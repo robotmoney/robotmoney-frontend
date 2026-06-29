@@ -1,0 +1,10 @@
+{
+  "name": "robotmoney-frontend-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Single-folder home for the split-ready frontend/ + backend/ + contract/ (+ mcp/).",
+  "scripts": {
+    "sync-contract": "bun scripts/sync-contract.ts",
+    "demo": "bun mcp/src/e2e.ts"
+  }
+}

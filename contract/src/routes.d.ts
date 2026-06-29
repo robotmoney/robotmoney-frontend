@@ -1,0 +1,26 @@
+export function path(template: string, params?: Record<string, string | number>): string;
+
+export const ROUTES: {
+  health: string;
+  comments: { list: string; create: string };
+  dashboards: {
+    vaultTvl: string;
+    walletBalances: string;
+    vaultApy: string;
+    allocationFramework: string;
+    regimeSnapshots: string;
+    researchSignal: string;
+  };
+  committee: {
+    members: string;
+    member: string;
+    subject: string;
+    subjectSnapshots: string;
+    sessions: string;
+    session: string;
+    brief: string;
+    apply: string;
+    applyUnlock: string;
+    submit: string;
+  };
+};

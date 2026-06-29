@@ -10,6 +10,7 @@ a Bun server, and a Postgres-backed task queue.
 contract/   shared HTTP contract (route paths + DTO types)
 frontend/   buildless static SPA (frontend/public)
 backend/    Bun server (API + static) + Postgres queue/workers + migrations
+mcp/        member-facing MCP server (Investment Committee)
 ```
 
 ## Prerequisites
@@ -35,17 +36,23 @@ bun run worker                            # drains the job queue, runs the sched
 After editing `contract/src/routes.js`, re-vendor it into the frontend:
 
 ```bash
-bun run sync-contract        # or: bash scripts/sync-contract.sh
+bun run sync-contract
 ```
 
-## Run the full stack (single box)
+## Run the full stack + end-to-end demo
 
 ```bash
 cp .env.example .env         # set DATABASE_URL (+ POSTGRES_* for the bundled db)
-docker compose up -d         # postgres + api (serves the site too) + worker
+docker compose up -d         # postgres + api (serves the site) + worker + mcp
+bun run demo                 # runs one committee session: regime + N signed agents via MCP
 ```
 
+Then open:
+- `http://localhost:8787/` — the site · `/regime` — live classification · `/committee` — the session
+- `http://localhost:8788/health` — the MCP server
+
 No reverse proxy: the `api` process serves both the API and `frontend/public`.
+`bun run demo` is re-runnable (it resets the day's session first).
 
 ## Useful commands
 

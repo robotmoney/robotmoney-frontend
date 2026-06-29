@@ -1,0 +1,80 @@
+# Single-box deployment (e.g. one DigitalOcean droplet). No reverse proxy: the
+# `api` process serves BOTH the JSON API and the static frontend (STATIC_DIR),
+# so there's nothing else to run in front of it.
+#
+# Local dev / CI usually only needs Postgres:   docker compose up -d postgres
+# Full box:                                      docker compose up -d
+#
+# DB modes are driven by DATABASE_URL + the postgres volume:
+#   ephemeral (CI)  : run with a throwaway volume / `docker compose down -v`
+#   demo            : named volume `pgdata` persists across restarts
+#   prod            : point DATABASE_URL at an external/managed Postgres and run
+#                     only `api` + `worker` (docker compose up api worker)
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-robotmoney}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robotmoney}
+      POSTGRES_DB: ${POSTGRES_DB:-robotmoney}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-robotmoney}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["bun", "run", "src/api/index.ts"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      RM_ENV: ${RM_ENV:-demo}
+      API_PORT: "8787"
+      # Serve the static frontend from this same process — no Caddy/nginx.
+      STATIC_DIR: /srv/frontend
+    ports:
+      - "${WEB_PORT:-8080}:8787"
+    volumes:
+      - ./frontend/public:/srv/frontend:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["bun", "run", "src/worker/index.ts"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      RM_ENV: ${RM_ENV:-demo}
+      WORKER_ID: ${WORKER_ID:-worker-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Member-facing MCP server (committee). Talks to the API by service name.
+  mcp:
+    build:
+      context: .
+      dockerfile: mcp/Dockerfile
+    environment:
+      BACKEND_URL: http://api:8787
+      MCP_PORT: "8788"
+    ports:
+      - "${MCP_PORT:-8788}:8788"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:

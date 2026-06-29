@@ -1,0 +1,17 @@
+{
+  "name": "@robotmoney/contract",
+  "version": "0.1.0",
+  "description": "HTTP API contract shared by the robotmoney frontend and backend. Types + route paths only, zero runtime deps.",
+  "type": "module",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    },
+    "./routes": "./src/routes.js"
+  },
+  "files": ["src"],
+  "license": "MIT"
+}

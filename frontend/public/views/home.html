@@ -1,0 +1,1493 @@
+<!-- Home route view — injected into <main id="view"> by the client router.
+     Order mirrors robotmoney-site/src/app/page.tsx:
+     Hero (substrate + terminal), Disclaimer, divider, Problem, Architecture,
+     Token, divider, Contract, Governance. The Footer lives in the SPA shell. -->
+
+<!-- ── Hero ── -->
+<section class="hero">
+  <div class="hero__grid grid-pattern"></div>
+  <div class="hero__substrate" x-data="substrate()"></div>
+  <div class="hero__fade"></div>
+  <div class="hero__glow"></div>
+
+  <div class="hero__content">
+    <div class="hero__cols">
+      <div class="hero__copy">
+        <div class="animate-fade-in-up" style="animation-delay:0.1s;opacity:0">
+          <span class="badge"><span class="badge__dot"></span>Protocol Specification v0.1</span>
+        </div>
+        <h1 class="hero__title animate-fade-in-up" style="animation-delay:0.2s;opacity:0">
+          <span class="hero__title-serif">Robot</span>
+          <span class="hero__title-bold text-gradient">Money</span>
+        </h1>
+        <p class="hero__lede animate-fade-in-up" style="animation-delay:0.5s;opacity:0">
+          An autonomous treasury for the agent economy. One USDC deposit.
+          Three diversified strategies. Withdraw at NAV anytime.
+        </p>
+        <div class="hero__stats animate-fade-in-up" style="animation-delay:0.65s;opacity:0">
+          <div class="stat"><div class="stat__value">ERC-4626</div><div class="stat__label">Vault Standard</div></div>
+          <div class="stat"><div class="stat__value">Base</div><div class="stat__label">Chain</div></div>
+          <div class="stat"><div class="stat__value">3</div><div class="stat__label">Buckets</div></div>
+        </div>
+        <div class="hero__cta animate-fade-in-up" style="animation-delay:0.8s;opacity:0">
+          <a href="/changelog" class="btn-primary btn-arrow">TRACK DEVELOPMENT <span class="btn-arrow__icon">&rarr;</span></a>
+        </div>
+      </div>
+
+      <div class="hero__terminal animate-fade-in-up" style="animation-delay:0.4s;opacity:0">
+        <div class="terminal-wrap">
+          <div class="terminal glow-green" x-data="terminalBoot()" x-init="start()">
+            <div class="terminal__bar">
+              <div class="terminal__dots">
+                <span class="dot dot--warn"></span><span class="dot dot--amber"></span><span class="dot dot--accent"></span>
+              </div>
+              <span class="terminal__title">robot-money — vault deployment</span>
+            </div>
+            <div class="terminal__body">
+              <template x-for="(line, i) in lines.slice(0, visible)" :key="i">
+                <div :class="lineClass(line)"><span x-text="line.text"></span><span class="terminal__cursor" x-show="i === visible - 1 && line.text"></span></div>
+              </template>
+            </div>
+          </div>
+          <div class="terminal__deco terminal__deco--a animate-float"></div>
+          <div class="terminal__deco terminal__deco--b animate-float" style="animation-delay:2s"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hero__scroll">
+      <span class="hero__scroll-label">Scroll</span>
+      <div class="hero__scroll-line"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Disclaimer ── -->
+<section class="disclaimer">
+  <div class="disclaimer__inner">
+    <p class="disclaimer__text">
+      This is a design document and first experiment. Development is in progress and is likely to take 6-12 months. The protocol will evolve and is being built in public. Consider the
+      <a href="/disclaimer">disclaimer</a> herein. The latest updates to the project are tracked in the
+      <a href="/changelog">Change Log</a>.
+    </p>
+    <p class="disclaimer__sub">Implementation details below are subject to change as development progresses.</p>
+  </div>
+</section>
+
+<div class="section-divider container"></div>
+
+<!-- ── Problem ── -->
+<!-- Problem section — ported from robotmoney-site/src/components/ProblemSection.tsx -->
+<section id="problem" class="problem">
+  <div class="problem__dots dot-pattern"></div>
+
+  <!-- Server grid illustration — atmospheric background -->
+  <div class="problem__bg" aria-hidden="true">
+    <svg class="problem__servers" viewBox="0 0 1200 600" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <linearGradient id="aGridFog" x1="0.5" y1="0" x2="0.5" y2="1">
+          <stop offset="0%" stop-color="#0b0e14" stop-opacity="0.2" />
+          <stop offset="50%" stop-color="#0b0e14" stop-opacity="0" />
+          <stop offset="100%" stop-color="#06080c" stop-opacity="0.8" />
+        </linearGradient>
+        <linearGradient id="aGridFogH" x1="0" y1="0.5" x2="1" y2="0.5">
+          <stop offset="0%" stop-color="#06080c" stop-opacity="0.9" />
+          <stop offset="20%" stop-color="#06080c" stop-opacity="0" />
+          <stop offset="80%" stop-color="#06080c" stop-opacity="0" />
+          <stop offset="100%" stop-color="#06080c" stop-opacity="0.9" />
+        </linearGradient>
+        <filter id="aNodeLed" x="-100%" y="-100%" width="300%" height="300%">
+          <feGaussianBlur stdDeviation="3" />
+        </filter>
+        <filter id="aNodeGlow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="6" />
+        </filter>
+        <linearGradient id="aFloorReflect" x1="0.5" y1="0" x2="0.5" y2="1">
+          <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.04" />
+          <stop offset="100%" stop-color="transparent" />
+        </linearGradient>
+      </defs>
+
+      <!-- Floor reflection -->
+      <rect x="0" y="350" width="1200" height="250" fill="url(#aFloorReflect)" />
+
+      <!-- Server grid -->
+        <g opacity="1">
+          <rect x="100" y="380" width="50" height="35" fill="#10141c" stroke="#222a38" stroke-width="0.5" rx="1" />
+          <rect x="100" y="380" width="50" height="10.5" fill="#181d28" rx="1" />
+          <circle cx="125" cy="385.25" r="7.5" fill="none" stroke="#222a38" stroke-width="0.3" />
+          <circle cx="125" cy="385.25" r="3" fill="#222a38" />
+          <rect x="105" y="399.25" width="6" height="6" rx="3" fill="#e8a640" class="led-amber" style="animation-delay:0s" />
+          <rect x="105" y="399.25" width="6" height="6" rx="3" fill="#e8a640" class="led-amber" style="animation-delay:0s" filter="url(#aNodeLed)" />
+          <rect x="102.5" y="417" width="10" height="4" fill="#e8a640" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="1">
+          <rect x="218.75" y="380" width="50" height="35" fill="#10141c" stroke="#222a38" stroke-width="0.5" rx="1" />
+          <rect x="218.75" y="380" width="50" height="10.5" fill="#181d28" rx="1" />
+          <circle cx="243.75" cy="385.25" r="7.5" fill="none" stroke="#222a38" stroke-width="0.3" />
+          <circle cx="243.75" cy="385.25" r="3" fill="#222a38" />
+          <rect x="223.75" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-2" style="animation-delay:0.17s" />
+          <rect x="223.75" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-2" style="animation-delay:0.17s" filter="url(#aNodeLed)" />
+          <rect x="221.25" y="417" width="10" height="4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="1">
+          <rect x="337.5" y="380" width="50" height="35" fill="#10141c" stroke="#222a38" stroke-width="0.5" rx="1" />
+          <rect x="337.5" y="380" width="50" height="10.5" fill="#181d28" rx="1" />
+          <circle cx="362.5" cy="385.25" r="7.5" fill="none" stroke="#222a38" stroke-width="0.3" />
+          <circle cx="362.5" cy="385.25" r="3" fill="#222a38" />
+          <rect x="342.5" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-3" style="animation-delay:0.34s" />
+          <rect x="342.5" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-3" style="animation-delay:0.34s" filter="url(#aNodeLed)" />
+          <rect x="340" y="417" width="10" height="4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="1">
+          <rect x="456.25" y="380" width="50" height="35" fill="#10141c" stroke="#222a38" stroke-width="0.5" rx="1" />
+          <rect x="456.25" y="380" width="50" height="10.5" fill="#181d28" rx="1" />
+          <circle cx="481.25" cy="385.25" r="7.5" fill="none" stroke="#222a38" stroke-width="0.3" />
+          <circle cx="481.25" cy="385.25" r="3" fill="#222a38" />
+          <rect x="461.25" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-1" style="animation-delay:0.51s" />
+          <rect x="461.25" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-1" style="animation-delay:0.51s" filter="url(#aNodeLed)" />
+          <rect x="458.75" y="417" width="10" height="4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="1">
+          <rect x="575" y="380" width="50" height="35" fill="#10141c" stroke="#222a38" stroke-width="0.5" rx="1" />
+          <rect x="575" y="380" width="50" height="10.5" fill="#181d28" rx="1" />
+          <circle cx="600" cy="385.25" r="7.5" fill="none" stroke="#222a38" stroke-width="0.3" />
+          <circle cx="600" cy="385.25" r="3" fill="#222a38" />
+          <rect x="580" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-2" style="animation-delay:0.68s" />
+          <rect x="580" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-2" style="animation-delay:0.68s" filter="url(#aNodeLed)" />
+          <rect x="577.5" y="417" width="10" height="4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="1">
+          <rect x="693.75" y="380" width="50" height="35" fill="#10141c" stroke="#222a38" stroke-width="0.5" rx="1" />
+          <rect x="693.75" y="380" width="50" height="10.5" fill="#181d28" rx="1" />
+          <circle cx="718.75" cy="385.25" r="7.5" fill="none" stroke="#222a38" stroke-width="0.3" />
+          <circle cx="718.75" cy="385.25" r="3" fill="#222a38" />
+          <rect x="698.75" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-3" style="animation-delay:0.85s" />
+          <rect x="698.75" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-3" style="animation-delay:0.85s" filter="url(#aNodeLed)" />
+          <rect x="696.25" y="417" width="10" height="4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="1">
+          <rect x="812.5" y="380" width="50" height="35" fill="#10141c" stroke="#222a38" stroke-width="0.5" rx="1" />
+          <rect x="812.5" y="380" width="50" height="10.5" fill="#181d28" rx="1" />
+          <circle cx="837.5" cy="385.25" r="7.5" fill="none" stroke="#222a38" stroke-width="0.3" />
+          <circle cx="837.5" cy="385.25" r="3" fill="#222a38" />
+          <rect x="817.5" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-1" style="animation-delay:1.02s" />
+          <rect x="817.5" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-1" style="animation-delay:1.02s" filter="url(#aNodeLed)" />
+          <rect x="815" y="417" width="10" height="4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="1">
+          <rect x="931.25" y="380" width="50" height="35" fill="#10141c" stroke="#222a38" stroke-width="0.5" rx="1" />
+          <rect x="931.25" y="380" width="50" height="10.5" fill="#181d28" rx="1" />
+          <circle cx="956.25" cy="385.25" r="7.5" fill="none" stroke="#222a38" stroke-width="0.3" />
+          <circle cx="956.25" cy="385.25" r="3" fill="#222a38" />
+          <rect x="936.25" y="399.25" width="6" height="6" rx="3" fill="#e8a640" class="led-amber" style="animation-delay:1.19s" />
+          <rect x="936.25" y="399.25" width="6" height="6" rx="3" fill="#e8a640" class="led-amber" style="animation-delay:1.19s" filter="url(#aNodeLed)" />
+          <rect x="933.75" y="417" width="10" height="4" fill="#e8a640" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="1">
+          <rect x="1050" y="380" width="50" height="35" fill="#10141c" stroke="#222a38" stroke-width="0.5" rx="1" />
+          <rect x="1050" y="380" width="50" height="10.5" fill="#181d28" rx="1" />
+          <circle cx="1075" cy="385.25" r="7.5" fill="none" stroke="#222a38" stroke-width="0.3" />
+          <circle cx="1075" cy="385.25" r="3" fill="#222a38" />
+          <rect x="1055" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-3" style="animation-delay:1.36s" />
+          <rect x="1055" y="399.25" width="6" height="6" rx="3" fill="#00e5ff" class="led-3" style="animation-delay:1.36s" filter="url(#aNodeLed)" />
+          <rect x="1052.5" y="417" width="10" height="4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.8833">
+          <rect x="150" y="330.5" width="45" height="31.5" fill="#10141c" stroke="#222a38" stroke-width="0.45" rx="1" />
+          <rect x="150" y="330.5" width="45" height="9.45" fill="#181d28" rx="1" />
+          <circle cx="172.5" cy="335.225" r="6.75" fill="none" stroke="#222a38" stroke-width="0.27" />
+          <circle cx="172.5" cy="335.225" r="2.7" fill="#222a38" />
+          <rect x="154.5" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-2" style="animation-delay:1.53s" />
+          <rect x="154.5" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-2" style="animation-delay:1.53s" filter="url(#aNodeLed)" />
+          <rect x="152.25" y="364" width="9" height="3.6" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.8833">
+          <rect x="256.875" y="330.5" width="45" height="31.5" fill="#10141c" stroke="#222a38" stroke-width="0.45" rx="1" />
+          <rect x="256.875" y="330.5" width="45" height="9.45" fill="#181d28" rx="1" />
+          <circle cx="279.375" cy="335.225" r="6.75" fill="none" stroke="#222a38" stroke-width="0.27" />
+          <circle cx="279.375" cy="335.225" r="2.7" fill="#222a38" />
+          <rect x="261.375" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-3" style="animation-delay:1.7s" />
+          <rect x="261.375" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-3" style="animation-delay:1.7s" filter="url(#aNodeLed)" />
+          <rect x="259.125" y="364" width="9" height="3.6" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.8833">
+          <rect x="363.75" y="330.5" width="45" height="31.5" fill="#10141c" stroke="#222a38" stroke-width="0.45" rx="1" />
+          <rect x="363.75" y="330.5" width="45" height="9.45" fill="#181d28" rx="1" />
+          <circle cx="386.25" cy="335.225" r="6.75" fill="none" stroke="#222a38" stroke-width="0.27" />
+          <circle cx="386.25" cy="335.225" r="2.7" fill="#222a38" />
+          <rect x="368.25" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-1" style="animation-delay:1.87s" />
+          <rect x="368.25" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-1" style="animation-delay:1.87s" filter="url(#aNodeLed)" />
+          <rect x="366" y="364" width="9" height="3.6" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.8833">
+          <rect x="470.625" y="330.5" width="45" height="31.5" fill="#10141c" stroke="#222a38" stroke-width="0.45" rx="1" />
+          <rect x="470.625" y="330.5" width="45" height="9.45" fill="#181d28" rx="1" />
+          <circle cx="493.125" cy="335.225" r="6.75" fill="none" stroke="#222a38" stroke-width="0.27" />
+          <circle cx="493.125" cy="335.225" r="2.7" fill="#222a38" />
+          <rect x="475.125" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-2" style="animation-delay:2.04s" />
+          <rect x="475.125" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-2" style="animation-delay:2.04s" filter="url(#aNodeLed)" />
+          <rect x="472.875" y="364" width="9" height="3.6" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.8833">
+          <rect x="577.5" y="330.5" width="45" height="31.5" fill="#10141c" stroke="#222a38" stroke-width="0.45" rx="1" />
+          <rect x="577.5" y="330.5" width="45" height="9.45" fill="#181d28" rx="1" />
+          <circle cx="600" cy="335.225" r="6.75" fill="none" stroke="#222a38" stroke-width="0.27" />
+          <circle cx="600" cy="335.225" r="2.7" fill="#222a38" />
+          <rect x="582" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-3" style="animation-delay:2.21s" />
+          <rect x="582" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-3" style="animation-delay:2.21s" filter="url(#aNodeLed)" />
+          <rect x="579.75" y="364" width="9" height="3.6" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.8833">
+          <rect x="684.375" y="330.5" width="45" height="31.5" fill="#10141c" stroke="#222a38" stroke-width="0.45" rx="1" />
+          <rect x="684.375" y="330.5" width="45" height="9.45" fill="#181d28" rx="1" />
+          <circle cx="706.875" cy="335.225" r="6.75" fill="none" stroke="#222a38" stroke-width="0.27" />
+          <circle cx="706.875" cy="335.225" r="2.7" fill="#222a38" />
+          <rect x="688.875" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-1" style="animation-delay:2.38s" />
+          <rect x="688.875" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-1" style="animation-delay:2.38s" filter="url(#aNodeLed)" />
+          <rect x="686.625" y="364" width="9" height="3.6" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.8833">
+          <rect x="791.25" y="330.5" width="45" height="31.5" fill="#10141c" stroke="#222a38" stroke-width="0.45" rx="1" />
+          <rect x="791.25" y="330.5" width="45" height="9.45" fill="#181d28" rx="1" />
+          <circle cx="813.75" cy="335.225" r="6.75" fill="none" stroke="#222a38" stroke-width="0.27" />
+          <circle cx="813.75" cy="335.225" r="2.7" fill="#222a38" />
+          <rect x="795.75" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#e8a640" class="led-amber" style="animation-delay:2.55s" />
+          <rect x="795.75" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#e8a640" class="led-amber" style="animation-delay:2.55s" filter="url(#aNodeLed)" />
+          <rect x="793.5" y="364" width="9" height="3.6" fill="#e8a640" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.8833">
+          <rect x="898.125" y="330.5" width="45" height="31.5" fill="#10141c" stroke="#222a38" stroke-width="0.45" rx="1" />
+          <rect x="898.125" y="330.5" width="45" height="9.45" fill="#181d28" rx="1" />
+          <circle cx="920.625" cy="335.225" r="6.75" fill="none" stroke="#222a38" stroke-width="0.27" />
+          <circle cx="920.625" cy="335.225" r="2.7" fill="#222a38" />
+          <rect x="902.625" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-3" style="animation-delay:2.72s" />
+          <rect x="902.625" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-3" style="animation-delay:2.72s" filter="url(#aNodeLed)" />
+          <rect x="900.375" y="364" width="9" height="3.6" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.8833">
+          <rect x="1005" y="330.5" width="45" height="31.5" fill="#10141c" stroke="#222a38" stroke-width="0.45" rx="1" />
+          <rect x="1005" y="330.5" width="45" height="9.45" fill="#181d28" rx="1" />
+          <circle cx="1027.5" cy="335.225" r="6.75" fill="none" stroke="#222a38" stroke-width="0.27" />
+          <circle cx="1027.5" cy="335.225" r="2.7" fill="#222a38" />
+          <rect x="1009.5" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-1" style="animation-delay:2.89s" />
+          <rect x="1009.5" y="347.825" width="5.4" height="5.4" rx="2.7" fill="#00e5ff" class="led-1" style="animation-delay:2.89s" filter="url(#aNodeLed)" />
+          <rect x="1007.25" y="364" width="9" height="3.6" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.7667">
+          <rect x="200" y="292" width="40" height="28" fill="#10141c" stroke="#222a38" stroke-width="0.4" rx="1" />
+          <rect x="200" y="292" width="40" height="8.4" fill="#181d28" rx="1" />
+          <circle cx="220" cy="296.2" r="6" fill="none" stroke="#222a38" stroke-width="0.24" />
+          <circle cx="220" cy="296.2" r="2.4" fill="#222a38" />
+          <rect x="204" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-3" style="animation-delay:0.06s" />
+          <rect x="204" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-3" style="animation-delay:0.06s" filter="url(#aNodeLed)" />
+          <rect x="202" y="322" width="8" height="3.2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.7667">
+          <rect x="295" y="292" width="40" height="28" fill="#10141c" stroke="#222a38" stroke-width="0.4" rx="1" />
+          <rect x="295" y="292" width="40" height="8.4" fill="#181d28" rx="1" />
+          <circle cx="315" cy="296.2" r="6" fill="none" stroke="#222a38" stroke-width="0.24" />
+          <circle cx="315" cy="296.2" r="2.4" fill="#222a38" />
+          <rect x="299" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-1" style="animation-delay:0.23s" />
+          <rect x="299" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-1" style="animation-delay:0.23s" filter="url(#aNodeLed)" />
+          <rect x="297" y="322" width="8" height="3.2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.7667">
+          <rect x="390" y="292" width="40" height="28" fill="#10141c" stroke="#222a38" stroke-width="0.4" rx="1" />
+          <rect x="390" y="292" width="40" height="8.4" fill="#181d28" rx="1" />
+          <circle cx="410" cy="296.2" r="6" fill="none" stroke="#222a38" stroke-width="0.24" />
+          <circle cx="410" cy="296.2" r="2.4" fill="#222a38" />
+          <rect x="394" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-2" style="animation-delay:0.4s" />
+          <rect x="394" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-2" style="animation-delay:0.4s" filter="url(#aNodeLed)" />
+          <rect x="392" y="322" width="8" height="3.2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.7667">
+          <rect x="485" y="292" width="40" height="28" fill="#10141c" stroke="#222a38" stroke-width="0.4" rx="1" />
+          <rect x="485" y="292" width="40" height="8.4" fill="#181d28" rx="1" />
+          <circle cx="505" cy="296.2" r="6" fill="none" stroke="#222a38" stroke-width="0.24" />
+          <circle cx="505" cy="296.2" r="2.4" fill="#222a38" />
+          <rect x="489" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-3" style="animation-delay:0.57s" />
+          <rect x="489" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-3" style="animation-delay:0.57s" filter="url(#aNodeLed)" />
+          <rect x="487" y="322" width="8" height="3.2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.7667">
+          <rect x="580" y="292" width="40" height="28" fill="#10141c" stroke="#222a38" stroke-width="0.4" rx="1" />
+          <rect x="580" y="292" width="40" height="8.4" fill="#181d28" rx="1" />
+          <circle cx="600" cy="296.2" r="6" fill="none" stroke="#222a38" stroke-width="0.24" />
+          <circle cx="600" cy="296.2" r="2.4" fill="#222a38" />
+          <rect x="584" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-1" style="animation-delay:0.74s" />
+          <rect x="584" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-1" style="animation-delay:0.74s" filter="url(#aNodeLed)" />
+          <rect x="582" y="322" width="8" height="3.2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.7667">
+          <rect x="675" y="292" width="40" height="28" fill="#10141c" stroke="#222a38" stroke-width="0.4" rx="1" />
+          <rect x="675" y="292" width="40" height="8.4" fill="#181d28" rx="1" />
+          <circle cx="695" cy="296.2" r="6" fill="none" stroke="#222a38" stroke-width="0.24" />
+          <circle cx="695" cy="296.2" r="2.4" fill="#222a38" />
+          <rect x="679" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#e8a640" class="led-amber" style="animation-delay:0.91s" />
+          <rect x="679" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#e8a640" class="led-amber" style="animation-delay:0.91s" filter="url(#aNodeLed)" />
+          <rect x="677" y="322" width="8" height="3.2" fill="#e8a640" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.7667">
+          <rect x="770" y="292" width="40" height="28" fill="#10141c" stroke="#222a38" stroke-width="0.4" rx="1" />
+          <rect x="770" y="292" width="40" height="8.4" fill="#181d28" rx="1" />
+          <circle cx="790" cy="296.2" r="6" fill="none" stroke="#222a38" stroke-width="0.24" />
+          <circle cx="790" cy="296.2" r="2.4" fill="#222a38" />
+          <rect x="774" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-3" style="animation-delay:1.08s" />
+          <rect x="774" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-3" style="animation-delay:1.08s" filter="url(#aNodeLed)" />
+          <rect x="772" y="322" width="8" height="3.2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.7667">
+          <rect x="865" y="292" width="40" height="28" fill="#10141c" stroke="#222a38" stroke-width="0.4" rx="1" />
+          <rect x="865" y="292" width="40" height="8.4" fill="#181d28" rx="1" />
+          <circle cx="885" cy="296.2" r="6" fill="none" stroke="#222a38" stroke-width="0.24" />
+          <circle cx="885" cy="296.2" r="2.4" fill="#222a38" />
+          <rect x="869" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-1" style="animation-delay:1.25s" />
+          <rect x="869" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-1" style="animation-delay:1.25s" filter="url(#aNodeLed)" />
+          <rect x="867" y="322" width="8" height="3.2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.7667">
+          <rect x="960" y="292" width="40" height="28" fill="#10141c" stroke="#222a38" stroke-width="0.4" rx="1" />
+          <rect x="960" y="292" width="40" height="8.4" fill="#181d28" rx="1" />
+          <circle cx="980" cy="296.2" r="6" fill="none" stroke="#222a38" stroke-width="0.24" />
+          <circle cx="980" cy="296.2" r="2.4" fill="#222a38" />
+          <rect x="964" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-2" style="animation-delay:1.42s" />
+          <rect x="964" y="307.4" width="4.8" height="4.8" rx="2.4" fill="#00e5ff" class="led-2" style="animation-delay:1.42s" filter="url(#aNodeLed)" />
+          <rect x="962" y="322" width="8" height="3.2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.65">
+          <rect x="250" y="264.5" width="35" height="24.5" fill="#10141c" stroke="#222a38" stroke-width="0.35" rx="1" />
+          <rect x="250" y="264.5" width="35" height="7.35" fill="#181d28" rx="1" />
+          <circle cx="267.5" cy="268.175" r="5.25" fill="none" stroke="#222a38" stroke-width="0.21" />
+          <circle cx="267.5" cy="268.175" r="2.1" fill="#222a38" />
+          <rect x="253.5" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-1" style="animation-delay:1.59s" />
+          <rect x="253.5" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-1" style="animation-delay:1.59s" filter="url(#aNodeLed)" />
+          <rect x="251.75" y="291" width="7" height="2.8" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.65">
+          <rect x="333.125" y="264.5" width="35" height="24.5" fill="#10141c" stroke="#222a38" stroke-width="0.35" rx="1" />
+          <rect x="333.125" y="264.5" width="35" height="7.35" fill="#181d28" rx="1" />
+          <circle cx="350.625" cy="268.175" r="5.25" fill="none" stroke="#222a38" stroke-width="0.21" />
+          <circle cx="350.625" cy="268.175" r="2.1" fill="#222a38" />
+          <rect x="336.625" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-2" style="animation-delay:1.76s" />
+          <rect x="336.625" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-2" style="animation-delay:1.76s" filter="url(#aNodeLed)" />
+          <rect x="334.875" y="291" width="7" height="2.8" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.65">
+          <rect x="416.25" y="264.5" width="35" height="24.5" fill="#10141c" stroke="#222a38" stroke-width="0.35" rx="1" />
+          <rect x="416.25" y="264.5" width="35" height="7.35" fill="#181d28" rx="1" />
+          <circle cx="433.75" cy="268.175" r="5.25" fill="none" stroke="#222a38" stroke-width="0.21" />
+          <circle cx="433.75" cy="268.175" r="2.1" fill="#222a38" />
+          <rect x="419.75" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-3" style="animation-delay:1.93s" />
+          <rect x="419.75" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-3" style="animation-delay:1.93s" filter="url(#aNodeLed)" />
+          <rect x="418" y="291" width="7" height="2.8" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.65">
+          <rect x="499.375" y="264.5" width="35" height="24.5" fill="#10141c" stroke="#222a38" stroke-width="0.35" rx="1" />
+          <rect x="499.375" y="264.5" width="35" height="7.35" fill="#181d28" rx="1" />
+          <circle cx="516.875" cy="268.175" r="5.25" fill="none" stroke="#222a38" stroke-width="0.21" />
+          <circle cx="516.875" cy="268.175" r="2.1" fill="#222a38" />
+          <rect x="502.875" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-1" style="animation-delay:2.1s" />
+          <rect x="502.875" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-1" style="animation-delay:2.1s" filter="url(#aNodeLed)" />
+          <rect x="501.125" y="291" width="7" height="2.8" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.65">
+          <rect x="582.5" y="264.5" width="35" height="24.5" fill="#10141c" stroke="#222a38" stroke-width="0.35" rx="1" />
+          <rect x="582.5" y="264.5" width="35" height="7.35" fill="#181d28" rx="1" />
+          <circle cx="600" cy="268.175" r="5.25" fill="none" stroke="#222a38" stroke-width="0.21" />
+          <circle cx="600" cy="268.175" r="2.1" fill="#222a38" />
+          <rect x="586" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#e8a640" class="led-amber" style="animation-delay:2.27s" />
+          <rect x="586" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#e8a640" class="led-amber" style="animation-delay:2.27s" filter="url(#aNodeLed)" />
+          <rect x="584.25" y="291" width="7" height="2.8" fill="#e8a640" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.65">
+          <rect x="665.625" y="264.5" width="35" height="24.5" fill="#10141c" stroke="#222a38" stroke-width="0.35" rx="1" />
+          <rect x="665.625" y="264.5" width="35" height="7.35" fill="#181d28" rx="1" />
+          <circle cx="683.125" cy="268.175" r="5.25" fill="none" stroke="#222a38" stroke-width="0.21" />
+          <circle cx="683.125" cy="268.175" r="2.1" fill="#222a38" />
+          <rect x="669.125" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-3" style="animation-delay:2.44s" />
+          <rect x="669.125" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-3" style="animation-delay:2.44s" filter="url(#aNodeLed)" />
+          <rect x="667.375" y="291" width="7" height="2.8" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.65">
+          <rect x="748.75" y="264.5" width="35" height="24.5" fill="#10141c" stroke="#222a38" stroke-width="0.35" rx="1" />
+          <rect x="748.75" y="264.5" width="35" height="7.35" fill="#181d28" rx="1" />
+          <circle cx="766.25" cy="268.175" r="5.25" fill="none" stroke="#222a38" stroke-width="0.21" />
+          <circle cx="766.25" cy="268.175" r="2.1" fill="#222a38" />
+          <rect x="752.25" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-1" style="animation-delay:2.61s" />
+          <rect x="752.25" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-1" style="animation-delay:2.61s" filter="url(#aNodeLed)" />
+          <rect x="750.5" y="291" width="7" height="2.8" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.65">
+          <rect x="831.875" y="264.5" width="35" height="24.5" fill="#10141c" stroke="#222a38" stroke-width="0.35" rx="1" />
+          <rect x="831.875" y="264.5" width="35" height="7.35" fill="#181d28" rx="1" />
+          <circle cx="849.375" cy="268.175" r="5.25" fill="none" stroke="#222a38" stroke-width="0.21" />
+          <circle cx="849.375" cy="268.175" r="2.1" fill="#222a38" />
+          <rect x="835.375" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-2" style="animation-delay:2.78s" />
+          <rect x="835.375" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-2" style="animation-delay:2.78s" filter="url(#aNodeLed)" />
+          <rect x="833.625" y="291" width="7" height="2.8" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.65">
+          <rect x="915" y="264.5" width="35" height="24.5" fill="#10141c" stroke="#222a38" stroke-width="0.35" rx="1" />
+          <rect x="915" y="264.5" width="35" height="7.35" fill="#181d28" rx="1" />
+          <circle cx="932.5" cy="268.175" r="5.25" fill="none" stroke="#222a38" stroke-width="0.21" />
+          <circle cx="932.5" cy="268.175" r="2.1" fill="#222a38" />
+          <rect x="918.5" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-3" style="animation-delay:2.95s" />
+          <rect x="918.5" y="277.975" width="4.2" height="4.2" rx="2.1" fill="#00e5ff" class="led-3" style="animation-delay:2.95s" filter="url(#aNodeLed)" />
+          <rect x="916.75" y="291" width="7" height="2.8" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.5333">
+          <rect x="300" y="248" width="30" height="21" fill="#10141c" stroke="#222a38" stroke-width="0.3" rx="1" />
+          <rect x="300" y="248" width="30" height="6.3" fill="#181d28" rx="1" />
+          <circle cx="315" cy="251.15" r="4.5" fill="none" stroke="#222a38" stroke-width="0.18" />
+          <circle cx="315" cy="251.15" r="1.8" fill="#222a38" />
+          <rect x="303" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-2" style="animation-delay:0.12s" />
+          <rect x="303" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-2" style="animation-delay:0.12s" filter="url(#aNodeLed)" />
+          <rect x="301.5" y="271" width="6" height="2.4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.5333">
+          <rect x="371.25" y="248" width="30" height="21" fill="#10141c" stroke="#222a38" stroke-width="0.3" rx="1" />
+          <rect x="371.25" y="248" width="30" height="6.3" fill="#181d28" rx="1" />
+          <circle cx="386.25" cy="251.15" r="4.5" fill="none" stroke="#222a38" stroke-width="0.18" />
+          <circle cx="386.25" cy="251.15" r="1.8" fill="#222a38" />
+          <rect x="374.25" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-3" style="animation-delay:0.29s" />
+          <rect x="374.25" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-3" style="animation-delay:0.29s" filter="url(#aNodeLed)" />
+          <rect x="372.75" y="271" width="6" height="2.4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.5333">
+          <rect x="442.5" y="248" width="30" height="21" fill="#10141c" stroke="#222a38" stroke-width="0.3" rx="1" />
+          <rect x="442.5" y="248" width="30" height="6.3" fill="#181d28" rx="1" />
+          <circle cx="457.5" cy="251.15" r="4.5" fill="none" stroke="#222a38" stroke-width="0.18" />
+          <circle cx="457.5" cy="251.15" r="1.8" fill="#222a38" />
+          <rect x="445.5" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-1" style="animation-delay:0.46s" />
+          <rect x="445.5" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-1" style="animation-delay:0.46s" filter="url(#aNodeLed)" />
+          <rect x="444" y="271" width="6" height="2.4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.5333">
+          <rect x="513.75" y="248" width="30" height="21" fill="#10141c" stroke="#222a38" stroke-width="0.3" rx="1" />
+          <rect x="513.75" y="248" width="30" height="6.3" fill="#181d28" rx="1" />
+          <circle cx="528.75" cy="251.15" r="4.5" fill="none" stroke="#222a38" stroke-width="0.18" />
+          <circle cx="528.75" cy="251.15" r="1.8" fill="#222a38" />
+          <rect x="516.75" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#e8a640" class="led-amber" style="animation-delay:0.63s" />
+          <rect x="516.75" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#e8a640" class="led-amber" style="animation-delay:0.63s" filter="url(#aNodeLed)" />
+          <rect x="515.25" y="271" width="6" height="2.4" fill="#e8a640" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.5333">
+          <rect x="585" y="248" width="30" height="21" fill="#10141c" stroke="#222a38" stroke-width="0.3" rx="1" />
+          <rect x="585" y="248" width="30" height="6.3" fill="#181d28" rx="1" />
+          <circle cx="600" cy="251.15" r="4.5" fill="none" stroke="#222a38" stroke-width="0.18" />
+          <circle cx="600" cy="251.15" r="1.8" fill="#222a38" />
+          <rect x="588" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-3" style="animation-delay:0.8s" />
+          <rect x="588" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-3" style="animation-delay:0.8s" filter="url(#aNodeLed)" />
+          <rect x="586.5" y="271" width="6" height="2.4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.5333">
+          <rect x="656.25" y="248" width="30" height="21" fill="#10141c" stroke="#222a38" stroke-width="0.3" rx="1" />
+          <rect x="656.25" y="248" width="30" height="6.3" fill="#181d28" rx="1" />
+          <circle cx="671.25" cy="251.15" r="4.5" fill="none" stroke="#222a38" stroke-width="0.18" />
+          <circle cx="671.25" cy="251.15" r="1.8" fill="#222a38" />
+          <rect x="659.25" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-1" style="animation-delay:0.97s" />
+          <rect x="659.25" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-1" style="animation-delay:0.97s" filter="url(#aNodeLed)" />
+          <rect x="657.75" y="271" width="6" height="2.4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.5333">
+          <rect x="727.5" y="248" width="30" height="21" fill="#10141c" stroke="#222a38" stroke-width="0.3" rx="1" />
+          <rect x="727.5" y="248" width="30" height="6.3" fill="#181d28" rx="1" />
+          <circle cx="742.5" cy="251.15" r="4.5" fill="none" stroke="#222a38" stroke-width="0.18" />
+          <circle cx="742.5" cy="251.15" r="1.8" fill="#222a38" />
+          <rect x="730.5" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-2" style="animation-delay:1.14s" />
+          <rect x="730.5" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-2" style="animation-delay:1.14s" filter="url(#aNodeLed)" />
+          <rect x="729" y="271" width="6" height="2.4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.5333">
+          <rect x="798.75" y="248" width="30" height="21" fill="#10141c" stroke="#222a38" stroke-width="0.3" rx="1" />
+          <rect x="798.75" y="248" width="30" height="6.3" fill="#181d28" rx="1" />
+          <circle cx="813.75" cy="251.15" r="4.5" fill="none" stroke="#222a38" stroke-width="0.18" />
+          <circle cx="813.75" cy="251.15" r="1.8" fill="#222a38" />
+          <rect x="801.75" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-3" style="animation-delay:1.31s" />
+          <rect x="801.75" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-3" style="animation-delay:1.31s" filter="url(#aNodeLed)" />
+          <rect x="800.25" y="271" width="6" height="2.4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.5333">
+          <rect x="870" y="248" width="30" height="21" fill="#10141c" stroke="#222a38" stroke-width="0.3" rx="1" />
+          <rect x="870" y="248" width="30" height="6.3" fill="#181d28" rx="1" />
+          <circle cx="885" cy="251.15" r="4.5" fill="none" stroke="#222a38" stroke-width="0.18" />
+          <circle cx="885" cy="251.15" r="1.8" fill="#222a38" />
+          <rect x="873" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-1" style="animation-delay:1.48s" />
+          <rect x="873" y="259.55" width="3.6" height="3.6" rx="1.8" fill="#00e5ff" class="led-1" style="animation-delay:1.48s" filter="url(#aNodeLed)" />
+          <rect x="871.5" y="271" width="6" height="2.4" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.4167">
+          <rect x="350" y="242.5" width="25" height="17.5" fill="#10141c" stroke="#222a38" stroke-width="0.25" rx="1" />
+          <rect x="350" y="242.5" width="25" height="5.25" fill="#181d28" rx="1" />
+          <circle cx="362.5" cy="245.125" r="3.75" fill="none" stroke="#222a38" stroke-width="0.15" />
+          <circle cx="362.5" cy="245.125" r="1.5" fill="#222a38" />
+          <rect x="352.5" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-3" style="animation-delay:1.65s" />
+          <rect x="352.5" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-3" style="animation-delay:1.65s" filter="url(#aNodeLed)" />
+          <rect x="351.25" y="262" width="5" height="2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.4167">
+          <rect x="409.375" y="242.5" width="25" height="17.5" fill="#10141c" stroke="#222a38" stroke-width="0.25" rx="1" />
+          <rect x="409.375" y="242.5" width="25" height="5.25" fill="#181d28" rx="1" />
+          <circle cx="421.875" cy="245.125" r="3.75" fill="none" stroke="#222a38" stroke-width="0.15" />
+          <circle cx="421.875" cy="245.125" r="1.5" fill="#222a38" />
+          <rect x="411.875" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-1" style="animation-delay:1.82s" />
+          <rect x="411.875" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-1" style="animation-delay:1.82s" filter="url(#aNodeLed)" />
+          <rect x="410.625" y="262" width="5" height="2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.4167">
+          <rect x="468.75" y="242.5" width="25" height="17.5" fill="#10141c" stroke="#222a38" stroke-width="0.25" rx="1" />
+          <rect x="468.75" y="242.5" width="25" height="5.25" fill="#181d28" rx="1" />
+          <circle cx="481.25" cy="245.125" r="3.75" fill="none" stroke="#222a38" stroke-width="0.15" />
+          <circle cx="481.25" cy="245.125" r="1.5" fill="#222a38" />
+          <rect x="471.25" y="252.125" width="3" height="3" rx="1.5" fill="#e8a640" class="led-amber" style="animation-delay:1.99s" />
+          <rect x="471.25" y="252.125" width="3" height="3" rx="1.5" fill="#e8a640" class="led-amber" style="animation-delay:1.99s" filter="url(#aNodeLed)" />
+          <rect x="470" y="262" width="5" height="2" fill="#e8a640" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.4167">
+          <rect x="528.125" y="242.5" width="25" height="17.5" fill="#10141c" stroke="#222a38" stroke-width="0.25" rx="1" />
+          <rect x="528.125" y="242.5" width="25" height="5.25" fill="#181d28" rx="1" />
+          <circle cx="540.625" cy="245.125" r="3.75" fill="none" stroke="#222a38" stroke-width="0.15" />
+          <circle cx="540.625" cy="245.125" r="1.5" fill="#222a38" />
+          <rect x="530.625" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-3" style="animation-delay:2.16s" />
+          <rect x="530.625" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-3" style="animation-delay:2.16s" filter="url(#aNodeLed)" />
+          <rect x="529.375" y="262" width="5" height="2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.4167">
+          <rect x="587.5" y="242.5" width="25" height="17.5" fill="#10141c" stroke="#222a38" stroke-width="0.25" rx="1" />
+          <rect x="587.5" y="242.5" width="25" height="5.25" fill="#181d28" rx="1" />
+          <circle cx="600" cy="245.125" r="3.75" fill="none" stroke="#222a38" stroke-width="0.15" />
+          <circle cx="600" cy="245.125" r="1.5" fill="#222a38" />
+          <rect x="590" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-1" style="animation-delay:2.33s" />
+          <rect x="590" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-1" style="animation-delay:2.33s" filter="url(#aNodeLed)" />
+          <rect x="588.75" y="262" width="5" height="2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.4167">
+          <rect x="646.875" y="242.5" width="25" height="17.5" fill="#10141c" stroke="#222a38" stroke-width="0.25" rx="1" />
+          <rect x="646.875" y="242.5" width="25" height="5.25" fill="#181d28" rx="1" />
+          <circle cx="659.375" cy="245.125" r="3.75" fill="none" stroke="#222a38" stroke-width="0.15" />
+          <circle cx="659.375" cy="245.125" r="1.5" fill="#222a38" />
+          <rect x="649.375" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-2" style="animation-delay:2.5s" />
+          <rect x="649.375" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-2" style="animation-delay:2.5s" filter="url(#aNodeLed)" />
+          <rect x="648.125" y="262" width="5" height="2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.4167">
+          <rect x="706.25" y="242.5" width="25" height="17.5" fill="#10141c" stroke="#222a38" stroke-width="0.25" rx="1" />
+          <rect x="706.25" y="242.5" width="25" height="5.25" fill="#181d28" rx="1" />
+          <circle cx="718.75" cy="245.125" r="3.75" fill="none" stroke="#222a38" stroke-width="0.15" />
+          <circle cx="718.75" cy="245.125" r="1.5" fill="#222a38" />
+          <rect x="708.75" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-3" style="animation-delay:2.67s" />
+          <rect x="708.75" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-3" style="animation-delay:2.67s" filter="url(#aNodeLed)" />
+          <rect x="707.5" y="262" width="5" height="2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.4167">
+          <rect x="765.625" y="242.5" width="25" height="17.5" fill="#10141c" stroke="#222a38" stroke-width="0.25" rx="1" />
+          <rect x="765.625" y="242.5" width="25" height="5.25" fill="#181d28" rx="1" />
+          <circle cx="778.125" cy="245.125" r="3.75" fill="none" stroke="#222a38" stroke-width="0.15" />
+          <circle cx="778.125" cy="245.125" r="1.5" fill="#222a38" />
+          <rect x="768.125" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-1" style="animation-delay:2.84s" />
+          <rect x="768.125" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-1" style="animation-delay:2.84s" filter="url(#aNodeLed)" />
+          <rect x="766.875" y="262" width="5" height="2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+        <g opacity="0.4167">
+          <rect x="825" y="242.5" width="25" height="17.5" fill="#10141c" stroke="#222a38" stroke-width="0.25" rx="1" />
+          <rect x="825" y="242.5" width="25" height="5.25" fill="#181d28" rx="1" />
+          <circle cx="837.5" cy="245.125" r="3.75" fill="none" stroke="#222a38" stroke-width="0.15" />
+          <circle cx="837.5" cy="245.125" r="1.5" fill="#222a38" />
+          <rect x="827.5" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-2" style="animation-delay:0.01s" />
+          <rect x="827.5" y="252.125" width="3" height="3" rx="1.5" fill="#00e5ff" class="led-2" style="animation-delay:0.01s" filter="url(#aNodeLed)" />
+          <rect x="826.25" y="262" width="5" height="2" fill="#00e5ff" opacity="0.06" filter="url(#aNodeGlow)" />
+        </g>
+
+      <!-- Fog overlays -->
+      <rect x="0" y="0" width="1200" height="600" fill="url(#aGridFog)" />
+      <rect x="0" y="0" width="1200" height="600" fill="url(#aGridFogH)" />
+
+      <!-- Ceiling lights -->
+      <circle cx="300" cy="40" r="40" fill="#e8a640" opacity="0.04" filter="url(#aNodeGlow)" />
+      <circle cx="600" cy="20" r="50" fill="#ffffff" opacity="0.03" filter="url(#aNodeGlow)" />
+      <circle cx="900" cy="35" r="35" fill="#e8a640" opacity="0.03" filter="url(#aNodeGlow)" />
+
+      <!-- Concrete pillar silhouette -->
+      <rect x="590" y="0" width="20" height="200" fill="#10141c" opacity="0.5" />
+    </svg>
+  </div>
+
+  <div class="problem__inner container">
+    <!-- Section header -->
+    <div class="problem__header">
+      <span class="problem__eyebrow">01 / The Problem</span>
+      <h2 class="problem__title">
+        Eighteen thousand agents.
+        <br />
+        <span class="problem__title-accent text-gradient">Idle capital.</span>
+      </h2>
+      <p class="problem__lede">
+        The Base agent economy has produced over 18,000 tokenized agents,
+        processed $600M+ in micropayments, and generated $50M+ in token
+        launch fees. Every agent with a wallet accumulates revenue. Most of
+        that capital sits idle.
+      </p>
+    </div>
+
+    <!-- The Three Options -->
+    <div class="problem__options">
+      <div class="problem__card card-hover">
+        <div class="problem__card-head">
+          <span class="problem__card-num">OPTION 01</span>
+          <span class="problem__card-status problem__card-status--warn">Current default</span>
+        </div>
+        <h3 class="problem__card-title">Hold &amp; Earn Nothing</h3>
+        <p class="problem__card-desc">Agent holds ETH/USDC in wallet. Zero yield. Purchasing power erodes. The default for most operators today.</p>
+      </div>
+      <div class="problem__card card-hover">
+        <div class="problem__card-head">
+          <span class="problem__card-num">OPTION 02</span>
+          <span class="problem__card-status problem__card-status--amber">Engineering-intensive</span>
+        </div>
+        <h3 class="problem__card-title">DeFi Integration</h3>
+        <p class="problem__card-desc">Deposit directly into Aave, Compound, etc. Requires custom integration work per protocol. Engineering overhead per agent.</p>
+      </div>
+      <div class="problem__card card-hover">
+        <div class="problem__card-head">
+          <span class="problem__card-num">OPTION 03</span>
+          <span class="problem__card-status problem__card-status--amber">Engineering-intensive</span>
+        </div>
+        <h3 class="problem__card-title">Active Trading</h3>
+        <p class="problem__card-desc">Build and maintain a full trading stack. Requires signal generation, execution, risk management. Most agents can't do this.</p>
+      </div>
+    </div>
+
+    <!-- The Solution callout -->
+    <div class="problem__solution border-gradient">
+      <div class="problem__solution-line"></div>
+      <div class="problem__solution-grid">
+        <div class="problem__solution-copy">
+          <span class="problem__eyebrow">The Solution</span>
+          <h3 class="problem__solution-title">
+            One USDC transfer. Diversified exposure.
+            <span class="problem__title-accent text-gradient">One integration, not twenty.</span>
+          </h3>
+          <p class="problem__solution-desc">
+            Robot Money eliminates the engineering burden. Deposit to the
+            vault contract. Get actively managed, diversified exposure across
+            stable yield, agent-token trading, and revenue-generating
+            positions. Withdraw at NAV anytime.
+          </p>
+        </div>
+        <div class="problem__badge-wrap">
+          <div class="problem__badge animate-pulse-glow">
+            <div class="problem__badge-inner">
+              <div class="problem__badge-num">1</div>
+              <div class="problem__badge-label">Integration</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ── Architecture ── -->
+<section id="architecture" class="architecture">
+  <!-- Background -->
+  <div class="architecture__bg"></div>
+  <div class="architecture__grid grid-pattern"></div>
+
+  <!-- VaultMonolith pyramid overlay (layered behind, from page.tsx) -->
+  <div class="architecture__monolith" aria-hidden="true">
+    <svg class="architecture__monolith-svg" viewBox="0 0 1200 500" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="concreteFace" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#2a3040" />
+          <stop offset="50%" stop-color="#1e2430" />
+          <stop offset="100%" stop-color="#181d28" />
+        </linearGradient>
+        <linearGradient id="concreteRight" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#222a38" />
+          <stop offset="100%" stop-color="#10141c" />
+        </linearGradient>
+        <linearGradient id="concreteLeft" x1="1" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#2e3a4e" />
+          <stop offset="100%" stop-color="#181d28" />
+        </linearGradient>
+        <radialGradient id="vaultGlow" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.4" />
+          <stop offset="40%" stop-color="#00e5ff" stop-opacity="0.15" />
+          <stop offset="100%" stop-color="transparent" />
+        </radialGradient>
+        <linearGradient id="vaultSky" x1="0.5" y1="0" x2="0.5" y2="1">
+          <stop offset="0%" stop-color="#181d28" />
+          <stop offset="60%" stop-color="#10141c" />
+          <stop offset="100%" stop-color="#0b0e14" />
+        </linearGradient>
+        <linearGradient id="vaultFloor" x1="0.5" y1="0" x2="0.5" y2="1">
+          <stop offset="0%" stop-color="#10141c" />
+          <stop offset="100%" stop-color="#06080c" />
+        </linearGradient>
+        <filter id="vaultInnerGlow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="15" />
+        </filter>
+        <filter id="edgeLight" x="-10%" y="-10%" width="120%" height="120%">
+          <feGaussianBlur stdDeviation="2" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <linearGradient id="monolithFog" x1="0" y1="0.5" x2="1" y2="0.5">
+          <stop offset="0%" stop-color="#06080c" stop-opacity="0.8" />
+          <stop offset="30%" stop-color="#06080c" stop-opacity="0" />
+          <stop offset="70%" stop-color="#06080c" stop-opacity="0" />
+          <stop offset="100%" stop-color="#06080c" stop-opacity="0.8" />
+        </linearGradient>
+      </defs>
+
+      <!-- Sky -->
+      <rect x="0" y="0" width="1200" height="320" fill="url(#vaultSky)" />
+      <!-- Floor -->
+      <rect x="0" y="320" width="1200" height="180" fill="url(#vaultFloor)" />
+
+      <!-- Floor grid lines -->
+      <line x1="0" y1="320" x2="1200" y2="320" stroke="#222a38" stroke-width="0.3" opacity="1" />
+      <line x1="0" y1="329" x2="1200" y2="329" stroke="#222a38" stroke-width="0.3" opacity="0.95" />
+      <line x1="0" y1="338" x2="1200" y2="338" stroke="#222a38" stroke-width="0.3" opacity="0.9" />
+      <line x1="0" y1="347" x2="1200" y2="347" stroke="#222a38" stroke-width="0.3" opacity="0.85" />
+      <line x1="0" y1="356" x2="1200" y2="356" stroke="#222a38" stroke-width="0.3" opacity="0.8" />
+      <line x1="0" y1="365" x2="1200" y2="365" stroke="#222a38" stroke-width="0.3" opacity="0.75" />
+      <line x1="0" y1="374" x2="1200" y2="374" stroke="#222a38" stroke-width="0.3" opacity="0.7" />
+      <line x1="0" y1="383" x2="1200" y2="383" stroke="#222a38" stroke-width="0.3" opacity="0.65" />
+      <line x1="0" y1="392" x2="1200" y2="392" stroke="#222a38" stroke-width="0.3" opacity="0.6" />
+      <line x1="0" y1="401" x2="1200" y2="401" stroke="#222a38" stroke-width="0.3" opacity="0.55" />
+      <line x1="0" y1="410" x2="1200" y2="410" stroke="#222a38" stroke-width="0.3" opacity="0.5" />
+      <line x1="0" y1="419" x2="1200" y2="419" stroke="#222a38" stroke-width="0.3" opacity="0.45" />
+      <line x1="0" y1="428" x2="1200" y2="428" stroke="#222a38" stroke-width="0.3" opacity="0.4" />
+      <line x1="0" y1="437" x2="1200" y2="437" stroke="#222a38" stroke-width="0.3" opacity="0.35" />
+      <line x1="0" y1="446" x2="1200" y2="446" stroke="#222a38" stroke-width="0.3" opacity="0.3" />
+      <line x1="0" y1="455" x2="1200" y2="455" stroke="#222a38" stroke-width="0.3" opacity="0.25" />
+      <line x1="0" y1="464" x2="1200" y2="464" stroke="#222a38" stroke-width="0.3" opacity="0.2" />
+      <line x1="0" y1="473" x2="1200" y2="473" stroke="#222a38" stroke-width="0.3" opacity="0.15" />
+      <line x1="0" y1="482" x2="1200" y2="482" stroke="#222a38" stroke-width="0.3" opacity="0.1" />
+      <line x1="0" y1="491" x2="1200" y2="491" stroke="#222a38" stroke-width="0.3" opacity="0.05" />
+
+      <!-- Outer pyramid -->
+      <polygon points="600,40 300,320 600,320" fill="url(#concreteLeft)" />
+      <polygon points="600,40 900,320 600,320" fill="url(#concreteRight)" />
+
+      <!-- Panel seam lines -->
+      <line x1="500" y1="117" x2="400" y2="250" stroke="#2e3a4e" stroke-width="0.5" opacity="0.4" />
+      <line x1="450" y1="152" x2="350" y2="285" stroke="#2e3a4e" stroke-width="0.3" opacity="0.3" />
+      <line x1="700" y1="117" x2="800" y2="250" stroke="#181d28" stroke-width="0.5" opacity="0.4" />
+      <line x1="750" y1="152" x2="850" y2="285" stroke="#181d28" stroke-width="0.3" opacity="0.3" />
+
+      <!-- Cyan edge accents -->
+      <line x1="600" y1="40" x2="300" y2="320" stroke="#00e5ff" stroke-width="0.8" opacity="0.12" filter="url(#edgeLight)" />
+      <line x1="600" y1="40" x2="900" y2="320" stroke="#00e5ff" stroke-width="0.8" opacity="0.12" filter="url(#edgeLight)" />
+
+      <!-- Inner triangular opening -->
+      <polygon points="600,140 480,300 720,300" fill="#0b0e14" />
+      <polygon points="600,140 480,300 720,300" fill="url(#vaultGlow)" />
+
+      <!-- Bright core glow -->
+      <circle cx="600" cy="250" r="30" fill="#00e5ff" opacity="0.15" filter="url(#vaultInnerGlow)" />
+      <circle cx="600" cy="260" r="8" fill="#00e5ff" opacity="0.2" />
+
+      <!-- Inner doorway hint -->
+      <rect x="570" y="260" width="60" height="40" fill="#10141c" stroke="#222a38" stroke-width="0.5" opacity="0.5" />
+      <line x1="600" y1="260" x2="600" y2="300" stroke="#222a38" stroke-width="0.3" opacity="0.5" />
+
+      <!-- Steps -->
+      <line x1="450" y1="310" x2="750" y2="310" stroke="#2e3a4e" stroke-width="0.5" opacity="0.4" />
+      <line x1="430" y1="315" x2="770" y2="315" stroke="#2e3a4e" stroke-width="0.5" opacity="0.3" />
+      <line x1="410" y1="320" x2="790" y2="320" stroke="#222a38" stroke-width="0.8" />
+
+      <!-- Ground-level accent lights -->
+      <circle cx="430" cy="320" r="2" fill="#00e5ff" opacity="0.3" />
+      <circle cx="500" cy="318" r="1.5" fill="#00e5ff" opacity="0.2" />
+      <circle cx="700" cy="318" r="1.5" fill="#00e5ff" opacity="0.2" />
+      <circle cx="770" cy="320" r="2" fill="#00e5ff" opacity="0.3" />
+      <circle cx="430" cy="320" r="8" fill="#00e5ff" opacity="0.05" filter="url(#vaultInnerGlow)" />
+      <circle cx="770" cy="320" r="8" fill="#00e5ff" opacity="0.05" filter="url(#vaultInnerGlow)" />
+
+      <!-- Floor reflection -->
+      <polygon points="600,600 350,320 850,320" fill="#10141c" opacity="0.15" />
+
+      <!-- Distant cityscape -->
+      <g opacity="0.08">
+        <rect x="50" y="280" width="8" height="40" fill="#222a38" />
+        <rect x="70" y="290" width="5" height="30" fill="#222a38" />
+        <rect x="90" y="295" width="12" height="25" fill="#222a38" />
+        <rect x="1080" y="285" width="10" height="35" fill="#222a38" />
+        <rect x="1100" y="290" width="6" height="30" fill="#222a38" />
+        <rect x="1120" y="300" width="15" height="20" fill="#222a38" />
+      </g>
+
+      <!-- Fog overlay -->
+      <rect x="0" y="0" width="1200" height="500" fill="url(#monolithFog)" />
+      <!-- Horizon haze -->
+      <rect x="0" y="290" width="1200" height="60" fill="#0b0e14" opacity="0.15" />
+    </svg>
+  </div>
+
+  <!-- Data stream illustration — positioned on the right -->
+  <div class="architecture__stream" aria-hidden="true">
+    <svg class="architecture__stream-svg" viewBox="0 0 500 600" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="streamBeam" x1="0.5" y1="0" x2="0.5" y2="1">
+          <stop offset="0%" stop-color="#e8a640" stop-opacity="0.8" />
+          <stop offset="50%" stop-color="#e8a640" stop-opacity="0.4" />
+          <stop offset="100%" stop-color="#e8a640" stop-opacity="0" />
+        </linearGradient>
+        <linearGradient id="streamBeamCyan" x1="0.5" y1="0" x2="0.5" y2="1">
+          <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.6" />
+          <stop offset="50%" stop-color="#00e5ff" stop-opacity="0.3" />
+          <stop offset="100%" stop-color="#00e5ff" stop-opacity="0" />
+        </linearGradient>
+        <filter id="streamGlow" x="-200%" y="-10%" width="500%" height="120%">
+          <feGaussianBlur stdDeviation="4" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <filter id="machineGlow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="12" />
+        </filter>
+        <radialGradient id="streamVignette" cx="0.5" cy="0.4" r="0.6">
+          <stop offset="0%" stop-color="transparent" />
+          <stop offset="100%" stop-color="#06080c" stop-opacity="0.7" />
+        </radialGradient>
+      </defs>
+
+      <!-- Machine head -->
+      <g opacity="0.7">
+        <rect x="220" y="0" width="80" height="30" fill="#181d28" stroke="#222a38" stroke-width="0.5" rx="2" />
+        <rect x="240" y="30" width="40" height="20" fill="#10141c" stroke="#2e3a4e" stroke-width="0.5" />
+        <circle cx="260" cy="70" r="35" fill="#10141c" stroke="#222a38" stroke-width="1" />
+        <circle cx="260" cy="70" r="28" fill="#181d28" stroke="#2e3a4e" stroke-width="0.5" />
+        <circle cx="260" cy="70" r="18" fill="#10141c" stroke="#222a38" stroke-width="0.5" />
+        <circle cx="260" cy="70" r="12" fill="none" stroke="#2e3a4e" stroke-width="0.3" stroke-dasharray="2 3" />
+        <circle cx="290" cy="70" r="2" fill="#222a38" />
+        <circle cx="275" cy="96" r="2" fill="#222a38" />
+        <circle cx="245" cy="96" r="2" fill="#222a38" />
+        <circle cx="230" cy="70" r="2" fill="#222a38" />
+        <circle cx="245" cy="44" r="2" fill="#222a38" />
+        <circle cx="275" cy="44" r="2" fill="#222a38" />
+      </g>
+
+      <!-- Light beams -->
+      <g filter="url(#streamGlow)">
+        <g><line x1="200" y1="100" x2="200" y2="380" stroke="url(#streamBeam)" stroke-width="1" opacity="0.5" /><circle cx="200" cy="380" r="1.5" fill="#e8a640" opacity="0.4" /></g>
+        <g><line x1="215" y1="100" x2="215" y2="320" stroke="url(#streamBeam)" stroke-width="1" opacity="0.3" /><circle cx="215" cy="320" r="1.5" fill="#e8a640" opacity="0.24" /></g>
+        <g><line x1="230" y1="100" x2="230" y2="410" stroke="url(#streamBeam)" stroke-width="1" opacity="0.6" /><circle cx="230" cy="410" r="1.5" fill="#e8a640" opacity="0.48" /></g>
+        <g><line x1="245" y1="100" x2="245" y2="280" stroke="url(#streamBeam)" stroke-width="1" opacity="0.25" /><circle cx="245" cy="280" r="1.5" fill="#e8a640" opacity="0.2" /></g>
+        <g><line x1="260" y1="100" x2="260" y2="360" stroke="url(#streamBeam)" stroke-width="1" opacity="0.45" /><circle cx="260" cy="360" r="1.5" fill="#e8a640" opacity="0.36" /></g>
+        <g><line x1="275" y1="100" x2="275" y2="300" stroke="url(#streamBeam)" stroke-width="1" opacity="0.35" /><circle cx="275" cy="300" r="1.5" fill="#e8a640" opacity="0.28" /></g>
+        <g><line x1="290" y1="100" x2="290" y2="400" stroke="url(#streamBeam)" stroke-width="1" opacity="0.55" /><circle cx="290" cy="400" r="1.5" fill="#e8a640" opacity="0.44" /></g>
+        <g><line x1="305" y1="100" x2="305" y2="340" stroke="url(#streamBeam)" stroke-width="1" opacity="0.4" /><circle cx="305" cy="340" r="1.5" fill="#e8a640" opacity="0.32" /></g>
+        <g><line x1="320" y1="100" x2="320" y2="370" stroke="url(#streamBeam)" stroke-width="1" opacity="0.5" /><circle cx="320" cy="370" r="1.5" fill="#e8a640" opacity="0.4" /></g>
+      </g>
+
+      <!-- Ambient glow under machine -->
+      <ellipse cx="260" cy="120" rx="80" ry="30" fill="#e8a640" opacity="0.06" filter="url(#machineGlow)" />
+
+      <!-- Receiving platform -->
+      <g opacity="0.6">
+        <ellipse cx="260" cy="420" rx="60" ry="8" fill="#181d28" stroke="#2e3a4e" stroke-width="0.5" />
+        <ellipse cx="260" cy="418" rx="45" ry="5" fill="#10141c" />
+        <ellipse cx="260" cy="418" rx="30" ry="3.5" fill="none" stroke="#222a38" stroke-width="0.5" />
+        <ellipse cx="260" cy="418" rx="15" ry="2" fill="none" stroke="#222a38" stroke-width="0.3" />
+        <circle cx="200" cy="430" r="4" fill="#181d28" stroke="#222a38" stroke-width="0.5" />
+        <circle cx="320" cy="430" r="4" fill="#181d28" stroke="#222a38" stroke-width="0.5" />
+        <circle cx="195" cy="445" r="3" fill="#10141c" stroke="#222a38" stroke-width="0.3" />
+        <circle cx="325" cy="445" r="3" fill="#10141c" stroke="#222a38" stroke-width="0.3" />
+      </g>
+
+      <!-- Table line -->
+      <line x1="100" y1="440" x2="420" y2="440" stroke="#222a38" stroke-width="0.5" />
+      <!-- Glow pool -->
+      <ellipse cx="260" cy="418" rx="40" ry="5" fill="#e8a640" opacity="0.1" filter="url(#machineGlow)" />
+
+      <!-- Background machines -->
+      <g opacity="0.2">
+        <rect x="60" y="120" width="30" height="300" fill="#181d28" rx="2" />
+        <circle cx="75" cy="140" r="10" fill="none" stroke="#222a38" stroke-width="0.5" />
+        <ellipse cx="75" cy="380" rx="15" ry="4" fill="#e8a640" opacity="0.15" filter="url(#machineGlow)" />
+        <rect x="420" y="140" width="25" height="280" fill="#181d28" rx="2" />
+        <circle cx="432" cy="160" r="8" fill="none" stroke="#222a38" stroke-width="0.5" />
+        <ellipse cx="432" cy="390" rx="12" ry="3" fill="#e8a640" opacity="0.12" filter="url(#machineGlow)" />
+      </g>
+
+      <!-- Vignette overlay -->
+      <rect x="0" y="0" width="500" height="600" fill="url(#streamVignette)" />
+    </svg>
+  </div>
+
+  <div class="architecture__inner">
+    <!-- Header -->
+    <div class="architecture__header">
+      <span class="architecture__eyebrow">02 / System Architecture</span>
+      <h2 class="architecture__title">
+        Three contracts. <span class="architecture__title-accent text-gradient">Two wallets.</span>
+      </h2>
+      <p class="architecture__lede">
+        The Vault holds third-party capital. The Token governs allocation.
+        The Prop Wallet holds protocol-owned capital.
+      </p>
+    </div>
+
+    <!-- Architecture Flow -->
+    <div class="architecture__flow">
+      <!-- Depositors -->
+      <div class="architecture__row-center">
+        <div class="architecture__depositors">
+          <div class="architecture__dot architecture__dot--blue"></div>
+          <span class="architecture__depositors-label">DEPOSITORS</span>
+          <span class="architecture__depositors-sub">(Agents + Humans)</span>
+        </div>
+      </div>
+
+      <!-- Arrow -->
+      <div class="architecture__row-center">
+        <div class="architecture__arrow architecture__arrow--accent">
+          <div class="architecture__arrow-line"></div>
+          <span class="architecture__arrow-label">USDC</span>
+          <div class="architecture__arrow-line"></div>
+          <div class="architecture__arrow-head"></div>
+        </div>
+      </div>
+
+      <!-- THE VAULT -->
+      <div class="architecture__vault glow-green">
+        <div class="architecture__vault-head">
+          <div class="architecture__square"></div>
+          <h3 class="architecture__vault-title">VAULT</h3>
+          <span class="architecture__tag">ERC-4626</span>
+        </div>
+
+        <!-- Three Buckets -->
+        <div class="architecture__buckets">
+          <div class="architecture__bucket architecture__bucket--low card-hover">
+            <div class="architecture__bucket-head">
+              <div class="architecture__bucket-id">
+                <span class="architecture__bucket-letter">A</span>
+                <span class="architecture__bucket-name">Bucket A</span>
+              </div>
+              <span class="architecture__bucket-target">50%</span>
+            </div>
+            <h4 class="architecture__bucket-heading">Stable Yield</h4>
+            <p class="architecture__bucket-desc">The stability anchor. Generates 3-6% APY on stablecoins with near-zero risk of principal loss.</p>
+            <div class="architecture__bucket-foot">
+              <div class="architecture__bucket-risk-row">
+                <span class="architecture__bucket-risk-label">Risk</span>
+                <span class="architecture__bucket-risk architecture__bucket-risk--low">Low</span>
+              </div>
+              <p class="architecture__bucket-assets">USDC/USDT on Aave, Compound, Morpho</p>
+            </div>
+          </div>
+
+          <div class="architecture__bucket architecture__bucket--high card-hover">
+            <div class="architecture__bucket-head">
+              <div class="architecture__bucket-id">
+                <span class="architecture__bucket-letter">B</span>
+                <span class="architecture__bucket-name">Bucket B</span>
+              </div>
+              <span class="architecture__bucket-target">25%</span>
+            </div>
+            <h4 class="architecture__bucket-heading">Diversified Agents</h4>
+            <p class="architecture__bucket-desc">The alpha engine. Tokens selected via $ROBOTMONEY tokenholder voting from agent-economy assets passing quantitative filter.</p>
+            <div class="architecture__bucket-foot">
+              <div class="architecture__bucket-risk-row">
+                <span class="architecture__bucket-risk-label">Risk</span>
+                <span class="architecture__bucket-risk architecture__bucket-risk--high">High</span>
+              </div>
+              <p class="architecture__bucket-assets">Agent-economy tokens via $ROBOTMONEY holder voting</p>
+            </div>
+          </div>
+
+          <div class="architecture__bucket architecture__bucket--medium card-hover">
+            <div class="architecture__bucket-head">
+              <div class="architecture__bucket-id">
+                <span class="architecture__bucket-letter">C</span>
+                <span class="architecture__bucket-name">Bucket C</span>
+              </div>
+              <span class="architecture__bucket-target">25%</span>
+            </div>
+            <h4 class="architecture__bucket-heading">Revenue Liquid Tokens</h4>
+            <p class="architecture__bucket-desc">The middle ground. Tokens selected via $ROBOTMONEY tokenholder voting: $10M+ market cap, 90+ days live, $100K+ daily volume.</p>
+            <div class="architecture__bucket-foot">
+              <div class="architecture__bucket-risk-row">
+                <span class="architecture__bucket-risk-label">Risk</span>
+                <span class="architecture__bucket-risk architecture__bucket-risk--medium">Medium</span>
+              </div>
+              <p class="architecture__bucket-assets">Revenue-generating assets via $ROBOTMONEY holder voting</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fee bar -->
+        <div class="architecture__fee">
+          <span class="architecture__fee-text">2% annual management fee (0.00548%/day)</span>
+          <div class="architecture__fee-sweep">
+            <div class="architecture__fee-line"></div>
+            <span class="architecture__fee-label">FEE SWEEP</span>
+            <div class="architecture__fee-line"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Arrow down -->
+      <div class="architecture__row-center">
+        <div class="architecture__arrow architecture__arrow--purple">
+          <div class="architecture__arrow-line architecture__arrow-line--tall"></div>
+          <div class="architecture__arrow-head architecture__arrow-head--purple"></div>
+        </div>
+      </div>
+
+      <!-- AGENT SKILL -->
+      <div class="architecture__skill">
+        <div class="architecture__skill-head">
+          <div class="architecture__square"></div>
+          <h3 class="architecture__vault-title">AGENT SKILL</h3>
+          <span class="architecture__tag">OpenClaw / MCP</span>
+        </div>
+
+        <div class="architecture__skill-grid">
+          <div>
+            <p class="architecture__skill-lede">
+              One command gives any AI agent the ability to deposit into the Robot Money vault, check balances, and manage USDC allocation across yield and agent-token baskets.
+            </p>
+            <div class="architecture__terminal">
+              <div class="architecture__terminal-head">
+                <span class="architecture__terminal-dot architecture__terminal-dot--warn"></span>
+                <span class="architecture__terminal-dot architecture__terminal-dot--warm"></span>
+                <span class="architecture__terminal-dot architecture__terminal-dot--accent"></span>
+                <span class="architecture__terminal-label">install</span>
+              </div>
+              <code class="architecture__terminal-code">$ npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli</code>
+            </div>
+            <div class="architecture__skill-cta">
+              <a class="architecture__btn architecture__btn--primary" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">Install &rarr;</a>
+              <a class="architecture__btn architecture__btn--ghost" href="/skills">Learn More</a>
+            </div>
+          </div>
+
+          <div class="architecture__steps">
+            <div class="architecture__step">
+              <div class="architecture__step-marker">
+                <span class="architecture__step-num">01</span>
+                <div class="architecture__step-line"></div>
+              </div>
+              <p class="architecture__step-text">Deposit USDC into the vault from any agent runtime</p>
+            </div>
+            <div class="architecture__step">
+              <div class="architecture__step-marker">
+                <span class="architecture__step-num">02</span>
+                <div class="architecture__step-line"></div>
+              </div>
+              <p class="architecture__step-text">Query vault balance, yield accrued, and bucket weights</p>
+            </div>
+            <div class="architecture__step">
+              <div class="architecture__step-marker">
+                <span class="architecture__step-num">03</span>
+                <div class="architecture__step-line"></div>
+              </div>
+              <p class="architecture__step-text">Simulate transactions before signing (simulation-first)</p>
+            </div>
+            <div class="architecture__step">
+              <div class="architecture__step-marker">
+                <span class="architecture__step-num">04</span>
+                <div class="architecture__step-line"></div>
+              </div>
+              <p class="architecture__step-text">Withdraw at NAV with pro-rata bucket exposure</p>
+            </div>
+            <div class="architecture__step">
+              <div class="architecture__step-marker">
+                <span class="architecture__step-num">05</span>
+              </div>
+              <p class="architecture__step-text">Works with Claude Code, Cursor, Codex, and MCP runtimes</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="architecture__skill-foot">
+          <p class="architecture__skill-note">
+            The skill is open-source and protocol-native. Any agent runtime can install it. The CLI handles simulation, signing, and broadcasting through the Open Wallet Standard.
+          </p>
+          <p class="architecture__skill-warn">&#9888; Skill is under active development. Implementation details may differ from final outcome.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ── Token ── -->
+<section id="token" class="token">
+  <div class="token__dots dot-pattern"></div>
+
+  <div class="token__inner">
+    <div class="token__grid">
+      <!-- Left -->
+      <div class="token__intro">
+        <span class="token__eyebrow">03 / The Token</span>
+        <h2 class="token__title">
+          <span class="token__title-ticker">$ROBOTMONEY</span>
+          <br />
+          steers the vault.
+        </h2>
+        <p class="token__lede">
+          The token serves exactly one function: governance over vault
+          allocation. It does not entitle holders to vault returns. The vault
+          is the investment product — the token is the steering mechanism.
+        </p>
+
+        <!-- Key specs -->
+        <div class="token__specs">
+          <div class="token__spec">
+            <span class="token__spec-label">Supply</span>
+            <div class="token__spec-value">100B</div>
+            <span class="token__spec-sub">Fixed, no inflation</span>
+          </div>
+          <div class="token__spec">
+            <span class="token__spec-label">Launch</span>
+            <div class="token__spec-value">Fair Launch</div>
+            <span class="token__spec-sub">On Base via Bankr</span>
+          </div>
+          <div class="token__spec">
+            <span class="token__spec-label">LP Lock</span>
+            <div class="token__spec-value">Until 2100</div>
+            <span class="token__spec-sub">Permanent lock</span>
+          </div>
+          <div class="token__spec">
+            <span class="token__spec-label">Team Alloc</span>
+            <div class="token__spec-value">0%</div>
+            <span class="token__spec-sub">No pre-sale</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right — Mechanisms -->
+      <div class="token__mechanisms">
+        <!-- Fee routing -->
+        <div class="token__card">
+          <h3 class="token__card-title token__card-title--accent">Fee Routing</h3>
+          <div class="token__fees">
+            <div class="token__fee">
+              <span class="token__fee-pct">57%</span>
+              <div class="token__fee-body">
+                <div class="token__fee-label">Creator share</div>
+                <div class="token__fee-dest">Prop wallet (permanent revenue)</div>
+              </div>
+              <div class="token__fee-bar" style="width: 57%;">
+                <div class="token__fee-bar-fill"></div>
+              </div>
+            </div>
+            <div class="token__fee">
+              <span class="token__fee-pct">43%</span>
+              <div class="token__fee-body">
+                <div class="token__fee-label">Interface &amp; Protocol</div>
+                <div class="token__fee-dest">Bankr / Clanker</div>
+              </div>
+              <div class="token__fee-bar" style="width: 43%;">
+                <div class="token__fee-bar-fill"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Buyback and Burn -->
+        <div class="token__card">
+          <h3 class="token__card-title token__card-title--warn">Buyback &amp; Burn Mechanism</h3>
+
+          <!-- Flow diagram -->
+          <div class="token__flow">
+            <div class="token__step">
+              <div class="token__step-rail">
+                <span class="token__step-num">01</span>
+                <div class="token__step-line"></div>
+              </div>
+              <p class="token__step-text">Prop wallet closes position at profit</p>
+            </div>
+            <div class="token__step">
+              <div class="token__step-rail">
+                <span class="token__step-num">02</span>
+                <div class="token__step-line"></div>
+              </div>
+              <p class="token__step-text">Realized gain calculated (USDC terms)</p>
+            </div>
+            <div class="token__step">
+              <div class="token__step-rail">
+                <span class="token__step-num">03</span>
+                <div class="token__step-line"></div>
+              </div>
+              <p class="token__step-text">Buyback: prop wallet buys $ROBOTMONEY on Uniswap v4</p>
+            </div>
+            <div class="token__step">
+              <div class="token__step-rail">
+                <span class="token__step-num">04</span>
+                <div class="token__step-line"></div>
+              </div>
+              <p class="token__step-text">Burn: purchased $ROBOTMONEY sent to 0x000...dEaD</p>
+            </div>
+            <div class="token__step">
+              <div class="token__step-rail">
+                <span class="token__step-num">05</span>
+              </div>
+              <p class="token__step-text">Receipt: BaseScan tx hash published to X + Moltbook</p>
+            </div>
+          </div>
+
+          <div class="token__card-note">
+            <p class="token__card-note-text">
+              No inflationary yield. Value accrual is purely from supply
+              reduction. If prop wallet underperforms, no buyback occurs.
+              Losses published with same transparency.
+            </p>
+          </div>
+        </div>
+
+        <!-- Burn note -->
+        <div class="token__card">
+          <h3 class="token__card-title token__card-title--purple">Burn Dynamics</h3>
+          <p class="token__burn-text">
+            Burns are a function of trading performance, not a schedule.
+            When the prop wallet realizes gains, those gains are used to
+            buy back and burn $ROBOTMONEY. If the prop wallet
+            underperforms, no buyback occurs. Every transaction — wins and
+            losses — is published on-chain.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<div class="section-divider container"></div>
+
+<!-- ── Contract ── -->
+<section class="contract" id="buy">
+  <div class="contract__container container">
+    <div class="contract__inner">
+      <!-- Label -->
+      <div class="contract__label">Official Contract</div>
+
+      <h2 class="contract__heading">
+        <span class="contract__heading-serif">Only use the</span>
+        <span class="contract__heading-bold text-gradient">official address.</span>
+      </h2>
+
+      <p class="contract__lede">
+        Always verify before interacting. This is the only legitimate
+        $ROBOTMONEY contract on Base. Do not trust any other address.
+      </p>
+
+      <!-- Contract address box -->
+      <div
+        class="contract__address-box"
+        x-data="{ copied: false }"
+      >
+        <div class="contract__address">
+          <div class="contract__address-label">$ROBOTMONEY on Base</div>
+          <code class="contract__address-code">0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3</code>
+        </div>
+        <button
+          type="button"
+          class="contract__copy"
+          @click="navigator.clipboard.writeText('0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3'); copied = true; setTimeout(() => copied = false, 2000)"
+        >
+          <span x-show="!copied">Copy</span>
+          <span x-show="copied" x-cloak>Copied!</span>
+        </button>
+      </div>
+
+      <!-- Action links -->
+      <div class="contract__actions">
+        <a
+          class="contract__action contract__action--arrow"
+          href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          View on DexScreener
+          <span class="contract__action-arrow">&rarr;</span>
+        </a>
+        <a
+          class="contract__action"
+          href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Verify on BaseScan
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ── Governance ── -->
+<section id="governance" class="governance">
+  <div class="governance__bg"></div>
+  <div class="governance__grid grid-pattern"></div>
+
+  <div class="governance__inner">
+    <!-- Header -->
+    <div class="governance__header">
+      <span class="governance__eyebrow">04 / Governance</span>
+      <h2 class="governance__title">
+        The agent runs the fund.
+        <span class="governance__title-em text-gradient">Holders steer it.</span>
+      </h2>
+    </div>
+
+    <!-- Governance flow -->
+    <div class="governance__flow">
+      <!-- Allocation Voting -->
+      <div class="governance__card card-hover">
+        <div class="governance__icon governance__icon--accent">
+          <span class="governance__icon-letter governance__icon-letter--accent">W</span>
+        </div>
+        <h3 class="governance__card-title">Weekly Allocation Votes</h3>
+        <p class="governance__card-text">
+          The Robot Money agent publishes a shortlist of 10-15 tokens that
+          pass the quantitative filter. $ROBOTMONEY holders rank their
+          preferred allocations over a 48-hour window.
+        </p>
+        <div class="governance__card-foot">
+          <span class="governance__card-note">
+            Votes weighted by token balance. Results determine Bucket B + C
+            composition.
+          </span>
+        </div>
+      </div>
+
+      <!-- Default Behavior -->
+      <div class="governance__card card-hover">
+        <div class="governance__icon governance__icon--blue">
+          <span class="governance__icon-letter governance__icon-letter--blue">D</span>
+        </div>
+        <h3 class="governance__card-title">Default Behavior</h3>
+        <p class="governance__card-text">
+          If fewer than 5% of circulating supply votes, the agent&apos;s own
+          ranked allocation executes. The fund always has a strategy. Early
+          on, the agent effectively manages solo.
+        </p>
+        <div class="governance__card-foot">
+          <span class="governance__card-note">
+            As the token distributes, external preferences gradually override
+            the default.
+          </span>
+        </div>
+      </div>
+
+      <!-- Monthly Rebalance -->
+      <div class="governance__card card-hover">
+        <div class="governance__icon governance__icon--purple">
+          <span class="governance__icon-letter governance__icon-letter--purple">M</span>
+        </div>
+        <h3 class="governance__card-title">Monthly Weight Rebalance</h3>
+        <p class="governance__card-text">
+          Bucket weights (the 33/33/33 default) are subject to monthly
+          governance votes. Token holders can shift allocation &mdash; e.g.,
+          50% stables / 25% trading / 25% liquid in a downturn.
+        </p>
+        <div class="governance__card-foot">
+          <span class="governance__card-note">
+            If no quorum, weights remain unchanged. Agent proposes shifts
+            with supporting analysis.
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quantitative Filter -->
+    <div class="governance__filter">
+      <div class="governance__filter-grid">
+        <div class="governance__filter-copy">
+          <h3 class="governance__filter-label">The Quantitative Filter</h3>
+          <p class="governance__filter-lede">The filter is the gate, not the vote.</p>
+          <p class="governance__filter-text">
+            Tokens must meet minimum thresholds to appear on the ballot.
+            Votes allocate weight among qualifying tokens only. An agent
+            cannot vote a token onto the ballot that the filter has excluded.
+          </p>
+        </div>
+
+        <div class="governance__metrics">
+          <div class="governance__metric">
+            <span class="governance__metric-name">Market Cap</span>
+            <span class="governance__metric-threshold">Minimum threshold</span>
+          </div>
+          <div class="governance__metric">
+            <span class="governance__metric-name">Age</span>
+            <span class="governance__metric-threshold">Maturity requirement</span>
+          </div>
+          <div class="governance__metric">
+            <span class="governance__metric-name">Daily Volume</span>
+            <span class="governance__metric-threshold">Liquidity floor</span>
+          </div>
+          <div class="governance__metric">
+            <span class="governance__metric-name">Unique Holders</span>
+            <span class="governance__metric-threshold">Distribution check</span>
+          </div>
+          <div class="governance__metric">
+            <span class="governance__metric-name">Revenue</span>
+            <span class="governance__metric-threshold">On-chain verifiable</span>
+          </div>
+          <p class="governance__metric-note">
+            Specific thresholds defined in the whitepaper and subject to governance.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Human Participation -->
+    <div class="governance__participation">
+      <div class="governance__pcard card-hover">
+        <div class="governance__pcard-head">
+          <div class="governance__pcard-icon">V</div>
+          <h4 class="governance__pcard-mode">Vault Depositor</h4>
+        </div>
+        <div class="governance__pcard-body">
+          <div>
+            <span class="governance__pcard-key">How</span>
+            <p class="governance__pcard-value">
+              Deposit USDC to vault contract via any Base-compatible wallet
+            </p>
+          </div>
+          <div>
+            <span class="governance__pcard-key">What You Get</span>
+            <p class="governance__pcard-value">
+              Vault shares. Exposure to three-bucket allocation. Withdraw at NAV minus 0.25% exit fee.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="governance__pcard card-hover">
+        <div class="governance__pcard-head">
+          <div class="governance__pcard-icon">T</div>
+          <h4 class="governance__pcard-mode">Token Holder / Voter</h4>
+        </div>
+        <div class="governance__pcard-body">
+          <div>
+            <span class="governance__pcard-key">How</span>
+            <p class="governance__pcard-value">
+              Buy $ROBOTMONEY on Uniswap v4 on Base
+            </p>
+          </div>
+          <div>
+            <span class="governance__pcard-key">What You Get</span>
+            <p class="governance__pcard-value">
+              Governance: vote on weekly allocation and monthly weight rebalance. Economic: benefit from buyback-and-burn.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+

@@ -1,0 +1,139 @@
+<section id="token" class="token">
+  <div class="token__dots dot-pattern"></div>
+
+  <div class="token__inner">
+    <div class="token__grid">
+      <!-- Left -->
+      <div class="token__intro">
+        <span class="token__eyebrow">03 / The Token</span>
+        <h2 class="token__title">
+          <span class="token__title-ticker">$ROBOTMONEY</span>
+          <br />
+          steers the vault.
+        </h2>
+        <p class="token__lede">
+          The token serves exactly one function: governance over vault
+          allocation. It does not entitle holders to vault returns. The vault
+          is the investment product — the token is the steering mechanism.
+        </p>
+
+        <!-- Key specs -->
+        <div class="token__specs">
+          <div class="token__spec">
+            <span class="token__spec-label">Supply</span>
+            <div class="token__spec-value">100B</div>
+            <span class="token__spec-sub">Fixed, no inflation</span>
+          </div>
+          <div class="token__spec">
+            <span class="token__spec-label">Launch</span>
+            <div class="token__spec-value">Fair Launch</div>
+            <span class="token__spec-sub">On Base via Bankr</span>
+          </div>
+          <div class="token__spec">
+            <span class="token__spec-label">LP Lock</span>
+            <div class="token__spec-value">Until 2100</div>
+            <span class="token__spec-sub">Permanent lock</span>
+          </div>
+          <div class="token__spec">
+            <span class="token__spec-label">Team Alloc</span>
+            <div class="token__spec-value">0%</div>
+            <span class="token__spec-sub">No pre-sale</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right — Mechanisms -->
+      <div class="token__mechanisms">
+        <!-- Fee routing -->
+        <div class="token__card">
+          <h3 class="token__card-title token__card-title--accent">Fee Routing</h3>
+          <div class="token__fees">
+            <div class="token__fee">
+              <span class="token__fee-pct">57%</span>
+              <div class="token__fee-body">
+                <div class="token__fee-label">Creator share</div>
+                <div class="token__fee-dest">Prop wallet (permanent revenue)</div>
+              </div>
+              <div class="token__fee-bar" style="width: 57%;">
+                <div class="token__fee-bar-fill"></div>
+              </div>
+            </div>
+            <div class="token__fee">
+              <span class="token__fee-pct">43%</span>
+              <div class="token__fee-body">
+                <div class="token__fee-label">Interface &amp; Protocol</div>
+                <div class="token__fee-dest">Bankr / Clanker</div>
+              </div>
+              <div class="token__fee-bar" style="width: 43%;">
+                <div class="token__fee-bar-fill"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Buyback and Burn -->
+        <div class="token__card">
+          <h3 class="token__card-title token__card-title--warn">Buyback &amp; Burn Mechanism</h3>
+
+          <!-- Flow diagram -->
+          <div class="token__flow">
+            <div class="token__step">
+              <div class="token__step-rail">
+                <span class="token__step-num">01</span>
+                <div class="token__step-line"></div>
+              </div>
+              <p class="token__step-text">Prop wallet closes position at profit</p>
+            </div>
+            <div class="token__step">
+              <div class="token__step-rail">
+                <span class="token__step-num">02</span>
+                <div class="token__step-line"></div>
+              </div>
+              <p class="token__step-text">Realized gain calculated (USDC terms)</p>
+            </div>
+            <div class="token__step">
+              <div class="token__step-rail">
+                <span class="token__step-num">03</span>
+                <div class="token__step-line"></div>
+              </div>
+              <p class="token__step-text">Buyback: prop wallet buys $ROBOTMONEY on Uniswap v4</p>
+            </div>
+            <div class="token__step">
+              <div class="token__step-rail">
+                <span class="token__step-num">04</span>
+                <div class="token__step-line"></div>
+              </div>
+              <p class="token__step-text">Burn: purchased $ROBOTMONEY sent to 0x000...dEaD</p>
+            </div>
+            <div class="token__step">
+              <div class="token__step-rail">
+                <span class="token__step-num">05</span>
+              </div>
+              <p class="token__step-text">Receipt: BaseScan tx hash published to X + Moltbook</p>
+            </div>
+          </div>
+
+          <div class="token__card-note">
+            <p class="token__card-note-text">
+              No inflationary yield. Value accrual is purely from supply
+              reduction. If prop wallet underperforms, no buyback occurs.
+              Losses published with same transparency.
+            </p>
+          </div>
+        </div>
+
+        <!-- Burn note -->
+        <div class="token__card">
+          <h3 class="token__card-title token__card-title--purple">Burn Dynamics</h3>
+          <p class="token__burn-text">
+            Burns are a function of trading performance, not a schedule.
+            When the prop wallet realizes gains, those gains are used to
+            buy back and burn $ROBOTMONEY. If the prop wallet
+            underperforms, no buyback occurs. Every transaction — wins and
+            losses — is published on-chain.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

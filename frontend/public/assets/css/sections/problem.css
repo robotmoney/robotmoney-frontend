@@ -1,0 +1,276 @@
+/* Problem section — ported from src/components/ProblemSection.tsx
+   + svg/AnimatedServerGrid.tsx. Mobile-first; md = 768px, lg = 1024px.
+   Tailwind scale translated to real CSS. */
+
+/* ════════ Section shell ════════ */
+.problem {
+  position: relative;
+  padding-block: 8rem; /* py-32 */
+}
+
+/* dot-pattern overlay opacity-30 */
+.problem__dots {
+  position: absolute;
+  inset: 0;
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+/* absolute server-grid background: inset-x-0 top-0 h-[500px] opacity-30 */
+.problem__bg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 500px;
+  opacity: 0.3;
+  pointer-events: none;
+  overflow: hidden;
+}
+.problem__servers {
+  display: block;
+  width: 100%;  /* w-full */
+  height: 100%; /* h-full */
+}
+
+/* relative z-10 max-w-7xl mx-auto px-6 (.container provides max-w + centering) */
+.problem__inner {
+  position: relative;
+  z-index: 10;
+  padding-inline: 1.5rem; /* px-6 */
+}
+
+/* ════════ Section header ════════ */
+.problem__header {
+  max-width: 48rem; /* max-w-3xl */
+  margin-bottom: 5rem; /* mb-20 */
+}
+
+/* eyebrow: text-[10px] font-mono uppercase tracking-[0.3em] accent mb-6 */
+.problem__eyebrow {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1.5rem; /* mb-6 */
+}
+
+/* text-4xl font-serif italic leading-[1.05] mb-8 */
+.problem__title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 2.25rem; /* text-4xl */
+  line-height: 1.05;
+  margin: 0 0 2rem; /* mb-8 */
+}
+/* not-italic font-sans font-bold (text-gradient applied via utility class) */
+.problem__title-accent {
+  font-style: normal;
+  font-family: var(--font-sans);
+  font-weight: 700;
+}
+
+/* text-lg text-muted leading-relaxed */
+.problem__lede {
+  font-size: 1.125rem;
+  line-height: 1.625;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+/* ════════ The three options ════════ */
+/* grid md:grid-cols-3 gap-6 mb-16 */
+.problem__options {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+  margin-bottom: 4rem;
+}
+
+/* group bg-surface border border-border p-8 card-hover */
+.problem__card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  padding: 2rem;
+}
+
+/* flex items-center justify-between mb-6 */
+.problem__card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+/* OPTION ## : text-[10px] font-mono tracking-[0.2em] text-dim */
+.problem__card-num {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+}
+
+/* status: text-[10px] font-mono uppercase tracking-widest (colored) */
+.problem__card-status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em; /* tracking-widest */
+}
+.problem__card-status--warn { color: var(--color-warn); }
+.problem__card-status--amber { color: #eab308; } /* text-yellow-500 */
+
+/* h3 text-xl font-semibold mb-4 + group-hover:text-accent transition-colors */
+.problem__card-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 1rem;
+  transition: color 0.3s;
+}
+.problem__card:hover .problem__card-title {
+  color: var(--color-accent);
+}
+
+/* p text-sm text-muted leading-relaxed */
+.problem__card-desc {
+  font-size: 0.875rem;
+  line-height: 1.625;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+/* ════════ The solution callout ════════ */
+/* relative border-gradient p-10 */
+.problem__solution {
+  position: relative;
+  padding: 2.5rem;
+}
+
+/* absolute top-0 left-0 w-full h-px gradient from accent/50 via blue/50 to transparent */
+.problem__solution-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    rgba(0, 229, 255, 0.5),
+    rgba(68, 136, 255, 0.5),
+    transparent
+  );
+}
+
+/* grid lg:grid-cols-[1fr_auto] gap-10 items-center */
+.problem__solution-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2.5rem;
+  align-items: center;
+}
+
+/* space-y-4 */
+.problem__solution-copy > * + * {
+  margin-top: 1rem;
+}
+
+/* h3 text-2xl font-serif italic leading-tight */
+.problem__solution-title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.5rem; /* text-2xl */
+  line-height: 1.25; /* leading-tight */
+  margin: 0;
+}
+
+/* p text-muted max-w-2xl */
+.problem__solution-desc {
+  color: var(--color-text-muted);
+  max-width: 42rem;
+  margin: 0;
+}
+
+/* flex-shrink-0 */
+.problem__badge-wrap {
+  flex-shrink: 0;
+}
+
+/* w-32 h-32 border accent/30 flex items-center justify-center animate-pulse-glow */
+.problem__badge {
+  width: 8rem;
+  height: 8rem;
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.problem__badge-inner {
+  text-align: center;
+}
+/* text-3xl font-mono font-bold accent */
+.problem__badge-num {
+  font-family: var(--font-mono);
+  font-size: 1.875rem; /* text-3xl */
+  font-weight: 700;
+  color: var(--color-accent);
+}
+/* text-[9px] font-mono uppercase tracking-[0.2em] text-dim mt-1 */
+.problem__badge-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+  margin-top: 0.25rem;
+}
+
+/* ════════ Animated server-grid LEDs (from AnimatedServerGrid <style>) ════════ */
+@keyframes ledPulse1 {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.55; }
+}
+@keyframes ledPulse2 {
+  0%, 100% { opacity: 0.3; }
+  60% { opacity: 0.6; }
+}
+@keyframes ledPulse3 {
+  0%, 100% { opacity: 0.2; }
+  40% { opacity: 0.5; }
+}
+@keyframes ledPulseAmber {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 0.45; }
+}
+.problem__servers .led-1 { animation: ledPulse1 2.4s ease-in-out infinite; }
+.problem__servers .led-2 { animation: ledPulse2 3.1s ease-in-out infinite; }
+.problem__servers .led-3 { animation: ledPulse3 1.8s ease-in-out infinite; }
+.problem__servers .led-amber { animation: ledPulseAmber 4s ease-in-out infinite; }
+
+/* ════════ Responsive ════════ */
+@media (min-width: 768px) {
+  /* md:text-5xl */
+  .problem__title { font-size: 3rem; }
+  /* md:grid-cols-3 */
+  .problem__options { grid-template-columns: repeat(3, 1fr); }
+  /* md:text-3xl */
+  .problem__solution-title { font-size: 1.875rem; }
+}
+
+@media (min-width: 1024px) {
+  /* lg:py-40 */
+  .problem { padding-block: 10rem; }
+  /* lg:px-8 */
+  .problem__inner { padding-inline: 2rem; }
+  /* lg:text-6xl */
+  .problem__title { font-size: 3.75rem; }
+  /* lg:p-14 */
+  .problem__solution { padding: 3.5rem; }
+  /* lg:grid-cols-[1fr_auto] */
+  .problem__solution-grid { grid-template-columns: 1fr auto; }
+  /* lg:w-40 lg:h-40 */
+  .problem__badge { width: 10rem; height: 10rem; }
+  /* lg:text-4xl */
+  .problem__badge-num { font-size: 2.25rem; }
+}

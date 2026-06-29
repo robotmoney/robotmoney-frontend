@@ -1,0 +1,14 @@
+{
+  "name": "@robotmoney/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/server.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@robotmoney/contract": "file:../contract",
+    "zod": "^4.4.3"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@robotmoney/backend",
+  "version": "0.1.0",
+  "description": "Robot Money analytics backend: Bun HTTP server (API + static) + Postgres-backed task queue and workers.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": ">=1.2"
+  },
+  "scripts": {
+    "api": "bun run src/api/index.ts",
+    "worker": "bun run src/worker/index.ts",
+    "migrate": "bun run src/db/migrate.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
+    "@robotmoney/contract": "file:../contract",
+    "cron-parser": "^4.9.0",
+    "postgres": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.9.3"
+  }
+}

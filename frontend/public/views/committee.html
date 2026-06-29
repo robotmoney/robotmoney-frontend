@@ -1,0 +1,47 @@
+<!-- Committee view — fetches the latest published session and renders the
+     members' signed takes + the aggregate. Injected into #view by the router. -->
+<section class="cv container" x-data="committeeView()" x-init="load()">
+  <header class="cv__head">
+    <span class="cv__eyebrow">Investment Committee</span>
+    <h1 class="cv__title">Committee <span class="text-gradient">Session</span></h1>
+    <p class="cv__sub" x-show="session" x-cloak>
+      <span x-text="session?.subject_name"></span> · <span x-text="session?.date?.slice(0,10)"></span> ·
+      state <span x-text="session?.state"></span>
+    </p>
+  </header>
+
+  <p class="cv__loading" x-show="loading">Loading committee…</p>
+  <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
+  <p class="cv__empty" x-show="!loading && !session" x-cloak>No published sessions yet.</p>
+
+  <template x-if="aggregate">
+    <div class="cv__aggregate">
+      <div class="cv__agg-metric">
+        <span x-text="aggregate.quorum.submitted"></span>/<span x-text="aggregate.quorum.active"></span>
+        <small>members submitted</small>
+      </div>
+      <div class="cv__stances">
+        <template x-for="[stance, n] in Object.entries(aggregate.stances)" :key="stance">
+          <span class="cv__stance-chip"><b x-text="n"></b> <span x-text="stance"></span></span>
+        </template>
+      </div>
+      <div class="cv__absent" x-show="aggregate.absent.length" x-cloak>
+        absent: <span x-text="aggregate.absent.join(', ')"></span>
+      </div>
+    </div>
+  </template>
+
+  <div class="cv__takes">
+    <template x-for="t in takes" :key="t.id">
+      <article class="cv__take">
+        <div class="cv__take-head">
+          <span class="cv__member" x-text="t.member_name"></span>
+          <span :class="stanceClass(t.stance)" x-text="t.stance"></span>
+          <span class="cv__conf">confidence <span x-text="Math.round((t.confidence||0)*100)+'%'"></span></span>
+          <span class="cv__verified" x-show="t.verified" title="signature verified">✓ signed</span>
+        </div>
+        <p class="cv__body" x-text="t.body"></p>
+      </article>
+    </template>
+  </div>
+</section>

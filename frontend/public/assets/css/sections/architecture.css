@@ -1,0 +1,510 @@
+/* ===========================================================================
+   Architecture section — ported from ArchitectureSection.tsx
+   (Tailwind utilities translated to hand-written CSS; reuses design-system
+   tokens + utilities: text-gradient, glow-green, grid-pattern, card-hover.)
+   =========================================================================== */
+
+.architecture {
+  position: relative;
+  padding-block: 8rem;            /* py-32 */
+  overflow: hidden;
+  background: var(--color-deep);
+}
+@media (min-width: 1024px) {
+  .architecture { padding-block: 10rem; } /* lg:py-40 */
+}
+
+/* ── Background layers ── */
+.architecture__bg {
+  position: absolute;
+  inset: 0;
+  background: var(--color-deep);
+  z-index: 0;
+}
+.architecture__grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.2;                   /* opacity-20 */
+  z-index: 0;
+}
+
+/* ── VaultMonolith pyramid overlay (layered behind content) ── */
+.architecture__monolith {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.3;
+  transform: translateY(-25%);
+  z-index: 1;
+}
+.architecture__monolith-svg {
+  width: 100%;
+  max-width: 64rem;               /* max-w-5xl */
+  height: auto;
+}
+
+/* ── Data stream illustration (right side, desktop only) ── */
+.architecture__stream {
+  position: absolute;
+  right: 0;
+  top: 5rem;                      /* top-20 */
+  width: 350px;
+  height: 500px;
+  opacity: 0.12;
+  pointer-events: none;
+  display: none;
+  z-index: 1;
+}
+@media (min-width: 1024px) {
+  .architecture__stream { display: block; } /* hidden lg:block */
+}
+.architecture__stream-svg { width: 100%; height: 100%; }
+
+/* ── Inner container ── */
+.architecture__inner {
+  position: relative;
+  z-index: 10;
+  max-width: 80rem;               /* max-w-7xl */
+  margin-inline: auto;
+  padding-inline: 1.5rem;         /* px-6 */
+}
+@media (min-width: 1024px) {
+  .architecture__inner { padding-inline: 2rem; } /* lg:px-8 */
+}
+
+/* ── Header ── */
+.architecture__header {
+  text-align: center;
+  max-width: 48rem;               /* max-w-3xl */
+  margin-inline: auto;
+  margin-bottom: 6rem;            /* mb-24 */
+}
+.architecture__eyebrow {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1.5rem;          /* mb-6 */
+}
+.architecture__title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 2.25rem;             /* text-4xl */
+  line-height: 1.05;
+  margin: 0 0 1.5rem;             /* mb-6 */
+}
+@media (min-width: 768px) {
+  .architecture__title { font-size: 3rem; }     /* md:text-5xl */
+}
+@media (min-width: 1024px) {
+  .architecture__title { font-size: 3.75rem; }  /* lg:text-6xl */
+}
+.architecture__title-accent {
+  font-style: normal;             /* not-italic */
+  font-family: var(--font-sans);
+  font-weight: 700;
+}
+.architecture__lede {
+  font-size: 1.125rem;            /* text-lg */
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+/* ── Flow stack (space-y-8) ── */
+.architecture__flow > * + * { margin-top: 2rem; }
+
+.architecture__row-center {
+  display: flex;
+  justify-content: center;
+}
+
+/* ── Depositors pill ── */
+.architecture__depositors {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;                   /* gap-3 */
+  padding: 0.75rem 1.5rem;        /* py-3 px-6 */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 2px;             /* rounded-sm */
+}
+.architecture__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+}
+.architecture__dot--blue { background: var(--color-blue); }
+.architecture__depositors-label {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;            /* text-sm */
+  color: var(--color-text-muted);
+}
+.architecture__depositors-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-dim);
+}
+
+/* ── Arrows ── */
+.architecture__arrow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;                   /* gap-1 */
+}
+.architecture__arrow--purple { gap: 0; }
+.architecture__arrow-line {
+  width: 1px;
+  height: 2rem;                   /* h-8 */
+  background: color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+.architecture__arrow-line--tall {
+  height: 2.5rem;                 /* h-10 */
+  background: color-mix(in srgb, var(--color-purple) 40%, transparent);
+}
+.architecture__arrow-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--color-accent);
+}
+.architecture__arrow-head {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 6px solid color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+.architecture__arrow-head--purple {
+  border-top-color: color-mix(in srgb, var(--color-purple) 40%, transparent);
+}
+
+/* ── Vault block ── */
+.architecture__vault {
+  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
+  background: var(--color-surface);
+  padding: 2rem;                  /* p-8 */
+}
+@media (min-width: 1024px) {
+  .architecture__vault { padding: 2.5rem; }  /* lg:p-10 */
+}
+.architecture__vault-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;                   /* gap-3 */
+  margin-bottom: 2rem;            /* mb-8 */
+}
+.architecture__square {
+  width: 0.75rem;
+  height: 0.75rem;
+  background: var(--color-accent);
+}
+.architecture__vault-title {
+  font-family: var(--font-mono);
+  font-size: 1.125rem;            /* text-lg */
+  font-weight: 700;
+  letter-spacing: 0.025em;        /* tracking-wide */
+  margin: 0;
+}
+.architecture__tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-dim);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  padding: 0.125rem 0.5rem;       /* py-0.5 px-2 */
+}
+
+/* ── Buckets grid ── */
+.architecture__buckets {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;                    /* gap-6 */
+}
+@media (min-width: 768px) {
+  .architecture__buckets { grid-template-columns: repeat(3, 1fr); } /* md:grid-cols-3 */
+}
+
+.architecture__bucket {
+  border: 1px solid;
+  padding: 1.5rem;                /* p-6 */
+}
+.architecture__bucket--low {
+  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
+}
+.architecture__bucket--high {
+  border-color: color-mix(in srgb, var(--color-warn) 40%, transparent);
+  background: color-mix(in srgb, var(--color-warn) 5%, transparent);
+}
+.architecture__bucket--medium {
+  border-color: color-mix(in srgb, #facc15 40%, transparent);  /* yellow-400 */
+  background: color-mix(in srgb, #facc15 5%, transparent);
+}
+.architecture__bucket-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;            /* mb-4 */
+}
+.architecture__bucket-id {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;                   /* gap-3 */
+}
+.architecture__bucket-letter {
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1.125rem;            /* text-lg */
+  background: var(--color-surface-light);
+  border: 1px solid var(--color-border);
+}
+.architecture__bucket-name {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;             /* text-xs */
+  text-transform: uppercase;
+  letter-spacing: 0.05em;         /* tracking-wider */
+  color: var(--color-text-muted);
+}
+.architecture__bucket-target {
+  font-family: var(--font-mono);
+  font-size: 1.25rem;             /* text-xl */
+  font-weight: 700;
+  color: var(--color-text);
+}
+.architecture__bucket-heading {
+  font-weight: 600;               /* font-semibold */
+  font-size: 1.125rem;            /* text-lg */
+  margin: 0 0 0.5rem;             /* mb-2 */
+}
+.architecture__bucket-desc {
+  font-size: 0.875rem;            /* text-sm */
+  color: var(--color-text-muted);
+  margin: 0 0 1rem;               /* mb-4 */
+}
+.architecture__bucket-foot {
+  padding-top: 1rem;              /* pt-4 */
+  border-top: 1px solid var(--color-border);
+}
+.architecture__bucket-risk-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.architecture__bucket-risk-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;          /* tracking-widest */
+  color: var(--color-text-dim);
+}
+.architecture__bucket-risk {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;             /* text-xs */
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.architecture__bucket-risk--low { color: var(--color-accent); }
+.architecture__bucket-risk--high { color: var(--color-warn); }
+.architecture__bucket-risk--medium { color: #facc15; } /* yellow-400 */
+.architecture__bucket-assets {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-dim);
+  margin: 0.5rem 0 0;             /* mt-2 */
+}
+
+/* ── Fee bar ── */
+.architecture__fee {
+  margin-top: 2rem;               /* mt-8 */
+  padding-top: 1.5rem;            /* pt-6 */
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.architecture__fee-text {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;             /* text-xs */
+  color: var(--color-text-dim);
+}
+.architecture__fee-sweep {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;                    /* gap-2 */
+}
+.architecture__fee-line {
+  width: 2rem;                    /* w-8 */
+  height: 1px;
+  background: color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+.architecture__fee-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-accent);
+}
+
+/* ── Agent skill block ── */
+.architecture__skill {
+  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
+  background: var(--color-surface);
+  padding: 2rem;                  /* p-8 */
+}
+@media (min-width: 1024px) {
+  .architecture__skill { padding: 2.5rem; }  /* lg:p-10 */
+}
+.architecture__skill-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;                   /* gap-3 */
+  margin-bottom: 1.5rem;          /* mb-6 */
+}
+.architecture__skill-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;                      /* gap-8 */
+}
+@media (min-width: 768px) {
+  .architecture__skill-grid { grid-template-columns: repeat(2, 1fr); } /* md:grid-cols-2 */
+}
+.architecture__skill-lede {
+  font-size: 0.875rem;            /* text-sm */
+  color: var(--color-text-muted);
+  line-height: 1.625;             /* leading-relaxed */
+  margin: 0 0 1.25rem;            /* mb-5 */
+}
+
+/* terminal card */
+.architecture__terminal {
+  background: var(--color-deep);
+  border: 1px solid var(--color-border);
+  padding: 1rem;                  /* p-4 */
+  margin-bottom: 1.25rem;         /* mb-5 */
+}
+.architecture__terminal-head {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;                  /* gap-1.5 */
+  margin-bottom: 0.75rem;         /* mb-3 */
+}
+.architecture__terminal-dot {
+  width: 0.625rem;                /* w-2.5 */
+  height: 0.625rem;
+  border-radius: 9999px;
+}
+.architecture__terminal-dot--warn { background: color-mix(in srgb, var(--color-warn) 60%, transparent); }
+.architecture__terminal-dot--warm { background: color-mix(in srgb, var(--color-warm) 60%, transparent); }
+.architecture__terminal-dot--accent { background: color-mix(in srgb, var(--color-accent) 60%, transparent); }
+.architecture__terminal-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+  margin-left: 0.5rem;            /* ml-2 */
+}
+.architecture__terminal-code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--color-accent);
+  word-break: break-all;          /* break-all */
+}
+
+/* CTA buttons */
+.architecture__skill-cta {
+  display: flex;
+  gap: 0.75rem;                   /* gap-3 */
+}
+.architecture__btn {
+  flex: 1 1 0%;
+  text-align: center;
+  padding: 0.625rem 1rem;         /* py-2.5 px-4 */
+  font-family: var(--font-mono);
+  font-size: 0.75rem;             /* text-xs */
+  text-transform: uppercase;
+  letter-spacing: 0.1em;          /* tracking-widest */
+  text-decoration: none;
+}
+.architecture__btn--primary {
+  background: var(--color-accent);
+  color: var(--color-void);
+  font-weight: 500;               /* font-medium */
+  transition: background-color 0.3s;
+}
+.architecture__btn--primary:hover { background: #ffffff; }
+.architecture__btn--ghost {
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  transition: border-color 0.3s, color 0.3s;
+}
+.architecture__btn--ghost:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+/* steps list (space-y-4) */
+.architecture__steps > * + * { margin-top: 1rem; }
+.architecture__step {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;                      /* gap-4 */
+}
+.architecture__step-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+.architecture__step-num {
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid color-mix(in srgb, var(--color-warn) 30%, transparent);
+  color: var(--color-warn);
+}
+.architecture__step-line {
+  width: 1px;
+  height: 1rem;                   /* h-4 */
+  background: color-mix(in srgb, var(--color-warn) 20%, transparent);
+}
+.architecture__step-text {
+  font-size: 0.875rem;            /* text-sm */
+  color: var(--color-text-muted);
+  padding-top: 0.375rem;          /* pt-1.5 */
+  margin: 0;
+}
+
+/* skill footer */
+.architecture__skill-foot {
+  margin-top: 1.5rem;             /* mt-6 */
+  padding-top: 1rem;              /* pt-4 */
+  border-top: 1px solid var(--color-border);
+}
+.architecture__skill-note {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;             /* text-xs */
+  color: var(--color-text-dim);
+  margin: 0;
+}
+.architecture__skill-warn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: color-mix(in srgb, var(--color-warn) 70%, transparent);
+  margin: 0.5rem 0 0;             /* mt-2 */
+}

@@ -1,0 +1,64 @@
+/* Data-driven view styles: regime + committee. Reuses the design tokens. */
+.rv, .cv { padding: 9rem 1.5rem 6rem; }
+.rv__eyebrow, .cv__eyebrow {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.3em; color: var(--color-accent);
+}
+.rv__title, .cv__title { font-size: 2.5rem; letter-spacing: -0.02em; margin: 0.5rem 0; }
+.rv__sub, .cv__sub { color: var(--color-text-muted); font-family: var(--font-mono); font-size: 0.85rem; }
+.rv__loading, .cv__loading, .cv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
+.rv__error, .cv__error { color: var(--color-warn); font-family: var(--font-mono); }
+
+/* regime cards */
+.rv__cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin: 2rem 0; }
+.rv__card {
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: 4px; padding: 1.5rem; display: flex; flex-direction: column; gap: 0.5rem;
+}
+.rv__metric { font-size: 2.5rem; font-family: var(--font-mono); font-weight: 700; color: var(--color-accent); }
+.rv__label { font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.2em; color: var(--color-text-dim); }
+.rv__pct { font-size: 0.8rem; font-family: var(--font-mono); color: var(--color-text-muted); }
+
+.regime-pill {
+  display: inline-block; padding: 0.4rem 1rem; border-radius: 999px;
+  font-family: var(--font-mono); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.1em;
+  border: 1px solid var(--color-border); width: fit-content;
+}
+.regime-pill--risk_on { color: var(--color-accent); border-color: rgba(0, 229, 255, 0.4); background: rgba(0, 229, 255, 0.08); }
+.regime-pill--neutral { color: var(--color-warm); border-color: rgba(232, 166, 64, 0.4); background: rgba(232, 166, 64, 0.08); }
+.regime-pill--risk_off { color: var(--color-warn); border-color: rgba(255, 102, 68, 0.4); background: rgba(255, 102, 68, 0.08); }
+
+.rv__chart { height: 280px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 1rem; margin: 1rem 0 2.5rem; }
+.rv__h2 { font-size: 1.25rem; margin-bottom: 1rem; }
+.rv__indicators { display: grid; grid-template-columns: 1fr; gap: 0.75rem; }
+.rv__ind { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 0.75rem 1rem; }
+.rv__ind-row { display: flex; justify-content: space-between; align-items: baseline; }
+.rv__ind-name { font-size: 0.9rem; }
+.rv__ind-panel { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--color-text-dim); }
+.rv__bar { height: 4px; background: var(--color-border); border-radius: 2px; margin: 0.5rem 0 0.25rem; overflow: hidden; }
+.rv__bar-fill { height: 100%; background: linear-gradient(90deg, #4488ff, #00e5ff); }
+.rv__ind-score { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); text-align: right; }
+
+/* committee */
+.cv__aggregate { display: flex; flex-wrap: wrap; align-items: center; gap: 1.5rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 1.5rem; margin: 2rem 0; }
+.cv__agg-metric { font-family: var(--font-mono); font-size: 1.75rem; font-weight: 700; color: var(--color-accent); }
+.cv__agg-metric small { display: block; font-size: 10px; font-weight: 400; text-transform: uppercase; letter-spacing: 0.2em; color: var(--color-text-dim); }
+.cv__stances { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.cv__stance-chip { font-family: var(--font-mono); font-size: 0.8rem; padding: 0.3rem 0.7rem; border: 1px solid var(--color-border); border-radius: 999px; color: var(--color-text-muted); }
+.cv__absent { font-family: var(--font-mono); font-size: 0.8rem; color: var(--color-text-dim); }
+
+.cv__takes { display: flex; flex-direction: column; gap: 1rem; }
+.cv__take { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 1.25rem; }
+.cv__take-head { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+.cv__member { font-weight: 700; }
+.cv__conf { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
+.cv__verified { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-accent); }
+.cv__body { color: var(--color-text-muted); margin: 0; }
+.stance { font-family: var(--font-mono); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em; padding: 0.2rem 0.6rem; border-radius: 3px; }
+.stance--bullish { color: var(--color-accent); background: rgba(0,229,255,0.1); }
+.stance--constructive { color: #6ee7b7; background: rgba(110,231,183,0.1); }
+.stance--neutral { color: var(--color-text-muted); background: rgba(255,255,255,0.05); }
+.stance--cautious { color: var(--color-warm); background: rgba(232,166,64,0.1); }
+.stance--bearish { color: var(--color-warn); background: rgba(255,102,68,0.1); }
+
+@media (min-width: 768px) { .rv__cards { grid-template-columns: repeat(4, 1fr); } .rv__indicators { grid-template-columns: repeat(2, 1fr); } }

@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Robot Money — Autonomous Treasury for the Agent Economy</title>
+    <meta name="description" content="A managed vault on Base that accepts USDC deposits from autonomous agents and allocates across three diversified strategies. One integration, not twenty." />
+    <meta property="og:title" content="Robot Money" />
+    <meta property="og:description" content="An autonomous treasury for the agent economy. One USDC deposit. Three diversified strategies. Withdraw at NAV anytime." />
+    <meta property="og:type" content="website" />
+
+    <!-- Shared design system — load order matters: tokens, then design-system,
+         then components. No @import; each file linked individually. -->
+    <link rel="stylesheet" href="/assets/css/tokens.css" />
+    <link rel="stylesheet" href="/assets/css/design-system.css" />
+    <link rel="stylesheet" href="/assets/css/components.css" />
+
+    <!-- Per-section CSS for the ported marketing fragments (loaded after the
+         shared utilities they consume). -->
+    <link rel="stylesheet" href="/assets/css/sections/problem.css" />
+    <link rel="stylesheet" href="/assets/css/sections/architecture.css" />
+    <link rel="stylesheet" href="/assets/css/sections/token.css" />
+    <link rel="stylesheet" href="/assets/css/sections/contract.css" />
+    <link rel="stylesheet" href="/assets/css/sections/governance.css" />
+    <link rel="stylesheet" href="/assets/css/sections/footer.css" />
+
+    <!-- Data-driven view styles (regime + committee). -->
+    <link rel="stylesheet" href="/assets/css/views.css" />
+
+    <!-- Per-environment public config (API origin). No secrets. -->
+    <script src="/config.js"></script>
+
+    <!-- No build, browser-native. Document order = execution order:
+         1) main.js (module) registers Alpine.data factories + boots the router;
+            its alpine:init listener is in place before Alpine starts.
+         2) p5 (global) for the hero substrate sketch.
+         3) Alpine starts and processes the light DOM. -->
+    <script type="module" src="/assets/js/app/main.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/p5@1.11.2/lib/p5.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+  </head>
+  <body>
+    <!-- ── Nav (inline; the SPA shell renders it once) ── -->
+    <nav class="nav nav--solid" x-data="{ scrolled: true, mobileOpen: false }">
+      <div class="nav__inner">
+        <div class="nav__row">
+          <a href="/" class="nav__logo"><img src="/assets/logo.svg" alt="Robot Money" /></a>
+          <div class="nav__links">
+            <a href="/" class="nav__link">Home<span class="nav__underline"></span></a>
+            <a href="/skills" class="nav__link">Skill<span class="nav__underline"></span></a>
+            <a href="/tokenomics" class="nav__link">Token<span class="nav__underline"></span></a>
+            <a href="/allocation" class="nav__link">Allocation<span class="nav__underline"></span></a>
+            <a href="/allocation2" class="nav__link">Performance<span class="nav__underline"></span></a>
+            <a href="/regime" class="nav__link">Regime<span class="nav__underline"></span></a>
+            <a href="/committee" class="nav__link">Committee<span class="nav__underline"></span></a>
+            <a href="https://analytics.robotmoney.net/projects" target="_blank" rel="noopener noreferrer" class="nav__link">Analytics<span class="nav__underline"></span></a>
+            <a href="/media" class="nav__link">Coverage<span class="nav__underline"></span></a>
+          </div>
+          <div class="nav__ctas">
+            <a href="/changelog" class="btn-primary btn-primary--sm">Development</a>
+          </div>
+          <button class="nav__toggle" @click="mobileOpen = !mobileOpen" aria-label="Menu">
+            <span class="nav__bar" :class="mobileOpen ? 'nav__bar--top-open' : ''"></span>
+            <span class="nav__bar" :class="mobileOpen ? 'nav__bar--bot-open' : ''"></span>
+          </button>
+        </div>
+      </div>
+      <div class="nav__mobile animate-slide-down" x-show="mobileOpen" x-cloak>
+        <div class="nav__mobile-inner">
+          <a href="/" class="nav__mlink" @click="mobileOpen=false">Home</a>
+          <a href="/skills" class="nav__mlink" @click="mobileOpen=false">Skill</a>
+          <a href="/tokenomics" class="nav__mlink" @click="mobileOpen=false">Token</a>
+          <a href="/allocation" class="nav__mlink" @click="mobileOpen=false">Allocation</a>
+          <a href="/allocation2" class="nav__mlink" @click="mobileOpen=false">Performance</a>
+          <a href="/regime" class="nav__mlink" @click="mobileOpen=false">Regime</a>
+          <a href="/committee" class="nav__mlink" @click="mobileOpen=false">Committee</a>
+          <a href="https://analytics.robotmoney.net/projects" target="_blank" rel="noopener noreferrer" class="nav__mlink" @click="mobileOpen=false">Analytics</a>
+          <a href="/media" class="nav__mlink" @click="mobileOpen=false">Coverage</a>
+          <a href="/changelog" class="btn-primary nav__mobile-cta" @click="mobileOpen=false">Development</a>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Route views are fetched and injected here by the client router. -->
+    <main id="view"></main>
+
+    <!-- ── Footer (site-wide; rendered once by the shell) ── -->
+    <footer class="footer">
+      <!-- Links & Info -->
+      <div class="footer__section">
+        <div class="footer__inner">
+          <div class="footer__grid">
+            <!-- Brand -->
+            <div class="footer__col footer__col--brand">
+              <div class="footer__brand">
+                <svg class="footer__logo" width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="logoLeft" x1="1" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#2e3a4e" />
+                      <stop offset="100%" stop-color="#181d28" />
+                    </linearGradient>
+                    <linearGradient id="logoRight" x1="0" y1="0" x2="1" y2="1">
+                      <stop offset="0%" stop-color="#222a38" />
+                      <stop offset="100%" stop-color="#10141c" />
+                    </linearGradient>
+                    <radialGradient id="logoGlow" cx="0.5" cy="0.6" r="0.5">
+                      <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.5" />
+                      <stop offset="60%" stop-color="#00e5ff" stop-opacity="0.15" />
+                      <stop offset="100%" stop-color="transparent" />
+                    </radialGradient>
+                    <filter id="logoInnerGlow" x="-50%" y="-50%" width="200%" height="200%">
+                      <feGaussianBlur stdDeviation="1.5" />
+                    </filter>
+                  </defs>
+                  <polygon points="16,3 4,28 16,28" fill="url(#logoLeft)" />
+                  <polygon points="16,3 28,28 16,28" fill="url(#logoRight)" />
+                  <line x1="16" y1="3" x2="4" y2="28" stroke="#00e5ff" stroke-width="0.5" opacity="0.2" />
+                  <line x1="16" y1="3" x2="28" y2="28" stroke="#00e5ff" stroke-width="0.5" opacity="0.2" />
+                  <line x1="4" y1="28" x2="28" y2="28" stroke="#00e5ff" stroke-width="0.3" opacity="0.1" />
+                  <polygon points="16,13 10,25 22,25" fill="#0b0e14" />
+                  <polygon points="16,13 10,25 22,25" fill="url(#logoGlow)" />
+                  <circle cx="16" cy="21" r="2" fill="#00e5ff" opacity="0.25" filter="url(#logoInnerGlow)" />
+                  <circle cx="16" cy="21" r="0.8" fill="#00e5ff" opacity="0.4" />
+                </svg>
+                <span class="footer__wordmark">ROBOT.MONEY</span>
+              </div>
+              <p class="footer__about">
+                An Autonomous Treasury for the Agent Economy. Built on Base by
+                <a href="https://x.com/JunoAgent" target="_blank" rel="noopener noreferrer" class="footer__link-accent">@JunoAgent</a>.
+                A
+                <a href="https://generative.ventures" target="_blank" rel="noopener noreferrer" class="footer__link-accent">Generative Ventures</a>
+                x
+                <a href="https://zhcinstitute.com" target="_blank" rel="noopener noreferrer" class="footer__link-accent">Institute for Zero-Human Companies</a>
+                collaboration.
+              </p>
+            </div>
+
+            <!-- Protocol -->
+            <div class="footer__col">
+              <h4 class="footer__heading">Protocol</h4>
+              <div class="footer__links">
+                <a href="https://basescan.org/token/0x65021a79aeef22b17cdc1b768f5e79a8618beba3" target="_blank" rel="noopener noreferrer" class="footer__link">$ROBOTMONEY Token</a>
+                <a href="https://bankr.bot/" target="_blank" rel="noopener noreferrer" class="footer__link">Bankr</a>
+                <a href="#" class="footer__link">x402</a>
+                <a href="/committee/apply" class="footer__link">Apply to IC</a>
+              </div>
+            </div>
+
+            <!-- Community -->
+            <div class="footer__col">
+              <h4 class="footer__heading">Community</h4>
+              <div class="footer__links">
+                <a href="https://x.com/RobotMoneyAgent" target="_blank" rel="noopener noreferrer" class="footer__link">X / Twitter</a>
+                <a href="https://t.me/+aFxo8CRpkI80YmM0" target="_blank" rel="noopener noreferrer" class="footer__link">Telegram</a>
+                <a href="#" class="footer__link">Moltbook</a>
+                <a href="https://lex.substack.com/" target="_blank" rel="noopener noreferrer" class="footer__link">Fintech Blueprint</a>
+                <a href="https://www.genventures.xyz/" target="_blank" rel="noopener noreferrer" class="footer__link">Generative Ventures</a>
+              </div>
+            </div>
+
+            <!-- Developers -->
+            <div class="footer__col">
+              <h4 class="footer__heading">Developers</h4>
+              <div class="footer__links">
+                <a href="/docs" class="footer__link">Documentation</a>
+                <a href="/changelog" class="footer__link">Changelog</a>
+                <a href="/smart-contract-risks" class="footer__link">Smart Contract Risks</a>
+                <a href="/visualizations" class="footer__link">Visualizations</a>
+              </div>
+            </div>
+
+            <!-- Disclaimer -->
+            <div class="footer__col">
+              <h4 class="footer__heading">Disclaimer</h4>
+              <div class="footer__links">
+                <a href="/disclaimer" class="footer__link">Legal Disclaimer</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom bar -->
+      <div class="footer__section">
+        <div class="footer__inner footer__bottom">
+          <p class="footer__fineprint footer__fineprint--legal">
+            Robot Money is not a registered investment vehicle. This document
+            describes a protocol mechanism, not an offer of securities. Consult
+            legal counsel before participating.
+          </p>
+          <p class="footer__fineprint">
+            &copy; 2026 Generative Ventures x The Institute for Zero-Human Companies
+          </p>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

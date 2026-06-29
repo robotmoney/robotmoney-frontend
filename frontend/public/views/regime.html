@@ -1,0 +1,52 @@
+<!-- Regime view — fetches /api/dashboards/regime-snapshots and renders the live
+     classification statistics. Injected into #view by the router. -->
+<section class="rv container" x-data="regimeView()" x-init="load()">
+  <header class="rv__head">
+    <span class="rv__eyebrow">Quantitative Filter</span>
+    <h1 class="rv__title">Market <span class="text-gradient">Regime</span></h1>
+    <p class="rv__sub" x-show="latest" x-cloak>As of <span x-text="latest?.date"></span> · composite is a 0–1 risk-on score across macro + on-chain indicators.</p>
+  </header>
+
+  <p class="rv__loading" x-show="loading">Loading regime…</p>
+  <p class="rv__error" x-show="error" x-text="error" x-cloak></p>
+
+  <template x-if="latest">
+    <div>
+      <div class="rv__cards">
+        <div class="rv__card">
+          <div class="rv__metric" x-text="pct(latest.composite)"></div>
+          <div class="rv__label">Composite (risk-on)</div>
+          <div class="rv__pct">percentile <span x-text="pct(latest.compositePercentile)"></span></div>
+        </div>
+        <div class="rv__card">
+          <span :class="regimeClass(latest.regime)" x-text="latest.regime"></span>
+          <div class="rv__label">Overall regime</div>
+        </div>
+        <div class="rv__card">
+          <span :class="regimeClass(latest.macroRegime)" x-text="latest.macroRegime"></span>
+          <div class="rv__label">Macro panel</div>
+        </div>
+        <div class="rv__card">
+          <span :class="regimeClass(latest.onchainRegime)" x-text="latest.onchainRegime"></span>
+          <div class="rv__label">On-chain panel</div>
+        </div>
+      </div>
+
+      <div class="rv__chart"><canvas x-ref="chart"></canvas></div>
+
+      <h2 class="rv__h2">Indicators</h2>
+      <div class="rv__indicators">
+        <template x-for="ind in latest.indicators" :key="ind.id">
+          <div class="rv__ind">
+            <div class="rv__ind-row">
+              <span class="rv__ind-name" x-text="ind.name"></span>
+              <span class="rv__ind-panel" x-text="ind.panel"></span>
+            </div>
+            <div class="rv__bar"><div class="rv__bar-fill" :style="`width:${ind.score*100}%`"></div></div>
+            <div class="rv__ind-score" x-text="pct(ind.score)"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+</section>
