@@ -40,23 +40,30 @@ so inline `<script>` and any `Alpine.data(...)` factory defined *inside* a
   inline line-icon SVGs (utility / principles / governance / participation
   cards). Heading font-style left as-is — the original IS serif-italic, so the
   port already matched (the prior audit's "upright serif" note was inaccurate).
+- **Copy button** (P2): global delegated `[data-copy]` clipboard handler in
+  `main.js` (boot-registered → works for injected views), wired to the
+  tokenomics contract-address Copy button. Functionally verified end-to-end.
+- **Hero animations** (P2): the original p5 hero sketches are restored as
+  boot-registered Alpine factories in new `assets/js/app/alpine/heroes.js`
+  (same lifecycle as `substrate.js`): `blogHero()` (generative tree),
+  `faqHero()` (WebGL terrain mesh), `tokHero()` (boids flock + predator). Each
+  is layered behind its hero title; all render with no console errors.
 
 Each fix is its own commit; re-screenshotted on `:8080` against
 `frontend/test/fixtures/screenshots/original/<slug>.png` and confirmed close.
 
 ## Remaining — P2 optional richness (nice-to-have, not required)
 
-1. **Hero animations.** New pages use static gradients instead of the original
-   p5/canvas hero sketches (flow-field, network-swarm, terrain, tree,
-   constructivist). To raise fidelity, port select sketches as boot-registered
-   `x-data` factories driving a `<canvas>` (see the hero substrate sketch
-   registration in `views.js`).
-2. **Real charts.** allocation2 / tokenomics use static CSS charts. If real
-   Chart.js parity is wanted, register chart factories in `views.js` (boot-time)
-   like the regime/research views do.
-3. **Copy buttons** on contract-address / code blocks (original has them; need
-   JS). Add via a boot-registered helper in `views.js` or a tiny global
-   delegated click handler in `main.js` — never per-view inline script.
+1. **More hero sketches.** Only the three touched pages (blog/faq/tokenomics)
+   got their animated heroes back. Other pages that had p5 heroes in the
+   original (e.g. media/skills) still use static gradients. Port the same way:
+   add a factory to `alpine/heroes.js` and wire `x-data` behind the hero.
+2. **Real charts.** allocation2 / tokenomics donut use static CSS charts. For
+   real Chart.js parity, register chart factories in `views.js` (boot-time) like
+   the regime/research views do.
+3. **Code-block copy buttons.** The `[data-copy]` handler in `main.js` is
+   generic; the docs/skill code blocks (`<pre>`) could each gain a Copy button
+   (original docs `CodeBlock` has one). Add `data-copy` buttons to those blocks.
 
 ## How to run + screenshot
 
