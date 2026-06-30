@@ -1,14 +1,24 @@
 // Committee REST handlers — thin transport over the domain layer. Used by the web
 // frontend (reads) and as the sibling to the MCP write tools (the MCP server
 // calls these under the hood). Returns {status, body} for the Bun router to send.
+import { createHash, timingSafeEqual } from "node:crypto";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import * as ic from "../../committee/domain.ts";
 import { config } from "../../config.ts";
+import { isPlausibleKey } from "../../lib/keys.ts";
 import { runAnalytics } from "../../analytics/index.ts";
 
 function bearer(req: Request): string | null {
   const h = req.headers.get("Authorization") ?? "";
   return h.startsWith("Bearer ") ? h.slice(7) : null;
+}
+
+// Constant-time secret comparison (over fixed-length sha256 hashes so lengths
+// always match and timing doesn't leak the secret).
+function secretEq(presented: string | null, expected: string): boolean {
+  const a = createHash("sha256").update(presented ?? "").digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
 }
 
 // Returns { status, body } or null if the path isn't a committee route.
@@ -57,14 +67,13 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   //  • analytics-provider — ANALYTICS_TOKEN bearer. May write the regime.
   //  • member         — committee_member_keys bearer. May submit (enforced in
   //                     submitRecommendation).
-  const privileged = () => {
-    if (config.adminToken) return req.headers.get("X-Admin-Token") === config.adminToken;
-    return config.env !== "prod";
-  };
-  const analyticsProvider = () => {
-    if (config.analyticsToken) return bearer(req) === config.analyticsToken;
-    return config.env !== "prod";
-  };
+  // Fail-closed: a token (constant-time compared) authorizes in any env; WITHOUT
+  // a token the role opens only when config.allowInsecure (ephemeral / explicit
+  // RM_ALLOW_INSECURE). demo/prod with no token → locked.
+  const privileged = () =>
+    config.adminToken ? secretEq(req.headers.get("X-Admin-Token"), config.adminToken) : config.allowInsecure;
+  const analyticsProvider = () =>
+    config.analyticsToken ? secretEq(bearer(req), config.analyticsToken) : config.allowInsecure;
 
   // PUBLIC onboarding: a prospective member submits its public key. The member
   // is recorded as 'applied' (NOT active) with an INACTIVE key — it cannot
@@ -73,6 +82,7 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   if (m === "POST" && p === "/api/committee/apply") {
     const b = (await req.json().catch(() => null)) as any;
     if (!b?.memberId || !b?.name || !b?.publicKey) return { status: 400, body: { error: "memberId, name, publicKey required" } };
+    if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
     const res = await ic.applyMember(b);
     return { status: res.status, body: res };
   }
@@ -92,6 +102,7 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     if (!privileged()) return { status: 403, body: { error: "onboarding requires admin authorization" } };
     const b = (await req.json().catch(() => null)) as any;
     if (!b?.memberId || !b?.name || !b?.publicKey) return { status: 400, body: { error: "memberId, name, publicKey required" } };
+    if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
     return { status: 201, body: await ic.registerMember(b) };
   }
 

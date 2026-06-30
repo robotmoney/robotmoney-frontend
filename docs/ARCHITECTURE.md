@@ -2,7 +2,9 @@
 
 Robot Money frontend + analytics backend. A clean rewrite of robotmoney.net that
 drops React/Next.js in favor of a **buildless, browser-native** stack, with a
-small HTTP API and a Postgres-backed task queue, all self-hosted on a single box.
+small HTTP API and a Postgres-backed task queue, self-hosted on DigitalOcean — a
+single `docker-compose` box for CI/demo, and a tiered topology behind a Cloudflare
+edge in production (see [TOPOLOGY.md](./TOPOLOGY.md)).
 
 For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
 
@@ -16,7 +18,8 @@ For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
   Committee**. Allocation / vault / wallet dashboards are out of scope.
 - **No build step.** No bundler, transpiler, or compiler — the browser does all
   the work at runtime; only evergreen browsers are supported.
-- **Consolidate backends onto one Postgres**, run in Docker.
+- **Consolidate backends onto one Postgres** (Docker for CI/demo; a DO Managed
+  Postgres HA cluster in production — see [TOPOLOGY.md](./TOPOLOGY.md)).
 - **Rebuild the data pipeline** as a custom Postgres-backed task queue (replacing
   the old GitHub Actions cron + Node scripts).
 - **Clean frontend/backend separation** — one repo now, designed to split into
@@ -66,7 +69,8 @@ robotmoney-frontend/
 - The frontend reaches the backend **only over HTTP**, through
   `frontend/public/assets/js/app/lib/api.js`, using the API origin from
   `window.RM_CONFIG.API_BASE_URL` (set by `frontend/public/config.js`). `""` means
-  same origin (the single-box default).
+  same origin — the default, since the `api` co-serves this surface's SPA assets
+  (in production behind the Cloudflare edge; see [TOPOLOGY.md](./TOPOLOGY.md)).
 - The database schema and migrations live in `backend/`; the frontend knows only
   the DTOs in `contract`.
 
@@ -157,8 +161,10 @@ TypeScript sources directly).
   (`comments`, `dashboards`, `committee`), using `postgres` (postgres.js) with raw SQL.
 - **Serves the static frontend too.** When `STATIC_DIR` is set, the same process
   serves `frontend/public` via `Bun.file`, with an `index.html` fallback for SPA
-  deep links — so a single-box deployment needs **no reverse proxy** (no Caddy/nginx)
-  and, being same-origin, no CORS. CORS headers remain for an optional split-origin setup.
+  deep links — so the SPA and its API are **same-origin** (no CORS) with no
+  app-level reverse proxy. In production a Cloudflare edge routes to this droplet
+  and terminates TLS (see [TOPOLOGY.md](./TOPOLOGY.md)); CORS headers remain for an
+  optional split-origin setup.
 - `src/worker/` — the always-on task-queue worker (see §7).
 - `src/db/` — connection pool (`client.ts`) and the migration runner (`migrate.ts`).
 - `src/lib/` — small helpers (e.g. `keys.ts`, sha256 access-key hashing).
@@ -264,20 +270,31 @@ The worker runs the suite via `analytics.run`; the API exposes regime at
 
 ## 8. Deployment
 
-Single box (e.g. a DigitalOcean droplet), `docker-compose.yml`:
+Two shapes, one codebase. The canonical map of DNS, origins, tiers, and vendors is
+[TOPOLOGY.md](./TOPOLOGY.md) (decision D13); the GitOps pipeline and the Cloudflare
+/ DO credentials CI needs are in [DEPLOYMENT.md](./DEPLOYMENT.md). This section
+covers what *this repo* ships.
+
+**CI & demo — single box**, `docker-compose.yml`:
 
 - `postgres` + `api` + `worker`. The `api` process **also serves the static
-  frontend** (`STATIC_DIR=/srv/frontend`) — one origin, no reverse proxy.
+  frontend** (`STATIC_DIR=/srv/frontend`) — one origin, no app-level proxy.
 - **DB modes** are driven by `DATABASE_URL` + the postgres volume:
   - *ephemeral* (CI): throwaway, `docker compose down -v`.
   - *demo*: named `pgdata` volume persists across restarts.
-  - *prod*: point `DATABASE_URL` at an external/managed Postgres and run only
-    `api` + `worker`.
+
+**Production — tiered on DigitalOcean behind a Cloudflare edge** (D13):
+
+- **API tier** — `api` + `worker` on a DO droplet, reached via Cloudflare Tunnel;
+  the `api` co-serves this surface's SPA assets at `/committee` + `/analytics`.
+- **Data tier** — `DATABASE_URL` points at a **DO Managed Postgres HA cluster**
+  (no `postgres` container).
+- **Static tier** — marketing is served separately from a **DO Spaces CDN**, not by
+  this `api`.
 - **Config**: the only required env var is `DATABASE_URL`. The frontend's only
   input is `API_BASE_URL` in `config.js` (`""` = same origin). Secrets
-  (Anthropic/FRED/RPC) live in the box env, not in the frontend.
-- TLS, if wanted, is terminated on the box however preferred; it is not required by
-  the app.
+  (Anthropic/FRED/RPC) live in the droplet env, not in the frontend.
+- **TLS** is terminated at the Cloudflare edge.
 
 ---
 

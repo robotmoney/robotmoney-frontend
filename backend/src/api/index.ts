@@ -56,10 +56,16 @@ const server = Bun.serve({
 
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
 
-    // Client ip for rate limiting: trust the first x-forwarded-for hop when
-    // present (single reverse proxy), else the raw socket address.
-    const fwd = req.headers.get("x-forwarded-for");
-    const clientIp = (fwd ? fwd.split(",")[0]!.trim() : "") || server.requestIP(req)?.address || "";
+    // Client ip for rate limiting. X-Forwarded-For is client-controlled and only
+    // trustworthy behind a known proxy, so we use it ONLY when TRUST_PROXY=1
+    // (taking the last hop = the proxy's view of the peer); otherwise the raw
+    // socket address. Prevents trivial rate-limit evasion via spoofed XFF.
+    const peer = server.requestIP(req)?.address || "";
+    let clientIp = peer;
+    if (config.trustProxy) {
+      const fwd = req.headers.get("x-forwarded-for");
+      if (fwd) clientIp = fwd.split(",").map((s) => s.trim()).filter(Boolean).pop() || peer;
+    }
 
     try {
       return await route(req, url, pathname, origin, clientIp);

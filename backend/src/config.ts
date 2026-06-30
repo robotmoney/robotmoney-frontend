@@ -8,8 +8,23 @@ function required(name: string): string {
   return v;
 }
 
+// Fail-closed: default to "prod" when RM_ENV is unset, and REFUSE to start on an
+// unrecognized value (so a typo like "production" can never silently open the
+// privileged surface). The unauthenticated convenience path is opt-in: it is
+// allowed only in the "ephemeral" (CI/throwaway) env or with RM_ALLOW_INSECURE=1.
+const VALID_ENVS = ["ephemeral", "demo", "prod"] as const;
+const RM_ENV = process.env.RM_ENV ?? "prod";
+if (!(VALID_ENVS as readonly string[]).includes(RM_ENV)) {
+  throw new Error(`invalid RM_ENV "${RM_ENV}" — expected one of ${VALID_ENVS.join(" | ")}`);
+}
+
 export const config = {
-  env: (process.env.RM_ENV ?? "demo") as "ephemeral" | "demo" | "prod",
+  env: RM_ENV as (typeof VALID_ENVS)[number],
+  // Privileged endpoints (onboarding/admin/analytics) may run WITHOUT a token
+  // only when this is true; otherwise the relevant token is required in every env.
+  allowInsecure: process.env.RM_ALLOW_INSECURE === "1" || RM_ENV === "ephemeral",
+  // Trust X-Forwarded-For for client-ip (rate limiting) only behind a known proxy.
+  trustProxy: process.env.TRUST_PROXY === "1",
   databaseUrl: required("DATABASE_URL"),
   apiPort: Number(process.env.API_PORT ?? 8787),
   // Comma-separated list of allowed browser origins for the frontend. Only

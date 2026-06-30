@@ -53,6 +53,21 @@ function buildServer(token: string | null) {
 }
 
 const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
+const lastSeen = new Map<string, number>(); // session id → last activity (idle sweep)
+const MAX_SESSIONS = 500; // cap concurrent sessions (DoS bound)
+const IDLE_MS = 10 * 60_000; // evict sessions idle longer than this
+
+// Periodically close idle sessions so the maps + McpServer instances can't grow
+// unboundedly (an unauthenticated client could otherwise open sessions forever).
+setInterval(() => {
+  const cutoff = Date.now() - IDLE_MS;
+  for (const [id, ts] of lastSeen) {
+    if (ts >= cutoff) continue;
+    try { (transports.get(id) as any)?.close?.(); } catch { /* ignore */ }
+    transports.delete(id); sessionTokenHash.delete(id); lastSeen.delete(id);
+  }
+}, 60_000);
+
 // Per-session hash of the bearer token bound at init. Every follow-up request to
 // an existing session must re-present the SAME token; otherwise a leaked/guessed
 // mcp-session-id would let an attacker ride a victim's bound identity (the SDK
@@ -80,16 +95,23 @@ Bun.serve({
       // Re-validate the bearer on EVERY request to a bound session.
       if (tokenHash(bearerOf(req)) !== sessionTokenHash.get(sid))
         return unauthorized("bearer token does not match the session it was bound to");
+      lastSeen.set(sid, Date.now());
       return transports.get(sid)!.handleRequest(req);
     }
 
-    // New session: this is an initialize request. Bind the bearer token now.
+    // New session (initialize). Require a real bearer — no anonymous sessions
+    // (else a missing token would bind sha256("") and anyone with no token could
+    // ride that bucket). Cap concurrent sessions.
     const token = bearerOf(req);
+    if (!token) return unauthorized("a bearer token is required to start an MCP session");
+    if (transports.size >= MAX_SESSIONS)
+      return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32002, message: "server at session capacity" }, id: null }),
+        { status: 429, headers: { "Content-Type": "application/json" } });
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
       enableJsonResponse: true,
-      onsessioninitialized: (id) => { transports.set(id, transport); sessionTokenHash.set(id, tokenHash(token)); },
-      onsessionclosed: (id) => { transports.delete(id); sessionTokenHash.delete(id); },
+      onsessioninitialized: (id) => { transports.set(id, transport); sessionTokenHash.set(id, tokenHash(token)); lastSeen.set(id, Date.now()); },
+      onsessionclosed: (id) => { transports.delete(id); sessionTokenHash.delete(id); lastSeen.delete(id); },
     });
     const server = buildServer(token);
     await server.connect(transport);

@@ -148,7 +148,10 @@ async function main(): Promise<void> {
   console.log("[demo] starting api…");
   children.push(Bun.spawn(["bun", "run", "src/api/index.ts"], {
     cwd: backendDir,
-    env: { ...process.env, DATABASE_URL: databaseUrl, RM_ENV: "demo", API_PORT: String(apiPort), STATIC_DIR: "../frontend/public" } as Record<string, string>,
+    // Local throwaway demo: explicitly opt into the unauthenticated convenience
+    // path so the harness can drive admin lifecycle without a token. A real
+    // deployment must NOT set this (it must provide ADMIN_TOKEN/ANALYTICS_TOKEN).
+    env: { ...process.env, DATABASE_URL: databaseUrl, RM_ENV: "demo", RM_ALLOW_INSECURE: "1", API_PORT: String(apiPort), STATIC_DIR: "../frontend/public" } as Record<string, string>,
     stdout: "inherit", stderr: "inherit",
   }));
 

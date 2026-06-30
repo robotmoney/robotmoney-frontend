@@ -13,6 +13,20 @@ const MAX_PAGE = 200;
 const RATE_MAX = 5; // posts allowed...
 const RATE_WINDOW_MS = 60_000; // ...per this window
 const postLog = new Map<string, number[]>();
+let sweepCounter = 0;
+
+// Drop keys whose window has fully aged out, so the map can't grow unboundedly
+// (an abuse/DoS vector, amplified if many distinct ips post). Cheap amortized sweep.
+function sweep(now: number): void {
+  if (++sweepCounter < 500) return;
+  sweepCounter = 0;
+  const cutoff = now - RATE_WINDOW_MS;
+  for (const [k, ts] of postLog) {
+    const r = ts.filter((t) => t > cutoff);
+    if (r.length === 0) postLog.delete(k);
+    else postLog.set(k, r);
+  }
+}
 
 function rateLimited(ipHash: string, now = Date.now()): boolean {
   const cutoff = now - RATE_WINDOW_MS;
@@ -23,8 +37,11 @@ function rateLimited(ipHash: string, now = Date.now()): boolean {
   }
   recent.push(now);
   postLog.set(ipHash, recent);
+  sweep(now);
   return false;
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // postgres.js returns timestamptz as a Date; normalize to ISO 8601.
 const iso = (d: unknown): string =>
@@ -72,6 +89,15 @@ export async function createComment(raw: unknown, ip: string): Promise<CreateRes
   if (author.length > MAX_AUTHOR) return { status: 400, body: { error: `author exceeds ${MAX_AUTHOR} chars` } };
   if (!content) return { status: 400, body: { error: "content is required" } };
   if (content.length > MAX_CONTENT) return { status: 400, body: { error: `content exceeds ${MAX_CONTENT} chars` } };
+
+  // A reply's parent must be a real, visible comment ON THE SAME PAGE. Validate
+  // the id format first (a malformed value must 400, not 500 on insert).
+  if (parentId !== null) {
+    if (!UUID_RE.test(parentId)) return { status: 400, body: { error: "invalid parentId" } };
+    const parent = (await sql<any[]>`SELECT page, status FROM comments WHERE id = ${parentId}`)[0];
+    if (!parent || parent.page !== page || parent.status !== "visible")
+      return { status: 400, body: { error: "invalid parentId" } };
+  }
 
   const ipHash = hashKey(ip || "unknown");
   if (rateLimited(ipHash)) {

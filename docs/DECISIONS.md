@@ -112,6 +112,9 @@ no import map are needed. Keeps the runtime dependency to plain static files.
 
 ## D8 — One Postgres, run in Docker (not Supabase)
 
+> **Prod mode refined by D13:** production is a DigitalOcean Managed Postgres HA
+> cluster; the ephemeral (CI) and demo (Docker) modes are unchanged.
+
 **Decision.** Consolidate comments (was Upstash), committee (was GitHub-as-DB),
 and dashboard data (was committed CSV/JSON) into a single self-hosted Postgres in
 Docker. Mode is chosen by `DATABASE_URL` + volume: ephemeral (CI), demo
@@ -147,6 +150,11 @@ single versioned seam (the contract) that makes the eventual split mechanical.
 
 ## D11 — Single box, no reverse proxy
 
+> **Superseded for production by D13** (Cloudflare edge + tiered DO topology). The
+> single-box `docker-compose` remains the **CI and demo** deployment; same-origin
+> /no-CORS is preserved *within* each surface because the Bun `api` still co-serves
+> its SPA assets.
+
 **Decision.** Deploy on one box (e.g. a DigitalOcean droplet). The Bun `api`
 process serves both the JSON API and the static frontend (`STATIC_DIR`).
 
@@ -164,3 +172,41 @@ executes the TypeScript sources directly; static files are served via `Bun.file`
 **Why.** Bun runs `.ts` with no build (satisfies D2), and `Bun.serve` covers both
 API routing and static serving on its own, so a framework (Hono) and a separate
 static server are unnecessary. Fewer dependencies, one runtime.
+
+---
+
+## D13 — Tiered cloud topology: Cloudflare edge + DO static/API/data tiers
+
+**Decision.** For **production**, deploy `robotmoney.net` as a separation of
+concerns across three tiers behind a Cloudflare routing edge. The full map is
+[TOPOLOGY.md](./TOPOLOGY.md):
+
+- **Edge** — Cloudflare for DNS, TLS, and a path-routing Worker (fail-open per
+  route). Cloudflare does **not** cache marketing.
+- **Static tier** — marketing assets in a **DO Spaces CDN**; no runtime dependency
+  on other tiers (fail-open — marketing serves even when the API is unavailable).
+- **API tier** — request/response services on **DO Droplets** (this repo's Bun
+  `api`+`worker`; the dapp's `rmpc`+gateway), reached via Cloudflare Tunnel.
+- **Data tier** — a **DO Managed Postgres HA cluster** (primary+standby failover,
+  backups, PITR).
+
+**Why.** The three surfaces (marketing, IC+analytics, dapp) have different
+lifecycles, failure domains, and infra needs. Organizing infrastructure by
+concern — delivery vs compute vs state — lets each tier scale, fail, and deploy
+independently, and keeps marketing serving when the API/data tiers are down.
+Cloudflare has no always-on VM or managed database and (by this decision) does not
+cache marketing, so delivery, compute, and state all stay on DigitalOcean.
+
+**Relationship.** Supersedes D11 for production (there is now an edge and multiple
+origins; same-origin/no-CORS is preserved *within* a surface because the Bun `api`
+still co-serves its SPA assets). Refines D8's prod mode to a managed HA cluster.
+The single-box `docker-compose` (D8/D11) remains the CI and demo deployment.
+
+**Alternatives rejected.**
+- **All-Cloudflare compute** (Workers/Containers) — no always-on instance for the
+  chain-synced `rmpc` daemon and no managed Postgres; scale-to-zero is wrong for it.
+- **Cloudflare caching marketing** (single-vendor edge cache) — chose the DO Spaces
+  CDN so all delivery, compute, and state sit on one provider (DO); Cloudflare stays
+  DNS/TLS/routing only, avoiding a double-CDN.
+- **Keeping the single box for prod** — no isolation between the marketing, API,
+  and data failure domains, and no database HA.
