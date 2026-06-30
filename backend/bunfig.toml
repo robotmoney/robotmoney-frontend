@@ -1,0 +1,6 @@
+[test]
+# Spins up an ephemeral Postgres (Docker) + applies migrations ONCE before any
+# test, and tears it down after. If Docker/Postgres is unavailable the preload
+# THROWS — tests fail loudly rather than silently skipping (test-coverage policy).
+preload = ["./tests/preload.ts"]
+timeout = 30000

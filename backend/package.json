@@ -11,6 +11,7 @@
     "api": "bun run src/api/index.ts",
     "worker": "bun run src/worker/index.ts",
     "migrate": "bun run src/db/migrate.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -72,6 +72,7 @@ No reverse proxy: the `api` process serves both the API and `frontend/public`.
 bun run migrate              # apply migrations
 bun run api                  # API only (no static)   — backend/
 bun run worker               # task-queue worker      — backend/
+bun test                     # hermetic suite (spins ephemeral Postgres) — backend/
 bun run typecheck            # tsc --noEmit            — backend/
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)
 ```
