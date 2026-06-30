@@ -2,7 +2,7 @@
 // agents participate THROUGH the MCP server (each its own key + token + MCP
 // session). One member is a deliberate no-show. Admin lifecycle is driven over
 // the backend's dev-only HTTP endpoints; no DB access here (clean boundary).
-import { runAgent } from "./agent.ts";
+import { runAgent, enroll } from "./agent.ts";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const today = new Date().toISOString().slice(0, 10);
@@ -30,7 +30,9 @@ async function main() {
   await admin("brief", { sessionId: session.id, windowMinutes: 60 });
   console.log(`session ${session.id}: brief published, window open`);
 
-  // Independent agents participate via the MCP server (the no-show is skipped).
+  // Enroll the no-show(s) onto the roster (so absence is recorded), then the
+  // present members participate independently via the MCP server.
+  await Promise.all(MEMBERS.filter((m) => !m.present).map((m) => enroll(m)));
   const present = MEMBERS.filter((m) => m.present);
   const results = await Promise.all(
     present.map((m) => runAgent({ ...m, date: today, subjectId: SUBJECT.id })),

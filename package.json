@@ -5,6 +5,6 @@
   "description": "Single-folder home for the split-ready frontend/ + backend/ + contract/ (+ mcp/).",
   "scripts": {
     "sync-contract": "bun scripts/sync-contract.ts",
-    "demo": "bun mcp/src/e2e.ts"
+    "demo": "bun scripts/demo.ts"
   }
 }

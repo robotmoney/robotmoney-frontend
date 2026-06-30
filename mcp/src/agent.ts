@@ -24,6 +24,17 @@ function stanceFor(composite: number, bias: number) {
 
 const textOf = (res: any) => JSON.parse(res.content?.[0]?.text ?? "null");
 
+// Enroll a member (register their public key) WITHOUT submitting — used to put a
+// deliberate no-show on the roster so absence is recorded at aggregation.
+export async function enroll(o: { memberId: string; name: string; lens?: string }) {
+  const { publicKeyB64 } = await generateKeyPair();
+  const adminHeaders = process.env.ADMIN_TOKEN ? { "X-Admin-Token": process.env.ADMIN_TOKEN } : {};
+  await fetch(`${BACKEND}/api/committee/register`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
+    body: JSON.stringify({ memberId: o.memberId, name: o.name, lens: o.lens, publicKey: publicKeyB64 }),
+  });
+}
+
 export async function runAgent(o: AgentOpts) {
   // 1. own keypair + onboarding (REST)
   const { publicKeyB64, privateKey } = await generateKeyPair();

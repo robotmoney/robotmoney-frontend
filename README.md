@@ -42,17 +42,29 @@ bun run sync-contract
 ## Run the full stack + end-to-end demo
 
 ```bash
-cp .env.example .env         # set DATABASE_URL (+ POSTGRES_* for the bundled db)
-docker compose up -d         # postgres + api (serves the site) + worker + mcp
-bun run demo                 # runs one committee session: regime + N signed agents via MCP
+bun run demo                 # provisions everything, runs a committee session, keeps it live
 ```
 
-Then open:
-- `http://localhost:8787/` — the site · `/regime` — live classification · `/committee` — the session
-- `http://localhost:8788/health` — the MCP server
+That's it — no separate `docker compose up` needed. `bun run demo` is a
+self-contained orchestrator (`scripts/demo.ts`) that on every run:
+
+- picks three **random free ports** (Postgres, API, MCP) so repeated/concurrent
+  runs never collide;
+- brings up Postgres in Docker under a **unique compose project**, runs
+  migrations, then starts the API (serving the static site), the worker, and the
+  MCP server as Bun child processes;
+- drives **one committee session** through the MCP server (regime + N signed
+  agents, one deliberate no-show);
+- prints the live URLs and **keeps the servers running** so you can open a
+  browser;
+- on Ctrl-C / exit (or any startup failure) **tears down every container and
+  volume it created** — nothing is left behind.
+
+The printed URLs use that run's random API/MCP ports, e.g.:
+- `http://localhost:<api>/` — the site · `/regime` · `/committee` · `/research/*`
+- `http://localhost:<mcp>/health` — the MCP server
 
 No reverse proxy: the `api` process serves both the API and `frontend/public`.
-`bun run demo` is re-runnable (it resets the day's session first).
 
 ## Useful commands
 

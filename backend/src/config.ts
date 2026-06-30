@@ -26,5 +26,9 @@ export const config = {
   // lifecycle). If set, callers must present it as `X-Admin-Token`. If unset,
   // those endpoints are allowed only outside prod (demo/ephemeral convenience).
   adminToken: process.env.ADMIN_TOKEN || null,
+  // Analytics data source. Default "seeded" (deterministic, hermetic, no keys).
+  // Opt in to REAL keyless live data (DefiLlama/CoinGecko/Yahoo) with PROVIDER=live;
+  // per-series failures still fall back to seeded so a run never breaks.
+  analyticsProvider: (process.env.PROVIDER === "live" ? "live" : "seeded") as "live" | "seeded",
 };
 
