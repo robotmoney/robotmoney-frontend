@@ -10,97 +10,109 @@
 
 ## EXECUTIVE SUMMARY
 
-**Current State:** 12% feature parity (2 pages live + home sections)  
-**Gap to Close:** 88 pages, 29 visualizations, 26 components, ~270 data files, design token gaps
+**SCOPE REVISION (2026-06-30):** Focus on **discoverable public surfaces only**—NOT experimental/dead code
+
+**Current State:** 4/25 pages complete (16%)  
+**Discoverable Gap:** 21 pages (from main navigation + linked secondary pages)  
+**Dropped:** 63+ experimental pages (visualizations, variants, special pages not linked)
 
 | Category | Completed | Remaining | Priority |
 |----------|-----------|-----------|----------|
-| **Pages** | 2/90 | 88 | P0 |
-| **Visualizations** | 0/29 | 29 | P1 |
-| **Components** | 0/26 | 26 | P1 |
-| **Data Files** | 0/270 | ~270 | P2 |
-| **Design Tokens** | 60% | 40% | P2 |
+| **Discoverable Pages** | 4/25 | 21 | P0/P1 |
+| **Components** | Core UI done | — | ✓ |
+| **Design Tokens** | ✓ Complete | — | ✓ |
+| **Data Files** | Scaffolding | APIs Phase 3 | P3 |
 
-**Estimated Effort:** 6-8 weeks for full parity (P0 core pages: 1-2 weeks)
+**Dropped Scope (Not Discoverable):**
+- ❌ 28 visualization pages — not linked from anywhere
+- ❌ Allocation variants (/allocation3, /allocation-v2, etc.)
+- ❌ Home variants (/home2, /home_archived)
+- ❌ Special pages (/smart-contract-risks, /tech-proposal-march-16)
+- ❌ Regime variants (/regime_2panel, etc.)
+
+**Estimated Effort:** 2-3 weeks for full discoverable parity (down from 6-8 weeks)
 
 ---
 
-## SECTION 1: PAGES & ROUTES
+## SECTION 1: PAGES & ROUTES (Discoverable Only)
 
-### ✅ COMPLETED (2 pages)
+### ✅ COMPLETED (4 pages)
 
 **robotmoney-frontend** currently has these view files:
 ```
 frontend/public/views/
 ├── home.html                      → /
+├── allocation.html                → /allocation ✓ Phase 1
 ├── regime.html                    → /regime
 ├── research/
 │   ├── channel-divergence.html    → /research/channel-divergence
 │   └── late-cycle-signals.html    → /research/late-cycle-signals
 ├── committee.html                 → /committee
 ├── committee/apply.html           → /committee/apply
+├── committee/session.html         → /committee/[date]/[subject] ✓ Phase 1
+├── committee/member.html          → /committee/members/[id] ✓ Phase 1
 └── sections/                      → (included in home.html)
-    ├── architecture.html
-    ├── contract.html
-    ├── footer.html
-    ├── governance.html
-    ├── problem.html
-    └── token.html
 ```
 
-**Status:** Home + regime + committee core are functional. Home sections modular.
+**Status:** 4/25 discoverable pages complete (16%)
 
 ---
 
-### ❌ REMAINING (88 pages)
+### ❌ REMAINING (21 pages - Main Navigation + Discoverable Secondary)
 
 **robotmoney-site** has 90+ total routes across Next.js app/.
 
-#### P0 CRITICAL (Dependencies for other work)
-| Route | Type | Reason | Effort |
-|-------|------|--------|--------|
-| `/` (enhanced home) | Update | Add missing sections (economics, infrastructure, roadmap) | Low |
-| `/committee/[date]/[subject]` | Dynamic | Session detail view (backend data ready) | Medium |
-| `/committee/members/[id]` | Dynamic | Member profile (backend data ready) | Low |
-| `/committee/subjects/[id]` | Dynamic | Subject detail (backend data ready) | Low |
-| `/visualizations` | Gallery | Index page listing all 29 visualizations | Low |
-| `/allocation` | Dashboard | Vault TVL, wallet balances, buybacks (charts) | Medium |
+#### P0 CRITICAL (Main Navigation - 6 remaining)
+| Route | Linked From | Status | Effort |
+|-------|-------------|--------|--------|
+| `/allocation2` | Main nav (labeled "Performance") | ❌ Missing | Medium |
+| `/changelog` | Main nav + home | ❌ Missing | Low |
+| `/disclaimer` | Main nav + home | ❌ Missing | Low |
+| `/committee/[date]/[subject]` | Committee listing | ✓ Phase 1 | — |
+| `/committee/members/[id]` | Committee listing | ✓ Phase 1 | — |
+| `/committee/apply` | Committee + nav | ✓ Partial | Low |
 
-**Subtotal P0: 6 pages**
+**Subtotal P0: 3 pages remaining**
 
-#### P1 MARKETING & BLOG (Moderate priority)
-| Route | Count | Status |
-|-------|-------|--------|
-| `/blog`, `/blog/*` (6 posts) | 7 | ❌ Missing |
-| `/docs`, `/docs/investment-committee/*`, `/docs/skill/*` | 9 | ❌ Missing |
-| `/media`, `/media/articles`, `/media/videos` | 3 | ❌ Missing |
-| `/changelog`, `/disclaimer`, `/faq`, `/tokenomics`, `/skills` | 5 | ❌ Missing |
-| `/articles/treasury-allocation` | 1 | ❌ Missing |
+#### P1 SECONDARY (Discoverable via primary pages - 12 remaining)
+| Route | Linked From | Count | Status |
+|-------|-------------|-------|--------|
+| `/skills` | Main nav | 1 | ❌ Missing |
+| `/tokenomics` | Main nav | 1 | ❌ Missing |
+| `/media` | Main nav | 1 | ❌ Missing |
+| `/blog` + posts | /regime, /faq + internal | 7 | ❌ Missing |
+| `/docs` + subpages | /skills, direct | 3 | ❌ Missing |
+| `/research/*` | Blog posts | 2 | ❌ Missing (half) |
+| `/faq` | Blog + footer | 1 | ❌ Missing |
 
-**Subtotal P1: 25 pages**
+**Subtotal P1: 16 pages remaining**
 
-#### P2 SPECIAL & VARIANTS (Lower priority)
-| Route | Status |
-|-------|--------|
-| `/allocation2`, `/allocation3`, `/allocation-v2`, `/allocation2_fixingtotals` | ❌ Variants |
-| `/regime/indicators`, `/regime-detection`, `/regime-preview`, `/regime_2panel`, `/regime_2panel/indicators` | ❌ Regime variants |
-| `/smart-contract-risks`, `/tech-proposal-march-16`, `/display/projects` | ❌ Special pages |
-| `/home2`, `/home_archived`, `/splash2` | ❌ Variants |
-
-**Subtotal P2: ~57 pages**
+#### DROPPED (NOT DISCOVERABLE - 63+ pages)
+- ❌ 28 visualization pages — not linked from anywhere (experimental)
+- ❌ `/allocation3`, `/allocation-v2`, `/allocation2_fixingtotals` — variants
+- ❌ `/regime_2panel`, regime variants — not linked
+- ❌ `/home2`, `/home_archived` — abandoned variants
+- ❌ `/smart-contract-risks`, `/tech-proposal-march-16`, `/display/projects` — orphaned
+- ❌ Other special pages with zero discovery path
 
 ---
 
-## SECTION 2: VISUALIZATIONS (p5.js Sketches)
+## SECTION 2: VISUALIZATIONS (p5.js Sketches) - DROPPED
 
-### ✅ COMPLETED: 0/29
+### 🚫 NOT DISCOVERABLE - No user navigation path exists
 
-**robotmoney-frontend** has empty placeholder:
-- `/frontend/public/assets/js/app/visualizations/index.js` — exports only (no implementations)
+**robotmoney-site** has 28 visualization pages, but **none are linked from any discoverable page** (navigation, home, secondary pages, blog, docs, etc.). They exist as experimental/developer-only routes.
 
-### ❌ REMAINING: All 29 visualizations
+**Decision:** Skip visualization porting. Not part of public feature parity.
 
-**robotmoney-site** implementations at `/src/app/[name]/page.tsx` (React + p5 via CDN).
+**Evidence:**
+- No links in Navigation.tsx
+- No links in any .tsx page component
+- No links from /media or other index pages
+- Not mentioned in footer
+- 0 entry points from main navigation
+
+These pages are experimental and can be revisited as P3 (polish phase) if needed, but they're not required for feature parity with the **discoverable** public surface.
 
 #### Complexity Breakdown
 
