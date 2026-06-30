@@ -1,0 +1,89 @@
+/* Docs 3-column shell — sidebar nav tree + content + On-this-page TOC.
+   Active only on /docs* routes (.docs-shell exists only in those views). Hides
+   the global nav + footer so docs render their own chrome, matching
+   robotmoney-site/src/app/docs/layout.tsx. */
+body:has(.docs-shell) .nav,
+body:has(.docs-shell) .footer { display: none !important; }
+
+.docs-shell {
+  max-width: 1440px; margin: 0 auto; padding: 0 1.5rem;
+  display: grid; grid-template-columns: 1fr; gap: 0 2rem;
+  color: var(--color-text); font-family: var(--font-sans);
+}
+/* Neutralize per-view centering/top-padding so the grid controls layout. */
+.docs-shell .docs-index,
+.docs-shell .docs-page { max-width: none; margin: 0; padding: 2.5rem 0 4rem; }
+
+.docs-sidebar { display: none; }
+.docs-toc { display: none; }
+
+.docs-sidebar__home {
+  display: flex; align-items: center; gap: 0.5rem; margin-bottom: 2rem;
+  font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.22em; color: var(--color-text-dim); text-decoration: none;
+}
+.docs-sidebar__home:hover { color: var(--color-accent); }
+.docs-sidebar__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }
+.docs-sidebar__group { margin-bottom: 2rem; }
+.docs-sidebar__grouptitle {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.2em; color: var(--color-text-dim); margin: 0 0 0.75rem;
+}
+.docs-sidebar__list { list-style: none; margin: 0; padding: 0; }
+.docs-sidebar__link {
+  display: block; padding: 0.25rem 0 0.25rem 0.75rem; margin-left: -0.5rem;
+  border-left: 2px solid transparent; color: var(--color-text-muted);
+  text-decoration: none; font-size: 0.875rem; line-height: 1.5;
+  transition: color 0.15s, border-color 0.15s;
+}
+.docs-sidebar__link:hover { color: var(--color-text); border-color: var(--color-border-light); }
+.docs-sidebar__link--active { color: var(--color-text); border-color: var(--color-accent); }
+.docs-sidebar__foot {
+  margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--color-border);
+  font-size: 11px; color: var(--color-text-dim);
+  display: flex; flex-direction: column; gap: 0.5rem;
+}
+.docs-sidebar__foot a { color: var(--color-text-dim); text-decoration: none; }
+.docs-sidebar__foot a:hover { color: var(--color-text-muted); }
+
+.docs-toc__label {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.2em; color: var(--color-text-dim); margin: 0 0 0.75rem;
+}
+.docs-toc__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.docs-toc__list a { color: var(--color-text-muted); text-decoration: none; font-size: 0.875rem; line-height: 1.4; }
+.docs-toc__list a:hover { color: var(--color-text); }
+
+@media (min-width: 1024px) {
+  .docs-shell { grid-template-columns: 260px minmax(0,1fr); padding: 0 2.5rem; }
+  .docs-sidebar {
+    display: block; align-self: start; position: sticky; top: 0;
+    max-height: 100vh; overflow-y: auto; padding: 2.5rem 1.5rem 2.5rem 0;
+  }
+}
+@media (min-width: 1280px) {
+  .docs-shell { grid-template-columns: 260px minmax(0,1fr) 240px; }
+  .docs-toc {
+    display: block; align-self: start; position: sticky; top: 0;
+    max-height: 100vh; overflow-y: auto; padding: 2.5rem 0 2.5rem 1.5rem;
+  }
+}
+
+/* Code-block copy button (bar lives in each docs view; styled here once since
+   docs-shell.css loads on every /docs* route). Scoped under .docs-shell so it
+   wins over the per-view .docs-codeblock__bar rules regardless of order. */
+.docs-shell .docs-codeblock__bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+}
+.docs-shell .docs-codeblock__copy {
+  flex-shrink: 0;
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.15em; color: var(--color-text-dim);
+  background: transparent; border: 1px solid var(--color-border);
+  padding: 0.1rem 0.5rem; border-radius: 3px; cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+.docs-shell .docs-codeblock__copy:hover,
+.docs-shell .docs-codeblock__copy.is-copied {
+  color: var(--color-accent); border-color: var(--color-accent);
+}

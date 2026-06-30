@@ -1,0 +1,705 @@
+<!-- /docs/skill/commands — Robot Money Skill command reference.
+     Ported from robotmoney-site/src/app/docs/skill/commands/page.tsx (static). -->
+<div class="docs-shell">
+  <aside class="docs-sidebar">
+    <a class="docs-sidebar__home" href="/docs"><span class="docs-sidebar__dot"></span>Robot Money · Docs</a>
+    <div class="docs-sidebar__group">
+      <div class="docs-sidebar__grouptitle">Get started</div>
+      <ul class="docs-sidebar__list">
+        <li><a class="docs-sidebar__link" href="/docs">Introduction</a></li>
+      </ul>
+    </div>
+    <div class="docs-sidebar__group">
+      <div class="docs-sidebar__grouptitle">Investment Committee</div>
+      <ul class="docs-sidebar__list">
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee">Overview</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee/how-it-works">How it works</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee/participation">Participation</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee/api-reference">API reference</a></li>
+      </ul>
+    </div>
+    <div class="docs-sidebar__group">
+      <div class="docs-sidebar__grouptitle">Robot Money Skill</div>
+      <ul class="docs-sidebar__list">
+        <li><a class="docs-sidebar__link" href="/docs/skill">Overview</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/skill/installation">Installation</a></li>
+        <li><a class="docs-sidebar__link docs-sidebar__link--active" href="/docs/skill/commands" aria-current="page">Commands</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/skill/agent-basket">Agent basket</a></li>
+      </ul>
+    </div>
+    <div class="docs-sidebar__foot">
+      <a href="https://github.com/agentjuno/robotmoney" target="_blank" rel="noopener noreferrer">GitHub &rarr;</a>
+      <a href="/changelog">Changelog &rarr;</a>
+      <a href="/disclaimer">Disclaimer &rarr;</a>
+    </div>
+  </aside>
+  <main class="docs-main">
+  <section class="docs-page">
+  <nav class="docs-breadcrumb" aria-label="Breadcrumb">
+    <a href="/docs">Docs</a>
+    <span>/</span>
+    <a href="/docs/skill" class="docs-bc-link">Robot Money Skill</a>
+    <span>/</span>
+    <span class="docs-bc-current">Commands</span>
+  </nav>
+  <a href="/docs/skill" class="docs-back">← Back to Robot Money Skill</a>
+
+  <header class="docs-header">
+    <h1 class="docs-title">Commands</h1>
+    <p class="docs-desc">
+      Every command in the skill: read commands that query protocol state,
+      prepare commands that produce unsigned calldata, and execute commands that
+      sign and broadcast end-to-end.
+    </p>
+  </header>
+
+  <div class="docs-prose">
+    <h2 id="shape">Common shape</h2>
+    <p>
+      Every command takes <code>--chain base</code>. There's no default chain in
+      v1; the flag is required even though Base is the only supported chain. This
+      is intentional — it forces explicit intent and makes multi-chain expansion
+      straightforward later.
+    </p>
+    <p>
+      Every command writes a single JSON object to <code>stdout</code> and exits
+      0 on success or 1 on failure. Errors are reported as JSON on stderr with a
+      structured <code>error</code> field. No partial output, no progress lines,
+      no color codes.
+    </p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code># Generic invocation pattern
+npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
+    </div>
+
+    <hr />
+
+    <h2 id="read">Read commands</h2>
+    <p>
+      Read commands query protocol state. None of them require a wallet or
+      signature. They're safe to call frequently; results are always current at
+      the latest block at call time.
+    </p>
+
+    <h3 id="health-check"><code>health-check</code></h3>
+    <p>
+      Smoke test: confirms RPC reachability, fetches vault state, and returns
+      <code>ok: true</code> if everything looks healthy.
+    </p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>npx @robotmoney/cli health-check --chain base</code></pre>
+    </div>
+    <p>
+      Response includes <code>chainId</code>, the RPC endpoint actually used, the
+      current block number, the vault's total assets and share price,
+      paused/shutdown flags, and the active adapter count. See
+      <a href="/docs/skill/installation#first-command">Installation</a> for a
+      worked example.
+    </p>
+
+    <h3 id="get-vault"><code>get-vault</code></h3>
+    <p>
+      Returns vault-level state: TVL, share price, caps, fee schedule, and
+      adapter breakdown.
+    </p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>npx @robotmoney/cli get-vault --chain base [--verbose]</code></pre>
+    </div>
+    <ul>
+      <li>
+        <code>--verbose</code> — include per-adapter balances, oracle freshness,
+        and audit recency metadata.
+      </li>
+    </ul>
+
+    <h3 id="get-apy"><code>get-apy</code></h3>
+    <p>
+      Returns the current effective APY of the vault as a weighted average
+      across active adapters. Excludes the exit fee from the yield calc — the
+      exit fee is reported separately.
+    </p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>npx @robotmoney/cli get-apy --chain base</code></pre>
+    </div>
+
+    <h3 id="get-balance"><code>get-balance</code></h3>
+    <p>Returns the rmUSDC balance and current USDC value for a given wallet.</p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>npx @robotmoney/cli get-balance --chain base --user-address 0x...</code></pre>
+    </div>
+    <ul>
+      <li><code>--user-address</code> (required) — the wallet to inspect.</li>
+    </ul>
+    <p>
+      Response includes the raw share balance, the share price, the net USDC
+      value after the exit fee (what the user would actually receive if they
+      redeemed right now), and the cost basis if available.
+    </p>
+
+    <h3 id="get-basket-holdings"><code>get-basket-holdings</code></h3>
+    <p>
+      Returns the wallet's holdings across all basket tokens (VIRTUAL, ROBOT,
+      BNKR, JUNO, ZFI, GIZA, PEAQ), with per-token balance and dollar value.
+    </p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>npx @robotmoney/cli get-basket-holdings --chain base --user-address 0x... [--no-pricing]</code></pre>
+    </div>
+    <ul>
+      <li><code>--user-address</code> (required) — the wallet to inspect.</li>
+      <li>
+        <code>--no-pricing</code> — skip dollar-value fetch. Returns token
+        balances only. Useful when you only need quantities.
+      </li>
+    </ul>
+
+    <hr />
+
+    <h2 id="prepare">Prepare commands</h2>
+    <p>
+      Prepare commands return unsigned calldata as JSON. They simulate the
+      transaction at the current block to surface any expected reverts before
+      signing. The CLI never touches keys in this path — the caller signs and
+      broadcasts externally.
+    </p>
+    <div class="docs-callout docs-callout--info">
+      <div class="docs-callout__label">Common response shape</div>
+      <div class="docs-callout__body">
+        Every prepare-* response contains an <code>operation</code> object with a
+        <code>summary</code>, a <code>transactions[]</code> array with one or
+        more unsigned tx objects (target, calldata, value, gas estimate), and a
+        <code>simulation</code> block with <code>allSucceeded</code>, per-tx
+        <code>failures[]</code>, and a <code>preview</code> showing the
+        post-state.
+      </div>
+    </div>
+
+    <h3 id="prepare-deposit"><code>prepare-deposit</code></h3>
+    <p>
+      Prepares the calldata to deposit USDC into the vault and atomically buy the
+      basket leg (95/5 by default).
+    </p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>npx @robotmoney/cli prepare-deposit \
+  --chain base \
+  --user-address 0x... \
+  --amount 100 \
+  --receiver 0x... \
+  [--no-basket | --basket-only] \
+  [--slippage-bps 300]</code></pre>
+    </div>
+    <ul>
+      <li><code>--user-address</code> (required) — who pays the USDC.</li>
+      <li>
+        <code>--amount</code> (required) — USDC amount, decimal. Subject to the
+        per-deposit cap (currently $5,000).
+      </li>
+      <li>
+        <code>--receiver</code> (required) — who receives the rmUSDC shares and
+        basket tokens. Usually the same as user-address.
+      </li>
+      <li><code>--no-basket</code> — route 100% to vault, skip the basket.</li>
+      <li><code>--basket-only</code> — route 100% to basket, skip the vault.</li>
+      <li>
+        <code>--slippage-bps</code> — basket leg slippage tolerance in basis
+        points. Default 300 (3%).
+      </li>
+    </ul>
+    <p>
+      Returns two unsigned transactions: the USDC <code>approve</code> and the
+      vault <code>deposit</code>. They must be signed and broadcast in order. The
+      simulation pre-applies the approval via state override so the deposit
+      simulation reflects a fully-approved state.
+    </p>
+
+    <h3 id="prepare-redeem"><code>prepare-redeem</code></h3>
+    <p>
+      Prepares calldata to redeem rmUSDC shares for USDC. Optionally sells back
+      any subset of basket holdings atomically.
+    </p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>npx @robotmoney/cli prepare-redeem \
+  --chain base \
+  --user-address 0x... \
+  --shares max \
+  --receiver 0x... \
+  [--sell-all | --sell-percent N | --sell-tokens VIRTUAL,JUNO [--sell-amounts 1.5,200]] \
+  [--slippage-bps 300]</code></pre>
+    </div>
+    <ul>
+      <li>
+        <code>--shares max</code> — redeem the user's full balance. Reads
+        <code>balanceOf</code> at call time so "max" always means "everything I
+        have right now." Or pass a specific share quantity.
+      </li>
+      <li><code>--receiver</code> (required) — where the USDC lands.</li>
+      <li>
+        <code>--sell-all</code> — also sell every basket holding back to USDC.
+      </li>
+      <li>
+        <code>--sell-percent N</code> — sell N% of every basket holding.
+      </li>
+      <li>
+        <code>--sell-tokens VIRTUAL,JUNO</code> — sell specific basket tokens.
+        Paired with <code>--sell-amounts</code> for partial sales (otherwise
+        sells full balance of each named token).
+      </li>
+    </ul>
+    <p>
+      Returns one unsigned transaction (a multicall combining the redeem and any
+      basket sells). Simulation reports the expected USDC received, broken down
+      by source (vault redeem vs. each basket sale).
+    </p>
+
+    <h3 id="prepare-withdraw"><code>prepare-withdraw</code></h3>
+    <p>
+      Same as <code>prepare-redeem</code> but specifies the USDC amount the
+      caller wants to receive instead of the share quantity. The skill computes
+      the share burn internally.
+    </p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>npx @robotmoney/cli prepare-withdraw \
+  --chain base \
+  --user-address 0x... \
+  --amount 50 \
+  --receiver 0x... \
+  [...same basket-sell flags as prepare-redeem...]</code></pre>
+    </div>
+    <div class="docs-callout docs-callout--tip">
+      <div class="docs-callout__label">When to prefer redeem over withdraw</div>
+      <div class="docs-callout__body">
+        For full-position exits, prefer
+        <code>prepare-redeem --shares max</code> — it handles adapter liquidity
+        limits gracefully and exits exactly the user's full balance, accounting
+        for fee precision. <code>prepare-withdraw --amount &lt;large&gt;</code>
+        can fail with an <code>ERC4626ExceededMaxWithdraw</code> revert if the
+        requested amount exceeds available adapter liquidity.
+      </div>
+    </div>
+
+    <hr />
+
+    <h2 id="execute">Execute commands</h2>
+    <p>
+      Execute commands sign and broadcast end-to-end via an OWS keystore. They
+      take the same flags as their prepare counterparts plus a wallet selector
+      and (optionally) a passphrase. They return confirmed transaction hashes
+      after on-chain confirmation.
+    </p>
+
+    <h3 id="create-wallet"><code>create-wallet</code></h3>
+    <p>
+      Mints a new EVM wallet under the OWS keystore format. Required before any
+      <code>execute-*</code> call if the caller doesn't already have an OWS
+      wallet.
+    </p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>npx @robotmoney/cli create-wallet [--label &lt;string&gt;] [--storage-path &lt;dir&gt;]</code></pre>
+    </div>
+    <ul>
+      <li>
+        <code>--label</code> — optional name for the wallet. Defaults to a
+        generated string. Used in <code>--wallet</code> flags below.
+      </li>
+      <li>
+        <code>--storage-path</code> — override the default storage directory
+        (<code>~/.ows/wallets/</code>).
+      </li>
+    </ul>
+    <p>
+      Returns the new address and funding instructions. The wallet needs both
+      USDC and a small amount of ETH on Base before any <code>execute-*</code>
+      call works.
+    </p>
+
+    <h3 id="execute-deposit"><code>execute-deposit</code></h3>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>npx @robotmoney/cli execute-deposit \
+  --chain base \
+  --wallet &lt;name&gt; \
+  --amount 100 \
+  [--no-basket | --basket-only]</code></pre>
+    </div>
+    <p>
+      Same semantics as <code>prepare-deposit</code> but signs and broadcasts via
+      the named OWS wallet. The receiver is implicitly the wallet's own address.
+    </p>
+
+    <h3 id="execute-redeem"><code>execute-redeem</code></h3>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>npx @robotmoney/cli execute-redeem \
+  --chain base \
+  --wallet &lt;name&gt; \
+  --shares max \
+  [--sell-all]</code></pre>
+    </div>
+
+    <h3 id="execute-withdraw"><code>execute-withdraw</code></h3>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>npx @robotmoney/cli execute-withdraw \
+  --chain base \
+  --wallet &lt;name&gt; \
+  --amount 50 \
+  [--sell-all]</code></pre>
+    </div>
+
+    <h4>Wallet selection</h4>
+    <ul>
+      <li>
+        <code>--wallet &lt;name&gt;</code> explicit → use that OWS wallet
+      </li>
+      <li>
+        Else if exactly one wallet exists in <code>~/.ows/wallets/</code> →
+        auto-pick it
+      </li>
+      <li>Else → error with the list of available wallets</li>
+    </ul>
+
+    <h4>Passphrase resolution</h4>
+    <p>In priority order:</p>
+    <ol>
+      <li>
+        <code>--passphrase &lt;string&gt;</code> — highest priority. Note:
+        visible in shell history.
+      </li>
+      <li>
+        <code>OWS_PASSPHRASE</code> environment variable — cleanest for agent
+        workflows.
+      </li>
+      <li>Interactive TTY prompt — default for humans.</li>
+    </ol>
+
+    <hr />
+
+    <h2 id="reverts">Simulation reverts</h2>
+    <p>
+      Prepare commands run a simulation and surface any expected reverts. Most
+      reverts have a known cause and a clear fix.
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>Revert</th>
+          <th>Cause</th>
+          <th>Fix</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>ERC20InsufficientAllowance</code></td>
+          <td>USDC allowance for the vault is below the deposit amount</td>
+          <td>
+            With <code>prepare-deposit</code>, simulation pre-applies the
+            approval via state override, so this shouldn't appear. If it does,
+            check the caller's approval flow.
+          </td>
+        </tr>
+        <tr>
+          <td><code>ERC20InsufficientBalance</code></td>
+          <td>User lacks USDC</td>
+          <td>Fund the wallet with USDC on Base first.</td>
+        </tr>
+        <tr>
+          <td><code>ERC4626ExceededMaxDeposit</code></td>
+          <td>Deposit exceeds vault's max for this receiver</td>
+          <td>Reduce amount; check TVL and per-deposit caps.</td>
+        </tr>
+        <tr>
+          <td><code>ERC4626ExceededMaxWithdraw</code></td>
+          <td>Withdraw amount exceeds the owner's current balance</td>
+          <td>
+            Use <code>prepare-redeem --shares max</code> to exit the full
+            position.
+          </td>
+        </tr>
+        <tr>
+          <td><code>ERC4626ExceededMaxRedeem</code></td>
+          <td>Redeem shares exceed the owner's share balance</td>
+          <td>
+            Use <code>--shares max</code>, which reads balanceOf automatically.
+          </td>
+        </tr>
+        <tr>
+          <td><code>TVLCapExceeded</code></td>
+          <td>
+            Deposit would push total vault assets above the TVL cap ($100,000)
+          </td>
+          <td>Reduce amount or wait for cap raise.</td>
+        </tr>
+        <tr>
+          <td><code>PerDepositCapExceeded</code></td>
+          <td>Single deposit exceeds the per-deposit cap ($5,000)</td>
+          <td>Split into multiple deposits under the cap.</td>
+        </tr>
+        <tr>
+          <td><code>VaultShutdown</code></td>
+          <td>Vault is permanently shut down — deposits disabled</td>
+          <td>Withdrawals still work; no new deposits accepted.</td>
+        </tr>
+        <tr>
+          <td><code>EnforcedPause</code></td>
+          <td>Vault is paused (operational emergency)</td>
+          <td>Wait for unpause; withdrawals may still be available.</td>
+        </tr>
+        <tr>
+          <td><code>NoActiveAdapters</code></td>
+          <td>No adapters are active</td>
+          <td>
+            Operator attention required before any deposit. Not a user-fixable
+            error.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="docs-callout docs-callout--note">
+      <div class="docs-callout__label">Expected failures</div>
+      <div class="docs-callout__body">
+        If <code>simulation.failures[i].expected === true</code>, that failure
+        is an artifact of simulating a dependent transaction at latest-block
+        state — not a real error. The <code>allSucceeded</code> field already
+        filters these out, so you only need to inspect <code>failures[]</code>
+        when <code>allSucceeded === false</code>.
+      </div>
+    </div>
+  </div>
+
+  <footer class="docs-footer">
+    <a href="/docs/skill">
+      <div class="docs-footer__label">← Overview</div>
+      <div class="docs-footer__title">Robot Money Skill</div>
+    </a>
+    <a href="/docs/skill/installation">
+      <div class="docs-footer__label">← Previous</div>
+      <div class="docs-footer__title">Installation</div>
+    </a>
+    <a href="/docs/skill/agent-basket">
+      <div class="docs-footer__label">Next →</div>
+      <div class="docs-footer__title">Agent basket</div>
+    </a>
+  </footer>
+</section>
+  </main>
+  <aside class="docs-toc">
+    <div class="docs-toc__label">On this page</div>
+    <ul class="docs-toc__list">
+      <li><a href="#shape">Common shape</a></li>
+      <li><a href="#read">Read commands</a></li>
+      <li><a href="#prepare">Prepare commands</a></li>
+      <li><a href="#execute">Execute commands</a></li>
+      <li><a href="#reverts">Simulation reverts</a></li>
+    </ul>
+  </aside>
+</div>
+
+<style>
+.docs-page {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 8rem 1.5rem 5rem;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+.docs-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+  margin-bottom: 1.5rem;
+}
+.docs-breadcrumb a { color: var(--color-text-dim); text-decoration: none; }
+.docs-breadcrumb a:hover { color: var(--color-text-muted); }
+.docs-bc-link { color: var(--color-text-muted) !important; }
+.docs-bc-current { color: var(--color-text); }
+.docs-back {
+  display: inline-block;
+  margin-bottom: 2rem;
+  font-size: 0.85rem;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  text-decoration: none;
+}
+.docs-back:hover { color: var(--color-accent); }
+.docs-header {
+  margin-bottom: 2.5rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.docs-title {
+  font-size: 2.5rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  margin: 0 0 1rem;
+  color: var(--color-text);
+}
+.docs-desc {
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+.docs-prose { font-size: 1rem; line-height: 1.7; }
+.docs-prose h2 {
+  font-size: 1.6rem;
+  font-weight: 600;
+  margin: 2.75rem 0 1rem;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+.docs-prose h3 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 2rem 0 0.75rem;
+  color: var(--color-text);
+}
+.docs-prose h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 1.5rem 0 0.5rem;
+  color: var(--color-text);
+}
+.docs-prose p { margin: 0 0 1rem; color: var(--color-text); }
+.docs-prose ul, .docs-prose ol { margin: 0 0 1rem; padding-left: 1.5rem; color: var(--color-text); }
+.docs-prose li { margin-bottom: 0.5rem; }
+.docs-prose strong { color: var(--color-text); font-weight: 600; }
+.docs-prose a { color: var(--color-accent); text-decoration: none; }
+.docs-prose a:hover { text-decoration: underline; }
+.docs-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--color-accent-dim);
+  background: rgba(0, 229, 255, 0.08);
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+}
+.docs-prose hr { border: none; border-top: 1px solid var(--color-border); margin: 2.5rem 0; }
+.docs-codeblock {
+  margin: 1.25rem 0;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-deep);
+  overflow: hidden;
+}
+.docs-codeblock__bar {
+  padding: 0.4rem 1rem;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--color-text-dim);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.docs-codeblock pre { margin: 0; padding: 0.75rem 1rem; overflow-x: auto; }
+.docs-codeblock code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--color-text);
+  background: none;
+  padding: 0;
+  white-space: pre;
+}
+.docs-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  font-size: 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.docs-prose th {
+  text-align: left;
+  padding: 0.75rem 1rem;
+  background: var(--color-surface-light);
+  color: var(--color-text-dim);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  border-bottom: 1px solid var(--color-border);
+}
+.docs-prose td {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text);
+  vertical-align: top;
+}
+.docs-callout {
+  margin: 1.5rem 0;
+  border-left: 2px solid var(--color-blue);
+  background: rgba(68, 136, 255, 0.06);
+  padding: 1rem 1rem 1rem 1.25rem;
+  border-radius: 0 4px 4px 0;
+}
+.docs-callout__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-family: var(--font-mono);
+  color: var(--color-blue);
+  margin-bottom: 0.4rem;
+}
+.docs-callout__body { font-size: 0.9rem; line-height: 1.6; color: var(--color-text); }
+.docs-callout__body p:last-child { margin-bottom: 0; }
+.docs-callout--tip { border-left-color: var(--color-accent); background: rgba(0, 229, 255, 0.05); }
+.docs-callout--tip .docs-callout__label { color: var(--color-accent); }
+.docs-callout--warn { border-left-color: var(--color-warn); background: rgba(255, 102, 68, 0.06); }
+.docs-callout--warn .docs-callout__label { color: var(--color-warn); }
+.docs-callout--info { border-left-color: var(--color-blue); background: rgba(68, 136, 255, 0.06); }
+.docs-callout--info .docs-callout__label { color: var(--color-blue); }
+.docs-callout--note { border-left-color: var(--color-warm); background: rgba(232, 166, 64, 0.06); }
+.docs-callout--note .docs-callout__label { color: var(--color-warm); }
+.docs-footer {
+  margin-top: 3.5rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.docs-footer a {
+  flex: 1 1 200px;
+  display: block;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--color-text);
+  transition: border-color 0.2s;
+}
+.docs-footer a:hover { border-color: var(--color-accent); }
+.docs-footer__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-family: var(--font-mono);
+  color: var(--color-text-dim);
+  margin-bottom: 0.25rem;
+}
+.docs-footer__title { font-size: 0.9rem; color: var(--color-text); }
+@media (max-width: 640px) {
+  .docs-page { padding: 6rem 1.25rem 4rem; }
+  .docs-title { font-size: 2rem; }
+  .docs-desc { font-size: 1rem; }
+}
+</style>

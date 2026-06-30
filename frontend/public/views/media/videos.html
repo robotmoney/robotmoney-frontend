@@ -1,0 +1,115 @@
+<!-- Media / Videos
+     Ported from robotmoney-site/src/app/media/videos/page.tsx + components/VideoCard.tsx
+     The video preview Image / YouTube iframe is replaced with a static gradient
+     placeholder block carrying the 𝕏 Space overlay.
+-->
+
+<section class="mv-page">
+  <div class="container">
+    <!-- Hero -->
+    <header class="mv-hero">
+      <a href="/media" class="mv-back">← Media</a>
+      <h1 class="mv-title">Videos</h1>
+      <p class="mv-lede">
+        Video content, interviews, and demos about Robot Money protocol.
+      </p>
+    </header>
+
+    <!-- Videos grid -->
+    <div class="mv-grid">
+
+      <a href="https://x.com/MCGlive/status/2036905632477987202" target="_blank" rel="noopener noreferrer" class="mv-card">
+        <!-- Twitter / X Space preview (static gradient stands in for the screenshot) -->
+        <div class="mv-card__preview">
+          <div class="mv-card__overlay">
+            <div class="mv-card__platform">
+              <span class="mv-card__platform-name">𝕏 Space</span>
+              <span class="mv-card__platform-dot">·</span>
+              <span class="mv-card__platform-len">38:20</span>
+            </div>
+            <div class="mv-card__watch">
+              <span class="mv-card__play">▶</span>
+              <span class="mv-card__watch-text">Watch on X</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="mv-card__body">
+          <div class="mv-meta"><span>𝕏 Twitter Space</span><span class="mv-dot">·</span><span>Mar 26, 2026</span></div>
+          <h3 class="mv-card__title">Agent Economy Discussion - MCG Live</h3>
+          <p class="mv-card__desc">Live discussion on the emerging agent economy and autonomous AI agents.</p>
+        </div>
+      </a>
+
+    </div>
+  </div>
+</section>
+
+<style>
+.mv-page { background: var(--color-void); min-height: 100vh; }
+.mv-page .container { max-width: 1100px; margin: 0 auto; padding: 8rem 1.5rem 5rem; }
+
+.mv-hero { padding-bottom: 2.5rem; border-bottom: 1px solid var(--color-border); margin-bottom: 3rem; }
+.mv-back {
+  display: inline-block; margin-bottom: 1rem;
+  font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase;
+  letter-spacing: 0.3em; color: var(--color-text-muted); text-decoration: none;
+}
+.mv-back:hover { color: var(--color-accent); }
+.mv-title { font-family: var(--font-serif); font-style: italic; font-size: 3rem; color: var(--color-accent); margin: 0 0 1rem; line-height: 1; }
+.mv-lede { color: var(--color-text-muted); max-width: 42rem; line-height: 1.6; margin: 0; }
+
+.mv-grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
+
+.mv-card {
+  display: block; background: var(--color-surface);
+  border: 1px solid var(--color-border); overflow: hidden;
+  text-decoration: none; transition: border-color 0.2s;
+}
+.mv-card:hover { border-color: var(--color-accent); }
+
+.mv-card__preview {
+  position: relative; aspect-ratio: 16 / 9; width: 100%;
+  background:
+    radial-gradient(circle at 30% 70%, rgba(0,229,255,0.18) 0%, transparent 60%),
+    linear-gradient(135deg, var(--color-accent), var(--color-purple));
+}
+.mv-card__overlay {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  padding: 1rem;
+  background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.2) 50%, transparent 100%);
+}
+.mv-card__platform {
+  display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;
+}
+.mv-card__platform-name { color: #fff; font-weight: 700; }
+.mv-card__platform-dot { color: rgba(255,255,255,0.6); }
+.mv-card__platform-len { color: rgba(255,255,255,0.6); }
+.mv-card__watch { display: flex; align-items: center; gap: 0.5rem; }
+.mv-card__play {
+  width: 2rem; height: 2rem; border-radius: 9999px;
+  background: var(--color-accent); color: #000;
+  display: flex; align-items: center; justify-content: center; font-size: 0.7rem;
+}
+.mv-card__watch-text { color: #fff; font-size: 0.875rem; }
+
+.mv-card__body { padding: 1rem; }
+.mv-meta {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--color-text-muted); margin-bottom: 0.5rem;
+}
+.mv-dot { color: var(--color-border-light); }
+.mv-card__title {
+  font-family: var(--font-serif); font-style: italic; font-size: 1rem;
+  color: var(--color-text); margin: 0; line-height: 1.3;
+}
+.mv-card:hover .mv-card__title { color: var(--color-accent); }
+.mv-card__desc { font-size: 0.75rem; color: var(--color-text-muted); line-height: 1.5; margin: 0.5rem 0 0; }
+
+@media (min-width: 768px) {
+  .mv-title { font-size: 3.5rem; }
+  .mv-grid { grid-template-columns: repeat(2, 1fr); gap: 1.5rem; }
+}
+</style>

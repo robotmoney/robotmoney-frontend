@@ -1,0 +1,770 @@
+{
+  "generatedAt": "2026-06-30T14:03:22.079Z",
+  "baseUrl": "http://localhost:3000",
+  "totalRoutes": 67,
+  "navigableRoutesCount": 64,
+  "captureStrategy": "All routes reachable from primary navigation + visualizations gallery",
+  "routes": [
+    {
+      "name": "home",
+      "route": "/",
+      "category": "Home",
+      "priority": "P0",
+      "url": "http://localhost:3000/",
+      "screenshotFiles": [
+        "home-desktop-1440.png",
+        "home-mobile-375.png"
+      ]
+    },
+    {
+      "name": "skills",
+      "route": "/skills",
+      "category": "Skills",
+      "priority": "P1",
+      "url": "http://localhost:3000/skills",
+      "screenshotFiles": [
+        "skills-desktop-1440.png",
+        "skills-mobile-375.png"
+      ]
+    },
+    {
+      "name": "tokenomics",
+      "route": "/tokenomics",
+      "category": "Token Info",
+      "priority": "P1",
+      "url": "http://localhost:3000/tokenomics",
+      "screenshotFiles": [
+        "tokenomics-desktop-1440.png",
+        "tokenomics-mobile-375.png"
+      ]
+    },
+    {
+      "name": "allocation",
+      "route": "/allocation",
+      "category": "Allocation",
+      "priority": "P0",
+      "url": "http://localhost:3000/allocation",
+      "screenshotFiles": [
+        "allocation-desktop-1440.png",
+        "allocation-mobile-375.png"
+      ]
+    },
+    {
+      "name": "allocation-performance",
+      "route": "/allocation2",
+      "category": "Allocation",
+      "priority": "P1",
+      "url": "http://localhost:3000/allocation2",
+      "screenshotFiles": [
+        "allocation-performance-desktop-1440.png",
+        "allocation-performance-mobile-375.png"
+      ]
+    },
+    {
+      "name": "regime",
+      "route": "/regime",
+      "category": "Regime",
+      "priority": "P0",
+      "url": "http://localhost:3000/regime",
+      "screenshotFiles": [
+        "regime-desktop-1440.png",
+        "regime-mobile-375.png"
+      ]
+    },
+    {
+      "name": "committee",
+      "route": "/committee",
+      "category": "Committee",
+      "priority": "P0",
+      "url": "http://localhost:3000/committee",
+      "screenshotFiles": [
+        "committee-desktop-1440.png",
+        "committee-mobile-375.png"
+      ]
+    },
+    {
+      "name": "media",
+      "route": "/media",
+      "category": "Coverage",
+      "priority": "P1",
+      "url": "http://localhost:3000/media",
+      "screenshotFiles": [
+        "media-desktop-1440.png",
+        "media-mobile-375.png"
+      ]
+    },
+    {
+      "name": "changelog",
+      "route": "/changelog",
+      "category": "Development",
+      "priority": "P1",
+      "url": "http://localhost:3000/changelog",
+      "screenshotFiles": [
+        "changelog-desktop-1440.png",
+        "changelog-mobile-375.png"
+      ]
+    },
+    {
+      "name": "committee-apply",
+      "route": "/committee/apply",
+      "category": "Committee",
+      "priority": "P1",
+      "url": "http://localhost:3000/committee/apply",
+      "screenshotFiles": [
+        "committee-apply-desktop-1440.png",
+        "committee-apply-mobile-375.png"
+      ]
+    },
+    {
+      "name": "regime-indicators",
+      "route": "/regime/indicators",
+      "category": "Regime",
+      "priority": "P2",
+      "url": "http://localhost:3000/regime/indicators",
+      "screenshotFiles": [
+        "regime-indicators-desktop-1440.png",
+        "regime-indicators-mobile-375.png"
+      ]
+    },
+    {
+      "name": "media-articles",
+      "route": "/media/articles",
+      "category": "Coverage",
+      "priority": "P2",
+      "url": "http://localhost:3000/media/articles",
+      "screenshotFiles": [
+        "media-articles-desktop-1440.png",
+        "media-articles-mobile-375.png"
+      ]
+    },
+    {
+      "name": "media-videos",
+      "route": "/media/videos",
+      "category": "Coverage",
+      "priority": "P2",
+      "url": "http://localhost:3000/media/videos",
+      "screenshotFiles": [
+        "media-videos-desktop-1440.png",
+        "media-videos-mobile-375.png"
+      ]
+    },
+    {
+      "name": "research-channel-divergence",
+      "route": "/research/channel-divergence",
+      "category": "Research",
+      "priority": "P1",
+      "url": "http://localhost:3000/research/channel-divergence",
+      "screenshotFiles": [
+        "research-channel-divergence-desktop-1440.png",
+        "research-channel-divergence-mobile-375.png"
+      ]
+    },
+    {
+      "name": "research-late-cycle-signals",
+      "route": "/research/late-cycle-signals",
+      "category": "Research",
+      "priority": "P1",
+      "url": "http://localhost:3000/research/late-cycle-signals",
+      "screenshotFiles": [
+        "research-late-cycle-signals-desktop-1440.png",
+        "research-late-cycle-signals-mobile-375.png"
+      ]
+    },
+    {
+      "name": "docs",
+      "route": "/docs",
+      "category": "Docs",
+      "priority": "P2",
+      "url": "http://localhost:3000/docs",
+      "screenshotFiles": [
+        "docs-desktop-1440.png",
+        "docs-mobile-375.png"
+      ]
+    },
+    {
+      "name": "docs-skill",
+      "route": "/docs/skill",
+      "category": "Docs",
+      "priority": "P2",
+      "url": "http://localhost:3000/docs/skill",
+      "screenshotFiles": [
+        "docs-skill-desktop-1440.png",
+        "docs-skill-mobile-375.png"
+      ]
+    },
+    {
+      "name": "docs-skill-installation",
+      "route": "/docs/skill/installation",
+      "category": "Docs",
+      "priority": "P3",
+      "url": "http://localhost:3000/docs/skill/installation",
+      "screenshotFiles": [
+        "docs-skill-installation-desktop-1440.png",
+        "docs-skill-installation-mobile-375.png"
+      ]
+    },
+    {
+      "name": "docs-skill-commands",
+      "route": "/docs/skill/commands",
+      "category": "Docs",
+      "priority": "P3",
+      "url": "http://localhost:3000/docs/skill/commands",
+      "screenshotFiles": [
+        "docs-skill-commands-desktop-1440.png",
+        "docs-skill-commands-mobile-375.png"
+      ]
+    },
+    {
+      "name": "docs-skill-agent-basket",
+      "route": "/docs/skill/agent-basket",
+      "category": "Docs",
+      "priority": "P3",
+      "url": "http://localhost:3000/docs/skill/agent-basket",
+      "screenshotFiles": [
+        "docs-skill-agent-basket-desktop-1440.png",
+        "docs-skill-agent-basket-mobile-375.png"
+      ]
+    },
+    {
+      "name": "docs-investment-committee",
+      "route": "/docs/investment-committee",
+      "category": "Docs",
+      "priority": "P2",
+      "url": "http://localhost:3000/docs/investment-committee",
+      "screenshotFiles": [
+        "docs-investment-committee-desktop-1440.png",
+        "docs-investment-committee-mobile-375.png"
+      ]
+    },
+    {
+      "name": "docs-ic-how-it-works",
+      "route": "/docs/investment-committee/how-it-works",
+      "category": "Docs",
+      "priority": "P3",
+      "url": "http://localhost:3000/docs/investment-committee/how-it-works",
+      "screenshotFiles": [
+        "docs-ic-how-it-works-desktop-1440.png",
+        "docs-ic-how-it-works-mobile-375.png"
+      ]
+    },
+    {
+      "name": "docs-ic-api-reference",
+      "route": "/docs/investment-committee/api-reference",
+      "category": "Docs",
+      "priority": "P3",
+      "url": "http://localhost:3000/docs/investment-committee/api-reference",
+      "screenshotFiles": [
+        "docs-ic-api-reference-desktop-1440.png",
+        "docs-ic-api-reference-mobile-375.png"
+      ]
+    },
+    {
+      "name": "docs-ic-participation",
+      "route": "/docs/investment-committee/participation",
+      "category": "Docs",
+      "priority": "P3",
+      "url": "http://localhost:3000/docs/investment-committee/participation",
+      "screenshotFiles": [
+        "docs-ic-participation-desktop-1440.png",
+        "docs-ic-participation-mobile-375.png"
+      ]
+    },
+    {
+      "name": "blog",
+      "route": "/blog",
+      "category": "Blog",
+      "priority": "P2",
+      "url": "http://localhost:3000/blog",
+      "screenshotFiles": [
+        "blog-desktop-1440.png",
+        "blog-mobile-375.png"
+      ]
+    },
+    {
+      "name": "blog-announcement",
+      "route": "/blog/announcement",
+      "category": "Blog",
+      "priority": "P3",
+      "url": "http://localhost:3000/blog/announcement",
+      "screenshotFiles": [
+        "blog-announcement-desktop-1440.png",
+        "blog-announcement-mobile-375.png"
+      ]
+    },
+    {
+      "name": "blog-regime-conservative-aggressive",
+      "route": "/blog/regime-conservative-aggressive",
+      "category": "Blog",
+      "priority": "P3",
+      "url": "http://localhost:3000/blog/regime-conservative-aggressive",
+      "screenshotFiles": [
+        "blog-regime-conservative-aggressive-desktop-1440.png",
+        "blog-regime-conservative-aggressive-mobile-375.png"
+      ]
+    },
+    {
+      "name": "blog-regime-eq-vs-base",
+      "route": "/blog/regime-eq-vs-base",
+      "category": "Blog",
+      "priority": "P3",
+      "url": "http://localhost:3000/blog/regime-eq-vs-base",
+      "screenshotFiles": [
+        "blog-regime-eq-vs-base-desktop-1440.png",
+        "blog-regime-eq-vs-base-mobile-375.png"
+      ]
+    },
+    {
+      "name": "blog-honest-backtesting-weights",
+      "route": "/blog/honest-backtesting-weights",
+      "category": "Blog",
+      "priority": "P3",
+      "url": "http://localhost:3000/blog/honest-backtesting-weights",
+      "screenshotFiles": [
+        "blog-honest-backtesting-weights-desktop-1440.png",
+        "blog-honest-backtesting-weights-mobile-375.png"
+      ]
+    },
+    {
+      "name": "blog-treasury-allocation",
+      "route": "/blog/treasury-allocation",
+      "category": "Blog",
+      "priority": "P3",
+      "url": "http://localhost:3000/blog/treasury-allocation",
+      "screenshotFiles": [
+        "blog-treasury-allocation-desktop-1440.png",
+        "blog-treasury-allocation-mobile-375.png"
+      ]
+    },
+    {
+      "name": "blog-peaq-partnership",
+      "route": "/blog/peaq-partnership",
+      "category": "Blog",
+      "priority": "P3",
+      "url": "http://localhost:3000/blog/peaq-partnership",
+      "screenshotFiles": [
+        "blog-peaq-partnership-desktop-1440.png",
+        "blog-peaq-partnership-mobile-375.png"
+      ]
+    },
+    {
+      "name": "blog-ai-ate-the-bull-market",
+      "route": "/blog/ai-ate-the-bull-market",
+      "category": "Blog",
+      "priority": "P3",
+      "url": "http://localhost:3000/blog/ai-ate-the-bull-market",
+      "screenshotFiles": [
+        "blog-ai-ate-the-bull-market-desktop-1440.png",
+        "blog-ai-ate-the-bull-market-mobile-375.png"
+      ]
+    },
+    {
+      "name": "visualizations-index",
+      "route": "/visualizations",
+      "category": "Visualizations",
+      "priority": "P1",
+      "url": "http://localhost:3000/visualizations",
+      "screenshotFiles": [
+        "visualizations-index-desktop-1440.png",
+        "visualizations-index-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-orbits",
+      "route": "/orbits",
+      "category": "Visualizations",
+      "priority": "P1",
+      "url": "http://localhost:3000/orbits",
+      "screenshotFiles": [
+        "viz-orbits-desktop-1440.png",
+        "viz-orbits-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-substrate",
+      "route": "/substrate",
+      "category": "Visualizations",
+      "priority": "P1",
+      "url": "http://localhost:3000/substrate",
+      "screenshotFiles": [
+        "viz-substrate-desktop-1440.png",
+        "viz-substrate-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-plasma",
+      "route": "/plasma",
+      "category": "Visualizations",
+      "priority": "P1",
+      "url": "http://localhost:3000/plasma",
+      "screenshotFiles": [
+        "viz-plasma-desktop-1440.png",
+        "viz-plasma-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-mandelbrot",
+      "route": "/mandelbrot",
+      "category": "Visualizations",
+      "priority": "P1",
+      "url": "http://localhost:3000/mandelbrot",
+      "screenshotFiles": [
+        "viz-mandelbrot-desktop-1440.png",
+        "viz-mandelbrot-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-flow-field",
+      "route": "/flow-field",
+      "category": "Visualizations",
+      "priority": "P1",
+      "url": "http://localhost:3000/flow-field",
+      "screenshotFiles": [
+        "viz-flow-field-desktop-1440.png",
+        "viz-flow-field-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-network-swarm",
+      "route": "/network-swarm",
+      "category": "Visualizations",
+      "priority": "P1",
+      "url": "http://localhost:3000/network-swarm",
+      "screenshotFiles": [
+        "viz-network-swarm-desktop-1440.png",
+        "viz-network-swarm-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-liquid-mesh",
+      "route": "/liquid-mesh",
+      "category": "Visualizations",
+      "priority": "P1",
+      "url": "http://localhost:3000/liquid-mesh",
+      "screenshotFiles": [
+        "viz-liquid-mesh-desktop-1440.png",
+        "viz-liquid-mesh-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-matrix-rain",
+      "route": "/matrix-rain",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/matrix-rain",
+      "screenshotFiles": [
+        "viz-matrix-rain-desktop-1440.png",
+        "viz-matrix-rain-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-tree",
+      "route": "/tree",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/tree",
+      "screenshotFiles": [
+        "viz-tree-desktop-1440.png",
+        "viz-tree-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-fractal-tree",
+      "route": "/fractal-tree",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/fractal-tree",
+      "screenshotFiles": [
+        "viz-fractal-tree-desktop-1440.png",
+        "viz-fractal-tree-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-attractor",
+      "route": "/attractor",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/attractor",
+      "screenshotFiles": [
+        "viz-attractor-desktop-1440.png",
+        "viz-attractor-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-constellation",
+      "route": "/constellation",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/constellation",
+      "screenshotFiles": [
+        "viz-constellation-desktop-1440.png",
+        "viz-constellation-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-constructivist",
+      "route": "/constructivist",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/constructivist",
+      "screenshotFiles": [
+        "viz-constructivist-desktop-1440.png",
+        "viz-constructivist-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-voronoi",
+      "route": "/voronoi",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/voronoi",
+      "screenshotFiles": [
+        "viz-voronoi-desktop-1440.png",
+        "viz-voronoi-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-waves",
+      "route": "/waves",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/waves",
+      "screenshotFiles": [
+        "viz-waves-desktop-1440.png",
+        "viz-waves-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-terrain",
+      "route": "/terrain",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/terrain",
+      "screenshotFiles": [
+        "viz-terrain-desktop-1440.png",
+        "viz-terrain-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-phyllotaxis",
+      "route": "/phyllotaxis",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/phyllotaxis",
+      "screenshotFiles": [
+        "viz-phyllotaxis-desktop-1440.png",
+        "viz-phyllotaxis-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-space-filling",
+      "route": "/space-filling",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/space-filling",
+      "screenshotFiles": [
+        "viz-space-filling-desktop-1440.png",
+        "viz-space-filling-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-moire",
+      "route": "/moire",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/moire",
+      "screenshotFiles": [
+        "viz-moire-desktop-1440.png",
+        "viz-moire-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-epicycles",
+      "route": "/epicycles",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/epicycles",
+      "screenshotFiles": [
+        "viz-epicycles-desktop-1440.png",
+        "viz-epicycles-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-dla",
+      "route": "/dla",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/dla",
+      "screenshotFiles": [
+        "viz-dla-desktop-1440.png",
+        "viz-dla-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-flock",
+      "route": "/flock",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/flock",
+      "screenshotFiles": [
+        "viz-flock-desktop-1440.png",
+        "viz-flock-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-reaction",
+      "route": "/reaction",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/reaction",
+      "screenshotFiles": [
+        "viz-reaction-desktop-1440.png",
+        "viz-reaction-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-magnetic-field",
+      "route": "/magnetic-field",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/magnetic-field",
+      "screenshotFiles": [
+        "viz-magnetic-field-desktop-1440.png",
+        "viz-magnetic-field-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-slime-mold",
+      "route": "/slime-mold",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/slime-mold",
+      "screenshotFiles": [
+        "viz-slime-mold-desktop-1440.png",
+        "viz-slime-mold-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-turing",
+      "route": "/turing",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/turing",
+      "screenshotFiles": [
+        "viz-turing-desktop-1440.png",
+        "viz-turing-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-double-pendulum",
+      "route": "/double-pendulum",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/double-pendulum",
+      "screenshotFiles": [
+        "viz-double-pendulum-desktop-1440.png",
+        "viz-double-pendulum-mobile-375.png"
+      ]
+    },
+    {
+      "name": "viz-chladni",
+      "route": "/chladni",
+      "category": "Visualizations",
+      "priority": "P2",
+      "url": "http://localhost:3000/chladni",
+      "screenshotFiles": [
+        "viz-chladni-desktop-1440.png",
+        "viz-chladni-mobile-375.png"
+      ]
+    },
+    {
+      "name": "disclaimer",
+      "route": "/disclaimer",
+      "category": "Info",
+      "priority": "P3",
+      "url": "http://localhost:3000/disclaimer",
+      "screenshotFiles": [
+        "disclaimer-desktop-1440.png",
+        "disclaimer-mobile-375.png"
+      ]
+    },
+    {
+      "name": "faq",
+      "route": "/faq",
+      "category": "Info",
+      "priority": "P3",
+      "url": "http://localhost:3000/faq",
+      "screenshotFiles": [
+        "faq-desktop-1440.png",
+        "faq-mobile-375.png"
+      ]
+    },
+    {
+      "name": "smart-contract-risks",
+      "route": "/smart-contract-risks",
+      "category": "Info",
+      "priority": "P3",
+      "url": "http://localhost:3000/smart-contract-risks",
+      "screenshotFiles": [
+        "smart-contract-risks-desktop-1440.png",
+        "smart-contract-risks-mobile-375.png"
+      ]
+    },
+    {
+      "route": "/committee/2025-02-15/robot-money-vault",
+      "name": "committee-session-example",
+      "category": "Committee",
+      "priority": "P1",
+      "note": "Dynamic example (replace date/subject)",
+      "url": "http://localhost:3000/committee/2025-02-15/robot-money-vault",
+      "screenshotFiles": [
+        "committee-session-example-desktop-1440.png",
+        "committee-session-example-mobile-375.png"
+      ]
+    },
+    {
+      "route": "/committee/members/woon",
+      "name": "committee-member-example",
+      "category": "Committee",
+      "priority": "P1",
+      "note": "Dynamic example (replace id)",
+      "url": "http://localhost:3000/committee/members/woon",
+      "screenshotFiles": [
+        "committee-member-example-desktop-1440.png",
+        "committee-member-example-mobile-375.png"
+      ]
+    },
+    {
+      "route": "/committee/subjects/robot-money-vault",
+      "name": "committee-subject-example",
+      "category": "Committee",
+      "priority": "P1",
+      "note": "Dynamic example (replace id)",
+      "url": "http://localhost:3000/committee/subjects/robot-money-vault",
+      "screenshotFiles": [
+        "committee-subject-example-desktop-1440.png",
+        "committee-subject-example-mobile-375.png"
+      ]
+    }
+  ],
+  "categories": [
+    "Allocation",
+    "Blog",
+    "Committee",
+    "Coverage",
+    "Development",
+    "Docs",
+    "Home",
+    "Info",
+    "Regime",
+    "Research",
+    "Skills",
+    "Token Info",
+    "Visualizations"
+  ],
+  "priorityBreakdown": {
+    "P0": 4,
+    "P1": 16,
+    "P2": 28,
+    "P3": 16
+  }
+}

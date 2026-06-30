@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Feature Parity Reference - All Navigable Routes</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: linear-gradient(135deg, #1a1a1a 0%, #0f0f0f 100%);
+      color: #e0e0e0;
+      padding: 40px 20px;
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+    h1 { margin-bottom: 10px; font-size: 2em; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+      margin: 30px 0;
+      padding: 20px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+    }
+    .stat {
+      text-align: center;
+      padding: 15px;
+      background: rgba(0,229,255,0.1);
+      border-radius: 4px;
+      border-left: 3px solid #00e5ff;
+    }
+    .stat-label { font-size: 0.8em; color: #888; text-transform: uppercase; }
+    .stat-value { font-size: 2em; font-weight: bold; color: #00e5ff; }
+
+    .filters {
+      display: flex;
+      gap: 10px;
+      margin: 20px 0;
+      flex-wrap: wrap;
+    }
+    .filter-btn {
+      padding: 8px 16px;
+      background: rgba(0,229,255,0.2);
+      color: #00e5ff;
+      border: 1px solid #00e5ff;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9em;
+    }
+    .filter-btn.active {
+      background: #00e5ff;
+      color: #000;
+    }
+
+    .category { margin: 30px 0; }
+    .category-title {
+      font-size: 1.2em;
+      font-weight: bold;
+      padding: 10px;
+      background: rgba(0,229,255,0.15);
+      border-left: 4px solid #00e5ff;
+      margin-bottom: 15px;
+    }
+
+    .routes-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+    }
+
+    .route-card {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(0,229,255,0.2);
+      border-radius: 6px;
+      padding: 15px;
+      transition: all 0.3s ease;
+    }
+    .route-card:hover {
+      background: rgba(255,255,255,0.12);
+      border-color: #00e5ff;
+      box-shadow: 0 0 20px rgba(0,229,255,0.2);
+    }
+    .route-name {
+      font-weight: bold;
+      margin-bottom: 5px;
+      color: #00e5ff;
+    }
+    .route-path {
+      font-family: monospace;
+      font-size: 0.9em;
+      color: #888;
+      margin-bottom: 8px;
+    }
+    .route-priority {
+      display: inline-block;
+      padding: 3px 8px;
+      background: rgba(0,229,255,0.2);
+      border-radius: 3px;
+      font-size: 0.75em;
+      font-weight: bold;
+    }
+    .route-priority.P0 { background: rgba(255,100,100,0.3); color: #ff6464; }
+    .route-priority.P1 { background: rgba(255,200,100,0.3); color: #ffc864; }
+    .route-priority.P2 { background: rgba(100,200,255,0.3); color: #64c8ff; }
+    .route-priority.P3 { background: rgba(100,255,100,0.3); color: #64ff64; }
+
+    .route-link {
+      display: block;
+      margin-top: 10px;
+      padding: 8px;
+      background: rgba(0,229,255,0.1);
+      color: #00e5ff;
+      text-align: center;
+      border-radius: 4px;
+      text-decoration: none;
+      font-size: 0.9em;
+      transition: background 0.2s;
+    }
+    .route-link:hover {
+      background: rgba(0,229,255,0.2);
+    }
+
+    .help {
+      background: rgba(0,229,255,0.1);
+      border-left: 4px solid #00e5ff;
+      padding: 15px;
+      margin: 30px 0;
+      border-radius: 4px;
+    }
+    .help h3 { margin-bottom: 10px; }
+    .help ol { margin-left: 20px; line-height: 1.8; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📸 Feature Parity Screenshot Reference</h1>
+    <p style="color: #888; margin-bottom: 20px;">All routes reachable from primary navigation • robotmoney-site</p>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-label">Total Routes</div>
+        <div class="stat-value">67</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">P0 Critical</div>
+        <div class="stat-value">4</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">P1 High</div>
+        <div class="stat-value">16</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">P2 Medium</div>
+        <div class="stat-value">28</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">P3 Low</div>
+        <div class="stat-value">16</div>
+      </div>
+    </div>
+
+    <div class="filters">
+      <button class="filter-btn active" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="P0">P0 Critical</button>
+      <button class="filter-btn" data-filter="P1">P1 High</button>
+      <button class="filter-btn" data-filter="P2">P2 Medium</button>
+      <button class="filter-btn" data-filter="P3">P3 Low</button>
+    </div>
+
+    <div class="help">
+      <h3>📷 How to Capture Screenshots</h3>
+      <ol>
+        <li>Click on a route below to open it</li>
+        <li>Take screenshot at <strong>1440px width</strong> (desktop): save as <code>{name}-desktop-1440.png</code></li>
+        <li>Resize browser to <strong>375px width</strong> (mobile): save as <code>{name}-mobile-375.png</code></li>
+        <li>Save files to: <code>docs/screenshots/reference/</code></li>
+      </ol>
+      <p style="margin-top: 10px; color: #888;">💡 Use browser DevTools Device Toolbar for consistent viewport sizes</p>
+    </div>
+<div class="category">
+    <div class="category-title">Allocation</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P0">
+        <div class="route-name">allocation</div>
+        <div class="route-path">/allocation</div>
+        <span class="route-priority P0">P0</span>
+        
+        <a href="http://localhost:3000/allocation" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">allocation-performance</div>
+        <div class="route-path">/allocation2</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/allocation2" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div><div class="category">
+    <div class="category-title">Blog</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">blog</div>
+        <div class="route-path">/blog</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/blog" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">blog-announcement</div>
+        <div class="route-path">/blog/announcement</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/blog/announcement" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">blog-regime-conservative-aggressive</div>
+        <div class="route-path">/blog/regime-conservative-aggressive</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/blog/regime-conservative-aggressive" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">blog-regime-eq-vs-base</div>
+        <div class="route-path">/blog/regime-eq-vs-base</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/blog/regime-eq-vs-base" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">blog-honest-backtesting-weights</div>
+        <div class="route-path">/blog/honest-backtesting-weights</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/blog/honest-backtesting-weights" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">blog-treasury-allocation</div>
+        <div class="route-path">/blog/treasury-allocation</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/blog/treasury-allocation" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">blog-peaq-partnership</div>
+        <div class="route-path">/blog/peaq-partnership</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/blog/peaq-partnership" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">blog-ai-ate-the-bull-market</div>
+        <div class="route-path">/blog/ai-ate-the-bull-market</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/blog/ai-ate-the-bull-market" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div><div class="category">
+    <div class="category-title">Committee</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P0">
+        <div class="route-name">committee</div>
+        <div class="route-path">/committee</div>
+        <span class="route-priority P0">P0</span>
+        
+        <a href="http://localhost:3000/committee" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">committee-apply</div>
+        <div class="route-path">/committee/apply</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/committee/apply" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">committee-session-example</div>
+        <div class="route-path">/committee/2025-02-15/robot-money-vault</div>
+        <span class="route-priority P1">P1</span>
+        <div style="font-size: 0.8em; color: #888; margin-top: 5px;">Dynamic example (replace date/subject)</div>
+        <a href="http://localhost:3000/committee/2025-02-15/robot-money-vault" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">committee-member-example</div>
+        <div class="route-path">/committee/members/woon</div>
+        <span class="route-priority P1">P1</span>
+        <div style="font-size: 0.8em; color: #888; margin-top: 5px;">Dynamic example (replace id)</div>
+        <a href="http://localhost:3000/committee/members/woon" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">committee-subject-example</div>
+        <div class="route-path">/committee/subjects/robot-money-vault</div>
+        <span class="route-priority P1">P1</span>
+        <div style="font-size: 0.8em; color: #888; margin-top: 5px;">Dynamic example (replace id)</div>
+        <a href="http://localhost:3000/committee/subjects/robot-money-vault" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div><div class="category">
+    <div class="category-title">Coverage</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">media</div>
+        <div class="route-path">/media</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/media" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">media-articles</div>
+        <div class="route-path">/media/articles</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/media/articles" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">media-videos</div>
+        <div class="route-path">/media/videos</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/media/videos" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div><div class="category">
+    <div class="category-title">Development</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">changelog</div>
+        <div class="route-path">/changelog</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/changelog" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div><div class="category">
+    <div class="category-title">Docs</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">docs</div>
+        <div class="route-path">/docs</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/docs" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">docs-skill</div>
+        <div class="route-path">/docs/skill</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/docs/skill" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">docs-skill-installation</div>
+        <div class="route-path">/docs/skill/installation</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/docs/skill/installation" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">docs-skill-commands</div>
+        <div class="route-path">/docs/skill/commands</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/docs/skill/commands" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">docs-skill-agent-basket</div>
+        <div class="route-path">/docs/skill/agent-basket</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/docs/skill/agent-basket" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">docs-investment-committee</div>
+        <div class="route-path">/docs/investment-committee</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/docs/investment-committee" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">docs-ic-how-it-works</div>
+        <div class="route-path">/docs/investment-committee/how-it-works</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/docs/investment-committee/how-it-works" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">docs-ic-api-reference</div>
+        <div class="route-path">/docs/investment-committee/api-reference</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/docs/investment-committee/api-reference" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">docs-ic-participation</div>
+        <div class="route-path">/docs/investment-committee/participation</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/docs/investment-committee/participation" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div><div class="category">
+    <div class="category-title">Home</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P0">
+        <div class="route-name">home</div>
+        <div class="route-path">/</div>
+        <span class="route-priority P0">P0</span>
+        
+        <a href="http://localhost:3000/" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div><div class="category">
+    <div class="category-title">Info</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">disclaimer</div>
+        <div class="route-path">/disclaimer</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/disclaimer" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">faq</div>
+        <div class="route-path">/faq</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/faq" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P3">
+        <div class="route-name">smart-contract-risks</div>
+        <div class="route-path">/smart-contract-risks</div>
+        <span class="route-priority P3">P3</span>
+        
+        <a href="http://localhost:3000/smart-contract-risks" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div><div class="category">
+    <div class="category-title">Regime</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P0">
+        <div class="route-name">regime</div>
+        <div class="route-path">/regime</div>
+        <span class="route-priority P0">P0</span>
+        
+        <a href="http://localhost:3000/regime" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">regime-indicators</div>
+        <div class="route-path">/regime/indicators</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/regime/indicators" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div><div class="category">
+    <div class="category-title">Research</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">research-channel-divergence</div>
+        <div class="route-path">/research/channel-divergence</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/research/channel-divergence" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">research-late-cycle-signals</div>
+        <div class="route-path">/research/late-cycle-signals</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/research/late-cycle-signals" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div><div class="category">
+    <div class="category-title">Skills</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">skills</div>
+        <div class="route-path">/skills</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/skills" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div><div class="category">
+    <div class="category-title">Token Info</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">tokenomics</div>
+        <div class="route-path">/tokenomics</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/tokenomics" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div><div class="category">
+    <div class="category-title">Visualizations</div>
+    <div class="routes-grid">
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">visualizations-index</div>
+        <div class="route-path">/visualizations</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/visualizations" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">viz-orbits</div>
+        <div class="route-path">/orbits</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/orbits" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">viz-substrate</div>
+        <div class="route-path">/substrate</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/substrate" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">viz-plasma</div>
+        <div class="route-path">/plasma</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/plasma" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">viz-mandelbrot</div>
+        <div class="route-path">/mandelbrot</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/mandelbrot" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">viz-flow-field</div>
+        <div class="route-path">/flow-field</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/flow-field" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">viz-network-swarm</div>
+        <div class="route-path">/network-swarm</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/network-swarm" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P1">
+        <div class="route-name">viz-liquid-mesh</div>
+        <div class="route-path">/liquid-mesh</div>
+        <span class="route-priority P1">P1</span>
+        
+        <a href="http://localhost:3000/liquid-mesh" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-matrix-rain</div>
+        <div class="route-path">/matrix-rain</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/matrix-rain" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-tree</div>
+        <div class="route-path">/tree</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/tree" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-fractal-tree</div>
+        <div class="route-path">/fractal-tree</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/fractal-tree" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-attractor</div>
+        <div class="route-path">/attractor</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/attractor" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-constellation</div>
+        <div class="route-path">/constellation</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/constellation" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-constructivist</div>
+        <div class="route-path">/constructivist</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/constructivist" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-voronoi</div>
+        <div class="route-path">/voronoi</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/voronoi" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-waves</div>
+        <div class="route-path">/waves</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/waves" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-terrain</div>
+        <div class="route-path">/terrain</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/terrain" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-phyllotaxis</div>
+        <div class="route-path">/phyllotaxis</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/phyllotaxis" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-space-filling</div>
+        <div class="route-path">/space-filling</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/space-filling" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-moire</div>
+        <div class="route-path">/moire</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/moire" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-epicycles</div>
+        <div class="route-path">/epicycles</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/epicycles" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-dla</div>
+        <div class="route-path">/dla</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/dla" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-flock</div>
+        <div class="route-path">/flock</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/flock" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-reaction</div>
+        <div class="route-path">/reaction</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/reaction" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-magnetic-field</div>
+        <div class="route-path">/magnetic-field</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/magnetic-field" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-slime-mold</div>
+        <div class="route-path">/slime-mold</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/slime-mold" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-turing</div>
+        <div class="route-path">/turing</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/turing" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-double-pendulum</div>
+        <div class="route-path">/double-pendulum</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/double-pendulum" target="_blank" class="route-link">Open in Browser →</a>
+      </div>
+      <div class="route-card" data-priority="P2">
+        <div class="route-name">viz-chladni</div>
+        <div class="route-path">/chladni</div>
+        <span class="route-priority P2">P2</span>
+        
+        <a href="http://localhost:3000/chladni" target="_blank" class="route-link">Open in Browser →</a>
+      </div></div></div>
+  </div>
+
+  <script>
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        e.target.classList.add('active');
+
+        const filter = e.target.dataset.filter;
+        document.querySelectorAll('.route-card').forEach(card => {
+          if (filter === 'all' || card.dataset.priority === filter) {
+            card.style.display = '';
+          } else {
+            card.style.display = 'none';
+          }
+        });
+      });
+    });
+  </script>
+</body>
+</html>

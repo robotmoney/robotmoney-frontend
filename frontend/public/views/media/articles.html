@@ -1,0 +1,95 @@
+<!-- Media / Articles
+     Ported from robotmoney-site/src/app/media/articles/page.tsx + components/ArticleCard.tsx
+     Article thumbnails (no Image/canvas) become static gradient placeholders.
+-->
+
+<section class="ma-page">
+  <div class="container">
+    <!-- Hero -->
+    <header class="ma-hero">
+      <a href="/media" class="ma-back">← Media</a>
+      <h1 class="ma-title">Articles</h1>
+      <p class="ma-lede">
+        Press coverage, research, and commentary on autonomous treasuries and the agent economy.
+      </p>
+    </header>
+
+    <!-- Articles grid -->
+    <div class="ma-grid">
+
+      <a href="/blog/treasury-allocation" class="ma-card">
+        <div class="ma-card__thumb"><span class="ma-glyph">📄</span></div>
+        <div class="ma-card__body">
+          <div class="ma-meta"><span>Robot Money</span><span class="ma-dot">·</span><span>May 12, 2026</span></div>
+          <h3 class="ma-card__title">Treasury Allocation for On-Chain Businesses: What 8 Years of Data Says About Holding ETH, Stables, and Everything Between</h3>
+          <p class="ma-card__preview">Most on-chain business treasuries hold their own token, ETH, or stables. We backtest those approaches plus a regime-based 3-state allocation across 8 years of data — including the 2022 crash that killed most company treasuries — and look at what the trade-offs actually are.</p>
+          <div class="ma-card__foot"><span class="ma-author">By Robot Money Research</span><span class="ma-tag">research</span></div>
+        </div>
+      </a>
+
+      <a href="https://www.galaxy.com/insights/research/zero-human-companies-ai-agents-defi-crypto" target="_blank" rel="noopener noreferrer" class="ma-card">
+        <div class="ma-card__thumb"><span class="ma-glyph">📄</span></div>
+        <div class="ma-card__body">
+          <div class="ma-meta"><span>Galaxy Digital</span><span class="ma-dot">·</span><span>Mar 26, 2026</span></div>
+          <h3 class="ma-card__title">The Agentic Flywheel: How Zero-Human Companies Will Reshape Onchain Markets</h3>
+          <p class="ma-card__preview">A comprehensive analysis of how autonomous AI agents are creating zero-human companies (ZHCs) that earn, transact, and compound capital onchain. Covers the emerging agentic capital markets stack including payments, identity, and DeFi integrations.</p>
+          <div class="ma-card__foot"><span class="ma-author">By Galaxy Research</span><span class="ma-tag">research</span></div>
+        </div>
+      </a>
+
+    </div>
+  </div>
+</section>
+
+<style>
+.ma-page { background: var(--color-void); min-height: 100vh; }
+.ma-page .container { max-width: 1100px; margin: 0 auto; padding: 8rem 1.5rem 5rem; }
+
+.ma-hero { padding-bottom: 2.5rem; border-bottom: 1px solid var(--color-border); margin-bottom: 3rem; }
+.ma-back {
+  display: inline-block; margin-bottom: 1rem;
+  font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase;
+  letter-spacing: 0.3em; color: var(--color-text-muted); text-decoration: none;
+}
+.ma-back:hover { color: var(--color-accent); }
+.ma-title { font-family: var(--font-serif); font-style: italic; font-size: 3rem; color: var(--color-accent); margin: 0 0 1rem; line-height: 1; }
+.ma-lede { color: var(--color-text-muted); max-width: 42rem; line-height: 1.6; margin: 0; }
+
+.ma-grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
+
+.ma-card {
+  display: flex; flex-direction: column;
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  text-decoration: none; transition: border-color 0.2s;
+}
+.ma-card:hover { border-color: var(--color-accent); }
+.ma-card__thumb {
+  width: 100%; height: 12rem; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, var(--color-accent), var(--color-purple));
+}
+.ma-glyph { font-size: 2.5rem; opacity: 0.85; }
+.ma-card__body { flex: 1; padding: 1.25rem; display: flex; flex-direction: column; justify-content: space-between; }
+.ma-meta {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--color-text-muted); margin-bottom: 0.5rem;
+}
+.ma-dot { color: var(--color-border-light); }
+.ma-card__title {
+  font-family: var(--font-serif); font-style: italic; font-size: 1.125rem;
+  color: var(--color-text); margin: 0 0 0.5rem; line-height: 1.3;
+}
+.ma-card:hover .ma-card__title { color: var(--color-accent); }
+.ma-card__preview { font-size: 0.875rem; color: var(--color-text-muted); line-height: 1.55; margin: 0 0 0.75rem; }
+.ma-card__foot { display: flex; align-items: center; justify-content: space-between; }
+.ma-author { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text); }
+.ma-tag { font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-accent); }
+
+@media (min-width: 768px) {
+  .ma-title { font-size: 3.5rem; }
+  .ma-grid { grid-template-columns: repeat(2, 1fr); gap: 1.5rem; }
+  .ma-card { flex-direction: row; }
+  .ma-card__thumb { width: 12rem; height: auto; }
+}
+</style>
