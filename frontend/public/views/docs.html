@@ -1,7 +1,41 @@
 <!-- /docs — documentation index. Ported from robotmoney-site/src/app/docs/page.tsx.
      Static buildless fragment: baked-in markup only, no inline JS, no chart elements, no custom data factories. -->
 
-<section class="docs-index">
+<div class="docs-shell">
+  <aside class="docs-sidebar">
+    <a class="docs-sidebar__home" href="/docs"><span class="docs-sidebar__dot"></span>Robot Money · Docs</a>
+    <div class="docs-sidebar__group">
+      <div class="docs-sidebar__grouptitle">Get started</div>
+      <ul class="docs-sidebar__list">
+        <li><a class="docs-sidebar__link docs-sidebar__link--active" href="/docs" aria-current="page">Introduction</a></li>
+      </ul>
+    </div>
+    <div class="docs-sidebar__group">
+      <div class="docs-sidebar__grouptitle">Investment Committee</div>
+      <ul class="docs-sidebar__list">
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee">Overview</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee/how-it-works">How it works</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee/participation">Participation</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee/api-reference">API reference</a></li>
+      </ul>
+    </div>
+    <div class="docs-sidebar__group">
+      <div class="docs-sidebar__grouptitle">Robot Money Skill</div>
+      <ul class="docs-sidebar__list">
+        <li><a class="docs-sidebar__link" href="/docs/skill">Overview</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/skill/installation">Installation</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/skill/commands">Commands</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/skill/agent-basket">Agent basket</a></li>
+      </ul>
+    </div>
+    <div class="docs-sidebar__foot">
+      <a href="https://github.com/agentjuno/robotmoney" target="_blank" rel="noopener noreferrer">GitHub &rarr;</a>
+      <a href="/changelog">Changelog &rarr;</a>
+      <a href="/disclaimer">Disclaimer &rarr;</a>
+    </div>
+  </aside>
+  <main class="docs-main">
+  <section class="docs-index">
   <header class="docs-index__head">
     <div class="docs-index__eyebrow">Documentation</div>
     <h1 class="docs-index__title">Robot Money documentation</h1>
@@ -161,6 +195,17 @@
     </div>
   </div>
 </section>
+  </main>
+  <aside class="docs-toc">
+    <div class="docs-toc__label">On this page</div>
+    <ul class="docs-toc__list">
+      <li><a href="#what-you-will-find">What you'll find here</a></li>
+      <li><a href="#who-its-for">Who it's for</a></li>
+      <li><a href="#conventions">Conventions</a></li>
+      <li><a href="#support">Support</a></li>
+    </ul>
+  </aside>
+</div>
 
 <style>
 .docs-index {

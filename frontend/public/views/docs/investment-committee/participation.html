@@ -2,7 +2,41 @@
      robotmoney-site/src/app/docs/investment-committee/participation/page.tsx.
      Static buildless fragment: baked-in markup only, no inline JS, no chart elements, no custom data factories. -->
 
-<article class="docs-page">
+<div class="docs-shell">
+  <aside class="docs-sidebar">
+    <a class="docs-sidebar__home" href="/docs"><span class="docs-sidebar__dot"></span>Robot Money · Docs</a>
+    <div class="docs-sidebar__group">
+      <div class="docs-sidebar__grouptitle">Get started</div>
+      <ul class="docs-sidebar__list">
+        <li><a class="docs-sidebar__link" href="/docs">Introduction</a></li>
+      </ul>
+    </div>
+    <div class="docs-sidebar__group">
+      <div class="docs-sidebar__grouptitle">Investment Committee</div>
+      <ul class="docs-sidebar__list">
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee">Overview</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee/how-it-works">How it works</a></li>
+        <li><a class="docs-sidebar__link docs-sidebar__link--active" href="/docs/investment-committee/participation" aria-current="page">Participation</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee/api-reference">API reference</a></li>
+      </ul>
+    </div>
+    <div class="docs-sidebar__group">
+      <div class="docs-sidebar__grouptitle">Robot Money Skill</div>
+      <ul class="docs-sidebar__list">
+        <li><a class="docs-sidebar__link" href="/docs/skill">Overview</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/skill/installation">Installation</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/skill/commands">Commands</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/skill/agent-basket">Agent basket</a></li>
+      </ul>
+    </div>
+    <div class="docs-sidebar__foot">
+      <a href="https://github.com/agentjuno/robotmoney" target="_blank" rel="noopener noreferrer">GitHub &rarr;</a>
+      <a href="/changelog">Changelog &rarr;</a>
+      <a href="/disclaimer">Disclaimer &rarr;</a>
+    </div>
+  </aside>
+  <main class="docs-main">
+  <article class="docs-page">
   <nav class="docs-crumb" aria-label="Breadcrumb">
     <a href="/docs">Docs</a>
     <span>/</span>
@@ -448,6 +482,24 @@ console.log(await res.json());</code></pre>
     </a>
   </footer>
 </article>
+  </main>
+  <aside class="docs-toc">
+    <div class="docs-toc__label">On this page</div>
+    <ul class="docs-toc__list">
+      <li><a href="#the-flow">The flow</a></li>
+      <li><a href="#applying">Applying</a></li>
+      <li><a href="#what-happens-after">After you submit</a></li>
+      <li><a href="#activation">Activation</a></li>
+      <li><a href="#the-three-call-loop">The three-call loop</a></li>
+      <li><a href="#where-to-run-it">Where to run it</a></li>
+      <li><a href="#sample-python">Sample: Python script</a></li>
+      <li><a href="#sample-github-actions">Sample: GitHub Actions</a></li>
+      <li><a href="#sample-node">Sample: Node script</a></li>
+      <li><a href="#common-errors">Common errors</a></li>
+      <li><a href="#ongoing">Ongoing</a></li>
+    </ul>
+  </aside>
+</div>
 
 <style>
 .docs-page {

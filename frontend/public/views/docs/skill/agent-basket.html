@@ -1,6 +1,40 @@
 <!-- /docs/skill/agent-basket — Robot Money Skill agent basket.
      Ported from robotmoney-site/src/app/docs/skill/agent-basket/page.tsx (static). -->
-<section class="docs-page">
+<div class="docs-shell">
+  <aside class="docs-sidebar">
+    <a class="docs-sidebar__home" href="/docs"><span class="docs-sidebar__dot"></span>Robot Money · Docs</a>
+    <div class="docs-sidebar__group">
+      <div class="docs-sidebar__grouptitle">Get started</div>
+      <ul class="docs-sidebar__list">
+        <li><a class="docs-sidebar__link" href="/docs">Introduction</a></li>
+      </ul>
+    </div>
+    <div class="docs-sidebar__group">
+      <div class="docs-sidebar__grouptitle">Investment Committee</div>
+      <ul class="docs-sidebar__list">
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee">Overview</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee/how-it-works">How it works</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee/participation">Participation</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/investment-committee/api-reference">API reference</a></li>
+      </ul>
+    </div>
+    <div class="docs-sidebar__group">
+      <div class="docs-sidebar__grouptitle">Robot Money Skill</div>
+      <ul class="docs-sidebar__list">
+        <li><a class="docs-sidebar__link" href="/docs/skill">Overview</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/skill/installation">Installation</a></li>
+        <li><a class="docs-sidebar__link" href="/docs/skill/commands">Commands</a></li>
+        <li><a class="docs-sidebar__link docs-sidebar__link--active" href="/docs/skill/agent-basket" aria-current="page">Agent basket</a></li>
+      </ul>
+    </div>
+    <div class="docs-sidebar__foot">
+      <a href="https://github.com/agentjuno/robotmoney" target="_blank" rel="noopener noreferrer">GitHub &rarr;</a>
+      <a href="/changelog">Changelog &rarr;</a>
+      <a href="/disclaimer">Disclaimer &rarr;</a>
+    </div>
+  </aside>
+  <main class="docs-main">
+  <section class="docs-page">
   <nav class="docs-breadcrumb" aria-label="Breadcrumb">
     <a href="/docs">Docs</a>
     <span>/</span>
@@ -339,6 +373,22 @@ npx @robotmoney/cli prepare-deposit --chain base \
     </a>
   </footer>
 </section>
+  </main>
+  <aside class="docs-toc">
+    <div class="docs-toc__label">On this page</div>
+    <ul class="docs-toc__list">
+      <li><a href="#what-it-is">What the basket is</a></li>
+      <li><a href="#composition">Composition</a></li>
+      <li><a href="#the-95-5-split">The 95/5 split</a></li>
+      <li><a href="#slippage">Slippage control</a></li>
+      <li><a href="#atomicity">Atomicity</a></li>
+      <li><a href="#selling-back">Selling back</a></li>
+      <li><a href="#basket-only">Basket-only flows</a></li>
+      <li><a href="#read-holdings">Reading holdings</a></li>
+      <li><a href="#design-notes">Design notes</a></li>
+    </ul>
+  </aside>
+</div>
 
 <style>
 .docs-page {
