@@ -39,6 +39,7 @@
           <span :class="stanceClass(t.stance)" x-text="t.stance"></span>
           <span class="cv__conf">confidence <span x-text="Math.round((t.confidence||0)*100)+'%'"></span></span>
           <span class="cv__verified" x-show="t.verified" title="signature verified">✓ signed</span>
+          <a class="cv__memo-link" x-show="t.memo_url" :href="t.memo_url" target="_blank" rel="noopener noreferrer" x-text="'Read memo ↗'"></a>
         </div>
         <p class="cv__body" x-text="t.body"></p>
       </article>

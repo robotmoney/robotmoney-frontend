@@ -205,6 +205,12 @@ const OPTIONAL_SECRETS: SecretSpec[] = [
     source: "file",
     validate: (value) => pem(value, "CERTIFICATE"),
   },
+  {
+    name: "FRED_API_KEY",
+    description: "FRED API key for live macro analytics series (T10Y2Y, HY_OAS, ICSA, UMCSENT); analytics run seeded without it",
+    source: "hidden",
+    validate: validateFredApiKey,
+  },
 ];
 
 const VARIABLE_SPECS: VariableSpec[] = [
@@ -304,6 +310,21 @@ async function validateDigitalOceanToken(value: string): Promise<string | null> 
     return response.ok ? null : `DigitalOcean rejected the token (HTTP ${response.status})`;
   } catch (error) {
     return `could not reach DigitalOcean: ${error instanceof Error ? error.message : error}`;
+  }
+}
+
+async function validateFredApiKey(value: string): Promise<string | null> {
+  const key = value.trim();
+  if (!/^[0-9a-z]{32}$/.test(key)) {
+    return "expected a 32-character lowercase alphanumeric FRED API key";
+  }
+  try {
+    const response = await fetchWithTimeout(
+      `https://api.stlouisfed.org/fred/series/observations?series_id=T10Y2Y&api_key=${key}&file_type=json&limit=1`,
+    );
+    return response.ok ? null : `FRED rejected the key (HTTP ${response.status})`;
+  } catch (error) {
+    return `could not reach FRED: ${error instanceof Error ? error.message : error}`;
   }
 }
 

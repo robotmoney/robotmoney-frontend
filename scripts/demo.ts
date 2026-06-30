@@ -31,8 +31,12 @@ const DB_USER = "robotmoney";
 const DB_PASSWORD = "robotmoney";
 const DB_NAME = "robotmoney";
 const databaseUrl = `postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}`;
-const backendUrl = `http://localhost:${apiPort}`;
-const mcpUrl = `http://localhost:${mcpPort}`;
+// Use 127.0.0.1, NOT localhost: Docker publishes the container ports on IPv4
+// (0.0.0.0) but GitHub Actions' daemon does not publish on IPv6, while Bun's
+// fetch resolves "localhost" to ::1 first — so a localhost health check times
+// out in CI even though the service is up. 127.0.0.1 forces the IPv4 path.
+const backendUrl = `http://127.0.0.1:${apiPort}`;
+const mcpUrl = `http://127.0.0.1:${mcpPort}`;
 const composeFiles = "docker-compose.yml:docker-compose.demo.yml";
 
 // Env shared by every `docker compose` call — pins the project, selects the
@@ -75,6 +79,16 @@ async function runCompose(args: string[], label: string): Promise<void> {
   });
   const code = await proc.exited;
   if (code !== 0) throw new Error(`${label} failed (exit ${code})`);
+}
+
+// On a startup failure, the containers are about to be torn down — capture their
+// state and logs FIRST so CI shows the real cause (e.g. a crash-loop) instead of
+// only a blind "timed out waiting for /health".
+function dumpDiagnostics(): void {
+  console.error("\n[demo] --- container diagnostics ---");
+  dockerCompose(["ps", "-a"], false);
+  dockerCompose(["logs", "--no-color", "--tail", "60"], false);
+  console.error("[demo] --- end diagnostics ---\n");
 }
 
 let cleaned = false;
@@ -149,19 +163,31 @@ async function main(): Promise<void> {
   await run(["bun", "run", "src/e2e.ts"], join(repoRoot, "mcp"),
     { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp` } as Record<string, string>, "committee session");
 
-  console.log("\n=== stack is live (Ctrl-C to tear everything down) ===");
-  console.log(`  frontend   ${backendUrl}/`);
-  console.log(`  regime     ${backendUrl}/regime`);
-  console.log(`  committee  ${backendUrl}/committee`);
-  console.log(`  research   ${backendUrl}/research/*`);
-  console.log(`  mcp health ${mcpUrl}/health`);
-  console.log(`  containers docker ps -a --filter name=${project}`);
+  console.log("[demo] running frontend checks…");
+  await run(["bun", "run", "scripts/demo-frontend-check.ts"], repoRoot,
+    { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "frontend checks");
+
+  const researchKeys = ["channel-divergence", "late-cycle-signals"];
+  if (process.env.CI) {
+    console.log("\n[demo] CI mode — all checks passed, tearing down…");
+    cleanup();
+    process.exit(0);
+  }
+
+  console.log("\n\u2500\u2500 Robot Money demo \u2500\u2500".padEnd(68, "\u2500"));
+  console.log(`  Site:       ${backendUrl}/`);
+  console.log(`  Regime:     ${backendUrl}/regime`);
+  console.log(`  Committee:  ${backendUrl}/committee`);
+  for (const k of researchKeys) console.log(`  Research:   ${backendUrl}/research/${k}`);
+  console.log(`  MCP:        ${mcpUrl}/health`);
   console.log("");
+  console.log(`  Press Ctrl-C to shut down.`);
   await new Promise<never>(() => { /* run until a signal triggers cleanup */ });
 }
 
 main().catch((err) => {
   console.error("[demo] startup failed:", err instanceof Error ? err.message : err);
+  if (!cleaned) dumpDiagnostics();
   cleanup();
   process.exit(1);
 });

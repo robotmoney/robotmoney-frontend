@@ -20,13 +20,22 @@ interface SeedSchedule {
 // Keep this list small and harmless. Each kind MUST have a handler registered in
 // backend/src/worker/handlers/index.ts and be idempotent on natural keys.
 //
-// Follow-up (intentionally NOT seeded here): the committee session lifecycle
-// (open/brief/close/aggregate/publish) needs dedicated job handlers that do not
-// yet exist; seeding it now would enqueue jobs with "no handler registered".
-// Add those handlers, then add their schedules to this list.
+// Committee schedules are intentionally no-cron (never auto-enqueued by the
+// scheduler). The demo script enqueues lifecycle jobs explicitly via the
+// admin enqueue-job endpoint, which lets the demo control the pace while still
+// exercising the real worker claim loop + handler path. Scheduled cron
+// triggering (e.g. daily open_session) is a future addition.
 const SCHEDULES: SeedSchedule[] = [
   // Daily 06:00 UTC: refresh the analytics suite (regime + research signals).
   { kind: "analytics.run", cron: "0 6 * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Committee lifecycle — disabled by default; the demo enqueues these explicitly
+  // via the admin enqueue-job endpoint, exercising the real worker claim loop +
+  // handler path. Enable manually or change to a real cron for auto-scheduling.
+  { kind: "committee.open_session", cron: "0 6 * * *", payload: {}, timezone: "UTC", enabled: false },
+  { kind: "committee.publish_brief", cron: "0 7 * * *", payload: {}, timezone: "UTC", enabled: false },
+  { kind: "committee.close_window", cron: "0 8 * * *", payload: {}, timezone: "UTC", enabled: false },
+  { kind: "committee.aggregate", cron: "0 9 * * *", payload: {}, timezone: "UTC", enabled: false },
+  { kind: "committee.publish", cron: "0 10 * * *", payload: {}, timezone: "UTC", enabled: false },
 ];
 
 export async function seed(): Promise<void> {

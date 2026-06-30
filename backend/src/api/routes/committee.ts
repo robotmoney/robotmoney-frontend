@@ -7,6 +7,7 @@ import * as ic from "../../committee/domain.ts";
 import { config } from "../../config.ts";
 import { isPlausibleKey } from "../../lib/keys.ts";
 import { runAnalytics } from "../../analytics/index.ts";
+import { sql } from "../../db/client.ts";
 
 function bearer(req: Request): string | null {
   const h = req.headers.get("Authorization") ?? "";
@@ -54,6 +55,32 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   if (m === "POST" && p === "/api/committee/signing-payload") {
     const sub = (await req.json().catch(() => ({}))) as any;
     return { status: 200, body: { canonical: canonicalizeSubmission(sub) } };
+  }
+
+  // Memo: post (member-authenticated) and get (public read).
+  if (m === "POST" && p === "/api/committee/memos") {
+    const token = bearer(req);
+    if (!token) return { status: 401, body: { error: "missing bearer token" } };
+    const b = (await req.json().catch(() => null)) as any;
+    if (!b?.sessionId || !b?.body) return { status: 400, body: { error: "sessionId and body required" } };
+    const res = await ic.postMemo(token, { sessionId: String(b.sessionId), title: b.title, body: b.body });
+    return { status: res.status, body: res };
+  }
+  if (m === "GET" && /^\/api\/committee\/memos\/\d+$/.test(p)) {
+    const id = Number(p.split("/").pop());
+    const memo = await ic.getMemo(id);
+    return { status: memo ? 200 : 404, body: memo ?? { error: "not found" } };
+  }
+
+  // Token verification (used by the MCP OAuth token endpoint to validate
+  // member credentials). Returns 200 with memberId if the bearer token is
+  // valid, 401 otherwise.
+  if (m === "GET" && p === "/api/committee/verify-token") {
+    const token = bearer(req);
+    if (!token) return { status: 401, body: { error: "missing bearer token" } };
+    const memberId = await ic.memberIdForToken(token);
+    if (!memberId) return { status: 401, body: { error: "invalid token" } };
+    return { status: 200, body: { memberId } };
   }
 
   // Member onboarding + admin lifecycle are PRIVILEGED. Guard: if ADMIN_TOKEN is
@@ -125,6 +152,22 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
       case "close": return { status: 200, body: await ic.closeWindow(b.sessionId) };
       case "aggregate": return { status: 200, body: await ic.aggregateSession(b.sessionId) };
       case "publish": return { status: 200, body: await ic.publishSession(b.sessionId) };
+      case "enqueue-job": {
+        const actionMap: Record<string, string> = {
+          open_session: "committee.open_session",
+          publish_brief: "committee.publish_brief",
+          close_window: "committee.close_window",
+          aggregate: "committee.aggregate",
+          publish: "committee.publish",
+        };
+        const kind = actionMap[b.action as string];
+        if (!kind) return { status: 400, body: { error: `unknown action: ${b.action}` } };
+        const { action: _, ...payload } = b;
+        const rows = await sql`
+          INSERT INTO jobs (kind, payload) VALUES (${kind}, ${sql.json(payload)})
+          RETURNING id, kind`;
+        return { status: 200, body: { jobId: rows[0].id, kind: rows[0].kind } };
+      }
       default: return { status: 404, body: { error: "unknown admin action" } };
     }
   }
