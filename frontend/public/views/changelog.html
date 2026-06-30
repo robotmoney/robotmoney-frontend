@@ -1,0 +1,703 @@
+<!-- Project Development — Roadmap + Changelog
+     Static fragment ported from robotmoney-site/src/app/changelog/page.tsx
+     and src/data/changelog.ts. No scripts/canvas: data baked into markup.
+-->
+
+<section class="cl">
+  <!-- Hero -->
+  <header class="cl__hero">
+    <h1 class="cl__h1">Project <span class="cl__grad">Development</span></h1>
+    <p class="cl__lede">
+      Roadmap, milestones, and a running log of everything shipped.
+      Building in public — subject to change as we learn.
+    </p>
+  </header>
+
+  <div class="cl__grid">
+
+    <!-- Left: Roadmap -->
+    <div class="cl__col">
+      <h2 class="cl__h2">Product <span class="cl__grad">Roadmap</span></h2>
+
+      <div class="cl__timeline">
+
+        <!-- Phase 0 -->
+        <div class="cl__phase">
+          <div class="cl__marker cl__marker--done">0</div>
+          <div class="cl__card">
+            <div class="cl__card-head">
+              <h3 class="cl__phase-title">Foundation</h3>
+              <span class="cl__badge cl__badge--done">Complete</span>
+            </div>
+            <ul class="cl__items">
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Launch $ROBOTMONEY token on Base via Bankr (100B supply, fair launch, LP locked until 2100)</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Publish protocol design document and whitepaper v0.1 on robotmoney.net</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Execute GV × ZHC Institute collaboration agreement</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Publish investment thesis on Fintech Blueprint</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Launch @RobotMoneyAgent X bot</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Set up AgentMail inbox for inbound communication</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Fund prop wallet from initial Clanker launch fees</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Phase 1 -->
+        <div class="cl__phase">
+          <div class="cl__marker cl__marker--done">1</div>
+          <div class="cl__card">
+            <div class="cl__card-head">
+              <h3 class="cl__phase-title">Prop Wallet &amp; Analytics</h3>
+              <span class="cl__badge cl__badge--done">Complete</span>
+            </div>
+            <ul class="cl__items">
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Ship live allocation dashboard and performance page with real-time on-chain data</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Execute initial buybacks from prop wallet swap fee revenue (~10 buybacks, ~$2,500 to date)</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Implement buyback tracking with on-chain tx receipts</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Publish smart contract risk research</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Begin manual prop wallet trading across ETH, $ROBOTMONEY, and agent tokens</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Secure exchange listings beyond Bankr (MEXC, WEEX)</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Launch Telegram community</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Build media page; begin podcast and interview circuit</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Phase 2 -->
+        <div class="cl__phase">
+          <div class="cl__marker cl__marker--active">2</div>
+          <div class="cl__card">
+            <div class="cl__card-head">
+              <h3 class="cl__phase-title">Governance &amp; Vault Design</h3>
+              <span class="cl__badge cl__badge--active">In Progress</span>
+            </div>
+            <ul class="cl__items">
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Publish technical design proposal; run community vote on implementation path</span></li>
+              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Finalize vault architecture (ERC-4626 MVP vs. institutional-grade custody)</span></li>
+              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Finalize governance architecture (off-chain voting MVP vs. on-chain gauge controller with veRM)</span></li>
+              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Define quantitative filter thresholds for token ballot inclusion</span></li>
+              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Resolve pre-deployment decisions: vault recipient address, fee ownership, contracting entity</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Phase 3 -->
+        <div class="cl__phase">
+          <div class="cl__marker cl__marker--active">3</div>
+          <div class="cl__card">
+            <div class="cl__card-head">
+              <h3 class="cl__phase-title">Agent Analytics Product</h3>
+              <span class="cl__badge cl__badge--active">In Progress</span>
+            </div>
+            <ul class="cl__items">
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Ship AI Investment Committee — three AI personas (Athena, Robot Money, Woon) analyze agent portfolios daily with structured discussion, disagreement callouts, and recommendation panels</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Ship analytics as a live product on robotmoney.net — /committee with member profiles, daily sessions, and subject pages with concentration + drift charts</span></li>
+              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Surface agent-token data that feeds into the governance allocation shortlist (volume, holder distribution, treasury health, revenue, age)</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Expose analytics via API so agents can query programmatically</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Use analytics output to generate and publish weekly allocation shortlists — the governance research layer that precedes on-chain voting</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Ship the shortlist as a standalone data product (x402-priced API for agent consumers)</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Phase 4 -->
+        <div class="cl__phase">
+          <div class="cl__marker cl__marker--active">4</div>
+          <div class="cl__card">
+            <div class="cl__card-head">
+              <h3 class="cl__phase-title">Vault Deployment</h3>
+              <span class="cl__badge cl__badge--active">In Progress</span>
+            </div>
+            <ul class="cl__items">
+              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Identify and close initial TVL partners for vault launch (agent operators, protocol treasuries)</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Deploy ERC-4626 vault on Base accepting USDC deposits — live at 0x4f83…49dd with rmUSDC share token</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Implement exit fee (0.25%) — enforced in contract</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Whitelist initial Bucket A strategies: Morpho Gauntlet USDC Prime, Aave V3, Compound V3</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Set bootstrap caps: $100K TVL cap, $5K per-deposit cap, multisig-administered</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Ship vault deposit/withdraw UI on robotmoney.net</span></li>
+              <li class="cl__item cl__item--done"><span class="cl__ico" title="Completed">✅</span><span>Publish vault contract address and integration docs for agent developers</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Implement management fee (2% annual, daily accrual) — pending</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Phase 5 -->
+        <div class="cl__phase">
+          <div class="cl__marker cl__marker--upcoming">5</div>
+          <div class="cl__card">
+            <div class="cl__card-head">
+              <h3 class="cl__phase-title">First TVL &amp; Autonomous Operations</h3>
+            </div>
+            <ul class="cl__items">
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Accept first third-party deposits into the vault</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Agent begins autonomous three-bucket allocation</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Publish daily portfolio updates and weekly allocation shortlists via RM Agent (no manual effort)</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Run first weekly allocation vote with live vault rebalancing</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Implement default allocation behavior when quorum is not met</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Wire prop wallet realized gains to deterministic buyback-and-burn with published BaseScan receipts</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Target: $100K TVL and first completed allocation vote cycle</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Phase 6 -->
+        <div class="cl__phase">
+          <div class="cl__marker cl__marker--active">6</div>
+          <div class="cl__card">
+            <div class="cl__card-head">
+              <h3 class="cl__phase-title">Partnerships &amp; Distribution</h3>
+              <span class="cl__badge cl__badge--active">In Progress</span>
+            </div>
+            <ul class="cl__items">
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Integrate with Bankr SDK for one-call vault deposits from any Bankr-enabled agent</span></li>
+              <li class="cl__item cl__item--active"><span class="cl__ico" title="In progress">🔄</span><span>Ship v0 OpenClaw skill — proof of concept testing deployed vault, router, wallet, and CLI logic with asset ceiling</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Integrate with Nevermined for agent-to-agent payment routing</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Activate peaq network partnership for DePIN agent treasury use cases</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Expand agent operator outreach beyond initial TVL partners</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Phase 7 -->
+        <div class="cl__phase">
+          <div class="cl__marker cl__marker--upcoming">7</div>
+          <div class="cl__card">
+            <div class="cl__card-head">
+              <h3 class="cl__phase-title">Governance Hardening</h3>
+            </div>
+            <ul class="cl__items">
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Migrate from off-chain voting to on-chain gauge controller with veRM locking</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Eliminate flash loan governance attack class via vote-escrow requirements</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Enable bribe market infrastructure (agents pay veRM holders for allocation weight)</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Commission and complete security audit of vault and governance contracts</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Lift deposit cap post-audit</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Phase 8 -->
+        <div class="cl__phase">
+          <div class="cl__marker cl__marker--upcoming">8</div>
+          <div class="cl__card">
+            <div class="cl__card-head">
+              <h3 class="cl__phase-title">Scale</h3>
+            </div>
+            <ul class="cl__items">
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Achieve and sustain $500K+ TVL (protocol cash-flow positive)</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Activate Bucket B (governance-selected agent tokens) and Bucket C (revenue liquid tokens) at full scale</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Begin publishing monthly performance reports with full on-chain receipts</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Evaluate performance fee addition based on track record</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Evaluate automated yield optimization for Bucket A</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Phase 9 -->
+        <div class="cl__phase">
+          <div class="cl__marker cl__marker--upcoming">9</div>
+          <div class="cl__card">
+            <div class="cl__card-head">
+              <h3 class="cl__phase-title">Expansion</h3>
+            </div>
+            <ul class="cl__items">
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Formalize legal entity structure (offshore foundation or DAO wrapper)</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Scale TVL through agent network effects and institutional outreach</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Publish quarterly strategy reviews</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Evaluate multi-chain expansion if agent economy migrates beyond Base</span></li>
+              <li class="cl__item cl__item--upcoming"><span class="cl__ico" title="Upcoming">⬜️</span><span>Revenue-fund or raise based on traction; formalize team and long-term governance</span></li>
+            </ul>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Right: Changelog -->
+    <div class="cl__col">
+      <h2 class="cl__h2">Change <span class="cl__grad">Log</span></h2>
+
+      <div class="cl__log">
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-06-01</span><span class="cl__cat">feature</span></div>
+          <h3 class="cl__entry-title">Allocation Page — Sub-Allocation Pie Charts</h3>
+          <p class="cl__entry-desc">Each vault strategy box now shows a sub-allocation breakdown with a small pie chart in the top-right corner and color-coded labels underneath. Conservative DeFi Yield: Aave, Morpho, Compound, Sky at 25% each. Agent Tokens: RobotMoney, Juno, Woon, Peaq, Zyfai, Giza equal weight. Protocol Tokens: BTC, ETH, HYPE at 33% each. RWAs: 90% SPY, 10% Gold. All slices within a strategy share a hue family (greens, blues, oranges, purples) for visual coherence.</p>
+          <div class="cl__links"><a class="cl__link" href="/allocation">View Allocation →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-05-28</span><span class="cl__cat">feature</span></div>
+          <h3 class="cl__entry-title">AI Investment Committee — Daily Agent-Persona Portfolio Reviews</h3>
+          <p class="cl__entry-desc">Shipped the Robot Money Investment Committee: three AI personas (Athena — quant risk, Robot Money — institutional treasury, Woon — machine economy participant) that analyze agent portfolios daily. Features: /committee page with member manifests, daily briefs and sessions at /committee/YYYY-MM-DD/&lt;subject&gt;, structured discussion with disagreement callouts, recommendation panels (bucket weights or position actions), concentration and drift charts per subject, partner PDF sheets, and OpenClaw integration via git-as-transport for hybrid pull/submit workflows. Committee sessions are generated by GitHub Actions daily and committed to the repo.</p>
+          <div class="cl__links"><a class="cl__link" href="/committee">View Committee →</a><a class="cl__link" href="/committee/members/athena">Athena Profile →</a><a class="cl__link" href="/committee/members/woon">Woon Profile →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-05-20</span><span class="cl__cat">research</span></div>
+          <h3 class="cl__entry-title">Regime v3 — Three-Panel Classifier (Macro + On-Chain + Equity Factor)</h3>
+          <p class="cl__entry-desc">Major upgrade to the regime detection system: expanded from two panels to three with a new Equity Factor panel (SPY trend, HY OAS, Shiller CAPE, BTC/SPX active addresses). New conservative compositor rule requires both macro and on-chain panels to agree before shifting regime, outperforming the averaged composite on every metric (2.37× final value vs 1.31×). Switched to append-only raw indicator history so no data is ever lost. Dual-source Shiller CAPE with automatic fallback. Published research comparing the old vs new classifier, and conservative vs aggressive rules.</p>
+          <div class="cl__links"><a class="cl__link" href="/regime">Live Regime →</a><a class="cl__link" href="/blog/regime-conservative-aggressive">Research: Conservative vs Aggressive →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-05-15</span><span class="cl__cat">infrastructure</span></div>
+          <h3 class="cl__entry-title">Vault TVL Parser Fix</h3>
+          <p class="cl__entry-desc">Fixed frontend parser reading all historical vault snapshots instead of the latest one. The hourly-vault-tvl.js script appends each run to CSV, creating a growing log. The parser was summing all 24 snapshots (inflated balances), returning the oldest TOTAL row, and showing a stale timestamp. Added filterToLatest() helper so only the most recent snapshot is used for display.</p>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-05-13</span><span class="cl__cat">research</span></div>
+          <h3 class="cl__entry-title">Regime Research — Treasury Allocation &amp; Conservative vs Aggressive Rules</h3>
+          <p class="cl__entry-desc">Published two research posts using the live regime classifier: (1) Treasury Allocation for On-Chain Businesses — 8-year backtest comparing regime-based allocation vs HODL, stables, and DeFi yield, with return attribution showing diversification does 74% of the work and regime overlay does 26%. (2) Conservative vs Aggressive Regime Rules — truth-table analysis showing the conservative rule (both macro and on-chain panels must agree) dominates the averaged composite on every metric: 2.37× final value vs 1.31×, higher Sharpe, and drawdown nearly halved. Both at /blog with live data from /regime.</p>
+          <div class="cl__links"><a class="cl__link" href="/blog/treasury-allocation">Treasury Allocation →</a><a class="cl__link" href="/blog/regime-conservative-aggressive">Conservative vs Aggressive →</a><a class="cl__link" href="/regime">Live Regime →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-05-07</span><span class="cl__cat">design</span></div>
+          <h3 class="cl__entry-title">Homepage Redesign + Media Coverage Page + Skill Integration</h3>
+          <p class="cl__entry-desc">Major site update: (1) New /media coverage page with token listings (Bankr, MEXC, WEEX), Galaxy Digital research article, and MCG Live video. Navigation updated with Coverage dropdown. (2) Replaced PROP WALLET section on homepage with AGENT SKILL box featuring install command, CTAs, and capabilities list. Added development disclaimer. (3) Removed Fee Economics and Infrastructure sections (5 &amp; 6) from homepage to streamline flow. (4) Swapped home2 to become the new homepage; archived old homepage at /home_archived. (5) Fixed mobile hero text smushing on /tokenomics and /skills. (6) Added top padding to hero sections to clear fixed nav.</p>
+          <div class="cl__links"><a class="cl__link" href="/media">View Coverage →</a><a class="cl__link" href="/">View Homepage →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-05-05</span><span class="cl__cat">feature</span></div>
+          <h3 class="cl__entry-title">Robot Money Skill v0 — Proof of Concept</h3>
+          <p class="cl__entry-desc">Shipped v0 OpenClaw skill as a proof of concept testing the live RobotMoneyVault (0x4f83…49dd) on Base — vault routing across Morpho/Aave/Compound, wallet integration, and CLI workflows. Includes asset ceiling. Architecture will evolve toward vault-of-vaults as strategy-specific vaults are added.</p>
+          <div class="cl__links"><a class="cl__link" href="/skills">View Skill →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-04-24</span><span class="cl__cat">content</span></div>
+          <h3 class="cl__entry-title">Regime Detection Research — Prior Art &amp; Methodology Survey</h3>
+          <p class="cl__entry-desc">Published comprehensive reference exhibit covering risk-on/risk-off regime detection across equities, fixed income, FX, commodities, crypto, and DeFi yield. Includes institutional prior art (Goldman FCI, Bridgewater, AQR), quantitative methods catalogue (HMM, risk parity, tree-based ML), indicator universe with 50+ data sources, and recommended starting architecture for daily multi-asset TAA engines. Also updated Blog page with new Research column.</p>
+          <div class="cl__links"><a class="cl__link" href="/regime-detection">View Regime Detection →</a><a class="cl__link" href="/blog">View Blog →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-04-15</span><span class="cl__cat">design</span></div>
+          <h3 class="cl__entry-title">Allocation Page Redesign — Consolidated Sleeves &amp; Category Visualization</h3>
+          <p class="cl__entry-desc">Merged standalone sleeves page into main allocation page with category-based asset grouping. Fixed color mapping: Agent tokens (blue), Protocol (orange), Stables/SS (green). New layout shows visual hierarchy with consistent ordering across allocations.</p>
+          <div class="cl__links"><a class="cl__link" href="/allocation">View Allocation →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-04-14</span><span class="cl__cat">feature</span></div>
+          <h3 class="cl__entry-title">Delegated Strategy Integration — ZYFAI &amp; Giza Stablecoin Positions</h3>
+          <p class="cl__entry-desc">Added real-time tracking of delegated USDC positions across ZYFAI and Giza strategies (~$4,500 each). New API integrations in hourly-prices.js and wallet-balance pipeline. Token symbol normalization for proper color mapping in allocation charts.</p>
+          <div class="cl__links"><a class="cl__link" href="/allocation">View Allocation →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-04-13</span><span class="cl__cat">partnership</span></div>
+          <h3 class="cl__entry-title">Peaq Partnership — Woon Agent Treasury Allocation</h3>
+          <p class="cl__entry-desc">Peaq's social growth agent Woon (@Woon_agent) allocates portion of generated revenue to Robot Money. First live integration demonstrating agent-to-agent treasury infrastructure. Allocation model distributes earnings across buybacks, reinvestment, and managed positions.</p>
+          <div class="cl__links"><a class="cl__link" href="https://peaq.network" target="_blank" rel="noopener noreferrer">Peaq Network →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-04-12</span><span class="cl__cat">infrastructure</span></div>
+          <h3 class="cl__entry-title">Data Pipeline Reliability &amp; Integrity Fixes</h3>
+          <p class="cl__entry-desc">Disabled duplicate 'Daily Unified Wallet Snapshot' workflow causing &gt;100% chart errors. Fixed CSV parser to use latest complete snapshot per date. Refactored hourly-balances.ts to eliminate code duplication and misleading comments.</p>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-31</span><span class="cl__cat">design</span></div>
+          <h3 class="cl__entry-title">Development Page Redesign — Two-Column Layout</h3>
+          <p class="cl__entry-desc">Redesigned Development page with side-by-side Roadmap and Changelog. Extended roadmap to include Phases 7-9: Governance Hardening, Scale, and Expansion. Removed Roadmap section from homepage to create a dedicated destination for project progress tracking.</p>
+          <div class="cl__links"><a class="cl__link" href="/changelog">View Development →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-30</span><span class="cl__cat">design</span></div>
+          <h3 class="cl__entry-title">Visual Effects System — 7 Interactive Demo Pages</h3>
+          <p class="cl__entry-desc">New generative visual effects across the site: Flow Field (Perlin noise particle trails), Network Swarm (connected nodes with data-transfer pixels), Liquid Mesh (scatter objects through displaced grids), Matrix Rain (ROBOTMONEY-spelling digital rain), Substrate Crystal (crack growth algorithm), Fractal Trees (Sierpinski branching with wind), and Constructivist Lissitzky (wedges piercing circles).</p>
+          <div class="cl__links"><a class="cl__link" href="/flow-field">View Effects →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-29</span><span class="cl__cat">design</span></div>
+          <h3 class="cl__entry-title">Homepage Redesign — Substrate Hero &amp; Layered Pyramid</h3>
+          <p class="cl__entry-desc">Complete homepage rebuild featuring Substrate crystal-growth algorithm as hero background. New layered pyramid visualization positioned under Architecture section. Solid disclaimer section replacing previous inline text.</p>
+          <div class="cl__links"><a class="cl__link" href="/">View Homepage →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-29</span><span class="cl__cat">design</span></div>
+          <h3 class="cl__entry-title">Blog Redesign — Fractal Trees Hero</h3>
+          <p class="cl__entry-desc">Blog index page redesigned with animated fractal tree visualization in hero area. Cyan-accented, wind-swaying generative trees create unique visual identity for the content section.</p>
+          <div class="cl__links"><a class="cl__link" href="/blog">View Blog →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-28</span><span class="cl__cat">design</span></div>
+          <h3 class="cl__entry-title">Navigation Logo — SVG Robot Money Mark</h3>
+          <p class="cl__entry-desc">Replaced text-based navigation with Robot Money SVG logo. Transparent background, 45px height. Clean branding update across all pages.</p>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-27</span><span class="cl__cat">community</span></div>
+          <h3 class="cl__entry-title">WEEX Exchange Listing</h3>
+          <p class="cl__entry-desc">ROBOTMONEY/USDT spot trading pair now live on WEEX exchange. Third listing alongside Bankr.bot (launch) and MEXC (Meme+ zone). Coverage page updated with all token listings.</p>
+          <div class="cl__links"><a class="cl__link" href="https://www.weex.com/spot/ROBOTMONEY-USDT" target="_blank" rel="noopener noreferrer">Trade on WEEX →</a><a class="cl__link" href="/media">View Coverage →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-26</span><span class="cl__cat">community</span></div>
+          <h3 class="cl__entry-title">Telegram Community Launch</h3>
+          <p class="cl__entry-desc">Official Robot Money Telegram community launched for real-time updates, discussions, and direct access to the team. Join for announcements, governance discussions, and behind-the-scenes development updates.</p>
+          <div class="cl__links"><a class="cl__link" href="https://t.me/+aFxo8CRpkI80YmM0" target="_blank" rel="noopener noreferrer">Join Telegram →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-26</span><span class="cl__cat">feature</span></div>
+          <h3 class="cl__entry-title">Media Page &amp; Press Archive</h3>
+          <p class="cl__entry-desc">New Media page featuring podcast appearances, interviews, and press coverage. Centralized hub for all Robot Money media mentions including the Zypsy podcast with Lex Sokolin and MCG interview coverage.</p>
+          <div class="cl__links"><a class="cl__link" href="/media">View Media →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-26</span><span class="cl__cat">feature</span></div>
+          <h3 class="cl__entry-title">Performance Page with Live Wallet Data</h3>
+          <p class="cl__entry-desc">New Performance page (allocation2) displaying real-time wallet holdings with live price feeds. Shows current allocations across ETH, ROBOTMONEY, and agent tokens with USD valuations. Auto-refreshes via Base RPC and GeckoTerminal API.</p>
+          <div class="cl__links"><a class="cl__link" href="/allocation2">View Performance →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-23</span><span class="cl__cat">feature</span></div>
+          <h3 class="cl__entry-title">Buyback Tracking &amp; Transparency</h3>
+          <p class="cl__entry-desc">New buybacks section on the Allocation page tracking all $ROBOTMONEY buyback transactions. Displays WETH spent, USD value, and tokens received for each transaction with running totals. 10 buybacks executed to date totaling ~1.15 WETH (~$2,504).</p>
+          <div class="cl__links"><a class="cl__link" href="/allocation">View Buybacks →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-22</span><span class="cl__cat">content</span></div>
+          <h3 class="cl__entry-title">Smart Contract Risk Research &amp; OG Image Redesign</h3>
+          <p class="cl__entry-desc">Published comprehensive smart contract risk analysis covering 13 major DeFi exploits from 2016-2026 ($4B+ in losses) with pattern analysis and prevention strategies. Redesigned all OG images for better social sharing with page-specific themes and glassmorphism design.</p>
+          <div class="cl__links"><a class="cl__link" href="/smart-contract-risks">View Risk Research →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-18</span><span class="cl__cat">feature</span></div>
+          <h3 class="cl__entry-title">Live Allocation Dashboard</h3>
+          <p class="cl__entry-desc">New Allocation page with real-time wallet holdings, strategy breakdown, and interactive charts. Fetches live data from Base RPC and GeckoTerminal.</p>
+          <div class="cl__links"><a class="cl__link" href="/allocation">View Allocation →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-17</span><span class="cl__cat">infrastructure</span></div>
+          <h3 class="cl__entry-title">AgentMail inbox live</h3>
+          <p class="cl__entry-desc">Robot Money now has its own email inbox via AgentMail — ready for inbound</p>
+          <div class="cl__links"><a class="cl__link" href="https://agentmail.to" target="_blank" rel="noopener noreferrer">AgentMail →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-16</span><span class="cl__cat">community</span></div>
+          <h3 class="cl__entry-title">Technical Design Proposal — Community Vote</h3>
+          <p class="cl__entry-desc">Evaluating implementation paths for agent delegation and governance. Vote on your preferred approach.</p>
+          <div class="cl__links"><a class="cl__link" href="/tech-proposal-march-16">View proposal and vote →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-16</span><span class="cl__cat">documentation</span></div>
+          <h3 class="cl__entry-title">Changelog and profile updates</h3>
+          <p class="cl__entry-desc">Added updates to changelog, updated social media personality and core vision profile</p>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-13</span><span class="cl__cat">social</span></div>
+          <h3 class="cl__entry-title">X bot launched</h3>
+          <p class="cl__entry-desc">Launched X bot</p>
+          <div class="cl__links"><a class="cl__link" href="https://x.com/RobotMoneyAgent" target="_blank" rel="noopener noreferrer">@RobotMoneyAgent →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-12</span><span class="cl__cat">content</span></div>
+          <h3 class="cl__entry-title">Substack published</h3>
+          <p class="cl__entry-desc">Published Robot Money analysis</p>
+          <div class="cl__links"><a class="cl__link" href="https://lex.substack.com/p/analysis-robot-money-and-the-economic" target="_blank" rel="noopener noreferrer">Read on Substack →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-12</span><span class="cl__cat">partnership</span></div>
+          <h3 class="cl__entry-title">ZHC Institute partnership announced</h3>
+          <p class="cl__entry-desc">Partnership announced: Generative Ventures + Zero Human Company Institute</p>
+          <div class="cl__links"><a class="cl__link" href="https://zhcinstitute.com" target="_blank" rel="noopener noreferrer">ZHC Institute →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-12</span><span class="cl__cat">documentation</span></div>
+          <h3 class="cl__entry-title">Website and design document live</h3>
+          <p class="cl__entry-desc">robotmoney.net live with protocol design documentation</p>
+          <div class="cl__links"><a class="cl__link" href="https://robotmoney.net" target="_blank" rel="noopener noreferrer">robotmoney.net →</a></div>
+        </div>
+
+        <div class="cl__entry">
+          <div class="cl__entry-meta"><span class="cl__date">2026-03-12</span><span class="cl__cat">launch</span></div>
+          <h3 class="cl__entry-title">Token launched on Base</h3>
+          <p class="cl__entry-desc">Token launched using Bankr on Base</p>
+          <div class="cl__links"><a class="cl__link" href="https://basescan.org/token/0x65021a79aeef22b17cdc1b768f5e79a8618beba3" target="_blank" rel="noopener noreferrer">View on BaseScan →</a></div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<style>
+.cl {
+  min-height: 100vh;
+  padding: 8rem 1.5rem 5rem;
+  background: var(--color-void);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+.cl__hero {
+  max-width: 720px;
+  margin: 0 auto 4rem;
+  text-align: center;
+}
+
+.cl__h1 {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 2.5rem;
+  line-height: 1.05;
+  margin: 0 0 1.25rem;
+}
+
+.cl__grad {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-blue));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--color-accent);
+}
+
+.cl__lede {
+  color: var(--color-text-muted);
+  max-width: 540px;
+  margin: 0 auto;
+  line-height: 1.6;
+}
+
+.cl__grid {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3rem;
+}
+
+.cl__h2 {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.75rem;
+  margin: 0 0 2rem;
+}
+
+/* Roadmap timeline */
+.cl__timeline {
+  position: relative;
+}
+
+.cl__timeline::before {
+  content: "";
+  position: absolute;
+  left: 15px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(to bottom, rgba(0, 229, 255, 0.5), var(--color-border), transparent);
+}
+
+.cl__phase {
+  position: relative;
+  padding-left: 3rem;
+  margin-bottom: 1rem;
+}
+
+.cl__marker {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.cl__marker--done {
+  background: var(--color-accent);
+  color: var(--color-void);
+}
+
+.cl__marker--active {
+  background: var(--color-accent);
+  color: var(--color-void);
+  box-shadow: 0 0 0 2px var(--color-void), 0 0 0 4px rgba(0, 229, 255, 0.3);
+}
+
+.cl__marker--upcoming {
+  border: 1px solid var(--color-border);
+  color: var(--color-text-dim);
+  background: var(--color-surface);
+}
+
+.cl__card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  padding: 1rem;
+  transition: border-color 0.2s;
+}
+
+.cl__card:hover {
+  border-color: rgba(0, 229, 255, 0.3);
+}
+
+.cl__card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.cl__phase-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.cl__badge {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.125rem 0.375rem;
+}
+
+.cl__badge--done {
+  color: var(--color-accent);
+  background: rgba(0, 229, 255, 0.1);
+}
+
+.cl__badge--active {
+  color: var(--color-warn);
+  background: rgba(255, 102, 68, 0.1);
+}
+
+.cl__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.cl__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.cl__item--done { color: var(--color-text-muted); }
+.cl__item--active { color: var(--color-text); }
+.cl__item--upcoming { color: var(--color-text-dim); }
+
+.cl__ico {
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+/* Changelog */
+.cl__log {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.cl__entry {
+  border-left: 2px solid rgba(0, 229, 255, 0.3);
+  padding: 0.25rem 0 0.25rem 1.25rem;
+}
+
+.cl__entry-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.cl__date {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-accent);
+}
+
+.cl__cat {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-dim);
+  background: var(--color-surface);
+  padding: 0.125rem 0.5rem;
+}
+
+.cl__entry-title {
+  font-size: 1rem;
+  font-weight: 500;
+  margin: 0 0 0.375rem;
+}
+
+.cl__entry-desc {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  line-height: 1.55;
+  margin: 0 0 0.5rem;
+}
+
+.cl__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.cl__link {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-accent);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.cl__link:hover { color: var(--color-text); }
+
+@media (min-width: 1024px) {
+  .cl {
+    padding: 10rem 2rem 6rem;
+  }
+  .cl__h1 { font-size: 3.5rem; }
+  .cl__h2 { font-size: 2rem; }
+  .cl__grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 3rem;
+  }
+}
+</style>

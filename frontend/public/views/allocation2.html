@@ -1,0 +1,537 @@
+<!-- Performance / Wallet Performance
+     Ported from robotmoney-site/src/app/allocation2/page.tsx
+     Static, buildless port. The original Chart.js stacked-area charts and the
+     constructivist canvas viz are rendered as static CSS visualizations.
+     Numbers are baked from public/data/unified-wallet-history.csv (latest
+     snapshot 2026-06-26; over-time composition is approximated for intermediate
+     dates where the source pulls per-asset data live).
+-->
+
+<section class="a2 container">
+
+  <!-- Hero -->
+  <header class="a2-hero">
+    <div class="a2-hero__viz" aria-hidden="true">
+      <span class="a2-orb a2-orb--1"></span>
+      <span class="a2-orb a2-orb--2"></span>
+      <span class="a2-orb a2-orb--3"></span>
+      <span class="a2-orb a2-orb--4"></span>
+      <span class="a2-orb a2-orb--5"></span>
+      <span class="a2-wedge a2-wedge--1"></span>
+      <span class="a2-wedge a2-wedge--2"></span>
+    </div>
+    <div class="a2-hero__inner">
+      <span class="a2-eyebrow">Historical Data</span>
+      <h1 class="a2-hero__title">Wallet <span class="a2-grad">Performance</span></h1>
+      <p class="a2-hero__lede">
+        Historical AUM and allocation changes since inception. Tracks all prop
+        strategy wallets in aggregate.
+      </p>
+    </div>
+  </header>
+
+  <!-- AUM Breakdown -->
+  <section class="a2-section">
+    <div class="a2-section__head">
+      <span class="a2-eyebrow">03 / History</span>
+      <h2 class="a2-h2">AUM <span class="a2-grad">Breakdown</span></h2>
+      <p class="a2-section__lede">
+        Daily snapshots of portfolio composition and value since March 18, 2026.
+      </p>
+    </div>
+
+    <!-- Category legend -->
+    <div class="a2-legend">
+      <span class="a2-legend__item"><span class="a2-dot" style="background:#4488ff;"></span>Agent (ROBOTMONEY, BNKR)</span>
+      <span class="a2-legend__item"><span class="a2-dot" style="background:#e8a640;"></span>Protocol (WETH, ETH)</span>
+      <span class="a2-legend__item"><span class="a2-dot" style="background:#10b981;"></span>Stable (USDC, ZYFAI-SS1)</span>
+      <span class="a2-legend__item"><span class="a2-dot" style="background:#8b5cf6;"></span>Stocks (SP500)</span>
+    </div>
+
+    <div class="a2-charts">
+
+      <!-- Absolute value chart -->
+      <div class="a2-card">
+        <div class="a2-card__head">
+          <h3 class="a2-card__title">AUM Over Time</h3>
+          <p class="a2-card__sub">Total portfolio value in USD</p>
+        </div>
+        <div class="a2-chart">
+          <div class="a2-yaxis">
+            <span>$91k</span><span>$68k</span><span>$45k</span><span>$23k</span><span>$0</span>
+          </div>
+          <div class="a2-track">
+            <!-- height %% = total AUM / 90.8k max ; segments = category composition -->
+            <div class="a2-col" style="height:80%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:70%;background:#4488ff"></span><span style="flex-basis:30%;background:#e8a640"></span><span style="flex-basis:0%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:79%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:60%;background:#4488ff"></span><span style="flex-basis:31%;background:#e8a640"></span><span style="flex-basis:9%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:92%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:55%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:12%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:64%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:50%;background:#4488ff"></span><span style="flex-basis:35%;background:#e8a640"></span><span style="flex-basis:15%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:96%"><span style="flex-basis:5%;background:#8b5cf6"></span><span style="flex-basis:48%;background:#4488ff"></span><span style="flex-basis:32%;background:#e8a640"></span><span style="flex-basis:15%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:100%"><span style="flex-basis:6%;background:#8b5cf6"></span><span style="flex-basis:45%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:16%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:100%"><span style="flex-basis:6%;background:#8b5cf6"></span><span style="flex-basis:43%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:18%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:81%"><span style="flex-basis:6%;background:#8b5cf6"></span><span style="flex-basis:42%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:19%;background:#10b981"></span></div>
+          </div>
+        </div>
+        <div class="a2-xaxis">
+          <span>Mar 18</span><span>Mar 28</span><span>Apr 17</span><span>Apr 27</span><span>May 17</span><span>Jun 7</span><span>Jun 17</span><span>Jun 26</span>
+        </div>
+      </div>
+
+      <!-- Percentage allocation chart -->
+      <div class="a2-card">
+        <div class="a2-card__head">
+          <h3 class="a2-card__title">Allocation Over Time</h3>
+          <p class="a2-card__sub">Asset composition as percentage of total</p>
+        </div>
+        <div class="a2-chart">
+          <div class="a2-yaxis">
+            <span>100%</span><span>75%</span><span>50%</span><span>25%</span><span>0%</span>
+          </div>
+          <div class="a2-track">
+            <!-- all columns full height; segments = category share of total -->
+            <div class="a2-col" style="height:100%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:70%;background:#4488ff"></span><span style="flex-basis:30%;background:#e8a640"></span><span style="flex-basis:0%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:100%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:60%;background:#4488ff"></span><span style="flex-basis:31%;background:#e8a640"></span><span style="flex-basis:9%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:100%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:55%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:12%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:100%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:50%;background:#4488ff"></span><span style="flex-basis:35%;background:#e8a640"></span><span style="flex-basis:15%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:100%"><span style="flex-basis:5%;background:#8b5cf6"></span><span style="flex-basis:48%;background:#4488ff"></span><span style="flex-basis:32%;background:#e8a640"></span><span style="flex-basis:15%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:100%"><span style="flex-basis:6%;background:#8b5cf6"></span><span style="flex-basis:45%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:16%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:100%"><span style="flex-basis:6%;background:#8b5cf6"></span><span style="flex-basis:43%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:18%;background:#10b981"></span></div>
+            <div class="a2-col" style="height:100%"><span style="flex-basis:6%;background:#8b5cf6"></span><span style="flex-basis:42%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:19%;background:#10b981"></span></div>
+          </div>
+        </div>
+        <div class="a2-xaxis">
+          <span>Mar 18</span><span>Mar 28</span><span>Apr 17</span><span>Apr 27</span><span>May 17</span><span>Jun 7</span><span>Jun 17</span><span>Jun 26</span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Historical Data table (last 5 snapshots) -->
+    <div class="a2-tablewrap">
+      <div class="a2-table__head">
+        <h3 class="a2-card__title">Historical Data</h3>
+        <span class="a2-table__hint">Showing last 5 snapshots</span>
+      </div>
+      <div class="a2-table__scroll">
+        <table class="a2-table">
+          <thead>
+            <tr>
+              <th class="a2-sticky">Date</th>
+              <th class="a2-r"><span class="a2-dot" style="background:#10b981;"></span>USDC</th>
+              <th class="a2-r"><span class="a2-dot" style="background:#10b981;"></span>ZYFAI-SS1</th>
+              <th class="a2-r"><span class="a2-dot" style="background:#e8a640;"></span>WETH</th>
+              <th class="a2-r"><span class="a2-dot" style="background:#e8a640;"></span>ETH</th>
+              <th class="a2-r"><span class="a2-dot" style="background:#4488ff;"></span>ROBOTMONEY</th>
+              <th class="a2-r"><span class="a2-dot" style="background:#4488ff;"></span>BNKR</th>
+              <th class="a2-r"><span class="a2-dot" style="background:#8b5cf6;"></span>SP500</th>
+              <th class="a2-r a2-total">Total AUM</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="a2-sticky">Jun 22</td>
+              <td class="a2-r"><span>$8,994</span><i>9.0371</i></td>
+              <td class="a2-r"><span>$4,536</span><i>1.0000</i></td>
+              <td class="a2-r"><span>$26,454</span><i>15.4378</i></td>
+              <td class="a2-r"><span>$86</span><i>0.0500</i></td>
+              <td class="a2-r"><span>$37,936</span><i>6499612465</i></td>
+              <td class="a2-r"><span>$12</span><i>25081.3083</i></td>
+              <td class="a2-r"><span>$4,733</span><i>0.6330</i></td>
+              <td class="a2-r a2-total">$82,751</td>
+            </tr>
+            <tr>
+              <td class="a2-sticky">Jun 23</td>
+              <td class="a2-r"><span>$9,016</span><i>9.0371</i></td>
+              <td class="a2-r"><span>$4,537</span><i>1.0000</i></td>
+              <td class="a2-r"><span>$26,553</span><i>15.4378</i></td>
+              <td class="a2-r"><span>$86</span><i>0.0500</i></td>
+              <td class="a2-r"><span>$37,959</span><i>6499612465</i></td>
+              <td class="a2-r"><span>$11</span><i>25081.3083</i></td>
+              <td class="a2-r"><span>$4,727</span><i>0.6330</i></td>
+              <td class="a2-r a2-total">$82,890</td>
+            </tr>
+            <tr>
+              <td class="a2-sticky">Jun 24</td>
+              <td class="a2-r"><span>$8,995</span><i>9.0371</i></td>
+              <td class="a2-r"><span>$4,537</span><i>1.0000</i></td>
+              <td class="a2-r"><span>$25,682</span><i>15.4378</i></td>
+              <td class="a2-r"><span>$83</span><i>0.0500</i></td>
+              <td class="a2-r"><span>$36,143</span><i>6499612465</i></td>
+              <td class="a2-r"><span>$11</span><i>25081.3083</i></td>
+              <td class="a2-r"><span>$4,669</span><i>0.6330</i></td>
+              <td class="a2-r a2-total">$80,120</td>
+            </tr>
+            <tr>
+              <td class="a2-sticky">Jun 25</td>
+              <td class="a2-r"><span>$9,042</span><i>9.0371</i></td>
+              <td class="a2-r"><span>$4,538</span><i>1.0000</i></td>
+              <td class="a2-r"><span>$24,916</span><i>15.4378</i></td>
+              <td class="a2-r"><span>$81</span><i>0.0500</i></td>
+              <td class="a2-r"><span>$31,831</span><i>6499612465</i></td>
+              <td class="a2-r"><span>$10</span><i>25081.3083</i></td>
+              <td class="a2-r"><span>$4,683</span><i>0.6330</i></td>
+              <td class="a2-r a2-total">$75,101</td>
+            </tr>
+            <tr>
+              <td class="a2-sticky">Jun 26</td>
+              <td class="a2-r"><span>$9,052</span><i>9.0371</i></td>
+              <td class="a2-r"><span>$4,538</span><i>1.0000</i></td>
+              <td class="a2-r"><span>$24,194</span><i>15.4378</i></td>
+              <td class="a2-r"><span>$78</span><i>0.0500</i></td>
+              <td class="a2-r"><span>$30,652</span><i>6499612465</i></td>
+              <td class="a2-r"><span>$9</span><i>25081.3083</i></td>
+              <td class="a2-r"><span>$4,656</span><i>0.6330</i></td>
+              <td class="a2-r a2-total">$73,180</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="a2-table__note">
+        * Values shown are aggregated across all tracked wallets. Per-wallet
+        breakdown available in raw data.
+      </p>
+    </div>
+
+    <div class="a2-foot">
+      <p class="a2-foot__note">
+        See current vault composition and buyback history on the
+        <a href="/allocation">Allocation dashboard</a>, or the
+        <a href="/regime">Regime</a> signal for market context.
+      </p>
+    </div>
+  </section>
+</section>
+
+<style>
+.a2 {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 8rem 1.5rem 5rem;
+  color: var(--color-text);
+}
+
+.a2-eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+
+.a2-grad {
+  background: linear-gradient(90deg, var(--color-accent), var(--color-blue));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-style: normal;
+  font-family: var(--font-sans);
+  font-weight: 700;
+}
+
+/* Hero */
+.a2-hero {
+  position: relative;
+  min-height: 44vh;
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-deep);
+  margin-bottom: 3rem;
+}
+
+.a2-hero__viz { position: absolute; inset: 0; z-index: 0; }
+
+.a2-hero__viz::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, var(--color-void), transparent 60%);
+}
+
+.a2-orb {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, var(--color-accent), var(--color-accent-dim) 55%, transparent 75%);
+  opacity: 0.35;
+  filter: blur(1px);
+}
+.a2-orb--1 { width: 180px; height: 180px; top: 8%; left: 10%; opacity: 0.5; }
+.a2-orb--2 { width: 110px; height: 110px; top: 30%; left: 32%; opacity: 0.25; }
+.a2-orb--3 { width: 90px;  height: 90px;  top: 12%; left: 60%; opacity: 0.4; }
+.a2-orb--4 { width: 220px; height: 220px; top: -6%; left: 72%; opacity: 0.2; }
+.a2-orb--5 { width: 70px;  height: 70px;  top: 46%; left: 50%; opacity: 0.3; }
+
+.a2-wedge {
+  position: absolute;
+  width: 0; height: 0;
+  border-style: solid;
+}
+.a2-wedge--1 {
+  top: 18%; left: 44%;
+  border-width: 18px 120px 18px 0;
+  border-color: transparent var(--color-accent) transparent transparent;
+  opacity: 0.5;
+  transform: rotate(-18deg);
+}
+.a2-wedge--2 {
+  top: 40%; left: 18%;
+  border-width: 12px 90px 12px 0;
+  border-color: transparent var(--color-accent-dim) transparent transparent;
+  opacity: 0.45;
+  transform: rotate(24deg);
+}
+
+.a2-hero__inner {
+  position: relative;
+  z-index: 2;
+  padding: 2.5rem 2rem;
+  max-width: 42rem;
+}
+
+.a2-hero__title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 2.5rem;
+  line-height: 1.05;
+  margin: 0 0 1rem;
+}
+
+.a2-hero__lede {
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Section */
+.a2-section { padding-top: 1rem; }
+.a2-section__head { margin-bottom: 2rem; }
+
+.a2-h2 {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.75rem;
+  margin: 0.25rem 0 0;
+}
+
+.a2-section__lede {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  margin: 0.75rem 0 0;
+  max-width: 42rem;
+}
+
+/* Legend */
+.a2-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  margin-bottom: 1.5rem;
+}
+.a2-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+}
+.a2-dot {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Charts */
+.a2-charts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+  margin-bottom: 2.5rem;
+}
+
+.a2-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1.25rem;
+}
+
+.a2-card__head { margin-bottom: 1.25rem; }
+.a2-card__title {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  color: var(--color-text);
+  margin: 0 0 0.25rem;
+}
+.a2-card__sub {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.a2-chart {
+  display: flex;
+  gap: 0.5rem;
+  height: 240px;
+}
+
+.a2-yaxis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--color-text-dim);
+  text-align: right;
+  width: 2.5rem;
+  flex-shrink: 0;
+  padding-bottom: 1px;
+}
+
+.a2-track {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  border-left: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  padding: 0 2px;
+  background:
+    repeating-linear-gradient(to top, transparent 0, transparent calc(25% - 1px), rgba(46,58,78,0.35) 25%);
+}
+
+.a2-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: 2px 2px 0 0;
+  overflow: hidden;
+}
+.a2-col span {
+  display: block;
+  width: 100%;
+}
+
+.a2-xaxis {
+  display: flex;
+  justify-content: space-between;
+  margin-left: 3rem;
+  margin-top: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--color-text-dim);
+}
+.a2-xaxis span { flex: 1; text-align: center; }
+
+/* Table */
+.a2-tablewrap { margin-top: 1rem; }
+.a2-table__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+.a2-table__hint {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+}
+
+.a2-table__scroll {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.a2-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.a2-table thead tr {
+  background: var(--color-surface-light);
+  border-bottom: 1px solid var(--color-border);
+}
+.a2-table th {
+  padding: 0.75rem 1rem;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  text-align: right;
+}
+.a2-table th.a2-sticky,
+.a2-table td.a2-sticky {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  background: var(--color-surface-light);
+}
+.a2-table tbody td.a2-sticky { background: var(--color-surface); }
+.a2-table th .a2-dot { margin-right: 0.4rem; }
+
+.a2-table tbody tr {
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.a2-table tbody tr:nth-child(even) { background: var(--color-deep); }
+.a2-table tbody tr:nth-child(even) td.a2-sticky { background: var(--color-deep); }
+
+.a2-table td { padding: 0.6rem 1rem; color: var(--color-text); }
+.a2-table td.a2-r {
+  text-align: right;
+}
+.a2-table td.a2-r span { display: block; color: var(--color-text); }
+.a2-table td.a2-r i {
+  display: block;
+  font-style: normal;
+  font-size: 0.6rem;
+  color: var(--color-text-dim);
+  margin-top: 1px;
+}
+.a2-table .a2-total {
+  color: var(--color-accent);
+  font-weight: 700;
+}
+
+.a2-table__note {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--color-text-dim);
+  margin: 0.75rem 0 0;
+}
+
+/* Footer */
+.a2-foot {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border);
+}
+.a2-foot__note {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+.a2-foot__note a { color: var(--color-accent); text-decoration: none; }
+.a2-foot__note a:hover { text-decoration: underline; }
+
+@media (min-width: 768px) {
+  .a2 { padding: 8rem 2rem 5rem; }
+  .a2-hero__title { font-size: 3.25rem; }
+  .a2-h2 { font-size: 2rem; }
+  .a2-charts { grid-template-columns: 1fr 1fr; }
+  .a2-chart { height: 300px; }
+}
+
+@media (min-width: 1024px) {
+  .a2 { padding: 9rem 2rem 6rem; }
+  .a2-hero__title { font-size: 3.75rem; }
+}
+</style>
