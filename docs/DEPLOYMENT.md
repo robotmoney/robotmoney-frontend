@@ -159,6 +159,27 @@ its subdomain) — not a secret.
 
 ## 7. Checklist — generate and hand to CI
 
+Run the credential doctor from the repository root:
+
+```sh
+# Interactive: audit both environments and offer to configure missing values.
+bun run credentials
+
+# Read-only: suitable for local checks and CI; exits non-zero when required
+# credentials or variables are missing.
+bun run credentials:check
+
+# Limit the interactive audit to one environment.
+bun run credentials -- --environment staging
+```
+
+The doctor never prints secret values. GitHub does not expose stored Environment
+secret values, so existing secrets can only be checked for presence. Cloudflare
+and DigitalOcean tokens are validated against their APIs when entered
+interactively, before they are uploaded. Generated application tokens and SSH
+keys are backed up outside the repository under
+`~/.config/robotmoney/gitops/<environment>/` with restrictive permissions.
+
 Do this **once per environment** (staging, then production):
 
 **Cloudflare** (DNS + observability)
