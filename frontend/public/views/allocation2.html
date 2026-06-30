@@ -1,7 +1,8 @@
 <!-- Performance / Wallet Performance
      Ported from robotmoney-site/src/app/allocation2/page.tsx
-     Static, buildless port. The original Chart.js stacked-area charts and the
-     constructivist canvas viz are rendered as static CSS visualizations.
+     Buildless port. The AUM/Allocation charts are Chart.js stacked areas drawn
+     by the boot-registered walletPerfView() factory (alpine/views.js); the
+     constructivist hero is a static CSS visualization.
      Numbers are baked from public/data/unified-wallet-history.csv (latest
      snapshot 2026-06-26; over-time composition is approximated for intermediate
      dates where the source pulls per-asset data live).
@@ -48,60 +49,24 @@
       <span class="a2-legend__item"><span class="a2-dot" style="background:#8b5cf6;"></span>Stocks (SP500)</span>
     </div>
 
-    <div class="a2-charts">
+    <div class="a2-charts" x-data="walletPerfView()">
 
-      <!-- Absolute value chart -->
+      <!-- Absolute value chart (Chart.js stacked area; data in walletPerfView) -->
       <div class="a2-card">
         <div class="a2-card__head">
           <h3 class="a2-card__title">AUM Over Time</h3>
           <p class="a2-card__sub">Total portfolio value in USD</p>
         </div>
-        <div class="a2-chart">
-          <div class="a2-yaxis">
-            <span>$91k</span><span>$68k</span><span>$45k</span><span>$23k</span><span>$0</span>
-          </div>
-          <div class="a2-track">
-            <!-- height %% = total AUM / 90.8k max ; segments = category composition -->
-            <div class="a2-col" style="height:80%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:70%;background:#4488ff"></span><span style="flex-basis:30%;background:#e8a640"></span><span style="flex-basis:0%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:79%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:60%;background:#4488ff"></span><span style="flex-basis:31%;background:#e8a640"></span><span style="flex-basis:9%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:92%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:55%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:12%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:64%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:50%;background:#4488ff"></span><span style="flex-basis:35%;background:#e8a640"></span><span style="flex-basis:15%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:96%"><span style="flex-basis:5%;background:#8b5cf6"></span><span style="flex-basis:48%;background:#4488ff"></span><span style="flex-basis:32%;background:#e8a640"></span><span style="flex-basis:15%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:100%"><span style="flex-basis:6%;background:#8b5cf6"></span><span style="flex-basis:45%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:16%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:100%"><span style="flex-basis:6%;background:#8b5cf6"></span><span style="flex-basis:43%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:18%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:81%"><span style="flex-basis:6%;background:#8b5cf6"></span><span style="flex-basis:42%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:19%;background:#10b981"></span></div>
-          </div>
-        </div>
-        <div class="a2-xaxis">
-          <span>Mar 18</span><span>Mar 28</span><span>Apr 17</span><span>Apr 27</span><span>May 17</span><span>Jun 7</span><span>Jun 17</span><span>Jun 26</span>
-        </div>
+        <div class="a2-chart"><canvas x-ref="aum"></canvas></div>
       </div>
 
-      <!-- Percentage allocation chart -->
+      <!-- Percentage allocation chart (Chart.js stacked area) -->
       <div class="a2-card">
         <div class="a2-card__head">
           <h3 class="a2-card__title">Allocation Over Time</h3>
           <p class="a2-card__sub">Asset composition as percentage of total</p>
         </div>
-        <div class="a2-chart">
-          <div class="a2-yaxis">
-            <span>100%</span><span>75%</span><span>50%</span><span>25%</span><span>0%</span>
-          </div>
-          <div class="a2-track">
-            <!-- all columns full height; segments = category share of total -->
-            <div class="a2-col" style="height:100%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:70%;background:#4488ff"></span><span style="flex-basis:30%;background:#e8a640"></span><span style="flex-basis:0%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:100%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:60%;background:#4488ff"></span><span style="flex-basis:31%;background:#e8a640"></span><span style="flex-basis:9%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:100%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:55%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:12%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:100%"><span style="flex-basis:0%;background:#8b5cf6"></span><span style="flex-basis:50%;background:#4488ff"></span><span style="flex-basis:35%;background:#e8a640"></span><span style="flex-basis:15%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:100%"><span style="flex-basis:5%;background:#8b5cf6"></span><span style="flex-basis:48%;background:#4488ff"></span><span style="flex-basis:32%;background:#e8a640"></span><span style="flex-basis:15%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:100%"><span style="flex-basis:6%;background:#8b5cf6"></span><span style="flex-basis:45%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:16%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:100%"><span style="flex-basis:6%;background:#8b5cf6"></span><span style="flex-basis:43%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:18%;background:#10b981"></span></div>
-            <div class="a2-col" style="height:100%"><span style="flex-basis:6%;background:#8b5cf6"></span><span style="flex-basis:42%;background:#4488ff"></span><span style="flex-basis:33%;background:#e8a640"></span><span style="flex-basis:19%;background:#10b981"></span></div>
-          </div>
-        </div>
-        <div class="a2-xaxis">
-          <span>Mar 18</span><span>Mar 28</span><span>Apr 17</span><span>Apr 27</span><span>May 17</span><span>Jun 7</span><span>Jun 17</span><span>Jun 26</span>
-        </div>
+        <div class="a2-chart"><canvas x-ref="alloc"></canvas></div>
       </div>
 
     </div>
@@ -376,59 +341,10 @@
 }
 
 .a2-chart {
-  display: flex;
-  gap: 0.5rem;
+  position: relative;
   height: 240px;
 }
-
-.a2-yaxis {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  color: var(--color-text-dim);
-  text-align: right;
-  width: 2.5rem;
-  flex-shrink: 0;
-  padding-bottom: 1px;
-}
-
-.a2-track {
-  flex: 1;
-  display: flex;
-  align-items: flex-end;
-  gap: 4px;
-  border-left: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
-  padding: 0 2px;
-  background:
-    repeating-linear-gradient(to top, transparent 0, transparent calc(25% - 1px), rgba(46,58,78,0.35) 25%);
-}
-
-.a2-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  border-radius: 2px 2px 0 0;
-  overflow: hidden;
-}
-.a2-col span {
-  display: block;
-  width: 100%;
-}
-
-.a2-xaxis {
-  display: flex;
-  justify-content: space-between;
-  margin-left: 3rem;
-  margin-top: 0.5rem;
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  color: var(--color-text-dim);
-}
-.a2-xaxis span { flex: 1; text-align: center; }
+.a2-chart canvas { width: 100% !important; height: 100% !important; }
 
 /* Table */
 .a2-tablewrap { margin-top: 1rem; }
