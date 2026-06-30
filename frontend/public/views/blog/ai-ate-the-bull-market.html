@@ -1,0 +1,426 @@
+<!-- /blog/ai-ate-the-bull-market — static port of the Next.js page.tsx.
+     No-build SPA: charts render dynamically on /research/*; here the figure
+     blocks carry the label + caption and link to the live interactive version. -->
+<article class="blog-root">
+  <a href="/blog" class="blog-back">&larr; Back to Blog</a>
+
+  <div class="blog-eyebrow">Research note</div>
+  <h1 class="blog-title">
+    AI ate the <span class="blog-gradient">bull market</span>
+  </h1>
+  <p class="blog-lede">
+    Stocks are up a lot in 2025-2026. Bitcoin is not. That hasn&rsquo;t been true in any
+    previous cycle, and it shows up in every measurement we&rsquo;ve built. This post walks
+    through what we found and what it means &mdash; in plain English, one chart at a time.
+  </p>
+
+  <section class="blog-section">
+    <h2>The short version</h2>
+    <p>
+      For about a decade, &ldquo;risk-on&rdquo; meant that easy money would chase risky
+      stuff: tech stocks, crypto, leveraged bets. Bitcoin and the Nasdaq tended to rise and
+      fall together because the same speculators were piling into both.
+    </p>
+    <p>
+      In 2025 that broke. The marginal &ldquo;risk dollar&rdquo; &mdash; the next dollar of
+      speculative money &mdash; started showing up overwhelmingly in a small basket of AI
+      stocks (NVIDIA, Microsoft, Google, and a handful of others), in prediction markets
+      like Kalshi, and in private secondaries like SpaceX. It stopped showing up in Bitcoin.
+    </p>
+    <p>
+      Below: seven indicators, each measuring this from a different angle. They all tell the
+      same story.
+    </p>
+  </section>
+
+  <section class="blog-section">
+    <div class="blog-eyebrow">Chart 1</div>
+    <h2>Bitcoin and Nasdaq used to move together. Now they don&rsquo;t.</h2>
+    <p>
+      This is the simplest version of the whole story. We line up Bitcoin and QQQ (the
+      Nasdaq-100 ETF) and pretend you bought $100 of each on January 1, 2018. The chart
+      below shows what those investments would be worth over time.
+    </p>
+    <p>
+      For seven years the orange (Bitcoin) and blue (Nasdaq) lines danced together &mdash;
+      same rallies, same drawdowns, same general shape. Starting in 2025 the blue line keeps
+      climbing while the orange line goes flat. They aren&rsquo;t the same trade anymore.
+    </p>
+    <figure class="blog-figure">
+      <div class="blog-figure-label">$100 in Bitcoin vs $100 in QQQ, indexed to Jan 1 2018</div>
+      <p class="blog-figure-caption">
+        Bitcoin (orange) and the Nasdaq-100 (blue) track each other for seven years, then
+        diverge sharply in 2025 as the Nasdaq keeps climbing and Bitcoin flattens.
+        Interactive chart at
+        <a href="/research/channel-divergence">/research/channel-divergence</a>.
+      </p>
+    </figure>
+  </section>
+
+  <section class="blog-section">
+    <div class="blog-eyebrow">Chart 2</div>
+    <h2>The &ldquo;does Bitcoin still care about stocks?&rdquo; number is collapsing.</h2>
+    <p>
+      In finance, &ldquo;beta&rdquo; is a one-number answer to &ldquo;when stocks go up, how
+      much does Bitcoin go up?&rdquo;. Beta of 1 means it tracks the market move for move.
+      Beta of 2 means it moves twice as much. Beta of 0 means Bitcoin and the market are
+      unrelated.
+    </p>
+    <p>
+      We measured Bitcoin&rsquo;s beta against the riskiest part of the stock market
+      (high-beta tech stocks vs the broader market). For most of the last 8 years that
+      number sat above 1 &mdash; Bitcoin was a leveraged bet on stock-market risk appetite.
+      In March 2026 it was around 3.3. Today it&rsquo;s <strong>0.66&times;</strong>.
+      That&rsquo;s a roughly 80% collapse in three months. Bitcoin still cares about the
+      stock market, but a lot less than it used to.
+    </p>
+    <figure class="blog-figure">
+      <div class="blog-figure-label">Bitcoin sensitivity to stock risk appetite</div>
+      <p class="blog-figure-caption">
+        Higher = Bitcoin moves with the stock market. The long-run average sits near
+        1.06&times;. The recent dive to 0.66&times; is the most aggressive de-coupling in the
+        data. Interactive chart at
+        <a href="/research/channel-divergence">/research/channel-divergence</a>.
+      </p>
+    </figure>
+  </section>
+
+  <section class="blog-section">
+    <div class="blog-eyebrow">Chart 3</div>
+    <h2>Bitcoin vs. Nasdaq: a 1-in-100 weakness reading.</h2>
+    <p>
+      Sometimes the simplest measure is the best one. We took the ratio of Bitcoin&rsquo;s
+      price to QQQ&rsquo;s price and asked: where does this ratio sit in its own three-year
+      history? A reading of 100% means &ldquo;Bitcoin has never been stronger vs Nasdaq
+      recently.&rdquo; 0% means &ldquo;Bitcoin has never been weaker.&rdquo;
+    </p>
+    <p>
+      Today the reading is <strong>0th percentile</strong>. That&rsquo;s near
+      zero. In the entire three-year window, Bitcoin has rarely been weaker against the
+      Nasdaq than it is right now. A year ago this number was 96. Six months ago it was 31.
+      Now it&rsquo;s 1.
+    </p>
+    <figure class="blog-figure">
+      <div class="blog-figure-label">Bitcoin/Nasdaq strength (3-year percentile)</div>
+      <p class="blog-figure-caption">
+        0 = Bitcoin near its weakest vs Nasdaq in the last 3 years. 1 = near its strongest.
+        Today&rsquo;s reading is essentially the floor. Interactive chart at
+        <a href="/research/channel-divergence">/research/channel-divergence</a>.
+      </p>
+    </figure>
+  </section>
+
+  <section class="blog-section">
+    <div class="blog-eyebrow">Chart 4</div>
+    <h2>Speculative dollars are flowing into stocks, not crypto.</h2>
+    <p>
+      One way to spot &ldquo;where is new money going?&rdquo; is to compare two things:
+      stablecoin supply (a proxy for cash sitting on crypto exchanges, ready to deploy) vs
+      Nasdaq prices (which rise partly because money is being shoveled into ETFs and
+      retirement accounts).
+    </p>
+    <p>
+      We subtract one from the other (each measured as a 90-day percentage change). When the
+      line is positive, crypto is absorbing more new money than stocks. When it&rsquo;s
+      negative, stocks are. The line has been negative for about two months now, and the
+      latest reading is <strong>-27.8%</strong>. That&rsquo;s the most
+      lopsided in favor of equity rails the data has shown all year.
+    </p>
+    <figure class="blog-figure">
+      <div class="blog-figure-label">Stablecoin growth &minus; Nasdaq growth (90 days)</div>
+      <p class="blog-figure-caption">
+        Above the zero line = new flow is going to crypto. Below = new flow is going to
+        equity rails. We&rsquo;re below. (Early-2018 readings of +500%+ are clipped off the
+        top &mdash; the stablecoin asset class was tiny then so percent-changes were
+        hyperbolic and not comparable to today.) Interactive chart at
+        <a href="/research/channel-divergence">/research/channel-divergence</a>.
+      </p>
+    </figure>
+  </section>
+
+  <section class="blog-section">
+    <h2>Why is this happening?</h2>
+    <p>
+      The crypto-specific charts above tell us <em>that</em> something has changed. They
+      don&rsquo;t tell us <em>why</em>. For that, we look at what&rsquo;s happening in
+      equities. Three observations explain a lot.
+    </p>
+  </section>
+
+  <section class="blog-section">
+    <div class="blog-eyebrow">Chart 5</div>
+    <h2>The stock market has become extraordinarily narrow.</h2>
+    <p>
+      The S&amp;P 500 is normally diversified across 500 companies. But today the index is
+      being carried by maybe 7 of them &mdash; the &ldquo;Magnificent 7&rdquo; AI giants. We
+      measure this by comparing the regular S&amp;P (SPY, where bigger companies count more)
+      against an equal-weighted version (RSP, where every company counts the same).
+    </p>
+    <p>
+      When SPY rises faster than RSP, it means a handful of giant companies are doing all
+      the work. Today this measure sits in the <strong>70th percentile</strong> of its
+      three-year range. Every major equity unwind in modern history (2000, 2022) started
+      from a concentration extreme. Concentration alone doesn&rsquo;t cause a crash &mdash;
+      it can persist for years &mdash; but an index priced on the success of 7 stories has
+      fewer independent legs than one priced on 500.
+    </p>
+    <figure class="blog-figure">
+      <div class="blog-figure-label">Index concentration (3-year percentile)</div>
+      <p class="blog-figure-caption">
+        Higher = a smaller and smaller group of companies is carrying the index. 1.0 would
+        mean record-narrow leadership. Interactive chart at
+        <a href="/research/late-cycle-signals">/research/late-cycle-signals</a>.
+      </p>
+    </figure>
+  </section>
+
+  <section class="blog-section">
+    <div class="blog-eyebrow">Chart 6</div>
+    <h2>Speculators are leveraged up, but consumers are not happy.</h2>
+    <p>
+      Margin debt is money that investors borrow against their portfolios to buy more
+      stocks. When margin debt grows fast, it&rsquo;s a sign that confidence is high and
+      speculation is hot. Right now it&rsquo;s growing about <strong>+22.9%</strong> per year
+      &mdash; not a record, but firmly expansionary.
+    </p>
+    <figure class="blog-figure">
+      <div class="blog-figure-label">Margin debt year-over-year change</div>
+      <p class="blog-figure-caption">
+        Above the zero line = investors are borrowing more to buy stocks. Big positive
+        readings have led every major equity peak (2000, 2007, 2021). Interactive chart at
+        <a href="/research/late-cycle-signals">/research/late-cycle-signals</a>.
+      </p>
+    </figure>
+    <p>
+      But here&rsquo;s where it gets weird. Normally, when speculation runs hot, consumer
+      confidence is also high &mdash; everyone is feeling good about the economy. Today,
+      the University of Michigan&rsquo;s consumer sentiment reading is at
+      <strong>49.8</strong>. That&rsquo;s a multi-decade low. It&rsquo;s the kind of number
+      you usually see during a recession, not during a stock-market rally.
+    </p>
+    <figure class="blog-figure">
+      <div class="blog-figure-label">University of Michigan consumer sentiment</div>
+      <p class="blog-figure-caption">
+        Higher = people feel better about the economy. The current reading is bear-market
+        low &mdash; even though stocks are at all-time highs. That gap is unusual.
+        Interactive chart at
+        <a href="/research/late-cycle-signals">/research/late-cycle-signals</a>.
+      </p>
+    </figure>
+  </section>
+
+  <section class="blog-section">
+    <h2>What does it all mean?</h2>
+    <p>
+      Put the pieces together and you get a coherent &mdash; and slightly uncomfortable
+      &mdash; picture of 2026:
+    </p>
+    <ul class="blog-list">
+      <li>A small number of AI giants are running the entire stock market. (Concentration high.)</li>
+      <li>Speculators are using leverage to bet on them. (Margin debt growing 20% a year.)</li>
+      <li>The broader economy is not enjoying the party. (Consumer sentiment at recession levels.)</li>
+      <li>
+        Crypto, which used to absorb a chunk of risk-on speculation, is getting almost
+        nothing. (Beta collapsed, BTC/Nasdaq at 1st percentile, stable flow turning negative.)
+      </li>
+    </ul>
+    <p>
+      This is not the classic &ldquo;everyone is euphoric and stocks are at all-time
+      highs&rdquo; market peak. It&rsquo;s narrower and stranger. Narrow rallies without
+      broad participation historically unwind faster than broad ones, because they depend
+      on a tiny number of narratives holding up &mdash; in this case, mostly AI capex
+      economics.
+    </p>
+    <p>
+      For our <a href="/regime">regime classifier</a> specifically, this argues for a
+      tempered read. The macro panel sees risk-on (easy money, healthy credit). But the
+      indicators in this post argue the macro panel is picking up something that the broader
+      economy doesn&rsquo;t share and that crypto isn&rsquo;t absorbing. Wiring them into the
+      composite would pull our headline reading back toward neutral &mdash; which is probably
+      the right call.
+    </p>
+  </section>
+
+  <section class="blog-callout">
+    <h3>How we built this</h3>
+    <p>
+      Every chart in this post is computed from free, publicly-available data. Prices from
+      Yahoo Finance, macro series from FRED, M&amp;A activity from the SEC&rsquo;s EDGAR
+      full-text search, stablecoin supply from DefiLlama. Two compute scripts
+      (<code>channel-divergence.js</code> and <code>late-cycle-signals.js</code>) run on a
+      daily GitHub Actions cron and write JSON artifacts the page reads. No private data,
+      no surveys, nothing you can&rsquo;t replicate.
+    </p>
+    <p>
+      Deep-dive versions with more methodology and caveats:
+      <a href="/research/channel-divergence">/research/channel-divergence</a>
+      (the crypto-side indicators) and
+      <a href="/research/late-cycle-signals">/research/late-cycle-signals</a>
+      (the equity-side gauges).
+    </p>
+  </section>
+
+  <p class="blog-outro">
+    Back to <a href="/regime">/regime</a>.
+  </p>
+
+  <div class="blog-back-wrap">
+    <a href="/blog" class="blog-back-btn">&larr; Back to Blog</a>
+  </div>
+</article>
+
+<style>
+  .blog-root {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 8rem 1.5rem 5rem;
+    font-family: var(--font-sans);
+    color: var(--color-text);
+    line-height: 1.7;
+  }
+  .blog-back {
+    display: inline-block;
+    margin-bottom: 2.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--color-text-muted);
+    text-decoration: none;
+    transition: color 0.2s ease;
+  }
+  .blog-back:hover { color: var(--color-accent); }
+  .blog-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.3em;
+    color: var(--color-accent);
+    margin-bottom: 0.75rem;
+  }
+  .blog-title {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: clamp(2rem, 6vw, 3rem);
+    line-height: 1.1;
+    margin: 0 0 1.5rem;
+    font-weight: 400;
+  }
+  .blog-gradient {
+    font-style: normal;
+    font-family: var(--font-sans);
+    font-weight: 700;
+    background: linear-gradient(110deg, var(--color-accent), var(--color-purple));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .blog-lede {
+    color: var(--color-text-muted);
+    font-size: 1.125rem;
+    line-height: 1.7;
+    margin: 0 0 1rem;
+  }
+  .blog-section { margin-top: 3.5rem; }
+  .blog-root h2 {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 1.5rem;
+    line-height: 1.25;
+    margin: 0 0 1rem;
+    color: var(--color-text);
+  }
+  .blog-root p {
+    color: var(--color-text-muted);
+    margin: 0 0 1rem;
+  }
+  .blog-root a {
+    color: var(--color-accent);
+    text-decoration: underline;
+  }
+  .blog-root strong { color: var(--color-text); font-weight: 600; }
+  .blog-root em { font-style: italic; }
+  .blog-root code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    color: var(--color-text-dim);
+  }
+  .blog-list {
+    color: var(--color-text-muted);
+    padding-left: 1.5rem;
+    margin: 0 0 1.5rem;
+    list-style: disc;
+  }
+  .blog-list li { margin-bottom: 0.75rem; }
+  .blog-figure {
+    margin: 1.5rem 0 0;
+    padding: 1.25rem;
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    background: rgba(16, 20, 28, 0.6);
+  }
+  .blog-figure-label {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--color-text);
+    margin-bottom: 0.5rem;
+  }
+  .blog-figure-caption {
+    font-size: 0.8rem;
+    color: var(--color-text-muted) !important;
+    margin: 0 !important;
+    line-height: 1.6;
+  }
+  .blog-callout {
+    margin-top: 4rem;
+    padding: 1.5rem;
+    background: rgba(16, 20, 28, 0.6);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+  }
+  .blog-callout h3 {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--color-accent);
+    margin: 0 0 0.75rem;
+    font-weight: 500;
+  }
+  .blog-callout p {
+    font-size: 0.875rem;
+    margin-bottom: 0.75rem;
+  }
+  .blog-callout p:last-child { margin-bottom: 0; }
+  .blog-outro {
+    font-size: 0.875rem;
+    margin-top: 2.5rem;
+  }
+  .blog-back-wrap {
+    margin-top: 4rem;
+    padding-top: 3rem;
+    border-top: 1px solid var(--color-border);
+  }
+  .blog-back-btn {
+    display: inline-block;
+    padding: 0.75rem 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted) !important;
+    text-decoration: none !important;
+    transition: all 0.3s ease;
+  }
+  .blog-back-btn:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent) !important;
+  }
+  @media (min-width: 1024px) {
+    .blog-root { padding-top: 10rem; }
+  }
+</style>

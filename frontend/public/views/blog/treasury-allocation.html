@@ -1,0 +1,410 @@
+<!-- Blog post: treasury-allocation
+     Ported from robotmoney-site/src/app/blog/treasury-allocation/page.tsx
+     Interactive <BacktestChart/> and <AttributionChart/> are replaced with
+     static notes (no <script>/<canvas> in injected fragments). Table values
+     are static in the source and reproduced verbatim. -->
+
+<article class="blog-research">
+  <header class="blog-research__head">
+    <div class="blog-research__meta">
+      <span class="blog-research__tag">Research</span>
+      <time datetime="2026-05-12" class="blog-research__date">May 2026</time>
+    </div>
+    <h1 class="blog-research__title">
+      <span class="blog-research__title-serif">Treasury Allocation for</span>
+      <span class="blog-research__title-grad">On-Chain Businesses</span>
+    </h1>
+    <p class="blog-research__lede">Comparing regime-based allocation, HODL, and stable yield across a full market cycle.</p>
+  </header>
+
+  <div class="blog-research__disclaimer">
+    <strong>Research note — not financial advice, not a financial product.</strong>
+    All numbers in this article are backtest results computed from historical data. They do not represent any tradable instrument, fund, or managed account. Past performance — especially backtested — does not predict future results. Source data, methodology, and live snapshot are public at <a href="/regime">/regime</a>.
+  </div>
+
+  <div class="blog-research__body">
+    <h2>The treasury problem nobody talks about until it&apos;s too late</h2>
+    <p>Most on-chain businesses hold their treasury in one of four ways: their own token, ETH or BTC, spot stables, or stablecoin yield (Aave, Compound, similar). Each choice has a real failure mode and there is published evidence for what each one costs over a full cycle.</p>
+    <p>The bear that ran from late 2021 through 2022 is the most useful natural experiment in recent memory. ETH drew down ~94% peak-to-trough; most 2021-era project tokens are still down 80–95% from their peaks even now; pure spot stables earned nothing while everything around them moved. Treasuries that didn&apos;t survive that drawdown are the silent majority of the story.</p>
+    <p>The question this piece sets out to answer: What does an asset-allocation approach actually offer over the dominant on-chain treasury patterns, and how much of that is genuine risk management versus single-cycle luck?</p>
+
+    <h2>The seven comparison points</h2>
+    <p>We computed 8+ years of daily-rebalanced backtests for the strategies on-chain businesses actually pick between. Numbers from a deterministic, open-source pipeline; sources, code, and live snapshot at <a href="/regime">/regime</a>.</p>
+
+    <div class="blog-research__scroll">
+      <table class="blog-research__table">
+        <thead>
+          <tr>
+            <th class="ta-l">Treasury approach</th>
+            <th class="ta-r">CAGR</th>
+            <th class="ta-r">Max DD</th>
+            <th class="ta-r">Sharpe</th>
+            <th class="ta-l">Smart-contract / token risk</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="row-accent">
+            <td class="c-accent">Regime-based 3-state (ETH+SP500+cash)</td>
+            <td class="ta-r c-accent">+25.0%</td>
+            <td class="ta-r">−44%</td>
+            <td class="ta-r">0.88</td>
+            <td class="c-dim">None — spot positions only</td>
+          </tr>
+          <tr>
+            <td>50/50 ETH+SP500 HODL</td>
+            <td class="ta-r">+22.1%</td><td class="ta-r">−73%</td><td class="ta-r">0.67</td>
+            <td class="c-dim">None</td>
+          </tr>
+          <tr>
+            <td>100% ETH HODL</td>
+            <td class="ta-r">+13.8%</td><td class="ta-r c-warn">−94%</td><td class="ta-r">0.58</td>
+            <td class="c-dim">None</td>
+          </tr>
+          <tr>
+            <td>100% SP500 HODL</td>
+            <td class="ta-r">+12.8%</td><td class="ta-r">−34%</td><td class="ta-r">0.72</td>
+            <td class="c-dim">None</td>
+          </tr>
+          <tr>
+            <td>100% cash — 3-month T-bill</td>
+            <td class="ta-r">+2.6%</td><td class="ta-r">0%</td><td class="ta-r">—</td>
+            <td class="c-dim">None</td>
+          </tr>
+          <tr>
+            <td>DeFi stable yield (Aave-style)</td>
+            <td class="ta-r c-dim">~5–8%*</td><td class="ta-r c-dim">~0%†</td><td class="ta-r c-dim">—</td>
+            <td class="c-warn">Smart-contract + depeg + protocol risk</td>
+          </tr>
+          <tr>
+            <td>Own / ICO token treasury</td>
+            <td class="ta-r c-warn">typically negative</td><td class="ta-r c-warn">−80 to −95%</td><td class="ta-r">—</td>
+            <td class="c-warn">Severe — concentrated, illiquid</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="blog-research__fine">* DeFi stable yields are time-varying and not backtested here — lending rates and protocol health change across cycles. † Excludes catastrophic events (depegs, exploits) which historically have caused major drawdowns in this category.</p>
+
+    <h2>8 years on a single chart</h2>
+    <p>Same starting capital ($1), same end date (May 2026), log scale so the doublings are visually comparable.</p>
+    <div class="blog-research__chartnote">Interactive equity-curve chart — view the live, rendered version at <a href="/regime">/regime</a>.</div>
+
+    <h2>What the chart actually shows</h2>
+    <p>Three things are visible and worth naming explicitly:</p>
+    <ul>
+      <li><strong>ETH HODL took a 94% drawdown.</strong> For a business treasury that needs to make payroll, that is a non-survivable event. The line eventually recovers, but the practical question is whether the company is still operating when it does. Most weren&apos;t.</li>
+      <li><strong>Spot stables yielded +2.6%.</strong> Zero drawdown is great; almost zero growth is a real opportunity cost over an 8-year window where the alternative grew 5–10× depending on which one you picked.</li>
+      <li><strong>The 50/50 ETH+SP500 blend already beats single-asset HODL</strong> on a risk-adjusted basis (Sharpe 0.67 vs 0.58 for ETH-only). This is the simplest possible diversification — and it&apos;s already a material improvement before any tactical overlay.</li>
+    </ul>
+
+    <h2>The return-attribution view</h2>
+    <p>The headline 25% CAGR comes from two stacked effects, and a treasury reader benefits from seeing where each one is doing the work. This chart attributes the regime composite&apos;s growth back to those two sources visually.</p>
+    <div class="blog-research__chartnote">Interactive attribution chart (diversification vs regime overlay) — view the live, rendered version at <a href="/regime">/regime</a>.</div>
+
+    <p><strong>The green band is diversification.</strong> It is the return you get from holding a balanced 50/50 ETH+SP500 portfolio instead of pure cash — before any timing or tactical decisions. It grows steadily over the whole window because risky assets compound. It dips in 2022 when both ETH and SP500 fell together, but it never goes away.</p>
+    <p><strong>The cyan band is the regime overlay.</strong> It is the additional return earned by tactically moving to cash during risk-off regime calls. Its shape tells the real story: thin in calm times, balloons during the 2022 drawdown (the regime kept capital in cash while the HODL line fell), then steadily shrinks as HODL catches up during the recovery. The cyan band ending today is the &ldquo;lead&rdquo; the overlay still has — currently +17% over straight HODL, down from a peak of +136% at the end of 2022.</p>
+    <p>Both effects matter, but they matter for different reasons. The green band is what gets you above the &ldquo;cash forever&rdquo; baseline at all — that&apos;s most of the return premium for a business that needs growth. The cyan band is insurance — it pays out during the bad cycle quarters and you pay a small carry cost during the good ones. A treasury that ignores either is leaving real value on the table for different reasons.</p>
+
+    <h2>Decomposing the two effects</h2>
+    <p>Same idea, structured as a 2×2 attribution table. Read across rows for the diversification effect (going from ETH to 50/50); read down columns for the regime overlay effect (adding tactical cash overlay).</p>
+
+    <div class="blog-research__scroll">
+      <table class="blog-research__table">
+        <thead>
+          <tr>
+            <th class="ta-l">&nbsp;</th>
+            <th class="ta-l">No regime (HODL)</th>
+            <th class="ta-l">With regime (Composite)</th>
+            <th class="ta-l c-accent">Δ from regime</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="c-dim">100% ETH</td>
+            <td>13.8% / 0.58 / −94%</td>
+            <td>32.1% / 0.78 / −63%</td>
+            <td class="c-accent fine">+18.3pp CAGR · +0.20 Sharpe · +31pp DD</td>
+          </tr>
+          <tr>
+            <td class="c-dim">50/50 ETH+SP500</td>
+            <td>22.1% / 0.67 / −73%</td>
+            <td>25.0% / 0.88 / −44%</td>
+            <td class="c-accent fine">+2.9pp CAGR · +0.21 Sharpe · +29pp DD</td>
+          </tr>
+          <tr>
+            <td class="c-accent fine upper">Δ from diversification</td>
+            <td class="c-accent fine">+8.3pp / +0.09 / +21pp</td>
+            <td class="c-accent fine">−7.1pp / +0.10 / +19pp</td>
+            <td class="c-dim">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="blog-research__fine">Each cell: CAGR / Sharpe / Max drawdown. Bottom-right counter-effect cell shows the regime overlay&apos;s diminishing CAGR contribution once you&apos;re already diversified (−7.1pp CAGR vs ETH HODL but the path was much smoother).</p>
+    <p><strong>By CAGR contribution</strong>, diversification does 74% of the work (+8.3pp of the +11.2pp total going from ETH HODL to Mixed Composite). The regime overlay only contributes the remaining 26%.</p>
+    <p><strong>By Sharpe contribution</strong>, regime overlay does 70% (+0.21 of +0.30 total improvement). Diversification does 30%.</p>
+    <p><strong>By drawdown protection</strong>, the two effects split roughly evenly: diversification 42% (−94 → −73, saves 21pp), regime overlay 58% (−73 → −44, saves another 29pp).</p>
+
+    <h2>Performance through each cycle phase</h2>
+    <p>The 8-year aggregate hides when each strategy worked and when it didn&apos;t. The honest read is in the phase-by-phase breakdown — particularly for a treasury whose survival depends on what happens in any single phase, not what averages out.</p>
+
+    <div class="blog-research__scroll">
+      <table class="blog-research__table blog-research__table--xs">
+        <thead>
+          <tr>
+            <th class="ta-l">Phase (date range)</th>
+            <th class="ta-r c-accent">Mixed Composite</th>
+            <th class="ta-r">50/50 HODL</th>
+            <th class="ta-r">100% ETH HODL</th>
+            <th class="ta-r">Cash</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><div>Pre-2020 + COVID</div><div class="sub">Feb 18 → Dec 20</div></td>
+            <td class="ta-r c-accent">+30.3%<span class="sub"> / −35%</span></td>
+            <td class="ta-r">+14.4%<span class="sub"> / −60%</span></td>
+            <td class="ta-r">−5.1%<span class="sub"> / −88%</span></td>
+            <td class="ta-r">+1.4%</td>
+          </tr>
+          <tr>
+            <td><div>2021 mania</div><div class="sub">Dec 20 → Nov 21</div></td>
+            <td class="ta-r">+248%<span class="sub"> / −8%</span></td>
+            <td class="ta-r">+251%<span class="sub"> / −8%</span></td>
+            <td class="ta-r">+646%<span class="sub"> / −18%</span></td>
+            <td class="ta-r">0%</td>
+          </tr>
+          <tr>
+            <td><div>2022 drawdown</div><div class="sub">Nov 21 → Dec 22</div></td>
+            <td class="ta-r c-accent">−14.1%<span class="sub"> / −17%</span></td>
+            <td class="ta-r c-warn">−46.7%<span class="sub"> / −54%</span></td>
+            <td class="ta-r c-warn">−71.3%<span class="sub"> / −77%</span></td>
+            <td class="ta-r">+1.8%</td>
+          </tr>
+          <tr>
+            <td><div>Recovery</div><div class="sub">Dec 22 → Jan 24</div></td>
+            <td class="ta-r">+7.8%<span class="sub"> / −1%</span></td>
+            <td class="ta-r">+54.1%<span class="sub"> / −9%</span></td>
+            <td class="ta-r">+81.4%<span class="sub"> / −15%</span></td>
+            <td class="ta-r">+5.1%</td>
+          </tr>
+          <tr>
+            <td><div>Recent (out-of-sample)</div><div class="sub">Feb 24 → today</div></td>
+            <td class="ta-r">+0.8%<span class="sub"> / −29%</span></td>
+            <td class="ta-r">+15.6%<span class="sub"> / −31%</span></td>
+            <td class="ta-r">−0.1%<span class="sub"> / −55%</span></td>
+            <td class="ta-r">+4.3%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="blog-research__fine">Each cell: annualized CAGR over the phase / max drawdown within the phase. Phase boundaries are calendar-defined, not optimized.</p>
+    <p>The pattern is consistent across all three regime portfolios (ETH-only, SP500-only, Mixed): <strong>composite wins decisively in drawdown periods, ties in mania periods, loses meaningfully during recoveries and benign out-of-sample windows.</strong> The 8-year aggregate win is essentially built up across two events — late 2018 + 2020 COVID, and 2022 — and partially given back during the recoveries that follow.</p>
+
+    <h2>The lead is shrinking</h2>
+    <p>Tracking the composite&apos;s cumulative advantage over the 50/50 HODL baseline through each phase makes the &ldquo;insurance&rdquo; framing concrete:</p>
+
+    <div class="blog-research__scroll">
+      <table class="blog-research__table">
+        <thead>
+          <tr>
+            <th class="ta-l">Milestone</th>
+            <th class="ta-r">Composite</th>
+            <th class="ta-r">HODL</th>
+            <th class="ta-r c-accent">Composite / HODL</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Start (Feb 2018)</td><td class="ta-r mono">$1.00</td><td class="ta-r mono">$1.00</td><td class="ta-r">1.00×</td></tr>
+          <tr><td>End of Pre-2020 + COVID</td><td class="ta-r mono">$2.12</td><td class="ta-r mono">$1.50</td><td class="ta-r">1.42×</td></tr>
+          <tr><td>End of 2021 mania</td><td class="ta-r mono">$6.64</td><td class="ta-r mono">$4.72</td><td class="ta-r">1.41×</td></tr>
+          <tr class="row-accent"><td class="c-accent">End of 2022 drawdown</td><td class="ta-r mono">$5.63</td><td class="ta-r mono">$2.39</td><td class="ta-r c-accent">2.36×</td></tr>
+          <tr><td>End of Recovery</td><td class="ta-r mono">$6.11</td><td class="ta-r mono">$3.81</td><td class="ta-r">1.60×</td></tr>
+          <tr><td>Today (May 2026)</td><td class="ta-r mono">$6.22</td><td class="ta-r mono">$5.31</td><td class="ta-r">1.17×</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The composite&apos;s edge peaked at 2.36× at end-2022 and has been narrowing ever since. This is the visible cost of carrying tail protection when no tail event is materializing. Whether the strategy &ldquo;works&rdquo; from here depends on whether the next 1–4 years contain another fat-tail event before HODL fully closes the gap. An honest treasury can&apos;t know in advance which world it is in.</p>
+
+    <h2>Honest limitations</h2>
+    <ul>
+      <li><strong>Single cycle.</strong> 2018–2026 covers roughly two full crypto cycles. The 2022 ETH drawdown drives a large fraction of the overlay&apos;s benefit. Strategies dependent on rare fat-tail events behave well in samples that contain such events and may behave less well in samples that don&apos;t.</li>
+      <li><strong>Backtest, not deployment.</strong> Real execution introduces slippage, gas costs, custody overhead, and behavioural drift. Each of these reduces realized vs backtested performance.</li>
+      <li><strong>In-sample / out-of-sample.</strong> The in-sample window (through Jan 2024) shows much stronger performance than the out-of-sample window (Feb 2024 onward). Some of that is the lack of a major drawdown in the OOS window — the overlay&apos;s primary value is preventing crashes, and the OOS window so far has been comparatively benign.</li>
+      <li><strong>Regime signal is not predictive of returns.</strong> The composite&apos;s forward-return correlation with SPX and ETH is near zero (ρ ≈ −0.1 to +0.2). This is consistent with the framing — the value of the overlay is in state classification and risk management, not in forecasting.</li>
+      <li><strong>Daily-rebalanced HODL assumption.</strong> The 50/50 HODL baseline assumes daily rebalancing with zero friction, which captures the full rebalancing premium between two volatile assets. A realistic 50/50 with monthly rebalancing and small friction would capture roughly half of that premium, narrowing the diversification effect somewhat.</li>
+    </ul>
+
+    <h2>What this is and isn&apos;t</h2>
+    <p>This is a public research artifact: open data, open code, deterministic computation, one-page methodology. It is not a fund, a managed account, a token offering, a financial product, or a recommendation. We publish it because we think the comparison itself is undervalued in on-chain treasury discussions — most teams default to &quot;hold our own token&quot; or &quot;hold ETH&quot; without ever pricing the alternative, and the alternative is meaningfully different over a full cycle.</p>
+    <p>Anyone interested in the underlying mechanics — indicators, weights, regime smoothing, correlation analysis — can see the live dashboard, methodology, and snapshot at <a href="/regime">/regime</a>.</p>
+
+    <div class="blog-research__longdisc">
+      <strong>Disclaimer.</strong> All performance figures in this article are backtest results, not live trading or fund returns. Backtests are hypothetical, assume frictionless execution where not modeled, and benefit from hindsight in the choice of indicators and parameters. Past performance — particularly backtested — is not indicative of future results. Nothing here constitutes investment advice or an offer to buy or sell any security or digital asset. Smart-contract, custody, regulatory, and counterparty risks are not fully reflected in any of these numbers. Readers should consult qualified advisors before making allocation decisions for any treasury, personal or institutional. Robot Money operates this as published research; it is not a registered investment advisor.
+    </div>
+  </div>
+
+  <div class="blog-research__back">
+    <a href="/blog" class="blog-research__back-link">← Back to Blog</a>
+  </div>
+</article>
+
+<style>
+.blog-research {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 8rem 1.5rem 5rem;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+.blog-research__head { margin-bottom: 3rem; }
+.blog-research__meta {
+  display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem;
+}
+.blog-research__tag {
+  padding: 0.25rem 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-accent);
+  border: 1px solid rgba(0,229,255,0.3);
+  background: var(--color-accent-glow);
+}
+.blog-research__date {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+}
+.blog-research__title {
+  font-size: clamp(2rem, 5vw, 3rem);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin: 0 0 1.25rem;
+}
+.blog-research__title-serif { font-family: var(--font-serif); font-style: italic; }
+.blog-research__title-grad {
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--color-accent), var(--color-blue));
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: var(--color-accent);
+}
+.blog-research__lede {
+  font-size: 1.25rem; line-height: 1.6; color: var(--color-text-muted); margin: 0;
+}
+.blog-research__disclaimer {
+  margin-bottom: 3rem;
+  padding: 1rem;
+  border: 1px solid rgba(255,102,68,0.4);
+  background: rgba(255,102,68,0.06);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+}
+.blog-research__disclaimer strong { color: var(--color-warn); }
+.blog-research__disclaimer a, .blog-research__body a { color: var(--color-accent); }
+.blog-research__body {
+  font-family: var(--font-serif);
+  font-size: 1.1rem;
+  line-height: 1.75;
+  color: var(--color-text-muted);
+}
+.blog-research__body h2 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 1.5rem;
+  color: var(--color-text);
+  margin: 2.75rem 0 1rem;
+  line-height: 1.2;
+}
+.blog-research__body p { margin: 0 0 1.25rem; }
+.blog-research__body ul { margin: 0 0 1.25rem; padding-left: 1.25rem; list-style: disc; }
+.blog-research__body li { margin-bottom: 0.6rem; }
+.blog-research__body strong { color: var(--color-text); }
+.blog-research__scroll { overflow-x: auto; margin: 1.5rem 0; }
+.blog-research__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+}
+.blog-research__table--xs { font-size: 0.75rem; }
+.blog-research__table th {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+  font-weight: 400;
+  padding: 0.5rem 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.blog-research__table td {
+  padding: 0.5rem 0.5rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text);
+  vertical-align: top;
+}
+.ta-l { text-align: left; }
+.ta-r { text-align: right; font-family: var(--font-mono); }
+.c-accent { color: var(--color-accent); }
+.c-warn { color: var(--color-warn); }
+.c-dim { color: var(--color-text-dim); }
+.mono { font-family: var(--font-mono); }
+.fine { font-size: 0.72rem; }
+.upper { text-transform: uppercase; font-family: var(--font-mono); }
+.row-accent { background: rgba(0,229,255,0.04); }
+.blog-research__table .sub { font-size: 0.62rem; color: var(--color-text-dim); }
+.blog-research__fine {
+  font-size: 0.75rem;
+  color: var(--color-text-dim);
+  font-family: var(--font-sans);
+}
+.blog-research__chartnote {
+  margin: 1.5rem 0;
+  padding: 2rem 1.5rem;
+  border: 1px dashed var(--color-border-light);
+  background: var(--color-surface);
+  border-radius: 8px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+.blog-research__longdisc {
+  margin-top: 3rem;
+  padding: 1.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  line-height: 1.7;
+  color: var(--color-text-dim);
+}
+.blog-research__longdisc strong { color: var(--color-text); }
+.blog-research__back {
+  margin-top: 4rem;
+  padding-top: 3rem;
+  border-top: 1px solid var(--color-border);
+}
+.blog-research__back-link {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: border-color 0.3s var(--ease-out-expo), color 0.3s var(--ease-out-expo);
+}
+.blog-research__back-link:hover { border-color: var(--color-accent); color: var(--color-accent); }
+@media (min-width: 768px) {
+  .blog-research { padding: 10rem 2rem 6rem; }
+  .blog-research__table th, .blog-research__table td { padding: 0.6rem 0.75rem; }
+}
+</style>

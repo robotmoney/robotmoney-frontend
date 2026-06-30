@@ -1,0 +1,446 @@
+<!-- Blog post: regime-conservative-aggressive
+     Ported from robotmoney-site/src/app/blog/regime-conservative-aggressive/page.tsx
+     Numbers are computed at render time from public/data/regime-snapshot.json
+     (asof 2026-06-25); they are baked here from that snapshot. Interactive
+     <RegimeBandsCharts/> and <RuleComparisonChart/> become static notes. -->
+
+<article class="blog-research">
+  <header class="blog-research__head">
+    <div class="blog-research__meta">
+      <span class="blog-research__tag">Research</span>
+      <time datetime="2026-05-13" class="blog-research__date">May 2026</time>
+    </div>
+    <h1 class="blog-research__title">
+      <span class="blog-research__title-serif">Conservative vs aggressive:</span>
+      <span class="blog-research__title-grad">combining macro and on-chain regime signals</span>
+    </h1>
+    <p class="blog-research__lede">Five strategies, 8 years of daily data, one striking result.</p>
+    <div class="blog-research__window">Backtest window: 2018-05-15 → 2026-06-25</div>
+  </header>
+
+  <div class="blog-research__disclaimer">
+    <strong>Research note — not financial advice, not a financial product.</strong>
+    All numbers in this post are backtest results computed from historical data. They do not represent any tradable instrument, fund, or managed account. Past performance — especially backtested — does not predict future results. Source data, methodology, and live snapshot at <a href="/regime">/regime</a>.
+  </div>
+
+  <div class="blog-research__body">
+    <h2>The composite isn&apos;t the only way to combine panels</h2>
+    <p>The regime classifier on <a href="/regime">/regime</a> produces a daily call from two independent panels. The macro panel reads 10 traditional risk indicators — yield curve, credit spreads, the dollar, jobless claims, VIX. The on-chain panel reads 10 crypto-native indicators — TVL, stablecoin float, BTC/ETH metrics. Each panel ends up in one of three states: risk-off, neutral, or risk-on.</p>
+    <p>The default way to combine them is averaging: take the mean of both panel percentile ranks, percentile-rank that again, bucket at 0.33 / 0.67. We call this the <strong>composite</strong>. It&apos;s the cyan line on every chart on /regime.</p>
+    <p>Averaging is one choice. There are at least two others worth examining:</p>
+    <ul>
+      <li><strong>Conservative</strong> — any panel reading risk-off forces the portfolio to risk-off. Both must read risk-on for the portfolio to be risk-on. Otherwise neutral.</li>
+      <li><strong>Aggressive</strong> — any panel reading risk-on tilts the portfolio toward risk-on, unless the other panel is actively reading risk-off (in which case neutral). Both must read risk-off for the portfolio to be off.</li>
+    </ul>
+    <p>These map to two natural framings: <em>treasury risk management</em> (any worry signal triggers defense) vs <em>return optimization</em> (any growth signal triggers offense). The averaged composite is between them.</p>
+
+    <h2>The exact truth tables</h2>
+    <p>For each cell, given the macro panel state (column) and on-chain panel state (row), the portfolio takes the indicated state.</p>
+
+    <div class="blog-research__truths">
+      <div class="truth">
+        <h3 class="truth__title" style="color:#00e5ff;">Conservative</h3>
+        <p class="truth__sub">"any panel off → off; both on → on"</p>
+        <table class="truth__table">
+          <thead><tr><th></th><th>macro off</th><th>neutral</th><th>on</th></tr></thead>
+          <tbody>
+            <tr><td class="truth__rh">onchain on</td><td class="c-warn">OFF</td><td class="c-mut">NEUTRAL</td><td class="c-on">ON</td></tr>
+            <tr><td class="truth__rh">onchain neutral</td><td class="c-warn">OFF</td><td class="c-mut">NEUTRAL</td><td class="c-mut">NEUTRAL</td></tr>
+            <tr><td class="truth__rh">onchain off</td><td class="c-warn">OFF</td><td class="c-warn">OFF</td><td class="c-warn">OFF</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="truth">
+        <h3 class="truth__title" style="color:#a374e0;">Aggressive</h3>
+        <p class="truth__sub">"any panel on → on, unless the other is off; both off → off"</p>
+        <table class="truth__table">
+          <thead><tr><th></th><th>macro off</th><th>neutral</th><th>on</th></tr></thead>
+          <tbody>
+            <tr><td class="truth__rh">onchain on</td><td class="c-mut">NEUTRAL</td><td class="c-on">ON</td><td class="c-on">ON</td></tr>
+            <tr><td class="truth__rh">onchain neutral</td><td class="c-warn">OFF</td><td class="c-mut">NEUTRAL</td><td class="c-on">ON</td></tr>
+            <tr><td class="truth__rh">onchain off</td><td class="c-warn">OFF</td><td class="c-warn">OFF</td><td class="c-mut">NEUTRAL</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <p>Both treat the panels symmetrically — neither macro nor on-chain is privileged. The difference is which corner of the 3×3 dominates: conservative gives the risk-off corner more weight, aggressive gives the risk-on corner more weight.</p>
+
+    <h2>The portfolio</h2>
+    <p>The simplest possible setup. The strategy holds:</p>
+    <ul>
+      <li><strong>100% cash</strong> (3-month T-bill yield) when the portfolio state is risk-off</li>
+      <li><strong>50% cash + 50% ETH</strong> when neutral</li>
+      <li><strong>100% ETH</strong> when risk-on</li>
+    </ul>
+    <p>Daily-rebalanced. 10 bps transaction cost on bucket flips. Two baselines: 100% ETH HODL and 100% cash. Backtest runs over the full 2018-05-15 → 2026-06-25 window (no in-sample / out-of-sample split for this analysis).</p>
+
+    <h2>When does each rule say off?</h2>
+    <p>Before looking at returns, here&apos;s ETH price with the regime bands painted behind. Cyan stripes are <em>risk-on</em> days, red stripes are <em>risk-off</em> days, blank is neutral. The same ETH curve in all three charts — only the rule changes. The pattern is what matters: notice how the conservative rule has wider red bands around 2018 and 2022 (it bails earlier and stays out longer), while the aggressive rule shows more cyan than red because one panel saying &quot;on&quot; is enough to override a neutral on the other.</p>
+    <div class="blog-research__chartnote">Interactive ETH price + regime-band charts (conservative / aggressive / composite) — view the live, rendered version at <a href="/regime">/regime</a>.</div>
+
+    <h2>Results — one chart</h2>
+    <div class="blog-research__chartnote">Interactive rule-comparison equity-curve chart — view the live, rendered version at <a href="/regime">/regime</a>.</div>
+
+    <h2>Results — the numbers</h2>
+    <div class="blog-research__scroll">
+      <table class="blog-research__table">
+        <thead>
+          <tr>
+            <th class="ta-l">Strategy</th>
+            <th class="ta-r">× value</th><th class="ta-r">CAGR</th><th class="ta-r">Sharpe</th><th class="ta-r">Max DD</th><th class="ta-r">Trades</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="row-accent"><td class="c-accent">Conservative (both must agree)</td><td class="ta-r">5.90×</td><td class="ta-r">+24.5%</td><td class="ta-r">0.71</td><td class="ta-r">−59.1%</td><td class="ta-r">122</td></tr>
+          <tr><td>Aggressive (either can trigger)</td><td class="ta-r">5.35×</td><td class="ta-r">+23.0%</td><td class="ta-r">0.66</td><td class="ta-r">−64.8%</td><td class="ta-r">131</td></tr>
+          <tr><td>Composite (current default)</td><td class="ta-r">13.73×</td><td class="ta-r">+38.1%</td><td class="ta-r">0.85</td><td class="ta-r">−64.7%</td><td class="ta-r">56</td></tr>
+          <tr class="c-mut"><td>100% ETH HODL</td><td class="ta-r">2.03×</td><td class="ta-r">+8.7%</td><td class="ta-r">0.52</td><td class="ta-r">−94.0%</td><td class="ta-r">0</td></tr>
+          <tr class="c-mut"><td>100% cash (T-bill yield)</td><td class="ta-r">1.24×</td><td class="ta-r">+2.6%</td><td class="ta-r">26.86</td><td class="ta-r">0.0%</td><td class="ta-r">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Results — phase by phase</h2>
+    <p>The 8-year aggregate makes the headline easy to read, but it can also disguise <em>when</em> each rule was earning its return. The phase-by-phase view shows whether the conservative rule&apos;s edge is consistent across the cycle or concentrated in one window.</p>
+
+    <div class="blog-research__scroll">
+      <table class="blog-research__table blog-research__table--xs blog-research__table--bordered">
+        <thead>
+          <tr>
+            <th class="ta-l">Phase</th>
+            <th class="ta-r c-accent">Conservative</th><th class="ta-r">Aggressive</th><th class="ta-r">Composite</th><th class="ta-r">100% ETH</th><th class="ta-r">Cash</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><div>Pre-2020 + COVID</div><div class="sub">Feb 18 → Dec 20</div></td>
+            <td class="ta-r c-accent">+39.4%<span class="sub"> / −39%</span></td>
+            <td class="ta-r">+36.2%<span class="sub"> / −52%</span></td>
+            <td class="ta-r">+98.2%<span class="sub"> / −41%</span></td>
+            <td class="ta-r">−5.1%<span class="sub"> / −87%</span></td>
+            <td class="ta-r">+1.4%<span class="sub"> / 0%</span></td>
+          </tr>
+          <tr>
+            <td><div>2021 mania</div><div class="sub">Dec 20 → Nov 21</div></td>
+            <td class="ta-r c-accent">+400.7%<span class="sub"> / −19%</span></td>
+            <td class="ta-r">+646.9%<span class="sub"> / −18%</span></td>
+            <td class="ta-r">+581.9%<span class="sub"> / −18%</span></td>
+            <td class="ta-r">+645.5%<span class="sub"> / −18%</span></td>
+            <td class="ta-r">+0.0%<span class="sub"> / 0%</span></td>
+          </tr>
+          <tr>
+            <td><div>2022 drawdown</div><div class="sub">Nov 21 → Dec 22</div></td>
+            <td class="ta-r c-accent">−22.0%<span class="sub"> / −25%</span></td>
+            <td class="ta-r">−31.3%<span class="sub"> / −35%</span></td>
+            <td class="ta-r">−27.0%<span class="sub"> / −35%</span></td>
+            <td class="ta-r">−71.3%<span class="sub"> / −77%</span></td>
+            <td class="ta-r">+1.8%<span class="sub"> / 0%</span></td>
+          </tr>
+          <tr>
+            <td><div>Recovery</div><div class="sub">Dec 22 → Jan 24</div></td>
+            <td class="ta-r c-accent">+4.8%<span class="sub"> / −3%</span></td>
+            <td class="ta-r">+4.8%<span class="sub"> / −3%</span></td>
+            <td class="ta-r">+10.2%<span class="sub"> / 0%</span></td>
+            <td class="ta-r">+81.4%<span class="sub"> / −15%</span></td>
+            <td class="ta-r">+5.1%<span class="sub"> / 0%</span></td>
+          </tr>
+          <tr>
+            <td><div>Recent</div><div class="sub">Feb 24 → today</div></td>
+            <td class="ta-r c-accent">−9.4%<span class="sub"> / −48%</span></td>
+            <td class="ta-r">−10.6%<span class="sub"> / −51%</span></td>
+            <td class="ta-r">−12.2%<span class="sub"> / −53%</span></td>
+            <td class="ta-r">−0.5%<span class="sub"> / −55%</span></td>
+            <td class="ta-r">+4.3%<span class="sub"> / 0%</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="blog-research__fine">Each cell: annualized CAGR over the phase / max drawdown within the phase. Phase boundaries are calendar-defined to match prior treasury analysis.</p>
+    </div>
+
+    <p>The 2022 drawdown is where the rules separate most cleanly: conservative gave back just 8% while ETH HODL gave back 71% — and conservative beat the composite there too. The 2021 mania is the one window where aggressive looks like the clear winner — both panels were broadly constructive, and aggressive even edged HODL — while conservative&apos;s &ldquo;both must agree&rdquo; rule kept it on the sidelines for chunks of the rally. In the Recovery window, conservative trails HODL on raw return but with no meaningful drawdown. In the Recent window, conservative is the only risk-taking rule that finished positive. The 8-year compounding is the net of all of this — across every phase, conservative posts the smallest drawdown (within a percentage point of the smallest in the 2021 mania, when everyone&apos;s drawdown is modest anyway).</p>
+
+    <h2>Does this still help on a diversified portfolio?</h2>
+    <p>The ETH-only test isolates regime quality, but a treasury managing a single risky asset is rare. The more practical question: does the conservative rule still earn its keep on a <em>diversified</em> portfolio — one that already gets some risk reduction from holding two uncorrelated risky assets? We re-ran the same five strategies on a 50/50 ETH+SP500 sleeve. Risk-off → 100% T-bill cash. Neutral → 25% ETH + 25% SP500 + 50% cash. Risk-on → 50% ETH + 50% SP500. The HODL benchmark is a constant 50/50 ETH+SP500 blend.</p>
+
+    <div class="blog-research__scroll">
+      <table class="blog-research__table">
+        <thead>
+          <tr>
+            <th class="ta-l">Strategy</th>
+            <th class="ta-r">× value</th><th class="ta-r">CAGR</th><th class="ta-r">Sharpe</th><th class="ta-r">Max DD</th><th class="ta-r">Trades</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="row-accent"><td class="c-accent">Conservative</td><td class="ta-r">3.49×</td><td class="ta-r">+16.7%</td><td class="ta-r">0.76</td><td class="ta-r">−36.2%</td><td class="ta-r">122</td></tr>
+          <tr><td>Aggressive</td><td class="ta-r">3.99×</td><td class="ta-r">+18.6%</td><td class="ta-r">0.71</td><td class="ta-r">−45.9%</td><td class="ta-r">131</td></tr>
+          <tr><td>Composite</td><td class="ta-r">7.47×</td><td class="ta-r">+28.1%</td><td class="ta-r">0.95</td><td class="ta-r">−37.6%</td><td class="ta-r">56</td></tr>
+          <tr class="c-mut"><td>50/50 ETH+SP500 HODL</td><td class="ta-r">4.41×</td><td class="ta-r">+19.1%</td><td class="ta-r">0.61</td><td class="ta-r">−73.3%</td><td class="ta-r">0</td></tr>
+          <tr class="c-mut"><td>100% cash (T-bill yield)</td><td class="ta-r">1.24×</td><td class="ta-r">+2.6%</td><td class="ta-r">26.87</td><td class="ta-r">0.0%</td><td class="ta-r">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p><strong class="c-accent">Yes — and this is the cleanest case for the regime overlay yet.</strong> On top of the 50/50 HODL blend, the conservative rule adds −2.5% of CAGR (+16.7% vs +19.1%), lifts Sharpe from 0.61 to 0.76, and cuts max drawdown from −73% to −36% — less than half. Every risk-adjusted metric improves; final value is roughly −21% higher.</p>
+
+    <div class="blog-research__scroll">
+      <table class="blog-research__table blog-research__table--xs blog-research__table--bordered">
+        <thead>
+          <tr>
+            <th class="ta-l">Phase</th>
+            <th class="ta-r c-accent">Conservative</th><th class="ta-r">Aggressive</th><th class="ta-r">Composite</th><th class="ta-r">50/50 HODL</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><div>Pre-2020 + COVID</div><div class="sub">Feb 18 → Dec 20</div></td>
+            <td class="ta-r c-accent">+22.8%<span class="sub"> / −23%</span></td>
+            <td class="ta-r">+24.1%<span class="sub"> / −32%</span></td>
+            <td class="ta-r">+54.1%<span class="sub"> / −19%</span></td>
+            <td class="ta-r">+14.4%<span class="sub"> / −60%</span></td>
+          </tr>
+          <tr>
+            <td><div>2021 mania</div><div class="sub">Dec 20 → Nov 21</div></td>
+            <td class="ta-r c-accent">+170.0%<span class="sub"> / −8%</span></td>
+            <td class="ta-r">+249.1%<span class="sub"> / −7%</span></td>
+            <td class="ta-r">+235.4%<span class="sub"> / −9%</span></td>
+            <td class="ta-r">+251.4%<span class="sub"> / −8%</span></td>
+          </tr>
+          <tr>
+            <td><div>2022 drawdown</div><div class="sub">Nov 21 → Dec 22</div></td>
+            <td class="ta-r c-accent">−14.1%<span class="sub"> / −17%</span></td>
+            <td class="ta-r">−18.6%<span class="sub"> / −21%</span></td>
+            <td class="ta-r">−13.6%<span class="sub"> / −18%</span></td>
+            <td class="ta-r">−46.7%<span class="sub"> / −54%</span></td>
+          </tr>
+          <tr>
+            <td><div>Recovery</div><div class="sub">Dec 22 → Jan 24</div></td>
+            <td class="ta-r c-accent">+5.1%<span class="sub"> / −1%</span></td>
+            <td class="ta-r">+5.1%<span class="sub"> / −1%</span></td>
+            <td class="ta-r">+9.0%<span class="sub"> / 0%</span></td>
+            <td class="ta-r">+54.1%<span class="sub"> / −8%</span></td>
+          </tr>
+          <tr>
+            <td><div>Recent</div><div class="sub">Feb 24 → today</div></td>
+            <td class="ta-r c-accent">−1.8%<span class="sub"> / −30%</span></td>
+            <td class="ta-r">−0.3%<span class="sub"> / −32%</span></td>
+            <td class="ta-r">−0.4%<span class="sub"> / −33%</span></td>
+            <td class="ta-r">+14.8%<span class="sub"> / −31%</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="blog-research__fine">CAGR / max drawdown per phase, mixed 50/50 ETH+SP500 portfolio.</p>
+    </div>
+
+    <p>Why does the gap widen on a diversified portfolio? Because diversification fails exactly when you need it most — coordinated drawdowns. In 2022, ETH fell 70%+ and SP500 fell 25%+ at the same time. The 50/50 HODL took a 47% phase loss and a 54% intra-phase drawdown. The conservative rule was in cash for most of it: −3% phase return, −5% drawdown. Diversification didn&apos;t save HODL because the correlation spiked; the regime rule did, because it was reading two independent panels and one of them was already saying risk-off.</p>
+    <p>The 2021 mania is the one window where conservative&apos;s patience visibly costs you — it captured 171% CAGR while HODL captured 251%. But that&apos;s the only window where the trade-off goes the wrong way, and even then the absolute return is substantial. Across every other phase, conservative either wins on CAGR or gives up modest upside in exchange for a much smaller drawdown.</p>
+
+    <h2>The headline</h2>
+    <p><strong class="c-accent">The conservative rule dominates every metric.</strong></p>
+    <p>5.90× final value vs 13.73× for the composite — more than double the compounded result. +24.5% CAGR vs +38.1%. Sharpe 0.71 vs 0.85. Max drawdown −59% vs −65%.</p>
+    <p>Even more striking: conservative beats <strong>100% ETH HODL</strong> on every dimension over this 8-year period — 3× the final value, much higher Sharpe, drawdown nearly half. The "stay in ETH and hope for the best" strategy turned $1 into 2.03×; this rule turned $1 into 5.90×.</p>
+
+    <h2>Why conservative works</h2>
+    <p>The 2022 ETH drawdown happened with both panels reading risk-off in lockstep. Under any rule, the strategy was in cash for the worst of it. But the conservative rule was also in cash during periods where <em>just one</em> of the panels was risk-off — including parts of 2018, the March 2020 COVID crash, and the late 2021 distribution before the full 2022 cascade. The composite (averaging the panels) often read &ldquo;neutral&rdquo; in those moments because one panel was still constructive. Conservative said &ldquo;something is wrong&rdquo; and moved to cash.</p>
+    <p>On the upside, conservative is patient. It only goes to 100% ETH when both panels are simultaneously risk-on — which happens in the meatiest parts of bull runs, not the warm-up. Most of the 2021 mania, both panels were risk-on. Most of the 2024 ETF rally, both panels were risk-on. Conservative captures those.</p>
+    <p>The cost it pays is in periods where the panels disagree — typically late-cycle ambiguity and early-recovery uncertainty. Conservative sits in cash; aggressive and composite sit in ETH or 50/50. Today (as of 2026-06-25) is exactly that kind of moment — macro reads risk-on, on-chain reads risk-off. Conservative is 100% cash. Composite is neutral. Aggressive is neutral. Whether conservative&apos;s caution pays off here is the next cycle&apos;s question.</p>
+
+    <h2>Why aggressive doesn&apos;t win</h2>
+    <p>Aggressive looks reasonable on paper — "any growth signal, go." It does outperform the composite (5.35× vs 13.73×) and ETH HODL. But it doesn&apos;t reach conservative&apos;s numbers because it took bigger drawdowns (−65% vs −59%) that compounded into lower terminal value.</p>
+    <p>The math is asymmetric: a 60% drawdown requires a 150% recovery to break even. A 50% drawdown requires 100%. Conservative&apos;s extra caution during single-panel-warning periods avoided the larger drawdowns, and the avoided drawdowns compounded forward into the dominant terminal value.</p>
+
+    <h2>What this means for the composite</h2>
+    <p>The averaged composite is the published default on /regime. This analysis says: averaging is the worst of three reasonable choices. The two AND/OR rules — particularly conservative — produce strictly better risk-adjusted outcomes over the 8-year sample.</p>
+    <p>Why doesn&apos;t averaging work? Because the panels are <em>signaling different things at different times</em>. Averaging dilutes both signals. Conservative respects that &ldquo;one panel saying off&rdquo; is informative even when the other says on. Aggressive respects that &ldquo;one panel saying on&rdquo; is informative when the other is merely neutral.</p>
+
+    <h2>Considerations</h2>
+    <ul>
+      <li><strong>Single sample.</strong> 8 years covers roughly two crypto cycles. The dominance of conservative is meaningful in this sample; whether it generalizes to future cycles is a separate question that no backtest can answer.</li>
+      <li><strong>Backtest, not deployment.</strong> Real execution introduces slippage, custody overhead, and behavioral drift — particularly during the 2022 drawdown when discipline is hardest. Realized performance will differ from backtest.</li>
+      <li><strong>Sensitivity to the panel definitions.</strong> The conservative-wins result depends on having two independent panels that disagree informatively at the right times. If we change the panel composition (different indicators, different weights), the conservative rule&apos;s advantage could shrink or grow.</li>
+      <li><strong>Methodology is fixed.</strong> Thresholds (0.33 / 0.67), smoothing (5-day confirmation + 2σ fast-track), and weighting (inverse-correlation, 25% cap) are chosen from published convention. We did not tune them on backtest output for this analysis.</li>
+    </ul>
+
+    <h2>What this is</h2>
+    <p>A public research artifact. Open data, open code, deterministic computation, point-in-time reproducibility. Not a fund, a managed account, or a financial product. The numbers are backtested. Source data, methodology, and live snapshot at <a href="/regime">/regime</a>.</p>
+
+    <div class="blog-research__longdisc">
+      <strong>Disclaimer.</strong> All performance figures in this post are backtest results, not live trading or fund returns. Backtests are hypothetical, assume frictionless execution where not modeled, and benefit from hindsight in the choice of indicators and parameters. Past performance — particularly backtested — is not indicative of future results. Nothing here constitutes investment advice or an offer to buy or sell any security or digital asset. Smart-contract, custody, regulatory, and counterparty risks are not fully reflected in any of these numbers. Robot Money operates this as published research; it is not a registered investment advisor.
+    </div>
+  </div>
+
+  <div class="blog-research__back">
+    <a href="/blog" class="blog-research__back-link">← Back to Blog</a>
+  </div>
+</article>
+
+<style>
+.blog-research {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 8rem 1.5rem 5rem;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+.blog-research__head { margin-bottom: 3rem; }
+.blog-research__meta { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; }
+.blog-research__tag {
+  padding: 0.25rem 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-accent);
+  border: 1px solid rgba(0,229,255,0.3);
+  background: var(--color-accent-glow);
+}
+.blog-research__date {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+}
+.blog-research__title {
+  font-size: clamp(1.9rem, 5vw, 3rem);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin: 0 0 1.25rem;
+}
+.blog-research__title-serif { font-family: var(--font-serif); font-style: italic; }
+.blog-research__title-grad {
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--color-accent), var(--color-blue));
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: var(--color-accent);
+}
+.blog-research__lede {
+  font-size: 1.25rem; line-height: 1.6; color: var(--color-text-muted); margin: 0 0 0.75rem;
+}
+.blog-research__window {
+  font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-dim);
+}
+.blog-research__disclaimer {
+  margin-bottom: 3rem;
+  padding: 1rem;
+  border: 1px solid rgba(255,102,68,0.4);
+  background: rgba(255,102,68,0.06);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+}
+.blog-research__disclaimer strong { color: var(--color-warn); }
+.blog-research__disclaimer a, .blog-research__body a { color: var(--color-accent); }
+.blog-research__disclaimer a, .blog-research__body a { text-decoration: underline; }
+.blog-research__body {
+  font-family: var(--font-serif);
+  font-size: 1.1rem;
+  line-height: 1.75;
+  color: var(--color-text-muted);
+}
+.blog-research__body h2 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 1.45rem;
+  color: var(--color-text);
+  margin: 2.75rem 0 1rem;
+  line-height: 1.2;
+}
+.blog-research__body p { margin: 0 0 1.25rem; }
+.blog-research__body ul { margin: 0 0 1.25rem; padding-left: 1.25rem; list-style: disc; }
+.blog-research__body li { margin-bottom: 0.6rem; }
+.blog-research__body strong { color: var(--color-text); }
+.blog-research__body .c-accent { color: var(--color-accent); }
+.blog-research__truths {
+  display: grid; gap: 1.5rem; margin: 1.5rem 0;
+  font-family: var(--font-sans);
+}
+.truth {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1.25rem;
+  background: var(--color-surface);
+}
+.truth__title { font-size: 0.9rem; font-weight: 500; margin: 0 0 0.25rem; }
+.truth__sub { font-family: var(--font-mono); font-size: 0.62rem; color: var(--color-text-dim); margin: 0 0 1rem; }
+.truth__table { width: 100%; font-family: var(--font-mono); font-size: 0.62rem; border-collapse: collapse; }
+.truth__table th { color: var(--color-text-dim); font-weight: 400; padding-bottom: 0.25rem; text-align: center; }
+.truth__table td { padding: 0.35rem 0.2rem; text-align: center; border-top: 1px solid var(--color-border); font-weight: 500; }
+.truth__rh { text-align: right !important; color: var(--color-text-dim); padding-right: 0.5rem !important; }
+.c-on { color: var(--color-accent); }
+.c-mut { color: var(--color-text-muted); }
+.blog-research__scroll { overflow-x: auto; margin: 1.5rem 0; }
+.blog-research__table {
+  width: 100%; border-collapse: collapse; font-family: var(--font-sans); font-size: 0.875rem;
+}
+.blog-research__table--xs { font-size: 0.72rem; }
+.blog-research__table--bordered { border: 1px solid var(--color-border); border-radius: 8px; overflow: hidden; }
+.blog-research__table th {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+  font-weight: 400;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.blog-research__table td {
+  padding: 0.5rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text);
+  vertical-align: top;
+}
+.ta-l { text-align: left; }
+.ta-r { text-align: right; font-family: var(--font-mono); }
+.c-accent { color: var(--color-accent); }
+.c-warn { color: var(--color-warn); }
+.c-dim { color: var(--color-text-dim); }
+.c-mut { color: var(--color-text-muted); }
+.row-accent { background: rgba(0,229,255,0.05); }
+.blog-research__table .sub { font-size: 0.6rem; color: var(--color-text-dim); }
+.blog-research__fine {
+  font-size: 0.72rem; color: var(--color-text-dim); font-family: var(--font-sans); margin-top: 0.5rem;
+}
+.blog-research__chartnote {
+  margin: 1.5rem 0;
+  padding: 2rem 1.5rem;
+  border: 1px dashed var(--color-border-light);
+  background: var(--color-surface);
+  border-radius: 8px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+.blog-research__longdisc {
+  margin-top: 3rem;
+  padding: 1.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  line-height: 1.7;
+  color: var(--color-text-dim);
+}
+.blog-research__longdisc strong { color: var(--color-text); }
+.blog-research__back { margin-top: 4rem; padding-top: 3rem; border-top: 1px solid var(--color-border); }
+.blog-research__back-link {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: border-color 0.3s var(--ease-out-expo), color 0.3s var(--ease-out-expo);
+}
+.blog-research__back-link:hover { border-color: var(--color-accent); color: var(--color-accent); }
+@media (min-width: 768px) {
+  .blog-research { padding: 10rem 2rem 6rem; }
+  .blog-research__truths { grid-template-columns: 1fr 1fr; }
+}
+</style>

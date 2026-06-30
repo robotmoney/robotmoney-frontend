@@ -1,0 +1,474 @@
+<!-- /blog/honest-backtesting-weights — static port of the Next.js page.tsx.
+     Numbers baked from public/data/weighting-comparison.json (asof 2026-05-14). -->
+<article class="blog-root">
+  <a href="/blog" class="blog-back">&larr; Back to Blog</a>
+
+  <header class="blog-header">
+    <div class="blog-meta">
+      <span class="blog-badge">Research</span>
+      <time datetime="2026-05-15" class="blog-date">May 2026</time>
+    </div>
+    <h1 class="blog-title">
+      <span class="blog-title-serif">Backtesting honestly:</span>
+      <span class="blog-gradient">what survives when you remove hindsight</span>
+    </h1>
+    <p class="blog-lede">
+      We went looking for the hindsight in our own backtest, found it, and rebuilt the
+      test without it. The honest version is less flashy &mdash; and far more trustworthy.
+    </p>
+  </header>
+
+  <div class="blog-note">
+    <strong>Research note &mdash; not financial advice, not a financial product.</strong>
+    All numbers here are backtest results from historical data. Past performance &mdash;
+    especially backtested &mdash; does not predict future results. Methodology and live
+    snapshot at <a href="/regime">/regime</a>.
+  </div>
+
+  <div class="blog-prose">
+    <h2>A backtest is only as honest as its worst look-ahead</h2>
+    <p>
+      The most valuable thing you can do with a backtest is try to break it. Our
+      <a href="/regime">regime classifier</a> reads 20 indicators across a macro panel
+      and an on-chain panel. Inside each panel the indicators are not equal-weighted &mdash;
+      they are weighted by <strong>inverse correlation</strong>: an indicator that moves
+      differently from the rest of its panel earns more weight, a redundant one earns less.
+      It&rsquo;s a sound diversification idea, and it&rsquo;s standard practice.
+    </p>
+    <p>
+      But it raised a question worth taking seriously: <em>when</em> were those weights
+      computed? In the original backtest, the weighting used the correlation structure of
+      the most recent three years of data &mdash; and then applied that single weight vector to
+      <strong>all eight years of history</strong>, including 2018. A 2018 regime call was
+      being scored with weights derived from 2024&ndash;2026 correlations that did not exist yet.
+      That is look-ahead bias. It&rsquo;s subtle, it&rsquo;s easy to ship by accident, and
+      it&rsquo;s exactly the kind of thing a backtest should be stress-tested for. So we did.
+    </p>
+
+    <h2>Three ways to weigh the same signal</h2>
+    <p>
+      Everything else held identical &mdash; same raw data, same percentile ranking, same
+      0.33/0.67 buckets, same 5-day confirmation smoothing, same constant 2.6%/yr cash leg,
+      same 10 bps rebalance cost. The <em>only</em> thing we varied was how the panel weights
+      are computed:
+    </p>
+    <ul class="blog-list">
+      <li>
+        <strong>Static inverse-correlation</strong> &mdash; the original method. One weight
+        vector from the latest 3-year window, applied to all history. Contains look-ahead.
+      </li>
+      <li>
+        <strong>Equal weight (1/N)</strong> &mdash; every indicator in a panel weighted the same.
+        No correlation input at all, so nothing to look ahead with. A robustness baseline.
+      </li>
+      <li>
+        <strong>Walk-forward inverse-correlation</strong> &mdash; the honest version. On each
+        day, the weights use <em>only</em> the trailing three years ending that day. Weights
+        evolve slowly as the window slides, and once a day&rsquo;s weight is set it is never
+        revised, because no future data was ever used to compute it.
+      </li>
+    </ul>
+
+    <h2>The comparison, in one picture</h2>
+    <figure class="blog-figure">
+      <div class="blog-figure-label">Equity curves &mdash; static vs equal vs walk-forward weighting</div>
+      <p class="blog-figure-caption">
+        The three weighting methods produce nearly indistinguishable composite equity curves;
+        the static method&rsquo;s edge concentrates in the conservative variant, which fades
+        under honest walk-forward weights. Live methodology and snapshot at
+        <a href="/regime">/regime</a>.
+      </p>
+    </figure>
+
+    <h2>The numbers &mdash; ETH / cash</h2>
+    <div class="blog-table-wrap">
+      <table class="blog-table">
+        <thead>
+          <tr>
+            <th class="blog-th-left">Strategy</th>
+            <th class="blog-th-right">Static</th>
+            <th class="blog-th-right">Equal 1/N</th>
+            <th class="blog-th-right blog-th-accent">Walk-forward</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="blog-row-hi">
+            <td class="blog-td-accent">Composite</td>
+            <td class="blog-td-num">8.0&times; <span class="blog-td-sub">sh 0.74</span></td>
+            <td class="blog-td-num">12.8&times; <span class="blog-td-sub">sh 0.83</span></td>
+            <td class="blog-td-num blog-td-accent">10.2&times; <span class="blog-td-sub2">sh 0.79</span></td>
+          </tr>
+          <tr>
+            <td>Conservative</td>
+            <td class="blog-td-num">21.7&times; <span class="blog-td-sub">sh 1.06</span></td>
+            <td class="blog-td-num">13.9&times; <span class="blog-td-sub">sh 0.93</span></td>
+            <td class="blog-td-num blog-td-accent">6.9&times; <span class="blog-td-sub2">sh 0.75</span></td>
+          </tr>
+          <tr>
+            <td>Aggressive</td>
+            <td class="blog-td-num">16.3&times; <span class="blog-td-sub">sh 0.89</span></td>
+            <td class="blog-td-num">13.5&times; <span class="blog-td-sub">sh 0.85</span></td>
+            <td class="blog-td-num blog-td-accent">8.3&times; <span class="blog-td-sub2">sh 0.75</span></td>
+          </tr>
+          <tr>
+            <td>100% ETH HODL</td>
+            <td class="blog-td-num">2.7&times; <span class="blog-td-sub">sh 0.56</span></td>
+            <td class="blog-td-num">2.7&times; <span class="blog-td-sub">sh 0.56</span></td>
+            <td class="blog-td-num blog-td-accent">2.7&times; <span class="blog-td-sub2">sh 0.56</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="blog-table-note">
+        Final multiple over ~8 years and Sharpe. Constant cash/cost assumptions, so
+        multiples differ slightly from <a href="/regime">/regime</a>; the cross-method
+        comparison is the point.
+      </p>
+    </div>
+
+    <h2>The numbers &mdash; diversified 50/50 ETH+SP500</h2>
+    <div class="blog-table-wrap">
+      <table class="blog-table">
+        <thead>
+          <tr>
+            <th class="blog-th-left">Strategy</th>
+            <th class="blog-th-right">Static</th>
+            <th class="blog-th-right">Equal 1/N</th>
+            <th class="blog-th-right blog-th-accent">Walk-forward</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="blog-row-hi">
+            <td class="blog-td-accent">Composite</td>
+            <td class="blog-td-num">5.6&times; <span class="blog-td-sub">sh 0.83</span></td>
+            <td class="blog-td-num">7.3&times; <span class="blog-td-sub">sh 0.94</span></td>
+            <td class="blog-td-num blog-td-accent">6.0&times; <span class="blog-td-sub2">sh 0.88</span></td>
+          </tr>
+          <tr>
+            <td>Conservative</td>
+            <td class="blog-td-num">7.2&times; <span class="blog-td-sub">sh 1.16</span></td>
+            <td class="blog-td-num">6.4&times; <span class="blog-td-sub">sh 1.06</span></td>
+            <td class="blog-td-num blog-td-accent">4.2&times; <span class="blog-td-sub2">sh 0.85</span></td>
+          </tr>
+          <tr>
+            <td>Aggressive</td>
+            <td class="blog-td-num">7.6&times; <span class="blog-td-sub">sh 0.98</span></td>
+            <td class="blog-td-num">7.6&times; <span class="blog-td-sub">sh 0.97</span></td>
+            <td class="blog-td-num blog-td-accent">5.0&times; <span class="blog-td-sub2">sh 0.82</span></td>
+          </tr>
+          <tr>
+            <td>50/50 HODL</td>
+            <td class="blog-td-num">5.3&times; <span class="blog-td-sub">sh 0.67</span></td>
+            <td class="blog-td-num">5.3&times; <span class="blog-td-sub">sh 0.67</span></td>
+            <td class="blog-td-num blog-td-accent">5.3&times; <span class="blog-td-sub2">sh 0.67</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>What survived the honest test</h2>
+    <p>
+      This is the encouraging part, and it&rsquo;s the part that matters most. The findings
+      that hold across <em>all three</em> weighting methods are the ones built on real
+      signal, not on the weighting choice:
+    </p>
+    <ul class="blog-list">
+      <li>
+        <strong>The regime overlay beats buy-and-hold on risk-adjusted return &mdash; every
+        method, every portfolio.</strong> Composite Sharpe is 0.74 / 0.83 / 0.79 on ETH vs
+        HODL&rsquo;s 0.56; on the diversified blend it is 0.88 vs 0.67. The direction never
+        flips.
+      </li>
+      <li>
+        <strong>Drawdown control is real and weighting-independent.</strong> On the
+        diversified portfolio the regime overlay caps the worst drawdown near -38% versus
+        HODL&rsquo;s -66% &mdash; under static, equal, and walk-forward alike. The
+        protection in coordinated sell-offs owes nothing to the weighting.
+      </li>
+      <li>
+        <strong>The composite is the steady performer.</strong> It is the one strategy
+        whose result barely moves across methods on ETH (8.0&times; &rarr; 12.8&times; &rarr;
+        10.2&times;). The averaging that can look like a weakness is exactly what makes it
+        robust.
+      </li>
+    </ul>
+
+    <h2>What was hindsight &mdash; and why we&rsquo;re glad we checked</h2>
+    <p>
+      The static method made the <strong>conservative</strong> rule look spectacular on ETH:
+      21.7&times;, more than double the composite. Under honest walk-forward weights that
+      becomes 6.9&times; &mdash; and it now sits <em>below</em> the plain composite
+      (10.2&times;) on both return and Sharpe. Most of conservative&rsquo;s apparent
+      dominance was the backtest quietly knowing the final correlation structure in advance.
+    </p>
+    <p>
+      That is not a disappointment &mdash; it is the system working. The entire point of
+      stress-testing a backtest is to find the result that doesn&rsquo;t survive contact
+      with point-in-time data <em>before</em> it informs a decision, not after. The cost of
+      finding this now is a less dramatic headline. The cost of not finding it would have
+      been trusting a number that hindsight built.
+    </p>
+
+    <h2>What we&rsquo;re doing about it</h2>
+    <ul class="blog-list">
+      <li>
+        <strong>Walk-forward weighting becomes the standard for backtests.</strong> Weights
+        are computed point-in-time from the trailing window only. It is the strictly more
+        correct method and it also removes the data-revision instability we wrote about
+        earlier &mdash; a past day&rsquo;s call can no longer be rewritten by future data,
+        because future data was never used to make it.
+      </li>
+      <li>
+        <strong>The composite stays the headline strategy.</strong> It is the rule that is
+        strong <em>and</em> stable under honest evaluation. Conservative and aggressive
+        remain interesting as risk-posture variants, reported on walk-forward numbers, with
+        no claim of dominance.
+      </li>
+      <li>
+        <strong>Every comparison is re-run on the honest basis.</strong> The numbers in
+        this piece are generated by a committed, re-runnable script from open data &mdash;
+        same discipline as the rest of <a href="/regime">/regime</a>.
+      </li>
+    </ul>
+
+    <h2>Takeaways</h2>
+    <p>
+      The substance is intact and arguably stronger for being tested: a two-panel regime
+      overlay improves risk-adjusted return and materially reduces drawdown versus
+      buy-and-hold, on a single asset and on a diversified blend, regardless of how you
+      weight the indicators. The piece of the earlier story that didn&rsquo;t survive &mdash;
+      the eye-popping conservative multiple on ETH &mdash; was hindsight, and we&rsquo;d
+      rather publish the version that survives scrutiny than the version that flatters. That
+      is the whole job.
+    </p>
+
+    <h2>Considerations</h2>
+    <ul class="blog-list blog-list-muted">
+      <li>
+        <strong>Still backtested.</strong> Walk-forward removes look-ahead in the
+        <em>weights</em>; it does not remove the hindsight in choosing which 20 indicators
+        and which transforms to use. Out-of-sample live performance will differ.
+      </li>
+      <li>
+        <strong>One cycle.</strong> 2018&ndash;2026 is roughly two crypto cycles. A longer
+        sample would tighten every magnitude here.
+      </li>
+      <li>
+        <strong>Constant cash assumption.</strong> A flat 2.6%/yr cash leg is used so the
+        only variable across methods is the weighting; the production snapshot uses the
+        real daily T-bill series, which shifts absolute multiples modestly.
+      </li>
+    </ul>
+
+    <div class="blog-disclaimer">
+      <strong>Disclaimer.</strong> All performance figures are backtest results, not live
+      trading or fund returns. Backtests are hypothetical and benefit from hindsight in the
+      choice of indicators and parameters even when point-in-time in the weighting. Past
+      performance &mdash; particularly backtested &mdash; is not indicative of future
+      results. Nothing here is investment advice or an offer to buy or sell any security or
+      digital asset. Robot Money operates this as published research; it is not a registered
+      investment advisor.
+    </div>
+  </div>
+
+  <div class="blog-back-wrap">
+    <a href="/blog" class="blog-back-btn">&larr; Back to Blog</a>
+  </div>
+</article>
+
+<style>
+  .blog-root {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 8rem 1.5rem 5rem;
+    font-family: var(--font-sans);
+    color: var(--color-text);
+    line-height: 1.7;
+  }
+  .blog-back {
+    display: inline-block;
+    margin-bottom: 2.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--color-text-muted);
+    text-decoration: none;
+    transition: color 0.2s ease;
+  }
+  .blog-back:hover { color: var(--color-accent); }
+  .blog-header { margin-bottom: 3rem; }
+  .blog-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+  .blog-badge {
+    padding: 0.25rem 0.625rem;
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--color-accent);
+    border: 1px solid rgba(0, 229, 255, 0.3);
+    background: rgba(0, 229, 255, 0.05);
+  }
+  .blog-date {
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--color-text-dim);
+  }
+  .blog-title {
+    font-size: clamp(2rem, 6vw, 3rem);
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+    margin: 0 0 1.5rem;
+    font-weight: 400;
+  }
+  .blog-title-serif { font-family: var(--font-serif); font-style: italic; }
+  .blog-gradient {
+    font-weight: 700;
+    background: linear-gradient(110deg, var(--color-accent), var(--color-purple));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .blog-lede {
+    font-size: 1.125rem;
+    color: var(--color-text-muted);
+    line-height: 1.7;
+    margin: 0;
+  }
+  .blog-note {
+    margin-bottom: 3rem;
+    padding: 1rem;
+    border: 1px solid rgba(255, 102, 68, 0.4);
+    background: rgba(255, 102, 68, 0.06);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    line-height: 1.7;
+    color: var(--color-text-muted);
+  }
+  .blog-note strong { color: var(--color-warn); }
+  .blog-prose h2 {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 1.5rem;
+    line-height: 1.25;
+    margin: 2.5rem 0 1rem;
+    color: var(--color-text);
+  }
+  .blog-prose p {
+    color: var(--color-text-muted);
+    margin: 0 0 1rem;
+  }
+  .blog-prose a, .blog-note a, .blog-disclaimer a {
+    color: var(--color-accent);
+    text-decoration: underline;
+  }
+  .blog-prose strong { color: var(--color-text); font-weight: 600; }
+  .blog-prose em { font-style: italic; }
+  .blog-list {
+    color: var(--color-text-muted);
+    padding-left: 1.25rem;
+    margin: 0 0 1.5rem;
+    list-style: disc;
+  }
+  .blog-list li { margin-bottom: 0.5rem; }
+  .blog-list-muted { color: var(--color-text-muted); }
+  .blog-figure {
+    margin: 1.5rem 0;
+    padding: 1.25rem;
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    background: rgba(16, 20, 28, 0.6);
+  }
+  .blog-figure-label {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--color-text);
+    margin-bottom: 0.5rem;
+  }
+  .blog-figure-caption {
+    font-size: 0.8rem;
+    color: var(--color-text-muted) !important;
+    margin: 0 !important;
+    line-height: 1.6;
+  }
+  .blog-table-wrap { margin: 1.5rem 0; overflow-x: auto; }
+  .blog-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+  .blog-table thead tr { border-bottom: 1px solid var(--color-border); }
+  .blog-th-left, .blog-th-right {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text-dim);
+    font-weight: 400;
+    padding: 0.5rem 0.5rem;
+  }
+  .blog-th-left { text-align: left; padding-right: 1rem; }
+  .blog-th-right { text-align: right; }
+  .blog-th-accent { color: var(--color-accent); }
+  .blog-table tbody tr { border-bottom: 1px solid var(--color-border); }
+  .blog-table td {
+    padding: 0.5rem 0.5rem;
+    color: var(--color-text);
+  }
+  .blog-table td:first-child { padding-right: 1rem; }
+  .blog-row-hi { background: rgba(0, 229, 255, 0.05); }
+  .blog-td-accent { color: var(--color-accent); font-weight: 500; }
+  .blog-td-num { text-align: right; font-family: var(--font-mono); }
+  .blog-td-sub { font-size: 0.625rem; color: var(--color-text-dim); }
+  .blog-td-sub2 { font-size: 0.625rem; opacity: 0.7; }
+  .blog-table-note {
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    color: var(--color-text-dim);
+    margin-top: 0.5rem;
+  }
+  .blog-table-note a { color: var(--color-text-dim); text-decoration: underline; }
+  .blog-disclaimer {
+    margin-top: 3rem;
+    padding: 1.5rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    font-size: 0.75rem;
+    color: var(--color-text-dim);
+    line-height: 1.7;
+  }
+  .blog-disclaimer strong { color: var(--color-text); }
+  .blog-back-wrap {
+    margin-top: 4rem;
+    padding-top: 3rem;
+    border-top: 1px solid var(--color-border);
+  }
+  .blog-back-btn {
+    display: inline-block;
+    padding: 0.75rem 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    text-decoration: none;
+    transition: all 0.3s ease;
+  }
+  .blog-back-btn:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+  @media (min-width: 1024px) {
+    .blog-root { padding-top: 10rem; }
+  }
+</style>
