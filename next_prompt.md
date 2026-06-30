@@ -43,27 +43,28 @@ so inline `<script>` and any `Alpine.data(...)` factory defined *inside* a
 - **Copy button** (P2): global delegated `[data-copy]` clipboard handler in
   `main.js` (boot-registered → works for injected views), wired to the
   tokenomics contract-address Copy button. Functionally verified end-to-end.
-- **Hero animations** (P2): the original p5 hero sketches are restored as
-  boot-registered Alpine factories in new `assets/js/app/alpine/heroes.js`
-  (same lifecycle as `substrate.js`): `blogHero()` (generative tree),
-  `faqHero()` (WebGL terrain mesh), `tokHero()` (boids flock + predator). Each
-  is layered behind its hero title; all render with no console errors.
+- **Hero animations** (P2): every navigable page that had a p5 hero in the
+  original now has it back, as boot-registered Alpine factories in new
+  `assets/js/app/alpine/heroes.js` (same lifecycle as `substrate.js`):
+  `blogHero()` (generative tree), `faqHero()` (WebGL terrain mesh), `tokHero()`
+  (boids flock + predator), `mediaHero()` (network swarm), `changelogHero()`
+  (flow field). Home already used `substrate()`. Each is layered behind its hero
+  title; all 14 navigable routes render with no console errors.
 
 Each fix is its own commit; re-screenshotted on `:8080` against
 `frontend/test/fixtures/screenshots/original/<slug>.png` and confirmed close.
 
 ## Remaining — P2 optional richness (nice-to-have, not required)
 
-1. **More hero sketches.** Only the three touched pages (blog/faq/tokenomics)
-   got their animated heroes back. Other pages that had p5 heroes in the
-   original (e.g. media/skills) still use static gradients. Port the same way:
-   add a factory to `alpine/heroes.js` and wire `x-data` behind the hero.
-2. **Real charts.** allocation2 / tokenomics donut use static CSS charts. For
+1. **Real charts.** allocation2 / tokenomics donut use static CSS charts. For
    real Chart.js parity, register chart factories in `views.js` (boot-time) like
-   the regime/research views do.
-3. **Code-block copy buttons.** The `[data-copy]` handler in `main.js` is
+   the regime/research views do. (The CSS versions already match closely.)
+2. **Code-block copy buttons.** The `[data-copy]` handler in `main.js` is
    generic; the docs/skill code blocks (`<pre>`) could each gain a Copy button
    (original docs `CodeBlock` has one). Add `data-copy` buttons to those blocks.
+
+Hero parity for navigable pages is complete — only the out-of-scope standalone
+visualization pages still lack their sketches (intentionally; see below).
 
 ## How to run + screenshot
 
