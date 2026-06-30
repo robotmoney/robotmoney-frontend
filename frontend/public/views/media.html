@@ -1,0 +1,421 @@
+<!-- Media / Coverage hub
+     Ported from robotmoney-site/src/app/media/page.tsx
+     Two-column layout: Publications | Token Listings + Partnerships + Coverage + FAQ.
+     The p5 "Network Swarm" hero canvas is replaced by a static CSS-gradient block.
+-->
+
+<section class="md-page">
+  <!-- Hero (static gradient stands in for the p5 Network Swarm) -->
+  <div class="md-hero">
+    <div class="md-hero__inner">
+      <h1 class="md-hero__title">
+        <span class="md-serif">Media</span>
+        <span class="md-grad">Coverage</span>
+      </h1>
+      <p class="md-hero__lede">
+        Token listings, articles, and media coverage about Robot Money, autonomous treasuries,
+        and the emerging agent economy.
+      </p>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="md-grid">
+      <!-- Left column — Publications -->
+      <div class="md-col-left">
+        <h2 class="md-h2 md-serif-it">Publications</h2>
+        <div class="md-stack">
+
+          <a href="/research/channel-divergence" class="md-pub">
+            <div class="md-pub__thumb md-thumb--research"><span class="md-thumb__glyph">◈</span></div>
+            <div class="md-pub__body">
+              <div class="md-meta"><span>Research</span><span class="md-dot">·</span><span>June 12, 2026</span></div>
+              <h3 class="md-pub__title">Channel divergence: is macro→crypto breaking?</h3>
+              <p class="md-pub__excerpt">Three transmission indicators that measure whether risk-on macro is still reaching crypto. Bitcoin's beta to risk-appetite has collapsed from 3.3 to 0.7 since March 2026, BTC/Nasdaq sits at the 1st percentile of its 3-year window, and the stablecoin-vs-Nasdaq flow proxy has turned sharply negative.</p>
+              <div class="md-pub__foot"><span>By Robot Money</span><span class="md-tag">Research</span></div>
+            </div>
+          </a>
+
+          <a href="/research/late-cycle-signals" class="md-pub">
+            <div class="md-pub__thumb md-thumb--research"><span class="md-thumb__glyph">◈</span></div>
+            <div class="md-pub__body">
+              <div class="md-meta"><span>Research</span><span class="md-dot">·</span><span>June 12, 2026</span></div>
+              <h3 class="md-pub__title">Late-cycle signals: how late in the rally are we?</h3>
+              <p class="md-pub__excerpt">Four slow-moving gauges inspired by BofA's 'signposts of a market peak' checklist, rebuilt from free data: index concentration (SPY/RSP), M&A activity (SEC S-4 filing counts), broker-dealer margin debt, and University of Michigan consumer sentiment.</p>
+              <div class="md-pub__foot"><span>By Robot Money</span><span class="md-tag">Research</span></div>
+            </div>
+          </a>
+
+          <a href="/blog/ai-ate-the-bull-market" class="md-pub">
+            <div class="md-pub__thumb md-thumb--research"><span class="md-thumb__glyph">◈</span></div>
+            <div class="md-pub__body">
+              <div class="md-meta"><span>Research</span><span class="md-dot">·</span><span>June 12, 2026</span></div>
+              <h3 class="md-pub__title">AI ate the bull market</h3>
+              <p class="md-pub__excerpt">Stocks are up a lot in 2025-2026. Bitcoin is not. That hasn't been true in any previous cycle. Seven free-data indicators tell the same story from different angles — beta collapse, BTC/Nasdaq at the 1st percentile, stables-flow turning negative, index concentration at extremes.</p>
+              <div class="md-pub__foot"><span>By Robot Money</span><span class="md-tag">Research</span></div>
+            </div>
+          </a>
+
+          <a href="/blog/regime-eq-vs-base" class="md-pub">
+            <div class="md-pub__thumb md-thumb--research"><span class="md-thumb__glyph">◈</span></div>
+            <div class="md-pub__body">
+              <div class="md-meta"><span>Research</span><span class="md-dot">·</span><span>May 31, 2026</span></div>
+              <h3 class="md-pub__title">Adding an equity factor panel: how the 3-panel /regime improves on the legacy 2-panel</h3>
+              <p class="md-pub__excerpt">Side-by-side backtest of the current 3-panel regime classifier (macro + on-chain + equity factor) and the legacy 2-panel /regime_2panel. Same 8 years, same point-in-time weights. The 3-panel composite wins on every portfolio.</p>
+              <div class="md-pub__foot"><span>By Robot Money</span><span class="md-tag">Research</span></div>
+            </div>
+          </a>
+
+          <a href="/blog/honest-backtesting-weights" class="md-pub">
+            <div class="md-pub__thumb md-thumb--research"><span class="md-thumb__glyph">◈</span></div>
+            <div class="md-pub__body">
+              <div class="md-meta"><span>Research</span><span class="md-dot">·</span><span>May 15, 2026</span></div>
+              <h3 class="md-pub__title">Backtesting honestly: what survives when you remove hindsight</h3>
+              <p class="md-pub__excerpt">Our regime model weights indicators by inverse correlation. We discovered the backtest computed those weights with full-history hindsight — so we rebuilt it point-in-time and re-ran every comparison. Here's what held up, what didn't, and why the honest version is the one worth trusting.</p>
+              <div class="md-pub__foot"><span>By Robot Money</span><span class="md-tag">Research</span></div>
+            </div>
+          </a>
+
+          <a href="/blog/regime-conservative-aggressive" class="md-pub">
+            <div class="md-pub__thumb md-thumb--research"><span class="md-thumb__glyph">◈</span></div>
+            <div class="md-pub__body">
+              <div class="md-meta"><span>Research</span><span class="md-dot">·</span><span>May 13, 2026</span></div>
+              <h3 class="md-pub__title">Conservative vs aggressive: combining macro and on-chain regime signals</h3>
+              <p class="md-pub__excerpt">Most regime classifiers average macro and on-chain panels into a single composite. We backtest two alternatives — combine them conservatively (any panel off → off) or aggressively (any panel on → on, unless contradicted) — across 8 years of ETH/cash allocation.</p>
+              <div class="md-pub__foot"><span>By Robot Money</span><span class="md-tag">Research</span></div>
+            </div>
+          </a>
+
+          <a href="/blog/treasury-allocation" class="md-pub">
+            <div class="md-pub__thumb md-thumb--research"><span class="md-thumb__glyph">◈</span></div>
+            <div class="md-pub__body">
+              <div class="md-meta"><span>Research</span><span class="md-dot">·</span><span>May 12, 2026</span></div>
+              <h3 class="md-pub__title">Treasury Allocation for On-Chain Businesses</h3>
+              <p class="md-pub__excerpt">8-year backtest comparing regime-based allocation, HODL, and stable yield across a full market cycle.</p>
+              <div class="md-pub__foot"><span>By Robot Money</span><span class="md-tag">Research</span></div>
+            </div>
+          </a>
+
+          <a href="/regime-detection" class="md-pub">
+            <div class="md-pub__thumb md-thumb--research"><span class="md-thumb__glyph">◈</span></div>
+            <div class="md-pub__body">
+              <div class="md-meta"><span>Research</span><span class="md-dot">·</span><span>April 24, 2026</span></div>
+              <h3 class="md-pub__title">Regime Detection</h3>
+              <p class="md-pub__excerpt">Prior art, methods, and data sources for risk-on / risk-off regime classification.</p>
+              <div class="md-pub__foot"><span>By Robot Money</span><span class="md-tag">Research</span></div>
+            </div>
+          </a>
+
+          <a href="/smart-contract-risks" class="md-pub">
+            <div class="md-pub__thumb md-thumb--research"><span class="md-thumb__glyph">◈</span></div>
+            <div class="md-pub__body">
+              <div class="md-meta"><span>Research</span><span class="md-dot">·</span><span>April 2, 2026</span></div>
+              <h3 class="md-pub__title">Smart Contract Risks</h3>
+              <p class="md-pub__excerpt">A field guide to how DeFi vaults get exploited — chronological case studies for protocol developers.</p>
+              <div class="md-pub__foot"><span>By Robot Money</span><span class="md-tag">Research</span></div>
+            </div>
+          </a>
+
+          <a href="/blog/peaq-partnership" class="md-pub">
+            <div class="md-pub__thumb md-thumb--partnership"><span class="md-thumb__glyph">◉</span></div>
+            <div class="md-pub__body">
+              <div class="md-meta"><span>Partnership</span><span class="md-dot">·</span><span>March 27, 2026</span></div>
+              <h3 class="md-pub__title">peaq Announces Partnership with Robot Money</h3>
+              <p class="md-pub__excerpt">peaq announced a partnership with Robot Money to bring autonomous treasury management to 3.3M+ machines on the peaq network. The first robot — a Hong Kong robo-farm — has already invested.</p>
+              <div class="md-pub__foot"><span>By Robot Money</span><span class="md-tag">Partnership</span></div>
+            </div>
+          </a>
+
+          <a href="/blog/announcement" class="md-pub">
+            <div class="md-pub__thumb md-thumb--announcement"><span class="md-thumb__glyph">◆</span></div>
+            <div class="md-pub__body">
+              <div class="md-meta"><span>Announcement</span><span class="md-dot">·</span><span>March 11, 2026</span></div>
+              <h3 class="md-pub__title">The Institute for Zero-Human Companies and Generative Ventures Are Building Robot Money</h3>
+              <p class="md-pub__excerpt">Autonomous Treasury Management for the Agent Economy. A partnership between ZHC Institute and Lex Sokolin's Generative Ventures to build a managed vault for AI agents.</p>
+              <div class="md-pub__foot"><span>By Robot Money</span><span class="md-tag">Announcement</span></div>
+            </div>
+          </a>
+
+          <a href="/disclaimer" class="md-pub">
+            <div class="md-pub__thumb md-thumb--research"><span class="md-thumb__glyph">◈</span></div>
+            <div class="md-pub__body">
+              <div class="md-meta"><span>Research</span><span class="md-dot">·</span><span>March 1, 2026</span></div>
+              <h3 class="md-pub__title">Legal Disclaimer</h3>
+              <p class="md-pub__excerpt">Important legal disclaimers — read carefully before interacting with the Robot Money protocol.</p>
+              <div class="md-pub__foot"><span>By Robot Money</span><span class="md-tag">Research</span></div>
+            </div>
+          </a>
+
+        </div>
+      </div>
+
+      <!-- Right column — Listings, Partnerships, Coverage, FAQ -->
+      <div class="md-col-right">
+
+        <!-- Browse all subpages -->
+        <div class="md-browse">
+          <a href="/media/articles" class="md-browse__link">All Articles →</a>
+          <a href="/media/videos" class="md-browse__link">All Videos →</a>
+        </div>
+
+        <!-- Token Listings -->
+        <div id="token-listings" class="md-block">
+          <h2 class="md-h3 md-serif-it">Token <span class="md-grad md-not-it">Listings</span></h2>
+          <div class="md-stack md-stack--sm">
+
+            <a href="https://bankr.bot/launches/0x65021a79aeef22b17cdc1b768f5e79a8618beba3" target="_blank" rel="noopener noreferrer" class="md-side-card">
+              <div class="md-side-card__head"><span class="md-side-card__name">Bankr.bot</span><span class="md-ext">↗</span></div>
+              <span class="md-kicker">Launch Platform</span>
+              <span class="md-side-card__date">2026-03-14</span>
+              <p class="md-side-card__desc">Original token launch on Bankr.bot on Base network</p>
+            </a>
+
+            <a href="https://www.mexc.com/en-GB/announcements/article/first-in-market-17827791534281" target="_blank" rel="noopener noreferrer" class="md-side-card">
+              <div class="md-side-card__head"><span class="md-side-card__name">MEXC</span><span class="md-ext">↗</span></div>
+              <span class="md-kicker">CEX — Meme+ Zone</span>
+              <span class="md-side-card__date">2026-03-17</span>
+              <p class="md-side-card__desc">First centralized exchange listing via MEXC Meme+ Trading Zone</p>
+            </a>
+
+            <a href="https://www.weex.com/spot/ROBOTMONEY-USDT" target="_blank" rel="noopener noreferrer" class="md-side-card">
+              <div class="md-side-card__head"><span class="md-side-card__name">WEEX</span><span class="md-ext">↗</span></div>
+              <span class="md-kicker">CEX — Spot Trading</span>
+              <span class="md-side-card__date">2026-03-27</span>
+              <p class="md-side-card__desc">ROBOTMONEY/USDT spot trading pair on WEEX exchange</p>
+            </a>
+
+          </div>
+        </div>
+
+        <!-- Partnerships -->
+        <div id="partnerships" class="md-block">
+          <h2 class="md-h3 md-serif-it">Partnerships</h2>
+          <div class="md-stack md-stack--sm">
+            <div class="md-partner">
+              <div class="md-partner__logo" style="background: linear-gradient(135deg, rgba(0,255,163,0.12) 0%, rgba(0,255,163,0.03) 50%, #050508 100%);">
+                <span class="md-partner__logo-text" style="color:#00FFA3;">peaq</span>
+              </div>
+              <div class="md-partner__body">
+                <span class="md-side-card__name">peaq × Woon</span>
+                <span class="md-kicker">Partnership</span>
+                <span class="md-side-card__date">2026-05-13</span>
+                <p class="md-side-card__desc">peaq's social growth agent Woon allocates portion of generated revenue to Robot Money — first live integration demonstrating agent-to-agent treasury infrastructure on Base.</p>
+                <div class="md-partner__links">
+                  <a href="https://www.peaq.xyz/" target="_blank" rel="noopener noreferrer" class="md-link">peaq ↗</a>
+                  <a href="https://x.com/Woon_agent" target="_blank" rel="noopener noreferrer" class="md-link">Woon Agent ↗</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Coverage -->
+        <div id="coverage" class="md-block">
+          <h2 class="md-h3 md-serif-it">Coverage</h2>
+          <div class="md-stack md-stack--sm">
+
+            <a href="https://www.galaxy.com/insights/research/zero-human-companies-ai-agents-defi-crypto" target="_blank" rel="noopener noreferrer" class="md-cov">
+              <div class="md-cov__thumb"><span class="md-thumb__glyph">📄</span></div>
+              <div class="md-cov__body">
+                <div class="md-meta"><span>Galaxy Digital</span><span class="md-dot">·</span><span>Mar 26, 2026</span><span class="md-dot">·</span><span class="md-accent">Article</span></div>
+                <h3 class="md-cov__title">The Agentic Flywheel: How Zero-Human Companies Will Reshape Onchain Markets</h3>
+                <p class="md-cov__desc">A comprehensive analysis of how autonomous AI agents are creating zero-human companies (ZHCs) that earn, transact, and compound capital onchain.</p>
+                <div class="md-cov__foot"><span>By Galaxy Research</span><span class="md-tag">research</span></div>
+              </div>
+            </a>
+
+            <a href="https://x.com/MCGlive/status/2036905632477987202" target="_blank" rel="noopener noreferrer" class="md-cov">
+              <div class="md-cov__thumb"><span class="md-thumb__glyph">𝕏</span></div>
+              <div class="md-cov__body">
+                <div class="md-meta"><span>𝕏 Twitter Space</span><span class="md-dot">·</span><span>Mar 26, 2026</span><span class="md-dot">·</span><span class="md-accent">Video</span></div>
+                <h3 class="md-cov__title">Agent Economy Discussion - MCG Live</h3>
+                <p class="md-cov__desc">Live discussion on the emerging agent economy and autonomous AI agents.</p>
+                <div class="md-cov__foot"><span>𝕏 Space</span></div>
+              </div>
+            </a>
+
+          </div>
+        </div>
+
+        <!-- FAQ -->
+        <div id="faq" class="md-block">
+          <h2 class="md-h3 md-serif-it">FAQ</h2>
+          <a href="/faq" class="md-side-card">
+            <div class="md-side-card__head"><span class="md-side-card__name">Frequently Asked Questions</span><span class="md-ext">↗</span></div>
+            <span class="md-kicker">Protocol</span>
+            <p class="md-side-card__desc">Answers to common questions about Robot Money, the vault, allocation strategies, and the agent economy.</p>
+          </a>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+.md-page {
+  background: var(--color-void);
+  min-height: 100vh;
+}
+.md-page .container { max-width: 1100px; margin: 0 auto; padding: 0 1.5rem; }
+
+/* Hero */
+.md-hero {
+  position: relative;
+  min-height: 42vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border-bottom: 1px solid var(--color-border);
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 30% 35%, rgba(0,229,255,0.10) 0%, transparent 55%),
+    radial-gradient(circle at 75% 70%, rgba(139,92,246,0.10) 0%, transparent 55%),
+    linear-gradient(135deg, #050508 0%, #0a0a12 55%, #06080c 100%);
+}
+.md-hero::after {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: 0; height: 100px;
+  background: linear-gradient(to top, var(--color-void), transparent);
+  pointer-events: none;
+}
+.md-hero__inner {
+  position: relative; z-index: 2;
+  max-width: 720px; padding: 5rem 1.5rem;
+}
+.md-hero__title {
+  font-size: 2.5rem; line-height: 1.05; margin: 0;
+  display: flex; gap: 0.6rem; justify-content: center; flex-wrap: wrap;
+}
+.md-hero__lede {
+  color: var(--color-text-muted);
+  margin: 1.25rem auto 0; max-width: 540px; line-height: 1.6;
+}
+
+.md-serif { font-family: var(--font-serif); font-style: italic; color: var(--color-text); }
+.md-serif-it { font-family: var(--font-serif); font-style: italic; }
+.md-not-it { font-style: normal; }
+.md-grad {
+  font-family: var(--font-sans); font-weight: 700; font-style: normal;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-purple));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+/* Layout grid */
+.md-grid {
+  display: grid; grid-template-columns: 1fr; gap: 2.5rem;
+  padding: 3rem 0 5rem;
+}
+.md-h2 { font-size: 1.85rem; color: var(--color-text); margin: 0 0 2rem; }
+.md-h3 { font-size: 1.35rem; color: var(--color-text); margin: 0 0 1.25rem; }
+
+.md-stack { display: flex; flex-direction: column; gap: 1rem; }
+.md-stack--sm { gap: 0.75rem; }
+.md-block { margin-bottom: 2.5rem; }
+
+/* Publication cards */
+.md-pub {
+  display: flex; flex-direction: column;
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  text-decoration: none; transition: border-color 0.2s;
+}
+.md-pub:hover { border-color: var(--color-accent); }
+.md-pub__thumb {
+  position: relative; width: 100%; height: 140px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.md-thumb--research { background: linear-gradient(135deg, #050508 0%, #0a0a12 50%, rgba(0,229,255,0.12) 100%); }
+.md-thumb--partnership { background: linear-gradient(135deg, #050508 0%, #0a0a12 50%, rgba(245,158,11,0.12) 100%); }
+.md-thumb--announcement { background: linear-gradient(135deg, #050508 0%, #0a0a12 50%, rgba(16,185,129,0.12) 100%); }
+.md-thumb__glyph { font-size: 2.25rem; opacity: 0.6; }
+.md-pub__body { flex: 1; padding: 1.1rem 1.25rem; display: flex; flex-direction: column; justify-content: space-between; }
+.md-pub__title {
+  font-family: var(--font-serif); font-style: italic; font-size: 1rem;
+  color: var(--color-text); margin: 0 0 0.5rem; line-height: 1.3;
+}
+.md-pub:hover .md-pub__title { color: var(--color-accent); }
+.md-pub__excerpt { font-size: 0.875rem; color: var(--color-text-muted); margin: 0 0 0.75rem; line-height: 1.5; }
+.md-pub__foot { display: flex; justify-content: space-between; align-items: center; }
+.md-pub__foot span:first-child { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text); }
+
+.md-meta {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  font-family: var(--font-mono); font-size: 0.625rem; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--color-text-muted); margin-bottom: 0.5rem;
+}
+.md-dot { color: var(--color-border-light); }
+.md-accent { color: var(--color-accent); }
+.md-tag { font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-text-dim); }
+
+/* Right column */
+.md-browse {
+  display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 2.5rem;
+}
+.md-browse__link {
+  flex: 1; min-width: 140px; text-align: center;
+  padding: 0.85rem 1rem;
+  font-family: var(--font-mono); font-size: 0.8rem;
+  color: var(--color-accent); text-decoration: none;
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  transition: border-color 0.2s, background 0.2s;
+}
+.md-browse__link:hover { border-color: var(--color-accent); background: var(--color-surface-light); }
+
+.md-side-card {
+  display: block; background: var(--color-surface);
+  border: 1px solid var(--color-border); padding: 1rem;
+  text-decoration: none; transition: border-color 0.3s;
+}
+.md-side-card:hover { border-color: var(--color-accent); }
+.md-side-card__head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 0.5rem; }
+.md-side-card__name { font-size: 1rem; font-weight: 700; color: var(--color-text); }
+.md-side-card:hover .md-side-card__name { color: var(--color-accent); }
+.md-ext { color: var(--color-text-muted); font-size: 0.9rem; }
+.md-side-card:hover .md-ext { color: var(--color-accent); }
+.md-kicker {
+  display: block; font-family: var(--font-mono); font-size: 0.625rem;
+  text-transform: uppercase; letter-spacing: 0.18em; color: var(--color-accent); margin-bottom: 0.25rem;
+}
+.md-side-card__date { display: block; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; }
+.md-side-card__desc { font-size: 0.875rem; color: var(--color-text-muted); line-height: 1.55; margin: 0; }
+
+/* Partnership */
+.md-partner { background: var(--color-surface); border: 1px solid var(--color-border); transition: border-color 0.3s; }
+.md-partner:hover { border-color: var(--color-accent); }
+.md-partner__logo { width: 100%; height: 7rem; display: flex; align-items: center; justify-content: center; }
+.md-partner__logo-text { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
+.md-partner__body { padding: 1rem; }
+.md-partner__body .md-side-card__name { display: block; margin-bottom: 0.25rem; }
+.md-partner__links { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.75rem; }
+.md-link { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-accent); text-decoration: none; }
+.md-link:hover { text-decoration: underline; }
+
+/* Coverage cards (right column) */
+.md-cov {
+  display: flex; flex-direction: column; background: var(--color-surface);
+  border: 1px solid var(--color-border); text-decoration: none; transition: border-color 0.2s;
+}
+.md-cov:hover { border-color: var(--color-accent); }
+.md-cov__thumb {
+  width: 100%; height: 120px; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, var(--color-accent), var(--color-purple));
+}
+.md-cov__thumb .md-thumb__glyph { color: #050508; opacity: 0.85; }
+.md-cov__body { padding: 1rem; }
+.md-cov__title { font-family: var(--font-serif); font-style: italic; font-size: 1.0625rem; color: var(--color-text); margin: 0 0 0.5rem; line-height: 1.3; }
+.md-cov:hover .md-cov__title { color: var(--color-accent); }
+.md-cov__desc { font-size: 0.875rem; color: var(--color-text-muted); line-height: 1.5; margin: 0 0 0.75rem; }
+.md-cov__foot { display: flex; justify-content: space-between; align-items: center; }
+.md-cov__foot span:first-child { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text); }
+
+@media (min-width: 768px) {
+  .md-hero__title { font-size: 3.25rem; }
+  .md-pub { flex-direction: row; }
+  .md-pub__thumb { width: 160px; height: auto; }
+}
+@media (min-width: 1024px) {
+  .md-grid { grid-template-columns: 7fr 5fr; gap: 3rem; padding: 4rem 0 6rem; }
+  .md-hero__title { font-size: 3.75rem; }
+}
+</style>
