@@ -22,4 +22,9 @@ export const config = {
   // frontend) — a single-box deployment with no reverse proxy.
   staticDir: process.env.STATIC_DIR || null,
   workerId: process.env.WORKER_ID ?? `worker-${process.pid}`,
+  // Shared secret guarding privileged endpoints (member onboarding + admin
+  // lifecycle). If set, callers must present it as `X-Admin-Token`. If unset,
+  // those endpoints are allowed only outside prod (demo/ephemeral convenience).
+  adminToken: process.env.ADMIN_TOKEN || null,
 };
+

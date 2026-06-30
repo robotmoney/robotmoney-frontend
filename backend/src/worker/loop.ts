@@ -41,33 +41,40 @@ export async function processOneJob(): Promise<boolean> {
   const startedAt = new Date();
   const handler = getHandler(job.kind);
 
+  // Terminal writes are guarded by continued ownership: if the reaper requeued
+  // this job (we overran the visibility timeout) another worker now owns it, so
+  // we must NOT stomp its row or write a duplicate job_runs. A 0-row UPDATE means
+  // we lost the lock — bail without recording.
   try {
     if (!handler) throw new Error(`no handler registered for kind "${job.kind}"`);
     const output = await handler(job.payload);
-    await sql.begin(async (tx) => {
-      await tx`UPDATE jobs SET status = 'succeeded', locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now() WHERE id = ${job.id}`;
+    const ok = await sql.begin(async (tx) => {
+      const upd = await tx`UPDATE jobs SET status = 'succeeded', locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now()
+                           WHERE id = ${job.id} AND locked_by = ${config.workerId} AND status = 'running' RETURNING id`;
+      if (upd.length === 0) return false;
       await tx`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, output)
                VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), 'succeeded', ${tx.json(output ?? null)})`;
+      return true;
     });
+    if (!ok) console.warn(`job ${job.id} (${job.kind}) lost its lock before completion (reaped) — result discarded`);
     return true;
   } catch (err) {
     const message = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
     const canRetry = job.attempts < job.max_attempts;
     const backoff = Math.min(MAX_BACKOFF_SECONDS, Math.pow(2, job.attempts));
     await sql.begin(async (tx) => {
-      if (canRetry) {
-        await tx`UPDATE jobs
-                    SET status = 'pending',
-                        run_after = now() + (${backoff} || ' seconds')::interval,
-                        locked_at = NULL, locked_by = NULL,
-                        last_error = ${message}, updated_at = now()
-                  WHERE id = ${job.id}`;
-      } else {
-        await tx`UPDATE jobs
-                    SET status = 'dead', locked_at = NULL, locked_by = NULL,
-                        last_error = ${message}, updated_at = now()
-                  WHERE id = ${job.id}`;
-      }
+      const upd = canRetry
+        ? await tx`UPDATE jobs
+                      SET status = 'pending',
+                          run_after = now() + (${backoff} || ' seconds')::interval,
+                          locked_at = NULL, locked_by = NULL,
+                          last_error = ${message}, updated_at = now()
+                    WHERE id = ${job.id} AND locked_by = ${config.workerId} AND status = 'running' RETURNING id`
+        : await tx`UPDATE jobs
+                      SET status = 'dead', locked_at = NULL, locked_by = NULL,
+                          last_error = ${message}, updated_at = now()
+                    WHERE id = ${job.id} AND locked_by = ${config.workerId} AND status = 'running' RETURNING id`;
+      if (upd.length === 0) return; // lost the lock — don't record a duplicate run
       await tx`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error)
                VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), ${canRetry ? "failed" : "dead"}, ${message})`;
     });

@@ -56,6 +56,19 @@ const server = Bun.serve({
 
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
 
+    try {
+      return await route(req, url, pathname, origin);
+    } catch (err) {
+      // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
+      // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.
+      if (err instanceof URIError) return json({ error: "bad request" }, origin, 400);
+      console.error("api error:", err);
+      return json({ error: "internal error" }, origin, 500);
+    }
+  },
+});
+
+async function route(req: Request, url: URL, pathname: string, origin: string | null): Promise<Response> {
     if (pathname === ROUTES.health) {
       let db = "down";
       try { await sql`SELECT 1`; db = "up"; } catch { db = "down"; }
@@ -87,8 +100,7 @@ const server = Bun.serve({
     const stat = await serveStatic(pathname);
     if (stat) return stat;
     return new Response("Not found", { status: 404 });
-  },
-});
+}
 
 console.log(`api listening on :${server.port} (env=${config.env})`);
 if (config.staticDir) console.log(`serving static frontend from ${config.staticDir}`);

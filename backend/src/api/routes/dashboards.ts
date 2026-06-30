@@ -26,7 +26,8 @@ export async function getResearchSignal(key: string) {
 
 // GET /api/dashboards/regime-snapshots?range=<n days> → { latest, history }
 export async function getRegimeSnapshots(url: URL): Promise<{ latest: RegimeSnapshot | null; history: RegimeSnapshot[] }> {
-  const range = Math.min(3650, Math.max(1, Number(url.searchParams.get("range") ?? 180)));
+  const n = Math.trunc(Number(url.searchParams.get("range") ?? 180));
+  const range = Number.isFinite(n) ? Math.min(3650, Math.max(1, n)) : 180;
   const rows = await sql`
     SELECT * FROM regime_snapshots
     ORDER BY date DESC

@@ -34,7 +34,7 @@ function buildServer(token: string | null) {
     async ({ date, subject }) => j(await get(`/api/committee/sessions/${encodeURIComponent(date)}/${encodeURIComponent(subject)}`)));
   server.registerTool("get_signing_payload",
     { description: "Canonical bytes to sign for a drafted recommendation.",
-      inputSchema: { memberId: z.string(), date: z.string(), subjectId: z.string(), nonce: z.string(), stance: z.string(), confidence: z.number(), body: z.string().optional() } },
+      inputSchema: { memberId: z.string(), date: z.string(), subjectId: z.string(), nonce: z.string(), stance: z.string(), confidence: z.number(), body: z.string().optional(), memoUrl: z.string().optional() } },
     async (sub) => j({ canonical: canonicalizeSubmission(sub) }));
   server.registerTool("submit_recommendation",
     { description: "Submit a signed recommendation (ed25519 signature over the canonical payload).",

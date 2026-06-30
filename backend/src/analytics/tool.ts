@@ -54,6 +54,7 @@ export class Registry {
 
   // Run one tool (and its deps) or all; returns {id: result}. Persists each.
   async run(asof: string, only?: string, provider: Provider = seededProvider) {
+    if (only && !this.tools.has(only)) throw new Error(`unknown analytics tool "${only}"`);
     const results = new Map<string, unknown>();
     const ctx: ToolContext = { asof, provider, dep: (id) => results.get(id) as any };
     const plan = only

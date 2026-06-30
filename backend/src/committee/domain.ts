@@ -34,9 +34,19 @@ export async function getSubject(id: string) {
   return r[0] ?? null;
 }
 
+// Calendar date → 'YYYY-MM-DD' (postgres.js returns `date` columns as Date objects).
+const day = (d: unknown) => (d == null ? null : typeof d === "string" ? d.slice(0, 10) : new Date(d as any).toISOString().slice(0, 10));
+
+export async function getSubjectSnapshots(id: string) {
+  const rows = await sql`SELECT id, subject_id, date, total_value_usd, positions, wallets, notable
+                         FROM committee_subject_snapshots WHERE subject_id = ${id} ORDER BY date DESC`;
+  return rows.map((r: any) => ({ ...r, date: day(r.date) }));
+}
+
 export async function listSessions() {
-  return sql`SELECT id, date, subject_id, subject_name, state, window_closes_at, published_at, generated_at
+  const rows = await sql`SELECT id, date, subject_id, subject_name, state, window_closes_at, published_at, generated_at
              FROM committee_sessions ORDER BY date DESC, generated_at DESC`;
+  return rows.map((r: any) => ({ ...r, date: day(r.date) }));
 }
 
 export async function getOpenSession() {
@@ -55,7 +65,7 @@ export async function getSession(date: string, subjectId: string) {
     FROM committee_recommendations r
     JOIN committee_members m ON m.id = r.member_id
     WHERE r.session_id = ${s.id} ORDER BY r.received_at`;
-  return { session: s, takes };
+  return { session: { ...s, date: day(s.date) }, takes };
 }
 
 export async function getBrief(date: string, subjectId: string) {
@@ -88,14 +98,22 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   if (!verified) return { ok: false, status: 400, error: "signature verification failed" };
 
   try {
-    const row = (await sql`
+    // Close the TOCTOU gap: re-check the window inside the same statement by
+    // gating the INSERT on a SELECT of the session that is still collecting and
+    // not past its close time. If the window closed between our check above and
+    // now, 0 rows insert and we reject.
+    const rows = await sql`
       INSERT INTO committee_recommendations
         (session_id, member_id, subject_id, date, nonce, stance, confidence, body, memo_url, payload, signature, verified)
-      VALUES (${session.id}, ${memberId}, ${sub.subjectId}, ${sub.date}, ${sub.nonce}, ${sub.stance},
-              ${sub.confidence}, ${sub.body ?? null}, ${sub.memoUrl ?? null}, ${sql.json(sub as any)}, ${sub.signature}, true)
-      RETURNING id`)[0];
+      SELECT s.id, ${memberId}, ${sub.subjectId}, ${sub.date}, ${sub.nonce}, ${sub.stance},
+             ${sub.confidence}, ${sub.body ?? null}, ${sub.memoUrl ?? null}, ${sql.json(sub as any)}, ${sub.signature}, true
+      FROM committee_sessions s
+      WHERE s.id = ${session.id} AND s.state = 'collecting'
+        AND (s.window_closes_at IS NULL OR s.window_closes_at > now())
+      RETURNING id`;
+    if (rows.length === 0) return { ok: false, status: 409, error: "submission window closed" };
     await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'submit_recommendation', ${sql.json({ sessionId: session.id })})`;
-    return { ok: true, status: 201, recommendationId: row.id, verified: true };
+    return { ok: true, status: 201, recommendationId: rows[0].id, verified: true };
   } catch (e: any) {
     if (String(e?.message ?? e).includes("duplicate") || e?.code === "23505")
       return { ok: false, status: 409, error: "already submitted (member/nonce or session/member)" };

@@ -27,8 +27,9 @@ const textOf = (res: any) => JSON.parse(res.content?.[0]?.text ?? "null");
 export async function runAgent(o: AgentOpts) {
   // 1. own keypair + onboarding (REST)
   const { publicKeyB64, privateKey } = await generateKeyPair();
+  const adminHeaders = process.env.ADMIN_TOKEN ? { "X-Admin-Token": process.env.ADMIN_TOKEN } : {};
   const reg = await fetch(`${BACKEND}/api/committee/register`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: o.memberId, name: o.name, lens: o.lens, publicKey: publicKeyB64 }),
   }).then((r) => r.json());
   const token: string = reg.token;

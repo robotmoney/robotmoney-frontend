@@ -4,5 +4,5 @@ export * from "./committee";
 export { ROUTES, path } from "./routes";
 export function canonicalizeSubmission(s: {
   memberId: string; date: string; subjectId: string; nonce: string;
-  stance: string; confidence: number; body?: string;
+  stance: string; confidence: number; body?: string; memoUrl?: string;
 }): string;

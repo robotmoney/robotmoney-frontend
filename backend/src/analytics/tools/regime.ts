@@ -73,7 +73,7 @@ export const regimeTool: AnalyticTool<RegimeResult> = {
       snapshots.push({
         date: dates[t],
         composite: Number(composite.toFixed(4)),
-        compositePercentile: Number(percentileInWindow(composite, compositeHistory).toFixed(4)),
+        compositePercentile: Number(percentileInWindow(composite, compositeHistory.slice(-WINDOW)).toFixed(4)),
         regime: label(composite), macroRegime: label(panel("macro")), onchainRegime: label(panel("onchain")), factorRegime: null,
         percentiles,
         indicators: readings.map((r) => ({ ...r, value: Number(r.value.toFixed(4)), score: Number(r.score.toFixed(4)) })),

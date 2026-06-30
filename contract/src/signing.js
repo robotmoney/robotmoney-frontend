@@ -11,6 +11,7 @@ export function canonicalizeSubmission(s) {
     stance: s.stance,
     confidence: s.confidence,
     body: s.body ?? "",
+    memoUrl: s.memoUrl ?? "",
   };
   return JSON.stringify(ordered);
 }

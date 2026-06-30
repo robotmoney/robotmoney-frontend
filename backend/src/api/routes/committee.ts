@@ -19,7 +19,11 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   if (m === "GET" && p === "/api/committee/members") return { status: 200, body: { members: await ic.getMembers() } };
   if (m === "GET" && p.startsWith("/api/committee/members/"))
     return { status: 200, body: await ic.getMember(decodeURIComponent(p.split("/").pop()!)) };
-  if (m === "GET" && p.startsWith("/api/committee/subjects/")) {
+  if (m === "GET" && /^\/api\/committee\/subjects\/[^/]+\/snapshots$/.test(p)) {
+    const id = decodeURIComponent(p.split("/")[4] ?? "");
+    return { status: 200, body: { snapshots: await ic.getSubjectSnapshots(id) } };
+  }
+  if (m === "GET" && /^\/api\/committee\/subjects\/[^/]+$/.test(p)) {
     const id = decodeURIComponent(p.split("/")[4] ?? "");
     return { status: 200, body: await ic.getSubject(id) };
   }
@@ -42,16 +46,28 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     return { status: 200, body: { canonical: canonicalizeSubmission(sub) } };
   }
 
-  // demo onboarding: member registers its own public key, gets a bearer token.
+  // Member onboarding + admin lifecycle are PRIVILEGED. Guard: if ADMIN_TOKEN is
+  // set, require it as X-Admin-Token (works in every env, incl. a public box);
+  // if unset, allow only outside prod (demo/ephemeral convenience). This closes
+  // the unauthenticated identity-takeover / state-drive holes. Proper
+  // per-member onboarding + OAuth is the IC-remainder work.
+  const privileged = () => {
+    if (config.adminToken) return req.headers.get("X-Admin-Token") === config.adminToken;
+    return config.env !== "prod";
+  };
+
+  // Onboarding: register a member's public key, get a bearer token. Privileged
+  // (it can rotate/replace an existing member's key).
   if (m === "POST" && p === "/api/committee/register") {
+    if (!privileged()) return { status: 403, body: { error: "onboarding requires admin authorization" } };
     const b = (await req.json().catch(() => null)) as any;
     if (!b?.memberId || !b?.name || !b?.publicKey) return { status: 400, body: { error: "memberId, name, publicKey required" } };
     return { status: 201, body: await ic.registerMember(b) };
   }
 
-  // dev-only admin lifecycle (disabled in prod). Drives a session for demos/E2E.
+  // Admin lifecycle. Drives a session for demos/E2E.
   if (m === "POST" && p.startsWith("/api/committee/admin/")) {
-    if (config.env === "prod") return { status: 403, body: { error: "admin disabled in prod" } };
+    if (!privileged()) return { status: 403, body: { error: "admin authorization required" } };
     const action = p.split("/").pop();
     const b = (await req.json().catch(() => ({}))) as any;
     switch (action) {

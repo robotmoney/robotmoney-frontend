@@ -15,9 +15,10 @@ const MEMBERS = [
   { memberId: "draco", name: "Draco", lens: "contrarian", bias: 0.0, present: false }, // absent
 ];
 
+const adminHeaders = process.env.ADMIN_TOKEN ? { "X-Admin-Token": process.env.ADMIN_TOKEN } : {};
 const admin = (action: string, body: unknown = {}) =>
   fetch(`${BACKEND}/api/committee/admin/${action}`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders }, body: JSON.stringify(body),
   }).then((r) => r.json());
 
 async function main() {
