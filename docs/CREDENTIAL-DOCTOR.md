@@ -86,6 +86,10 @@ Credentials flow through three layers:
 | `DO_SPACES_SECRET` | Created alongside `DO_SPACES_KEY` or manual | ≥32 chars |
 | `DATABASE_URL` | Manual entry | Postgres URL + `sslmode=require` |
 | `DO_DB_CA_CERT` (optional) | File | PEM certificate |
+| `FRED_API_KEY` (optional) | Manual entry | 32-char format + live FRED API check |
+
+`FRED_API_KEY` is an application/data secret needed only for live macro
+analytics series; the app runs seeded without it.
 
 ### Deployment variables (pushed to GitHub, readable)
 
