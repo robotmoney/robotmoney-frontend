@@ -1,12 +1,16 @@
 <!-- Blog index — ported from robotmoney-site/src/app/blog/page.tsx
-     Static SPA fragment (no <script>): the p5 hero sketch is replaced with a
-     static gradient hero. Cards link root-relative to /blog/<slug>. -->
+     Static SPA fragment (no inline <script>): the p5 generative-tree hero is the
+     boot-registered blogHero() factory (assets/js/app/alpine/heroes.js). Cards
+     link root-relative to /blog/<slug>. -->
 
 <section class="blog-idx container">
   <header class="blog-idx__hero">
-    <div class="blog-idx__eyebrow">Updates</div>
-    <h1 class="blog-idx__title">Robot Money <span class="blog-idx__title-alt">Blog</span></h1>
-    <p class="blog-idx__lede">Announcements, research, and updates from the team.</p>
+    <div class="blog-idx__hero-art" x-data="blogHero()"></div>
+    <div class="blog-idx__hero-inner">
+      <div class="blog-idx__eyebrow">Updates</div>
+      <h1 class="blog-idx__title">Robot Money <span class="blog-idx__title-alt">Blog</span></h1>
+      <p class="blog-idx__lede">Announcements, research, and updates from the team.</p>
+    </div>
   </header>
 
   <div class="blog-idx__list">
@@ -141,10 +145,36 @@
   padding: 8rem 1.5rem 5rem;
 }
 .blog-idx__hero {
+  position: relative;
+  overflow: hidden;
+  min-height: 340px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   text-align: center;
   padding: 2rem 0 3.5rem;
   margin-bottom: 3rem;
   border-bottom: 1px solid var(--color-border);
+}
+.blog-idx__hero-art {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+.blog-idx__hero-inner {
+  position: relative;
+  z-index: 1;
+}
+.blog-idx__hero::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 100px;
+  background: linear-gradient(to top, var(--color-void), transparent);
+  z-index: 0;
+  pointer-events: none;
 }
 .blog-idx__eyebrow {
   font-family: var(--font-mono);

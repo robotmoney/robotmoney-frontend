@@ -4,6 +4,7 @@
 // step, no Web Components — Alpine owns all behavior and lifecycle.
 import { registerSubstrate } from "./alpine/substrate.js";
 import { registerViews } from "./alpine/views.js";
+import { registerHeroes } from "./alpine/heroes.js";
 import { start } from "./router.js";
 
 // Terminal boot animation copy — drives the hero's faux deployment log.
@@ -47,6 +48,7 @@ document.addEventListener("alpine:init", () => {
 
   registerSubstrate(Alpine);
   registerViews(Alpine);
+  registerHeroes(Alpine);
 });
 
 // Boot the router once the document is parsed. The router renders the current
