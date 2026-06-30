@@ -40,9 +40,12 @@ so inline `<script>` and any `Alpine.data(...)` factory defined *inside* a
   inline line-icon SVGs (utility / principles / governance / participation
   cards). Heading font-style left as-is — the original IS serif-italic, so the
   port already matched (the prior audit's "upright serif" note was inaccurate).
-- **Copy button** (P2): global delegated `[data-copy]` clipboard handler in
-  `main.js` (boot-registered → works for injected views), wired to the
-  tokenomics contract-address Copy button. Functionally verified end-to-end.
+- **Copy buttons** (P2): global delegated clipboard handler in `main.js`
+  (boot-registered → works for injected views). `[data-copy="<text>"]` copies a
+  literal (tokenomics contract address); `[data-copy-code]` copies the `<pre>`
+  text of its `.docs-codeblock`. A Copy button is wired into the tokenomics
+  contract row and into every docs/skill code-block bar (44 blocks across 7
+  views; styled once in `docs-shell.css`). All functionally verified end-to-end.
 - **Hero animations** (P2): every navigable page that had a p5 hero in the
   original now has it back, as boot-registered Alpine factories in new
   `assets/js/app/alpine/heroes.js` (same lifecycle as `substrate.js`):
@@ -54,17 +57,22 @@ so inline `<script>` and any `Alpine.data(...)` factory defined *inside* a
 Each fix is its own commit; re-screenshotted on `:8080` against
 `frontend/test/fixtures/screenshots/original/<slug>.png` and confirmed close.
 
-## Remaining — P2 optional richness (nice-to-have, not required)
+## Remaining — P2 optional richness (low value; everything above is done)
 
-1. **Real charts.** allocation2 / tokenomics donut use static CSS charts. For
-   real Chart.js parity, register chart factories in `views.js` (boot-time) like
-   the regime/research views do. (The CSS versions already match closely.)
-2. **Code-block copy buttons.** The `[data-copy]` handler in `main.js` is
-   generic; the docs/skill code blocks (`<pre>`) could each gain a Copy button
-   (original docs `CodeBlock` has one). Add `data-copy` buttons to those blocks.
+Only stylistic chart differences remain; both render correctly with matching
+data, so these are genuinely optional:
 
-Hero parity for navigable pages is complete — only the out-of-scope standalone
-visualization pages still lack their sketches (intentionally; see below).
+1. **Real charts.** The tokenomics fee donut is a CSS conic-gradient (the
+   original is a Chart.js doughnut — visually near-identical). allocation2 uses
+   CSS **stacked bars** where the original used Chart.js **stacked areas** (same
+   data, slightly different style). For exact parity, register chart factories in
+   `views.js` (boot-time) like the regime/research views do.
+2. **allocation2 constructivist hero.** Its hero is a static shapes/gradient
+   approximation of the original animated "constructivist" p5 canvas. Could be
+   ported as another `heroes.js` factory if desired (lower priority).
+
+Hero parity for navigable pages is otherwise complete — only the out-of-scope
+standalone visualization pages still lack sketches (intentionally; see below).
 
 ## How to run + screenshot
 
