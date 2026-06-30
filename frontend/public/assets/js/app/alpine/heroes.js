@@ -879,4 +879,175 @@ export function registerHeroes(Alpine) {
       this._p5 = new p5Constructor(sketch, container);
     },
   }));
+
+  Alpine.data("constructivistHero", () => ({
+    _cleanup: null,
+    init() {
+      const container = this.$el;
+      if (!container) return;
+      let cancelled = false;
+      let raf = 0;
+    const spd = 1.1, windSpd = 0.8, numCircles = 15, numWedges = 7, wedgeScl = 1.0;
+    const BG = [10, 10, 15], AC = [0, 229, 255];
+    let W = container.offsetWidth, H = container.offsetHeight;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = W; canvas.height = H;
+    canvas.style.display = "block"; canvas.style.width = W + "px"; canvas.style.height = H + "px";
+    container.appendChild(canvas);
+    const ctx = canvas.getContext("2d");
+
+    let circles = [], wedges = [], sparks = [];
+    let windTime = 0, wedgeScaleOsc = 1.0;
+
+    function generateCircles() {
+      circles = [];
+      const minR = Math.min(W, H) * 0.04, maxR = Math.min(W, H) * 0.18;
+      let att = 0;
+      while (circles.length < numCircles && att < 2000) {
+        const r = minR + Math.random() * (maxR - minR);
+        const x = r + Math.random() * (W - 2 * r), y = r + Math.random() * (H - 2 * r);
+        let ok = true;
+        for (const c of circles) { if (Math.sqrt((x - c.x) ** 2 + (y - c.y) ** 2) < r + c.r + 8) { ok = false; break; } }
+        if (ok) circles.push({ x, y, r, vx: 0, vy: 0, homeX: x, homeY: y });
+        att++;
+      }
+    }
+
+    function initWedges() {
+      wedges = [];
+      for (let i = 0; i < numWedges; i++) {
+        const bW = 30 + Math.random() * 40, len = bW * (3 + Math.random() * 2), ang = Math.random() * Math.PI * 2, v = 0.5 + Math.random() * 1.5;
+        wedges.push({ x: Math.random() * W, y: Math.random() * H, angle: ang, vx: Math.cos(ang) * v, vy: Math.sin(ang) * v, baseW: bW, length: len, opacity: 0.85 + Math.random() * 0.15 });
+      }
+    }
+
+    function wedgePath(w, s) {
+      const len = w.length * s, half = w.baseW * s * 0.5;
+      const tipX = w.x + Math.cos(w.angle) * len * 0.6, tipY = w.y + Math.sin(w.angle) * len * 0.6;
+      const px = Math.cos(w.angle + Math.PI / 2), py = Math.sin(w.angle + Math.PI / 2);
+      const bx = w.x - Math.cos(w.angle) * len * 0.4, by = w.y - Math.sin(w.angle) * len * 0.4;
+      return { tipX, tipY, b1x: bx + px * half, b1y: by + py * half, b2x: bx - px * half, b2y: by - py * half };
+    }
+
+    function drawWedge(w, s, color) {
+      const p = wedgePath(w, s);
+      ctx.beginPath(); ctx.moveTo(p.tipX, p.tipY); ctx.lineTo(p.b1x, p.b1y); ctx.lineTo(p.b2x, p.b2y); ctx.closePath();
+      ctx.fillStyle = color; ctx.fill();
+    }
+
+    function spawnSparks(x, y, cR) {
+      if (sparks.length > 200) return;
+      const cnt = 5 + Math.floor(Math.random() * 6), md = 5 + cR * 0.3;
+      for (let i = 0; i < cnt; i++) {
+        const a = Math.random() * Math.PI * 2, sp = 2 + Math.random() * 3;
+        sparks.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, decay: 0.03 + Math.random() * 0.04, len: md * (0.3 + Math.random() * 0.7) });
+      }
+    }
+
+    function drawSparks() {
+      ctx.lineWidth = 1;
+      for (let i = sparks.length - 1; i >= 0; i--) {
+        const s = sparks[i]; s.x += s.vx; s.y += s.vy; s.vx *= 0.92; s.vy *= 0.92; s.life -= s.decay;
+        if (s.life <= 0) { sparks.splice(i, 1); continue; }
+        ctx.strokeStyle = `rgba(${AC[0]},${AC[1]},${AC[2]},${s.life * 0.8})`;
+        ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(s.x - s.vx * s.len * 0.3, s.y - s.vy * s.len * 0.3); ctx.stroke();
+      }
+    }
+
+    function flowNoise(x, y, t) {
+      return Math.sin(x * 0.008 + t * 0.3) * 0.5 + Math.sin(y * 0.01 + t * 0.2) * 0.3 + Math.sin((x + y) * 0.005 + t * 0.15) * 0.2 + Math.sin(x * 0.015 - y * 0.012 + t * 0.4) * 0.15;
+    }
+
+    function update() {
+      windTime += 0.01 * windSpd;
+      for (const w of wedges) {
+        w.x += w.vx * spd; w.y += w.vy * spd;
+        const m = 200 * wedgeScl;
+        if (w.x > W + m) w.x = -m; if (w.x < -m) w.x = W + m;
+        if (w.y > H + m) w.y = -m; if (w.y < -m) w.y = H + m;
+      }
+      const wf = windSpd * 0.15, gf = windSpd * 0.12;
+      for (const c of circles) {
+        c.vx += flowNoise(c.x, c.y, windTime) * wf; c.vy += flowNoise(c.x + 500, c.y + 500, windTime + 100) * wf;
+        for (const o of circles) {
+          if (o === c) continue; const dx = o.x - c.x, dy = o.y - c.y, dSq = dx * dx + dy * dy, d = Math.sqrt(dSq);
+          if (d < 1) continue; const f = gf * (c.r * o.r) / (dSq + 500); c.vx += dx / d * f; c.vy += dy / d * f;
+        }
+        c.vx += (c.homeX - c.x) * 0.0005; c.vy += (c.homeY - c.y) * 0.0005;
+        c.vx *= 0.98; c.vy *= 0.98; c.x += c.vx; c.y += c.vy;
+        if (c.x - c.r < 0) { c.x = c.r; c.vx = Math.abs(c.vx) * 0.5; }
+        if (c.x + c.r > W) { c.x = W - c.r; c.vx = -Math.abs(c.vx) * 0.5; }
+        if (c.y - c.r < 0) { c.y = c.r; c.vy = Math.abs(c.vy) * 0.5; }
+        if (c.y + c.r > H) { c.y = H - c.r; c.vy = -Math.abs(c.vy) * 0.5; }
+      }
+      for (let i = 0; i < circles.length; i++) {
+        for (let j = i + 1; j < circles.length; j++) {
+          const a = circles[i], b = circles[j], dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy), minD = a.r + b.r + 4;
+          if (d < minD && d > 0.01) {
+            const ol = (minD - d) / 2, nx = dx / d, ny = dy / d;
+            a.x -= nx * ol; a.y -= ny * ol; b.x += nx * ol; b.y += ny * ol;
+            const rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+            if (rv < 0) { const mA = a.r * a.r, mB = b.r * b.r, tM = mA + mB, imp = rv * 0.8; a.vx += nx * imp * mB / tM; a.vy += ny * imp * mB / tM; b.vx -= nx * imp * mA / tM; b.vy -= ny * imp * mA / tM; }
+          }
+        }
+      }
+      const oscT = Math.sin(windTime * 2 * Math.PI / 8) * 0.5 + 0.5;
+      wedgeScaleOsc = 0.3 + (wedgeScl - 0.3) * oscT;
+    }
+
+    function render() {
+      const acS = `rgb(${AC[0]},${AC[1]},${AC[2]})`, bgS = `rgb(${BG[0]},${BG[1]},${BG[2]})`;
+      ctx.fillStyle = bgS; ctx.fillRect(0, 0, W, H);
+      let maxR = 1; for (const c of circles) if (c.r > maxR) maxR = c.r;
+      for (const c of circles) {
+        const t = c.r / maxR;
+        ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${Math.round(AC[0] * 0.2 + t * AC[0] * 0.8)},${Math.round(AC[1] * 0.15 + t * AC[1] * 0.7)},${Math.round(AC[2] * 0.05 + t * AC[2] * 0.3 + 10)},${0.35 + t * 0.55})`;
+        ctx.fill();
+      }
+      for (const w of wedges) {
+        const sc = wedgeScaleOsc, wp = wedgePath(w, sc);
+        ctx.globalAlpha = w.opacity; drawWedge(w, sc, acS);
+        for (const c of circles) {
+          ctx.save(); ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); ctx.clip(); drawWedge(w, sc, bgS); ctx.restore();
+          const pts = [{ x: wp.tipX, y: wp.tipY }, { x: wp.b1x, y: wp.b1y }, { x: wp.b2x, y: wp.b2y }];
+          for (let k = 0; k < 3; k++) {
+            const p1 = pts[k], p2 = pts[(k + 1) % 3], d1 = (p1.x - c.x) ** 2 + (p1.y - c.y) ** 2, d2 = (p2.x - c.x) ** 2 + (p2.y - c.y) ** 2, r2 = c.r * c.r;
+            if ((d1 < r2) !== (d2 < r2)) {
+              let t = 0.5;
+              for (let it = 0; it < 5; it++) { const mx = p1.x + t * (p2.x - p1.x), my = p1.y + t * (p2.y - p1.y), md = (mx - c.x) ** 2 + (my - c.y) ** 2; if (md < r2) { if (d1 < r2) t += 0.5 / (1 << (it + 1)); else t -= 0.5 / (1 << (it + 1)); } else { if (d1 < r2) t -= 0.5 / (1 << (it + 1)); else t += 0.5 / (1 << (it + 1)); } }
+              spawnSparks(p1.x + t * (p2.x - p1.x), p1.y + t * (p2.y - p1.y), c.r);
+            }
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+      drawSparks();
+    }
+
+    function init() {
+      if (!container) return;
+      const nW = container.offsetWidth, nH = container.offsetHeight;
+      if (nW < 1 || nH < 1) return;
+      W = nW; H = nH; canvas.width = W; canvas.height = H; canvas.style.width = W + "px"; canvas.style.height = H + "px";
+      generateCircles(); initWedges();
+    }
+
+    function loop() { if (cancelled) return; update(); render(); raf = requestAnimationFrame(loop); }
+    init(); raf = requestAnimationFrame(loop);
+
+    let prevW = W, prevH = H;
+    const onResize = () => { if (!container) return; const nW = container.offsetWidth, nH = container.offsetHeight; if (nW === prevW && nH === prevH) return; prevW = nW; prevH = nH; init(); };
+    window.addEventListener("resize", onResize);
+
+      this._cleanup = () => {
+        cancelled = true;
+        cancelAnimationFrame(raf);
+        window.removeEventListener("resize", onResize);
+        if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
+      };
+    },
+    destroy() { if (this._cleanup) this._cleanup(); },
+  }));
 }

@@ -2,7 +2,8 @@
      Ported from robotmoney-site/src/app/allocation2/page.tsx
      Buildless port. The AUM/Allocation charts are Chart.js stacked areas drawn
      by the boot-registered walletPerfView() factory (alpine/views.js); the
-     constructivist hero is a static CSS visualization.
+     constructivist hero is the boot-registered constructivistHero() canvas
+     factory (alpine/heroes.js).
      Numbers are baked from public/data/unified-wallet-history.csv (latest
      snapshot 2026-06-26; over-time composition is approximated for intermediate
      dates where the source pulls per-asset data live).
@@ -12,15 +13,7 @@
 
   <!-- Hero -->
   <header class="a2-hero">
-    <div class="a2-hero__viz" aria-hidden="true">
-      <span class="a2-orb a2-orb--1"></span>
-      <span class="a2-orb a2-orb--2"></span>
-      <span class="a2-orb a2-orb--3"></span>
-      <span class="a2-orb a2-orb--4"></span>
-      <span class="a2-orb a2-orb--5"></span>
-      <span class="a2-wedge a2-wedge--1"></span>
-      <span class="a2-wedge a2-wedge--2"></span>
-    </div>
+    <div class="a2-hero__viz" x-data="constructivistHero()" aria-hidden="true"></div>
     <div class="a2-hero__inner">
       <span class="a2-eyebrow">Historical Data</span>
       <h1 class="a2-hero__title">Wallet <span class="a2-grad">Performance</span></h1>
@@ -217,38 +210,7 @@
   background: linear-gradient(to top, var(--color-void), transparent 60%);
 }
 
-.a2-orb {
-  position: absolute;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, var(--color-accent), var(--color-accent-dim) 55%, transparent 75%);
-  opacity: 0.35;
-  filter: blur(1px);
-}
-.a2-orb--1 { width: 180px; height: 180px; top: 8%; left: 10%; opacity: 0.5; }
-.a2-orb--2 { width: 110px; height: 110px; top: 30%; left: 32%; opacity: 0.25; }
-.a2-orb--3 { width: 90px;  height: 90px;  top: 12%; left: 60%; opacity: 0.4; }
-.a2-orb--4 { width: 220px; height: 220px; top: -6%; left: 72%; opacity: 0.2; }
-.a2-orb--5 { width: 70px;  height: 70px;  top: 46%; left: 50%; opacity: 0.3; }
-
-.a2-wedge {
-  position: absolute;
-  width: 0; height: 0;
-  border-style: solid;
-}
-.a2-wedge--1 {
-  top: 18%; left: 44%;
-  border-width: 18px 120px 18px 0;
-  border-color: transparent var(--color-accent) transparent transparent;
-  opacity: 0.5;
-  transform: rotate(-18deg);
-}
-.a2-wedge--2 {
-  top: 40%; left: 18%;
-  border-width: 12px 90px 12px 0;
-  border-color: transparent var(--color-accent-dim) transparent transparent;
-  opacity: 0.45;
-  transform: rotate(24deg);
-}
+.a2-hero__viz canvas { display: block; width: 100%; height: 100%; }
 
 .a2-hero__inner {
   position: relative;
