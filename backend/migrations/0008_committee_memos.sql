@@ -5,7 +5,7 @@
 CREATE TABLE IF NOT EXISTS committee_memos (
   id         bigserial PRIMARY KEY,
   member_id  text NOT NULL REFERENCES committee_members(id),
-  session_id bigint NOT NULL REFERENCES committee_sessions(id),
+  session_id uuid NOT NULL REFERENCES committee_sessions(id),
   title      text NOT NULL DEFAULT '',
   body       text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()

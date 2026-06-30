@@ -63,7 +63,7 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     if (!token) return { status: 401, body: { error: "missing bearer token" } };
     const b = (await req.json().catch(() => null)) as any;
     if (!b?.sessionId || !b?.body) return { status: 400, body: { error: "sessionId and body required" } };
-    const res = await ic.postMemo(token, { sessionId: Number(b.sessionId), title: b.title, body: b.body });
+    const res = await ic.postMemo(token, { sessionId: String(b.sessionId), title: b.title, body: b.body });
     return { status: res.status, body: res };
   }
   if (m === "GET" && /^\/api\/committee\/memos\/\d+$/.test(p)) {
