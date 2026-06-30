@@ -212,14 +212,15 @@ export async function openSession(date: string, subjectId: string) {
   return r;
 }
 
-export async function publishBrief(sessionId: string, windowMinutes = 60) {
+export async function publishBrief(sessionId: string, windowMinutes = 60, prevOutcome?: string) {
   const s = (await sql`SELECT * FROM committee_sessions WHERE id = ${sessionId}`)[0];
   const regime = (await sql`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
   const recent = await sql`SELECT date, subject_id, state FROM committee_sessions WHERE state = 'published' ORDER BY date DESC LIMIT 5`;
   const researchSignals = await sql`
     SELECT signal_key, date, payload FROM research_signals
     WHERE date = ${s.date} ORDER BY signal_key`;
-  const body = { regime, subject: await getSubject(s.subject_id), recentSessions: recent, researchSignals };
+  const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
+  const body = { regime, subject: await getSubject(s.subject_id), recentSessions: recent, previousSession, researchSignals };
   await sql`INSERT INTO committee_briefs (date, subject_id, body) VALUES (${s.date}, ${s.subject_id}, ${sql.json(body)})
             ON CONFLICT (date, subject_id) DO UPDATE SET body = EXCLUDED.body`;
   const closes = new Date(Date.now() + windowMinutes * 60_000);

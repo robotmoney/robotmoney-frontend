@@ -51,11 +51,11 @@ All MCP tools listed in the architecture must be demonstrated:
 | `get_brief` | ✅ Current |
 | `get_signing_payload` | ✅ Current |
 | `submit_recommendation` | ✅ Current |
-| `get_subject_snapshot` | ❌ Missing |
-| `post_memo` | ❌ Not implemented |
-| `classify_regime` (optional analysis) | ❌ Not implemented |
+| `get_subject_snapshot` | ✅ Current |
+| `post_memo` | ✅ Current |
+| `classify_regime` (optional analysis) | ✅ Current |
 | `actual_vs_target_weights` (optional analysis) | ❌ Not implemented |
-| `concentration_metrics` (optional analysis) | ❌ Not implemented |
+| `concentration_metrics` (optional analysis) | ✅ Current |
 
 The MCP transport must use **Streamable HTTP with OAuth 2.1** (bearer tokens are a
 dev-mode fallback only; the OAuth flow must be exercised in the demo).
@@ -73,7 +73,7 @@ The REST sibling routes must be demonstrated exercising the same domain code:
 - `POST /api/committee/regime` (role-gated analytics write)
 - `GET /api/committee/members`
 - `GET /api/committee/sessions` / `GET /api/committee/sessions/:id`
-- `GET /api/committee/brief/:sessionId`
+- `GET /api/committee/brief?date=&subject=`
 - `GET /api/dashboards/regime-snapshots`
 - `GET /api/dashboards/research-signals/:key`
 

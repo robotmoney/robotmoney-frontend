@@ -52,6 +52,8 @@ function buildServer(memberId: string, memberToken: string | null) {
     async () => j(await get(`/api/committee/sessions`)));
   server.registerTool("get_brief", { description: "The brief for a session.", inputSchema: { date: z.string(), subject: z.string() } },
     async ({ date, subject }) => j(await get(`/api/committee/brief?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(subject)}`)));
+  server.registerTool("get_subject_snapshot", { description: "Latest snapshot (positions, weights, total value) for a portfolio subject.", inputSchema: { subjectId: z.string() } },
+    async ({ subjectId }) => j({ ...(await get(`/api/committee/subjects/${encodeURIComponent(subjectId)}/snapshots`)) }));
   server.registerTool("get_session", { description: "A committee session with its takes.", inputSchema: { date: z.string(), subject: z.string() } },
     async ({ date, subject }) => j(await get(`/api/committee/sessions/${encodeURIComponent(date)}/${encodeURIComponent(subject)}`)));
   server.registerTool("get_signing_payload",

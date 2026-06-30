@@ -9,7 +9,8 @@ export async function openSession(payload: Record<string, unknown>): Promise<unk
 export async function publishBrief(payload: Record<string, unknown>): Promise<unknown> {
   const sessionId = String(payload.sessionId);
   const windowMinutes = Number(payload.windowMinutes ?? 60);
-  return await ic.publishBrief(sessionId, windowMinutes);
+  const prevOutcome = payload.prevOutcome ? String(payload.prevOutcome) : undefined;
+  return await ic.publishBrief(sessionId, windowMinutes, prevOutcome);
 }
 
 export async function closeWindow(payload: Record<string, unknown>): Promise<unknown> {

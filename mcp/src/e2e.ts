@@ -65,7 +65,7 @@ async function runSession(date: string, subject: typeof SUBJECTS[0], sessionInde
   const sd = await waitForSessionState(date, subject.id, "scheduled");
   const sessionId = sd.session.id;
 
-  await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes: 60 });
+  await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes: 60, prevOutcome });
   await waitForSessionState(date, subject.id, "collecting");
   console.log(`${tag} session ${sessionId}: brief published, window open`);
 
@@ -167,23 +167,51 @@ async function main() {
   // Session 1: today's subject
   const s1 = await runSession(today, SUBJECTS[0], 1);
 
-  // Cross-role denial assertions (during session 2's window, using s1's data)
-  // Register a test member and verify token/member mismatch is rejected.
+  // ── Cross-role denial assertions ─────────────────────────────────────────
+  // Register a test member and verify identity-layer checks (always enforced
+  // regardless of RM_ALLOW_INSECURE). The demo runs in insecure mode so role
+  // gates on regime write (analyticsProvider) and admin lifecycle (privileged)
+  // are open — the identity-layer submit checks are the universal enforcement.
   const testReg = await fetch(`${BACKEND}/api/committee/register`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: "cross-role-test", name: "Cross Role Test", publicKey: (await generateKeyPair()).publicKeyB64 }),
   }).then((r) => r.json());
   const testToken: string = testReg.token;
+
+  // 5a. Unknown token → 401 with "unknown member token"
   const badTokenRes = await fetch(`${BACKEND}/api/committee/submit`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer nonexistent" },
     body: JSON.stringify({ memberId: "cross-role-test", date: today, subjectId: SUBJECTS[0].id, nonce: crypto.randomUUID(), stance: "neutral", confidence: 0.5, signature: "bad" }),
   }).then((r) => r.json());
-  console.log(`  cross-role: unknown token → ${badTokenRes.status} ${badTokenRes.error}`);
+  console.log(`  cross-role: unknown token → ${badTokenRes.status} "${badTokenRes.error}"`);
+  const badTokenOk = badTokenRes.status === 401 && String(badTokenRes.error).includes("unknown member token");
+  if (!badTokenOk) throw new Error(`expected 401 unknown token, got ${badTokenRes.status}`);
+
+  // 5b. Known token but wrong memberId in body → 403 with "token/member mismatch"
   const mismatchRes = await fetch(`${BACKEND}/api/committee/submit`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ memberId: "someone-else", date: today, subjectId: SUBJECTS[0].id, nonce: crypto.randomUUID(), stance: "neutral", confidence: 0.5, signature: "bad" }),
   }).then((r) => r.json());
-  console.log(`  cross-role: token/member mismatch → ${mismatchRes.status} ${mismatchRes.error}`);
+  console.log(`  cross-role: token/member mismatch → ${mismatchRes.status} "${mismatchRes.error}"`);
+  const mismatchOk = mismatchRes.status === 403 && String(mismatchRes.error).includes("token/member mismatch");
+  if (!mismatchOk) throw new Error(`expected 403 token/member mismatch, got ${mismatchRes.status}`);
+
+  // 5c. Known member token calling regime write (would be 403 with
+  // ANALYTICS_TOKEN set; in insecure mode the gate is open so we document
+  // the expected behaviour rather than assert a specific status).
+  const regimeWriteRes = await fetch(`${BACKEND}/api/committee/regime`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
+    body: JSON.stringify({ asof: today }),
+  });
+  const regimeWriteInsecure = process.env.RM_ALLOW_INSECURE !== "0" && !process.env.ANALYTICS_TOKEN;
+  console.log(`  cross-role: member → regime write → ${regimeWriteRes.status}${regimeWriteInsecure ? " (insecure mode — gate open)" : " (enforced)"}`);
+
+  // 5d. Known member token calling admin lifecycle (same insecure-mode caveat).
+  const adminCloseRes = await fetch(`${BACKEND}/api/committee/admin/close`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
+    body: JSON.stringify({ sessionId: -1 }),
+  });
+  console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeWriteInsecure ? " (insecure mode — gate open)" : " (enforced)"}`);
 
   // Session 2: next day, different subject (demonstrates rotation + cross-session awareness)
   const s2 = await runSession(tomorrow, SUBJECTS[1], 2, s1.pub.session.synthesis);

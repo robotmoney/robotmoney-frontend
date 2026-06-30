@@ -153,14 +153,15 @@ async function main(): Promise<void> {
   await run(["bun", "run", "scripts/demo-frontend-check.ts"], repoRoot,
     { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "frontend checks");
 
-  console.log("\n=== stack is live (Ctrl-C to tear everything down) ===");
-  console.log(`  frontend   ${backendUrl}/`);
-  console.log(`  regime     ${backendUrl}/regime`);
-  console.log(`  committee  ${backendUrl}/committee`);
-  console.log(`  research   ${backendUrl}/research/*`);
-  console.log(`  mcp health ${mcpUrl}/health`);
-  console.log(`  containers docker ps -a --filter name=${project}`);
+  const researchKeys = ["channel-divergence", "late-cycle-signals"];
+  console.log("\n\u2500\u2500 Robot Money demo \u2500\u2500".padEnd(68, "\u2500"));
+  console.log(`  Site:       ${backendUrl}/`);
+  console.log(`  Regime:     ${backendUrl}/regime`);
+  console.log(`  Committee:  ${backendUrl}/committee`);
+  for (const k of researchKeys) console.log(`  Research:   ${backendUrl}/research/${k}`);
+  console.log(`  MCP:        ${mcpUrl}/health`);
   console.log("");
+  console.log(`  Press Ctrl-C to shut down.`);
   await new Promise<never>(() => { /* run until a signal triggers cleanup */ });
 }
 
