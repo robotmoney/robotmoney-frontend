@@ -1491,3 +1491,45 @@
   </div>
 </section>
 
+<!-- ── Public comment thread (Postgres-backed; original site parity) ── -->
+<section class="comments" x-data="commentsThread('home')" x-init="load()">
+  <div class="comments__inner">
+    <h3 class="comments__title">Discussion</h3>
+    <p class="comments__sub">Join the conversation. Comments are public.</p>
+
+    <template x-if="loading">
+      <p class="comments__state">Loading comments…</p>
+    </template>
+    <template x-if="error">
+      <p class="comments__state comments__state--err" x-text="error"></p>
+    </template>
+
+    <ul class="comments__list" x-show="!loading && !error">
+      <template x-if="comments.length === 0">
+        <li class="comments__empty">No comments yet — be the first.</li>
+      </template>
+      <template x-for="c in comments" :key="c.id">
+        <li class="comment">
+          <div class="comment__head">
+            <span class="comment__author" x-text="c.author"></span>
+            <span class="comment__when" x-text="when(c.createdAt)"></span>
+          </div>
+          <p class="comment__body" x-text="c.content"></p>
+        </li>
+      </template>
+    </ul>
+
+    <form class="comments__form" @submit.prevent="submit()">
+      <input class="comments__input" type="text" maxlength="80" placeholder="Your name"
+             x-model="form.author" :disabled="posting" />
+      <textarea class="comments__textarea" maxlength="4000" rows="3" placeholder="Add a comment…"
+                x-model="form.content" :disabled="posting"></textarea>
+      <div class="comments__actions">
+        <button class="btn-primary" type="submit" :disabled="posting"
+                x-text="posting ? 'Posting…' : 'Post comment'"></button>
+      </div>
+      <p class="comments__notice" x-show="notice" x-text="notice"></p>
+    </form>
+  </div>
+</section>
+

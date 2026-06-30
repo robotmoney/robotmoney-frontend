@@ -8,6 +8,7 @@
 // Demo auth = bearer token (the §9.5 design upgrades this to OAuth 2.1). The
 // valuable part — member-side signing + server-side signature verification — is
 // real and unchanged.
+import { createHash } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
@@ -52,6 +53,20 @@ function buildServer(token: string | null) {
 }
 
 const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
+// Per-session hash of the bearer token bound at init. Every follow-up request to
+// an existing session must re-present the SAME token; otherwise a leaked/guessed
+// mcp-session-id would let an attacker ride a victim's bound identity (the SDK
+// routes a known session straight to its transport, ignoring Authorization).
+const sessionTokenHash = new Map<string, string>();
+const bearerOf = (req: Request) => {
+  const auth = req.headers.get("Authorization") ?? "";
+  return auth.startsWith("Bearer ") ? auth.slice(7) : null;
+};
+const tokenHash = (token: string | null) => createHash("sha256").update(token ?? "").digest("hex");
+const unauthorized = (msg: string) =>
+  new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: msg }, id: null }), {
+    status: 401, headers: { "Content-Type": "application/json" },
+  });
 
 Bun.serve({
   port: PORT,
@@ -62,17 +77,19 @@ Bun.serve({
 
     const sid = req.headers.get("mcp-session-id");
     if (sid && transports.has(sid)) {
+      // Re-validate the bearer on EVERY request to a bound session.
+      if (tokenHash(bearerOf(req)) !== sessionTokenHash.get(sid))
+        return unauthorized("bearer token does not match the session it was bound to");
       return transports.get(sid)!.handleRequest(req);
     }
 
     // New session: this is an initialize request. Bind the bearer token now.
-    const auth = req.headers.get("Authorization") ?? "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+    const token = bearerOf(req);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
       enableJsonResponse: true,
-      onsessioninitialized: (id) => transports.set(id, transport),
-      onsessionclosed: (id) => transports.delete(id),
+      onsessioninitialized: (id) => { transports.set(id, transport); sessionTokenHash.set(id, tokenHash(token)); },
+      onsessionclosed: (id) => { transports.delete(id); sessionTokenHash.delete(id); },
     });
     const server = buildServer(token);
     await server.connect(transport);

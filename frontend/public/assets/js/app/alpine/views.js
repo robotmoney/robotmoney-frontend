@@ -121,4 +121,81 @@ export function registerViews(Alpine) {
     },
     stanceClass(s) { return `stance stance--${s}`; },
   }));
+
+  // ── Public comment thread ─────────────────────────────────────────────────
+  // Re-creates the original site's comment thread, now backed by Postgres.
+  // Fed a page slug; fetches GET /api/comments and POSTs new comments. Renders
+  // optimistically and surfaces the 429 rate-limit message inline.
+  Alpine.data("commentsThread", (page) => ({
+    page,
+    loading: true,
+    error: null,
+    notice: null,
+    posting: false,
+    comments: [],
+    form: { author: "", content: "" },
+    async load() {
+      try {
+        const data = await api.get(ROUTES.comments.list, { page: this.page });
+        this.comments = data.comments || [];
+        this.loading = false;
+      } catch (e) {
+        this.error = e.message;
+        this.loading = false;
+      }
+    },
+    async submit() {
+      this.notice = null;
+      const author = this.form.author.trim();
+      const content = this.form.content.trim();
+      if (!author || !content) {
+        this.notice = "Name and comment are both required.";
+        return;
+      }
+      this.posting = true;
+      try {
+        const created = await api.post(ROUTES.comments.create, { page: this.page, author, content });
+        this.comments.push(created); // optimistic append (oldest → newest)
+        this.form.content = "";
+      } catch (e) {
+        // ApiError exposes .status; 429 = rate limited.
+        this.notice = e.status === 429
+          ? "You're commenting too fast — please wait a moment and try again."
+          : `Could not post your comment (${e.message}).`;
+      } finally {
+        this.posting = false;
+      }
+    },
+    when(iso) {
+      try { return new Date(iso).toLocaleString(); } catch (_) { return iso; }
+    },
+  }));
+
+  // ── Committee application (apply → pending activation) ─────────────────────
+  // The real onboarding entry point. POSTs the prospective member's public key
+  // to /api/committee/apply; the member is recorded 'applied' and an admin must
+  // activate it before it can submit. No token is minted here.
+  Alpine.data("applyForm", () => ({
+    form: { memberId: "", name: "", lens: "", publicKey: "" },
+    submitting: false,
+    error: null,
+    result: null,
+    async submit() {
+      this.error = null;
+      this.submitting = true;
+      try {
+        const body = {
+          memberId: this.form.memberId.trim(),
+          name: this.form.name.trim(),
+          lens: this.form.lens.trim() || undefined,
+          publicKey: this.form.publicKey.trim(),
+        };
+        this.result = await api.post(ROUTES.committee.apply, body);
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.submitting = false;
+      }
+    },
+  }));
 }

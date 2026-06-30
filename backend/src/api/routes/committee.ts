@@ -51,13 +51,43 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   // if unset, allow only outside prod (demo/ephemeral convenience). This closes
   // the unauthenticated identity-takeover / state-drive holes. Proper
   // per-member onboarding + OAuth is the IC-remainder work.
+  // Roles (docs/ARCHITECTURE.md §9.8):
+  //  • host/admin     — privileged() (ADMIN_TOKEN or non-prod). Drives lifecycle
+  //                     and member activation; can rotate keys.
+  //  • analytics-provider — ANALYTICS_TOKEN bearer. May write the regime.
+  //  • member         — committee_member_keys bearer. May submit (enforced in
+  //                     submitRecommendation).
   const privileged = () => {
     if (config.adminToken) return req.headers.get("X-Admin-Token") === config.adminToken;
     return config.env !== "prod";
   };
+  const analyticsProvider = () => {
+    if (config.analyticsToken) return bearer(req) === config.analyticsToken;
+    return config.env !== "prod";
+  };
 
-  // Onboarding: register a member's public key, get a bearer token. Privileged
-  // (it can rotate/replace an existing member's key).
+  // PUBLIC onboarding: a prospective member submits its public key. The member
+  // is recorded as 'applied' (NOT active) with an INACTIVE key — it cannot
+  // submit until an admin activates it. Re-applying refreshes the pending
+  // record but NEVER overwrites an already-active member's key (that's admin).
+  if (m === "POST" && p === "/api/committee/apply") {
+    const b = (await req.json().catch(() => null)) as any;
+    if (!b?.memberId || !b?.name || !b?.publicKey) return { status: 400, body: { error: "memberId, name, publicKey required" } };
+    const res = await ic.applyMember(b);
+    return { status: res.status, body: res };
+  }
+
+  // Role-gated regime write: ONLY the analytics-provider may persist the regime.
+  if (m === "POST" && p === "/api/committee/regime") {
+    if (!analyticsProvider()) return { status: 403, body: { error: "analytics-provider role required" } };
+    const b = (await req.json().catch(() => ({}))) as any;
+    const tools = Object.keys(await runAnalytics(b.asof ?? new Date().toISOString().slice(0, 10)));
+    return { status: 200, body: { ok: true, tools } };
+  }
+
+  // Onboarding (privileged alias): register a member's public key and mint a
+  // bearer token in one shot (apply + activate combined). Kept for the demo/E2E
+  // harness. Privileged because it can rotate/replace an existing member's key.
   if (m === "POST" && p === "/api/committee/register") {
     if (!privileged()) return { status: 403, body: { error: "onboarding requires admin authorization" } };
     const b = (await req.json().catch(() => null)) as any;
@@ -71,6 +101,11 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     const action = p.split("/").pop();
     const b = (await req.json().catch(() => ({}))) as any;
     switch (action) {
+      case "activate": {
+        if (!b?.memberId) return { status: 400, body: { error: "memberId required" } };
+        const res = await ic.activateMember(b.memberId);
+        return { status: res.status, body: res };
+      }
       case "reset": return { status: 200, body: await ic.resetSessions() };
       case "regime": return { status: 200, body: { tools: Object.keys(await runAnalytics(b.asof ?? new Date().toISOString().slice(0, 10))) } };
       case "subject": return { status: 200, body: await ic.ensureSubject(b.id, b.name) };

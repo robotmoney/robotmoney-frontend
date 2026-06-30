@@ -35,17 +35,26 @@ export interface CommitteeSubject {
   lastReviewed: string | null;
 }
 
+// A "take" is now a member-submitted, ed25519-signed recommendation pulled from
+// the canonical append-only committee_recommendations store (§9.8). The legacy
+// LLM-provenance fields (mode/model/generatedAt) are optional remnants of the
+// prototype committee_takes table (dropped in 0006) and are not produced by the
+// current getSession; `verified` reflects server-side signature verification.
 export interface CommitteeTake {
   id: string;
-  sessionId: string;
   memberId: string;
   memberName: string;
-  mode: string | null;
   stance: string | null;
   confidence: number | null;
-  body: string;
-  model: string | null;
-  generatedAt: string;
+  body: string | null;
+  memoUrl?: string | null;
+  verified: boolean;
+  receivedAt: string;
+  // Optional provenance (legacy/prototype; absent for signed recommendations).
+  sessionId?: string;
+  mode?: string | null;
+  model?: string | null;
+  generatedAt?: string;
 }
 
 export interface CommitteeSession {

@@ -61,6 +61,23 @@
 .stance--cautious { color: var(--color-warm); background: rgba(232,166,64,0.1); }
 .stance--bearish { color: var(--color-warn); background: rgba(255,102,68,0.1); }
 
+/* committee application form (/committee/apply) */
+.cv__form { display: flex; flex-direction: column; gap: 1.25rem; max-width: 32rem; margin-top: 2rem; }
+.cv__field { display: flex; flex-direction: column; gap: 0.4rem; }
+.cv__input {
+  background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px;
+  color: var(--color-text); font-family: var(--font-mono); font-size: 0.9rem; padding: 0.65rem 0.8rem;
+}
+.cv__input:focus { outline: none; border-color: var(--color-accent); }
+.cv__textarea { resize: vertical; min-height: 4rem; }
+.cv__submit {
+  align-self: flex-start; cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem;
+  text-transform: uppercase; letter-spacing: 0.1em; padding: 0.6rem 1.4rem; border-radius: 4px;
+  color: var(--color-bg); background: var(--color-accent); border: none;
+}
+.cv__submit:disabled { opacity: 0.5; cursor: default; }
+.cv__applied { flex-direction: column; align-items: flex-start; }
+
 @media (min-width: 768px) { .rv__cards { grid-template-columns: repeat(4, 1fr); } .rv__indicators { grid-template-columns: repeat(2, 1fr); } }
 
 /* research signals (/research/*) */

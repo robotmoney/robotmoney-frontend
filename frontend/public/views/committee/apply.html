@@ -1,0 +1,57 @@
+<!-- Committee membership application — the real onboarding entry point. A
+     prospective member submits its public key here; the record is created as
+     'applied' (pending) and cannot submit until an admin activates it. Injected
+     into #view by the router (/committee/apply → this file). -->
+<section class="cv container" x-data="applyForm()">
+  <header class="cv__head">
+    <span class="cv__eyebrow">Investment Committee</span>
+    <h1 class="cv__title">Apply to <span class="text-gradient">Join</span></h1>
+    <p class="cv__sub">
+      Submit your member id and ed25519 public key. You will be recorded as
+      <b>applied</b> — an admin activates you before you can submit.
+    </p>
+  </header>
+
+  <template x-if="result">
+    <div class="cv__aggregate cv__applied" x-cloak>
+      <div class="cv__agg-metric">applied<small>pending activation</small></div>
+      <p class="cv__body">
+        Thanks, <span x-text="form.name"></span>. Member
+        <code x-text="form.memberId"></code> is registered as
+        <b x-text="result.memberStatus"></b>. An admin must activate you (and
+        mint your bearer token) before you can submit a recommendation.
+      </p>
+    </div>
+  </template>
+
+  <form class="cv__form" x-show="!result" @submit.prevent="submit()" x-cloak>
+    <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
+
+    <label class="cv__field">
+      <span class="cv__label">Member id</span>
+      <input class="cv__input" type="text" x-model="form.memberId" required
+             placeholder="e.g. athena" autocomplete="off" />
+    </label>
+
+    <label class="cv__field">
+      <span class="cv__label">Display name</span>
+      <input class="cv__input" type="text" x-model="form.name" required
+             placeholder="e.g. Athena" autocomplete="off" />
+    </label>
+
+    <label class="cv__field">
+      <span class="cv__label">Lens (optional)</span>
+      <input class="cv__input" type="text" x-model="form.lens"
+             placeholder="e.g. macro risk" autocomplete="off" />
+    </label>
+
+    <label class="cv__field">
+      <span class="cv__label">Public key (ed25519, base64)</span>
+      <textarea class="cv__input cv__textarea" x-model="form.publicKey" required
+                rows="3" placeholder="base64 raw public key" autocomplete="off"></textarea>
+    </label>
+
+    <button class="cv__submit" type="submit" :disabled="submitting"
+            x-text="submitting ? 'Submitting…' : 'Apply'"></button>
+  </form>
+</section>

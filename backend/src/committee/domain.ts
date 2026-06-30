@@ -121,10 +121,54 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   }
 }
 
+// ── Onboarding: apply (public) → activate (admin) ───────────────────────────
+// The real path. A prospective member submits its PUBLIC key with `apply`; the
+// member stays status='applied' and the key is registered INACTIVE (no token,
+// cannot submit). An admin then `activate`s the member, which flips it active,
+// activates the key, and mints a bearer token. RM never holds private keys.
+export interface ApplyInput { memberId: string; name: string; lens?: string; publicKey: string; contact?: string }
+
+export async function applyMember(input: ApplyInput) {
+  const existing = (await sql`SELECT id, status FROM committee_members WHERE id = ${input.memberId}`)[0] as { id: string; status: string } | undefined;
+  // An ALREADY-ACTIVE member's key can only be changed by an admin (key rotation
+  // is privileged). A public re-apply must never overwrite a live key/identity.
+  if (existing && existing.status === "active")
+    return { ok: false, status: 409, error: "member already active; key changes require admin" };
+
+  // Upsert the member as 'applied' (re-apply updates the pending record).
+  await sql`INSERT INTO committee_members (id, status, name, lens, contact_email, applied_at)
+            VALUES (${input.memberId}, 'applied', ${input.name}, ${input.lens ?? null}, ${input.contact ?? null}, now())
+            ON CONFLICT (id) DO UPDATE SET status = 'applied', name = EXCLUDED.name,
+              lens = EXCLUDED.lens, contact_email = EXCLUDED.contact_email, applied_at = now()`;
+  // Replace only the pending (inactive) key — never an active one (guarded above).
+  await sql`DELETE FROM committee_member_keys WHERE member_id = ${input.memberId} AND active = false`;
+  await sql`INSERT INTO committee_member_keys (member_id, public_key, active) VALUES (${input.memberId}, ${input.publicKey}, false)`;
+  // Keep one pending application record (re-apply refreshes it).
+  await sql`DELETE FROM committee_applications WHERE member_id = ${input.memberId} AND status = 'pending'`;
+  await sql`INSERT INTO committee_applications (member_id, payload, status) VALUES (${input.memberId}, ${sql.json(input as any)}, 'pending')`;
+  await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${input.memberId}, 'apply', ${sql.json({ memberId: input.memberId })})`;
+  return { ok: true, status: 201, memberStatus: "applied" as const };
+}
+
+export async function activateMember(memberId: string) {
+  const existing = (await sql`SELECT id, status FROM committee_members WHERE id = ${memberId}`)[0] as { id: string; status: string } | undefined;
+  if (!existing) return { ok: false, status: 404, error: "no such applicant" };
+  const key = (await sql`SELECT id FROM committee_member_keys WHERE member_id = ${memberId} ORDER BY created_at DESC LIMIT 1`)[0] as { id: number } | undefined;
+  if (!key) return { ok: false, status: 409, error: "no key on file; member must apply first" };
+  const token = `tok_${memberId}_${crypto.randomUUID().slice(0, 8)}`;
+  await sql`UPDATE committee_members SET status = 'active', activated_at = now() WHERE id = ${memberId}`;
+  // Activate the latest key + bind the bearer token (only its hash is stored).
+  await sql`UPDATE committee_member_keys SET active = true, token_hash = ${hashKey(token)} WHERE id = ${key.id}`;
+  await sql`UPDATE committee_applications SET status = 'approved', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
+  await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'activate_member', ${sql.json({ memberId })})`;
+  return { ok: true, status: 200, memberId, token };
+}
+
 // ── Demo onboarding ─────────────────────────────────────────────────────────
 // A member generates its own keypair and registers its PUBLIC key here, getting
-// a bearer token for the MCP/REST surfaces. (Real flow is apply → admin-activate;
-// this is the demo shortcut. Private keys never leave the member.)
+// a bearer token in one shot. This is the PRIVILEGED admin shortcut (apply +
+// activate combined) used by the demo/E2E harness; the public path is
+// applyMember → activateMember. Private keys never leave the member.
 export async function registerMember(input: { memberId: string; name: string; lens?: string; publicKey: string }) {
   const token = `tok_${input.memberId}_${crypto.randomUUID().slice(0, 8)}`;
   await sql`INSERT INTO committee_members (id, status, name, lens)

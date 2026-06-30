@@ -26,6 +26,11 @@ export const config = {
   // lifecycle). If set, callers must present it as `X-Admin-Token`. If unset,
   // those endpoints are allowed only outside prod (demo/ephemeral convenience).
   adminToken: process.env.ADMIN_TOKEN || null,
+  // Credential for the analytics-provider role. Only this role may write the
+  // regime via POST /api/committee/regime. Presented as a Bearer token. If set,
+  // it is required (every env); if unset, the role is allowed only outside prod
+  // (demo/ephemeral convenience), mirroring adminToken.
+  analyticsToken: process.env.ANALYTICS_TOKEN || null,
   // Analytics data source. Default "seeded" (deterministic, hermetic, no keys).
   // Opt in to REAL keyless live data (DefiLlama/CoinGecko/Yahoo) with PROVIDER=live;
   // per-series failures still fall back to seeded so a run never breaks.

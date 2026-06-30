@@ -224,3 +224,27 @@
 .footer__inner { max-width: 80rem; margin-inline: auto; display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; align-items: center; }
 .footer__mark { font-family: var(--font-mono); letter-spacing: 0.2em; color: var(--color-text); }
 .footer__legal { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-dim); }
+
+/* ════════ Comment thread (Postgres-backed; original site parity) ════════ */
+.comments { border-top: 1px solid var(--color-border); padding: 4rem 1.5rem; }
+.comments__inner { max-width: 48rem; margin-inline: auto; }
+.comments__title { font-family: var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text); margin: 0 0 0.25rem; }
+.comments__sub { font-size: 0.875rem; color: var(--color-text-dim); margin: 0 0 2rem; }
+.comments__state { font-family: var(--font-mono); font-size: 0.875rem; color: var(--color-text-dim); }
+.comments__state--err { color: var(--color-warn); }
+.comments__list { list-style: none; margin: 0 0 2rem; padding: 0; display: flex; flex-direction: column; gap: 1rem; }
+.comments__empty { font-size: 0.875rem; color: var(--color-text-dim); }
+.comment { border: 1px solid var(--color-border); border-radius: 0.5rem; background: var(--color-surface); padding: 1rem 1.25rem; }
+.comment__head { display: flex; align-items: baseline; gap: 0.75rem; margin-bottom: 0.4rem; }
+.comment__author { font-family: var(--font-mono); font-size: 0.875rem; color: var(--color-accent); }
+.comment__when { font-size: 0.75rem; color: var(--color-text-dim); }
+.comment__body { margin: 0; color: var(--color-text); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.comments__form { display: flex; flex-direction: column; gap: 0.75rem; }
+.comments__input, .comments__textarea {
+  width: 100%; box-sizing: border-box; background: var(--color-void); color: var(--color-text);
+  border: 1px solid var(--color-border); border-radius: 0.5rem; padding: 0.65rem 0.85rem;
+  font-family: var(--font-sans); font-size: 0.9375rem; resize: vertical;
+}
+.comments__input:focus, .comments__textarea:focus { outline: none; border-color: var(--color-accent); }
+.comments__actions { display: flex; justify-content: flex-end; }
+.comments__notice { margin: 0; font-family: var(--font-mono); font-size: 0.8125rem; color: var(--color-warn); }

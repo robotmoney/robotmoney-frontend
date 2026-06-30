@@ -1,0 +1,50 @@
+-- §9.8 Row-Level Security (DEFERRED — defense-in-depth, not yet enabled).
+--
+-- Intent: enforce the API-layer role model (member / analytics-provider /
+-- admin) a second time at the database, so a bug in a handler cannot let the
+-- wrong role write committee_recommendations or regime_snapshots. Roles would
+-- be carried per request via a GUC (e.g. SET LOCAL app.current_role = '...')
+-- and policies would key off current_setting('app.current_role', true).
+--
+-- Why this is a STUB and not live DDL:
+--   The backend uses a SINGLE shared postgres.js connection POOL (see
+--   backend/src/db/client.ts, max≈10) and does NOT wrap each HTTP request in a
+--   transaction with a per-request role GUC. SET LOCAL only lasts for a
+--   transaction; a plain `SET` would leak the role across pooled connections to
+--   unrelated requests — a correctness/security hazard. Enabling RLS without
+--   that per-request GUC plumbing would either (a) be a no-op for the pool's
+--   login role (which typically BYPASSRLS / owns the tables) or (b) lock the
+--   app out entirely. Both are worse than the fully-enforced API-layer checks
+--   already in place (backend/src/api/routes/committee.ts: privileged() /
+--   analyticsProvider(), and submitRecommendation's member-token gate).
+--
+-- To activate RLS later (separate, scoped change):
+--   1. Add per-request transaction scoping in db/client.ts that runs
+--      `SELECT set_config('app.current_role', $role, true)` (true = local) at
+--      the start of each request's transaction.
+--   2. Run the app under a NON-owner login role that does not BYPASSRLS.
+--   3. Replace this stub with the policies below.
+--
+-- Planned policies (kept here as the canonical spec; intentionally commented):
+--
+--   ALTER TABLE committee_recommendations ENABLE ROW LEVEL SECURITY;
+--   ALTER TABLE committee_recommendations FORCE ROW LEVEL SECURITY;
+--   -- reads: any authenticated role
+--   CREATE POLICY committee_recs_read ON committee_recommendations
+--     FOR SELECT USING (current_setting('app.current_role', true) IN ('member','analytics-provider','admin'));
+--   -- inserts (submissions): members and admin only; recommendations are append-only
+--   CREATE POLICY committee_recs_write ON committee_recommendations
+--     FOR INSERT WITH CHECK (current_setting('app.current_role', true) IN ('member','admin'));
+--
+--   ALTER TABLE regime_snapshots ENABLE ROW LEVEL SECURITY;
+--   ALTER TABLE regime_snapshots FORCE ROW LEVEL SECURITY;
+--   CREATE POLICY regime_read ON regime_snapshots
+--     FOR SELECT USING (true);
+--   -- writes: analytics-provider (or admin) only
+--   CREATE POLICY regime_write ON regime_snapshots
+--     FOR ALL USING (current_setting('app.current_role', true) IN ('analytics-provider','admin'))
+--     WITH CHECK (current_setting('app.current_role', true) IN ('analytics-provider','admin'));
+--
+-- This migration is intentionally a no-op so it records cleanly and the schema
+-- documents the deferred RLS plan in one place.
+SELECT 1 WHERE false;

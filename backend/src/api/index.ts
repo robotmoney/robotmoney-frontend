@@ -5,7 +5,7 @@ import { join, normalize } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
 import { config } from "../config.ts";
 import { sql } from "../db/client.ts";
-import { listComments } from "./routes/comments.ts";
+import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getResearchSignal } from "./routes/dashboards.ts";
 import { handleCommittee } from "./routes/committee.ts";
 
@@ -49,15 +49,20 @@ async function serveStatic(pathname: string): Promise<Response | null> {
 
 const server = Bun.serve({
   port: config.apiPort,
-  async fetch(req) {
+  async fetch(req, server) {
     const url = new URL(req.url);
     const origin = req.headers.get("Origin");
     const { pathname } = url;
 
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
 
+    // Client ip for rate limiting: trust the first x-forwarded-for hop when
+    // present (single reverse proxy), else the raw socket address.
+    const fwd = req.headers.get("x-forwarded-for");
+    const clientIp = (fwd ? fwd.split(",")[0]!.trim() : "") || server.requestIP(req)?.address || "";
+
     try {
-      return await route(req, url, pathname, origin);
+      return await route(req, url, pathname, origin, clientIp);
     } catch (err) {
       // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
       // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.
@@ -68,7 +73,7 @@ const server = Bun.serve({
   },
 });
 
-async function route(req: Request, url: URL, pathname: string, origin: string | null): Promise<Response> {
+async function route(req: Request, url: URL, pathname: string, origin: string | null, clientIp: string): Promise<Response> {
     if (pathname === ROUTES.health) {
       let db = "down";
       try { await sql`SELECT 1`; db = "up"; } catch { db = "down"; }
@@ -77,6 +82,12 @@ async function route(req: Request, url: URL, pathname: string, origin: string | 
 
     if (pathname === ROUTES.comments.list && req.method === "GET") {
       return json(await listComments(url), origin);
+    }
+
+    if (pathname === ROUTES.comments.create && req.method === "POST") {
+      const body = await req.json().catch(() => null);
+      const r = await createComment(body, clientIp);
+      return json(r.body, origin, r.status);
     }
 
     if (pathname === ROUTES.dashboards.regimeSnapshots && req.method === "GET") {
