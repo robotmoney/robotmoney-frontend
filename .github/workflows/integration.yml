@@ -1,15 +1,16 @@
-# Runs the backend test suite on every push/PR. The suite is self-contained: its
-# preload starts an ephemeral Postgres via Docker (available on ubuntu-latest) and
-# applies migrations, then tears it down — the SAME harness used locally, so there
-# is no CI-specific behavior. A missing Docker/Postgres fails the run loudly.
-name: test
+# Integration tier of the test pyramid: the backend suite runs against a real
+# Postgres. The self-contained preload starts an ephemeral Postgres via Docker
+# (available on ubuntu-latest) and applies migrations, then tears it down — the
+# SAME harness used locally, so there is no CI-specific behavior. A missing
+# Docker/Postgres fails the run loudly.
+name: integration
 on:
   push:
     branches: [main]
   pull_request:
 
 jobs:
-  backend-test:
+  backend-integration:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
