@@ -1,110 +1,112 @@
 # Network topology — DNS, origins & vendors
 
 How `robotmoney.net` presents several independent product surfaces as one
-seamless site, organized as a clean **separation of concerns** across three
-infrastructure tiers behind one routing edge. This document is cross-cutting: it
-spans the **marketing** site, **this repo** (Investment Committee + analytics),
+seamless site, organized by a clean **separation of concerns** — both across
+infrastructure tiers and across **two vendors**. This document is cross-cutting:
+it spans the **marketing** site, **this repo** (Investment Committee + analytics),
 and the **on-chain dapp** (`robotmoney-core`). It is a companion to
 [ARCHITECTURE.md](./ARCHITECTURE.md) (this frontend's internals) and
 [DECISIONS.md](./DECISIONS.md); the production topology here is decision **D13**,
-which supersedes the single-box parts of D8/D11 (see [§11](#11-relationship-to-existing-decisions)).
+which supersedes the single-box parts of D8/D11 (see [§10](#10-relationship-to-existing-decisions)).
 
 ---
 
-## 1. Principle — separation of concerns
+## 1. Principle — two separations of concern
 
-Robot Money has three product surfaces with very different lifecycles and infra:
-static marketing copy, the IC + analytics backend (Bun + Postgres + MCP), and the
-dapp (a long-running Rust daemon, the on-chain gateway, wallet flows). They are
-**deployed independently** — separate codebases, releases, and failure domains.
-
-The infrastructure is organized **by concern, not by surface**, into three tiers,
-fronted by one routing edge and unified visually by one design layer:
+**By tier.** Three surfaces with different lifecycles and infra, deployed
+independently:
 
 - **Static tier** — asset delivery. No runtime dependency on anything else; serves
   even when the API and data tiers are down (**fail-open**).
 - **API tier** — request/response compute. Stateless services.
 - **Data tier** — durable state. One high-availability database.
 
-Two shared seams unify the surfaces: the **edge** (one origin, path routing — this
-document) and the **design layer** (shared `tokens.css` + nav/footer chrome —
-ARCHITECTURE §4).
+**By vendor.** Each vendor owns one job, and **no routing software runs anywhere**:
+
+- **Cloudflare — DNS + observability.** Authoritative DNS, proxied TLS/DDoS, and
+  monitoring (Health Checks, analytics, Logpush). This is *configuration, not code*
+  — no Worker, no reverse proxy.
+- **DigitalOcean — compute + storage.** Droplets, Spaces (+CDN), and Managed
+  Postgres.
+
+Because Cloudflare runs no routing code and DigitalOcean has no managed
+path-router, surfaces are addressed by **subdomain** (host-based routing via plain
+DNS), not by path prefix. The seamless look is carried by the **shared design
+layer** (ARCHITECTURE §4), not by a shared origin.
 
 ---
 
-## 2. Tiers, concerns & vendors
+## 2. The vendor split
 
-| Tier / layer | Concern | Vendor & home | Fail-open? |
-|---|---|---|---|
-| **Edge** | DNS, TLS, path routing | **Cloudflare** — DNS + a routing Worker | routes around dead origins |
-| **Static** | Marketing asset delivery | **DigitalOcean Spaces CDN** | **yes** — independent of API/data |
-| **API** | Request/response compute | **DigitalOcean Droplets** — Bun `api`+`worker`; `rmpc`+gateway | per-route at the edge |
-| **Data** | Durable state | **DigitalOcean Managed Postgres — HA cluster** | n/a (primary+standby failover) |
+| Vendor | Owns | Form |
+|--------|------|------|
+| **Cloudflare** | DNS, TLS, DDoS, **observability** (Health Checks, analytics, Logpush) | Configuration only — **no software** |
+| **DigitalOcean** | **Compute** (Droplets), **storage** (Spaces + CDN), **data** (Managed Postgres HA) | The running system |
 
-**Rule of thumb: Cloudflare owns the edge (DNS, TLS, routing); DigitalOcean owns
-delivery, compute, and state.** Cloudflare has no always-on VM and no managed
-database, and — by this design — does not cache marketing. So the static CDN, the
-droplets, and the Postgres cluster all live on DigitalOcean.
+**Rule of thumb: Cloudflare resolves and watches; DigitalOcean runs and stores.**
+All deployable software lives on DigitalOcean.
 
 ---
 
-## 3. The single origin — path map
+## 3. The surfaces — subdomain map
 
-Every surface is served under one origin, `robotmoney.net`, routed by **path
-prefix** (not subdomains):
+Each surface is its own hostname, resolved by a plain DNS record:
 
-| Path | Surface | Tier → home | Source |
-|------|---------|-------------|--------|
-| `/`, `/about`, `/docs` | Marketing | Static → **DO Spaces CDN** | marketing UI (this repo, D1) |
-| `/committee/*`, `/analytics/*` | IC + analytics | API → **DO droplet** (Bun) + Data → **Postgres HA** | `robotmoney-frontend` (this repo) |
-| `/app/*` | Dapp | API → **DO droplet** (`rmpc` + gateway) | `robotmoney-core` |
+| Hostname | Surface | Tier → home | Source |
+|----------|---------|-------------|--------|
+| `robotmoney.net`, `www.` | Marketing | Static → **DO Spaces CDN** | marketing UI (this repo, D1) |
+| `committee.robotmoney.net` | IC + analytics | API → **DO droplet** (Bun) + Data → **Postgres HA** | `robotmoney-frontend` (this repo) |
+| `app.robotmoney.net` | Dapp | API → **DO droplet** (`rmpc` + gateway) | `robotmoney-core` |
 
-**Why path-prefix, not subdomains.** One origin → navigation never feels like
-leaving the site, session cookies are shared, no CORS. The IC SPA and its API stay
-**same-origin** under `/committee` (D11's same-origin/no-CORS property is preserved
-within the surface, because the Bun `api` co-serves its own SPA assets); the edge
-presents all surfaces as one origin.
+Each app is served at **its own root**, so there is **no path-prefix and no
+base-path handling** — the SPA history router (D4) and import maps (D2) work
+unmodified. The SPA and its API are **same-origin** on the same subdomain (no CORS
+within a surface).
 
 ---
 
-## 4. The edge router (Cloudflare Worker)
+## 4. DNS & TLS — how each hostname resolves
 
-A thin Worker at the apex maps each path prefix to its tier origin. Cloudflare's
-role is strictly **DNS + TLS + routing — it does not cache marketing** (the Spaces
-CDN owns that, §5). It is chosen over plain Origin Rules for **fail-open per
-route**: if an origin is down, the Worker returns that surface's own (or
-cached/error) response rather than a global `502`. A bad deploy on the dapp cannot
-take down marketing or the committee — blast radius is one surface.
+- **Marketing** (`robotmoney.net` via CNAME-flattening, and `www`) → a **DNS-only**
+  (grey-cloud) CNAME to the **DO Spaces CDN endpoint**. This is the CDN's native
+  host-based usage: DO delivers, caches, and terminates TLS with its **custom-domain
+  certificate**. Cloudflare does *not* sit in the data path here, so there is **no
+  double-CDN** (§7).
+- **App subdomains** (`committee.`, `app.`) → **proxied** (orange-cloud) records to
+  the droplet. Cloudflare presents its edge certificate to users and provides
+  TLS/DDoS plus traffic analytics; the droplet serves a **Cloudflare Origin CA
+  certificate** to the proxy. The droplet's **DO Cloud Firewall** allows ingress
+  only from Cloudflare's IP ranges.
+- **(Optional hardening)** a **Cloudflare Tunnel** can replace the proxied-DNS +
+  firewall approach for *zero* public ingress, at the cost of running the
+  `cloudflared` connector on the droplet. Default is proxied DNS + firewall (no
+  connector to run).
 
 ---
 
 ## 5. Static tier — marketing (DO Spaces CDN)
 
 The static marketing assets (the marketing UI preserved per D1) are uploaded to a
-**DigitalOcean Space with its CDN enabled**; the Spaces CDN distributes and caches
-them at the edge. This tier has **no runtime dependency on the API or data tiers**
-— it is pure static — so when an API droplet or Postgres is unavailable, marketing
-**still serves (fail-open)**. Any dynamic data a marketing page wants is fetched
-client-side and must **degrade gracefully**; the page itself never hard-depends on
-the API being up.
+**DigitalOcean Space with its CDN enabled**, served on the apex/`www` hostname.
+The tier has **no runtime dependency on the API or data tiers** — it is pure static
+— so when a droplet or Postgres is unavailable, marketing **still serves
+(fail-open)**. Any dynamic data a marketing page wants is fetched client-side and
+must **degrade gracefully**; the page never hard-depends on the API.
 
 ---
 
 ## 6. API tier — services on DO droplets
 
-Request/response services run on **DigitalOcean Droplets**:
+Request/response services run on **DigitalOcean Droplets**, one surface per
+subdomain:
 
-- **IC + analytics** — this repo's Bun `api` + `worker`. The `api` co-serves this
-  surface's SPA assets (`STATIC_DIR`) same-origin with its own API; only marketing
-  is split out to the static tier.
-- **Dapp** — the `rmpc` daemon + on-chain gateway (`robotmoney-core`).
+- **`committee.`** — this repo's Bun `api` + `worker`; the `api` co-serves this
+  surface's SPA assets (`STATIC_DIR`) same-origin at the subdomain root.
+- **`app.`** — the `rmpc` daemon + on-chain gateway (`robotmoney-core`).
 
-Droplets are reached through **Cloudflare Tunnel** (`cloudflared` dials *out*): no
-public ingress, no exposed ports, no inbound firewall rules, no origin TLS certs
-to rotate. This removes a class of operational/monitoring burden and shrinks the
-attack surface. (Droplets are used because Cloudflare has no always-on instance and
-the `rmpc` daemon must stay synced to chain head — a scale-to-zero model is wrong
-for it.)
+Ingress is Cloudflare-proxied DNS locked to Cloudflare IPs by a DO Cloud Firewall
+(§4). Droplets are used because Cloudflare has no always-on instance and the `rmpc`
+daemon must stay synced to chain head — a scale-to-zero model is wrong for it.
 
 ---
 
@@ -112,63 +114,52 @@ for it.)
 
 Durable state is a **DigitalOcean Managed Postgres high-availability cluster**:
 primary + standby with automated failover, daily backups, and point-in-time
-recovery. The API tier connects via `DATABASE_URL`; no other tier touches the
-database. This refines D8's production mode (one Postgres) to a managed HA cluster
-and replaces the single-box Dockerized Postgres for production (the Dockerized
-Postgres remains the CI and demo mode — D8).
+recovery. Only the API tier connects, via `DATABASE_URL`. This refines D8's
+production mode (one Postgres) to a managed HA cluster; the single-box Dockerized
+Postgres remains the CI and demo mode (D8).
 
 ---
 
 ## 8. No double-CDN
 
-The static tier's CDN is **DO Spaces CDN**; Cloudflare does **not** add a second
-cache in front of it. Set Cloudflare to **bypass cache on the marketing paths**, so
-there is one cache and one invalidation path. Cloudflare passes API responses
-through uncached as well. One concern, one owner: marketing caching belongs to the
-Spaces CDN.
+Marketing's CDN is **DO Spaces CDN**, reached **DNS-only** (§4), so Cloudflare adds
+no second cache in front of it — one cache, one invalidation path (purge is a DO
+operation). The proxied app subdomains are dynamic; Cloudflare passes them through.
 
 ---
 
-## 9. Base paths (the one real gotcha)
+## 9. Seamless without a single origin, and observability
 
-Each surface is mounted under a **prefix** (`/committee`, `/app`), not at root.
-With the buildless model (import maps, runtime asset resolution; D2), asset and
-import URLs must resolve relative to that prefix. **Make each app base-path-aware**
-— it knows it lives at `/committee` and builds its links, router paths (D4), and
-import-map URLs accordingly — rather than stripping the prefix at the edge and
-relying on `<base href>`, which interacts subtly with import maps.
+**Seamless look** does not require one origin — it comes from the shared design
+layer (`tokens.css` + shared nav/footer chrome; ARCHITECTURE §4), identical on
+every subdomain. Shared login/session works by setting cookies on
+`.robotmoney.net`. Cross-surface API calls (rare — each surface mostly calls its
+own same-host API) use CORS.
 
----
+**Observability** is Cloudflare's second job, complemented by DO:
 
-## 10. Monitoring
-
-- **Standardized `/health` JSON contract** across every surface is the keystone.
-  Each checks its *own* dependencies and returns the same shape, so one dashboard
-  reads a heterogeneous stack:
-  - marketing — trivially `200` (static, no deps)
-  - IC + analytics — Postgres reachable, MCP up
-  - dapp — `rmpc` alive, gateway reachable, **RPC reachable + chain-head lag below
-    threshold**
-- **Cloudflare Health Checks** hit each `/health`; **Logpush** + **Worker
-  analytics** give per-route request/error rates with nothing to operate.
-- **Data tier** — rely on the DO managed cluster's metrics (replication lag,
-  failover events, connection saturation).
-- **Fail-open** (§4, §5) keeps a single failed tier from cascading; the static
-  marketing tier in particular stays up independently of API and data.
+- **Cloudflare** — **Health Checks** probe each surface's `/health`; traffic +
+  security **analytics** and **Logpush** per hostname.
+- **DigitalOcean** — droplet **Monitoring/alerts**, **Uptime** checks, and Managed
+  Postgres metrics (replication lag, failover, connections).
+- **`/health` JSON contract** (the keystone) — every surface returns the same shape
+  and checks its own deps: marketing trivially `200`; IC = Postgres + MCP; dapp =
+  `rmpc` alive + gateway + RPC reachable + chain-head lag below threshold.
+- **Fail-open** keeps a single failed tier from cascading; the static marketing
+  tier in particular stays up independently.
 
 ---
 
-## 11. Relationship to existing decisions
+## 10. Relationship to existing decisions
 
 - **D11 (single box, no reverse proxy)** — **superseded for production by D13.**
-  Production now has a Cloudflare edge and three DO tiers. The reason D11 cited —
-  same-origin, no CORS — is *preserved within each surface* (the Bun `api` still
-  co-serves its SPA assets). The single-box `docker-compose` remains the **CI and
-  demo** deployment.
+  Production splits across subdomains on DO with Cloudflare for DNS+observability;
+  there is still **no reverse proxy** (host-based DNS routing, not a proxy). The
+  single-box `docker-compose` remains the **CI and demo** deployment.
 - **D8 (one Postgres in Docker)** — **prod mode refined by D13:** production is a
-  **DO Managed Postgres HA cluster**; the ephemeral (CI) and demo modes are
-  unchanged.
-- **D10 (split-ready repos)** — reinforced: each tier/surface is already an
-  independent origin behind the edge, so a repo split stays mechanical.
-- **D4 (SPA history router)** — now **base-path-aware** under `/committee` (§9).
-- **D2 (buildless)** — drives the base-path handling in §9.
+  **DO Managed Postgres HA cluster**; ephemeral (CI) and demo modes unchanged.
+- **D10 (split-ready repos)** — reinforced: each surface is already an independent
+  host, so a repo split stays mechanical.
+- **D4 (SPA history router)** — works **unmodified at the subdomain root**; the
+  earlier path-prefix/base-path concern is gone.
+- **D2 (buildless)** — import maps resolve at the root, no base-path rewriting.

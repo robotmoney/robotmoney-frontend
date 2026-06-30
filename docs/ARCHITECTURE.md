@@ -3,8 +3,8 @@
 Robot Money frontend + analytics backend. A clean rewrite of robotmoney.net that
 drops React/Next.js in favor of a **buildless, browser-native** stack, with a
 small HTTP API and a Postgres-backed task queue, self-hosted on DigitalOcean — a
-single `docker-compose` box for CI/demo, and a tiered topology behind a Cloudflare
-edge in production (see [TOPOLOGY.md](./TOPOLOGY.md)).
+single `docker-compose` box for CI/demo, and a tiered topology (DO compute+storage,
+Cloudflare for DNS+observability) in production (see [TOPOLOGY.md](./TOPOLOGY.md)).
 
 For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
 
@@ -69,8 +69,9 @@ robotmoney-frontend/
 - The frontend reaches the backend **only over HTTP**, through
   `frontend/public/assets/js/app/lib/api.js`, using the API origin from
   `window.RM_CONFIG.API_BASE_URL` (set by `frontend/public/config.js`). `""` means
-  same origin — the default, since the `api` co-serves this surface's SPA assets
-  (in production behind the Cloudflare edge; see [TOPOLOGY.md](./TOPOLOGY.md)).
+  same origin — the default, since the `api` co-serves this surface's SPA assets at
+  its subdomain root (in production, `committee.robotmoney.net`; see
+  [TOPOLOGY.md](./TOPOLOGY.md)).
 - The database schema and migrations live in `backend/`; the frontend knows only
   the DTOs in `contract`.
 
@@ -162,9 +163,10 @@ TypeScript sources directly).
 - **Serves the static frontend too.** When `STATIC_DIR` is set, the same process
   serves `frontend/public` via `Bun.file`, with an `index.html` fallback for SPA
   deep links — so the SPA and its API are **same-origin** (no CORS) with no
-  app-level reverse proxy. In production a Cloudflare edge routes to this droplet
-  and terminates TLS (see [TOPOLOGY.md](./TOPOLOGY.md)); CORS headers remain for an
-  optional split-origin setup.
+  reverse proxy. In production this surface is its own subdomain
+  (`committee.robotmoney.net`), Cloudflare-proxied for TLS (see
+  [TOPOLOGY.md](./TOPOLOGY.md)); CORS headers remain for an optional split-origin
+  setup.
 - `src/worker/` — the always-on task-queue worker (see §7).
 - `src/db/` — connection pool (`client.ts`) and the migration runner (`migrate.ts`).
 - `src/lib/` — small helpers (e.g. `keys.ts`, sha256 access-key hashing).
@@ -283,18 +285,22 @@ covers what *this repo* ships.
   - *ephemeral* (CI): throwaway, `docker compose down -v`.
   - *demo*: named `pgdata` volume persists across restarts.
 
-**Production — tiered on DigitalOcean behind a Cloudflare edge** (D13):
+**Production — tiered on DigitalOcean, Cloudflare for DNS+observability** (D13;
+credentials in [DEPLOYMENT.md](./DEPLOYMENT.md)):
 
-- **API tier** — `api` + `worker` on a DO droplet, reached via Cloudflare Tunnel;
-  the `api` co-serves this surface's SPA assets at `/committee` + `/analytics`.
+- **API tier** — `api` + `worker` on a DO droplet at its own subdomain
+  (`committee.robotmoney.net`); the `api` co-serves this surface's SPA assets at the
+  subdomain root. Cloudflare-proxied; a DO Cloud Firewall limits ingress to
+  Cloudflare IPs.
 - **Data tier** — `DATABASE_URL` points at a **DO Managed Postgres HA cluster**
   (no `postgres` container).
-- **Static tier** — marketing is served separately from a **DO Spaces CDN**, not by
-  this `api`.
+- **Static tier** — marketing is served separately from a **DO Spaces CDN** on the
+  apex/`www`, not by this `api`.
 - **Config**: the only required env var is `DATABASE_URL`. The frontend's only
-  input is `API_BASE_URL` in `config.js` (`""` = same origin). Secrets
-  (Anthropic/FRED/RPC) live in the droplet env, not in the frontend.
-- **TLS** is terminated at the Cloudflare edge.
+  input is `API_BASE_URL` in `config.js` (`""` = same origin on its subdomain).
+  Secrets (Anthropic/FRED/RPC) live in the droplet env, not in the frontend.
+- **TLS** is provided by Cloudflare's proxy (the droplet serves a Cloudflare Origin
+  CA cert).
 
 ---
 
