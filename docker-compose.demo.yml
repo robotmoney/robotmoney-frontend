@@ -1,0 +1,18 @@
+services:
+  postgres:
+    labels:
+      robotmoney.demo.project: ${DEMO_PROJECT}
+
+  api:
+    labels:
+      robotmoney.demo.project: ${DEMO_PROJECT}
+    environment:
+      RM_ALLOW_INSECURE: "1"
+
+  worker:
+    labels:
+      robotmoney.demo.project: ${DEMO_PROJECT}
+
+  mcp:
+    labels:
+      robotmoney.demo.project: ${DEMO_PROJECT}
