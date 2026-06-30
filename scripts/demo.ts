@@ -154,6 +154,12 @@ async function main(): Promise<void> {
     { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "frontend checks");
 
   const researchKeys = ["channel-divergence", "late-cycle-signals"];
+  if (process.env.CI) {
+    console.log("\n[demo] CI mode — all checks passed, tearing down…");
+    cleanup();
+    process.exit(0);
+  }
+
   console.log("\n\u2500\u2500 Robot Money demo \u2500\u2500".padEnd(68, "\u2500"));
   console.log(`  Site:       ${backendUrl}/`);
   console.log(`  Regime:     ${backendUrl}/regime`);

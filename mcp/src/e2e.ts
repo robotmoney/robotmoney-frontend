@@ -5,8 +5,11 @@
 // handler → domain) so the demo exercises the real FOR UPDATE SKIP LOCKED claim
 // loop. Multi-session: the second session's brief references the first session's
 // outcome, demonstrating rotation awareness.
-import { runAgent, enroll } from "./agent.ts";
-import { generateKeyPair } from "./crypto.ts";
+import { runAgent, enroll, stanceFor, textOf, ExistingCredentials } from "./agent.ts";
+import { generateKeyPair, sign } from "./crypto.ts";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -50,7 +53,7 @@ async function enqueueLifecycleJob(action: string, payload: unknown = {}) {
   return result;
 }
 
-async function runSession(date: string, subject: typeof SUBJECTS[0], sessionIndex: number, prevOutcome?: string) {
+async function runSession(date: string, subject: typeof SUBJECTS[0], sessionIndex: number, prevOutcome?: string, existingCredentials?: Map<string, ExistingCredentials>) {
   const tag = `[session ${sessionIndex}: ${date}/${subject.id}]`;
   console.log(`\n${tag}`);
 
@@ -69,11 +72,12 @@ async function runSession(date: string, subject: typeof SUBJECTS[0], sessionInde
   await waitForSessionState(date, subject.id, "collecting");
   console.log(`${tag} session ${sessionId}: brief published, window open`);
 
-  // Enroll the no-show, then run present agents.
+  // Enroll the no-show, then run present agents (some may have externally-
+  // provisioned credentials from the public apply → activate path).
   await Promise.all(MEMBERS.filter((m) => !m.present).map((m) => enroll(m)));
   const present = MEMBERS.filter((m) => m.present);
   const results = await Promise.all(
-    present.map((m) => runAgent({ ...m, date, subjectId: subject.id, sessionId })),
+    present.map((m) => runAgent({ ...m, date, subjectId: subject.id, sessionId }, existingCredentials?.get(m.memberId))),
   );
   for (const r of results) {
     const ok = r.result?.verified ? "✓verified" : JSON.stringify(r.result);
@@ -167,6 +171,33 @@ async function main() {
   // Session 1: today's subject
   const s1 = await runSession(today, SUBJECTS[0], 1);
 
+  // ── New agent onboarded from scratch ─────────────────────────────────────
+  // Demonstrates the public apply → admin activate → MCP OAuth → submit flow.
+  // The agent (eos) will participate in session 2 alongside existing members.
+  const eosDate = today;
+  const { publicKeyB64: eosPub, privateKey: eosPriv } = await generateKeyPair();
+
+  // 4a. Public apply (no auth required) — member is recorded as 'applied'
+  const applyRes = await fetch(`${BACKEND}/api/committee/apply`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ memberId: "eos", name: "Eos", lens: "newcomer", publicKey: eosPub }),
+  }).then((r) => r.json());
+  console.log(`\n  onboard eos: apply → status=${applyRes.status} memberStatus=${applyRes.memberStatus}`);
+  if (applyRes.status !== 201) throw new Error(`apply failed: ${JSON.stringify(applyRes)}`);
+
+  // 4b. Admin activates — flips applied→active, mints bearer token
+  const activateRes = await fetch(`${BACKEND}/api/committee/admin/activate`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
+    body: JSON.stringify({ memberId: "eos" }),
+  }).then((r) => r.json());
+  console.log(`  onboard eos: activate → status=${activateRes.status} token=${activateRes.token ? "✓" : "✗"}`);
+  if (activateRes.status !== 200 || !activateRes.token) throw new Error(`activate failed: ${JSON.stringify(activateRes)}`);
+
+  // 4c. Eos is now a full committee member. Add to the roster for session 2.
+  const eosCreds: ExistingCredentials = { token: activateRes.token, privateKey: eosPriv };
+  const existingCreds = new Map<string, ExistingCredentials>([["eos", eosCreds]]);
+  MEMBERS.push({ memberId: "eos", name: "Eos", lens: "newcomer", bias: 0.05, present: true });
+
   // ── Cross-role denial assertions ─────────────────────────────────────────
   // Register a test member and verify identity-layer checks (always enforced
   // regardless of RM_ALLOW_INSECURE). The demo runs in insecure mode so role
@@ -213,8 +244,10 @@ async function main() {
   });
   console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeWriteInsecure ? " (insecure mode — gate open)" : " (enforced)"}`);
 
-  // Session 2: next day, different subject (demonstrates rotation + cross-session awareness)
-  const s2 = await runSession(tomorrow, SUBJECTS[1], 2, s1.pub.session.synthesis);
+  // Session 2: next day, different subject (demonstrates rotation + cross-session
+  // awareness). Eos (onboarded via public apply→activate) participates alongside
+  // the original members, proving the from-scratch onboarding flow.
+  const s2 = await runSession(tomorrow, SUBJECTS[1], 2, s1.pub.session.synthesis, existingCreds);
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${BACKEND}/api/committee/sessions`).then((r) => r.json());

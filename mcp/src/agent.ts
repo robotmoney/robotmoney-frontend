@@ -3,6 +3,11 @@
 // entirely through the MCP server — read regime + brief, decide a stance, get
 // the canonical signing payload, sign it with its own key, and submit. RM never
 // sees the private key.
+//
+// The optional `existingCredentials` parameter supports agents that have been
+// onboarded through the public apply → admin activate flow (rather than the
+// privileged register shortcut). When provided, the agent skips key generation
+// and REST registration, using the externally-obtained token + private key.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
@@ -16,14 +21,19 @@ export interface AgentOpts {
   date: string; subjectId: string; sessionId: number;
 }
 
-function stanceFor(composite: number, bias: number) {
+export interface ExistingCredentials {
+  token: string;
+  privateKey: CryptoKey;
+}
+
+export function stanceFor(composite: number, bias: number) {
   const x = composite + bias;
   const stance = x >= 0.67 ? "bullish" : x >= 0.55 ? "constructive" : x >= 0.45 ? "neutral" : x >= 0.33 ? "cautious" : "bearish";
   const confidence = Math.round(Math.min(1, Math.abs(x - 0.5) * 2 + 0.4) * 100) / 100;
   return { stance, confidence };
 }
 
-const textOf = (res: any) => JSON.parse(res.content?.[0]?.text ?? "null");
+export const textOf = (res: any) => JSON.parse(res.content?.[0]?.text ?? "null");
 
 // Enroll a member (register their public key) WITHOUT submitting — used to put a
 // deliberate no-show on the roster so absence is recorded at aggregation.
@@ -36,15 +46,17 @@ export async function enroll(o: { memberId: string; name: string; lens?: string 
   });
 }
 
-export async function runAgent(o: AgentOpts) {
-  // 1. own keypair + onboarding (REST)
-  const { publicKeyB64, privateKey } = await generateKeyPair();
+export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCredentials) {
+  // 1. own keypair + onboarding (REST). Skip both when external credentials are
+  //    provided (the apply → activate path handles these externally).
+  const { publicKeyB64, privateKey } = existingCredentials
+    ? { publicKeyB64: "", privateKey: existingCredentials.privateKey }
+    : await generateKeyPair();
   const adminHeaders = process.env.ADMIN_TOKEN ? { "X-Admin-Token": process.env.ADMIN_TOKEN } : {};
-  const reg = await fetch(`${BACKEND}/api/committee/register`, {
+  const token = existingCredentials?.token ?? (await fetch(`${BACKEND}/api/committee/register`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: o.memberId, name: o.name, lens: o.lens, publicKey: publicKeyB64 }),
-  }).then((r) => r.json());
-  const token: string = reg.token;
+  }).then((r) => r.json())).token;
 
   // 2. connect to the MCP server via OAuth 2.1 client_credentials grant.
   // The ClientCredentialsProvider handles token acquisition, refresh, and
