@@ -57,22 +57,19 @@ so inline `<script>` and any `Alpine.data(...)` factory defined *inside* a
 Each fix is its own commit; re-screenshotted on `:8080` against
 `frontend/test/fixtures/screenshots/original/<slug>.png` and confirmed close.
 
-## Remaining — P2 optional richness (low value; everything above is done)
+- **Real charts** (P2): allocation2's AUM/Allocation charts are now Chart.js
+  stacked areas (`walletPerfView()` in `views.js`), and the tokenomics fee
+  distribution is a Chart.js pie (`feeChart()`), both matching the original.
+- **allocation2 constructivist hero** (P2): the original vanilla-canvas
+  Lissitzky viz (gravitating circles + slicing wedges + spark collisions) is
+  restored as `constructivistHero()` in `heroes.js`.
 
-Only stylistic chart differences remain; both render correctly with matching
-data, so these are genuinely optional:
+## Remaining
 
-1. **Real charts.** The tokenomics fee donut is a CSS conic-gradient (the
-   original is a Chart.js doughnut — visually near-identical). allocation2 uses
-   CSS **stacked bars** where the original used Chart.js **stacked areas** (same
-   data, slightly different style). For exact parity, register chart factories in
-   `views.js` (boot-time) like the regime/research views do.
-2. **allocation2 constructivist hero.** Its hero is a static shapes/gradient
-   approximation of the original animated "constructivist" p5 canvas. Could be
-   ported as another `heroes.js` factory if desired (lower priority).
-
-Hero parity for navigable pages is otherwise complete — only the out-of-scope
-standalone visualization pages still lack sketches (intentionally; see below).
+Nothing in scope. Every P0/P1/P2 parity item for the navigable site is done and
+verified (all 18 navigable routes render with no app JS errors). The only things
+left are the **out-of-scope standalone visualization pages** (see below), which
+are intentionally excluded unless the user asks for them.
 
 ## How to run + screenshot
 
