@@ -1141,6 +1141,15 @@ async function collectDeploymentSecret(
         console.log(`  validation failed: ${problem}`);
         if (!await yesNo("  Store this value anyway?")) return null;
       }
+      const adminEquivalent = spec.name === "CF_API_TOKEN"
+        ? vault.admin.CF_BOOTSTRAP_TOKEN
+        : spec.name === "DO_API_TOKEN"
+          ? vault.admin.DO_BOOTSTRAP_TOKEN
+          : undefined;
+      if (adminEquivalent && value === adminEquivalent) {
+        console.log("  rejected: deployment credentials must not reuse an admin bootstrap key");
+        return null;
+      }
       vault.deployment[environment][spec.name] = value;
       await saveCurrentVault();
       console.log(`  stored ${spec.name} in the encrypted vault`);
@@ -1152,6 +1161,15 @@ async function collectDeploymentSecret(
     const value = await getSecretValue(spec, environment);
     if (!value) {
       console.log("  skipped: no value supplied");
+      return null;
+    }
+    const adminEquivalent = spec.name === "CF_API_TOKEN"
+      ? vault.admin.CF_BOOTSTRAP_TOKEN
+      : spec.name === "DO_API_TOKEN"
+        ? vault.admin.DO_BOOTSTRAP_TOKEN
+        : undefined;
+    if (adminEquivalent && value === adminEquivalent) {
+      console.log("  rejected: deployment credentials must not reuse an admin bootstrap key");
       return null;
     }
     vault.deployment[environment][spec.name] = value;
@@ -1267,28 +1285,23 @@ async function revokeCredentials(): Promise<void> {
   console.log(`Repository: ${repo}\n`);
   for (const environment of environments) {
     console.log(`--- ${environment.toUpperCase()} ---`);
-    const vaultKeys = Object.keys(vault.deployment[environment]).filter(
-      (k) => !k.endsWith("_ID") && !k.endsWith("_KEY") && !k.endsWith("_CERT"),
+    const credentialKeys = Object.keys(vault.deployment[environment]).filter(
+      (k) => !k.endsWith("_ID"),
     );
-    const revocable = vaultKeys.filter((k) => {
-      if (k === "CF_API_TOKEN") return true;
-      if (k === "CF_ORIGIN_CERT" || k === "CF_ORIGIN_KEY") return false;
-      return true;
-    });
-    if (!revocable.length) {
-      console.log("  No revocable credentials in the vault.\n");
+    if (!credentialKeys.length) {
+      console.log("  No credentials in the vault.\n");
       continue;
     }
-    console.log(`  Credentials in vault: ${vaultKeys.join(", ")}`);
+    console.log(`  Credentials in vault: ${credentialKeys.join(", ")}`);
     if (!await yesNo(`  Revoke credentials for ${environment}?`)) continue;
 
-    for (const name of vaultKeys) {
+    for (const name of credentialKeys) {
       if (!await yesNo(`    Remove ${name}?`)) continue;
 
       // Revoke at the provider
       if (name === "CF_API_TOKEN" && vault.admin.CF_BOOTSTRAP_TOKEN && vault.deployment[environment].CF_API_TOKEN_ID) {
         try {
-          await revokeCloudflareToken(vault.admin.CF_BOOTSTRAP_TOKEN, vault.deployment[environment].CF_API_TOKEN_ID!);
+          await revokeCloudflareToken(vault.admin.CF_BOOTSTRAP_TOKEN, vault.deployment[environment].CF_API_TOKEN_ID);
           console.log(`    revoked ${name} at Cloudflare`);
         } catch (error) {
           console.log(`    could not revoke at Cloudflare: ${error instanceof Error ? error.message : error}`);
