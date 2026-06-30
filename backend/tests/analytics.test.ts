@@ -1,7 +1,9 @@
 import { test, expect } from "bun:test";
-import { percentileInWindow, applySign } from "../src/analytics/transforms.ts";
-import { seededProvider } from "../src/analytics/provider.ts";
-import { regimeTool } from "../src/analytics/tools/regime.ts";
+import { percentileInWindow, applySign } from "../src/analytics/transform/math.ts";
+import { seededProvider } from "../src/analytics/access/provider.ts";
+import { regimeTool } from "../src/analytics/analyze/regime.ts";
+import { channelDivergenceTool } from "../src/analytics/analyze/channel-divergence.ts";
+import { lateCycleTool } from "../src/analytics/analyze/late-cycle.ts";
 
 test("transforms: percentile + sign", () => {
   expect(percentileInWindow(3, [1, 2, 3, 4])).toBeCloseTo(0.75, 5);
@@ -33,4 +35,31 @@ test("regime classifier produces valid, bounded snapshots", () => {
   // determinism across two computes for the same asof
   const again = regimeTool.compute(ctx as any).snapshots.at(-1)!;
   expect(again.composite).toBe(snapshots.at(-1)!.composite);
+});
+
+const ASOF = "2024-01-15";
+const ctx = { asof: ASOF, provider: seededProvider, dep: () => undefined } as any;
+
+test("channel-divergence compute: bounded gauges, valid reads, charted series", async () => {
+  const payload = await channelDivergenceTool.compute(ctx);
+  expect(payload.asof).toBe(ASOF);
+  expect(payload.gauges.length).toBeGreaterThan(0);
+  for (const g of payload.gauges) {
+    expect(g.percentile).toBeGreaterThanOrEqual(0);
+    expect(g.percentile).toBeLessThanOrEqual(1);
+    expect(["channel intact", "softening", "breaking down"]).toContain(g.read);
+  }
+  expect(payload.series.points.length).toBeGreaterThan(0);
+});
+
+test("late-cycle compute: bounded gauges, valid reads, charted series", async () => {
+  const payload = await lateCycleTool.compute(ctx);
+  expect(payload.asof).toBe(ASOF);
+  expect(payload.gauges.length).toBeGreaterThan(0);
+  for (const g of payload.gauges) {
+    expect(g.percentile).toBeGreaterThanOrEqual(0);
+    expect(g.percentile).toBeLessThanOrEqual(1);
+    expect(["benign", "elevated", "saturated (late-cycle)"]).toContain(g.read);
+  }
+  expect(payload.series.points.length).toBeGreaterThan(0);
 });

@@ -243,30 +243,64 @@ from the dedupe key; **concurrency safety** from `SKIP LOCKED`. Handlers
 (`worker/handlers/`) are registered per `kind`; the `analytics.run` handler drives
 the analytics suite (§7.1).
 
-### 7.1 Analytics suite (generic & composable)
+### 7.1 Analytics suite (six-stage pipeline)
 
 All analytics — the regime classifier and the research signals — are instances of
 one abstraction in `backend/src/analytics/`, so they share data-sourcing,
-normalization, scheduling, persistence, and API exposure:
+normalization, scheduling, persistence, and API exposure. The directory is split
+into six independently testable stages — **access → extract → transform → analyze
+→ store → report** — each a leaf that can be exercised in isolation:
 
-- **`provider.ts`** — the single data seam. Tools never know where series come
-  from. v0 is a deterministic `seededProvider` (hermetic, no API keys); a future
-  `FetcherProvider` (FRED/Yahoo/CoinMetrics/DefiLlama/RPC) implements the same
-  interface and is the *only* thing that changes to go live.
-- **`transforms.ts`** — shared math (percentile-in-window, sign, z-score, rolling
-  beta, ratios) so normalization is identical suite-wide.
-- **`tool.ts`** — the `AnalyticTool` interface (`id, kind, inputs, dependsOn,
-  compute, persist`) + a `Registry` that topologically orders `dependsOn` and
-  runs/persists tools. A tool may **compose** another's output (e.g. a future
-  "regime tempered by channel-divergence") with no special-casing.
-- **`tools/`** — `regime` (→ `regime_snapshots`), `channel-divergence`,
-  `late-cycle-signals` (→ `research_signals`). Adding an analytic = write a tool +
-  register it + add a job schedule + a route; nothing else changes.
+- **`types.ts`** — the leaf shapes (`Point`, `SeriesSpec`) that flow through every
+  stage.
+- **`access/`** — the data seam. `provider.ts` defines the `Provider` interface +
+  the deterministic, hermetic `seededProvider` (no API keys; the default).
+  `fetcher-provider.ts` is an **implemented, opt-in** live provider (`PROVIDER=live`)
+  that satisfies the same interface by *composing* extract + transform; it pulls
+  REAL series from KEYLESS public sources only — **DefiLlama, CoinGecko, Yahoo
+  Finance** — and falls back to seeded *per series* for anything keyed (FRED:
+  `T10Y2Y`/`HY_OAS`/`ICSA`) or unmapped, so `getSeries` never throws.
+  `select.ts` picks seeded vs live for a run.
+- **`extract/`** — pull raw series from sources. `http.ts` (timeout/abort fetch),
+  one pure parser per source (`defillama.ts`, `coingecko.ts`, `yahoo.ts` — JSON in
+  → `Point[]` out, throw on garbage), and `sources.ts`, the series-id → fetch+parse
+  wiring the live provider iterates (each source isolated; one failure drops only
+  its own series).
+- **`transform/`** — normalize/clean. `math.ts` is the shared pure math
+  (percentile-in-window, sign, rolling beta, ratios, `isoDay`, …) so normalization
+  is identical suite-wide; `grid.ts` reshapes gappy real series onto the dense
+  daily grid (`shapeDaily` forward-fill, `ratioByDate`).
+- **`analyze/`** — the computations (pure, DB-free). `tool.ts` is the
+  `AnalyticTool` interface (`id, kind, inputs, dependsOn, compute, persist`) + a
+  `Registry` that topologically orders `dependsOn` and runs/persists tools — a tool
+  may **compose** another's output (e.g. a future "regime tempered by
+  channel-divergence") with no special-casing. `research.ts` holds the research
+  payload shape; `regime.ts`, `channel-divergence.ts`, `late-cycle.ts` are the
+  tools (their `compute()` is pure; `persist()` is a one-line delegate to `store/`).
+- **`store/`** — the only SQL writes. `regime-store.ts` (`saveRegimeSnapshots`) and
+  `research-store.ts` (`persistResearchSignal`), both upserting on natural keys.
+- **`report/`** — `projections.ts` owns all SQL reads + the row→DTO map
+  (`fetchRegimeSnapshots(range)`, `fetchLatestResearchSignal(key)`). The HTTP route
+  `api/routes/dashboards.ts` is a thin adapter — it only parses/clamps `range` and
+  calls these. MCP and the frontend stay consumers across the HTTP boundary.
 
-The worker runs the suite via `analytics.run`; the API exposes regime at
-`/api/dashboards/regime-snapshots` and each research signal at
-`/api/dashboards/research-signals/:key`; the frontend renders `/regime` and the
-`/research/*` views (mirroring the original site's surfaces).
+Three pipelines run through these stages:
+
+- **`regime`** — macro + on-chain indicators (`T10Y2Y`, `HY_OAS`, `VIX`, `DXY`,
+  `COPPER_GOLD`, `ICSA`, `DEFI_TVL`, `STABLES`, `BTC_ACTIVE`, `ETH_TREND`,
+  `BTC_ETH`) → per-indicator sign-adjusted percentile → panel + overall composite +
+  regime label history → **`regime_snapshots`**.
+- **`channel-divergence`** — `BTC`, `QQQ`, `SPY` → BTC beta vs the risk-appetite
+  factor + BTC/QQQ relative strength gauges → **`research_signals`**.
+- **`late-cycle-signals`** — `SPY`, `RSP`, `MNA`, `MARGIN`, `CONF` → index
+  concentration / M&A / margin debt / confidence gauges → **`research_signals`**.
+
+The worker runs the whole suite daily at **06:00 UTC** (`analytics.run`, cron
+`0 6 * * *`); the API exposes regime at `/api/dashboards/regime-snapshots?range=`
+and each research signal at `/api/dashboards/research-signals/:key`; the frontend
+renders `/regime` and the `/research/*` views (mirroring the original site's
+surfaces). Adding an analytic = write a tool + register it + add a job schedule +
+a route; nothing else changes.
 
 ---
 

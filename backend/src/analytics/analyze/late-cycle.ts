@@ -2,9 +2,10 @@
 // /research/late-cycle-signals. Slow gauges that historically saturate near
 // equity peaks: index concentration (SPY/RSP), M&A activity, margin debt, and
 // consumer confidence. Complements (does not feed) the regime composite.
-import type { AnalyticTool, ToolContext } from "../tool.ts";
-import { ratio, percentileInWindow } from "../transforms.ts";
-import { persistResearchSignal, type ResearchPayload, type Gauge } from "./research-base.ts";
+import type { AnalyticTool, ToolContext } from "./tool.ts";
+import { ratio, percentileInWindow } from "../transform/math.ts";
+import type { ResearchPayload, Gauge } from "./research.ts";
+import { persistResearchSignal } from "../store/research-store.ts";
 
 const KEY = "late-cycle-signals";
 
