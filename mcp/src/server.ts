@@ -73,7 +73,7 @@ function buildServer(memberId: string, memberToken: string | null) {
     });
   server.registerTool("post_memo",
     { description: "Publish a long-form analysis memo for a session. Returns a URL that can be passed as memoUrl in submit_recommendation.",
-      inputSchema: { sessionId: z.number(), title: z.string().optional(), body: z.string() } },
+      inputSchema: { sessionId: z.string(), title: z.string().optional(), body: z.string() } },
     async (input) => {
       const res = await fetch(`${BACKEND}/api/committee/memos`, {
         method: "POST",
@@ -221,13 +221,24 @@ Bun.serve({
 
     // ── OAuth 2.1 metadata (RFC 8414) ──────────────────────────────────
     if (url.pathname === "/.well-known/oauth-authorization-server") {
+      // Advertise endpoints at the origin the CLIENT used to reach us, not our
+      // internal bind (http://localhost:${PORT}). An OAuth client follows these
+      // discovered URLs verbatim, so they must be reachable from where the client
+      // runs. In the demo the MCP server is published on a host port that differs
+      // from its in-container PORT, so a hardcoded localhost:${PORT} is refused.
+      const base = url.origin;
       return jsonResponse({
-        issuer: `http://localhost:${PORT}`,
-        token_endpoint: `http://localhost:${PORT}/mcp/oauth/token`,
+        issuer: base,
+        // Required by RFC 8414 and the MCP SDK's metadata schema, which rejects
+        // discovery without it. This server only uses the client_credentials
+        // grant (no redirect flow), so the endpoint is advertised for schema
+        // compliance but never invoked.
+        authorization_endpoint: `${base}/mcp/oauth/authorize`,
+        token_endpoint: `${base}/mcp/oauth/token`,
         token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
         response_types_supported: ["token"],
         grant_types_supported: ["client_credentials", "refresh_token"],
-        revocation_endpoint: `http://localhost:${PORT}/mcp/oauth/revoke`,
+        revocation_endpoint: `${base}/mcp/oauth/revoke`,
       });
     }
 

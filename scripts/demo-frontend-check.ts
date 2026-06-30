@@ -71,13 +71,13 @@ async function main() {
     "session?.state",
     "cv__verified",
     "cv__memo-link",  // memoUrl rendering (Phase 3)
-    "takes.length",
+    "x-for=\"t in takes\"",  // renders the members' signed takes
     "aggregate.absent",
   ]);
   await checkView("/views/regime.html", [
     "x-data=\"regimeView()\"",
     "latest.composite",
-    "regime-pill",
+    "regimeClass(latest.regime)",  // styled regime label
     "rv__indicators",
   ]);
   await checkView("/views/research/channel-divergence.html", [
@@ -95,8 +95,8 @@ async function main() {
   await checkView("/", [
     "x-data",
     "Alpine",
-    "router.js",
-    "views.js",
+    "assets/js/app/main.js",  // module that registers Alpine factories + boots the router
+    "/config.js",  // runtime config bootstrap
     "href=\"/committee\"",
     "href=\"/regime\"",
   ]);

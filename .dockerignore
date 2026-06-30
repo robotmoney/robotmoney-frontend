@@ -1,0 +1,14 @@
+# Build context is the repo ROOT for every service (compose `context: .`), so
+# THIS root file is the only .dockerignore Docker reads — per-service ones are
+# ignored. Keep host-only artifacts out of the image: a copied-in node_modules
+# would clobber the one `bun install` builds, breaking the @robotmoney/contract
+# `file:` symlink at runtime (Cannot find module). It also bloats the context.
+**/node_modules
+.git
+**/.git
+*.log
+.env
+.env.*
+dist
+**/dist
+.DS_Store
