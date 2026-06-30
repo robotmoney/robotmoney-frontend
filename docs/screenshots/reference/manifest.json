@@ -1,0 +1,162 @@
+{
+  "generatedAt": "2026-06-30T14:00:20.545Z",
+  "baseUrl": "http://localhost:3000",
+  "pages": [
+    {
+      "name": "home",
+      "route": "/",
+      "url": "http://localhost:3000/",
+      "widths": [
+        1440,
+        375
+      ],
+      "expectedFiles": [
+        "home-1440.png",
+        "home-375.png"
+      ]
+    },
+    {
+      "name": "regime",
+      "route": "/regime",
+      "url": "http://localhost:3000/regime",
+      "widths": [
+        1440,
+        375
+      ],
+      "expectedFiles": [
+        "regime-1440.png",
+        "regime-375.png"
+      ]
+    },
+    {
+      "name": "committee",
+      "route": "/committee",
+      "url": "http://localhost:3000/committee",
+      "widths": [
+        1440,
+        375
+      ],
+      "expectedFiles": [
+        "committee-1440.png",
+        "committee-375.png"
+      ]
+    },
+    {
+      "name": "committee-apply",
+      "route": "/committee/apply",
+      "url": "http://localhost:3000/committee/apply",
+      "widths": [
+        1440,
+        375
+      ],
+      "expectedFiles": [
+        "committee-apply-1440.png",
+        "committee-apply-375.png"
+      ]
+    },
+    {
+      "name": "research-channel-divergence",
+      "route": "/research/channel-divergence",
+      "url": "http://localhost:3000/research/channel-divergence",
+      "widths": [
+        1440,
+        375
+      ],
+      "expectedFiles": [
+        "research-channel-divergence-1440.png",
+        "research-channel-divergence-375.png"
+      ]
+    },
+    {
+      "name": "research-late-cycle-signals",
+      "route": "/research/late-cycle-signals",
+      "url": "http://localhost:3000/research/late-cycle-signals",
+      "widths": [
+        1440,
+        375
+      ],
+      "expectedFiles": [
+        "research-late-cycle-signals-1440.png",
+        "research-late-cycle-signals-375.png"
+      ]
+    },
+    {
+      "name": "allocation",
+      "route": "/allocation",
+      "url": "http://localhost:3000/allocation",
+      "widths": [
+        1440,
+        375
+      ],
+      "expectedFiles": [
+        "allocation-1440.png",
+        "allocation-375.png"
+      ]
+    },
+    {
+      "name": "visualizations-index",
+      "route": "/visualizations",
+      "url": "http://localhost:3000/visualizations",
+      "widths": [
+        1440,
+        375
+      ],
+      "expectedFiles": [
+        "visualizations-index-1440.png",
+        "visualizations-index-375.png"
+      ]
+    },
+    {
+      "name": "viz-orbits",
+      "route": "/orbits",
+      "url": "http://localhost:3000/orbits",
+      "widths": [
+        1440,
+        375
+      ],
+      "expectedFiles": [
+        "viz-orbits-1440.png",
+        "viz-orbits-375.png"
+      ]
+    },
+    {
+      "name": "viz-substrate",
+      "route": "/substrate",
+      "url": "http://localhost:3000/substrate",
+      "widths": [
+        1440,
+        375
+      ],
+      "expectedFiles": [
+        "viz-substrate-1440.png",
+        "viz-substrate-375.png"
+      ]
+    },
+    {
+      "name": "viz-plasma",
+      "route": "/plasma",
+      "url": "http://localhost:3000/plasma",
+      "widths": [
+        1440,
+        375
+      ],
+      "expectedFiles": [
+        "viz-plasma-1440.png",
+        "viz-plasma-375.png"
+      ]
+    },
+    {
+      "name": "viz-mandelbrot",
+      "route": "/mandelbrot",
+      "url": "http://localhost:3000/mandelbrot",
+      "widths": [
+        1440,
+        375
+      ],
+      "expectedFiles": [
+        "viz-mandelbrot-1440.png",
+        "viz-mandelbrot-375.png"
+      ]
+    }
+  ]
+}
