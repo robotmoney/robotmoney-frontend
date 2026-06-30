@@ -11,8 +11,9 @@ For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
 ## 1. Goals & scope
 
 - **Preserve the marketing UI** of robotmoney.net (reproduce the look exactly).
-- **Cherry-pick two feature areas**: live data **dashboards** (allocation,
-  regime, research) and the **Investment Committee**.
+- **Cherry-pick two feature areas**: the **regime/research** data views (the
+  regime classifier + its regime-family research signals) and the **Investment
+  Committee**. Allocation / vault / wallet dashboards are out of scope.
 - **No build step.** No bundler, transpiler, or compiler — the browser does all
   the work at runtime; only evergreen browsers are supported.
 - **Consolidate backends onto one Postgres**, run in Docker.
@@ -21,8 +22,8 @@ For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
 - **Clean frontend/backend separation** — one repo now, designed to split into
   two later with zero source edits.
 
-Out of scope for v1: the generative-art visualizations, blog/media editorial, and
-other secondary pages.
+Out of scope for v1: the allocation / vault / wallet dashboards, the generative-art
+visualizations, blog/media editorial, and other secondary pages.
 
 ---
 
@@ -231,8 +232,33 @@ worker (`backend/src/worker/`) runs three loops:
 
 **Idempotency** comes from upserting on natural keys; **exactly-once scheduling**
 from the dedupe key; **concurrency safety** from `SKIP LOCKED`. Handlers
-(`worker/handlers/`) and external fetchers (`worker/fetchers/` — FRED, Yahoo,
-Shiller, CoinMetrics, DefiLlama, Base RPC, etc.) are registered per `kind`.
+(`worker/handlers/`) are registered per `kind`; the `analytics.run` handler drives
+the analytics suite (§7.1).
+
+### 7.1 Analytics suite (generic & composable)
+
+All analytics — the regime classifier and the research signals — are instances of
+one abstraction in `backend/src/analytics/`, so they share data-sourcing,
+normalization, scheduling, persistence, and API exposure:
+
+- **`provider.ts`** — the single data seam. Tools never know where series come
+  from. v0 is a deterministic `seededProvider` (hermetic, no API keys); a future
+  `FetcherProvider` (FRED/Yahoo/CoinMetrics/DefiLlama/RPC) implements the same
+  interface and is the *only* thing that changes to go live.
+- **`transforms.ts`** — shared math (percentile-in-window, sign, z-score, rolling
+  beta, ratios) so normalization is identical suite-wide.
+- **`tool.ts`** — the `AnalyticTool` interface (`id, kind, inputs, dependsOn,
+  compute, persist`) + a `Registry` that topologically orders `dependsOn` and
+  runs/persists tools. A tool may **compose** another's output (e.g. a future
+  "regime tempered by channel-divergence") with no special-casing.
+- **`tools/`** — `regime` (→ `regime_snapshots`), `channel-divergence`,
+  `late-cycle-signals` (→ `research_signals`). Adding an analytic = write a tool +
+  register it + add a job schedule + a route; nothing else changes.
+
+The worker runs the suite via `analytics.run`; the API exposes regime at
+`/api/dashboards/regime-snapshots` and each research signal at
+`/api/dashboards/research-signals/:key`; the frontend renders `/regime` and the
+`/research/*` views (mirroring the original site's surfaces).
 
 ---
 

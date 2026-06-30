@@ -16,9 +16,10 @@ existing Next.js 16 / React 19 app.
 (committed CSV/JSON via 16 GitHub Actions crons, Upstash Redis, GitHub-as-DB). We
 want a lean foundation and only two feature areas carried forward.
 
-**Scope.** Preserve the marketing UI; cherry-pick **dashboards** (allocation,
-regime, research) and the **Investment Committee**. Out of scope for v1:
-generative-art visualizations, blog/media, other editorial pages.
+**Scope.** Preserve the marketing UI; cherry-pick the **regime/research** views
+(the regime classifier + its regime-family research signals) and the **Investment
+Committee**. Out of scope: allocation / vault / wallet dashboards, generative-art
+visualizations, blog/media, other editorial pages.
 
 ---
 

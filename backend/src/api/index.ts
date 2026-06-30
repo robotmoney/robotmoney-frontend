@@ -6,7 +6,7 @@ import { ROUTES } from "@robotmoney/contract";
 import { config } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { listComments } from "./routes/comments.ts";
-import { getRegimeSnapshots } from "./routes/dashboards.ts";
+import { getRegimeSnapshots, getResearchSignal } from "./routes/dashboards.ts";
 import { handleCommittee } from "./routes/committee.ts";
 
 function corsHeaders(origin: string | null): Record<string, string> {
@@ -68,6 +68,12 @@ const server = Bun.serve({
 
     if (pathname === ROUTES.dashboards.regimeSnapshots && req.method === "GET") {
       return json(await getRegimeSnapshots(url), origin);
+    }
+
+    if (pathname.startsWith("/api/dashboards/research-signals/") && req.method === "GET") {
+      const key = decodeURIComponent(pathname.split("/").pop()!);
+      const r = await getResearchSignal(key);
+      return json(r ?? { error: "not found" }, origin, r ? 200 : 404);
     }
 
     if (pathname.startsWith("/api/committee/")) {

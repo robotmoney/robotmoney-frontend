@@ -21,14 +21,15 @@ const ROUTES = {
 
 const viewEl = () => document.getElementById("view");
 
-// Resolve a pathname to the view file we should fetch. Prefer an explicit
-// route; otherwise attempt /views/<first-segment>.html (the caller falls back
-// to home if that fetch 404s).
+// Resolve a pathname to its view file: explicit route first, else the full path
+// under /views (so nested routes like /research/channel-divergence map to
+// /views/research/channel-divergence.html). The caller falls back to home if the
+// fetch 404s.
 function viewFor(pathname) {
+  if (pathname === "/") return HOME_VIEW;
   if (ROUTES[pathname]) return ROUTES[pathname];
-  const seg = pathname.replace(/^\/+/, "").split("/")[0];
-  if (seg) return `${VIEW_DIR}/${seg}.html`;
-  return HOME_VIEW;
+  const clean = pathname.replace(/\/+$/, "");
+  return `${VIEW_DIR}${clean}.html`;
 }
 
 // Mark the nav link whose href matches the current path as active/current.

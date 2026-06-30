@@ -51,6 +51,51 @@ export function registerViews(Alpine) {
     regimeClass(r) { return r ? `regime-pill regime-pill--${r}` : "regime-pill"; },
   }));
 
+  // ── Research signal (channel-divergence / late-cycle-signals) ─────────────
+  Alpine.data("researchView", (key) => ({
+    key,
+    loading: true,
+    error: null,
+    payload: null,
+    async load() {
+      try {
+        const data = await api.get(path(ROUTES.dashboards.researchSignal, { key: this.key }));
+        this.payload = data.payload;
+        this.loading = false;
+        this.$nextTick(() => this.drawChart());
+      } catch (e) {
+        this.error = e.message;
+        this.loading = false;
+      }
+    },
+    drawChart() {
+      const canvas = this.$refs.chart;
+      const pts = this.payload?.series?.points ?? [];
+      if (!canvas || !window.Chart || !pts.length) return;
+      new window.Chart(canvas, {
+        type: "line",
+        data: {
+          labels: pts.map((p) => p.date),
+          datasets: [{ label: this.payload.series.label, data: pts.map((p) => p.value),
+            borderColor: "#4488ff", backgroundColor: "rgba(68,136,255,0.12)", fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2 }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          scales: { y: { grid: { color: "rgba(255,255,255,0.06)" }, ticks: { color: "#7e889e" } },
+            x: { grid: { display: false }, ticks: { color: "#4a5268", maxTicksLimit: 8 } } },
+          plugins: { legend: { labels: { color: "#7e889e" } } },
+        },
+      });
+    },
+    pct(x) { return x == null ? "—" : Math.round(x * 100) + "%"; },
+    readClass(read) {
+      const r = String(read || "");
+      if (r.includes("intact") || r === "benign") return "read read--ok";
+      if (r.includes("break") || r.includes("saturated")) return "read read--warn";
+      return "read read--mid";
+    },
+  }));
+
   // ── Investment Committee ──────────────────────────────────────────────────
   Alpine.data("committeeView", () => ({
     loading: true,

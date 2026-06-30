@@ -4,7 +4,7 @@
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import * as ic from "../../committee/domain.ts";
 import { config } from "../../config.ts";
-import { writeRegimeHistory } from "../../worker/handlers/regime.ts";
+import { runAnalytics } from "../../analytics/index.ts";
 
 function bearer(req: Request): string | null {
   const h = req.headers.get("Authorization") ?? "";
@@ -56,7 +56,7 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     const b = (await req.json().catch(() => ({}))) as any;
     switch (action) {
       case "reset": return { status: 200, body: await ic.resetSessions() };
-      case "regime": return { status: 200, body: { snapshots: await writeRegimeHistory(b.asof ?? new Date().toISOString().slice(0, 10)) } };
+      case "regime": return { status: 200, body: { tools: Object.keys(await runAnalytics(b.asof ?? new Date().toISOString().slice(0, 10))) } };
       case "subject": return { status: 200, body: await ic.ensureSubject(b.id, b.name) };
       case "open": return { status: 200, body: await ic.openSession(b.date, b.subjectId) };
       case "brief": return { status: 200, body: await ic.publishBrief(b.sessionId, b.windowMinutes ?? 60) };

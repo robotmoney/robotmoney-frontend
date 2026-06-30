@@ -1,0 +1,29 @@
+<!-- /research/channel-divergence — mirrors the original surface. Fetches the
+     channel-divergence research signal and renders its gauges + chart. -->
+<section class="rs container" x-data="researchView('channel-divergence')" x-init="load()">
+  <header class="rs__head">
+    <span class="rs__eyebrow">Research</span>
+    <h1 class="rs__title" x-text="payload?.title || 'Channel divergence'">Channel divergence</h1>
+    <p class="rs__q" x-show="payload" x-cloak x-text="payload?.question"></p>
+    <p class="rs__asof" x-show="payload" x-cloak>As of <span x-text="payload?.asof"></span> · complements the regime composite (not wired into it).</p>
+  </header>
+
+  <p class="rs__loading" x-show="loading">Loading signal…</p>
+  <p class="rs__error" x-show="error" x-text="error" x-cloak></p>
+
+  <template x-if="payload">
+    <div>
+      <div class="rs__gauges">
+        <template x-for="g in payload.gauges" :key="g.id">
+          <div class="rs__gauge">
+            <div class="rs__gauge-name" x-text="g.name"></div>
+            <div class="rs__gauge-val" x-text="g.value"></div>
+            <div class="rs__bar"><div class="rs__bar-fill" :style="`width:${g.percentile*100}%`"></div></div>
+            <span :class="readClass(g.read)" x-text="g.read"></span>
+          </div>
+        </template>
+      </div>
+      <div class="rs__chart"><canvas x-ref="chart"></canvas></div>
+    </div>
+  </template>
+</section>
