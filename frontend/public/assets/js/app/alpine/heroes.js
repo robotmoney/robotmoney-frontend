@@ -105,4 +105,80 @@ export function registerHeroes(Alpine) {
       this._p5 = new p5Constructor(sketch, container);
     },
   }));
+
+  Alpine.data("faqHero", () => ({
+    _p5: null,
+    init() {
+      const host = this.$el;
+      host.innerHTML = '<div class="hero-art__canvas" style="position:absolute;inset:0"></div>';
+      const container = host.querySelector(".hero-art__canvas");
+      const startWhenReady = () => {
+        if (window.p5) this._start(container);
+        else setTimeout(startWhenReady, 50);
+      };
+      startWhenReady();
+    },
+    destroy() {
+      if (this._p5) { this._p5.remove(); this._p5 = null; }
+    },
+    _start(container) {
+      const p5Constructor = window.p5;
+      const ACCENT = [0, 229, 255], BG = [5, 5, 8];
+      const sketch = (p) => {
+        let W, H, cols, rows, scl = 25, terrain = [], flying = 0, frameNum = 0;
+        p.setup = function () {
+          W = container.offsetWidth; H = container.offsetHeight;
+          p.createCanvas(W, H, p.WEBGL).style("display", "block");
+          p.pixelDensity(1);
+          cols = Math.ceil(W / scl) + 2; rows = Math.ceil(H / scl) + 2;
+          for (let x = 0; x < cols; x++) { terrain[x] = []; for (let y = 0; y < rows; y++) terrain[x][y] = 0; }
+          p.background(BG[0], BG[1], BG[2]);
+        };
+        p.windowResized = function () {
+          W = container.offsetWidth; H = container.offsetHeight;
+          p.resizeCanvas(W, H);
+          cols = Math.ceil(W / scl) + 2; rows = Math.ceil(H / scl) + 2;
+          terrain = [];
+          for (let x = 0; x < cols; x++) { terrain[x] = []; for (let y = 0; y < rows; y++) terrain[x][y] = 0; }
+        };
+        p.draw = function () {
+          frameNum++; flying -= 0.01;
+          let yoff = flying;
+          for (let y = 0; y < rows; y++) {
+            let xoff = 0;
+            for (let x = 0; x < cols; x++) {
+              let h = p.noise(xoff, yoff) * 180;
+              h += p.noise(xoff * 2, yoff * 2) * 60;
+              h += p.noise(xoff * 4, yoff * 4) * 20;
+              terrain[x][y] = h; xoff += 0.08;
+            }
+            yoff += 0.08;
+          }
+          p.background(BG[0], BG[1], BG[2]);
+          p.noStroke();
+          const camDist = Math.max(W, H) * 0.7;
+          p.camera(0, -Math.max(W, H) * 0.3, camDist * 0.8, 0, 0, 0, 0, 1, 0);
+          p.rotateX(p.radians(55 + Math.sin(frameNum * 0.001) * 5));
+          p.translate(-W * 0.5, -H * 0.3, 0);
+          p.noFill();
+          p.strokeWeight(0.5);
+          for (let x = 0; x < cols; x++) {
+            const alpha = 70 + (x % 5 === 0 ? 60 : 0);
+            p.stroke(ACCENT[0], ACCENT[1], ACCENT[2], alpha);
+            p.beginShape();
+            for (let y = 0; y < rows; y++) { const h = terrain[x][y]; p.vertex(x * scl, y * scl, -h); }
+            p.endShape();
+          }
+          for (let y = 0; y < rows; y++) {
+            const alpha = 70 + (y % 5 === 0 ? 60 : 0);
+            p.stroke(ACCENT[0], ACCENT[1], ACCENT[2], alpha);
+            p.beginShape();
+            for (let x = 0; x < cols; x++) { const h = terrain[x][y]; p.vertex(x * scl, y * scl, -h); }
+            p.endShape();
+          }
+        };
+      };
+      this._p5 = new p5Constructor(sketch, container);
+    },
+  }));
 }

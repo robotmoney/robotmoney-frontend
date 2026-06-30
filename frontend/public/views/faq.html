@@ -2,7 +2,9 @@
      Static port of robotmoney-site/src/app/faq/page.tsx.
      32 Q&As in a single flat list, rendered as open prose — every question is a
      heading with its answer always visible (no accordion / collapse).
-     No <script>/<canvas>/custom Alpine factories (innerHTML-injected).
+     The hero renders an animated WebGL terrain-mesh canvas via the
+     boot-registered faqHero() Alpine factory (assets/js/app/alpine/heroes.js),
+     layered behind the hero title. No inline <script> in this view.
      Internal links are root-relative; there are no external links in the source.
 -->
 
@@ -11,6 +13,7 @@
 
     <!-- Hero -->
     <header class="faq__hero">
+      <div class="faq__hero-art" x-data="faqHero()"></div>
       <div class="faq__eyebrow">Frequently Asked Questions</div>
       <h1 class="faq__title">Robot Money <span class="faq__title-accent">FAQ</span></h1>
       <p class="faq__lede">
@@ -535,6 +538,28 @@
   border-bottom: 1px solid var(--color-border);
   position: relative;
   overflow: hidden;
+  min-height: 360px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.faq__hero-art {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.faq__hero::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 100px;
+  background: linear-gradient(to top, var(--color-void), transparent);
+  z-index: 0;
+  pointer-events: none;
 }
 
 .faq__hero::before {
