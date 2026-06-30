@@ -1,18 +1,13 @@
 // The single data seam for the analytics suite. Every tool gets its raw series
-// from a Provider — tools never know whether the data is seeded or live. v0 ships
-// a deterministic SeededProvider (hermetic, no API keys); a future FetcherProvider
-// (FRED/Yahoo/CoinMetrics/DefiLlama/RPC) implements the same interface and is the
-// ONLY thing that changes when wiring real data.
-import { lcg, hashStr } from "./transforms.ts";
+// from a Provider — tools never know whether the data is seeded or live. The
+// default is a deterministic seededProvider (hermetic, no API keys). An opt-in,
+// implemented live FetcherProvider (DefiLlama/CoinGecko/Yahoo, all keyless;
+// PROVIDER=live) satisfies the same interface and falls back to seeded per series,
+// so it is the ONLY thing that changes when serving real data.
+import type { SeriesSpec, Point } from "../types.ts";
+import { lcg, hashStr } from "../transform/math.ts";
 
-export interface SeriesSpec {
-  id: string; // canonical series id (e.g. "VIX", "BTC", "QQQ")
-  base: number; // central level
-  vol: number; // step volatility as a fraction of base
-  drift?: number; // small per-step drift fraction
-}
-
-export interface Point { date: string; value: number; }
+export type { SeriesSpec, Point } from "../types.ts";
 
 export interface Provider {
   getSeries(spec: SeriesSpec, asof: string, lookbackDays: number): Point[];

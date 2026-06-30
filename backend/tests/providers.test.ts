@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { createFetcherProvider } from "../src/analytics/providers/fetcher.ts";
+import { createFetcherProvider } from "../src/analytics/access/fetcher-provider.ts";
 
 test("FetcherProvider degrades to seeded when every source fetch fails (never throws)", async () => {
   const orig = globalThis.fetch;

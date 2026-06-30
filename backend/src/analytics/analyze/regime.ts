@@ -1,9 +1,9 @@
 // Regime classifier as a composable AnalyticTool. Macro + on-chain indicators →
 // per-indicator sign-adjusted percentile → panel composites → overall composite +
 // regime label. Persists the full history to regime_snapshots.
-import { sql } from "../../db/client.ts";
-import type { AnalyticTool, ToolContext } from "../tool.ts";
-import { percentileInWindow, applySign } from "../transforms.ts";
+import type { AnalyticTool, ToolContext } from "./tool.ts";
+import { percentileInWindow, applySign } from "../transform/math.ts";
+import { saveRegimeSnapshots } from "../store/regime-store.ts";
 
 const WINDOW = 90;
 const RISK_OFF = 0.33;
@@ -82,16 +82,5 @@ export const regimeTool: AnalyticTool<RegimeResult> = {
     return { snapshots };
   },
 
-  async persist(result) {
-    for (const s of result.snapshots) {
-      await sql`
-        INSERT INTO regime_snapshots
-          (date, composite, composite_percentile, regime, macro_regime, onchain_regime, factor_regime, percentiles, indicators)
-        VALUES (${s.date}, ${s.composite}, ${s.compositePercentile}, ${s.regime}, ${s.macroRegime}, ${s.onchainRegime}, ${s.factorRegime}, ${sql.json(s.percentiles)}, ${sql.json(s.indicators)})
-        ON CONFLICT (date) DO UPDATE SET
-          composite = EXCLUDED.composite, composite_percentile = EXCLUDED.composite_percentile,
-          regime = EXCLUDED.regime, macro_regime = EXCLUDED.macro_regime, onchain_regime = EXCLUDED.onchain_regime,
-          factor_regime = EXCLUDED.factor_regime, percentiles = EXCLUDED.percentiles, indicators = EXCLUDED.indicators`;
-    }
-  },
+  async persist(result) { await saveRegimeSnapshots(result.snapshots); },
 };

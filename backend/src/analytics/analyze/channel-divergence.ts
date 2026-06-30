@@ -2,9 +2,10 @@
 // original /research/channel-divergence. Complements (does not feed) the regime
 // composite. Indicators: BTC beta vs the risk-appetite factor (QQQ−SPY returns),
 // and the BTC/QQQ relative-strength ratio.
-import type { AnalyticTool, ToolContext } from "../tool.ts";
-import { pctChange, rollingBeta, ratio, percentileInWindow, clamp01 } from "../transforms.ts";
-import { persistResearchSignal, type ResearchPayload } from "./research-base.ts";
+import type { AnalyticTool, ToolContext } from "./tool.ts";
+import { pctChange, rollingBeta, ratio, percentileInWindow, clamp01 } from "../transform/math.ts";
+import type { ResearchPayload } from "./research.ts";
+import { persistResearchSignal } from "../store/research-store.ts";
 
 const KEY = "channel-divergence";
 

@@ -67,3 +67,7 @@ export function dateBefore(asof: string, daysAgo: number): string {
   const [y, m, d] = asof.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d) - daysAgo * 86400_000).toISOString().slice(0, 10);
 }
+
+// Epoch milliseconds → ISO YYYY-MM-DD (UTC). Shared by the extract parsers (which
+// key raw upstream rows by day) and the transform grid (which dates dense days).
+export const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);

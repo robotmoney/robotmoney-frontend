@@ -3,8 +3,8 @@
 // exposure. Tools may compose other tools via `dependsOn` (the registry resolves
 // run order), which is how a future "regime tempered by channel-divergence" would
 // be expressed without special-casing.
-import type { Provider } from "./provider.ts";
-import { seededProvider } from "./provider.ts";
+import type { Provider } from "../access/provider.ts";
+import { seededProvider } from "../access/provider.ts";
 
 export interface ToolContext {
   asof: string;
