@@ -1,3 +1,5 @@
+# End-to-end tier of the test pyramid: stands up the full stack (api + worker +
+# mcp + postgres via docker compose) and drives the demo lifecycle end to end.
 name: e2e
 on:
   push:
@@ -5,7 +7,7 @@ on:
   pull_request:
 
 jobs:
-  demo:
+  e2e:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

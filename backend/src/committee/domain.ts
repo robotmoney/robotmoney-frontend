@@ -267,7 +267,7 @@ export async function publishSession(sessionId: string) {
 }
 
 // ── Memos ───────────────────────────────────────────────────────────────────
-export async function postMemo(token: string, input: { sessionId: number; title?: string; body: string }) {
+export async function postMemo(token: string, input: { sessionId: string; title?: string; body: string }) {
   const memberId = await memberIdForToken(token);
   if (!memberId) return { ok: false, status: 401, error: "unknown member token" };
   const rows = await sql`
