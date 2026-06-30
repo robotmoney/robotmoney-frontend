@@ -1,0 +1,541 @@
+<!-- /docs/skill/agent-basket — Robot Money Skill agent basket.
+     Ported from robotmoney-site/src/app/docs/skill/agent-basket/page.tsx (static). -->
+<section class="docs-page">
+  <nav class="docs-breadcrumb" aria-label="Breadcrumb">
+    <a href="/docs">Docs</a>
+    <span>/</span>
+    <a href="/docs/skill" class="docs-bc-link">Robot Money Skill</a>
+    <span>/</span>
+    <span class="docs-bc-current">Agent basket</span>
+  </nav>
+  <a href="/docs/skill" class="docs-back">← Back to Robot Money Skill</a>
+
+  <header class="docs-header">
+    <h1 class="docs-title">Agent basket</h1>
+    <p class="docs-desc">
+      A small, curated allocation across seven agent-economy tokens that rides on
+      top of every vault deposit by default. Optional, atomic, and configurable
+      per call.
+    </p>
+  </header>
+
+  <div class="docs-prose">
+    <h2 id="what-it-is">What the basket is</h2>
+    <p>
+      Every <code>prepare-deposit</code> and <code>execute-deposit</code> call
+      has two legs by default: the main vault deposit and an
+      <strong>agent token basket</strong> leg. The basket is a fixed 7-token
+      allocation that gives the depositor exposure to the broader agent-economy
+      sector alongside the stable yield from the vault.
+    </p>
+    <p>
+      It's configurable per-call — flags let you turn the basket off entirely,
+      allocate 100% to the basket, change slippage tolerance, or sell back any
+      subset of holdings on exit. Defaults are 95% vault / 5% basket, 3%
+      slippage.
+    </p>
+
+    <h2 id="composition">Composition</h2>
+    <p>
+      Seven tokens, deliberately curated. The list reflects an agent-economy
+      thesis: protocols, platforms, and infrastructure that AI agents actually
+      use or that earn revenue from agent activity.
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>Token</th>
+          <th>Chain</th>
+          <th>Lens</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>VIRTUAL</code></td>
+          <td>Base</td>
+          <td>Agent-launch platform</td>
+        </tr>
+        <tr>
+          <td><code>ROBOT</code></td>
+          <td>Base</td>
+          <td>Robot Money protocol token</td>
+        </tr>
+        <tr>
+          <td><code>BNKR</code></td>
+          <td>Base</td>
+          <td>Agent trading rails (Bankr)</td>
+        </tr>
+        <tr>
+          <td><code>JUNO</code></td>
+          <td>Base</td>
+          <td>Generative Ventures agent (operator of Robot Money)</td>
+        </tr>
+        <tr>
+          <td><code>ZFI</code></td>
+          <td>Base</td>
+          <td>Zyfai — autonomous stablecoin strategy</td>
+        </tr>
+        <tr>
+          <td><code>GIZA</code></td>
+          <td>Base</td>
+          <td>Giza — agent infrastructure</td>
+        </tr>
+        <tr>
+          <td><code>PEAQ</code></td>
+          <td>Base</td>
+          <td>Machine economy infrastructure</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>
+      All seven trade on Uniswap V3 on Base. The basket leg routes through
+      Uniswap UniversalRouter in a single transaction along with the vault
+      deposit.
+    </p>
+    <div class="docs-callout docs-callout--note">
+      <div class="docs-callout__label">The basket is curated, not algorithmic</div>
+      <div class="docs-callout__body">
+        Token selection is maintained by Robot Money. Tokens may be added or
+        removed; the changelog announces every adjustment. Allocation across
+        tokens within the basket is roughly equal but is rebalanced occasionally
+        to reflect listing changes. If you want fully programmatic exposure to
+        the agent-economy sector, use <code>--no-basket</code> and assemble your
+        own basket logic.
+      </div>
+    </div>
+
+    <h2 id="the-95-5-split">The 95/5 split</h2>
+    <p>
+      By default, deposits route
+      <strong>95% of input USDC into the vault</strong> and
+      <strong>5% into the basket</strong>, split roughly equally across the 7
+      tokens. So a <code>--amount 1000</code> deposit puts $950 into rmUSDC and
+      approximately $7.14 into each of the 7 basket tokens.
+    </p>
+    <p>
+      The split is reflected in the response's <code>operation.summary</code>:
+    </p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar">json</div>
+      <pre><code>{
+  "operation": {
+    "summary": {
+      "type": "deposit",
+      "vault": {
+        "usdcAmount": "950.00",
+        "expectedShares": "947.55"
+      },
+      "basket": {
+        "usdcAmount": "50.00",
+        "perTokenUsdc": "7.14",
+        "tokens": ["VIRTUAL", "ROBOT", "BNKR", "JUNO", "ZFI", "GIZA", "PEAQ"],
+        "slippageBps": 300
+      }
+    },
+    "transactions": [
+      { "purpose": "approve-vault", "target": "0x833589fc...", "...": "..." },
+      { "purpose": "deposit-and-basket", "target": "0x4f835c9f...", "...": "..." }
+    ]
+  }
+}</code></pre>
+    </div>
+
+    <h2 id="slippage">Slippage control</h2>
+    <p>
+      The basket leg can experience slippage because seven swaps execute in one
+      block. The default tolerance is <strong>300 bps (3%)</strong> per swap.
+      Adjust per-call:
+    </p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar">shell</div>
+      <pre><code># Tighter tolerance for low-volatility periods
+npx @robotmoney/cli prepare-deposit --chain base \
+  --user-address 0x... --amount 100 --receiver 0x... \
+  --slippage-bps 100   # 1%
+
+# Wider tolerance for volatile periods or larger sizes
+npx @robotmoney/cli prepare-deposit --chain base \
+  --user-address 0x... --amount 5000 --receiver 0x... \
+  --slippage-bps 500   # 5%</code></pre>
+    </div>
+    <p>
+      Slippage applies to each token swap independently. If any swap exceeds the
+      tolerance, the entire deposit transaction reverts — the basket leg is
+      atomic with the vault leg.
+    </p>
+
+    <h2 id="atomicity">Atomicity</h2>
+    <p>
+      The basket leg and the vault leg share a single transaction. Either both
+      succeed or both revert. You can't end up in a state where the vault deposit
+      went through but the basket purchase failed (or vice versa).
+    </p>
+    <p>
+      Atomic also means atomic in MEV terms. Front-running the basket swaps
+      individually isn't possible without front-running the vault deposit, which
+      is uneconomical at typical agent sizes.
+    </p>
+
+    <h2 id="selling-back">Selling back</h2>
+    <p>
+      Withdrawals can sell any subset of basket holdings back to USDC, atomically
+      with the vault redeem. Four sell-back modes:
+    </p>
+
+    <h3>Sell everything</h3>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar">shell</div>
+      <pre><code>npx @robotmoney/cli prepare-redeem \
+  --chain base --user-address 0x... --shares max --receiver 0x... \
+  --sell-all</code></pre>
+    </div>
+    <p>
+      Sells the full balance of every basket token the user holds, plus redeems
+      all rmUSDC. Returns one USDC amount to the receiver.
+    </p>
+
+    <h3>Sell a percentage of everything</h3>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar">shell</div>
+      <pre><code>npx @robotmoney/cli prepare-redeem \
+  --chain base --user-address 0x... --shares max --receiver 0x... \
+  --sell-percent 50</code></pre>
+    </div>
+    <p>
+      Sells 50% of every basket holding. Useful for proportional de-risking —
+      exit half your vault position and half your basket exposure in one
+      transaction.
+    </p>
+
+    <h3>Sell specific tokens</h3>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar">shell</div>
+      <pre><code>npx @robotmoney/cli prepare-redeem \
+  --chain base --user-address 0x... --shares max --receiver 0x... \
+  --sell-tokens VIRTUAL,JUNO</code></pre>
+    </div>
+    <p>
+      Sells the full balance of just the listed tokens. Other basket holdings
+      stay in the wallet.
+    </p>
+
+    <h3>Sell specific amounts of specific tokens</h3>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar">shell</div>
+      <pre><code>npx @robotmoney/cli prepare-redeem \
+  --chain base --user-address 0x... --shares max --receiver 0x... \
+  --sell-tokens VIRTUAL,JUNO \
+  --sell-amounts 1.5,200</code></pre>
+    </div>
+    <p>
+      Sells exactly the listed amounts (1.5 VIRTUAL, 200 JUNO). Other basket
+      holdings stay. The order of <code>--sell-amounts</code> matches the order
+      of <code>--sell-tokens</code>.
+    </p>
+
+    <h2 id="basket-only">Basket-only flows</h2>
+    <p>Two flags let you skip the vault leg entirely:</p>
+    <h3>Deposit only to basket</h3>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar">shell</div>
+      <pre><code>npx @robotmoney/cli prepare-deposit \
+  --chain base --user-address 0x... --amount 100 --receiver 0x... \
+  --basket-only</code></pre>
+    </div>
+    <p>
+      Routes 100% of the input to the basket (~$14.29 per token). Useful when the
+      caller wants pure agent-economy exposure without the yield leg.
+    </p>
+
+    <h3>Deposit only to vault</h3>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar">shell</div>
+      <pre><code>npx @robotmoney/cli prepare-deposit \
+  --chain base --user-address 0x... --amount 100 --receiver 0x... \
+  --no-basket</code></pre>
+    </div>
+    <p>
+      Routes 100% of the input to the vault. The basket leg is skipped and no
+      swaps execute. Same gas profile as a vanilla ERC-4626 deposit.
+    </p>
+
+    <h2 id="read-holdings">Reading holdings</h2>
+    <p>
+      Inspect any wallet's basket position with
+      <code>get-basket-holdings</code>:
+    </p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar">shell</div>
+      <pre><code>npx @robotmoney/cli get-basket-holdings --chain base --user-address 0x...</code></pre>
+    </div>
+    <p>Sample response:</p>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar">json</div>
+      <pre><code>{
+  "userAddress": "0xabc...",
+  "chain": "base",
+  "tokens": [
+    { "symbol": "VIRTUAL", "balance": "12.5",  "valueUsd": "44.21" },
+    { "symbol": "ROBOT",   "balance": "1820",  "valueUsd": "33.04" },
+    { "symbol": "BNKR",    "balance": "85.3",  "valueUsd": "27.91" },
+    { "symbol": "JUNO",    "balance": "1240",  "valueUsd": "31.04" },
+    { "symbol": "ZFI",     "balance": "210",   "valueUsd": "29.18" },
+    { "symbol": "GIZA",    "balance": "405",   "valueUsd": "27.40" },
+    { "symbol": "PEAQ",    "balance": "8500",  "valueUsd": "30.12" }
+  ],
+  "totalUsd": "222.90",
+  "pricedAt": "2026-06-08T14:22:11.301Z"
+}</code></pre>
+    </div>
+    <p>
+      Add <code>--no-pricing</code> to skip the dollar-value fetch and return
+      token balances only. Useful when you only need quantities (faster, fewer
+      external calls).
+    </p>
+
+    <h2 id="design-notes">Design notes</h2>
+    <p>A few choices that explain why the basket exists in its current shape.</p>
+    <ul>
+      <li>
+        <strong>5% is small enough to be honest, big enough to matter.</strong>
+        The default split treats the basket as a tilt, not a strategy. Operators
+        who want bigger agent-economy exposure should set it explicitly via
+        <code>--basket-only</code> or by following deposits with separate basket
+        buys.
+      </li>
+      <li>
+        <strong>Curated, not indexed.</strong> The token list is maintained by
+        humans. There's no on-chain governance process for additions or
+        removals; the curation is part of what Robot Money signs for. If you
+        disagree with the composition, use <code>--no-basket</code>.
+      </li>
+      <li>
+        <strong>Atomic with vault operations, not standalone.</strong> The
+        basket is designed as a leg on top of vault deposits, not as a separate
+        product. That keeps gas profile reasonable (one tx instead of eight) and
+        avoids the failure modes of partially completed multi-leg trades.
+      </li>
+      <li>
+        <strong>The basket isn't in the vault.</strong> rmUSDC holders are not
+        exposed to basket tokens through the vault mechanic — the basket sits in
+        the depositor's wallet, not inside the vault. The vault is pure USDC
+        yield. The basket is alongside it.
+      </li>
+    </ul>
+  </div>
+
+  <footer class="docs-footer">
+    <a href="/docs/skill">
+      <div class="docs-footer__label">← Overview</div>
+      <div class="docs-footer__title">Robot Money Skill</div>
+    </a>
+    <a href="/docs/skill/commands">
+      <div class="docs-footer__label">← Previous</div>
+      <div class="docs-footer__title">Commands</div>
+    </a>
+    <a href="/docs/skill/installation">
+      <div class="docs-footer__label">Related →</div>
+      <div class="docs-footer__title">Installation</div>
+    </a>
+  </footer>
+</section>
+
+<style>
+.docs-page {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 8rem 1.5rem 5rem;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+.docs-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+  margin-bottom: 1.5rem;
+}
+.docs-breadcrumb a { color: var(--color-text-dim); text-decoration: none; }
+.docs-breadcrumb a:hover { color: var(--color-text-muted); }
+.docs-bc-link { color: var(--color-text-muted) !important; }
+.docs-bc-current { color: var(--color-text); }
+.docs-back {
+  display: inline-block;
+  margin-bottom: 2rem;
+  font-size: 0.85rem;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  text-decoration: none;
+}
+.docs-back:hover { color: var(--color-accent); }
+.docs-header {
+  margin-bottom: 2.5rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.docs-title {
+  font-size: 2.5rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  margin: 0 0 1rem;
+  color: var(--color-text);
+}
+.docs-desc {
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+.docs-prose { font-size: 1rem; line-height: 1.7; }
+.docs-prose h2 {
+  font-size: 1.6rem;
+  font-weight: 600;
+  margin: 2.75rem 0 1rem;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+.docs-prose h3 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 2rem 0 0.75rem;
+  color: var(--color-text);
+}
+.docs-prose h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 1.5rem 0 0.5rem;
+  color: var(--color-text);
+}
+.docs-prose p { margin: 0 0 1rem; color: var(--color-text); }
+.docs-prose ul, .docs-prose ol { margin: 0 0 1rem; padding-left: 1.5rem; color: var(--color-text); }
+.docs-prose li { margin-bottom: 0.5rem; }
+.docs-prose strong { color: var(--color-text); font-weight: 600; }
+.docs-prose a { color: var(--color-accent); text-decoration: none; }
+.docs-prose a:hover { text-decoration: underline; }
+.docs-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--color-accent-dim);
+  background: rgba(0, 229, 255, 0.08);
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+}
+.docs-prose hr { border: none; border-top: 1px solid var(--color-border); margin: 2.5rem 0; }
+.docs-codeblock {
+  margin: 1.25rem 0;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-deep);
+  overflow: hidden;
+}
+.docs-codeblock__bar {
+  padding: 0.4rem 1rem;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--color-text-dim);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.docs-codeblock pre { margin: 0; padding: 0.75rem 1rem; overflow-x: auto; }
+.docs-codeblock code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--color-text);
+  background: none;
+  padding: 0;
+  white-space: pre;
+}
+.docs-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  font-size: 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.docs-prose th {
+  text-align: left;
+  padding: 0.75rem 1rem;
+  background: var(--color-surface-light);
+  color: var(--color-text-dim);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  border-bottom: 1px solid var(--color-border);
+}
+.docs-prose td {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text);
+  vertical-align: top;
+}
+.docs-callout {
+  margin: 1.5rem 0;
+  border-left: 2px solid var(--color-blue);
+  background: rgba(68, 136, 255, 0.06);
+  padding: 1rem 1rem 1rem 1.25rem;
+  border-radius: 0 4px 4px 0;
+}
+.docs-callout__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-family: var(--font-mono);
+  color: var(--color-blue);
+  margin-bottom: 0.4rem;
+}
+.docs-callout__body { font-size: 0.9rem; line-height: 1.6; color: var(--color-text); }
+.docs-callout__body p:last-child { margin-bottom: 0; }
+.docs-callout--tip { border-left-color: var(--color-accent); background: rgba(0, 229, 255, 0.05); }
+.docs-callout--tip .docs-callout__label { color: var(--color-accent); }
+.docs-callout--warn { border-left-color: var(--color-warn); background: rgba(255, 102, 68, 0.06); }
+.docs-callout--warn .docs-callout__label { color: var(--color-warn); }
+.docs-callout--info { border-left-color: var(--color-blue); background: rgba(68, 136, 255, 0.06); }
+.docs-callout--info .docs-callout__label { color: var(--color-blue); }
+.docs-callout--note { border-left-color: var(--color-warm); background: rgba(232, 166, 64, 0.06); }
+.docs-callout--note .docs-callout__label { color: var(--color-warm); }
+.docs-footer {
+  margin-top: 3.5rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.docs-footer a {
+  flex: 1 1 200px;
+  display: block;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--color-text);
+  transition: border-color 0.2s;
+}
+.docs-footer a:hover { border-color: var(--color-accent); }
+.docs-footer__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-family: var(--font-mono);
+  color: var(--color-text-dim);
+  margin-bottom: 0.25rem;
+}
+.docs-footer__title { font-size: 0.9rem; color: var(--color-text); }
+@media (max-width: 640px) {
+  .docs-page { padding: 6rem 1.25rem 4rem; }
+  .docs-title { font-size: 2rem; }
+  .docs-desc { font-size: 1rem; }
+}
+</style>
