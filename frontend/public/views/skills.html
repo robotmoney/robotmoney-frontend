@@ -1,0 +1,370 @@
+<!-- /skills — Skill documentation hub.
+     Ported from robotmoney-site/src/app/skills/page.tsx (+ _components copy).
+     Static link-card hub pointing at the /docs/skill subpages.
+     NO <script>, NO <canvas>, NO custom Alpine factories. -->
+
+<section class="sk container">
+  <header class="sk__head">
+    <span class="sk__eyebrow">Robot Money Skill</span>
+    <h1 class="sk__title">
+      Agent <span class="sk__title-accent">Skill</span> docs
+    </h1>
+    <p class="sk__lede">
+      One deposit splits 95% into a multi-protocol USDC yield vault and 5% into a
+      curated basket of 6 agent tokens. Install the skill into any MCP-compatible
+      agent runtime and the full deposit &rarr; yield + basket &rarr; withdraw loop
+      runs with no human in the loop.
+    </p>
+
+    <div class="sk__install">
+      <span class="sk__install-label">install</span>
+      <code class="sk__install-cmd">npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli</code>
+    </div>
+    <p class="sk__install-note">
+      Works with Claude Code, Cursor, Codex, and any MCP-compatible agent runtime.
+    </p>
+  </header>
+
+  <!-- Primary doc cards -->
+  <div class="sk__grid">
+    <a class="sk-card sk-card--feature" href="/docs/skill">
+      <span class="sk-card__num">01</span>
+      <h2 class="sk-card__title">Skill overview</h2>
+      <p class="sk-card__desc">
+        What the Robot Money skill is, how it loads protocol context into an agent,
+        and the simulate &rarr; sign &rarr; broadcast write flow.
+      </p>
+      <span class="sk-card__cta">Read overview &rarr;</span>
+    </a>
+
+    <a class="sk-card" href="/docs/skill/installation">
+      <span class="sk-card__num">02</span>
+      <h2 class="sk-card__title">Installation</h2>
+      <p class="sk-card__desc">
+        Add the skill to Claude Code, Cursor, Codex, or any MCP runtime. Wallet
+        bootstrap via the Open Wallet Standard and the RPC health check.
+      </p>
+      <span class="sk-card__cta">Install guide &rarr;</span>
+    </a>
+
+    <a class="sk-card" href="/docs/skill/commands">
+      <span class="sk-card__num">03</span>
+      <h2 class="sk-card__title">Commands</h2>
+      <p class="sk-card__desc">
+        Twelve commands across Wallet, Read, Prepare, and Execute groups &mdash;
+        from <code>get-vault</code> and <code>get-apy</code> to
+        <code>prepare-deposit</code> and <code>execute-withdraw</code>.
+      </p>
+      <span class="sk-card__cta">Command reference &rarr;</span>
+    </a>
+
+    <a class="sk-card" href="/docs/skill/agent-basket">
+      <span class="sk-card__num">04</span>
+      <h2 class="sk-card__title">Agent basket</h2>
+      <p class="sk-card__desc">
+        The 5% basket leg: 6 curated agent tokens routed via Uniswap, per-token
+        holdings, and how the basket is bought and sold alongside the vault.
+      </p>
+      <span class="sk-card__cta">Basket details &rarr;</span>
+    </a>
+  </div>
+
+  <!-- Command group summary -->
+  <div class="sk__section">
+    <h2 class="sk__section-title">Twelve commands, four groups</h2>
+    <div class="sk__groups">
+      <div class="sk-group">
+        <span class="sk-group__label">Wallet</span>
+        <ul class="sk-group__list">
+          <li><code>create-wallet</code> &mdash; bootstrap a new OWS wallet for an agent or machine</li>
+        </ul>
+      </div>
+      <div class="sk-group">
+        <span class="sk-group__label">Read</span>
+        <ul class="sk-group__list">
+          <li><code>health-check</code> &mdash; RPC connectivity and vault reachability</li>
+          <li><code>get-vault</code> &mdash; full vault state: caps, fees, share price, per-adapter breakdown</li>
+          <li><code>get-balance</code> &mdash; rmUSDC balance and USDC-equivalent value</li>
+          <li><code>get-apy</code> &mdash; blended APY across Morpho, Aave, and Compound</li>
+          <li><code>get-basket-holdings</code> &mdash; per-token balances + USD values for the 6 basket tokens</li>
+        </ul>
+      </div>
+      <div class="sk-group">
+        <span class="sk-group__label">Prepare</span>
+        <ul class="sk-group__list">
+          <li><code>prepare-deposit</code> &mdash; unsigned calldata for the vault (95%) + basket (5%) legs</li>
+          <li><code>prepare-redeem</code> &mdash; unsigned calldata for vault redeem + basket sell</li>
+          <li><code>prepare-withdraw</code> &mdash; unsigned withdrawal by target net USDC amount</li>
+        </ul>
+      </div>
+      <div class="sk-group">
+        <span class="sk-group__label">Execute</span>
+        <ul class="sk-group__list">
+          <li><code>execute-deposit</code> &mdash; sign + broadcast deposit end-to-end via OWS</li>
+          <li><code>execute-redeem</code> &mdash; sign + broadcast redeem (vault + basket sell)</li>
+          <li><code>execute-withdraw</code> &mdash; sign + broadcast a withdrawal end-to-end</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <footer class="sk__footer">
+    <p class="sk__footer-text">
+      Autonomous yield for the agent economy &mdash; permissionless on Base.
+    </p>
+    <div class="sk__footer-links">
+      <a class="sk__footer-link sk__footer-link--primary" href="/docs">All documentation &rarr;</a>
+      <a class="sk__footer-link" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">View on GitHub</a>
+      <a class="sk__footer-link" href="https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd" target="_blank" rel="noopener noreferrer">Vault on BaseScan</a>
+    </div>
+  </footer>
+</section>
+
+<style>
+.sk {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 8rem 1.5rem 5rem;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+/* Header */
+.sk__head { margin-bottom: 3.5rem; }
+
+.sk__eyebrow {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+
+.sk__title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 2.75rem;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin: 0 0 1.25rem;
+}
+
+.sk__title-accent {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-blue));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--color-accent);
+}
+
+.sk__lede {
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  color: var(--color-text-muted);
+  max-width: 44rem;
+  margin: 0 0 2rem;
+}
+
+/* Install card */
+.sk__install {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  padding: 1rem 1.25rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.sk__install-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+}
+
+.sk__install-cmd {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--color-accent);
+  word-break: break-all;
+}
+
+.sk__install-note {
+  font-size: 0.85rem;
+  color: var(--color-text-dim);
+  margin: 0.75rem 0 0;
+}
+
+/* Card grid */
+.sk__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+  margin-bottom: 4rem;
+}
+
+.sk-card {
+  display: block;
+  padding: 1.75rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.25s var(--ease-out-expo), transform 0.25s var(--ease-out-expo);
+}
+
+.sk-card:hover {
+  border-color: var(--color-accent);
+  transform: translateY(-2px);
+}
+
+.sk-card--feature {
+  border-color: var(--color-border-light);
+}
+
+.sk-card__num {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-text-dim);
+}
+
+.sk-card__title {
+  font-size: 1.35rem;
+  font-weight: 600;
+  margin: 0.75rem 0 0.6rem;
+}
+
+.sk-card:hover .sk-card__title { color: var(--color-accent); }
+
+.sk-card__desc {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  margin: 0 0 1rem;
+}
+
+.sk-card__desc code,
+.sk-group__list code {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  color: var(--color-accent-dim);
+  background: var(--color-accent-glow);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.sk-card__cta {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--color-accent);
+}
+
+/* Command groups */
+.sk__section { margin-bottom: 4rem; }
+
+.sk__section-title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.75rem;
+  margin: 0 0 1.75rem;
+}
+
+.sk__groups {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+}
+
+.sk-group {
+  padding: 1.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.sk-group__label {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+
+.sk-group__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.sk-group__list li {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+/* Footer */
+.sk__footer {
+  padding-top: 2.5rem;
+  border-top: 1px solid var(--color-border);
+  text-align: center;
+}
+
+.sk__footer-text {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.25rem;
+  color: var(--color-text);
+  margin: 0 0 1.5rem;
+}
+
+.sk__footer-links {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.sk__footer-link {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-text-dim);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.sk__footer-link:hover { color: var(--color-accent); }
+
+.sk__footer-link--primary { color: var(--color-accent); }
+
+@media (min-width: 700px) {
+  .sk__title { font-size: 3.5rem; }
+  .sk__grid { grid-template-columns: 1fr 1fr; }
+  .sk-card--feature { grid-column: 1 / -1; }
+  .sk__groups { grid-template-columns: 1fr 1fr; }
+  .sk__footer-links { flex-direction: row; justify-content: center; }
+}
+
+@media (min-width: 1024px) {
+  .sk { padding: 9rem 2rem 6rem; }
+}
+</style>

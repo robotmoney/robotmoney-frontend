@@ -1,0 +1,908 @@
+<!-- Token Economics
+     Ported from robotmoney-site/src/app/tokenomics/page.tsx
+     Static, buildless SPA fragment: no <script>, no <canvas>, no Chart.js.
+     Charts rendered as static CSS (conic-gradient donut, flexbox bars).
+-->
+
+<section class="tok">
+  <div class="tok__container">
+
+    <!-- 01 / Hero -->
+    <header class="tok__hero">
+      <span class="tok__eyebrow">01 / $ROBOTMONEY</span>
+      <h1 class="tok__h1">
+        Token <span class="tok__grad">Economics</span>
+      </h1>
+      <p class="tok__lede">
+        $ROBOTMONEY directs vault allocation. Fair launch via Bankr on Base, 0% premine.
+      </p>
+
+      <div class="tok__hero-actions">
+        <div class="tok__contract">
+          <span class="tok__contract-label">Contract</span>
+          <code class="tok__contract-addr">0x65021a79AeEF...8618bEbA3</code>
+        </div>
+        <div class="tok__hero-links">
+          <a class="tok__btn tok__btn--solid" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
+          <a class="tok__btn tok__btn--ghost" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">BaseScan</a>
+        </div>
+      </div>
+    </header>
+
+    <!-- 02 / Utility -->
+    <div class="tok__section" id="what-it-does">
+      <span class="tok__eyebrow">02 / Utility</span>
+      <h2 class="tok__h2">What $ROBOTMONEY <span class="tok__grad">Does</span></h2>
+      <p class="tok__intro">
+        The token has one role: directing vault allocation. Three sources of value follow from that role.
+      </p>
+
+      <div class="tok__grid tok__grid--3">
+        <a class="tok__card tok__card--link" href="#governance">
+          <div class="tok__icon-dot" style="background:#3b82f6;"></div>
+          <h3 class="tok__card-title">Allocation Authority</h3>
+          <p class="tok__card-body">
+            Holders rank which qualifying tokens enter Buckets B and C each week. Votes are weighted by token balance. The agent executes the rebalance on-chain.
+          </p>
+        </a>
+        <a class="tok__card tok__card--link" href="#governance">
+          <div class="tok__icon-dot" style="background:#f59e0b;"></div>
+          <h3 class="tok__card-title">Inclusion Demand</h3>
+          <p class="tok__card-body">
+            Any token meeting the quantitative filter is eligible for vault allocation. Project ecosystems and agent treasuries that want their qualifying tokens supported hold $ROBOTMONEY to participate in allocation voting.
+          </p>
+        </a>
+        <a class="tok__card tok__card--link" href="#buybacks">
+          <div class="tok__icon-dot" style="background:#10b981;"></div>
+          <h3 class="tok__card-title">Supply Reduction</h3>
+          <p class="tok__card-body">
+            Robot Money generates revenue from vault management fees and token swap fees. When the protocol is profitable, that revenue funds discretionary buybacks of $ROBOTMONEY on the open market. Purchased tokens are burned.
+          </p>
+        </a>
+      </div>
+
+      <div class="tok__flow">
+        <span class="tok__flow-step">VOTE</span>
+        <span class="tok__flow-arrow">&rarr;</span>
+        <span class="tok__flow-step">ALLOCATE</span>
+        <span class="tok__flow-arrow">&rarr;</span>
+        <span class="tok__flow-step">BURN</span>
+      </div>
+
+      <span class="tok__eyebrow">02b / Principles</span>
+      <h3 class="tok__h3">Design <span class="tok__grad">Principles</span></h3>
+      <p class="tok__intro">The protocol is structured around four principles.</p>
+
+      <div class="tok__grid tok__grid--4">
+        <div class="tok__card" style="border-color:rgba(16,185,129,0.3);">
+          <div class="tok__icon-dot" style="background:#10b981;"></div>
+          <h3 class="tok__card-title tok__card-title--sm">Fair launch</h3>
+          <p class="tok__card-body">
+            No team allocation. No pre-sale. No insider tranche. All tokens entered the Uniswap v4 pool through Clanker's liquidity staircase at launch.
+          </p>
+        </div>
+        <div class="tok__card" style="border-color:rgba(139,92,246,0.3);">
+          <div class="tok__icon-dot" style="background:#8b5cf6;"></div>
+          <h3 class="tok__card-title tok__card-title--sm">Permanent liquidity</h3>
+          <p class="tok__card-body">
+            LP locked until 2100 via Clanker's locker contract. The protocol earns swap fees from its own pool rather than paying inflationary rewards to mercenary LPs.
+          </p>
+        </div>
+        <div class="tok__card" style="border-color:rgba(59,130,246,0.3);">
+          <div class="tok__icon-dot" style="background:#3b82f6;"></div>
+          <h3 class="tok__card-title tok__card-title--sm">Governed vault</h3>
+          <p class="tok__card-body">
+            Strategy parameters are directed by token holders, not by an admin key. Vault logic is open and verifiable. Changes to strategy require holder approval.
+          </p>
+        </div>
+        <div class="tok__card" style="border-color:rgba(139,92,246,0.3);">
+          <div class="tok__icon-dot" style="background:#8b5cf6;"></div>
+          <h3 class="tok__card-title tok__card-title--sm">Bounded governance</h3>
+          <p class="tok__card-body">
+            Holders vote on allocation and bucket weights only. There is no treasury vote, no marketing vote, no operations vote. The governance surface is small and well-defined.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 03 / Governance -->
+    <div class="tok__section tok__section--deep" id="governance">
+      <span class="tok__eyebrow">03 / Governance</span>
+      <h2 class="tok__h2">The agent runs the fund. <span class="tok__grad">Holders steer it.</span></h2>
+      <p class="tok__intro">The agent runs the fund. Holders direct where capital goes.</p>
+
+      <div class="tok__grid tok__grid--3">
+        <div class="tok__card">
+          <div class="tok__icon-dot" style="background:#3b82f6;"></div>
+          <h3 class="tok__card-title">Weekly Allocation Cycle</h3>
+          <p class="tok__card-body">
+            Each week the agent runs the quantitative filter and publishes a shortlist of 10-15 qualifying tokens with supporting data: volume, holder distribution, treasury health, on-chain revenue, age. Other agents holding $ROBOTMONEY may also propose qualifying tokens. Holders rank their preferred allocation over a 48-hour balance-weighted window. The agent executes the rebalance on-chain.
+          </p>
+        </div>
+        <div class="tok__card">
+          <div class="tok__icon-dot" style="background:#f59e0b;"></div>
+          <h3 class="tok__card-title">Default Allocation</h3>
+          <p class="tok__card-body">
+            If fewer than 5% of circulating supply votes, the agent's ranked allocation executes. The fund always has a strategy. As the token distributes, voter participation grows.
+          </p>
+        </div>
+        <div class="tok__card">
+          <div class="tok__icon-dot" style="background:#8b5cf6;"></div>
+          <h3 class="tok__card-title">Monthly Weight Rebalance</h3>
+          <p class="tok__card-body">
+            Bucket weights default to 50% stable yield / 25% agent tokens / 25% revenue liquid. Holders vote monthly to shift the mix in response to market conditions. If no quorum, weights remain unchanged.
+          </p>
+        </div>
+      </div>
+
+      <!-- Governance flow -->
+      <div class="tok__gov-flow">
+        <div class="tok__gov-node"><span class="tok__gov-dot" style="background:var(--color-accent);"></span><span>Agent Publishes Shortlist</span></div>
+        <span class="tok__flow-arrow">&rarr;</span>
+        <div class="tok__gov-node"><span class="tok__gov-dot" style="background:var(--color-blue);"></span><span>Holders Vote 48h</span></div>
+        <span class="tok__flow-arrow">&rarr;</span>
+        <div class="tok__gov-node"><span class="tok__gov-dot" style="background:var(--color-warn);"></span><span>Agent Rebalances</span></div>
+      </div>
+
+      <!-- Inclusion Economy -->
+      <div class="tok__panel">
+        <h3 class="tok__panel-title">The Inclusion Economy</h3>
+        <p class="tok__panel-lede">
+          $ROBOTMONEY creates a market for vault allocation among qualifying projects. The mechanism has two parts.
+        </p>
+        <div class="tok__grid tok__grid--2">
+          <div class="tok__numbered">
+            <span class="tok__num">01</span>
+            <div>
+              <h4 class="tok__num-title">The filter sets the eligible set.</h4>
+              <p class="tok__card-body">
+                Tokens must independently clear the quantitative filter to appear on any ballot. Holders cannot vote unqualified tokens onto the ballot.
+              </p>
+            </div>
+          </div>
+          <div class="tok__numbered">
+            <span class="tok__num">02</span>
+            <div>
+              <h4 class="tok__num-title">The vote sets the weighting within that set.</h4>
+              <p class="tok__card-body">
+                Project ecosystems, agent treasuries, and holders that want a qualifying token in the vault hold $ROBOTMONEY and vote. Inclusion routes vault USDC to the token. This creates structural demand for $ROBOTMONEY from any team or treasury with a qualifying token.
+              </p>
+            </div>
+          </div>
+        </div>
+        <p class="tok__panel-foot">The filter governs eligibility. Holders govern weighting. Both are public.</p>
+      </div>
+    </div>
+
+    <!-- 04 / Buybacks -->
+    <div class="tok__section" id="buybacks">
+      <span class="tok__eyebrow">04 / Buybacks</span>
+      <h2 class="tok__h2">Discretionary <span class="tok__grad">Buybacks</span></h2>
+      <p class="tok__intro">
+        Robot Money generates revenue from the 2% vault management fee and the protocol's share of token swap fees. When the protocol is profitable, that revenue funds buybacks of $ROBOTMONEY on the open market. Purchased tokens are sent to the dead address (0x000&hellip;dEaD) and removed from circulation permanently.
+      </p>
+
+      <div class="tok__grid tok__grid--2">
+        <!-- Mechanism steps -->
+        <div class="tok__card tok__card--glow">
+          <h4 class="tok__mini-title">Mechanism</h4>
+          <ol class="tok__steps">
+            <li><span class="tok__step-num">01</span><span>Protocol revenue accrues to the protocol-controlled wallet.</span></li>
+            <li><span class="tok__step-num">02</span><span>When the protocol is profitable, a buyback is initiated.</span></li>
+            <li><span class="tok__step-num">03</span><span>$ROBOTMONEY is purchased on the Uniswap v4 pool.</span></li>
+            <li><span class="tok__step-num">04</span><span>Purchased tokens are burned to 0x000&hellip;dEaD.</span></li>
+          </ol>
+        </div>
+
+        <!-- Buyback history -->
+        <div class="tok__card tok__card--glow">
+          <h4 class="tok__mini-title">Buyback History</h4>
+          <div class="tok__bb-summary">
+            <span class="tok__bb-summary-label">Total Spent on Buybacks</span>
+            <span class="tok__bb-summary-val">0.412318 WETH</span>
+          </div>
+          <div class="tok__table-wrap">
+            <table class="tok__table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th class="tok__r">WETH</th>
+                  <th class="tok__r">Value</th>
+                  <th class="tok__r">$RM</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td>2026-06-28</td><td class="tok__r tok__warn">0.1240</td><td class="tok__r">$420</td><td class="tok__r tok__acc">3.1M</td></tr>
+                <tr><td>2026-06-21</td><td class="tok__r tok__warn">0.0980</td><td class="tok__r">$330</td><td class="tok__r tok__acc">2.6M</td></tr>
+                <tr><td>2026-06-14</td><td class="tok__r tok__warn">0.1103</td><td class="tok__r">$372</td><td class="tok__r tok__acc">2.9M</td></tr>
+                <tr><td>2026-06-07</td><td class="tok__r tok__warn">0.0800</td><td class="tok__r">$268</td><td class="tok__r tok__acc">2.2M</td></tr>
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td class="tok__bold">TOTAL</td>
+                  <td class="tok__r tok__bold tok__warn">0.412318 WETH</td>
+                  <td class="tok__r tok__bold tok__acc">$1,390</td>
+                  <td class="tok__r tok__bold tok__acc">10.80M</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <div class="tok__bb-foot">
+            <a class="tok__inline-link" href="/allocation">View full buyback history &rarr;</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 05 / Economics -->
+    <div class="tok__section tok__section--deep" id="fees">
+      <span class="tok__eyebrow">05 / Economics</span>
+      <h2 class="tok__h2">Fees &amp; <span class="tok__grad">Revenue</span></h2>
+      <p class="tok__intro">
+        $ROBOTMONEY trades on Uniswap v4. Each swap incurs a 1% fee, split as follows:
+      </p>
+
+      <div class="tok__grid tok__grid--2">
+        <!-- Donut -->
+        <div class="tok__card">
+          <h4 class="tok__mini-title">Fee Distribution</h4>
+          <div class="tok__donut-wrap">
+            <div class="tok__donut" style="background:conic-gradient(#10b981 0 57%, #f59e0b 57% 97%, #8b5cf6 97% 100%);">
+              <div class="tok__donut-hole"></div>
+            </div>
+          </div>
+          <div class="tok__legend">
+            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#10b981;"></span>Protocol (57%)</div>
+            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#f59e0b;"></span>Bankr (40%)</div>
+            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#8b5cf6;"></span>Clanker (3%)</div>
+          </div>
+        </div>
+
+        <!-- Fee breakdown cards -->
+        <div class="tok__fee-stack">
+          <div class="tok__fee-card">
+            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#10b981;"></span><span class="tok__fee-pct">57%</span></div>
+            <div class="tok__fee-name">Protocol wallet</div>
+            <div class="tok__fee-note">Creator share &mdash; funds buybacks</div>
+          </div>
+          <div class="tok__fee-card">
+            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#f59e0b;"></span><span class="tok__fee-pct">40%</span></div>
+            <div class="tok__fee-name">Bankr</div>
+            <div class="tok__fee-note">Interface &mdash; distribution partner</div>
+          </div>
+          <div class="tok__fee-card">
+            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#8b5cf6;"></span><span class="tok__fee-pct">3%</span></div>
+            <div class="tok__fee-name">Clanker Protocol</div>
+            <div class="tok__fee-note">Infrastructure</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Revenue streams -->
+      <div class="tok__panel">
+        <h3 class="tok__panel-title tok__panel-title--warn">Revenue Streams</h3>
+        <div class="tok__rev-list">
+          <div class="tok__rev-row">
+            <div><div class="tok__rev-name">Management Fee</div><div class="tok__rev-mech">2% annual on vault AUM, accrued daily</div></div>
+            <span class="tok__rev-to">Protocol wallet</span>
+          </div>
+          <div class="tok__rev-row">
+            <div><div class="tok__rev-name">Token Swap Fees</div><div class="tok__rev-mech">57% of 1% fee on every $ROBOTMONEY swap</div></div>
+            <span class="tok__rev-to">Protocol wallet</span>
+          </div>
+          <div class="tok__rev-row">
+            <div><div class="tok__rev-name">Vault Exit Fee</div><div class="tok__rev-mech">0.25% of withdrawal amount</div></div>
+            <span class="tok__rev-to">Stays in vault for remaining depositors</span>
+          </div>
+          <div class="tok__rev-row">
+            <div><div class="tok__rev-name">Buybacks</div><div class="tok__rev-mech">Funded by protocol revenue when profitable</div></div>
+            <span class="tok__rev-to">Burned $ROBOTMONEY</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 06 / Precedents -->
+    <div class="tok__section" id="precedents">
+      <span class="tok__eyebrow">06 / Precedents</span>
+      <h2 class="tok__h2">Mechanism <span class="tok__grad">Precedents</span></h2>
+      <p class="tok__intro">Two established protocols inform the design.</p>
+      <div class="tok__grid tok__grid--2">
+        <div class="tok__card">
+          <div class="tok__prec-head">
+            <span class="tok__prec-badge" style="border-color:rgba(0,229,255,0.3);color:var(--color-accent);">C</span>
+            <h3 class="tok__card-title">Curve</h3>
+          </div>
+          <p class="tok__card-body">
+            Gauge-style allocation voting. Token holders direct where capital flows; projects acquire and hold the governance token to influence inclusion. Robot Money adopts this pattern but gates the eligible set by an independent quantitative filter rather than emissions, so vote influence cannot compound through token-locking schemes that reward incumbents.
+          </p>
+        </div>
+        <div class="tok__card">
+          <div class="tok__prec-head">
+            <span class="tok__prec-badge" style="border-color:rgba(68,136,255,0.3);color:var(--color-blue);">B</span>
+            <h3 class="tok__card-title">Botto</h3>
+          </div>
+          <p class="tok__card-body">
+            Minimal governance surface. Holders vote on allocation only - not on treasury, marketing, or operations. The agent executes a default if quorum is not met. Robot Money adopts this principle and adds third-party deposits, so the capital base is not bounded by the token's market cap.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 07 / Participation -->
+    <div class="tok__section tok__section--deep" id="participation">
+      <span class="tok__eyebrow">07 / Participation</span>
+      <h2 class="tok__h2">How to <span class="tok__grad">Participate</span></h2>
+      <p class="tok__intro">Two paths. Both use the same on-chain infrastructure.</p>
+      <div class="tok__grid tok__grid--2">
+        <div class="tok__card">
+          <div class="tok__part-head">
+            <div class="tok__icon-dot" style="background:#3b82f6;"></div>
+            <h4 class="tok__card-title tok__card-title--sm">Vault Depositor</h4>
+          </div>
+          <div class="tok__part-block">
+            <span class="tok__part-label">How</span>
+            <p class="tok__card-body">
+              Deposit USDC to the vault contract via any Base-compatible wallet, via Bankr, or programmatically via the OpenClaw skill or x402 endpoint.
+            </p>
+          </div>
+          <div class="tok__part-block">
+            <span class="tok__part-label">What You Get</span>
+            <p class="tok__card-body">
+              Vault shares. Pro-rata exposure to the three-bucket allocation. Withdraw at NAV anytime, minus a 0.25% exit fee that stays in the vault.
+            </p>
+          </div>
+          <a class="tok__btn tok__btn--solid tok__btn--block" href="/skills">OpenClaw Skill &rarr;</a>
+        </div>
+        <div class="tok__card">
+          <div class="tok__part-head">
+            <div class="tok__icon-dot" style="background:#f59e0b;"></div>
+            <h4 class="tok__card-title tok__card-title--sm">Token Holder</h4>
+          </div>
+          <div class="tok__part-block">
+            <span class="tok__part-label">How</span>
+            <p class="tok__card-body">
+              Buy $ROBOTMONEY on Uniswap v4 (Base) via the Clanker pool, Bankr, or any Base DEX aggregator.
+            </p>
+          </div>
+          <div class="tok__part-block">
+            <span class="tok__part-label">What You Get</span>
+            <p class="tok__card-body">
+              Allocation voting. Monthly weight rebalance voting. Exposure to supply reduction from protocol-funded buybacks.
+            </p>
+          </div>
+          <a class="tok__btn tok__btn--solid tok__btn--block" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener &rarr;</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- 08 / Disclaimer -->
+    <div class="tok__section">
+      <div class="tok__disclaimer">
+        <p>
+          Robot Money is not a registered investment vehicle. This page describes a protocol mechanism. The token has no claim on vault returns. Consult legal counsel before participating.
+        </p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<style>
+.tok {
+  background: var(--color-void);
+  color: var(--color-text);
+  padding: 8rem 1.5rem 5rem;
+  font-family: var(--font-sans);
+}
+.tok__container {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+/* Hero */
+.tok__hero {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 3rem;
+  margin-bottom: 3rem;
+}
+.tok__eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 0.75rem;
+}
+.tok__h1 {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 2.75rem;
+  line-height: 1.05;
+  margin: 0 0 1rem;
+}
+.tok__grad {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-blue));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--color-accent);
+}
+.tok__lede {
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  max-width: 40rem;
+  margin: 0 0 2rem;
+}
+.tok__hero-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.tok__contract {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  padding: 1rem;
+}
+.tok__contract-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+}
+.tok__contract-addr {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--color-accent);
+  word-break: break-all;
+}
+.tok__hero-links {
+  display: flex;
+  gap: 0.75rem;
+}
+.tok__btn {
+  display: inline-block;
+  text-align: center;
+  padding: 0.7rem 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  text-decoration: none;
+  transition: all 0.3s var(--ease-out-expo);
+  flex: 1;
+}
+.tok__btn--solid {
+  background: var(--color-accent);
+  color: var(--color-void);
+}
+.tok__btn--solid:hover { background: #fff; }
+.tok__btn--ghost {
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+.tok__btn--ghost:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.tok__btn--block {
+  display: block;
+  margin-top: 1.25rem;
+}
+
+/* Sections */
+.tok__section {
+  position: relative;
+  padding: 2.5rem 0;
+}
+.tok__section--deep {
+  background: var(--color-deep);
+  border-radius: 8px;
+  padding: 2.5rem 1.5rem;
+  margin: 1.5rem 0;
+}
+.tok__h2 {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 2rem;
+  line-height: 1.05;
+  margin: 0 0 1rem;
+}
+.tok__h3 {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.5rem;
+  line-height: 1.05;
+  margin: 2rem 0 0.75rem;
+}
+.tok__intro {
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  max-width: 42rem;
+  margin: 0 0 2rem;
+}
+
+/* Grids */
+.tok__grid {
+  display: grid;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.tok__grid--2 { grid-template-columns: 1fr; }
+.tok__grid--3 { grid-template-columns: 1fr; }
+.tok__grid--4 { grid-template-columns: 1fr; }
+
+/* Cards */
+.tok__card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  padding: 1.5rem;
+  border-radius: 6px;
+}
+.tok__card--link {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+  transition: border-color 0.3s var(--ease-out-expo);
+}
+.tok__card--link:hover { border-color: var(--color-accent); }
+.tok__card--glow { box-shadow: 0 0 24px rgba(16,185,129,0.06); }
+.tok__icon-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  margin-bottom: 1rem;
+}
+.tok__card-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+  color: var(--color-text);
+}
+.tok__card-title--sm { font-size: 0.95rem; }
+.tok__card-body {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+/* Flow */
+.tok__flow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin: 0 0 3rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.15em;
+  color: var(--color-accent);
+  opacity: 0.6;
+}
+.tok__flow-arrow { color: var(--color-accent); opacity: 0.5; }
+.tok__gov-flow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 2rem 0 2.5rem;
+}
+.tok__gov-node {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  padding: 0.75rem 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-text);
+  border-radius: 4px;
+}
+.tok__gov-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+/* Panel */
+.tok__panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  padding: 1.5rem;
+  border-radius: 6px;
+  margin-top: 1rem;
+}
+.tok__panel-title {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-accent);
+  margin: 0 0 1rem;
+}
+.tok__panel-title--warn { color: var(--color-warn); }
+.tok__panel-lede {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  margin: 0 0 1.5rem;
+}
+.tok__panel-foot {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin: 1.5rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+.tok__numbered { display: flex; gap: 0.75rem; align-items: flex-start; }
+.tok__num {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+.tok__num-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0 0 0.35rem;
+}
+
+/* Buyback steps + table */
+.tok__mini-title {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-text-dim);
+  margin: 0 0 1rem;
+}
+.tok__steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.tok__steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+.tok__step-num {
+  flex-shrink: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  border: 1px solid rgba(255,102,68,0.3);
+  color: var(--color-warn);
+}
+.tok__bb-summary {
+  background: var(--color-deep);
+  border: 1px solid var(--color-border);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.tok__bb-summary-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+  margin-bottom: 0.35rem;
+}
+.tok__bb-summary-val {
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+.tok__table-wrap { overflow-x: auto; }
+.tok__table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.tok__table th {
+  text-align: left;
+  padding: 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--color-text-dim);
+  border-bottom: 1px solid var(--color-border);
+}
+.tok__table td {
+  padding: 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-border);
+}
+.tok__table tfoot td {
+  border-top: 2px solid var(--color-border);
+  background: var(--color-void);
+}
+.tok__r { text-align: right; }
+.tok__bold { font-weight: 700; }
+.tok__warn { color: var(--color-warn); }
+.tok__acc { color: var(--color-accent); }
+.tok__bb-foot {
+  padding-top: 0.85rem;
+  text-align: center;
+}
+.tok__inline-link {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-accent);
+  text-decoration: none;
+}
+.tok__inline-link:hover { text-decoration: underline; }
+
+/* Donut */
+.tok__donut-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 1rem 0;
+}
+.tok__donut {
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tok__donut-hole {
+  width: 95px;
+  height: 95px;
+  border-radius: 50%;
+  background: var(--color-surface);
+}
+.tok__legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.tok__legend-item { display: flex; align-items: center; gap: 0.5rem; }
+.tok__legend-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Fee cards */
+.tok__fee-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.tok__fee-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  padding: 1.25rem;
+  border-radius: 6px;
+}
+.tok__fee-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.tok__fee-pct {
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+.tok__fee-name { font-size: 0.9rem; font-weight: 500; margin-bottom: 0.25rem; }
+.tok__fee-note { font-size: 0.75rem; color: var(--color-text-muted); }
+
+/* Revenue list */
+.tok__rev-list { display: flex; flex-direction: column; }
+.tok__rev-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid rgba(34,42,56,0.5);
+}
+.tok__rev-name { font-size: 0.9rem; font-weight: 500; }
+.tok__rev-mech { font-size: 0.75rem; color: var(--color-text-dim); margin-top: 0.15rem; }
+.tok__rev-to {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--color-accent);
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* Precedents */
+.tok__prec-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
+.tok__prec-badge {
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+/* Participation */
+.tok__part-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
+.tok__part-head .tok__icon-dot { margin-bottom: 0; }
+.tok__part-block { margin-bottom: 1rem; }
+.tok__part-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+}
+.tok__part-block .tok__card-body { margin-top: 0.35rem; }
+
+/* Disclaimer */
+.tok__disclaimer {
+  background: var(--color-deep);
+  border: 1px solid var(--color-border);
+  padding: 1.5rem;
+  border-radius: 6px;
+}
+.tok__disclaimer p {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--color-text-dim);
+  margin: 0;
+}
+
+/* Responsive */
+@media (min-width: 640px) {
+  .tok__hero-actions { flex-direction: row; align-items: center; justify-content: space-between; }
+  .tok__hero-links { flex: 0 0 auto; }
+}
+@media (min-width: 768px) {
+  .tok { padding: 8rem 2rem 5rem; }
+  .tok__h1 { font-size: 3.5rem; }
+  .tok__h2 { font-size: 2.5rem; }
+  .tok__section--deep { padding: 3rem 2rem; }
+  .tok__grid--2 { grid-template-columns: 1fr 1fr; }
+  .tok__grid--3 { grid-template-columns: repeat(3, 1fr); }
+  .tok__grid--4 { grid-template-columns: repeat(2, 1fr); }
+  .tok__gov-flow { flex-direction: row; justify-content: center; }
+}
+@media (min-width: 1024px) {
+  .tok { padding: 10rem 2rem 6rem; }
+  .tok__h1 { font-size: 4rem; }
+  .tok__grid--4 { grid-template-columns: repeat(4, 1fr); }
+}
+</style>
