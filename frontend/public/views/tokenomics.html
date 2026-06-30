@@ -21,6 +21,7 @@
         <div class="tok__contract">
           <span class="tok__contract-label">Contract</span>
           <code class="tok__contract-addr">0x65021a79AeEF...8618bEbA3</code>
+          <button type="button" class="tok__copy" data-copy="0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" data-copied-text="Copied!"><span data-copy-label>Copy</span></button>
         </div>
         <div class="tok__hero-links">
           <a class="tok__btn tok__btn--solid" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
@@ -465,6 +466,17 @@
   color: var(--color-accent);
   word-break: break-all;
 }
+.tok__copy {
+  flex-shrink: 0; margin-left: auto;
+  padding: 0.5rem 1rem;
+  font-family: var(--font-mono); font-size: 0.65rem;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--color-text-muted);
+  background: transparent; border: 1px solid var(--color-border);
+  cursor: pointer; transition: color 0.2s, border-color 0.2s;
+}
+.tok__copy:hover { color: var(--color-accent); border-color: var(--color-accent); }
+.tok__copy.is-copied { color: var(--color-accent); border-color: var(--color-accent); }
 .tok__hero-links {
   display: flex;
   gap: 0.75rem;

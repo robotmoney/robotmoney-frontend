@@ -56,3 +56,29 @@ if (document.readyState === "loading") {
 } else {
   start();
 }
+
+// Global delegated "copy to clipboard" handler. Any element with a
+// `data-copy="<text>"` attribute copies that text on click and shows
+// transient "Copied!" feedback. Registered once at boot so it works for
+// router-injected views (whose own inline scripts never execute).
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-copy]");
+  if (!btn) return;
+  const text = btn.getAttribute("data-copy");
+  const done = () => {
+    const label = btn.querySelector("[data-copy-label]") || btn;
+    const prev = label.textContent;
+    label.textContent = btn.getAttribute("data-copied-text") || "Copied!";
+    btn.classList.add("is-copied");
+    setTimeout(() => { label.textContent = prev; btn.classList.remove("is-copied"); }, 2000);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(done);
+  } else {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); } catch (_) {}
+    document.body.removeChild(ta); done();
+  }
+});
