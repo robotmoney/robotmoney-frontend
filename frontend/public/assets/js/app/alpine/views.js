@@ -149,6 +149,25 @@ export function registerViews(Alpine) {
     },
   }));
 
+  // ── Tokenomics fee distribution (pie) ─────────────────────────────────────
+  // Static Chart.js pie matching the original FeePieChart. The custom legend
+  // below the chart stays in the markup, so the chart's own legend is off.
+  Alpine.data("feeChart", () => ({
+    init() { this.$nextTick(() => this.draw()); },
+    draw() {
+      const canvas = this.$refs.fee;
+      if (!canvas || !window.Chart) return;
+      new window.Chart(canvas, {
+        type: "pie",
+        data: {
+          labels: ["Protocol (57%)", "Bankr (40%)", "Clanker (3%)"],
+          datasets: [{ data: [57, 40, 3], backgroundColor: ["#10b981", "#f59e0b", "#8b5cf6"], borderColor: "#0a0a0f", borderWidth: 2 }],
+        },
+        options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } } },
+      });
+    },
+  }));
+
   // ── Investment Committee ──────────────────────────────────────────────────
   Alpine.data("committeeView", () => ({
     loading: true,
