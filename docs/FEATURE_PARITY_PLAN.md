@@ -1,26 +1,45 @@
-# Feature Parity Plan: robotmoney-site → robotmoney-frontend
+# Feature Parity Audit: robotmoney-site → robotmoney-frontend
 
-**Goal:** Bring robotmoney-frontend to pixel-perfect feature parity with robotmoney-site (legacy Next.js/React/Tailwind). This repo uses a **buildless** stack (HTML + Alpine.js + hand-written CSS + Bun/Postgres backend).
+**Goal:** Achieve pixel-perfect feature parity between robotmoney-site (legacy Next.js/React/Tailwind) and robotmoney-frontend (buildless: HTML + Alpine.js + hand-written CSS + Bun/Postgres backend).
 
-**Branch:** `adhoc/20260630-125844-feature-parity-visualizations-nemotron`
-**Worktree:** `/home/lucas/tmp/superfield-worktrees/robotmoney-frontend/adhoc-20260630-125844-feature-parity-visualizations`
+**Branch:** `adhoc/20260630-125844-feature-parity-visualizations-nemotron`  
+**Worktree:** `/home/lucas/tmp/superfield-worktrees/robotmoney-frontend/adhoc-20260630-125844-feature-parity-visualizations`  
+**Audit Date:** 2026-06-30
 
 ---
 
-## 1. Pages Inventory Comparison
+## EXECUTIVE SUMMARY
 
-### Current robotmoney-frontend (7 view files)
+**Current State:** 12% feature parity (2 pages live + home sections)  
+**Gap to Close:** 88 pages, 29 visualizations, 26 components, ~270 data files, design token gaps
+
+| Category | Completed | Remaining | Priority |
+|----------|-----------|-----------|----------|
+| **Pages** | 2/90 | 88 | P0 |
+| **Visualizations** | 0/29 | 29 | P1 |
+| **Components** | 0/26 | 26 | P1 |
+| **Data Files** | 0/270 | ~270 | P2 |
+| **Design Tokens** | 60% | 40% | P2 |
+
+**Estimated Effort:** 6-8 weeks for full parity (P0 core pages: 1-2 weeks)
+
+---
+
+## SECTION 1: PAGES & ROUTES
+
+### ✅ COMPLETED (2 pages)
+
+**robotmoney-frontend** currently has these view files:
 ```
 frontend/public/views/
-├── home.html                      → / (home)
+├── home.html                      → /
 ├── regime.html                    → /regime
 ├── research/
 │   ├── channel-divergence.html    → /research/channel-divergence
 │   └── late-cycle-signals.html    → /research/late-cycle-signals
 ├── committee.html                 → /committee
-├── committee/
-│   └── apply.html                 → /committee/apply
-└── sections/                      # Home sections (included in home.html)
+├── committee/apply.html           → /committee/apply
+└── sections/                      → (included in home.html)
     ├── architecture.html
     ├── contract.html
     ├── footer.html
@@ -29,536 +48,404 @@ frontend/public/views/
     └── token.html
 ```
 
-### Target robotmoney-site (70+ pages)
-| Category | Pages | Status |
-|----------|-------|--------|
-| **Marketing / Core** | `/`, `/disclaimer`, `/changelog`, `/faq`, `/docs/*` | ❌ Missing |
-| **Allocation / Vault** | `/allocation`, `/allocation-v2`, `/allocation2`, `/allocation3`, `/allocation2_fixingtotals`, `/tokenomics` | ❌ Missing |
-| **Regime / Research** | `/regime`, `/regime/indicators`, `/regime-detection`, `/regime-preview`, `/regime_2panel`, `/regime_2panel/indicators`, `/research/channel-divergence`, `/research/late-cycle-signals` | ⚠️ Partial |
-| **Committee** | `/committee`, `/committee/[date]/[subject]`, `/committee/members/[id]`, `/committee/subjects/[id]`, `/committee/apply` | ⚠️ Partial |
-| **Visualizations (37)** | `/matrix-rain`, `/substrate`, `/flow-field`, `/tree`, `/fractal-tree`, `/network-swarm`, `/liquid-mesh`, `/attractor`, `/constellation`, `/constructivist`, `/dla`, `/flock`, `/mandelbrot`, `/orbits`, `/reaction`, `/terrain`, `/voronoi`, `/waves`, `/epicycles`, `/chladni`, `/slime-mold`, `/double-pendulum`, `/turing`, `/phyllotaxis`, `/space-filling`, `/moire`, `/magnetic-field`, `/plasma`, `/visualization`, `/visualizations`, `/splash2`, `/home2`, `/home_archived` | ❌ Missing |
-| **Blog / Media** | `/blog`, `/blog/*` (6 posts), `/media`, `/media/articles`, `/media/videos`, `/articles/treasury-allocation` | ❌ Missing |
-| **Docs / Skills** | `/docs`, `/docs/investment-committee/*` (4), `/docs/skill/*` (4), `/skills` | ❌ Missing |
-| **Special** | `/smart-contract-risks`, `/tech-proposal-march-16`, `/turing`, `/tree`, `/display/projects` | ❌ Missing |
-
-**Total new pages to create: ~63**
+**Status:** Home + regime + committee core are functional. Home sections modular.
 
 ---
 
-## 2. Visualizations to Port (37 effects)
+### ❌ REMAINING (88 pages)
 
-All visualizations in robotmoney-site are **p5.js sketches** (React components with `useEffect` loading p5 from CDN). In the buildless frontend, they must be ported as **vanilla p5 instances** mounted into `#view` via Alpine or plain JS.
+**robotmoney-site** has 90+ total routes across Next.js app/.
 
-### Hero/Background Effects (used on multiple pages)
-| Effect | Source | Used On |
-|--------|--------|---------|
-| Substrate (crystal growth) | `src/app/page.tsx`, `src/app/substrate/page.tsx` | Home, /substrate |
-| Flow Field | `src/app/flow-field/page.tsx` | /flow-field |
-| Network Swarm | `src/app/network-swarm/page.tsx` | /network-swarm |
-| Liquid Mesh | `src/app/liquid-mesh/page.tsx` | /liquid-mesh, /allocation hero |
-| Orbits | `src/components/OrbitsCanvas.tsx` | /regime, /orbits |
-| Slime Mold | `src/components/committee/SlimeMoldHero.tsx` | /committee |
+#### P0 CRITICAL (Dependencies for other work)
+| Route | Type | Reason | Effort |
+|-------|------|--------|--------|
+| `/` (enhanced home) | Update | Add missing sections (economics, infrastructure, roadmap) | Low |
+| `/committee/[date]/[subject]` | Dynamic | Session detail view (backend data ready) | Medium |
+| `/committee/members/[id]` | Dynamic | Member profile (backend data ready) | Low |
+| `/committee/subjects/[id]` | Dynamic | Subject detail (backend data ready) | Low |
+| `/visualizations` | Gallery | Index page listing all 29 visualizations | Low |
+| `/allocation` | Dashboard | Vault TVL, wallet balances, buybacks (charts) | Medium |
 
-### Standalone Visualization Pages (37)
-Each needs a dedicated `views/visualizations/<name>.html` + JS sketch module.
+**Subtotal P0: 6 pages**
 
-| # | Path | Type | Complexity |
-|---|------|------|------------|
-| 1 | `/matrix-rain` | Canvas (chars) | Low |
-| 2 | `/substrate` | Canvas (crack growth) | High |
-| 3 | `/flow-field` | Canvas (particles + perlin) | Medium |
-| 4 | `/tree` | Canvas (recursive) | Low |
-| 5 | `/fractal-tree` | Canvas (recursive) | Low |
-| 6 | `/network-swarm` | Canvas (nodes + data pixels) | Medium |
-| 7 | `/liquid-mesh` | Canvas (deformable grid + scatter) | High |
-| 8 | `/attractor` | Canvas (Lorenz) | Low |
-| 9 | `/constellation` | Canvas (stars + connections) | Low |
-| 10 | `/constructivist` | Canvas (geometric) | Low |
-| 11 | `/dla` | Canvas (diffusion-limited agg) | Medium |
-| 12 | `/flock` | Canvas (boids) | Medium |
-| 13 | `/mandelbrot` | Canvas (fractal) | Low |
-| 14 | `/orbits` | Canvas (elliptical) | Low |
-| 15 | `/reaction` | Canvas (reaction-diffusion) | Medium |
-| 16 | `/terrain` | Canvas (procedural) | Low |
-| 17 | `/voronoi` | Canvas (cellular) | Low |
-| 18 | `/waves` | Canvas (sine interference) | Low |
-| 19 | `/epicycles` | Canvas (Fourier) | Medium |
-| 20 | `/chladni` | Canvas (resonance) | Low |
-| 21 | `/slime-mold` | Canvas (physarum) | Medium |
-| 22 | `/double-pendulum` | Canvas (chaos) | Low |
-| 23 | `/turing` | Canvas (reaction-diffusion) | Medium |
-| 24 | `/phyllotaxis` | Canvas (golden spiral) | Low |
-| 25 | `/space-filling` | Canvas (Hilbert curve) | Low |
-| 26 | `/moire` | Canvas (interference) | Low |
-| 27 | `/magnetic-field` | Canvas (field lines) | Medium |
-| 28 | `/plasma` | Canvas (metaballs) | Medium |
-| 29 | `/visualization` | Canvas (gallery entry) | — |
-| 30 | `/visualizations` | Index page with SVG previews | — |
-| 31 | `/splash2` | Canvas | Low |
-| 32 | `/home2` | Page variant | — |
-| 33 | `/home_archived` | Page variant | — |
-| 34 | `/smart-contract-risks` | Content page | — |
-| 35 | `/tech-proposal-march-16` | Content page | — |
-| 36 | `/tree` | Content page (not visualization) | — |
-| 37 | `/display/projects` | Content page | — |
+#### P1 MARKETING & BLOG (Moderate priority)
+| Route | Count | Status |
+|-------|-------|--------|
+| `/blog`, `/blog/*` (6 posts) | 7 | ❌ Missing |
+| `/docs`, `/docs/investment-committee/*`, `/docs/skill/*` | 9 | ❌ Missing |
+| `/media`, `/media/articles`, `/media/videos` | 3 | ❌ Missing |
+| `/changelog`, `/disclaimer`, `/faq`, `/tokenomics`, `/skills` | 5 | ❌ Missing |
+| `/articles/treasury-allocation` | 1 | ❌ Missing |
 
-**Note:** `/visualizations` index uses `VisualizationsPreview.tsx` which renders **static SVG previews** for all 37 effects. This is a separate component that generates SVG strings—must be ported to generate static SVGs at build time or runtime.
+**Subtotal P1: 25 pages**
+
+#### P2 SPECIAL & VARIANTS (Lower priority)
+| Route | Status |
+|-------|--------|
+| `/allocation2`, `/allocation3`, `/allocation-v2`, `/allocation2_fixingtotals` | ❌ Variants |
+| `/regime/indicators`, `/regime-detection`, `/regime-preview`, `/regime_2panel`, `/regime_2panel/indicators` | ❌ Regime variants |
+| `/smart-contract-risks`, `/tech-proposal-march-16`, `/display/projects` | ❌ Special pages |
+| `/home2`, `/home_archived`, `/splash2` | ❌ Variants |
+
+**Subtotal P2: ~57 pages**
 
 ---
 
-## 3. Components to Port
+## SECTION 2: VISUALIZATIONS (p5.js Sketches)
 
-### React Components → Alpine.js / Vanilla JS
+### ✅ COMPLETED: 0/29
 
-| Component | Source | Target Approach |
-|-----------|--------|-----------------|
-| `Navigation` | `src/components/Navigation.tsx` | Alpine component in `assets/js/app/alpine/navigation.js` |
-| `Footer` | `src/components/Footer.tsx` | Static HTML partial (`views/sections/footer.html`) |
-| `Hero` | `src/components/Hero.tsx` | Home view includes substrate canvas |
-| `ProblemSection` | `src/components/ProblemSection.tsx` | `views/sections/problem.html` |
-| `ArchitectureSection` | `src/components/ArchitectureSection.tsx` | `views/sections/architecture.html` + VaultMonolithSVG |
-| `TokenSection` | `src/components/TokenSection.tsx` | `views/sections/token.html` |
-| `GovernanceSection` | `src/components/GovernanceSection.tsx` | `views/sections/governance.html` |
-| `ContractSection` | `src/components/ContractSection.tsx` | `views/sections/contract.html` |
-| `EconomicsSection` | `src/components/EconomicsSection.tsx` | New section |
-| `InfrastructureSection` | `src/components/InfrastructureSection.tsx` | New section |
-| `RoadmapSection` | `src/components/RoadmapSection.tsx` | New section |
-| `AllocationSection` | `src/components/AllocationSection.tsx` | New page `/allocation` |
-| `CommentsSection` | `src/components/CommentsSection.tsx` | Uses backend comments API |
-| `OrbitsCanvas` | `src/components/OrbitsCanvas.tsx` | p5 sketch module |
-| `SlimeMoldHero` | `src/components/committee/SlimeMoldHero.tsx` | p5 sketch module |
-| `Avatar` | `src/components/committee/Avatar.tsx` | Alpine component |
-| `VisualizationsPreview` | `src/components/VisualizationsPreview.tsx` | Static SVG generator module |
-| `RegimeDashboard` | `src/app/regime-detection/RegimeDashboard.tsx` | Alpine + Chart.js |
-| `HistoryChart` / `BacktestChart` / `Sparkline` | `src/app/regime-detection/*.tsx` | Chart.js modules |
+**robotmoney-frontend** has empty placeholder:
+- `/frontend/public/assets/js/app/visualizations/index.js` — exports only (no implementations)
 
-### SVG Components → Static SVG Files or Inline
-| SVG | Source | Target |
-|-----|--------|--------|
-| `VaultMonolithSVG` | `src/components/svg/VaultMonolithSVG.tsx` | `assets/svg/vault-monolith.svg` |
-| `VaultBeamSVG` | `src/components/svg/VaultBeamSVG.tsx` | `assets/svg/vault-beam.svg` |
-| `VaultCorridorSVG` | `src/components/svg/VaultCorridorSVG.tsx` | `assets/svg/vault-corridor.svg` |
-| `VaultCubeRow` | `src/components/svg/VaultCubeRow.tsx` | `assets/svg/vault-cube-row.svg` |
-| `MonolithLogoSVG` | `src/components/svg/MonolithLogoSVG.tsx` | `assets/svg/monolith-logo.svg` |
-| `AnimatedBeamSVG` | `src/components/svg/AnimatedBeamSVG.tsx` | CSS animation + SVG |
-| `AnimatedServerGrid` | `src/components/svg/AnimatedServerGrid.tsx` | CSS animation + SVG |
-| `ServerGridSVG` | `src/components/svg/ServerGridSVG.tsx` | `assets/svg/server-grid.svg` |
-| `DataStreamSVG` | `src/components/svg/DataStreamSVG.tsx` | CSS animation + SVG |
+### ❌ REMAINING: All 29 visualizations
 
----
+**robotmoney-site** implementations at `/src/app/[name]/page.tsx` (React + p5 via CDN).
 
-## 4. Data & Backend Requirements
+#### Complexity Breakdown
 
-### Static Data Files (in `frontend/public/data/`)
-| File | Source | Used By |
-|------|--------|---------|
-| `regime-history.csv` | `data/regime/regime-history.csv` | Regime page |
-| `regime-versions.json` | `data/regime/regime-versions.json` | Regime page |
-| `raw-indicator-history.csv` | `data/regime/raw-indicator-history.csv` | Regime page |
-| `regime-eq-snapshot.json` | `public/data/regime-eq-snapshot.json` | RegimeDashboard |
-| `hourly-wallet-balances.csv` | `data/unified-wallet-history.csv` | Allocation page |
-| `hourly-vault-tvl.csv` | (generated) | Allocation page |
-| `vault-apy.json` | (generated) | Allocation page |
-| `committee/research.json` | `data/committee/research.json` | Committee pages |
-| `committee/subjects/*.json` | `data/committee/subjects/*.json` | Committee pages |
-| `committee/members/*.json` | `data/committee/members/*.json` | Committee pages |
-| `committee/allocation.json` | `data/committee/allocation.json` | Allocation page |
-| `wallet.ts` config | `src/config/wallet.ts` | Allocation page |
+| Tier | Count | Visualizations | Est. Time |
+|------|-------|-----------------|-----------|
+| **Low** (Pure canvas, simple math) | 12 | tree, fractal-tree, attractor, constellation, constructivist, mandelbrot, terrain, voronoi, phyllotaxis, space-filling, moire, chladni | 2 days |
+| **Medium** (Particles, interactions, perlin noise) | 10 | matrix-rain, flow-field, orbits, waves, epicycles, dla, flock, reaction, magnetic-field, turing | 4 days |
+| **High** (Complex physics, multi-layer rendering) | 6 | substrate, network-swarm, liquid-mesh, slime-mold, plasma, double-pendulum | 3 days |
+| **Index/Gallery** | 1 | visualizations index + SVG previews | 1 day |
 
-### Backend API Endpoints Needed
-| Endpoint | Purpose | Status |
-|----------|---------|--------|
-| `/api/dashboards/regime-snapshots` | Regime data | ✅ Exists |
-| `/api/dashboards/research-signals/:key` | Research signals | ✅ Exists |
-| `/api/committee/*` | Committee CRUD | ✅ Partial |
-| `/api/comments` | Comments | ✅ Exists |
-| `/api/wallet/holdings` | Wallet balances | ❌ New |
-| `/api/vault/tvl` | Vault TVL | ❌ New |
-| `/api/vault/apy` | Vault APY | ❌ New |
-| `/api/buybacks` | Buyback history | ❌ New |
+**Total Estimation: ~10 days (with parallel work)**
 
-### Task Queue Jobs Needed
-| Job Kind | Purpose | Schedule |
-|----------|---------|----------|
-| `analytics.run` | Regime + research signals | Daily |
-| `wallet.sync` | Fetch hourly balances | Hourly |
-| `vault.sync` | Fetch vault TVL | Hourly |
-| `buybacks.sync` | Index buyback txns | Hourly |
-| `committee.open_session` | IC session lifecycle | Daily |
-| `committee.publish_brief` | IC brief | Daily |
-| `committee.close_window` | IC submission close | Daily |
-| `committee.aggregate` | IC rollup | Daily |
-| `committee.publish` | IC publish | IC publish | Daily |
+### Migration Pattern
 
----
-
-## 5. CSS / Design System
-
-### Current State
-`frontend/public/assets/css/` has:
-- `tokens.css` — design tokens (colors, fonts, easing)
-- `design-system.css` — base/reset, utilities
-- `components.css` — semantic component classes
-- `sections/*.css` — per-section styles
-- `views.css` — view-level styles
-
-### Missing from robotmoney-site
-| Token/Utility | Source | Action |
-|---------------|--------|--------|
-| `--color-blue`, `--color-warn`, `--color-void`, `--color-deep`, `--color-surface` | Tailwind config | Add to `tokens.css` |
-| `glow-green`, `animate-fade-in-up`, `animate-float`, `animate-pulse` | Tailwind utilities | Add to `design-system.css` |
-| `text-gradient` (cyan gradient text) | Tailwind | Already in `design-system.css` |
-| `grid-pattern` | Tailwind | Already in `design-system.css` |
-| `prose-rm` | Tailwind | Already in `design-system.css` |
-
-**Action:** Audit `tailwind.config.ts` and `globals.css` from robotmoney-site, ensure all tokens/utilities exist in hand-written CSS.
-
----
-
-## 6. Implementation Phases
-
-### Phase 0: Foundation (Week 1)
-- [ ] Create worktree, branch, this plan doc
-- [ ] Audit & sync design tokens from robotmoney-site → `tokens.css`
-- [ ] Port `Navigation` → Alpine component
-- [ ] Port `Footer` → static partial
-- [ ] Set up `assets/js/app/lib/visualizations/` module system for p5 sketches
-- [ ] Create `views/visualizations/index.html` (gallery page)
-- [ ] Port `VisualizationsPreview.tsx` → static SVG generator (`assets/js/app/lib/visualization-previews.js`)
-
-### Phase 1: Core Marketing Pages (Week 1-2)
-- [ ] `/disclaimer` → `views/disclaimer.html`
-- [ ] `/changelog` → `views/changelog.html`
-- [ ] `/faq` → `views/faq.html`
-- [ ] `/docs` → `views/docs/index.html` + subpages
-- [ ] `/skills` → `views/skills.html`
-- [ ] `/tokenomics` → `views/tokenomics.html`
-- [ ] `/smart-contract-risks` → `views/smart-contract-risks.html`
-- [ ] `/tech-proposal-march-16` → `views/tech-proposal-march-16.html`
-- [ ] Blog index `/blog` + 6 posts → `views/blog/*.html`
-- [ ] Media pages `/media`, `/media/articles`, `/media/videos` → `views/media/*.html`
-- [ ] `/articles/treasury-allocation` → `views/articles/treasury-allocation.html`
-
-### Phase 2: Visualization Pages (Week 2-4)
-**Strategy:** Create a p5 sketch module for each effect, then a thin HTML view that mounts it.
-
-| Batch | Visualizations | Notes |
-|-------|----------------|-------|
-| 2a | `substrate`, `flow-field`, `network-swarm`, `liquid-mesh` | High complexity; used as hero backgrounds too |
-| 2b | `matrix-rain`, `tree`, `fractal-tree`, `attractor`, `constellation`, `constructivist`, `orbits`, `waves`, `terrain`, `voronoi`, `phyllotaxis`, `space-filling`, `moire` | Low/medium; pure canvas |
-| 2c | `dla`, `flock`, `mandelbrot`, `reaction`, `epicycles`, `chladni`, `slime-mold`, `double-pendulum`, `turing`, `magnetic-field`, `plasma` | Medium; some need math libs |
-| 2d | `visualizations` index (SVG previews), `splash2`, `home2`, `home_archived` | Special pages |
-
-**Each visualization view:**
+Each visualization requires:
 ```
 views/visualizations/<name>.html
-  → loads assets/js/app/visualizations/<name>.js
-  → mounts p5 into #canvas-container
-  → includes standard hero chrome (nav, title, description)
+  ↓
+assets/js/app/visualizations/<name>.js
+  ↓
+Mount p5 sketch into #canvas-container
+  ↓
+Hero chrome (nav, title, description)
 ```
 
-### Phase 3: Allocation / Vault Pages (Week 3-4)
-- [ ] `/allocation` — main page with Chart.js pies, wallet tables, vault TVL, buybacks
-- [ ] Backend: wallet sync job, vault sync job, buyback indexer job
-- [ ] API: `/api/wallet/holdings`, `/api/vault/tvl`, `/api/vault/apy`, `/api/buybacks`
-- [ ] Chart.js integration (already in `assets/js/app/lib/charts.js`)
-- [ ] Multi-wallet sleeve tables (mobile cards / desktop tables)
-
-### Phase 4: Regime / Research Pages (Week 3-4)
-- [ ] `/regime` — already exists, enhance with full methodology
-- [ ] `/regime/indicators` — indicator breakdown
-- [ ] `/regime-detection` — backtest/history charts
-- [ ] `/regime-preview` — preview page
-- [ ] `/regime_2panel` + `/regime_2panel/indicators` — alt layouts
-- [ ] `/research/channel-divergence` — exists, enhance
-- [ ] `/research/late-cycle-signals` — exists, enhance
-
-### Phase 5: Committee Deep Pages (Week 4)
-- [ ] `/committee/[date]/[subject]` — session detail
-- [ ] `/committee/members/[id]` — member profile
-- [ ] `/committee/subjects/[id]` — subject detail
-- [ ] Dynamic routing via router.js (params)
-- [ ] Backend: ensure committee API returns full data
-
-### Phase 6: Polish & Parity Verification (Week 5)
-- [ ] Visual diff every page vs robotmoney-site (local dev)
-- [ ] Fix CSS token mismatches
-- [ ] Verify all p5 sketches run at 60fps
-- [ ] Test mobile/responsive
-- [ ] Run `bun run demo` full stack E2E
-- [ ] Document any intentional deviations
-
----
-
-## 7. Technical Approach Details
-
-### p5 Sketch Module Pattern
+**Example Pattern:**
 ```js
 // assets/js/app/visualizations/substrate.js
 export function createSubstrateSketch(container, options = {}) {
   return (p) => {
-    // ... sketch code from robotmoney-site
-    // Use container.offsetWidth/Height for sizing
-    // Accept options for intensity, speed, colors
+    p.setup = () => { /* ... */ };
+    p.draw = () => { /* ... */ };
   };
 }
 
-// In view HTML:
+// In views/visualizations/substrate.html:
 <script type="module">
   import { createSubstrateSketch } from '/assets/js/app/visualizations/substrate.js';
   import * as p5 from 'https://cdn.jsdelivr.net/npm/p5@1.9.4/+esm';
-  
-  const container = document.getElementById('canvas-container');
-  new p5(createSubstrateSketch(container), container);
+  new p5(createSubstrateSketch(document.getElementById('canvas-container')), 'canvas-container');
 </script>
 ```
 
-### Routing for Dynamic Pages
-`router.js` already supports param routes. Add:
-```js
-// In router.js route map
-'/committee/:date/:subject': 'views/committee/session.html',
-'/committee/members/:id': 'views/committee/member.html',
-'/committee/subjects/:id': 'views/committee/subject.html',
-```
+---
 
-Views read params via `router.params` (Alpine `$data` or global).
+## SECTION 3: COMPONENTS (React → Alpine.js Migration)
 
-### Chart.js Integration
-Already vendored at `assets/js/app/lib/charts.js`. Use same pattern as allocation page:
-```js
-import { Chart, registerables } from 'chart.js';
-Chart.register(...registerables);
-// Create pie/doughnut charts in Alpine components
-```
+### ✅ COMPLETED: 0/26
 
-### SVG Previews for Visualizations Gallery
-Port `VisualizationsPreview.tsx` functions to `assets/js/app/lib/visualization-previews.js`:
-- Each `generatePreview(path)` returns SVG string
-- Gallery page renders all 37 previews server-side (or at load time)
-- Since buildless, generate at runtime in browser — cache in `sessionStorage`
+**robotmoney-frontend** has 2 generic Alpine files:
+- `/frontend/public/assets/js/app/alpine/views.js` (201 lines)
+- `/frontend/public/assets/js/app/alpine/substrate.js` (167 lines)
+
+**Total:** ~368 lines of generic UI handling (not component ports).
+
+### ❌ REMAINING: 26 React Components
+
+**robotmoney-site** components at `/src/components/`:
+
+#### Layout & High-Impact (MIGRATE FIRST)
+| Component | Src | Target | Effort |
+|-----------|-----|--------|--------|
+| Navigation | Navigation.tsx | `assets/js/app/alpine/navigation.js` + nav sections | Medium |
+| Footer | Footer.tsx | `views/sections/footer.html` (already partial) | Low |
+| Hero | Hero.tsx | Integrated into `views/home.html` | Low |
+
+#### Section Components (Build home page variants)
+| Component | Lines | Target | Effort |
+|-----------|-------|--------|--------|
+| ProblemSection | ~80 | `views/sections/problem.html` | Low |
+| ArchitectureSection | ~120 | `views/sections/architecture.html` + VaultMonolithSVG | Medium |
+| TokenSection | ~100 | `views/sections/token.html` | Low |
+| GovernanceSection | ~90 | `views/sections/governance.html` | Low |
+| ContractSection | ~70 | `views/sections/contract.html` | Low |
+| EconomicsSection | ~60 | `views/sections/economics.html` (new) | Low |
+| InfrastructureSection | ~90 | `views/sections/infrastructure.html` (new) | Low |
+| RoadmapSection | ~80 | `views/sections/roadmap.html` (new) | Low |
+| AllocationSection | ~110 | `/views/allocation.html` (standalone) | Medium |
+| CommentsSection | ~120 | `assets/js/app/alpine/comments.js` + backend API | Medium |
+
+#### Canvas & Visualization Components
+| Component | Type | Target | Effort |
+|-----------|------|--------|--------|
+| OrbitsCanvas | p5 sketch | `assets/js/app/visualizations/orbits.js` | Part of viz migration |
+| SlimeMoldHero | p5 sketch | `assets/js/app/visualizations/slime-mold.js` | Part of viz migration |
+| VisualizationsPreview | SVG generator | `assets/js/app/lib/visualization-previews.js` | Medium |
+| Avatar | Small UI | `assets/js/app/alpine/avatar.js` | Low |
+
+#### SVG Components (Convert to static SVG files)
+| Component | Target | Effort |
+|-----------|--------|--------|
+| VaultMonolithSVG | `assets/svg/vault-monolith.svg` | Low |
+| VaultBeamSVG | `assets/svg/vault-beam.svg` | Low |
+| VaultCorridorSVG | `assets/svg/vault-corridor.svg` | Low |
+| VaultCubeRow | `assets/svg/vault-cube-row.svg` | Low |
+| MonolithLogoSVG | `assets/svg/monolith-logo.svg` | Low |
+| AnimatedBeamSVG | CSS animation + SVG | Medium |
+| AnimatedServerGrid | CSS animation + SVG | Medium |
+| ServerGridSVG | `assets/svg/server-grid.svg` | Low |
+| DataStreamSVG | CSS animation + SVG | Medium |
+
+#### Data & Chart Components
+| Component | Purpose | Target | Effort |
+|-----------|---------|--------|--------|
+| RegimeDashboard | Regime charts | `assets/js/app/alpine/regime-dashboard.js` + Chart.js | Medium |
+| HistoryChart | Line charts | `assets/js/app/lib/charts.js` (vendor) | Low |
+| BacktestChart | Backtest viz | `assets/js/app/lib/charts.js` | Low |
+| Sparkline | Mini charts | `assets/js/app/lib/charts.js` | Low |
+
+**Subtotal Components: 26 files (~1700 lines of React code)**
 
 ---
 
-## 8. File Structure After Completion
+## SECTION 4: DATA FILES & BACKEND
 
+### ✅ COMPLETED: 0/~270 files
+
+**robotmoney-frontend** has NO `/frontend/public/data/` directory.
+
+### ❌ REMAINING: ~270 files
+
+**robotmoney-site** data structure:
+
+#### Committee Data (High Priority)
 ```
-frontend/public/
-├── index.html
-├── config.js
-├── views/
-│   ├── home.html
-│   ├── disclaimer.html
-│   ├── changelog.html
-│   ├── faq.html
-│   ├── tokenomics.html
-│   ├── smart-contract-risks.html
-│   ├── tech-proposal-march-16.html
-│   ├── regime.html
-│   ├── regime-indicators.html
-│   ├── regime-detection.html
-│   ├── regime-preview.html
-│   ├── regime-2panel.html
-│   ├── regime-2panel-indicators.html
-│   ├── research/
-│   │   ├── channel-divergence.html
-│   │   └── late-cycle-signals.html
-│   ├── committee.html
-│   ├── committee/
-│   │   ├── apply.html
-│   │   ├── session.html          # [date]/[subject]
-│   │   ├── member.html           # members/[id]
-│   │   └── subject.html          # subjects/[id]
-│   ├── blog/
-│   │   ├── index.html
-│   │   ├── announcement.html
-│   │   ├── regime-conservative-aggressive.html
-│   │   ├── regime-eq-vs-base.html
-│   │   ├── honest-backtesting-weights.html
-│   │   ├── treasury-allocation.html
-│   │   ├── peaq-partnership.html
-│   │   └── ai-ate-the-bull-market.html
-│   ├── media/
-│   │   ├── index.html
-│   │   ├── articles.html
-│   │   └── videos.html
-│   ├── articles/
-│   │   └── treasury-allocation.html
-│   ├── docs/
-│   │   ├── index.html
-│   │   ├── investment-committee/
-│   │   │   ├── index.html
-│   │   │   ├── how-it-works.html
-│   │   │   ├── api-reference.html
-│   │   │   └── participation.html
-│   │   └── skill/
-│   │       ├── index.html
-│   │       ├── installation.html
-│   │       ├── commands.html
-│   │       └── agent-basket.html
-│   ├── skills.html
-│   ├── allocation.html
-│   ├── visualizations.html
-│   ├── visualizations/
-│   │   ├── substrate.html
-│   │   ├── flow-field.html
-│   │   ├── matrix-rain.html
-│   │   ├── tree.html
-│   │   ├── fractal-tree.html
-│   │   ├── network-swarm.html
-│   │   ├── liquid-mesh.html
-│   │   ├── attractor.html
-│   │   ├── constellation.html
-│   │   ├── constructivist.html
-│   │   ├── dla.html
-│   │   ├── flock.html
-│   │   ├── mandelbrot.html
-│   │   ├── orbits.html
-│   │   ├── reaction.html
-│   │   ├── terrain.html
-│   │   ├── voronoi.html
-│   │   ├── waves.html
-│   │   ├── epicycles.html
-│   │   ├── chladni.html
-│   │   ├── slime-mold.html
-│   │   ├── double-pendulum.html
-│   │   ├── turing.html
-│   │   ├── phyllotaxis.html
-│   │   ├── space-filling.html
-│   │   ├── moire.html
-│   │   ├── magnetic-field.html
-│   │   ├── plasma.html
-│   │   ├── splash2.html
-│   │   ├── home2.html
-│   │   └── home_archived.html
-│   └── sections/
-│       ├── architecture.html
-│       ├── contract.html
-│       ├── footer.html
-│       ├── governance.html
-│       ├── problem.html
-│       ├── token.html
-│       ├── economics.html
-│       ├── infrastructure.html
-│       └── roadmap.html
-├── assets/
-│   ├── css/
-│   │   ├── tokens.css
-│   │   ├── design-system.css
-│   │   ├── components.css
-│   │   ├── views.css
-│   │   └── sections/
-│   ├── js/
-│   │   └── app/
-│   │       ├── router.js
-│   │       ├── alpine/
-│   │       │   ├── navigation.js
-│   │       │   ├── avatar.js
-│   │       │   ├── regime-dashboard.js
-│   │       │   ├── allocation-charts.js
-│   │       │   └── committee.js
-│   │       ├── lib/
-│   │       │   ├── api.js
-│   │       │   ├── format.js
-│   │       │   ├── transforms.js
-│   │       │   ├── charts.js
-│   │       │   ├── visualization-previews.js
-│   │       │   └── contract/ (vendored)
-│   │       └── visualizations/
-│   │           ├── substrate.js
-│   │           ├── flow-field.js
-│   │           ├── network-swarm.js
-│   │           ├── liquid-mesh.js
-│   │           ├── matrix-rain.js
-│   │           ├── tree.js
-│   │           ├── fractal-tree.js
-│   │           ├── attractor.js
-│   │           ├── constellation.js
-│   │           ├── constructivist.js
-│   │           ├── dla.js
-│   │           ├── flock.js
-│   │           ├── mandelbrot.js
-│   │           ├── orbits.js
-│   │           ├── reaction.js
-│   │           ├── terrain.js
-│   │           ├── voronoi.js
-│   │           ├── waves.js
-│   │           ├── epicycles.js
-│   │           ├── chladni.js
-│   │           ├── slime-mold.js
-│   │           ├── double-pendulum.js
-│   │           ├── turing.js
-│   │           ├── phyllotaxis.js
-│   │           ├── space-filling.js
-│   │           ├── moire.js
-│   │           ├── magnetic-field.js
-│   │           └── plasma.js
-│   └── svg/
-│       ├── vault-monolith.svg
-│       ├── vault-beam.svg
-│       ├── vault-corridor.svg
-│       ├── vault-cube-row.svg
-│       ├── monolith-logo.svg
-│       ├── server-grid.svg
-│       └── ...
-└── data/
-    ├── regime-history.csv
-    ├── regime-versions.json
-    ├── raw-indicator-history.csv
-    ├── regime-eq-snapshot.json
-    ├── hourly-wallet-balances.csv
-    ├── hourly-vault-tvl.csv
-    ├── vault-apy.json
-    └── committee/
-        ├── research.json
-        ├── allocation.json
-        ├── members/
-        │   ├── _index.json
-        │   ├── woon.json
-        │   ├── robotmoney.json
-        │   └── athena.json
-        └── subjects/
-            ├── _SCHEMA.md
-            ├── robotmoney-vault.json
-            ├── robotmoney-treasury.json
-            ├── robotmoney-allocation.json
-            └── woon.json
+public/data/committee/
+├── briefs/          ← 51 dated briefs (JSON)
+├── sessions/        ← 51 dated sessions (JSON)
+└── subjects/        ← 51 dated session subjects (JSON)
+
+data/committee/
+├── research.json    ← Research signals
+├── members/         ← Member profiles (JSON)
+│   ├── woon.json
+│   ├── robotmoney.json
+│   └── athena.json
+└── allocation.json  ← Allocation data
 ```
+
+**Action:** Copy entire `/public/data/committee/` + `/data/committee/` to robotmoney-frontend.
+
+#### Regime & Research Data (Medium Priority)
+```
+data/regime/
+├── regime-history.csv
+├── regime-versions.json
+├── raw-indicator-history.csv
+└── regime-eq-snapshot.json
+
+data/research/
+├── channel-divergence.json
+└── late-cycle-signals.json
+```
+
+**Action:** Copy to `/frontend/public/data/regime/`, `/frontend/public/data/research/`.
+
+#### Financial Data (Medium Priority)
+```
+data/
+├── unified-wallet-history.csv   → hourly wallet balances
+├── hourly-vault-tvl.csv         → vault TVL timeseries
+├── vault-apy.json               → APY by pool
+├── prices.csv                   → Token prices
+├── buyback-history.csv          → Buyback txns (if exists)
+└── weighting-comparison.json    → Allocation weights
+```
+
+**Action:** Copy to `/frontend/public/data/financial/`.
+
+#### Backend APIs Needed
+
+| Endpoint | Purpose | Status | Action |
+|----------|---------|--------|--------|
+| `/api/dashboards/regime-snapshots` | Regime data | ✅ Exists | Use as-is |
+| `/api/dashboards/research-signals/:key` | Research signals | ✅ Exists | Use as-is |
+| `/api/committee/*` | Committee CRUD | ✅ Partial | Verify endpoints |
+| `/api/comments` | Comments | ✅ Exists | Integrate |
+| `/api/wallet/holdings` | Wallet balances | ❌ New | Implement |
+| `/api/vault/tvl` | Vault TVL | ❌ New | Implement |
+| `/api/vault/apy` | Vault APY | ❌ New | Implement |
+| `/api/buybacks` | Buyback history | ❌ New | Implement |
+
+#### Backend Jobs Needed
+
+| Job | Frequency | Status | Action |
+|-----|-----------|--------|--------|
+| `analytics.run` | Daily | ✅ May exist | Verify |
+| `wallet.sync` | Hourly | ❌ New | Implement |
+| `vault.sync` | Hourly | ❌ New | Implement |
+| `buybacks.sync` | Hourly | ❌ New | Implement |
+| Committee jobs | Daily | ✅ Exist | Use as-is |
 
 ---
 
-## 9. Acceptance Criteria
+## SECTION 5: DESIGN SYSTEM & TOKENS
 
-1. **Pixel-perfect visual match** — Every page renders identically to robotmoney-site at desktop (1440px) and mobile (375px)
-2. **All 37 visualizations run** — 60fps, no console errors, responsive resize works
-3. **All 63+ pages accessible** — Deep links work, browser back/forward works, no 404s
-4. **Data freshness** — Allocation page shows live wallet/vault/buyback data (or fallback CSV)
-5. **Committee flows work** — Apply, session view, member profile, subject detail all load real data
-6. **Buildless constraint upheld** — No `node_modules` in frontend, no build step, Bun only on backend
-7. **Demo passes** — `bun run demo` provisions full stack, runs committee session, serves all pages
+### ✅ COMPLETED: 60% (Partial)
+
+**robotmoney-frontend** `/frontend/public/assets/css/tokens.css` has:
+```css
+/* Typography (complete) */
+--font-sans: 'Space Grotesk'
+--font-serif: 'Instrument Serif'
+--font-mono: 'JetBrains Mono'
+
+/* Colors (partial) */
+--color-void, --color-deep, --color-surface, --color-surface-light
+--color-border, --color-border-light
+--color-text, --color-text-muted, --color-text-dim
+--color-accent, --color-accent-dim, --color-accent-glow
+--color-warm, --color-warn, --color-blue, --color-purple
+
+/* Easing (complete) */
+--ease-out-expo, --ease-in-out-sine
+
+/* Spacing (complete) */
+--space-xs through --space-xl (via base CSS)
+```
+
+### ❌ REMAINING: 40% (Color palette, animations, utilities)
+
+**robotmoney-site** Tailwind config has:
+
+#### Missing Color Variants
+```
+sage: DEFAULT, light, dark
+olive: DEFAULT, light
+coral: DEFAULT, light
+tealBadge: DEFAULT, light
+navy: DEFAULT, light
+sidebar (system colors)
+```
+
+**Action:** Add to tokens.css as CSS custom properties.
+
+#### Missing Animations & Utilities
+```css
+/* Animations */
+@keyframes accordion-down, accordion-up, fade-in, fade-in-up
+animation: 0g-glow (green glow effect)
+
+/* Utilities */
+text-gradient (cyan text gradient)
+grid-pattern (background grid)
+prose-rm (readable typography)
+glow-green (element glow)
+animate-float, animate-pulse, animate-fade-in-up
+```
+
+**Action:** Add animation keyframes + utility classes to `design-system.css`.
+
+#### Font Stack Alignment
+- robotmoney-frontend: Space Grotesk (sans), Instrument Serif (serif)
+- robotmoney-site: Inter (sans), Libre Baskerville (serif)
+- **Action:** Verify visual alignment; consider font substitution or update to match
 
 ---
 
-## 10. Risk & Mitigation
+## SECTION 6: IMPLEMENTATION ROADMAP
+
+### Phase 0: Foundation (Days 1-2)
+- [ ] Commit this audit
+- [ ] Create `/frontend/public/data/` directory structure
+- [ ] Port top 5 high-impact components: Navigation, Footer, Hero, ProblemSection, ArchitectureSection
+- [ ] Add missing color variants to `tokens.css`
+- [ ] Add animation keyframes to `design-system.css`
+
+### Phase 1: Core Pages (Days 3-5)
+- [ ] Update `/home.html` with new sections (economics, infrastructure, roadmap)
+- [ ] Create `/allocation.html` with Chart.js integration
+- [ ] Create `/regime/indicators.html`, `/regime-detection.html`, `/regime-preview.html`
+- [ ] Create `/visualizations/index.html` (gallery page)
+- [ ] Implement dynamic routes: `/committee/[date]/[subject]`, `/committee/members/[id]`, `/committee/subjects/[id]`
+
+### Phase 2: Visualization Gallery (Days 6-15)
+**Parallel batches:**
+- Batch 2a (High complexity): substrate, network-swarm, liquid-mesh, slime-mold, plasma, double-pendulum (3 days)
+- Batch 2b (Low complexity): tree, fractal-tree, attractor, constellation, constructivist, mandelbrot, terrain, voronoi, phyllotaxis, space-filling, moire, chladni (2 days)
+- Batch 2c (Medium complexity): matrix-rain, flow-field, orbits, waves, epicycles, dla, flock, reaction, magnetic-field, turing (4 days)
+
+### Phase 3: Data & Marketing (Days 16-20)
+- [ ] Copy committee, regime, research data files
+- [ ] Implement `/api/wallet/holdings`, `/api/vault/tvl`, `/api/vault/apy` endpoints
+- [ ] Implement `wallet.sync`, `vault.sync`, `buybacks.sync` jobs
+- [ ] Create `/blog/` pages (7 pages)
+- [ ] Create `/docs/` pages (9 pages)
+
+### Phase 4: Polish & Verification (Days 21-25)
+- [ ] Visual diff every page vs robotmoney-site (desktop + mobile)
+- [ ] Test all 29 visualizations at 60fps
+- [ ] Test responsive behavior (375px - 1440px)
+- [ ] Full E2E: `bun run demo`
+- [ ] Document intentional deviations
+
+---
+
+## SECTION 7: MIGRATION PRIORITY MATRIX
+
+| Dimension | Scope | Complexity | Impact | Blocker? | Priority |
+|-----------|-------|-----------|--------|----------|----------|
+| **Pages (P0)** | 6 core | Medium | Critical | Yes | **P0** |
+| **Visualizations** | 29 sketches | High | High | No | **P1** |
+| **Components** | 26 React → Alpine | Medium | High | Yes | **P1** |
+| **Data Sync** | ~270 files | Low | Medium | No | **P2** |
+| **Design Tokens** | Color + animation | Low | Medium | No | **P2** |
+| **Marketing Pages** | 25 blog/docs/media | Low | Low | No | **P3** |
+| **Variants & Special** | 57 pages | Low | Low | No | **P3** |
+
+---
+
+## SECTION 8: RISK & ASSUMPTIONS
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| p5 performance on mobile | High | Test early; reduce particle counts via `intensity` param; use `IntersectionObserver` to pause off-screen |
-| Chart.js bundle size | Medium | Already vendored; tree-shake via ES modules |
-| Dynamic committee routes | Medium | Router supports params; test deep links thoroughly |
-| CSS token drift | High | Single source: `tokens.css`; audit against Tailwind config weekly |
-| Backend data pipelines | High | Phase 3/4 parallelize; use fallback CSVs for frontend dev |
-| SVG preview generation | Low | Generate client-side once, cache; 37 SVGs < 200KB total |
+| p5 performance on mobile | High | Test early; param-driven intensity; IntersectionObserver pause |
+| Chart.js vendor size | Low | Already vendored; tree-shake via ES modules |
+| Dynamic route params in Alpine | Medium | router.js supports params; test deep links early |
+| CSS token drift over time | Medium | Single source of truth: tokens.css + design-system.css |
+| Backend data API availability | High | Use fallback CSV in frontend dev; API can roll out async |
+| SVG animation CSS complexity | Low | Vendor animations from Tailwind; test cross-browser |
 
 ---
 
-## 11. Next Steps
+## SECTION 9: SUCCESS CRITERIA
 
-1. **Approve this plan** — confirm scope & phasing
-2. **Start Phase 0** — tokens, navigation, visualization module system
-3. **Parallelize** — visualizations (Phase 2) can proceed independently of data pages (Phase 3/4)
-4. **Weekly parity reviews** — diff screenshots vs robotmoney-site
+- [ ] **Pixel-perfect visual match** — Every P0/P1 page renders identically at 1440px and 375px
+- [ ] **All 29 visualizations live** — 60fps, responsive resize, no console errors
+- [ ] **All P0/P1 pages accessible** — Deep links work, back/forward works, no 404s
+- [ ] **Committee flows complete** — Apply, session detail, member profile, subject detail load real data
+- [ ] **Design tokens synced** — Color palette + animations match robotmoney-site
+- [ ] **Buildless constraint upheld** — No node_modules, no build step, Bun backend only
+- [ ] **Demo passes** — `bun run demo` provisions full stack, runs E2E
 
 ---
 
-*Generated: 2026-06-30 | Branch: `adhoc/20260630-125844-feature-parity-visualizations-nemotron`*
+## SECTION 10: NEXT STEPS
+
+1. **Immediate:** Review this audit; confirm P0/P1 scope with team
+2. **Start Phase 0:** Design tokens + navigation + hero component
+3. **Parallelize Phase 2:** Visualizations can start while pages complete
+4. **Weekly parity reviews:** Screenshot diffs vs robotmoney-site (Figma or screenshot tool)
+5. **Async backend:** Data APIs can roll out after Phase 1 pages are live
+
+---
+
+**Branch:** `adhoc/20260630-125844-feature-parity-visualizations-nemotron`  
+**Audit Generated:** 2026-06-30  
+**Status:** Ready for Phase 0 kickoff
