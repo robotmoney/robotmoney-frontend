@@ -216,7 +216,10 @@ export async function publishBrief(sessionId: string, windowMinutes = 60) {
   const s = (await sql`SELECT * FROM committee_sessions WHERE id = ${sessionId}`)[0];
   const regime = (await sql`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
   const recent = await sql`SELECT date, subject_id, state FROM committee_sessions WHERE state = 'published' ORDER BY date DESC LIMIT 5`;
-  const body = { regime, subject: await getSubject(s.subject_id), recentSessions: recent };
+  const researchSignals = await sql`
+    SELECT signal_key, date, payload FROM research_signals
+    WHERE date = ${s.date} ORDER BY signal_key`;
+  const body = { regime, subject: await getSubject(s.subject_id), recentSessions: recent, researchSignals };
   await sql`INSERT INTO committee_briefs (date, subject_id, body) VALUES (${s.date}, ${s.subject_id}, ${sql.json(body)})
             ON CONFLICT (date, subject_id) DO UPDATE SET body = EXCLUDED.body`;
   const closes = new Date(Date.now() + windowMinutes * 60_000);
@@ -260,4 +263,23 @@ export async function aggregateSession(sessionId: string) {
 export async function publishSession(sessionId: string) {
   await sql`UPDATE committee_sessions SET state = 'published', published_at = now() WHERE id = ${sessionId}`;
   return { sessionId, state: "published" };
+}
+
+// ── Memos ───────────────────────────────────────────────────────────────────
+export async function postMemo(token: string, input: { sessionId: number; title?: string; body: string }) {
+  const memberId = await memberIdForToken(token);
+  if (!memberId) return { ok: false, status: 401, error: "unknown member token" };
+  const rows = await sql`
+    INSERT INTO committee_memos (member_id, session_id, title, body)
+    VALUES (${memberId}, ${input.sessionId}, ${input.title ?? ""}, ${input.body})
+    RETURNING id`;
+  const id = rows[0].id;
+  return { ok: true, status: 201, id, url: `/api/committee/memos/${id}` };
+}
+
+export async function getMemo(id: number) {
+  const r = (await sql`SELECT id, member_id, session_id, title, body, created_at
+                       FROM committee_memos WHERE id = ${id}`)[0] ?? null;
+  if (!r) return null;
+  return { ...r, created_at: r.created_at?.toISOString?.() ?? r.created_at };
 }

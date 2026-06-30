@@ -149,6 +149,10 @@ async function main(): Promise<void> {
   await run(["bun", "run", "src/e2e.ts"], join(repoRoot, "mcp"),
     { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp` } as Record<string, string>, "committee session");
 
+  console.log("[demo] running frontend checks…");
+  await run(["bun", "run", "scripts/demo-frontend-check.ts"], repoRoot,
+    { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "frontend checks");
+
   console.log("\n=== stack is live (Ctrl-C to tear everything down) ===");
   console.log(`  frontend   ${backendUrl}/`);
   console.log(`  regime     ${backendUrl}/regime`);

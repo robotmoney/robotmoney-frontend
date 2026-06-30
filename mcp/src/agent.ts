@@ -5,6 +5,7 @@
 // sees the private key.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
 import { generateKeyPair, sign } from "./crypto.ts";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
@@ -12,7 +13,7 @@ const MCP_URL = process.env.MCP_URL ?? "http://localhost:8788/mcp";
 
 export interface AgentOpts {
   memberId: string; name: string; lens: string; bias: number;
-  date: string; subjectId: string;
+  date: string; subjectId: string; sessionId: number;
 }
 
 function stanceFor(composite: number, bias: number) {
@@ -45,11 +46,22 @@ export async function runAgent(o: AgentOpts) {
   }).then((r) => r.json());
   const token: string = reg.token;
 
-  // 2. connect to the MCP server with the member's bearer token
+  // 2. connect to the MCP server via OAuth 2.1 client_credentials grant.
+  // The ClientCredentialsProvider handles token acquisition, refresh, and
+  // automatic retry on 401. The MCP server's token endpoint validates the
+  // member credentials (memberId + bearer token) and issues short-lived
+  // access tokens. This exercises the real OAuth 2.1 flow end-to-end.
   const client = new Client({ name: `agent-${o.memberId}`, version: "0.1.0" });
-  const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), {
-    requestInit: { headers: { Authorization: `Bearer ${token}` } },
+  // OAuth discovery needs the server origin (no path component) to find
+  // /.well-known/oauth-authorization-server at the root.
+  const mcpUrl = new URL(MCP_URL);
+  const authProvider = new ClientCredentialsProvider({
+    clientId: o.memberId,
+    clientSecret: token,
+    url: new URL(mcpUrl.origin),
+    authMethod: "client_secret_post",
   });
+  const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), { authProvider });
   await client.connect(transport);
 
   try {
@@ -58,17 +70,34 @@ export async function runAgent(o: AgentOpts) {
     await client.callTool({ name: "get_brief", arguments: { date: o.date, subject: o.subjectId } });
     const composite = Number(regime?.composite ?? 0.5);
 
+    // Optionally use RM's classify_regime helper for provenance
+    let provenance: string[] = [];
+    if (o.memberId === "cygnus") {
+      const classification = textOf(await client.callTool({ name: "classify_regime", arguments: { composite } }));
+      provenance = [`RM tool: classify_regime → ${classification.classification} (${classification.explanation})`];
+    }
+
     // 4. decide, get canonical payload, sign, submit — all via MCP
     const { stance, confidence } = stanceFor(composite, o.bias);
+    const provenanceText = provenance.length ? ` [${provenance.join("; ")}]` : "";
+    const memoText = `${o.name} (${o.lens}): regime composite ${composite.toFixed(2)} → ${stance}. ` +
+      `The composite reflects ${composite >= 0.5 ? "favorable" : "unfavorable"} conditions for ${o.subjectId}. ` +
+      `My ${o.lens} lens confirms this outlook.${provenanceText}`;
+    const memoResult = textOf(await client.callTool({
+      name: "post_memo",
+      arguments: { sessionId: o.sessionId, title: `${o.name}'s analysis of ${o.subjectId}`, body: memoText },
+    }));
+    const memoUrl = memoResult.ok ? memoResult.url : undefined;
     const draft = {
       memberId: o.memberId, date: o.date, subjectId: o.subjectId,
       nonce: crypto.randomUUID(), stance, confidence,
-      body: `${o.name} (${o.lens}): regime composite ${composite.toFixed(2)} → ${stance}.`,
+      body: `${o.name} (${o.lens}): regime composite ${composite.toFixed(2)} → ${stance}.${provenanceText}`,
+      memoUrl,
     };
     const { canonical } = textOf(await client.callTool({ name: "get_signing_payload", arguments: draft }));
     const signature = await sign(canonical, privateKey);
     const result = textOf(await client.callTool({ name: "submit_recommendation", arguments: { ...draft, signature } }));
-    return { memberId: o.memberId, stance, confidence, result };
+    return { memberId: o.memberId, stance, confidence, memoUrl, provenance, result };
   } finally {
     await client.close();
   }
