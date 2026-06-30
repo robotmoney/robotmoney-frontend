@@ -1,12 +1,14 @@
 <!-- Media / Coverage hub
      Ported from robotmoney-site/src/app/media/page.tsx
      Two-column layout: Publications | Token Listings + Partnerships + Coverage + FAQ.
-     The p5 "Network Swarm" hero canvas is replaced by a static CSS-gradient block.
+     The p5 "Network Swarm" hero is the boot-registered mediaHero() factory
+     (assets/js/app/alpine/heroes.js).
 -->
 
 <section class="md-page">
-  <!-- Hero (static gradient stands in for the p5 Network Swarm) -->
+  <!-- Hero (p5 Network Swarm via mediaHero() factory) -->
   <div class="md-hero">
+    <div class="md-hero__art" x-data="mediaHero()"></div>
     <div class="md-hero__inner">
       <h1 class="md-hero__title">
         <span class="md-serif">Media</span>
@@ -274,11 +276,13 @@
     radial-gradient(circle at 75% 70%, rgba(139,92,246,0.10) 0%, transparent 55%),
     linear-gradient(135deg, #050508 0%, #0a0a12 55%, #06080c 100%);
 }
+.md-hero__art { position: absolute; inset: 0; z-index: 0; }
 .md-hero::after {
   content: "";
   position: absolute; left: 0; right: 0; bottom: 0; height: 100px;
   background: linear-gradient(to top, var(--color-void), transparent);
   pointer-events: none;
+  z-index: 1;
 }
 .md-hero__inner {
   position: relative; z-index: 2;

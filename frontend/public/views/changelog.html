@@ -1,11 +1,13 @@
 <!-- Project Development — Roadmap + Changelog
-     Static fragment ported from robotmoney-site/src/app/changelog/page.tsx
-     and src/data/changelog.ts. No scripts/canvas: data baked into markup.
+     Ported from robotmoney-site/src/app/changelog/page.tsx and
+     src/data/changelog.ts. Data baked into markup; the p5 "Flow Field" hero is
+     the boot-registered changelogHero() factory (assets/js/app/alpine/heroes.js).
 -->
 
 <section class="cl">
-  <!-- Hero -->
+  <!-- Hero (p5 Flow Field via changelogHero() factory) -->
   <header class="cl__hero">
+    <div class="cl__hero-art" x-data="changelogHero()"></div>
     <h1 class="cl__h1">Project <span class="cl__grad">Development</span></h1>
     <p class="cl__lede">
       Roadmap, milestones, and a running log of everything shipped.
@@ -453,9 +455,25 @@
 }
 
 .cl__hero {
+  position: relative;
+  overflow: hidden;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   max-width: 720px;
   margin: 0 auto 4rem;
+  padding: 2.5rem 1.5rem;
   text-align: center;
+}
+.cl__hero-art { position: absolute; inset: 0; z-index: 0; }
+.cl__hero .cl__h1,
+.cl__hero .cl__lede { position: relative; z-index: 1; }
+.cl__hero::after {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: 0; height: 90px;
+  background: linear-gradient(to top, var(--color-void), transparent);
+  z-index: 0; pointer-events: none;
 }
 
 .cl__h1 {
