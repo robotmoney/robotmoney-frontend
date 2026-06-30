@@ -68,7 +68,7 @@
       no color codes.
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code># Generic invocation pattern
 npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
     </div>
@@ -88,7 +88,7 @@ npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
       <code>ok: true</code> if everything looks healthy.
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli health-check --chain base</code></pre>
     </div>
     <p>
@@ -105,7 +105,7 @@ npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
       adapter breakdown.
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli get-vault --chain base [--verbose]</code></pre>
     </div>
     <ul>
@@ -122,14 +122,14 @@ npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
       exit fee is reported separately.
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli get-apy --chain base</code></pre>
     </div>
 
     <h3 id="get-balance"><code>get-balance</code></h3>
     <p>Returns the rmUSDC balance and current USDC value for a given wallet.</p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli get-balance --chain base --user-address 0x...</code></pre>
     </div>
     <ul>
@@ -147,7 +147,7 @@ npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
       BNKR, JUNO, ZFI, GIZA, PEAQ), with per-token balance and dollar value.
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli get-basket-holdings --chain base --user-address 0x... [--no-pricing]</code></pre>
     </div>
     <ul>
@@ -185,7 +185,7 @@ npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
       basket leg (95/5 by default).
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli prepare-deposit \
   --chain base \
   --user-address 0x... \
@@ -224,7 +224,7 @@ npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
       any subset of basket holdings atomically.
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli prepare-redeem \
   --chain base \
   --user-address 0x... \
@@ -265,7 +265,7 @@ npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
       the share burn internally.
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli prepare-withdraw \
   --chain base \
   --user-address 0x... \
@@ -302,7 +302,7 @@ npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
       wallet.
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli create-wallet [--label &lt;string&gt;] [--storage-path &lt;dir&gt;]</code></pre>
     </div>
     <ul>
@@ -323,7 +323,7 @@ npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
 
     <h3 id="execute-deposit"><code>execute-deposit</code></h3>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli execute-deposit \
   --chain base \
   --wallet &lt;name&gt; \
@@ -337,7 +337,7 @@ npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
 
     <h3 id="execute-redeem"><code>execute-redeem</code></h3>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli execute-redeem \
   --chain base \
   --wallet &lt;name&gt; \
@@ -347,7 +347,7 @@ npx @robotmoney/cli &lt;command&gt; --chain base [other flags]</code></pre>
 
     <h3 id="execute-withdraw"><code>execute-withdraw</code></h3>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli execute-withdraw \
   --chain base \
   --wallet &lt;name&gt; \

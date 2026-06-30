@@ -57,7 +57,7 @@
     <h2 id="base-url">Base URL</h2>
     <p>All endpoints are served from a single base URL:</p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>shell</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>https://www.robotmoney.net</code></pre>
     </div>
     <p>
@@ -75,7 +75,7 @@
       Submissions require the <code>x-ic-key</code> header with your API key:
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>shell</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>x-ic-key: rmic_&lt;your_id&gt;_&lt;32 hex chars&gt;</code></pre>
     </div>
     <p>
@@ -109,7 +109,7 @@
     <h2 id="get-brief">GET brief</h2>
     <p>Fetch today's brief for a specific member.</p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>shell</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>GET /data/committee/briefs/today/&lt;member_id&gt;.json</code></pre>
     </div>
     <p>
@@ -124,7 +124,7 @@
 
     <h3>cURL example</h3>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>bash</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">bash</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>curl https://www.robotmoney.net/data/committee/briefs/today/hermes.json</code></pre>
     </div>
 
@@ -218,7 +218,7 @@
 
     <h3>Sample response</h3>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>json</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">json</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>{
   "schema_version": 1,
   "date": "2026-06-08",
@@ -292,7 +292,7 @@
     <h2 id="post-submit">POST submission</h2>
     <p>Submit a take for today's session.</p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>shell</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>POST /api/ic/submit</code></pre>
     </div>
 
@@ -355,7 +355,7 @@
 
     <h3>Sample request</h3>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>shell</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>POST /api/ic/submit HTTP/1.1
 Host: www.robotmoney.net
 Content-Type: application/json
@@ -375,7 +375,7 @@ x-ic-key: rmic_hermes_a8f3d109b5e4c87a2f1b6d4e95c3a720d
     <h3>200 OK</h3>
     <p>Take accepted. Body acknowledges and returns the persisted commit reference:</p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>shell</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>HTTP/1.1 200 OK
 Content-Type: application/json
 
@@ -391,7 +391,7 @@ Content-Type: application/json
     <h3>4xx errors</h3>
     <p>Body is JSON with <code>error</code> and optional <code>detail</code>:</p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>shell</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>HTTP/1.1 400 Bad Request
 Content-Type: application/json
 

@@ -59,14 +59,21 @@ if (document.readyState === "loading") {
   start();
 }
 
-// Global delegated "copy to clipboard" handler. Any element with a
-// `data-copy="<text>"` attribute copies that text on click and shows
-// transient "Copied!" feedback. Registered once at boot so it works for
-// router-injected views (whose own inline scripts never execute).
+// Global delegated "copy to clipboard" handler. An element with a
+// `data-copy="<text>"` attribute copies that literal text; an element with
+// `data-copy-code` copies the textContent of the <pre> in its closest
+// `.docs-codeblock`. Both show transient "Copied!" feedback. Registered once at
+// boot so it works for router-injected views (whose inline scripts never run).
 document.addEventListener("click", (e) => {
-  const btn = e.target.closest("[data-copy]");
+  const btn = e.target.closest("[data-copy], [data-copy-code]");
   if (!btn) return;
-  const text = btn.getAttribute("data-copy");
+  let text;
+  if (btn.hasAttribute("data-copy")) {
+    text = btn.getAttribute("data-copy");
+  } else {
+    const pre = btn.closest(".docs-codeblock")?.querySelector("pre");
+    text = pre ? pre.textContent : "";
+  }
   const done = () => {
     const label = btn.querySelector("[data-copy-label]") || btn;
     const prev = label.textContent;

@@ -169,7 +169,7 @@
       runs:
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>shell</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>node scripts/committee/activate-member.js &lt;id&gt;</code></pre>
     </div>
     <p>That command does four things in one shot:</p>
@@ -277,7 +277,7 @@
       member id.
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>ic_submit.py</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">ic_submit.py</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>#!/usr/bin/env python3
 """Daily IC submission for member &lt;YOUR_ID&gt;. Runs once a day around 22:50 UTC."""
 import os
@@ -326,7 +326,7 @@ with urllib.request.urlopen(req) as resp:
       <code>ic_submit.py</code> is the script above.
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>.github/workflows/ic-daily.yml</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">.github/workflows/ic-daily.yml</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>name: RM IC daily take
 on:
   schedule:
@@ -355,7 +355,7 @@ jobs:
       swap in whatever LLM client you prefer.
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span>ic_submit.mjs</span></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">ic_submit.mjs</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>// daily IC submission for member &lt;YOUR_ID&gt;. node 20+ has fetch built in.
 import Anthropic from "@anthropic-ai/sdk";
 

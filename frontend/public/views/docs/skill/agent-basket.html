@@ -150,7 +150,7 @@
       The split is reflected in the response's <code>operation.summary</code>:
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">json</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">json</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>{
   "operation": {
     "summary": {
@@ -181,7 +181,7 @@
       Adjust per-call:
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code># Tighter tolerance for low-volatility periods
 npx @robotmoney/cli prepare-deposit --chain base \
   --user-address 0x... --amount 100 --receiver 0x... \
@@ -218,7 +218,7 @@ npx @robotmoney/cli prepare-deposit --chain base \
 
     <h3>Sell everything</h3>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli prepare-redeem \
   --chain base --user-address 0x... --shares max --receiver 0x... \
   --sell-all</code></pre>
@@ -230,7 +230,7 @@ npx @robotmoney/cli prepare-deposit --chain base \
 
     <h3>Sell a percentage of everything</h3>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli prepare-redeem \
   --chain base --user-address 0x... --shares max --receiver 0x... \
   --sell-percent 50</code></pre>
@@ -243,7 +243,7 @@ npx @robotmoney/cli prepare-deposit --chain base \
 
     <h3>Sell specific tokens</h3>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli prepare-redeem \
   --chain base --user-address 0x... --shares max --receiver 0x... \
   --sell-tokens VIRTUAL,JUNO</code></pre>
@@ -255,7 +255,7 @@ npx @robotmoney/cli prepare-deposit --chain base \
 
     <h3>Sell specific amounts of specific tokens</h3>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli prepare-redeem \
   --chain base --user-address 0x... --shares max --receiver 0x... \
   --sell-tokens VIRTUAL,JUNO \
@@ -271,7 +271,7 @@ npx @robotmoney/cli prepare-deposit --chain base \
     <p>Two flags let you skip the vault leg entirely:</p>
     <h3>Deposit only to basket</h3>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli prepare-deposit \
   --chain base --user-address 0x... --amount 100 --receiver 0x... \
   --basket-only</code></pre>
@@ -283,7 +283,7 @@ npx @robotmoney/cli prepare-deposit --chain base \
 
     <h3>Deposit only to vault</h3>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli prepare-deposit \
   --chain base --user-address 0x... --amount 100 --receiver 0x... \
   --no-basket</code></pre>
@@ -299,12 +299,12 @@ npx @robotmoney/cli prepare-deposit --chain base \
       <code>get-basket-holdings</code>:
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">shell</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>npx @robotmoney/cli get-basket-holdings --chain base --user-address 0x...</code></pre>
     </div>
     <p>Sample response:</p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar">json</div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">json</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>{
   "userAddress": "0xabc...",
   "chain": "base",
