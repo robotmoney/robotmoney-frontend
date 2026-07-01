@@ -1,4 +1,11 @@
-// OPT-IN live data provider. Implements the same `Provider` interface as the
+// TEST-ONLY provider scaffolding. The PRODUCTION path is analytics/index.ts
+// runAnalytics → access/data-source.ts liveDataSource (real fetchers, no synthetic
+// fallback). This FetcherProvider is retained solely for the hermetic
+// tests/providers.test.ts (it exercises the seeded degradation seam) and is NOT
+// referenced by the orchestrator — the old PROVIDER=live proxy behavior is
+// superseded now that the default IS real.
+//
+// It implements the same `Provider` interface as the
 // default `seededProvider`, but pulls REAL series from KEYLESS public sources
 // (DefiLlama, CoinGecko, Yahoo Finance — see extract/sources.ts for the id→source
 // map). Series that require keys (FRED: T10Y2Y/HY_OAS/ICSA) or RPC, plus anything

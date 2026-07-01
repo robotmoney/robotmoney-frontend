@@ -1,53 +1,132 @@
-// Extract stage: the series-id → fetch+parse wiring. This is the map of which
-// canonical series come from which keyless source — formerly inlined in
-// FetcherProvider.warm(). The access/fetcher-provider just iterates these tasks.
+// Extract stage: the indicator-id → fetch+parse wiring. This is the map of which
+// canonical series come from which KEYLESS source, driven by the analyze/
+// indicators.ts registry — ported from agentjuno/robotmoney lib/fetch_all.js.
 //
-// Each source is isolated: one failure (bad status, network, timeout, garbage
-// payload) only drops its own series via the per-attempt catch, so the suite
-// always runs. `set` is invoked per resolved series id with its Point[]; derived
-// ratio series (BTC/ETH, copper/gold) are aligned on shared dates via the
-// transform grid before being set.
+// Every indicator id resolves to a raw {date,value}[] series matching the
+// original's raw-indicator-history layout (PRE-transform):
+//   - fred single series          → level (T10Y2Y, DFII10, T5YIE, HY_OAS/BAMLH0A0HYM2,
+//                                    DXY/DTWEXBGS, ICSA)
+//   - yahoo single symbol         → adj-close level (VIX/^VIX, SPX_TREND/^GSPC,
+//                                    ETH_TREND/ETH-USD)
+//   - yahoo [num, den]            → num/den ratio on shared dates (COPPER_GOLD=HG/GC,
+//                                    IWM_SPY, BTC_ETH=BTC-USD/ETH-USD, SPHB_SPLV,
+//                                    MTUM_SPY, IWF_IWD, XLU_SPY, XLP_XLY)
+//   - defillama_tvl               → DEFI_TVL / DEFI_GROWTH (raw TVL level; the
+//                                    change90 transform is applied downstream)
+//   - defillama_stables           → STABLES / STABLES_GROWTH (raw stable float)
+//   - blockchain_com              → BTC_ACTIVE (n-unique-addresses), BTC_MVRV (mvrv)
+//   - coinmetrics                 → ETH_ACTIVE (eth / AdrActCnt)
+//   - geckoterminal_newpools      → NEW_TOKENS (today's 24h count; merged forward)
+//   - shiller_cape / multpl       → SHILLER_CAPE
+//
+// Note the derivation semantics: `*_TREND` ids store the RAW price (the 50/200
+// SMA ratio is a downstream transform), and `*_GROWTH` ids store the RAW level
+// (the 90d %-change is downstream) — so a fetched series compares apples-to-apples
+// against raw-indicator-history.
 import type { Point } from "../types.ts";
-import { fetchJson } from "./http.ts";
-import { parseLlamaTvl, parseLlamaStables, llamaTvlUrl, llamaStablesUrl } from "./defillama.ts";
-import { parseCoinGecko, cgUrl } from "./coingecko.ts";
-import { parseYahoo, yfUrl } from "./yahoo.ts";
-import { ratioByDate } from "../transform/grid.ts";
+import { INDICATORS, type Indicator } from "../analyze/indicators.ts";
+import { fetchFred } from "./fred.ts";
+import { fetchYahoo } from "./yahoo.ts";
+import { fetchDefillamaTvl, fetchDefillamaStables } from "./defillama.ts";
+import { fetchBlockchainComChart } from "./blockchain-com.ts";
+import { fetchCoinmetrics } from "./coinmetrics.ts";
+import { fetchGeckoTerminalNewPools } from "./geckoterminal.ts";
+import { fetchShillerCape, fetchMultplShillerCape } from "./shiller.ts";
 
-// Build the per-source fetch tasks. Returns the in-flight promises so the caller
-// can `await Promise.all(...)`. `set` is the sink for resolved series.
+type Logger = {
+  log?: (m: string) => void;
+  warn?: (m: string) => void;
+  error?: (m: string) => void;
+};
+
+// Ratio of two gappy series on the intersection of dates (a/b), skipping any
+// date where the denominator is 0 or non-finite. Matches the original's
+// mergeRatioSeries in lib/fetch_all.js.
+export function mergeRatioSeries(a: Point[], b: Point[]): Point[] {
+  const bm = new Map(b.map((p) => [p.date, p.value]));
+  const out: Point[] = [];
+  for (const p of a) {
+    const d = bm.get(p.date);
+    if (Number.isFinite(d as number) && d !== 0 && d !== undefined) out.push({ date: p.date, value: p.value / d });
+  }
+  return out;
+}
+
+// Resolve ONE indicator to its raw series. Throws on fetch/parse failure so the
+// caller decides whether to fall back to persisted history.
+export async function fetchOne(ind: Indicator, logger: Logger = console): Promise<Point[]> {
+  switch (ind.source) {
+    case "fred":
+      return fetchFred(ind.series as string);
+    case "yahoo": {
+      if (Array.isArray(ind.series)) {
+        const [a, b] = await Promise.all([fetchYahoo(ind.series[0]), fetchYahoo(ind.series[1])]);
+        if (a.length === 0) throw new Error(`Yahoo numerator ${ind.series[0]} empty`);
+        if (b.length === 0) throw new Error(`Yahoo denominator ${ind.series[1]} empty`);
+        return mergeRatioSeries(a, b);
+      }
+      return fetchYahoo(ind.series as string);
+    }
+    case "defillama_tvl":
+      return fetchDefillamaTvl();
+    case "defillama_stables":
+      return fetchDefillamaStables();
+    case "blockchain_com":
+      return fetchBlockchainComChart(ind.series as string);
+    case "coinmetrics": {
+      const s = ind.series as { asset: string; metric: string };
+      return fetchCoinmetrics(s.asset, s.metric);
+    }
+    case "geckoterminal_newpools":
+      return fetchGeckoTerminalNewPools();
+    case "multpl_shiller_cape":
+      return fetchMultplShillerCape();
+    case "shiller_cape":
+      return fetchShillerCape(logger);
+    default:
+      throw new Error(`Unknown source: ${ind.source}`);
+  }
+}
+
+// Fetch every registry indicator's raw history concurrently. A failed/empty
+// series returns [] (logged loudly) — the orchestrator falls back to persisted
+// history for that id. Returns { [indicatorId]: Point[] }.
+export async function fetchAll(
+  opts: { logger?: Logger; indicators?: Indicator[] } = {},
+): Promise<Record<string, Point[]>> {
+  const logger = opts.logger ?? console;
+  const inds = opts.indicators ?? INDICATORS;
+  const results = await Promise.all(
+    inds.map(async (ind): Promise<[string, Point[]]> => {
+      try {
+        return [ind.id, await fetchOne(ind, logger)];
+      } catch (e: any) {
+        logger.error?.(`[extract] fetch ${ind.id} (${ind.source}) FAILED: ${e?.message ?? e}`);
+        return [ind.id, []];
+      }
+    }),
+  );
+  const out: Record<string, Point[]> = {};
+  for (const [id, data] of results) out[id] = data;
+  logger.log?.("[extract] fetch summary:");
+  for (const [id, data] of results) {
+    const last = data.length ? data[data.length - 1] : null;
+    logger.log?.(`  ${(data.length === 0 ? "x EMPTY" : "ok").padEnd(8)} ${id.padEnd(14)} rows=${String(data.length).padStart(6)} last=${last?.date ?? "-"}`);
+  }
+  return out;
+}
+
+// Back-compat seam for access/fetcher-provider.warm(): pump each resolved series
+// into `set`. One indicator failing only drops its own series (fetchAll isolates
+// per id); the whole call never throws.
 export function loadSources(set: (id: string, pts: Point[]) => void): Promise<void>[] {
-  const tasks: Promise<void>[] = [];
-  const attempt = (fn: () => Promise<void>) =>
-    tasks.push(fn().catch(() => { /* per-source failure ⇒ seeded fallback */ }));
-
-  // DefiLlama (keyless)
-  attempt(async () => set("DEFI_TVL", parseLlamaTvl(await fetchJson(llamaTvlUrl))));
-  attempt(async () => set("STABLES", parseLlamaStables(await fetchJson(llamaStablesUrl))));
-
-  // CoinGecko (keyless): one fetch per coin, several derived series.
-  attempt(async () => {
-    const [btc, eth] = await Promise.all([fetchJson(cgUrl("bitcoin")), fetchJson(cgUrl("ethereum"))]);
-    const btcPx = parseCoinGecko(btc, "prices");
-    const ethPx = parseCoinGecko(eth, "prices");
-    set("BTC", btcPx);
-    set("ETH_TREND", ethPx);
-    set("BTC_ACTIVE", parseCoinGecko(btc, "total_volumes")); // on-chain activity proxy
-    set("BTC_ETH", ratioByDate(btcPx, ethPx));
-  });
-
-  // Yahoo Finance (keyless)
-  const yf = (id: string, symbol: string) =>
-    attempt(async () => set(id, parseYahoo(await fetchJson(yfUrl(symbol)))));
-  yf("SPY", "SPY");
-  yf("QQQ", "QQQ");
-  yf("RSP", "RSP");
-  yf("VIX", "^VIX");
-  yf("DXY", "DX-Y.NYB");
-  attempt(async () => {
-    const [copper, gold] = await Promise.all([fetchJson(yfUrl("HG=F")), fetchJson(yfUrl("GC=F"))]);
-    set("COPPER_GOLD", ratioByDate(parseYahoo(copper), parseYahoo(gold)));
-  });
-
-  return tasks;
+  return [
+    fetchAll()
+      .then((all) => {
+        for (const id in all) if (all[id].length) set(id, all[id]);
+      })
+      .catch(() => {
+        /* whole-batch failure ⇒ every series falls back to seeded */
+      }),
+  ];
 }

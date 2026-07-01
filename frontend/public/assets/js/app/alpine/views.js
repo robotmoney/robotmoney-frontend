@@ -51,7 +51,25 @@ export function registerViews(Alpine) {
     },
     destroy() { this._chart?.destroy(); this._chart = null; },
     pct(x) { return x == null ? "—" : Math.round(x * 100) + "%"; },
+    fmtWeight(w) { return w == null ? "—" : Math.round(w * 100) + "%"; },
     regimeClass(r) { return r ? `regime-pill regime-pill--${r}` : "regime-pill"; },
+    regimeLabel(r) { return r ? String(r).replace(/_/g, "-") : "—"; },
+    // Rich per-indicator objects come only on the latest (asof) row; historical
+    // rows carry the numeric columns + `percentiles` map. Group the asof indicators
+    // by panel so the view can render Macro / On-chain sections.
+    indicatorsIn(panel) {
+      const inds = this.latest?.indicators;
+      return Array.isArray(inds) ? inds.filter((i) => i.panel === panel) : [];
+    },
+    panelIndex(p) { return p === "macro" ? this.latest?.macroIndex : this.latest?.onchainIndex; },
+    panelPercentile(p) { return p === "macro" ? this.latest?.macroPercentile : this.latest?.onchainPercentile; },
+    panelRegime(p) { return p === "macro" ? this.latest?.macroRegime : this.latest?.onchainRegime; },
+    // Sign-aligned percentile (1 = risk-on) drives the bar; fall back to the raw
+    // percentile if the signed value is absent.
+    sigPct(ind) {
+      const v = ind.signed_percentile != null ? ind.signed_percentile : ind.percentile;
+      return v == null ? 0 : Math.round(v * 100);
+    },
   }));
 
   // ── Research signal (channel-divergence / late-cycle-signals) ─────────────
@@ -66,10 +84,40 @@ export function registerViews(Alpine) {
         const data = await api.get(path(ROUTES.dashboards.researchSignal, { key: this.key }));
         this.payload = data.payload;
         this.loading = false;
-        this.$nextTick(() => this.drawChart());
+        this.$nextTick(() => { this.drawChart(); this.drawSeriesCharts(); });
       } catch (e) {
         this.error = e.message;
         this.loading = false;
+      }
+    },
+    // The real payload carries a richer `indicators` map (the newly-added
+    // channel-divergence gauges — btc_beta_vs_risk_appetite / btc_qqq_ratio_percentile
+    // / stables_vs_qqq_flow — and the late-cycle series — concentration / top7_vs_spy /
+    // mna / margin / consumer_conf). Render each as its own labelled sparkline.
+    indicatorNames() {
+      const inds = this.payload?.indicators;
+      return inds && typeof inds === "object" ? Object.keys(inds) : [];
+    },
+    prettify(k) { return String(k).replace(/_/g, " "); },
+    drawSeriesCharts() {
+      const inds = this.payload?.indicators;
+      if (!inds || !window.Chart || !this.$root) return;
+      for (const canvas of this.$root.querySelectorAll("canvas[data-series]")) {
+        const key = canvas.getAttribute("data-series");
+        const pts = (inds[key] || []).filter((p) => p && p.value != null).slice(-180);
+        if (!pts.length) continue;
+        new window.Chart(canvas, {
+          type: "line",
+          data: {
+            labels: pts.map((p) => p.date),
+            datasets: [{ data: pts.map((p) => p.value), borderColor: "#4488ff", borderWidth: 1.5, pointRadius: 0, tension: 0.25, fill: false }],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false, animation: false,
+            plugins: { legend: { display: false } },
+            scales: { x: { display: false }, y: { ticks: { color: "#4a5268", maxTicksLimit: 3 }, grid: { color: "rgba(255,255,255,0.05)" } } },
+          },
+        });
       }
     },
     drawChart() {

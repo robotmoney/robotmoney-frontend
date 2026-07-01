@@ -19,11 +19,28 @@
             <div class="rs__gauge-name" x-text="g.name"></div>
             <div class="rs__gauge-val" x-text="g.value"></div>
             <div class="rs__bar"><div class="rs__bar-fill" :style="`width:${g.percentile*100}%`"></div></div>
+            <div class="rs__gauge-pct">percentile <span x-text="pct(g.percentile)"></span></div>
             <span :class="readClass(g.read)" x-text="g.read"></span>
           </div>
         </template>
       </div>
       <div class="rs__chart"><canvas x-ref="chart"></canvas></div>
+
+      <!-- Real richer indicator series from the payload (concentration, top7_vs_spy,
+           mna, margin_debt_yoy, consumer_conf and their percentile tracks). -->
+      <template x-if="indicatorNames().length">
+        <div>
+          <h2 class="rs__h2">Indicator series</h2>
+          <div class="rs__series-grid">
+            <template x-for="name in indicatorNames()" :key="name">
+              <div class="rs__series-card">
+                <div class="rs__series-label" x-text="prettify(name)"></div>
+                <div class="rs__series-canvas"><canvas :data-series="name"></canvas></div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
     </div>
   </template>
 </section>
