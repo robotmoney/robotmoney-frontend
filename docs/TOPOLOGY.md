@@ -258,3 +258,62 @@ flowchart TB
     style Reaper fill:#78350f33,stroke:#d97706,stroke-width:2px
     style Handlers fill:#1e1b4b33,stroke:#4338ca,stroke-width:2px
 ```
+
+## 12. Analytics pipeline — research & report jobs
+
+The analytics suite runs as a scheduled job (`analytics.run`, daily 22:30 UTC).
+It drives three compute pipelines through a shared 6-stage access → extract →
+transform → analyze → store → report flow:
+
+```mermaid
+flowchart TB
+    subgraph Sources["Data Sources"]
+        FRED["FRED — macro indicators"]
+        Yahoo["Yahoo Finance — prices, indices"]
+        DefiLlama["DefiLlama — TVL, stablecoins"]
+        Other["Other — blockchain.com,<br/>Coinmetrics, EDGAR, Shiller"]
+    end
+
+    subgraph Extract["Extract"]
+        E1["26 registry indicators<br/>for regime classifier"]
+        E2["Research inputs:<br/>BTC, QQQ, SPY, RSP, TOP7,<br/>M&A, margin, confidence"]
+    end
+
+    subgraph Transform["Transform"]
+        T["buildDateAxis → alignDailyForwardFill<br/>→ applyTransform → mergeSeries"]
+    end
+
+    subgraph Analyze["Analyze"]
+        R["Regime Classifier<br/>per-indicator percentile →<br/>inverse-correlation weighted<br/>→ composite regime label"]
+        C["Channel Divergence<br/>BTC beta + BTC/QQQ ratio +<br/>stablecoin flow → channel gauge"]
+        L["Late-Cycle Signals<br/>concentration + M&A +<br/>margin debt + confidence<br/>→ cycle saturation gauge"]
+    end
+
+    subgraph Store["Store"]
+        S1["raw_indicator_history"]
+        S2["regime_snapshots<br/>+ regime_indicators"]
+        S3["research_signals"]
+    end
+
+    subgraph Report["Report → API"]
+        P1["GET /api/dashboards/<br/>regime-snapshots"]
+        P2["GET /api/dashboards/<br/>research-signals/:key"]
+    end
+
+    Sources --> Extract
+    Extract --> Transform
+    Transform --> Analyze
+    R --> S1
+    R --> S2
+    C --> S3
+    L --> S3
+    S2 --> P1
+    S3 --> P2
+
+    style Sources fill:#5a2d0c33,stroke:#dd6b20,stroke-width:2px
+    style Extract fill:#1e3a5f33,stroke:#1e3a5f,stroke-width:2px
+    style Transform fill:#1e3a5f33,stroke:#1e3a5f,stroke-width:2px
+    style Analyze fill:#3b076433,stroke:#7c3aed,stroke-width:2px
+    style Store fill:#064e3b33,stroke:#059669,stroke-width:2px
+    style Report fill:#064e3b33,stroke:#059669,stroke-width:2px
+```
