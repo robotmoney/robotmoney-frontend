@@ -112,13 +112,17 @@ interface CommitteeState {
 type OnboardStepStatus = "pending" | "running" | "done" | "failed";
 interface OnboardStep { key: string; status: OnboardStepStatus; }
 interface OnboardState { memberId: string; name: string; steps: OnboardStep[]; }
+// A member scheduled to be admitted in the future, with the epoch-ms of its admission
+// so the TUI can render a live countdown.
+interface UpcomingMember { memberId: string; name: string; at: number; }
 interface DemoState {
   services: { name: string; url: string }[];
   containers: { name: string; phase: Phase; detail?: string }[];
   steps: { name: string; status: StepStatus }[];
   research: ResearchEntry[];
   committees: Record<string, CommitteeState>; // keyed by subject id; populated once SUBJECTS is imported
-  onboarding?: OnboardState; // current/most-recent prospective member (undefined until the first)
+  onboarded: OnboardState[]; // every prospective member that has entered onboarding — kept in the pane with its live status checks
+  upcoming: UpcomingMember[]; // scheduled future admissions, each with a countdown to its turn
   messages: string[];
 }
 const state: DemoState = {
@@ -142,6 +146,8 @@ const state: DemoState = {
   ],
   research: [],
   committees: {},
+  onboarded: [],
+  upcoming: [],
   messages: [],
 };
 
@@ -157,11 +163,17 @@ function setStep(name: string, status: StepStatus): void {
 // onboardMember(); session/memo/admitted flip when the new member is seen taking +
 // posting a memo in a live session (via committeeProgress).
 const ONBOARD_STEPS = ["keypair", "apply", "review", "activate", "connect", "session", "memo", "admitted"];
+// Begin (or resume) a member's join checklist. The member is appended to the persistent
+// onboarded list so its status checks stay in the pane after admission, and it is dropped
+// from the upcoming queue now that its turn has arrived.
 function startOnboarding(memberId: string, name: string): void {
-  state.onboarding = { memberId, name, steps: ONBOARD_STEPS.map((key) => ({ key, status: "pending" as OnboardStepStatus })) };
+  if (!state.onboarded.some((o) => o.memberId === memberId)) {
+    state.onboarded.push({ memberId, name, steps: ONBOARD_STEPS.map((key) => ({ key, status: "pending" as OnboardStepStatus })) });
+  }
+  state.upcoming = state.upcoming.filter((u) => u.memberId !== memberId);
 }
-function setOnboardStep(key: string, status: OnboardStepStatus): void {
-  const step = state.onboarding?.steps.find((s) => s.key === key);
+function setOnboardStep(memberId: string, key: string, status: OnboardStepStatus): void {
+  const step = state.onboarded.find((o) => o.memberId === memberId)?.steps.find((s) => s.key === key);
   if (step) step.status = status;
 }
 
@@ -630,14 +642,27 @@ function render(): string[] {
   lines.push("  " + state.containers.map((c) => `${phaseGlyph(c.phase)} ${c.name}${c.detail ? color("2", `(${c.detail})`) : ""}`).join("   "));
   lines.push("  " + state.steps.map((s) => `${stepGlyph(s.status)} ${s.name}`).join("   "));
 
-  // Onboarding strip (full width): the current prospective member's join checklist.
+  // Onboarding strip (full width): every prospective member keeps its join checklist
+  // after admission (status checks stay visible), plus a queue of upcoming members with
+  // a live countdown to when each is admitted.
   lines.push(hr(W, "Onboarding"));
-  if (state.onboarding) {
-    const ob = state.onboarding;
-    const cells = ob.steps.map((s) => `${onboardGlyph(s.status)} ${s.key}`).join("  ");
-    lines.push(truncate(`  ${color("36", ob.name)} ${color("2", `(${ob.memberId})`)}  ${cells}`, W));
-  } else {
+  if (state.onboarded.length === 0) {
     lines.push(color("2", "  · waiting for the first prospective member…"));
+  } else {
+    const MAX_SHOWN = 6; // keep the strip from crowding out the panes on a long run
+    const hidden = state.onboarded.length - MAX_SHOWN;
+    if (hidden > 0) lines.push(color("2", `  (+${hidden} earlier admitted — checks retained)`));
+    for (const ob of state.onboarded.slice(-MAX_SHOWN)) {
+      const cells = ob.steps.map((s) => `${onboardGlyph(s.status)} ${s.key}`).join("  ");
+      lines.push(truncate(`  ${color("36", ob.name.padEnd(10))} ${color("2", `(${ob.memberId})`)}  ${cells}`, W));
+    }
+  }
+  if (state.upcoming.length > 0) {
+    const now = Date.now();
+    const items = state.upcoming
+      .map((u) => `${color("36", u.name)} ${color("2", `in ${fmtDuration(Math.max(0, u.at - now))}`)}`)
+      .join("    ");
+    lines.push(truncate(`  ${color("2", "upcoming →")} ${items}`, W));
   }
 
   // Footer (built first so the middle region can claim the rest of the height)
@@ -692,17 +717,17 @@ function committeeProgress(subjectId: string): SessionProgress {
       log(`committee ${subjectId}: ${ev.state}`);
     } else {
       c.members[ev.memberId] = { stage: ev.stage, stance: ev.stance, confidence: ev.confidence };
-      // If this is the current onboarding prospect, reflect its first live
-      // participation (submitting a take + posting a memo) in the join checklist.
-      const ob = state.onboarding;
-      if (ob && ob.memberId === ev.memberId && ev.stage !== "absent") {
+      // If this is an onboarding prospect, reflect its first live participation
+      // (submitting a take + posting a memo) in that member's join checklist.
+      const ob = state.onboarded.find((o) => o.memberId === ev.memberId);
+      if (ob && ev.stage !== "absent") {
         if (ev.stage === "done") {
-          setOnboardStep("session", "done");
-          setOnboardStep("memo", "done");
-          setOnboardStep("admitted", "done");
+          setOnboardStep(ob.memberId, "session", "done");
+          setOnboardStep(ob.memberId, "memo", "done");
+          setOnboardStep(ob.memberId, "admitted", "done");
           log(`onboarding ${ev.memberId}: admitted — participated + pushed memo`);
         } else {
-          setOnboardStep("session", "running");
+          setOnboardStep(ob.memberId, "session", "running");
         }
       }
     }
@@ -892,22 +917,37 @@ async function main(): Promise<void> {
   const NEWCOMER_LENSES = ["liquidity", "volatility", "credit", "tail risk", "sentiment", "flows", "macro", "positioning"];
   const FIRST_ONBOARD_MS = 60_000;     // first admission ~1 min in (after the base committee shows)
   const ONBOARD_INTERVAL_MS = 300_000; // then a new character every 5 min
+  // Deterministic name/lens/bias for the n-th admission — shared by the driver and the
+  // upcoming-queue preview so the TUI shows exactly who joins next.
+  function plannedNewcomer(n: number): { memberId: string; name: string; lens: string; bias: number } {
+    const name = NEWCOMER_NAMES[n] ?? `Astra ${n + 1}`;
+    return {
+      memberId: name.toLowerCase().replace(/\s+/g, "-"),
+      name,
+      lens: NEWCOMER_LENSES[n % NEWCOMER_LENSES.length],
+      bias: ((n % 5) - 2) * 0.05, // spread -0.10 … +0.10
+    };
+  }
   async function onboardingDriver(): Promise<void> {
     for (let n = 0; ; n++) {
-      await sleep(n === 0 ? FIRST_ONBOARD_MS : ONBOARD_INTERVAL_MS);
-      const name = NEWCOMER_NAMES[n] ?? `Astra ${n + 1}`;
-      const memberId = name.toLowerCase().replace(/\s+/g, "-");
-      const lens = NEWCOMER_LENSES[n % NEWCOMER_LENSES.length];
-      const bias = ((n % 5) - 2) * 0.05; // spread -0.10 … +0.10
-      startOnboarding(memberId, name);
+      const delay = n === 0 ? FIRST_ONBOARD_MS : ONBOARD_INTERVAL_MS;
+      const dueAt = Date.now() + delay;
+      // Preview the next few admissions (this one + its successors) with countdowns.
+      state.upcoming = [0, 1, 2].map((k) => {
+        const p = plannedNewcomer(n + k);
+        return { memberId: p.memberId, name: p.name, at: dueAt + k * ONBOARD_INTERVAL_MS };
+      });
+      await sleep(delay);
+      const { memberId, name, lens, bias } = plannedNewcomer(n);
+      startOnboarding(memberId, name); // append to the persistent pane + drop from upcoming
       try {
         const { member, creds } = await e2e.onboardMember({ memberId, name, lens, bias }, {
           reviewMs: 6000,
-          onStage: (stage: string, ok: boolean) => setOnboardStep(stage, ok ? "done" : "failed"),
+          onStage: (stage: string, ok: boolean) => setOnboardStep(memberId, stage, ok ? "done" : "failed"),
         });
         onboardedCreds.set(memberId, creds);
         e2e.MEMBERS.push(member); // grow the roster → joins subsequent sessions
-        setOnboardStep("session", "running");
+        setOnboardStep(memberId, "session", "running");
         log(`onboarded ${memberId} (#${n + 1}) — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
       } catch (err) {
         log(`onboarding ${memberId} failed (stack still running): ${err instanceof Error ? err.message : err}`);
