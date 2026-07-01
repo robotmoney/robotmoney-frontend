@@ -67,3 +67,26 @@ export async function loadRegimeHistory(): Promise<RegimeHistRow[]> {
 export async function loadJsonGz<T = any>(name: string): Promise<T> {
   return JSON.parse(await readGz(name)) as T;
 }
+
+// Ground-truth reference produced by running the ORIGINAL agentjuno/robotmoney
+// scripts/regime pipeline (lib/utils align + lib/transforms + compute.js) over the
+// SAME vendored raw-indicator-history.csv.gz this suite replays — the 2-panel
+// [macro, onchain] default composite, full history. Regenerate with the
+// out-of-repo generator documented in regime-fidelity.test.ts.
+export interface RegimeComputeReference {
+  meta: { source: string; backfill_start: string; max_date: string; indicators: string[]; rows: number };
+  dateAxis: string[];
+  composite: (number | null)[];
+  compositePercentile: (number | null)[];
+  macroIndex: (number | null)[];
+  onchainIndex: (number | null)[];
+  macroPercentile: (number | null)[];
+  onchainPercentile: (number | null)[];
+  regime: (string | null)[];
+  macroRegime: (string | null)[];
+  onchainRegime: (string | null)[];
+}
+
+export async function loadRegimeComputeReference(): Promise<RegimeComputeReference> {
+  return loadJsonGz<RegimeComputeReference>("regime-compute-reference.json.gz");
+}

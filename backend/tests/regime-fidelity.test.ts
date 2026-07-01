@@ -31,6 +31,7 @@ import {
   loadRawIndicatorHistory,
   loadRegimeHistory,
   loadJsonGz,
+  loadRegimeComputeReference,
 } from "./fixtures/regime/load.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { computeRegime } from "../src/analytics/analyze/compute.ts";
@@ -136,6 +137,94 @@ test("regime fidelity (STRICT): full last-day pipeline matches the committed reg
     perInd++;
   }
   expect(perInd).toBeGreaterThan(15);
+});
+
+// ── STRICT multi-day proof of ALGORITHM-PORT fidelity (option B) ──────────────
+// The committed regime-history.csv can only be matched to <1e-9 on the single
+// freshly-recomputed `asof` row (see the two STRICT tests above): every earlier
+// row is FROZEN from an earlier raw-data vintage, so a fresh recompute from the
+// committed raw legitimately diverges (empirically: 2nd-most-recent row already
+// ~1.7e-2, historical rows up to ~0.27). That divergence is a data-vintage
+// artifact, NOT a port defect — so to prove multi-day methodology fidelity we
+// compare against a REFERENCE computed by the ORIGINAL JS pipeline over the SAME
+// vendored raw fixture.
+//
+// regime-compute-reference.json.gz (≈127 KB gz, 3102 rows) was produced by
+// driving agentjuno/robotmoney scripts/regime end-to-end — lib/utils
+// (buildDateAxis + alignDailyForwardFill/ZeroFill) → lib/transforms.applyTransform
+// → compute.js computeRegime (2-panel [macro, onchain] default) — over
+// raw-indicator-history.csv.gz, i.e. the identical align+transform+compute path
+// update.js uses. Our TS port must reproduce it BYTE-IDENTICALLY (<1e-12) across
+// EVERY axis row plus exact regime/macro/onchain labels. A regression in the
+// ported math (rank, sign-align, inverse-correlation weights, composite,
+// smoothing) fails here even though the frozen-CSV tracking test would still pass.
+test("regime fidelity (STRICT, multi-day): our TS computeRegime reproduces the ORIGINAL JS pipeline to <1e-12 across ALL rows + exact labels", async () => {
+  const { result, dateAxis } = await replay();
+  const ref = await loadRegimeComputeReference();
+
+  // Same raw fixture → identical date axis (same length + values).
+  expect(dateAxis.length).toBe(ref.dateAxis.length);
+  expect(dateAxis.length).toBeGreaterThan(2900);
+  expect(dateAxis[0]).toBe(ref.dateAxis[0]);
+  expect(dateAxis[dateAxis.length - 1]).toBe(ref.dateAxis[dateAxis.length - 1]);
+  // Registry parity: same indicator set fed to both pipelines.
+  expect(ref.meta.indicators.length).toBe(26);
+
+  const NUM_SERIES = [
+    "composite", "compositePercentile", "macroIndex", "onchainIndex",
+    "macroPercentile", "onchainPercentile",
+  ] as const;
+  const LABEL_SERIES = ["regime", "macroRegime", "onchainRegime"] as const;
+
+  const tsNum: Record<(typeof NUM_SERIES)[number], number[]> = {
+    composite: result.composite,
+    compositePercentile: result.compositePercentile,
+    macroIndex: result.macroIndex!,
+    onchainIndex: result.onchainIndex!,
+    macroPercentile: result.macroPercentile!,
+    onchainPercentile: result.onchainPercentile!,
+  };
+  const tsLbl: Record<(typeof LABEL_SERIES)[number], (string | null)[]> = {
+    regime: result.regime,
+    macroRegime: result.macroRegime!,
+    onchainRegime: result.onchainRegime!,
+  };
+
+  let maxDiff = 0;
+  let numericCompared = 0;
+  let labelCompared = 0;
+  let firstRegimeIdx = -1;
+  for (let i = 0; i < dateAxis.length; i++) {
+    for (const s of NUM_SERIES) {
+      const a = tsNum[s][i];
+      const b = ref[s][i];
+      const aFin = Number.isFinite(a);
+      const bFin = b != null && Number.isFinite(b);
+      expect(aFin, `${s}[${dateAxis[i]}] finiteness must match reference`).toBe(bFin);
+      if (aFin && bFin) {
+        const d = Math.abs(a - (b as number));
+        maxDiff = Math.max(maxDiff, d);
+        expect(d, `${s}[${dateAxis[i]}]`).toBeLessThan(1e-12);
+        numericCompared++;
+      }
+    }
+    for (const s of LABEL_SERIES) {
+      expect(tsLbl[s][i], `${s}[${dateAxis[i]}]`).toBe(ref[s][i]);
+      if (ref[s][i] != null) labelCompared++;
+    }
+    if (firstRegimeIdx < 0 && ref.regime[i] != null) firstRegimeIdx = i;
+  }
+
+  // Prove the strict window is the WHOLE classified history, not a lone row.
+  const classifiedRows = ref.regime.filter((r) => r != null).length;
+  console.log(
+    `[regime-fidelity] STRICT vs original-JS reference: axisRows=${dateAxis.length} ` +
+      `classifiedRows=${classifiedRows} numericCompared=${numericCompared} ` +
+      `labelCompared=${labelCompared} maxAbsDiff=${maxDiff.toExponential(3)}`,
+  );
+  expect(classifiedRows).toBeGreaterThan(2900); // strict labels span the entire history
+  expect(numericCompared).toBeGreaterThan(6 * 2900); // 6 numeric series × ~2960 rows
+  expect(maxDiff).toBeLessThan(1e-12);
 });
 
 test("regime fidelity (TRACKING): full history tracks the frozen regime-history.csv within the inherent data-vintage drift", async () => {
