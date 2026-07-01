@@ -5,7 +5,8 @@
 // handler → domain) so the demo exercises the real FOR UPDATE SKIP LOCKED claim
 // loop. Multi-session: the second session's brief references the first session's
 // outcome, demonstrating rotation awareness.
-import { runAgent, enroll, stanceFor, textOf, ExistingCredentials, AgentStage } from "./agent.ts";
+import { runAgent, enroll, stanceFor, textOf } from "./agent.ts";
+import type { ExistingCredentials, AgentStage } from "./agent.ts";
 import { generateKeyPair, sign } from "./crypto.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -25,7 +26,13 @@ export const SUBJECTS = [
   { id: "mav", name: "Mav Holdings" },
 ];
 
-const adminHeaders = process.env.ADMIN_TOKEN ? { "X-Admin-Token": process.env.ADMIN_TOKEN } : {};
+const adminHeaders: Record<string, string> = process.env.ADMIN_TOKEN
+  ? { "X-Admin-Token": process.env.ADMIN_TOKEN }
+  : {};
+
+async function responseJson<T = any>(response: Response): Promise<T> {
+  return await response.json() as T;
+}
 
 // Optional, additive progress stream for runSession. Emits real session-lifecycle
 // transitions and per-member pipeline stages so a UI can render live committee
@@ -40,7 +47,7 @@ export async function admin(action: string, body: unknown = {}) {
   const r = await fetch(`${BACKEND}/api/committee/admin/${action}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders }, body: JSON.stringify(body),
   });
-  return r.json();
+  return responseJson(r);
 }
 
 // Prospective-member onboarding (public apply → admin review/activate → MCP OAuth
@@ -106,7 +113,7 @@ async function waitForSessionState(date: string, subject: string, expectedState:
   while (Date.now() < deadline) {
     const r = await fetch(`${BACKEND}/api/committee/sessions/${date}/${subject}`);
     if (r.ok) {
-      const data = await r.json();
+      const data = await responseJson(r);
       if (data.session?.state === expectedState) return data;
     }
     await sleep(500);
@@ -114,7 +121,7 @@ async function waitForSessionState(date: string, subject: string, expectedState:
   throw new Error(`session ${date}/${subject} did not reach '${expectedState}' within ${timeoutMs}ms`);
 }
 
-async function enqueueLifecycleJob(action: string, payload: unknown = {}) {
+async function enqueueLifecycleJob(action: string, payload: Record<string, unknown> = {}) {
   const result = await admin("enqueue-job", { action, ...payload });
   console.log(`  enqueued ${result.kind} (job #${result.jobId})`);
   return result;
@@ -175,20 +182,20 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   await waitForSessionState(date, subject.id, "published");
   emitSession("published", sessionId);
 
-  const pub = await fetch(`${BACKEND}/api/committee/sessions/${date}/${subject.id}`).then((r) => r.json());
+  const pub = await fetch(`${BACKEND}/api/committee/sessions/${date}/${subject.id}`).then(responseJson);
   console.log(`${tag} published: state=${pub.session.state}, takes=${pub.takes.length}`);
   console.log(`${tag} synthesis: ${pub.session.synthesis}`);
-  console.log(`${tag} absent: ${JSON.stringify(pub.takes.filter((t: any) => t.verified === null || t.verified === false).map((t: any) => t.member_id))}`);
+  console.log(`${tag} absent: ${JSON.stringify(pub.takes.filter((t: any) => t.verified === null || t.verified === false).map((t: any) => t.memberId))}`);
 
   // Verify memos
   for (const r of results) {
     if (!r.memoUrl) { console.log(`  ${r.memberId}: no memo`); continue; }
     const memoRes = await fetch(`${BACKEND}${r.memoUrl}`);
     if (memoRes.ok) {
-      const memo = await memoRes.json();
+      const memo = await responseJson(memoRes);
       console.log(`  ${r.memberId}: memo verified (id=${memo.id})`);
-      const take = pub.takes.find((t: any) => t.member_id === r.memberId);
-      if (take?.memo_url === r.memoUrl) console.log(`  ${r.memberId}: memo_url in submission ✓`);
+      const take = pub.takes.find((t: any) => t.memberId === r.memberId);
+      if (take?.memoUrl === r.memoUrl) console.log(`  ${r.memberId}: memoUrl in submission ✓`);
     } else {
       console.log(`  ${r.memberId}: memo fetch failed (${memoRes.status})`);
     }
@@ -211,7 +218,7 @@ async function main() {
   const MCP_BASE = (process.env.MCP_URL ?? "http://localhost:8788/mcp").replace(/\/mcp\/?$/, "");
   // 1. Metadata endpoint
   const metaRes = await fetch(`${MCP_BASE}/.well-known/oauth-authorization-server`);
-  const meta = metaRes.ok ? await metaRes.json() : {};
+  const meta = metaRes.ok ? await responseJson(metaRes) : {};
   console.log(`  OAuth metadata: token_endpoint=${meta.token_endpoint ? "✓" : "✗"}`);
 
   // 2. Register a member and exchange credentials for an OAuth access token
@@ -219,7 +226,7 @@ async function main() {
   const oauthReg = await fetch(`${BACKEND}/api/committee/register`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ ...oauthMember, publicKey: (await generateKeyPair()).publicKeyB64 }),
-  }).then((r) => r.json());
+  }).then(responseJson);
   const oauthToken = await fetch(`${MCP_BASE}/mcp/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -228,7 +235,7 @@ async function main() {
       client_id: oauthMember.memberId,
       client_secret: oauthReg.token,
     }),
-  }).then((r) => r.json());
+  }).then(responseJson);
   console.log(`  OAuth token exchange: access_token=${oauthToken.access_token ? "✓" : "✗"} expires_in=${oauthToken.expires_in}`);
 
   // 3. Invalid credentials are rejected
@@ -262,7 +269,7 @@ async function main() {
   const applyRes = await fetch(`${BACKEND}/api/committee/apply`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ memberId: "eos", name: "Eos", lens: "newcomer", publicKey: eosPub }),
-  }).then((r) => r.json());
+  }).then(responseJson);
   console.log(`\n  onboard eos: apply → status=${applyRes.status} memberStatus=${applyRes.memberStatus}`);
   if (applyRes.status !== 201) throw new Error(`apply failed: ${JSON.stringify(applyRes)}`);
 
@@ -270,7 +277,7 @@ async function main() {
   const activateRes = await fetch(`${BACKEND}/api/committee/admin/activate`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: "eos" }),
-  }).then((r) => r.json());
+  }).then(responseJson);
   console.log(`  onboard eos: activate → status=${activateRes.status} token=${activateRes.token ? "✓" : "✗"}`);
   if (activateRes.status !== 200 || !activateRes.token) throw new Error(`activate failed: ${JSON.stringify(activateRes)}`);
 
@@ -287,14 +294,14 @@ async function main() {
   const testReg = await fetch(`${BACKEND}/api/committee/register`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: "cross-role-test", name: "Cross Role Test", publicKey: (await generateKeyPair()).publicKeyB64 }),
-  }).then((r) => r.json());
+  }).then(responseJson);
   const testToken: string = testReg.token;
 
   // 5a. Unknown token → 401 with "unknown member token"
   const badTokenRes = await fetch(`${BACKEND}/api/committee/submit`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer nonexistent" },
     body: JSON.stringify({ memberId: "cross-role-test", date: today, subjectId: SUBJECTS[0].id, nonce: crypto.randomUUID(), stance: "neutral", confidence: 0.5, signature: "bad" }),
-  }).then((r) => r.json());
+  }).then(responseJson);
   console.log(`  cross-role: unknown token → ${badTokenRes.status} "${badTokenRes.error}"`);
   const badTokenOk = badTokenRes.status === 401 && String(badTokenRes.error).includes("unknown member token");
   if (!badTokenOk) throw new Error(`expected 401 unknown token, got ${badTokenRes.status}`);

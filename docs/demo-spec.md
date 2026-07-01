@@ -6,6 +6,13 @@ keeps the stack live as a **standing demo** (see §0). Ctrl-C / SIGTERM tears th
 down; a startup failure leaves it up for inspection; `bun run demo:down` tears down an
 already-running (e.g. backgrounded) demo.
 
+> **One committee, not many.** Everything below exercises the *single* Investment
+> Committee. The harness drives it through **two sessions** (session 1 = today's
+> subject; session 2 = a different subject the next day, referencing session 1's
+> outcome), with N **members** submitting signed takes and one deliberate no-show
+> (recorded absent). These plurals — members / subjects / sessions / takes — are the
+> moving parts of the one committee, **not** separate committees.
+
 ---
 
 ## 0. Standing demo mode (`bun run demo`, local)
@@ -23,7 +30,7 @@ fresh activity, driven two ways (hybrid):
 
 - **Regime + research** — driven by the worker's own scheduler. In demo mode
   (`DEMO_FAST_SCHEDULES=1`, set only for the local migrate/seed) the seed appends fast
-  demo-cadence rows to `job_schedules` in addition to the default daily 06:00 UTC rows:
+  demo-cadence rows to `job_schedules` in addition to the default daily 22:30 UTC rows:
   `regime.classify` on `*/2 * * * *` (regime only) and `analytics.run` on
   `1-59/2 * * * *` (the full suite — regime + both research signals). The one-minute
   cron offset staggers them so they fire at different times.

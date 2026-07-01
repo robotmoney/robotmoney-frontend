@@ -1,9 +1,10 @@
 // Committee domain/service layer — the single place the rules live (window
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
-import { sql } from "../db/client.ts";
+import { jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import { verifySubmissionSignature } from "../lib/signing.ts";
+import { toBrief, toMember, toMemo, toSession, toSnapshot, toSubject, toTake } from "./projections.ts";
 
 // ── Identity ──────────────────────────────────────────────────────────────
 export async function memberIdForToken(token: string): Promise<string | null> {
@@ -22,41 +23,40 @@ async function publicKeyFor(memberId: string): Promise<string | null> {
 
 // ── Reads ─────────────────────────────────────────────────────────────────
 export async function getMembers() {
-  return sql`SELECT id, status, name, tagline, lens, mandate, operator
-             FROM committee_members WHERE status = 'active' ORDER BY id`;
+  const rows = await sql`SELECT * FROM committee_members WHERE status = 'active' ORDER BY id`;
+  return rows.map(toMember);
 }
 export async function getMember(id: string) {
-  const r = await sql`SELECT id, status, name, tagline, lens, mandate, operator FROM committee_members WHERE id = ${id}`;
-  return r[0] ?? null;
+  const row = (await sql`SELECT * FROM committee_members WHERE id = ${id}`)[0];
+  return row ? toMember(row) : null;
 }
 export async function getSubject(id: string) {
-  const r = await sql`SELECT id, status, name, operator, thesis_blurb, wallets, recommendation_type FROM committee_subjects WHERE id = ${id}`;
-  return r[0] ?? null;
+  const row = (await sql`SELECT * FROM committee_subjects WHERE id = ${id}`)[0];
+  return row ? toSubject(row) : null;
 }
-
-// Calendar date → 'YYYY-MM-DD' (postgres.js returns `date` columns as Date objects).
-const day = (d: unknown) => (d == null ? null : typeof d === "string" ? d.slice(0, 10) : new Date(d as any).toISOString().slice(0, 10));
 
 export async function getSubjectSnapshots(id: string) {
   const rows = await sql`SELECT id, subject_id, date, total_value_usd, positions, wallets, notable
                          FROM committee_subject_snapshots WHERE subject_id = ${id} ORDER BY date DESC`;
-  return rows.map((r: any) => ({ ...r, date: day(r.date) }));
+  return rows.map(toSnapshot);
 }
 
 export async function listSessions() {
-  const rows = await sql`SELECT id, date, subject_id, subject_name, state, window_closes_at, published_at, generated_at
-             FROM committee_sessions ORDER BY date DESC, generated_at DESC`;
-  return rows.map((r: any) => ({ ...r, date: day(r.date) }));
+  const rows = await sql`SELECT * FROM committee_sessions ORDER BY date DESC, generated_at DESC`;
+  return rows.map(toSession);
 }
 
 export async function getOpenSession() {
   const r = await sql`SELECT id, date, subject_id, subject_name, state, window_closes_at
                       FROM committee_sessions WHERE state = 'collecting'
                       ORDER BY generated_at DESC LIMIT 1`;
-  return r[0] ?? null;
+  return r[0] ? toSession(r[0]) : null;
 }
 
-export async function getSession(date: string, subjectId: string) {
+export async function getSession(
+  date: string,
+  subjectId: string,
+): Promise<{ session: ReturnType<typeof toSession>; takes: ReturnType<typeof toTake>[] } | null> {
   const s = (await sql`SELECT * FROM committee_sessions WHERE date = ${date} AND subject_id = ${subjectId}`)[0];
   if (!s) return null;
   const takes = await sql`
@@ -65,13 +65,13 @@ export async function getSession(date: string, subjectId: string) {
     FROM committee_recommendations r
     JOIN committee_members m ON m.id = r.member_id
     WHERE r.session_id = ${s.id} ORDER BY r.received_at`;
-  return { session: { ...s, date: day(s.date) }, takes };
+  return { session: toSession(s), takes: takes.map(toTake) };
 }
 
 export async function getBrief(date: string, subjectId: string) {
   const r = await sql`SELECT id, date, subject_id, body, created_at FROM committee_briefs
                       WHERE date = ${date} AND subject_id = ${subjectId} ORDER BY created_at DESC LIMIT 1`;
-  return r[0] ?? null;
+  return r[0] ? toBrief(r[0]) : null;
 }
 
 // ── Submit (verify identity + window + signature + nonce) ───────────────────
@@ -221,7 +221,7 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     WHERE date = ${s.date} ORDER BY signal_key`;
   const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
   const body = { regime, subject: await getSubject(s.subject_id), recentSessions: recent, previousSession, researchSignals };
-  await sql`INSERT INTO committee_briefs (date, subject_id, body) VALUES (${s.date}, ${s.subject_id}, ${sql.json(body)})
+  await sql`INSERT INTO committee_briefs (date, subject_id, body) VALUES (${s.date}, ${s.subject_id}, ${sql.json(jsonValue(body))})
             ON CONFLICT (date, subject_id) DO UPDATE SET body = EXCLUDED.body`;
   const closes = new Date(Date.now() + windowMinutes * 60_000);
   await sql`UPDATE committee_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
@@ -282,5 +282,5 @@ export async function getMemo(id: number) {
   const r = (await sql`SELECT id, member_id, session_id, title, body, created_at
                        FROM committee_memos WHERE id = ${id}`)[0] ?? null;
   if (!r) return null;
-  return { ...r, created_at: r.created_at?.toISOString?.() ?? r.created_at };
+  return toMemo(r);
 }

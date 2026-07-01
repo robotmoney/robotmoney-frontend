@@ -62,7 +62,7 @@
     <!-- Brief -->
     <div class="session-brief">
       <h3 class="section-subtitle">Brief</h3>
-      <div class="brief-content" x-html="brief"></div>
+      <pre class="brief-content" x-text="brief"></pre>
     </div>
 
     <!-- Members -->
@@ -92,25 +92,29 @@
             <canvas id="allocationChart" x-ref="allocationChart"></canvas>
           </div>
           <div class="result-legend">
-            <div class="legend-item" x-for="item in allocation">
-              <span class="legend-dot" :style="{ background: item.color }"></span>
-              <span x-text="item.label + ': ' + item.value"></span>
-            </div>
+            <template x-for="item in allocation" :key="item.label">
+              <div class="legend-item">
+                <span class="legend-dot" :style="{ background: item.color }"></span>
+                <span x-text="item.label + ': ' + item.value"></span>
+              </div>
+            </template>
           </div>
         </div>
 
         <div class="result-card">
           <h4 class="result-title">Confidence Scores</h4>
           <div class="result-content">
-            <div class="confidence-bar" x-for="score in confidence">
-              <div class="confidence-label">
-                <span x-text="score.label"></span>
-                <span class="confidence-value" x-text="score.value + '%'"></span>
+            <template x-for="score in confidence" :key="score.label">
+              <div class="confidence-bar">
+                <div class="confidence-label">
+                  <span x-text="score.label"></span>
+                  <span class="confidence-value" x-text="score.value + '%'"></span>
+                </div>
+                <div class="confidence-track">
+                  <div class="confidence-fill" :style="{ width: score.value + '%' }"></div>
+                </div>
               </div>
-              <div class="confidence-track">
-                <div class="confidence-fill" :style="{ width: score.value + '%' }"></div>
-              </div>
-            </div>
+            </template>
           </div>
         </div>
       </div>
@@ -521,76 +525,3 @@
   }
 }
 </style>
-
-<script type="module">
-Alpine.data('icSessionDetail', () => ({
-  title: 'Loading...',
-  date: new Date(),
-  status: 'pending',
-  statusLabel: 'In Progress',
-  memberCount: 0,
-  submissionCount: 0,
-  phases: [],
-  members: [],
-  submissions: [],
-  brief: '',
-  allocation: [],
-  confidence: [],
-
-  init() {
-    this.loadSessionData();
-  },
-
-  loadSessionData() {
-    // Extract params from URL
-    const path = window.location.pathname;
-    const match = path.match(/\/committee\/([^\/]+)\/([^\/]+)/);
-    if (!match) {
-      this.title = 'Session not found';
-      return;
-    }
-
-    const [_, date, subject] = match;
-    this.title = subject.replace(/-/g, ' ').toUpperCase();
-    this.date = new Date(date);
-    this.memberCount = 3;
-    this.submissionCount = 2;
-    this.statusLabel = 'Closed';
-    this.phases = ['published', 'open', 'closed', 'aggregated'];
-
-    // Mock data (replace with API call in Phase 3)
-    this.members = [
-      { id: 'woon', name: 'Woon', role: 'Founder', avatar: '/avatars/committee/woon.jpg', hasSubmitted: true },
-      { id: 'robotmoney', name: 'Robot', role: 'Agent', avatar: '/avatars/committee/robotmoney.jpg', hasSubmitted: true },
-      { id: 'athena', name: 'Athena', role: 'Advisor', avatar: '/avatars/committee/athena.jpg', hasSubmitted: false }
-    ];
-
-    this.submissions = [
-      { id: 1, memberName: 'Woon', allocationA: 35, allocationB: 30, allocationC: 35, confidence: 85, comment: 'Balanced approach' },
-      { id: 2, memberName: 'Robot', allocationA: 33, allocationB: 34, allocationC: 33, confidence: 72, comment: '' }
-    ];
-
-    this.brief = '<p>Evaluate rebalancing of treasury allocation across three buckets.</p><p>Current distribution: 33% each. Consider market conditions and risk profiles.</p>';
-
-    this.allocation = [
-      { label: 'Bucket A', value: '33%', color: '#00e5ff' },
-      { label: 'Bucket B', value: '34%', color: '#4488ff' },
-      { label: 'Bucket C', value: '33%', color: '#8b5cf6' }
-    ];
-
-    this.confidence = [
-      { label: 'Consensus', value: 80 },
-      { label: 'Members', value: 66 },
-      { label: 'Confidence', value: 79 }
-    ];
-  },
-
-  formatDate(date) {
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-  },
-
-  phaseDate(phase) {
-    return this.formatDate(new Date(this.date.getTime() + (Math.random() * 10 * 24 * 60 * 60 * 1000)));
-  }
-}));
-</script>

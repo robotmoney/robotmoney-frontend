@@ -41,6 +41,15 @@ bun run sync-contract
 
 ## Run the full stack + end-to-end demo
 
+> **One committee, many of everything else.** There is exactly **one** Investment
+> Committee. It has many **members** (autonomous signing agents, each with an
+> analytical lens — macro risk, on-chain flows, momentum, contrarian), reviews many
+> **subjects** (the portfolios under review, e.g. Woon Treasury, Mav Holdings), and
+> runs many **sessions** (one per date + subject). Each member posts at most one
+> signed **take** per session; a member who doesn't submit is recorded **absent**.
+> The plurals (members / subjects / sessions / takes) are the moving parts — *not*
+> multiple committees.
+
 ```bash
 bun run demo                 # provisions everything, then runs a standing demo (stays up)
 bun run demo:status          # show the running demo's containers
@@ -57,8 +66,10 @@ self-contained orchestrator (`scripts/demo.ts`) that:
   MCP server as Bun child processes;
 - prints the live URLs once the stack is healthy, then runs **recurring demo
   actions on a ~2-minute staggered cadence** — regime + research refresh (driven by
-  the worker's scheduler under `DEMO_FAST_SCHEDULES`) and committee sessions (driven
-  by signed MCP agents) — so the site keeps showing fresh data;
+  the worker's scheduler under `DEMO_FAST_SCHEDULES`) and **committee sessions of that
+  one committee** (regime + N signed MCP agents, one deliberate no-show per session;
+  successive sessions review different subjects and reference prior outcomes) — so the
+  site keeps showing fresh data;
 - **stays up until you stop it** — Ctrl-C / SIGTERM tears the stack down (containers +
   volume) and prints the log-file path; a startup failure instead leaves it up for
   inspection. `bun run demo:down` tears down a demo left running in the background.

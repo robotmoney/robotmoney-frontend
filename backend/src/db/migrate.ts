@@ -61,7 +61,7 @@ export async function migrate(): Promise<void> {
   await seed();
 }
 
-// Run directly: `node src/db/migrate.ts`
+// Run directly: `bun run src/db/migrate.ts`
 if (import.meta.url === `file://${process.argv[1]}`) {
   migrate()
     .then(closeDb)

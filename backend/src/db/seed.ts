@@ -7,7 +7,7 @@
 // natural keys, so an extra firing is harmless. We DO NOT touch next_run_at /
 // enabled on an existing row — that lets the scheduler own slot bookkeeping and
 // lets an operator disable a schedule without the seed re-enabling it.
-import { sql, closeDb } from "./client.ts";
+import { sql, closeDb, jsonValue } from "./client.ts";
 
 interface SeedSchedule {
   kind: string;
@@ -26,8 +26,10 @@ interface SeedSchedule {
 // exercising the real worker claim loop + handler path. Scheduled cron
 // triggering (e.g. daily open_session) is a future addition.
 const SCHEDULES: SeedSchedule[] = [
-  // Daily 06:00 UTC: refresh the analytics suite (regime + research signals).
-  { kind: "analytics.run", cron: "0 6 * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Daily 22:30 UTC: refresh the analytics suite (regime + research signals).
+  // After the US equity close (21:00 UTC) + FRED's daily refresh, mirroring the
+  // original scripts/regime cron so the fetched raw is the settled end-of-day data.
+  { kind: "analytics.run", cron: "30 22 * * *", payload: {}, timezone: "UTC", enabled: true },
   // Committee lifecycle — disabled by default; the demo enqueues these explicitly
   // via the admin enqueue-job endpoint, exercising the real worker claim loop +
   // handler path. Enable manually or change to a real cron for auto-scheduling.
@@ -64,7 +66,7 @@ export async function seed(): Promise<void> {
     // (next_run_at, last_enqueued_at, enabled) survive untouched.
     await sql`
       INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
-      VALUES (${s.kind}, ${s.cron}, ${sql.json(s.payload)}, ${s.timezone}, ${s.enabled})
+      VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled})
       ON CONFLICT (kind, cron) DO NOTHING
     `;
   }

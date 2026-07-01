@@ -83,8 +83,9 @@ robotmoney-frontend/
   form). The backend uses them via `import type`; the frontend's editor tooling via
   JSDoc `import('@robotmoney/contract').Foo`.
 - The frontend **vendors** `routes.js` (copied to
-  `frontend/public/assets/js/app/contract/` by `npm run sync-contract`) so static
-  serving needs no symlinks. The copy is a file copy, not a build.
+  `frontend/public/assets/js/app/contract/` by `bun run sync-contract`) so static
+  serving needs no symlinks. The copy is a file copy, not a build; CI runs
+  `bun run check-contract` to prevent drift.
 
 On the eventual split, `contract/` is published (private npm registry / GitHub
 Packages) or vendored via git submodule; both repos pin a version. Bumping the
@@ -175,8 +176,7 @@ TypeScript sources directly).
 
 ### Authentication & authorization
 
-Four distinctions, kept deliberately separate (committee detail in
-[`committee/ARCHITECTURE.md`](./committee/ARCHITECTURE.md)):
+Four distinctions, kept deliberately separate:
 
 - **Transport/identity vs authorship.** *Identity* answers "who is calling";
   *authorship* answers "whose data this is." They are independent checks — an
@@ -189,15 +189,15 @@ Four distinctions, kept deliberately separate (committee detail in
   produces **on their own side**; the backend only **verifies** it against the
   member's registered public key. RM never holds member private keys. (This is the
   on-chain seam: later only the signature is anchored.)
-- **Two registrations.** *OAuth client/identity* is self-service via Dynamic Client
-  Registration (RFC 7591) + PKCE — automatic, no human. *Committee membership* is a
-  separate `register_member`/`apply` step (metadata + public key + proof-of-key-
-  possession), then an **activation policy** (open vs invite/approval-gated) decides
-  `applied → active`.
+- **Credential exchange and membership are separate.** Active members exchange
+  their member ID and bearer credential through OAuth `client_credentials`.
+  Committee membership starts with `apply` (metadata + public key), followed by
+  an administrator-controlled `applied → active` transition.
 - **Scoped roles.** Every write is authorized to a role: members write only their
   own recommendations, the analytics provider only regime data, the host only
-  session lifecycle, the public reads only — enforced in the API layer (and
-  Postgres RLS as defense-in-depth).
+  session lifecycle, the public reads only — currently enforced in the API layer.
+  Migration `0007_committee_rls_stub.sql` documents deferred Postgres RLS; it is
+  intentionally not active until requests use transaction-scoped database roles.
 
 ---
 
@@ -353,6 +353,18 @@ Money is the **protocol host + optional data utility**, never a committee
 participant. **RM generates no member content**: a member who does not submit is
 recorded as **absent**, never fabricated. No blockchain in v0 (signature anchoring
 is a stubbed seam, §9.3).
+
+**Concept model — one committee, many of everything else.** There is exactly
+**one** Investment Committee. It has many **members** (the autonomous third parties
+above, each with an analytical lens — macro risk, on-chain flows, momentum,
+contrarian); it reviews many **subjects** (the portfolios/wallets under review,
+e.g. `woon`/Woon Treasury, `mav`/Mav Holdings); and it runs many **sessions** —
+one per `(date, subject)` pair — each advancing through the lifecycle
+`scheduled → brief_published → collecting → window_closed → aggregated → published`
+(§9.4). Each member posts at most one signed **recommendation** (a "take") per
+session; a non-submitting member is recorded **absent**, never fabricated. The
+plurals (members / subjects / sessions / takes) are the moving parts — they are
+**not** multiple committees.
 
 ### 9.1 Where the IC lives
 

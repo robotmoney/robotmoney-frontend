@@ -5,7 +5,7 @@
     <span class="cv__eyebrow">Investment Committee</span>
     <h1 class="cv__title">Committee <span class="text-gradient">Session</span></h1>
     <p class="cv__sub" x-show="session" x-cloak>
-      <span x-text="session?.subject_name"></span> · <span x-text="session?.date?.slice(0,10)"></span> ·
+      <span x-text="session?.subjectName"></span> · <span x-text="session?.date?.slice(0,10)"></span> ·
       state <span x-text="session?.state"></span>
     </p>
   </header>
@@ -35,11 +35,11 @@
     <template x-for="t in takes" :key="t.id">
       <article class="cv__take">
         <div class="cv__take-head">
-          <span class="cv__member" x-text="t.member_name"></span>
+          <span class="cv__member" x-text="t.memberName"></span>
           <span :class="stanceClass(t.stance)" x-text="t.stance"></span>
           <span class="cv__conf">confidence <span x-text="Math.round((t.confidence||0)*100)+'%'"></span></span>
           <span class="cv__verified" x-show="t.verified" title="signature verified">✓ signed</span>
-          <a class="cv__memo-link" x-show="t.memo_url" :href="t.memo_url" target="_blank" rel="noopener noreferrer" x-text="'Read memo ↗'"></a>
+          <a class="cv__memo-link" x-show="t.memoUrl" :href="t.memoUrl" target="_blank" rel="noopener noreferrer" x-text="'Read memo ↗'"></a>
         </div>
         <p class="cv__body" x-text="t.body"></p>
       </article>

@@ -1,0 +1,50 @@
+{
+  "current": "v3",
+  "versions": {
+    "v1": {
+      "active_from": "2018-02-28",
+      "description": "0.33/0.67 percentile bucketing on the composite. 5-day confirmation OR 2σ fast-track smoothing on regime transitions. Inverse-correlation weighted panels with 25% per-indicator weight cap. Level-only transforms (no change30/sma). 20 indicators across macro (10) and on-chain (10) panels.",
+      "indicators": 20,
+      "thresholds": { "risk_off": 0.33, "risk_on": 0.67 },
+      "smoothing": { "confirmation_days": 5, "fast_track_sigma": 2, "sigma_lookback_days": 252 },
+      "weight_cap": 0.25,
+      "rolling_window_days": 1095,
+      "frozen_at": "2026-05-12T23:33:08.668Z",
+      "frozen_from_commit": "08e7a6b",
+      "notes": [
+        "Panel weights computed on the FULL available history then applied uniformly across all dates (look-ahead bias). Frozen labels — past rows immutable.",
+        "Superseded by v2 (point-in-time weights) and now v3 (live recompute on best-available data)."
+      ]
+    },
+    "v2": {
+      "active_from": "2018-02-28",
+      "description": "Point-in-time inverse-correlation weighting: each day's panel weights use only the trailing 3y window ending that day (no look-ahead). Recomputed on a monthly cadence. Frozen labels — past rows immutable.",
+      "indicators": 20,
+      "thresholds": { "risk_off": 0.33, "risk_on": 0.67 },
+      "smoothing": { "confirmation_days": 5, "fast_track_sigma": 2, "sigma_lookback_days": 252 },
+      "weight_cap": 0.25,
+      "rolling_window_days": 1095,
+      "rebuilt_at": "2026-05-18T12:26:50.372Z",
+      "notes": [
+        "Weights are point-in-time over [t-1095, t]. No future data influences a past day.",
+        "Recomputed on a monthly (21 trading-day) cadence; identical to daily recompute to <1e-3.",
+        "Superseded by v3 — v2 was frozen from raw inputs that had multi-year truncations (HY_OAS at 3y, BTC_ACTIVE at 5y) and 974 SHILLER_CAPE bogus zeros from 2023-09 onward, plus the macro panel still contained SPX_TREND and IWM_SPY before those moved to the factor panel."
+      ]
+    },
+    "v3": {
+      "active_from": "2018-02-28",
+      "description": "Same point-in-time inverse-correlation methodology as v2, but the frozen-baseline lockout is removed. Every cron run rewrites regime-history.csv with the freshly computed full history, so past labels always reflect best-available math on best-available data. SHILLER_CAPE cleaned (974 zero rows from 2023-09 onward removed by PR #47), HY_OAS and BTC_ACTIVE fetchers backfill the full source window (PR #49), SPX_TREND and IWM_SPY moved from macro to factor panel.",
+      "indicators": 20,
+      "thresholds": { "risk_off": 0.33, "risk_on": 0.67 },
+      "smoothing": { "confirmation_days": 5, "fast_track_sigma": 2, "sigma_lookback_days": 252 },
+      "weight_cap": 0.25,
+      "rolling_window_days": 1095,
+      "notes": [
+        "No frozen lockout: every cron run publishes the regime labels implied by the current raw history. The 5-day + 2σ smoothing absorbs noise from minor data revisions; the small percentile shifts that motivated the frozen lockout in v1/v2 are now visible and welcome, since they reflect real data corrections (Shiller cleanup, HY_OAS/BTC_ACTIVE backfill).",
+        "Raw data remains strictly append-only (raw-indicator-history.csv via mergeSeries, PR #48): the historical SOURCE of truth never loses a row. Only the DERIVED regime labels are recomputed.",
+        "Point-in-time weights as in v2: each day's panel weights use only [t-1095, t]. No look-ahead.",
+        "First v3 history is written on the first cron run after this version is merged."
+      ]
+    }
+  }
+}

@@ -35,9 +35,15 @@
 .rv__ind-row { display: flex; justify-content: space-between; align-items: baseline; }
 .rv__ind-name { font-size: 0.9rem; }
 .rv__ind-panel { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--color-text-dim); }
+.rv__ind-weight { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
 .rv__bar { height: 4px; background: var(--color-border); border-radius: 2px; margin: 0.5rem 0 0.25rem; overflow: hidden; }
 .rv__bar-fill { height: 100%; background: linear-gradient(90deg, #4488ff, #00e5ff); }
 .rv__ind-score { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); text-align: right; }
+.rv__ind-sep { color: var(--color-text-dim); margin: 0 0.35rem; }
+.rv__panel { margin: 0 0 1.75rem; }
+.rv__panel-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+.rv__panel-name { font-size: 1rem; font-weight: 600; }
+.rv__panel-meta { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 
 /* committee */
 .cv__aggregate { display: flex; flex-wrap: wrap; align-items: center; gap: 1.5rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 1.5rem; margin: 2rem 0; }
@@ -98,5 +104,11 @@
 .read--ok { color: var(--color-accent); background: rgba(0,229,255,0.1); }
 .read--mid { color: var(--color-warm); background: rgba(232,166,64,0.1); }
 .read--warn { color: var(--color-warn); background: rgba(255,102,68,0.1); }
+.rs__gauge-pct { font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-muted); margin: 0.25rem 0 0.5rem; }
 .rs__chart { height: 280px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 1rem; margin-top: 1.5rem; }
-@media (min-width: 768px) { .rs__gauges { grid-template-columns: repeat(2, 1fr); } }
+.rs__h2 { font-size: 1.25rem; margin: 2.5rem 0 1rem; }
+.rs__series-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+.rs__series-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 0.75rem 1rem 1rem; }
+.rs__series-label { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); margin-bottom: 0.5rem; }
+.rs__series-canvas { height: 120px; }
+@media (min-width: 768px) { .rs__gauges { grid-template-columns: repeat(2, 1fr); } .rs__series-grid { grid-template-columns: repeat(2, 1fr); } }

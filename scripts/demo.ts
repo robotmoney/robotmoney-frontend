@@ -787,6 +787,10 @@ async function main(): Promise<void> {
     await run(["bun", "run", "scripts/demo-frontend-check.ts"], repoRoot,
       { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "frontend checks");
 
+    console.log("[demo] running browser checks…");
+    await run(["bun", "run", "test:browser"], repoRoot,
+      { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "browser checks");
+
     console.log("\n[demo] CI mode — all checks passed, tearing down…");
     cleanup();
     process.exit(0);

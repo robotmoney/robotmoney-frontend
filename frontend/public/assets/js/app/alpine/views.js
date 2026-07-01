@@ -6,6 +6,7 @@ import { api, ROUTES, path } from "../lib/api.js";
 export function registerViews(Alpine) {
   // ── Regime classification ────────────────────────────────────────────────
   Alpine.data("regimeView", () => ({
+    _chart: null,
     loading: true,
     error: null,
     latest: null,
@@ -25,7 +26,8 @@ export function registerViews(Alpine) {
     drawChart() {
       const canvas = this.$refs.chart;
       if (!canvas || !window.Chart || !this.history.length) return;
-      new window.Chart(canvas, {
+      this._chart?.destroy();
+      this._chart = new window.Chart(canvas, {
         type: "line",
         data: {
           labels: this.history.map((s) => s.date),
@@ -47,12 +49,32 @@ export function registerViews(Alpine) {
         },
       });
     },
+    destroy() { this._chart?.destroy(); this._chart = null; },
     pct(x) { return x == null ? "—" : Math.round(x * 100) + "%"; },
+    fmtWeight(w) { return w == null ? "—" : Math.round(w * 100) + "%"; },
     regimeClass(r) { return r ? `regime-pill regime-pill--${r}` : "regime-pill"; },
+    regimeLabel(r) { return r ? String(r).replace(/_/g, "-") : "—"; },
+    // Rich per-indicator objects come only on the latest (asof) row; historical
+    // rows carry the numeric columns + `percentiles` map. Group the asof indicators
+    // by panel so the view can render Macro / On-chain sections.
+    indicatorsIn(panel) {
+      const inds = this.latest?.indicators;
+      return Array.isArray(inds) ? inds.filter((i) => i.panel === panel) : [];
+    },
+    panelIndex(p) { return p === "macro" ? this.latest?.macroIndex : this.latest?.onchainIndex; },
+    panelPercentile(p) { return p === "macro" ? this.latest?.macroPercentile : this.latest?.onchainPercentile; },
+    panelRegime(p) { return p === "macro" ? this.latest?.macroRegime : this.latest?.onchainRegime; },
+    // Sign-aligned percentile (1 = risk-on) drives the bar; fall back to the raw
+    // percentile if the signed value is absent.
+    sigPct(ind) {
+      const v = ind.signed_percentile != null ? ind.signed_percentile : ind.percentile;
+      return v == null ? 0 : Math.round(v * 100);
+    },
   }));
 
   // ── Research signal (channel-divergence / late-cycle-signals) ─────────────
   Alpine.data("researchView", (key) => ({
+    _chart: null,
     key,
     loading: true,
     error: null,
@@ -62,17 +84,48 @@ export function registerViews(Alpine) {
         const data = await api.get(path(ROUTES.dashboards.researchSignal, { key: this.key }));
         this.payload = data.payload;
         this.loading = false;
-        this.$nextTick(() => this.drawChart());
+        this.$nextTick(() => { this.drawChart(); this.drawSeriesCharts(); });
       } catch (e) {
         this.error = e.message;
         this.loading = false;
+      }
+    },
+    // The real payload carries a richer `indicators` map (the newly-added
+    // channel-divergence gauges — btc_beta_vs_risk_appetite / btc_qqq_ratio_percentile
+    // / stables_vs_qqq_flow — and the late-cycle series — concentration / top7_vs_spy /
+    // mna / margin / consumer_conf). Render each as its own labelled sparkline.
+    indicatorNames() {
+      const inds = this.payload?.indicators;
+      return inds && typeof inds === "object" ? Object.keys(inds) : [];
+    },
+    prettify(k) { return String(k).replace(/_/g, " "); },
+    drawSeriesCharts() {
+      const inds = this.payload?.indicators;
+      if (!inds || !window.Chart || !this.$root) return;
+      for (const canvas of this.$root.querySelectorAll("canvas[data-series]")) {
+        const key = canvas.getAttribute("data-series");
+        const pts = (inds[key] || []).filter((p) => p && p.value != null).slice(-180);
+        if (!pts.length) continue;
+        new window.Chart(canvas, {
+          type: "line",
+          data: {
+            labels: pts.map((p) => p.date),
+            datasets: [{ data: pts.map((p) => p.value), borderColor: "#4488ff", borderWidth: 1.5, pointRadius: 0, tension: 0.25, fill: false }],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false, animation: false,
+            plugins: { legend: { display: false } },
+            scales: { x: { display: false }, y: { ticks: { color: "#4a5268", maxTicksLimit: 3 }, grid: { color: "rgba(255,255,255,0.05)" } } },
+          },
+        });
       }
     },
     drawChart() {
       const canvas = this.$refs.chart;
       const pts = this.payload?.series?.points ?? [];
       if (!canvas || !window.Chart || !pts.length) return;
-      new window.Chart(canvas, {
+      this._chart?.destroy();
+      this._chart = new window.Chart(canvas, {
         type: "line",
         data: {
           labels: pts.map((p) => p.date),
@@ -87,6 +140,7 @@ export function registerViews(Alpine) {
         },
       });
     },
+    destroy() { this._chart?.destroy(); this._chart = null; },
     pct(x) { return x == null ? "—" : Math.round(x * 100) + "%"; },
     readClass(read) {
       const r = String(read || "");
@@ -102,6 +156,7 @@ export function registerViews(Alpine) {
   // the original. No fetch; draws once on init. Stacks bottom→top:
   // Stable, Protocol, Agent, Stocks.
   Alpine.data("walletPerfView", () => ({
+    _charts: [],
     labels: ["Mar 18", "Mar 28", "Apr 17", "Apr 27", "May 17", "Jun 7", "Jun 17", "Jun 26"],
     aumSeries: [
       { label: "Stable (USDC, ZYFAI-SS1)", color: "#10b981", data: [0, 6460, 10020, 8720, 13080, 14530, 16340, 13970] },
@@ -122,7 +177,7 @@ export function registerViews(Alpine) {
     },
     _chart(canvas, series, max, tick) {
       if (!canvas || !window.Chart) return;
-      new window.Chart(canvas, {
+      const instance = new window.Chart(canvas, {
         type: "line",
         data: {
           labels: this.labels,
@@ -142,22 +197,26 @@ export function registerViews(Alpine) {
           plugins: { legend: { display: false } },
         },
       });
+      this._charts.push(instance);
     },
     draw() {
       this._chart(this.$refs.aum, this.aumSeries, 91000, (v) => "$" + Math.round(v / 1000) + "k");
       this._chart(this.$refs.alloc, this.pctSeries, 100, (v) => v + "%");
     },
+    destroy() { this._charts.forEach((item) => item.destroy()); this._charts = []; },
   }));
 
   // ── Tokenomics fee distribution (pie) ─────────────────────────────────────
   // Static Chart.js pie matching the original FeePieChart. The custom legend
   // below the chart stays in the markup, so the chart's own legend is off.
   Alpine.data("feeChart", () => ({
+    _chart: null,
     init() { this.$nextTick(() => this.draw()); },
     draw() {
       const canvas = this.$refs.fee;
       if (!canvas || !window.Chart) return;
-      new window.Chart(canvas, {
+      this._chart?.destroy();
+      this._chart = new window.Chart(canvas, {
         type: "pie",
         data: {
           labels: ["Protocol (57%)", "Bankr (40%)", "Clanker (3%)"],
@@ -166,6 +225,7 @@ export function registerViews(Alpine) {
         options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } } },
       });
     },
+    destroy() { this._chart?.destroy(); this._chart = null; },
   }));
 
   // ── Investment Committee ──────────────────────────────────────────────────
@@ -181,10 +241,10 @@ export function registerViews(Alpine) {
         const published = (sessions || []).filter((s) => s.state === "published");
         const pick = published[0] ?? (sessions || [])[0];
         if (!pick) { this.loading = false; return; }
-        const detail = await api.get(path(ROUTES.committee.session, { date: pick.date, subject: pick.subject_id }));
+        const detail = await api.get(path(ROUTES.committee.session, { date: pick.date, subject: pick.subjectId }));
         this.session = detail.session;
         this.takes = detail.takes || [];
-        this.aggregate = detail.session?.committee_recommendation ?? null;
+        this.aggregate = detail.session?.committeeRecommendation ?? null;
         this.loading = false;
       } catch (e) {
         this.error = e.message;

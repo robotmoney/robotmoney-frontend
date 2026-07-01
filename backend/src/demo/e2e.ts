@@ -11,6 +11,7 @@ import { generateKeyPair, signMessage } from "../lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import * as ic from "../committee/domain.ts";
 import { runAnalytics } from "../analytics/index.ts";
+import { hermeticDataSource } from "../analytics/access/hermetic-source.ts";
 
 const API = process.env.API_BASE ?? "http://localhost:8787";
 const today = new Date().toISOString().slice(0, 10);
@@ -70,7 +71,10 @@ async function agentSubmit(member: typeof MEMBERS[number], idn: { token: string;
 
 async function main() {
   console.log(`\n=== Committee E2E demo (${today}) ===`);
-  await runAnalytics(today);
+  // Demo/e2e MUST be hermetic + offline (demo spec: no FRED/Yahoo/EDGAR/... calls).
+  // Pass the deterministic seeded source explicitly so this path never fires the
+  // ~200 live EDGAR/fetcher requests the prod `liveDataSource` would.
+  await runAnalytics(today, undefined, hermeticDataSource);
   const regime = (await sql`SELECT composite, regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0];
   const composite = Number(regime.composite);
   console.log(`regime: composite=${composite.toFixed(3)} (${regime.regime})`);

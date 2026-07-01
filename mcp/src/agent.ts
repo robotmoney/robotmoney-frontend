@@ -15,6 +15,9 @@ import { generateKeyPair, sign } from "./crypto.ts";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const MCP_URL = process.env.MCP_URL ?? "http://localhost:8788/mcp";
+const adminHeaders: Record<string, string> = process.env.ADMIN_TOKEN
+  ? { "X-Admin-Token": process.env.ADMIN_TOKEN }
+  : {};
 
 export interface AgentOpts {
   memberId: string; name: string; lens: string; bias: number;
@@ -45,7 +48,6 @@ export const textOf = (res: any) => JSON.parse(res.content?.[0]?.text ?? "null")
 // deliberate no-show on the roster so absence is recorded at aggregation.
 export async function enroll(o: { memberId: string; name: string; lens?: string }) {
   const { publicKeyB64 } = await generateKeyPair();
-  const adminHeaders = process.env.ADMIN_TOKEN ? { "X-Admin-Token": process.env.ADMIN_TOKEN } : {};
   await fetch(`${BACKEND}/api/committee/register`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: o.memberId, name: o.name, lens: o.lens, publicKey: publicKeyB64 }),
@@ -58,11 +60,10 @@ export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCrede
   const { publicKeyB64, privateKey } = existingCredentials
     ? { publicKeyB64: "", privateKey: existingCredentials.privateKey }
     : await generateKeyPair();
-  const adminHeaders = process.env.ADMIN_TOKEN ? { "X-Admin-Token": process.env.ADMIN_TOKEN } : {};
   const token = existingCredentials?.token ?? (await fetch(`${BACKEND}/api/committee/register`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: o.memberId, name: o.name, lens: o.lens, publicKey: publicKeyB64 }),
-  }).then((r) => r.json())).token;
+  }).then(async (r) => (await r.json() as { token: string }))).token;
 
   // 2. connect to the MCP server via OAuth 2.1 client_credentials grant.
   // The ClientCredentialsProvider handles token acquisition, refresh, and
@@ -72,12 +73,9 @@ export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCrede
   const client = new Client({ name: `agent-${o.memberId}`, version: "0.1.0" });
   // OAuth discovery needs the server origin (no path component) to find
   // /.well-known/oauth-authorization-server at the root.
-  const mcpUrl = new URL(MCP_URL);
   const authProvider = new ClientCredentialsProvider({
     clientId: o.memberId,
     clientSecret: token,
-    url: new URL(mcpUrl.origin),
-    authMethod: "client_secret_post",
   });
   const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), { authProvider });
   await client.connect(transport);

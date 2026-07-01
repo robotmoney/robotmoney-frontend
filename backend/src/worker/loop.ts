@@ -1,4 +1,4 @@
-import { sql } from "../db/client.ts";
+import { jsonValue, sql } from "../db/client.ts";
 import { config } from "../config.ts";
 import { getHandler } from "./handlers/index.ts";
 
@@ -53,7 +53,7 @@ export async function processOneJob(): Promise<boolean> {
                            WHERE id = ${job.id} AND locked_by = ${config.workerId} AND status = 'running' RETURNING id`;
       if (upd.length === 0) return false;
       await tx`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, output)
-               VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), 'succeeded', ${tx.json(output ?? null)})`;
+               VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), 'succeeded', ${tx.json(jsonValue(output ?? null))})`;
       return true;
     });
     if (!ok) console.warn(`job ${job.id} (${job.kind}) lost its lock before completion (reaped) — result discarded`);

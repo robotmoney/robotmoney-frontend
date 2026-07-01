@@ -1,22 +1,9 @@
-// Alpine.data factories for animated page-hero canvases. Same lifecycle pattern
-// as substrate.js: init() injects a canvas host + waits for p5; destroy() tears
-// the p5 instance down on SPA view changes. p5 is the CDN global.
+// Alpine.data factories for animated page-hero canvases.
+import { p5Lifecycle } from "./p5-lifecycle.js";
+
 export function registerHeroes(Alpine) {
   Alpine.data("blogHero", () => ({
-    _p5: null,
-    init() {
-      const host = this.$el;
-      host.innerHTML = '<div class="hero-art__canvas" style="position:absolute;inset:0"></div>';
-      const container = host.querySelector(".hero-art__canvas");
-      const startWhenReady = () => {
-        if (window.p5) this._start(container);
-        else setTimeout(startWhenReady, 50);
-      };
-      startWhenReady();
-    },
-    destroy() {
-      if (this._p5) { this._p5.remove(); this._p5 = null; }
-    },
+    ...p5Lifecycle(),
     _start(container) {
       const p5Constructor = window.p5;
       const numTrees = 20, maxDepth = 6, windStrength = 80, branchAngle = 25, shrinkPct = 67, randomness = 40;
@@ -107,20 +94,7 @@ export function registerHeroes(Alpine) {
   }));
 
   Alpine.data("faqHero", () => ({
-    _p5: null,
-    init() {
-      const host = this.$el;
-      host.innerHTML = '<div class="hero-art__canvas" style="position:absolute;inset:0"></div>';
-      const container = host.querySelector(".hero-art__canvas");
-      const startWhenReady = () => {
-        if (window.p5) this._start(container);
-        else setTimeout(startWhenReady, 50);
-      };
-      startWhenReady();
-    },
-    destroy() {
-      if (this._p5) { this._p5.remove(); this._p5 = null; }
-    },
+    ...p5Lifecycle(),
     _start(container) {
       const p5Constructor = window.p5;
       const ACCENT = [0, 229, 255], BG = [5, 5, 8];
@@ -183,20 +157,7 @@ export function registerHeroes(Alpine) {
   }));
 
   Alpine.data("tokHero", () => ({
-    _p5: null,
-    init() {
-      const host = this.$el;
-      host.innerHTML = '<div class="hero-art__canvas" style="position:absolute;inset:0"></div>';
-      const container = host.querySelector(".hero-art__canvas");
-      const startWhenReady = () => {
-        if (window.p5) this._start(container);
-        else setTimeout(startWhenReady, 50);
-      };
-      startWhenReady();
-    },
-    destroy() {
-      if (this._p5) { this._p5.remove(); this._p5 = null; }
-    },
+    ...p5Lifecycle(),
     _start(container) {
       const p5Constructor = window.p5;
       const ACCENT = [0, 229, 255], BG = [5, 5, 8];
@@ -488,20 +449,7 @@ export function registerHeroes(Alpine) {
   }));
 
   Alpine.data("mediaHero", () => ({
-    _p5: null,
-    init() {
-      const host = this.$el;
-      host.innerHTML = '<div class="hero-art__canvas" style="position:absolute;inset:0"></div>';
-      const container = host.querySelector(".hero-art__canvas");
-      const startWhenReady = () => {
-        if (window.p5) this._start(container);
-        else setTimeout(startWhenReady, 50);
-      };
-      startWhenReady();
-    },
-    destroy() {
-      if (this._p5) { this._p5.remove(); this._p5 = null; }
-    },
+    ...p5Lifecycle(),
     _start(container) {
       const p5Constructor = window.p5;
       let intensity = 45;
@@ -709,20 +657,7 @@ export function registerHeroes(Alpine) {
   }));
 
   Alpine.data("changelogHero", () => ({
-    _p5: null,
-    init() {
-      const host = this.$el;
-      host.innerHTML = '<div class="hero-art__canvas" style="position:absolute;inset:0"></div>';
-      const container = host.querySelector(".hero-art__canvas");
-      const startWhenReady = () => {
-        if (window.p5) this._start(container);
-        else setTimeout(startWhenReady, 50);
-      };
-      startWhenReady();
-    },
-    destroy() {
-      if (this._p5) { this._p5.remove(); this._p5 = null; }
-    },
+    ...p5Lifecycle(),
     _start(container) {
       const p5Constructor = window.p5;
       let intensity = 55;

@@ -1,6 +1,6 @@
 # Build context is the repo ROOT so we can include the file: contract dependency.
 # No bundler: Bun runs the TypeScript sources directly.
-FROM oven/bun:1
+FROM oven/bun:1.3.5
 
 WORKDIR /app
 

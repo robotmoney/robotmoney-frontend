@@ -1,12 +1,8 @@
-// Hermetic frontend-rendering check. Runs after the E2E committee session
-// completes but while the stack is live. Fetches the raw SPA view HTML files
-// and verifies their structure — cataches missing template elements, broken
-// Alpine.js directives, and regressions in the view contract.
+// Hermetic frontend-structure check. Runs after the E2E committee session while
+// the stack is live. It verifies route fragments and the API data they consume.
 //
-// Uses fetch + string matching only (no headless browser). The SPA views are
-// buildless static HTML with Alpine.js directives; as long as the view file
-// is served and contains the expected x-data / template structure, the
-// client-side render will produce correct output.
+// This is intentionally not a browser-rendering test; it guards the buildless
+// view contract cheaply and rejects inline scripts that innerHTML would ignore.
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,7 +63,7 @@ async function main() {
   // The SPA serves them as raw fragments that the router injects.
   await checkView("/views/committee.html", [
     "x-data=\"committeeView()\"",
-    "session?.subject_name",
+    "session?.subjectName",
     "session?.state",
     "cv__verified",
     "cv__memo-link",  // memoUrl rendering (Phase 3)
@@ -90,6 +86,38 @@ async function main() {
     "payload.gauges",
     "rs__chart",
   ]);
+  await checkView("/views/allocation.html", [
+    "x-data=\"allocationCharts()\"",
+    "x-data=\"allocationKpis()\"",
+  ]);
+  await checkView("/views/committee/member.html", ["x-data=\"memberProfile()\""]);
+  await checkView("/views/committee/session.html", ["x-data=\"icSessionDetail()\""]);
+
+  // Router patterns and globally registered factories keep dynamic fragments
+  // executable after innerHTML injection.
+  checkLocalViewFile("../assets/js/app/routes.js", [
+    "committee\\/members\\/",
+    "committee\\/\\d{4}-\\d{2}-\\d{2}\\/",
+  ]);
+  checkLocalViewFile("../assets/js/app/router.js", [
+    "AbortController",
+  ]);
+  checkLocalViewFile("../assets/js/app/alpine/static-views.js", [
+    "memberProfile",
+    "icSessionDetail",
+    "allocationCharts",
+  ]);
+
+  for (const filename of new Bun.Glob("**/*.html").scanSync({ cwd: viewsDir })) {
+    const source = readFileSync(join(viewsDir, filename), "utf8");
+    const withoutComments = source.replace(/<!--[\s\S]*?-->/g, "");
+    const hasInlineScript = /<script(?:\s|>)/i.test(withoutComments);
+    checks.push({
+      name: `${filename} has no inline scripts`,
+      ok: !hasInlineScript,
+      detail: hasInlineScript ? "move behavior into assets/js/app/alpine" : "none",
+    });
+  }
 
   // Check the SPA shell (index.html) has the nav links and Alpine bootstrap.
   await checkView("/", [
