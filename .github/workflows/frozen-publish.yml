@@ -1,0 +1,54 @@
+# Publishes the baked, offline "frozen" single-file SPA as a downloadable,
+# timestamp-labelled GitHub Actions artifact (issue #24, deferred publish step
+# from feature #14).
+#
+# CI taxonomy class: feature-correctness. The bake runs from committed fixtures
+# (`bun run frozen:fixtures`) — it hits NO network — and the self-contained
+# guard asserts the produced bundle references no external resource. Both prove
+# the frozen-bake feature under change, so this runs on every PR (draft + r4r)
+# and on push, and is safely bypassed on docs-only changes. Nothing here depends
+# on the network, so it does not add a network-dependent per-PR check.
+#
+# Out of scope (deliberately, per issue #24): publishing to the robotmonet.net
+# cloudflared tunnel / external hosting — a later follow-up.
+name: frozen-publish
+env:
+  CI_CLASS: feature-correctness
+on:
+  pull_request:
+    paths-ignore: ['**.md', '**.txt']
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', '**.txt']
+  schedule:
+    - cron: "0 7 * * *" # nightly sweep — re-bake + re-publish the offline bundle
+  workflow_dispatch: {}
+
+jobs:
+  frozen-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Install root tooling
+        run: bun install --frozen-lockfile
+      - name: Bake the offline frozen bundle (no network — committed fixtures)
+        run: bun run frozen:fixtures
+      - name: Guard — assert the bundle is self-contained / offline
+        # Executes the real scanner over the freshly-baked bundle. Fails loudly
+        # (exit 1) if dist/frozen/index.html is missing, empty, or references any
+        # external http(s):// resource. Never a no-op, never a skip.
+        run: bun run scripts/check-frozen-selfcontained.ts
+      - name: Derive the timestamp-labelled artifact name from the manifest
+        id: label
+        run: echo "name=$(bun run scripts/frozen-artifact-name.ts)" >> "$GITHUB_OUTPUT"
+      - name: Publish the frozen bundle as a downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.label.outputs.name }}
+          path: |
+            dist/frozen/index.html
+            dist/frozen/frozen-manifest.json
+          if-no-files-found: error
