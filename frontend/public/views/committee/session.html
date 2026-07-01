@@ -92,25 +92,29 @@
             <canvas id="allocationChart" x-ref="allocationChart"></canvas>
           </div>
           <div class="result-legend">
-            <div class="legend-item" x-for="item in allocation">
-              <span class="legend-dot" :style="{ background: item.color }"></span>
-              <span x-text="item.label + ': ' + item.value"></span>
-            </div>
+            <template x-for="item in allocation" :key="item.label">
+              <div class="legend-item">
+                <span class="legend-dot" :style="{ background: item.color }"></span>
+                <span x-text="item.label + ': ' + item.value"></span>
+              </div>
+            </template>
           </div>
         </div>
 
         <div class="result-card">
           <h4 class="result-title">Confidence Scores</h4>
           <div class="result-content">
-            <div class="confidence-bar" x-for="score in confidence">
-              <div class="confidence-label">
-                <span x-text="score.label"></span>
-                <span class="confidence-value" x-text="score.value + '%'"></span>
+            <template x-for="score in confidence" :key="score.label">
+              <div class="confidence-bar">
+                <div class="confidence-label">
+                  <span x-text="score.label"></span>
+                  <span class="confidence-value" x-text="score.value + '%'"></span>
+                </div>
+                <div class="confidence-track">
+                  <div class="confidence-fill" :style="{ width: score.value + '%' }"></div>
+                </div>
               </div>
-              <div class="confidence-track">
-                <div class="confidence-fill" :style="{ width: score.value + '%' }"></div>
-              </div>
-            </div>
+            </template>
           </div>
         </div>
       </div>

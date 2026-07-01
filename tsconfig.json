@@ -13,5 +13,9 @@
     "esModuleInterop": true,
     "types": ["bun-types"]
   },
-  "include": ["scripts/**/*.ts"]
+  "include": [
+    "scripts/**/*.ts",
+    "playwright.config.ts",
+    "frontend/test/browser/**/*.ts"
+  ]
 }

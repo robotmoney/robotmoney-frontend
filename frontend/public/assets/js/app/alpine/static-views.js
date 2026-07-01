@@ -7,7 +7,12 @@ function chart(canvas, config) {
 const doughnut = (labels, data, colors) => ({
   type: "doughnut",
   data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: "#0a0f15", borderWidth: 2 }] },
-  options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: { legend: { display: false } },
+  },
 });
 
 export function registerStaticViews(Alpine) {
@@ -47,6 +52,7 @@ export function registerStaticViews(Alpine) {
             options: {
               responsive: true,
               maintainAspectRatio: false,
+              animation: false,
               plugins: { legend: { display: false } },
               scales: { y: { ticks: { callback: (v) => `$${(v / 1000000).toFixed(1)}M` } } },
             },

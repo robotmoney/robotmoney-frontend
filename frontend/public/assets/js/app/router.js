@@ -51,6 +51,10 @@ async function render(pathname) {
     html = await fetchView(NOT_FOUND_VIEW, controller.signal);
   }
   if (controller.signal.aborted) return;
+  // Alpine's MutationObserver sees removals after the DOM operation. Destroy
+  // synchronously first so canvas render loops stop before their nodes detach.
+  window.dispatchEvent(new CustomEvent("rm:before-view-change"));
+  window.Alpine?.destroyTree?.(host);
   host.innerHTML = html;
   window.scrollTo(0, 0);
   syncNav(pathname);
