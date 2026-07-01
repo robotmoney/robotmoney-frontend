@@ -1,6 +1,12 @@
 // Extract stage: the HTTP primitives every source client shares. A hard
 // timeout/abort means an unreachable or slow source fails fast so the caller can
 // fall back to seeded / persisted for that series.
+//
+// When FETCH_CACHE_TTL_MS > 0 (opt-in, demo/dev only — off by default) each GET
+// body is memoized to disk via fetch-cache.ts so repeated live demo boots do not
+// re-pay the heavy cold-fetch cost (EDGAR ~200 requests, big FRED/Shiller CSVs).
+
+import { withFetchCache } from "./fetch-cache.ts";
 
 const UA = "robotmoney-regime/1.0";
 
@@ -10,18 +16,20 @@ export async function fetchJson(
   timeoutMs = 8000,
   headers: Record<string, string> = {},
 ): Promise<unknown> {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const r = await fetch(url, {
-      signal: ac.signal,
-      headers: { "user-agent": UA, accept: "application/json", ...headers },
-    });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText} for ${url}`);
-    return await r.json();
-  } finally {
-    clearTimeout(timer);
-  }
+  return withFetchCache("json", url, async () => {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, {
+        signal: ac.signal,
+        headers: { "user-agent": UA, accept: "application/json", ...headers },
+      });
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText} for ${url}`);
+      return await r.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  });
 }
 
 // Fetch text (CSV / HTML) with the same hard-timeout discipline.
@@ -30,16 +38,18 @@ export async function fetchText(
   timeoutMs = 8000,
   headers: Record<string, string> = {},
 ): Promise<string> {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const r = await fetch(url, {
-      signal: ac.signal,
-      headers: { "user-agent": UA, accept: "text/csv,text/plain,*/*", ...headers },
-    });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText} for ${url}`);
-    return await r.text();
-  } finally {
-    clearTimeout(timer);
-  }
+  return withFetchCache("text", url, async () => {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, {
+        signal: ac.signal,
+        headers: { "user-agent": UA, accept: "text/csv,text/plain,*/*", ...headers },
+      });
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText} for ${url}`);
+      return await r.text();
+    } finally {
+      clearTimeout(timer);
+    }
+  });
 }
