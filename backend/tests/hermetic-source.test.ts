@@ -75,13 +75,32 @@ test("runAnalytics(hermetic) persists regime + research OFFLINE (demo/e2e path)"
   }
 }, { timeout: 120_000 });
 
-test("resolveAnalyticsSource selects hermetic only under ANALYTICS_SOURCE=hermetic", () => {
+// The single source knob (issue #13): ANALYTICS_SOURCE is authoritative.
+//   unset/""/"live" → live (prod default + explicit demo opt-in)
+//   "hermetic"      → hermetic (CI + demo default)
+//   anything else   → REFUSED loudly (fail-closed; no silent live-network fallthrough)
+test("resolveAnalyticsSource: live is default + explicit opt-in, hermetic opt-out, bad value fails closed", () => {
   const prev = process.env.ANALYTICS_SOURCE;
   try {
+    // hermetic opt-out (CI/demo default)
     process.env.ANALYTICS_SOURCE = "hermetic";
     expect(resolveAnalyticsSource()).toBe(hermeticDataSource);
+
+    // unset → production live default
     delete process.env.ANALYTICS_SOURCE;
     expect(resolveAnalyticsSource()).toBe(liveDataSource);
+
+    // empty string → live default (compose passes "" when the var is unset)
+    process.env.ANALYTICS_SOURCE = "";
+    expect(resolveAnalyticsSource()).toBe(liveDataSource);
+
+    // explicit live opt-in (the demo showcase switch)
+    process.env.ANALYTICS_SOURCE = "live";
+    expect(resolveAnalyticsSource()).toBe(liveDataSource);
+
+    // a typo must NOT silently fall through to the live network — it throws.
+    process.env.ANALYTICS_SOURCE = "seeded";
+    expect(() => resolveAnalyticsSource()).toThrow(/invalid ANALYTICS_SOURCE/);
   } finally {
     if (prev === undefined) delete process.env.ANALYTICS_SOURCE;
     else process.env.ANALYTICS_SOURCE = prev;

@@ -40,9 +40,12 @@ export const config = {
   // it is required (every env); if unset, the role is allowed only outside prod
   // (demo/ephemeral convenience), mirroring adminToken.
   analyticsToken: process.env.ANALYTICS_TOKEN || null,
-  // Analytics data source. Default "seeded" (deterministic, hermetic, no keys).
-  // Opt in to REAL keyless live data (DefiLlama/CoinGecko/Yahoo) with PROVIDER=live;
-  // per-series failures still fall back to seeded so a run never breaks.
+  // DEPRECATED for orchestrator source selection — kept only for the retired
+  // FetcherProvider test scaffolding (access/fetcher-provider.ts, tests/providers.test.ts).
+  // The production/demo analytics pipeline (analytics/index.ts runAnalytics) selects its
+  // data source SOLELY via `ANALYTICS_SOURCE` (unset|live → real fetchers, hermetic →
+  // seeded/offline) — see analytics/index.ts::resolveAnalyticsSource. `PROVIDER` no
+  // longer influences the live/demo data path; do NOT use it to opt a demo into real data.
   analyticsProvider: (process.env.PROVIDER === "live" ? "live" : "seeded") as "live" | "seeded",
 };
 

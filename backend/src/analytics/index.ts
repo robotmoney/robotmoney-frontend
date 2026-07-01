@@ -21,6 +21,7 @@ import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { applyTransform } from "./transform/transforms.ts";
 import { buildDateAxis, alignDailyForwardFill, alignDailyZeroFill, mergeSeries } from "./transform/math.ts";
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "./store/raw-history-store.ts";
+import { seedRawIndicatorFloor } from "./store/floor-seed.ts";
 import { saveRegimeSnapshots, type RegimeSnapshotRow } from "./store/regime-store.ts";
 import { persistResearchSignal } from "./store/research-store.ts";
 import { computeChannelDivergence, computeLateCycle } from "./analyze/research-signals.ts";
@@ -30,12 +31,30 @@ import { hermeticDataSource } from "./access/hermetic-source.ts";
 
 const BACKFILL_START = "2018-01-01"; // crypto on-chain coverage starts ~2018 cleanly
 
-// Default source selector. Production = the REAL fetchers (`liveDataSource`). The
-// demo/e2e path opts into a deterministic, offline source with
-// ANALYTICS_SOURCE=hermetic (set in docker-compose.demo.yml for api+worker) so a
-// full run never touches the network. Tests inject their own fixture source.
+// ─── The ONE analytics source knob ──────────────────────────────────────────
+// `ANALYTICS_SOURCE` is the single, authoritative selector the orchestrator (and
+// therefore the worker/api that call runAnalytics) honors:
+//
+//   unset      → live       (production default: real keyless fetchers)
+//   "live"     → live       (explicit opt-in — demos that want REAL numbers)
+//   "hermetic" → hermetic   (deterministic, offline seeded — CI + the demo default)
+//
+// Any other value is REFUSED loudly (fail-closed, mirroring config.ts RM_ENV) so a
+// typo like "seeded"/"prod" can never silently fall through to the live network.
+//
+// The legacy `PROVIDER` / `config.analyticsProvider` knob is NOT consulted here —
+// it only fed the retired FetcherProvider test scaffolding (access/fetcher-provider.ts),
+// never this orchestrator. See config.ts for its deprecation note. `ANALYTICS_SOURCE`
+// is the only knob the live/demo data path reads.
+const VALID_ANALYTICS_SOURCES = ["live", "hermetic"] as const;
+
 export function resolveAnalyticsSource(): AnalyticsDataSource {
-  return process.env.ANALYTICS_SOURCE === "hermetic" ? hermeticDataSource : liveDataSource;
+  const raw = process.env.ANALYTICS_SOURCE;
+  if (raw === undefined || raw === "" || raw === "live") return liveDataSource;
+  if (raw === "hermetic") return hermeticDataSource;
+  throw new Error(
+    `invalid ANALYTICS_SOURCE "${raw}" — expected one of ${VALID_ANALYTICS_SOURCES.join(" | ")} (or unset for the production live default)`,
+  );
 }
 
 const nn = (v: number | undefined): number | null =>
@@ -58,6 +77,14 @@ export async function runAnalytics(
 
   // ── REGIME ────────────────────────────────────────────────────────────────
   if (want("regime")) {
+    // Opt-in cold-DB floor seed (issue #13): on the real-live demo path a fresh DB
+    // would re-fetch years of history (esp. ~200 EDGAR requests) before the first
+    // classify. ANALYTICS_FLOOR_SEED=1 loads the vendored real floor ONCE (idempotent
+    // gap-fill; no-op once warm) so getPersisted() below sees it. Off by default →
+    // CI/hermetic runs never touch it.
+    if (process.env.ANALYTICS_FLOOR_SEED === "1") {
+      await seedRawIndicatorFloor({ logger });
+    }
     const floor = await getPersisted();
     const fetched = await source.fetchIndicators(INDICATORS, logger);
 

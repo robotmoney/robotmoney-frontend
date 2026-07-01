@@ -244,8 +244,36 @@ RM never holds the private key at any point.
 
 ## 7. Hermeticity and cleanup
 
-- Zero external dependencies: the demo must not reach out to FRED, Yahoo, CoinMetrics,
-  or any live API. The `seededProvider` supplies deterministic data.
+- Zero external dependencies (default): the demo must not reach out to FRED, Yahoo,
+  CoinMetrics, or any live API. The hermetic seeded source supplies deterministic
+  data. This is the `bun run demo` default and the ONLY per-PR / CI behaviour.
+
+### 7a. Opt-in real-live-data path (showcase only)
+
+A showcase can run the **real** keyless pipeline end-to-end (live regime + research
+numbers) by exporting env before `bun run demo`. Nothing here is reachable from the
+per-PR CI graph — CI/default stay hermetic and offline.
+
+- **`ANALYTICS_SOURCE`** — the single, authoritative source knob honored by the
+  orchestrator (`analytics/index.ts::resolveAnalyticsSource`, called by api + worker):
+  - unset / `live` → real keyless fetchers (production default; the demo opt-in),
+  - `hermetic` → deterministic offline seeded source (CI + the demo default),
+  - any other value is **refused loudly** (fail-closed — a typo never silently hits
+    the network).
+  The legacy `PROVIDER` / `config.analyticsProvider` knob is **deprecated** for source
+  selection and no longer influences the live/demo path; do not use it to opt in.
+- **`ANALYTICS_FLOOR_SEED=1`** — one-time cold-DB raw floor seed: load a vendored real
+  `raw_indicator_history` floor once so a fresh live boot doesn't re-fetch years of
+  history (esp. ~200 SEC-EDGAR requests) before the first classify. Idempotent
+  (append-only — existing DB rows win on overlap; no-op once warm). `FLOOR_SEED_PATH`
+  overrides the seed file (must be readable inside the container).
+- **`FETCH_CACHE_TTL_MS`** (+ optional `FETCH_CACHE_DIR`) — opt-in on-disk TTL cache
+  for the heavy source GETs so repeated live boots are fast and polite to upstreams.
+  `0` (default) disables it entirely.
+
+Example: `ANALYTICS_SOURCE=live ANALYTICS_FLOOR_SEED=1 FETCH_CACHE_TTL_MS=3600000 bun run demo`.
+The live path preserves the honesty model: empty fetch → persisted real floor; a
+no-history indicator is excluded + logged (never synthetic).
 - Random ports (Postgres, API, MCP) + unique compose project name: concurrent runs do
   not collide. The run identity (project + ports + compose env) is written to
   `.agents/demo-state.json` so the explicit teardown command can find it.
