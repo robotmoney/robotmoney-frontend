@@ -94,19 +94,23 @@ type Phase = "pending" | "building" | "starting" | "healthy" | "failed";
 type StepStatus = "pending" | "running" | "done" | "failed";
 interface ResearchEntry { id: number; kind: string; state: "queued" | "running" | "done"; asof?: string; at?: string; note: string; }
 interface MemberState { stage: "connect" | "fetch" | "thinking" | "reporting" | "waiting" | "done" | "absent"; stance?: string; confidence?: number; }
+// Per-subject committee pane. Each subject (woon, mav, …) runs on its OWN schedule
+// and gets its OWN pane, so the TUI shows them side by side.
+interface CommitteeState {
+  subjectName: string;
+  sessionState: string;
+  sessionId?: number;
+  members: Record<string, MemberState>;
+  publishedCount: number;
+  history: { date: string; synthesis: string }[];
+  nextAt: number; // epoch-ms of this subject's next session; 0 = running now
+}
 interface DemoState {
   services: { name: string; url: string }[];
   containers: { name: string; phase: Phase; detail?: string }[];
   steps: { name: string; status: StepStatus }[];
   research: ResearchEntry[];
-  committee: {
-    sessionState: string;
-    subject: string;
-    sessionId?: number;
-    members: Record<string, MemberState>;
-    publishedCount: number;
-    history: { date: string; subject: string; synthesis: string }[];
-  };
+  committees: Record<string, CommitteeState>; // keyed by subject id; populated once SUBJECTS is imported
   messages: string[];
 }
 const state: DemoState = {
@@ -129,7 +133,7 @@ const state: DemoState = {
     { name: "mcp /health", status: "pending" },
   ],
   research: [],
-  committee: { sessionState: "idle", subject: "", members: {}, publishedCount: 0, history: [] },
+  committees: {},
   messages: [],
 };
 
@@ -486,9 +490,6 @@ function startHealthPolling(): void {
 // --- TUI render -----------------------------------------------------------
 let tui: Tui | undefined;
 let frame = 0;
-// 0 = a committee session is running now (no pending countdown); otherwise the
-// epoch-ms at which the next session fires. Set by the committee loop.
-let nextCommitteeAt = 0;
 let healthChecking = false; // true while a docker-container health poll is in flight
 
 function fmtDuration(ms: number): string {
@@ -529,16 +530,24 @@ function memberGlyph(m: MemberState): string {
 }
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-// Two side-by-side columns for the largest region, joined by a vertical rule.
-function twoCol(left: string[], right: string[], width: number): string[] {
+// Equal-width column width for k side-by-side panes (accounting for " │ " gaps).
+function columnWidth(width: number, k: number): number {
+  return Math.floor((width - 3 * (k - 1)) / k);
+}
+// N side-by-side columns, joined by vertical rules; each cell truncated/padded to
+// an equal width. Rows past a column's content are blank.
+function columns(panes: string[][], width: number): string[] {
+  const k = panes.length;
   const gap = " │ ";
-  const colW = Math.max(12, Math.floor((width - gap.length) / 2));
-  const n = Math.max(left.length, right.length);
+  const colW = Math.max(12, columnWidth(width, k));
+  const n = Math.max(0, ...panes.map((p) => p.length));
   const out: string[] = [];
   for (let i = 0; i < n; i++) {
-    const l = truncate(left[i] ?? "", colW);
-    const r = truncate(right[i] ?? "", colW);
-    out.push(l + " ".repeat(Math.max(0, colW - visibleLen(l))) + gap + r);
+    const cells = panes.map((p) => {
+      const cell = truncate(p[i] ?? "", colW);
+      return cell + " ".repeat(Math.max(0, colW - visibleLen(cell)));
+    });
+    out.push(cells.join(gap));
   }
   return out;
 }
@@ -557,14 +566,12 @@ function renderResearch(height: number): string[] {
   return out;
 }
 
-function renderCommittee(height: number): string[] {
-  const c = state.committee;
-  const nextTxt = nextCommitteeAt > 0
-    ? `next ${fmtDuration(Math.max(0, nextCommitteeAt - Date.now()))}`
-    : "running…";
+function renderCommittee(subjectId: string, height: number): string[] {
+  const c = state.committees[subjectId];
+  if (!c) return [color("2", "(no data)")];
+  const nextTxt = c.nextAt > 0 ? `next ${fmtDuration(Math.max(0, c.nextAt - Date.now()))}` : "running…";
   const out = [
-    color("1", `Committee — ${c.subject || "(idle)"}`) +
-      color("2", `  [${c.sessionState}] pub:${c.publishedCount} · ${nextTxt}`),
+    color("1", c.subjectName) + color("2", `  [${c.sessionState}] pub:${c.publishedCount} · ${nextTxt}`),
   ];
   const ids = Object.keys(c.members);
   for (const id of ids) {
@@ -572,11 +579,11 @@ function renderCommittee(height: number): string[] {
     const stance = m.stance ? color(STAGE_COLOR[m.stage] || "37", ` ${m.stance}${m.confidence != null ? ` c=${m.confidence}` : ""}`) : "";
     out.push(`${memberGlyph(m)} ${cap(id).padEnd(9)} ${m.stage.padEnd(9)}${stance}`);
   }
-  if (ids.length === 0) out.push(color("2", "  (no active session yet…)"));
+  if (ids.length === 0) out.push(color("2", "  (waiting…)"));
   if (c.history.length) {
-    out.push(color("2", "recent syntheses:"));
+    out.push(color("2", "recent:"));
     for (const h of c.history.slice(-Math.max(1, height - ids.length - 3))) {
-      out.push(color("2", `  ${h.date}/${h.subject}: ${h.synthesis}`));
+      out.push(color("2", `  ${h.date}: ${h.synthesis}`));
     }
   }
   return out;
@@ -606,16 +613,30 @@ function render(): string[] {
   for (const m of state.messages) footer.push(color("2", `  ${m}`));
   footer.push(color("2", "  Ctrl-C / SIGTERM tears down the stack (containers + volume)."));
 
-  // Middle region: Research | Committee, splitting the largest remaining space.
+  // Middle region: Research + one pane per committee subject, splitting the largest
+  // remaining space. Side-by-side columns when they fit; stacked when too narrow.
   const midH = Math.max(3, H - lines.length - footer.length - 1);
   lines.push(hr(W));
-  if (W < 72) {
-    // Narrow terminal: stack the panes instead of side-by-side.
-    const half = Math.max(2, Math.floor(midH / 2));
-    for (const l of renderResearch(half)) lines.push(truncate(l, W));
-    for (const l of renderCommittee(midH - half)) lines.push(truncate(l, W));
+  const subjectIds = Object.keys(state.committees);
+  const paneCount = 1 + subjectIds.length;
+  const fits = W >= 72 && columnWidth(W, paneCount) >= 22;
+  if (fits) {
+    const panes = [
+      renderResearch(midH),
+      ...subjectIds.map((id) => renderCommittee(id, midH)),
+    ].map((p) => p.slice(0, midH));
+    for (const l of columns(panes, W)) lines.push(l);
   } else {
-    for (const l of twoCol(renderResearch(midH), renderCommittee(midH), W)) lines.push(l);
+    // Too narrow for columns: stack each pane, dividing the height evenly.
+    const each = Math.max(2, Math.floor(midH / paneCount));
+    const panes = [
+      renderResearch(each),
+      ...subjectIds.map((id) => renderCommittee(id, each)),
+    ];
+    for (let p = 0; p < panes.length; p++) {
+      if (p > 0) lines.push(color("2", "·".repeat(Math.min(W, 24))));
+      for (const l of panes[p].slice(0, each)) lines.push(truncate(l, W));
+    }
   }
 
   return [...lines, ...footer];
@@ -625,21 +646,23 @@ function render(): string[] {
 // Maps the additive runSession/runAgent callback events onto committee state and
 // logs milestones. All member stages here are REAL pipeline events emitted by the
 // agent (connect/fetch/thinking/reporting/done) — no fabricated sub-steps.
-const committeeProgress: SessionProgress = (ev) => {
-  const c = state.committee;
-  if (ev.type === "session") {
-    c.sessionState = ev.state;
-    c.subject = ev.subject;
-    if (ev.sessionId) c.sessionId = ev.sessionId;
-    // Window closed → present members have submitted and now wait for synthesis.
-    if (ev.state === "window_closed") {
-      for (const id of Object.keys(c.members)) if (c.members[id].stage === "done") c.members[id].stage = "waiting";
+function committeeProgress(subjectId: string): SessionProgress {
+  return (ev) => {
+    const c = state.committees[subjectId];
+    if (!c) return;
+    if (ev.type === "session") {
+      c.sessionState = ev.state;
+      if (ev.sessionId) c.sessionId = ev.sessionId;
+      // Window closed → present members have submitted and now wait for synthesis.
+      if (ev.state === "window_closed") {
+        for (const id of Object.keys(c.members)) if (c.members[id].stage === "done") c.members[id].stage = "waiting";
+      }
+      log(`committee ${subjectId}: ${ev.state}`);
+    } else {
+      c.members[ev.memberId] = { stage: ev.stage, stance: ev.stance, confidence: ev.confidence };
     }
-    log(`committee ${ev.subject}: ${ev.state}`);
-  } else {
-    c.members[ev.memberId] = { stage: ev.stage, stance: ev.stance, confidence: ev.confidence };
-  }
-};
+  };
+}
 
 // --- Orchestration --------------------------------------------------------
 async function main(): Promise<void> {
@@ -750,40 +773,60 @@ async function main(): Promise<void> {
   process.env.MCP_URL = `${mcpUrl}/mcp`;
   const e2e = await import(join(repoRoot, "mcp", "src", "e2e.ts"));
 
-  // One-time setup: reset once (clears any prior demo history), seed regime + the
-  // first subject. Subsequent ticks self-seed their (date, subject) via runSession.
+  // One-time setup: reset once (clears any prior demo history) + seed regime.
   await e2e.admin("reset");
   const today = new Date().toISOString().slice(0, 10);
   await e2e.admin("regime", { asof: today });
-  await e2e.admin("subject", e2e.SUBJECTS[0]);
 
-  const COMMITTEE_INTERVAL_MS = 120_000; // ~2 min
-  let tick = 0;
-  async function committeeTick(): Promise<void> {
-    // Rotate (date, subject) each tick so sessions accumulate without colliding
-    // on the UNIQUE(date, subject_id) key.
-    const date = new Date(Date.now() + tick * 86400_000).toISOString().slice(0, 10);
-    const subject = e2e.SUBJECTS[tick % e2e.SUBJECTS.length];
-    log(`committee tick #${tick + 1} → ${date}/${subject.id}`);
-    state.committee.members = {}; // fresh session — members repopulate via callback
-    nextCommitteeAt = 0; // a session is running now — pane shows "running…"
-    try {
-      const res = await e2e.runSession(date, subject, tick + 1, undefined, undefined, tuiActive ? committeeProgress : undefined);
-      state.committee.publishedCount++;
-      const synth: string = res?.pub?.session?.synthesis ?? "";
-      state.committee.history.push({ date, subject: subject.id, synthesis: synth });
-      if (state.committee.history.length > 4) state.committee.history.shift();
-      log(`committee published ${date}/${subject.id}`);
-    } catch (err) {
-      log(`committee session failed (stack still running): ${err instanceof Error ? err.message : err}`);
-    }
-    tick++;
-    nextCommitteeAt = Date.now() + COMMITTEE_INTERVAL_MS; // arm the countdown
-    // Recursive setTimeout (not setInterval): schedule the NEXT tick only after
-    // this one settles, so sessions never overlap even if one runs long.
-    setTimeout(() => { void committeeTick(); }, COMMITTEE_INTERVAL_MS);
+  // Each subject runs on its OWN schedule (own interval + a stagger offset) so woon
+  // and mav appear in separate panes on separate cadences. Execution is SERIALIZED
+  // (run the earliest-due subject, then reschedule just that one) so two committee
+  // sessions never run concurrently and race on the shared member roster. runSession
+  // with sessionIndex>0 self-seeds the (subject, regime) for its date, so no subject
+  // needs pre-seeding here.
+  const COMMITTEE_INTERVAL_MS = 120_000; // ~2 min per subject
+  interface SubjectSchedule { subject: { id: string; name: string }; intervalMs: number; nextAt: number; runs: number; }
+  const schedules: SubjectSchedule[] = e2e.SUBJECTS.map((s: { id: string; name: string }, i: number) => ({
+    subject: s, intervalMs: COMMITTEE_INTERVAL_MS, nextAt: Date.now() + i * 60_000, runs: 0,
+  }));
+  // Populate the per-subject panes and seed their countdowns.
+  for (const sch of schedules) {
+    state.committees[sch.subject.id] = {
+      subjectName: sch.subject.name, sessionState: "idle", members: {},
+      publishedCount: 0, history: [], nextAt: sch.nextAt,
+    };
   }
-  void committeeTick(); // immediate first session
+
+  async function committeeDriver(): Promise<void> {
+    for (;;) {
+      // Pick the earliest-due subject and wait until its slot.
+      const due = schedules.reduce((a, b) => (b.nextAt < a.nextAt ? b : a));
+      const wait = due.nextAt - Date.now();
+      if (wait > 0) await sleep(wait);
+      const subject = due.subject;
+      const c = state.committees[subject.id];
+      // Rotate the date per THIS subject's own run count so sessions accumulate
+      // without colliding on UNIQUE(date, subject_id).
+      const date = new Date(Date.now() + due.runs * 86400_000).toISOString().slice(0, 10);
+      log(`committee → ${date}/${subject.id}`);
+      c.members = {};
+      c.nextAt = 0; // running now → pane shows "running…"
+      try {
+        const res = await e2e.runSession(date, subject, due.runs + 1, undefined, undefined, tuiActive ? committeeProgress(subject.id) : undefined);
+        c.publishedCount++;
+        const synth: string = res?.pub?.session?.synthesis ?? "";
+        c.history.push({ date, synthesis: synth });
+        if (c.history.length > 4) c.history.shift();
+        log(`committee published ${date}/${subject.id}`);
+      } catch (err) {
+        log(`committee session failed (stack still running): ${err instanceof Error ? err.message : err}`);
+      }
+      due.runs++;
+      due.nextAt = Date.now() + due.intervalMs;
+      c.nextAt = due.nextAt;
+    }
+  }
+  void committeeDriver();
 
   await new Promise<never>(() => { /* run forever; Ctrl-C/SIGTERM (or `demo:down`) stops the stack */ });
 }
