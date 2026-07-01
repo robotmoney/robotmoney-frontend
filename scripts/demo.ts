@@ -4,8 +4,6 @@ import { mkdirSync, writeFileSync, openSync, writeSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, visibleLen, type Tui } from "./lib/tui.ts";
-import type { SessionProgress } from "../mcp/src/e2e.ts";
-import type { ExistingCredentials } from "../mcp/src/agent.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -95,6 +93,16 @@ type Phase = "pending" | "building" | "starting" | "healthy" | "failed";
 type StepStatus = "pending" | "running" | "done" | "failed";
 interface ResearchEntry { id: number; kind: string; state: "queued" | "running" | "done"; asof?: string; at?: string; note: string; }
 interface MemberState { stage: "connect" | "fetch" | "thinking" | "reporting" | "waiting" | "done" | "absent"; stance?: string; confidence?: number; }
+// Local structural mirrors of the mcp types (e2e.ts SessionProgress / agent.ts
+// ExistingCredentials). We deliberately do NOT `import type` them across the package
+// boundary: demo.ts loads e2e via a dynamic import() (untyped), and a static type
+// import from ../mcp/src drags the MCP SDK into the ROOT tsc program (no mcp deps) →
+// TS2307 under `bun run typecheck`. Local aliases keep our annotations decoupled.
+type SessionProgress = (ev:
+  | { type: "session"; state: string; sessionId?: number; subject: string; date?: string }
+  | { type: "member"; memberId: string; stage: MemberState["stage"]; stance?: string; confidence?: number }
+) => void;
+type ExistingCredentials = { token: string; privateKey: CryptoKey };
 // Per-subject committee pane. Each subject (woon, mav, …) runs on its OWN schedule
 // and gets its OWN pane, so the TUI shows them side by side.
 interface CommitteeState {
