@@ -29,13 +29,47 @@ async function freePorts(n: number): Promise<number[]> {
   return ports;
 }
 
+// --- Pinned (fixed) ports -------------------------------------------------
+// A host operator can PIN a host port via env (WEB_PORT / MCP_PORT / POSTGRES_PORT)
+// instead of taking a random free one — useful when the host's root cloudflared
+// config routes the robotmoney.net origin to a STABLE demo port. Returns undefined
+// when unset/empty (→ a random free port is drawn instead). Only one demo can hold a
+// given fixed port at a time.
+function parsePort(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(`${name}=${raw} is not a valid TCP port (1-65535)`);
+  }
+  return n;
+}
+
 // --- Run config -----------------------------------------------------------
 // Random host ports for api, mcp AND postgres — a standing local demo must not
 // collide with a postgres already bound to :5432 on the dev box (api/worker/mcp
 // reach postgres over the compose network by service name, so the published host
 // port is only for external tooling; it just needs to be free).
-const [apiPort, mcpPort, pgPort] = await freePorts(3);
-const project = `rmdemo_${crypto.randomUUID().slice(0, 8)}`;
+//
+// Any of the three host ports can be PINNED via env (see parsePort). We size the
+// random pool to exactly the number of UNSET ports and shift() them out in a fixed
+// order, so a pinned port keeps its env value and every unset one still gets a random
+// free port. Nothing pinned ⇒ all three random, exactly as before.
+const fixedApiPort = parsePort("WEB_PORT");
+const fixedMcpPort = parsePort("MCP_PORT");
+const fixedPgPort = parsePort("POSTGRES_PORT");
+const pool = await freePorts(
+  (fixedApiPort === undefined ? 1 : 0) +
+    (fixedMcpPort === undefined ? 1 : 0) +
+    (fixedPgPort === undefined ? 1 : 0),
+);
+const apiPort = fixedApiPort ?? pool.shift()!;
+const mcpPort = fixedMcpPort ?? pool.shift()!;
+const pgPort = fixedPgPort ?? pool.shift()!;
+// Pin the compose project name when DEMO_PROJECT is set (re-runs reuse/tear down the
+// same containers); otherwise a fresh random project per run. dockerEnv sets
+// DEMO_PROJECT=project either way, so the compose label stays consistent.
+const project = process.env.DEMO_PROJECT?.trim() || `rmdemo_${crypto.randomUUID().slice(0, 8)}`;
 const DB_USER = "robotmoney";
 const DB_PASSWORD = "robotmoney";
 const DB_NAME = "robotmoney";
@@ -219,7 +253,15 @@ function unpatchConsole(): void {
   console.log = origConsole.log; console.error = origConsole.error; console.warn = origConsole.warn;
 }
 
-log(`project=${project}  api=:${apiPort}  mcp=:${mcpPort}  pg=:${pgPort}`);
+// Annotate pinned ports/project with "(fixed)" so the operator can see at a glance
+// which host ports came from env (the stable-cloudflared-origin path) vs random.
+const fx = (isFixed: boolean) => (isFixed ? " (fixed)" : "");
+log(
+  `project=${project}${fx(Boolean(process.env.DEMO_PROJECT?.trim()))}  ` +
+    `api=:${apiPort}${fx(fixedApiPort !== undefined)}  ` +
+    `mcp=:${mcpPort}${fx(fixedMcpPort !== undefined)}  ` +
+    `pg=:${pgPort}${fx(fixedPgPort !== undefined)}`,
+);
 
 // --- Container lifecycle --------------------------------------------------
 function dockerCompose(args: string[], check = true): Bun.SyncSubprocess {

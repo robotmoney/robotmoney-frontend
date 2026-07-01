@@ -85,6 +85,24 @@ The printed URLs use that run's random API/MCP ports, e.g.:
 
 No reverse proxy: the `api` process serves both the API and `frontend/public`.
 
+### Fixed ports (stable cloudflared origin)
+
+By default the standing demo picks three **random free** host ports. Set any of
+`WEB_PORT` / `MCP_PORT` / `POSTGRES_PORT` to **pin** that host port instead — useful
+when the host's root `cloudflared` config routes the `robotmoney.net` origin to a
+stable demo port. Add `DEMO_PROJECT` to pin the compose project name so re-runs
+reuse / tear down the same containers:
+
+```bash
+DEMO_PROJECT=rmdemo WEB_PORT=48787 MCP_PORT=48788 bun run demo
+```
+
+- Each var can be pinned independently; any unset one still gets a random free port.
+- The startup log annotates each pinned port/project with `(fixed)`.
+- Only **one** demo can hold a given fixed port at a time — start a second pinned
+  demo on the same port and Docker will refuse the bind. Use `bun run demo:down`
+  (with the same `DEMO_PROJECT`) to release it.
+
 ## Useful commands
 
 ```bash

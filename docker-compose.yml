@@ -40,7 +40,7 @@ services:
       # Serve the static frontend from this same process — no Caddy/nginx.
       STATIC_DIR: /srv/frontend
     ports:
-      - "${WEB_PORT:-8080}:8787"
+      - "${WEB_PORT:-48787}:8787"
     volumes:
       - ./frontend/public:/srv/frontend:ro
     depends_on:
@@ -71,7 +71,7 @@ services:
       BACKEND_URL: http://api:8787
       MCP_PORT: "8788"
     ports:
-      - "${MCP_PORT:-8788}:8788"
+      - "${MCP_PORT:-48788}:8788"
     depends_on:
       - api
     restart: unless-stopped
