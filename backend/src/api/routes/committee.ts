@@ -7,7 +7,15 @@ import * as ic from "../../committee/domain.ts";
 import { config } from "../../config.ts";
 import { isPlausibleKey } from "../../lib/keys.ts";
 import { runAnalytics } from "../../analytics/index.ts";
-import { sql } from "../../db/client.ts";
+import { jsonValue, sql } from "../../db/client.ts";
+import {
+  parseApply,
+  parsePositiveNumber,
+  parseSigningDraft,
+  parseSubmission,
+  readJsonObject,
+  requiredString,
+} from "../validation.ts";
 
 function bearer(req: Request): string | null {
   const h = req.headers.get("Authorization") ?? "";
@@ -53,7 +61,8 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
 
   // get_signing_payload: return the exact canonical bytes the member must sign.
   if (m === "POST" && p === "/api/committee/signing-payload") {
-    const sub = (await req.json().catch(() => ({}))) as any;
+    const sub = parseSigningDraft(await readJsonObject(req));
+    if (!sub) return { status: 400, body: { error: "invalid signing draft" } };
     return { status: 200, body: { canonical: canonicalizeSubmission(sub) } };
   }
 
@@ -61,9 +70,15 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   if (m === "POST" && p === "/api/committee/memos") {
     const token = bearer(req);
     if (!token) return { status: 401, body: { error: "missing bearer token" } };
-    const b = (await req.json().catch(() => null)) as any;
-    if (!b?.sessionId || !b?.body) return { status: 400, body: { error: "sessionId and body required" } };
-    const res = await ic.postMemo(token, { sessionId: String(b.sessionId), title: b.title, body: b.body });
+    const b = await readJsonObject(req);
+    const sessionId = b && requiredString(b, "sessionId", 100);
+    const body = b && requiredString(b, "body", 50_000);
+    if (!b || !sessionId || !body) return { status: 400, body: { error: "sessionId and body required" } };
+    const res = await ic.postMemo(token, {
+      sessionId,
+      title: typeof b.title === "string" ? b.title.slice(0, 300) : undefined,
+      body,
+    });
     return { status: res.status, body: res };
   }
   if (m === "GET" && /^\/api\/committee\/memos\/\d+$/.test(p)) {
@@ -107,8 +122,8 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   // submit until an admin activates it. Re-applying refreshes the pending
   // record but NEVER overwrites an already-active member's key (that's admin).
   if (m === "POST" && p === "/api/committee/apply") {
-    const b = (await req.json().catch(() => null)) as any;
-    if (!b?.memberId || !b?.name || !b?.publicKey) return { status: 400, body: { error: "memberId, name, publicKey required" } };
+    const b = parseApply(await readJsonObject(req));
+    if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
     if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
     const res = await ic.applyMember(b);
     return { status: res.status, body: res };
@@ -117,8 +132,9 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   // Role-gated regime write: ONLY the analytics-provider may persist the regime.
   if (m === "POST" && p === "/api/committee/regime") {
     if (!analyticsProvider()) return { status: 403, body: { error: "analytics-provider role required" } };
-    const b = (await req.json().catch(() => ({}))) as any;
-    const tools = Object.keys(await runAnalytics(b.asof ?? new Date().toISOString().slice(0, 10)));
+    const b = await readJsonObject(req) ?? {};
+    const asof = typeof b.asof === "string" ? b.asof : new Date().toISOString().slice(0, 10);
+    const tools = Object.keys(await runAnalytics(asof));
     return { status: 200, body: { ok: true, tools } };
   }
 
@@ -127,8 +143,8 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   // harness. Privileged because it can rotate/replace an existing member's key.
   if (m === "POST" && p === "/api/committee/register") {
     if (!privileged()) return { status: 403, body: { error: "onboarding requires admin authorization" } };
-    const b = (await req.json().catch(() => null)) as any;
-    if (!b?.memberId || !b?.name || !b?.publicKey) return { status: 400, body: { error: "memberId, name, publicKey required" } };
+    const b = parseApply(await readJsonObject(req));
+    if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
     if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
     return { status: 201, body: await ic.registerMember(b) };
   }
@@ -137,21 +153,41 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   if (m === "POST" && p.startsWith("/api/committee/admin/")) {
     if (!privileged()) return { status: 403, body: { error: "admin authorization required" } };
     const action = p.split("/").pop();
-    const b = (await req.json().catch(() => ({}))) as any;
+    const b = await readJsonObject(req) ?? {};
     switch (action) {
       case "activate": {
-        if (!b?.memberId) return { status: 400, body: { error: "memberId required" } };
-        const res = await ic.activateMember(b.memberId);
+        const memberId = requiredString(b, "memberId", 100);
+        if (!memberId) return { status: 400, body: { error: "memberId required" } };
+        const res = await ic.activateMember(memberId);
         return { status: res.status, body: res };
       }
       case "reset": return { status: 200, body: await ic.resetSessions() };
-      case "regime": return { status: 200, body: { tools: Object.keys(await runAnalytics(b.asof ?? new Date().toISOString().slice(0, 10))) } };
-      case "subject": return { status: 200, body: await ic.ensureSubject(b.id, b.name) };
-      case "open": return { status: 200, body: await ic.openSession(b.date, b.subjectId) };
-      case "brief": return { status: 200, body: await ic.publishBrief(b.sessionId, b.windowMinutes ?? 60) };
-      case "close": return { status: 200, body: await ic.closeWindow(b.sessionId) };
-      case "aggregate": return { status: 200, body: await ic.aggregateSession(b.sessionId) };
-      case "publish": return { status: 200, body: await ic.publishSession(b.sessionId) };
+      case "regime": return { status: 200, body: { tools: Object.keys(await runAnalytics(typeof b.asof === "string" ? b.asof : new Date().toISOString().slice(0, 10))) } };
+      case "subject": {
+        const id = requiredString(b, "id", 100);
+        const name = requiredString(b, "name", 200);
+        return id && name
+          ? { status: 200, body: await ic.ensureSubject(id, name) }
+          : { status: 400, body: { error: "id and name required" } };
+      }
+      case "open": {
+        const date = requiredString(b, "date", 10);
+        const subjectId = requiredString(b, "subjectId", 100);
+        return date && subjectId
+          ? { status: 200, body: await ic.openSession(date, subjectId) }
+          : { status: 400, body: { error: "date and subjectId required" } };
+      }
+      case "brief":
+      case "close":
+      case "aggregate":
+      case "publish": {
+        const sessionId = requiredString(b, "sessionId", 100);
+        if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
+        if (action === "brief") return { status: 200, body: await ic.publishBrief(sessionId, parsePositiveNumber(b.windowMinutes, 60)) };
+        if (action === "close") return { status: 200, body: await ic.closeWindow(sessionId) };
+        if (action === "aggregate") return { status: 200, body: await ic.aggregateSession(sessionId) };
+        return { status: 200, body: await ic.publishSession(sessionId) };
+      }
       case "enqueue-job": {
         const actionMap: Record<string, string> = {
           open_session: "committee.open_session",
@@ -160,11 +196,12 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
           aggregate: "committee.aggregate",
           publish: "committee.publish",
         };
-        const kind = actionMap[b.action as string];
+        const queueAction = requiredString(b, "action", 100);
+        const kind = queueAction ? actionMap[queueAction] : undefined;
         if (!kind) return { status: 400, body: { error: `unknown action: ${b.action}` } };
         const { action: _, ...payload } = b;
         const rows = await sql`
-          INSERT INTO jobs (kind, payload) VALUES (${kind}, ${sql.json(payload)})
+          INSERT INTO jobs (kind, payload) VALUES (${kind}, ${sql.json(jsonValue(payload))})
           RETURNING id, kind`;
         return { status: 200, body: { jobId: rows[0].id, kind: rows[0].kind } };
       }
@@ -176,8 +213,8 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   if (m === "POST" && p === "/api/committee/submit") {
     const token = bearer(req);
     if (!token) return { status: 401, body: { error: "missing bearer token" } };
-    const sub = (await req.json().catch(() => null)) as ic.SubmissionInput | null;
-    if (!sub) return { status: 400, body: { error: "invalid JSON body" } };
+    const sub = parseSubmission(await readJsonObject(req));
+    if (!sub) return { status: 400, body: { error: "invalid submission" } };
     const res = await ic.submitRecommendation(token, sub);
     return { status: res.status, body: res };
   }

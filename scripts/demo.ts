@@ -25,7 +25,7 @@ async function freePorts(n: number): Promise<number[]> {
 }
 
 // --- Run config -----------------------------------------------------------
-const [apiPort, mcpPort] = await freePorts(2);
+const [postgresPort, apiPort, mcpPort] = await freePorts(3);
 const project = `rmdemo_${crypto.randomUUID().slice(0, 8)}`;
 const DB_USER = "robotmoney";
 const DB_PASSWORD = "robotmoney";
@@ -49,12 +49,13 @@ const dockerEnv: Record<string, string> = {
   DATABASE_URL: databaseUrl,
   WEB_PORT: String(apiPort),
   MCP_PORT: String(mcpPort),
+  POSTGRES_PORT: String(postgresPort),
   POSTGRES_USER: DB_USER,
   POSTGRES_PASSWORD: DB_PASSWORD,
   POSTGRES_DB: DB_NAME,
 } as Record<string, string>;
 
-console.log(`[demo] project=${project}  api=:${apiPort}  mcp=:${mcpPort}`);
+console.log(`[demo] project=${project}  postgres=:${postgresPort}  api=:${apiPort}  mcp=:${mcpPort}`);
 
 // --- Container lifecycle --------------------------------------------------
 function dockerCompose(args: string[], check = true): Bun.SyncSubprocess {
@@ -159,22 +160,29 @@ async function main(): Promise<void> {
   await waitForHttp(`${mcpUrl}/health`);
   console.log("[demo] api + mcp healthy");
 
-  console.log("\n[demo] running committee session…");
-  await run(["bun", "run", "src/e2e.ts"], join(repoRoot, "mcp"),
-    { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp` } as Record<string, string>, "committee session");
-
-  console.log("[demo] running frontend checks…");
-  await run(["bun", "run", "scripts/demo-frontend-check.ts"], repoRoot,
-    { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "frontend checks");
-
   const researchKeys = ["channel-divergence", "late-cycle-signals"];
+
   if (process.env.CI) {
+    // CI: run checks then tear down.
+    console.log("\n[demo] running committee session…");
+    await run(["bun", "run", "src/e2e.ts"], join(repoRoot, "mcp"),
+      { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp` } as Record<string, string>, "committee session");
+
+    console.log("[demo] running frontend checks…");
+    await run(["bun", "run", "scripts/demo-frontend-check.ts"], repoRoot,
+      { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "frontend checks");
+
+    console.log("[demo] running browser checks…");
+    await run(["bun", "run", "test:browser"], repoRoot,
+      { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "browser checks");
+
     console.log("\n[demo] CI mode — all checks passed, tearing down…");
     cleanup();
     process.exit(0);
   }
 
-  console.log("\n\u2500\u2500 Robot Money demo \u2500\u2500".padEnd(68, "\u2500"));
+  // Local: print URLs and keep the environment up first, then run checks non-fatally.
+  console.log("\n── Robot Money demo ──".padEnd(68, "─"));
   console.log(`  Site:       ${backendUrl}/`);
   console.log(`  Regime:     ${backendUrl}/regime`);
   console.log(`  Committee:  ${backendUrl}/committee`);
@@ -182,6 +190,23 @@ async function main(): Promise<void> {
   console.log(`  MCP:        ${mcpUrl}/health`);
   console.log("");
   console.log(`  Press Ctrl-C to shut down.`);
+  console.log("");
+
+  // Run checks after the environment is confirmed up — failures log but never tear down.
+  (async () => {
+    try {
+      console.log("[demo] running committee session…");
+      await run(["bun", "run", "src/e2e.ts"], join(repoRoot, "mcp"),
+        { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp` } as Record<string, string>, "committee session");
+      console.log("[demo] running frontend checks…");
+      await run(["bun", "run", "scripts/demo-frontend-check.ts"], repoRoot,
+        { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "frontend checks");
+      console.log("[demo] all checks passed — environment still running, Ctrl-C to stop.");
+    } catch (err) {
+      console.error("[demo] checks failed (environment still running):", err instanceof Error ? err.message : err);
+    }
+  })();
+
   await new Promise<never>(() => { /* run until a signal triggers cleanup */ });
 }
 

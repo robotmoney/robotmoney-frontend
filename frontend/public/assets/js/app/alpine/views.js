@@ -6,6 +6,7 @@ import { api, ROUTES, path } from "../lib/api.js";
 export function registerViews(Alpine) {
   // ── Regime classification ────────────────────────────────────────────────
   Alpine.data("regimeView", () => ({
+    _chart: null,
     loading: true,
     error: null,
     latest: null,
@@ -25,7 +26,8 @@ export function registerViews(Alpine) {
     drawChart() {
       const canvas = this.$refs.chart;
       if (!canvas || !window.Chart || !this.history.length) return;
-      new window.Chart(canvas, {
+      this._chart?.destroy();
+      this._chart = new window.Chart(canvas, {
         type: "line",
         data: {
           labels: this.history.map((s) => s.date),
@@ -47,6 +49,7 @@ export function registerViews(Alpine) {
         },
       });
     },
+    destroy() { this._chart?.destroy(); this._chart = null; },
     pct(x) { return x == null ? "—" : Math.round(x * 100) + "%"; },
     fmtWeight(w) { return w == null ? "—" : Math.round(w * 100) + "%"; },
     regimeClass(r) { return r ? `regime-pill regime-pill--${r}` : "regime-pill"; },
@@ -71,6 +74,7 @@ export function registerViews(Alpine) {
 
   // ── Research signal (channel-divergence / late-cycle-signals) ─────────────
   Alpine.data("researchView", (key) => ({
+    _chart: null,
     key,
     loading: true,
     error: null,
@@ -120,7 +124,8 @@ export function registerViews(Alpine) {
       const canvas = this.$refs.chart;
       const pts = this.payload?.series?.points ?? [];
       if (!canvas || !window.Chart || !pts.length) return;
-      new window.Chart(canvas, {
+      this._chart?.destroy();
+      this._chart = new window.Chart(canvas, {
         type: "line",
         data: {
           labels: pts.map((p) => p.date),
@@ -135,6 +140,7 @@ export function registerViews(Alpine) {
         },
       });
     },
+    destroy() { this._chart?.destroy(); this._chart = null; },
     pct(x) { return x == null ? "—" : Math.round(x * 100) + "%"; },
     readClass(read) {
       const r = String(read || "");
@@ -142,6 +148,84 @@ export function registerViews(Alpine) {
       if (r.includes("break") || r.includes("saturated")) return "read read--warn";
       return "read read--mid";
     },
+  }));
+
+  // ── Wallet performance (allocation2) ──────────────────────────────────────
+  // Static baked series (approximated from the unified-wallet-history snapshots,
+  // the same numbers the CSS bars used) drawn as Chart.js stacked areas to match
+  // the original. No fetch; draws once on init. Stacks bottom→top:
+  // Stable, Protocol, Agent, Stocks.
+  Alpine.data("walletPerfView", () => ({
+    _charts: [],
+    labels: ["Mar 18", "Mar 28", "Apr 17", "Apr 27", "May 17", "Jun 7", "Jun 17", "Jun 26"],
+    aumSeries: [
+      { label: "Stable (USDC, ZYFAI-SS1)", color: "#10b981", data: [0, 6460, 10020, 8720, 13080, 14530, 16340, 13970] },
+      { label: "Protocol (WETH, ETH)", color: "#e8a640", data: [21790, 22240, 27570, 20340, 27890, 29960, 29960, 24270] },
+      { label: "Agent (ROBOTMONEY, BNKR)", color: "#4488ff", data: [50850, 43040, 45950, 29060, 41840, 40860, 39040, 30890] },
+      { label: "Stocks (SP500)", color: "#8b5cf6", data: [0, 0, 0, 0, 4360, 5450, 5450, 4410] },
+    ],
+    pctSeries: [
+      { label: "Stable (USDC, ZYFAI-SS1)", color: "#10b981", data: [0, 9, 12, 15, 15, 16, 18, 19] },
+      { label: "Protocol (WETH, ETH)", color: "#e8a640", data: [30, 31, 33, 35, 32, 33, 33, 33] },
+      { label: "Agent (ROBOTMONEY, BNKR)", color: "#4488ff", data: [70, 60, 55, 50, 48, 45, 43, 42] },
+      { label: "Stocks (SP500)", color: "#8b5cf6", data: [0, 0, 0, 0, 5, 6, 6, 6] },
+    ],
+    init() { this.$nextTick(() => this.draw()); },
+    _rgba(hex, a) {
+      const n = parseInt(hex.slice(1), 16);
+      return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+    },
+    _chart(canvas, series, max, tick) {
+      if (!canvas || !window.Chart) return;
+      const instance = new window.Chart(canvas, {
+        type: "line",
+        data: {
+          labels: this.labels,
+          datasets: series.map((s) => ({
+            label: s.label, data: s.data, borderColor: s.color,
+            backgroundColor: this._rgba(s.color, 0.45),
+            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+          })),
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: { mode: "index", intersect: false },
+          scales: {
+            y: { stacked: true, beginAtZero: true, max, grid: { color: "rgba(255,255,255,0.06)" }, ticks: { color: "#7e889e", callback: tick } },
+            x: { grid: { display: false }, ticks: { color: "#4a5268", maxTicksLimit: 8 } },
+          },
+          plugins: { legend: { display: false } },
+        },
+      });
+      this._charts.push(instance);
+    },
+    draw() {
+      this._chart(this.$refs.aum, this.aumSeries, 91000, (v) => "$" + Math.round(v / 1000) + "k");
+      this._chart(this.$refs.alloc, this.pctSeries, 100, (v) => v + "%");
+    },
+    destroy() { this._charts.forEach((item) => item.destroy()); this._charts = []; },
+  }));
+
+  // ── Tokenomics fee distribution (pie) ─────────────────────────────────────
+  // Static Chart.js pie matching the original FeePieChart. The custom legend
+  // below the chart stays in the markup, so the chart's own legend is off.
+  Alpine.data("feeChart", () => ({
+    _chart: null,
+    init() { this.$nextTick(() => this.draw()); },
+    draw() {
+      const canvas = this.$refs.fee;
+      if (!canvas || !window.Chart) return;
+      this._chart?.destroy();
+      this._chart = new window.Chart(canvas, {
+        type: "pie",
+        data: {
+          labels: ["Protocol (57%)", "Bankr (40%)", "Clanker (3%)"],
+          datasets: [{ data: [57, 40, 3], backgroundColor: ["#10b981", "#f59e0b", "#8b5cf6"], borderColor: "#0a0a0f", borderWidth: 2 }],
+        },
+        options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } } },
+      });
+    },
+    destroy() { this._chart?.destroy(); this._chart = null; },
   }));
 
   // ── Investment Committee ──────────────────────────────────────────────────
@@ -157,10 +241,10 @@ export function registerViews(Alpine) {
         const published = (sessions || []).filter((s) => s.state === "published");
         const pick = published[0] ?? (sessions || [])[0];
         if (!pick) { this.loading = false; return; }
-        const detail = await api.get(path(ROUTES.committee.session, { date: pick.date, subject: pick.subject_id }));
+        const detail = await api.get(path(ROUTES.committee.session, { date: pick.date, subject: pick.subjectId }));
         this.session = detail.session;
         this.takes = detail.takes || [];
-        this.aggregate = detail.session?.committee_recommendation ?? null;
+        this.aggregate = detail.session?.committeeRecommendation ?? null;
         this.loading = false;
       } catch (e) {
         this.error = e.message;

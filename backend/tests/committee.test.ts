@@ -46,6 +46,11 @@ test("submit: signature verify/reject, window, duplicate", async () => {
   const ok = await ic.submitRecommendation(m.token, await signed("n1"));
   expect(ok.status).toBe(201);
   expect(ok.verified).toBe(true);
+  const detail = await ic.getSession(date, subj);
+  expect(detail?.session.subjectId).toBe(subj);
+  expect(detail?.session).not.toHaveProperty("subject_id");
+  expect(detail?.takes[0].memberId).toBe(m.id);
+  expect(detail?.takes[0]).not.toHaveProperty("member_id");
 
   // same member, same session → 409 (one take per member)
   expect((await ic.submitRecommendation(m.token, await signed("n2"))).status).toBe(409);

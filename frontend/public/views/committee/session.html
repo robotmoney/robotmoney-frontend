@@ -1,0 +1,527 @@
+<!-- Committee Session Detail Page
+     Dynamic route: /committee/[date]/[subject]
+     Ported from robotmoney-site/src/app/committee/[date]/[subject]/page.tsx
+-->
+
+<section class="section section--ic-session" x-data="icSessionDetail()">
+  <div class="container">
+    <!-- Back link -->
+    <a href="/committee" class="breadcrumb">← Back to Committee</a>
+
+    <!-- Header -->
+    <div class="session-header">
+      <div class="session-meta">
+        <h1 class="session-title" x-text="title"></h1>
+        <div class="session-date">
+          <span class="badge" x-text="formatDate(date)"></span>
+          <span class="badge" :class="status" x-text="status"></span>
+        </div>
+      </div>
+      <div class="session-stats">
+        <div class="stat"><div class="stat-label">Members</div><div class="stat-value" x-text="memberCount"></div></div>
+        <div class="stat"><div class="stat-label">Submissions</div><div class="stat-value" x-text="submissionCount"></div></div>
+        <div class="stat"><div class="stat-label">Status</div><div class="stat-value" x-text="statusLabel"></div></div>
+      </div>
+    </div>
+
+    <!-- Session Timeline -->
+    <div class="session-timeline">
+      <h3 class="section-subtitle">Session Timeline</h3>
+      <div class="timeline">
+        <div class="timeline-event" :class="{ completed: phases.includes('published') }">
+          <div class="timeline-dot"></div>
+          <div class="timeline-content">
+            <div class="timeline-label">Brief Published</div>
+            <div class="timeline-date" x-text="phaseDate('brief')"></div>
+          </div>
+        </div>
+        <div class="timeline-event" :class="{ completed: phases.includes('open') }">
+          <div class="timeline-dot"></div>
+          <div class="timeline-content">
+            <div class="timeline-label">Submissions Open</div>
+            <div class="timeline-date" x-text="phaseDate('open')"></div>
+          </div>
+        </div>
+        <div class="timeline-event" :class="{ completed: phases.includes('closed') }">
+          <div class="timeline-dot"></div>
+          <div class="timeline-content">
+            <div class="timeline-label">Submissions Closed</div>
+            <div class="timeline-date" x-text="phaseDate('closed')"></div>
+          </div>
+        </div>
+        <div class="timeline-event" :class="{ completed: phases.includes('aggregated') }">
+          <div class="timeline-dot"></div>
+          <div class="timeline-content">
+            <div class="timeline-label">Results Aggregated</div>
+            <div class="timeline-date" x-text="phaseDate('aggregated')"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Brief -->
+    <div class="session-brief">
+      <h3 class="section-subtitle">Brief</h3>
+      <pre class="brief-content" x-text="brief"></pre>
+    </div>
+
+    <!-- Members -->
+    <div class="session-members">
+      <h3 class="section-subtitle">Committee Members</h3>
+      <div class="members-grid">
+        <template x-for="member in members" :key="member.id">
+          <a :href="'/committee/members/' + member.id" class="member-card">
+            <img :src="member.avatar" :alt="member.name" class="member-avatar" />
+            <h4 class="member-name" x-text="member.name"></h4>
+            <p class="member-role" x-text="member.role"></p>
+            <div class="member-status" :class="member.hasSubmitted ? 'submitted' : 'pending'">
+              <span x-text="member.hasSubmitted ? '✓ Submitted' : '⏳ Pending'"></span>
+            </div>
+          </a>
+        </template>
+      </div>
+    </div>
+
+    <!-- Results Summary -->
+    <div class="session-results">
+      <h3 class="section-subtitle">Aggregate Results</h3>
+      <div class="results-grid">
+        <div class="result-card">
+          <h4 class="result-title">Recommended Allocation</h4>
+          <div class="result-content">
+            <canvas id="allocationChart" x-ref="allocationChart"></canvas>
+          </div>
+          <div class="result-legend">
+            <template x-for="item in allocation" :key="item.label">
+              <div class="legend-item">
+                <span class="legend-dot" :style="{ background: item.color }"></span>
+                <span x-text="item.label + ': ' + item.value"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <div class="result-card">
+          <h4 class="result-title">Confidence Scores</h4>
+          <div class="result-content">
+            <template x-for="score in confidence" :key="score.label">
+              <div class="confidence-bar">
+                <div class="confidence-label">
+                  <span x-text="score.label"></span>
+                  <span class="confidence-value" x-text="score.value + '%'"></span>
+                </div>
+                <div class="confidence-track">
+                  <div class="confidence-fill" :style="{ width: score.value + '%' }"></div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Submissions Table -->
+    <div class="session-submissions">
+      <h3 class="section-subtitle">Member Submissions</h3>
+      <div class="table-wrapper">
+        <table class="submissions-table">
+          <thead>
+            <tr>
+              <th>Member</th>
+              <th class="align-center">Allocation A</th>
+              <th class="align-center">Allocation B</th>
+              <th class="align-center">Allocation C</th>
+              <th class="align-right">Confidence</th>
+              <th>Comment</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="submission in submissions" :key="submission.id">
+              <tr>
+                <td><strong x-text="submission.memberName"></strong></td>
+                <td class="align-center" x-text="submission.allocationA + '%'"></td>
+                <td class="align-center" x-text="submission.allocationB + '%'"></td>
+                <td class="align-center" x-text="submission.allocationC + '%'"></td>
+                <td class="align-right"><span x-text="submission.confidence + '%'"></span></td>
+                <td><span x-text="submission.comment || '—'"></span></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section__footer">
+      <p class="section__note">
+        Data for <strong x-text="title"></strong>. This is a read-only view of the Investment Committee session details.
+      </p>
+    </div>
+  </div>
+</section>
+
+<style>
+.section--ic-session {
+  min-height: 100vh;
+  padding: 8rem 1.5rem 5rem;
+  background: var(--color-void);
+}
+
+.breadcrumb {
+  display: inline-block;
+  margin-bottom: 2rem;
+  color: var(--color-accent);
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: color 0.2s;
+}
+
+.breadcrumb:hover { color: #fff; }
+
+.session-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2rem;
+  margin-bottom: 4rem;
+  padding: 2rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.session-title {
+  font-size: 2.5rem;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+  color: var(--color-text);
+  margin-bottom: 0.5rem;
+}
+
+.session-date {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-accent);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  background: rgba(0, 229, 255, 0.05);
+  border-radius: 4px;
+}
+
+.badge.published { border-color: #4ade80; color: #4ade80; background: rgba(74, 222, 128, 0.05); }
+.badge.pending { border-color: #fbbf24; color: #fbbf24; background: rgba(251, 191, 36, 0.05); }
+.badge.closed { border-color: #ff6644; color: #ff6644; background: rgba(255, 102, 68, 0.05); }
+
+.session-stats {
+  display: flex;
+  gap: 2rem;
+}
+
+.stat {
+  text-align: center;
+}
+
+.stat-label {
+  font-size: 0.8rem;
+  color: var(--color-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 0.5rem;
+}
+
+.stat-value {
+  font-size: 2rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+}
+
+/* Timeline */
+.session-timeline {
+  margin-bottom: 4rem;
+}
+
+.section-subtitle {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 1.5rem;
+}
+
+.timeline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+}
+
+.timeline-event {
+  display: flex;
+  gap: 1rem;
+  padding: 1.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.timeline-event.completed {
+  opacity: 1;
+  border-color: var(--color-accent);
+  background: var(--color-surface-light);
+}
+
+.timeline-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-text-dim);
+  margin-top: 0.25rem;
+  flex-shrink: 0;
+}
+
+.timeline-event.completed .timeline-dot {
+  background: var(--color-accent);
+}
+
+.timeline-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.timeline-date {
+  font-size: 0.8rem;
+  color: var(--color-text-dim);
+  margin-top: 0.25rem;
+}
+
+/* Brief */
+.session-brief {
+  margin-bottom: 4rem;
+  padding: 2rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.brief-content {
+  line-height: 1.8;
+  color: var(--color-text);
+}
+
+/* Members */
+.session-members {
+  margin-bottom: 4rem;
+}
+
+.members-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 1.5rem;
+}
+
+.member-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  text-decoration: none;
+  text-align: center;
+  transition: all 0.3s;
+}
+
+.member-card:hover {
+  border-color: var(--color-accent);
+  background: var(--color-surface-light);
+  transform: translateY(-2px);
+}
+
+.member-avatar {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  margin: 0 auto;
+  object-fit: cover;
+}
+
+.member-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.member-role {
+  font-size: 0.8rem;
+  color: var(--color-text-dim);
+  margin: 0;
+}
+
+.member-status {
+  font-size: 0.8rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-muted);
+}
+
+.member-status.submitted {
+  background: rgba(74, 222, 128, 0.1);
+  color: #4ade80;
+}
+
+/* Results */
+.session-results {
+  margin-bottom: 4rem;
+}
+
+.results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 2rem;
+}
+
+.result-card {
+  padding: 2rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.result-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 1rem;
+}
+
+.result-content {
+  margin-bottom: 1rem;
+  height: 250px;
+}
+
+.result-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+}
+
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+/* Confidence bars */
+.confidence-bar {
+  margin-bottom: 1.5rem;
+}
+
+.confidence-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+  color: var(--color-text);
+}
+
+.confidence-value {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--color-accent);
+}
+
+.confidence-track {
+  height: 6px;
+  background: var(--color-border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.confidence-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #00e5ff, #4488ff);
+  transition: width 0.3s;
+}
+
+/* Submissions Table */
+.session-submissions {
+  margin-bottom: 3rem;
+}
+
+.table-wrapper {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  overflow-x: auto;
+}
+
+.submissions-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.submissions-table thead {
+  background: var(--color-surface-light);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.submissions-table th {
+  padding: 1rem;
+  text-align: left;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+}
+
+.submissions-table td {
+  padding: 1rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.submissions-table tbody tr:hover {
+  background: var(--color-surface-light);
+}
+
+.align-center { text-align: center; font-family: var(--font-mono); }
+.align-right { text-align: right; font-family: var(--font-mono); }
+
+.section__footer {
+  text-align: center;
+  padding-top: 2rem;
+  border-top: 1px solid var(--color-border);
+}
+
+@media (min-width: 1024px) {
+  .session-header {
+    grid-template-columns: 1fr 300px;
+  }
+
+  .members-grid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+</style>

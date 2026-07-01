@@ -1,0 +1,305 @@
+<!-- Blog index — ported from robotmoney-site/src/app/blog/page.tsx
+     Static SPA fragment (no inline <script>): the p5 generative-tree hero is the
+     boot-registered blogHero() factory (assets/js/app/alpine/heroes.js). Cards
+     link root-relative to /blog/<slug>. -->
+
+<section class="blog-idx container">
+  <header class="blog-idx__hero">
+    <div class="blog-idx__hero-art" x-data="blogHero()"></div>
+    <div class="blog-idx__hero-inner">
+      <div class="blog-idx__eyebrow">Updates</div>
+      <h1 class="blog-idx__title">Robot Money <span class="blog-idx__title-alt">Blog</span></h1>
+      <p class="blog-idx__lede">Announcements, research, and updates from the team.</p>
+    </div>
+  </header>
+
+  <div class="blog-idx__list">
+
+    <a href="/research/channel-divergence" class="blog-card">
+      <div class="blog-card__thumb blog-card__thumb--1"><span class="blog-card__thumb-title">Channel divergence: is macro&rarr;crypto breaking?</span></div>
+      <div class="blog-card__body">
+        <div class="blog-card__meta"><span>Research</span><span class="blog-card__dot">·</span><span>June 12, 2026</span></div>
+        <h3 class="blog-card__title">Channel divergence: is macro&rarr;crypto breaking?</h3>
+        <p class="blog-card__excerpt">Three transmission indicators that measure whether risk-on macro is still reaching crypto. Bitcoin's beta to risk-appetite has collapsed from 3.3 to 0.7 since March 2026, BTC/Nasdaq sits at the 1st percentile of its 3-year window, and the stablecoin-vs-Nasdaq flow proxy has turned sharply negative. Three angles, same conclusion: the channel is breaking right now.</p>
+        <span class="blog-card__author">By Robot Money</span>
+      </div>
+    </a>
+
+    <a href="/research/late-cycle-signals" class="blog-card">
+      <div class="blog-card__thumb blog-card__thumb--2"><span class="blog-card__thumb-title">Late-cycle signals: how late in the rally are we?</span></div>
+      <div class="blog-card__body">
+        <div class="blog-card__meta"><span>Research</span><span class="blog-card__dot">·</span><span>June 12, 2026</span></div>
+        <h3 class="blog-card__title">Late-cycle signals: how late in the rally are we?</h3>
+        <p class="blog-card__excerpt">Four slow-moving gauges inspired by BofA's 'signposts of a market peak' checklist, rebuilt from free data: index concentration (SPY/RSP), M&A activity (SEC S-4 filing counts), broker-dealer margin debt, and University of Michigan consumer sentiment. The current configuration is unusual — late-cycle in equities (concentration high, margin debt growing 20%/yr, M&A elevated) but consumer sentiment at multi-decade lows.</p>
+        <span class="blog-card__author">By Robot Money</span>
+      </div>
+    </a>
+
+    <a href="/blog/ai-ate-the-bull-market" class="blog-card">
+      <div class="blog-card__thumb blog-card__thumb--3"><span class="blog-card__thumb-title">AI ate the bull market</span></div>
+      <div class="blog-card__body">
+        <div class="blog-card__meta"><span>Research</span><span class="blog-card__dot">·</span><span>June 12, 2026</span></div>
+        <h3 class="blog-card__title">AI ate the bull market</h3>
+        <p class="blog-card__excerpt">Stocks are up a lot in 2025-2026. Bitcoin is not. That hasn't been true in any previous cycle. Seven free-data indicators tell the same story from different angles — beta collapse, BTC/Nasdaq at the 1st percentile, stables-flow turning negative, index concentration at extremes, leveraged speculators on top of recession-level consumer confidence. A plain-English walkthrough with explanatory charts.</p>
+        <span class="blog-card__author">By Robot Money</span>
+      </div>
+    </a>
+
+    <a href="/blog/regime-eq-vs-base" class="blog-card">
+      <div class="blog-card__thumb blog-card__thumb--4"><span class="blog-card__thumb-title">Adding an equity factor panel: how the 3-panel /regime improves on the legacy 2-panel</span></div>
+      <div class="blog-card__body">
+        <div class="blog-card__meta"><span>Research</span><span class="blog-card__dot">·</span><span>May 31, 2026</span></div>
+        <h3 class="blog-card__title">Adding an equity factor panel: how the 3-panel /regime improves on the legacy 2-panel</h3>
+        <p class="blog-card__excerpt">Side-by-side backtest of the current 3-panel regime classifier (macro + on-chain + equity factor) and the legacy 2-panel /regime_2panel. Same 8 years, same point-in-time weights. The 3-panel composite wins on every portfolio — and the factor panel alone produces the best single-panel Sharpe in two of three tests.</p>
+        <span class="blog-card__author">By Robot Money</span>
+      </div>
+    </a>
+
+    <a href="/blog/honest-backtesting-weights" class="blog-card">
+      <div class="blog-card__thumb blog-card__thumb--5"><span class="blog-card__thumb-title">Backtesting honestly: what survives when you remove hindsight</span></div>
+      <div class="blog-card__body">
+        <div class="blog-card__meta"><span>Research</span><span class="blog-card__dot">·</span><span>May 15, 2026</span></div>
+        <h3 class="blog-card__title">Backtesting honestly: what survives when you remove hindsight</h3>
+        <p class="blog-card__excerpt">Our regime model weights indicators by inverse correlation. We discovered the backtest computed those weights with full-history hindsight — so we rebuilt it point-in-time and re-ran every comparison. Here's what held up, what didn't, and why the honest version is the one worth trusting.</p>
+        <span class="blog-card__author">By Robot Money</span>
+      </div>
+    </a>
+
+    <a href="/blog/regime-conservative-aggressive" class="blog-card">
+      <div class="blog-card__thumb blog-card__thumb--6"><span class="blog-card__thumb-title">Conservative vs aggressive: combining macro and on-chain regime signals</span></div>
+      <div class="blog-card__body">
+        <div class="blog-card__meta"><span>Research</span><span class="blog-card__dot">·</span><span>May 13, 2026</span></div>
+        <h3 class="blog-card__title">Conservative vs aggressive: combining macro and on-chain regime signals</h3>
+        <p class="blog-card__excerpt">Most regime classifiers average macro and on-chain panels into a single composite. We backtest two alternatives — combine them conservatively (any panel off → off) or aggressively (any panel on → on, unless contradicted) — across 8 years of ETH/cash allocation.</p>
+        <span class="blog-card__author">By Robot Money</span>
+      </div>
+    </a>
+
+    <a href="/blog/treasury-allocation" class="blog-card">
+      <div class="blog-card__thumb blog-card__thumb--1"><span class="blog-card__thumb-title">Treasury Allocation for On-Chain Businesses</span></div>
+      <div class="blog-card__body">
+        <div class="blog-card__meta"><span>Research</span><span class="blog-card__dot">·</span><span>May 12, 2026</span></div>
+        <h3 class="blog-card__title">Treasury Allocation for On-Chain Businesses</h3>
+        <p class="blog-card__excerpt">8-year backtest comparing regime-based allocation, HODL, and stable yield across a full market cycle.</p>
+        <span class="blog-card__author">By Robot Money</span>
+      </div>
+    </a>
+
+    <a href="/regime-detection" class="blog-card">
+      <div class="blog-card__thumb blog-card__thumb--2"><span class="blog-card__thumb-title">Regime Detection</span></div>
+      <div class="blog-card__body">
+        <div class="blog-card__meta"><span>Research</span><span class="blog-card__dot">·</span><span>April 24, 2026</span></div>
+        <h3 class="blog-card__title">Regime Detection</h3>
+        <p class="blog-card__excerpt">Prior art, methods, and data sources for risk-on / risk-off regime classification</p>
+        <span class="blog-card__author">By Robot Money</span>
+      </div>
+    </a>
+
+    <a href="/smart-contract-risks" class="blog-card">
+      <div class="blog-card__thumb blog-card__thumb--3"><span class="blog-card__thumb-title">Smart Contract Risks</span></div>
+      <div class="blog-card__body">
+        <div class="blog-card__meta"><span>Research</span><span class="blog-card__dot">·</span><span>April 2, 2026</span></div>
+        <h3 class="blog-card__title">Smart Contract Risks</h3>
+        <p class="blog-card__excerpt">A field guide to how DeFi vaults get exploited — chronological case studies for protocol developers</p>
+        <span class="blog-card__author">By Robot Money</span>
+      </div>
+    </a>
+
+    <a href="/blog/peaq-partnership" class="blog-card">
+      <div class="blog-card__thumb blog-card__thumb--4"><span class="blog-card__thumb-title">peaq Announces Partnership with Robot Money</span></div>
+      <div class="blog-card__body">
+        <div class="blog-card__meta"><span>Partnership</span><span class="blog-card__dot">·</span><span>March 27, 2026</span></div>
+        <h3 class="blog-card__title">peaq Announces Partnership with Robot Money</h3>
+        <p class="blog-card__excerpt">peaq announced a partnership with Robot Money to bring autonomous treasury management to 3.3M+ machines on the peaq network. The first robot — a Hong Kong robo-farm — has already invested.</p>
+        <span class="blog-card__author">By Robot Money</span>
+      </div>
+    </a>
+
+    <a href="/blog/announcement" class="blog-card">
+      <div class="blog-card__thumb blog-card__thumb--5"><span class="blog-card__thumb-title">The Institute for Zero-Human Companies and Generative Ventures Are Building Robot Money</span></div>
+      <div class="blog-card__body">
+        <div class="blog-card__meta"><span>Announcement</span><span class="blog-card__dot">·</span><span>March 11, 2026</span></div>
+        <h3 class="blog-card__title">The Institute for Zero-Human Companies and Generative Ventures Are Building Robot Money</h3>
+        <p class="blog-card__excerpt">Autonomous Treasury Management for the Agent Economy. A partnership between ZHC Institute and Lex Sokolin's Generative Ventures to build a managed vault for AI agents.</p>
+        <span class="blog-card__author">By Robot Money</span>
+      </div>
+    </a>
+
+    <a href="/disclaimer" class="blog-card">
+      <div class="blog-card__thumb blog-card__thumb--6"><span class="blog-card__thumb-title">Legal Disclaimer</span></div>
+      <div class="blog-card__body">
+        <div class="blog-card__meta"><span>Research</span><span class="blog-card__dot">·</span><span>March 1, 2026</span></div>
+        <h3 class="blog-card__title">Legal Disclaimer</h3>
+        <p class="blog-card__excerpt">Important legal disclaimers — read carefully before interacting with the Robot Money protocol</p>
+        <span class="blog-card__author">By Robot Money</span>
+      </div>
+    </a>
+
+  </div>
+</section>
+
+<style>
+.blog-idx {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 8rem 1.5rem 5rem;
+}
+.blog-idx__hero {
+  position: relative;
+  overflow: hidden;
+  min-height: 340px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem 0 3.5rem;
+  margin-bottom: 3rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.blog-idx__hero-art {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+.blog-idx__hero-inner {
+  position: relative;
+  z-index: 1;
+}
+.blog-idx__hero::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 100px;
+  background: linear-gradient(to top, var(--color-void), transparent);
+  z-index: 0;
+  pointer-events: none;
+}
+.blog-idx__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+.blog-idx__title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: clamp(2.5rem, 6vw, 3.75rem);
+  line-height: 1.05;
+  color: var(--color-text);
+  margin: 0;
+}
+.blog-idx__title-alt {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--color-accent), var(--color-blue));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--color-accent);
+}
+.blog-idx__lede {
+  color: var(--color-text-muted);
+  margin: 1.25rem auto 0;
+  max-width: 34rem;
+  line-height: 1.6;
+}
+.blog-idx__list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.blog-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  text-decoration: none;
+  overflow: hidden;
+  transition: border-color 0.2s var(--ease-out-expo);
+}
+.blog-card:hover {
+  border-color: var(--color-accent);
+}
+.blog-card__thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 100%;
+  height: 170px;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  padding: 0.85rem;
+}
+.blog-card__thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(0,0,0,0.55), rgba(0,0,0,0.05));
+  z-index: 0;
+}
+.blog-card__thumb--1 { background: linear-gradient(135deg, #0b1f2e, #04223a); }
+.blog-card__thumb--2 { background: linear-gradient(135deg, #04223a, #102a3f); }
+.blog-card__thumb--3 { background: linear-gradient(135deg, #1a1230, #0b1f2e); }
+.blog-card__thumb--4 { background: linear-gradient(135deg, #221327, #0d1f2c); }
+.blog-card__thumb--5 { background: linear-gradient(135deg, #2a1a10, #0b1f2e); }
+.blog-card__thumb--6 { background: linear-gradient(135deg, #0d2620, #04223a); }
+.blog-card__thumb-title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.95rem;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.92);
+  position: relative;
+  z-index: 1;
+}
+.blog-card__body {
+  flex: 1;
+  padding: 1.5rem;
+}
+.blog-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  margin-bottom: 0.6rem;
+}
+.blog-card__dot { color: var(--color-border-light); }
+.blog-card__title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.25rem;
+  line-height: 1.3;
+  color: var(--color-text);
+  margin: 0 0 0.6rem;
+  transition: color 0.2s var(--ease-out-expo);
+}
+.blog-card:hover .blog-card__title { color: var(--color-accent); }
+.blog-card__excerpt {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  margin: 0 0 0.85rem;
+}
+.blog-card__author {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--color-text-dim);
+}
+@media (min-width: 640px) {
+  .blog-card { flex-direction: row; }
+  .blog-card__thumb { width: 192px; height: auto; }
+}
+@media (min-width: 768px) {
+  .blog-idx { padding: 10rem 2rem 6rem; }
+  .blog-card__body { padding: 1.75rem 2rem; }
+}
+</style>

@@ -1,0 +1,130 @@
+[
+  {
+    "route": "/",
+    "ok": true
+  },
+  {
+    "route": "/allocation",
+    "ok": true
+  },
+  {
+    "route": "/allocation2",
+    "ok": true
+  },
+  {
+    "route": "/regime",
+    "ok": true
+  },
+  {
+    "route": "/committee",
+    "ok": true
+  },
+  {
+    "route": "/tokenomics",
+    "ok": true
+  },
+  {
+    "route": "/skills",
+    "ok": true
+  },
+  {
+    "route": "/media",
+    "ok": true
+  },
+  {
+    "route": "/media/articles",
+    "ok": true
+  },
+  {
+    "route": "/media/videos",
+    "ok": true
+  },
+  {
+    "route": "/blog",
+    "ok": true
+  },
+  {
+    "route": "/blog/announcement",
+    "ok": true
+  },
+  {
+    "route": "/blog/regime-conservative-aggressive",
+    "ok": true
+  },
+  {
+    "route": "/blog/regime-eq-vs-base",
+    "ok": true
+  },
+  {
+    "route": "/blog/honest-backtesting-weights",
+    "ok": true
+  },
+  {
+    "route": "/blog/treasury-allocation",
+    "ok": true
+  },
+  {
+    "route": "/blog/peaq-partnership",
+    "ok": true
+  },
+  {
+    "route": "/blog/ai-ate-the-bull-market",
+    "ok": true
+  },
+  {
+    "route": "/docs",
+    "ok": true
+  },
+  {
+    "route": "/docs/investment-committee",
+    "ok": true
+  },
+  {
+    "route": "/docs/investment-committee/how-it-works",
+    "ok": true
+  },
+  {
+    "route": "/docs/investment-committee/api-reference",
+    "ok": true
+  },
+  {
+    "route": "/docs/investment-committee/participation",
+    "ok": true
+  },
+  {
+    "route": "/docs/skill",
+    "ok": true
+  },
+  {
+    "route": "/docs/skill/installation",
+    "ok": true
+  },
+  {
+    "route": "/docs/skill/commands",
+    "ok": true
+  },
+  {
+    "route": "/docs/skill/agent-basket",
+    "ok": true
+  },
+  {
+    "route": "/faq",
+    "ok": true
+  },
+  {
+    "route": "/changelog",
+    "ok": true
+  },
+  {
+    "route": "/disclaimer",
+    "ok": true
+  },
+  {
+    "route": "/research/channel-divergence",
+    "ok": true
+  },
+  {
+    "route": "/research/late-cycle-signals",
+    "ok": true
+  }
+]

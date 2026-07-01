@@ -14,9 +14,19 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
+      - name: Install root browser tooling
+        run: bun install --frozen-lockfile
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
       - name: Install deps
         working-directory: mcp
-        run: bun install
+        run: bun install --frozen-lockfile
+      - name: Typecheck MCP
+        working-directory: mcp
+        run: bun run typecheck
+      - name: Test MCP
+        working-directory: mcp
+        run: bun test
       - name: Full-stack demo
         run: bun run scripts/demo.ts
         env:

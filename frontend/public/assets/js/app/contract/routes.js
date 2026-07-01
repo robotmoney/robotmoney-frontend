@@ -19,10 +19,6 @@ export const ROUTES = {
   },
 
   dashboards: {
-    vaultTvl: "/api/dashboards/vault-tvl", // GET ?range=
-    walletBalances: "/api/dashboards/wallet-balances", // GET ?range=
-    vaultApy: "/api/dashboards/vault-apy", // GET
-    allocationFramework: "/api/dashboards/allocation-framework", // GET
     regimeSnapshots: "/api/dashboards/regime-snapshots", // GET ?range=
     researchSignal: "/api/dashboards/research-signals/:key", // GET
   },
@@ -36,7 +32,6 @@ export const ROUTES = {
     session: "/api/committee/sessions/:date/:subject", // GET
     brief: "/api/committee/brief", // GET ?date=&subject=
     apply: "/api/committee/apply", // POST
-    applyUnlock: "/api/committee/apply/unlock", // POST
     submit: "/api/committee/submit", // POST
   },
 };

@@ -61,7 +61,10 @@ export interface CommitteeSession {
   id: string;
   date: string;
   subjectId: string;
-  subjectName: string;
+  subjectName: string | null;
+  state: "scheduled" | "collecting" | "window_closed" | "aggregated" | "published";
+  windowClosesAt: string | null;
+  publishedAt: string | null;
   regimeSummary: unknown;
   subjectSnapshotTotalValueUsd: number | null;
   synthesis: string | null;

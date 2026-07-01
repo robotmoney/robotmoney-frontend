@@ -7,7 +7,7 @@
 // natural keys, so an extra firing is harmless. We DO NOT touch next_run_at /
 // enabled on an existing row — that lets the scheduler own slot bookkeeping and
 // lets an operator disable a schedule without the seed re-enabling it.
-import { sql, closeDb } from "./client.ts";
+import { sql, closeDb, jsonValue } from "./client.ts";
 
 interface SeedSchedule {
   kind: string;
@@ -47,7 +47,7 @@ export async function seed(): Promise<void> {
     // (next_run_at, last_enqueued_at, enabled) survive untouched.
     await sql`
       INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
-      VALUES (${s.kind}, ${s.cron}, ${sql.json(s.payload)}, ${s.timezone}, ${s.enabled})
+      VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled})
       ON CONFLICT (kind, cron) DO NOTHING
     `;
   }

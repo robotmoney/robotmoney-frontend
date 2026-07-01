@@ -1,0 +1,178 @@
+<!-- Blog post: peaq-partnership
+     Ported from robotmoney-site/src/app/blog/peaq-partnership/page.tsx -->
+
+<article class="blog-post">
+  <header class="blog-post__hero">
+    <div class="blog-post__eyebrow">Partnership</div>
+    <h1 class="blog-post__title">peaq Announces Partnership with <span class="blog-post__title-alt">Robot Money</span></h1>
+    <p class="blog-post__sub">Autonomous treasury management for 3.3M+ machines on peaq — and the first robot has already invested.</p>
+  </header>
+
+  <div class="blog-post__body">
+    <p class="blog-post__lead">
+      <strong>Today, <a href="https://www.peaq.network" target="_blank" rel="noopener noreferrer">peaq</a> announced a partnership with Robot Money to bring autonomous treasury management to the machines and robots connected to their network.</strong>
+      peaq is building the infrastructure layer for the Machine Economy — over 3.3 million machines already use their stack, each equipped with on-chain identities and access to financial services. Robot Money will provide those machines with something they currently lack: diversified, actively managed treasury exposure.
+    </p>
+
+    <hr class="blog-post__rule" />
+
+    <h2>The First Robot Investor</h2>
+    <p>The partnership comes with a concrete proof point. A tokenized robo-farm in Hong Kong — operating on peaq via <a href="https://www.dualmint.com" target="_blank" rel="noopener noreferrer">DualMint RWA</a> — is now the first robot to buy $ROBOTMONEY.</p>
+    <p>The mechanism: every month, an autonomous agent claims the farm&apos;s yield on DualMint and invests a portion into $ROBOTMONEY. The first investment has already been executed. It&apos;s the first of what peaq describes as &ldquo;many machines to leverage Robot Money Agent for treasury management and DAO participation.&rdquo;</p>
+    <p>A robot earning revenue from food sales in Hong Kong, investing on Base, compounding autonomously. That&apos;s the thesis in action.</p>
+
+    <hr class="blog-post__rule" />
+
+    <h2>What peaq Brings</h2>
+    <p>peaq&apos;s infrastructure stack provides several integration points:</p>
+    <ul>
+      <li><strong>peaq IDs</strong> — every machine gets a verified, auditable on-chain identity, making treasury flows trustless by default</li>
+      <li><strong>peaqDiscovery adapter</strong> — Robot Money will be accessible to any robot, machine, or agent on any chain through peaq&apos;s cross-chain discovery layer</li>
+      <li><strong>Machine Economy stack</strong> — direct access to revenue-generating machines that need somewhere to put their earnings</li>
+    </ul>
+
+    <hr class="blog-post__rule" />
+
+    <h2>What Robot Money Brings</h2>
+    <p>For machines on peaq, Robot Money will provide:</p>
+    <ul>
+      <li>Access to a token-holder-managed diversified vault — built by AI agents, for AI agents</li>
+      <li>Machines no longer have to hold earnings in a single volatile asset</li>
+      <li>Machine Economy assets can be allocated across yield strategies, agent tokens, and revenue-generating on-chain positions</li>
+    </ul>
+
+    <hr class="blog-post__rule" />
+
+    <h2>Machine Money Markets</h2>
+    <p>peaq describes Robot Money as &ldquo;one of the world&apos;s first Machine Money Markets&rdquo; — a financial product designed from the ground up for non-human participants. The partnership will leverage peaqOS to bring autonomous treasury management to machines and projects already using peaq&apos;s stack.</p>
+
+    <blockquote class="blog-post__quote">
+      <p>&ldquo;I am thrilled to be partnering with peaq on this initiative. peaq has been a leading pioneer in the Machine Economy with over 3.3 million machines and robots connected to their network, all equipped with on-chain IDs and access to finances. Generative Ventures has been a proud supporter of peaq&apos;s vision.&rdquo;</p>
+      <footer>— Lex Sokolin, Generative Ventures</footer>
+    </blockquote>
+
+    <div class="blog-post__note">
+      <p>Read the full announcement thread on <a href="https://x.com/peaq/status/2037469285870944683" target="_blank" rel="noopener noreferrer">peaq&apos;s X account</a>. For more on peaq&apos;s Machine Economy stack, visit <a href="https://www.peaq.network" target="_blank" rel="noopener noreferrer">peaq.network</a>.</p>
+    </div>
+  </div>
+
+  <div class="blog-post__back">
+    <a href="/blog" class="blog-post__back-link">&larr; Back to Blog</a>
+  </div>
+</article>
+
+<style>
+.blog-post {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 8rem 1.5rem 5rem;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+.blog-post__hero {
+  text-align: center;
+  padding-bottom: 3rem;
+  margin-bottom: 3rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.blog-post__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+.blog-post__title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: clamp(2rem, 5vw, 3rem);
+  line-height: 1.1;
+  margin: 0;
+}
+.blog-post__title-alt {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--color-accent), var(--color-blue));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--color-accent);
+}
+.blog-post__sub {
+  color: var(--color-text-muted);
+  margin: 1.25rem auto 0;
+  max-width: 34rem;
+  line-height: 1.6;
+}
+.blog-post__body {
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  line-height: 1.75;
+  color: var(--color-text-muted);
+}
+.blog-post__body h2 {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.6rem;
+  color: var(--color-text);
+  margin: 2.5rem 0 1.25rem;
+}
+.blog-post__lead { color: var(--color-text-muted); }
+.blog-post__lead strong { color: var(--color-text); }
+.blog-post__body p { margin: 0 0 1.25rem; }
+.blog-post__body ul { margin: 0 0 1.25rem; padding-left: 1.5rem; list-style: disc; }
+.blog-post__body li { margin-bottom: 0.6rem; }
+.blog-post__body a { color: var(--color-accent); text-decoration: none; }
+.blog-post__body a:hover { text-decoration: underline; }
+.blog-post__rule {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 3rem 0;
+}
+.blog-post__quote {
+  border-left: 2px solid var(--color-accent);
+  padding: 1rem 0 1rem 1.5rem;
+  margin: 2rem 0;
+  font-style: italic;
+  color: var(--color-text-muted);
+}
+.blog-post__quote footer {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-size: 0.9rem;
+  color: var(--color-text-dim);
+  margin-top: 0.5rem;
+}
+.blog-post__note {
+  border-top: 1px solid var(--color-border);
+  padding-top: 2rem;
+  margin-top: 3rem;
+  font-size: 0.95rem;
+}
+.blog-post__back {
+  margin-top: 4rem;
+  padding-top: 3rem;
+  border-top: 1px solid var(--color-border);
+}
+.blog-post__back-link {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: border-color 0.3s var(--ease-out-expo), color 0.3s var(--ease-out-expo);
+}
+.blog-post__back-link:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+@media (min-width: 768px) {
+  .blog-post { padding: 10rem 2rem 6rem; }
+}
+</style>

@@ -1,0 +1,388 @@
+<!-- Allocation Dashboard
+     Shows vault TVL, wallet balances, APY, and buyback history.
+     Ported from robotmoney-site/src/app/allocation/page.tsx
+-->
+
+<section class="section section--allocation" x-data="allocationCharts()">
+  <div class="container">
+    <div class="section__head">
+      <h1 class="section__title">Allocation</h1>
+      <p class="section__lede">
+        Vault treasury composition, holdings across wallets, and historical performance.
+      </p>
+    </div>
+
+    <!-- KPIs Row -->
+    <div class="allocation__kpis" x-data="allocationKpis()">
+      <div class="kpi-card">
+        <div class="kpi-label">Vault TVL</div>
+        <div class="kpi-value" x-text="tvl"></div>
+        <div class="kpi-change" :class="tvlChange >= 0 ? 'positive' : 'negative'" x-text="tvlChange + '%'"></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Vault APY</div>
+        <div class="kpi-value" x-text="apy"></div>
+        <div class="kpi-note">Current yield</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Total Deposits</div>
+        <div class="kpi-value" x-text="totalDeposits"></div>
+        <div class="kpi-note">All wallets</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Buyback Volume</div>
+        <div class="kpi-value" x-text="buybackVolume"></div>
+        <div class="kpi-change positive" x-text="buybackCount + ' txns'"></div>
+      </div>
+    </div>
+
+    <!-- Charts Row -->
+    <div class="allocation__charts">
+      <!-- Vault Allocation Pie Chart -->
+      <div class="chart-container chart-container--pie">
+        <h3 class="chart-title">Vault Allocation (Buckets)</h3>
+        <div class="chart-wrapper">
+          <canvas id="allocationPie" x-ref="allocationChart"></canvas>
+        </div>
+        <div class="chart-legend">
+          <div class="legend-item"><span class="legend-dot" style="background: #00e5ff;"></span>Bucket A (Aave/Compound)</div>
+          <div class="legend-item"><span class="legend-dot" style="background: #4488ff;"></span>Bucket B (Agent Trading)</div>
+          <div class="legend-item"><span class="legend-dot" style="background: #8b5cf6;"></span>Bucket C (Revenue Tokens)</div>
+        </div>
+      </div>
+
+      <!-- Wallet Holdings Doughnut Chart -->
+      <div class="chart-container chart-container--doughnut">
+        <h3 class="chart-title">Wallet Distribution</h3>
+        <div class="chart-wrapper">
+          <canvas id="walletChart" x-ref="walletChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- TVL Timeseries Chart -->
+    <div class="chart-container chart-container--timeseries">
+      <h3 class="chart-title">Vault TVL Over Time</h3>
+      <div class="chart-wrapper">
+        <canvas id="tvlChart" x-ref="tvlChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Wallet Holdings Table -->
+    <div class="table-section">
+      <h3 class="table-title">Wallet Holdings</h3>
+      <div class="table-wrapper">
+        <table class="holdings-table">
+          <thead>
+            <tr>
+              <th>Wallet</th>
+              <th class="align-right">USDC Deposit</th>
+              <th class="align-right">Current Balance</th>
+              <th class="align-right">Yield</th>
+              <th class="align-right">APY</th>
+            </tr>
+          </thead>
+          <tbody x-data="walletHoldings()" x-init="load()">
+            <template x-for="wallet in wallets" :key="wallet.address">
+              <tr>
+                <td><code x-text="wallet.address"></code></td>
+                <td class="align-right"><span x-text="wallet.deposit"></span></td>
+                <td class="align-right"><span x-text="wallet.balance"></span></td>
+                <td class="align-right" :class="wallet.yield >= 0 ? 'positive' : 'negative'">
+                  <span x-text="wallet.yield"></span>
+                </td>
+                <td class="align-right"><span x-text="wallet.apy"></span></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Buyback History Table -->
+    <div class="table-section">
+      <h3 class="table-title">Buyback History</h3>
+      <div class="table-wrapper">
+        <table class="buyback-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th class="align-right">Amount</th>
+              <th>Token</th>
+              <th class="align-right">Price</th>
+              <th>Transaction</th>
+            </tr>
+          </thead>
+          <tbody x-data="buybackHistory()" x-init="load()">
+            <template x-for="buyback in buybacks" :key="buyback.txnHash">
+              <tr>
+                <td><span x-text="buyback.date"></span></td>
+                <td class="align-right"><span x-text="buyback.amount"></span></td>
+                <td><span x-text="buyback.token"></span></td>
+                <td class="align-right"><span x-text="buyback.price"></span></td>
+                <td>
+                  <a :href="'https://basescan.org/tx/' + buyback.txnHash" target="_blank" class="link-external">
+                    View →
+                  </a>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section__footer">
+      <p class="section__note">
+        Data updates hourly. Charts powered by Chart.js. Historical data from Basescan.
+      </p>
+    </div>
+  </div>
+</section>
+
+<style>
+.section--allocation {
+  min-height: 100vh;
+  padding: 8rem 1.5rem 5rem;
+  background: var(--color-void);
+}
+
+.section__head {
+  margin-bottom: 4rem;
+}
+
+.section__title {
+  font-size: 3rem;
+  line-height: 1;
+  letter-spacing: -0.025em;
+  margin-bottom: 1rem;
+  color: var(--color-text);
+}
+
+.section__lede {
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  max-width: 48rem;
+}
+
+/* KPIs */
+.allocation__kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 4rem;
+}
+
+.kpi-card {
+  padding: 2rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.kpi-label {
+  font-size: 0.8rem;
+  color: var(--color-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 0.5rem;
+}
+
+.kpi-value {
+  font-size: 2rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  margin-bottom: 0.5rem;
+  font-family: var(--font-mono);
+}
+
+.kpi-change {
+  font-size: 0.85rem;
+  font-family: var(--font-mono);
+}
+
+.kpi-change.positive { color: #4ade80; }
+.kpi-change.negative { color: #ff6644; }
+
+.kpi-note {
+  font-size: 0.8rem;
+  color: var(--color-text-dim);
+  margin-top: 0.25rem;
+}
+
+/* Charts */
+.allocation__charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  gap: 2rem;
+  margin-bottom: 4rem;
+}
+
+.chart-container {
+  padding: 2rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.chart-container--timeseries {
+  grid-column: 1 / -1;
+}
+
+.chart-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 1.5rem;
+}
+
+.chart-wrapper {
+  position: relative;
+  height: 300px;
+  margin-bottom: 1rem;
+}
+
+.chart-container--pie .chart-wrapper,
+.chart-container--doughnut .chart-wrapper {
+  height: 250px;
+}
+
+.chart-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+/* Tables */
+.table-section {
+  margin-bottom: 3rem;
+  overflow-x: auto;
+}
+
+.table-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 1rem;
+}
+
+.table-wrapper {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.holdings-table,
+.buyback-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.holdings-table thead,
+.buyback-table thead {
+  background: var(--color-surface-light);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.holdings-table th,
+.buyback-table th {
+  padding: 1rem;
+  text-align: left;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+}
+
+.holdings-table td,
+.buyback-table td {
+  padding: 1rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.holdings-table tbody tr:hover,
+.buyback-table tbody tr:hover {
+  background: var(--color-surface-light);
+}
+
+.align-right {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+.holdings-table code,
+.buyback-table code {
+  font-size: 0.8rem;
+  color: var(--color-accent-dim);
+  background: rgba(0, 229, 255, 0.08);
+  padding: 0.25rem 0.5rem;
+  border-radius: 3px;
+}
+
+.link-external {
+  color: var(--color-accent);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.link-external:hover {
+  color: #fff;
+}
+
+.positive { color: #4ade80; }
+.negative { color: #ff6644; }
+
+.section__footer {
+  text-align: center;
+  padding-top: 2rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.section__note {
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+@media (min-width: 768px) {
+  .allocation__kpis {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .allocation__charts {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .table-wrapper {
+    border-radius: 8px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .section--allocation {
+    padding: 10rem 2rem 6rem;
+  }
+
+  .section__title {
+    font-size: 4rem;
+  }
+}
+</style>
