@@ -10,40 +10,11 @@
 // panel_weight, sparkline}) in the `indicators` jsonb. Pure I/O — no compute.
 import { sql } from "../../db/client.ts";
 import type postgres from "postgres";
-
-// Persistable snapshot row. Structurally a superset of the legacy
-// analyze/regime.ts RegimeSnapshot (whose narrower shape stays assignable), with
-// the v2 panel indices/percentiles, panel weights, and version added. `null` is
-// accepted for any numeric/label field that a given panel didn't produce.
-export interface RegimeSnapshotRow {
-  date: string;
-  composite: number | null;
-  compositePercentile: number | null;
-  regime: string | null;
-  macroRegime: string | null;
-  onchainRegime: string | null;
-  factorRegime: string | null;
-  macroIndex?: number | null;
-  onchainIndex?: number | null;
-  factorIndex?: number | null;
-  macroPercentile?: number | null;
-  onchainPercentile?: number | null;
-  factorPercentile?: number | null;
-  panelWeights?: Record<string, Record<string, number>> | null;
-  version?: string | null;
-  percentiles: Record<string, number>;
-  // Rich per-indicator objects ({raw_value, raw_date, transformed_value,
-  // percentile, signed_percentile, panel_weight, sparkline}); JSON-serializable.
-  indicators: readonly postgres.JSONValue[];
-  // Dashboard-level blobs — written ONLY on the asof/latest row (undefined/null on
-  // historical rows). Pass-through JSON preserving snake_case inside; typed loosely
-  // like the other jsonb columns.
-  panels?: readonly string[] | null;
-  bucketThresholds?: Record<string, unknown> | null;
-  backtest?: Record<string, unknown> | null;
-  correlations?: Record<string, unknown> | null;
-  extras?: Record<string, unknown> | null;
-}
+// The row shape lives in the pure (DB-free) projection module so the shared eq
+// mapper can import it without pulling in this Postgres client. Re-exported here
+// for the store's own long-standing consumers (analytics index, tests).
+import type { RegimeSnapshotRow } from "../report/regime-projection.ts";
+export type { RegimeSnapshotRow };
 
 export async function saveRegimeSnapshots(snapshots: RegimeSnapshotRow[]): Promise<void> {
   // The orchestrator persists the full recomputed history (~3k rows) each run, so
@@ -70,7 +41,7 @@ async function upsertSnapshot(s: RegimeSnapshotRow): Promise<void> {
          ${s.macroIndex ?? null}, ${s.onchainIndex ?? null}, ${s.factorIndex ?? null},
          ${s.macroPercentile ?? null}, ${s.onchainPercentile ?? null}, ${s.factorPercentile ?? null},
          ${s.panelWeights == null ? null : sql.json(s.panelWeights)}, ${s.version ?? null},
-         ${sql.json(s.percentiles)}, ${sql.json(s.indicators)},
+         ${sql.json(s.percentiles)}, ${sql.json(s.indicators as unknown as postgres.JSONValue)},
          ${s.panels == null ? null : sql.json(s.panels as postgres.JSONValue)},
          ${s.bucketThresholds == null ? null : sql.json(s.bucketThresholds as postgres.JSONValue)},
          ${s.backtest == null ? null : sql.json(s.backtest as postgres.JSONValue)},
@@ -123,7 +94,7 @@ export async function loadRegimeSnapshot(date: string): Promise<RegimeSnapshotRo
     panelWeights: (row.panel_weights ?? null) as Record<string, Record<string, number>> | null,
     version: row.version ?? null,
     percentiles: (row.percentiles ?? {}) as Record<string, number>,
-    indicators: (row.indicators ?? []) as readonly postgres.JSONValue[],
+    indicators: (row.indicators ?? []) as RegimeSnapshotRow["indicators"],
     panels: (row.panels ?? null) as readonly string[] | null,
     bucketThresholds: (row.bucket_thresholds ?? null) as Record<string, unknown> | null,
     backtest: (row.backtest ?? null) as Record<string, unknown> | null,

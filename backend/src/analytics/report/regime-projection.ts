@@ -6,6 +6,59 @@
 // (which requires DATABASE_URL at import time).
 import type { RegimeSnapshot } from "@robotmoney/contract";
 
+// A JSON-serializable value. Declared here rather than imported from `postgres`
+// so `RegimeSnapshotRow` — and every module that imports only the row TYPE (the
+// Playwright stub's shared mapper via regime-eq-map.ts) — stays free of the
+// backend-only `postgres` dependency. Structurally the same JSON shape.
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+// Persistable snapshot row. Structurally a superset of the legacy
+// analyze/regime.ts RegimeSnapshot (whose narrower shape stays assignable), with
+// the v2 panel indices/percentiles, panel weights, and version added. `null` is
+// accepted for any numeric/label field that a given panel didn't produce.
+//
+// Lives in this pure (DB-free) module — not in the store — so the shared mapper
+// can reference the row shape without dragging in the Postgres client. The store
+// re-exports it for its own consumers.
+export interface RegimeSnapshotRow {
+  date: string;
+  composite: number | null;
+  compositePercentile: number | null;
+  regime: string | null;
+  macroRegime: string | null;
+  onchainRegime: string | null;
+  factorRegime: string | null;
+  macroIndex?: number | null;
+  onchainIndex?: number | null;
+  factorIndex?: number | null;
+  macroPercentile?: number | null;
+  onchainPercentile?: number | null;
+  factorPercentile?: number | null;
+  panelWeights?: Record<string, Record<string, number>> | null;
+  version?: string | null;
+  percentiles: Record<string, number>;
+  // Rich per-indicator objects ({raw_value, raw_date, transformed_value,
+  // percentile, signed_percentile, panel_weight, sparkline}); JSON-serializable.
+  indicators: readonly JsonValue[];
+  // Dashboard-level blobs — written ONLY on the asof/latest row (undefined/null on
+  // historical rows). Opaque JSON pass-through preserving snake_case inside. Typed
+  // `unknown` because two producers feed them: the computed pipeline
+  // (analytics/index.ts) passes strongly-typed `BacktestPayload`/`CorrelationsPayload`
+  // (interfaces without index signatures), while the offline eq-snapshot mapper
+  // passes loose objects — `unknown` accepts both; the store just `sql.json`s them.
+  panels?: readonly string[] | null;
+  bucketThresholds?: unknown | null;
+  backtest?: unknown | null;
+  correlations?: unknown | null;
+  extras?: unknown | null;
+}
+
 // Postgres hands numerics back as text; coerce to number|null. `null`/undefined
 // stay null so the DTO's nullable panel fields are honest.
 export const num = (v: unknown): number | null => (v == null ? null : Number(v));

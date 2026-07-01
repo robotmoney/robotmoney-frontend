@@ -11,8 +11,10 @@
 // their original snake_case (pass-through), matching the indicators[].panel_weight
 // convention.
 import type { RegimeSnapshot } from "@robotmoney/contract";
-import type { RegimeSnapshotRow } from "../store/regime-store.ts";
-import { rowToSnapshot } from "./regime-projection.ts";
+// Import the row type from the pure projection module (NOT the store) so this
+// mapper — shared with the root-scoped Playwright stub — never transitively
+// reaches the Postgres client. Keeps the module genuinely I/O-free.
+import { rowToSnapshot, type RegimeSnapshotRow } from "./regime-projection.ts";
 
 // One enriched per-indicator object in the canonical snapshot.
 interface EqIndicator {
