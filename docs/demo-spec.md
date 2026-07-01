@@ -235,11 +235,14 @@ the TUI shows only distilled state. Layout:
   (`docker compose ps` every ~3 s), so a post-startup crash / restart-loop / `unhealthy`
   Docker healthcheck turns the icon red (with a detail like `exited 1` / `restarting` /
   `unhealthy`). The pane header shows a refresh spinner while a check is in flight.
-- **Onboarding** (full-width strip) — the current prospective committee member's join
-  checklist: `keypair → apply → review → activate → connect → session → memo → admitted`,
-  each pending / spinner / ✓ / ✗. Steps 1–5 are driven by the real join flow
-  (`onboardMember`); `session`/`memo`/`admitted` flip when the newcomer is observed
-  submitting a signed take + posting a memo in a live session. See §11.
+- **Onboarding** (full-width strip) — each prospective member's join checklist:
+  `keypair → apply → review → activate → connect → session → memo → admitted`, each
+  pending / spinner / ✓ / ✗. Steps 1–5 are driven by the real join flow
+  (`onboardMember`); `session`/`memo`/`admitted` flip when the member is observed
+  submitting a signed take + posting a memo in a live session. Admitted members **retain
+  their checklist** in the pane (most recent shown, with a `(+N earlier admitted)` note),
+  and an `upcoming → Name in m:ss …` line **counts down** to the next scheduled
+  admissions. See §11.
 - **Activity** (largest region) — Research plus **one pane per committee subject**, laid
   out as responsive columns (side by side when they fit, stacking when the terminal is
   narrow):
@@ -308,4 +311,5 @@ unchanged) and an onboarding loop in `scripts/demo.ts`. The first admission fire
 after start (so it's visible early); thereafter a **new character joins every ~5 minutes,
 indefinitely** (a curated name pool, then generated names so the demo never runs dry), so
 the committee keeps growing for as long as the demo runs. Each admission is rendered live
-in the Onboarding strip (§10.1).
+in the Onboarding strip (§10.1), which keeps every admitted member's completed checklist
+visible and shows a live countdown to the upcoming admissions.
