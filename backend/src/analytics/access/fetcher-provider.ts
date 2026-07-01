@@ -7,7 +7,7 @@
 //
 // It implements the same `Provider` interface as the
 // default `seededProvider`, but pulls REAL series from KEYLESS public sources
-// (DefiLlama, CoinGecko, Yahoo Finance — see extract/sources.ts for the id→source
+// (DefiLlama, Yahoo Finance — see extract/sources.ts for the id→source
 // map). Series that require keys (FRED: T10Y2Y/HY_OAS/ICSA) or RPC, plus anything
 // with no keyless source (MNA/MARGIN/CONF), fall back to the seeded path PER
 // SERIES.
