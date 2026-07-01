@@ -3,7 +3,11 @@
 // natural key overwrites rather than duplicates.
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import { saveRegimeSnapshots } from "../src/analytics/store/regime-store.ts";
+import {
+  saveRegimeSnapshots,
+  loadRegimeSnapshot,
+  type RegimeSnapshotRow,
+} from "../src/analytics/store/regime-store.ts";
 import type { RegimeSnapshot } from "../src/analytics/analyze/regime.ts";
 import { persistResearchSignal } from "../src/analytics/store/research-store.ts";
 import type { ResearchPayload } from "../src/analytics/analyze/research.ts";
@@ -43,6 +47,90 @@ test("saveRegimeSnapshots: round-trips and upserts (no duplicate on re-save)", a
   const rows = await sql`SELECT composite FROM regime_snapshots WHERE date = ${DATE}`;
   expect(rows.length).toBe(1);
   expect(Number(rows[0].composite)).toBeCloseTo(0.9, 9);
+});
+
+test("saveRegimeSnapshots: round-trips the full v2 row (panel fields, weights, version, rich indicators)", async () => {
+  const RDATE = "1990-02-20"; // unique date, no collision with other tests/seeds
+  await sql`DELETE FROM regime_snapshots WHERE date = ${RDATE}`;
+
+  const richIndicators = [
+    {
+      id: "T10Y2Y",
+      name: "10y-2y yield curve",
+      panel: "macro",
+      raw_value: 0.41,
+      raw_date: "1990-02-19",
+      transformed_value: 0.41,
+      percentile: 0.62,
+      signed_percentile: 0.62,
+      panel_weight: 0.18,
+      sparkline: [0.38, 0.39, 0.4, 0.41],
+    },
+    {
+      id: "DEFI_TVL",
+      name: "DeFi TVL",
+      panel: "onchain",
+      raw_value: 95e9,
+      raw_date: "1990-02-19",
+      transformed_value: 0.0567,
+      percentile: 0.71,
+      signed_percentile: 0.71,
+      panel_weight: 0.22,
+      sparkline: [0.05, 0.052, 0.055, 0.0567],
+    },
+  ];
+  const panelWeights = {
+    macro: { T10Y2Y: 0.18, HY_OAS: 0.25 },
+    onchain: { DEFI_TVL: 0.22, STABLES: 0.19 },
+    factor: { CONCENTRATION: 0.31 },
+  };
+
+  const row: RegimeSnapshotRow = {
+    date: RDATE,
+    composite: 0.5321,
+    compositePercentile: 0.6789,
+    regime: "risk_on",
+    macroRegime: "neutral",
+    onchainRegime: "risk_on",
+    factorRegime: "risk_off",
+    macroIndex: 0.48,
+    onchainIndex: 0.58,
+    factorIndex: 0.29,
+    macroPercentile: 0.55,
+    onchainPercentile: 0.72,
+    factorPercentile: 0.21,
+    panelWeights,
+    version: "v2-2026.07",
+    percentiles: { T10Y2Y: 0.62, DEFI_TVL: 0.71 },
+    indicators: richIndicators,
+  };
+
+  await saveRegimeSnapshots([row]);
+  const back = await loadRegimeSnapshot(RDATE);
+  expect(back).not.toBeNull();
+  expect(back!.date).toBe(RDATE);
+  expect(back!.composite).toBeCloseTo(0.5321, 9);
+  expect(back!.compositePercentile).toBeCloseTo(0.6789, 9);
+  expect(back!.regime).toBe("risk_on");
+  expect(back!.macroRegime).toBe("neutral");
+  expect(back!.onchainRegime).toBe("risk_on");
+  expect(back!.factorRegime).toBe("risk_off");
+  expect(back!.macroIndex).toBeCloseTo(0.48, 9);
+  expect(back!.onchainIndex).toBeCloseTo(0.58, 9);
+  expect(back!.factorIndex).toBeCloseTo(0.29, 9);
+  expect(back!.macroPercentile).toBeCloseTo(0.55, 9);
+  expect(back!.onchainPercentile).toBeCloseTo(0.72, 9);
+  expect(back!.factorPercentile).toBeCloseTo(0.21, 9);
+  expect(back!.version).toBe("v2-2026.07");
+  expect(back!.panelWeights).toEqual(panelWeights);
+  expect(back!.percentiles).toEqual({ T10Y2Y: 0.62, DEFI_TVL: 0.71 });
+  expect(back!.indicators).toEqual(richIndicators);
+
+  // re-save with a mutated composite → overwrite, exactly one row.
+  await saveRegimeSnapshots([{ ...row, composite: 0.1 }]);
+  const rows = await sql`SELECT composite FROM regime_snapshots WHERE date = ${RDATE}`;
+  expect(rows.length).toBe(1);
+  expect(Number(rows[0].composite)).toBeCloseTo(0.1, 9);
 });
 
 test("persistResearchSignal: round-trips and upserts on (signal_key, date)", async () => {
