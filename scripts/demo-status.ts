@@ -19,6 +19,7 @@ interface DemoState {
   dbUser: string;
   dbPassword: string;
   dbName: string;
+  logFile?: string;
   createdAt: string;
 }
 
@@ -47,6 +48,7 @@ console.log(`[demo:status] project=${s.project}  api=:${s.apiPort}  mcp=:${s.mcp
 console.log(`[demo:status]   Site:      http://127.0.0.1:${s.apiPort}/`);
 console.log(`[demo:status]   MCP:       http://127.0.0.1:${s.mcpPort}/health`);
 console.log(`[demo:status]   state file: ${stateFile}`);
+if (s.logFile) console.log(`[demo:status]   log file:   ${s.logFile}`);
 console.log("");
 
 const r = Bun.spawnSync(["docker", "compose", "ps"], {

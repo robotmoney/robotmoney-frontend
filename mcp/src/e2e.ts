@@ -5,7 +5,7 @@
 // handler → domain) so the demo exercises the real FOR UPDATE SKIP LOCKED claim
 // loop. Multi-session: the second session's brief references the first session's
 // outcome, demonstrating rotation awareness.
-import { runAgent, enroll, stanceFor, textOf, ExistingCredentials } from "./agent.ts";
+import { runAgent, enroll, stanceFor, textOf, ExistingCredentials, AgentStage } from "./agent.ts";
 import { generateKeyPair, sign } from "./crypto.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -26,6 +26,15 @@ export const SUBJECTS = [
 ];
 
 const adminHeaders = process.env.ADMIN_TOKEN ? { "X-Admin-Token": process.env.ADMIN_TOKEN } : {};
+
+// Optional, additive progress stream for runSession. Emits real session-lifecycle
+// transitions and per-member pipeline stages so a UI can render live committee
+// state. Default undefined ⇒ zero behaviour change (standalone main() never passes
+// it). Members that are deliberate no-shows surface as stage 'absent'.
+export type SessionEvent =
+  | { type: "session"; state: string; sessionId?: number; subject: string; date: string }
+  | { type: "member"; memberId: string; stage: AgentStage | "absent"; stance?: string; confidence?: number };
+export type SessionProgress = (ev: SessionEvent) => void;
 
 export async function admin(action: string, body: unknown = {}) {
   const r = await fetch(`${BACKEND}/api/committee/admin/${action}`, {
@@ -53,9 +62,12 @@ async function enqueueLifecycleJob(action: string, payload: unknown = {}) {
   return result;
 }
 
-export async function runSession(date: string, subject: typeof SUBJECTS[0], sessionIndex: number, prevOutcome?: string, existingCredentials?: Map<string, ExistingCredentials>) {
+export async function runSession(date: string, subject: typeof SUBJECTS[0], sessionIndex: number, prevOutcome?: string, existingCredentials?: Map<string, ExistingCredentials>, onProgress?: SessionProgress) {
   const tag = `[session ${sessionIndex}: ${date}/${subject.id}]`;
   console.log(`\n${tag}`);
+  // Session-lifecycle emitter — one call per real state transition below.
+  const emitSession = (state: string, sessionId?: number) =>
+    onProgress?.({ type: "session", state, sessionId, subject: subject.id, date });
 
   // Ensure subject exists; regime is already seeded by the first session.
   if (sessionIndex > 0) {
@@ -67,17 +79,25 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   await enqueueLifecycleJob("open_session", { date, subjectId: subject.id });
   const sd = await waitForSessionState(date, subject.id, "scheduled");
   const sessionId = sd.session.id;
+  emitSession("scheduled", sessionId);
 
   await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes: 60, prevOutcome });
   await waitForSessionState(date, subject.id, "collecting");
+  emitSession("collecting", sessionId);
   console.log(`${tag} session ${sessionId}: brief published, window open`);
 
   // Enroll the no-show, then run present agents (some may have externally-
   // provisioned credentials from the public apply → activate path).
-  await Promise.all(MEMBERS.filter((m) => !m.present).map((m) => enroll(m)));
+  const absent = MEMBERS.filter((m) => !m.present);
+  await Promise.all(absent.map((m) => enroll(m)));
+  for (const m of absent) onProgress?.({ type: "member", memberId: m.memberId, stage: "absent" });
   const present = MEMBERS.filter((m) => m.present);
   const results = await Promise.all(
-    present.map((m) => runAgent({ ...m, date, subjectId: subject.id, sessionId }, existingCredentials?.get(m.memberId))),
+    present.map((m) => runAgent(
+      { ...m, date, subjectId: subject.id, sessionId },
+      existingCredentials?.get(m.memberId),
+      onProgress && ((stage, info) => onProgress({ type: "member", memberId: m.memberId, stage, ...info })),
+    )),
   );
   for (const r of results) {
     const ok = r.result?.verified ? "✓verified" : JSON.stringify(r.result);
@@ -87,12 +107,15 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
 
   await enqueueLifecycleJob("close_window", { sessionId });
   await waitForSessionState(date, subject.id, "window_closed");
+  emitSession("window_closed", sessionId);
 
   await enqueueLifecycleJob("aggregate", { sessionId });
   await waitForSessionState(date, subject.id, "aggregated");
+  emitSession("aggregated", sessionId);
 
   await enqueueLifecycleJob("publish", { sessionId });
   await waitForSessionState(date, subject.id, "published");
+  emitSession("published", sessionId);
 
   const pub = await fetch(`${BACKEND}/api/committee/sessions/${date}/${subject.id}`).then((r) => r.json());
   console.log(`${tag} published: state=${pub.session.state}, takes=${pub.takes.length}`);
