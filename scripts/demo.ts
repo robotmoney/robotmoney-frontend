@@ -1,6 +1,6 @@
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
-import { mkdirSync, writeFileSync, openSync, writeSync } from "node:fs";
+import { mkdirSync, writeFileSync, openSync, writeSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, visibleLen, type Tui } from "./lib/tui.ts";
@@ -246,6 +246,12 @@ function writeStateFile(): void {
   writeFileSync(stateFile, JSON.stringify(state, null, 2));
 }
 
+// Remove the state file after an explicit teardown so `demo:status`/`demo:down`
+// don't point at a torn-down run. Best-effort.
+function removeStateFile(): void {
+  try { rmSync(stateFile, { force: true }); } catch { /* best effort */ }
+}
+
 // Print how to inspect and tear down, then leave the stack UP. Used by the
 // signal handlers and startup-failure path in the LOCAL flow — the demo never
 // auto-tears-down; teardown is only ever `bun run demo:down`.
@@ -258,14 +264,17 @@ function printLeaveRunning(): void {
   console.log(`[demo]   tear down:   bun run demo:down`);
 }
 
-// LOCAL flow never tears down — not on Ctrl-C, not on SIGTERM. Only the explicit
-// `bun run demo:down` stops the stack. (The CI flow calls cleanup() directly.)
-// In TUI mode: restore the terminal FIRST (so the leave-running message prints on
-// the normal screen with a visible cursor), then narrate, then exit 0.
+// Ctrl-C / SIGTERM tear the stack down (containers + volume) and exit. In TUI mode
+// restore the terminal FIRST so the teardown narration prints on the normal screen
+// with a visible cursor. The log file persists after teardown for post-mortem, so
+// we print its path. (The CI flow calls cleanup() directly; the startup-failure
+// path leaves containers up for inspection.)
 function onSignal(): void {
   if (tui) tui.stop();
   unpatchConsole();
-  printLeaveRunning();
+  console.log(`\n[demo] logs: ${logFile}`);
+  cleanup();
+  removeStateFile();
   process.exit(0);
 }
 process.on("SIGINT", onSignal);
@@ -530,7 +539,7 @@ function render(): string[] {
   // Footer (built first so the middle region can claim the rest of the height)
   const footer: string[] = [hr(W, "Log")];
   for (const m of state.messages) footer.push(color("2", `  ${m}`));
-  footer.push(color("2", "  Ctrl-C leaves the stack running · `bun run demo:down` to stop."));
+  footer.push(color("2", "  Ctrl-C / SIGTERM tears down the stack (containers + volume)."));
 
   // Middle region: Research | Committee, splitting the largest remaining space.
   const midH = Math.max(3, H - lines.length - footer.length - 1);
@@ -641,9 +650,10 @@ async function main(): Promise<void> {
     for (const k of researchKeys) console.log(`  Research:   ${backendUrl}/research/${k}`);
     console.log(`  MCP:        ${mcpUrl}/health`);
     console.log(`  State file: ${stateFile}`);
+    console.log(`  Log file:   ${logFile}`);
     console.log("");
     console.log("  Demo actions run on a ~2-min staggered cadence.");
-    console.log("  Ctrl-C leaves the stack RUNNING. Tear down with: bun run demo:down");
+    console.log("  Ctrl-C / SIGTERM tears down the stack (containers + volume).");
     console.log("");
   }
   log(`READY — Site ${backendUrl}/  ·  MCP ${mcpUrl}/health  ·  state ${stateFile}`);
@@ -708,7 +718,7 @@ async function main(): Promise<void> {
   }
   void committeeTick(); // immediate first session
 
-  await new Promise<never>(() => { /* run forever; only `demo:down` stops the stack */ });
+  await new Promise<never>(() => { /* run forever; Ctrl-C/SIGTERM (or `demo:down`) stops the stack */ });
 }
 
 main().catch((err) => {
