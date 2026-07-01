@@ -878,37 +878,41 @@ async function main(): Promise<void> {
   void committeeDriver();
 
   // ── Periodic new-member onboarding ───────────────────────────────────────
-  // Every ONBOARD_INTERVAL, walk a brand-new prospect through the real join gates
-  // (keypair → apply → review → activate → OAuth connect), then add it to the shared
-  // roster (e2e.MEMBERS + onboardedCreds) so it participates in — and grows — the
+  // Walk a brand-new prospect through the real join gates (keypair → apply →
+  // review → activate → OAuth connect), then add it to the shared roster
+  // (e2e.MEMBERS + onboardedCreds) so it participates in — and GROWS — the
   // committee. session/memo/admitted complete when committeeProgress sees the
-  // newcomer take + post a memo. Capped so the committee doesn't grow unbounded.
-  const NEWCOMERS: { memberId: string; name: string; lens: string; bias: number }[] = [
-    { memberId: "helios", name: "Helios", lens: "liquidity", bias: 0.05 },
-    { memberId: "selene", name: "Selene", lens: "volatility", bias: -0.05 },
-    { memberId: "rhea", name: "Rhea", lens: "credit", bias: 0.0 },
-    { memberId: "nyx", name: "Nyx", lens: "tail risk", bias: -0.15 },
-    { memberId: "eos", name: "Eos", lens: "newcomer", bias: 0.1 },
+  // newcomer take + post a memo. The first admission fires early so it's visible;
+  // thereafter a NEW character joins every ONBOARD_INTERVAL, indefinitely (curated
+  // names first, then generated ones so the demo never runs dry).
+  const NEWCOMER_NAMES = [
+    "Helios", "Selene", "Rhea", "Nyx", "Eos", "Theia", "Hyperion", "Phoebe",
+    "Coeus", "Crius", "Iapetus", "Metis", "Tethys", "Themis", "Mnemosyne",
   ];
-  const ONBOARD_INTERVAL_MS = 180_000; // ~3 min between admissions
+  const NEWCOMER_LENSES = ["liquidity", "volatility", "credit", "tail risk", "sentiment", "flows", "macro", "positioning"];
+  const FIRST_ONBOARD_MS = 60_000;     // first admission ~1 min in (after the base committee shows)
+  const ONBOARD_INTERVAL_MS = 300_000; // then a new character every 5 min
   async function onboardingDriver(): Promise<void> {
-    for (const spec of NEWCOMERS) {
-      await sleep(ONBOARD_INTERVAL_MS); // let the base committee run first
-      startOnboarding(spec.memberId, spec.name);
+    for (let n = 0; ; n++) {
+      await sleep(n === 0 ? FIRST_ONBOARD_MS : ONBOARD_INTERVAL_MS);
+      const name = NEWCOMER_NAMES[n] ?? `Astra ${n + 1}`;
+      const memberId = name.toLowerCase().replace(/\s+/g, "-");
+      const lens = NEWCOMER_LENSES[n % NEWCOMER_LENSES.length];
+      const bias = ((n % 5) - 2) * 0.05; // spread -0.10 … +0.10
+      startOnboarding(memberId, name);
       try {
-        const { member, creds } = await e2e.onboardMember(spec, {
+        const { member, creds } = await e2e.onboardMember({ memberId, name, lens, bias }, {
           reviewMs: 6000,
           onStage: (stage: string, ok: boolean) => setOnboardStep(stage, ok ? "done" : "failed"),
         });
-        onboardedCreds.set(spec.memberId, creds);
+        onboardedCreds.set(memberId, creds);
         e2e.MEMBERS.push(member); // grow the roster → joins subsequent sessions
         setOnboardStep("session", "running");
-        log(`onboarded ${spec.memberId} — awaiting first session participation`);
+        log(`onboarded ${memberId} (#${n + 1}) — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
       } catch (err) {
-        log(`onboarding ${spec.memberId} failed (stack still running): ${err instanceof Error ? err.message : err}`);
+        log(`onboarding ${memberId} failed (stack still running): ${err instanceof Error ? err.message : err}`);
       }
     }
-    log(`onboarding complete — committee at ${e2e.MEMBERS.length} seats`);
   }
   void onboardingDriver();
 
