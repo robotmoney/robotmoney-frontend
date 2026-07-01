@@ -46,6 +46,10 @@ async function fixtureSource(): Promise<AnalyticsDataSource> {
     margin: finitePts(lc.indicators.margin_debt_level),
     conf: finitePts(lc.indicators.consumer_conf_level),
   };
+  // Vendored backtest/correlations extras (real Yahoo ^GSPC/ETH-USD + FRED DTB3,
+  // truncated to asof) — the same fixture the strict fidelity test replays. Lets
+  // the orchestrator compute + persist the backtest/correlations deterministically.
+  const extras: any = await loadJsonGz("regime-extras.json.gz");
   return {
     async fetchIndicators(indicators: Indicator[]): Promise<Record<string, Point[]>> {
       const out: Record<string, Point[]> = {};
@@ -54,6 +58,9 @@ async function fixtureSource(): Promise<AnalyticsDataSource> {
     },
     async fetchResearchInputs(): Promise<ResearchInputs> {
       return research;
+    },
+    async fetchBacktestExtras() {
+      return { spx: extras.spx, eth: extras.eth, tbill3m: extras.tbill3m };
     },
   };
 }
@@ -81,7 +88,7 @@ test(
       SELECT date::text AS date, composite, composite_percentile, regime,
              macro_index, onchain_index, macro_percentile, onchain_percentile,
              macro_regime, onchain_regime, factor_index, panel_weights, version,
-             indicators
+             indicators, backtest, correlations
       FROM regime_snapshots ORDER BY date DESC LIMIT 1`;
     expect(latest.date).toBe(ASOF);
 
@@ -106,6 +113,25 @@ test(
     // the as-of row carries the rich per-indicator objects (macro+onchain+factor)
     expect(Array.isArray(latest.indicators)).toBe(true);
     expect((latest.indicators as any[]).length).toBeGreaterThan(15);
+
+    // ── asof-only backtest + predictive correlations persisted on the latest row ──
+    const bt = latest.backtest as any;
+    const corr = latest.correlations as any;
+    expect(bt).not.toBeNull();
+    expect(corr).not.toBeNull();
+    expect(Object.keys(bt).sort()).toEqual(["eth", "mixed", "sp500"]);
+    // strategies per portfolio (composite/panels/derived + hodl + stables_only).
+    expect(Object.keys(bt.eth)).toContain("composite");
+    expect(Object.keys(bt.eth)).toContain("eth_hodl");
+    expect(Object.keys(bt.eth)).toContain("stables_only");
+    expect(bt.eth.composite.equity_curve.length).toBeGreaterThan(50);
+    expect(Number.isFinite(bt.eth.composite.final_value)).toBe(true);
+    // correlations carry forward (30/90/180d) + concurrent for each index.
+    expect(Object.keys(corr.forward).sort()).toEqual(["composite", "macro", "onchain"]);
+    expect(Object.keys(corr.forward.composite).sort()).toEqual(
+      ["eth_180d", "eth_30d", "eth_90d", "spx_180d", "spx_30d", "spx_90d"],
+    );
+    expect(corr.concurrent.composite.spx.n).toBeGreaterThan(2000);
 
     // ── (3) both research signals landed with a gauges array + richer payload ──
     for (const key of ["channel-divergence", "late-cycle-signals"]) {
@@ -134,6 +160,9 @@ test(
       },
       async fetchResearchInputs(): Promise<ResearchInputs> {
         return { btc: [], qqq: [], spy: [], rsp: [], top7: TOP7.map(() => []), mna: [], margin: [], conf: [] };
+      },
+      async fetchBacktestExtras() {
+        return { spx: [], eth: [], tbill3m: [] };
       },
     };
     await runAnalytics(ASOF, "regime", emptySource);

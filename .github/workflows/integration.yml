@@ -3,14 +3,34 @@
 # (available on ubuntu-latest) and applies migrations, then tears it down — the
 # SAME harness used locally, so there is no CI-specific behavior. A missing
 # Docker/Postgres fails the run loudly.
+#
+# CI taxonomy class: system-correctness (backend suite vs real Postgres). Per the
+# taxonomy gating matrix this is DEFERRED until a PR is ready for review: it must
+# SKIP on draft PRs and RUN once the PR is marked ready-for-review, plus on push
+# to the default branch. Wiring that enforces this:
+#   - `pull_request.types` includes `ready_for_review` so flipping a draft to
+#     ready re-triggers the workflow (default PR types would not).
+#   - the job `if:` guard skips the run while the PR is still a draft.
+#   - `paths-ignore: ['**.md','**.txt']` bypasses this code check on docs-only PRs.
+# A nightly sweep is intentionally NOT added: the intended triggers are ready PRs
+# + push main. The taxonomy grader flags a missing nightly sweep only as an
+# optional full-sweep warning, never an error.
 name: integration
+env:
+  CI_CLASS: system-correctness
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', '**.txt']
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ['**.md', '**.txt']
 
 jobs:
   backend-integration:
+    # Deferred until ready-for-review: run on push (non-PR) and on non-draft PRs;
+    # skip while the PR is still a draft.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +41,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Check root scripts
         run: bun run typecheck && bun run test
+      - name: Check docs/analytics consistency
+        run: bash scripts/check-docs-analytics.sh
       - name: Install deps
         working-directory: backend
         run: bun install --frozen-lockfile

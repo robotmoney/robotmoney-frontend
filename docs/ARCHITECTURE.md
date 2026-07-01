@@ -152,6 +152,43 @@ Hand-written, no Tailwind, in three files:
 - **chart.js** (+ datalabels) — dashboard charts (UMD global, dashboard views only).
 - **p5.js** — hero/visual canvases (global `<script>`).
 
+### Preview mode (goldens-backed, no backend)
+
+Lightweight hosting for **agentic development of the marketing surface** (the
+buildless SPA *is* the marketing site). A contributor — human or agent — working
+from a git checkout can view and iterate on the site with **no backend, database,
+or workers**. Full design in
+[`docs/preview-server-spec.md`](./preview-server-spec.md); contributor workflow in
+[`CONTRIBUTING.md`](../CONTRIBUTING.md). The mechanism:
+
+**The preview server (`scripts/serve-preview.ts`, `bun run preview`).** A ~40-line
+`Bun.serve` that (a) serves the **live** `frontend/public` tree so source edits
+show on refresh, and (b) **mocks every `/api/*` route from the committed goldens**
+(`goldens/api-goldens.json`). The SPA is **unmodified** — it still requests
+same-origin `/api/*`; the server answers from the goldens (query dropped — a
+golden is one point in time), and writes (POST/PUT/DELETE) are accepted no-ops.
+It binds a **random free port** (printed on start) so concurrent previews never
+collide, with an index.html SPA fallback for client routes. There is **no build
+step and no `file://`** — it's the real static SPA served over HTTP.
+
+**Goldens (`goldens/api-goldens.json`).** One committed JSON keyed by request
+pathname → response body, covering every route the frontend calls. It is a *mock*:
+**field shapes are real, values are point-in-time.** Goldens are **captured from a
+real running system** (a deployed test cluster or a local `bun run demo` stack)
+via `bun run goldens:update` — never hand-authored and never derived from other
+fixtures, so the shapes stay faithful to what the backend actually returns.
+
+**Correctness is the change author's responsibility.** There is no nightly
+regeneration. An agent (or human) that changes the system such that an API's
+shape changes must recapture the goldens in the same PR — the same discipline as
+updating tests or the contract. A CI **drift gate** (see the spec) blocks a PR
+whose goldens no longer match the code; the fix is `bun run goldens:update`.
+
+**Data fidelity caveat.** Because values are mock/point-in-time, preview is for
+**layout, copy, components, and navigation** — not for trusting numbers or charts.
+For realistic, evolving data (real analytics + simulations) run the full stack
+with `bun run demo` (see [`demo-spec.md`](./demo-spec.md)).
+
 ---
 
 ## 5. Backend
@@ -253,19 +290,30 @@ into six independently testable stages — **access → extract → transform �
 
 - **`types.ts`** — the leaf shapes (`Point`, `SeriesSpec`) that flow through every
   stage.
-- **`access/`** — the data seam. `provider.ts` defines the `Provider` interface +
-  the deterministic, hermetic `seededProvider` (no API keys; the default).
-  `fetcher-provider.ts` is an **implemented, opt-in** live provider (`PROVIDER=live`)
-  that satisfies the same interface by *composing* extract + transform; it pulls
-  REAL series from KEYLESS public sources only — **DefiLlama, CoinGecko, Yahoo
-  Finance** — and falls back to seeded *per series* for anything keyed (FRED:
-  `T10Y2Y`/`HY_OAS`/`ICSA`) or unmapped, so `getSeries` never throws.
-  `select.ts` picks seeded vs live for a run.
-- **`extract/`** — pull raw series from sources. `http.ts` (timeout/abort fetch),
-  one pure parser per source (`defillama.ts`, `coingecko.ts`, `yahoo.ts` — JSON in
-  → `Point[]` out, throw on garbage), and `sources.ts`, the series-id → fetch+parse
-  wiring the live provider iterates (each source isolated; one failure drops only
-  its own series).
+- **`access/`** — the data seam for the orchestrator. `data-source.ts` defines the
+  `AnalyticsDataSource` interface (`fetchIndicators` / `fetchResearchInputs` /
+  `fetchBacktestExtras`) and the production default **`liveDataSource`** — pure REAL
+  keyless fetchers, NO synthetic substitution: a failed/empty fetch returns `[]` and
+  the orchestrator degrades to the persisted-real floor via `mergeSeries` (never to
+  seeded data). `hermetic-source.ts` is the deterministic, offline
+  **`hermeticDataSource`** (seeded walks from `provider.ts`'s `seededProvider`) used by
+  CI and the demo default. **`ANALYTICS_SOURCE`**, resolved by
+  **`resolveAnalyticsSource()`** in `backend/src/analytics/index.ts`, is the SINGLE
+  authoritative selector: unset/`live` → `liveDataSource`, `hermetic` →
+  `hermeticDataSource`, any other value refused loudly (fail-closed). The legacy
+  `PROVIDER` / `config.analyticsProvider` knob is **deprecated for source selection**
+  and is no longer consulted on the live/demo path (see the deprecation note in
+  `config.ts`). The old per-run seeded-vs-live selector module has been deleted; the
+  opt-in `fetcher-provider.ts` it drove is retired from the data path (retained only
+  for legacy provider unit tests).
+- **`extract/`** — pull raw series from KEYLESS public sources. `http.ts`
+  (timeout/abort fetch, plus an opt-in on-disk TTL cache in `fetch-cache.ts`), one
+  pure parser per source — **`fred.ts`, `yahoo.ts`, `defillama.ts`,
+  `blockchain-com.ts`, `coinmetrics.ts`, `geckoterminal.ts`, `shiller.ts`,
+  `edgar.ts`** (JSON/CSV in → `Point[]` out, throw on garbage) — and `sources.ts`,
+  the indicator-id → fetch+parse wiring that `liveDataSource.fetchIndicators` drives
+  (each source isolated; one failure drops only its own series, which then falls back
+  to the persisted floor).
 - **`transform/`** — normalize/clean. `math.ts` is the shared pure math
   (percentile-in-window, sign, rolling beta, ratios, `isoDay`, …) so normalization
   is identical suite-wide; `grid.ts` reshapes gappy real series onto the dense
@@ -277,10 +325,23 @@ into six independently testable stages — **access → extract → transform �
   channel-divergence") with no special-casing. `research.ts` holds the research
   payload shape; `regime.ts`, `channel-divergence.ts`, `late-cycle.ts` are the
   tools (their `compute()` is pure; `persist()` is a one-line delegate to `store/`).
-- **`store/`** — the only SQL writes. `regime-store.ts` (`saveRegimeSnapshots`) and
-  `research-store.ts` (`persistResearchSignal`), both upserting on natural keys.
+  `backtest.ts` (`computeBacktest`) and `correlations.ts` (`computeCorrelations`)
+  add the asof-only regime **backtest** + predictive **correlations** payloads
+  (ported from the original `regime-snapshot.json`).
+- **`store/`** — the only SQL writes. `regime-store.ts` (`saveRegimeSnapshots`),
+  `research-store.ts` (`persistResearchSignal`), and `raw-history-store.ts` (the
+  append-only persisted raw floor) all upsert on natural keys; `floor-seed.ts`
+  performs the opt-in cold-DB floor seed (`ANALYTICS_FLOOR_SEED=1`).
+  `saveRegimeSnapshots` also bakes the asof-only **`backtest`** + **`correlations`**
+  jsonb payloads onto the latest `regime_snapshots` row (columns added by migration
+  `0010_backtest_correlations.sql`; NULL on historical rows), sourced via
+  `AnalyticsDataSource.fetchBacktestExtras` (SPX/ETH price levels + the DTB3 3-month
+  T-bill yield).
 - **`report/`** — `projections.ts` owns all SQL reads + the row→DTO map
-  (`fetchRegimeSnapshots(range)`, `fetchLatestResearchSignal(key)`). The HTTP route
+  (`fetchRegimeSnapshots(range)` → `{ latest, history }`, carrying the asof-only
+  `backtest`/`correlations` on `latest`; `fetchLatestResearchSignal(key)`). The
+  contract DTOs **`BacktestPayload`** / **`CorrelationsPayload`**
+  (`contract/src/dashboards.d.ts`) type those payloads. The HTTP route
   `api/routes/dashboards.ts` is a thin adapter — it only parses/clamps `range` and
   calls these. MCP and the frontend stay consumers across the HTTP boundary.
 
@@ -298,9 +359,9 @@ Three pipelines run through these stages:
 The worker runs the whole suite daily at **06:00 UTC** (`analytics.run`, cron
 `0 6 * * *`); the API exposes regime at `/api/dashboards/regime-snapshots?range=`
 and each research signal at `/api/dashboards/research-signals/:key`; the frontend
-renders `/regime` and the `/research/*` views (mirroring the original site's
-surfaces). Adding an analytic = write a tool + register it + add a job schedule +
-a route; nothing else changes.
+renders `/regime` (including the backtest + predictive-correlations panels) and the
+`/research/*` views (mirroring the original site's surfaces). Adding an analytic =
+write a tool + register it + add a job schedule + a route; nothing else changes.
 
 ---
 
@@ -335,6 +396,14 @@ credentials in [DEPLOYMENT.md](./DEPLOYMENT.md)):
   Secrets (Anthropic/FRED/RPC) live in the droplet env, not in the frontend.
 - **TLS** is provided by Cloudflare's proxy (the droplet serves a Cloudflare Origin
   CA cert).
+
+**Preview mode — no-backend hosting for development.** Independent of both hosted
+shapes, `bun run preview` serves the live SPA with every `/api/*` route mocked
+from committed goldens (`goldens/api-goldens.json`) on a random free port — for
+developing the marketing surface without a backend. Mechanism in §4 "Preview mode
+(goldens-backed, no backend)"; workflow + fidelity caveats in
+[`CONTRIBUTING.md`](../CONTRIBUTING.md) and
+[`docs/preview-server-spec.md`](./preview-server-spec.md).
 
 ---
 

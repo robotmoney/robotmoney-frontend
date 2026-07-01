@@ -30,7 +30,7 @@ flowchart LR
     subgraph External["External Data Sources"]
         direction LR
         Sources1["DefiLlama"]
-        Sources2["CoinGecko"]
+        Sources2["CoinMetrics"]
         Sources3["Yahoo Finance"]
         Sources4["FRED"]
     end

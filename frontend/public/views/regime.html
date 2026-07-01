@@ -36,6 +36,73 @@
 
       <div class="rv__chart"><canvas x-ref="chart"></canvas></div>
 
+      <!-- Regime backtest: month-end equity curves (composite/conservative/
+           aggressive timing vs buy-and-hold + stables) across portfolios. Asof-only. -->
+      <template x-if="hasBacktest()">
+        <div class="rv__backtest">
+          <div class="rv__panel-head">
+            <h2 class="rv__h2">Regime backtest</h2>
+            <span class="rv__seg">
+              <template x-for="p in portfolios()" :key="p">
+                <button type="button" class="rv__seg-btn" :class="p === portfolio && 'rv__seg-btn--on'"
+                        @click="setPortfolio(p)" x-text="p === 'sp500' ? 'S&P 500' : p === 'mixed' ? 'Mixed' : 'ETH'"></button>
+              </template>
+            </span>
+          </div>
+          <p class="rv__note">Growth of $1, month-end (log scale). 3-state allocation timed by the regime buckets; cash earns the 3-month T-bill. Baselines: buy-and-hold and 100% stables.</p>
+          <div class="rv__chart rv__chart--equity"><canvas x-ref="equity"></canvas></div>
+          <div class="rv__metrics">
+            <table class="rv__mtable">
+              <thead>
+                <tr><th>Strategy</th><th>CAGR</th><th>Sharpe</th><th>Max DD</th><th>Transitions</th><th>×$1</th></tr>
+              </thead>
+              <tbody>
+                <template x-for="m in strategyMetrics()" :key="m.name">
+                  <tr>
+                    <td x-text="m.name"></td>
+                    <td x-text="fmtCagr(m.cagr)"></td>
+                    <td x-text="fmtNum(m.sharpe)"></td>
+                    <td x-text="fmtCagr(m.maxDd)"></td>
+                    <td x-text="m.transitions"></td>
+                    <td x-text="fmtNum(m.finalValue)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+
+      <!-- Predictive-power correlations: Spearman ρ of each index level vs SPX/ETH
+           forward log-returns (30/90/180d) + concurrent log-price. Asof-only. -->
+      <template x-if="hasCorrelations()">
+        <div class="rv__corr">
+          <h2 class="rv__h2">Predictive power</h2>
+          <p class="rv__note">Rank correlation (Spearman ρ) of each index level today vs the asset's forward log-return over the next 30 / 90 / 180 days, plus the concurrent (same-day) log-price. Small-sample caveats apply.</p>
+          <template x-for="asset in ['spx','eth']" :key="asset">
+            <div class="rv__corr-block">
+              <div class="rv__panel-name" x-text="asset === 'spx' ? 'vs S&P 500' : 'vs ETH'"></div>
+              <table class="rv__mtable">
+                <thead>
+                  <tr><th>Index</th><th>fwd 30d</th><th>fwd 90d</th><th>fwd 180d</th><th>concurrent</th></tr>
+                </thead>
+                <tbody>
+                  <template x-for="index in corrIndices()" :key="asset + index">
+                    <tr>
+                      <td x-text="index"></td>
+                      <td :class="corrClass(forwardCorr(index, asset, '30'))" x-text="fmtRho(forwardCorr(index, asset, '30'))"></td>
+                      <td :class="corrClass(forwardCorr(index, asset, '90'))" x-text="fmtRho(forwardCorr(index, asset, '90'))"></td>
+                      <td :class="corrClass(forwardCorr(index, asset, '180'))" x-text="fmtRho(forwardCorr(index, asset, '180'))"></td>
+                      <td :class="corrClass(concurrentCorr(index, asset))" x-text="fmtRho(concurrentCorr(index, asset))"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </div>
+      </template>
+
       <!-- Real per-indicator objects (asof row): panel-grouped with each
            indicator's sign-aligned percentile bar, raw percentile, and the
            point-in-time inverse-correlation panel weight. -->

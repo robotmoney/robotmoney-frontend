@@ -7,17 +7,19 @@ export function registerViews(Alpine) {
   // ── Regime classification ────────────────────────────────────────────────
   Alpine.data("regimeView", () => ({
     _chart: null,
+    _equityChart: null,
     loading: true,
     error: null,
     latest: null,
     history: [],
+    portfolio: "eth", // backtest portfolio selector (eth | sp500 | mixed)
     async load() {
       try {
         const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: 180 });
         this.latest = data.latest;
         this.history = data.history;
         this.loading = false;
-        this.$nextTick(() => this.drawChart());
+        this.$nextTick(() => { this.drawChart(); this.drawEquityChart(); });
       } catch (e) {
         this.error = e.message;
         this.loading = false;
@@ -49,7 +51,6 @@ export function registerViews(Alpine) {
         },
       });
     },
-    destroy() { this._chart?.destroy(); this._chart = null; },
     pct(x) { return x == null ? "—" : Math.round(x * 100) + "%"; },
     fmtWeight(w) { return w == null ? "—" : Math.round(w * 100) + "%"; },
     regimeClass(r) { return r ? `regime-pill regime-pill--${r}` : "regime-pill"; },
@@ -70,6 +71,75 @@ export function registerViews(Alpine) {
       const v = ind.signed_percentile != null ? ind.signed_percentile : ind.percentile;
       return v == null ? 0 : Math.round(v * 100);
     },
+    // ── Backtest: month-end equity curves for the selected portfolio ──────────
+    // The backtest payload is asof-only (latest row). Plot the headline strategies
+    // (composite regime timing) vs the buy-and-hold + stables baselines.
+    hasBacktest() { return !!(this.latest && this.latest.backtest); },
+    portfolios() { return this.hasBacktest() ? Object.keys(this.latest.backtest) : []; },
+    setPortfolio(p) { this.portfolio = p; this.$nextTick(() => this.drawEquityChart()); },
+    _equitySeries() {
+      const bt = this.latest?.backtest?.[this.portfolio];
+      if (!bt) return [];
+      const hodlKey = { eth: "eth_hodl", sp500: "sp500_hodl", mixed: "blend_hodl" }[this.portfolio];
+      const specs = [
+        { key: "composite", label: "Composite timing", color: "#00e5ff" },
+        { key: "conservative", label: "Conservative", color: "#7cf5b0" },
+        { key: "aggressive", label: "Aggressive", color: "#f5a623" },
+        { key: hodlKey, label: "Buy & hold", color: "#b06cff" },
+        { key: "stables_only", label: "Stables only", color: "#5a6b8c" },
+      ];
+      return specs.filter((s) => s.key && bt[s.key]?.equity_curve?.length).map((s) => ({ ...s, m: bt[s.key] }));
+    },
+    strategyMetrics() {
+      const bt = this.latest?.backtest?.[this.portfolio];
+      if (!bt) return [];
+      return Object.entries(bt).map(([name, m]) => ({
+        name: String(name).replace(/_/g, " "),
+        cagr: m.cagr, sharpe: m.sharpe, maxDd: m.max_drawdown,
+        transitions: m.transitions, finalValue: m.final_value,
+      }));
+    },
+    drawEquityChart() {
+      const canvas = this.$refs.equity;
+      const series = this._equitySeries();
+      if (!canvas || !window.Chart || !series.length) return;
+      this._equityChart?.destroy();
+      const labels = series[0].m.equity_curve.map((p) => p.date);
+      const byDate = (curve) => { const m = new Map(curve.map((p) => [p.date, p.value])); return labels.map((d) => m.get(d) ?? null); };
+      this._equityChart = new window.Chart(canvas, {
+        type: "line",
+        data: {
+          labels,
+          datasets: series.map((s) => ({
+            label: s.label, data: byDate(s.m.equity_curve),
+            borderColor: s.color, backgroundColor: "transparent",
+            fill: false, tension: 0.2, pointRadius: 0, borderWidth: 2, spanGaps: true,
+          })),
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          scales: {
+            y: { type: "logarithmic", grid: { color: "rgba(255,255,255,0.06)" }, ticks: { color: "#7e889e" } },
+            x: { grid: { display: false }, ticks: { color: "#4a5268", maxTicksLimit: 8 } },
+          },
+          plugins: { legend: { labels: { color: "#7e889e" } } },
+        },
+      });
+    },
+    // ── Predictive-power correlations (asof-only) ─────────────────────────────
+    hasCorrelations() { return !!(this.latest && this.latest.correlations); },
+    corrIndices() { return this.hasCorrelations() ? Object.keys(this.latest.correlations.forward) : []; },
+    corrHorizons() { return ["30", "90", "180"]; },
+    forwardCorr(index, asset, h) { return this.latest?.correlations?.forward?.[index]?.[`${asset}_${h}d`] ?? null; },
+    concurrentCorr(index, asset) { return this.latest?.correlations?.concurrent?.[index]?.[asset] ?? null; },
+    fmtRho(cell) { return cell && cell.rho != null ? (cell.rho >= 0 ? "+" : "") + cell.rho.toFixed(2) : "—"; },
+    corrClass(cell) {
+      if (!cell || cell.rho == null) return "rv__rho";
+      return cell.rho >= 0 ? "rv__rho rv__rho--pos" : "rv__rho rv__rho--neg";
+    },
+    fmtCagr(x) { return x == null ? "—" : (x >= 0 ? "+" : "") + Math.round(x * 100) + "%"; },
+    fmtNum(x, d = 2) { return x == null ? "—" : Number(x).toFixed(d); },
+    destroy() { this._chart?.destroy(); this._chart = null; this._equityChart?.destroy(); this._equityChart = null; },
   }));
 
   // ── Research signal (channel-divergence / late-cycle-signals) ─────────────

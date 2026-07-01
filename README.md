@@ -103,6 +103,26 @@ DEMO_PROJECT=rmdemo WEB_PORT=48787 MCP_PORT=48788 bun run demo
   demo on the same port and Docker will refuse the bind. Use `bun run demo:down`
   (with the same `DEMO_PROJECT`) to release it.
 
+## Preview mode — view the site with no backend
+
+`bun run preview` serves the **live** `frontend/public` SPA and **mocks every
+`/api/*` route from committed goldens** (`goldens/api-goldens.json`), so you can
+view and iterate on the marketing surface with no backend, database, or workers.
+It binds a **random free port** (printed on start) so concurrent previews never
+collide; edits to source show on refresh.
+
+```bash
+bun run preview                                   # serve; open the printed URL
+BACKEND_URL=http://127.0.0.1:48787 bun run goldens:update   # refresh goldens from a running system
+```
+
+**Data fidelity:** goldens carry **real field shapes** but **mock / point-in-time
+values** — preview is for layout, copy, and components, *not* for trusting the
+numbers. For realistic, evolving data run the full stack with `bun run demo`.
+Keeping goldens correct is the responsibility of the change author; see
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) and
+[`docs/preview-server-spec.md`](./docs/preview-server-spec.md).
+
 ## Useful commands
 
 ```bash
@@ -112,5 +132,7 @@ bun run worker               # task-queue worker      — backend/
 bun test                     # hermetic suite (spins ephemeral Postgres) — backend/
 bun run typecheck            # tsc --noEmit            — backend/
 bun run demo:down            # tear down the standing demo (containers + volume)
+bun run preview              # serve the SPA with /api/* mocked from goldens (random port) — root
+bun run goldens:update       # recapture goldens from a running backend (BACKEND_URL) — root
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)
 ```

@@ -221,3 +221,43 @@ proxy). Refines D8's prod mode to a managed HA cluster. The single-box
 - **Cloudflare caching marketing** — would double-CDN in front of the DO Spaces CDN;
   marketing is reached DNS-only so DO owns its delivery.
 - **Keeping the single box for prod** — no isolation between failure domains, no DB HA.
+
+---
+
+## D14 — Preview mode (goldens-backed) over the baked "frozen" single file
+
+**Decision.** For no-backend development of the marketing surface, serve the live
+`frontend/public` SPA over HTTP and mock `/api/*` from a committed goldens file
+(`goldens/api-goldens.json`), via `bun run preview`. Remove the deprecated
+single-file `file://` "frozen" distribution (the `scripts/bake-frozen.ts` +
+`scripts/lib/frozen-*` bake, `frozen-boot.js` fetch/history shim, the
+self-contained guard, and the `frozen-publish` artifact workflow).
+
+**Why.** A static page should not need to be pre-baked into a monolith with a
+`fetch`/`history` monkeypatch — that machinery existed only to satisfy the
+`file://` double-click case. The real audience is a **Claude-assisted contributor
+with a git checkout**, who has the agent start a thin server, edit files, and open
+a PR — so a hosted URL and a `file://` bundle are both unnecessary. Mocking `/api/*`
+from one goldens file keeps the SPA byte-for-byte the source (no app changes) and
+makes edits show on refresh.
+
+**Correctness.** Goldens are **captured from a real running system** (a deployed
+test cluster or `bun run demo`), not hand-written and not derived from other
+fixtures — so **field shapes** stay faithful; values are point-in-time. Keeping
+them correct is the **change author's responsibility** (no nightly regeneration);
+a CI drift gate blocks a PR whose goldens no longer match the code. The most
+important check is that the **fields** are correct, not the numbers.
+
+**Rejected.**
+- **Baked single-file `file://` bundle** (the prior #14 implementation) — inlining
+  + fetch/history shim to dodge `file://` restrictions; unnecessary once `file://`
+  is dropped.
+- **Static-dist bake + hosting** — per-endpoint JSON dist served by a static host;
+  more machinery than the audience needs (no hosted URL required).
+- **Nightly-regenerated goldens** — makes correctness a bot's job; we want the
+  change author to own it, and a value-refresh cron conflicts with a strict drift
+  gate.
+
+**Fidelity caveat.** Preview is for layout/copy/components/navigation; for
+realistic, evolving data run `bun run demo` (see [demo-spec.md](./demo-spec.md)).
+See [preview-server-spec.md](./preview-server-spec.md) for the full design.

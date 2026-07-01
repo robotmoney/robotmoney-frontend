@@ -1,0 +1,1874 @@
+{
+  "version": 1,
+  "source": "bootstrap:fixtures",
+  "note": "Field shapes are real; VALUES are mock/point-in-time. Recapture from a real running system with `bun run goldens:update`.",
+  "routes": {
+    "/api/comments": {
+      "comments": [
+        {
+          "id": 1,
+          "page": "home",
+          "author": "satoshi",
+          "content": "Fascinating experiment.",
+          "createdAt": "2026-06-28T12:00:00Z"
+        },
+        {
+          "id": 2,
+          "page": "home",
+          "author": "vitalik",
+          "content": "Watching the regime signals closely.",
+          "createdAt": "2026-06-29T09:30:00Z"
+        }
+      ]
+    },
+    "/api/committee/brief": {
+      "body": {
+        "thesis": "Woon treasury remains diversified across three buckets.",
+        "horizon": "quarterly"
+      }
+    },
+    "/api/committee/members": {
+      "members": [
+        {
+          "id": "athena",
+          "name": "Athena",
+          "lens": "macro & liquidity",
+          "tagline": "Macro strategist",
+          "mandate": "Reads the macro regime.",
+          "activatedAt": "2026-05-01T00:00:00Z"
+        },
+        {
+          "id": "apollo",
+          "name": "Apollo",
+          "lens": "on-chain flows",
+          "tagline": "On-chain analyst",
+          "mandate": "Tracks stablecoin flows.",
+          "activatedAt": "2026-05-04T00:00:00Z"
+        },
+        {
+          "id": "hermes",
+          "name": "Hermes",
+          "lens": "volatility",
+          "tagline": "Vol trader",
+          "mandate": "Watches term structure.",
+          "activatedAt": "2026-05-08T00:00:00Z"
+        }
+      ]
+    },
+    "/api/committee/members/apollo": {
+      "id": "apollo",
+      "name": "Apollo",
+      "lens": "on-chain flows",
+      "tagline": "On-chain analyst",
+      "mandate": "Tracks stablecoin flows.",
+      "activatedAt": "2026-05-04T00:00:00Z"
+    },
+    "/api/committee/members/athena": {
+      "id": "athena",
+      "name": "Athena",
+      "lens": "macro & liquidity",
+      "tagline": "Macro strategist",
+      "mandate": "Reads the macro regime.",
+      "activatedAt": "2026-05-01T00:00:00Z"
+    },
+    "/api/committee/members/hermes": {
+      "id": "hermes",
+      "name": "Hermes",
+      "lens": "volatility",
+      "tagline": "Vol trader",
+      "mandate": "Watches term structure.",
+      "activatedAt": "2026-05-08T00:00:00Z"
+    },
+    "/api/committee/sessions": {
+      "sessions": [
+        {
+          "id": 1,
+          "date": "2026-06-29",
+          "subjectId": "woon",
+          "subjectName": "Woon Treasury",
+          "state": "published"
+        }
+      ]
+    },
+    "/api/committee/sessions/2026-06-29/woon": {
+      "session": {
+        "id": 1,
+        "date": "2026-06-29",
+        "subjectId": "woon",
+        "subjectName": "Woon Treasury",
+        "state": "published",
+        "committeeRecommendation": {
+          "quorum": {
+            "submitted": 3,
+            "active": 3
+          },
+          "stances": {
+            "risk_on": 1,
+            "neutral": 1,
+            "risk_off": 1
+          },
+          "absent": []
+        }
+      },
+      "takes": [
+        {
+          "id": 1,
+          "memberId": "athena",
+          "memberName": "Athena",
+          "stance": "risk_on",
+          "confidence": 0.72,
+          "verified": true,
+          "memoUrl": "",
+          "body": "Macro backdrop supports risk."
+        },
+        {
+          "id": 2,
+          "memberId": "apollo",
+          "memberName": "Apollo",
+          "stance": "neutral",
+          "confidence": 0.55,
+          "verified": true,
+          "memoUrl": "",
+          "body": "Flows are mixed; stay balanced."
+        },
+        {
+          "id": 3,
+          "memberId": "hermes",
+          "memberName": "Hermes",
+          "stance": "risk_off",
+          "confidence": 0.61,
+          "verified": true,
+          "memoUrl": "",
+          "body": "Vol is cheap; hedge here."
+        }
+      ]
+    },
+    "/api/dashboards/regime-snapshots": {
+      "latest": {
+        "date": "2026-06-29",
+        "composite": 0.4541570691590452,
+        "compositePercentile": 0.3273972602739726,
+        "regime": "neutral",
+        "macroRegime": "risk_on",
+        "onchainRegime": "risk_off",
+        "macroIndex": 0.5842960555548308,
+        "onchainIndex": 0.3240180827632596,
+        "macroPercentile": 0.7484018264840183,
+        "onchainPercentile": 0.07351598173515982,
+        "version": "v3",
+        "indicators": [
+          {
+            "id": "T10Y2Y",
+            "name": "10y–2y yield curve",
+            "panel": "macro",
+            "source": "fred",
+            "source_url": "https://fred.stlouisfed.org/series/T10Y2Y",
+            "sign": 1,
+            "transform": "level",
+            "unit": "percent",
+            "description": "The difference between 10-year and 2-year US Treasury yields. When negative (\"inverted\"), short-dated bonds yield more than long-dated ones — a configuration that has historically preceded every US recession since 1955.",
+            "derivation": "FRED publishes this as a daily spread (DGS10 − DGS2). We read the raw level in percentage points.",
+            "interpretation": "Steep positive curve (above ~1.5%) signals healthy growth expectations — long-term capital wants compensation for tying up money. Flat or inverted curve (below 0%) signals that the bond market expects future rate cuts because growth is slowing. Risk-on when steepening; risk-off when flattening or inverted.",
+            "raw_value": 0.28,
+            "raw_date": "2026-06-29",
+            "transformed_value": 0.28,
+            "percentile": 0.5287671232876713,
+            "signed_percentile": 0.5287671232876713,
+            "panel_weight": 0.06666659163853841,
+            "sparkline": [
+              0.6429223744292237,
+              0.7210045662100457,
+              0.7703196347031963,
+              0.7753424657534247,
+              0.7502283105022831,
+              0.9333333333333333,
+              0.954337899543379,
+              0.9100456621004567,
+              0.9634703196347032,
+              0.9968036529680365,
+              0.9776255707762557,
+              0.9707762557077626,
+              0.8958904109589041,
+              0.9949771689497717,
+              0.9616438356164384,
+              0.8735159817351598,
+              0.9305936073059361,
+              0.9986301369863013,
+              0.9990867579908675,
+              0.91324200913242,
+              0.7438356164383562,
+              0.7538812785388128,
+              0.6447488584474886,
+              0.5287671232876713
+            ]
+          },
+          {
+            "id": "DFII10",
+            "name": "Real 10y yield",
+            "panel": "macro",
+            "source": "fred",
+            "source_url": "https://fred.stlouisfed.org/series/DFII10",
+            "sign": -1,
+            "transform": "level",
+            "unit": "percent",
+            "description": "The yield on 10-year Treasury Inflation-Protected Securities (TIPS) — the \"real\" interest rate after stripping out inflation expectations. The pure cost of capital that policymakers actually care about.",
+            "derivation": "FRED series DFII10, published daily.",
+            "interpretation": "Low or negative real rates (below 0.5%) mean monetary policy is loose, which lifts risk assets — investors are pushed out the risk curve. High real rates (above 2%) mean restrictive policy, which compresses valuations and squeezes leveraged businesses. Risk-on when low; risk-off when high.",
+            "raw_value": 2.19,
+            "raw_date": "2026-06-28",
+            "transformed_value": 2.19,
+            "percentile": 0.8808219178082192,
+            "signed_percentile": 0.11917808219178083,
+            "panel_weight": 0.07633990825679013,
+            "sparkline": [
+              0.2666666666666667,
+              0.3214611872146119,
+              0.39908675799086757,
+              0.20913242009132416,
+              0.2648401826484018,
+              0.04977168949771693,
+              0.11552511415525113,
+              0.3817351598173516,
+              0.4146118721461187,
+              0.3488584474885845,
+              0.22146118721461183,
+              0.39315068493150684,
+              0.3762557077625571,
+              0.5666666666666667,
+              0.5940639269406393,
+              0.5840182648401826,
+              0.634703196347032,
+              0.4557077625570777,
+              0.5333333333333333,
+              0.791324200913242,
+              0.34931506849315064,
+              0.4657534246575342,
+              0.271689497716895,
+              0.11917808219178083
+            ]
+          },
+          {
+            "id": "T5YIE",
+            "name": "5y breakeven inflation",
+            "panel": "macro",
+            "source": "fred",
+            "source_url": "https://fred.stlouisfed.org/series/T5YIE",
+            "sign": 1,
+            "transform": "level",
+            "unit": "percent",
+            "description": "The bond market's implied forecast for average inflation over the next 5 years. Computed as the spread between nominal 5-year Treasury yield and 5-year TIPS yield.",
+            "derivation": "FRED T5YIE, daily. The number is the inflation rate at which an investor would be indifferent between a nominal Treasury and a TIPS over the period — \"breaking even.\"",
+            "interpretation": "Historically read as a regime-dependent signal. In deflationary periods (2009–2020), rising breakevens meant the Fed was succeeding at reflating — risk-on. In the post-2022 inflation regime, elevated breakevens can also signal Fed hawkishness — risk-off. Our sign is +1 (reflation framing). Treat with care during stagflation-like conditions.",
+            "raw_value": 2.24,
+            "raw_date": "2026-06-29",
+            "transformed_value": 2.24,
+            "percentile": 0.23972602739726026,
+            "signed_percentile": 0.23972602739726026,
+            "panel_weight": 0.09157055397604723,
+            "sparkline": [
+              0.04794520547945205,
+              0.0228310502283105,
+              0.05799086757990868,
+              0.5712328767123288,
+              0.4977168949771689,
+              0.5995433789954338,
+              0.7771689497716895,
+              0.8036529680365296,
+              0.8525114155251141,
+              0.42876712328767125,
+              0.6579908675799087,
+              0.4762557077625571,
+              0.8,
+              0.8365296803652968,
+              0.7607305936073059,
+              0.7287671232876712,
+              0.4269406392694064,
+              0.3598173515981735,
+              0.9484018264840183,
+              0.7319634703196347,
+              0.9410958904109589,
+              0.9990867579908675,
+              0.8666666666666667,
+              0.23972602739726026
+            ]
+          },
+          {
+            "id": "HY_OAS",
+            "name": "HY OAS credit spread",
+            "panel": "macro",
+            "source": "fred",
+            "source_url": "https://fred.stlouisfed.org/series/BAMLH0A0HYM2",
+            "sign": -1,
+            "transform": "level",
+            "unit": "percent",
+            "description": "ICE BofA US High Yield Option-Adjusted Spread. The yield premium that investors demand to hold US junk-rated corporate bonds over Treasuries. A direct, real-time measure of credit risk appetite.",
+            "derivation": "FRED series BAMLH0A0HYM2, daily. Already an OAS — adjusts for embedded call/put options in the bond universe so it's comparable across regimes.",
+            "interpretation": "Tight spreads (below 3.5%) signal that credit markets are complacent, default risk is being priced low — risk-on. Wide spreads (above 6%) signal that credit investors are pricing-in stress — risk-off. Above 10% is recessionary. One of the most reliable late-cycle / crisis indicators we have.",
+            "raw_value": 2.78,
+            "raw_date": "2026-06-28",
+            "transformed_value": 2.78,
+            "percentile": 0.14840182648401826,
+            "signed_percentile": 0.8515981735159818,
+            "panel_weight": 0.22439235607162913,
+            "sparkline": [
+              0.6993006993006994,
+              0.8239130434782609,
+              0.9959183673469387,
+              0.989443378119002,
+              0.956442831215971,
+              0.8694158075601375,
+              0.935562805872757,
+              0.8174726989079564,
+              0.32738095238095233,
+              0.19088319088319083,
+              0.4795361527967258,
+              0.807994757536042,
+              0.8438287153652393,
+              0.8563636363636363,
+              0.8690058479532163,
+              0.7370203160270881,
+              0.7603711790393013,
+              0.8653643083421331,
+              0.7612474437627812,
+              0.5576540755467196,
+              0.36306653809064604,
+              0.8336457357075914,
+              0.9009132420091324,
+              0.8515981735159818
+            ]
+          },
+          {
+            "id": "DXY",
+            "name": "DXY (trade-weighted USD)",
+            "panel": "macro",
+            "source": "fred",
+            "source_url": "https://fred.stlouisfed.org/series/DTWEXBGS",
+            "sign": -1,
+            "transform": "level",
+            "unit": "index",
+            "description": "A broad trade-weighted index of the US dollar against the currencies of major US trading partners. Measures dollar strength globally, not just against the major reserve currencies.",
+            "derivation": "FRED series DTWEXBGS. Published weekly (not the daily DXY ICE futures index). We read the raw index level.",
+            "interpretation": "A stronger dollar tightens global financial conditions — emerging-market borrowers with dollar debt struggle, commodity prices fall, and risk assets typically suffer. A weaker dollar does the opposite. Risk-off when DXY is high or rising; risk-on when low or falling.",
+            "raw_value": 119.2868,
+            "raw_date": "2026-06-28",
+            "transformed_value": 119.2868,
+            "percentile": 0.13881278538812786,
+            "signed_percentile": 0.8611872146118722,
+            "panel_weight": 0.0995902498447072,
+            "sparkline": [
+              0.11278538812785388,
+              0.25114155251141557,
+              0.39315068493150684,
+              0.05525114155251143,
+              0.0547945205479452,
+              0.0004566210045662267,
+              0.021461187214611877,
+              0.04611872146118723,
+              0.13287671232876708,
+              0.4068493150684932,
+              0.5397260273972603,
+              0.8771689497716895,
+              0.5237442922374429,
+              0.7776255707762557,
+              0.7712328767123288,
+              0.4963470319634703,
+              0.5593607305936072,
+              0.8159817351598173,
+              0.9808219178082191,
+              0.9744292237442922,
+              0.5237442922374429,
+              0.9237442922374429,
+              0.8547945205479452,
+              0.8611872146118722
+            ]
+          },
+          {
+            "id": "ICSA",
+            "name": "Initial jobless claims",
+            "panel": "macro",
+            "source": "fred",
+            "source_url": "https://fred.stlouisfed.org/series/ICSA",
+            "sign": -1,
+            "transform": "level",
+            "unit": "count",
+            "description": "The number of new claims filed for US unemployment insurance benefits in the most recent week. The cleanest high-frequency read on labor market health.",
+            "derivation": "FRED series ICSA, published every Thursday for the prior week ending Saturday. We use the raw weekly count.",
+            "interpretation": "Low claims (below 250k) signal a tight labor market — workers are hard to replace, businesses are hesitant to lay off. Rising claims (above 350k) signal labor market stress and have historically preceded recessions by 3–6 months. Risk-on when low; risk-off when rising.",
+            "raw_value": 215000,
+            "raw_date": "2026-06-28",
+            "transformed_value": 215000,
+            "percentile": 0.30730593607305934,
+            "signed_percentile": 0.6926940639269407,
+            "panel_weight": 0.23478290695404608,
+            "sparkline": [
+              0.14109589041095894,
+              0.31872146118721456,
+              0.29863013698630136,
+              0.4730593607305936,
+              0.38082191780821917,
+              0.7073059360730594,
+              0.6963470319634704,
+              0.06073059360730593,
+              0.44246575342465755,
+              0.08538812785388128,
+              0.05159817351598173,
+              0.20273972602739732,
+              0.5561643835616439,
+              0.147945205479452,
+              0.38219178082191785,
+              0.5497716894977169,
+              0.7168949771689498,
+              0.9561643835616438,
+              0.2721461187214612,
+              0.773972602739726,
+              0.9534246575342465,
+              0.9972602739726028,
+              0.7050228310502283,
+              0.6926940639269407
+            ]
+          },
+          {
+            "id": "VIX",
+            "name": "VIX",
+            "panel": "macro",
+            "source": "yahoo",
+            "source_url": "https://finance.yahoo.com/quote/%5EVIX",
+            "sign": -1,
+            "transform": "level",
+            "unit": "index",
+            "description": "CBOE Volatility Index. The market's expected 30-day volatility of the S&P 500, derived from the prices of out-of-the-money S&P options. Universally known as the \"fear gauge.\"",
+            "derivation": "Yahoo Finance ticker ^VIX, daily close. The number is annualized expected volatility in percentage points.",
+            "interpretation": "Below 15 = complacency, low fear, risk-on environment. 15–25 = normal. 25–40 = elevated stress, risk-off. Above 40 = panic (rare — March 2020, Lehman, 1987). VIX tends to mean-revert; sustained elevated readings matter more than spikes.",
+            "raw_value": 17.649999618530273,
+            "raw_date": "2026-06-29",
+            "transformed_value": 17.649999618530273,
+            "percentile": 0.6648401826484018,
+            "signed_percentile": 0.33515981735159817,
+            "panel_weight": 0.0708318593410515,
+            "sparkline": [
+              0.6442922374429223,
+              0.708675799086758,
+              0.6105022831050229,
+              0.23972602739726023,
+              0.8337899543378995,
+              0.539269406392694,
+              0.5885844748858448,
+              0.3707762557077625,
+              0.2296803652968037,
+              0.16301369863013704,
+              0.42648401826484017,
+              0.5561643835616439,
+              0.5347031963470319,
+              0.6296803652968037,
+              0.5319634703196348,
+              0.39497716894977164,
+              0.5223744292237442,
+              0.6479452054794521,
+              0.3337899543378996,
+              0.16712328767123286,
+              0.045205479452054775,
+              0.40776255707762554,
+              0.597716894977169,
+              0.33515981735159817
+            ]
+          },
+          {
+            "id": "COPPER_GOLD",
+            "name": "Copper / Gold ratio",
+            "panel": "macro",
+            "source": "yahoo",
+            "source_url": "https://finance.yahoo.com/quote/HG=F",
+            "sign": 1,
+            "transform": "level",
+            "unit": "ratio4",
+            "description": "Price of copper futures divided by price of gold futures. Copper is an industrial-demand proxy (used heavily in construction, electronics, manufacturing); gold is a defensive store of value. The ratio captures whether the commodity complex is leaning cyclical or defensive.",
+            "derivation": "Yahoo Finance HG=F (Comex copper futures) divided by GC=F (Comex gold futures), daily.",
+            "interpretation": "Rising ratio signals industrial activity outpacing safe-haven demand — growth confidence — risk-on. Falling ratio signals investors flocking to gold while copper demand fades — defensive positioning — risk-off. A classic Druckenmiller-favorite cyclical gauge.",
+            "raw_value": 0.0015327125658240101,
+            "raw_date": "2026-06-29",
+            "transformed_value": 0.0015327125658240101,
+            "percentile": 0.4031963470319635,
+            "signed_percentile": 0.4031963470319635,
+            "panel_weight": 0.1358255739171902,
+            "sparkline": [
+              0.0031963470319634705,
+              0.014611872146118721,
+              0.05342465753424658,
+              0.00228310502283105,
+              0.0036529680365296802,
+              0.0031963470319634705,
+              0.00410958904109589,
+              0.09908675799086758,
+              0.11735159817351598,
+              0.00228310502283105,
+              0.021004566210045664,
+              0.08904109589041095,
+              0.00045662100456621003,
+              0.008675799086757991,
+              0.015068493150684932,
+              0.045205479452054796,
+              0.026027397260273973,
+              0.11643835616438356,
+              0.0821917808219178,
+              0.0036529680365296802,
+              0.05707762557077625,
+              0.19223744292237444,
+              0.2853881278538813,
+              0.4031963470319635
+            ]
+          },
+          {
+            "id": "DEFI_TVL",
+            "name": "Total DeFi TVL",
+            "panel": "onchain",
+            "source": "defillama_tvl",
+            "source_url": "https://defillama.com/",
+            "sign": 1,
+            "transform": "level",
+            "unit": "usd",
+            "description": "Total dollar value of crypto assets locked across all DeFi protocols — lending, automated market makers, liquid staking, restaking, yield aggregators. The aggregate measure of capital deployment into permissionless finance.",
+            "derivation": "DefiLlama aggregates TVL across all tracked protocols on all chains in USD terms. Updated daily.",
+            "interpretation": "Rising TVL = capital flowing into DeFi = on-chain risk appetite = risk-on. Falling TVL = capital withdrawal back to centralized rails or stables = risk-off. Note: USD value is sensitive to ETH/BTC price moves, so growth measures (90d Δ) are often more informative than the level alone.",
+            "raw_value": 70997425735,
+            "raw_date": "2026-06-29",
+            "transformed_value": 70997425735,
+            "percentile": 0.2278538812785388,
+            "signed_percentile": 0.2278538812785388,
+            "panel_weight": 0.08525326708884241,
+            "sparkline": [
+              0.693607305936073,
+              0.5958904109589042,
+              0.6972602739726027,
+              0.7310502283105023,
+              0.854337899543379,
+              0.8552511415525114,
+              0.8863013698630137,
+              0.8123287671232877,
+              0.763013698630137,
+              0.860730593607306,
+              0.9146118721461187,
+              0.917351598173516,
+              0.9958904109589041,
+              0.991324200913242,
+              0.9858447488584475,
+              0.9301369863013699,
+              0.8251141552511415,
+              0.7748858447488585,
+              0.7392694063926941,
+              0.5292237442922374,
+              0.5255707762557078,
+              0.36210045662100454,
+              0.29634703196347034,
+              0.2278538812785388
+            ]
+          },
+          {
+            "id": "STABLES",
+            "name": "Total stablecoin float",
+            "panel": "onchain",
+            "source": "defillama_stables",
+            "source_url": "https://defillama.com/stablecoins",
+            "sign": 1,
+            "transform": "level",
+            "unit": "usd",
+            "description": "Total outstanding supply of USD-pegged stablecoins (USDT, USDC, DAI, and others) across all chains. Approximates the dollar liquidity sitting on crypto rails.",
+            "derivation": "DefiLlama stablecoin aggregate, in USD. Updated daily.",
+            "interpretation": "Growing stablecoin float = capital entering the crypto ecosystem (often a leading indicator of upcoming deployment into risky assets). Shrinking float = capital leaving crypto. Risk-on when growing; risk-off when contracting. Counter-intuitively, stablecoin growth alongside falling crypto prices is sometimes the most bullish setup — dry powder accumulating during a sell-off.",
+            "raw_value": 310940177575.17,
+            "raw_date": "2026-06-29",
+            "transformed_value": 310940177575.17,
+            "percentile": 0.8945205479452055,
+            "signed_percentile": 0.8945205479452055,
+            "panel_weight": 0.100968594412627,
+            "sparkline": [
+              0.8707762557077625,
+              0.8954337899543379,
+              0.9018264840182648,
+              0.9018264840182648,
+              0.9995433789954338,
+              0.9931506849315068,
+              0.9995433789954338,
+              0.9831050228310503,
+              0.9958904109589041,
+              0.9995433789954338,
+              0.9995433789954338,
+              0.9986301369863013,
+              0.9995433789954338,
+              0.9995433789954338,
+              0.9995433789954338,
+              0.9876712328767123,
+              0.9812785388127854,
+              0.9684931506849315,
+              0.9200913242009132,
+              0.9785388127853881,
+              0.9867579908675799,
+              0.9858447488584475,
+              0.9602739726027397,
+              0.8945205479452055
+            ]
+          },
+          {
+            "id": "BTC_ACTIVE",
+            "name": "BTC active addresses",
+            "panel": "onchain",
+            "source": "blockchain_com",
+            "source_url": "https://www.blockchain.com/explorer/charts/n-unique-addresses",
+            "sign": 1,
+            "transform": "level",
+            "unit": "count",
+            "description": "Number of unique Bitcoin addresses that participated in transactions on a given day. A proxy for organic network usage and on-chain engagement.",
+            "derivation": "Blockchain.com's n-unique-addresses chart, daily.",
+            "interpretation": "Rising active addresses = engaged user base, growing network utility = risk-on. Caveat: structural decline is real — ETF custody, Lightning Network, and exchange consolidation have moved transactions off-chain. So absolute levels are less informative than they were pre-2021. Treat this as a directional indicator, not a level read.",
+            "raw_value": 416739,
+            "raw_date": "2026-06-28",
+            "transformed_value": 416739,
+            "percentile": 0.028310502283105023,
+            "signed_percentile": 0.028310502283105023,
+            "panel_weight": 0.1429985367966247,
+            "sparkline": [
+              0.1136986301369863,
+              0.0771689497716895,
+              0.10821917808219178,
+              0.21506849315068494,
+              0.2726027397260274,
+              0.19315068493150686,
+              0.28356164383561644,
+              0.5045662100456622,
+              0.21232876712328766,
+              0.30182648401826484,
+              0.1593607305936073,
+              0.21324200913242009,
+              0.43424657534246575,
+              0.040639269406392696,
+              0.41050228310502285,
+              0.46986301369863015,
+              0.05251141552511415,
+              0.41598173515981735,
+              0.3365296803652968,
+              0.22054794520547946,
+              0.19771689497716896,
+              0.32557077625570774,
+              0.012328767123287671,
+              0.028310502283105023
+            ]
+          },
+          {
+            "id": "ETH_ACTIVE",
+            "name": "ETH active addresses",
+            "panel": "onchain",
+            "source": "coinmetrics",
+            "source_url": "https://charts.coinmetrics.io/network-data/eth/AdrActCnt",
+            "sign": 1,
+            "transform": "level",
+            "unit": "count",
+            "description": "Number of unique Ethereum addresses that transacted on a given day. Equivalent to the BTC measure, for ETH mainnet specifically.",
+            "derivation": "Coinmetrics community data, asset=ETH, metric=AdrActCnt. Daily.",
+            "interpretation": "Same logic as BTC active addresses — rising = engaged network = risk-on. Caveats also similar: L2 migration has moved a lot of ETH activity off mainnet. Look for trend changes rather than absolute levels.",
+            "raw_value": 1059702,
+            "raw_date": "2026-06-28",
+            "transformed_value": 1059702,
+            "percentile": 0.9698630136986301,
+            "signed_percentile": 0.9698630136986301,
+            "panel_weight": 0.13831808205802867,
+            "sparkline": [
+              0.25525114155251144,
+              0.5739726027397261,
+              0.41598173515981735,
+              0.27351598173515984,
+              0.6735159817351598,
+              0.6689497716894978,
+              0.6196347031963471,
+              0.7748858447488585,
+              0.5821917808219178,
+              0.8625570776255708,
+              0.9374429223744293,
+              0.7328767123287672,
+              0.9968036529680365,
+              0.9821917808219178,
+              0.9429223744292238,
+              0.9575342465753425,
+              0.9940639269406393,
+              0.9858447488584475,
+              0.9593607305936073,
+              0.95662100456621,
+              0.95662100456621,
+              0.8662100456621005,
+              0.9036529680365297,
+              0.9698630136986301
+            ]
+          },
+          {
+            "id": "BTC_MVRV",
+            "name": "BTC MVRV",
+            "panel": "onchain",
+            "source": "blockchain_com",
+            "source_url": "https://www.blockchain.com/explorer/charts/mvrv",
+            "sign": 1,
+            "transform": "level",
+            "unit": "ratio2",
+            "description": "Market Value to Realized Value ratio. Divides BTC market capitalization by its \"realized cap\" — the sum of (price-at-last-move × amount) across all UTXOs. Represents how big a paper gain or loss the average bitcoin holder is sitting on.",
+            "derivation": "Blockchain.com mvrv chart. Realized cap is computed from on-chain UTXO data.",
+            "interpretation": "Below 1 = market cap below cost basis of holders = historical bottoms (March 2020, late 2022). Above 3 = average holder up 3x = historical tops (late 2017, early 2021). Risk-on when rising from low; the indicator becomes a contrarian peak signal above 3.5. Use with care near extremes.",
+            "raw_value": null,
+            "raw_date": null,
+            "transformed_value": null,
+            "percentile": null,
+            "signed_percentile": null,
+            "panel_weight": 0,
+            "sparkline": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "id": "BTC_ETH",
+            "name": "BTC / ETH ratio",
+            "panel": "onchain",
+            "source": "yahoo",
+            "source_url": "https://finance.yahoo.com/quote/BTC-USD",
+            "sign": -1,
+            "transform": "level",
+            "unit": "ratio2",
+            "description": "BTC price divided by ETH price. A proxy for \"crypto risk preference\" — when capital flies to the safest crypto asset (BTC) over the higher-beta major (ETH), risk-off is happening within crypto.",
+            "derivation": "Yahoo Finance BTC-USD ÷ ETH-USD, daily. We use this as a proxy for BTC dominance because true BTC.D historical data requires a paid feed.",
+            "interpretation": "Rising ratio = BTC outperforming ETH = capital seeking shelter within crypto = crypto risk-off. Falling ratio = ETH outperforming = animal spirits, alt-rotation = risk-on. Strongly correlates with the broader \"alt season\" framework.",
+            "raw_value": 37.37402247895539,
+            "raw_date": "2026-06-29",
+            "transformed_value": 37.37402247895539,
+            "percentile": 0.8598173515981735,
+            "signed_percentile": 0.14018264840182648,
+            "panel_weight": 0.13998081687621647,
+            "sparkline": [
+              0.04063926940639273,
+              0.0031963470319634757,
+              0.015068493150684925,
+              0.0004566210045662267,
+              0.03242009132420087,
+              0.020547945205479423,
+              0.012328767123287676,
+              0.0004566210045662267,
+              0.00136986301369868,
+              0.011415525114155223,
+              0.06621004566210043,
+              0.05616438356164388,
+              0.16940639269406388,
+              0.3100456621004566,
+              0.23424657534246573,
+              0.21232876712328763,
+              0.19771689497716893,
+              0.23333333333333328,
+              0.16118721461187213,
+              0.16210045662100458,
+              0.20958904109589038,
+              0.18310502283105023,
+              0.13013698630136983,
+              0.14018264840182648
+            ]
+          },
+          {
+            "id": "ETH_TREND",
+            "name": "ETH 50d/200d trend",
+            "panel": "onchain",
+            "source": "yahoo",
+            "source_url": "https://finance.yahoo.com/quote/ETH-USD",
+            "sign": 1,
+            "transform": "trend_50_200",
+            "unit": "index",
+            "description": "Ratio of ETH's 50-day simple moving average to its 200-day SMA. The ETH-specific equivalent of SPX_TREND.",
+            "derivation": "Yahoo ETH-USD daily closes. SMA(50) ÷ SMA(200).",
+            "interpretation": "Above 1 = ETH in uptrend = risk-on. Below 1 = downtrend = risk-off. Like SPX_TREND, lags but filters noise.",
+            "raw_value": 1613.510009765625,
+            "raw_date": "2026-06-29",
+            "transformed_value": 0.8147885259731608,
+            "percentile": 0.17488584474885846,
+            "signed_percentile": 0.17488584474885846,
+            "panel_weight": 0.1550808733493497,
+            "sparkline": [
+              0.4625570776255708,
+              0.27899543378995434,
+              0.17488584474885846,
+              0.25251141552511414,
+              0.4963470319634703,
+              0.8315068493150685,
+              0.7155251141552511,
+              0.49726027397260275,
+              0.10365296803652968,
+              0.051598173515981734,
+              0.16027397260273973,
+              0.4954337899543379,
+              0.8168949771689498,
+              0.9995433789954338,
+              0.9703196347031964,
+              0.8671232876712329,
+              0.35114155251141554,
+              0.11552511415525114,
+              0.10365296803652968,
+              0.03881278538812785,
+              0.03424657534246575,
+              0.14200913242009133,
+              0.30639269406392694,
+              0.17488584474885846
+            ]
+          },
+          {
+            "id": "NEW_TOKENS",
+            "name": "New DEX pools (24h)",
+            "panel": "onchain",
+            "source": "geckoterminal_newpools",
+            "source_url": "https://www.geckoterminal.com/new-pools",
+            "sign": -1,
+            "transform": "level",
+            "unit": "count",
+            "description": "Count of new DEX liquidity pools (≈ new token launches) observed across all networks in the trailing 24 hours. A real-time measure of crypto speculation intensity.",
+            "derivation": "GeckoTerminal's /networks/new_pools endpoint, polled daily. The cron appends each day's count to data/regime/token-launches.csv; the percentile rank reads from that accumulated history.",
+            "interpretation": "High count = speculative froth (think 2021 NFT/meme manias, 2024 memecoin frenzy) = late-cycle behavior = contrarian risk-off signal. Low count = calm market = risk-on. Sign −1: rising count counts as risk-off. Note: this indicator is \"accumulate-forward\" — it only became reliable once we had ~60 days of daily samples, and the upstream API caps make it under-count on the busiest days.",
+            "raw_value": 100,
+            "raw_date": "2026-06-29",
+            "transformed_value": 100,
+            "percentile": 0.5,
+            "signed_percentile": 0.5,
+            "panel_weight": 0,
+            "sparkline": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              0.5
+            ]
+          },
+          {
+            "id": "DEFI_GROWTH",
+            "name": "DeFi TVL growth (90d)",
+            "panel": "onchain",
+            "source": "defillama_tvl",
+            "source_url": "https://defillama.com/",
+            "sign": 1,
+            "transform": "change90",
+            "unit": "percent_change",
+            "description": "The 90-day percent change in total DeFi TVL. Captures flow — whether capital is actively expanding or contracting the on-chain ecosystem — independent of where the absolute level happens to be.",
+            "derivation": "DefiLlama TVL series, transformed via (TVL[today] − TVL[today−90]) ÷ TVL[today−90].",
+            "interpretation": "Positive growth = capital flowing in = risk-on. Negative growth = capital exit = risk-off. Sits alongside DEFI_TVL (level): position vs. flow are different questions and both matter for treasury context.",
+            "raw_value": 70997425735,
+            "raw_date": "2026-06-29",
+            "transformed_value": -0.22642589091718193,
+            "percentile": 0.13378995433789953,
+            "signed_percentile": 0.13378995433789953,
+            "panel_weight": 0.14238185895155442,
+            "sparkline": [
+              0.626027397260274,
+              0.16575342465753426,
+              0.4671232876712329,
+              0.5374429223744293,
+              0.9328767123287671,
+              0.8926940639269406,
+              0.8799086757990867,
+              0.20410958904109588,
+              0.17671232876712328,
+              0.254337899543379,
+              0.6735159817351598,
+              0.7082191780821918,
+              0.8470319634703196,
+              0.7949771689497717,
+              0.8598173515981735,
+              0.5438356164383562,
+              0.07990867579908675,
+              0.009589041095890411,
+              0.06894977168949772,
+              0.10182648401826484,
+              0.16575342465753426,
+              0.032420091324200914,
+              0.3538812785388128,
+              0.13378995433789953
+            ]
+          },
+          {
+            "id": "STABLES_GROWTH",
+            "name": "Stablecoin float growth (90d)",
+            "panel": "onchain",
+            "source": "defillama_stables",
+            "source_url": "https://defillama.com/stablecoins",
+            "sign": 1,
+            "transform": "change90",
+            "unit": "percent_change",
+            "description": "The 90-day percent change in total stablecoin float. Captures whether dollar liquidity on crypto rails is expanding or shrinking — a leading indicator of imminent risk-asset deployment or withdrawal.",
+            "derivation": "DefiLlama stablecoin aggregate, transformed via (Stables[today] − Stables[today−90]) ÷ Stables[today−90].",
+            "interpretation": "Stablecoin float almost always grows over multi-month periods (the asset class is structurally growing), so a 90d change above ~5% counts as healthy expansion = risk-on. Stagnation or contraction = capital leaving crypto = risk-off. One of the cleaner pure-flow signals.",
+            "raw_value": 310940177575.17,
+            "raw_date": "2026-06-29",
+            "transformed_value": -0.00870924486868787,
+            "percentile": 0.10821917808219178,
+            "signed_percentile": 0.10821917808219178,
+            "panel_weight": 0.09501797046675663,
+            "sparkline": [
+              0.5301369863013699,
+              0.608675799086758,
+              0.6506849315068494,
+              0.6251141552511416,
+              0.8324200913242009,
+              0.9301369863013699,
+              0.9876712328767123,
+              0.8488584474885845,
+              0.8470319634703196,
+              0.7748858447488585,
+              0.7374429223744292,
+              0.6488584474885845,
+              0.7328767123287672,
+              0.8488584474885845,
+              0.910958904109589,
+              0.8269406392694064,
+              0.5420091324200913,
+              0.3082191780821918,
+              0.2497716894977169,
+              0.254337899543379,
+              0.29269406392694064,
+              0.34383561643835614,
+              0.28904109589041094,
+              0.10821917808219178
+            ]
+          }
+        ]
+      },
+      "history": [
+        {
+          "date": "2026-01-01",
+          "composite": 0.513195
+        },
+        {
+          "date": "2026-01-02",
+          "composite": 0.538878
+        },
+        {
+          "date": "2026-01-03",
+          "composite": 0.525908
+        },
+        {
+          "date": "2026-01-04",
+          "composite": 0.523808
+        },
+        {
+          "date": "2026-01-05",
+          "composite": 0.544846
+        },
+        {
+          "date": "2026-01-06",
+          "composite": 0.551471
+        },
+        {
+          "date": "2026-01-07",
+          "composite": 0.535938
+        },
+        {
+          "date": "2026-01-08",
+          "composite": 0.528106
+        },
+        {
+          "date": "2026-01-09",
+          "composite": 0.550711
+        },
+        {
+          "date": "2026-01-10",
+          "composite": 0.540173
+        },
+        {
+          "date": "2026-01-11",
+          "composite": 0.533518
+        },
+        {
+          "date": "2026-01-12",
+          "composite": 0.547039
+        },
+        {
+          "date": "2026-01-13",
+          "composite": 0.548999
+        },
+        {
+          "date": "2026-01-14",
+          "composite": 0.559514
+        },
+        {
+          "date": "2026-01-15",
+          "composite": 0.575821
+        },
+        {
+          "date": "2026-01-16",
+          "composite": 0.584147
+        },
+        {
+          "date": "2026-01-17",
+          "composite": 0.561372
+        },
+        {
+          "date": "2026-01-18",
+          "composite": 0.558068
+        },
+        {
+          "date": "2026-01-19",
+          "composite": 0.557619
+        },
+        {
+          "date": "2026-01-20",
+          "composite": 0.537724
+        },
+        {
+          "date": "2026-01-21",
+          "composite": 0.559429
+        },
+        {
+          "date": "2026-01-22",
+          "composite": 0.562173
+        },
+        {
+          "date": "2026-01-23",
+          "composite": 0.56749
+        },
+        {
+          "date": "2026-01-24",
+          "composite": 0.552742
+        },
+        {
+          "date": "2026-01-25",
+          "composite": 0.548709
+        },
+        {
+          "date": "2026-01-26",
+          "composite": 0.553374
+        },
+        {
+          "date": "2026-01-27",
+          "composite": 0.564538
+        },
+        {
+          "date": "2026-01-28",
+          "composite": 0.570175
+        },
+        {
+          "date": "2026-01-29",
+          "composite": 0.577281
+        },
+        {
+          "date": "2026-01-30",
+          "composite": 0.581541
+        },
+        {
+          "date": "2026-01-31",
+          "composite": 0.508127
+        },
+        {
+          "date": "2026-02-01",
+          "composite": 0.485927
+        },
+        {
+          "date": "2026-02-02",
+          "composite": 0.511905
+        },
+        {
+          "date": "2026-02-03",
+          "composite": 0.517517
+        },
+        {
+          "date": "2026-02-04",
+          "composite": 0.497675
+        },
+        {
+          "date": "2026-02-05",
+          "composite": 0.498444
+        },
+        {
+          "date": "2026-02-06",
+          "composite": 0.507337
+        },
+        {
+          "date": "2026-02-07",
+          "composite": 0.475293
+        },
+        {
+          "date": "2026-02-08",
+          "composite": 0.466399
+        },
+        {
+          "date": "2026-02-09",
+          "composite": 0.480403
+        },
+        {
+          "date": "2026-02-10",
+          "composite": 0.477608
+        },
+        {
+          "date": "2026-02-11",
+          "composite": 0.477362
+        },
+        {
+          "date": "2026-02-12",
+          "composite": 0.461241
+        },
+        {
+          "date": "2026-02-13",
+          "composite": 0.463627
+        },
+        {
+          "date": "2026-02-14",
+          "composite": 0.498251
+        },
+        {
+          "date": "2026-02-15",
+          "composite": 0.494059
+        },
+        {
+          "date": "2026-02-16",
+          "composite": 0.498401
+        },
+        {
+          "date": "2026-02-17",
+          "composite": 0.493686
+        },
+        {
+          "date": "2026-02-18",
+          "composite": 0.512636
+        },
+        {
+          "date": "2026-02-19",
+          "composite": 0.509004
+        },
+        {
+          "date": "2026-02-20",
+          "composite": 0.523912
+        },
+        {
+          "date": "2026-02-21",
+          "composite": 0.511881
+        },
+        {
+          "date": "2026-02-22",
+          "composite": 0.506585
+        },
+        {
+          "date": "2026-02-23",
+          "composite": 0.488185
+        },
+        {
+          "date": "2026-02-24",
+          "composite": 0.492434
+        },
+        {
+          "date": "2026-02-25",
+          "composite": 0.510583
+        },
+        {
+          "date": "2026-02-26",
+          "composite": 0.515887
+        },
+        {
+          "date": "2026-02-27",
+          "composite": 0.506888
+        },
+        {
+          "date": "2026-02-28",
+          "composite": 0.477612
+        },
+        {
+          "date": "2026-03-01",
+          "composite": 0.467117
+        },
+        {
+          "date": "2026-03-02",
+          "composite": 0.50115
+        },
+        {
+          "date": "2026-03-03",
+          "composite": 0.482302
+        },
+        {
+          "date": "2026-03-04",
+          "composite": 0.492934
+        },
+        {
+          "date": "2026-03-05",
+          "composite": 0.496691
+        },
+        {
+          "date": "2026-03-06",
+          "composite": 0.49503
+        },
+        {
+          "date": "2026-03-07",
+          "composite": 0.471852
+        },
+        {
+          "date": "2026-03-08",
+          "composite": 0.464918
+        },
+        {
+          "date": "2026-03-09",
+          "composite": 0.458395
+        },
+        {
+          "date": "2026-03-10",
+          "composite": 0.489886
+        },
+        {
+          "date": "2026-03-11",
+          "composite": 0.481445
+        },
+        {
+          "date": "2026-03-12",
+          "composite": 0.461133
+        },
+        {
+          "date": "2026-03-13",
+          "composite": 0.449787
+        },
+        {
+          "date": "2026-03-14",
+          "composite": 0.441416
+        },
+        {
+          "date": "2026-03-15",
+          "composite": 0.438794
+        },
+        {
+          "date": "2026-03-16",
+          "composite": 0.46739
+        },
+        {
+          "date": "2026-03-17",
+          "composite": 0.483215
+        },
+        {
+          "date": "2026-03-18",
+          "composite": 0.481403
+        },
+        {
+          "date": "2026-03-19",
+          "composite": 0.466655
+        },
+        {
+          "date": "2026-03-20",
+          "composite": 0.452635
+        },
+        {
+          "date": "2026-03-21",
+          "composite": 0.440303
+        },
+        {
+          "date": "2026-03-22",
+          "composite": 0.428485
+        },
+        {
+          "date": "2026-03-23",
+          "composite": 0.457196
+        },
+        {
+          "date": "2026-03-24",
+          "composite": 0.456765
+        },
+        {
+          "date": "2026-03-25",
+          "composite": 0.4711
+        },
+        {
+          "date": "2026-03-26",
+          "composite": 0.459824
+        },
+        {
+          "date": "2026-03-27",
+          "composite": 0.435853
+        },
+        {
+          "date": "2026-03-28",
+          "composite": 0.425045
+        },
+        {
+          "date": "2026-03-29",
+          "composite": 0.424581
+        },
+        {
+          "date": "2026-03-30",
+          "composite": 0.426645
+        },
+        {
+          "date": "2026-03-31",
+          "composite": 0.453616
+        },
+        {
+          "date": "2026-04-01",
+          "composite": 0.501148
+        },
+        {
+          "date": "2026-04-02",
+          "composite": 0.487228
+        },
+        {
+          "date": "2026-04-03",
+          "composite": 0.479395
+        },
+        {
+          "date": "2026-04-04",
+          "composite": 0.423404
+        },
+        {
+          "date": "2026-04-05",
+          "composite": 0.423416
+        },
+        {
+          "date": "2026-04-06",
+          "composite": 0.447808
+        },
+        {
+          "date": "2026-04-07",
+          "composite": 0.449239
+        },
+        {
+          "date": "2026-04-08",
+          "composite": 0.49151
+        },
+        {
+          "date": "2026-04-09",
+          "composite": 0.495624
+        },
+        {
+          "date": "2026-04-10",
+          "composite": 0.507169
+        },
+        {
+          "date": "2026-04-11",
+          "composite": 0.522284
+        },
+        {
+          "date": "2026-04-12",
+          "composite": 0.515233
+        },
+        {
+          "date": "2026-04-13",
+          "composite": 0.530922
+        },
+        {
+          "date": "2026-04-14",
+          "composite": 0.562459
+        },
+        {
+          "date": "2026-04-15",
+          "composite": 0.551748
+        },
+        {
+          "date": "2026-04-16",
+          "composite": 0.547256
+        },
+        {
+          "date": "2026-04-17",
+          "composite": 0.572515
+        },
+        {
+          "date": "2026-04-18",
+          "composite": 0.521214
+        },
+        {
+          "date": "2026-04-19",
+          "composite": 0.493307
+        },
+        {
+          "date": "2026-04-20",
+          "composite": 0.497832
+        },
+        {
+          "date": "2026-04-21",
+          "composite": 0.511425
+        },
+        {
+          "date": "2026-04-22",
+          "composite": 0.50771
+        },
+        {
+          "date": "2026-04-23",
+          "composite": 0.50871
+        },
+        {
+          "date": "2026-04-24",
+          "composite": 0.522264
+        },
+        {
+          "date": "2026-04-25",
+          "composite": 0.540615
+        },
+        {
+          "date": "2026-04-26",
+          "composite": 0.536061
+        },
+        {
+          "date": "2026-04-27",
+          "composite": 0.541887
+        },
+        {
+          "date": "2026-04-28",
+          "composite": 0.531006
+        },
+        {
+          "date": "2026-04-29",
+          "composite": 0.533432
+        },
+        {
+          "date": "2026-04-30",
+          "composite": 0.566117
+        },
+        {
+          "date": "2026-05-01",
+          "composite": 0.58943
+        },
+        {
+          "date": "2026-05-02",
+          "composite": 0.552277
+        },
+        {
+          "date": "2026-05-03",
+          "composite": 0.568827
+        },
+        {
+          "date": "2026-05-04",
+          "composite": 0.565848
+        },
+        {
+          "date": "2026-05-05",
+          "composite": 0.589948
+        },
+        {
+          "date": "2026-05-06",
+          "composite": 0.592633
+        },
+        {
+          "date": "2026-05-07",
+          "composite": 0.600823
+        },
+        {
+          "date": "2026-05-08",
+          "composite": 0.591581
+        },
+        {
+          "date": "2026-05-09",
+          "composite": 0.621458
+        },
+        {
+          "date": "2026-05-10",
+          "composite": 0.552123
+        },
+        {
+          "date": "2026-05-11",
+          "composite": 0.560372
+        },
+        {
+          "date": "2026-05-12",
+          "composite": 0.562889
+        },
+        {
+          "date": "2026-05-13",
+          "composite": 0.571878
+        },
+        {
+          "date": "2026-05-14",
+          "composite": 0.573315
+        },
+        {
+          "date": "2026-05-15",
+          "composite": 0.573273
+        },
+        {
+          "date": "2026-05-16",
+          "composite": 0.551682
+        },
+        {
+          "date": "2026-05-17",
+          "composite": 0.545309
+        },
+        {
+          "date": "2026-05-18",
+          "composite": 0.555571
+        },
+        {
+          "date": "2026-05-19",
+          "composite": 0.543509
+        },
+        {
+          "date": "2026-05-20",
+          "composite": 0.55925
+        },
+        {
+          "date": "2026-05-21",
+          "composite": 0.56001
+        },
+        {
+          "date": "2026-05-22",
+          "composite": 0.588805
+        },
+        {
+          "date": "2026-05-23",
+          "composite": 0.529678
+        },
+        {
+          "date": "2026-05-24",
+          "composite": 0.527941
+        },
+        {
+          "date": "2026-05-25",
+          "composite": 0.536108
+        },
+        {
+          "date": "2026-05-26",
+          "composite": 0.546065
+        },
+        {
+          "date": "2026-05-27",
+          "composite": 0.545479
+        },
+        {
+          "date": "2026-05-28",
+          "composite": 0.556187
+        },
+        {
+          "date": "2026-05-29",
+          "composite": 0.573865
+        },
+        {
+          "date": "2026-05-30",
+          "composite": 0.541599
+        },
+        {
+          "date": "2026-05-31",
+          "composite": 0.538142
+        },
+        {
+          "date": "2026-06-01",
+          "composite": 0.533404
+        },
+        {
+          "date": "2026-06-02",
+          "composite": 0.5584604532245212
+        },
+        {
+          "date": "2026-06-03",
+          "composite": 0.547451
+        },
+        {
+          "date": "2026-06-04",
+          "composite": 0.537927
+        },
+        {
+          "date": "2026-06-05",
+          "composite": 0.5195355835535072
+        },
+        {
+          "date": "2026-06-06",
+          "composite": 0.521641
+        },
+        {
+          "date": "2026-06-07",
+          "composite": 0.534194
+        },
+        {
+          "date": "2026-06-08",
+          "composite": 0.533989
+        },
+        {
+          "date": "2026-06-09",
+          "composite": 0.525674
+        },
+        {
+          "date": "2026-06-10",
+          "composite": 0.523133
+        },
+        {
+          "date": "2026-06-11",
+          "composite": 0.520464
+        },
+        {
+          "date": "2026-06-12",
+          "composite": 0.491511
+        },
+        {
+          "date": "2026-06-13",
+          "composite": 0.504662
+        },
+        {
+          "date": "2026-06-14",
+          "composite": 0.476903
+        },
+        {
+          "date": "2026-06-15",
+          "composite": 0.5070455962505371
+        },
+        {
+          "date": "2026-06-16",
+          "composite": 0.472436
+        },
+        {
+          "date": "2026-06-17",
+          "composite": 0.479273
+        },
+        {
+          "date": "2026-06-18",
+          "composite": 0.483794606683341
+        },
+        {
+          "date": "2026-06-19",
+          "composite": 0.479822
+        },
+        {
+          "date": "2026-06-20",
+          "composite": 0.488203
+        },
+        {
+          "date": "2026-06-21",
+          "composite": 0.47469
+        },
+        {
+          "date": "2026-06-22",
+          "composite": 0.467814
+        },
+        {
+          "date": "2026-06-23",
+          "composite": 0.457596
+        },
+        {
+          "date": "2026-06-24",
+          "composite": 0.441659
+        },
+        {
+          "date": "2026-06-25",
+          "composite": 0.455255
+        },
+        {
+          "date": "2026-06-26",
+          "composite": 0.469708
+        },
+        {
+          "date": "2026-06-27",
+          "composite": 0.474758
+        },
+        {
+          "date": "2026-06-28",
+          "composite": 0.445331
+        },
+        {
+          "date": "2026-06-29",
+          "composite": 0.4541570691590452
+        }
+      ]
+    },
+    "/api/dashboards/research-signals/channel-divergence": {
+      "signalKey": "channel-divergence",
+      "date": "2026-06-29",
+      "payload": {
+        "asof": "2026-06-29",
+        "title": "Channel divergence",
+        "question": "Is the easy-money → crypto transmission channel breaking down?",
+        "gauges": [
+          {
+            "id": "BTC_BETA",
+            "name": "BTC beta vs risk appetite",
+            "value": 0.412,
+            "percentile": 0.55,
+            "read": "softening"
+          },
+          {
+            "id": "BTC_QQQ_RATIO",
+            "name": "BTC/QQQ relative strength",
+            "value": 0.62,
+            "percentile": 0.71,
+            "read": "channel intact"
+          },
+          {
+            "id": "STABLES_QQQ_FLOW",
+            "name": "Stablecoin vs QQQ flow (90d)",
+            "value": 0.0137,
+            "percentile": 0.21,
+            "read": "breaking down"
+          },
+          {
+            "id": "CHANNEL",
+            "name": "Composite channel health",
+            "value": 0.49,
+            "percentile": 0.49,
+            "read": "softening"
+          }
+        ],
+        "series": {
+          "label": "BTC/QQQ ratio",
+          "points": [
+            {
+              "date": "2026-06-27",
+              "value": 0.61
+            },
+            {
+              "date": "2026-06-28",
+              "value": 0.62
+            },
+            {
+              "date": "2026-06-29",
+              "value": 0.63
+            }
+          ]
+        },
+        "indicators": {
+          "btc_beta_vs_risk_appetite": [
+            {
+              "date": "2026-06-28",
+              "value": 0.41
+            },
+            {
+              "date": "2026-06-29",
+              "value": 0.412
+            }
+          ],
+          "btc_qqq_ratio_percentile": [
+            {
+              "date": "2026-06-28",
+              "value": 0.7
+            },
+            {
+              "date": "2026-06-29",
+              "value": 0.71
+            }
+          ],
+          "stables_vs_qqq_flow": [
+            {
+              "date": "2026-06-28",
+              "value": 0.012
+            },
+            {
+              "date": "2026-06-29",
+              "value": 0.0137
+            }
+          ]
+        }
+      }
+    },
+    "/api/dashboards/research-signals/late-cycle-signals": {
+      "signalKey": "late-cycle-signals",
+      "date": "2026-06-29",
+      "payload": {
+        "asof": "2026-06-29",
+        "title": "Late-cycle signals",
+        "question": "How late in the cycle is this rally?",
+        "gauges": [
+          {
+            "id": "CONCENTRATION",
+            "name": "Index concentration (SPY/RSP)",
+            "value": 1.2841,
+            "percentile": 0.88,
+            "read": "saturated (late-cycle)"
+          },
+          {
+            "id": "TOP7_VS_SPY",
+            "name": "Top-7 basket vs SPY",
+            "value": 1.8342,
+            "percentile": 0.91,
+            "read": "saturated (late-cycle)"
+          },
+          {
+            "id": "MNA",
+            "name": "M&A activity (S-4 filings)",
+            "value": 42,
+            "percentile": 0.63,
+            "read": "elevated"
+          },
+          {
+            "id": "MARGIN",
+            "name": "Margin debt YoY",
+            "value": 0.1523,
+            "percentile": 0.74,
+            "read": "saturated (late-cycle)"
+          },
+          {
+            "id": "CONF",
+            "name": "Consumer confidence (UMich)",
+            "value": 61.7,
+            "percentile": 0.32,
+            "read": "benign"
+          }
+        ],
+        "series": {
+          "label": "Index concentration (SPY/RSP)",
+          "points": [
+            {
+              "date": "2026-06-27",
+              "value": 1.27
+            },
+            {
+              "date": "2026-06-28",
+              "value": 1.28
+            },
+            {
+              "date": "2026-06-29",
+              "value": 1.2841
+            }
+          ]
+        },
+        "indicators": {
+          "concentration_top7_vs_spy": [
+            {
+              "date": "2026-06-28",
+              "value": 1.83
+            },
+            {
+              "date": "2026-06-29",
+              "value": 1.8342
+            }
+          ],
+          "mna_pct": [
+            {
+              "date": "2026-06-28",
+              "value": 0.62
+            },
+            {
+              "date": "2026-06-29",
+              "value": 0.63
+            }
+          ]
+        }
+      }
+    },
+    "/health": {
+      "status": "ok",
+      "env": "preview",
+      "db": "up"
+    }
+  }
+}

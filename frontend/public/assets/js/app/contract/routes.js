@@ -2,11 +2,16 @@
 // Frontend imports these to build URLs; backend imports them to register routes.
 // Pure data — no runtime dependencies.
 
-/** Build a path from a template by substituting :params. */
+/**
+ * Build a path from a template by substituting :params.
+ * @param {string} template
+ * @param {Record<string, string | number>} [params]
+ * @returns {string}
+ */
 export function path(template, params = {}) {
-  return template.replace(/:([a-zA-Z_]+)/g, (_, key) => {
+  return template.replace(/:([a-zA-Z_]+)/g, (/** @type {string} */ _, /** @type {string} */ key) => {
     if (params[key] == null) throw new Error(`missing path param: ${key}`);
-    return encodeURIComponent(params[key]);
+    return encodeURIComponent(String(params[key]));
   });
 }
 
