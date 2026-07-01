@@ -9,22 +9,10 @@ import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getResearchSignal } from "./routes/dashboards.ts";
 import { handleCommittee } from "./routes/committee.ts";
 
-function corsHeaders(origin: string | null): Record<string, string> {
-  if (origin && config.corsOrigins.includes(origin)) {
-    return {
-      "Access-Control-Allow-Origin": origin,
-      "Access-Control-Allow-Credentials": "true",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    };
-  }
-  return {};
-}
-
-function json(data: unknown, origin: string | null, status = 200): Response {
+function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    headers: { "Content-Type": "application/json" },
   });
 }
 
@@ -51,10 +39,9 @@ const server = Bun.serve({
   port: config.apiPort,
   async fetch(req, server) {
     const url = new URL(req.url);
-    const origin = req.headers.get("Origin");
     const { pathname } = url;
 
-    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    if (req.method === "OPTIONS") return new Response(null, { status: 204 });
 
     // Client ip for rate limiting. X-Forwarded-For is client-controlled and only
     // trustworthy behind a known proxy, so we use it ONLY when TRUST_PROXY=1
@@ -68,51 +55,51 @@ const server = Bun.serve({
     }
 
     try {
-      return await route(req, url, pathname, origin, clientIp);
+      return await route(req, url, pathname, clientIp);
     } catch (err) {
       // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
       // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.
-      if (err instanceof URIError) return json({ error: "bad request" }, origin, 400);
+      if (err instanceof URIError) return json({ error: "bad request" }, 400);
       console.error("api error:", err);
-      return json({ error: "internal error" }, origin, 500);
+      return json({ error: "internal error" }, 500);
     }
   },
 });
 
-async function route(req: Request, url: URL, pathname: string, origin: string | null, clientIp: string): Promise<Response> {
+async function route(req: Request, url: URL, pathname: string, clientIp: string): Promise<Response> {
     if (pathname === ROUTES.health) {
       let db = "down";
       try { await sql`SELECT 1`; db = "up"; } catch { db = "down"; }
-      return json({ status: "ok", env: config.env, db }, origin);
+      return json({ status: "ok", env: config.env, db });
     }
 
     if (pathname === ROUTES.comments.list && req.method === "GET") {
-      return json(await listComments(url), origin);
+      return json(await listComments(url));
     }
 
     if (pathname === ROUTES.comments.create && req.method === "POST") {
       const body = await req.json().catch(() => null);
       const r = await createComment(body, clientIp);
-      return json(r.body, origin, r.status);
+      return json(r.body, r.status);
     }
 
     if (pathname === ROUTES.dashboards.regimeSnapshots && req.method === "GET") {
-      return json(await getRegimeSnapshots(url), origin);
+      return json(await getRegimeSnapshots(url));
     }
 
     if (pathname.startsWith("/api/dashboards/research-signals/") && req.method === "GET") {
       const key = decodeURIComponent(pathname.split("/").pop()!);
       const r = await getResearchSignal(key);
-      return json(r ?? { error: "not found" }, origin, r ? 200 : 404);
+      return json(r ?? { error: "not found" }, r ? 200 : 404);
     }
 
     if (pathname.startsWith("/api/committee/")) {
       const r = await handleCommittee(req, url);
-      if (r) return json(r.body, origin, r.status);
+      if (r) return json(r.body, r.status);
     }
 
     // Unmatched API path → 404 JSON (never fall through to static).
-    if (pathname.startsWith("/api/")) return json({ error: "not found" }, origin, 404);
+    if (pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
 
     const stat = await serveStatic(pathname);
     if (stat) return stat;
