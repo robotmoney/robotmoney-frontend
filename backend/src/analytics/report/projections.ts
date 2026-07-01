@@ -29,6 +29,9 @@ function rowToSnapshot(r: any): RegimeSnapshot {
     version: r.version ?? null,
     percentiles: r.percentiles ?? {},
     indicators: r.indicators ?? [],
+    // Asof-only backtest + predictive correlations (latest row only; null on history).
+    backtest: r.backtest ?? null,
+    correlations: r.correlations ?? null,
   };
 }
 

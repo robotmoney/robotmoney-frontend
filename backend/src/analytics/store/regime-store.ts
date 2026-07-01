@@ -10,6 +10,8 @@
 // panel_weight, sparkline}) in the `indicators` jsonb. Pure I/O — no compute.
 import { sql } from "../../db/client.ts";
 import type postgres from "postgres";
+import type { BacktestPayload } from "../analyze/backtest.ts";
+import type { CorrelationsPayload } from "../analyze/correlations.ts";
 
 // Persistable snapshot row. Structurally a superset of the legacy
 // analyze/regime.ts RegimeSnapshot (whose narrower shape stays assignable), with
@@ -35,6 +37,10 @@ export interface RegimeSnapshotRow {
   // Rich per-indicator objects ({raw_value, raw_date, transformed_value,
   // percentile, signed_percentile, panel_weight, sparkline}); JSON-serializable.
   indicators: readonly postgres.JSONValue[];
+  // Asof-only predictive correlations + regime backtest (portfolio→strategy→
+  // metrics). Non-null on the latest row only; null on historical rows.
+  backtest?: BacktestPayload | null;
+  correlations?: CorrelationsPayload | null;
 }
 
 export async function saveRegimeSnapshots(snapshots: RegimeSnapshotRow[]): Promise<void> {
@@ -54,14 +60,17 @@ async function upsertSnapshot(s: RegimeSnapshotRow): Promise<void> {
          macro_regime, onchain_regime, factor_regime,
          macro_index, onchain_index, factor_index,
          macro_percentile, onchain_percentile, factor_percentile,
-         panel_weights, version, percentiles, indicators)
+         panel_weights, version, percentiles, indicators,
+         backtest, correlations)
       VALUES
         (${s.date}, ${s.composite}, ${s.compositePercentile}, ${s.regime},
          ${s.macroRegime}, ${s.onchainRegime}, ${s.factorRegime},
          ${s.macroIndex ?? null}, ${s.onchainIndex ?? null}, ${s.factorIndex ?? null},
          ${s.macroPercentile ?? null}, ${s.onchainPercentile ?? null}, ${s.factorPercentile ?? null},
          ${s.panelWeights == null ? null : sql.json(s.panelWeights)}, ${s.version ?? null},
-         ${sql.json(s.percentiles)}, ${sql.json(s.indicators)})
+         ${sql.json(s.percentiles)}, ${sql.json(s.indicators)},
+         ${s.backtest == null ? null : sql.json(s.backtest as unknown as postgres.JSONValue)},
+         ${s.correlations == null ? null : sql.json(s.correlations as unknown as postgres.JSONValue)})
       ON CONFLICT (date) DO UPDATE SET
         composite = EXCLUDED.composite,
         composite_percentile = EXCLUDED.composite_percentile,
@@ -78,7 +87,9 @@ async function upsertSnapshot(s: RegimeSnapshotRow): Promise<void> {
         panel_weights = EXCLUDED.panel_weights,
         version = EXCLUDED.version,
         percentiles = EXCLUDED.percentiles,
-        indicators = EXCLUDED.indicators`;
+        indicators = EXCLUDED.indicators,
+        backtest = EXCLUDED.backtest,
+        correlations = EXCLUDED.correlations`;
 }
 
 // Read one snapshot back as a typed row (numerics coerced from Postgres text).
@@ -105,5 +116,7 @@ export async function loadRegimeSnapshot(date: string): Promise<RegimeSnapshotRo
     version: row.version ?? null,
     percentiles: (row.percentiles ?? {}) as Record<string, number>,
     indicators: (row.indicators ?? []) as readonly postgres.JSONValue[],
+    backtest: (row.backtest ?? null) as BacktestPayload | null,
+    correlations: (row.correlations ?? null) as CorrelationsPayload | null,
   };
 }

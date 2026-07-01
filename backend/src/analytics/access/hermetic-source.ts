@@ -10,7 +10,7 @@
 //
 // Magnitudes are irrelevant — every series is percentile-ranked downstream, so
 // `base` only anchors a level and `vol` supplies the variation the ranks need.
-import type { AnalyticsDataSource, ResearchInputs, Logger } from "./data-source.ts";
+import type { AnalyticsDataSource, ResearchInputs, BacktestExtras, Logger } from "./data-source.ts";
 import type { Point } from "../types.ts";
 import type { Indicator } from "../analyze/indicators.ts";
 import { seededProvider } from "./provider.ts";
@@ -61,6 +61,19 @@ export const hermeticDataSource: AnalyticsDataSource = {
       mna: seeded("MNA_S4", asof, 40, 0.08),
       margin: seeded("MARGIN_DEBT", asof, 900_000, 0.02, 0.0005),
       conf: seeded("UMCSENT", asof, 75, 0.02),
+    };
+  },
+
+  // Backtest/correlations overlays: deterministic seeded price/yield walks anchored
+  // at today (the demo always runs for today). Magnitudes are illustrative — the
+  // demo only needs a coherent equity chart + correlations panel, never parity.
+  async fetchBacktestExtras(logger: Logger = console): Promise<BacktestExtras> {
+    logger.warn?.("[analytics] HERMETIC backtest extras — deterministic seeded series, NO network");
+    const asof = today();
+    return {
+      spx: seeded("^GSPC", asof, 4500, 0.012, 0.0003),
+      eth: seeded("ETH-USD", asof, 2500, 0.04, 0.0004),
+      tbill3m: seeded("DTB3", asof, 4.5, 0.01),
     };
   },
 };
