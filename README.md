@@ -51,28 +51,37 @@ bun run sync-contract
 > multiple committees.
 
 ```bash
-bun run demo                 # provisions everything, runs committee sessions, keeps it live
+bun run demo                 # provisions everything, then runs a standing demo (stays up)
+bun run demo:status          # show the running demo's containers
+bun run demo:down            # tear down the demo (containers + volume)
 ```
 
 That's it — no separate `docker compose up` needed. `bun run demo` is a
-self-contained orchestrator (`scripts/demo.ts`) that on every run:
+self-contained orchestrator (`scripts/demo.ts`) that:
 
 - picks three **random free ports** (Postgres, API, MCP) so repeated/concurrent
-  runs never collide;
+  runs never collide, and records the run to `.agents/demo-state.json`;
 - brings up Postgres in Docker under a **unique compose project**, runs
   migrations, then starts the API (serving the static site), the worker, and the
   MCP server as Bun child processes;
-- drives **two sessions of that one committee** through the MCP server (regime +
-  N signed agents, one deliberate no-show per session; the second session reviews
-  a different subject the next day and references the first's outcome);
-- prints the live URLs and **keeps the servers running** so you can open a
-  browser;
-- on Ctrl-C / exit (or any startup failure) **tears down every container and
-  volume it created** — nothing is left behind.
+- prints the live URLs once the stack is healthy, then runs **recurring demo
+  actions on a ~2-minute staggered cadence** — regime + research refresh (driven by
+  the worker's scheduler under `DEMO_FAST_SCHEDULES`) and **committee sessions of that
+  one committee** (regime + N signed MCP agents, one deliberate no-show per session;
+  successive sessions review different subjects and reference prior outcomes) — so the
+  site keeps showing fresh data;
+- **stays up until you stop it** — Ctrl-C / SIGTERM tears the stack down (containers +
+  volume) and prints the log-file path; a startup failure instead leaves it up for
+  inspection. `bun run demo:down` tears down a demo left running in the background.
+
+In an interactive terminal it renders a **live TUI** (service URLs, container
+startup/healthcheck status, and split Research / Committee activity panes); verbose
+output goes to `.agents/demo-<project>.log`, not the screen. Disable with `NO_TUI=1`
+(or a non-TTY / CI), which falls back to plain line logging.
 
 The printed URLs use that run's random API/MCP ports, e.g.:
-- `http://localhost:<api>/` — the site · `/regime` · `/committee` · `/research/*`
-- `http://localhost:<mcp>/health` — the MCP server
+- `http://127.0.0.1:<api>/` — the site · `/regime` · `/committee` · `/research/*`
+- `http://127.0.0.1:<mcp>/health` — the MCP server
 
 No reverse proxy: the `api` process serves both the API and `frontend/public`.
 
@@ -84,5 +93,6 @@ bun run api                  # API only (no static)   — backend/
 bun run worker               # task-queue worker      — backend/
 bun test                     # hermetic suite (spins ephemeral Postgres) — backend/
 bun run typecheck            # tsc --noEmit            — backend/
+bun run demo:down            # tear down the standing demo (containers + volume)
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)
 ```

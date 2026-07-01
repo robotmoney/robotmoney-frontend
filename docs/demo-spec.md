@@ -1,8 +1,10 @@
 # Demo Specification
 
 What `bun run demo` must demonstrate to exercise the full Investment Committee lifecycle —
-a single command that provisions everything, runs the session lifecycle end-to-end, keeps
-the stack live, and tears down cleanly.
+a single command that provisions everything, runs the session lifecycle end-to-end, and
+keeps the stack live as a **standing demo** (see §0). Ctrl-C / SIGTERM tears the stack
+down; a startup failure leaves it up for inspection; `bun run demo:down` tears down an
+already-running (e.g. backgrounded) demo.
 
 > **One committee, not many.** Everything below exercises the *single* Investment
 > Committee. The harness drives it through **two sessions** (session 1 = today's
@@ -12,6 +14,51 @@ the stack live, and tears down cleanly.
 > moving parts of the one committee, **not** separate committees.
 
 ---
+
+## 0. Standing demo mode (`bun run demo`, local)
+
+Locally, `bun run demo` is a **long-lived standing demo**, not a one-shot. It runs in
+three phases and stays up until you stop it (Ctrl-C / SIGTERM):
+
+**(a) Bring-up.** Build images → start Postgres → migrate (seeds `job_schedules`) →
+start api + worker + mcp → wait for `/health` on api and mcp. Once healthy it writes a
+run state file at `.agents/demo-state.json` (compose project name + this run's random
+ports + compose env, so teardown can find the run) and prints the READY route table.
+
+**(b) Staggered scheduled actions (~2 min cadence).** The demo continuously produces
+fresh activity, driven two ways (hybrid):
+
+- **Regime + research** — driven by the worker's own scheduler. In demo mode
+  (`DEMO_FAST_SCHEDULES=1`, set only for the local migrate/seed) the seed appends fast
+  demo-cadence rows to `job_schedules` in addition to the default daily 22:30 UTC rows:
+  `regime.classify` on `*/2 * * * *` (regime only) and `analytics.run` on
+  `1-59/2 * * * *` (the full suite — regime + both research signals). The one-minute
+  cron offset staggers them so they fire at different times.
+- **Committee opinions** — driven by a loop inside `scripts/demo.ts`, because a
+  committee session needs live MCP agents to sign + submit takes. After a one-time
+  reset + setup, it runs one full session (open → brief → collect → agents →
+  close → aggregate → publish) roughly every 120 s (recursive `setTimeout`, offset
+  from the analytics ticks), rotating (date, subject) so sessions accumulate. It does
+  **not** reset between ticks. It reuses the `runSession` runner exported from
+  `mcp/src/e2e.ts` (whose entry-point `main()` is guarded so importing it does not
+  trigger the reset-heavy standalone flow).
+
+One immediate tick of each runs at startup so the site has data on first load; the
+one-shot frontend check (`scripts/demo-frontend-check.ts`) also runs once,
+non-fatally.
+
+**(c) Teardown.** The stack stays up until you stop it. **Ctrl-C / SIGTERM tears it
+down** (`docker compose down -v`), printing the log-file path first (the log persists for
+post-mortem) and removing the state file. A **startup failure** is the exception: it
+dumps diagnostics and leaves the containers up for inspection. For a demo that is already
+running (e.g. started in the background, or its process was killed with SIGKILL):
+
+- `bun run demo:down` — `docker compose down -v` for the recorded run + removes the
+  state file.
+- `bun run demo:status` — `docker compose ps` for the recorded run (also prints the log
+  path).
+
+CI (`process.env.CI`) is unchanged: it runs the checks once and then tears down.
 
 ## 1. Lifecycle stages
 
@@ -144,9 +191,17 @@ RM never holds the private key at any point.
 
 - Zero external dependencies: the demo must not reach out to FRED, Yahoo, CoinMetrics,
   or any live API. The `seededProvider` supplies deterministic data.
-- Random ports + unique compose project name: concurrent runs do not collide.
-- On any exit path (Ctrl-C, SIGTERM, startup failure, assertion failure):
-  `docker compose down -v` — nothing left behind.
+- Random ports (Postgres, API, MCP) + unique compose project name: concurrent runs do
+  not collide. The run identity (project + ports + compose env) is written to
+  `.agents/demo-state.json` so the explicit teardown command can find it.
+- **Teardown on exit (local).** Ctrl-C / SIGTERM tears the stack down
+  (`docker compose down -v`, wipes the volume, removes the state file) and prints the
+  log-file path first. A **startup failure** is the exception — it leaves the stack
+  RUNNING so it can be inspected. `bun run demo:down` tears down an already-running demo
+  (e.g. one started in the background); `bun run demo:status` shows the running
+  containers and the log path.
+- **CI is the exception:** when `process.env.CI` is set the demo runs its checks once
+  and then tears down (`docker compose down -v`) so no containers/volumes leak.
 - A missing Docker dependency (Postgres image, build failure) must fail the run
   loudly, never silently skip.
 
@@ -173,18 +228,95 @@ The demo should demonstrate at least two sessions (or the concept of rotation):
 
 ## 10. Demo output
 
-When the demo completes its E2E assertions and enters keep-alive mode, it must print:
+### 10.1 TUI (default, interactive terminal)
+
+In an interactive terminal the demo takes over the screen with a zero-dependency ANSI
+TUI (`scripts/lib/tui.ts`) that repaints ~4×/s. Raw logs are **suppressed** on screen;
+the TUI shows only distilled state. Layout:
+
+- **Services** — the run's URLs (Site / Regime / Committee / Research per key / MCP), on
+  `127.0.0.1:<random port>`.
+- **Startup** — per-container status (postgres, api, worker, mcp) plus migrate and the
+  `/health` checks, each shown pending / in-progress (spinner) / healthy / failed. After
+  bring-up the icons are kept live by polling the **real docker container state**
+  (`docker compose ps` every ~3 s), so a post-startup crash / restart-loop / `unhealthy`
+  Docker healthcheck turns the icon red (with a detail like `exited 1` / `restarting` /
+  `unhealthy`). The pane header shows a refresh spinner while a check is in flight.
+- **Onboarding** (full-width strip) — each prospective member's join checklist:
+  `keypair → apply → review → activate → connect → session → memo → admitted`, each
+  pending / spinner / ✓ / ✗. Steps 1–5 are driven by the real join flow
+  (`onboardMember`); `session`/`memo`/`admitted` flip when the member is observed
+  submitting a signed take + posting a memo in a live session. Admitted members **retain
+  their checklist** in the pane (most recent shown, with a `(+N earlier admitted)` note),
+  and an `upcoming → Name in m:ss …` line **counts down** to the next scheduled
+  admissions. See §11.
+- **Activity** (largest region) — Research plus **one pane per committee subject**, laid
+  out as responsive columns (side by side when they fit, stacking when the terminal is
+  narrow):
+  - **Research** — recent `regime.classify` / `analytics.run` runs, advancing
+    queued → running → done as the worker's queue transitions are observed, annotated
+    with what landed (e.g. `regime → risk_on 0.76`). Fidelity is queue-level (see
+    demo-plan §10), not fabricated sub-steps. The header shows a live **countdown** to
+    the next scheduled regime/research run (from `job_schedules.next_run_at`, using the
+    DB clock).
+  - **One pane per subject** (woon, mav, …) — each subject runs on its **own schedule**
+    (independent interval + stagger offset, serialized execution) and gets its own pane
+    showing its session lifecycle state, each member's real stage (connect → fetch →
+    thinking → reporting → waiting; no-shows absent), and a per-subject **countdown** to
+    its next session (`running…` while in progress).
+- **Log footer** — the last few distilled events plus: `Ctrl-C / SIGTERM tears down the
+  stack (containers + volume)`.
+
+Full verbose output from every process (api, worker, mcp, migrations, the committee
+driver, and the orchestrator's own narration) is written to
+`.agents/demo-<project>.log` (path shown in the TUI header, recorded in the state file,
+and shown by `bun run demo:status`). On Ctrl-C / SIGTERM the terminal is restored first,
+the log path is printed, and the stack is torn down. A startup failure instead restores
+the terminal and leaves the containers up for inspection (with the log path).
+
+### 10.2 Plain fallback (non-TTY, CI, `--no-tui` / `NO_TUI=1`)
+
+When stdout is not a TTY, in CI, or when the TUI is disabled, the demo keeps the plain
+line-logging behavior: once healthy it prints a READY route table, then logs each
+scheduled action as it fires.
 
 ```
-── Robot Money demo ────────────────────────────────────
-  Site:       http://localhost:<api>/
-  Regime:     http://localhost:<api>/regime
-  Committee:  http://localhost:<api>/committee
-  Research:   http://localhost:<api>/research/<key>
-  MCP:        http://localhost:<mcp>/health
+── Robot Money demo ── READY ────────────────────────────
+  Site:       http://127.0.0.1:<api>/
+  Regime:     http://127.0.0.1:<api>/regime
+  Committee:  http://127.0.0.1:<api>/committee
+  Research:   http://127.0.0.1:<api>/research/<key>
+  MCP:        http://127.0.0.1:<mcp>/health
 
-  Session #<id> — <subject> — <stance summary>
-  Members present: <n>  Absent: <m>  Published: yes
-
-  Press Ctrl-C to shut down.
+  State file: .agents/demo-state.json
+  Log file:   .agents/demo-<project>.log
+  Demo actions run on a ~2-min staggered cadence.
+  Ctrl-C / SIGTERM tears down the stack (containers + volume).
 ```
+
+## 11. New-member onboarding (growing committee)
+
+The standing demo periodically admits a **brand-new committee member** through the real
+join path, proving the public apply → admin activate → MCP OAuth flow and demonstrating a
+committee that **grows over time**:
+
+1. **keypair** — the prospect generates its own ed25519 keypair (RM never sees the private
+   key).
+2. **apply** — `POST /api/committee/apply` (public, no auth) → status `applied`.
+3. **review** — a short simulated admin-review delay.
+4. **activate** — `POST /api/committee/admin/activate` → mints the member's bearer token →
+   `active`.
+5. **connect** — exchanges the token for an MCP OAuth 2.1 `client_credentials` access
+   token.
+6. **session / memo / admitted** — the new member is added to the shared roster
+   (`onboardedCreds` + `MEMBERS`) so it participates in the next session for whichever
+   subject runs next, submitting a signed take and posting a memo; these steps flip to
+   done via the same session progress callback that drives the subject panes.
+
+Driven by `onboardMember()` in `mcp/src/e2e.ts` (additive; the standalone `main()` is
+unchanged) and an onboarding loop in `scripts/demo.ts`. The first admission fires ~1 min
+after start (so it's visible early); thereafter a **new character joins every ~5 minutes,
+indefinitely** (a curated name pool, then generated names so the demo never runs dry), so
+the committee keeps growing for as long as the demo runs. Each admission is rendered live
+in the Onboarding strip (§10.1), which keeps every admitted member's completed checklist
+visible and shows a live countdown to the upcoming admissions.

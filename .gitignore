@@ -6,3 +6,6 @@ node_modules/
 dist/
 playwright-report/
 test-results/
+
+# Standing local demo state (written by `bun run demo`, removed by `demo:down`).
+.agents/demo-state.json

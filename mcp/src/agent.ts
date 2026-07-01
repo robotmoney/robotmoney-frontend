@@ -29,6 +29,12 @@ export interface ExistingCredentials {
   privateKey: CryptoKey;
 }
 
+// Optional, additive progress callback. When provided, runAgent emits its real
+// pipeline stages so a UI can show a member advancing connect → fetch → thinking
+// → reporting → done. Default undefined ⇒ zero behaviour change (standalone e2e).
+export type AgentStage = "connect" | "fetch" | "thinking" | "reporting" | "done";
+export type AgentProgress = (stage: AgentStage, info?: { stance?: string; confidence?: number }) => void;
+
 export function stanceFor(composite: number, bias: number) {
   const x = composite + bias;
   const stance = x >= 0.67 ? "bullish" : x >= 0.55 ? "constructive" : x >= 0.45 ? "neutral" : x >= 0.33 ? "cautious" : "bearish";
@@ -48,7 +54,7 @@ export async function enroll(o: { memberId: string; name: string; lens?: string 
   });
 }
 
-export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCredentials) {
+export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCredentials, onProgress?: AgentProgress) {
   // 1. own keypair + onboarding (REST). Skip both when external credentials are
   //    provided (the apply → activate path handles these externally).
   const { publicKeyB64, privateKey } = existingCredentials
@@ -73,12 +79,14 @@ export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCrede
   });
   const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), { authProvider });
   await client.connect(transport);
+  onProgress?.("connect"); // MCP session established (OAuth handshake done)
 
   try {
     // 3. read context via MCP tools
     const regime = textOf(await client.callTool({ name: "get_regime", arguments: {} }));
     await client.callTool({ name: "get_brief", arguments: { date: o.date, subject: o.subjectId } });
     const composite = Number(regime?.composite ?? 0.5);
+    onProgress?.("fetch"); // regime + brief read
 
     // Optionally use RM's classify_regime helper for provenance
     let provenance: string[] = [];
@@ -89,10 +97,12 @@ export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCrede
 
     // 4. decide, get canonical payload, sign, submit — all via MCP
     const { stance, confidence } = stanceFor(composite, o.bias);
+    onProgress?.("thinking", { stance, confidence }); // stance decided
     const provenanceText = provenance.length ? ` [${provenance.join("; ")}]` : "";
     const memoText = `${o.name} (${o.lens}): regime composite ${composite.toFixed(2)} → ${stance}. ` +
       `The composite reflects ${composite >= 0.5 ? "favorable" : "unfavorable"} conditions for ${o.subjectId}. ` +
       `My ${o.lens} lens confirms this outlook.${provenanceText}`;
+    onProgress?.("reporting", { stance, confidence }); // posting memo, signing, submitting
     const memoResult = textOf(await client.callTool({
       name: "post_memo",
       arguments: { sessionId: o.sessionId, title: `${o.name}'s analysis of ${o.subjectId}`, body: memoText },
@@ -107,6 +117,7 @@ export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCrede
     const { canonical } = textOf(await client.callTool({ name: "get_signing_payload", arguments: draft }));
     const signature = await sign(canonical, privateKey);
     const result = textOf(await client.callTool({ name: "submit_recommendation", arguments: { ...draft, signature } }));
+    onProgress?.("done", { stance, confidence }); // recommendation submitted
     return { memberId: o.memberId, stance, confidence, memoUrl, provenance, result };
   } finally {
     await client.close();

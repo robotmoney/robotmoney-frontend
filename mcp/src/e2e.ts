@@ -6,7 +6,7 @@
 // loop. Multi-session: the second session's brief references the first session's
 // outcome, demonstrating rotation awareness.
 import { runAgent, enroll, stanceFor, textOf } from "./agent.ts";
-import type { ExistingCredentials } from "./agent.ts";
+import type { ExistingCredentials, AgentStage } from "./agent.ts";
 import { generateKeyPair, sign } from "./crypto.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -15,13 +15,13 @@ import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const MEMBERS = [
+export const MEMBERS = [
   { memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1, present: true },
   { memberId: "boreas", name: "Boreas", lens: "on-chain flows", bias: 0.0, present: true },
   { memberId: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: true },
   { memberId: "draco", name: "Draco", lens: "contrarian", bias: 0.0, present: false }, // absent
 ];
-const SUBJECTS = [
+export const SUBJECTS = [
   { id: "woon", name: "Woon Treasury" },
   { id: "mav", name: "Mav Holdings" },
 ];
@@ -34,11 +34,78 @@ async function responseJson<T = any>(response: Response): Promise<T> {
   return await response.json() as T;
 }
 
-async function admin(action: string, body: unknown = {}) {
+// Optional, additive progress stream for runSession. Emits real session-lifecycle
+// transitions and per-member pipeline stages so a UI can render live committee
+// state. Default undefined ⇒ zero behaviour change (standalone main() never passes
+// it). Members that are deliberate no-shows surface as stage 'absent'.
+export type SessionEvent =
+  | { type: "session"; state: string; sessionId?: number; subject: string; date: string }
+  | { type: "member"; memberId: string; stage: AgentStage | "absent"; stance?: string; confidence?: number };
+export type SessionProgress = (ev: SessionEvent) => void;
+
+export async function admin(action: string, body: unknown = {}) {
   const r = await fetch(`${BACKEND}/api/committee/admin/${action}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders }, body: JSON.stringify(body),
   });
   return responseJson(r);
+}
+
+// Prospective-member onboarding (public apply → admin review/activate → MCP OAuth
+// connect). Additive + optional: used by the standing demo to periodically admit a
+// NEW committee member and grow the roster. Emits one onStage(stage, ok) per gate so
+// a UI can render the join checklist. Returns the roster entry + credentials the
+// caller hands to runSession (via its existingCredentials map) so the new member
+// participates — signing client-side with its OWN key — in subsequent sessions.
+export type OnboardStage = "keypair" | "apply" | "review" | "activate" | "connect";
+export interface OnboardSpec { memberId: string; name: string; lens: string; bias?: number; }
+export interface OnboardResult {
+  member: { memberId: string; name: string; lens: string; bias: number; present: true };
+  creds: ExistingCredentials;
+}
+export async function onboardMember(
+  spec: OnboardSpec,
+  opts?: { reviewMs?: number; onStage?: (stage: OnboardStage, ok: boolean) => void },
+): Promise<OnboardResult> {
+  const emit = (s: OnboardStage, ok = true) => opts?.onStage?.(s, ok);
+
+  // 1. The member generates its OWN ed25519 keypair (RM never sees the private key).
+  const { publicKeyB64, privateKey } = await generateKeyPair();
+  emit("keypair");
+
+  // 2. Public apply (no auth) — recorded as 'applied'.
+  const applyRes = await fetch(`${BACKEND}/api/committee/apply`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ memberId: spec.memberId, name: spec.name, lens: spec.lens, publicKey: publicKeyB64 }),
+  }).then((r) => r.json());
+  if (applyRes.status !== 201) { emit("apply", false); throw new Error(`apply failed: ${JSON.stringify(applyRes)}`); }
+  emit("apply");
+
+  // 3. Admin review — simulated approval delay before activation.
+  await sleep(opts?.reviewMs ?? 4000);
+  emit("review");
+
+  // 4. Admin activates — flips applied→active and mints the member's bearer token.
+  const activateRes = await fetch(`${BACKEND}/api/committee/admin/activate`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
+    body: JSON.stringify({ memberId: spec.memberId }),
+  }).then((r) => r.json());
+  if (activateRes.status !== 200 || !activateRes.token) { emit("activate", false); throw new Error(`activate failed: ${JSON.stringify(activateRes)}`); }
+  emit("activate");
+
+  // 5. Connect: exchange the bearer token for an MCP OAuth 2.1 access token
+  //    (client_credentials) — proves the member can authenticate to the MCP server.
+  const MCP_BASE = (process.env.MCP_URL ?? "http://localhost:8788/mcp").replace(/\/mcp\/?$/, "");
+  const tok = await fetch(`${MCP_BASE}/mcp/oauth/token`, {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "client_credentials", client_id: spec.memberId, client_secret: activateRes.token }),
+  }).then((r) => r.json());
+  if (!tok.access_token) { emit("connect", false); throw new Error(`oauth connect failed for ${spec.memberId}`); }
+  emit("connect");
+
+  return {
+    member: { memberId: spec.memberId, name: spec.name, lens: spec.lens, bias: spec.bias ?? 0, present: true },
+    creds: { token: activateRes.token, privateKey },
+  };
 }
 
 async function waitForSessionState(date: string, subject: string, expectedState: string, timeoutMs = 30_000) {
@@ -60,9 +127,12 @@ async function enqueueLifecycleJob(action: string, payload: Record<string, unkno
   return result;
 }
 
-async function runSession(date: string, subject: typeof SUBJECTS[0], sessionIndex: number, prevOutcome?: string, existingCredentials?: Map<string, ExistingCredentials>) {
+export async function runSession(date: string, subject: typeof SUBJECTS[0], sessionIndex: number, prevOutcome?: string, existingCredentials?: Map<string, ExistingCredentials>, onProgress?: SessionProgress) {
   const tag = `[session ${sessionIndex}: ${date}/${subject.id}]`;
   console.log(`\n${tag}`);
+  // Session-lifecycle emitter — one call per real state transition below.
+  const emitSession = (state: string, sessionId?: number) =>
+    onProgress?.({ type: "session", state, sessionId, subject: subject.id, date });
 
   // Ensure subject exists; regime is already seeded by the first session.
   if (sessionIndex > 0) {
@@ -74,17 +144,25 @@ async function runSession(date: string, subject: typeof SUBJECTS[0], sessionInde
   await enqueueLifecycleJob("open_session", { date, subjectId: subject.id });
   const sd = await waitForSessionState(date, subject.id, "scheduled");
   const sessionId = sd.session.id;
+  emitSession("scheduled", sessionId);
 
   await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes: 60, prevOutcome });
   await waitForSessionState(date, subject.id, "collecting");
+  emitSession("collecting", sessionId);
   console.log(`${tag} session ${sessionId}: brief published, window open`);
 
   // Enroll the no-show, then run present agents (some may have externally-
   // provisioned credentials from the public apply → activate path).
-  await Promise.all(MEMBERS.filter((m) => !m.present).map((m) => enroll(m)));
+  const absent = MEMBERS.filter((m) => !m.present);
+  await Promise.all(absent.map((m) => enroll(m)));
+  for (const m of absent) onProgress?.({ type: "member", memberId: m.memberId, stage: "absent" });
   const present = MEMBERS.filter((m) => m.present);
   const results = await Promise.all(
-    present.map((m) => runAgent({ ...m, date, subjectId: subject.id, sessionId }, existingCredentials?.get(m.memberId))),
+    present.map((m) => runAgent(
+      { ...m, date, subjectId: subject.id, sessionId },
+      existingCredentials?.get(m.memberId),
+      onProgress && ((stage, info) => onProgress({ type: "member", memberId: m.memberId, stage, ...info })),
+    )),
   );
   for (const r of results) {
     const ok = r.result?.verified ? "✓verified" : JSON.stringify(r.result);
@@ -94,12 +172,15 @@ async function runSession(date: string, subject: typeof SUBJECTS[0], sessionInde
 
   await enqueueLifecycleJob("close_window", { sessionId });
   await waitForSessionState(date, subject.id, "window_closed");
+  emitSession("window_closed", sessionId);
 
   await enqueueLifecycleJob("aggregate", { sessionId });
   await waitForSessionState(date, subject.id, "aggregated");
+  emitSession("aggregated", sessionId);
 
   await enqueueLifecycleJob("publish", { sessionId });
   await waitForSessionState(date, subject.id, "published");
+  emitSession("published", sessionId);
 
   const pub = await fetch(`${BACKEND}/api/committee/sessions/${date}/${subject.id}`).then(responseJson);
   console.log(`${tag} published: state=${pub.session.state}, takes=${pub.takes.length}`);
@@ -263,4 +344,11 @@ async function main() {
   console.log("\n=== done ===\n");
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+// Only run the full E2E flow (reset + OAuth assertions + 2 sessions) when this
+// file is the entry point (e.g. CI's `bun run src/e2e.ts`). Guarded so the
+// standing demo can `import { runSession, admin, SUBJECTS }` WITHOUT triggering
+// a reset that would wipe accumulating demo history. main()'s behaviour as an
+// entry point is unchanged.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}

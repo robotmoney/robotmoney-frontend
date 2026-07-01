@@ -192,3 +192,80 @@ P1 (worker) → concurrent (P2, P3) → P5 (authz) → P6 (frontend) → P7 (mul
                                   ↕
                                 P4 (OAuth) — anytime, but independent
 ```
+
+---
+
+## Phase 9 — Standing demo (local)  ✅ shipped
+
+`bun run demo` runs as a long-lived **standing demo** rather than a one-shot:
+
+- **Bring-up + healthcheck + READY route table**, then a run state file at
+  `.agents/demo-state.json`.
+- **Recurring, staggered (~2 min) scheduled actions**: regime + research driven by the
+  worker's scheduler via fast demo-cadence `job_schedules` rows gated behind
+  `DEMO_FAST_SCHEDULES` (`regime.classify` `*/2`, `analytics.run` `1-59/2`); committee
+  sessions driven by an in-process MCP-agent loop in `demo.ts` reusing the exported
+  `runSession` from `mcp/src/e2e.ts` (rotating date/subject, no reset between ticks).
+- **Teardown on exit**: Ctrl-C / SIGTERM tears the stack down (`docker compose down -v`
+  + removes the state file) and prints the log path; a **startup failure** is the
+  exception and leaves containers up for inspection. `bun run demo:down` /
+  `bun run demo:status` handle an already-running (e.g. backgrounded) demo.
+- CI (`process.env.CI`) still runs the checks once and tears down.
+
+See demo-spec.md §0.
+
+## Phase 10 — Demo TUI  ✅ shipped
+
+A zero-dependency ANSI TUI (`scripts/lib/tui.ts`) is the default view for the local
+standing demo, replacing interleaved log lines. Layout:
+
+- **Services pane** — URLs of all services (Site / Regime / Committee / Research / MCP).
+- **Startup pane** — per-container status for the Docker startups + healthchecks
+  (pending / in-progress / healthy / failed), kept live after bring-up by polling the
+  real `docker compose ps` state every ~3 s so crashes / restart-loops / unhealthy
+  containers turn red; a refresh spinner shows on the header while checking.
+- **Onboarding strip** (full width) — the current prospective member's join checklist
+  (keypair → apply → review → activate → connect → session → memo → admitted); see
+  Phase 11.
+- **Activity pane** (largest) — Research + **one pane per committee subject** as
+  responsive columns (side by side, stacking on narrow terminals):
+  - **Research tasks** — driven by polling the queue (see fidelity note below); header
+    shows a countdown to the next scheduled regime/research run.
+  - **Committee, one pane per subject** — each subject on its **own** schedule
+    (independent interval + stagger, serialized execution) with its own countdown;
+    per-member stages connect → fetch → thinking → reporting → waiting driven by a real
+    progress callback from `mcp/src/agent.ts` / `runSession`.
+
+Implementation notes:
+
+- **Verbose logs go to `.agents/demo-<project>.log`** for every process that prints
+  text (api, worker, mcp, migrations, committee driver, orchestrator narration); child
+  stdio is routed to the log fd and `console.*` is patched so imported modules can't
+  corrupt the screen. The TUI suppresses raw logs and shows only distilled status. The
+  log path is recorded in the state file and shown by `bun run demo:status`.
+- The TUI activates only when `stdout.isTTY && !CI && !NO_TUI && !--no-tui`; otherwise
+  the plain line-logging fallback (and CI) is used unchanged.
+- Terminal is always restored on exit (Ctrl-C / SIGTERM / startup failure). On
+  Ctrl-C / SIGTERM the stack is then torn down; a startup failure leaves it up.
+
+**Research fidelity note:** the worker's `job_runs` only records *terminal* rows, so the
+research pane derives state from the `jobs` table LEFT JOINed to `job_runs` and advances
+queued → running → done on those observable queue transitions (annotated from the
+dashboard API), rather than fabricating fetch/process/report sub-steps.
+
+**Remaining:** a visual pass on a real interactive terminal — the renderer, gating,
+polling SQL, and non-TTY fallback are verified, but the live alternate-screen render and
+animated committee/research panes were not observed in a TTY during implementation.
+
+## Phase 11 — New-member onboarding / growing committee  ✅ shipped
+
+The standing demo periodically admits a brand-new committee member through the real join
+path and grows the roster over time. `onboardMember()` (exported from `mcp/src/e2e.ts`,
+additive — standalone `main()` unchanged) runs keypair → public apply → simulated review →
+admin activate → MCP OAuth connect, emitting a stage callback; an onboarding loop in
+`scripts/demo.ts` drives it (first admission ~1 min in, then a new character every ~5 min
+indefinitely — curated names then generated), adds the admitted member to the shared
+roster (`onboardedCreds` + the now-exported `MEMBERS`) so it participates in subsequent
+sessions, and renders the checklist in the Onboarding strip. The `session`/`memo`/`admitted` steps flip when the newcomer is observed
+taking + posting a memo in a live session (via the same session progress callback). See
+demo-spec.md §11.
