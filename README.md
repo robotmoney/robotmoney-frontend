@@ -103,35 +103,25 @@ DEMO_PROJECT=rmdemo WEB_PORT=48787 MCP_PORT=48788 bun run demo
   demo on the same port and Docker will refuse the bind. Use `bun run demo:down`
   (with the same `DEMO_PROJECT`) to release it.
 
-## Frozen build — offline, server-less single file
+## Preview mode — view the site with no backend
 
-The **frozen** distribution bakes the whole SPA into **one self-contained
-`dist/frozen/index.html`** that renders every view **offline** — a non-technical
-user can double-click it (`file://`, no server, no network, no build tools) and
-browse a point-in-time snapshot of the site. See
-[`docs/ARCHITECTURE.md` §4 "Frozen (offline single-file) distribution"](./docs/ARCHITECTURE.md#4-frontend)
-for how it works.
+`bun run preview` serves the **live** `frontend/public` SPA and **mocks every
+`/api/*` route from committed goldens** (`goldens/api-goldens.json`), so you can
+view and iterate on the marketing surface with no backend, database, or workers.
+It binds a **random free port** (printed on start) so concurrent previews never
+collide; edits to source show on refresh.
 
 ```bash
-# Bake from a LIVE backend (snapshots every endpoint the frontend requests):
-BACKEND_URL=http://127.0.0.1:8787 bun run frozen
-
-# Bake fully OFFLINE from committed fixtures (no backend needed):
-bun run frozen:fixtures
+bun run preview                                   # serve; open the printed URL
+BACKEND_URL=http://127.0.0.1:48787 bun run goldens:update   # refresh goldens from a running system
 ```
 
-Both produce, under `dist/frozen/`:
-
-- `index.html` — the single self-contained file (app + views + baked API JSON +
-  vendored p5/Chart.js/Alpine, all inlined). Open it directly: `file://…/dist/frozen/index.html`.
-- `frozen-manifest.json` — bake metadata (`bakedAt`, `source`, endpoint list, byte size).
-
-**Constraints:** it is a *snapshot* — data is frozen as-of the bake, writes
-(POST/PUT/DELETE) are accepted no-ops, query params are ignored (keyed by
-pathname), and the URL bar stays on `index.html` while views swap in place. The
-bake fails loudly if any endpoint the frontend requests can't be satisfied (no
-silent gaps). Not for production hosting of live data — it's for offline demos,
-archival, and email/USB hand-off.
+**Data fidelity:** goldens carry **real field shapes** but **mock / point-in-time
+values** — preview is for layout, copy, and components, *not* for trusting the
+numbers. For realistic, evolving data run the full stack with `bun run demo`.
+Keeping goldens correct is the responsibility of the change author; see
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) and
+[`docs/preview-server-spec.md`](./docs/preview-server-spec.md).
 
 ## Useful commands
 
@@ -142,7 +132,7 @@ bun run worker               # task-queue worker      — backend/
 bun test                     # hermetic suite (spins ephemeral Postgres) — backend/
 bun run typecheck            # tsc --noEmit            — backend/
 bun run demo:down            # tear down the standing demo (containers + volume)
-bun run frozen               # bake offline single file from a live backend  — root
-bun run frozen:fixtures      # bake offline single file from fixtures (no backend) — root
+bun run preview              # serve the SPA with /api/* mocked from goldens (random port) — root
+bun run goldens:update       # recapture goldens from a running backend (BACKEND_URL) — root
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)
 ```
