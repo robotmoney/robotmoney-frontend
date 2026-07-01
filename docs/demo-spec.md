@@ -216,8 +216,40 @@ The demo should demonstrate at least two sessions (or the concept of rotation):
 
 ## 10. Demo output
 
-Once the stack is healthy the demo prints a READY route table (before any actions
-start):
+### 10.1 TUI (default, interactive terminal)
+
+In an interactive terminal the demo takes over the screen with a zero-dependency ANSI
+TUI (`scripts/lib/tui.ts`) that repaints ~4×/s. Raw logs are **suppressed** on screen;
+the TUI shows only distilled state. Layout:
+
+- **Services** — the run's URLs (Site / Regime / Committee / Research per key / MCP), on
+  `127.0.0.1:<random port>`.
+- **Startup** — per-container status (postgres, api, worker, mcp) plus migrate and the
+  `/health` checks, each shown pending / in-progress (spinner) / healthy / failed.
+- **Activity** (largest region) — split into two panes (side by side, stacking on narrow
+  terminals):
+  - **Research** — recent `regime.classify` / `analytics.run` runs, advancing
+    queued → running → done as the worker's queue transitions are observed, annotated
+    with what landed (e.g. `regime → risk_on 0.76`). Fidelity is queue-level (see
+    demo-plan §10), not fabricated sub-steps.
+  - **Committee** — the active session's lifecycle state and each member's real stage
+    (connect → fetch → thinking → reporting → waiting; no-shows marked absent), driven by
+    a live progress callback from the agent code.
+- **Log footer** — the last few distilled events plus: `Ctrl-C leaves the stack running ·
+  bun run demo:down to stop`.
+
+Full verbose output from every process (api, worker, mcp, migrations, the committee
+driver, and the orchestrator's own narration) is written to
+`.agents/demo-<project>.log` (path recorded in the state file and shown by
+`bun run demo:status`). On Ctrl-C / SIGTERM / startup failure the terminal is restored
+first, the containers are left running, and the teardown instructions + log path are
+printed.
+
+### 10.2 Plain fallback (non-TTY, CI, `--no-tui` / `NO_TUI=1`)
+
+When stdout is not a TTY, in CI, or when the TUI is disabled, the demo keeps the plain
+line-logging behavior: once healthy it prints a READY route table, then logs each
+scheduled action as it fires.
 
 ```
 ── Robot Money demo ── READY ────────────────────────────
@@ -227,14 +259,7 @@ start):
   Research:   http://127.0.0.1:<api>/research/<key>
   MCP:        http://127.0.0.1:<mcp>/health
 
-  state: .agents/demo-state.json
+  state: .agents/demo-state.json   log: .agents/demo-<project>.log
   Scheduled actions running (~2 min, staggered): regime · research · committee.
   Ctrl-C leaves the stack running · `bun run demo:down` to stop.
 ```
-
-It then logs each scheduled action as it fires (regime/research refresh, committee
-session published) so the standing demo's activity is visible in the terminal.
-
-> A richer terminal UI (TUI) for the standing demo — service URLs, live container
-> startup/healthcheck status, and split panes for the async scheduled tasks — is
-> planned; see demo-plan.md.

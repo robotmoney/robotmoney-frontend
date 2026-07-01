@@ -62,6 +62,11 @@ self-contained orchestrator (`scripts/demo.ts`) that:
 - **keeps everything running** — it does NOT tear down on Ctrl-C or on startup
   failure. Stop it explicitly with `bun run demo:down`.
 
+In an interactive terminal it renders a **live TUI** (service URLs, container
+startup/healthcheck status, and split Research / Committee activity panes); verbose
+output goes to `.agents/demo-<project>.log`, not the screen. Disable with `NO_TUI=1`
+(or a non-TTY / CI), which falls back to plain line logging.
+
 The printed URLs use that run's random API/MCP ports, e.g.:
 - `http://127.0.0.1:<api>/` — the site · `/regime` · `/committee` · `/research/*`
 - `http://127.0.0.1:<mcp>/health` — the MCP server

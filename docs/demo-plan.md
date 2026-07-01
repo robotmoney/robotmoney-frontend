@@ -212,22 +212,36 @@ P1 (worker) → concurrent (P2, P3) → P5 (authz) → P6 (frontend) → P7 (mul
 
 See demo-spec.md §0.
 
-## Phase 10 — Demo TUI (planned)
+## Phase 10 — Demo TUI  ✅ shipped
 
-The standing demo is complex enough to warrant a proper terminal UI instead of
-interleaved log lines. Target layout:
+A zero-dependency ANSI TUI (`scripts/lib/tui.ts`) is the default view for the local
+standing demo, replacing interleaved log lines. Layout:
 
 - **Services pane** — URLs of all services (Site / Regime / Committee / Research / MCP).
-- **Startup pane** — clean per-container status for the Docker startups + healthchecks
-  (in-progress / healthy / failed).
-- **Activity pane** (largest) — split by the async scheduled tasks, grouped as:
-  - **Research tasks** — fetch → process → report.
-  - **Committee member tasks** — fetch data → thinking → reporting → waiting.
+- **Startup pane** — per-container status for the Docker startups + healthchecks
+  (pending / in-progress / healthy / failed).
+- **Activity pane** (largest) — split (side by side, stacking on narrow terminals):
+  - **Research tasks** — driven by polling the queue (see fidelity note below).
+  - **Committee member tasks** — connect → fetch → thinking → reporting → waiting,
+    driven by a real progress callback from `mcp/src/agent.ts` / `runSession`.
 
-Requirements:
+Implementation notes:
 
-- **Verbose logs go to a file** for every process that prints text (api, worker, mcp,
-  the committee driver, analytics), while the **TUI suppresses raw logs** and shows
-  only distilled status. The log file path is printed / recorded in the state file.
-- The TUI is the default local view; a `--no-tui` / non-TTY fallback keeps the plain
-  line-logging behavior (and CI stays plain).
+- **Verbose logs go to `.agents/demo-<project>.log`** for every process that prints
+  text (api, worker, mcp, migrations, committee driver, orchestrator narration); child
+  stdio is routed to the log fd and `console.*` is patched so imported modules can't
+  corrupt the screen. The TUI suppresses raw logs and shows only distilled status. The
+  log path is recorded in the state file and shown by `bun run demo:status`.
+- The TUI activates only when `stdout.isTTY && !CI && !NO_TUI && !--no-tui`; otherwise
+  the plain line-logging fallback (and CI) is used unchanged.
+- Terminal is always restored on exit (Ctrl-C / SIGTERM / startup failure); containers
+  are left running.
+
+**Research fidelity note:** the worker's `job_runs` only records *terminal* rows, so the
+research pane derives state from the `jobs` table LEFT JOINed to `job_runs` and advances
+queued → running → done on those observable queue transitions (annotated from the
+dashboard API), rather than fabricating fetch/process/report sub-steps.
+
+**Remaining:** a visual pass on a real interactive terminal — the renderer, gating,
+polling SQL, and non-TTY fallback are verified, but the live alternate-screen render and
+animated committee/research panes were not observed in a TTY during implementation.
