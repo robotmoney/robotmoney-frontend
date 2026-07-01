@@ -14,7 +14,7 @@ import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const MEMBERS = [
+export const MEMBERS = [
   { memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1, present: true },
   { memberId: "boreas", name: "Boreas", lens: "on-chain flows", bias: 0.0, present: true },
   { memberId: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: true },
@@ -41,6 +41,64 @@ export async function admin(action: string, body: unknown = {}) {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders }, body: JSON.stringify(body),
   });
   return r.json();
+}
+
+// Prospective-member onboarding (public apply → admin review/activate → MCP OAuth
+// connect). Additive + optional: used by the standing demo to periodically admit a
+// NEW committee member and grow the roster. Emits one onStage(stage, ok) per gate so
+// a UI can render the join checklist. Returns the roster entry + credentials the
+// caller hands to runSession (via its existingCredentials map) so the new member
+// participates — signing client-side with its OWN key — in subsequent sessions.
+export type OnboardStage = "keypair" | "apply" | "review" | "activate" | "connect";
+export interface OnboardSpec { memberId: string; name: string; lens: string; bias?: number; }
+export interface OnboardResult {
+  member: { memberId: string; name: string; lens: string; bias: number; present: true };
+  creds: ExistingCredentials;
+}
+export async function onboardMember(
+  spec: OnboardSpec,
+  opts?: { reviewMs?: number; onStage?: (stage: OnboardStage, ok: boolean) => void },
+): Promise<OnboardResult> {
+  const emit = (s: OnboardStage, ok = true) => opts?.onStage?.(s, ok);
+
+  // 1. The member generates its OWN ed25519 keypair (RM never sees the private key).
+  const { publicKeyB64, privateKey } = await generateKeyPair();
+  emit("keypair");
+
+  // 2. Public apply (no auth) — recorded as 'applied'.
+  const applyRes = await fetch(`${BACKEND}/api/committee/apply`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ memberId: spec.memberId, name: spec.name, lens: spec.lens, publicKey: publicKeyB64 }),
+  }).then((r) => r.json());
+  if (applyRes.status !== 201) { emit("apply", false); throw new Error(`apply failed: ${JSON.stringify(applyRes)}`); }
+  emit("apply");
+
+  // 3. Admin review — simulated approval delay before activation.
+  await sleep(opts?.reviewMs ?? 4000);
+  emit("review");
+
+  // 4. Admin activates — flips applied→active and mints the member's bearer token.
+  const activateRes = await fetch(`${BACKEND}/api/committee/admin/activate`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
+    body: JSON.stringify({ memberId: spec.memberId }),
+  }).then((r) => r.json());
+  if (activateRes.status !== 200 || !activateRes.token) { emit("activate", false); throw new Error(`activate failed: ${JSON.stringify(activateRes)}`); }
+  emit("activate");
+
+  // 5. Connect: exchange the bearer token for an MCP OAuth 2.1 access token
+  //    (client_credentials) — proves the member can authenticate to the MCP server.
+  const MCP_BASE = (process.env.MCP_URL ?? "http://localhost:8788/mcp").replace(/\/mcp\/?$/, "");
+  const tok = await fetch(`${MCP_BASE}/mcp/oauth/token`, {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "client_credentials", client_id: spec.memberId, client_secret: activateRes.token }),
+  }).then((r) => r.json());
+  if (!tok.access_token) { emit("connect", false); throw new Error(`oauth connect failed for ${spec.memberId}`); }
+  emit("connect");
+
+  return {
+    member: { memberId: spec.memberId, name: spec.name, lens: spec.lens, bias: spec.bias ?? 0, present: true },
+    creds: { token: activateRes.token, privateKey },
+  };
 }
 
 async function waitForSessionState(date: string, subject: string, expectedState: string, timeoutMs = 30_000) {

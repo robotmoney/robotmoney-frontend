@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, visibleLen, type Tui } from "./lib/tui.ts";
 import type { SessionProgress } from "../mcp/src/e2e.ts";
+import type { ExistingCredentials } from "../mcp/src/agent.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -105,12 +106,19 @@ interface CommitteeState {
   history: { date: string; synthesis: string }[];
   nextAt: number; // epoch-ms of this subject's next session; 0 = running now
 }
+// Prospective committee-member onboarding, shown as a full-width checklist strip.
+// The steps mirror the real join gates; session/memo/admitted flip to done when the
+// new member is observed participating (take + memo) in a live session.
+type OnboardStepStatus = "pending" | "running" | "done" | "failed";
+interface OnboardStep { key: string; status: OnboardStepStatus; }
+interface OnboardState { memberId: string; name: string; steps: OnboardStep[]; }
 interface DemoState {
   services: { name: string; url: string }[];
   containers: { name: string; phase: Phase; detail?: string }[];
   steps: { name: string; status: StepStatus }[];
   research: ResearchEntry[];
   committees: Record<string, CommitteeState>; // keyed by subject id; populated once SUBJECTS is imported
+  onboarding?: OnboardState; // current/most-recent prospective member (undefined until the first)
   messages: string[];
 }
 const state: DemoState = {
@@ -144,6 +152,17 @@ function setContainer(name: string, phase: Phase, detail?: string): void {
 function setStep(name: string, status: StepStatus): void {
   const s = state.steps.find((x) => x.name === name);
   if (s) s.status = status;
+}
+// The prospective-member join checklist, in order. keypair→connect are driven by
+// onboardMember(); session/memo/admitted flip when the new member is seen taking +
+// posting a memo in a live session (via committeeProgress).
+const ONBOARD_STEPS = ["keypair", "apply", "review", "activate", "connect", "session", "memo", "admitted"];
+function startOnboarding(memberId: string, name: string): void {
+  state.onboarding = { memberId, name, steps: ONBOARD_STEPS.map((key) => ({ key, status: "pending" as OnboardStepStatus })) };
+}
+function setOnboardStep(key: string, status: OnboardStepStatus): void {
+  const step = state.onboarding?.steps.find((s) => s.key === key);
+  if (step) step.status = status;
 }
 
 // --- Logging --------------------------------------------------------------
@@ -511,6 +530,9 @@ function phaseGlyph(p: Phase): string {
 function stepGlyph(s: StepStatus): string {
   return s === "done" ? color("32", "✓") : s === "failed" ? color("31", "✗") : s === "running" ? color("33", spinner(frame)) : color("2", "·");
 }
+function onboardGlyph(s: OnboardStepStatus): string {
+  return s === "done" ? color("32", "✓") : s === "failed" ? color("31", "✗") : s === "running" ? color("33", spinner(frame)) : color("2", "·");
+}
 // Three ticks that advance ONLY on the observable queued→running→done job states.
 // They are NOT fabricated fetch/process/report sub-steps — the comment and labels
 // stay honest about that granularity (we only observe the queue transitions).
@@ -608,6 +630,16 @@ function render(): string[] {
   lines.push("  " + state.containers.map((c) => `${phaseGlyph(c.phase)} ${c.name}${c.detail ? color("2", `(${c.detail})`) : ""}`).join("   "));
   lines.push("  " + state.steps.map((s) => `${stepGlyph(s.status)} ${s.name}`).join("   "));
 
+  // Onboarding strip (full width): the current prospective member's join checklist.
+  lines.push(hr(W, "Onboarding"));
+  if (state.onboarding) {
+    const ob = state.onboarding;
+    const cells = ob.steps.map((s) => `${onboardGlyph(s.status)} ${s.key}`).join("  ");
+    lines.push(truncate(`  ${color("36", ob.name)} ${color("2", `(${ob.memberId})`)}  ${cells}`, W));
+  } else {
+    lines.push(color("2", "  · waiting for the first prospective member…"));
+  }
+
   // Footer (built first so the middle region can claim the rest of the height)
   const footer: string[] = [hr(W, "Log")];
   for (const m of state.messages) footer.push(color("2", `  ${m}`));
@@ -660,6 +692,19 @@ function committeeProgress(subjectId: string): SessionProgress {
       log(`committee ${subjectId}: ${ev.state}`);
     } else {
       c.members[ev.memberId] = { stage: ev.stage, stance: ev.stance, confidence: ev.confidence };
+      // If this is the current onboarding prospect, reflect its first live
+      // participation (submitting a take + posting a memo) in the join checklist.
+      const ob = state.onboarding;
+      if (ob && ob.memberId === ev.memberId && ev.stage !== "absent") {
+        if (ev.stage === "done") {
+          setOnboardStep("session", "done");
+          setOnboardStep("memo", "done");
+          setOnboardStep("admitted", "done");
+          log(`onboarding ${ev.memberId}: admitted — participated + pushed memo`);
+        } else {
+          setOnboardStep("session", "running");
+        }
+      }
     }
   };
 }
@@ -797,6 +842,10 @@ async function main(): Promise<void> {
     };
   }
 
+  // Credentials for members onboarded at runtime (apply→activate). Passed to every
+  // runSession so newly-admitted members participate (signing with their own key).
+  const onboardedCreds = new Map<string, ExistingCredentials>();
+
   async function committeeDriver(): Promise<void> {
     for (;;) {
       // Pick the earliest-due subject and wait until its slot.
@@ -812,7 +861,7 @@ async function main(): Promise<void> {
       c.members = {};
       c.nextAt = 0; // running now → pane shows "running…"
       try {
-        const res = await e2e.runSession(date, subject, due.runs + 1, undefined, undefined, tuiActive ? committeeProgress(subject.id) : undefined);
+        const res = await e2e.runSession(date, subject, due.runs + 1, undefined, onboardedCreds, tuiActive ? committeeProgress(subject.id) : undefined);
         c.publishedCount++;
         const synth: string = res?.pub?.session?.synthesis ?? "";
         c.history.push({ date, synthesis: synth });
@@ -827,6 +876,41 @@ async function main(): Promise<void> {
     }
   }
   void committeeDriver();
+
+  // ── Periodic new-member onboarding ───────────────────────────────────────
+  // Every ONBOARD_INTERVAL, walk a brand-new prospect through the real join gates
+  // (keypair → apply → review → activate → OAuth connect), then add it to the shared
+  // roster (e2e.MEMBERS + onboardedCreds) so it participates in — and grows — the
+  // committee. session/memo/admitted complete when committeeProgress sees the
+  // newcomer take + post a memo. Capped so the committee doesn't grow unbounded.
+  const NEWCOMERS: { memberId: string; name: string; lens: string; bias: number }[] = [
+    { memberId: "helios", name: "Helios", lens: "liquidity", bias: 0.05 },
+    { memberId: "selene", name: "Selene", lens: "volatility", bias: -0.05 },
+    { memberId: "rhea", name: "Rhea", lens: "credit", bias: 0.0 },
+    { memberId: "nyx", name: "Nyx", lens: "tail risk", bias: -0.15 },
+    { memberId: "eos", name: "Eos", lens: "newcomer", bias: 0.1 },
+  ];
+  const ONBOARD_INTERVAL_MS = 180_000; // ~3 min between admissions
+  async function onboardingDriver(): Promise<void> {
+    for (const spec of NEWCOMERS) {
+      await sleep(ONBOARD_INTERVAL_MS); // let the base committee run first
+      startOnboarding(spec.memberId, spec.name);
+      try {
+        const { member, creds } = await e2e.onboardMember(spec, {
+          reviewMs: 6000,
+          onStage: (stage: string, ok: boolean) => setOnboardStep(stage, ok ? "done" : "failed"),
+        });
+        onboardedCreds.set(spec.memberId, creds);
+        e2e.MEMBERS.push(member); // grow the roster → joins subsequent sessions
+        setOnboardStep("session", "running");
+        log(`onboarded ${spec.memberId} — awaiting first session participation`);
+      } catch (err) {
+        log(`onboarding ${spec.memberId} failed (stack still running): ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    log(`onboarding complete — committee at ${e2e.MEMBERS.length} seats`);
+  }
+  void onboardingDriver();
 
   await new Promise<never>(() => { /* run forever; Ctrl-C/SIGTERM (or `demo:down`) stops the stack */ });
 }
