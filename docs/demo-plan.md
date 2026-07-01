@@ -263,9 +263,9 @@ The standing demo periodically admits a brand-new committee member through the r
 path and grows the roster over time. `onboardMember()` (exported from `mcp/src/e2e.ts`,
 additive — standalone `main()` unchanged) runs keypair → public apply → simulated review →
 admin activate → MCP OAuth connect, emitting a stage callback; an onboarding loop in
-`scripts/demo.ts` drives it on a cadence (default ~3 min, capped at a small newcomer pool),
-adds the admitted member to the shared roster (`onboardedCreds` + the now-exported
-`MEMBERS`) so it participates in subsequent sessions, and renders the checklist in the
-Onboarding strip. The `session`/`memo`/`admitted` steps flip when the newcomer is observed
+`scripts/demo.ts` drives it (first admission ~1 min in, then a new character every ~5 min
+indefinitely — curated names then generated), adds the admitted member to the shared
+roster (`onboardedCreds` + the now-exported `MEMBERS`) so it participates in subsequent
+sessions, and renders the checklist in the Onboarding strip. The `session`/`memo`/`admitted` steps flip when the newcomer is observed
 taking + posting a memo in a live session (via the same session progress callback). See
 demo-spec.md §11.

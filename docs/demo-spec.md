@@ -304,7 +304,8 @@ committee that **grows over time**:
    done via the same session progress callback that drives the subject panes.
 
 Driven by `onboardMember()` in `mcp/src/e2e.ts` (additive; the standalone `main()` is
-unchanged) and an onboarding loop in `scripts/demo.ts`. Cadence and cap are configurable
-(default: one admission every ~3 min, up to a small pool of newcomers), so the committee
-grows from its base roster to a bounded maximum. Each admission is rendered live in the
-Onboarding strip (§10.1).
+unchanged) and an onboarding loop in `scripts/demo.ts`. The first admission fires ~1 min
+after start (so it's visible early); thereafter a **new character joins every ~5 minutes,
+indefinitely** (a curated name pool, then generated names so the demo never runs dry), so
+the committee keeps growing for as long as the demo runs. Each admission is rendered live
+in the Onboarding strip (§10.1).
