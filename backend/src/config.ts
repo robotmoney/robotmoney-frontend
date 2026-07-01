@@ -27,12 +27,6 @@ export const config = {
   trustProxy: process.env.TRUST_PROXY === "1",
   databaseUrl: required("DATABASE_URL"),
   apiPort: Number(process.env.API_PORT ?? 8787),
-  // Comma-separated list of allowed browser origins for the frontend. Only
-  // relevant when the frontend is served from a different origin than the API.
-  corsOrigins: (process.env.CORS_ORIGINS ?? "http://localhost:8080")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean),
   // If set, the API process also serves this static directory (the built
   // frontend) — a single-box deployment with no reverse proxy.
   staticDir: process.env.STATIC_DIR || null,

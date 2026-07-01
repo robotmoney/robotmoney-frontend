@@ -111,7 +111,7 @@ reference/
 
 ### Side-by-side Comparison
 1. Open robotmoney-site in browser at 1440px: `http://localhost:3000`
-2. Open robotmoney-frontend dev server in another window: `http://localhost:8080` (or configured port)
+2. Open robotmoney-frontend dev server in another window: `http://localhost:48787` (or configured port)
 3. Navigate to same page on both
 4. Use browser DevTools to measure spacing, fonts, colors
 5. Use screenshot references to verify:
