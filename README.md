@@ -103,6 +103,36 @@ DEMO_PROJECT=rmdemo WEB_PORT=48787 MCP_PORT=48788 bun run demo
   demo on the same port and Docker will refuse the bind. Use `bun run demo:down`
   (with the same `DEMO_PROJECT`) to release it.
 
+## Frozen build — offline, server-less single file
+
+The **frozen** distribution bakes the whole SPA into **one self-contained
+`dist/frozen/index.html`** that renders every view **offline** — a non-technical
+user can double-click it (`file://`, no server, no network, no build tools) and
+browse a point-in-time snapshot of the site. See
+[`docs/ARCHITECTURE.md` §4 "Frozen (offline single-file) distribution"](./docs/ARCHITECTURE.md#4-frontend)
+for how it works.
+
+```bash
+# Bake from a LIVE backend (snapshots every endpoint the frontend requests):
+BACKEND_URL=http://127.0.0.1:8787 bun run frozen
+
+# Bake fully OFFLINE from committed fixtures (no backend needed):
+bun run frozen:fixtures
+```
+
+Both produce, under `dist/frozen/`:
+
+- `index.html` — the single self-contained file (app + views + baked API JSON +
+  vendored p5/Chart.js/Alpine, all inlined). Open it directly: `file://…/dist/frozen/index.html`.
+- `frozen-manifest.json` — bake metadata (`bakedAt`, `source`, endpoint list, byte size).
+
+**Constraints:** it is a *snapshot* — data is frozen as-of the bake, writes
+(POST/PUT/DELETE) are accepted no-ops, query params are ignored (keyed by
+pathname), and the URL bar stays on `index.html` while views swap in place. The
+bake fails loudly if any endpoint the frontend requests can't be satisfied (no
+silent gaps). Not for production hosting of live data — it's for offline demos,
+archival, and email/USB hand-off.
+
 ## Useful commands
 
 ```bash
@@ -112,5 +142,7 @@ bun run worker               # task-queue worker      — backend/
 bun test                     # hermetic suite (spins ephemeral Postgres) — backend/
 bun run typecheck            # tsc --noEmit            — backend/
 bun run demo:down            # tear down the standing demo (containers + volume)
+bun run frozen               # bake offline single file from a live backend  — root
+bun run frozen:fixtures      # bake offline single file from fixtures (no backend) — root
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)
 ```
