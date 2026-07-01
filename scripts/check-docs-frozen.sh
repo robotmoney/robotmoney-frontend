@@ -64,7 +64,7 @@ pkg_cmds="$(jq -r '.scripts | keys[] | select(startswith("frozen"))' "$PKG" | so
 [ -n "$pkg_cmds" ] || fail "package.json defines no 'frozen*' scripts"
 while IFS= read -r cmd; do
   [ -n "$cmd" ] || continue
-  if ! printf '%s\n' "$doc_text" | grep -qF "bun run $cmd"; then
+  if ! grep -qF "bun run $cmd" <<< "$doc_text"; then
     fail "package.json script 'frozen*' '$cmd' is not documented (expected 'bun run $cmd' in ${DOCS[*]})"
   fi
   echo "check-docs-frozen: package.json script 'bun run $cmd' is documented"
