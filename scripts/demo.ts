@@ -315,6 +315,18 @@ async function run(cmd: string[], cwd: string, env: Record<string, string>, labe
 // once from the dashboard API (what actually landed). Fully defensive: any query
 // failure is logged and skipped — it never crashes the TUI.
 const researchNotes = new Map<number, string>();
+// Countdown to the next worker-scheduled run per kind. We ask the DB for the
+// seconds remaining (authoritative — avoids host/container clock skew) each poll
+// and interpolate between polls in render(). regime.classify + analytics.run can
+// each have BOTH a default daily row and a fast demo row enabled, so we take the
+// SOONEST (MIN) upcoming run per kind.
+interface NextRun { secondsUntil: number; fetchedAt: number; }
+const nextRuns: Record<string, NextRun> = {};
+function secsUntilNext(kind: string): number | null {
+  const nr = nextRuns[kind];
+  if (!nr) return null;
+  return Math.max(0, Math.round(nr.secondsUntil - (Date.now() - nr.fetchedAt) / 1000));
+}
 function mapJobState(status: string): ResearchEntry["state"] {
   if (status === "pending") return "queued";
   if (status === "running") return "running";
@@ -367,10 +379,32 @@ async function pollResearch(): Promise<void> {
   }
   state.research = entries;
 }
+// Poll the schedules table for the next fire time of the analytics kinds so the
+// TUI can show a live countdown. GROUP BY kind + MIN → the soonest upcoming run
+// even when a daily and a fast-demo row are both enabled. Defensive: any failure
+// is logged and skipped.
+async function pollNextRuns(): Promise<void> {
+  const q =
+    "SELECT kind, MIN(GREATEST(0, EXTRACT(EPOCH FROM (next_run_at - now()))))::int " +
+    "FROM job_schedules WHERE enabled AND next_run_at IS NOT NULL " +
+    "AND kind IN ('analytics.run','regime.classify') GROUP BY kind";
+  const r = Bun.spawnSync(
+    ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", DB_USER, "-d", DB_NAME, "-tAF", "|", "-c", q],
+    { cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe" },
+  );
+  if (r.exitCode !== 0) { log(`next-run poll query failed (exit ${r.exitCode})`); return; }
+  const rows = new TextDecoder().decode(r.stdout).trim().split("\n").filter(Boolean);
+  for (const row of rows) {
+    const [kind, secs] = row.split("|");
+    const n = Number(secs);
+    if (kind && Number.isFinite(n)) nextRuns[kind] = { secondsUntil: n, fetchedAt: Date.now() };
+  }
+}
 let researchTimer: ReturnType<typeof setTimeout> | null = null;
 function startResearchPolling(): void {
   const tick = async () => {
     try { await pollResearch(); } catch (e) { log(`research poll error: ${e instanceof Error ? e.message : e}`); }
+    try { await pollNextRuns(); } catch (e) { log(`next-run poll error: ${e instanceof Error ? e.message : e}`); }
     researchTimer = setTimeout(() => void tick(), 4000);
   };
   void tick();
@@ -379,6 +413,9 @@ function startResearchPolling(): void {
 // --- TUI render -----------------------------------------------------------
 let tui: Tui | undefined;
 let frame = 0;
+// 0 = a committee session is running now (no pending countdown); otherwise the
+// epoch-ms at which the next session fires. Set by the committee loop.
+let nextCommitteeAt = 0;
 
 function fmtDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -386,6 +423,8 @@ function fmtDuration(ms: number): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
 }
+// Seconds → "m:ss" for the pane countdowns; "—" when unknown (not yet polled).
+const fmtCountdown = (secs: number | null): string => (secs == null ? "—" : fmtDuration(secs * 1000));
 
 function phaseGlyph(p: Phase): string {
   if (p === "building") return color("33", spinner(frame));
@@ -431,7 +470,10 @@ function twoCol(left: string[], right: string[], width: number): string[] {
 }
 
 function renderResearch(height: number): string[] {
-  const out = [color("1", "Research — scheduled analytics (polled from job queue)")];
+  const out = [
+    color("1", "Research") +
+      color("2", `  next regime ${fmtCountdown(secsUntilNext("regime.classify"))} · research ${fmtCountdown(secsUntilNext("analytics.run"))}`),
+  ];
   out.push(color("2", "kind                 state    detail"));
   for (const e of state.research.slice(0, Math.max(0, height - 2))) {
     const stateLbl = e.state === "done" ? color("32", "done ") : e.state === "running" ? color("33", "run  ") : color("2", "queue");
@@ -443,7 +485,13 @@ function renderResearch(height: number): string[] {
 
 function renderCommittee(height: number): string[] {
   const c = state.committee;
-  const out = [color("1", `Committee — ${c.subject || "(idle)"}  [${c.sessionState}]  published:${c.publishedCount}`)];
+  const nextTxt = nextCommitteeAt > 0
+    ? `next ${fmtDuration(Math.max(0, nextCommitteeAt - Date.now()))}`
+    : "running…";
+  const out = [
+    color("1", `Committee — ${c.subject || "(idle)"}`) +
+      color("2", `  [${c.sessionState}] pub:${c.publishedCount} · ${nextTxt}`),
+  ];
   const ids = Object.keys(c.members);
   for (const id of ids) {
     const m = c.members[id];
@@ -641,6 +689,7 @@ async function main(): Promise<void> {
     const subject = e2e.SUBJECTS[tick % e2e.SUBJECTS.length];
     log(`committee tick #${tick + 1} → ${date}/${subject.id}`);
     state.committee.members = {}; // fresh session — members repopulate via callback
+    nextCommitteeAt = 0; // a session is running now — pane shows "running…"
     try {
       const res = await e2e.runSession(date, subject, tick + 1, undefined, undefined, tuiActive ? committeeProgress : undefined);
       state.committee.publishedCount++;
@@ -652,6 +701,7 @@ async function main(): Promise<void> {
       log(`committee session failed (stack still running): ${err instanceof Error ? err.message : err}`);
     }
     tick++;
+    nextCommitteeAt = Date.now() + COMMITTEE_INTERVAL_MS; // arm the countdown
     // Recursive setTimeout (not setInterval): schedule the NEXT tick only after
     // this one settles, so sessions never overlap even if one runs long.
     setTimeout(() => { void committeeTick(); }, COMMITTEE_INTERVAL_MS);
