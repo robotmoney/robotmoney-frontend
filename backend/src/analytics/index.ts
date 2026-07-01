@@ -25,6 +25,12 @@ import { seedRawIndicatorFloor } from "./store/floor-seed.ts";
 import { saveRegimeSnapshots, type RegimeSnapshotRow } from "./store/regime-store.ts";
 import { persistResearchSignal } from "./store/research-store.ts";
 import { computeChannelDivergence, computeLateCycle } from "./analyze/research-signals.ts";
+import { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
+import {
+  computeBacktest,
+  stripDailyFromSnapshot,
+  type BacktestPayload,
+} from "./analyze/backtest.ts";
 import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 import { liveDataSource, type AnalyticsDataSource, type Logger } from "./access/data-source.ts";
 import { hermeticDataSource } from "./access/hermetic-source.ts";
@@ -124,7 +130,23 @@ export async function runAnalytics(
 
     const r2 = computeRegime(transformed, dateAxis); // [macro, onchain]
     const r3 = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"]); // +factor
-    const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw);
+
+    // Predictive correlations + regime backtest — computed from the SAME 2-panel
+    // composite the original main snapshot uses, over the chart-overlay extras
+    // (SPX/ETH price levels + DTB3 yield; NOT registry indicators). A failed
+    // extras fetch degrades to []: correlations/backtest simply carry fewer/no
+    // pairs rather than throwing. Baked onto the latest snapshot row (asof view).
+    const extras = await source.fetchBacktestExtras(logger);
+    let backtest: BacktestPayload | null = null;
+    let correlations: CorrelationsPayload | null = null;
+    try {
+      correlations = computeCorrelations(dateAxis, r2, extras);
+      backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, r2, extras));
+    } catch (e: any) {
+      logger.error?.(`[analytics] backtest/correlations failed: ${e?.message ?? e}`);
+    }
+
+    const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, backtest, correlations);
     await saveRegimeSnapshots(rows);
 
     const last = dateAxis.length - 1;
@@ -180,6 +202,8 @@ function buildSnapshotRows(
   r3: RegimeComputeResult,
   transformed: Record<string, number[]>,
   lastRaw: Record<string, { date: string; value: number } | null>,
+  backtest: BacktestPayload | null = null,
+  correlations: CorrelationsPayload | null = null,
 ): RegimeSnapshotRow[] {
   const rows: RegimeSnapshotRow[] = [];
   const lastIdx = dateAxis.length - 1;
@@ -222,6 +246,10 @@ function buildSnapshotRows(
       version: CURRENT_REGIME_VERSION,
       percentiles,
       indicators,
+      // Backtest + predictive correlations are asof-only (baked on the latest row,
+      // matching the original snapshot); historical rows carry null.
+      backtest: isLatest ? backtest : null,
+      correlations: isLatest ? correlations : null,
     });
   }
   return rows;

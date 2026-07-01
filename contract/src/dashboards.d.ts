@@ -66,6 +66,46 @@ export interface RegimeIndicator {
   sparkline: (number | null)[];
 }
 
+// One dated equity point on a backtest strategy's month-end curve.
+export interface BacktestEquityPoint {
+  date: string;
+  value: number;
+}
+
+// Per-strategy backtest metrics (ported from the original simulate() return).
+export interface BacktestStrategyMetrics {
+  final_value: number | null;
+  cagr: number | null;
+  cagr_in_sample: number | null;
+  cagr_out_sample: number | null;
+  sharpe: number | null;
+  max_drawdown: number | null;
+  transitions: number;
+  n_days: number;
+  start_date: string;
+  end_date: string;
+  equity_curve: BacktestEquityPoint[];
+}
+
+// portfolio (eth | sp500 | mixed) → strategy (composite | macro | onchain |
+// macro_inverted | conservative | aggressive | <asset>_hodl | stables_only) → metrics.
+export type BacktestPayload = Record<string, Record<string, BacktestStrategyMetrics>>;
+
+// One rank-correlation cell: Spearman ρ (null if <10 pairs) + sample size n.
+export interface CorrelationCell {
+  rho: number | null;
+  n: number;
+}
+
+// Predictive-power correlations. forward[index][`${asset}_${h}d`] = rank-corr of
+// the index level vs the asset's forward log-return over h∈{30,90,180} days;
+// concurrent[index][asset] = rank-corr vs the concurrent log-price. index ∈
+// {composite, macro, onchain}; asset ∈ {spx, eth}.
+export interface CorrelationsPayload {
+  forward: Record<string, Record<string, CorrelationCell>>;
+  concurrent: Record<string, Record<string, CorrelationCell>>;
+}
+
 export interface RegimeSnapshot {
   date: string;
   composite: number | null;
@@ -88,6 +128,11 @@ export interface RegimeSnapshot {
   // Rich per-indicator objects on the asof row; [] on historical rows. Kept
   // permissive (legacy rows may carry a differently-shaped object).
   indicators: RegimeIndicator[] | Record<string, unknown>;
+  // Asof-only regime backtest + predictive correlations (ported from the original
+  // regime-snapshot.json). Present on the latest snapshot only; null on historical
+  // rows. Additive/superset — existing fields unchanged.
+  backtest?: BacktestPayload | null;
+  correlations?: CorrelationsPayload | null;
 }
 
 // One dated point in a research-signal series (value nullable for pre-history/gaps).

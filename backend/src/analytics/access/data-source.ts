@@ -35,15 +35,30 @@ export interface ResearchInputs {
   conf: Point[];
 }
 
+// Chart-overlay extras the regime backtest + predictive correlations need beyond
+// the regime registry: daily SPX (^GSPC) and ETH (ETH-USD) PRICE LEVELS and the
+// DTB3 3-month T-bill yield. These are NOT registry indicators (the raw floor
+// stores derived ratios like SPX_TREND=SMA50/SMA200, never price levels), so the
+// orchestrator fetches them here — mirroring update.js fetchExtras.
+export interface BacktestExtras {
+  spx: Point[];
+  eth: Point[];
+  tbill3m: Point[];
+}
+
 export interface AnalyticsDataSource {
   // Registry indicator raw series (id → pre-transform {date,value}[]).
   fetchIndicators(indicators: Indicator[], logger?: Logger): Promise<Record<string, Point[]>>;
   // Research-only inputs (BTC/QQQ/SPY/RSP/top-7/MNA/MARGIN/CONF).
   fetchResearchInputs(asof: string, logger?: Logger): Promise<ResearchInputs>;
+  // Backtest/correlations overlays (SPX/ETH price levels + DTB3 yield). A failed
+  // fetch returns [] (logged) → that leg is simply excluded downstream.
+  fetchBacktestExtras(logger?: Logger): Promise<BacktestExtras>;
 }
 
 const CHANNEL_START = "2018-01-01";
 const LATECYCLE_START = "2010-01-01";
+const EXTRAS_START = "2010-01-01"; // Yahoo returns inception for younger tickers
 const unix = (iso: string) => Math.floor(new Date(iso + "T00:00:00Z").getTime() / 1000);
 
 // Isolate one fetch: on any failure return [] (logged loudly). Never throws, so
@@ -79,5 +94,14 @@ export const liveDataSource: AnalyticsDataSource = {
       safe("FRED UMCSENT", () => fetchFred("UMCSENT"), logger),
     ]);
     return { btc, qqq, spy, rsp, top7, mna, margin, conf };
+  },
+
+  async fetchBacktestExtras(logger = console): Promise<BacktestExtras> {
+    const [spx, eth, tbill3m] = await Promise.all([
+      safe("^GSPC", () => fetchYahoo("^GSPC", unix(EXTRAS_START)), logger),
+      safe("ETH-USD", () => fetchYahoo("ETH-USD", unix(EXTRAS_START)), logger),
+      safe("FRED DTB3", () => fetchFred("DTB3"), logger),
+    ]);
+    return { spx, eth, tbill3m };
   },
 };
