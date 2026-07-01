@@ -192,3 +192,42 @@ P1 (worker) → concurrent (P2, P3) → P5 (authz) → P6 (frontend) → P7 (mul
                                   ↕
                                 P4 (OAuth) — anytime, but independent
 ```
+
+---
+
+## Phase 9 — Standing demo (local)  ✅ shipped
+
+`bun run demo` runs as a long-lived **standing demo** rather than a one-shot:
+
+- **Bring-up + healthcheck + READY route table**, then a run state file at
+  `.agents/demo-state.json`.
+- **Recurring, staggered (~2 min) scheduled actions**: regime + research driven by the
+  worker's scheduler via fast demo-cadence `job_schedules` rows gated behind
+  `DEMO_FAST_SCHEDULES` (`regime.classify` `*/2`, `analytics.run` `1-59/2`); committee
+  sessions driven by an in-process MCP-agent loop in `demo.ts` reusing the exported
+  `runSession` from `mcp/src/e2e.ts` (rotating date/subject, no reset between ticks).
+- **Never auto-tears-down** (Ctrl-C, SIGTERM, and startup failure all leave containers
+  up). Teardown is explicit: `bun run demo:down` / `bun run demo:status`.
+- CI (`process.env.CI`) still runs the checks once and tears down.
+
+See demo-spec.md §0.
+
+## Phase 10 — Demo TUI (planned)
+
+The standing demo is complex enough to warrant a proper terminal UI instead of
+interleaved log lines. Target layout:
+
+- **Services pane** — URLs of all services (Site / Regime / Committee / Research / MCP).
+- **Startup pane** — clean per-container status for the Docker startups + healthchecks
+  (in-progress / healthy / failed).
+- **Activity pane** (largest) — split by the async scheduled tasks, grouped as:
+  - **Research tasks** — fetch → process → report.
+  - **Committee member tasks** — fetch data → thinking → reporting → waiting.
+
+Requirements:
+
+- **Verbose logs go to a file** for every process that prints text (api, worker, mcp,
+  the committee driver, analytics), while the **TUI suppresses raw logs** and shows
+  only distilled status. The log file path is printed / recorded in the state file.
+- The TUI is the default local view; a `--no-tui` / non-TTY fallback keeps the plain
+  line-logging behavior (and CI stays plain).

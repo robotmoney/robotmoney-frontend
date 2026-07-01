@@ -1,10 +1,54 @@
 # Demo Specification
 
 What `bun run demo` must demonstrate to exercise the full Investment Committee lifecycle —
-a single command that provisions everything, runs one complete session end-to-end, keeps
-the stack live, and tears down cleanly.
+a single command that provisions everything, runs the session lifecycle end-to-end, and
+keeps the stack live as a **standing demo** (see §0). It never tears itself down; teardown
+is explicit (`bun run demo:down`).
 
 ---
+
+## 0. Standing demo mode (`bun run demo`, local)
+
+Locally, `bun run demo` is a **long-lived standing demo**, not a one-shot. It runs in
+three phases and never tears itself down:
+
+**(a) Bring-up.** Build images → start Postgres → migrate (seeds `job_schedules`) →
+start api + worker + mcp → wait for `/health` on api and mcp. Once healthy it writes a
+run state file at `.agents/demo-state.json` (compose project name + this run's random
+ports + compose env, so teardown can find the run) and prints the READY route table.
+
+**(b) Staggered scheduled actions (~2 min cadence).** The demo continuously produces
+fresh activity, driven two ways (hybrid):
+
+- **Regime + research** — driven by the worker's own scheduler. In demo mode
+  (`DEMO_FAST_SCHEDULES=1`, set only for the local migrate/seed) the seed appends fast
+  demo-cadence rows to `job_schedules` in addition to the default daily 06:00 UTC rows:
+  `regime.classify` on `*/2 * * * *` (regime only) and `analytics.run` on
+  `1-59/2 * * * *` (the full suite — regime + both research signals). The one-minute
+  cron offset staggers them so they fire at different times.
+- **Committee opinions** — driven by a loop inside `scripts/demo.ts`, because a
+  committee session needs live MCP agents to sign + submit takes. After a one-time
+  reset + setup, it runs one full session (open → brief → collect → agents →
+  close → aggregate → publish) roughly every 120 s (recursive `setTimeout`, offset
+  from the analytics ticks), rotating (date, subject) so sessions accumulate. It does
+  **not** reset between ticks. It reuses the `runSession` runner exported from
+  `mcp/src/e2e.ts` (whose entry-point `main()` is guarded so importing it does not
+  trigger the reset-heavy standalone flow).
+
+One immediate tick of each runs at startup so the site has data on first load; the
+one-shot frontend check (`scripts/demo-frontend-check.ts`) also runs once,
+non-fatally.
+
+**(c) No auto-teardown.** The stack stays up on success, on Ctrl-C/SIGTERM, and on
+startup failure. Ctrl-C prints how to stop and exits, leaving containers running; a
+startup failure dumps diagnostics but leaves containers up for inspection. Teardown is
+explicit only:
+
+- `bun run demo:down` — `docker compose down -v` for the recorded run + removes the
+  state file.
+- `bun run demo:status` — `docker compose ps` for the recorded run.
+
+CI (`process.env.CI`) is unchanged: it runs the checks once and then tears down.
 
 ## 1. Lifecycle stages
 
@@ -137,9 +181,15 @@ RM never holds the private key at any point.
 
 - Zero external dependencies: the demo must not reach out to FRED, Yahoo, CoinMetrics,
   or any live API. The `seededProvider` supplies deterministic data.
-- Random ports + unique compose project name: concurrent runs do not collide.
-- On any exit path (Ctrl-C, SIGTERM, startup failure, assertion failure):
-  `docker compose down -v` — nothing left behind.
+- Random ports (Postgres, API, MCP) + unique compose project name: concurrent runs do
+  not collide. The run identity (project + ports + compose env) is written to
+  `.agents/demo-state.json` so the explicit teardown command can find it.
+- **No automatic teardown (local).** On Ctrl-C, SIGTERM, or startup failure the stack
+  is left RUNNING so it can be inspected and demoed. Teardown is explicit:
+  `bun run demo:down` (tears down + wipes the volume + removes the state file);
+  `bun run demo:status` shows the running containers.
+- **CI is the exception:** when `process.env.CI` is set the demo runs its checks once
+  and then tears down (`docker compose down -v`) so no containers/volumes leak.
 - A missing Docker dependency (Postgres image, build failure) must fail the run
   loudly, never silently skip.
 
@@ -166,18 +216,25 @@ The demo should demonstrate at least two sessions (or the concept of rotation):
 
 ## 10. Demo output
 
-When the demo completes its E2E assertions and enters keep-alive mode, it must print:
+Once the stack is healthy the demo prints a READY route table (before any actions
+start):
 
 ```
-── Robot Money demo ────────────────────────────────────
-  Site:       http://localhost:<api>/
-  Regime:     http://localhost:<api>/regime
-  Committee:  http://localhost:<api>/committee
-  Research:   http://localhost:<api>/research/<key>
-  MCP:        http://localhost:<mcp>/health
+── Robot Money demo ── READY ────────────────────────────
+  Site:       http://127.0.0.1:<api>/
+  Regime:     http://127.0.0.1:<api>/regime
+  Committee:  http://127.0.0.1:<api>/committee
+  Research:   http://127.0.0.1:<api>/research/<key>
+  MCP:        http://127.0.0.1:<mcp>/health
 
-  Session #<id> — <subject> — <stance summary>
-  Members present: <n>  Absent: <m>  Published: yes
-
-  Press Ctrl-C to shut down.
+  state: .agents/demo-state.json
+  Scheduled actions running (~2 min, staggered): regime · research · committee.
+  Ctrl-C leaves the stack running · `bun run demo:down` to stop.
 ```
+
+It then logs each scheduled action as it fires (regime/research refresh, committee
+session published) so the standing demo's activity is visible in the terminal.
+
+> A richer terminal UI (TUI) for the standing demo — service URLs, live container
+> startup/healthcheck status, and split panes for the async scheduled tasks — is
+> planned; see demo-plan.md.
