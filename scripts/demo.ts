@@ -419,12 +419,77 @@ function startResearchPolling(): void {
   void tick();
 }
 
+// --- Container health polling ---------------------------------------------
+// Actively check the REAL docker container status (not just the HTTP /health
+// endpoints) so a crash / restart-loop / unhealthy Docker healthcheck surfaces in
+// the Startup pane. Polls `docker compose ps` and maps each service's State+Health
+// to a pane phase: ✓ healthy · ✗ errored · spinner while starting/checking. Only
+// postgres declares a Docker healthcheck; for api/worker/mcp the signal is process
+// state (running vs exited/restarting) — i.e. the "absence of errors". Fully
+// defensive: any failure is logged and skipped, never crashing the TUI.
+interface PsEntry { Service?: string; Name?: string; State?: string; Health?: string; ExitCode?: number; }
+function classifyContainer(e: PsEntry): { phase: Phase; detail?: string } {
+  const st = (e.State ?? "").toLowerCase();
+  const h = (e.Health ?? "").toLowerCase();
+  if (st === "running") {
+    if (h === "starting") return { phase: "starting", detail: "health: starting" };
+    if (h === "unhealthy") return { phase: "failed", detail: "unhealthy" };
+    return { phase: "healthy", detail: h || undefined }; // healthy, or no healthcheck defined
+  }
+  if (st === "restarting") return { phase: "failed", detail: "restarting" };
+  if (st === "exited" || st === "dead") return { phase: "failed", detail: `exited${e.ExitCode != null ? ` ${e.ExitCode}` : ""}` };
+  if (st === "created" || st === "paused") return { phase: "starting", detail: st };
+  return { phase: "starting", detail: st || "checking" };
+}
+async function pollContainerHealth(): Promise<void> {
+  healthChecking = true;
+  try {
+    // Async spawn (not spawnSync) so the render loop keeps animating the refresh
+    // spinner while docker runs. `-a` includes stopped/exited containers.
+    const proc = Bun.spawn(["docker", "compose", "ps", "-a", "--format", "json"], {
+      cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe",
+    });
+    const out = await new Response(proc.stdout).text();
+    await proc.exited;
+    if (proc.exitCode !== 0) { log(`container health poll failed (exit ${proc.exitCode})`); return; }
+    // Compose emits either NDJSON (one object per line, v2.21+) or a JSON array.
+    const entries: PsEntry[] = [];
+    const trimmed = out.trim();
+    if (trimmed.startsWith("[")) {
+      try { entries.push(...(JSON.parse(trimmed) as PsEntry[])); } catch { /* skip */ }
+    } else {
+      for (const line of trimmed.split("\n").filter(Boolean)) {
+        try { entries.push(JSON.parse(line) as PsEntry); } catch { /* skip malformed line */ }
+      }
+    }
+    for (const c of state.containers) {
+      const e = entries.find((x) => x.Service === c.name || x.Name?.includes(`-${c.name}-`) || x.Name?.includes(`_${c.name}_`));
+      if (!e) { setContainer(c.name, "failed", "not found"); continue; }
+      const { phase, detail } = classifyContainer(e);
+      setContainer(c.name, phase, detail ?? "");
+    }
+  } catch (e) {
+    log(`container health poll error: ${e instanceof Error ? e.message : e}`);
+  } finally {
+    healthChecking = false;
+  }
+}
+let healthTimer: ReturnType<typeof setTimeout> | null = null;
+function startHealthPolling(): void {
+  const tick = async () => {
+    await pollContainerHealth();
+    healthTimer = setTimeout(() => void tick(), 3000);
+  };
+  void tick();
+}
+
 // --- TUI render -----------------------------------------------------------
 let tui: Tui | undefined;
 let frame = 0;
 // 0 = a committee session is running now (no pending countdown); otherwise the
 // epoch-ms at which the next session fires. Set by the committee loop.
 let nextCommitteeAt = 0;
+let healthChecking = false; // true while a docker-container health poll is in flight
 
 function fmtDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -532,7 +597,7 @@ function render(): string[] {
   for (const s of state.services) lines.push(`  ${color("36", s.name.padEnd(10))} ${s.url}`);
 
   // Startup pane
-  lines.push(hr(W, "Startup"));
+  lines.push(hr(W, healthChecking ? `Startup ${spinner(frame)}` : "Startup"));
   lines.push("  " + state.containers.map((c) => `${phaseGlyph(c.phase)} ${c.name}${c.detail ? color("2", `(${c.detail})`) : ""}`).join("   "));
   lines.push("  " + state.steps.map((s) => `${stepGlyph(s.status)} ${s.name}`).join("   "));
 
@@ -660,6 +725,8 @@ async function main(): Promise<void> {
 
   // Research pane: begin polling the worker's real job queue (TUI mode only).
   if (tuiActive) startResearchPolling();
+  // Startup pane: begin live-checking the real docker container status (TUI only).
+  if (tuiActive) startHealthPolling();
 
   // Frontend check — ONCE at startup, non-fatal (unchanged behaviour). Runs in a
   // child process, so its process.exit on failure can't take the demo down.
