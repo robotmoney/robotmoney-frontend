@@ -253,19 +253,30 @@ into six independently testable stages — **access → extract → transform �
 
 - **`types.ts`** — the leaf shapes (`Point`, `SeriesSpec`) that flow through every
   stage.
-- **`access/`** — the data seam. `provider.ts` defines the `Provider` interface +
-  the deterministic, hermetic `seededProvider` (no API keys; the default).
-  `fetcher-provider.ts` is an **implemented, opt-in** live provider (`PROVIDER=live`)
-  that satisfies the same interface by *composing* extract + transform; it pulls
-  REAL series from KEYLESS public sources only — **DefiLlama, CoinGecko, Yahoo
-  Finance** — and falls back to seeded *per series* for anything keyed (FRED:
-  `T10Y2Y`/`HY_OAS`/`ICSA`) or unmapped, so `getSeries` never throws.
-  `select.ts` picks seeded vs live for a run.
-- **`extract/`** — pull raw series from sources. `http.ts` (timeout/abort fetch),
-  one pure parser per source (`defillama.ts`, `coingecko.ts`, `yahoo.ts` — JSON in
-  → `Point[]` out, throw on garbage), and `sources.ts`, the series-id → fetch+parse
-  wiring the live provider iterates (each source isolated; one failure drops only
-  its own series).
+- **`access/`** — the data seam for the orchestrator. `data-source.ts` defines the
+  `AnalyticsDataSource` interface (`fetchIndicators` / `fetchResearchInputs` /
+  `fetchBacktestExtras`) and the production default **`liveDataSource`** — pure REAL
+  keyless fetchers, NO synthetic substitution: a failed/empty fetch returns `[]` and
+  the orchestrator degrades to the persisted-real floor via `mergeSeries` (never to
+  seeded data). `hermetic-source.ts` is the deterministic, offline
+  **`hermeticDataSource`** (seeded walks from `provider.ts`'s `seededProvider`) used by
+  CI and the demo default. **`ANALYTICS_SOURCE`**, resolved by
+  **`resolveAnalyticsSource()`** in `backend/src/analytics/index.ts`, is the SINGLE
+  authoritative selector: unset/`live` → `liveDataSource`, `hermetic` →
+  `hermeticDataSource`, any other value refused loudly (fail-closed). The legacy
+  `PROVIDER` / `config.analyticsProvider` knob is **deprecated for source selection**
+  and is no longer consulted on the live/demo path (see the deprecation note in
+  `config.ts`). The old per-run seeded-vs-live selector module has been deleted; the
+  opt-in `fetcher-provider.ts` it drove is retired from the data path (retained only
+  for legacy provider unit tests).
+- **`extract/`** — pull raw series from KEYLESS public sources. `http.ts`
+  (timeout/abort fetch, plus an opt-in on-disk TTL cache in `fetch-cache.ts`), one
+  pure parser per source — **`fred.ts`, `yahoo.ts`, `defillama.ts`,
+  `blockchain-com.ts`, `coinmetrics.ts`, `geckoterminal.ts`, `shiller.ts`,
+  `edgar.ts`** (JSON/CSV in → `Point[]` out, throw on garbage) — and `sources.ts`,
+  the indicator-id → fetch+parse wiring that `liveDataSource.fetchIndicators` drives
+  (each source isolated; one failure drops only its own series, which then falls back
+  to the persisted floor).
 - **`transform/`** — normalize/clean. `math.ts` is the shared pure math
   (percentile-in-window, sign, rolling beta, ratios, `isoDay`, …) so normalization
   is identical suite-wide; `grid.ts` reshapes gappy real series onto the dense
@@ -277,10 +288,23 @@ into six independently testable stages — **access → extract → transform �
   channel-divergence") with no special-casing. `research.ts` holds the research
   payload shape; `regime.ts`, `channel-divergence.ts`, `late-cycle.ts` are the
   tools (their `compute()` is pure; `persist()` is a one-line delegate to `store/`).
-- **`store/`** — the only SQL writes. `regime-store.ts` (`saveRegimeSnapshots`) and
-  `research-store.ts` (`persistResearchSignal`), both upserting on natural keys.
+  `backtest.ts` (`computeBacktest`) and `correlations.ts` (`computeCorrelations`)
+  add the asof-only regime **backtest** + predictive **correlations** payloads
+  (ported from the original `regime-snapshot.json`).
+- **`store/`** — the only SQL writes. `regime-store.ts` (`saveRegimeSnapshots`),
+  `research-store.ts` (`persistResearchSignal`), and `raw-history-store.ts` (the
+  append-only persisted raw floor) all upsert on natural keys; `floor-seed.ts`
+  performs the opt-in cold-DB floor seed (`ANALYTICS_FLOOR_SEED=1`).
+  `saveRegimeSnapshots` also bakes the asof-only **`backtest`** + **`correlations`**
+  jsonb payloads onto the latest `regime_snapshots` row (columns added by migration
+  `0010_backtest_correlations.sql`; NULL on historical rows), sourced via
+  `AnalyticsDataSource.fetchBacktestExtras` (SPX/ETH price levels + the DTB3 3-month
+  T-bill yield).
 - **`report/`** — `projections.ts` owns all SQL reads + the row→DTO map
-  (`fetchRegimeSnapshots(range)`, `fetchLatestResearchSignal(key)`). The HTTP route
+  (`fetchRegimeSnapshots(range)` → `{ latest, history }`, carrying the asof-only
+  `backtest`/`correlations` on `latest`; `fetchLatestResearchSignal(key)`). The
+  contract DTOs **`BacktestPayload`** / **`CorrelationsPayload`**
+  (`contract/src/dashboards.d.ts`) type those payloads. The HTTP route
   `api/routes/dashboards.ts` is a thin adapter — it only parses/clamps `range` and
   calls these. MCP and the frontend stay consumers across the HTTP boundary.
 
@@ -298,9 +322,9 @@ Three pipelines run through these stages:
 The worker runs the whole suite daily at **06:00 UTC** (`analytics.run`, cron
 `0 6 * * *`); the API exposes regime at `/api/dashboards/regime-snapshots?range=`
 and each research signal at `/api/dashboards/research-signals/:key`; the frontend
-renders `/regime` and the `/research/*` views (mirroring the original site's
-surfaces). Adding an analytic = write a tool + register it + add a job schedule +
-a route; nothing else changes.
+renders `/regime` (including the backtest + predictive-correlations panels) and the
+`/research/*` views (mirroring the original site's surfaces). Adding an analytic =
+write a tool + register it + add a job schedule + a route; nothing else changes.
 
 ---
 
