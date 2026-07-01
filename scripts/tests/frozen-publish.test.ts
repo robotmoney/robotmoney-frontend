@@ -133,8 +133,8 @@ describe("frozen artifact name (timestamp label)", () => {
 
   test("frozenArtifactName interpolates the (sanitized) bake timestamp", () => {
     const name = frozenArtifactName("2026-07-01T18:05:09.546Z");
-    expect(name).toBe("frozen-index-html-2026-07-01T18-05-09-546Z");
-    expect(name.startsWith("frozen-index-html-")).toBe(true);
+    expect(name).toBe("frozen-spa-2026-07-01T18-05-09-546Z");
+    expect(name.startsWith("frozen-spa-")).toBe(true);
   });
 
   test("empty bakedAt is rejected loudly", () => {
@@ -148,7 +148,7 @@ describe("frozen artifact name (timestamp label)", () => {
     try {
       const name = frozenArtifactNameFromManifest(join(dir, "frozen-manifest.json"));
       // The label provably carries the manifest's bake timestamp.
-      expect(name).toBe(`frozen-index-html-${sanitizeStamp(bakedAt)}`);
+      expect(name).toBe(`frozen-spa-${sanitizeStamp(bakedAt)}`);
       expect(name).toContain("2026-06-30T09-15-00-000Z");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -170,9 +170,9 @@ describe("frozen-publish workflow wiring", () => {
   test("derives the artifact name from the manifest timestamp via the shared helper", () => {
     expect(wf).toContain("scripts/frozen-artifact-name.ts");
   });
-  test("uploads dist/frozen/index.html as a named artifact", () => {
+  test("uploads the dist/frozen directory as a named artifact", () => {
     expect(wf).toContain("actions/upload-artifact");
-    expect(wf).toContain("dist/frozen/index.html");
+    expect(wf).toContain("path: dist/frozen");
   });
   test("declares its CI taxonomy class", () => {
     expect(wf).toMatch(/CI_CLASS:\s*feature-correctness/);

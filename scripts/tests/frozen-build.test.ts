@@ -1,21 +1,25 @@
-// Hermetic, backend-free tests for the server-less "frozen" single-file build.
+// Hermetic, backend-free tests for the server-less "frozen" static distribution.
 // These run in CI via `bun run test` (integration.yml → root `bun test
-// scripts/tests`), so they EXECUTE the real bundler + assembler and the real
+// scripts/tests`), so they EXECUTE the real static-dist writer and the real
 // completeness cross-check on every PR — no external resource, no silent skip.
 //
 // Two guarantees are enforced here:
 //   1. NO SILENT GAP — every API endpoint the frontend actually requests is in
 //      the bake plan (frozen-endpoints.ts). A new `api.get(...)` call site that
 //      isn't baked fails this test loudly, the fidelity analog the issue calls for.
-//   2. The assembled index.html is genuinely self-contained + offline: the app
-//      graph bundles to a classic IIFE, every CDN/module/config/stylesheet tag is
-//      replaced by inlined code+data, and the baked snapshot + views are present.
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+//   2. The written dist is a genuinely self-contained + offline static SPA: the
+//      shell keeps its module script but pulls vendored libs locally (no CDN), the
+//      web-font @import is dropped, each API snapshot is a static /data/*.json
+//      file, index.html is mirrored to 404.html, and scanning the WHOLE tree
+//      (every .html/.css) finds zero external resource references.
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ROUTES } from "../../frontend/public/assets/js/app/contract/routes.js";
-import { assembleFrozenHtml, bundleAppJs, collectViews } from "../lib/frozen-build.ts";
+import { scanFrozenDir } from "../check-frozen-selfcontained.ts";
+import { STATIC_DATA_BASE, writeFrozenDist } from "../lib/frozen-build.ts";
 import {
   GET_ROUTE_TEMPLATES,
   WRITE_ROUTE_TEMPLATES,
@@ -92,66 +96,77 @@ describe("frozen bake plan completeness (no silent gap)", () => {
   });
 });
 
-describe("frozen single-file assembly (offline, self-contained)", () => {
-  test("app graph bundles to a classic (non-module) IIFE", async () => {
-    const js = await bundleAppJs(repoRoot);
-    expect(js.length).toBeGreaterThan(1000);
-    // No bare ES import/export survived the bundle → it is a classic script.
-    expect(/^\s*import\s/m.test(js)).toBe(false);
-    expect(/^\s*export\s/m.test(js)).toBe(false);
-    // The one absolute asset ref was rewritten to a data: URI (file:// safe).
-    expect(js.includes("/assets/logo.svg")).toBe(false);
-  });
+describe("frozen static distribution (offline, self-contained)", () => {
+  let outDir: string;
 
-  test("collects every view fragment keyed by its router path", () => {
-    const views = collectViews(repoRoot);
-    expect(views["/views/home.html"]).toBeString();
-    expect(views["/views/regime.html"]).toContain("rv__");
-    expect(views["/views/committee/session.html"]).toBeString();
-    expect(views["/views/not-found.html"]).toBeString();
-    expect(Object.keys(views).length).toBeGreaterThan(10);
-  });
-
-  test("assembled index.html is fully inlined and offline", async () => {
-    const data = fixtureFrozenData(repoRoot);
-    const html = await assembleFrozenHtml({
+  beforeAll(() => {
+    outDir = mkdtempSync(join(tmpdir(), "frozen-dist-"));
+    writeFrozenDist({
       repoRoot,
-      frozenData: data,
+      outDir,
+      frozenData: fixtureFrozenData(repoRoot),
       meta: { bakedAt: "2026-06-29T00:00:00.000Z", source: "fixtures" },
     });
+  });
 
-    // Baked snapshot + views + boot shim are inlined.
-    expect(html).toContain("window.RM_FROZEN=");
-    expect(html).toContain("window.RM_VIEWS=");
-    expect(html).toContain("window.RM_FROZEN_META=");
-    // Real regime data made it into the payload (drives the /regime charts).
-    expect(html).toContain("compositePercentile");
-    // Vendored runtime libs are inlined (no CDN needed).
-    expect(html).toContain("window.Alpine"); // alpine cdn build references this global
-    // Frozen boot shim installs the fetch/history override.
-    expect(html).toContain("blocked non-baked request");
+  afterAll(() => {
+    rmSync(outDir, { recursive: true, force: true });
+  });
 
-    // NOTHING reaches the network: no CDN script tags, no module script, no
-    // external config, no <link> stylesheet, no web-font @import.
-    expect(/<script[^>]*src="https:\/\/cdn\.jsdelivr\.net/.test(html)).toBe(false);
-    expect(/<script[^>]*type="module"/.test(html)).toBe(false);
-    expect(html.includes('src="/config.js"')).toBe(false);
-    expect(/<link rel="stylesheet"/.test(html)).toBe(false);
-    expect(html.includes("fonts.googleapis.com")).toBe(false);
+  test("index.html keeps the real SPA (module script, local vendor, nothing inlined)", () => {
+    const indexPath = join(outDir, "index.html");
+    expect(existsSync(indexPath)).toBe(true);
+    const html = readFileSync(indexPath, "utf8");
+    // The real static SPA is served over HTTP → the module entry point stays.
+    expect(html).toContain('type="module"');
+    // Vendored libs are pulled locally instead of from a CDN.
+    expect(html).toContain("/assets/vendor/alpinejs.cdn.min.js");
+    expect(html).not.toContain("cdn.jsdelivr.net");
+    // Nothing is inlined into a global — the app fetches its data at runtime.
+    expect(html).not.toContain("window.RM_FROZEN");
+  });
 
-    // Inlined CSS is present.
-    expect(html).toContain("<style>");
+  test("config.js points the SPA at its static data base", () => {
+    const cfg = readFileSync(join(outDir, "config.js"), "utf8");
+    expect(cfg).toContain("STATIC_DATA_BASE");
+    expect(cfg).toContain(STATIC_DATA_BASE); // "/data"
+  });
 
-    // Regression guard: the inlined payloads are injected with REPLACER
-    // FUNCTIONS, not string replacements — a string replacement would interpret
-    // `$$`/`$&`/`$1` and mangle the vendored code. The vendored Alpine build
-    // contains `$$` sequences (it registers its magics with a `$`-prefixed
-    // template); assert every `$$`-bearing chunk of the pristine library survives
-    // byte-for-byte in the build, so the whole class of `$`-interpretation
-    // corruption stays fixed. (The offline browser spec proves the runtime effect.)
-    const alpineSrc = readFileSync(join(repoRoot, "node_modules/alpinejs/dist/cdn.min.js"), "utf8");
-    const dollarChunks = alpineSrc.match(/.{0,8}\$\$.{0,8}/g) ?? [];
-    expect(dollarChunks.length).toBeGreaterThan(0);
-    for (const chunk of dollarChunks) expect(html).toContain(chunk);
+  test("regime snapshot is emitted as a static JSON file with the real data", () => {
+    const regimePath = join(outDir, "data/api/dashboards/regime-snapshots.json");
+    expect(existsSync(regimePath)).toBe(true);
+    const text = readFileSync(regimePath, "utf8");
+    const parsed = JSON.parse(text) as { latest?: unknown };
+    expect(parsed.latest).toBeDefined();
+    // Real regime data made it into the snapshot (drives the /regime charts).
+    expect(text).toContain("compositePercentile");
+  });
+
+  test("health snapshot maps /health → /data/health.json", () => {
+    expect(existsSync(join(outDir, "data/health.json"))).toBe(true);
+  });
+
+  test("404.html mirrors index.html for SPA deep-link refreshes", () => {
+    const index = readFileSync(join(outDir, "index.html"), "utf8");
+    const notFound = readFileSync(join(outDir, "404.html"), "utf8");
+    expect(notFound).toBe(index);
+  });
+
+  test("web-font @import is dropped from tokens.css (fully offline)", () => {
+    const css = readFileSync(join(outDir, "assets/css/tokens.css"), "utf8");
+    expect(css).not.toContain("fonts.googleapis");
+  });
+
+  test("the deleted frozen-boot.js shim is not present anywhere in the dist", () => {
+    const all = readdirSync(outDir, { recursive: true, encoding: "utf8" }) as string[];
+    expect(all.some((rel) => rel.endsWith("frozen-boot.js"))).toBe(false);
+  });
+
+  test("scanning the WHOLE tree finds zero external resource references", () => {
+    const { inspected, filesScanned, violations } = scanFrozenDir(outDir);
+    // Real coverage over the whole dist: many files, many resource refs, none external.
+    expect(violations).toHaveLength(0);
+    expect(inspected).toBeGreaterThan(0);
+    expect(filesScanned).toBeGreaterThan(1);
   });
 });

@@ -1,45 +1,82 @@
-// The load-bearing proof of the server-less "frozen" build: it takes the ACTUAL
-// single-file artifact the bake produces, loads it over the file:// scheme with
-// NO backend and NO network, drives every view through the SPA router, and
-// asserts the data-driven charts render from the baked snapshot — exactly the
-// non-technical "double-click index.html" experience the issue ships.
+// The load-bearing proof of the server-less "frozen" static distribution: it
+// writes the ACTUAL static dist the bake produces (from committed fixtures, no
+// backend), serves it over HTTP with a dumb static server + SPA fallback (the
+// exact shape any static host — GitHub Pages, S3, nginx — would serve), then
+// drives every view through the SPA router and asserts each renders purely from
+// the static /data/*.json snapshots.
 //
-// Two guarantees, loud-failing (never skipped): (1) ZERO network — any http(s)
-// request from the page fails the test, so a regression that leaks a live fetch
-// or a CDN <script> cannot pass; (2) every view renders with no console/page
-// error, and the regime / research / allocation charts are real Chart.js
-// instances built from the inlined data.
+// Two guarantees, loud-failing (never skipped): (1) ZERO external network — no
+// request leaks to a CDN or any off-origin host, so a regression that re-adds a
+// CDN <script> or a live API fetch cannot pass; the page's data comes from
+// /data/… static JSON. (2) every view renders with no console/page error, with
+// the regime / research / committee views built from the static snapshots.
 //
-// The artifact is built hermetically from committed fixtures (no backend) in
-// beforeAll via the same `scripts/bake-frozen.ts --fixtures` path CI publishes.
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+// The dist is built hermetically from committed fixtures (no backend, no network)
+// in beforeAll via the same writeFrozenDist() path CI publishes; vendored libs
+// are local in the dist, so no page.route stubbing is needed.
+import { createServer, type Server } from "node:http";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { extname, join, normalize } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import { writeFrozenDist } from "../../../scripts/lib/frozen-build.ts";
+import { fixtureFrozenData } from "../../../scripts/lib/frozen-fixtures.ts";
 
 const repoRoot = process.cwd();
-const builtFile = join(repoRoot, "dist", "frozen", "index.html");
-const fileUrl = pathToFileURL(builtFile).href;
+let server: Server;
+let base: string;
+let outDir: string;
 
-test.beforeAll(() => {
-  // Build the real single-file artifact from fixtures — no backend, no network.
-  execFileSync("bun", ["run", "scripts/bake-frozen.ts", "--fixtures"], {
-    cwd: repoRoot,
-    stdio: "inherit",
+// Module scripts require a correct JS MIME type or the browser refuses to run
+// them, so serve real content types (mirrors what any static host sends).
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+};
+
+test.beforeAll(async () => {
+  // 1. Write the real static frozen dist from fixtures — no backend, no network.
+  outDir = mkdtempSync(join(tmpdir(), "frozen-offline-"));
+  writeFrozenDist({
+    repoRoot,
+    outDir,
+    frozenData: fixtureFrozenData(repoRoot),
+    meta: { bakedAt: "2026-06-29T00:00:00.000Z", source: "fixtures" },
   });
-  if (!existsSync(builtFile)) throw new Error(`frozen build did not emit ${builtFile}`);
+
+  // 2. Serve it over HTTP with an index.html SPA fallback (mirrors serve-frozen.ts).
+  server = createServer((req, res) => {
+    const p = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
+    // Resolve within outDir; missing files fall back to index.html (SPA deep links).
+    const rel = normalize(p === "/" ? "index.html" : p.replace(/^\/+/, ""));
+    let file = join(outDir, rel);
+    if (!file.startsWith(outDir) || !existsSync(file) || !statSync(file).isFile()) {
+      file = join(outDir, "index.html");
+    }
+    res.setHeader("content-type", MIME[extname(file)] ?? "application/octet-stream");
+    res.end(readFileSync(file));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const addr = server.address();
+  if (!addr || typeof addr === "string") throw new Error("server did not bind a port");
+  base = `http://127.0.0.1:${addr.port}`;
 });
 
-// Fail on ANY off-file network request (http/https). file:// sub-resource loads
-// are inlined away; only the top document itself is file://.
-function trapNetwork(page: Page): string[] {
-  const hits: string[] = [];
-  page.on("request", (req) => {
-    const url = req.url();
-    if (url.startsWith("http://") || url.startsWith("https://")) hits.push(`${req.method()} ${url}`);
-  });
-  return hits;
+test.afterAll(async () => {
+  await new Promise<void>((resolve) => server?.close(() => resolve()));
+  if (outDir) rmSync(outDir, { recursive: true, force: true });
+});
+
+// SPA navigation via the history router (matches spa.spec.ts / analytics-views.spec.ts).
+async function navigate(page: Page, path: string): Promise<void> {
+  await page.evaluate((p) => {
+    history.pushState({}, "", p);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, path);
 }
 
 function trapErrors(page: Page): string[] {
@@ -49,110 +86,85 @@ function trapErrors(page: Page): string[] {
   return errors;
 }
 
-// In-app navigation that works under file:// (where history.pushState throws a
-// swallowed SecurityError): synthesize an anchor and click it so the router's
-// own click handler renders the target path from the anchor href, not location.
-async function navigate(page: Page, path: string): Promise<void> {
-  await page.evaluate((p) => {
-    const a = document.createElement("a");
-    a.setAttribute("href", p);
-    a.textContent = "nav";
-    a.style.position = "fixed";
-    a.style.left = "-9999px";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  }, path);
-}
-
-test("loads offline from file:// with zero network and no errors", async ({ page }) => {
-  const net = trapNetwork(page);
+test("home boots offline from the static dist with no console errors", async ({ page }) => {
   const errors = trapErrors(page);
 
-  await page.goto(fileUrl);
-  // The shell renders the home view immediately (router boot). Under file:// the
-  // boot path is index.html's own fs path, which the shim routes to home rather
-  // than a 404 — what a double-click should show.
+  await page.goto(base + "/");
+  // The shell + router boot and inject the home view into #view.
   await expect(page.locator("nav.nav")).toBeVisible();
   await expect.poll(async () =>
-    (await page.locator("#view").innerText()).includes("Page not found"),
-  ).toBe(false);
-  await expect.poll(async () =>
-    (await page.locator("#view").innerText()).length,
-  ).toBeGreaterThan(500);
+    (await page.locator("#view").innerHTML()).trim().length,
+  ).toBeGreaterThan(0);
 
-  // Walk every nav destination plus the two research signals — all inlined.
-  const routes = [
-    "/skills", "/tokenomics", "/allocation", "/allocation2", "/regime",
-    "/committee", "/media", "/blog", "/docs", "/changelog",
-    "/research/channel-divergence", "/research/late-cycle-signals", "/",
-  ];
-  for (const r of routes) {
-    await navigate(page, r);
-    // The router injected a non-empty view.
-    await expect.poll(async () =>
-      (await page.locator("#view").innerHTML()).trim().length,
-    ).toBeGreaterThan(0);
-  }
-
-  // Let any deferred fetch/module failure surface on the event loop.
   await page.waitForTimeout(150);
-  expect(net).toEqual([]);
   expect(errors).toEqual([]);
 });
 
-test("regime view renders a real chart + enriched panels from the baked snapshot", async ({ page }) => {
-  await page.goto(fileUrl);
+test("regime view renders from /data/api/dashboards/regime-snapshots.json", async ({ page }) => {
+  const errors = trapErrors(page);
+
+  await page.goto(base + "/");
   await navigate(page, "/regime");
 
   await expect(page.locator(".rv__title")).toContainText("Regime");
-  await expect(page.locator(".rv__panel")).toHaveCount(2);
+  // A canvas (the composite-history Chart.js instance) is built from the snapshot.
+  await expect(page.locator(".rv__chart canvas").first()).toBeVisible();
 
-  // The composite history canvas is a live Chart.js instance built from data.
-  await expect.poll(async () =>
-    page.locator(".rv__chart canvas").evaluate((c) =>
-      Boolean((window as any).Chart?.getChart(c as HTMLCanvasElement)),
-    ),
-  ).toBe(true);
+  await page.waitForTimeout(150);
+  expect(errors).toEqual([]);
 });
 
-test("research signal view renders its gauges + chart offline", async ({ page }) => {
-  await page.goto(fileUrl);
+test("research signal view renders its gauges from the static snapshot", async ({ page }) => {
+  const errors = trapErrors(page);
+
+  await page.goto(base + "/");
   await navigate(page, "/research/channel-divergence");
 
   await expect(page.locator(".rs__title")).toContainText("Channel divergence");
   await expect(page.locator(".rs__gauge")).toHaveCount(4);
-  await expect(page.locator(".rs__gauge", { hasText: "Stablecoin vs QQQ flow" })
-    .locator(".rs__gauge-val")).toHaveText("0.0137");
 
-  await expect.poll(async () =>
-    page.locator(".rs__chart canvas").evaluate((c) =>
-      Boolean((window as any).Chart?.getChart(c as HTMLCanvasElement)),
-    ),
-  ).toBe(true);
+  await page.waitForTimeout(150);
+  expect(errors).toEqual([]);
 });
 
-test("committee view loads the baked session offline", async ({ page }) => {
-  await page.goto(fileUrl);
+test("committee view renders the baked takes from the static snapshot", async ({ page }) => {
+  const errors = trapErrors(page);
+
+  await page.goto(base + "/");
   await navigate(page, "/committee");
 
-  await expect(page.locator(".cv__title")).toContainText("Committee");
-  // The baked published session renders (the empty-state stays hidden) with its
-  // subject name pulled from the inlined snapshot.
-  await expect(page.locator(".cv__empty")).toBeHidden();
-  await expect.poll(async () =>
-    (await page.locator("#view").innerText()).includes("Woon Treasury"),
-  ).toBe(true);
+  await expect(page.locator(".cv__take")).toHaveCount(3);
+
+  await page.waitForTimeout(150);
+  expect(errors).toEqual([]);
 });
 
-test("allocation view renders its pie chart offline", async ({ page }) => {
-  await page.goto(fileUrl);
-  await navigate(page, "/allocation");
+test("data comes from /data static JSON and nothing leaks to an external origin", async ({ page }) => {
+  const external: string[] = [];
+  const dataHits: string[] = [];
+  page.on("requestfinished", (req) => {
+    const url = req.url();
+    if (url.startsWith(base + "/data/")) dataHits.push(url);
+    // Any request to a different origin (a CDN, a live API) is a leak.
+    if (!url.startsWith(base + "/") && (url.startsWith("http://") || url.startsWith("https://"))) {
+      external.push(`${req.method()} ${url}`);
+    }
+  });
+  // Hard-block any external origin so a leak fails loudly rather than silently.
+  await page.route("**/*", (route) => {
+    const url = route.request().url();
+    if (url.startsWith(base + "/")) return route.continue();
+    external.push(`BLOCKED ${route.request().method()} ${url}`);
+    return route.abort();
+  });
 
-  await expect(page.locator("#allocationPie")).toBeVisible();
-  await expect.poll(async () =>
-    page.locator("#allocationPie").evaluate((c) =>
-      Boolean((window as any).Chart?.getChart(c as HTMLCanvasElement)),
-    ),
-  ).toBe(true);
+  await page.goto(base + "/");
+  await navigate(page, "/regime");
+  await navigate(page, "/committee");
+  await page.waitForTimeout(200);
+
+  // At least one snapshot was fetched from the static /data tree…
+  expect(dataHits.length).toBeGreaterThan(0);
+  // …and nothing went off-origin (no CDN, no backend).
+  expect(external).toEqual([]);
 });

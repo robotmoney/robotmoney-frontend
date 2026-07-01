@@ -103,13 +103,15 @@ DEMO_PROJECT=rmdemo WEB_PORT=48787 MCP_PORT=48788 bun run demo
   demo on the same port and Docker will refuse the bind. Use `bun run demo:down`
   (with the same `DEMO_PROJECT`) to release it.
 
-## Frozen build — offline, server-less single file
+## Frozen build — offline, server-less static SPA
 
-The **frozen** distribution bakes the whole SPA into **one self-contained
-`dist/frozen/index.html`** that renders every view **offline** — a non-technical
-user can double-click it (`file://`, no server, no network, no build tools) and
-browse a point-in-time snapshot of the site. See
-[`docs/ARCHITECTURE.md` §4 "Frozen (offline single-file) distribution"](./docs/ARCHITECTURE.md#4-frontend)
+The **frozen** distribution writes the whole SPA into a **self-contained static
+directory `dist/frozen/`** that renders every view from point-in-time
+`/data/*.json` snapshots — served over HTTP by any dumb static host (GitHub
+Pages, S3, nginx, `python3 -m http.server`), with no backend, no database, and no
+build tools. The one code seam is `lib/api.js`, which reads
+`RM_CONFIG.STATIC_DATA_BASE` (`/data` in the dist) instead of a live API. See
+[`docs/ARCHITECTURE.md` §4 "Frozen (offline, server-less static SPA) distribution"](./docs/ARCHITECTURE.md#4-frontend)
 for how it works.
 
 ```bash
@@ -118,20 +120,28 @@ BACKEND_URL=http://127.0.0.1:8787 bun run frozen
 
 # Bake fully OFFLINE from committed fixtures (no backend needed):
 bun run frozen:fixtures
+
+# Preview the dist over HTTP (SPA fallback for deep-link refreshes):
+bun run frozen:serve            # or: python3 -m http.server -d dist/frozen
 ```
 
-Both produce, under `dist/frozen/`:
+The bake produces, under `dist/frozen/`:
 
-- `index.html` — the single self-contained file (app + views + baked API JSON +
-  vendored p5/Chart.js/Alpine, all inlined). Open it directly: `file://…/dist/frozen/index.html`.
-- `frozen-manifest.json` — bake metadata (`bakedAt`, `source`, endpoint list, byte size).
+- The real static SPA (`index.html`, `config.js`, `assets/`, `views/`), with
+  vendored p5/Chart.js/Alpine copied locally and the web-font `@import` dropped so
+  the dist references **zero external resources** (enforced by
+  `scripts/check-frozen-selfcontained.ts`, which scans the whole directory).
+- `data/**.json` — one API snapshot per request pathname (e.g.
+  `data/api/dashboards/regime-snapshots.json`).
+- `404.html` — a copy of `index.html`, so hosts with a custom 404 page serve the
+  SPA on a deep-link refresh.
+- `frozen-manifest.json` — bake metadata (`bakedAt`, `source`, endpoint list).
 
 **Constraints:** it is a *snapshot* — data is frozen as-of the bake, writes
-(POST/PUT/DELETE) are accepted no-ops, query params are ignored (keyed by
-pathname), and the URL bar stays on `index.html` while views swap in place. The
-bake fails loudly if any endpoint the frontend requests can't be satisfied (no
-silent gaps). Not for production hosting of live data — it's for offline demos,
-archival, and email/USB hand-off.
+(POST/PUT/DELETE) are accepted no-ops, and query params are ignored (snapshots are
+keyed by pathname). The bake fails loudly if any endpoint the frontend requests
+can't be satisfied (no silent gaps). Not for production hosting of live data —
+it's for offline demos, archival, and static-host publishing.
 
 ## Useful commands
 
@@ -142,7 +152,8 @@ bun run worker               # task-queue worker      — backend/
 bun test                     # hermetic suite (spins ephemeral Postgres) — backend/
 bun run typecheck            # tsc --noEmit            — backend/
 bun run demo:down            # tear down the standing demo (containers + volume)
-bun run frozen               # bake offline single file from a live backend  — root
-bun run frozen:fixtures      # bake offline single file from fixtures (no backend) — root
+bun run frozen               # bake offline static SPA from a live backend    — root
+bun run frozen:fixtures      # bake offline static SPA from fixtures (no backend) — root
+bun run frozen:serve         # serve dist/frozen over HTTP with SPA fallback   — root
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)
 ```

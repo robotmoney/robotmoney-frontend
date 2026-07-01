@@ -9,10 +9,10 @@
 // user can double-click (file://) to browse every view OFFLINE. A manifest is
 // emitted; any endpoint the frontend requests that the bake could NOT satisfy
 // fails the build loudly (the "no silent gap" guarantee).
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assembleFrozenHtml, type FrozenData } from "./lib/frozen-build.ts";
+import { writeFrozenDist, type FrozenData } from "./lib/frozen-build.ts";
 import {
   memberBakeTargets,
   requiredFrozenKeys,
@@ -73,28 +73,25 @@ async function main(): Promise<void> {
   }
 
   const bakedAt = new Date().toISOString();
-  const html = await assembleFrozenHtml({
+  const { dataFiles, endpoints } = writeFrozenDist({
     repoRoot,
+    outDir,
     frozenData,
     meta: { bakedAt, source, backendUrl: useFixtures ? undefined : backendUrl },
   });
 
-  mkdirSync(outDir, { recursive: true });
-  const htmlPath = join(outDir, "index.html");
-  writeFileSync(htmlPath, html);
-
-  const keys = Object.keys(frozenData).sort();
   const manifest = {
     bakedAt,
     source,
     backendUrl: useFixtures ? null : backendUrl,
-    endpointCount: keys.length,
-    endpoints: keys,
-    bytes: Buffer.byteLength(html),
+    endpointCount: dataFiles,
+    endpoints,
   };
+  // writeFrozenDist clears outDir first, so the manifest is written afterwards.
   writeFileSync(join(outDir, "frozen-manifest.json"), JSON.stringify(manifest, null, 2));
 
-  console.log(`[frozen] baked ${keys.length} endpoints → ${htmlPath} (${(manifest.bytes / 1_048_576).toFixed(2)} MB)`);
+  console.log(`[frozen] wrote static SPA + ${dataFiles} endpoint snapshots → ${outDir}`);
+  console.log(`[frozen] serve with any static host, e.g.  python3 -m http.server -d ${outDir}`);
   console.log(`[frozen] frozen as-of ${bakedAt}`);
 }
 

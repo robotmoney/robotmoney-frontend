@@ -19,7 +19,7 @@
 // Exit 0 with a real, non-zero inspection count on a clean bundle; exit 1 with a
 // per-violation report otherwise. This runs in CI (feature-correctness) after
 // `bun run frozen:fixtures` — never a no-op, never a silent skip.
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -102,6 +102,47 @@ export function scanSelfContained(html: string): SelfContainedResult {
   return { inspected, violations };
 }
 
+// A standalone .css file is scanned as raw stylesheet text (no <style> extraction).
+const CSS_INSPECTED_RE = /\burl\(|@import/gi;
+
+export function scanCssText(css: string): SelfContainedResult {
+  const inspected = css.match(CSS_INSPECTED_RE)?.length ?? 0;
+  const violations: Violation[] = [];
+  for (const { kind, re } of CSS_RULES) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(css)) !== null) violations.push({ kind, url: m[1], snippet: m[0].slice(0, 120) });
+  }
+  return { inspected, violations };
+}
+
+export interface DirViolation extends Violation {
+  file: string;
+}
+export interface DirResult {
+  inspected: number;
+  filesScanned: number;
+  violations: DirViolation[];
+}
+
+/** Scan every .html and .css file under a frozen dist directory for external refs. */
+export function scanFrozenDir(dir: string): DirResult {
+  const out: DirResult = { inspected: 0, filesScanned: 0, violations: [] };
+  for (const rel of readdirSync(dir, { recursive: true, encoding: "utf8" }) as string[]) {
+    const isHtml = rel.endsWith(".html");
+    const isCss = rel.endsWith(".css");
+    if (!isHtml && !isCss) continue;
+    const abs = join(dir, rel);
+    if (!statSync(abs).isFile()) continue;
+    const text = readFileSync(abs, "utf8");
+    const r = isHtml ? scanSelfContained(text) : scanCssText(text);
+    out.inspected += r.inspected;
+    out.filesScanned += 1;
+    for (const v of r.violations) out.violations.push({ ...v, file: rel });
+  }
+  return out;
+}
+
 function fail(msg: string): never {
   console.error(`[selfcontained] FAIL: ${msg}`);
   process.exit(1);
@@ -110,32 +151,41 @@ function fail(msg: string): never {
 function main(): void {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const repoRoot = join(scriptDir, "..");
-  const target = process.argv[2] ?? join(repoRoot, "dist", "frozen", "index.html");
+  const target = process.argv[2] ?? join(repoRoot, "dist", "frozen");
 
   if (!existsSync(target)) {
-    fail(`bundle not found at ${target} — run \`bun run frozen:fixtures\` first`);
+    fail(`frozen dist not found at ${target} — run \`bun run frozen:fixtures\` first`);
   }
-  const size = statSync(target).size;
-  if (size === 0) fail(`bundle at ${target} is empty (0 bytes)`);
 
-  const html = readFileSync(target, "utf8");
-  if (html.trim().length === 0) fail(`bundle at ${target} contains only whitespace`);
-
-  const { inspected, violations } = scanSelfContained(html);
-  if (inspected === 0) {
-    // A real frozen bundle inlines scripts/styles; zero resource constructs means
-    // we are not actually looking at the baked SPA.
-    fail(`bundle at ${target} has no resource-loading constructs — is this the baked SPA?`);
+  // A directory scans the whole dist (html + css); a single file keeps back-compat.
+  let inspected: number;
+  let filesScanned = 1;
+  let violations: DirViolation[];
+  if (statSync(target).isDirectory()) {
+    if (!existsSync(join(target, "index.html"))) fail(`${target} has no index.html — is this the frozen dist?`);
+    const r = scanFrozenDir(target);
+    inspected = r.inspected;
+    filesScanned = r.filesScanned;
+    violations = r.violations;
+  } else {
+    if (statSync(target).size === 0) fail(`${target} is empty (0 bytes)`);
+    const html = readFileSync(target, "utf8");
+    if (html.trim().length === 0) fail(`${target} contains only whitespace`);
+    const r = scanSelfContained(html);
+    inspected = r.inspected;
+    violations = r.violations.map((v) => ({ ...v, file: target }));
   }
+
+  if (inspected === 0) fail(`${target} has no resource-loading constructs — is this the frozen dist?`);
 
   if (violations.length > 0) {
-    console.error(`[selfcontained] FAIL: ${violations.length} external resource reference(s) in ${target}:`);
-    for (const v of violations) console.error(`  - [${v.kind}] ${v.url}\n      ${v.snippet}`);
+    console.error(`[selfcontained] FAIL: ${violations.length} external resource reference(s) under ${target}:`);
+    for (const v of violations) console.error(`  - [${v.kind}] ${v.file}: ${v.url}\n      ${v.snippet}`);
     process.exit(1);
   }
 
   console.log(
-    `[selfcontained] PASS: ${target} is self-contained — inspected ${inspected} resource references, 0 external (${(size / 1_048_576).toFixed(2)} MB)`,
+    `[selfcontained] PASS: ${target} is self-contained — scanned ${filesScanned} file(s), inspected ${inspected} resource reference(s), 0 external`,
   );
 }
 

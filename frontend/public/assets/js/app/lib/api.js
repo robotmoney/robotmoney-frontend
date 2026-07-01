@@ -12,6 +12,19 @@ function base() {
 }
 
 async function request(method, route, { query, body } = {}) {
+  // Frozen static-data mode: the SPA is served from a dumb static host with no
+  // API. GETs resolve to pre-generated JSON files under STATIC_DATA_BASE (keyed
+  // by the request pathname, query dropped — a snapshot is one point in time);
+  // writes are accepted no-ops. This is the ONLY networking difference between
+  // the live app and the frozen distribution — no fetch/history monkeypatching.
+  const staticBase = window.RM_CONFIG?.STATIC_DATA_BASE;
+  if (staticBase != null) {
+    if (method !== "GET") return null;
+    const res = await fetch(`${staticBase.replace(/\/$/, "")}${route}.json`, { credentials: "omit" });
+    if (!res.ok) throw new ApiError(res.status, `no frozen snapshot for ${route}`);
+    return res.status === 204 ? null : res.json();
+  }
+
   let url = base() + route;
   if (query) {
     const qs = new URLSearchParams(query).toString();

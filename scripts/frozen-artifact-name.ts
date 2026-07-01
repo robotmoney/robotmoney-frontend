@@ -3,7 +3,7 @@
 // artifact label provably carries the bake timestamp read from the manifest.
 //
 //   bun run scripts/frozen-artifact-name.ts [path/to/frozen-manifest.json]
-//     → prints the artifact name, e.g. frozen-index-html-2026-07-01T18-05-09-546Z
+//     → prints the artifact name, e.g. frozen-spa-2026-07-01T18-05-09-546Z
 //
 // GitHub Actions artifact names may not contain any of  " : < > | * ? / \  or
 // CR/LF, so the ISO-8601 `bakedAt` (which has `:` and `.`) is sanitized to a
@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PREFIX = "frozen-index-html";
+const PREFIX = "frozen-spa";
 
 /** Replace GitHub-artifact-illegal characters in a timestamp with `-`. */
 export function sanitizeStamp(bakedAt: string): string {

@@ -1,189 +1,113 @@
-// Single-file "frozen" build assembler. Turns the buildless SPA under
-// frontend/public/ into ONE self-contained index.html that renders every view
-// OFFLINE (file://, any static host) from a baked snapshot of the API — no
-// server, no network, no build tools on the viewer's machine.
+// Frozen "static distribution" writer. Turns the buildless SPA under
+// frontend/public/ into a self-contained STATIC DIRECTORY (dist/frozen/) that
+// any dumb static host — `python3 -m http.server`, GitHub Pages, S3, nginx —
+// can serve with no backend, no database, and no build tools on the viewer's
+// machine.
 //
-// Why one inlined file (the mechanism, documented once here):
-//   The live SPA loads app JS as `type="module"` and fetches view fragments +
-//   API JSON at runtime. On the file: scheme, module scripts and fetch() are
-//   blocked by CORS (origin "null"), and absolute paths ("/views/…") don't
-//   resolve. Inlining EVERYTHING into a single classic-script document removes
-//   all three problems: the app JS is bundled to a classic (non-module) IIFE,
-//   the views + baked API JSON + vendored libs are inlined, and a fetch shim
-//   (frozen-boot.js) answers every request from the inlined data. Zero network.
+// How it stays server-less WITHOUT inlining everything into one file or hacking
+// fetch/history (the file:// approach this replaced):
+//   - The app is the real static SPA, copied verbatim. Module scripts, fetch,
+//     and absolute paths all work because it's served over http://, not file://.
+//   - A per-dist config.js sets RM_CONFIG.STATIC_DATA_BASE, so the ONE
+//     networking boundary (app/lib/api.js) reads pre-generated JSON snapshots
+//     under /data/… instead of a live API. No other code path changes.
+//   - Vendored libs (p5/Chart/Alpine) are copied locally and the web-font
+//     @import is dropped, so the dist references zero external resources
+//     (enforced by scripts/check-frozen-selfcontained.ts).
+//   - index.html is also emitted as 404.html so static hosts that support a
+//     custom 404 (GitHub Pages) serve the SPA on a deep-link refresh.
 //
-// This module is pure assembly (no I/O side effects beyond reading source): the
-// caller supplies the baked API data (RM_FROZEN). scripts/bake-frozen.ts feeds
-// it live-backend data; the tests feed it committed fixtures.
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { Glob } from "bun";
+// The caller supplies the baked API data (keyed by request pathname).
+// scripts/bake-frozen.ts feeds it live-backend data; the tests feed fixtures.
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 export type FrozenData = Record<string, unknown>;
 
-// Vendored runtime libs — inlined from node_modules so nothing is fetched from a
-// CDN at runtime. Order matters: p5 + Chart define globals the views consume;
-// Alpine must run LAST (after the app bundle registers its `alpine:init`
-// factories) so it fires that event with the factories already attached.
-const VENDOR_LIBS = [
-  "node_modules/p5/lib/p5.min.js",
-  "node_modules/chart.js/dist/chart.umd.min.js",
-  "node_modules/alpinejs/dist/cdn.min.js",
-] as const;
-
-// The CDN / module / config <script> tags the frozen build strips (replaced by
-// the inlined vendor libs, app bundle, and baked config).
-const STRIPPED_SCRIPT_RE =
-  /\s*<script[^>]*\bsrc="(?:https:\/\/cdn\.jsdelivr\.net\/[^"]+|\/config\.js|\/assets\/js\/app\/main\.js)"[^>]*><\/script>/g;
-
-const CSS_LINK_RE = /\s*<link rel="stylesheet" href="(\/assets\/css\/[^"]+)"\s*\/>/g;
-
-// Google Fonts @import inside tokens.css — a network request; strip it so the
-// build is fully offline (fonts fall back to the declared system stack).
-const GOOGLE_FONTS_IMPORT_RE =
-  /@import\s+url\(['"]https:\/\/fonts\.googleapis\.com[^)]*\)\s*;/g;
-
-// JS line/paragraph separators — illegal unescaped in a JS string literal.
-const LINE_SEP = String.fromCharCode(0x2028);
-const PARA_SEP = String.fromCharCode(0x2029);
-
-/** Escape a JS source body so it can be safely inlined inside <script>…</script>. */
-function scriptSafe(body: string): string {
-  return body.replace(/<\/script/gi, "<\\/script");
-}
-
-/** JSON that is safe to embed as a JS object literal inside an inline <script>. */
-function embedJson(value: unknown): string {
-  // Escape "<" so a "</script>" inside any value cannot close the tag, plus the
-  // two JS string-illegal separators.
-  return JSON.stringify(value)
-    .replace(/</g, "\\u003c")
-    .split(LINE_SEP)
-    .join("\\u2028")
-    .split(PARA_SEP)
-    .join("\\u2029");
-}
-
-/** Bundle the ES-module app graph to a single classic (non-module) IIFE string. */
-export async function bundleAppJs(repoRoot: string): Promise<string> {
-  const result = await Bun.build({
-    entrypoints: [join(repoRoot, "frontend/public/assets/js/app/main.js")],
-    format: "iife",
-    target: "browser",
-    minify: true,
-  });
-  if (!result.success) {
-    throw new Error(`frozen: app bundle failed:\n${result.logs.map(String).join("\n")}`);
-  }
-  const [out] = result.outputs;
-  if (!out) throw new Error("frozen: app bundle produced no output");
-  let js = await out.text();
-  // Absolute asset paths don't resolve under file://; inline the one raster the
-  // app references (the committee avatar / nav fallback) as a data URI.
-  js = js.replaceAll("/assets/logo.svg", logoDataUri(repoRoot));
-  return js;
-}
-
-/** Read every view fragment, keyed by the "/views/…​.html" path the router fetches. */
-export function collectViews(repoRoot: string): Record<string, string> {
-  const viewsDir = join(repoRoot, "frontend/public/views");
-  const out: Record<string, string> = {};
-  for (const rel of new Glob("**/*.html").scanSync({ cwd: viewsDir })) {
-    out[`/views/${rel.split("\\").join("/")}`] = readFileSync(join(viewsDir, rel), "utf8");
-  }
-  return out;
-}
-
-/** The SVG logo as a data: URI so it renders under file:// with no network. */
-export function logoDataUri(repoRoot: string): string {
-  const svg = readFileSync(join(repoRoot, "frontend/public/assets/logo.svg"), "utf8");
-  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
-}
-
-/** Concatenate every stylesheet the shell links, stripping the web-font import. */
-function inlineCss(repoRoot: string, hrefs: string[]): string {
-  return hrefs
-    .map((href) => readFileSync(join(repoRoot, "frontend/public", href.replace(/^\//, "")), "utf8"))
-    .join("\n")
-    .replace(GOOGLE_FONTS_IMPORT_RE, "");
-}
-
-/** Read the frozen-boot fetch/history shim source. */
-function readFrozenBoot(repoRoot: string): string {
-  return readFileSync(join(repoRoot, "frontend/public/assets/js/app/frozen-boot.js"), "utf8");
-}
-
-/**
- * Assemble the complete single-file frozen build as an HTML string.
- * The document order of the injected scripts encodes the boot contract:
- *   1. baked data (RM_FROZEN + RM_VIEWS)  — the offline snapshot
- *   2. frozen-boot                        — installs the fetch/history shim
- *   3. app bundle                         — registers alpine:init factories, boots router
- *   4. p5, Chart                          — globals the views draw with
- *   5. Alpine                             — starts LAST, fires alpine:init
- */
 export interface FrozenMeta {
   bakedAt: string; // ISO timestamp
   source: string; // "backend" | "fixtures"
   backendUrl?: string;
 }
 
-export async function assembleFrozenHtml(opts: {
+// Vendored runtime libs, copied from node_modules so nothing loads from a CDN.
+// `cdn` is the exact <script src> in the shipped index.html we rewrite to `out`.
+const VENDOR = [
+  { src: "node_modules/p5/lib/p5.min.js", out: "p5.min.js", cdn: "https://cdn.jsdelivr.net/npm/p5@1.11.2/lib/p5.min.js" },
+  { src: "node_modules/chart.js/dist/chart.umd.min.js", out: "chart.umd.min.js", cdn: "https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js" },
+  { src: "node_modules/alpinejs/dist/cdn.min.js", out: "alpinejs.cdn.min.js", cdn: "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js" },
+] as const;
+
+const VENDOR_DIR = "assets/vendor";
+
+// The web-font @import inside tokens.css — a network request; drop it so the
+// dist is fully offline (fonts fall back to the declared system stack).
+const GOOGLE_FONTS_IMPORT_RE = /@import\s+url\(['"]https:\/\/fonts\.googleapis\.com[^)]*\)\s*;/g;
+
+/** Where the SPA reads its snapshots from, relative to the host root. */
+export const STATIC_DATA_BASE = "/data";
+
+function frozenConfigJs(meta?: FrozenMeta): string {
+  const stamp = meta ? ` baked ${meta.bakedAt} from ${meta.source}${meta.backendUrl ? ` (${meta.backendUrl})` : ""}` : "";
+  return (
+    `// Frozen static distribution —${stamp}. Server-less: the SPA reads its data\n` +
+    `// from pre-generated JSON under STATIC_DATA_BASE instead of a live API.\n` +
+    `window.RM_CONFIG = { API_BASE_URL: "", STATIC_DATA_BASE: ${JSON.stringify(STATIC_DATA_BASE)}, FROZEN: true };\n`
+  );
+}
+
+export interface FrozenDistResult {
+  outDir: string;
+  dataFiles: number;
+  endpoints: string[];
+}
+
+/**
+ * Write the complete static frozen distribution to `outDir`. Idempotent: the
+ * directory is cleared first.
+ */
+export function writeFrozenDist(opts: {
   repoRoot: string;
+  outDir: string;
   frozenData: FrozenData;
   meta?: FrozenMeta;
-}): Promise<string> {
-  const { repoRoot, frozenData, meta } = opts;
-  const shellPath = join(repoRoot, "frontend/public/index.html");
-  let html = readFileSync(shellPath, "utf8");
+}): FrozenDistResult {
+  const { repoRoot, outDir, frozenData, meta } = opts;
 
-  // 1. Inline CSS: collect the linked stylesheets in order, drop the <link>s.
-  const cssHrefs: string[] = [];
-  html = html.replace(CSS_LINK_RE, (_m, href: string) => {
-    cssHrefs.push(href);
-    return "";
-  });
-  const css = inlineCss(repoRoot, cssHrefs);
+  // 1. Fresh copy of the real static SPA (index.html, config.js, assets, views).
+  rmSync(outDir, { recursive: true, force: true });
+  mkdirSync(outDir, { recursive: true });
+  cpSync(join(repoRoot, "frontend/public"), outDir, { recursive: true });
 
-  // 2. Strip the CDN / module / config <script> tags — replaced by inlined code.
-  html = html.replace(STRIPPED_SCRIPT_RE, "");
-
-  // 3. Rewrite the one absolute asset reference in the shell (the nav logo).
-  html = html.replaceAll("/assets/logo.svg", logoDataUri(repoRoot));
-
-  // NOTE: every dynamic insertion below uses a REPLACER FUNCTION, never a string
-  // replacement. String replacements interpret `$$`, `$&`, `$1`… specially, and
-  // the inlined vendor/app/data payloads legitimately contain `$` sequences —
-  // e.g. Alpine registers its magics with `` `$${name}` ``, so a string
-  // replacement silently turns `$$` into `$` and every magic ($nextTick, $refs…)
-  // loses its prefix. Function replacers return their value verbatim.
-
-  // 4. Inline the collected CSS just before </head>.
-  html = html.replace("</head>", () => `    <style>\n${css}\n    </style>\n  </head>`);
-
-  // 5. Assemble the ordered boot scripts and inject them before </body>.
-  const views = collectViews(repoRoot);
-  const dataJs =
-    `window.RM_FROZEN=${embedJson(frozenData)};` +
-    `window.RM_VIEWS=${embedJson(views)};` +
-    (meta ? `window.RM_FROZEN_META=${embedJson(meta)};` : "");
-  if (meta) {
-    html = html.replace(
-      "<head>",
-      () => `<head>\n    <!-- frozen build: baked ${meta.bakedAt} from ${meta.source}${meta.backendUrl ? ` (${meta.backendUrl})` : ""}. Renders offline (file://) with no server. -->`,
-    );
+  // 2. Localize the vendored libs and rewrite the CDN <script src>s in the shell.
+  mkdirSync(join(outDir, VENDOR_DIR), { recursive: true });
+  const indexPath = join(outDir, "index.html");
+  let html = readFileSync(indexPath, "utf8");
+  for (const lib of VENDOR) {
+    cpSync(join(repoRoot, lib.src), join(outDir, VENDOR_DIR, lib.out));
+    html = html.replaceAll(lib.cdn, `/${VENDOR_DIR}/${lib.out}`);
   }
-  const appJs = await bundleAppJs(repoRoot);
-  const frozenBoot = readFrozenBoot(repoRoot);
-  const vendor = VENDOR_LIBS.map((lib) => readFileSync(join(repoRoot, lib), "utf8"));
+  writeFileSync(indexPath, html);
 
-  const bootBlock =
-    `<script>${scriptSafe(dataJs)}</script>\n` +
-    `<script>${scriptSafe(frozenBoot)}</script>\n` +
-    `<script>${scriptSafe(appJs)}</script>\n` +
-    vendor.map((v) => `<script>${scriptSafe(v)}</script>`).join("\n") +
-    "\n";
+  // 3. Drop the web-font @import so nothing is fetched from the network.
+  const tokensPath = join(outDir, "assets/css/tokens.css");
+  writeFileSync(tokensPath, readFileSync(tokensPath, "utf8").replace(GOOGLE_FONTS_IMPORT_RE, ""));
 
-  html = html.replace("</body>", () => `${bootBlock}</body>`);
-  return html;
+  // 4. Point the SPA at its static snapshots (overwrite the live config.js).
+  writeFileSync(join(outDir, "config.js"), frozenConfigJs(meta));
+
+  // 5. Emit each API snapshot as a static JSON file keyed by request pathname:
+  //    "/api/dashboards/regime-snapshots" -> <out>/data/api/dashboards/regime-snapshots.json
+  const dataRoot = join(outDir, STATIC_DATA_BASE.replace(/^\//, ""));
+  const endpoints = Object.keys(frozenData).sort();
+  for (const key of endpoints) {
+    const file = join(dataRoot, `${key.replace(/^\//, "")}.json`);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(frozenData[key]));
+  }
+
+  // 6. SPA fallback for deep-link refreshes on hosts with a custom 404 page.
+  writeFileSync(join(outDir, "404.html"), readFileSync(indexPath, "utf8"));
+
+  return { outDir, dataFiles: endpoints.length, endpoints };
 }

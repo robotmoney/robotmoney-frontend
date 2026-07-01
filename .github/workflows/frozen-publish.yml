@@ -1,4 +1,5 @@
-# Publishes the baked, offline "frozen" single-file SPA as a downloadable,
+# Publishes the baked, offline "frozen" static SPA distribution (a directory:
+# the static site + pre-generated /data/*.json snapshots) as a downloadable,
 # timestamp-labelled GitHub Actions artifact (issue #24, deferred publish step
 # from feature #14).
 #
@@ -36,19 +37,17 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Bake the offline frozen bundle (no network — committed fixtures)
         run: bun run frozen:fixtures
-      - name: Guard — assert the bundle is self-contained / offline
-        # Executes the real scanner over the freshly-baked bundle. Fails loudly
-        # (exit 1) if dist/frozen/index.html is missing, empty, or references any
-        # external http(s):// resource. Never a no-op, never a skip.
-        run: bun run scripts/check-frozen-selfcontained.ts
+      - name: Guard — assert the dist is self-contained / offline
+        # Executes the real scanner over every .html/.css file in the freshly
+        # baked dist. Fails loudly (exit 1) if dist/frozen is missing or any file
+        # references an external http(s):// resource. Never a no-op, never a skip.
+        run: bun run scripts/check-frozen-selfcontained.ts dist/frozen
       - name: Derive the timestamp-labelled artifact name from the manifest
         id: label
         run: echo "name=$(bun run scripts/frozen-artifact-name.ts)" >> "$GITHUB_OUTPUT"
-      - name: Publish the frozen bundle as a downloadable artifact
+      - name: Publish the frozen static SPA dist as a downloadable artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.label.outputs.name }}
-          path: |
-            dist/frozen/index.html
-            dist/frozen/frozen-manifest.json
+          path: dist/frozen
           if-no-files-found: error

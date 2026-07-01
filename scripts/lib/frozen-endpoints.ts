@@ -1,12 +1,13 @@
 // The bake plan: every API endpoint the buildless frontend requests, so the
-// frozen single-file build can answer all of them offline. Kept in ONE place so
+// frozen static build can answer all of them offline. Kept in ONE place so
 // a new frontend endpoint that isn't baked fails loudly (the "no silent gap"
 // analog of the fidelity pattern) — scripts/tests/frozen-endpoints.test.ts
 // cross-checks this plan against the actual api.get call sites in the app JS.
 //
-// The frozen fetch shim (frozen-boot.js) keys RM_FROZEN by URL *pathname* only
-// (query strings are dropped — a frozen snapshot is a single point in time), so
-// every plan key below is a pathname.
+// The snapshots are written as static JSON keyed by request *pathname* only
+// (query strings are dropped — a frozen snapshot is a single point in time) and
+// served under STATIC_DATA_BASE (/data); lib/api.js resolves them in static mode.
+// Every plan key below is therefore a pathname.
 import { ROUTES, path } from "../../frontend/public/assets/js/app/contract/routes.js";
 
 // The research signal keys the site exposes (nav + blog link to /research/<key>).
