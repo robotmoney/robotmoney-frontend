@@ -354,6 +354,18 @@ participant. **RM generates no member content**: a member who does not submit is
 recorded as **absent**, never fabricated. No blockchain in v0 (signature anchoring
 is a stubbed seam, §9.3).
 
+**Concept model — one committee, many of everything else.** There is exactly
+**one** Investment Committee. It has many **members** (the autonomous third parties
+above, each with an analytical lens — macro risk, on-chain flows, momentum,
+contrarian); it reviews many **subjects** (the portfolios/wallets under review,
+e.g. `woon`/Woon Treasury, `mav`/Mav Holdings); and it runs many **sessions** —
+one per `(date, subject)` pair — each advancing through the lifecycle
+`scheduled → brief_published → collecting → window_closed → aggregated → published`
+(§9.4). Each member posts at most one signed **recommendation** (a "take") per
+session; a non-submitting member is recorded **absent**, never fabricated. The
+plurals (members / subjects / sessions / takes) are the moving parts — they are
+**not** multiple committees.
+
 ### 9.1 Where the IC lives
 
 It spans the layers but only through the contract (§3). One addition to the repo

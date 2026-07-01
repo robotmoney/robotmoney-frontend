@@ -1,8 +1,15 @@
 # Demo Specification
 
 What `bun run demo` must demonstrate to exercise the full Investment Committee lifecycle —
-a single command that provisions everything, runs one complete session end-to-end, keeps
+a single command that provisions everything, runs the session lifecycle end-to-end, keeps
 the stack live, and tears down cleanly.
+
+> **One committee, not many.** Everything below exercises the *single* Investment
+> Committee. The harness drives it through **two sessions** (session 1 = today's
+> subject; session 2 = a different subject the next day, referencing session 1's
+> outcome), with N **members** submitting signed takes and one deliberate no-show
+> (recorded absent). These plurals — members / subjects / sessions / takes — are the
+> moving parts of the one committee, **not** separate committees.
 
 ---
 
