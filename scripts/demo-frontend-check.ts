@@ -73,8 +73,8 @@ async function main() {
   await checkView("/views/regime.html", [
     "x-data=\"regimeView()\"",
     "latest.composite",
-    "regimeClass(latest.regime)",  // styled regime label
-    "rv__indicators",
+    "regimeLabel(latest.regime)",  // styled top-line regime label (pixel-parity rewrite)
+    "rv__panels",                  // per-panel indicator tables section
   ]);
   await checkView("/views/research/channel-divergence.html", [
     "x-data=\"researchView('channel-divergence')\"",
