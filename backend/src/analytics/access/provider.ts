@@ -1,7 +1,7 @@
 // The single data seam for the analytics suite. Every tool gets its raw series
 // from a Provider — tools never know whether the data is seeded or live. The
 // default is a deterministic seededProvider (hermetic, no API keys). An opt-in,
-// implemented live FetcherProvider (DefiLlama/CoinGecko/Yahoo, all keyless;
+// implemented live FetcherProvider (DefiLlama/Yahoo, all keyless;
 // PROVIDER=live) satisfies the same interface and falls back to seeded per series,
 // so it is the ONLY thing that changes when serving real data.
 import type { SeriesSpec, Point } from "../types.ts";
