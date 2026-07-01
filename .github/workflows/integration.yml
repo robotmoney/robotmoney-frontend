@@ -21,6 +21,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Check root scripts
         run: bun run typecheck && bun run test
+      - name: Check docs/analytics consistency
+        run: bash scripts/check-docs-analytics.sh
       - name: Install deps
         working-directory: backend
         run: bun install --frozen-lockfile

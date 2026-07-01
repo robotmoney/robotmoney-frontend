@@ -6,6 +6,7 @@
   "scripts": {
     "sync-contract": "bun scripts/sync-contract.ts",
     "check-contract": "bun scripts/sync-contract.ts --check",
+    "check-docs": "bash scripts/check-docs-analytics.sh",
     "test": "bun test scripts/tests",
     "test:browser": "playwright test",
     "typecheck": "tsc --noEmit",
