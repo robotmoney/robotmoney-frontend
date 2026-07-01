@@ -38,8 +38,27 @@ const SCHEDULES: SeedSchedule[] = [
   { kind: "committee.publish", cron: "0 10 * * *", payload: {}, timezone: "UTC", enabled: false },
 ];
 
+// Fast demo schedules — ONLY added when DEMO_FAST_SCHEDULES is set (the demo
+// script sets it on the migrate/seed run). Prod/CI leave the flag unset, so the
+// default seed above is byte-for-byte unchanged there.
+//
+// These drive the worker's scheduler at a ~2-minute cadence and are STAGGERED by
+// different cron minute offsets (cron is minute-granularity) so the two analytics
+// action types never fire in the same minute:
+//   - regime.classify (regime-only)      → even minutes  (*/2)
+//   - analytics.run    (regime+research) → odd minutes   (1-59/2, offset by 1)
+// New (kind, cron) combos, so ON CONFLICT DO NOTHING inserts them once and lets
+// the scheduler own next_run_at/enabled bookkeeping thereafter.
+const FAST_DEMO_SCHEDULES: SeedSchedule[] = [
+  { kind: "regime.classify", cron: "*/2 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "analytics.run", cron: "1-59/2 * * * *", payload: {}, timezone: "UTC", enabled: true },
+];
+
 export async function seed(): Promise<void> {
-  for (const s of SCHEDULES) {
+  const schedules = process.env.DEMO_FAST_SCHEDULES
+    ? [...SCHEDULES, ...FAST_DEMO_SCHEDULES]
+    : SCHEDULES;
+  for (const s of schedules) {
     // ON CONFLICT DO NOTHING keeps this purely additive/idempotent: the row is
     // inserted once and never overwritten, so the scheduler-managed columns
     // (next_run_at, last_enqueued_at, enabled) survive untouched.
@@ -49,7 +68,7 @@ export async function seed(): Promise<void> {
       ON CONFLICT (kind, cron) DO NOTHING
     `;
   }
-  console.log(`seeded job_schedules (${SCHEDULES.length} definition(s), idempotent)`);
+  console.log(`seeded job_schedules (${schedules.length} definition(s), idempotent)`);
 }
 
 // Run directly: `bun run src/db/seed.ts`

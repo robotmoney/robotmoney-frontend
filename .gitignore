@@ -4,3 +4,6 @@ node_modules/
 *.log
 .DS_Store
 dist/
+
+# Standing local demo state (written by `bun run demo`, removed by `demo:down`).
+.agents/demo-state.json

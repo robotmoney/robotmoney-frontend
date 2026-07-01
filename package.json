@@ -6,6 +6,8 @@
   "scripts": {
     "sync-contract": "bun scripts/sync-contract.ts",
     "demo": "bun scripts/demo.ts",
+    "demo:down": "bun scripts/demo-down.ts",
+    "demo:status": "bun scripts/demo-status.ts",
     "credentials": "bun scripts/gitops-credentials.ts",
     "credentials:check": "bun scripts/gitops-credentials.ts --check"
   }

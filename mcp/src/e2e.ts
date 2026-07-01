@@ -20,14 +20,14 @@ const MEMBERS = [
   { memberId: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: true },
   { memberId: "draco", name: "Draco", lens: "contrarian", bias: 0.0, present: false }, // absent
 ];
-const SUBJECTS = [
+export const SUBJECTS = [
   { id: "woon", name: "Woon Treasury" },
   { id: "mav", name: "Mav Holdings" },
 ];
 
 const adminHeaders = process.env.ADMIN_TOKEN ? { "X-Admin-Token": process.env.ADMIN_TOKEN } : {};
 
-async function admin(action: string, body: unknown = {}) {
+export async function admin(action: string, body: unknown = {}) {
   const r = await fetch(`${BACKEND}/api/committee/admin/${action}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders }, body: JSON.stringify(body),
   });
@@ -53,7 +53,7 @@ async function enqueueLifecycleJob(action: string, payload: unknown = {}) {
   return result;
 }
 
-async function runSession(date: string, subject: typeof SUBJECTS[0], sessionIndex: number, prevOutcome?: string, existingCredentials?: Map<string, ExistingCredentials>) {
+export async function runSession(date: string, subject: typeof SUBJECTS[0], sessionIndex: number, prevOutcome?: string, existingCredentials?: Map<string, ExistingCredentials>) {
   const tag = `[session ${sessionIndex}: ${date}/${subject.id}]`;
   console.log(`\n${tag}`);
 
@@ -256,4 +256,11 @@ async function main() {
   console.log("\n=== done ===\n");
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+// Only run the full E2E flow (reset + OAuth assertions + 2 sessions) when this
+// file is the entry point (e.g. CI's `bun run src/e2e.ts`). Guarded so the
+// standing demo can `import { runSession, admin, SUBJECTS }` WITHOUT triggering
+// a reset that would wipe accumulating demo history. main()'s behaviour as an
+// entry point is unchanged.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}
