@@ -5,7 +5,15 @@
 # change. Instead it runs here on a daily schedule (and on-demand) with
 # RUN_LIVE_FETCHERS=1, so source drift is still caught every day without gating PRs.
 # Per-PR coverage remains the deterministic parser suite (tests/extract.test.ts).
+#
+# CI taxonomy class: heavy (scheduled live external-endpoint drift test). Heavy
+# suites are sweep-only: they must have NO `pull_request` trigger at all, and run
+# only on a schedule and/or push to the default branch. This workflow already
+# carries only `schedule` + `workflow_dispatch`, so keeping the live-fetcher test
+# off the per-PR graph is exactly what the taxonomy requires.
 name: nightly-fetchers
+env:
+  CI_CLASS: heavy
 on:
   schedule:
     - cron: "0 8 * * *" # daily 08:00 UTC
