@@ -230,19 +230,30 @@ the TUI shows only distilled state. Layout:
 - **Services** — the run's URLs (Site / Regime / Committee / Research per key / MCP), on
   `127.0.0.1:<random port>`.
 - **Startup** — per-container status (postgres, api, worker, mcp) plus migrate and the
-  `/health` checks, each shown pending / in-progress (spinner) / healthy / failed.
-- **Activity** (largest region) — split into two panes (side by side, stacking on narrow
-  terminals):
+  `/health` checks, each shown pending / in-progress (spinner) / healthy / failed. After
+  bring-up the icons are kept live by polling the **real docker container state**
+  (`docker compose ps` every ~3 s), so a post-startup crash / restart-loop / `unhealthy`
+  Docker healthcheck turns the icon red (with a detail like `exited 1` / `restarting` /
+  `unhealthy`). The pane header shows a refresh spinner while a check is in flight.
+- **Onboarding** (full-width strip) — the current prospective committee member's join
+  checklist: `keypair → apply → review → activate → connect → session → memo → admitted`,
+  each pending / spinner / ✓ / ✗. Steps 1–5 are driven by the real join flow
+  (`onboardMember`); `session`/`memo`/`admitted` flip when the newcomer is observed
+  submitting a signed take + posting a memo in a live session. See §11.
+- **Activity** (largest region) — Research plus **one pane per committee subject**, laid
+  out as responsive columns (side by side when they fit, stacking when the terminal is
+  narrow):
   - **Research** — recent `regime.classify` / `analytics.run` runs, advancing
     queued → running → done as the worker's queue transitions are observed, annotated
     with what landed (e.g. `regime → risk_on 0.76`). Fidelity is queue-level (see
     demo-plan §10), not fabricated sub-steps. The header shows a live **countdown** to
     the next scheduled regime/research run (from `job_schedules.next_run_at`, using the
     DB clock).
-  - **Committee** — the active session's lifecycle state and each member's real stage
-    (connect → fetch → thinking → reporting → waiting; no-shows marked absent), driven by
-    a live progress callback from the agent code. The header shows a **countdown** to the
-    next session (or `running…` while one is in progress).
+  - **One pane per subject** (woon, mav, …) — each subject runs on its **own schedule**
+    (independent interval + stagger offset, serialized execution) and gets its own pane
+    showing its session lifecycle state, each member's real stage (connect → fetch →
+    thinking → reporting → waiting; no-shows absent), and a per-subject **countdown** to
+    its next session (`running…` while in progress).
 - **Log footer** — the last few distilled events plus: `Ctrl-C / SIGTERM tears down the
   stack (containers + volume)`.
 
@@ -272,3 +283,28 @@ scheduled action as it fires.
   Demo actions run on a ~2-min staggered cadence.
   Ctrl-C / SIGTERM tears down the stack (containers + volume).
 ```
+
+## 11. New-member onboarding (growing committee)
+
+The standing demo periodically admits a **brand-new committee member** through the real
+join path, proving the public apply → admin activate → MCP OAuth flow and demonstrating a
+committee that **grows over time**:
+
+1. **keypair** — the prospect generates its own ed25519 keypair (RM never sees the private
+   key).
+2. **apply** — `POST /api/committee/apply` (public, no auth) → status `applied`.
+3. **review** — a short simulated admin-review delay.
+4. **activate** — `POST /api/committee/admin/activate` → mints the member's bearer token →
+   `active`.
+5. **connect** — exchanges the token for an MCP OAuth 2.1 `client_credentials` access
+   token.
+6. **session / memo / admitted** — the new member is added to the shared roster
+   (`onboardedCreds` + `MEMBERS`) so it participates in the next session for whichever
+   subject runs next, submitting a signed take and posting a memo; these steps flip to
+   done via the same session progress callback that drives the subject panes.
+
+Driven by `onboardMember()` in `mcp/src/e2e.ts` (additive; the standalone `main()` is
+unchanged) and an onboarding loop in `scripts/demo.ts`. Cadence and cap are configurable
+(default: one admission every ~3 min, up to a small pool of newcomers), so the committee
+grows from its base roster to a bounded maximum. Each admission is rendered live in the
+Onboarding strip (§10.1).

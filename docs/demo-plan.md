@@ -221,11 +221,20 @@ standing demo, replacing interleaved log lines. Layout:
 
 - **Services pane** — URLs of all services (Site / Regime / Committee / Research / MCP).
 - **Startup pane** — per-container status for the Docker startups + healthchecks
-  (pending / in-progress / healthy / failed).
-- **Activity pane** (largest) — split (side by side, stacking on narrow terminals):
-  - **Research tasks** — driven by polling the queue (see fidelity note below).
-  - **Committee member tasks** — connect → fetch → thinking → reporting → waiting,
-    driven by a real progress callback from `mcp/src/agent.ts` / `runSession`.
+  (pending / in-progress / healthy / failed), kept live after bring-up by polling the
+  real `docker compose ps` state every ~3 s so crashes / restart-loops / unhealthy
+  containers turn red; a refresh spinner shows on the header while checking.
+- **Onboarding strip** (full width) — the current prospective member's join checklist
+  (keypair → apply → review → activate → connect → session → memo → admitted); see
+  Phase 11.
+- **Activity pane** (largest) — Research + **one pane per committee subject** as
+  responsive columns (side by side, stacking on narrow terminals):
+  - **Research tasks** — driven by polling the queue (see fidelity note below); header
+    shows a countdown to the next scheduled regime/research run.
+  - **Committee, one pane per subject** — each subject on its **own** schedule
+    (independent interval + stagger, serialized execution) with its own countdown;
+    per-member stages connect → fetch → thinking → reporting → waiting driven by a real
+    progress callback from `mcp/src/agent.ts` / `runSession`.
 
 Implementation notes:
 
@@ -247,3 +256,16 @@ dashboard API), rather than fabricating fetch/process/report sub-steps.
 **Remaining:** a visual pass on a real interactive terminal — the renderer, gating,
 polling SQL, and non-TTY fallback are verified, but the live alternate-screen render and
 animated committee/research panes were not observed in a TTY during implementation.
+
+## Phase 11 — New-member onboarding / growing committee  ✅ shipped
+
+The standing demo periodically admits a brand-new committee member through the real join
+path and grows the roster over time. `onboardMember()` (exported from `mcp/src/e2e.ts`,
+additive — standalone `main()` unchanged) runs keypair → public apply → simulated review →
+admin activate → MCP OAuth connect, emitting a stage callback; an onboarding loop in
+`scripts/demo.ts` drives it on a cadence (default ~3 min, capped at a small newcomer pool),
+adds the admitted member to the shared roster (`onboardedCreds` + the now-exported
+`MEMBERS`) so it participates in subsequent sessions, and renders the checklist in the
+Onboarding strip. The `session`/`memo`/`admitted` steps flip when the newcomer is observed
+taking + posting a memo in a live session (via the same session progress callback). See
+demo-spec.md §11.
