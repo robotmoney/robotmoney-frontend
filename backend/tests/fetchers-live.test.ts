@@ -6,11 +6,14 @@
 // changed response format — the point is to catch a source moving out from under
 // us, not to silently skip.
 //
-// Gating: it runs when RUN_LIVE_FETCHERS=1 OR CI=true (GitHub Actions has
-// network). Locally / in a network-blocked sandbox it does NOT run — the
-// deterministic parser tests in tests/extract.test.ts remain the gate. This is a
-// documented environment gate, NOT a silent per-assertion skip: when enabled it
-// must reach the network and pass, or it fails.
+// Gating: it runs ONLY when RUN_LIVE_FETCHERS=1 — a nightly/manual job
+// (.github/workflows/nightly-fetchers.yml), NOT plain CI. It is deliberately NOT
+// gated on CI=true: otherwise it would run on every PR and could flake on a
+// transient upstream hiccup, gating unrelated changes on external-API health.
+// Per-PR coverage is the deterministic parser suite in tests/extract.test.ts; this
+// file only defers the LIVE drift guard to the nightly job. This is a documented
+// environment gate, NOT a silent per-assertion skip: when enabled it must reach the
+// network and pass (or fail loudly); when disabled it announces why (below).
 import { test, expect } from "bun:test";
 import type { Point } from "../src/analytics/types.ts";
 import { loadRawIndicatorHistory } from "./fixtures/regime/load.ts";
@@ -24,19 +27,20 @@ import { fetchShillerCape } from "../src/analytics/extract/shiller.ts";
 import { fetchEdgarS4Monthly } from "../src/analytics/extract/edgar.ts";
 import { mergeRatioSeries } from "../src/analytics/extract/sources.ts";
 
-const LIVE = process.env.RUN_LIVE_FETCHERS === "1" || process.env.CI === "true";
+const LIVE = process.env.RUN_LIVE_FETCHERS === "1";
 const t = LIVE ? test : test.skip;
 
 if (!LIVE) {
   // Not a silent skip of behavior: parser correctness is covered by
   // tests/extract.test.ts (always runs). This only defers the network drift
-  // guard to CI. Announce loudly so a green local run is never mistaken for
-  // "the live endpoints were validated".
+  // guard to the nightly job. Announce loudly so a green PR/local run is never
+  // mistaken for "the live endpoints were validated".
   // eslint-disable-next-line no-console
   console.warn(
-    "[fetchers-live] SKIPPED live drift checks (no RUN_LIVE_FETCHERS/CI). " +
-      "Deterministic parser coverage in tests/extract.test.ts still gates. " +
-      "Set RUN_LIVE_FETCHERS=1 to validate against real endpoints.",
+    "[fetchers-live] SKIPPED live drift checks (RUN_LIVE_FETCHERS != 1). " +
+      "Deterministic parser coverage in tests/extract.test.ts still gates every PR. " +
+      "The nightly workflow (nightly-fetchers.yml) sets RUN_LIVE_FETCHERS=1 to " +
+      "validate against real endpoints daily. Set RUN_LIVE_FETCHERS=1 to run locally.",
   );
   test("fetchers-live gate is documented (parser tests remain the gate)", () => {
     expect(LIVE).toBe(false);

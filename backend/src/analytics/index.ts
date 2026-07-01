@@ -26,8 +26,17 @@ import { persistResearchSignal } from "./store/research-store.ts";
 import { computeChannelDivergence, computeLateCycle } from "./analyze/research-signals.ts";
 import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 import { liveDataSource, type AnalyticsDataSource, type Logger } from "./access/data-source.ts";
+import { hermeticDataSource } from "./access/hermetic-source.ts";
 
 const BACKFILL_START = "2018-01-01"; // crypto on-chain coverage starts ~2018 cleanly
+
+// Default source selector. Production = the REAL fetchers (`liveDataSource`). The
+// demo/e2e path opts into a deterministic, offline source with
+// ANALYTICS_SOURCE=hermetic (set in docker-compose.demo.yml for api+worker) so a
+// full run never touches the network. Tests inject their own fixture source.
+export function resolveAnalyticsSource(): AnalyticsDataSource {
+  return process.env.ANALYTICS_SOURCE === "hermetic" ? hermeticDataSource : liveDataSource;
+}
 
 const nn = (v: number | undefined): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -37,7 +46,7 @@ const nn = (v: number | undefined): number | null =>
 export async function runAnalytics(
   asof: string,
   toolId?: string,
-  source: AnalyticsDataSource = liveDataSource,
+  source: AnalyticsDataSource = resolveAnalyticsSource(),
 ): Promise<Record<string, unknown>> {
   const logger: Logger = console;
   const want = (id: string) => !toolId || toolId === id;

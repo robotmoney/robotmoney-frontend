@@ -4,7 +4,7 @@
   <header class="rv__head">
     <span class="rv__eyebrow">Quantitative Filter</span>
     <h1 class="rv__title">Market <span class="text-gradient">Regime</span></h1>
-    <p class="rv__sub" x-show="latest" x-cloak>As of <span x-text="latest?.date"></span> · composite is a 0–1 risk-on score across macro + on-chain indicators.</p>
+    <p class="rv__sub" x-show="latest" x-cloak>As of <span x-text="latest?.date"></span> · composite is a 0–1 risk-on score across macro + on-chain indicators<template x-if="latest?.version"><span> · model <span x-text="latest.version"></span></span></template>.</p>
   </header>
 
   <p class="rv__loading" x-show="loading">Loading regime…</p>
@@ -23,30 +23,51 @@
           <div class="rv__label">Overall regime</div>
         </div>
         <div class="rv__card">
-          <span :class="regimeClass(latest.macroRegime)" x-text="latest.macroRegime"></span>
+          <span :class="regimeClass(latest.macroRegime)" x-text="regimeLabel(latest.macroRegime)"></span>
           <div class="rv__label">Macro panel</div>
+          <div class="rv__pct">index <span x-text="pct(latest.macroIndex)"></span> · pct <span x-text="pct(latest.macroPercentile)"></span></div>
         </div>
         <div class="rv__card">
-          <span :class="regimeClass(latest.onchainRegime)" x-text="latest.onchainRegime"></span>
+          <span :class="regimeClass(latest.onchainRegime)" x-text="regimeLabel(latest.onchainRegime)"></span>
           <div class="rv__label">On-chain panel</div>
+          <div class="rv__pct">index <span x-text="pct(latest.onchainIndex)"></span> · pct <span x-text="pct(latest.onchainPercentile)"></span></div>
         </div>
       </div>
 
       <div class="rv__chart"><canvas x-ref="chart"></canvas></div>
 
-      <h2 class="rv__h2">Indicators</h2>
-      <div class="rv__indicators">
-        <template x-for="ind in latest.indicators" :key="ind.id">
-          <div class="rv__ind">
-            <div class="rv__ind-row">
-              <span class="rv__ind-name" x-text="ind.name"></span>
-              <span class="rv__ind-panel" x-text="ind.panel"></span>
-            </div>
-            <div class="rv__bar"><div class="rv__bar-fill" :style="`width:${ind.score*100}%`"></div></div>
-            <div class="rv__ind-score" x-text="pct(ind.score)"></div>
+      <!-- Real per-indicator objects (asof row): panel-grouped with each
+           indicator's sign-aligned percentile bar, raw percentile, and the
+           point-in-time inverse-correlation panel weight. -->
+      <h2 class="rv__h2">Indicators by panel</h2>
+      <template x-for="panel in ['macro','onchain']" :key="panel">
+        <div class="rv__panel" x-show="indicatorsIn(panel).length">
+          <div class="rv__panel-head">
+            <span class="rv__panel-name" x-text="panel === 'macro' ? 'Macro' : 'On-chain'"></span>
+            <span class="rv__panel-meta">
+              index <span x-text="pct(panelIndex(panel))"></span> ·
+              pct <span x-text="pct(panelPercentile(panel))"></span> ·
+              <span :class="regimeClass(panelRegime(panel))" x-text="regimeLabel(panelRegime(panel))"></span>
+            </span>
           </div>
-        </template>
-      </div>
+          <div class="rv__indicators">
+            <template x-for="ind in indicatorsIn(panel)" :key="ind.id">
+              <div class="rv__ind">
+                <div class="rv__ind-row">
+                  <span class="rv__ind-name" x-text="ind.name"></span>
+                  <span class="rv__ind-weight" x-text="'weight ' + fmtWeight(ind.panel_weight)"></span>
+                </div>
+                <div class="rv__bar"><div class="rv__bar-fill" :style="`width:${sigPct(ind)}%`"></div></div>
+                <div class="rv__ind-score">
+                  <span x-text="'percentile ' + pct(ind.percentile)"></span>
+                  <span class="rv__ind-sep">·</span>
+                  <span x-text="'risk-on ' + pct(ind.signed_percentile)"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
     </div>
   </template>
 </section>

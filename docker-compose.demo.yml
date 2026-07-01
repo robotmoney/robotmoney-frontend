@@ -8,10 +8,17 @@ services:
       robotmoney.demo.project: ${DEMO_PROJECT}
     environment:
       RM_ALLOW_INSECURE: "1"
+      # Demo spec: the analytics run MUST be deterministic + offline (no FRED/Yahoo/
+      # EDGAR/... calls). Select the hermetic seeded source instead of liveDataSource.
+      # The API process runs runAnalytics for the /committee/admin/regime call.
+      ANALYTICS_SOURCE: "hermetic"
 
   worker:
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
+    environment:
+      # Same offline guarantee for any analytics job the worker processes.
+      ANALYTICS_SOURCE: "hermetic"
 
   mcp:
     labels:
