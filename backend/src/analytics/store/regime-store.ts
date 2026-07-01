@@ -38,8 +38,17 @@ export interface RegimeSnapshotRow {
 }
 
 export async function saveRegimeSnapshots(snapshots: RegimeSnapshotRow[]): Promise<void> {
-  for (const s of snapshots) {
-    await sql`
+  // The orchestrator persists the full recomputed history (~3k rows) each run, so
+  // pipeline the upserts in bounded concurrent chunks rather than one blocking
+  // round-trip per row. Upsert semantics (ON CONFLICT (date)) are unchanged.
+  const CHUNK = 250;
+  for (let i = 0; i < snapshots.length; i += CHUNK) {
+    await Promise.all(snapshots.slice(i, i + CHUNK).map(upsertSnapshot));
+  }
+}
+
+async function upsertSnapshot(s: RegimeSnapshotRow): Promise<void> {
+  await sql`
       INSERT INTO regime_snapshots
         (date, composite, composite_percentile, regime,
          macro_regime, onchain_regime, factor_regime,
@@ -70,7 +79,6 @@ export async function saveRegimeSnapshots(snapshots: RegimeSnapshotRow[]): Promi
         version = EXCLUDED.version,
         percentiles = EXCLUDED.percentiles,
         indicators = EXCLUDED.indicators`;
-  }
 }
 
 // Read one snapshot back as a typed row (numerics coerced from Postgres text).

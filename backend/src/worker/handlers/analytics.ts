@@ -1,7 +1,9 @@
 import { runAnalytics } from "../../analytics/index.ts";
 
 // Generic analytics handler: runs one tool (payload.tool) or the whole suite,
-// for payload.asof (default today). Replaces the bespoke regime handler.
+// for payload.asof (default today), via the real orchestrator (analytics/index.ts
+// runAnalytics → live keyless fetchers, append-only merge, no synthetic data).
+// This is what the seeded `analytics.run` cron (db/seed.ts, 22:30 UTC) fires.
 export async function analyticsRun(payload: Record<string, unknown>): Promise<unknown> {
   const asof = (payload.asof as string) ?? new Date().toISOString().slice(0, 10);
   const tool = payload.tool as string | undefined;

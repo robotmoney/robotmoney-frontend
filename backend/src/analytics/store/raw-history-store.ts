@@ -40,7 +40,14 @@ export async function saveRawIndicatorHistory(byIndicator: RawIndicatorHistory):
     }
   }
   if (rows.length === 0) return;
-  await sql`
-    INSERT INTO raw_indicator_history ${sql(rows, "date", "indicator", "value")}
-    ON CONFLICT (date, indicator) DO UPDATE SET value = EXCLUDED.value`;
+  // The full floor is tens of thousands of (date,indicator) rows; a single
+  // multi-row INSERT would blow past Postgres' 65534 bind-parameter cap (3 params
+  // per row). Chunk so each statement stays well under the limit.
+  const CHUNK = 5000; // 5000 × 3 = 15000 params per statement
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const batch = rows.slice(i, i + CHUNK);
+    await sql`
+      INSERT INTO raw_indicator_history ${sql(batch, "date", "indicator", "value")}
+      ON CONFLICT (date, indicator) DO UPDATE SET value = EXCLUDED.value`;
+  }
 }
