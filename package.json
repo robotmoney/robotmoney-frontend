@@ -5,8 +5,18 @@
   "description": "Single-folder home for the split-ready frontend/ + backend/ + contract/ (+ mcp/).",
   "scripts": {
     "sync-contract": "bun scripts/sync-contract.ts",
+    "check-contract": "bun scripts/sync-contract.ts --check",
+    "test": "bun test scripts/tests",
+    "typecheck": "tsc --noEmit",
     "demo": "bun scripts/demo.ts",
     "credentials": "bun scripts/gitops-credentials.ts",
     "credentials:check": "bun scripts/gitops-credentials.ts --check"
+  },
+  "dependencies": {
+    "libsodium-wrappers": "^0.8.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.9.3"
   }
 }

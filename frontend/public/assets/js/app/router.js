@@ -6,31 +6,9 @@
 // Known routes map a pathname to a view file. Unknown same-origin paths fall
 // back to the home view so internal links never 404 during early development.
 
-const VIEW_DIR = "/views";
-const HOME_VIEW = `${VIEW_DIR}/home.html`;
-
-// Explicit path -> view file table. Paths without a dedicated view file map to
-// the home view as a placeholder for now.
-const ROUTES = {
-  "/": HOME_VIEW,
-  // /regime and /committee resolve to their own /views/<seg>.html via viewFor();
-  // routes without a dedicated view file fall back to the home view.
-  "/allocation": HOME_VIEW,
-  "/research": HOME_VIEW,
-};
+import { NOT_FOUND_VIEW, viewFor } from "./routes.js";
 
 const viewEl = () => document.getElementById("view");
-
-// Resolve a pathname to its view file: explicit route first, else the full path
-// under /views (so nested routes like /research/channel-divergence map to
-// /views/research/channel-divergence.html). The caller falls back to home if the
-// fetch 404s.
-function viewFor(pathname) {
-  if (pathname === "/") return HOME_VIEW;
-  if (ROUTES[pathname]) return ROUTES[pathname];
-  const clean = pathname.replace(/\/+$/, "");
-  return `${VIEW_DIR}${clean}.html`;
-}
 
 // Mark the nav link whose href matches the current path as active/current.
 function syncNav(pathname) {
@@ -50,23 +28,29 @@ function syncNav(pathname) {
   });
 }
 
-async function fetchView(file) {
-  const res = await fetch(file, { headers: { Accept: "text/html" } });
+async function fetchView(file, signal) {
+  const res = await fetch(file, { headers: { Accept: "text/html" }, signal });
   if (!res.ok) throw new Error(`view fetch failed: ${file} (${res.status})`);
   return res.text();
 }
 
+let activeRender = null;
+
 async function render(pathname) {
   const host = viewEl();
   if (!host) return;
+  activeRender?.abort();
+  const controller = new AbortController();
+  activeRender = controller;
   const primary = viewFor(pathname);
   let html;
   try {
-    html = await fetchView(primary);
-  } catch (_) {
-    // Unknown/missing view — fall back to the home view so links don't 404.
-    html = await fetchView(HOME_VIEW);
+    html = await fetchView(primary, controller.signal);
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    html = await fetchView(NOT_FOUND_VIEW, controller.signal);
   }
+  if (controller.signal.aborted) return;
   host.innerHTML = html;
   window.scrollTo(0, 0);
   syncNav(pathname);

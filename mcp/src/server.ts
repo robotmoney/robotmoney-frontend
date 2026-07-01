@@ -9,13 +9,14 @@
 // design). The MCP server acts as the authorization server: it exposes a token
 // endpoint that validates member credentials against the backend and issues
 // short-lived access tokens. Legacy direct bearer tokens also work for backward
-// compatibility. The hot path (per-request validation of an existing session)
-// is a single SHA-256 hash comparison — no HTTP round trips.
+// compatibility. OAuth access tokens are checked locally on every request;
+// legacy member tokens are revalidated by the backend.
 import { createHash } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { canonicalizeSubmission } from "@robotmoney/contract";
+import { TokenStore } from "./token-store.ts";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const PORT = Number(process.env.MCP_PORT ?? 8788);
@@ -26,22 +27,9 @@ const REFRESH_TOKEN_TTL = 86400; // 24 hours
 const j = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 async function get(path: string) { return (await fetch(`${BACKEND}${path}`)).json(); }
 
-interface AccessTokenEntry {
-  memberId: string;
-  memberToken: string; // the original backend bearer token, forwarded on tool calls
-  expiresAt: number;
-}
-interface RefreshTokenEntry {
-  memberId: string;
-  memberToken: string;
-  accessToken: string; // the access token this refresh token was issued with
-  expiresAt: number;
-}
+const tokenStore = new TokenStore(ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL);
 
-const accessTokens = new Map<string, AccessTokenEntry>();
-const refreshTokens = new Map<string, RefreshTokenEntry>();
-
-function buildServer(memberId: string, memberToken: string | null) {
+function buildServer(memberId: string, memberToken: string) {
   const server = new McpServer({ name: "robotmoney-committee", version: "0.1.0" });
 
   server.registerTool("get_regime", { description: "Latest regime classification statistics.", inputSchema: {} },
@@ -135,8 +123,9 @@ const MAX_SESSIONS = 500; // cap concurrent sessions (DoS bound)
 const IDLE_MS = 10 * 60_000; // evict sessions idle longer than this
 
 // Periodically close idle sessions so the maps + McpServer instances can't grow
-// unboundedly (an unauthenticated client could otherwise open sessions forever).
+// unboundedly when authenticated clients abandon sessions without closing them.
 setInterval(() => {
+  tokenStore.sweep();
   const cutoff = Date.now() - IDLE_MS;
   for (const [id, ts] of lastSeen) {
     if (ts >= cutoff) continue;
@@ -150,7 +139,7 @@ setInterval(() => {
 // token), checked on every follow-up request to the same session.
 interface SessionBinding {
   memberId: string;
-  memberToken: string | null;
+  memberToken: string;
   tokenHash: string;
 }
 const sessionBinding = new Map<string, SessionBinding>();
@@ -176,10 +165,6 @@ function oauthError(error: string, description?: string, status = 400): Response
   return jsonResponse({ error, error_description: description }, status);
 }
 
-function isExpired(entry: { expiresAt: number }): boolean {
-  return Date.now() > entry.expiresAt;
-}
-
 async function validateMemberCredentials(memberId: string, clientSecret: string): Promise<boolean> {
   try {
     const res = await fetch(`${BACKEND}/api/committee/verify-token`, {
@@ -193,22 +178,24 @@ async function validateMemberCredentials(memberId: string, clientSecret: string)
   }
 }
 
-// Resolve a presented bearer to { memberId, memberToken }.
-// Checks the OAuth access token store first, then falls back to direct legacy
-// token (validated lazily by downstream backend calls).
-function resolveBearer(token: string): { memberId: string; memberToken: string | null } | null {
-  // 1. OAuth access token
-  const entry = accessTokens.get(token);
-  if (entry && !isExpired(entry)) {
-    return { memberId: entry.memberId, memberToken: entry.memberToken };
-  }
-  if (entry) accessTokens.delete(token); // expired — clean up
+// Resolve a presented bearer to { memberId, memberToken }. OAuth access tokens
+// are local; direct legacy tokens are validated against the backend.
+async function resolveBearer(token: string): Promise<{ memberId: string; memberToken: string } | null> {
+  const oauth = tokenStore.resolveAccess(token);
+  if (oauth) return oauth;
 
-  // 2. Legacy token — we can't validate it locally (only the backend knows the
-  // hash). Return a synthetic memberId based on token hash so the session can
-  // bind; actual authorization is enforced by the downstream backend calls.
-  // This maintains backward compatibility with non-OAuth clients.
-  return { memberId: `token:${tokenHash(token)}`, memberToken: token };
+  // Legacy direct bearers remain supported, but validate them before allocating
+  // transport/session state so arbitrary strings cannot consume session capacity.
+  try {
+    const res = await fetch(`${BACKEND}/api/committee/verify-token`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const body = await res.json() as { memberId?: string };
+    return body.memberId ? { memberId: body.memberId, memberToken: token } : null;
+  } catch {
+    return null;
+  }
 }
 
 Bun.serve({
@@ -262,38 +249,28 @@ Bun.serve({
         const valid = await validateMemberCredentials(clientId, clientSecret);
         if (!valid) return oauthError("invalid_client", "member credentials rejected", 401);
 
-        const accessToken = crypto.randomUUID();
-        const refreshToken = crypto.randomUUID();
-        const now = Date.now();
-        accessTokens.set(accessToken, { memberId: clientId, memberToken: clientSecret, expiresAt: now + ACCESS_TOKEN_TTL * 1000 });
-        refreshTokens.set(refreshToken, { memberId: clientId, memberToken: clientSecret, accessToken, expiresAt: now + REFRESH_TOKEN_TTL * 1000 });
+        const issued = tokenStore.issue({ memberId: clientId, memberToken: clientSecret });
+        if (!issued) return oauthError("temporarily_unavailable", "token capacity reached", 503);
         return jsonResponse({
-          access_token: accessToken,
+          access_token: issued.accessToken,
           token_type: "bearer",
-          expires_in: ACCESS_TOKEN_TTL,
-          refresh_token: refreshToken,
+          expires_in: issued.expiresIn,
+          refresh_token: issued.refreshToken,
         });
       }
 
       if (grantType === "refresh_token") {
         const rt = body.get("refresh_token");
         if (!rt) return oauthError("invalid_request", "refresh_token required");
-        const stored = refreshTokens.get(rt);
-        if (!stored || isExpired(stored)) {
-          if (stored) refreshTokens.delete(rt);
+        const issued = tokenStore.rotate(rt);
+        if (!issued) {
           return oauthError("invalid_grant", "refresh token expired or invalid", 401);
         }
-        const newAccessToken = crypto.randomUUID();
-        const newRefreshToken = crypto.randomUUID();
-        const now = Date.now();
-        accessTokens.set(newAccessToken, { memberId: stored.memberId, memberToken: stored.memberToken, expiresAt: now + ACCESS_TOKEN_TTL * 1000 });
-        refreshTokens.set(newRefreshToken, { memberId: stored.memberId, memberToken: stored.memberToken, accessToken: newAccessToken, expiresAt: now + REFRESH_TOKEN_TTL * 1000 });
-        refreshTokens.delete(rt);
         return jsonResponse({
-          access_token: newAccessToken,
+          access_token: issued.accessToken,
           token_type: "bearer",
-          expires_in: ACCESS_TOKEN_TTL,
-          refresh_token: newRefreshToken,
+          expires_in: issued.expiresIn,
+          refresh_token: issued.refreshToken,
         });
       }
 
@@ -304,13 +281,7 @@ Bun.serve({
     if (url.pathname === "/mcp/oauth/revoke" && req.method === "POST") {
       const body = new URLSearchParams(await req.text());
       const token = body.get("token");
-      if (token) {
-        accessTokens.delete(token);
-        // Also delete any refresh token pointing to it
-        for (const [rt, entry] of refreshTokens) {
-          if (entry.accessToken === token) refreshTokens.delete(rt);
-        }
-      }
+      if (token) tokenStore.revoke(token);
       // RFC 7009: always return 200 (don't reveal if token was valid)
       return jsonResponse({});
     }
@@ -324,6 +295,9 @@ Bun.serve({
       const presented = bearerOf(req) ?? "";
       if (tokenHash(presented) !== sessionBinding.get(sid)?.tokenHash)
         return unauthorized("bearer token does not match the session it was bound to");
+      const identity = await resolveBearer(presented);
+      if (!identity || identity.memberId !== sessionBinding.get(sid)?.memberId)
+        return unauthorized("bearer token is expired or revoked");
       lastSeen.set(sid, Date.now());
       return transports.get(sid)!.handleRequest(req);
     }
@@ -336,7 +310,7 @@ Bun.serve({
         { status: 429, headers: { "Content-Type": "application/json" } });
 
     // Resolve the bearer token to { memberId, memberToken }.
-    const resolved = resolveBearer(rawToken);
+    const resolved = await resolveBearer(rawToken);
     if (!resolved) return unauthorized("invalid bearer token");
 
     const t = new WebStandardStreamableHTTPServerTransport({

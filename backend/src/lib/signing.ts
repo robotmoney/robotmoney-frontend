@@ -6,8 +6,8 @@ import { canonicalizeSubmission } from "@robotmoney/contract";
 
 const ALG = { name: "Ed25519" } as const;
 
-function b64ToBytes(b64: string): Uint8Array {
-  return new Uint8Array(Buffer.from(b64, "base64"));
+function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
+  return Uint8Array.from(Buffer.from(b64, "base64"));
 }
 function bytesToB64(bytes: ArrayBuffer | Uint8Array): string {
   return Buffer.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)).toString("base64");

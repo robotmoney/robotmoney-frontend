@@ -6,8 +6,11 @@
 export function registerSubstrate(Alpine) {
   Alpine.data("substrate", () => ({
     _p5: null,
+    _p5Timer: null,
+    _destroyed: false,
     _observer: null,
     init() {
+      this._destroyed = false;
       const host = this.$el;
       host.innerHTML =
         '<div class="substrate__canvas" style="position:absolute;inset:0"></div>' +
@@ -15,12 +18,16 @@ export function registerSubstrate(Alpine) {
       const container = host.querySelector(".substrate__canvas");
       const overlay = host.querySelector(".substrate__overlay");
       const startWhenReady = () => {
+        if (this._destroyed) return;
         if (window.p5) this._start(container, overlay);
-        else setTimeout(startWhenReady, 50);
+        else this._p5Timer = setTimeout(startWhenReady, 50);
       };
       startWhenReady();
     },
     destroy() {
+      this._destroyed = true;
+      clearTimeout(this._p5Timer);
+      this._p5Timer = null;
       if (this._p5) { this._p5.remove(); this._p5 = null; }
       if (this._observer) this._observer.disconnect();
     },

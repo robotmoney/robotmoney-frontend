@@ -1,5 +1,5 @@
 // Always-on worker process: drains the job queue, ticks the scheduler, and
-// reaps crashed jobs. Run with `node src/worker/index.ts`.
+// reaps crashed jobs. Run with `bun run src/worker/index.ts`.
 import { config } from "../config.ts";
 import { closeDb } from "../db/client.ts";
 import { processOneJob } from "./loop.ts";
@@ -11,6 +11,7 @@ const SCHEDULER_TICK_MS = Number(process.env.SCHEDULER_TICK_MS ?? 30_000);
 const REAPER_TICK_MS = Number(process.env.REAPER_TICK_MS ?? 60_000);
 
 let running = true;
+const stopped = new AbortController();
 
 async function drainLoop() {
   while (running) {
@@ -36,18 +37,32 @@ async function periodic(label: string, fn: () => Promise<unknown>, everyMs: numb
 }
 
 function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise<void>((resolve) => {
+    if (stopped.signal.aborted) return resolve();
+    const timer = setTimeout(resolve, ms);
+    stopped.signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
 }
 
-function shutdown(signal: string) {
+let shutdownStarted = false;
+async function shutdown(signal: string) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
   console.log(`\n${signal} received, shutting down…`);
   running = false;
-  setTimeout(() => closeDb().then(() => process.exit(0)), 500);
+  stopped.abort();
+  await Promise.allSettled(loops);
+  await closeDb();
 }
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
 console.log(`worker ${config.workerId} starting (env=${config.env})`);
-void drainLoop();
-void periodic("scheduler", tickScheduler, SCHEDULER_TICK_MS);
-void periodic("reaper", reapStuckJobs, REAPER_TICK_MS);
+const loops = [
+  drainLoop(),
+  periodic("scheduler", tickScheduler, SCHEDULER_TICK_MS),
+  periodic("reaper", reapStuckJobs, REAPER_TICK_MS),
+];

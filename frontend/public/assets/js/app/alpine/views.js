@@ -6,6 +6,7 @@ import { api, ROUTES, path } from "../lib/api.js";
 export function registerViews(Alpine) {
   // ── Regime classification ────────────────────────────────────────────────
   Alpine.data("regimeView", () => ({
+    _chart: null,
     loading: true,
     error: null,
     latest: null,
@@ -25,7 +26,8 @@ export function registerViews(Alpine) {
     drawChart() {
       const canvas = this.$refs.chart;
       if (!canvas || !window.Chart || !this.history.length) return;
-      new window.Chart(canvas, {
+      this._chart?.destroy();
+      this._chart = new window.Chart(canvas, {
         type: "line",
         data: {
           labels: this.history.map((s) => s.date),
@@ -47,12 +49,14 @@ export function registerViews(Alpine) {
         },
       });
     },
+    destroy() { this._chart?.destroy(); this._chart = null; },
     pct(x) { return x == null ? "—" : Math.round(x * 100) + "%"; },
     regimeClass(r) { return r ? `regime-pill regime-pill--${r}` : "regime-pill"; },
   }));
 
   // ── Research signal (channel-divergence / late-cycle-signals) ─────────────
   Alpine.data("researchView", (key) => ({
+    _chart: null,
     key,
     loading: true,
     error: null,
@@ -72,7 +76,8 @@ export function registerViews(Alpine) {
       const canvas = this.$refs.chart;
       const pts = this.payload?.series?.points ?? [];
       if (!canvas || !window.Chart || !pts.length) return;
-      new window.Chart(canvas, {
+      this._chart?.destroy();
+      this._chart = new window.Chart(canvas, {
         type: "line",
         data: {
           labels: pts.map((p) => p.date),
@@ -87,6 +92,7 @@ export function registerViews(Alpine) {
         },
       });
     },
+    destroy() { this._chart?.destroy(); this._chart = null; },
     pct(x) { return x == null ? "—" : Math.round(x * 100) + "%"; },
     readClass(read) {
       const r = String(read || "");
@@ -102,6 +108,7 @@ export function registerViews(Alpine) {
   // the original. No fetch; draws once on init. Stacks bottom→top:
   // Stable, Protocol, Agent, Stocks.
   Alpine.data("walletPerfView", () => ({
+    _charts: [],
     labels: ["Mar 18", "Mar 28", "Apr 17", "Apr 27", "May 17", "Jun 7", "Jun 17", "Jun 26"],
     aumSeries: [
       { label: "Stable (USDC, ZYFAI-SS1)", color: "#10b981", data: [0, 6460, 10020, 8720, 13080, 14530, 16340, 13970] },
@@ -122,7 +129,7 @@ export function registerViews(Alpine) {
     },
     _chart(canvas, series, max, tick) {
       if (!canvas || !window.Chart) return;
-      new window.Chart(canvas, {
+      const instance = new window.Chart(canvas, {
         type: "line",
         data: {
           labels: this.labels,
@@ -142,22 +149,26 @@ export function registerViews(Alpine) {
           plugins: { legend: { display: false } },
         },
       });
+      this._charts.push(instance);
     },
     draw() {
       this._chart(this.$refs.aum, this.aumSeries, 91000, (v) => "$" + Math.round(v / 1000) + "k");
       this._chart(this.$refs.alloc, this.pctSeries, 100, (v) => v + "%");
     },
+    destroy() { this._charts.forEach((item) => item.destroy()); this._charts = []; },
   }));
 
   // ── Tokenomics fee distribution (pie) ─────────────────────────────────────
   // Static Chart.js pie matching the original FeePieChart. The custom legend
   // below the chart stays in the markup, so the chart's own legend is off.
   Alpine.data("feeChart", () => ({
+    _chart: null,
     init() { this.$nextTick(() => this.draw()); },
     draw() {
       const canvas = this.$refs.fee;
       if (!canvas || !window.Chart) return;
-      new window.Chart(canvas, {
+      this._chart?.destroy();
+      this._chart = new window.Chart(canvas, {
         type: "pie",
         data: {
           labels: ["Protocol (57%)", "Bankr (40%)", "Clanker (3%)"],
@@ -166,6 +177,7 @@ export function registerViews(Alpine) {
         options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } } },
       });
     },
+    destroy() { this._chart?.destroy(); this._chart = null; },
   }));
 
   // ── Investment Committee ──────────────────────────────────────────────────
@@ -181,10 +193,10 @@ export function registerViews(Alpine) {
         const published = (sessions || []).filter((s) => s.state === "published");
         const pick = published[0] ?? (sessions || [])[0];
         if (!pick) { this.loading = false; return; }
-        const detail = await api.get(path(ROUTES.committee.session, { date: pick.date, subject: pick.subject_id }));
+        const detail = await api.get(path(ROUTES.committee.session, { date: pick.date, subject: pick.subjectId }));
         this.session = detail.session;
         this.takes = detail.takes || [];
-        this.aggregate = detail.session?.committee_recommendation ?? null;
+        this.aggregate = detail.session?.committeeRecommendation ?? null;
         this.loading = false;
       } catch (e) {
         this.error = e.message;

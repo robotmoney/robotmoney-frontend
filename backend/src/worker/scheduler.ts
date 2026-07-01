@@ -1,5 +1,5 @@
 import parser from "cron-parser";
-import { sql } from "../db/client.ts";
+import { jsonValue, sql } from "../db/client.ts";
 
 interface ScheduleRow {
   id: number;
@@ -44,7 +44,7 @@ export async function tickScheduler(): Promise<number> {
         const slot = slotDate.toISOString().slice(0, 16).replace(/[-:T]/g, "");
         const inserted = await tx`
           INSERT INTO jobs (kind, payload, dedupe_key)
-          VALUES (${s.kind}, ${tx.json(s.payload)}, ${`${s.kind}:${slot}`})
+          VALUES (${s.kind}, ${tx.json(jsonValue(s.payload))}, ${`${s.kind}:${slot}`})
           ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
           RETURNING id`;
         if (inserted.length > 0) enqueued++;

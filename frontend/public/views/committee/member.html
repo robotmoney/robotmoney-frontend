@@ -34,7 +34,7 @@
     <!-- Bio -->
     <div class="member-section">
       <h3 class="section-subtitle">About</h3>
-      <p class="member-bio" x-html="bio"></p>
+      <p class="member-bio" x-text="bio"></p>
     </div>
 
     <!-- Voting History -->
@@ -297,74 +297,3 @@
   }
 }
 </style>
-
-<script type="module">
-Alpine.data('memberProfile', () => ({
-  name: 'Loading...',
-  role: '',
-  avatar: '/avatars/placeholder.jpg',
-  bio: '',
-  totalSessions: 0,
-  totalSubmissions: 0,
-  participationRate: 0,
-  joinDate: '2025',
-  recentSubmissions: [],
-
-  init() {
-    this.loadMemberData();
-  },
-
-  loadMemberData() {
-    // Extract member ID from URL
-    const path = window.location.pathname;
-    const memberId = path.split('/').pop();
-
-    // Mock data (replace with API call in Phase 3)
-    const members = {
-      'woon': {
-        name: 'Woon',
-        role: 'Founder & Builder',
-        avatar: '/avatars/committee/woon.jpg',
-        bio: 'Creator of Robot Money protocol. Focus on long-term treasury optimization and risk management.',
-        totalSessions: 12,
-        totalSubmissions: 11,
-        participationRate: 92,
-        joinDate: '2025-01-01'
-      },
-      'robotmoney': {
-        name: 'Robot Money Agent',
-        role: 'Autonomous Agent',
-        avatar: '/avatars/committee/robotmoney.jpg',
-        bio: 'Autonomous trading agent evaluating market conditions and allocation strategies.',
-        totalSessions: 12,
-        totalSubmissions: 12,
-        participationRate: 100,
-        joinDate: '2025-01-15'
-      },
-      'athena': {
-        name: 'Athena',
-        role: 'Investment Advisor',
-        avatar: '/avatars/committee/athena.jpg',
-        bio: 'Financial advisor with expertise in DeFi risk management and portfolio optimization.',
-        totalSessions: 12,
-        totalSubmissions: 10,
-        participationRate: 83,
-        joinDate: '2025-02-01'
-      }
-    };
-
-    const data = members[memberId] || members['woon'];
-    Object.assign(this, data);
-
-    this.recentSubmissions = [
-      { id: 1, sessionTitle: 'Robot Money Vault', sessionDate: '2025-06-30', sessionSlug: 'robot-money-vault', date: new Date('2025-06-29'), a: 35, b: 30, c: 35, confidence: 85 },
-      { id: 2, sessionTitle: 'Treasury Rebalance', sessionDate: '2025-06-15', sessionSlug: 'treasury-rebalance', date: new Date('2025-06-14'), a: 33, b: 34, c: 33, confidence: 78 },
-      { id: 3, sessionTitle: 'Risk Assessment', sessionDate: '2025-06-01', sessionSlug: 'risk-assessment', date: new Date('2025-05-31'), a: 37, b: 28, c: 35, confidence: 72 }
-    ];
-  },
-
-  formatDate(date) {
-    return new Date(date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-  }
-}));
-</script>

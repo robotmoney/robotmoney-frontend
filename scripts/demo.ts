@@ -25,7 +25,7 @@ async function freePorts(n: number): Promise<number[]> {
 }
 
 // --- Run config -----------------------------------------------------------
-const [apiPort, mcpPort] = await freePorts(2);
+const [postgresPort, apiPort, mcpPort] = await freePorts(3);
 const project = `rmdemo_${crypto.randomUUID().slice(0, 8)}`;
 const DB_USER = "robotmoney";
 const DB_PASSWORD = "robotmoney";
@@ -49,12 +49,13 @@ const dockerEnv: Record<string, string> = {
   DATABASE_URL: databaseUrl,
   WEB_PORT: String(apiPort),
   MCP_PORT: String(mcpPort),
+  POSTGRES_PORT: String(postgresPort),
   POSTGRES_USER: DB_USER,
   POSTGRES_PASSWORD: DB_PASSWORD,
   POSTGRES_DB: DB_NAME,
 } as Record<string, string>;
 
-console.log(`[demo] project=${project}  api=:${apiPort}  mcp=:${mcpPort}`);
+console.log(`[demo] project=${project}  postgres=:${postgresPort}  api=:${apiPort}  mcp=:${mcpPort}`);
 
 // --- Container lifecycle --------------------------------------------------
 function dockerCompose(args: string[], check = true): Bun.SyncSubprocess {
