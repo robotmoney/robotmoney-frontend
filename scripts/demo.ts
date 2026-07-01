@@ -25,7 +25,7 @@ async function freePorts(n: number): Promise<number[]> {
 }
 
 // --- Run config -----------------------------------------------------------
-const [apiPort, mcpPort] = await freePorts(2);
+const [postgresPort, apiPort, mcpPort] = await freePorts(3);
 const project = `rmdemo_${crypto.randomUUID().slice(0, 8)}`;
 const DB_USER = "robotmoney";
 const DB_PASSWORD = "robotmoney";
@@ -49,12 +49,13 @@ const dockerEnv: Record<string, string> = {
   DATABASE_URL: databaseUrl,
   WEB_PORT: String(apiPort),
   MCP_PORT: String(mcpPort),
+  POSTGRES_PORT: String(postgresPort),
   POSTGRES_USER: DB_USER,
   POSTGRES_PASSWORD: DB_PASSWORD,
   POSTGRES_DB: DB_NAME,
 } as Record<string, string>;
 
-console.log(`[demo] project=${project}  api=:${apiPort}  mcp=:${mcpPort}`);
+console.log(`[demo] project=${project}  postgres=:${postgresPort}  api=:${apiPort}  mcp=:${mcpPort}`);
 
 // --- Container lifecycle --------------------------------------------------
 function dockerCompose(args: string[], check = true): Bun.SyncSubprocess {
@@ -170,6 +171,10 @@ async function main(): Promise<void> {
     console.log("[demo] running frontend checks…");
     await run(["bun", "run", "scripts/demo-frontend-check.ts"], repoRoot,
       { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "frontend checks");
+
+    console.log("[demo] running browser checks…");
+    await run(["bun", "run", "test:browser"], repoRoot,
+      { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "browser checks");
 
     console.log("\n[demo] CI mode — all checks passed, tearing down…");
     cleanup();

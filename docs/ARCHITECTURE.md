@@ -83,8 +83,9 @@ robotmoney-frontend/
   form). The backend uses them via `import type`; the frontend's editor tooling via
   JSDoc `import('@robotmoney/contract').Foo`.
 - The frontend **vendors** `routes.js` (copied to
-  `frontend/public/assets/js/app/contract/` by `npm run sync-contract`) so static
-  serving needs no symlinks. The copy is a file copy, not a build.
+  `frontend/public/assets/js/app/contract/` by `bun run sync-contract`) so static
+  serving needs no symlinks. The copy is a file copy, not a build; CI runs
+  `bun run check-contract` to prevent drift.
 
 On the eventual split, `contract/` is published (private npm registry / GitHub
 Packages) or vendored via git submodule; both repos pin a version. Bumping the
@@ -175,8 +176,7 @@ TypeScript sources directly).
 
 ### Authentication & authorization
 
-Four distinctions, kept deliberately separate (committee detail in
-[`committee/ARCHITECTURE.md`](./committee/ARCHITECTURE.md)):
+Four distinctions, kept deliberately separate:
 
 - **Transport/identity vs authorship.** *Identity* answers "who is calling";
   *authorship* answers "whose data this is." They are independent checks — an
@@ -189,15 +189,15 @@ Four distinctions, kept deliberately separate (committee detail in
   produces **on their own side**; the backend only **verifies** it against the
   member's registered public key. RM never holds member private keys. (This is the
   on-chain seam: later only the signature is anchored.)
-- **Two registrations.** *OAuth client/identity* is self-service via Dynamic Client
-  Registration (RFC 7591) + PKCE — automatic, no human. *Committee membership* is a
-  separate `register_member`/`apply` step (metadata + public key + proof-of-key-
-  possession), then an **activation policy** (open vs invite/approval-gated) decides
-  `applied → active`.
+- **Credential exchange and membership are separate.** Active members exchange
+  their member ID and bearer credential through OAuth `client_credentials`.
+  Committee membership starts with `apply` (metadata + public key), followed by
+  an administrator-controlled `applied → active` transition.
 - **Scoped roles.** Every write is authorized to a role: members write only their
   own recommendations, the analytics provider only regime data, the host only
-  session lifecycle, the public reads only — enforced in the API layer (and
-  Postgres RLS as defense-in-depth).
+  session lifecycle, the public reads only — currently enforced in the API layer.
+  Migration `0007_committee_rls_stub.sql` documents deferred Postgres RLS; it is
+  intentionally not active until requests use transaction-scoped database roles.
 
 ---
 

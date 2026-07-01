@@ -5,6 +5,7 @@
 import { registerSubstrate } from "./alpine/substrate.js";
 import { registerViews } from "./alpine/views.js";
 import { registerHeroes } from "./alpine/heroes.js";
+import { registerStaticViews } from "./alpine/static-views.js";
 import { start } from "./router.js";
 
 // Terminal boot animation copy — drives the hero's faux deployment log.
@@ -29,12 +30,17 @@ document.addEventListener("alpine:init", () => {
   Alpine.data("terminalBoot", () => ({
     lines: TERMINAL_LINES,
     visible: 0,
+    timers: [],
     start() {
-      TERMINAL_LINES.forEach((line, i) => {
+      this.timers = TERMINAL_LINES.map((line, i) =>
         setTimeout(() => {
           this.visible = i + 1;
-        }, line.delay + 500);
-      });
+        }, line.delay + 500),
+      );
+    },
+    destroy() {
+      this.timers.forEach(clearTimeout);
+      this.timers = [];
     },
     lineClass(line) {
       const t = line.text;
@@ -49,6 +55,7 @@ document.addEventListener("alpine:init", () => {
   registerSubstrate(Alpine);
   registerViews(Alpine);
   registerHeroes(Alpine);
+  registerStaticViews(Alpine);
 });
 
 // Boot the router once the document is parsed. The router renders the current

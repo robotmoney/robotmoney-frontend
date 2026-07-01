@@ -4,10 +4,6 @@ export const ROUTES: {
   health: string;
   comments: { list: string; create: string };
   dashboards: {
-    vaultTvl: string;
-    walletBalances: string;
-    vaultApy: string;
-    allocationFramework: string;
     regimeSnapshots: string;
     researchSignal: string;
   };
@@ -20,7 +16,6 @@ export const ROUTES: {
     session: string;
     brief: string;
     apply: string;
-    applyUnlock: string;
     submit: string;
   };
 };
