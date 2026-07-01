@@ -10,8 +10,6 @@
 // panel_weight, sparkline}) in the `indicators` jsonb. Pure I/O — no compute.
 import { sql } from "../../db/client.ts";
 import type postgres from "postgres";
-import type { BacktestPayload } from "../analyze/backtest.ts";
-import type { CorrelationsPayload } from "../analyze/correlations.ts";
 
 // Persistable snapshot row. Structurally a superset of the legacy
 // analyze/regime.ts RegimeSnapshot (whose narrower shape stays assignable), with
@@ -37,10 +35,14 @@ export interface RegimeSnapshotRow {
   // Rich per-indicator objects ({raw_value, raw_date, transformed_value,
   // percentile, signed_percentile, panel_weight, sparkline}); JSON-serializable.
   indicators: readonly postgres.JSONValue[];
-  // Asof-only predictive correlations + regime backtest (portfolio→strategy→
-  // metrics). Non-null on the latest row only; null on historical rows.
-  backtest?: BacktestPayload | null;
-  correlations?: CorrelationsPayload | null;
+  // Dashboard-level blobs — written ONLY on the asof/latest row (undefined/null on
+  // historical rows). Pass-through JSON preserving snake_case inside; typed loosely
+  // like the other jsonb columns.
+  panels?: readonly string[] | null;
+  bucketThresholds?: Record<string, unknown> | null;
+  backtest?: Record<string, unknown> | null;
+  correlations?: Record<string, unknown> | null;
+  extras?: Record<string, unknown> | null;
 }
 
 export async function saveRegimeSnapshots(snapshots: RegimeSnapshotRow[]): Promise<void> {
@@ -61,7 +63,7 @@ async function upsertSnapshot(s: RegimeSnapshotRow): Promise<void> {
          macro_index, onchain_index, factor_index,
          macro_percentile, onchain_percentile, factor_percentile,
          panel_weights, version, percentiles, indicators,
-         backtest, correlations)
+         panels, bucket_thresholds, backtest, correlations, extras)
       VALUES
         (${s.date}, ${s.composite}, ${s.compositePercentile}, ${s.regime},
          ${s.macroRegime}, ${s.onchainRegime}, ${s.factorRegime},
@@ -69,8 +71,11 @@ async function upsertSnapshot(s: RegimeSnapshotRow): Promise<void> {
          ${s.macroPercentile ?? null}, ${s.onchainPercentile ?? null}, ${s.factorPercentile ?? null},
          ${s.panelWeights == null ? null : sql.json(s.panelWeights)}, ${s.version ?? null},
          ${sql.json(s.percentiles)}, ${sql.json(s.indicators)},
-         ${s.backtest == null ? null : sql.json(s.backtest as unknown as postgres.JSONValue)},
-         ${s.correlations == null ? null : sql.json(s.correlations as unknown as postgres.JSONValue)})
+         ${s.panels == null ? null : sql.json(s.panels as postgres.JSONValue)},
+         ${s.bucketThresholds == null ? null : sql.json(s.bucketThresholds as postgres.JSONValue)},
+         ${s.backtest == null ? null : sql.json(s.backtest as postgres.JSONValue)},
+         ${s.correlations == null ? null : sql.json(s.correlations as postgres.JSONValue)},
+         ${s.extras == null ? null : sql.json(s.extras as postgres.JSONValue)})
       ON CONFLICT (date) DO UPDATE SET
         composite = EXCLUDED.composite,
         composite_percentile = EXCLUDED.composite_percentile,
@@ -88,8 +93,11 @@ async function upsertSnapshot(s: RegimeSnapshotRow): Promise<void> {
         version = EXCLUDED.version,
         percentiles = EXCLUDED.percentiles,
         indicators = EXCLUDED.indicators,
+        panels = EXCLUDED.panels,
+        bucket_thresholds = EXCLUDED.bucket_thresholds,
         backtest = EXCLUDED.backtest,
-        correlations = EXCLUDED.correlations`;
+        correlations = EXCLUDED.correlations,
+        extras = EXCLUDED.extras`;
 }
 
 // Read one snapshot back as a typed row (numerics coerced from Postgres text).
@@ -116,7 +124,10 @@ export async function loadRegimeSnapshot(date: string): Promise<RegimeSnapshotRo
     version: row.version ?? null,
     percentiles: (row.percentiles ?? {}) as Record<string, number>,
     indicators: (row.indicators ?? []) as readonly postgres.JSONValue[],
-    backtest: (row.backtest ?? null) as BacktestPayload | null,
-    correlations: (row.correlations ?? null) as CorrelationsPayload | null,
+    panels: (row.panels ?? null) as readonly string[] | null,
+    bucketThresholds: (row.bucket_thresholds ?? null) as Record<string, unknown> | null,
+    backtest: (row.backtest ?? null) as Record<string, unknown> | null,
+    correlations: (row.correlations ?? null) as Record<string, unknown> | null,
+    extras: (row.extras ?? null) as Record<string, unknown> | null,
   };
 }

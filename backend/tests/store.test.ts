@@ -85,6 +85,12 @@ test("saveRegimeSnapshots: round-trips the full v2 row (panel fields, weights, v
     factor: { CONCENTRATION: 0.31 },
   };
 
+  const bucketThresholds = { risk_off: 0.33, risk_on: 0.67 };
+  const panels = ["macro", "onchain", "factor"];
+  const backtest = { eth: { composite: { final_value: 2.4, equity_curve: [{ date: "1990-02-19", value: 1 }, { date: "1990-02-20", value: 1.02 }] } } };
+  const correlations = { forward: { factor: { spx_30d: { rho: 0.12, n: 900 } } }, concurrent: {} };
+  const extras = { spx: [{ date: "1990-02-19", value: 4000 }], eth: [{ date: "1990-02-19", value: 2500 }] };
+
   const row: RegimeSnapshotRow = {
     date: RDATE,
     composite: 0.5321,
@@ -103,6 +109,11 @@ test("saveRegimeSnapshots: round-trips the full v2 row (panel fields, weights, v
     version: "v2-2026.07",
     percentiles: { T10Y2Y: 0.62, DEFI_TVL: 0.71 },
     indicators: richIndicators,
+    panels,
+    bucketThresholds,
+    backtest,
+    correlations,
+    extras,
   };
 
   await saveRegimeSnapshots([row]);
@@ -125,6 +136,12 @@ test("saveRegimeSnapshots: round-trips the full v2 row (panel fields, weights, v
   expect(back!.panelWeights).toEqual(panelWeights);
   expect(back!.percentiles).toEqual({ T10Y2Y: 0.62, DEFI_TVL: 0.71 });
   expect(back!.indicators).toEqual(richIndicators);
+  // Dashboard-level blobs round-trip on the asof row (snake_case preserved inside).
+  expect(back!.panels).toEqual(panels);
+  expect(back!.bucketThresholds).toEqual(bucketThresholds);
+  expect(back!.backtest).toEqual(backtest);
+  expect(back!.correlations).toEqual(correlations);
+  expect(back!.extras).toEqual(extras);
 
   // re-save with a mutated composite → overwrite, exactly one row.
   await saveRegimeSnapshots([{ ...row, composite: 0.1 }]);

@@ -128,11 +128,15 @@ export interface RegimeSnapshot {
   // Rich per-indicator objects on the asof row; [] on historical rows. Kept
   // permissive (legacy rows may carry a differently-shaped object).
   indicators: RegimeIndicator[] | Record<string, unknown>;
-  // Asof-only regime backtest + predictive correlations (ported from the original
-  // regime-snapshot.json). Present on the latest snapshot only; null on historical
-  // rows. Additive/superset — existing fields unchanged.
+  // Asof-only dashboard blobs — populated ONLY on the latest snapshot; null on
+  // historical rows. Pass-through blobs preserving snake_case INSIDE (matching the
+  // existing indicators[].panel_weight convention), so the frontend receives the
+  // original snapshot shapes verbatim. Additive/superset — existing fields unchanged.
   backtest?: BacktestPayload | null;
   correlations?: CorrelationsPayload | null;
+  panels?: string[] | null;
+  bucketThresholds?: { risk_off: number; risk_on: number } | null;
+  extras?: Record<string, BacktestEquityPoint[]> | null;
 }
 
 // One dated point in a research-signal series (value nullable for pre-history/gaps).
