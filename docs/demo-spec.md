@@ -2,15 +2,16 @@
 
 What `bun run demo` must demonstrate to exercise the full Investment Committee lifecycle —
 a single command that provisions everything, runs the session lifecycle end-to-end, and
-keeps the stack live as a **standing demo** (see §0). It never tears itself down; teardown
-is explicit (`bun run demo:down`).
+keeps the stack live as a **standing demo** (see §0). Ctrl-C / SIGTERM tears the stack
+down; a startup failure leaves it up for inspection; `bun run demo:down` tears down an
+already-running (e.g. backgrounded) demo.
 
 ---
 
 ## 0. Standing demo mode (`bun run demo`, local)
 
 Locally, `bun run demo` is a **long-lived standing demo**, not a one-shot. It runs in
-three phases and never tears itself down:
+three phases and stays up until you stop it (Ctrl-C / SIGTERM):
 
 **(a) Bring-up.** Build images → start Postgres → migrate (seeds `job_schedules`) →
 start api + worker + mcp → wait for `/health` on api and mcp. Once healthy it writes a
@@ -39,14 +40,16 @@ One immediate tick of each runs at startup so the site has data on first load; t
 one-shot frontend check (`scripts/demo-frontend-check.ts`) also runs once,
 non-fatally.
 
-**(c) No auto-teardown.** The stack stays up on success, on Ctrl-C/SIGTERM, and on
-startup failure. Ctrl-C prints how to stop and exits, leaving containers running; a
-startup failure dumps diagnostics but leaves containers up for inspection. Teardown is
-explicit only:
+**(c) Teardown.** The stack stays up until you stop it. **Ctrl-C / SIGTERM tears it
+down** (`docker compose down -v`), printing the log-file path first (the log persists for
+post-mortem) and removing the state file. A **startup failure** is the exception: it
+dumps diagnostics and leaves the containers up for inspection. For a demo that is already
+running (e.g. started in the background, or its process was killed with SIGKILL):
 
 - `bun run demo:down` — `docker compose down -v` for the recorded run + removes the
   state file.
-- `bun run demo:status` — `docker compose ps` for the recorded run.
+- `bun run demo:status` — `docker compose ps` for the recorded run (also prints the log
+  path).
 
 CI (`process.env.CI`) is unchanged: it runs the checks once and then tears down.
 
@@ -184,10 +187,12 @@ RM never holds the private key at any point.
 - Random ports (Postgres, API, MCP) + unique compose project name: concurrent runs do
   not collide. The run identity (project + ports + compose env) is written to
   `.agents/demo-state.json` so the explicit teardown command can find it.
-- **No automatic teardown (local).** On Ctrl-C, SIGTERM, or startup failure the stack
-  is left RUNNING so it can be inspected and demoed. Teardown is explicit:
-  `bun run demo:down` (tears down + wipes the volume + removes the state file);
-  `bun run demo:status` shows the running containers.
+- **Teardown on exit (local).** Ctrl-C / SIGTERM tears the stack down
+  (`docker compose down -v`, wipes the volume, removes the state file) and prints the
+  log-file path first. A **startup failure** is the exception — it leaves the stack
+  RUNNING so it can be inspected. `bun run demo:down` tears down an already-running demo
+  (e.g. one started in the background); `bun run demo:status` shows the running
+  containers and the log path.
 - **CI is the exception:** when `process.env.CI` is set the demo runs its checks once
   and then tears down (`docker compose down -v`) so no containers/volumes leak.
 - A missing Docker dependency (Postgres image, build failure) must fail the run
@@ -238,15 +243,15 @@ the TUI shows only distilled state. Layout:
     (connect → fetch → thinking → reporting → waiting; no-shows marked absent), driven by
     a live progress callback from the agent code. The header shows a **countdown** to the
     next session (or `running…` while one is in progress).
-- **Log footer** — the last few distilled events plus: `Ctrl-C leaves the stack running ·
-  bun run demo:down to stop`.
+- **Log footer** — the last few distilled events plus: `Ctrl-C / SIGTERM tears down the
+  stack (containers + volume)`.
 
 Full verbose output from every process (api, worker, mcp, migrations, the committee
 driver, and the orchestrator's own narration) is written to
-`.agents/demo-<project>.log` (path recorded in the state file and shown by
-`bun run demo:status`). On Ctrl-C / SIGTERM / startup failure the terminal is restored
-first, the containers are left running, and the teardown instructions + log path are
-printed.
+`.agents/demo-<project>.log` (path shown in the TUI header, recorded in the state file,
+and shown by `bun run demo:status`). On Ctrl-C / SIGTERM the terminal is restored first,
+the log path is printed, and the stack is torn down. A startup failure instead restores
+the terminal and leaves the containers up for inspection (with the log path).
 
 ### 10.2 Plain fallback (non-TTY, CI, `--no-tui` / `NO_TUI=1`)
 
@@ -262,7 +267,8 @@ scheduled action as it fires.
   Research:   http://127.0.0.1:<api>/research/<key>
   MCP:        http://127.0.0.1:<mcp>/health
 
-  state: .agents/demo-state.json   log: .agents/demo-<project>.log
-  Scheduled actions running (~2 min, staggered): regime · research · committee.
-  Ctrl-C leaves the stack running · `bun run demo:down` to stop.
+  State file: .agents/demo-state.json
+  Log file:   .agents/demo-<project>.log
+  Demo actions run on a ~2-min staggered cadence.
+  Ctrl-C / SIGTERM tears down the stack (containers + volume).
 ```

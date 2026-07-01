@@ -206,8 +206,10 @@ P1 (worker) → concurrent (P2, P3) → P5 (authz) → P6 (frontend) → P7 (mul
   `DEMO_FAST_SCHEDULES` (`regime.classify` `*/2`, `analytics.run` `1-59/2`); committee
   sessions driven by an in-process MCP-agent loop in `demo.ts` reusing the exported
   `runSession` from `mcp/src/e2e.ts` (rotating date/subject, no reset between ticks).
-- **Never auto-tears-down** (Ctrl-C, SIGTERM, and startup failure all leave containers
-  up). Teardown is explicit: `bun run demo:down` / `bun run demo:status`.
+- **Teardown on exit**: Ctrl-C / SIGTERM tears the stack down (`docker compose down -v`
+  + removes the state file) and prints the log path; a **startup failure** is the
+  exception and leaves containers up for inspection. `bun run demo:down` /
+  `bun run demo:status` handle an already-running (e.g. backgrounded) demo.
 - CI (`process.env.CI`) still runs the checks once and tears down.
 
 See demo-spec.md §0.
@@ -234,8 +236,8 @@ Implementation notes:
   log path is recorded in the state file and shown by `bun run demo:status`.
 - The TUI activates only when `stdout.isTTY && !CI && !NO_TUI && !--no-tui`; otherwise
   the plain line-logging fallback (and CI) is used unchanged.
-- Terminal is always restored on exit (Ctrl-C / SIGTERM / startup failure); containers
-  are left running.
+- Terminal is always restored on exit (Ctrl-C / SIGTERM / startup failure). On
+  Ctrl-C / SIGTERM the stack is then torn down; a startup failure leaves it up.
 
 **Research fidelity note:** the worker's `job_runs` only records *terminal* rows, so the
 research pane derives state from the `jobs` table LEFT JOINed to `job_runs` and advances

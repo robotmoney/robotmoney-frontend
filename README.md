@@ -59,8 +59,9 @@ self-contained orchestrator (`scripts/demo.ts`) that:
   actions on a ~2-minute staggered cadence** — regime + research refresh (driven by
   the worker's scheduler under `DEMO_FAST_SCHEDULES`) and committee sessions (driven
   by signed MCP agents) — so the site keeps showing fresh data;
-- **keeps everything running** — it does NOT tear down on Ctrl-C or on startup
-  failure. Stop it explicitly with `bun run demo:down`.
+- **stays up until you stop it** — Ctrl-C / SIGTERM tears the stack down (containers +
+  volume) and prints the log-file path; a startup failure instead leaves it up for
+  inspection. `bun run demo:down` tears down a demo left running in the background.
 
 In an interactive terminal it renders a **live TUI** (service URLs, container
 startup/healthcheck status, and split Research / Committee activity panes); verbose
