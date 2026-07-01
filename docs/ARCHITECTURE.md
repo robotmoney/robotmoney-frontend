@@ -152,6 +152,80 @@ Hand-written, no Tailwind, in three files:
 - **chart.js** (+ datalabels) — dashboard charts (UMD global, dashboard views only).
 - **p5.js** — hero/visual canvases (global `<script>`).
 
+### Frozen (offline single-file) distribution
+
+A second **shape** of the same buildless SPA: `bun run frozen` /
+`bun run frozen:fixtures` (`scripts/bake-frozen.ts`) bake the whole app into one
+self-contained **`dist/frozen/index.html`** that renders every view **offline**
+under `file://` — no server, no network, no build tools on the viewer's machine.
+Build commands, outputs (`dist/frozen/index.html` + `frozen-manifest.json`), and
+constraints are in [README "Frozen build"](../README.md#frozen-build--offline-server-less-single-file);
+this section documents the **mechanism** once.
+
+**Why one inlined classic-script file.** On the `file:` scheme three things that
+the live SPA relies on break: `type="module"` scripts and `fetch()` are blocked
+by CORS (origin `null`), and absolute paths (`/views/…`, `/api/…`) don't resolve.
+The frozen build removes all three by inlining *everything* into a single
+classic-script document — the app JS bundled to a classic (non-module) IIFE via
+`Bun.build`, the view fragments + baked API JSON + vendored libs inlined, and a
+`fetch` shim answering every request from the inlined data. Zero network.
+
+**The bake (`scripts/bake-frozen.ts` + `scripts/lib/frozen-*`).** It snapshots
+every endpoint the frontend requests — static targets first, then parameterised
+member/session detail targets discovered from the list bodies — into an
+`RM_FROZEN` map keyed by pathname. `--fixtures` sources the same map from
+committed fixtures instead of a live `BACKEND_URL`, so the bake needs no backend.
+**No silent gap:** if any required endpoint is missing the build fails loudly.
+`assembleFrozenHtml` then reads the live shell (`frontend/public/index.html`),
+inlines the CSS (dropping the Google-Fonts `@import` so nothing is fetched),
+strips the CDN/module/`config.js` `<script>` tags, and injects an ordered boot
+block before `</body>`.
+
+**Boot contract (script order matters).** The injected scripts encode the offline
+boot sequence:
+
+1. **baked data** — `window.RM_FROZEN` (API snapshot) + `window.RM_VIEWS` (inlined
+   `/views/*.html` fragments) + `window.RM_FROZEN_META`.
+2. **`frozen-boot.js`** — the fetch/history shim (see below), installed *before*
+   any view renders.
+3. **app bundle** — the classic IIFE; registers its `alpine:init` factories and
+   boots the router.
+4. **p5, Chart.js** — globals the views draw with.
+5. **Alpine** — runs **last**, so it fires `alpine:init` with the app's factories
+   already attached.
+
+**`frozen-boot.js` — the shim** (`frontend/public/assets/js/app/frozen-boot.js`,
+present *only* in the frozen build). It changes no app code; it substitutes the
+runtime dependencies of `lib/api.js` and `router.js`:
+
+- Sets `window.RM_CONFIG.FROZEN = true` and `API_BASE_URL = ""`, so `api.js` keeps
+  building `/api/…` URLs that the shim intercepts.
+- Overrides `window.fetch`: `GET /api/*` resolves from `RM_FROZEN`, `GET /views/*`
+  from `RM_VIEWS`; **writes (POST/PUT/DELETE) are accepted no-ops** returning
+  `{ ok: true, frozen: true }` (a point-in-time snapshot has no mutable state); an
+  unbaked parameterised GET returns a shape-safe empty body so views render their
+  empty state; any *other* URL is rejected loudly rather than reaching the network.
+- Wraps `history.pushState`/`replaceState` to swallow **only** the `SecurityError`
+  the SPA router triggers by pushing absolute paths under `file://`, so
+  `router.render(pathname)` still runs and the view swaps — the URL bar just stays
+  on `index.html`. (Consistent with §4's boot model: behaviour is registered at
+  boot, not by scripts inside injected view fragments.)
+
+**Vendored offline assets.** p5, Chart.js, and Alpine are inlined from
+`node_modules` (no CDN at runtime), and the one raster asset (`logo.svg`) is
+inlined as a `data:` URI.
+
+**Pitfall — string-replacement `$$` magic (from #14 dev notes).** Every dynamic
+insertion in `assembleFrozenHtml` uses a **replacer *function***
+(`html.replace(needle, () => value)`), never a string replacement. JavaScript's
+`String.prototype.replace` interprets `$$`, `$&`, `$1`… specially *in the
+replacement string*, and the inlined vendor/app/data payloads legitimately
+contain `$` sequences — notably Alpine registers its magics with `` `$${name}` ``.
+A string replacement would silently turn `$$` into `$`, so every Alpine magic
+(`$nextTick`, `$refs`, `$dispatch`, …) would lose its prefix and the app would
+break in subtle, hard-to-trace ways. **Rule for any future HTML-inlining work:
+always pass a function replacer so the payload is emitted verbatim.**
+
 ---
 
 ## 5. Backend
@@ -359,6 +433,13 @@ credentials in [DEPLOYMENT.md](./DEPLOYMENT.md)):
   Secrets (Anthropic/FRED/RPC) live in the droplet env, not in the frontend.
 - **TLS** is provided by Cloudflare's proxy (the droplet serves a Cloudflare Origin
   CA cert).
+
+**Offline distribution — the frozen single file.** Independent of both hosted
+shapes, `bun run frozen` / `frozen:fixtures` bakes the SPA into one
+`dist/frozen/index.html` that renders every view offline from a point-in-time API
+snapshot (`file://`, no server). Mechanism in §4 "Frozen (offline single-file)
+distribution"; commands and constraints in
+[README "Frozen build"](../README.md#frozen-build--offline-server-less-single-file).
 
 ---
 

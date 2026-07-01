@@ -23,6 +23,8 @@ jobs:
         run: bun run typecheck && bun run test
       - name: Check docs/analytics consistency
         run: bash scripts/check-docs-analytics.sh
+      - name: Check frozen docs <-> package.json in sync
+        run: bash scripts/check-docs-frozen.sh
       - name: Install deps
         working-directory: backend
         run: bun install --frozen-lockfile
