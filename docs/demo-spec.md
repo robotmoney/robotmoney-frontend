@@ -13,6 +13,61 @@ already-running (e.g. backgrounded) demo.
 > (recorded absent). These plurals — members / subjects / sessions / takes — are the
 > moving parts of the one committee, **not** separate committees.
 
+```mermaid
+flowchart TB
+    subgraph Scheduler["⏱ Worker Scheduler"]
+        SC["tickScheduler() every 30s<br/>reads job_schedules<br/>FOR UPDATE SKIP LOCKED"]
+        SC -->|even minute| R["regime.classify<br/>→ regime snapshot"]
+        SC -->|odd minute| A["analytics.run<br/>→ regime + research"]
+        R -->|"poll DB (TUI)"| TP
+        A -->|"poll DB (TUI)"| TP
+    end
+
+    subgraph Core["👥 Core Members (seated at start)"]
+        M1["Athena<br/>lens: macro risk"]
+        M2["Boreas<br/>lens: on-chain flows"]
+        M3["Cygnus<br/>lens: momentum"]
+        M4["Draco — ABSENT"]
+    end
+
+    subgraph Prospects["🧑‍🚀 Prospective Members (join progressively)"]
+        N1["Helios → ~1min"]
+        N2["Selene → ~6min"]
+        N3["Rhea → ~11min"]
+        NX["… every 5min"]
+    end
+
+    subgraph Session["📋 Committee Session (per subject, ~2min cadence)"]
+        direction LR
+        S1["scheduled"] --> S2["brief_published"] --> S3["collecting"] --> S4["window_closed"] --> S5["aggregated"] --> S6["published"]
+    end
+
+    subgraph Onboarding["📝 Onboarding Gates"]
+        direction LR
+        O1["keypair"] --> O2["apply"] --> O3["review"] --> O4["activate"] --> O5["connect"]
+    end
+
+    subgraph TUI["🖥 TUI Panels"]
+        TP["Research Queue"]
+        TP2["Committee Status"]
+        TP3["Onboarding Strip"]
+    end
+
+    Core -->|"sign → submit"| S3
+    Prospects -->|walk through| Onboarding
+    O5 -->|"admitted → joins roster"| S3
+    Scheduler -.->|visible in| TP
+    Session -.->|visible in| TP2
+    Onboarding -.->|visible in| TP3
+
+    style Scheduler fill:#1e3a5f33,stroke:#1e3a5f,stroke-width:2px
+    style Core fill:#3b076433,stroke:#7c3aed,stroke-width:2px
+    style Prospects fill:#3b076433,stroke:#a855f7,stroke-width:2px,stroke-dasharray:5 5
+    style Session fill:#1e1b4b33,stroke:#4338ca,stroke-width:2px
+    style Onboarding fill:#064e3b33,stroke:#059669,stroke-width:2px
+    style TUI fill:#78350f33,stroke:#d97706,stroke-width:2px
+```
+
 ---
 
 ## 0. Standing demo mode (`bun run demo`, local)
