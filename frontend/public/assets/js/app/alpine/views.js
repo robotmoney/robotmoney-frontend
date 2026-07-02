@@ -124,6 +124,14 @@ const SOURCE_LABEL = {
   blockchain_com: "Blockchain.com", coinmetrics: "Coinmetrics", geckoterminal_newpools: "GeckoTerminal",
 };
 
+// The inline regime-band legend swatches (REGIME_BG_LEGEND from
+// regimeBandsPlugin.ts): shown next to "Full history" and each equity-curve chart.
+const REGIME_BG_LEGEND = [
+  { label: "risk-off", color: "rgba(232,166,64,0.50)" },
+  { label: "neutral", color: "rgba(126,136,158,0.15)" },
+  { label: "risk-on", color: "rgba(0,229,255,0.40)" },
+];
+
 export function registerViews(Alpine) {
   // ── Regime classification ────────────────────────────────────────────────
   Alpine.data("regimeView", () => ({
@@ -132,8 +140,10 @@ export function registerViews(Alpine) {
     error: null,
     latest: null,
     history: [],
-    // Which history-chart overlays are visible; regime bands on by default.
-    visible: { composite: true, macro: true, onchain: true, factor: true, spx: false, eth: false, bands: true },
+    // History-chart overlay toggles. composite/macro/on-chain/factor are ALWAYS
+    // drawn (no per-series toggle, matching the source HistoryChart); only the
+    // regime bands + the S&P 500 / ETH price overlays toggle.
+    visible: { spx: false, eth: false, bands: true },
 
     async load() {
       try {
@@ -154,8 +164,6 @@ export function registerViews(Alpine) {
     panelsList() { const p = this.latest?.panels; return Array.isArray(p) && p.length ? p : ["macro", "onchain"]; },
     panelLabel(p) { return p === "macro" ? "Macro" : p === "onchain" ? "On-chain" : p === "factor" ? "Equity factor" : p; },
     panelIndex(p) { return this.latest?.[p + "Index"]; },
-    panelPercentile(p) { return this.latest?.[p + "Percentile"]; },
-    panelRegime(p) { return this.latest?.[p + "Regime"]; },
     // Rich per-indicator objects come only on the latest (asof) row; historical
     // rows carry the numeric columns + `percentiles` map. Group by panel.
     indicatorsIn(panel) {
@@ -164,16 +172,25 @@ export function registerViews(Alpine) {
     },
 
     // ── formatting ──────────────────────────────────────────────────────────
-    pct(x) { return x == null ? "—" : Math.round(x * 100) + "%"; },
     posPct(x) { return x == null ? 0 : Math.max(0, Math.min(1, x)) * 100; },
+    // Percentile as an integer (no % sign), e.g. "62" → rendered "62th pct".
+    fmtPctInt(x) { return x == null || !isFinite(x) ? "—" : (x * 100).toFixed(0); },
     fmtWeight(w) { return w == null ? "—" : (w * 100).toFixed(1) + "%"; },
-    regimeClass(r) { return r ? `regime-pill regime-pill--${r}` : "regime-pill"; },
     regimeLabel(r) { return r == null ? "—" : ({ risk_off: "Risk-off", neutral: "Neutral", risk_on: "Risk-on" }[r] || String(r).replace(/_/g, "-")); },
     regimeColor(r) { return r === "risk_off" ? "#ff6644" : r === "risk_on" ? "#00e5ff" : "#7e889e"; },
     regimeCardStyle(r) { const c = this.regimeColor(r); return `border-color:${c};background:${this._alpha(c, 0.1)}`; },
     _alpha(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; },
     fmtSign(s) { return s == null ? "—" : (s >= 0 ? "+" : "") + s; },
     sourceLabel(s) { return SOURCE_LABEL[s] || s || "—"; },
+    // Per-indicator +1/−1 sign explanation (the panel-table hover tooltip).
+    signTooltip(sign, name) {
+      if (sign == null || sign >= 0) {
+        return `Sign +1 — rising ${name} reads as risk-on, so the percentile is used as-is. "Signed" column has the same orientation as "high = risk-on" across every indicator.`;
+      }
+      return `Sign −1 — rising ${name} reads as risk-off, so we flip the percentile (1 − pctile) before averaging. That keeps "Signed" oriented "high = risk-on" across every indicator.`;
+    },
+    // Component methodology footer: bucket thresholds as integer percentiles.
+    bucketPct(key) { const t = this.latest?.bucketThresholds; return t && t[key] != null ? (t[key] * 100).toFixed(0) : "—"; },
 
     // Last visible value (transformed for change series), formatted by unit.
     fmtLast(ind) {
@@ -239,7 +256,7 @@ export function registerViews(Alpine) {
     corrSampleMeta() {
       const c = this.latest?.correlations;
       const n = c?.forward?.composite?.spx_30d?.n ?? c?.concurrent?.composite?.spx?.n ?? 0;
-      const trailing = n >= 252 ? "~" + (n / 252).toFixed(1) + "y" : "~" + Math.round(n / 21) + "mo";
+      const trailing = n >= 252 ? "~" + (n / 252).toFixed(1) + "y" : "~" + Math.max(1, Math.round(n / 21)) + "mo";
       return "Spearman ρ · trailing " + trailing;
     },
 
@@ -273,11 +290,19 @@ export function registerViews(Alpine) {
       return '<svg class="rv__pie" width="' + size + '" height="' + size + '" aria-hidden="true">' + paths + '</svg>';
     },
 
-    // ── charts ──────────────────────────────────────────────────────────────
+    // ── history-chart overlay toggles + legend ────────────────────────────────
+    bgLegend() { return REGIME_BG_LEGEND; },
+    hasSpx() { return (this.latest?.extras?.spx || []).length > 0; },
+    hasEth() { return (this.latest?.extras?.eth || []).length > 0; },
     isVisible(key) { return !!this.visible[key]; },
     toggle(key) { this.visible[key] = !this.visible[key]; this.drawHistory(); },
+    // Overlay-chip inline style: active → series colour border/text + `${color}1a` bg.
+    chipStyle(active, color) {
+      return active
+        ? `border-color:${color};color:${color};background:${color}1a`
+        : "border-color:var(--color-border);color:var(--color-text-muted);background:transparent";
+    },
     _setChart(key, chart) { this._charts[key]?.destroy(); this._charts[key] = chart; },
-    destroy() { Object.values(this._charts).forEach((c) => c?.destroy()); this._charts = {}; },
     // Panel index on a history row: prefer the DTO camelCase, fall back to the
     // raw snapshot key so the chart works against either shape.
     _idx(h, panel) { const v = h[panel + "Index"]; return v != null ? v : h[panel]; },
@@ -287,12 +312,13 @@ export function registerViews(Alpine) {
       if (!canvas || !window.Chart || !this.history.length) return;
       const labels = this.history.map((h) => h.date);
       const line = (label, data, color, o = {}) => ({ label, data, borderColor: color, backgroundColor: o.bg || "transparent", fill: !!o.fill, tension: 0.2, pointRadius: 0, borderWidth: o.bw || 1.25, yAxisID: o.axis || "y" });
-      const ds = [];
-      if (this.visible.composite) ds.push(line("Composite", this.history.map((h) => h.composite), "#00e5ff", { fill: true, bg: "rgba(0,229,255,0.10)", bw: 2 }));
-      if (this.visible.macro) ds.push(line("Macro", this.history.map((h) => this._idx(h, "macro")), "#7e889e"));
-      if (this.visible.onchain) ds.push(line("On-chain", this.history.map((h) => this._idx(h, "onchain")), "#e8a640"));
+      const ds = [
+        line("Composite", this.history.map((h) => h.composite), "#00e5ff", { fill: true, bg: "rgba(0,229,255,0.10)", bw: 2 }),
+        line("Macro", this.history.map((h) => this._idx(h, "macro")), "#7e889e"),
+        line("On-chain", this.history.map((h) => this._idx(h, "onchain")), "#e8a640"),
+      ];
       const hasFactor = this.history.some((h) => this._idx(h, "factor") != null);
-      if (hasFactor && this.visible.factor) ds.push(line("Equity factor", this.history.map((h) => this._idx(h, "factor")), "#a374e0"));
+      if (hasFactor) ds.push(line("Equity factor", this.history.map((h) => this._idx(h, "factor")), "#a374e0"));
       const extras = this.latest?.extras || {};
       const showSpx = this.visible.spx && (extras.spx || []).length > 0;
       const showEth = this.visible.eth && (extras.eth || []).length > 0;
@@ -359,75 +385,8 @@ export function registerViews(Alpine) {
         this._setChart("bt-" + key, chart);
       }
     },
-    // ── Backtest: month-end equity curves for the selected portfolio ──────────
-    // The backtest payload is asof-only (latest row). Plot the headline strategies
-    // (composite regime timing) vs the buy-and-hold + stables baselines.
-    hasBacktest() { return !!(this.latest && this.latest.backtest); },
-    portfolios() { return this.hasBacktest() ? Object.keys(this.latest.backtest) : []; },
-    setPortfolio(p) { this.portfolio = p; this.$nextTick(() => this.drawEquityChart()); },
-    _equitySeries() {
-      const bt = this.latest?.backtest?.[this.portfolio];
-      if (!bt) return [];
-      const hodlKey = { eth: "eth_hodl", sp500: "sp500_hodl", mixed: "blend_hodl" }[this.portfolio];
-      const specs = [
-        { key: "composite", label: "Composite timing", color: "#00e5ff" },
-        { key: "conservative", label: "Conservative", color: "#7cf5b0" },
-        { key: "aggressive", label: "Aggressive", color: "#f5a623" },
-        { key: hodlKey, label: "Buy & hold", color: "#b06cff" },
-        { key: "stables_only", label: "Stables only", color: "#5a6b8c" },
-      ];
-      return specs.filter((s) => s.key && bt[s.key]?.equity_curve?.length).map((s) => ({ ...s, m: bt[s.key] }));
-    },
-    strategyMetrics() {
-      const bt = this.latest?.backtest?.[this.portfolio];
-      if (!bt) return [];
-      return Object.entries(bt).map(([name, m]) => ({
-        name: String(name).replace(/_/g, " "),
-        cagr: m.cagr, sharpe: m.sharpe, maxDd: m.max_drawdown,
-        transitions: m.transitions, finalValue: m.final_value,
-      }));
-    },
-    drawEquityChart() {
-      const canvas = this.$refs.equity;
-      const series = this._equitySeries();
-      if (!canvas || !window.Chart || !series.length) return;
-      this._equityChart?.destroy();
-      const labels = series[0].m.equity_curve.map((p) => p.date);
-      const byDate = (curve) => { const m = new Map(curve.map((p) => [p.date, p.value])); return labels.map((d) => m.get(d) ?? null); };
-      this._equityChart = new window.Chart(canvas, {
-        type: "line",
-        data: {
-          labels,
-          datasets: series.map((s) => ({
-            label: s.label, data: byDate(s.m.equity_curve),
-            borderColor: s.color, backgroundColor: "transparent",
-            fill: false, tension: 0.2, pointRadius: 0, borderWidth: 2, spanGaps: true,
-          })),
-        },
-        options: {
-          responsive: true, maintainAspectRatio: false, animation: false,
-          scales: {
-            y: { type: "logarithmic", grid: { color: "rgba(255,255,255,0.06)" }, ticks: { color: "#7e889e" } },
-            x: { grid: { display: false }, ticks: { color: "#4a5268", maxTicksLimit: 8 } },
-          },
-          plugins: { legend: { labels: { color: "#7e889e" } } },
-        },
-      });
-    },
-    // ── Predictive-power correlations (asof-only) ─────────────────────────────
-    hasCorrelations() { return !!(this.latest && this.latest.correlations); },
-    corrIndices() { return this.hasCorrelations() ? Object.keys(this.latest.correlations.forward) : []; },
-    corrHorizons() { return ["30", "90", "180"]; },
-    forwardCorr(index, asset, h) { return this.latest?.correlations?.forward?.[index]?.[`${asset}_${h}d`] ?? null; },
-    concurrentCorr(index, asset) { return this.latest?.correlations?.concurrent?.[index]?.[asset] ?? null; },
-    fmtRho(cell) { return cell && cell.rho != null ? (cell.rho >= 0 ? "+" : "") + cell.rho.toFixed(2) : "—"; },
-    corrClass(cell) {
-      if (!cell || cell.rho == null) return "rv__rho";
-      return cell.rho >= 0 ? "rv__rho rv__rho--pos" : "rv__rho rv__rho--neg";
-    },
-    fmtCagr(x) { return x == null ? "—" : (x >= 0 ? "+" : "") + Math.round(x * 100) + "%"; },
-    fmtNum(x, d = 2) { return x == null ? "—" : Number(x).toFixed(d); },
-    destroy() { this._chart?.destroy(); this._chart = null; this._equityChart?.destroy(); this._equityChart = null; },
+
+    destroy() { Object.values(this._charts).forEach((c) => c?.destroy()); this._charts = {}; },
   }));
 
   // ── Research signal (channel-divergence / late-cycle-signals) ─────────────

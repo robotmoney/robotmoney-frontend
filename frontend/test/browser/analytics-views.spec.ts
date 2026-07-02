@@ -126,13 +126,14 @@ test("regime dashboard renders 3 panels, sparklines, correlations + backtests (e
   await expect(page.locator(".rv__cards .rv__card")).toHaveCount(4);
   await expect(page.locator(".rv__card--regime")).toContainText(latest.composite!.toFixed(2));
 
-  // All three panel tables render with index meta, including the equity factor
-  // panel (only present in the eq snapshot).
+  // All three panel tables render (headers carry just the panel title now, matching
+  // the source PanelTable), including the equity factor panel (eq snapshot only).
   const panels = page.locator(".rv__panel-card");
   await expect(panels).toHaveCount(3);
-  const macroMeta = page.locator(".rv__panel-card", { hasText: "Macro panel" }).locator(".rv__panel-card-meta");
-  await expect(macroMeta).toContainText(`${Math.round(latest.macroIndex! * 100)}%`);
+  await expect(page.locator(".rv__panel-card", { hasText: "Macro panel" })).toBeVisible();
   await expect(page.locator(".rv__panel-card", { hasText: "Equity factor panel" })).toBeVisible();
+  // The macro panel index surfaces in its summary index card (value to 2dp).
+  await expect(page.locator(".rv__cards")).toContainText(latest.macroIndex!.toFixed(2));
 
   // Per-indicator inline-SVG sparklines render (the enrichment).
   await expect(page.locator(".rv__spark-svg").first()).toBeVisible();

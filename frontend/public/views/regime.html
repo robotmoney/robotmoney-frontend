@@ -1,11 +1,16 @@
-<!-- Regime Classifier — the live 3-panel dashboard ported from the original
-     RegimeDashboard. Fetches /api/dashboards/regime-snapshots ({latest,history});
-     the asof `latest` row carries the panels, per-indicator sparklines, the
-     predictive-power correlations, the price `extras`, and the three backtests. -->
+<!-- Regime Classifier — a faithful port of the original Next.js /regime page:
+     the Orbits (Lissajous) hero + <RegimeDashboard> (summary cards, full-history
+     Chart.js line chart, per-panel indicator tables, predictive-power
+     correlations, the three market backtests) + page-level methodology.
+     Data comes from /api/dashboards/regime-snapshots ({latest,history}); the asof
+     `latest` row carries panels, per-indicator sparklines, correlations, price
+     `extras`, backtests and bucket thresholds. -->
 <section class="rv rv--dash" x-data="regimeView()" x-init="load()">
-  <!-- Hero -->
+  <!-- Hero (OrbitsCanvas: count=8, horizontal, fillHeight=0.7, speed=0.003) -->
   <div class="rv__hero">
-    <div class="rv__hero-art" x-data="constructivistHero()" aria-hidden="true"></div>
+    <div class="rv__hero-art" x-data="orbitsHero()" aria-hidden="true"></div>
+    <div class="rv__hero-fade rv__hero-fade--top" aria-hidden="true"></div>
+    <div class="rv__hero-fade rv__hero-fade--bottom" aria-hidden="true"></div>
     <div class="rv__hero-inner">
       <span class="rv__eyebrow rv__eyebrow--accent">Live Dashboard</span>
       <h1 class="rv__title">Regime <span class="text-gradient">Classifier</span></h1>
@@ -29,11 +34,11 @@
         </div>
 
         <!-- Summary cards: top-line regime + one index card per panel -->
-        <div class="rv__cards">
+        <div class="rv__cards" :class="panelsList().length >= 3 ? 'rv--cols4' : 'rv--cols3'">
           <div class="rv__card rv__card--regime" :style="regimeCardStyle(latest.regime)">
             <span class="rv__card-eyebrow" :style="`color:${regimeColor(latest.regime)}`">Top-line regime</span>
             <div class="rv__card-regime" :style="`color:${regimeColor(latest.regime)}`" x-text="regimeLabel(latest.regime)"></div>
-            <div class="rv__card-foot">composite <span x-text="latest.composite == null ? '—' : latest.composite.toFixed(2)"></span> · <span x-text="pct(latest.compositePercentile)"></span> pct of last 3y</div>
+            <div class="rv__card-foot">composite <span x-text="latest.composite == null ? '—' : latest.composite.toFixed(2)"></span> · <span x-text="fmtPctInt(latest.compositePercentile)"></span>th pct of last 3y</div>
           </div>
           <template x-for="p in panelsList()" :key="p">
             <div class="rv__card">
@@ -48,30 +53,40 @@
           </template>
         </div>
 
-        <!-- Full-history composite chart + overlay toggles -->
+        <!-- Full-history composite chart. composite/macro/on-chain/factor lines
+             are always drawn; only the regime bands, S&P 500 and ETH overlays
+             toggle (S&P/ETH only appear when the price extras exist). -->
         <div class="rv__chart-card">
           <div class="rv__chart-head">
-            <span class="rv__chart-title">Full history</span>
+            <div class="rv__chart-title-group">
+              <span class="rv__chart-title">Full history</span>
+              <template x-if="visible.bands">
+                <span class="rv__legend">
+                  <template x-for="r in bgLegend()" :key="r.label">
+                    <span class="rv__legend-item"><span class="rv__legend-swatch" :style="`background:${r.color}`"></span> <span x-text="r.label"></span></span>
+                  </template>
+                </span>
+              </template>
+            </div>
             <div class="rv__chips">
-              <button type="button" class="rv__chip" :class="{ 'rv__chip--on': isVisible('bands') }" @click="toggle('bands')">Regime bands</button>
-              <button type="button" class="rv__chip" :class="{ 'rv__chip--on': isVisible('composite') }" @click="toggle('composite')">Composite</button>
-              <button type="button" class="rv__chip" :class="{ 'rv__chip--on': isVisible('macro') }" @click="toggle('macro')">Macro</button>
-              <button type="button" class="rv__chip" :class="{ 'rv__chip--on': isVisible('onchain') }" @click="toggle('onchain')">On-chain</button>
-              <button type="button" class="rv__chip" :class="{ 'rv__chip--on': isVisible('factor') }" @click="toggle('factor')">Factor</button>
-              <button type="button" class="rv__chip" :class="{ 'rv__chip--on': isVisible('spx') }" @click="toggle('spx')">S&amp;P 500</button>
-              <button type="button" class="rv__chip" :class="{ 'rv__chip--on': isVisible('eth') }" @click="toggle('eth')">ETH</button>
+              <button type="button" class="rv__chip" :style="chipStyle(visible.bands, '#00e5ff')" @click="toggle('bands')">Regime bands</button>
+              <template x-if="hasSpx()">
+                <button type="button" class="rv__chip" :style="chipStyle(visible.spx, '#5fb3a1')" @click="toggle('spx')">S&amp;P 500</button>
+              </template>
+              <template x-if="hasEth()">
+                <button type="button" class="rv__chip" :style="chipStyle(visible.eth, '#a374e0')" @click="toggle('eth')">ETH</button>
+              </template>
             </div>
           </div>
           <div class="rv__chart"><canvas x-ref="chart"></canvas></div>
         </div>
 
         <!-- Per-panel indicator tables -->
-        <div class="rv__panels">
+        <div class="rv__panels" :class="panelsList().length >= 3 ? 'rv--cols3' : 'rv--cols2'">
           <template x-for="p in panelsList()" :key="p">
             <div class="rv__panel-card">
               <div class="rv__panel-card-head">
                 <h3 class="rv__panel-card-title" x-text="panelLabel(p) + ' panel'"></h3>
-                <span class="rv__panel-card-meta">index <span x-text="pct(panelIndex(p))"></span> · <span :class="regimeClass(panelRegime(p))" x-text="regimeLabel(panelRegime(p))"></span></span>
               </div>
               <table class="rv__table">
                 <thead>
@@ -81,7 +96,10 @@
                   <template x-for="ind in indicatorsIn(p)" :key="ind.id">
                     <tr>
                       <td class="rv__ind-cell">
-                        <span class="rv__ind-name" x-text="ind.name"></span>
+                        <span class="rv__ind-tipwrap">
+                          <span class="rv__ind-name" x-text="ind.name"></span><a class="rv__ind-info" :href="`/regime/indicators#${ind.id}`" :title="'What is this indicator?'" :aria-label="`Read about ${ind.name}`"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.5v3.5M8 5.5v.01" stroke-linecap="round"/></svg></a>
+                          <span class="rv__tip" role="tooltip" x-text="signTooltip(ind.sign, ind.name)"></span>
+                        </span>
                         <span class="rv__ind-src">
                           <template x-if="ind.source_url"><a :href="ind.source_url" target="_blank" rel="noopener" x-text="sourceLabel(ind.source)"></a></template>
                           <template x-if="!ind.source_url"><span x-text="sourceLabel(ind.source)"></span></template>
@@ -107,39 +125,37 @@
               <h3 class="rv__panel-card-title">Predictive power &amp; alignment</h3>
               <span class="rv__panel-card-meta" x-text="corrSampleMeta()"></span>
             </div>
-            <div class="rv__table-scroll">
-              <template x-if="hasForward()">
-                <table class="rv__table rv__corr-table">
-                  <thead>
-                    <tr><th>Index → forward return</th><template x-for="c in fwdCols()" :key="c[0]"><th class="rv__num" x-text="c[1]"></th></template></tr>
-                  </thead>
-                  <tbody>
-                    <template x-for="row in corrRows()" :key="'f' + row[0]">
-                      <tr>
-                        <td x-text="row[1]"></td>
-                        <template x-for="c in fwdCols()" :key="c[0]"><td class="rv__num" :style="`color:${rhoColor(fwdCell(row[0], c[0]))}`" :title="rhoTitle(fwdCell(row[0], c[0]))" x-text="rhoText(fwdCell(row[0], c[0]))"></td></template>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
-              </template>
-              <template x-if="hasConcurrent()">
-                <table class="rv__table rv__corr-table">
-                  <thead>
-                    <tr><th>Index ↔ current price (alignment)</th><template x-for="c in conCols()" :key="c[0]"><th class="rv__num" x-text="c[1]"></th></template><th class="rv__num"></th><th class="rv__num"></th><th class="rv__num"></th><th class="rv__num"></th></tr>
-                  </thead>
-                  <tbody>
-                    <template x-for="row in corrRows()" :key="'c' + row[0]">
-                      <tr>
-                        <td x-text="row[1]"></td>
-                        <template x-for="c in conCols()" :key="c[0]"><td class="rv__num" :style="`color:${rhoColor(conCell(row[0], c[0]))}`" :title="rhoTitle(conCell(row[0], c[0]))" x-text="rhoText(conCell(row[0], c[0]))"></td></template>
-                        <td></td><td></td><td></td><td></td>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
-              </template>
-            </div>
+            <template x-if="hasForward()">
+              <table class="rv__table rv__corr-table">
+                <thead>
+                  <tr><th>Index → forward return</th><template x-for="c in fwdCols()" :key="c[0]"><th class="rv__num" x-text="c[1]"></th></template></tr>
+                </thead>
+                <tbody>
+                  <template x-for="row in corrRows()" :key="'f' + row[0]">
+                    <tr>
+                      <td x-text="row[1]"></td>
+                      <template x-for="c in fwdCols()" :key="c[0]"><td class="rv__num" :style="`color:${rhoColor(fwdCell(row[0], c[0]))}`" :title="rhoTitle(fwdCell(row[0], c[0]))" x-text="rhoText(fwdCell(row[0], c[0]))"></td></template>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </template>
+            <template x-if="hasConcurrent()">
+              <table class="rv__table rv__corr-table">
+                <thead>
+                  <tr><th>Index ↔ current price (alignment)</th><template x-for="c in conCols()" :key="c[0]"><th class="rv__num" x-text="c[1]"></th></template><th class="rv__num"></th><th class="rv__num"></th><th class="rv__num"></th><th class="rv__num"></th></tr>
+                </thead>
+                <tbody>
+                  <template x-for="row in corrRows()" :key="'c' + row[0]">
+                    <tr>
+                      <td x-text="row[1]"></td>
+                      <template x-for="c in conCols()" :key="c[0]"><td class="rv__num" :style="`color:${rhoColor(conCell(row[0], c[0]))}`" :title="rhoTitle(conCell(row[0], c[0]))" x-text="rhoText(conCell(row[0], c[0]))"></td></template>
+                      <td></td><td></td><td></td><td></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </template>
             <div class="rv__foot">
               <p><strong>Forward:</strong> ρ = rank correlation between today's index level and the asset's log return over the next {30, 90, 180} calendar days, evaluated daily over the trailing window. The predictive measure.</p>
               <p><strong>Alignment:</strong> ρ between today's index and today's log-price. A sanity check, not a prediction — does the panel track the asset right now? Note that price-derived indicators (SPX_TREND, IWM_SPY in macro; BTC/ETH ratio, ETH_TREND in on-chain) inflate this by construction.</p>
@@ -158,7 +174,7 @@
               </div>
               <div class="rv__bt-weights">
                 <template x-for="state in ['risk_off', 'neutral', 'risk_on']" :key="state">
-                  <span class="rv__bt-weight"><span class="rv__pie-wrap" x-html="statePie(bt.weights[state])"></span> <span x-text="regimeLabel(state).toLowerCase() + ' · ' + describeWeights(bt.weights[state])"></span></span>
+                  <span class="rv__bt-weight"><span class="rv__pie-wrap" x-html="statePie(bt.weights[state])"></span> <span x-text="state + ' · ' + describeWeights(bt.weights[state])"></span></span>
                 </template>
               </div>
             </div>
@@ -170,7 +186,7 @@
                 <tbody>
                   <template x-for="row in backtestRows(bt)" :key="row.key">
                     <tr :class="{ 'rv__bt-baseline': row.baseline }">
-                      <td class="rv__ind-cell"><span class="rv__ind-name" x-text="row.label"></span><span class="rv__ind-src" x-text="row.desc"></span></td>
+                      <td class="rv__ind-cell"><span class="rv__ind-name rv__ind-name--plain" x-text="row.label"></span><span class="rv__ind-src" x-text="row.desc"></span></td>
                       <td class="rv__num" x-text="fmtNum2(row.s.final_value)"></td>
                       <td class="rv__num" x-text="fmtPctSigned(row.s.cagr)"></td>
                       <td class="rv__num rv__muted" x-text="fmtPctSigned(row.s.cagr_in_sample)"></td>
@@ -184,7 +200,14 @@
               </table>
             </div>
             <div class="rv__bt-chart-wrap">
-              <div class="rv__bt-chart-label">Equity curves · log scale</div>
+              <div class="rv__bt-chart-label">
+                <span>Equity curves · log scale</span>
+                <span class="rv__legend">
+                  <template x-for="r in bgLegend()" :key="r.label">
+                    <span class="rv__legend-item"><span class="rv__legend-swatch" :style="`background:${r.color}`"></span> <span x-text="r.label"></span></span>
+                  </template>
+                </span>
+              </div>
               <div class="rv__bt-chart"><canvas :data-bt="bt.key"></canvas></div>
             </div>
             <div class="rv__foot">
@@ -194,28 +217,37 @@
           </div>
         </template>
 
-        <!-- Methodology -->
-        <div class="rv__method">
-          <span class="rv__eyebrow rv__eyebrow--accent">Methodology</span>
-          <div class="rv__method-card">
-            <h3 class="rv__method-title">How it works</h3>
-            <ul class="rv__method-list">
-              <li><strong>Macro panel (8):</strong> 10y–2y curve, real 10y, 5y breakeven, HY OAS, DXY, initial jobless claims, VIX, copper/gold — sources: FRED &amp; Yahoo.</li>
-              <li><strong>On-chain panel (10):</strong> DeFi TVL (level + 90d growth), stablecoin float (level + 90d growth), BTC/ETH active addresses, BTC MVRV, BTC/ETH ratio, ETH 50d/200d trend, new DEX pools per 24h — sources: DefiLlama, blockchain.com, Coinmetrics, Yahoo, GeckoTerminal.</li>
-              <li><strong>Equity factor panel (8):</strong> high-beta vs low-vol (SPHB/SPLV), momentum (MTUM/SPY), growth vs value (IWF/IWD), utilities leadership (XLU/SPY), staples vs discretionary (XLP/XLY), S&amp;P 500 50d/200d trend, IWM/SPY breadth, Shiller CAPE — sources: Yahoo Finance and the Shiller spreadsheet mirror. Sign-stable equity risk-appetite + style + valuation signals.</li>
-              <li><strong>Normalization:</strong> rolling 3-year percentile rank per indicator, sign-aligned so +1 always means risk-on.</li>
-              <li><strong>Within-panel weighting:</strong> point-in-time inverse-correlation. Each day's weights use only the trailing 3-year window — no look-ahead. Redundant inputs get auto-discounted without manual sub-grouping. 25% per-indicator cap.</li>
-              <li><strong>Composite:</strong> arithmetic mean of all three panel indices, then 3y rolling percentile, bucketed at 0.33 / 0.67.</li>
-              <li><strong>Smoothing:</strong> the published regime label requires <strong>5 consecutive trading days</strong> in the new bucket before switching, OR a single-day move in composite percentile exceeding <strong>2σ</strong> of its trailing 1y daily-change distribution (with direction consistent with the new bucket). Filters out boundary-noise flips while still responding quickly to legitimate fast regime shifts.</li>
-              <li><strong>Storage:</strong> long-format history persisted daily; current snapshot served from the analytics store.</li>
-            </ul>
-          </div>
-          <div class="rv__method-card">
-            <h3 class="rv__method-title">Why three panels</h3>
-            <p>The macro panel reads upstream causes — monetary policy, credit conditions, the labor market. The on-chain panel reads crypto-native flows and network health. The equity factor panel reads the behavioral response of price-setters who have already digested the upstream inputs and are committing capital. Three independent viewpoints on the same risk regime, blended into one composite. Walk through the comparison and per-panel attribution in the <a href="/blog/regime-eq-vs-base" class="rv__link">research write-up</a>.</p>
-          </div>
+        <!-- Component methodology footer (bucket thresholds from latest.bucketThresholds) -->
+        <div class="rv__component-foot">
+          <p>Composite = 0.5 × macro + 0.5 × onchain. Each panel is a weighted mean of sign-aligned 3y rolling percentile ranks; weights within a panel are inversely proportional to each indicator's mean absolute correlation with the rest of the panel. Bucket thresholds: composite percentile &lt;<span x-text="bucketPct('risk_off')"></span> = risk-off, &gt;<span x-text="bucketPct('risk_on')"></span> = risk-on.</p>
         </div>
       </div>
     </template>
+
+    <!-- Page-level methodology (from regime/page.tsx) -->
+    <div class="rv__method-wrap">
+      <hr class="rv__method-hr">
+      <span class="rv__eyebrow rv__eyebrow--accent">Methodology</span>
+      <div class="rv__method">
+        <div class="rv__method-card">
+          <h3 class="rv__method-title">How it works</h3>
+          <ul class="rv__method-list">
+            <li><strong>Macro panel (8):</strong> 10y–2y curve, real 10y, 5y breakeven, HY OAS, DXY, initial jobless claims, VIX, copper/gold — sources: FRED &amp; Yahoo.</li>
+            <li><strong>On-chain panel (10):</strong> DeFi TVL (level + 90d growth), stablecoin float (level + 90d growth), BTC/ETH active addresses, BTC MVRV, BTC/ETH ratio, ETH 50d/200d trend, new DEX pools per 24h — sources: DefiLlama, blockchain.com, Coinmetrics, Yahoo, GeckoTerminal.</li>
+            <li><strong>Equity factor panel (8):</strong> high-beta vs low-vol (SPHB/SPLV), momentum (MTUM/SPY), growth vs value (IWF/IWD), utilities leadership (XLU/SPY), staples vs discretionary (XLP/XLY), S&amp;P 500 50d/200d trend, IWM/SPY breadth, Shiller CAPE — sources: Yahoo Finance and the Shiller spreadsheet mirror. Sign-stable equity risk-appetite + style + valuation signals.</li>
+            <li><strong>Normalization:</strong> rolling 3-year percentile rank per indicator, sign-aligned so +1 always means risk-on.</li>
+            <li><strong>Within-panel weighting:</strong> point-in-time inverse-correlation. Each day's weights use only the trailing 3-year window — no look-ahead. Redundant inputs get auto-discounted without manual sub-grouping. 25% per-indicator cap.</li>
+            <li><strong>Composite:</strong> arithmetic mean of all three panel indices, then 3y rolling percentile, bucketed at 0.33 / 0.67.</li>
+            <li><strong>Smoothing:</strong> the published regime label requires <strong>5 consecutive trading days</strong> in the new bucket before switching, OR a single-day move in composite percentile exceeding <strong>2σ</strong> of its trailing 1y daily-change distribution (with direction consistent with the new bucket). Filters out boundary-noise flips while still responding quickly to legitimate fast regime shifts.</li>
+            <li><strong>Storage:</strong> long-format history persisted daily; current snapshot served from the analytics store.</li>
+          </ul>
+        </div>
+        <div class="rv__method-card">
+          <h3 class="rv__method-title">Why three panels</h3>
+          <p>The macro panel reads upstream causes — monetary policy, credit conditions, the labor market. The on-chain panel reads crypto-native flows and network health. The equity factor panel reads the behavioral response of price-setters who have already digested the upstream inputs and are committing capital. Three independent viewpoints on the same risk regime, blended into one composite. Walk through the comparison and per-panel attribution in the <a href="/blog/regime-eq-vs-base" class="rv__link">research write-up</a>.</p>
+        </div>
+      </div>
+      <p class="rv__method-note">For the original two-panel classifier (macro + on-chain only, kept as a reference) see <a href="/regime_2panel" class="rv__link">/regime_2panel</a>. For the full prior-art survey and design-space mapping, see the <a href="/regime-detection" class="rv__link">Regime Detection research brief</a>.</p>
+    </div>
   </div>
 </section>

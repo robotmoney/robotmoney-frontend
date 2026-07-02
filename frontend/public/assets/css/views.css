@@ -23,15 +23,18 @@
 .rv--dash { padding: 0 0 5rem; }
 .rv__eyebrow--accent { color: var(--color-accent); }
 
-/* hero */
+/* hero (OrbitsCanvas background + void gradient fades, from regime/page.tsx) */
 .rv__hero {
-  position: relative; min-height: 44vh; display: flex; flex-direction: column;
+  position: relative; min-height: 50vh; display: flex; flex-direction: column;
   align-items: center; justify-content: center; text-align: center; overflow: hidden;
-  border-bottom: 1px solid var(--color-border); padding: 7rem 1.5rem 3.5rem;
+  border-bottom: 1px solid var(--color-border); padding: 5rem 1.5rem 4rem;
 }
-.rv__hero-art { position: absolute; inset: 0; z-index: 0; opacity: 0.5; }
+.rv__hero-art { position: absolute; inset: 0; z-index: 0; background: rgb(5, 5, 8); }
 .rv__hero-art canvas { width: 100%; height: 100%; display: block; }
-.rv__hero-inner { position: relative; z-index: 1; max-width: 720px; }
+.rv__hero-fade { position: absolute; left: 0; right: 0; z-index: 1; pointer-events: none; }
+.rv__hero-fade--top { top: 0; bottom: 0; background: linear-gradient(to bottom, rgba(6, 8, 12, 0.6), transparent 40%, var(--color-void)); }
+.rv__hero-fade--bottom { bottom: 0; height: 120px; background: linear-gradient(to top, var(--color-void), transparent); }
+.rv__hero-inner { position: relative; z-index: 2; max-width: 720px; }
 .rv__hero .rv__title {
   font-family: var(--font-serif); font-style: italic; font-weight: 400;
   font-size: clamp(2.4rem, 5vw, 3.6rem); letter-spacing: -0.01em; margin: 0.5rem 0 0;
@@ -41,7 +44,7 @@
 
 /* body + dashboard layout */
 .rv__body { max-width: 1280px; margin: 0 auto; padding: 3rem 1.5rem 0; }
-.rv__dash { display: flex; flex-direction: column; gap: 2.5rem; }
+.rv__dash { display: flex; flex-direction: column; gap: 1.5rem; }
 .rv__dash-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
 .rv__dash-title { font-size: 1.6rem; font-family: var(--font-serif); font-style: italic; margin: 0.35rem 0 0; }
 .rv__asof { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); }
@@ -65,14 +68,18 @@
 /* full-history chart card */
 .rv__chart-card { border: 1px solid var(--color-border); border-radius: 8px; padding: 1rem; background: rgba(16, 20, 28, 0.4); }
 .rv__chart-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.75rem; }
+.rv__chart-title-group { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
 .rv__chart-title { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); }
 .rv__chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .rv__chip {
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.2em;
-  padding: 0.3rem 0.6rem; border-radius: 4px; border: 1px solid var(--color-border);
+  padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid var(--color-border);
   color: var(--color-text-muted); background: transparent; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
-.rv__chip--on { border-color: var(--color-accent); color: var(--color-accent); background: rgba(0, 229, 255, 0.1); }
+/* inline regime-band legend (REGIME_BG_LEGEND swatches) */
+.rv__legend { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 10px; text-transform: none; letter-spacing: normal; color: var(--color-text-muted); }
+.rv__legend-item { display: inline-flex; align-items: center; gap: 0.25rem; }
+.rv__legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
 .rv__chart { height: 260px; background: transparent; border: 0; border-radius: 0; padding: 0; margin: 0; }
 
 /* panel + generic tables */
@@ -92,8 +99,27 @@
 .rv__num { text-align: right; font-family: var(--font-mono); }
 .rv__muted { color: var(--color-text-muted); }
 .rv__ind-cell { display: flex; flex-direction: column; gap: 0.1rem; }
-.rv__ind-name { font-size: 0.85rem; color: var(--color-text); }
-.rv__ind-src { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); }
+.rv__ind-name {
+  font-size: 0.85rem; color: var(--color-text); cursor: help;
+  text-decoration: underline; text-decoration-style: dotted;
+  text-decoration-color: var(--color-text-dim); text-underline-offset: 4px;
+}
+.rv__ind-name--plain { text-decoration: none; cursor: default; }
+/* name + info-icon + hover tooltip wrapper (source PanelTable "group") */
+.rv__ind-tipwrap { position: relative; display: inline; }
+.rv__ind-info { margin-left: 0.35rem; display: inline-block; color: var(--color-text-dim); vertical-align: baseline; transition: color 0.15s; }
+.rv__ind-info:hover { color: var(--color-accent); }
+.rv__ind-info svg { display: inline-block; vertical-align: baseline; }
+.rv__tip {
+  pointer-events: none; position: absolute; left: 0; top: 100%; z-index: 20;
+  margin-top: 0.5rem; width: 18rem; border-radius: 6px;
+  border: 1px solid var(--color-border); background: var(--color-surface);
+  padding: 0.75rem; font-family: var(--font-mono); font-size: 11px; line-height: 1.6;
+  color: var(--color-text-muted); box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+  opacity: 0; transition: opacity 0.15s;
+}
+.rv__ind-tipwrap:hover .rv__tip { opacity: 1; }
+.rv__ind-src { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); margin-top: 0.15rem; }
 .rv__ind-src a { color: var(--color-text-dim); text-decoration: none; }
 .rv__ind-src a:hover { color: var(--color-accent); }
 .rv__spark { width: 90px; }
@@ -107,8 +133,8 @@
 .rv__pie { display: block; }
 .rv__bt-baseline td { background: rgba(16, 20, 28, 0.35); }
 .rv__bt-chart-wrap { padding: 1rem; border-top: 1px solid var(--color-border); }
-.rv__bt-chart-label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); margin-bottom: 0.75rem; }
-.rv__bt-chart { height: 300px; }
+.rv__bt-chart-label { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); margin-bottom: 0.75rem; }
+.rv__bt-chart { height: 320px; }
 
 /* shared card footers */
 .rv__foot { padding: 0.85rem 1rem; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); line-height: 1.6; }
@@ -116,13 +142,21 @@
 .rv__foot p:last-child { margin-bottom: 0; }
 .rv__foot strong { color: var(--color-text-muted); }
 
-/* methodology */
-.rv__method { display: flex; flex-direction: column; gap: 1rem; }
+/* component methodology footer (bucket thresholds) */
+.rv__component-foot { padding-top: 0.5rem; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 11px; line-height: 1.6; color: var(--color-text-dim); }
+.rv__component-foot p { margin: 0; }
+
+/* page-level methodology */
+.rv__method-wrap { margin-top: 3rem; }
+.rv__method-hr { border: 0; border-top: 1px solid var(--color-border); margin: 0 0 3rem; }
+.rv__method-wrap .rv__eyebrow { display: block; margin-bottom: 0.75rem; }
+.rv__method { display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem; }
 .rv__method-card { background: rgba(16, 20, 28, 0.6); border: 1px solid var(--color-border); border-radius: 8px; padding: 1.5rem; }
 .rv__method-title { font-family: var(--font-mono); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.2em; color: var(--color-accent); margin: 0 0 0.75rem; }
 .rv__method-list { color: var(--color-text-muted); font-size: 0.85rem; line-height: 1.6; margin: 0; padding-left: 1.25rem; }
 .rv__method-list li { margin-bottom: 0.25rem; }
 .rv__method-card p { color: var(--color-text-muted); font-size: 0.85rem; line-height: 1.7; margin: 0; }
+.rv__method-note { color: var(--color-text-muted); font-size: 0.85rem; line-height: 1.7; margin: 1.5rem 0 0; }
 .rv__link { color: var(--color-accent); text-decoration: underline; }
 
 /* committee */
@@ -166,7 +200,11 @@
 
 @media (min-width: 768px) {
   .rv__cards { grid-template-columns: repeat(4, 1fr); }
+  .rv__cards.rv--cols3 { grid-template-columns: repeat(3, 1fr); }
+  .rv__cards.rv--cols4 { grid-template-columns: repeat(4, 1fr); }
   .rv__panels { grid-template-columns: repeat(3, 1fr); }
+  .rv__panels.rv--cols2 { grid-template-columns: repeat(2, 1fr); }
+  .rv__panels.rv--cols3 { grid-template-columns: repeat(3, 1fr); }
 }
 
 /* research signals (/research/*) */
