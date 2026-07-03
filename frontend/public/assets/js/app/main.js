@@ -6,6 +6,7 @@ import { registerSubstrate } from "./alpine/substrate.js";
 import { registerViews } from "./alpine/views.js";
 import { registerHeroes } from "./alpine/heroes.js";
 import { registerStaticViews } from "./alpine/static-views.js";
+import { applyChartDefaults } from "./lib/chart-theme.js";
 import { start } from "./router.js";
 
 // Terminal boot animation copy — drives the hero's faux deployment log.
@@ -26,6 +27,10 @@ const TERMINAL_LINES = [
 // Register every Alpine.data factory the views need, before Alpine starts.
 document.addEventListener("alpine:init", () => {
   const Alpine = window.Alpine;
+
+  // Chart.js CDN precedes Alpine in document order, so window.Chart is ready by
+  // now — set the shared chart theme defaults once, before any chart draws.
+  applyChartDefaults();
 
   Alpine.data("terminalBoot", () => ({
     lines: TERMINAL_LINES,
