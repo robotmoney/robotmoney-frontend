@@ -1,0 +1,144 @@
+<!-- /visualizations — Visualizations hub (footer/dev link).
+     Static on-brand placeholder pointing at the live data pages.
+     NO <script>, NO custom Alpine factories. -->
+
+<section class="stub">
+  <div class="stub__container">
+    <header class="stub__head">
+      <div class="stub__eyebrow">Data</div>
+      <h1 class="stub__title">Robot Money <span class="stub__accent">Visualizations</span></h1>
+      <p class="stub__lede">
+        A hub for Robot Money&apos;s live and research visualizations. The gallery
+        of experimental views is still being assembled; in the meantime the live
+        data pages below are published and updating.
+      </p>
+    </header>
+
+    <div class="stub__grid">
+      <a class="stub__card" href="/regime">
+        <h2 class="stub__card-title">Regime Classifier</h2>
+        <p class="stub__card-desc">
+          The daily cross-asset risk-on / risk-off signal across macro, on-chain,
+          and factor panels.
+        </p>
+        <span class="stub__card-cta">Open /regime &rarr;</span>
+      </a>
+      <a class="stub__card" href="/allocation2">
+        <h2 class="stub__card-title">Allocation</h2>
+        <p class="stub__card-desc">
+          Vault allocation and strategy weights across the three protocol-governed
+          streams.
+        </p>
+        <span class="stub__card-cta">Open /allocation2 &rarr;</span>
+      </a>
+      <a class="stub__card" href="/committee">
+        <h2 class="stub__card-title">Investment Committee</h2>
+        <p class="stub__card-desc">
+          The daily structured discussion among AI agents about one rotating
+          portfolio subject.
+        </p>
+        <span class="stub__card-cta">Open /committee &rarr;</span>
+      </a>
+    </div>
+
+    <div class="stub__back">
+      <a class="stub__back-link" href="/">&larr; Back to Home</a>
+    </div>
+  </div>
+</section>
+
+<style>
+.stub {
+  min-height: 100vh;
+  padding: 8rem 1.5rem 5rem;
+  background: var(--color-void);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+.stub__container { max-width: 900px; margin: 0 auto; }
+.stub__head { margin-bottom: 3rem; }
+.stub__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+.stub__title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 2.5rem;
+  line-height: 1.05;
+  margin: 0;
+}
+.stub__accent {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-blue));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--color-accent);
+}
+.stub__lede {
+  color: var(--color-text-muted);
+  max-width: 44rem;
+  margin: 1.25rem 0 0;
+  line-height: 1.65;
+  font-size: 1.0625rem;
+}
+.stub__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+}
+.stub__card {
+  display: block;
+  padding: 1.75rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.25s var(--ease-out-expo), transform 0.25s var(--ease-out-expo);
+}
+.stub__card:hover { border-color: var(--color-accent); transform: translateY(-2px); }
+.stub__card-title { font-size: 1.35rem; font-weight: 600; margin: 0 0 0.6rem; }
+.stub__card:hover .stub__card-title { color: var(--color-accent); }
+.stub__card-desc {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  margin: 0 0 1rem;
+}
+.stub__card-cta {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--color-accent);
+}
+.stub__back { margin-top: 3rem; }
+.stub__back-link {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: border-color 0.3s, color 0.3s;
+}
+.stub__back-link:hover { border-color: var(--color-accent); color: var(--color-accent); }
+@media (min-width: 700px) {
+  .stub__grid { grid-template-columns: 1fr 1fr 1fr; }
+}
+@media (min-width: 1024px) {
+  .stub { padding: 10rem 2rem 6rem; }
+  .stub__title { font-size: 3.5rem; }
+}
+</style>
