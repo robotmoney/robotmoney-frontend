@@ -1,0 +1,84 @@
+<!-- /tech-proposal-march-16 — Technical Proposal, March 16 (changelog link).
+     Static on-brand placeholder for an archived proposal doc.
+     NO <script>, NO custom Alpine factories. -->
+
+<section class="stub">
+  <div class="stub__container">
+    <header class="stub__head">
+      <div class="stub__eyebrow">Archived Proposal</div>
+      <h1 class="stub__title">Technical Proposal &mdash; <span class="stub__accent">March 16</span></h1>
+      <p class="stub__lede">
+        An archived technical proposal from March 16 documenting an early design
+        decision for the Robot Money protocol. The full text is being ported into
+        this archive; a summary and links back to the relevant changelog entry will
+        appear here.
+      </p>
+    </header>
+
+    <div class="stub__back">
+      <a class="stub__back-link" href="/changelog">&larr; Back to the changelog</a>
+    </div>
+  </div>
+</section>
+
+<style>
+.stub {
+  min-height: 100vh;
+  padding: 8rem 1.5rem 5rem;
+  background: var(--color-void);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+.stub__container { max-width: 768px; margin: 0 auto; }
+.stub__head { margin-bottom: 3rem; }
+.stub__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+.stub__title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 2.5rem;
+  line-height: 1.05;
+  margin: 0;
+}
+.stub__accent {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-blue));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--color-accent);
+}
+.stub__lede {
+  color: var(--color-text-muted);
+  max-width: 44rem;
+  margin: 1.25rem 0 0;
+  line-height: 1.65;
+  font-size: 1.0625rem;
+}
+.stub__back { margin-top: 3rem; }
+.stub__back-link {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: border-color 0.3s, color 0.3s;
+}
+.stub__back-link:hover { border-color: var(--color-accent); color: var(--color-accent); }
+@media (min-width: 1024px) {
+  .stub { padding: 10rem 2rem 6rem; }
+  .stub__title { font-size: 3.5rem; }
+}
+</style>

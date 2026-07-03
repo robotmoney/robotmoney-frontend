@@ -87,8 +87,8 @@ async function main() {
     "rs__chart",
   ]);
   await checkView("/views/allocation.html", [
-    "x-data=\"allocationCharts()\"",
-    "x-data=\"allocationKpis()\"",
+    "x-data=\"walletPerfView()\"",
+    "rm-chartcard",  // shared chart-card component
   ]);
   await checkView("/views/committee/member.html", ["x-data=\"memberProfile()\""]);
   await checkView("/views/committee/session.html", ["x-data=\"icSessionDetail()\""]);
@@ -105,7 +105,6 @@ async function main() {
   checkLocalViewFile("../assets/js/app/alpine/static-views.js", [
     "memberProfile",
     "icSessionDetail",
-    "allocationCharts",
   ]);
 
   for (const filename of new Bun.Glob("**/*.html").scanSync({ cwd: viewsDir })) {

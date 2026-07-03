@@ -43,9 +43,9 @@ test("renders allocation and dynamic committee routes through Alpine", async ({ 
     history.pushState({}, "", "/allocation");
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
-  await expect(page.getByRole("heading", { name: "Allocation", exact: true })).toBeVisible();
-  await expect(page.locator(".kpi-value").first()).toHaveText("$2.45M");
-  await expect(page.locator("#allocationPie")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Wallet Performance", exact: true })).toBeVisible();
+  // The walletPerfView factory draws two Chart.js stacked-area canvases.
+  await expect(page.locator(".rm-chart canvas").first()).toBeVisible();
 
   await page.goto("/committee/members/athena");
   await expect(page.locator(".profile-name")).toHaveText("Athena");
@@ -74,9 +74,9 @@ test("latest navigation wins when an earlier fragment response is delayed", asyn
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
 
-  await expect(page.getByRole("heading", { name: "Allocation", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Wallet Performance", exact: true })).toBeVisible();
   await page.waitForTimeout(400);
-  await expect(page.getByRole("heading", { name: "Allocation", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Wallet Performance", exact: true })).toBeVisible();
   await expect(page.locator(".profile-name")).toHaveCount(0);
 
   await expectNoBrowserErrors(errors);
@@ -90,15 +90,16 @@ test("navigation destroys Chart.js and p5 resources from the previous view", asy
     history.pushState({}, "", "/allocation");
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
-  await expect(page.locator("#allocationPie")).toBeVisible();
-  const chartId = await page.locator("#allocationPie").evaluate((canvas) => {
+  const allocCanvas = page.locator(".rm-chart canvas").first();
+  await expect(allocCanvas).toBeVisible();
+  const chartId = await allocCanvas.evaluate((canvas) => {
     const chart = window.Chart?.getChart(canvas as HTMLCanvasElement);
     if (!chart) throw new Error("allocation Chart.js instance was not created");
     return chart.id;
   });
 
   await page.getByRole("link", { name: "Home", exact: true }).first().click();
-  await expect(page.locator("#allocationPie")).toHaveCount(0);
+  await expect(page.locator(".rm-chart canvas")).toHaveCount(0);
   await expect.poll(() =>
     page.evaluate((id) => Boolean(window.Chart?.instances?.[id]), chartId)
   ).toBe(false);
