@@ -1,13 +1,9 @@
 /* Data-driven view styles: regime + committee. Reuses the design tokens. */
 .rv, .cv { padding: 9rem 1.5rem 6rem; }
-.rv__eyebrow, .cv__eyebrow {
-  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.3em; color: var(--color-accent);
-}
+/* eyebrow, loading and error are promoted to components.css (.rm-eyebrow /
+   .rm-loading / .rm-error, grouped with .rv__*/.cv__* — single source). */
 .rv__title, .cv__title { font-size: 2.5rem; letter-spacing: -0.02em; margin: 0.5rem 0; }
 .rv__sub, .cv__sub { color: var(--color-text-muted); font-family: var(--font-mono); font-size: 0.85rem; }
-.rv__loading, .cv__loading, .cv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
-.rv__error, .cv__error { color: var(--color-warn); font-family: var(--font-mono); }
 
 /* regime pills (shared: summary meta + panel headers) */
 .regime-pill {
@@ -21,7 +17,7 @@
 
 /* ── Regime dashboard (rv--dash) ─────────────────────────────────────────── */
 .rv--dash { padding: 0 0 5rem; }
-.rv__eyebrow--accent { color: var(--color-accent); }
+/* .rv__eyebrow--accent promoted to components.css (.rm-eyebrow--accent). */
 
 /* hero (OrbitsCanvas background + void gradient fades, from regime/page.tsx) */
 .rv__hero {
@@ -48,42 +44,23 @@
 .rv__body { max-width: 1280px; margin: 0 auto; padding: 2.2rem 1.5rem 0; }
 @media (min-width: 1024px) { .rv__body { padding-left: 2rem; padding-right: 2rem; } }
 .rv__dash { display: flex; flex-direction: column; gap: 1.1rem; }
-.rv__dash-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
-.rv__dash-title { font-size: 1.6rem; font-family: var(--font-serif); font-style: italic; margin: 0.35rem 0 0; }
-.rv__asof { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); }
+/* section head/title/as-of promoted to components.css
+   (.rm-section-head / .rm-section-title / .rm-asof). */
 
-/* summary cards */
-.rv__cards { display: grid; grid-template-columns: 1fr; gap: 0.8rem; }
-.rv__card {
-  background: rgba(16, 20, 28, 0.4); border: 1px solid var(--color-border);
-  border-radius: 8px; padding: 1rem; display: flex; flex-direction: column;
-}
+/* summary cards — grid + card shell + card-eyebrow/val/foot promoted to
+   components.css (.rm-cards / .rm-card / .rm-card-eyebrow / .rm-card-val /
+   .rm-card-foot). Regime-only card variants stay here. */
 .rv__card--regime { background: transparent; }
-.rv__card-eyebrow { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); }
 .rv__card-regime { font-size: 1.9rem; font-weight: 500; margin-top: 0.35rem; }
-.rv__card-val { font-size: 1.9rem; font-weight: 500; margin-top: 0.35rem; color: var(--color-text); font-family: var(--font-mono); }
-.rv__card-foot { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); margin-top: 0.55rem; }
 .rv__posbar { position: relative; height: 6px; background: var(--color-border); border-radius: 999px; overflow: hidden; margin-top: 0.85rem; }
 .rv__posbar-fill { height: 100%; background: var(--color-accent); border-radius: 999px; }
 .rv__posbar-tick { position: absolute; top: 0; bottom: 0; width: 1px; left: 50%; background: var(--color-text-dim); }
 .rv__posbar-labels { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); margin-top: 0.25rem; }
 
-/* full-history chart card (p-4 in source) */
-.rv__chart-card { border: 1px solid var(--color-border); border-radius: 8px; padding: 1rem; background: rgba(16, 20, 28, 0.4); }
-.rv__chart-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.7rem; margin-bottom: 0.7rem; }
-.rv__chart-title-group { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.rv__chart-title { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); }
-.rv__chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.rv__chip {
-  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.2em;
-  padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid var(--color-border);
-  color: var(--color-text-muted); background: transparent; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s;
-}
-/* inline regime-band legend (REGIME_BG_LEGEND swatches) */
-.rv__legend { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 10px; text-transform: none; letter-spacing: normal; color: var(--color-text-muted); }
-.rv__legend-item { display: inline-flex; align-items: center; gap: 0.25rem; }
-.rv__legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
-.rv__chart { height: 260px; background: transparent; border: 0; border-radius: 0; padding: 0; margin: 0; }
+/* full-history chart card — shell + head + title-group + title + chart +
+   chips + legend promoted to components.css (.rm-chartcard / .rm-chartcard-head
+   / .rm-chartcard-title-group / .rm-chartcard-title / .rm-chart / .rm-chips /
+   .rm-chip / .rm-legend / .rm-legend-item / .rm-legend-swatch). */
 
 /* panel + generic tables */
 .rv__panels { display: grid; grid-template-columns: 1fr; gap: 1.25rem; }
@@ -91,16 +68,8 @@
 .rv__panel-card-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; padding: 0.72rem 1rem; border-bottom: 1px solid var(--color-border); background: rgba(16, 20, 28, 0.4); }
 .rv__panel-card-title { font-size: 0.9rem; font-weight: 500; margin: 0; }
 .rv__panel-card-meta { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); }
-.rv__table-scroll { overflow-x: auto; }
-.rv__table { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.26; }
-.rv__table thead th { font-family: var(--font-mono); font-weight: 400; color: var(--color-text-dim); text-align: left; padding: 0.44rem 0.5rem; white-space: nowrap; }
-.rv__table thead th:first-child { padding-left: 1rem; }
-.rv__table thead th:last-child { padding-right: 1rem; }
-.rv__table td { padding: 0.44rem 0.5rem; border-top: 1px solid var(--color-border); vertical-align: middle; }
-.rv__table td:first-child { padding-left: 1rem; }
-.rv__table td:last-child { padding-right: 1rem; }
-.rv__num { text-align: right; font-family: var(--font-mono); }
-.rv__muted { color: var(--color-text-muted); }
+/* table shell + cells (.rm-table-scroll / .rm-table / .rm-num / .rm-muted)
+   promoted to components.css; regime-only cell styles stay below. */
 .rv__ind-cell { display: flex; flex-direction: column; gap: 0.1rem; }
 .rv__ind-name {
   font-size: 0.85rem; color: var(--color-text); cursor: help;
@@ -139,11 +108,7 @@
 .rv__bt-chart-label { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); margin-bottom: 0.75rem; }
 .rv__bt-chart { height: 320px; }
 
-/* shared card footers */
-.rv__foot { padding: 0.85rem 1rem; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); line-height: 1.6; }
-.rv__foot p { margin: 0 0 0.4rem; }
-.rv__foot p:last-child { margin-bottom: 0; }
-.rv__foot strong { color: var(--color-text-muted); }
+/* card foot note (.rm-foot) promoted to components.css. */
 
 /* component methodology footer (bucket thresholds) */
 .rv__component-foot { padding-top: 0.4rem; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 11px; line-height: 1.6; color: var(--color-text-dim); }
@@ -202,7 +167,7 @@
 .cv__applied { flex-direction: column; align-items: flex-start; }
 
 @media (min-width: 768px) {
-  .rv__cards { grid-template-columns: repeat(4, 1fr); }
+  /* .rv__cards base 4-col grid promoted to components.css (.rm-cards). */
   .rv__cards.rv--cols3 { grid-template-columns: repeat(3, 1fr); }
   .rv__cards.rv--cols4 { grid-template-columns: repeat(4, 1fr); }
   .rv__panels { grid-template-columns: repeat(3, 1fr); }
@@ -236,3 +201,22 @@
 .rs__series-label { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); margin-bottom: 0.5rem; }
 .rs__series-canvas { height: 120px; }
 @media (min-width: 768px) { .rs__gauges { grid-template-columns: repeat(2, 1fr); } .rs__series-grid { grid-template-columns: repeat(2, 1fr); } }
+
+/* allocation (/allocation) residue — the page is built almost entirely from the
+   shared .rm-* components (see components.css) + the regime hero shell; these
+   few page-local rules cover content shapes the shared library doesn't: the
+   two-up chart grid, standalone category-legend spacing, section/chart ledes,
+   the stacked value-over-quantity numeric cell, the accent total column, table
+   header swatches, and the footer link/margin. */
+.alloc-charts { display: grid; grid-template-columns: 1fr; gap: 1.5rem; margin-bottom: 2.5rem; }
+.alloc-legend { flex-wrap: wrap; gap: 0.75rem 1.25rem; margin-bottom: 1.5rem; }
+.alloc-lede { font-size: 0.875rem; color: var(--color-text-muted); margin: 0.75rem 0 0; max-width: 42rem; }
+.alloc-chart-sub { font-size: 0.75rem; color: var(--color-text-muted); margin: 0.25rem 0 0; }
+.alloc-num span { display: block; }
+.alloc-num i { display: block; font-style: normal; font-size: 0.6rem; color: var(--color-text-dim); margin-top: 1px; }
+.alloc-total { color: var(--color-accent); font-weight: 700; }
+.alloc-table th .rm-legend-swatch { margin-right: 0.4rem; }
+.alloc-foot { margin-top: 2.5rem; }
+.alloc-foot a { color: var(--color-accent); text-decoration: none; }
+.alloc-foot a:hover { text-decoration: underline; }
+@media (min-width: 768px) { .alloc-charts { grid-template-columns: 1fr 1fr; } }
