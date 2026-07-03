@@ -248,3 +248,80 @@
 .comments__input:focus, .comments__textarea:focus { outline: none; border-color: var(--color-accent); }
 .comments__actions { display: flex; justify-content: flex-end; }
 .comments__notice { margin: 0; font-family: var(--font-mono); font-size: 0.8125rem; color: var(--color-warn); }
+
+/* ════════ Shared data-view components ════════
+   Page-agnostic building blocks for data dashboards (regime, allocation, …).
+   Each rule is the SINGLE SOURCE OF TRUTH: the neutral .rm-* name is grouped
+   with the original regime .rv__* (and committee .cv__*) selector, copying
+   regime's exact values, so both the reference page and new pages render
+   identically from one block. The matching regime/committee blocks were
+   removed from views.css. Regime-DOMAIN styling (hero, backtests, correlations,
+   sparklines, posbars, indicator cells, pie, methodology) stays in views.css. */
+
+/* eyebrow (kicker) */
+.rm-eyebrow, .rv__eyebrow, .cv__eyebrow {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.3em; color: var(--color-accent);
+}
+.rm-eyebrow--accent, .rv__eyebrow--accent { color: var(--color-accent); }
+
+/* loading / error states */
+.rm-loading, .rv__loading, .cv__loading, .cv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
+.rm-error, .rv__error, .cv__error { color: var(--color-warn); font-family: var(--font-mono); }
+
+/* section head + title + as-of */
+.rm-section-head, .rv__dash-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
+.rm-section-title, .rv__dash-title { font-size: 1.6rem; font-family: var(--font-serif); font-style: italic; margin: 0.35rem 0 0; }
+.rm-asof, .rv__asof { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); }
+
+/* summary / stat card grid + card */
+.rm-cards, .rv__cards { display: grid; grid-template-columns: 1fr; gap: 0.8rem; }
+.rm-card, .rv__card {
+  background: rgba(16, 20, 28, 0.4); border: 1px solid var(--color-border);
+  border-radius: 8px; padding: 1rem; display: flex; flex-direction: column;
+}
+.rm-card-eyebrow, .rv__card-eyebrow { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); }
+.rm-card-val, .rv__card-val { font-size: 1.9rem; font-weight: 500; margin-top: 0.35rem; color: var(--color-text); font-family: var(--font-mono); }
+.rm-card-foot, .rv__card-foot { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); margin-top: 0.55rem; }
+
+/* chart card shell */
+.rm-chartcard, .rv__chart-card { border: 1px solid var(--color-border); border-radius: 8px; padding: 1rem; background: rgba(16, 20, 28, 0.4); }
+.rm-chartcard-head, .rv__chart-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.7rem; margin-bottom: 0.7rem; }
+.rm-chartcard-title-group, .rv__chart-title-group { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.rm-chartcard-title, .rv__chart-title { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-text-muted); }
+.rm-chart, .rv__chart { height: 260px; background: transparent; border: 0; border-radius: 0; padding: 0; margin: 0; }
+
+/* toggle chips */
+.rm-chips, .rv__chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.rm-chip, .rv__chip {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.2em;
+  padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid var(--color-border);
+  color: var(--color-text-muted); background: transparent; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+/* legend (colored swatches) */
+.rm-legend, .rv__legend { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 10px; text-transform: none; letter-spacing: normal; color: var(--color-text-muted); }
+.rm-legend-item, .rv__legend-item { display: inline-flex; align-items: center; gap: 0.25rem; }
+.rm-legend-swatch, .rv__legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+
+/* data table */
+.rm-table-scroll, .rv__table-scroll { overflow-x: auto; }
+.rm-table, .rv__table { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.26; }
+.rm-table thead th, .rv__table thead th { font-family: var(--font-mono); font-weight: 400; color: var(--color-text-dim); text-align: left; padding: 0.44rem 0.5rem; white-space: nowrap; }
+.rm-table thead th:first-child, .rv__table thead th:first-child { padding-left: 1rem; }
+.rm-table thead th:last-child, .rv__table thead th:last-child { padding-right: 1rem; }
+.rm-table td, .rv__table td { padding: 0.44rem 0.5rem; border-top: 1px solid var(--color-border); vertical-align: middle; }
+.rm-table td:first-child, .rv__table td:first-child { padding-left: 1rem; }
+.rm-table td:last-child, .rv__table td:last-child { padding-right: 1rem; }
+.rm-num, .rv__num { text-align: right; font-family: var(--font-mono); }
+.rm-muted, .rv__muted { color: var(--color-text-muted); }
+
+/* card / section foot note */
+.rm-foot, .rv__foot { padding: 0.85rem 1rem; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); line-height: 1.6; }
+.rm-foot p, .rv__foot p { margin: 0 0 0.4rem; }
+.rm-foot p:last-child, .rv__foot p:last-child { margin-bottom: 0; }
+.rm-foot strong, .rv__foot strong { color: var(--color-text-muted); }
+
+@media (min-width: 768px) {
+  .rm-cards, .rv__cards { grid-template-columns: repeat(4, 1fr); }
+}
