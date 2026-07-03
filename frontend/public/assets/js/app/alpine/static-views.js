@@ -1,4 +1,5 @@
 import { api, ROUTES, path } from "../lib/api.js";
+import { PALETTE, rgba } from "../lib/chart-theme.js";
 
 function chart(canvas, config) {
   return canvas && window.Chart ? new window.Chart(canvas, config) : null;
@@ -6,7 +7,7 @@ function chart(canvas, config) {
 
 const doughnut = (labels, data, colors) => ({
   type: "doughnut",
-  data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: "#0a0f15", borderWidth: 2 }] },
+  data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: PALETTE.deep, borderWidth: 2 }] },
   options: {
     responsive: true,
     maintainAspectRatio: false,
@@ -31,10 +32,10 @@ export function registerStaticViews(Alpine) {
       this.$nextTick(() => {
         this._charts = [
           chart(this.$refs.allocationChart, doughnut(
-            ["Bucket A", "Bucket B", "Bucket C"], [33, 33, 34], ["#00e5ff", "#4488ff", "#8b5cf6"],
+            ["Bucket A", "Bucket B", "Bucket C"], [33, 33, 34], [PALETTE.accent, PALETTE.blue, PALETTE.purple],
           )),
           chart(this.$refs.walletChart, doughnut(
-            ["Wallet A", "Wallet B", "Wallet C"], [20, 31, 49], ["#00e5ff", "#4488ff", "#e8a640"],
+            ["Wallet A", "Wallet B", "Wallet C"], [20, 31, 49], [PALETTE.accent, PALETTE.blue, PALETTE.warm],
           )),
           chart(this.$refs.tvlChart, {
             type: "line",
@@ -43,8 +44,8 @@ export function registerStaticViews(Alpine) {
               datasets: [{
                 label: "Vault TVL",
                 data: [1800000, 1950000, 2050000, 2200000, 2320000, 2380000, 2450000],
-                borderColor: "#00e5ff",
-                backgroundColor: "rgba(0,229,255,.1)",
+                borderColor: PALETTE.accent,
+                backgroundColor: rgba(PALETTE.accent, 0.1),
                 fill: true,
                 tension: 0.4,
               }],
