@@ -18,19 +18,19 @@
   max-width: 80rem;        /* max-w-7xl */
   margin-inline: auto;     /* mx-auto */
   padding-inline: 1.5rem;  /* px-6 */
-  padding-block: 3rem;     /* py-12 */
+  padding-block: 2.75rem;  /* reduced from py-12 */
 }
 
 /* <div className="grid md:grid-cols-5 gap-10"> */
 .footer__grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 2.5rem; /* gap-10 */
+  gap: 2rem; /* reduced from gap-10 */
 }
 
 /* <div className="space-y-4 ..."> — vertical rhythm between direct children */
 .footer__col > * + * {
-  margin-top: 1rem; /* space-y-4 */
+  margin-top: 0.9rem; /* reduced from space-y-4 */
 }
 
 /* <div className="flex items-center gap-3"> */
@@ -88,7 +88,7 @@
   flex-direction: column;
 }
 .footer__links > * + * {
-  margin-top: 0.5rem; /* space-y-2 */
+  margin-top: 0.4rem; /* reduced from space-y-2 */
 }
 
 /* <a className="block text-sm text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors"> */
@@ -106,12 +106,12 @@
 /* Bottom bar inner:
    <div className="... py-6 flex flex-col md:flex-row items-center justify-between gap-4"> */
 .footer__bottom {
-  padding-block: 1.5rem; /* py-6 */
+  padding-block: 1.25rem; /* reduced from py-6 */
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem; /* gap-4 */
+  gap: 0.9rem; /* reduced from gap-4 */
 }
 
 /* <p className="text-[10px] font-mono text-[var(--color-text-dim)] ..."> */

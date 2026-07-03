@@ -11,6 +11,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
+import { mapEqSnapshotToDto } from "../../../backend/src/analytics/report/regime-eq-map.ts";
 
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
@@ -21,32 +22,15 @@ const vendorScripts = {
     "node_modules/p5/lib/p5.min.js",
 };
 
-// The committed ground-truth regime snapshot (vendored, gzipped in the backend test
-// fixtures). We map its snake_case shape to the /api/dashboards/regime-snapshots
-// DTO ({ latest, history }) the regimeView() factory consumes.
+// The committed ground-truth regime snapshot (vendored eq variant, gzipped in the
+// backend test fixtures — 3 panels incl. factor, 3 backtests, correlations, price
+// extras, per-indicator sparklines). We run it through the SAME pure mapper the
+// live endpoint uses so the stubbed { latest, history } DTO is byte-identical to
+// production. This is exactly what the regimeView() dashboard renders.
 function loadRegimeStub() {
-  const gz = join(process.cwd(), "backend/tests/fixtures/regime/regime-snapshot.json.gz");
+  const gz = join(process.cwd(), "backend/tests/fixtures/regime/regime-eq-snapshot.json.gz");
   const snap = JSON.parse(gunzipSync(readFileSync(gz)).toString("utf8"));
-  const latest = {
-    date: snap.asof,
-    composite: snap.composite,
-    compositePercentile: snap.composite_percentile,
-    regime: snap.regime,
-    macroRegime: snap.macro_regime,
-    onchainRegime: snap.onchain_regime,
-    macroIndex: snap.macro_index,
-    onchainIndex: snap.onchain_index,
-    macroPercentile: snap.macro_percentile,
-    onchainPercentile: snap.onchain_percentile,
-    version: "v3",
-    // Rich per-indicator objects already carry id/name/panel/panel_weight/percentile/
-    // signed_percentile — exactly what the view renders.
-    indicators: snap.indicators,
-  };
-  const history = (snap.history ?? [])
-    .map((h: any) => ({ date: h.date, composite: h.composite }))
-    .slice(-180);
-  return { latest, history };
+  return mapEqSnapshotToDto(snap);
 }
 
 // Ported research payload shape (analytics/analyze/research-signals.ts). The
@@ -126,36 +110,46 @@ async function navigate(page: Page, path: string) {
   }, path);
 }
 
-test("regime view renders panel indices + per-indicator panel weights (enriched)", async ({ page }) => {
+test("regime dashboard renders 3 panels, sparklines, correlations + backtests (enriched)", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");
   await navigate(page, "/regime");
 
-  const stub = loadRegimeStub();
+  const latest = loadRegimeStub().latest!;
 
-  // Header as-of + composite card.
+  // Hero title + live-composite header.
   await expect(page.locator(".rv__title")).toContainText("Regime");
-  await expect(page.locator(".rv__card").first()).toContainText(`${Math.round(stub.latest.composite * 100)}%`);
+  await expect(page.locator(".rv__dash-title")).toContainText("Daily regime classification");
 
-  // Both panel sections render with their index/percentile meta.
-  const panels = page.locator(".rv__panel");
-  await expect(panels).toHaveCount(2);
-  const macroMeta = page.locator(".rv__panel", { hasText: "Macro" }).locator(".rv__panel-meta");
-  await expect(macroMeta).toContainText(`${Math.round(stub.latest.macroIndex * 100)}%`);
-  const onchainMeta = page.locator(".rv__panel", { hasText: "On-chain" }).locator(".rv__panel-meta");
-  await expect(onchainMeta).toContainText(`${Math.round(stub.latest.onchainIndex * 100)}%`);
+  // Summary cards: the top-line regime pill + one index card per panel (4 total
+  // for the eq snapshot). The regime card shows the composite level in its foot.
+  await expect(page.locator(".rv__cards .rv__card")).toHaveCount(4);
+  await expect(page.locator(".rv__card--regime")).toContainText(latest.composite!.toFixed(2));
 
-  // Per-indicator panel WEIGHTS surface (the enrichment). Every indicator row shows
-  // a "weight NN%" chip; at least one has a real (non-dash) weight.
-  const weights = page.locator(".rv__ind-weight");
-  await expect(weights.first()).toBeVisible();
-  const weightTexts = await weights.allTextContents();
-  expect(weightTexts.length).toBeGreaterThan(10);
-  expect(weightTexts.every((t) => t.includes("weight"))).toBe(true);
-  expect(weightTexts.some((t) => /weight \d+%/.test(t))).toBe(true);
+  // All three panel tables render (headers carry just the panel title now, matching
+  // the source PanelTable), including the equity factor panel (eq snapshot only).
+  const panels = page.locator(".rv__panel-card");
+  await expect(panels).toHaveCount(3);
+  await expect(page.locator(".rv__panel-card", { hasText: "Macro panel" })).toBeVisible();
+  await expect(page.locator(".rv__panel-card", { hasText: "Equity factor panel" })).toBeVisible();
+  // The macro panel index surfaces in its summary index card (value to 2dp).
+  await expect(page.locator(".rv__cards")).toContainText(latest.macroIndex!.toFixed(2));
+
+  // Per-indicator inline-SVG sparklines render (the enrichment).
+  await expect(page.locator(".rv__spark-svg").first()).toBeVisible();
+  expect(await page.locator(".rv__spark-svg").count()).toBeGreaterThan(10);
 
   // A named indicator from the vendored snapshot renders in the macro panel.
   await expect(page.locator(".rv__ind-name", { hasText: "yield curve" }).first()).toBeVisible();
+
+  // Predictive-power table + all three backtest cards (eth / sp500 / mixed).
+  await expect(page.locator(".rv__corr-card")).toHaveCount(1);
+  await expect(page.locator(".rv__corr-card")).toContainText("Predictive power");
+  await expect(page.locator(".rv__bt-card:visible")).toHaveCount(3);
+  await expect(page.locator(".rv__bt-card", { hasText: "Backtest · ETH / cash" })).toBeVisible();
+
+  // Charts instantiate: full-history canvas + one equity-curve canvas per backtest.
+  expect(await page.locator("canvas").count()).toBeGreaterThanOrEqual(4);
 });
 
 test("channel-divergence view renders the Stablecoin-vs-QQQ-flow gauge with value + read", async ({ page }) => {

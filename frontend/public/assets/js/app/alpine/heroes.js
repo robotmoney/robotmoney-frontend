@@ -815,6 +815,93 @@ export function registerHeroes(Alpine) {
     },
   }));
 
+  // Faithful port of components/OrbitsCanvas.tsx for the /regime hero:
+  // count=8, layout="horizontal", fillHeight=0.7, speed=0.003. Lissajous curves
+  // with fading trails; the frame is cleared with the dark BG at low alpha each
+  // draw so trails decay (rather than a hard background()).
+  Alpine.data("orbitsHero", () => ({
+    ...p5Lifecycle(),
+    _start(container) {
+      const p5Constructor = window.p5;
+      const COUNT = 8, FILL_HEIGHT = 0.7, SPEED = 0.003, TRAIL_LENGTH = 120;
+      const PALETTE = [
+        [0, 229, 255], [0, 210, 255], [0, 255, 240], [0, 200, 255],
+        [0, 255, 220], [0, 190, 255], [0, 230, 250], [0, 220, 240],
+      ];
+      const BG = [5, 5, 8];
+
+      class Lissajous {
+        constructor(p, cx, cy, radius, a, b, delta, speed, color) {
+          this.p = p; this.cx = cx; this.cy = cy; this.radius = radius;
+          this.a = a; this.b = b; this.delta = delta; this.speed = speed;
+          this.t = 0; this.trail = []; this.color = color;
+        }
+        update() {
+          this.t += this.speed;
+          const x = this.cx + this.p.sin(this.a * this.t + this.delta) * this.radius;
+          const y = this.cy + this.p.sin(this.b * this.t) * this.radius;
+          this.trail.push({ x, y });
+          if (this.trail.length > TRAIL_LENGTH) this.trail.shift();
+        }
+        draw() {
+          for (let i = 1; i < this.trail.length; i++) {
+            const alpha = this.p.map(i, 0, this.trail.length, 0, 150);
+            const weight = this.p.map(i, 0, this.trail.length, 0.2, 2);
+            this.p.stroke(this.color[0], this.color[1], this.color[2], alpha);
+            this.p.strokeWeight(weight);
+            this.p.line(this.trail[i - 1].x, this.trail[i - 1].y, this.trail[i].x, this.trail[i].y);
+          }
+          if (this.trail.length > 0) {
+            const cur = this.trail[this.trail.length - 1];
+            this.p.noStroke();
+            this.p.fill(this.color[0], this.color[1], this.color[2], 255);
+            this.p.ellipse(cur.x, cur.y, 4);
+            this.p.fill(this.color[0], this.color[1], this.color[2], 30);
+            this.p.ellipse(cur.x, cur.y, 16);
+          }
+        }
+      }
+
+      const sketch = (p) => {
+        let curves = [];
+        function initCurves() {
+          curves = [];
+          const availH = p.height * FILL_HEIGHT;
+          const availW = p.width;
+          // horizontal layout (single centered row, incrementally faster L→R)
+          const spacing = availW / (COUNT + 1);
+          const cy = p.height / 2;
+          const radius = Math.min(spacing, availH) * 0.4;
+          for (let i = 0; i < COUNT; i++) {
+            const cx = spacing * (i + 1);
+            const a = 3 + i * 0.5, b = 2 + i * 0.3, delta = i * 0.4;
+            const s = SPEED + i * 0.003;
+            curves.push(new Lissajous(p, cx, cy, radius, a, b, delta, s, PALETTE[i % PALETTE.length]));
+          }
+        }
+        p.setup = function () {
+          W = container.offsetWidth; H = container.offsetHeight;
+          p.createCanvas(W, H).style("display", "block");
+          p.pixelDensity(Math.min(window.devicePixelRatio || 1, 2));
+          initCurves();
+        };
+        let W, H;
+        p.windowResized = function () {
+          W = container.offsetWidth; H = container.offsetHeight;
+          p.resizeCanvas(W, H);
+          // continue existing curves (OrbitsCanvas does not re-init on resize)
+        };
+        p.draw = function () {
+          p.fill(BG[0], BG[1], BG[2], 25);
+          p.noStroke();
+          p.rect(0, 0, p.width, p.height);
+          for (const c of curves) { c.update(); c.draw(); }
+        };
+      };
+      this._p5 = new p5Constructor(sketch, container);
+    },
+  }));
+
   Alpine.data("constructivistHero", () => ({
     _cleanup: null,
     init() {

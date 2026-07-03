@@ -13,20 +13,31 @@ const stateFile = join(repoRoot, ".agents", "demo-state.json");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// --- Random free ports ----------------------------------------------------
-async function freePorts(n: number): Promise<number[]> {
-  const servers: ReturnType<typeof createServer>[] = [];
-  for (let i = 0; i < n; i++) {
-    const srv = await new Promise<ReturnType<typeof createServer>>((resolve, reject) => {
-      const s = createServer();
-      s.on("error", reject);
-      s.listen(0, "127.0.0.1", () => resolve(s));
-    });
-    servers.push(srv);
+// --- Port allocation ------------------------------------------------------
+type Held = ReturnType<typeof createServer>;
+// Bind `port` (0 = a random free one) on 127.0.0.1; resolve the HELD server if
+// it bound, else null (port already in use). Callers keep every returned server
+// open until all ports are chosen so two allocations can't draw the same one.
+function tryBind(port: number): Promise<Held | null> {
+  return new Promise((resolve) => {
+    const s = createServer();
+    s.on("error", () => resolve(null));
+    s.listen(port, "127.0.0.1", () => resolve(s));
+  });
+}
+// Choose a host port. Precedence: an explicit env pin wins as-is; else the
+// cloudflared-facing `preferred` default if it's free (so a standing demo lands
+// on the port the host tunnel already routes to); else a random free port.
+async function allocatePort(fixed: number | undefined, preferred: number | undefined, held: Held[]): Promise<number> {
+  if (fixed !== undefined) return fixed;
+  if (preferred !== undefined) {
+    const s = await tryBind(preferred);
+    if (s) { held.push(s); return preferred; }
   }
-  const ports = servers.map((s) => (s.address() as AddressInfo).port);
-  await Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
-  return ports;
+  const s = await tryBind(0);
+  if (!s) throw new Error("could not bind a free host port");
+  held.push(s);
+  return (s.address() as AddressInfo).port;
 }
 
 // --- Pinned (fixed) ports -------------------------------------------------
@@ -46,26 +57,27 @@ function parsePort(name: string): number | undefined {
 }
 
 // --- Run config -----------------------------------------------------------
-// Random host ports for api, mcp AND postgres — a standing local demo must not
-// collide with a postgres already bound to :5432 on the dev box (api/worker/mcp
-// reach postgres over the compose network by service name, so the published host
-// port is only for external tooling; it just needs to be free).
+// Host ports for api, mcp AND postgres. The api/mcp ports prefer the stable
+// cloudflared-facing defaults (48787/48788 — the same defaults docker-compose
+// falls back to, and what the host tunnel routes robotmonet.net to) so a standing
+// demo is reachable over the tunnel without extra config; if a default is already
+// taken (another demo up), that port falls back to a random free one.
 //
-// Any of the three host ports can be PINNED via env (see parsePort). We size the
-// random pool to exactly the number of UNSET ports and shift() them out in a fixed
-// order, so a pinned port keeps its env value and every unset one still gets a random
-// free port. Nothing pinned ⇒ all three random, exactly as before.
+// Postgres has NO preferred default: a dev box often already has postgres on
+// :5432, and nothing external routes to the demo's pg (api/worker/mcp reach it
+// over the compose network by service name), so its host port is always random.
+//
+// Any of the three can still be PINNED via env (WEB_PORT/MCP_PORT/POSTGRES_PORT),
+// which is honored as-is. Every returned socket is held open until all three are
+// chosen, then closed together, so no two draws collide.
 const fixedApiPort = parsePort("WEB_PORT");
 const fixedMcpPort = parsePort("MCP_PORT");
 const fixedPgPort = parsePort("POSTGRES_PORT");
-const pool = await freePorts(
-  (fixedApiPort === undefined ? 1 : 0) +
-    (fixedMcpPort === undefined ? 1 : 0) +
-    (fixedPgPort === undefined ? 1 : 0),
-);
-const apiPort = fixedApiPort ?? pool.shift()!;
-const mcpPort = fixedMcpPort ?? pool.shift()!;
-const pgPort = fixedPgPort ?? pool.shift()!;
+const heldPorts: Held[] = [];
+const apiPort = await allocatePort(fixedApiPort, 48787, heldPorts);
+const mcpPort = await allocatePort(fixedMcpPort, 48788, heldPorts);
+const pgPort = await allocatePort(fixedPgPort, undefined, heldPorts);
+await Promise.all(heldPorts.map((s) => new Promise<void>((r) => s.close(() => r()))));
 // Pin the compose project name when DEMO_PROJECT is set (re-runs reuse/tear down the
 // same containers); otherwise a fresh random project per run. dockerEnv sets
 // DEMO_PROJECT=project either way, so the compose label stays consistent.

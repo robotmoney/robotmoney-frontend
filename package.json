@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.53.2",
+    "@robotmoney/contract": "file:./contract",
     "@types/bun": "^1.2.0",
     "alpinejs": "3.14.9",
     "chart.js": "4.5.1",

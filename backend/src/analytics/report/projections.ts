@@ -4,36 +4,9 @@
 // over the HTTP boundary; this is the single backend projection layer.
 import { sql } from "../../db/client.ts";
 import type { RegimeSnapshot } from "@robotmoney/contract";
-
-// Postgres hands numerics back as text; coerce to number|null. `null`/undefined
-// stay null so the DTO's nullable panel fields are honest.
-const num = (v: unknown): number | null => (v == null ? null : Number(v));
-
-function rowToSnapshot(r: any): RegimeSnapshot {
-  return {
-    date: typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10),
-    composite: num(r.composite),
-    compositePercentile: num(r.composite_percentile),
-    regime: r.regime,
-    macroRegime: r.macro_regime,
-    onchainRegime: r.onchain_regime,
-    factorRegime: r.factor_regime,
-    // v2 enrichment: panel indices/percentiles, point-in-time panel weights, version.
-    macroIndex: num(r.macro_index),
-    onchainIndex: num(r.onchain_index),
-    factorIndex: num(r.factor_index),
-    macroPercentile: num(r.macro_percentile),
-    onchainPercentile: num(r.onchain_percentile),
-    factorPercentile: num(r.factor_percentile),
-    panelWeights: r.panel_weights ?? null,
-    version: r.version ?? null,
-    percentiles: r.percentiles ?? {},
-    indicators: r.indicators ?? [],
-    // Asof-only backtest + predictive correlations (latest row only; null on history).
-    backtest: r.backtest ?? null,
-    correlations: r.correlations ?? null,
-  };
-}
+// The row→DTO projection lives in a pure, DB-free module so the offline
+// eq-snapshot mapper can reuse the EXACT same projection (see regime-projection.ts).
+import { rowToSnapshot } from "./regime-projection.ts";
 
 // Latest research-signal payload for a key (or null).
 export async function fetchLatestResearchSignal(key: string) {
