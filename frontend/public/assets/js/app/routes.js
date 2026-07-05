@@ -1,13 +1,16 @@
 const VIEW_DIR = "/views";
 export const HOME_VIEW = `${VIEW_DIR}/home.html`;
 export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
+export const PERFORMANCE_VIEW = `${VIEW_DIR}/performance.html`;
 export const NOT_FOUND_VIEW = `${VIEW_DIR}/not-found.html`;
 
 /** @type {Record<string, string>} */
 const ROUTES = {
   "/": HOME_VIEW,
   "/research": HOME_VIEW,
-  "/allocation2": ALLOCATION_VIEW,
+  "/allocation": ALLOCATION_VIEW,
+  "/performance": PERFORMANCE_VIEW,
+  "/allocation2": PERFORMANCE_VIEW, // legacy redirect
 };
 
 /** @param {string} pathname */

@@ -902,6 +902,201 @@ export function registerHeroes(Alpine) {
     },
   }));
 
+  // Faithful port of the /allocation "liquid mesh dots" hero
+  // (robotmoney-site/src/app/allocation/page.tsx lines 390-586): a cyan
+  // Perlin-noise mesh of vertex dots that drift, with roaming scatter-objects
+  // that push the mesh around. Oscillation slowly ramps the distortion param.
+  Alpine.data("meshHero", () => ({
+    ...p5Lifecycle(),
+    _start(container) {
+      const p5Constructor = window.p5;
+
+      // Effect defaults
+      const intensity = 80;
+      const speed = 0.35;
+      const slider3Value = 40;
+      const oscillation = 300;
+      const slider3Max = 100;
+      const pauseSec = 3;
+      const cycleSec = 10;
+      const oscMax = 500;
+
+      const ACCENT = [0, 229, 255];
+      const BG = [5, 5, 8];
+
+      function I(lo, hi) {
+        return lo + (hi - lo) * (intensity / 100);
+      }
+
+      // Oscillation state
+      let oscPauseTimer = 0;
+      let oscDirection = 1;
+      let oscCurrentValue = 0;
+
+      function tickOscillation() {
+        if (oscillation === 0) { oscCurrentValue = slider3Value; return; }
+        const target = slider3Value;
+        if (target === 0) { oscCurrentValue = 0; return; }
+        const pauseFrames = pauseSec * 60;
+        const cycleFrames = (cycleSec * 60 * oscMax) / Math.max(oscillation, 1);
+        const stepPerFrame = target / (cycleFrames / 2);
+        if (oscPauseTimer > 0) { oscPauseTimer--; return; }
+        oscCurrentValue += stepPerFrame * oscDirection;
+        if (oscCurrentValue >= target) { oscCurrentValue = target; oscDirection = -1; oscPauseTimer = pauseFrames; }
+        if (oscCurrentValue <= 0) { oscCurrentValue = 0; oscDirection = 1; oscPauseTimer = pauseFrames; }
+      }
+
+      function getParam3() {
+        const raw = oscillation === 0 ? slider3Value : oscCurrentValue;
+        return raw / slider3Max;
+      }
+
+      const sketch = (p) => {
+        let W, H;
+        let meshPoints = [];
+        let scatterObjects = [];
+        let frameNum = 0;
+
+        function spawnScatterObject() {
+          const side = Math.floor(p.random(4));
+          let sx, sy, angle;
+          const margin = 100;
+          if (side === 0) { sx = -margin; sy = p.random(H); angle = p.random(-0.4, 0.4); }
+          else if (side === 1) { sx = W + margin; sy = p.random(H); angle = p.PI + p.random(-0.4, 0.4); }
+          else if (side === 2) { sx = p.random(W); sy = -margin; angle = p.HALF_PI + p.random(-0.4, 0.4); }
+          else { sx = p.random(W); sy = H + margin; angle = -p.HALF_PI + p.random(-0.4, 0.4); }
+          const spd = 1.5 + p.random(2.5);
+          return {
+            x: sx, y: sy,
+            vx: Math.cos(angle) * spd,
+            vy: Math.sin(angle) * spd,
+            radius: 80 + p.random(120),
+            alive: true,
+          };
+        }
+
+        p.setup = function () {
+          W = container.offsetWidth;
+          H = container.offsetHeight;
+          p.createCanvas(W, H).style("display", "block");
+          setupMesh();
+        };
+
+        p.windowResized = function () {
+          W = container.offsetWidth;
+          H = container.offsetHeight;
+          p.resizeCanvas(W, H);
+          setupMesh();
+        };
+
+        function setupMesh() {
+          meshPoints = [];
+          const sp = Math.max(8, Math.round(I(60, 8)));
+          for (let x = -sp; x <= W + sp; x += sp) {
+            for (let y = -sp; y <= H + sp; y += sp) {
+              meshPoints.push({
+                baseX: x, baseY: y, x: x, y: y,
+                nOff: Math.random() * 1000,
+                dx: 0, dy: 0,
+              });
+            }
+          }
+          scatterObjects = [spawnScatterObject()];
+        }
+
+        p.draw = function () {
+          tickOscillation();
+          const spd = speed;
+          frameNum += spd;
+          const distortion = getParam3();
+
+          p.background(BG[0], BG[1], BG[2]);
+          const t = frameNum * I(0.003, 0.025);
+          const baseDisp = I(6, 100);
+          const shakeReduction = 0.5;
+          const extraDisp = distortion * baseDisp * 1.5;
+          const freqSpread = distortion * 0.006;
+
+          // Update scatter objects
+          for (const so of scatterObjects) {
+            so.x += so.vx * spd;
+            so.y += so.vy * spd;
+            if (so.x < -300 || so.x > W + 300 || so.y < -300 || so.y > H + 300) so.alive = false;
+          }
+          scatterObjects = scatterObjects.filter((o) => o.alive);
+          if (scatterObjects.length === 0) scatterObjects.push(spawnScatterObject());
+
+          // Position mesh vertices
+          for (const pt of meshPoints) {
+            const freq = 0.004 + (distortion > 0.01 ? (p.noise(pt.nOff) - 0.5) * freqSpread : 0);
+            const nx = p.noise(pt.baseX * freq, pt.baseY * freq, t);
+            const ny = p.noise(pt.baseX * freq + 100, pt.baseY * freq + 100, t);
+            pt.x = pt.baseX + (nx - 0.5) * baseDisp * shakeReduction;
+            pt.y = pt.baseY + (ny - 0.5) * baseDisp * shakeReduction;
+            if (distortion > 0.01) {
+              const jx = p.noise(pt.nOff, t * 0.4) - 0.5;
+              const jy = p.noise(pt.nOff + 500, t * 0.4) - 0.5;
+              pt.x += jx * extraDisp;
+              pt.y += jy * extraDisp;
+            }
+
+            pt.dx *= 0.85; pt.dy *= 0.85;
+            for (const so of scatterObjects) {
+              const ddx = pt.x - so.x;
+              const ddy = pt.y - so.y;
+              const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+              if (dist < so.radius) {
+                let force = (1 - dist / so.radius);
+                force = force * force * (40 + distortion * 80);
+                const ang = Math.atan2(ddy, ddx);
+                pt.dx += Math.cos(ang) * force * 0.3;
+                pt.dy += Math.sin(ang) * force * 0.3;
+              }
+            }
+            pt.x += pt.dx;
+            pt.y += pt.dy;
+          }
+
+          // Vertex dots
+          const baseDotSz = I(0.5, 7);
+          const dotSz = baseDotSz + distortion * baseDotSz * 2;
+          const daMax = I(5, 240);
+          const dTh = I(0.8, 0.2) - distortion * 0.15;
+          let skip = intensity < 25 ? 4 : (intensity < 50 ? 2 : 1);
+          if (distortion > 0.5) skip = 1;
+          p.noStroke();
+          for (let i = 0; i < meshPoints.length; i += skip) {
+            const pt = meshPoints[i];
+            const br = p.noise(pt.baseX * 0.006, pt.baseY * 0.006, t * 0.7);
+            if (br > dTh) {
+              const al = p.map(br, dTh, 1, 0, daMax);
+              const thisDot = dotSz * (0.5 + p.noise(pt.nOff + 100, t * 0.3));
+              p.fill(ACCENT[0], ACCENT[1], ACCENT[2], al);
+              p.ellipse(pt.x, pt.y, Math.max(0.5, thisDot));
+              if (distortion > 0.3 && thisDot > dotSz * 0.6) {
+                p.fill(ACCENT[0], ACCENT[1], ACCENT[2], al * 0.12 * distortion);
+                p.ellipse(pt.x, pt.y, thisDot * (2 + distortion * 2));
+              }
+            }
+          }
+
+          // Draw scatter object glow
+          p.noStroke();
+          for (const so of scatterObjects) {
+            if (so.x > -50 && so.x < W + 50 && so.y > -50 && so.y < H + 50) {
+              p.fill(ACCENT[0], ACCENT[1], ACCENT[2], 6);
+              p.ellipse(so.x, so.y, so.radius * 1.5);
+              p.fill(ACCENT[0], ACCENT[1], ACCENT[2], 12);
+              p.ellipse(so.x, so.y, so.radius * 0.5);
+            }
+          }
+        };
+      };
+
+      this._p5 = new p5Constructor(sketch, container);
+    },
+  }));
+
   Alpine.data("constructivistHero", () => ({
     _cleanup: null,
     init() {

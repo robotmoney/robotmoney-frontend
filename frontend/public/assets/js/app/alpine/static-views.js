@@ -1,5 +1,4 @@
 import { api, ROUTES, path } from "../lib/api.js";
-
 export function registerStaticViews(Alpine) {
   Alpine.data("memberProfile", () => ({
     name: "Loading…",

@@ -43,9 +43,16 @@ test("renders allocation and dynamic committee routes through Alpine", async ({ 
     history.pushState({}, "", "/allocation");
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
-  await expect(page.getByRole("heading", { name: "Wallet Performance", exact: true })).toBeVisible();
-  // The walletPerfView factory draws two Chart.js stacked-area canvases.
-  await expect(page.locator(".rm-chart canvas").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
+  // The allocationView factory draws the strategy/vault/wallet pie canvases.
+  await expect(page.locator("canvas").first()).toBeVisible();
+
+  // Test performance page with Wallet Performance heading
+  await page.evaluate(() => {
+    history.pushState({}, "", "/performance");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await expect(page.getByRole("heading", { name: /Wallet Performance/, exact: false })).toBeVisible();
 
   await page.goto("/committee/members/athena");
   await expect(page.locator(".profile-name")).toHaveText("Athena");
@@ -74,9 +81,9 @@ test("latest navigation wins when an earlier fragment response is delayed", asyn
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
 
-  await expect(page.getByRole("heading", { name: "Wallet Performance", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
   await page.waitForTimeout(400);
-  await expect(page.getByRole("heading", { name: "Wallet Performance", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
   await expect(page.locator(".profile-name")).toHaveCount(0);
 
   await expectNoBrowserErrors(errors);
