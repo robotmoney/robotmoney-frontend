@@ -34,120 +34,75 @@
       </p>
     </div>
 
-    <!-- Category legend -->
-    <div class="a2-legend">
-      <span class="a2-legend__item"><span class="a2-dot" style="background:#4488ff;"></span>Agent (ROBOTMONEY, BNKR)</span>
-      <span class="a2-legend__item"><span class="a2-dot" style="background:#e8a640;"></span>Protocol (WETH, ETH)</span>
-      <span class="a2-legend__item"><span class="a2-dot" style="background:#10b981;"></span>Stable (USDC, ZYFAI-SS1)</span>
-      <span class="a2-legend__item"><span class="a2-dot" style="background:#8b5cf6;"></span>Stocks (SP500)</span>
-    </div>
+    <div x-data="walletPerfView()">
 
-    <div class="a2-charts" x-data="walletPerfView()">
+      <div class="a2-charts">
 
-      <!-- Absolute value chart (Chart.js stacked area; data in walletPerfView) -->
-      <div class="a2-card">
-        <div class="a2-card__head">
-          <h3 class="a2-card__title">AUM Over Time</h3>
-          <p class="a2-card__sub">Total portfolio value in USD</p>
+        <!-- Absolute value chart (Chart.js stacked area; data in walletPerfView) -->
+        <div class="a2-card">
+          <div class="a2-card__head">
+            <h3 class="a2-card__title">AUM Over Time</h3>
+            <p class="a2-card__sub">Total portfolio value in USD</p>
+          </div>
+          <div class="a2-chart"><canvas x-ref="aum"></canvas></div>
         </div>
-        <div class="a2-chart"><canvas x-ref="aum"></canvas></div>
-      </div>
 
-      <!-- Percentage allocation chart (Chart.js stacked area) -->
-      <div class="a2-card">
-        <div class="a2-card__head">
-          <h3 class="a2-card__title">Allocation Over Time</h3>
-          <p class="a2-card__sub">Asset composition as percentage of total</p>
+        <!-- Percentage allocation chart (Chart.js stacked area) -->
+        <div class="a2-card">
+          <div class="a2-card__head">
+            <h3 class="a2-card__title">Allocation Over Time</h3>
+            <p class="a2-card__sub">Asset composition as percentage of total</p>
+          </div>
+          <div class="a2-chart"><canvas x-ref="alloc"></canvas></div>
         </div>
-        <div class="a2-chart"><canvas x-ref="alloc"></canvas></div>
+
       </div>
 
-    </div>
+      <!-- Historical Data table (last 5 collapsed / all 99 via Show All) -->
+      <div class="a2-tablewrap">
+        <div class="a2-table__head">
+          <h3 class="a2-card__title">Historical Data</h3>
+          <button type="button" class="a2-table__toggle" @click="showAll = !showAll"
+                  x-text="showAll ? 'Show Last 5' : 'Show All'"></button>
+        </div>
+        <div class="a2-table__scroll">
+          <table class="a2-table">
+            <thead>
+              <tr>
+                <th class="a2-sticky">Date</th>
+                <template x-for="col in columns" :key="col.sym">
+                  <th class="a2-r"><span class="a2-dot" :style="`background:${col.color};`"></span><span x-text="col.sym"></span></th>
+                </template>
+                <th class="a2-r a2-total">Total AUM</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in visibleRows()" :key="row.d">
+                <tr>
+                  <td class="a2-sticky" x-text="row.d"></td>
+                  <template x-for="col in columns" :key="col.sym">
+                    <td class="a2-r">
+                      <template x-if="row.a[col.sym]">
+                        <span class="a2-cell">
+                          <span x-text="fmtUsd(row.a[col.sym][0])"></span>
+                          <i x-text="row.a[col.sym][1]"></i>
+                        </span>
+                      </template>
+                      <template x-if="!row.a[col.sym]"><span class="a2-dim">&ndash;</span></template>
+                    </td>
+                  </template>
+                  <td class="a2-r a2-total" x-text="fmtUsd(row.aum)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+        <p class="a2-table__note">
+          * Values shown are aggregated across all tracked wallets. Per-wallet
+          breakdown available in raw data.
+        </p>
+      </div>
 
-    <!-- Historical Data table (last 5 snapshots) -->
-    <div class="a2-tablewrap">
-      <div class="a2-table__head">
-        <h3 class="a2-card__title">Historical Data</h3>
-        <span class="a2-table__hint">Showing last 5 snapshots</span>
-      </div>
-      <div class="a2-table__scroll">
-        <table class="a2-table">
-          <thead>
-            <tr>
-              <th class="a2-sticky">Date</th>
-              <th class="a2-r"><span class="a2-dot" style="background:#10b981;"></span>USDC</th>
-              <th class="a2-r"><span class="a2-dot" style="background:#10b981;"></span>ZYFAI-SS1</th>
-              <th class="a2-r"><span class="a2-dot" style="background:#e8a640;"></span>WETH</th>
-              <th class="a2-r"><span class="a2-dot" style="background:#e8a640;"></span>ETH</th>
-              <th class="a2-r"><span class="a2-dot" style="background:#4488ff;"></span>ROBOTMONEY</th>
-              <th class="a2-r"><span class="a2-dot" style="background:#4488ff;"></span>BNKR</th>
-              <th class="a2-r"><span class="a2-dot" style="background:#8b5cf6;"></span>SP500</th>
-              <th class="a2-r a2-total">Total AUM</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td class="a2-sticky">Jun 22</td>
-              <td class="a2-r"><span>$8,994</span><i>9.0371</i></td>
-              <td class="a2-r"><span>$4,536</span><i>1.0000</i></td>
-              <td class="a2-r"><span>$26,454</span><i>15.4378</i></td>
-              <td class="a2-r"><span>$86</span><i>0.0500</i></td>
-              <td class="a2-r"><span>$37,936</span><i>6499612465</i></td>
-              <td class="a2-r"><span>$12</span><i>25081.3083</i></td>
-              <td class="a2-r"><span>$4,733</span><i>0.6330</i></td>
-              <td class="a2-r a2-total">$82,751</td>
-            </tr>
-            <tr>
-              <td class="a2-sticky">Jun 23</td>
-              <td class="a2-r"><span>$9,016</span><i>9.0371</i></td>
-              <td class="a2-r"><span>$4,537</span><i>1.0000</i></td>
-              <td class="a2-r"><span>$26,553</span><i>15.4378</i></td>
-              <td class="a2-r"><span>$86</span><i>0.0500</i></td>
-              <td class="a2-r"><span>$37,959</span><i>6499612465</i></td>
-              <td class="a2-r"><span>$11</span><i>25081.3083</i></td>
-              <td class="a2-r"><span>$4,727</span><i>0.6330</i></td>
-              <td class="a2-r a2-total">$82,890</td>
-            </tr>
-            <tr>
-              <td class="a2-sticky">Jun 24</td>
-              <td class="a2-r"><span>$8,995</span><i>9.0371</i></td>
-              <td class="a2-r"><span>$4,537</span><i>1.0000</i></td>
-              <td class="a2-r"><span>$25,682</span><i>15.4378</i></td>
-              <td class="a2-r"><span>$83</span><i>0.0500</i></td>
-              <td class="a2-r"><span>$36,143</span><i>6499612465</i></td>
-              <td class="a2-r"><span>$11</span><i>25081.3083</i></td>
-              <td class="a2-r"><span>$4,669</span><i>0.6330</i></td>
-              <td class="a2-r a2-total">$80,120</td>
-            </tr>
-            <tr>
-              <td class="a2-sticky">Jun 25</td>
-              <td class="a2-r"><span>$9,042</span><i>9.0371</i></td>
-              <td class="a2-r"><span>$4,538</span><i>1.0000</i></td>
-              <td class="a2-r"><span>$24,916</span><i>15.4378</i></td>
-              <td class="a2-r"><span>$81</span><i>0.0500</i></td>
-              <td class="a2-r"><span>$31,831</span><i>6499612465</i></td>
-              <td class="a2-r"><span>$10</span><i>25081.3083</i></td>
-              <td class="a2-r"><span>$4,683</span><i>0.6330</i></td>
-              <td class="a2-r a2-total">$75,101</td>
-            </tr>
-            <tr>
-              <td class="a2-sticky">Jun 26</td>
-              <td class="a2-r"><span>$9,052</span><i>9.0371</i></td>
-              <td class="a2-r"><span>$4,538</span><i>1.0000</i></td>
-              <td class="a2-r"><span>$24,194</span><i>15.4378</i></td>
-              <td class="a2-r"><span>$78</span><i>0.0500</i></td>
-              <td class="a2-r"><span>$30,652</span><i>6499612465</i></td>
-              <td class="a2-r"><span>$9</span><i>25081.3083</i></td>
-              <td class="a2-r"><span>$4,656</span><i>0.6330</i></td>
-              <td class="a2-r a2-total">$73,180</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p class="a2-table__note">
-        * Values shown are aggregated across all tracked wallets. Per-wallet
-        breakdown available in raw data.
-      </p>
     </div>
 
     <div class="a2-foot">
@@ -164,7 +119,7 @@
 .a2 {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 8rem 1.5rem 5rem;
+  padding: 0 1.5rem 5rem;
   color: var(--color-text);
 }
 
@@ -188,16 +143,20 @@
   font-weight: 700;
 }
 
-/* Hero */
+/* Hero — full-bleed (breaks out of the 1400px .a2 content band) */
 .a2-hero {
   position: relative;
-  min-height: 44vh;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  min-height: 52vh;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   overflow: hidden;
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  background: var(--color-deep);
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-void);
   margin-bottom: 3rem;
 }
 
@@ -215,8 +174,10 @@
 .a2-hero__inner {
   position: relative;
   z-index: 2;
-  padding: 2.5rem 2rem;
-  max-width: 42rem;
+  width: 100%;
+  max-width: 1400px;
+  margin-inline: auto;
+  padding: 2.5rem 1.5rem;
 }
 
 .a2-hero__title {
@@ -232,6 +193,7 @@
   font-size: 1rem;
   line-height: 1.6;
   margin: 0;
+  max-width: 42rem;
 }
 
 /* Section */
@@ -304,7 +266,7 @@
 
 .a2-chart {
   position: relative;
-  height: 240px;
+  height: 300px;
 }
 .a2-chart canvas { width: 100% !important; height: 100% !important; }
 
@@ -321,6 +283,17 @@
   font-size: 0.7rem;
   color: var(--color-text-muted);
 }
+.a2-table__toggle {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--color-accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.a2-table__toggle:hover { text-decoration: underline; }
+.a2-table td.a2-r .a2-dim { color: var(--color-text-dim); }
 
 .a2-table__scroll {
   overflow-x: auto;
@@ -401,15 +374,16 @@
 .a2-foot__note a:hover { text-decoration: underline; }
 
 @media (min-width: 768px) {
-  .a2 { padding: 8rem 2rem 5rem; }
+  .a2 { padding: 0 2rem 5rem; }
+  .a2-hero__inner { padding: 2.5rem 2rem; }
   .a2-hero__title { font-size: 3.25rem; }
   .a2-h2 { font-size: 2rem; }
   .a2-charts { grid-template-columns: 1fr 1fr; }
-  .a2-chart { height: 300px; }
+  .a2-chart { height: 340px; }
 }
 
 @media (min-width: 1024px) {
-  .a2 { padding: 9rem 2rem 6rem; }
+  .a2 { padding: 0 2rem 6rem; }
   .a2-hero__title { font-size: 3.75rem; }
 }
 </style>

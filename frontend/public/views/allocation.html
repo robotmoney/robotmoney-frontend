@@ -1,388 +1,795 @@
-<!-- Allocation Dashboard
-     Shows vault TVL, wallet balances, APY, and buyback history.
-     Ported from robotmoney-site/src/app/allocation/page.tsx
+<!-- Asset Allocation
+     Pixel-perfect static port of robotmoney-site/src/app/allocation/page.tsx.
+     Buildless: every pie is a Chart.js pie drawn by the boot-registered
+     allocationView() factory (alpine/views.js); all numbers are baked from the
+     public/data snapshots (latest 2026-06-26) per .spec/allocation-spec.md.
+     Shares the a2-* design system with performance.html.
 -->
 
-<section class="section section--allocation" x-data="allocationCharts()">
-  <div class="container">
-    <div class="section__head">
-      <h1 class="section__title">Allocation</h1>
-      <p class="section__lede">
-        Vault treasury composition, holdings across wallets, and historical performance.
+<section class="a2 container" x-data="allocationView()">
+
+  <!-- ── HERO ────────────────────────────────────────────────────────────── -->
+  <header class="a2-hero alloc-hero">
+    <div class="a2-hero__viz" x-data="meshHero()" aria-hidden="true"></div>
+    <div class="a2-hero__inner alloc-hero__inner">
+      <div class="alloc-hero__text">
+        <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
+        <p class="a2-hero__lede">
+          Real-time portfolio holdings, vault strategy breakdown, and buyback
+          history across all prop wallets.
+        </p>
+      </div>
+      <div class="alloc-aum">
+        <span class="alloc-aum__label">Total AUM</span>
+        <span class="alloc-aum__value">$71,681</span>
+        <span class="alloc-aum__sub">Jun 26, 2026, 11:16 AM UTC</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── 01 / STRATEGY — Vault Allocation ────────────────────────────────── -->
+  <section class="a2-section">
+    <div class="a2-section__head">
+      <span class="a2-eyebrow">01 / Strategy</span>
+      <h2 class="a2-h2">Vault <span class="a2-grad">Allocation</span></h2>
+      <p class="a2-section__lede">
+        This is the current investment philosophy, not yet holdings. These
+        buckets will be implemented once the vault is live with investment
+        selection - determined in part through voting by $ROBOTMONEY holders.
       </p>
     </div>
 
-    <!-- KPIs Row -->
-    <div class="allocation__kpis" x-data="allocationKpis()">
-      <div class="kpi-card">
-        <div class="kpi-label">Vault TVL</div>
-        <div class="kpi-value" x-text="tvl"></div>
-        <div class="kpi-change" :class="tvlChange >= 0 ? 'positive' : 'negative'" x-text="tvlChange + '%'"></div>
+    <div class="alloc-grid3">
+      <!-- Big strategy pie -->
+      <div class="a2-card alloc-pie-card">
+        <div class="alloc-pie rm-chart"><canvas x-ref="strategy"></canvas></div>
       </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Vault APY</div>
-        <div class="kpi-value" x-text="apy"></div>
-        <div class="kpi-note">Current yield</div>
+
+      <!-- 2x2 bucket cards -->
+      <div class="alloc-buckets">
+        <!-- Card 1 -->
+        <div class="a2-card alloc-bucket">
+          <div class="alloc-bucket__top">
+            <div class="alloc-bucket__info">
+              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#10b981;"></span>95%</div>
+              <h4 class="alloc-bucket__title">Conservative DeFi Yield</h4>
+              <p class="alloc-bucket__desc">Aave, Compound, Morpho, Sky on Base. Near-zero principal risk.</p>
+            </div>
+            <div class="alloc-bucket__pie"><canvas x-ref="mini1"></canvas></div>
+          </div>
+          <div class="alloc-legend">
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#047857;"></span>Aave</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#059669;"></span>Morpho</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#10b981;"></span>Compound</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#34d399;"></span>Sky</span>
+          </div>
+        </div>
+
+        <!-- Card 2 -->
+        <div class="a2-card alloc-bucket">
+          <div class="alloc-bucket__top">
+            <div class="alloc-bucket__info">
+              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#3b82f6;"></span>5%</div>
+              <h4 class="alloc-bucket__title">Agent Tokens</h4>
+              <p class="alloc-bucket__desc">Tokens of Agents that are holders of $ROBOTMONEY, selected through governance.</p>
+            </div>
+            <div class="alloc-bucket__pie"><canvas x-ref="mini2"></canvas></div>
+          </div>
+          <div class="alloc-legend">
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#1e3a8a;"></span>RobotMoney</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#1e40af;"></span>Juno</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#2563eb;"></span>Woon</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#3b82f6;"></span>Peaq</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#60a5fa;"></span>Zyfai</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#93c5fd;"></span>Giza</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#bfdbfe;"></span>DEUS</span>
+          </div>
+        </div>
+
+        <!-- Card 3 -->
+        <div class="a2-card alloc-bucket">
+          <div class="alloc-bucket__top">
+            <div class="alloc-bucket__info">
+              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#f59e0b;"></span>0%</div>
+              <h4 class="alloc-bucket__title">Protocol Tokens</h4>
+              <p class="alloc-bucket__desc">Large-cap crypto and DeFi digital assets. BTC, ETH, HYPE.</p>
+            </div>
+            <div class="alloc-bucket__pie"><canvas x-ref="mini3"></canvas></div>
+          </div>
+          <div class="alloc-legend">
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#b45309;"></span>BTC</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#d97706;"></span>ETH</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#f59e0b;"></span>HYPE</span>
+          </div>
+        </div>
+
+        <!-- Card 4 -->
+        <div class="a2-card alloc-bucket">
+          <div class="alloc-bucket__top">
+            <div class="alloc-bucket__info">
+              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#a855f7;"></span>0%</div>
+              <h4 class="alloc-bucket__title">Real World Assets</h4>
+              <p class="alloc-bucket__desc">Traditional instruments. Exposure to the S&amp;P 500 or commodities.</p>
+            </div>
+            <div class="alloc-bucket__pie"><canvas x-ref="mini4"></canvas></div>
+          </div>
+          <div class="alloc-legend">
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#7c3aed;"></span>SPY</span>
+            <span class="alloc-legend__item"><span class="alloc-dot alloc-dot--sm" style="background:#a855f7;"></span>Gold</span>
+          </div>
+        </div>
       </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Total Deposits</div>
-        <div class="kpi-value" x-text="totalDeposits"></div>
-        <div class="kpi-note">All wallets</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Buyback Volume</div>
-        <div class="kpi-value" x-text="buybackVolume"></div>
-        <div class="kpi-change positive" x-text="buybackCount + ' txns'"></div>
+    </div>
+  </section>
+
+  <!-- ── Vault TVL ───────────────────────────────────────────────────────── -->
+  <section class="a2-section alloc-section--bordered">
+    <div class="a2-section__head">
+      <h2 class="a2-h2">Vault <span class="a2-grad">TVL</span></h2>
+      <div class="alloc-chip">
+        <span class="alloc-chip__label">7-Day APY</span>
+        <span class="alloc-chip__value">4.06%</span>
       </div>
     </div>
 
-    <!-- Charts Row -->
-    <div class="allocation__charts">
-      <!-- Vault Allocation Pie Chart -->
-      <div class="chart-container chart-container--pie">
-        <h3 class="chart-title">Vault Allocation (Buckets)</h3>
-        <div class="chart-wrapper">
-          <canvas id="allocationPie" x-ref="allocationChart"></canvas>
-        </div>
-        <div class="chart-legend">
-          <div class="legend-item"><span class="legend-dot" style="background: #00e5ff;"></span>Bucket A (Aave/Compound)</div>
-          <div class="legend-item"><span class="legend-dot" style="background: #4488ff;"></span>Bucket B (Agent Trading)</div>
-          <div class="legend-item"><span class="legend-dot" style="background: #8b5cf6;"></span>Bucket C (Revenue Tokens)</div>
-        </div>
+    <div class="alloc-grid3">
+      <!-- Vault pie -->
+      <div class="a2-card alloc-pie-card">
+        <div class="alloc-pie rm-chart"><canvas x-ref="vault"></canvas></div>
       </div>
 
-      <!-- Wallet Holdings Doughnut Chart -->
-      <div class="chart-container chart-container--doughnut">
-        <h3 class="chart-title">Wallet Distribution</h3>
-        <div class="chart-wrapper">
-          <canvas id="walletChart" x-ref="walletChart"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <!-- TVL Timeseries Chart -->
-    <div class="chart-container chart-container--timeseries">
-      <h3 class="chart-title">Vault TVL Over Time</h3>
-      <div class="chart-wrapper">
-        <canvas id="tvlChart" x-ref="tvlChart"></canvas>
-      </div>
-    </div>
-
-    <!-- Wallet Holdings Table -->
-    <div class="table-section">
-      <h3 class="table-title">Wallet Holdings</h3>
-      <div class="table-wrapper">
-        <table class="holdings-table">
+      <!-- Vault holdings table -->
+      <div class="a2-card alloc-tablecard">
+        <table class="alloc-table">
           <thead>
             <tr>
-              <th>Wallet</th>
-              <th class="align-right">USDC Deposit</th>
-              <th class="align-right">Current Balance</th>
-              <th class="align-right">Yield</th>
-              <th class="align-right">APY</th>
+              <th class="alloc-l">Protocol</th>
+              <th class="alloc-r">Balance</th>
+              <th class="alloc-r">Price</th>
+              <th class="alloc-r">Value</th>
             </tr>
           </thead>
-          <tbody x-data="walletHoldings()" x-init="load()">
-            <template x-for="wallet in wallets" :key="wallet.address">
-              <tr>
-                <td><code x-text="wallet.address"></code></td>
-                <td class="align-right"><span x-text="wallet.deposit"></span></td>
-                <td class="align-right"><span x-text="wallet.balance"></span></td>
-                <td class="align-right" :class="wallet.yield >= 0 ? 'positive' : 'negative'">
-                  <span x-text="wallet.yield"></span>
-                </td>
-                <td class="align-right"><span x-text="wallet.apy"></span></td>
-              </tr>
-            </template>
+          <tbody>
+            <tr>
+              <td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>MORPHO</td>
+              <td class="alloc-r">51.5855</td>
+              <td class="alloc-r">$1.00</td>
+              <td class="alloc-r alloc-val">$52</td>
+            </tr>
+            <tr>
+              <td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>AAVE</td>
+              <td class="alloc-r">51.5693</td>
+              <td class="alloc-r">$1.00</td>
+              <td class="alloc-r alloc-val">$52</td>
+            </tr>
+            <tr>
+              <td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>COMPOUND</td>
+              <td class="alloc-r">51.5698</td>
+              <td class="alloc-r">$1.00</td>
+              <td class="alloc-r alloc-val">$52</td>
+            </tr>
           </tbody>
         </table>
+        <div class="alloc-tfoot">
+          <div class="alloc-tfoot__row">
+            <span class="alloc-tfoot__label">Total Vault Assets</span>
+            <span class="alloc-tfoot__value">$154.72</span>
+          </div>
+          <div class="alloc-tfoot__row alloc-tfoot__row--sub">
+            <span>153.5 rmUSDC shares @ $1.0080</span>
+            <span>Jun 26, 2026, 11:27 AM UTC</span>
+          </div>
+        </div>
       </div>
     </div>
+  </section>
 
-    <!-- Buyback History Table -->
-    <div class="table-section">
-      <h3 class="table-title">Buyback History</h3>
-      <div class="table-wrapper">
-        <table class="buyback-table">
+  <!-- ── 02 / WALLET — Agent Wallet ──────────────────────────────────────── -->
+  <section class="a2-section alloc-section--bordered">
+    <div class="a2-section__head">
+      <span class="a2-eyebrow">02 / Wallet</span>
+      <h2 class="a2-h2">Agent <span class="a2-grad">Wallet</span></h2>
+    </div>
+
+    <div class="alloc-grid3">
+      <!-- Wallet pie -->
+      <div class="a2-card alloc-pie-card">
+        <div class="alloc-pie rm-chart"><canvas x-ref="wallet"></canvas></div>
+      </div>
+
+      <!-- Aggregate holdings table -->
+      <div class="a2-card alloc-tablecard">
+        <table class="alloc-table">
           <thead>
             <tr>
-              <th>Date</th>
-              <th class="align-right">Amount</th>
-              <th>Token</th>
-              <th class="align-right">Price</th>
-              <th>Transaction</th>
+              <th class="alloc-l">Asset</th>
+              <th class="alloc-r">Balance</th>
+              <th class="alloc-r">Price</th>
+              <th class="alloc-r">Value</th>
             </tr>
           </thead>
-          <tbody x-data="buybackHistory()" x-init="load()">
-            <template x-for="buyback in buybacks" :key="buyback.txnHash">
-              <tr>
-                <td><span x-text="buyback.date"></span></td>
-                <td class="align-right"><span x-text="buyback.amount"></span></td>
-                <td><span x-text="buyback.token"></span></td>
-                <td class="align-right"><span x-text="buyback.price"></span></td>
-                <td>
-                  <a :href="'https://basescan.org/tx/' + buyback.txnHash" target="_blank" class="link-external">
-                    View →
-                  </a>
-                </td>
-              </tr>
-            </template>
+          <tbody>
+            <tr>
+              <td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>USDC</td>
+              <td class="alloc-r">9,037.405</td><td class="alloc-r">$0.9983</td><td class="alloc-r alloc-val">$9,022</td>
+            </tr>
+            <tr>
+              <td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>ZYFAI-SS1</td>
+              <td class="alloc-r">1</td><td class="alloc-r">$4538.49</td><td class="alloc-r alloc-val">$4,538</td>
+            </tr>
+            <tr>
+              <td class="alloc-sym"><span class="alloc-dot" style="background:#3b82f6;"></span>ROBOTMONEY</td>
+              <td class="alloc-r">6499.61M</td><td class="alloc-r">$0.00000451</td><td class="alloc-r alloc-val">$29,300</td>
+            </tr>
+            <tr>
+              <td class="alloc-sym"><span class="alloc-dot" style="background:#3b82f6;"></span>BNKR</td>
+              <td class="alloc-r">25,081.3083</td><td class="alloc-r">$0.000377</td><td class="alloc-r alloc-val">$9</td>
+            </tr>
+            <tr>
+              <td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>WETH</td>
+              <td class="alloc-r">15.4378</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$23,940</td>
+            </tr>
+            <tr>
+              <td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>ETH</td>
+              <td class="alloc-r">0.05</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$77</td>
+            </tr>
+            <tr>
+              <td class="alloc-sym"><span class="alloc-dot" style="background:#8b5cf6;"></span>SP500</td>
+              <td class="alloc-r">0.633</td><td class="alloc-r">$7327.17</td><td class="alloc-r alloc-val">$4,638</td>
+            </tr>
           </tbody>
         </table>
+        <div class="alloc-tfoot">
+          <div class="alloc-tfoot__row">
+            <span class="alloc-tfoot__label">Total</span>
+            <span class="alloc-tfoot__value">$71,526</span>
+          </div>
+        </div>
       </div>
     </div>
 
-    <div class="section__footer">
-      <p class="section__note">
-        Data updates hourly. Charts powered by Chart.js. Historical data from Basescan.
+    <!-- Wallet Holdings (Sleeves) -->
+    <h3 class="alloc-sleeves__head">Wallet Holdings (Sleeves)</h3>
+
+    <!-- Sleeve: Bankr -->
+    <div class="a2-card alloc-tablecard alloc-sleeve">
+      <div class="alloc-sleeve__head">
+        <span class="alloc-sleeve__name">Bankr</span>
+        <span class="alloc-sleeve__totalwrap">
+          <span class="alloc-sleeve__total">$43,910</span>
+          <span class="alloc-sleeve__type">prop</span>
+        </span>
+      </div>
+      <table class="alloc-table">
+        <thead>
+          <tr><th class="alloc-l">Asset</th><th class="alloc-r">Balance</th><th class="alloc-r">Price</th><th class="alloc-r">Value</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>ETH</td><td class="alloc-r">0.0034</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$5</td></tr>
+          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>WETH</td><td class="alloc-r">0.6026</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$935</td></tr>
+          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>USDC</td><td class="alloc-r">9,037.405</td><td class="alloc-r">$0.9983</td><td class="alloc-r alloc-val">$9,022</td></tr>
+          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#3b82f6;"></span>ROBOTMONEY</td><td class="alloc-r">6499.61M</td><td class="alloc-r">$0.00000451</td><td class="alloc-r alloc-val">$29,300</td></tr>
+          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#3b82f6;"></span>BNKR</td><td class="alloc-r">25,081.3083</td><td class="alloc-r">$0.000377</td><td class="alloc-r alloc-val">$9</td></tr>
+          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#8b5cf6;"></span>SP500</td><td class="alloc-r">0.633</td><td class="alloc-r">$7327.17</td><td class="alloc-r alloc-val">$4,638</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Sleeve: Stablecoin Strategy 1 -->
+    <div class="a2-card alloc-tablecard alloc-sleeve">
+      <div class="alloc-sleeve__head">
+        <span class="alloc-sleeve__name">Stablecoin Strategy 1</span>
+        <span class="alloc-sleeve__totalwrap">
+          <span class="alloc-sleeve__total">$27,580</span>
+          <span class="alloc-sleeve__type">prop</span>
+        </span>
+      </div>
+      <table class="alloc-table">
+        <thead>
+          <tr><th class="alloc-l">Asset</th><th class="alloc-r">Balance</th><th class="alloc-r">Price</th><th class="alloc-r">Value</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>ETH</td><td class="alloc-r">0.0233</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$36</td></tr>
+          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>WETH</td><td class="alloc-r">14.8352</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$23,006</td></tr>
+          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>ZYFAI-SS1</td><td class="alloc-r">1</td><td class="alloc-r">$4538.49</td><td class="alloc-r alloc-val">$4,538</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Sleeve: Stablecoin Strategy 2 -->
+    <div class="a2-card alloc-tablecard alloc-sleeve">
+      <div class="alloc-sleeve__head">
+        <span class="alloc-sleeve__name">Stablecoin Strategy 2</span>
+        <span class="alloc-sleeve__totalwrap">
+          <span class="alloc-sleeve__total">$36</span>
+          <span class="alloc-sleeve__type">prop</span>
+        </span>
+      </div>
+      <table class="alloc-table">
+        <thead>
+          <tr><th class="alloc-l">Asset</th><th class="alloc-r">Balance</th><th class="alloc-r">Price</th><th class="alloc-r">Value</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>ETH</td><td class="alloc-r">0.0233</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$36</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="alloc-caption">Aggregate view across 3 wallets. Each wallet displays its individual positions.</p>
+  </section>
+
+  <!-- ── 03 / BUYBACKS — Token Buybacks ──────────────────────────────────── -->
+  <section class="a2-section alloc-section--bordered">
+    <div class="a2-section__head">
+      <span class="a2-eyebrow">03 / Buybacks</span>
+      <h2 class="a2-h2">Token <span class="a2-grad">Buybacks</span></h2>
+      <p class="a2-section__lede">
+        Historical buyback transactions where WETH was swapped for $ROBOTMONEY.
       </p>
     </div>
-  </div>
+
+    <div class="alloc-spent">
+      <span class="alloc-spent__label">Total Spent on Buybacks</span>
+      <span class="alloc-spent__value">1.149114 WETH</span>
+    </div>
+
+    <div class="a2-card alloc-tablecard">
+      <div class="alloc-table__scroll">
+        <table class="alloc-table alloc-table--buyback">
+          <thead>
+            <tr>
+              <th class="alloc-l">Date</th>
+              <th class="alloc-r">WETH Spent</th>
+              <th class="alloc-r">Value (USD)</th>
+              <th class="alloc-r">$ROBOTMONEY Received</th>
+              <th class="alloc-r">Transaction</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.116534</td><td class="alloc-r">$253.97</td><td class="alloc-r alloc-val">18.45M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0xa19a086682db8ff57a94e8f594bb542c8e4ba1d8f79bf7ad48717be0587ffa37">0xa19a08...7ffa37</a></td></tr>
+            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.115910</td><td class="alloc-r">$252.61</td><td class="alloc-r alloc-val">17.81M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x9ce840624ce3742bca40f6b672587dfa1ad85ac40476ecb7cb71938a170319bc">0x9ce840...0319bc</a></td></tr>
+            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.115910</td><td class="alloc-r">$252.61</td><td class="alloc-r alloc-val">17.77M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x8dc090ca0ec59882d541dffd52adbe64adbdba4166dd63a230722d2ea0b29266">0x8dc090...b29266</a></td></tr>
+            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.114375</td><td class="alloc-r">$249.26</td><td class="alloc-r alloc-val">18.17M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x1e09868aa284f8a969f7a85a11758e896b786f5f78daf8b503274b2828209361">0x1e0986...209361</a></td></tr>
+            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.114375</td><td class="alloc-r">$249.26</td><td class="alloc-r alloc-val">18.14M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x79594aaa2a4b39bdcbc19ba9f39834963d0f00599b4437e17a517503f996450f">0x79594a...96450f</a></td></tr>
+            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.115006</td><td class="alloc-r">$250.64</td><td class="alloc-r alloc-val">18.20M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x9364ec11ec2543438b2c1efaee79aad6ecc2ef42606ca9efa9f8378ac4837eac">0x9364ec...837eac</a></td></tr>
+            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.114251</td><td class="alloc-r">$248.99</td><td class="alloc-r alloc-val">18.04M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0xd63e11167880ef5ca9d7dfeb2e361b355e93aa01317ccb9ab5bdf5918168eb74">0xd63e11...68eb74</a></td></tr>
+            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.114251</td><td class="alloc-r">$248.99</td><td class="alloc-r alloc-val">17.46M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0xe6d8138395fb5815157cf1197570dd26c10f4fd3c3792e08fa9f38956811ec33">0xe6d813...11ec33</a></td></tr>
+            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.114251</td><td class="alloc-r">$248.99</td><td class="alloc-r alloc-val">17.43M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x81cf52a3f723c48a65c67999b5b4417a67b67687125aec29ba255246a6eba39f">0x81cf52...eba39f</a></td></tr>
+            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.114251</td><td class="alloc-r">$248.99</td><td class="alloc-r alloc-val">17.37M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x3c9718e37624c0de8b5e295b3e8a9cf5dc98dcd0d08cbad395551c2ce6f8eab9">0x3c9718...f8eab9</a></td></tr>
+          </tbody>
+          <tfoot>
+            <tr class="alloc-table__total">
+              <td>TOTAL</td>
+              <td class="alloc-r alloc-warn">1.149114 WETH</td>
+              <td class="alloc-r alloc-val">$2,504.31</td>
+              <td class="alloc-r alloc-val">178.82M</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  </section>
 </section>
 
 <style>
-.section--allocation {
-  min-height: 100vh;
-  padding: 8rem 1.5rem 5rem;
-  background: var(--color-void);
-}
-
-.section__head {
-  margin-bottom: 4rem;
-}
-
-.section__title {
-  font-size: 3rem;
-  line-height: 1;
-  letter-spacing: -0.025em;
-  margin-bottom: 1rem;
+.a2 {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 1.5rem 5rem;
   color: var(--color-text);
 }
 
-.section__lede {
-  font-size: 1.125rem;
-  line-height: 1.6;
-  color: var(--color-text-muted);
-  max-width: 48rem;
-}
-
-/* KPIs */
-.allocation__kpis {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1.5rem;
-  margin-bottom: 4rem;
-}
-
-.kpi-card {
-  padding: 2rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-}
-
-.kpi-label {
-  font-size: 0.8rem;
-  color: var(--color-text-dim);
+.a2-eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
-  margin-bottom: 0.5rem;
-}
-
-.kpi-value {
-  font-size: 2rem;
-  font-weight: 600;
+  letter-spacing: 0.3em;
   color: var(--color-accent);
-  margin-bottom: 0.5rem;
-  font-family: var(--font-mono);
-}
-
-.kpi-change {
-  font-size: 0.85rem;
-  font-family: var(--font-mono);
-}
-
-.kpi-change.positive { color: #4ade80; }
-.kpi-change.negative { color: #ff6644; }
-
-.kpi-note {
-  font-size: 0.8rem;
-  color: var(--color-text-dim);
-  margin-top: 0.25rem;
-}
-
-/* Charts */
-.allocation__charts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-  gap: 2rem;
-  margin-bottom: 4rem;
-}
-
-.chart-container {
-  padding: 2rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-}
-
-.chart-container--timeseries {
-  grid-column: 1 / -1;
-}
-
-.chart-title {
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: var(--color-text);
-  margin-bottom: 1.5rem;
-}
-
-.chart-wrapper {
-  position: relative;
-  height: 300px;
   margin-bottom: 1rem;
 }
 
-.chart-container--pie .chart-wrapper,
-.chart-container--doughnut .chart-wrapper {
-  height: 250px;
+.a2-grad {
+  background: linear-gradient(90deg, var(--color-accent), var(--color-blue));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-style: normal;
+  font-family: var(--font-sans);
+  font-weight: 700;
 }
 
-.chart-legend {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  font-size: 0.9rem;
-}
-
-.legend-item {
+/* Hero — full-bleed (breaks out of the 1400px .a2 content band) */
+.a2-hero {
+  position: relative;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  min-height: 52vh;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  color: var(--color-text-muted);
-}
-
-.legend-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 2px;
-}
-
-/* Tables */
-.table-section {
+  overflow: hidden;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-void);
   margin-bottom: 3rem;
-  overflow-x: auto;
+}
+.a2-hero__inner {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 1400px;
+  margin-inline: auto;
+  padding: 2.5rem 1.5rem;
+}
+.a2-hero__viz { position: absolute; inset: 0; z-index: 0; }
+.a2-hero__viz::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, var(--color-void), transparent 60%);
+}
+.a2-hero__viz canvas { display: block; width: 100%; height: 100%; }
+.a2-hero__title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 2.5rem;
+  line-height: 1.05;
+  margin: 0 0 1rem;
+}
+.a2-hero__lede {
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  line-height: 1.6;
+  margin: 0;
+  max-width: 34rem;
 }
 
-.table-title {
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: var(--color-text);
-  margin-bottom: 1rem;
+/* Hero — allocation two-column inner (title/lede at left, Total AUM at right) */
+.alloc-hero__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  width: 100%;
+  align-items: flex-start;
+  justify-content: space-between;
 }
+.alloc-hero__text { max-width: 40rem; }
 
-.table-wrapper {
+.alloc-aum {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 8px;
-  overflow: hidden;
+  padding: 0.75rem 1.25rem;
 }
-
-.holdings-table,
-.buyback-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.holdings-table thead,
-.buyback-table thead {
-  background: var(--color-surface-light);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.holdings-table th,
-.buyback-table th {
-  padding: 1rem;
-  text-align: left;
-  font-size: 0.85rem;
-  font-weight: 600;
+.alloc-aum__label {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.3em;
+  color: var(--color-text-dim);
+}
+.alloc-aum__value {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+.alloc-aum__sub {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
   color: var(--color-text-dim);
 }
 
-.holdings-table td,
-.buyback-table td {
-  padding: 1rem;
+/* Section */
+.a2-section { padding-top: 1rem; margin-bottom: 3.5rem; }
+.a2-section__head { margin-bottom: 2rem; }
+.alloc-section--bordered {
   border-top: 1px solid var(--color-border);
-  color: var(--color-text);
+  padding-top: 3rem;
+}
+.a2-h2 {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.75rem;
+  margin: 0.25rem 0 0;
+}
+.a2-section__lede {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  margin: 0.75rem 0 0;
+  max-width: 46rem;
+  line-height: 1.6;
 }
 
-.holdings-table tbody tr:hover,
-.buyback-table tbody tr:hover {
-  background: var(--color-surface-light);
+/* Chip (7-day APY) */
+.alloc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  background: var(--color-void);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.375rem 0.75rem;
 }
-
-.align-right {
-  text-align: right;
+.alloc-chip__label {
   font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--color-text-dim);
 }
-
-.holdings-table code,
-.buyback-table code {
-  font-size: 0.8rem;
-  color: var(--color-accent-dim);
-  background: rgba(0, 229, 255, 0.08);
-  padding: 0.25rem 0.5rem;
-  border-radius: 3px;
-}
-
-.link-external {
+.alloc-chip__value {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  font-weight: 700;
   color: var(--color-accent);
-  text-decoration: none;
-  transition: color 0.2s;
 }
 
-.link-external:hover {
-  color: #fff;
+/* Card + grid */
+.a2-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1.25rem;
+}
+.alloc-grid3 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+  align-items: stretch;
+}
+.alloc-buckets {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
 }
 
-.positive { color: #4ade80; }
-.negative { color: #ff6644; }
-
-.section__footer {
-  text-align: center;
-  padding-top: 2rem;
-  border-top: 1px solid var(--color-border);
+/* Pie card */
+.alloc-pie-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
 }
+.alloc-pie {
+  position: relative;
+  width: 100%;
+  height: 280px;
+}
+.alloc-pie canvas { width: 100% !important; height: 100% !important; }
 
-.section__note {
-  font-size: 0.9rem;
+/* Bucket card */
+.alloc-bucket { display: flex; flex-direction: column; gap: 1rem; }
+.alloc-bucket__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.alloc-bucket__info { min-width: 0; }
+.alloc-bucket__pct {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-sans);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-accent);
+  line-height: 1;
+}
+.alloc-bucket__title {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  color: var(--color-text);
+  margin: 0.85rem 0 0.4rem;
+}
+.alloc-bucket__desc {
+  font-size: 0.75rem;
+  line-height: 1.5;
   color: var(--color-text-muted);
   margin: 0;
 }
+.alloc-bucket__pie {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  flex-shrink: 0;
+}
+.alloc-bucket__pie canvas { width: 96px !important; height: 96px !important; }
+
+/* Dots */
+.alloc-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.alloc-dot--sm { width: 6px; height: 6px; }
+
+/* Mini legend */
+.alloc-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.85rem;
+}
+.alloc-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--color-text-muted);
+}
+
+/* Tables */
+.alloc-tablecard { padding: 0; overflow: hidden; }
+.alloc-table__scroll { overflow-x: auto; }
+.alloc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.alloc-table thead tr {
+  background: var(--color-surface-light);
+  border-bottom: 1px solid var(--color-border);
+}
+.alloc-table th {
+  padding: 0.85rem 1.25rem;
+  font-weight: 500;
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--color-text-dim);
+}
+.alloc-table th.alloc-l, .alloc-table td.alloc-sym, .alloc-table tbody td:first-child { text-align: left; }
+.alloc-table th.alloc-r, .alloc-table td.alloc-r { text-align: right; }
+.alloc-table tbody td {
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.alloc-table tbody tr:first-child td { border-top: none; }
+.alloc-sym { display: flex; align-items: center; gap: 0.5rem; }
+.alloc-table td.alloc-val { color: var(--color-accent); }
+.alloc-table td.alloc-warn { color: var(--color-warn); }
+.alloc-link { color: var(--color-accent); text-decoration: none; }
+.alloc-link:hover { text-decoration: underline; }
+
+/* Table footer band */
+.alloc-tfoot {
+  background: var(--color-void);
+  border-top: 1px solid var(--color-border);
+  padding: 0.85rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.alloc-tfoot__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.alloc-tfoot__label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-text-dim);
+}
+.alloc-tfoot__value {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+.alloc-tfoot__row--sub span {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--color-text-dim);
+}
+
+/* Buyback total row */
+.alloc-table--buyback tfoot .alloc-table__total td {
+  border-top: 2px solid var(--color-border);
+  background: var(--color-void);
+  font-weight: 700;
+}
+
+/* Sleeves */
+.alloc-sleeves__head {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+  margin: 2.5rem 0 1rem;
+}
+.alloc-sleeve { margin-bottom: 1rem; }
+.alloc-sleeve__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.alloc-sleeve__name {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--color-text);
+}
+.alloc-sleeve__totalwrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+}
+.alloc-sleeve__total {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+.alloc-sleeve__type {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+}
+.alloc-caption {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin: 1.25rem 0 0;
+}
+
+/* Buyback total-spent chip */
+.alloc-spent {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--color-void);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.75rem;
+}
+.alloc-spent__label {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+}
+.alloc-spent__value {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-accent);
+}
 
 @media (min-width: 768px) {
-  .allocation__kpis {
-    grid-template-columns: repeat(4, 1fr);
-  }
-
-  .allocation__charts {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .table-wrapper {
-    border-radius: 8px;
-  }
+  .a2 { padding: 0 2rem 5rem; }
+  .a2-hero__inner { padding: 2.5rem 2rem; }
+  .a2-hero__title { font-size: 3.25rem; }
+  .a2-h2 { font-size: 2rem; }
+  .alloc-buckets { grid-template-columns: 1fr 1fr; }
+  .alloc-hero__inner { flex-direction: row; align-items: flex-end; }
+  .alloc-aum { align-self: center; }
 }
 
 @media (min-width: 1024px) {
-  .section--allocation {
-    padding: 10rem 2rem 6rem;
-  }
-
-  .section__title {
-    font-size: 4rem;
-  }
+  .a2 { padding: 0 2rem 6rem; }
+  .a2-hero__title { font-size: 3.75rem; }
+  .alloc-grid3 { grid-template-columns: 1fr 2fr; }
 }
 </style>
