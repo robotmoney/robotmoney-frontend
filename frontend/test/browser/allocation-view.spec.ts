@@ -68,6 +68,18 @@ function adapterValue(a: VaultEconomicsAdapter): string {
 function totalAum(tvlUsd: number | null): number | null {
   return tvlUsd == null ? null : WALLET_SNAPSHOT_TOTAL_USD + tvlUsd;
 }
+// Mirrors allocationView()'s adapterBalance()/adapterPrice(): every vault
+// adapter is a USDC-denominated position pegged at $1.00/unit, so Balance
+// equals balanceUsd and Price is a constant "$1.00" once configured; both
+// render "—" for an unconfigured/unknown adapter.
+function adapterBalance(a: VaultEconomicsAdapter): string {
+  return a.configured !== false && a.balanceUsd != null
+    ? a.balanceUsd.toLocaleString("en-US", { maximumFractionDigits: 4 })
+    : "—";
+}
+function adapterPrice(a: VaultEconomicsAdapter): string {
+  return a.configured !== false && a.balanceUsd != null ? "$1.00" : "—";
+}
 
 async function stubEnvironment(page: Page, payload: VaultEconomics) {
   for (const [url, file] of Object.entries(vendorScripts)) {
@@ -103,21 +115,30 @@ test("allocation view binds vault economics to the golden payload, retiring the 
   await expect(page.locator(".alloc-chip__value")).toHaveText(fmtPct(golden.apy7d));
   await expect(page.locator(".alloc-chip__value")).not.toHaveText("4.06%");
 
-  // Vault holdings table: exactly 3 rows, each protocol name + value from the
-  // golden's adapters array (never the retired MORPHO/AAVE/COMPOUND unit
-  // counts 51.5855/51.5693/51.5698 that the static port baked in). The
-  // committed golden's adapters are all still at their placeholder addresses
-  // (configured:false) — assert the explicit "Not configured" state, never a
-  // live-looking $0 (the exact bug issue #50 fixes).
+  // Vault holdings table: Protocol/Balance/Price/Value columns (matching
+  // robotmoney-site's Vault TVL table structure), exactly 3 rows, each
+  // protocol name + balance/price/value from the golden's adapters array
+  // (never the retired MORPHO/AAVE/COMPOUND unit counts 51.5855/51.5693/
+  // 51.5698 that the static port baked in). The committed golden's adapters
+  // are all still at their placeholder addresses (configured:false) — assert
+  // the explicit "Not configured" / "—" states, never a live-looking $0 (the
+  // exact bug issue #50 fixes).
+  const headerCells = page.locator(".alloc-tablecard").first().locator("thead th");
+  await expect(headerCells).toHaveText(["Protocol", "Balance", "Price", "Value"]);
   const rows = page.locator(".alloc-tablecard").first().locator("tbody tr");
   await expect(rows).toHaveCount(3);
   for (const a of golden.adapters) {
     const row = rows.filter({ hasText: a.name.toUpperCase() });
     await expect(row).toHaveCount(1);
+    const cells = row.locator("td");
+    await expect(cells.nth(1)).toHaveText(adapterBalance(a));
+    await expect(cells.nth(2)).toHaveText(adapterPrice(a));
     await expect(row.locator(".alloc-val")).toHaveText(adapterValue(a));
     if (a.configured === false) {
       await expect(row.locator(".alloc-val")).not.toHaveText("$0");
       await expect(row.locator(".alloc-val")).toHaveClass(/alloc-val--unconfigured/);
+      await expect(cells.nth(1)).toHaveText("—");
+      await expect(cells.nth(2)).toHaveText("—");
     }
   }
   await expect(page.locator(".alloc-tablecard").first()).not.toContainText("51.5855");
@@ -175,11 +196,18 @@ test("allocation view renders the non-live indicator when vault-economics report
   await expect(rows).toHaveCount(3);
   for (const a of stubPayload.adapters) {
     const row = rows.filter({ hasText: a.name.toUpperCase() });
+    const cells = row.locator("td");
+    await expect(cells.nth(1)).toHaveText(adapterBalance(a));
+    await expect(cells.nth(2)).toHaveText(adapterPrice(a));
     await expect(row.locator(".alloc-val")).toHaveText(adapterValue(a));
   }
-  // The configured adapter shows its real (stub) balance, never "Not configured".
+  // The configured adapter shows its real (stub) balance/price/value, never "Not configured".
+  await expect(rows.filter({ hasText: "MORPHO" }).locator("td").nth(1)).toHaveText("28,000");
+  await expect(rows.filter({ hasText: "MORPHO" }).locator("td").nth(2)).toHaveText("$1.00");
   await expect(rows.filter({ hasText: "MORPHO" }).locator(".alloc-val")).toHaveText("$28,000");
-  // The still-unconfigured adapters show the explicit state, never a $0.
+  // The still-unconfigured adapters show the explicit "—"/"Not configured" state, never a $0.
+  await expect(rows.filter({ hasText: "AAVE" }).locator("td").nth(1)).toHaveText("—");
+  await expect(rows.filter({ hasText: "AAVE" }).locator("td").nth(2)).toHaveText("—");
   await expect(rows.filter({ hasText: "AAVE" }).locator(".alloc-val")).toHaveText("Not configured");
   await expect(rows.filter({ hasText: "AAVE" }).locator(".alloc-val")).not.toHaveText("$0");
 });
@@ -213,5 +241,10 @@ test("allocation view renders a stale badge and never fabricates numbers when va
   await expect(page.locator(".alloc-nonlive")).toBeHidden(); // source:'live', even while stale
   const rows = page.locator(".alloc-tablecard").first().locator("tbody tr");
   await expect(rows).toHaveCount(3);
-  for (const row of await rows.all()) await expect(row.locator(".alloc-val")).toHaveText("—");
+  for (const row of await rows.all()) {
+    await expect(row.locator(".alloc-val")).toHaveText("—");
+    const cells = row.locator("td");
+    await expect(cells.nth(1)).toHaveText("—");
+    await expect(cells.nth(2)).toHaveText("—");
+  }
 });

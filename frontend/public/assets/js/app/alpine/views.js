@@ -676,6 +676,19 @@ export function registerViews(Alpine) {
     adapterValue(a) {
       return a && a.configured === false ? "Not configured" : this.fmtUsd(a?.balanceUsd);
     },
+    // Balance/Price columns (vault TVL table layout parity): every adapter is
+    // a USDC-denominated lending position, so its balance is the same figure
+    // as balanceUsd at a fixed $1.00/unit peg — not a second, independently
+    // fabricated number. Unconfigured/unknown adapters show "—", never a
+    // live-looking $0 or invented price.
+    adapterBalance(a) {
+      return a && a.configured !== false && a.balanceUsd != null
+        ? Number(a.balanceUsd).toLocaleString("en-US", { maximumFractionDigits: 4 })
+        : "—";
+    },
+    adapterPrice(a) {
+      return a && a.configured !== false && a.balanceUsd != null ? "$1.00" : "—";
+    },
     asOfLabel() {
       const asOf = this.economics?.asOf;
       if (!asOf) return "—";
