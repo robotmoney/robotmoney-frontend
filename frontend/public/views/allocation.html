@@ -143,6 +143,13 @@
       <p class="alloc-stale" x-show="economics?.stale" x-cloak>
         Live chain data unavailable — showing last known values.
       </p>
+      <!-- Non-live indicator (issue #50): the vault-economics payload carries
+           source:'stub' when the backend runs against the hermetic demo/CI RPC
+           stub — canned fixture numbers must never be presented as live
+           chain data. -->
+      <p class="alloc-nonlive" x-show="economics?.source === 'stub'" x-cloak>
+        Demo data — hermetic stub, not live chain data.
+      </p>
     </div>
 
     <div class="alloc-grid3">
@@ -171,7 +178,10 @@
                   <span class="alloc-dot" style="background:#10b981;"></span>
                   <a class="alloc-link" target="_blank" rel="noopener" :href="`https://basescan.org/address/${a.address}`" x-text="a.name.toUpperCase()"></a>
                 </td>
-                <td class="alloc-r alloc-val" x-text="fmtUsd(a.balanceUsd)"></td>
+                <!-- issue #50: adapters still at placeholder addresses come back
+                     configured:false + balanceUsd:null — shown as an explicit
+                     unconfigured state, never a live-looking $0. -->
+                <td class="alloc-r alloc-val" :class="a.configured === false ? 'alloc-val--unconfigured' : ''" x-text="adapterValue(a)"></td>
               </tr>
             </template>
           </tbody>
@@ -545,6 +555,23 @@
   font-size: 0.75rem;
   color: var(--color-warn);
   margin: 0.5rem 0 0;
+}
+
+/* Non-live badge — the payload is served by the hermetic demo/CI RPC stub
+   (source:'stub', issue #50); stub numbers are flagged, never shown as live. */
+.alloc-nonlive {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-warn);
+  margin: 0.5rem 0 0;
+}
+
+/* Unconfigured adapter value — placeholder address, no live balance (issue #50). */
+.alloc-val--unconfigured {
+  color: var(--color-text-dim);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 /* Card + grid */

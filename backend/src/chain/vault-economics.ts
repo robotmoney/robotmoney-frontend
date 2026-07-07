@@ -3,7 +3,7 @@
 // (base-rpc-client.ts) on demand, behind a short-TTL in-process cache. On any
 // RPC failure it degrades to the last persisted share-price sample (or nulls)
 // with `stale: true` — it NEVER fabricates a number.
-import { config } from "../config.ts";
+import { config, resolveBaseRpcSource, resolveVaultAdapters, type BaseRpcSource, type VaultAdapterConfig } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { callTotalAssets, callTotalSupply, callBalanceOf, type RpcCallOptions } from "./base-rpc-client.ts";
 
@@ -16,12 +16,23 @@ function toUsd(raw: bigint): number {
 export interface VaultAdapterHolding {
   name: string;
   address: string;
+  // False while the adapter is still at its non-functional placeholder address
+  // (no ADAPTER_*_ADDRESS env override, issue #50). Unconfigured adapters are
+  // never eth_called and always carry balanceUsd: null — a placeholder must
+  // never render as a live-looking $0.
+  configured: boolean;
   balanceUsd: number | null;
 }
 
 export interface VaultEconomics {
   asOf: string;
   stale: boolean;
+  // Provenance (issue #50): 'live' = a real Base JSON-RPC endpoint;
+  // 'stub' = the hermetic demo/CI fixture stub (BASE_RPC_SOURCE=stub, set by
+  // the DEMO_HERMETIC=1 compose layer). Stub-served payloads are never
+  // presented as live chain data — the allocation UI renders a non-live
+  // indicator off this field.
+  source: BaseRpcSource;
   tvlUsd: number | null;
   sharePrice: number | null;
   totalShares: number | null;
@@ -38,16 +49,18 @@ interface LiveRead {
   totalAssets: bigint;
   totalSupply: bigint;
   idle: bigint;
-  adapterBalances: bigint[];
+  // Parallel to the adapters argument: null for an UNCONFIGURED (placeholder)
+  // adapter, which is never eth_called (issue #50).
+  adapterBalances: (bigint | null)[];
 }
 
-async function readLive(): Promise<LiveRead> {
+async function readLive(adapters: VaultAdapterConfig[]): Promise<LiveRead> {
   const opts = rpcOpts();
   const [totalAssets, totalSupply, idle, ...adapterBalances] = await Promise.all([
     callTotalAssets(config.vault.address, opts),
     callTotalSupply(config.vault.address, opts),
     callBalanceOf(config.vault.usdc, config.vault.address, opts),
-    ...config.vault.adapters.map((a) => callTotalAssets(a.address, opts)),
+    ...adapters.map((a) => (a.configured ? callTotalAssets(a.address, opts) : Promise.resolve(null))),
   ]);
   return { totalAssets, totalSupply, idle, adapterBalances };
 }
@@ -117,23 +130,38 @@ export async function fetchVaultEconomics(): Promise<VaultEconomics> {
   const now = Date.now();
   if (cache && now - cache.at < CACHE_TTL_MS) return cache.value;
 
+  // Resolved per call (not module load) so the provenance marker and the
+  // adapter `configured` flags always track the current env — and so tests can
+  // flip BASE_RPC_SOURCE / ADAPTER_*_ADDRESS per case. resolveBaseRpcSource is
+  // fail-closed and intentionally OUTSIDE the try below: an invalid marker
+  // must refuse loudly, never degrade into a payload claiming 'live'.
+  const source = resolveBaseRpcSource();
+  const adapters = resolveVaultAdapters();
+
   let result: VaultEconomics;
   try {
-    const live = await readLive();
+    const live = await readLive(adapters);
     const sharePrice = live.totalSupply === 0n ? null : Number(live.totalAssets) / Number(live.totalSupply);
     result = {
       asOf: new Date(now).toISOString(),
       stale: false,
+      source,
       tvlUsd: toUsd(live.totalAssets),
       sharePrice,
       totalShares: toUsd(live.totalSupply),
       idleUsdc: toUsd(live.idle),
       apy7d: await computeApy7d(config.vault.address),
-      adapters: config.vault.adapters.map((a, i) => ({
-        name: a.name,
-        address: a.address,
-        balanceUsd: toUsd(live.adapterBalances[i]!),
-      })),
+      adapters: adapters.map((a, i) => {
+        const balance = live.adapterBalances[i];
+        return {
+          name: a.name,
+          address: a.address,
+          configured: a.configured,
+          // Unconfigured (placeholder) adapters are never eth_called: null,
+          // not a live-looking $0 (issue #50).
+          balanceUsd: balance == null ? null : toUsd(balance),
+        };
+      }),
     };
   } catch (err) {
     console.error("vault-economics: Base RPC read failed, degrading to last-persisted values:", err);
@@ -143,12 +171,13 @@ export async function fetchVaultEconomics(): Promise<VaultEconomics> {
     result = {
       asOf: persisted.asOf ?? new Date(now).toISOString(),
       stale: true,
+      source,
       tvlUsd: persisted.totalAssets,
       sharePrice: persisted.sharePrice,
       totalShares: persisted.totalSupply,
       idleUsdc: null, // no persisted history for idle balance / per-adapter breakdown
       apy7d: await computeApy7d(config.vault.address).catch(() => null),
-      adapters: config.vault.adapters.map((a) => ({ name: a.name, address: a.address, balanceUsd: null })),
+      adapters: adapters.map((a) => ({ name: a.name, address: a.address, configured: a.configured, balanceUsd: null })),
     };
   }
   cache = { at: now, value: result };

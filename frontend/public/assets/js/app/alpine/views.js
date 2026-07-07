@@ -643,6 +643,12 @@ export function registerViews(Alpine) {
       return "$" + n.toLocaleString("en-US", { maximumFractionDigits: Math.abs(n) < 1000 ? 2 : 0 });
     },
     fmtPct(v) { return v == null ? "—" : (Number(v) * 100).toFixed(2) + "%"; },
+    // Per-adapter Value cell (issue #50): an adapter still at its placeholder
+    // address is reported configured:false with balanceUsd:null by the API —
+    // render an explicit unconfigured state, never a live-looking $0 / dash.
+    adapterValue(a) {
+      return a && a.configured === false ? "Not configured" : this.fmtUsd(a?.balanceUsd);
+    },
     asOfLabel() {
       const asOf = this.economics?.asOf;
       if (!asOf) return "—";
