@@ -182,7 +182,22 @@ export function registerStaticViews(Alpine) {
         const ids = (memberIndex?.members || memberIndex || ["athena", "robotmoney", "woon"]).map((m) => m.id || m);
         this.members = (await Promise.all(ids.map((id) => maybeJson(`${ARCHIVE_ROOT}/manifests/members/${id}.json`)))).filter(Boolean);
       } catch {
-        this.error = `No archived committee session found for ${date}/${subject}. The reference archive currently ends at 2026-06-25 for Woon.`;
+        // Sessions newer than the static reference archive (e.g. today's live
+        // session) are only served by the backend — fall back to the live API.
+        try {
+          const [res, memberList] = await Promise.all([
+            api.get(path(ROUTES.committee.session, { date, subject })),
+            api.get(ROUTES.committee.members).catch(() => null),
+          ]);
+          const normalized = normalizeSession({ ...res.session, takes: res.takes }, null);
+          this.session = normalized;
+          this.subject = normalized.subject;
+          this.brief = normalized.brief;
+          this.takes = normalized.takes;
+          this.members = memberList?.members || [];
+        } catch {
+          this.error = `No archived committee session found for ${date}/${subject}. The reference archive currently ends at 2026-06-25 for Woon.`;
+        }
       } finally {
         this.loading = false;
       }
