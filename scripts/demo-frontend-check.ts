@@ -108,9 +108,15 @@ async function main() {
   ]);
   // Session detail renders the members' signed takes + memo links and the
   // e2e submissions table (spa.spec.ts asserts .session-submissions rows).
+  // The reference-faithful member-opinion cards (issue #75) must survive: one
+  // cv__take card per member with a role/lens line and a stance-confidence
+  // badge — the surface spa.spec.ts asserts against for live demo sessions.
   await checkView("/views/committee/session.html", [
     "x-data=\"icSessionDetail()\"",
     "x-for=\"t in takes\"",  // renders the members' signed takes
+    "cv__take",              // member-opinion card (issue #75 render surface)
+    "cv__stance-badge",      // stance · confidence badge
+    "cv__take-lens",         // member role/lens line
     "cv__memo-link",         // memoUrl rendering
     "session-submissions",   // compact submissions table (e2e hook)
   ]);

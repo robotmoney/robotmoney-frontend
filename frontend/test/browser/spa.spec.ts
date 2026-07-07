@@ -70,6 +70,19 @@ test("renders allocation and dynamic committee routes through Alpine", async ({ 
   await expect(page.locator(".session-title")).toHaveText("Woon Treasury");
   await expect(page.locator(".session-submissions tbody tr")).toHaveCount(3);
 
+  // Live loadApi -> camelTake -> cv__take render path (issue #75): a live/current
+  // Woon session served from the Postgres committee API (not the pre-2026-07-01
+  // static archive) renders one member-opinion card per participating member.
+  // runSession drives athena/boreas/cygnus, so exactly three cards render. Each
+  // card carries the member name, a non-empty role/lens, and a stance-confidence
+  // badge — guards a silent regression in the member-opinion render surface.
+  const takeCards = page.locator(".cv__take");
+  await expect(takeCards).toHaveCount(3);
+  const firstCard = takeCards.first();
+  await expect(firstCard.locator(".cv__member-link")).not.toHaveText("");
+  await expect(firstCard.locator(".cv__take-lens")).not.toHaveText("");
+  await expect(firstCard.locator(".cv__stance-badge")).toHaveText(/\S+ · \d+%/);
+
   await expectNoBrowserErrors(errors);
 });
 
