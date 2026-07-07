@@ -6,7 +6,7 @@ export function registerHeroes(Alpine) {
     ...p5Lifecycle(),
     _start(container) {
       const p5Constructor = window.p5;
-      const numTrees = 20, maxDepth = 6, windStrength = 80, branchAngle = 25, shrinkPct = 67, randomness = 40;
+      const numTrees = 10, maxDepth = 5, windStrength = 80, branchAngle = 25, shrinkPct = 67, randomness = 40;
       const ACCENT = [0, 229, 255], BG = [5, 5, 8];
       const sketch = (p) => {
         let W, H, trees = [], windTime = 0;
@@ -1104,6 +1104,9 @@ export function registerHeroes(Alpine) {
       if (!container) return;
       let cancelled = false;
       let raf = 0;
+      let paused = false;
+      const reduce =
+        typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     const spd = 1.1, windSpd = 0.8, numCircles = 15, numWedges = 7, wedgeScl = 1.0;
     const BG = [10, 10, 15], AC = [0, 229, 255];
     let W = container.offsetWidth, H = container.offsetHeight;
@@ -1147,9 +1150,8 @@ export function registerHeroes(Alpine) {
       return { tipX, tipY, b1x: bx + px * half, b1y: by + py * half, b2x: bx - px * half, b2y: by - py * half };
     }
 
-    function drawWedge(w, s, color) {
-      const p = wedgePath(w, s);
-      ctx.beginPath(); ctx.moveTo(p.tipX, p.tipY); ctx.lineTo(p.b1x, p.b1y); ctx.lineTo(p.b2x, p.b2y); ctx.closePath();
+    function drawWedge(path, color) {
+      ctx.beginPath(); ctx.moveTo(path.tipX, path.tipY); ctx.lineTo(path.b1x, path.b1y); ctx.lineTo(path.b2x, path.b2y); ctx.closePath();
       ctx.fillStyle = color; ctx.fill();
     }
 
@@ -1225,9 +1227,11 @@ export function registerHeroes(Alpine) {
       }
       for (const w of wedges) {
         const sc = wedgeScaleOsc, wp = wedgePath(w, sc);
-        ctx.globalAlpha = w.opacity; drawWedge(w, sc, acS);
+        // wp is fixed for this wedge for the rest of this frame — reuse it
+        // instead of having drawWedge recompute the same trig per circle.
+        ctx.globalAlpha = w.opacity; drawWedge(wp, acS);
         for (const c of circles) {
-          ctx.save(); ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); ctx.clip(); drawWedge(w, sc, bgS); ctx.restore();
+          ctx.save(); ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); ctx.clip(); drawWedge(wp, bgS); ctx.restore();
           const pts = [{ x: wp.tipX, y: wp.tipY }, { x: wp.b1x, y: wp.b1y }, { x: wp.b2x, y: wp.b2y }];
           for (let k = 0; k < 3; k++) {
             const p1 = pts[k], p2 = pts[(k + 1) % 3], d1 = (p1.x - c.x) ** 2 + (p1.y - c.y) ** 2, d2 = (p2.x - c.x) ** 2 + (p2.y - c.y) ** 2, r2 = c.r * c.r;
@@ -1251,17 +1255,43 @@ export function registerHeroes(Alpine) {
       generateCircles(); initWedges();
     }
 
-    function loop() { if (cancelled) return; update(); render(); raf = requestAnimationFrame(loop); }
-    init(); raf = requestAnimationFrame(loop);
+    function loop() { if (cancelled || paused) return; update(); render(); raf = requestAnimationFrame(loop); }
+    init();
+    if (reduce) {
+      // Reduced motion: render one static frame instead of starting the loop.
+      update(); render();
+    } else {
+      raf = requestAnimationFrame(loop);
+    }
 
     let prevW = W, prevH = H;
     const onResize = () => { if (!container) return; const nW = container.offsetWidth, nH = container.offsetHeight; if (nW === prevW && nH === prevH) return; prevW = nW; prevH = nH; init(); };
     window.addEventListener("resize", onResize);
 
+      let intersectionObserver = null;
+      if (!reduce && typeof IntersectionObserver !== "undefined") {
+        intersectionObserver = new IntersectionObserver(
+          (entries) => entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              if (paused && !cancelled) {
+                paused = false;
+                raf = requestAnimationFrame(loop);
+              }
+            } else {
+              paused = true;
+              cancelAnimationFrame(raf);
+            }
+          }),
+          { threshold: 0.1 },
+        );
+        intersectionObserver.observe(container);
+      }
+
       this._cleanup = () => {
         cancelled = true;
         cancelAnimationFrame(raf);
         window.removeEventListener("resize", onResize);
+        intersectionObserver?.disconnect();
         if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
       };
     },
@@ -1289,8 +1319,20 @@ export function registerHeroes(Alpine) {
         let collapseProgress = 0;
 
         function agentCount() {
-          return Math.max(900, Math.min(3000, Math.floor((W * H) / 260)));
+          return Math.max(900, Math.min(1200, Math.floor((W * H) / 260)));
         }
+
+        // A small fixed set of behavior profiles spanning the same
+        // speed/sensorDist/sensorAngle/steer ranges the per-agent randomization
+        // used to cover, computed once instead of 4 p.random() calls per agent
+        // (up to 1200 agents) on every seed/re-seed.
+        const AGENT_PROFILES = [
+          { speed: 1.0, sensorDist: 12, sensorAngle: 0.5, steer: 0.15 },
+          { speed: 1.375, sensorDist: 14, sensorAngle: 0.55, steer: 0.1875 },
+          { speed: 1.75, sensorDist: 16, sensorAngle: 0.6, steer: 0.225 },
+          { speed: 2.125, sensorDist: 18, sensorAngle: 0.65, steer: 0.2625 },
+          { speed: 2.5, sensorDist: 20, sensorAngle: 0.7, steer: 0.3 },
+        ];
 
         function seedAgents(cx = W / 2, cy = H / 2, radiusMin = 30, radiusMax = 150) {
           agents = [];
@@ -1298,15 +1340,16 @@ export function registerHeroes(Alpine) {
           for (let i = 0; i < n; i++) {
             const angle = p.random(p.TWO_PI);
             const dist = p.random(radiusMin, Math.min(radiusMax, Math.max(W, H) * 0.22));
+            const profile = AGENT_PROFILES[i % AGENT_PROFILES.length];
             agents.push({
               x: cx + p.cos(angle) * dist,
               y: cy + p.sin(angle) * dist,
               heading: angle + p.random(-0.5, 0.5),
-              speed: p.random(1, 2.5),
-              sensorDist: p.random(12, 20),
-              sensorAngle: 0.5 + p.random(0.2),
-              steer: 0.15 + p.random(0.15),
-              colorIdx: Math.floor(p.random(COLORS.length)),
+              speed: profile.speed,
+              sensorDist: profile.sensorDist,
+              sensorAngle: profile.sensorAngle,
+              steer: profile.steer,
+              colorIdx: i % COLORS.length,
             });
           }
         }
@@ -1333,7 +1376,6 @@ export function registerHeroes(Alpine) {
           W = Math.max(1, container.offsetWidth);
           H = Math.max(1, container.offsetHeight);
           p.createCanvas(W, H).style("display", "block");
-          p.frameRate(60);
           reset();
         };
 
@@ -1349,7 +1391,12 @@ export function registerHeroes(Alpine) {
 
         p.draw = function () {
           p.background(BG[0], BG[1], BG[2], isCollapsing ? 30 : 15);
-          for (let i = 0; i < trailMap.length; i++) trailMap[i] *= 0.96;
+          // Only touch cells with a meaningful value — most of the map is
+          // already ~0 at any given moment, so skipping those avoids a
+          // pointless multiply across the full W*H array every frame.
+          for (let i = 0; i < trailMap.length; i++) {
+            if (trailMap[i] > 0.01) trailMap[i] *= 0.96;
+          }
 
           cycleTime++;
           if (cycleTime > cycleDuration && !isCollapsing) {

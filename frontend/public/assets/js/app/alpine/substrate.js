@@ -3,12 +3,14 @@
 // Components: Alpine's init()/destroy() lifecycle starts and tears down p5 (so
 // the canvas is cleaned up on SPA view changes). p5 is the global from the CDN
 // <script>; we render into the element this x-data is attached to.
+import { applyHeroPerf } from "./p5-hero-perf.js";
+
 export function registerSubstrate(Alpine) {
   Alpine.data("substrate", () => ({
     _p5: null,
     _p5Timer: null,
     _destroyed: false,
-    _observer: null,
+    _perfCleanup: null,
     _pageHide: null,
     _beforeViewChange: null,
     init() {
@@ -40,12 +42,13 @@ export function registerSubstrate(Alpine) {
       this._beforeViewChange = null;
       clearTimeout(this._p5Timer);
       this._p5Timer = null;
+      this._perfCleanup?.();
+      this._perfCleanup = null;
       if (this._p5) { this._p5.noLoop(); this._p5.remove(); this._p5 = null; }
-      if (this._observer) this._observer.disconnect();
     },
     _start(container, overlay) {
       const p5Constructor = window.p5;
-      const intensity = 81, speed = 6.0, fadeSec = 4, lineW = 1.1, dotSize = 36;
+      const intensity = 45, speed = 3.0, fadeSec = 4, lineW = 1.1, dotSize = 36;
       const ACCENT = [0, 229, 255], BG = [10, 10, 15];
 
       const sketch = (p) => {
@@ -55,7 +58,10 @@ export function registerSubstrate(Alpine) {
         function Crack() {
           this.x = 0; this.y = 0; this.t = 0; this.alive = true;
           this.findStart = function () {
-            for (let attempt = 0; attempt < 5000; attempt++) {
+            // Bounded random search for *a* valid grid cell, not a specific
+            // one — a lower attempt cap is cheaper in the worst case (an
+            // already-dense grid) with no visible difference in outcome.
+            for (let attempt = 0; attempt < 1500; attempt++) {
               let px = Math.floor(p.random(W));
               let py = Math.floor(p.random(H));
               if (cgrid[py * W + px] < 10000) {
@@ -98,7 +104,7 @@ export function registerSubstrate(Alpine) {
         function initGeneration() {
           cgrid = new Int32Array(W * H).fill(10001);
           cracks = []; numCracks = 0; stasisFrames = 0;
-          maxCracks = Math.max(5, Math.round(W * (intensity / 100)));
+          maxCracks = Math.min(700, Math.max(5, Math.round(W * (intensity / 100))));
           let seeds = Math.max(3, Math.round(maxCracks * 0.1));
           for (let k = 0; k < seeds; k++) {
             let px = Math.floor(p.random(W));
@@ -173,14 +179,7 @@ export function registerSubstrate(Alpine) {
       };
 
       this._p5 = new p5Constructor(sketch, container);
-      this._observer = new IntersectionObserver(
-        (entries) => entries.forEach((e) => {
-          if (!this._p5) return;
-          if (e.isIntersecting) this._p5.loop(); else this._p5.noLoop();
-        }),
-        { threshold: 0.1 },
-      );
-      this._observer.observe(this.$el);
+      this._perfCleanup = applyHeroPerf(this._p5, this.$el, { fpsCap: 30 });
     },
   }));
 }
