@@ -352,10 +352,17 @@ into six independently testable stages — **access → extract → transform �
 
 Three pipelines run through these stages:
 
-- **`regime`** — macro + on-chain indicators (`T10Y2Y`, `HY_OAS`, `VIX`, `DXY`,
-  `COPPER_GOLD`, `ICSA`, `DEFI_TVL`, `STABLES`, `BTC_ACTIVE`, `ETH_TREND`,
-  `BTC_ETH`) → per-indicator sign-adjusted percentile → panel + overall composite +
-  regime label history → **`regime_snapshots`**.
+- **`regime`** — 26 registry indicators (`backend/src/analytics/analyze/indicators.ts`)
+  across three panels: **macro** (`T10Y2Y`, `DFII10`, `T5YIE`, `HY_OAS`, `DXY`,
+  `ICSA`, `VIX`, `COPPER_GOLD`) and **on-chain** (`DEFI_TVL`, `STABLES`,
+  `BTC_ACTIVE`, `ETH_ACTIVE`, `BTC_MVRV`, `BTC_ETH`, `ETH_TREND`, `NEW_TOKENS`,
+  `DEFI_GROWTH`, `STABLES_GROWTH`) drive the 2-panel composite (0.5×macro +
+  0.5×on-chain); a third **factor** panel (`SPX_TREND`, `IWM_SPY`, `SPHB_SPLV`,
+  `MTUM_SPY`, `IWF_IWD`, `XLU_SPY`, `XLP_XLY`, `SHILLER_CAPE`) is fetched,
+  persisted, and served as a **display-only** third index card on `/regime` — it
+  is not part of the composite. Per-indicator sign-adjusted percentile → panel +
+  overall composite + regime label history → **`regime_snapshots`** (`panels`
+  column lists which panels are populated on the asof row).
 - **`channel-divergence`** — `BTC`, `QQQ`, `SPY` → BTC beta vs the risk-appetite
   factor + BTC/QQQ relative strength gauges → **`research_signals`**.
 - **`late-cycle-signals`** — `SPY`, `RSP`, `MNA`, `MARGIN`, `CONF` → index
