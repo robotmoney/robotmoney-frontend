@@ -1,5 +1,7 @@
 // Shared Alpine lifecycle for p5-backed components. Retaining the retry timer
 // prevents a sketch from starting in detached DOM after a route change.
+import { applyHeroPerf } from "./p5-hero-perf.js";
+
 export function p5Lifecycle() {
   return {
     _p5: null,
@@ -7,6 +9,7 @@ export function p5Lifecycle() {
     _p5Destroyed: false,
     _p5PageHide: null,
     _p5BeforeViewChange: null,
+    _perfCleanup: null,
     init() {
       this._p5Destroyed = false;
       this._p5PageHide = () => this.destroy();
@@ -18,8 +21,12 @@ export function p5Lifecycle() {
       const container = host.firstElementChild;
       const startWhenReady = () => {
         if (this._p5Destroyed) return;
-        if (window.p5) this._start(container);
-        else this._p5Timer = setTimeout(startWhenReady, 50);
+        if (window.p5) {
+          this._start(container);
+          this._perfCleanup = applyHeroPerf(this._p5, host, { fpsCap: 30 });
+        } else {
+          this._p5Timer = setTimeout(startWhenReady, 50);
+        }
       };
       startWhenReady();
     },
@@ -33,6 +40,8 @@ export function p5Lifecycle() {
       this._p5BeforeViewChange = null;
       clearTimeout(this._p5Timer);
       this._p5Timer = null;
+      this._perfCleanup?.();
+      this._perfCleanup = null;
       if (this._p5) {
         this._p5.noLoop();
         this._p5.remove();
