@@ -1,8 +1,15 @@
 <!-- Asset Allocation
      Pixel-perfect static port of robotmoney-site/src/app/allocation/page.tsx.
      Buildless: every pie is a Chart.js pie drawn by the boot-registered
-     allocationView() factory (alpine/views.js); all numbers are baked from the
-     public/data snapshots (latest 2026-06-26) per .spec/allocation-spec.md.
+     allocationView() factory (alpine/views.js).
+     Vault economics (Total AUM hero, 7-Day APY, vault pie, vault holdings
+     table, Total Vault Assets / rmUSDC shares) are LIVE: fetched from
+     GET /api/dashboards/vault-economics (issue #40), which reads the vault via
+     Base JSON-RPC behind a short-TTL server cache and degrades to
+     `stale: true` + last-known/null values (never fabricated) when the RPC is
+     unreachable. Strategy/wallet/buyback sections remain the static port —
+     baked from the public/data snapshots (latest 2026-06-26) per
+     .spec/allocation-spec.md — and are out of scope for this feature.
      Shares the a2-* design system with performance.html.
 -->
 
@@ -19,10 +26,13 @@
           history across all prop wallets.
         </p>
       </div>
+      <!-- Total AUM is bound to the live vault-economics tvlUsd (issue #40).
+           Wallet/buyback balances are out of scope for this feature, so "AUM"
+           here means vault TVL, not a combined wallet+vault figure. -->
       <div class="alloc-aum">
         <span class="alloc-aum__label">Total AUM</span>
-        <span class="alloc-aum__value">$71,681</span>
-        <span class="alloc-aum__sub">Jun 26, 2026, 11:16 AM UTC</span>
+        <span class="alloc-aum__value" x-text="fmtUsd(economics?.tvlUsd)">—</span>
+        <span class="alloc-aum__sub" x-text="asOfLabel()">—</span>
       </div>
     </div>
   </header>
@@ -128,8 +138,11 @@
       <h2 class="a2-h2">Vault <span class="a2-grad">TVL</span></h2>
       <div class="alloc-chip">
         <span class="alloc-chip__label">7-Day APY</span>
-        <span class="alloc-chip__value">4.06%</span>
+        <span class="alloc-chip__value" x-text="fmtPct(economics?.apy7d)">—</span>
       </div>
+      <p class="alloc-stale" x-show="economics?.stale" x-cloak>
+        Live chain data unavailable — showing last known values.
+      </p>
     </div>
 
     <div class="alloc-grid3">
@@ -138,46 +151,39 @@
         <div class="alloc-pie rm-chart"><canvas x-ref="vault"></canvas></div>
       </div>
 
-      <!-- Vault holdings table -->
+      <!-- Vault holdings table — live per-adapter balances from
+           GET /api/dashboards/vault-economics (issue #40). The endpoint only
+           carries {name, address, balanceUsd} per adapter (no separate
+           on-chain balance/price breakdown), so this table is Protocol +
+           Value; the protocol name links to its BaseScan address. -->
       <div class="a2-card alloc-tablecard">
         <table class="alloc-table">
           <thead>
             <tr>
               <th class="alloc-l">Protocol</th>
-              <th class="alloc-r">Balance</th>
-              <th class="alloc-r">Price</th>
               <th class="alloc-r">Value</th>
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>MORPHO</td>
-              <td class="alloc-r">51.5855</td>
-              <td class="alloc-r">$1.00</td>
-              <td class="alloc-r alloc-val">$52</td>
-            </tr>
-            <tr>
-              <td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>AAVE</td>
-              <td class="alloc-r">51.5693</td>
-              <td class="alloc-r">$1.00</td>
-              <td class="alloc-r alloc-val">$52</td>
-            </tr>
-            <tr>
-              <td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>COMPOUND</td>
-              <td class="alloc-r">51.5698</td>
-              <td class="alloc-r">$1.00</td>
-              <td class="alloc-r alloc-val">$52</td>
-            </tr>
+            <template x-for="a in (economics?.adapters ?? [])" :key="a.address">
+              <tr>
+                <td class="alloc-sym">
+                  <span class="alloc-dot" style="background:#10b981;"></span>
+                  <a class="alloc-link" target="_blank" rel="noopener" :href="`https://basescan.org/address/${a.address}`" x-text="a.name.toUpperCase()"></a>
+                </td>
+                <td class="alloc-r alloc-val" x-text="fmtUsd(a.balanceUsd)"></td>
+              </tr>
+            </template>
           </tbody>
         </table>
         <div class="alloc-tfoot">
           <div class="alloc-tfoot__row">
             <span class="alloc-tfoot__label">Total Vault Assets</span>
-            <span class="alloc-tfoot__value">$154.72</span>
+            <span class="alloc-tfoot__value" x-text="fmtUsd(economics?.tvlUsd)">—</span>
           </div>
           <div class="alloc-tfoot__row alloc-tfoot__row--sub">
-            <span>153.5 rmUSDC shares @ $1.0080</span>
-            <span>Jun 26, 2026, 11:27 AM UTC</span>
+            <span x-text="sharesLabel()">—</span>
+            <span x-text="asOfLabel()">—</span>
           </div>
         </div>
       </div>
@@ -530,6 +536,15 @@
   font-size: 0.875rem;
   font-weight: 700;
   color: var(--color-accent);
+}
+
+/* Stale badge — live vault-economics fetch failed; last-known/null values are
+   shown instead (issue #40, never a fabricated number). */
+.alloc-stale {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-warn);
+  margin: 0.5rem 0 0;
 }
 
 /* Card + grid */

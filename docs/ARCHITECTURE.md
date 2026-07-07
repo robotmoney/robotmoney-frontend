@@ -15,7 +15,11 @@ For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
 - **Preserve the marketing UI** of robotmoney.net (reproduce the look exactly).
 - **Cherry-pick two feature areas**: the **regime/research** data views (the
   regime classifier + its regime-family research signals) and the **Investment
-  Committee**. Allocation / vault / wallet dashboards are out of scope.
+  Committee**. Allocation / vault / wallet dashboards are out of scope, **except**
+  the `/allocation` page's vault-economics slice (TVL, share price, adapters,
+  7-day APY), brought into scope by a live Base RPC pipeline — see
+  [DECISIONS.md §D15](./DECISIONS.md#d15--live-vault-economics-pipeline-from-base-rpc-supersedes-d1s-vault-dashboard-exclusion)
+  and §10 below. Wallet-balances and buyback stay out of scope.
 - **No build step.** No bundler, transpiler, or compiler — the browser does all
   the work at runtime; only evergreen browsers are supported.
 - **Consolidate backends onto one Postgres** (Docker for CI/demo; a DO Managed
@@ -26,7 +30,8 @@ For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
   two later with zero source edits.
 
 Out of scope for v1: the allocation / vault / wallet dashboards, the generative-art
-visualizations, blog/media editorial, and other secondary pages.
+visualizations, blog/media editorial, and other secondary pages — **except** the
+live vault-economics slice of `/allocation` (§D15).
 
 ---
 
@@ -587,3 +592,51 @@ analytics-provider / host), ideally with Postgres row-level security as
 defense-in-depth; and add the **role-gated regime write** endpoint. The worker's
 committee handlers are **orchestration** (open/brief/close/aggregate/publish), never
 generation of member takes.
+
+---
+
+## 10. Vault economics (live chain data)
+
+Decision [D15](./DECISIONS.md#d15--live-vault-economics-pipeline-from-base-rpc-supersedes-d1s-vault-dashboard-exclusion)
+brought the `/allocation` page's vault-economics slice into scope, backed by a
+real Base (chainId `8453`) JSON-RPC read pipeline — the first (and, per §1,
+only) exception to the allocation/vault/wallet out-of-scope line.
+
+- **`backend/src/chain/base-rpc-client.ts`** — a minimal `eth_call` client: no
+  external chain SDK (ethers/viem), just `fetch` + hand-rolled 4-byte selector
+  encoding for the three read-only calls this feature needs (`totalAssets()`,
+  `totalSupply()`, `balanceOf(address)`) and uint256 decoding. Keeps the
+  buildless-backend dependency footprint (§2) unchanged.
+- **`backend/src/chain/vault-economics.ts`** — reads the vault's
+  `totalAssets()`/`totalSupply()` (→ `sharePrice = totalAssets / totalSupply`,
+  `null` iff `totalSupply = 0`), the vault's idle USDC balance
+  (`USDC.balanceOf(vault)`), and each configured adapter's `totalAssets()`,
+  behind a 30s in-process cache. On any RPC failure it returns
+  `stale: true` with the **last-persisted share-price sample** (or `null`) —
+  never a fabricated number, never a 5xx.
+- **Config, not on-chain discovery** — `config.vault` (`backend/src/config.ts`)
+  holds the vault + USDC addresses (already documented publicly at
+  `frontend/public/views/docs/skill/installation.html` and `skills.html`) and
+  the three adapter `{name, address}` entries, all overridable via env
+  (`VAULT_ADDRESS`, `USDC_ADDRESS`, `ADAPTER_MORPHO_ADDRESS`,
+  `ADAPTER_AAVE_ADDRESS`, `ADAPTER_COMPOUND_ADDRESS`). The adapter contract
+  addresses are not published anywhere yet, so their defaults are
+  non-functional placeholders pending real values.
+- **`vault_share_price_history`** (migration `0012_vault_share_price_history.sql`)
+  — one row per `(vault_address, sample_hour)`, upserted by the hourly
+  `vault.sample_share_price` job (`backend/src/worker/handlers/vault.ts`,
+  seeded in `db/seed.ts`, cron `0 * * * *`). 7-day APY
+  (`(1 + growth)^(365/daysElapsed) - 1`) is computed from these samples in
+  `computeApy7d`; fewer than two samples in the lookback yields `null`.
+- **`GET /api/dashboards/vault-economics`** (`ROUTES.dashboards.vaultEconomics`,
+  `backend/src/api/routes/dashboards.ts`) returns
+  `{ asOf, stale, tvlUsd, sharePrice, totalShares, idleUsdc, apy7d, adapters }`
+  where `adapters` is exactly the three configured `{name, address,
+  balanceUsd}` entries. `allocationView()` (`frontend/public/assets/js/app/alpine/views.js`)
+  fetches this on init and binds it into `views/allocation.html`, showing a
+  `stale` badge and last-known/null text instead of the retired static
+  2026-06-26 literals.
+- **Preview/demo fidelity (D14)** — `goldens/api-goldens.json` carries a real
+  captured `/api/dashboards/vault-economics` entry so `bun run preview` and the
+  e2e Playwright spec (`frontend/test/browser/allocation-view.spec.ts`) render
+  this section offline.

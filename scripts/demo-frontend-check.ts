@@ -87,8 +87,17 @@ async function main() {
     "rs__chart",
   ]);
   await checkView("/views/allocation.html", [
+    "x-data=\"allocationView()\"",
+    "alloc-tablecard",             // vault/wallet holdings table card
+    "alloc-aum__value",            // hero Total AUM (live vault-economics binding, issue #40)
+    "alloc-chip__value",           // 7-day APY chip (live vault-economics binding, issue #40)
+  ]);
+  // The wallet-performance charts (walletPerfView(), formerly embedded in
+  // allocation.html) moved to their own page under the pixel-perfect lift
+  // (#39); "rm-chartcard" was renamed to "a2-card" in that same lift.
+  await checkView("/views/performance.html", [
     "x-data=\"walletPerfView()\"",
-    "rm-chartcard",  // shared chart-card component
+    "a2-card",  // shared chart-card component
   ]);
   await checkView("/views/committee/member.html", ["x-data=\"memberProfile()\""]);
   await checkView("/views/committee/session.html", ["x-data=\"icSessionDetail()\""]);

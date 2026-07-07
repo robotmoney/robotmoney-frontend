@@ -311466,6 +311466,32 @@
         }
       }
     },
+    "/api/dashboards/vault-economics": {
+      "asOf": "2026-07-07T16:17:08.336Z",
+      "stale": false,
+      "tvlUsd": 170.256868,
+      "sharePrice": 1.009184016146862,
+      "totalShares": 168.707456,
+      "idleUsdc": 0,
+      "apy7d": null,
+      "adapters": [
+        {
+          "name": "Morpho",
+          "address": "0x1111111111111111111111111111111111111111",
+          "balanceUsd": 0
+        },
+        {
+          "name": "Aave",
+          "address": "0x2222222222222222222222222222222222222222",
+          "balanceUsd": 0
+        },
+        {
+          "name": "Compound",
+          "address": "0x3333333333333333333333333333333333333333",
+          "balanceUsd": 0
+        }
+      ]
+    },
     "/health": {
       "status": "ok",
       "env": "demo",

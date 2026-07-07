@@ -47,5 +47,38 @@ export const config = {
   // seeded/offline) — see analytics/index.ts::resolveAnalyticsSource. `PROVIDER` no
   // longer influences the live/demo data path; do NOT use it to opt a demo into real data.
   analyticsProvider: (process.env.PROVIDER === "live" ? "live" : "seeded") as "live" | "seeded",
+  // --- Vault economics (live Base RPC read, issue #40) ---------------------
+  // Base mainnet (chainId 8453) JSON-RPC endpoint used for the read-only
+  // eth_call vault-economics pipeline (backend/src/chain). No API key required
+  // for the public default; override for a private/rate-limited provider.
+  baseRpcUrl: process.env.BASE_RPC_URL || "https://mainnet.base.org",
+  vault: {
+    // RobotMoneyVault on Base, documented publicly at
+    // frontend/public/views/docs/skill/installation.html and skill.html.
+    address: process.env.VAULT_ADDRESS || "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
+    // USDC on Base, same doc pages.
+    usdc: process.env.USDC_ADDRESS || "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    // Decision (issue #40): adapter set comes from config, NOT on-chain
+    // discovery. The vault's three real adapter contract addresses are not
+    // published anywhere in this repo yet, so the defaults below are
+    // deliberately NON-FUNCTIONAL placeholders — override with the real
+    // deployed addresses via env once known. IMPORTANT: these must be
+    // addresses with NO contract code (an `eth_call` to them then decodes a
+    // clean empty `0x` result as 0n). Do NOT use low addresses like
+    // 0x0…01/02/03 — on Base (and most EVM chains) those alias the
+    // ecrecover/sha256/ripemd160 precompiles, which return real (garbage,
+    // for this use) output instead of erroring, silently producing an
+    // absurd fabricated-looking balance. The repeating-digit addresses below
+    // are verified empty accounts on Base mainnet. A placeholder/wrong
+    // address makes its balance read as 0 — the chain client
+    // (chain/vault-economics.ts) still reports `stale: false` (the RPC itself
+    // is healthy), so this is a config gap to close before adapters are
+    // meaningful, not a fabricated number.
+    adapters: [
+      { name: "Morpho", address: process.env.ADAPTER_MORPHO_ADDRESS || "0x1111111111111111111111111111111111111111" },
+      { name: "Aave", address: process.env.ADAPTER_AAVE_ADDRESS || "0x2222222222222222222222222222222222222222" },
+      { name: "Compound", address: process.env.ADAPTER_COMPOUND_ADDRESS || "0x3333333333333333333333333333333333333333" },
+    ],
+  },
 };
 

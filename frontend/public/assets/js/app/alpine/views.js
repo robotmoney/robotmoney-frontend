@@ -577,13 +577,20 @@ export function registerViews(Alpine) {
     destroy() { this._chart?.destroy(); this._chart = null; },
   }));
 
-  // ── Asset Allocation (static, baked) ──────────────────────────────────────
-  // Every pie is a static Chart.js pie with data baked from the allocation spec
-  // (reconciled against public/data snapshots). The three BIG pies (strategy,
-  // vault, wallet) render % datalabels via a small inline plugin; the four MINI
-  // bucket pies render none. No fetch — draws once on init, destroys on unmount.
+  // ── Asset Allocation ───────────────────────────────────────────────────────
+  // Strategy/bucket/wallet pies are static Chart.js pies baked from the
+  // allocation spec (reconciled against public/data snapshots) — unchanged,
+  // out of scope for issue #40. The vault economics section (hero Total AUM,
+  // 7-Day APY, vault pie, holdings table, Total Vault Assets) is LIVE: fetched
+  // from GET /api/dashboards/vault-economics on init, then the pies are
+  // (re)drawn once the fetch settles so the vault pie reflects real per-adapter
+  // balances. The three BIG pies (strategy, vault, wallet) render % datalabels
+  // via a small inline plugin; the four MINI bucket pies render none.
   Alpine.data("allocationView", () => ({
     _charts: [],
+    economics: null,
+    loading: true,
+    error: null,
     // Inline datalabels plugin: white mono-bold % just inside each slice edge,
     // mirroring chartjs-plugin-datalabels {anchor:"end", align:"start", offset:10}.
     _pieLabels: {
@@ -611,7 +618,45 @@ export function registerViews(Alpine) {
         ctx.restore();
       },
     },
-    init() { this.$nextTick(() => this.draw()); },
+    init() {
+      this.$nextTick(() => this.draw());
+      this.load();
+    },
+    // Fetch live vault economics; redraw so the vault pie reflects real
+    // per-adapter balances once the response (or the degraded/stale fallback)
+    // arrives. Alpine's x-text bindings on economics.* update reactively on
+    // their own — this only needs to touch the imperative Chart.js canvas.
+    async load() {
+      try {
+        this.economics = await api.get(ROUTES.dashboards.vaultEconomics);
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.loading = false;
+        this.destroy();
+        this.$nextTick(() => this.draw());
+      }
+    },
+    fmtUsd(v) {
+      if (v == null) return "—";
+      const n = Number(v);
+      return "$" + n.toLocaleString("en-US", { maximumFractionDigits: Math.abs(n) < 1000 ? 2 : 0 });
+    },
+    fmtPct(v) { return v == null ? "—" : (Number(v) * 100).toFixed(2) + "%"; },
+    asOfLabel() {
+      const asOf = this.economics?.asOf;
+      if (!asOf) return "—";
+      const label = new Date(asOf).toLocaleString("en-US", {
+        month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: "UTC",
+      }) + " UTC";
+      return this.economics?.stale ? `${label} (stale)` : label;
+    },
+    sharesLabel() {
+      const shares = this.economics?.totalShares;
+      const price = this.economics?.sharePrice;
+      if (shares == null || price == null) return "—";
+      return `${Number(shares).toLocaleString("en-US", { maximumFractionDigits: 2 })} rmUSDC shares @ $${Number(price).toFixed(4)}`;
+    },
     _pie(ref, labels, data, colors, big) {
       const canvas = this.$refs[ref];
       if (!canvas || !window.Chart) return;
@@ -646,9 +691,15 @@ export function registerViews(Alpine) {
       this._pie("mini3", ["BTC", "ETH", "HYPE"],
         [33.33, 33.33, 33.34], ["#b45309", "#d97706", "#f59e0b"], false);
       this._pie("mini4", ["SPY", "Gold"], [50, 50], ["#7c3aed", "#a855f7"], false);
-      // Vault pie — three near-equal green protocol slices.
-      this._pie("vault", ["MORPHO", "AAVE", "COMPOUND"],
-        [51.59, 51.57, 51.57], ["#10b981", "#10b981", "#10b981"], true);
+      // Vault pie — three adapter slices from the live vault-economics fetch
+      // (issue #40). Before the fetch resolves, or when it degrades to
+      // stale/null balances, falls back to an equal-thirds placeholder rather
+      // than a fabricated split.
+      const adapters = this.economics?.adapters ?? [];
+      const hasLiveBalances = adapters.length === 3 && adapters.some((a) => a.balanceUsd != null && a.balanceUsd > 0);
+      const vaultLabels = adapters.length === 3 ? adapters.map((a) => a.name.toUpperCase()) : ["MORPHO", "AAVE", "COMPOUND"];
+      const vaultValues = hasLiveBalances ? adapters.map((a) => Math.max(0, Number(a.balanceUsd) || 0)) : [1, 1, 1];
+      this._pie("vault", vaultLabels, vaultValues, ["#10b981", "#10b981", "#10b981"], true);
       // Wallet pie — USD value per asset, colour-grouped.
       this._pie("wallet",
         ["USDC", "ZYFAI-SS1", "ROBOTMONEY", "BNKR", "WETH", "ETH", "SP500"],

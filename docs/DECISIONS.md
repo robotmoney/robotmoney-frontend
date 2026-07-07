@@ -19,7 +19,10 @@ want a lean foundation and only two feature areas carried forward.
 **Scope.** Preserve the marketing UI; cherry-pick the **regime/research** views
 (the regime classifier + its regime-family research signals) and the **Investment
 Committee**. Out of scope: allocation / vault / wallet dashboards, generative-art
-visualizations, blog/media, other editorial pages.
+visualizations, blog/media, other editorial pages. **Superseded in part by D15**:
+the `/allocation` page's vault-economics slice (TVL, share price, adapters,
+7-day APY) is brought into scope with a live Base RPC pipeline; wallet-balances
+and buyback stay out of scope.
 
 ---
 
@@ -261,3 +264,50 @@ important check is that the **fields** are correct, not the numbers.
 **Fidelity caveat.** Preview is for layout/copy/components/navigation; for
 realistic, evolving data run `bun run demo` (see [demo-spec.md](./demo-spec.md)).
 See [preview-server-spec.md](./preview-server-spec.md) for the full design.
+
+---
+
+## D15 — Live vault-economics pipeline from Base RPC (supersedes D1's vault-dashboard exclusion)
+
+**Decision.** Bring the `/allocation` page's **vault economics** slice (Total
+Vault Assets, share price, total rmUSDC shares, per-adapter holdings, 7-day
+APY, the Total AUM hero) into scope, backed by a real Base JSON-RPC pipeline
+(issue #40) — superseding D1's "out of scope: allocation / vault / wallet
+dashboards" for this slice only. The backend reads the vault via `eth_call`
+(`totalAssets()`, `totalSupply()`), the vault's idle USDC balance
+(`USDC.balanceOf(vault)`), and three configured adapters'
+`totalAssets()`, computing TVL/share price/total shares/holdings on demand
+behind a short-TTL server cache (`backend/src/chain/vault-economics.ts`). A
+7-day APY is derived from share-price samples an hourly worker job persists
+(`vault_share_price_history`, `backend/src/worker/handlers/vault.ts`), served
+at `GET /api/dashboards/vault-economics`. `allocationView()` fetches and binds
+this section; other `/allocation` sections (buyback, wallet balances) remain
+the static port and stay out of scope. The vault's adapter set comes from
+**config, not on-chain discovery** — the vault + USDC addresses are the ones
+already documented publicly (`frontend/public/views/docs/skill/installation.html`,
+`skills.html`); the three adapter contract addresses aren't published anywhere
+yet, so their defaults are non-functional placeholders pending real values via
+env.
+
+**Why.** The prior static port (#39) baked every vault-economics figure from a
+single 2026-06-26 snapshot, permanently diverging from both robotmoney-site and
+actual Base chain state — the opposite of D1's "reproduce the look exactly"
+goal once there is a real vault to reflect. Fetching at serve time (not a
+committed snapshot) keeps this data seam consistent with the rest of the
+pipeline (D9): Postgres-backed, worker-scheduled, cache-fronted — no bespoke
+cron-commit machinery.
+
+**Rejected.**
+- **GitHub-Actions-cron snapshot-commit pipeline** (mirroring the old
+  robotmoney-site model D1 explicitly moved away from) — reintroduces a
+  committed-data seam this rebuild deliberately removed.
+- **On-chain adapter discovery/registry reads** — more moving parts than a
+  fixed 3-adapter vault needs; config with mainnet defaults is simpler and the
+  adapter set changes rarely enough to be an explicit deploy-time value.
+- **An external chain SDK (ethers/viem)** — the feature needs exactly three
+  read-only selectors; hand-rolled selector encode/decode over plain `fetch`
+  keeps the buildless-backend dependency footprint (D2, D12) unchanged.
+- **Degrading with a 5xx or a fabricated number on RPC failure** — the contract
+  is explicit `stale: true` + last-persisted-or-null values, never a made-up
+  figure, so the UI can show a clearly-marked degraded state instead of silently
+  wrong numbers.

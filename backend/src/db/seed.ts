@@ -30,6 +30,9 @@ const SCHEDULES: SeedSchedule[] = [
   // After the US equity close (21:00 UTC) + FRED's daily refresh, mirroring the
   // original scripts/regime cron so the fetched raw is the settled end-of-day data.
   { kind: "analytics.run", cron: "30 22 * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Hourly vault share-price sample (issue #40) — dense enough for a 7-day APY
+  // lookback, cheap on RPC (3 eth_calls/hour). Handler: worker/handlers/vault.ts.
+  { kind: "vault.sample_share_price", cron: "0 * * * *", payload: {}, timezone: "UTC", enabled: true },
   // Committee lifecycle — disabled by default; the demo enqueues these explicitly
   // via the admin enqueue-job endpoint, exercising the real worker claim loop +
   // handler path. Enable manually or change to a real cron for auto-scheduling.

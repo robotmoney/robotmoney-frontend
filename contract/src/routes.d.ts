@@ -6,6 +6,7 @@ export const ROUTES: {
   dashboards: {
     regimeSnapshots: string;
     researchSignal: string;
+    vaultEconomics: string;
   };
   committee: {
     members: string;
