@@ -73,10 +73,15 @@ function parsePort(name: string): number | undefined {
 const fixedApiPort = parsePort("WEB_PORT");
 const fixedMcpPort = parsePort("MCP_PORT");
 const fixedPgPort = parsePort("POSTGRES_PORT");
+// Host port for the hermetic Base RPC stub (issue #48) — no preferred default,
+// nothing external routes to it; the post-run RPC guard reads its /__count over
+// this host port to assert zero live Base mainnet calls.
+const fixedStubPort = parsePort("BASE_RPC_STUB_PORT");
 const heldPorts: Held[] = [];
 const apiPort = await allocatePort(fixedApiPort, 48787, heldPorts);
 const mcpPort = await allocatePort(fixedMcpPort, 48788, heldPorts);
 const pgPort = await allocatePort(fixedPgPort, undefined, heldPorts);
+const stubPort = await allocatePort(fixedStubPort, undefined, heldPorts);
 await Promise.all(heldPorts.map((s) => new Promise<void>((r) => s.close(() => r()))));
 // Pin the compose project name when DEMO_PROJECT is set (re-runs reuse/tear down the
 // same containers); otherwise a fresh random project per run. dockerEnv sets
@@ -106,6 +111,7 @@ const dockerEnv: Record<string, string> = {
   WEB_PORT: String(apiPort),
   MCP_PORT: String(mcpPort),
   POSTGRES_PORT: String(pgPort),
+  BASE_RPC_STUB_PORT: String(stubPort),
   POSTGRES_USER: DB_USER,
   POSTGRES_PASSWORD: DB_PASSWORD,
   POSTGRES_DB: DB_NAME,
@@ -852,6 +858,15 @@ async function main(): Promise<void> {
     console.log("[demo] running browser checks…");
     await run(["bun", "run", "test:browser"], repoRoot,
       { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "browser checks");
+
+    // Hermetic Base RPC guard (issue #48): the browser suite just drove
+    // /allocation, whose vault-economics fetch reads the vault over eth_call.
+    // Assert those reads hit the in-CI stub (BASE_RPC_STUB_URL/__count > 0) and
+    // that no e2e path resolves to live Base mainnet — fails the check loudly on
+    // any live-RPC leak.
+    console.log("[demo] asserting hermetic Base RPC (zero live mainnet calls)…");
+    await run(["bun", "run", "scripts/demo-rpc-guard.ts"], repoRoot,
+      { ...process.env, BASE_RPC_STUB_URL: `http://127.0.0.1:${stubPort}` } as Record<string, string>, "rpc hermetic guard");
 
     console.log("\n[demo] CI mode — all checks passed, tearing down…");
     cleanup();
