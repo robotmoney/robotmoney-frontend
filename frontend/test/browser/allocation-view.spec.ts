@@ -7,12 +7,20 @@
 // (goldens/api-goldens.json) — the single source of truth per
 // docs/preview-server-spec.md — so the assertions below are checking that the
 // rendered DOM equals the goldens payload values, and that the retired
-// 2026-06-26 static literals ($71,681 / 4.06% / $154.72 / "153.5 rmUSDC
-// shares @ $1.0080" / MORPHO 51.5855 / AAVE 51.5693 / COMPOUND 51.5698) no
-// longer appear anywhere in the served view.
+// 2026-06-26 static literals (4.06% / $154.72 / "153.5 rmUSDC shares @
+// $1.0080" / MORPHO 51.5855 / AAVE 51.5693 / COMPOUND 51.5698) no longer
+// appear anywhere in the served view.
+//
+// Hero Total AUM = WALLET_SNAPSHOT_TOTAL_USD (the static Agent Wallet
+// snapshot baked below on the same page) + the live vault tvlUsd — mirroring
+// robotmoney-site's original combined wallet+vault semantics
+// (src/app/allocation/page.tsx). See totalAum()/WALLET_SNAPSHOT_TOTAL_USD in
+// alpine/views.js; keep this constant in sync with that one.
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
+
+const WALLET_SNAPSHOT_TOTAL_USD = 71526;
 
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
@@ -54,6 +62,12 @@ function fmtPct(v: number | null): string {
 function adapterValue(a: VaultEconomicsAdapter): string {
   return a.configured === false ? "Not configured" : fmtUsd(a.balanceUsd);
 }
+// Mirrors allocationView()'s totalAum(): hero Total AUM combines the static
+// wallet snapshot with the live vault tvlUsd, and is null (renders "—")
+// whenever the vault figure itself is unknown.
+function totalAum(tvlUsd: number | null): number | null {
+  return tvlUsd == null ? null : WALLET_SNAPSHOT_TOTAL_USD + tvlUsd;
+}
 
 async function stubEnvironment(page: Page, payload: VaultEconomics) {
   for (const [url, file] of Object.entries(vendorScripts)) {
@@ -79,8 +93,10 @@ test("allocation view binds vault economics to the golden payload, retiring the 
   await page.goto("/");
   await navigate(page, "/allocation");
 
-  // Hero Total AUM == live tvlUsd (never the retired static $71,681).
-  await expect(page.locator(".alloc-aum__value")).toHaveText(fmtUsd(golden.tvlUsd));
+  // Hero Total AUM == static wallet snapshot + live tvlUsd (never the
+  // vault-only tvlUsd alone, nor the retired static $71,681).
+  await expect(page.locator(".alloc-aum__value")).toHaveText(fmtUsd(totalAum(golden.tvlUsd)));
+  await expect(page.locator(".alloc-aum__value")).not.toHaveText(fmtUsd(golden.tvlUsd));
   await expect(page.locator(".alloc-aum__value")).not.toHaveText("$71,681");
 
   // 7-Day APY chip == live apy7d (never the retired static 4.06%).
