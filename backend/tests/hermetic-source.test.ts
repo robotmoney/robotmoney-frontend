@@ -65,9 +65,17 @@ test("runAnalytics(hermetic) persists regime + research OFFLINE (demo/e2e path)"
   expect(Object.keys(results).sort()).toEqual(["channel-divergence", "late-cycle-signals", "regime"]);
   const [{ count }] = await sql`SELECT COUNT(*)::int AS count FROM regime_snapshots`;
   expect(count).toBeGreaterThan(1000); // full seeded 2018..today axis classified
-  const [latest] = await sql`SELECT composite, regime, version FROM regime_snapshots ORDER BY date DESC LIMIT 1`;
+  const [latest] = await sql`SELECT composite, regime, version, panels, factor_index FROM regime_snapshots ORDER BY date DESC LIMIT 1`;
   expect(Number(latest.composite)).toBeGreaterThanOrEqual(0);
   expect(latest.regime).not.toBeNull();
+  // The /regime view renders one index card per panel from the asof row's `panels`.
+  // The pipeline computes a real Equity factor index, so all THREE panels must be
+  // present on the latest row (regression guard for the dropped-`panels` bug that
+  // hid the factor panel). `panels` is asof-only — historical rows stay NULL.
+  expect(latest.panels).toEqual(["macro", "onchain", "factor"]);
+  expect(latest.factor_index).not.toBeNull();
+  const [{ nonnull }] = await sql`SELECT COUNT(*)::int AS nonnull FROM regime_snapshots WHERE panels IS NOT NULL`;
+  expect(nonnull).toBe(1); // exactly the asof/latest row carries panels
   for (const key of ["channel-divergence", "late-cycle-signals"]) {
     const rows = await sql`SELECT payload FROM research_signals WHERE signal_key = ${key} AND date = ${ASOF}`;
     expect(rows.length).toBe(1);

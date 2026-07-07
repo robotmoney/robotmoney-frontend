@@ -162,7 +162,14 @@ export function registerViews(Alpine) {
     },
 
     // ── panels ──────────────────────────────────────────────────────────────
-    panelsList() { const p = this.latest?.panels; return Array.isArray(p) && p.length ? p : ["macro", "onchain"]; },
+    panelsList() {
+      const p = this.latest?.panels;
+      if (Array.isArray(p) && p.length) return p;
+      // Fallback when `panels` is null: always show macro + on-chain, and append the
+      // display-only Equity factor panel when its index is present in the data.
+      const base = ["macro", "onchain"];
+      return this.latest?.factorIndex != null ? [...base, "factor"] : base;
+    },
     panelLabel(p) { return p === "macro" ? "Macro" : p === "onchain" ? "On-chain" : p === "factor" ? "Equity factor" : p; },
     panelIndex(p) { return this.latest?.[p + "Index"]; },
     // Rich per-indicator objects come only on the latest (asof) row; historical
