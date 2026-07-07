@@ -10,7 +10,7 @@
       <div>
         <header class="cv__detail-head">
           <p class="cv__eyebrow"><span x-text="formatDate(session.date)"></span> / subject</p>
-          <h1 class="cv__detail-title" x-text="session.subjectName"></h1>
+          <h1 class="cv__detail-title session-title" x-text="session.subjectName"></h1>
           <p class="cv__lede cv__lede--compact" x-text="briefSummary()"></p>
           <div class="cv__fact-row">
             <span>composite <span x-text="fmtNum(session.regimeSummary?.composite, 3)"></span></span>
@@ -101,6 +101,20 @@
                 </article>
               </template>
             </div>
+          </div>
+        </section>
+
+        <section class="cv__takes-section" x-show="takes.length">
+          <p class="cv__panel-label">Member submissions</p>
+          <div class="cv__table-wrap session-submissions">
+            <table class="cv__data-table">
+              <thead><tr><th>Member</th><th>Stance</th><th class="cv__num">Confidence</th></tr></thead>
+              <tbody>
+                <template x-for="t in takes" :key="t.id">
+                  <tr><td x-text="t.memberName"></td><td x-text="t.stance"></td><td class="cv__num" x-text="fmtPct(t.confidence)"></td></tr>
+                </template>
+              </tbody>
+            </table>
           </div>
         </section>
 
