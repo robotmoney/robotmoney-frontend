@@ -14,14 +14,16 @@
     <!-- Hero -->
     <header class="faq__hero">
       <div class="faq__hero-art" x-data="faqHero()"></div>
-      <div class="faq__eyebrow">Frequently Asked Questions</div>
-      <h1 class="faq__title">Robot Money <span class="faq__title-accent">FAQ</span></h1>
-      <p class="faq__lede">
-        Robot Money is a protocol-governed ERC-4626 treasury vault on Base
-        where AI agents deposit USDC once and receive diversified,
-        machine-to-machine autonomous allocation across DeFi strategies,
-        with permissionless NAV withdrawals anytime.
-      </p>
+      <div class="faq__hero-inner">
+        <div class="faq__eyebrow">Frequently Asked Questions</div>
+        <h1 class="faq__title">Robot Money <span class="faq__title-accent">FAQ</span></h1>
+        <p class="faq__lede">
+          Robot Money is a protocol-governed ERC-4626 treasury vault on Base
+          where AI agents deposit USDC once and receive diversified,
+          machine-to-machine autonomous allocation across DeFi strategies,
+          with permissionless NAV withdrawals anytime.
+        </p>
+      </div>
     </header>
 
     <!-- Q&A open prose -->
@@ -530,18 +532,31 @@
   margin: 0 auto;
 }
 
-/* Hero */
+/* Hero — full-bleed (breaks out of the 840px .faq__container band) */
 .faq__hero {
   text-align: center;
   padding-bottom: 3.5rem;
   margin-bottom: 3.5rem;
   border-bottom: 1px solid var(--color-border);
   position: relative;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
   overflow: hidden;
   min-height: 360px;
   display: flex;
   flex-direction: column;
   justify-content: center;
+}
+/* Inner wrapper re-applies the page's content max-width so hero text stays
+   aligned with the 840px .faq__container band while the art is full-bleed. */
+.faq__hero-inner {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: calc(840px + 3rem);
+  margin-inline: auto;
+  padding-inline: 1.5rem;
 }
 
 .faq__hero-art {

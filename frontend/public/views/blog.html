@@ -144,8 +144,12 @@
   margin: 0 auto;
   padding: 8rem 1.5rem 5rem;
 }
+/* Hero — full-bleed (breaks out of the 1000px .blog-idx content band) */
 .blog-idx__hero {
   position: relative;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
   overflow: hidden;
   min-height: 340px;
   display: flex;
@@ -161,9 +165,15 @@
   inset: 0;
   z-index: 0;
 }
+/* Inner wrapper re-applies the page's content max-width so hero text stays
+   aligned with the 1000px .blog-idx band while the art is full-bleed. */
 .blog-idx__hero-inner {
   position: relative;
   z-index: 1;
+  width: 100%;
+  max-width: 1000px;
+  margin-inline: auto;
+  padding-inline: 1.5rem;
 }
 .blog-idx__hero::after {
   content: "";

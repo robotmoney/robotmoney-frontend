@@ -13,23 +13,25 @@
     <!-- 01 / Hero -->
     <header class="tok__hero">
       <div class="tok__hero-art" x-data="tokHero()"></div>
-      <span class="tok__eyebrow">01 / $ROBOTMONEY</span>
-      <h1 class="tok__h1">
-        Token <span class="tok__grad">Economics</span>
-      </h1>
-      <p class="tok__lede">
-        $ROBOTMONEY directs vault allocation. Fair launch via Bankr on Base, 0% premine.
-      </p>
+      <div class="tok__hero-inner">
+        <span class="tok__eyebrow">01 / $ROBOTMONEY</span>
+        <h1 class="tok__h1">
+          Token <span class="tok__grad">Economics</span>
+        </h1>
+        <p class="tok__lede">
+          $ROBOTMONEY directs vault allocation. Fair launch via Bankr on Base, 0% premine.
+        </p>
 
-      <div class="tok__hero-actions">
-        <div class="tok__contract">
-          <span class="tok__contract-label">Contract</span>
-          <code class="tok__contract-addr">0x65021a79AeEF...8618bEbA3</code>
-          <button type="button" class="tok__copy" data-copy="0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" data-copied-text="Copied!"><span data-copy-label>Copy</span></button>
-        </div>
-        <div class="tok__hero-links">
-          <a class="tok__btn tok__btn--solid" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
-          <a class="tok__btn tok__btn--ghost" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">BaseScan</a>
+        <div class="tok__hero-actions">
+          <div class="tok__contract">
+            <span class="tok__contract-label">Contract</span>
+            <code class="tok__contract-addr">0x65021a79AeEF...8618bEbA3</code>
+            <button type="button" class="tok__copy" data-copy="0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" data-copied-text="Copied!"><span data-copy-label>Copy</span></button>
+          </div>
+          <div class="tok__hero-links">
+            <a class="tok__btn tok__btn--solid" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
+            <a class="tok__btn tok__btn--ghost" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">BaseScan</a>
+          </div>
         </div>
       </div>
     </header>
@@ -403,9 +405,12 @@
   margin: 0 auto;
 }
 
-/* Hero */
+/* Hero — full-bleed (breaks out of the 1100px .tok__container band) */
 .tok__hero {
   position: relative;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
   overflow: hidden;
   min-height: 380px;
   display: flex;
@@ -417,6 +422,17 @@
 }
 .tok__hero-art { position: absolute; inset: 0; z-index: 0; }
 .tok__hero > *:not(.tok__hero-art) { position: relative; z-index: 1; }
+/* Inner wrapper re-applies the page's content max-width so hero text/CTA
+   stays aligned with the 1100px .tok__container band while the art is
+   full-bleed. */
+.tok__hero-inner {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: calc(1100px + 3rem);
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+}
 .tok__hero::after {
   content: "";
   position: absolute;
