@@ -52,4 +52,11 @@ jobs:
         run: bun run scripts/demo.ts
         env:
           CI: "true"
+          # Hermetic Base RPC (issue #48): pin the demo stack's vault-economics
+          # eth_call reads to the in-CI stub (docker-compose.demo.yml base-rpc-stub
+          # service) so this required check NEVER reads live, rate-limited Base
+          # mainnet (config.ts default https://mainnet.base.org). Wired here in
+          # addition to the compose default so BOTH env layers agree; the demo's
+          # scripts/demo-rpc-guard.ts fails this job loudly on any live-RPC leak.
+          BASE_RPC_URL: "http://base-rpc-stub:8645"
         timeout-minutes: 20
