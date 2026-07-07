@@ -1,0 +1,84 @@
+{
+  "subject_id": "woon",
+  "date": "2026-05-30",
+  "fetched_at": "2026-05-30T23:18:01.435Z",
+  "source_type": "rpc",
+  "total_value_usd": 57368.6,
+  "wallets": [
+    {
+      "label": "main",
+      "address": "0x0227c836d96a22ba3265cf66333bcb7d70fabf22",
+      "chain": "base",
+      "value_usd": 49238.63
+    },
+    {
+      "label": "holdings",
+      "address": "0xbc5f9750af6557be4750863ef76e4390584572b9",
+      "chain": "base",
+      "value_usd": 4929.97
+    },
+    {
+      "label": "holdings-peaq",
+      "address": "0x117698a995120c7e0c2888e337908a6b7d9e7cfb",
+      "chain": "peaq",
+      "value_usd": 3200
+    }
+  ],
+  "positions": [
+    {
+      "token": "WOON",
+      "name": "Woon",
+      "chain": "base",
+      "balance": 6524643399.193591,
+      "price_usd": 0.000005047048985,
+      "value_usd": 32930.19
+    },
+    {
+      "token": "PEAQ",
+      "name": "Peaq (Base bridge)",
+      "chain": "base",
+      "balance": 389523.217235,
+      "price_usd": 0.04,
+      "value_usd": 15580.93
+    },
+    {
+      "token": "USDC",
+      "name": "USD Coin",
+      "chain": "base",
+      "balance": 7556.940919000001,
+      "price_usd": 1.001591593,
+      "value_usd": 7568.97
+    },
+    {
+      "token": "ROBOTMONEY",
+      "name": "Robot Money",
+      "chain": "base",
+      "balance": 128826030.275065,
+      "price_usd": 0.000009703929857,
+      "value_usd": 1250.12
+    },
+    {
+      "token": "ETH",
+      "name": "Ethereum",
+      "chain": "base",
+      "balance": 0.018297,
+      "price_usd": 2020.57,
+      "value_usd": 36.97
+    },
+    {
+      "token": "BNKR",
+      "name": "BankrCoin",
+      "chain": "base",
+      "balance": 1891.224241,
+      "price_usd": 0.0007519447516,
+      "value_usd": 1.42
+    }
+  ],
+  "notable": [
+    "holds Robot Money vault shares — Woon's portfolio mechanically contains the basket RM allocates",
+    "earns in stables (Bankr trading fees, peaq salary), accumulates in PEAQ and ROBOTMONEY",
+    "income is performance-linked — peaq engagement metrics drive Woon's bonus, which funds buybacks",
+    "NFT positions (RoboFarm, RecycleMachine, ClawMachine) declared but not valued in v1 reads",
+    "concentration: WOON is 57.4% of read value"
+  ]
+}

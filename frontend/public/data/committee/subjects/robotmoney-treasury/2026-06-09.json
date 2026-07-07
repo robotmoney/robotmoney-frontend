@@ -1,0 +1,82 @@
+{
+  "subject_id": "robotmoney-treasury",
+  "date": "2026-06-09",
+  "fetched_at": "2026-06-09T23:46:09.754Z",
+  "source_type": "rpc",
+  "total_value_usd": 84773.32,
+  "wallets": [
+    {
+      "label": "primary",
+      "address": "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6",
+      "chain": "base",
+      "value_usd": 50376.3
+    },
+    {
+      "label": "stablecoin-strategy-1",
+      "address": "0x422c906083ca40b7e055b811d517f03bbbef8eee",
+      "chain": "base",
+      "value_usd": 34358.82
+    },
+    {
+      "label": "stablecoin-strategy-2",
+      "address": "0x8d0c331e45beca4184b758f3049f8897aabb9442",
+      "chain": "base",
+      "value_usd": 38.2
+    }
+  ],
+  "positions": [
+    {
+      "token": "ROBOTMONEY",
+      "name": "Robot Money",
+      "chain": "base",
+      "balance": 6420314208.419795,
+      "price_usd": 0.000006345527703,
+      "value_usd": 40740.28
+    },
+    {
+      "token": "WETH",
+      "name": "Wrapped Ether",
+      "chain": "base",
+      "balance": 15.179557,
+      "price_usd": 1638.9,
+      "value_usd": 24877.78
+    },
+    {
+      "token": "USDC",
+      "name": "USD Coin",
+      "chain": "base",
+      "balance": 14505.332801,
+      "price_usd": 1.0018072883,
+      "value_usd": 14531.55
+    },
+    {
+      "token": "ZYFAI-SS1",
+      "name": "Zyfai SS1 Delegated",
+      "chain": "base",
+      "balance": 1,
+      "price_usd": 4529.401411,
+      "value_usd": 4529.4
+    },
+    {
+      "token": "ETH",
+      "name": "Ethereum",
+      "chain": "base",
+      "balance": 0.049962,
+      "price_usd": 1638.9,
+      "value_usd": 81.89000000000001
+    },
+    {
+      "token": "BNKR",
+      "name": "BankrCoin",
+      "chain": "base",
+      "balance": 25081.308313,
+      "price_usd": 0.0004953118715,
+      "value_usd": 12.42
+    }
+  ],
+  "notable": [
+    "concentrated in ROBOTMONEY token by design — the prop wallet flywheel requires protocol-owned reserves to be deployable",
+    "the LP-locked-until-2100 commitment makes protocol-owned liquidity the load-bearing piece of the buyback mechanism",
+    "Stablecoin Strategy 1 and 2 are delegated yield positions (Zyfai, Giza) — value comes from delegated-position price feeds, not ERC20 balanceOf on the wallet itself"
+  ]
+}

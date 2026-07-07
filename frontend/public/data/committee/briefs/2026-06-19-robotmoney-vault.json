@@ -1,0 +1,646 @@
+{
+  "date": "2026-06-19",
+  "subject_id": "robotmoney-vault",
+  "subject": {
+    "id": "robotmoney-vault",
+    "name": "Robot Money Vault",
+    "operator": "robotmoney",
+    "thesis_blurb": "The Robot Money ERC-4626 vault (0x4f835c9f…) on Base. Holds depositor capital and allocates across 4 strategic buckets per governance: Conservative DeFi Yield (95%), Agent Tokens (5%), Protocol Tokens (0%, placeholder), Real World Assets (0%, placeholder). Distinct from the treasury wallet, which holds protocol-owned capital.",
+    "structural_notes": [
+      "depositor capital, not protocol capital — the IC opines on allocation strategy, not protocol mechanics",
+      "target weights: Conservative DeFi 95%, Agent Tokens 5%, Protocol Tokens 0% (placeholder), Real World Assets 0% (placeholder)",
+      "actual allocation tracked via public/data/hourly-vault-tvl.csv",
+      "Conservative DeFi sleeve currently split across Aave V3, Compound V3, Morpho Gauntlet USDC Prime, Idle USDC"
+    ],
+    "source_type": "vault_tvl"
+  },
+  "regime": {
+    "asof": "2026-06-19",
+    "composite": 0.580443328988472,
+    "composite_percentile": 0.7063926940639269,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off",
+    "factor_regime": "risk_on",
+    "macro_percentile": 0.8105022831050228,
+    "onchain_percentile": 0.1045662100456621,
+    "factor_percentile": 0.9940639269406393,
+    "bucket_thresholds": {
+      "risk_off": 0.33,
+      "risk_on": 0.67
+    },
+    "correlations": {
+      "forward": {
+        "composite": {
+          "spx_30d": {
+            "rho": -0.04485718475840569,
+            "n": 2956
+          },
+          "spx_90d": {
+            "rho": 0.0005379006015416117,
+            "n": 2896
+          },
+          "spx_180d": {
+            "rho": 0.04284701428673275,
+            "n": 2806
+          },
+          "eth_30d": {
+            "rho": 0.0596490507777132,
+            "n": 2957
+          },
+          "eth_90d": {
+            "rho": 0.05290428544227752,
+            "n": 2897
+          },
+          "eth_180d": {
+            "rho": -0.029166950076987882,
+            "n": 2807
+          }
+        },
+        "macro": {
+          "spx_30d": {
+            "rho": -0.14956185152682216,
+            "n": 2956
+          },
+          "spx_90d": {
+            "rho": -0.17326617323233634,
+            "n": 2896
+          },
+          "spx_180d": {
+            "rho": -0.22227654053731474,
+            "n": 2806
+          },
+          "eth_30d": {
+            "rho": 0.014575315380454406,
+            "n": 2957
+          },
+          "eth_90d": {
+            "rho": -0.051396138903532014,
+            "n": 2897
+          },
+          "eth_180d": {
+            "rho": -0.23354937343753615,
+            "n": 2807
+          }
+        },
+        "onchain": {
+          "spx_30d": {
+            "rho": 0.0019517216278563166,
+            "n": 2956
+          },
+          "spx_90d": {
+            "rho": 0.049012622405281814,
+            "n": 2896
+          },
+          "spx_180d": {
+            "rho": 0.12521539617620311,
+            "n": 2806
+          },
+          "eth_30d": {
+            "rho": 0.06809451985145079,
+            "n": 2957
+          },
+          "eth_90d": {
+            "rho": 0.1195829498458076,
+            "n": 2897
+          },
+          "eth_180d": {
+            "rho": 0.10517918469573544,
+            "n": 2807
+          }
+        },
+        "factor": {
+          "spx_30d": {
+            "rho": 0.02625885930011195,
+            "n": 2956
+          },
+          "spx_90d": {
+            "rho": 0.1118582275177745,
+            "n": 2896
+          },
+          "spx_180d": {
+            "rho": 0.18615083956207742,
+            "n": 2806
+          },
+          "eth_30d": {
+            "rho": 0.05475456374414947,
+            "n": 2957
+          },
+          "eth_90d": {
+            "rho": 0.04466620551624164,
+            "n": 2897
+          },
+          "eth_180d": {
+            "rho": 0.02921841535126569,
+            "n": 2807
+          }
+        }
+      },
+      "concurrent": {
+        "composite": {
+          "spx": {
+            "rho": 0.2610279909375332,
+            "n": 2987
+          },
+          "eth": {
+            "rho": 0.38615281910499855,
+            "n": 2987
+          }
+        },
+        "macro": {
+          "spx": {
+            "rho": 0.54027028071774,
+            "n": 2987
+          },
+          "eth": {
+            "rho": 0.608850942285241,
+            "n": 2987
+          }
+        },
+        "onchain": {
+          "spx": {
+            "rho": -0.14522561352099383,
+            "n": 2987
+          },
+          "eth": {
+            "rho": 0.07685704815340626,
+            "n": 2987
+          }
+        },
+        "factor": {
+          "spx": {
+            "rho": 0.24852670585469483,
+            "n": 2987
+          },
+          "eth": {
+            "rho": 0.281636462757065,
+            "n": 2987
+          }
+        }
+      }
+    }
+  },
+  "regime_history": [
+    {
+      "date": "2026-06-12",
+      "composite": 0.5909769727090325,
+      "regime": "risk_on",
+      "macro": 0.6459217500354525,
+      "macro_regime": "risk_on",
+      "onchain": 0.37412504867594865,
+      "onchain_regime": "risk_off",
+      "factor": 0.7528841194156964,
+      "factor_regime": "risk_on"
+    },
+    {
+      "date": "2026-06-13",
+      "composite": 0.5415034505792781,
+      "regime": "neutral",
+      "macro": 0.550022047359753,
+      "macro_regime": "risk_on",
+      "onchain": 0.32062267309905274,
+      "onchain_regime": "risk_off",
+      "factor": 0.7538656312790286,
+      "factor_regime": "risk_on"
+    },
+    {
+      "date": "2026-06-14",
+      "composite": 0.5659712656108905,
+      "regime": "neutral",
+      "macro": 0.6339755334149492,
+      "macro_regime": "risk_on",
+      "onchain": 0.30983627874694225,
+      "onchain_regime": "risk_off",
+      "factor": 0.7541019846707803,
+      "factor_regime": "risk_on"
+    },
+    {
+      "date": "2026-06-15",
+      "composite": 0.59269258488591,
+      "regime": "risk_on",
+      "macro": 0.6660996006514929,
+      "macro_regime": "risk_on",
+      "onchain": 0.3486249014606447,
+      "onchain_regime": "risk_off",
+      "factor": 0.7633532525455925,
+      "factor_regime": "risk_on"
+    },
+    {
+      "date": "2026-06-16",
+      "composite": 0.5793714819738002,
+      "regime": "risk_on",
+      "macro": 0.6439575662376553,
+      "macro_regime": "risk_on",
+      "onchain": 0.3418153599239259,
+      "onchain_regime": "risk_off",
+      "factor": 0.7523415197598192,
+      "factor_regime": "risk_on"
+    },
+    {
+      "date": "2026-06-17",
+      "composite": 0.5740149109222711,
+      "regime": "risk_on",
+      "macro": 0.6207878417774189,
+      "macro_regime": "risk_on",
+      "onchain": 0.34489499685767117,
+      "onchain_regime": "risk_off",
+      "factor": 0.7563618941317235,
+      "factor_regime": "risk_on"
+    },
+    {
+      "date": "2026-06-18",
+      "composite": 0.5819590222101556,
+      "regime": "risk_on",
+      "macro": 0.6280886594487238,
+      "macro_regime": "risk_on",
+      "onchain": 0.3390389190334807,
+      "onchain_regime": "risk_off",
+      "factor": 0.7787494881482623,
+      "factor_regime": "risk_on"
+    },
+    {
+      "date": "2026-06-19",
+      "composite": 0.580443328988472,
+      "regime": "risk_on",
+      "macro": 0.6259278030230374,
+      "macro_regime": "risk_on",
+      "onchain": 0.33667517239537914,
+      "onchain_regime": "risk_off",
+      "factor": 0.7787270115469992,
+      "factor_regime": "risk_on"
+    }
+  ],
+  "allocation": {
+    "asof": "2026-06-02",
+    "vault_contract": "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
+    "buckets": [
+      {
+        "id": "conservative_defi_yield",
+        "name": "Conservative DeFi Yield",
+        "target_weight": 0.95,
+        "color": "#10b981",
+        "description": "Aave, Compound, Morpho, Sky on Base. Near-zero principal risk.",
+        "eligible_protocols": [
+          "Aave V3",
+          "Compound V3",
+          "Morpho Gauntlet USDC Prime",
+          "Sky"
+        ],
+        "items": [
+          {
+            "id": "aave",
+            "name": "Aave",
+            "target_weight": 0.25,
+            "color": "#047857",
+            "tokens": [
+              "AAVE"
+            ]
+          },
+          {
+            "id": "morpho",
+            "name": "Morpho",
+            "target_weight": 0.25,
+            "color": "#059669",
+            "tokens": [
+              "MORPHO"
+            ]
+          },
+          {
+            "id": "compound",
+            "name": "Compound",
+            "target_weight": 0.25,
+            "color": "#10b981",
+            "tokens": [
+              "COMPOUND"
+            ]
+          },
+          {
+            "id": "sky",
+            "name": "Sky",
+            "target_weight": 0.25,
+            "color": "#34d399",
+            "tokens": [
+              "SKY"
+            ]
+          }
+        ],
+        "tokens": [
+          "AAVE",
+          "COMPOUND",
+          "MORPHO",
+          "SKY",
+          "USDC",
+          "ZYFAI-SS1",
+          "GIZA-SS1",
+          "rmUSDC"
+        ],
+        "current_market_view": "Stablecoin yields compressed to 3-4% across major protocols. Flight to quality ongoing.",
+        "regime_behavior": "Held across all regimes. Weight increases in risk-off as the principal anchor."
+      },
+      {
+        "id": "agent_tokens",
+        "name": "Agent Tokens",
+        "target_weight": 0.05,
+        "color": "#3b82f6",
+        "description": "Tokens of Agents that are holders of $ROBOTMONEY, selected through governance.",
+        "eligible_protocols": [
+          "governance-selected agent tokens"
+        ],
+        "items": [
+          {
+            "id": "robotmoney",
+            "name": "RobotMoney",
+            "target_weight": 0.1429,
+            "color": "#1e3a8a",
+            "tokens": [
+              "ROBOTMONEY"
+            ]
+          },
+          {
+            "id": "juno",
+            "name": "Juno",
+            "target_weight": 0.1429,
+            "color": "#1e40af",
+            "tokens": [
+              "JUNO"
+            ]
+          },
+          {
+            "id": "woon",
+            "name": "Woon",
+            "target_weight": 0.1429,
+            "color": "#2563eb",
+            "tokens": [
+              "WOON"
+            ]
+          },
+          {
+            "id": "peaq",
+            "name": "Peaq",
+            "target_weight": 0.1429,
+            "color": "#3b82f6",
+            "tokens": [
+              "PEAQ"
+            ]
+          },
+          {
+            "id": "zyfai",
+            "name": "Zyfai",
+            "target_weight": 0.1429,
+            "color": "#60a5fa",
+            "tokens": [
+              "ZYFAI"
+            ]
+          },
+          {
+            "id": "giza",
+            "name": "Giza",
+            "target_weight": 0.1428,
+            "color": "#93c5fd",
+            "tokens": [
+              "GIZA"
+            ]
+          },
+          {
+            "id": "deus",
+            "name": "DEUS",
+            "target_weight": 0.1427,
+            "color": "#bfdbfe",
+            "tokens": [
+              "DEUS"
+            ]
+          }
+        ],
+        "tokens": [
+          "WOON",
+          "PEAQ",
+          "ROBOTMONEY",
+          "DEUS",
+          "JUNO",
+          "ZYFAI",
+          "GIZA"
+        ],
+        "current_market_view": "Token-holder-governed allocation. Quantitative filter applied to eligible agent tokens.",
+        "regime_behavior": "Tilts up in risk-on (high beta to crypto + on-chain panel). Tilts down or zero in risk-off."
+      },
+      {
+        "id": "protocol_tokens",
+        "name": "Protocol Tokens",
+        "target_weight": 0,
+        "color": "#f59e0b",
+        "description": "Large-cap crypto and DeFi digital assets. BTC, ETH, HYPE.",
+        "eligible_protocols": [
+          "BTC",
+          "ETH",
+          "HYPE"
+        ],
+        "items": [
+          {
+            "id": "btc",
+            "name": "BTC",
+            "target_weight": 0.3333,
+            "color": "#b45309",
+            "tokens": [
+              "BTC",
+              "WBTC"
+            ]
+          },
+          {
+            "id": "eth",
+            "name": "ETH",
+            "target_weight": 0.3333,
+            "color": "#d97706",
+            "tokens": [
+              "ETH",
+              "WETH"
+            ]
+          },
+          {
+            "id": "hype",
+            "name": "HYPE",
+            "target_weight": 0.3334,
+            "color": "#f59e0b",
+            "tokens": [
+              "HYPE"
+            ]
+          }
+        ],
+        "tokens": [
+          "ETH",
+          "WETH",
+          "BTC",
+          "WBTC",
+          "HYPE"
+        ],
+        "current_market_view": "Hyperliquid showing sustained fee generation. BTC + ETH as the cycle anchors.",
+        "regime_behavior": "Placeholder bucket (0% today). Future allocation gated on backtest review and governance."
+      },
+      {
+        "id": "real_world_assets",
+        "name": "Real World Assets",
+        "target_weight": 0,
+        "color": "#a855f7",
+        "description": "Traditional instruments. Exposure to the S&P 500 or commodities.",
+        "eligible_protocols": [
+          "tokenized SP500",
+          "tokenized commodities"
+        ],
+        "items": [
+          {
+            "id": "spy",
+            "name": "SPY",
+            "target_weight": 0.5,
+            "color": "#7c3aed",
+            "tokens": [
+              "SPY",
+              "SP500"
+            ]
+          },
+          {
+            "id": "gold",
+            "name": "Gold",
+            "target_weight": 0.5,
+            "color": "#a855f7",
+            "tokens": [
+              "GOLD"
+            ]
+          }
+        ],
+        "tokens": [
+          "SPY",
+          "SP500",
+          "GOLD"
+        ],
+        "current_market_view": "Not yet allocated. Will explore tokenized equities and commodity exposure.",
+        "regime_behavior": "Placeholder bucket (0% today). Eventually a counter-cycle position to crypto-correlated buckets."
+      }
+    ]
+  },
+  "research": {
+    "_comment": "Curated summaries of Robot Money published research. The brief generator injects this into Athena's prompt only — research is Athena's context. Each article carries a `core` flag: core articles (methodology, frameworks, risk taxonomies, definitions) stay in Athena's context permanently. Non-core articles (quarterly reads, post-mortems on specific events) slide on a most-recent-N window. Athena's context = all core + most-recent non-core, capped at 15 total. Add `core: true` for foundational pieces; omit for time-bound ones.",
+    "articles": [
+      {
+        "slug": "/articles/treasury-allocation",
+        "title": "Treasury Allocation for On-Chain Businesses",
+        "date": "2026-05-12",
+        "core": true,
+        "summary": "8-year backtest comparing regime-based 3-state allocation against HODL strategies (ETH, SP500) and stable yield, across a full market cycle.",
+        "key_findings": [
+          "Regime-based allocation outperformed straight HODL on a risk-adjusted basis (higher Sharpe, lower max drawdown) across the 2018-2026 window.",
+          "Most of the alpha came from being de-risked in the 2022 drawdown phase, not from being aggressively risk-on in mania phases.",
+          "The 3-state model (risk-off / neutral / risk-on) captured most of the cycle alpha; finer-grained regimes added complexity without proportional improvement."
+        ]
+      },
+      {
+        "slug": "/blog/honest-backtesting-weights",
+        "title": "Backtesting honestly: what survives when you remove hindsight",
+        "date": "2026-05-15",
+        "core": true,
+        "summary": "Discovered the regime model's inverse-correlation weighting was computed with full-history hindsight. Rebuilt it point-in-time and re-ran every comparison.",
+        "key_findings": [
+          "Hindsight-weighted backtests overstated alpha by a material margin; the honest version is what the live model now uses.",
+          "The macro panel correlation signal held up under point-in-time weights; the on-chain panel signal was weaker but still directional.",
+          "Honest 8-year CAGR of the regime-based allocation is meaningfully positive but not the eye-popping figure the hindsight version produced."
+        ]
+      },
+      {
+        "slug": "/blog/regime-conservative-aggressive",
+        "title": "Conservative vs aggressive: combining macro and on-chain regime signals",
+        "date": "2026-05-13",
+        "core": true,
+        "summary": "Backtested two ways to combine macro + on-chain panels into a single composite — conservative (any panel off → off) vs aggressive (any panel on → on, unless contradicted).",
+        "key_findings": [
+          "Conservative composite captures most of the drawdown protection with lower turnover.",
+          "Aggressive composite captures more upside in 2021-style melt-ups but produces more whipsaw losses in choppy regimes.",
+          "The current live model uses the conservative composite — costs some upside but keeps drawdowns shallower."
+        ]
+      },
+      {
+        "slug": "/regime-detection",
+        "title": "Regime Detection",
+        "date": "2026-04-24",
+        "core": true,
+        "summary": "Prior art, methods, and data sources for risk-on / risk-off regime classification used by the Robot Money regime model.",
+        "key_findings": [
+          "Composite is built from 18 indicators across macro (10) and on-chain (8) panels.",
+          "Each indicator is percentile-ranked over a rolling 3-year window, sign-aligned so high = risk-on, weighted by inverse correlation within panel.",
+          "Bucket thresholds: composite percentile <0.33 = risk-off, 0.33-0.67 = neutral, >0.67 = risk-on."
+        ]
+      },
+      {
+        "slug": "/smart-contract-risks",
+        "title": "Smart Contract Risks",
+        "date": "2026-04-02",
+        "core": true,
+        "summary": "Field guide to how DeFi vaults get exploited. Chronological case studies relevant to the Conservative DeFi Yield bucket's protocol selection.",
+        "key_findings": [
+          "Vault exploits cluster around three patterns: oracle manipulation, reentrancy via callback hooks, and admin-key compromise.",
+          "Aave, Compound, and Morpho (current Conservative DeFi protocols) have multi-year track records without principal loss events.",
+          "Concentration in a single protocol within the Conservative bucket is the bigger risk than the bucket itself."
+        ]
+      }
+    ]
+  },
+  "subject_snapshot": {
+    "subject_id": "robotmoney-vault",
+    "date": "2026-06-19",
+    "fetched_at": "2026-06-19T00:02:21.520Z",
+    "source_type": "vault_tvl",
+    "total_value_usd": 149.12,
+    "wallets": [
+      {
+        "label": "vault",
+        "address": "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
+        "chain": "base",
+        "value_usd": 149.12
+      }
+    ],
+    "positions": [
+      {
+        "token": "MORPHO",
+        "name": "Morpho Gauntlet USDC Prime",
+        "chain": "base",
+        "balance": 49.716471,
+        "price_usd": 1,
+        "value_usd": 49.72
+      },
+      {
+        "token": "AAVE",
+        "name": "Aave V3",
+        "chain": "base",
+        "balance": 49.701201,
+        "price_usd": 1,
+        "value_usd": 49.7
+      },
+      {
+        "token": "COMPOUND",
+        "name": "Compound V3",
+        "chain": "base",
+        "balance": 49.701318,
+        "price_usd": 1,
+        "value_usd": 49.7
+      }
+    ],
+    "notable": [
+      "depositor capital, not protocol capital — the IC opines on allocation strategy, not protocol mechanics",
+      "target weights: Conservative DeFi 95%, Agent Tokens 5%, Protocol Tokens 0% (placeholder), Real World Assets 0% (placeholder)",
+      "actual allocation tracked via public/data/hourly-vault-tvl.csv",
+      "Conservative DeFi sleeve currently split across Aave V3, Compound V3, Morpho Gauntlet USDC Prime, Idle USDC"
+    ]
+  },
+  "recent_sessions": [
+    {
+      "date": "2026-06-15",
+      "synthesis": "The committee reads the regime mechanics identically — composite 0.568 is risk_on for an eighth session, fading from 0.588 on 06-12, with a 89-point spread between macro/factor (82nd/96th) and on-chain at the 7th percentile, a 3-year low for the panel the correlation card aligns with forward returns. Where they diverge is what that floor-print means: Athena reads on-chain at the 7th as the leading panel screaming and the risk_on label one print from flipping, Robot Money reads the composite still above the 0.567 memory boundary and well below the 0.67 deviation threshold, and Woon notes a month of sub-30th on-chain hasn't broken anything and the upside cost of waiting keeps compounding. On the 4-bucket framework, 95% Conservative DeFi and 0% placeholders are unanimous; the Agent Tokens sleeve splits the room the same three ways as the prior four sessions — Athena now hardens to 0% with on-chain at a floor, Woon initiates ~$7 over two sessions, Robot Money treats the under-allocation as mandate deviation to close immediately. What would settle it is the same unresolved governance question carried since 2026-06-02: whether the 5% Agent target is a regime-conditional ceiling or an unconditional floor. The secondary contested call carries forward unchanged — whether to add a fourth Conservative venue to pull single-protocol max under 25% (Athena), or accept 33/33/33 as already honest (Robot Money, Woon)."
+    },
+    {
+      "date": "2026-06-11",
+      "synthesis": "The committee reads the regime mechanics identically — composite 0.592 is risk_on for an eighth session against an eight-session fade from 0.614, with a 66-point spread between macro/factor (85th/95th) and on-chain (29th), the panel the correlation card aligns with forward returns. Where they diverge is what the fade means: Athena reads \"risk_on label, risk_off direction\" and treats on-chain as the leading dissent, Robot Money reads the print as loud but not load-bearing since 0.592 is nowhere near the 0.67 threshold authorizing deviation, and Woon notes the conservative composite's upside cost has now been paid for a full month with zero Agent exposure. On the 4-bucket framework, 95% Conservative DeFi and 0% placeholders are unanimous; the Agent Tokens sleeve splits the room the same three ways as the last three sessions — Athena gates at on-chain >50th for five sessions, Woon initiates ~$7 now scaling over two sessions, Robot Money treats the 5% as immediate mandate. What would settle it is the same unresolved governance question carried since 2026-06-02: whether the 5% Agent target is a regime-conditional ceiling or an unconditional floor. A secondary contested call carries forward — whether to add a fourth Conservative venue (Athena) to push single-protocol max under 25%, or accept 33/33/33 as already honest (Robot Money, Woon)."
+    },
+    {
+      "date": "2026-06-07",
+      "synthesis": "The committee reads the regime identically — composite 0.594 is mechanically risk_on but fading for a fourth session, with a 70-point spread between macro/factor (87th/96th) and on-chain (26th), the panel the correlation card aligns with forward returns. Where they diverge is interpretation: Athena reads the four-session fade toward on-chain as the directional signal, Robot Money reads the same fade as the conservative aggregator working as designed, and Woon reads a month of unresolved divergence as evidence the wait-for-on-chain gate has become permanent defunding. On allocation, 95% Conservative DeFi and 0% placeholders are unanimous; the Agent Tokens sleeve splits the room three ways — Athena holds at 0% until on-chain crosses the 50th for five sessions, Woon initiates at 2–3% now scaling to 5% on confirmation, Robot Money treats the 5% target as a mandate the vault is obligated to fund immediately. What would settle it is a governance read on whether the 5% Agent target is a regime-conditional ceiling or an unconditional floor — the same question the 2026-06-02 session surfaced and did not resolve. A secondary contested call carried over from 2026-05-30: whether the Conservative sleeve's single-protocol concentration is better addressed by adding a fourth venue (Athena) or accepted as honest at 33/33/33 (Robot Money, Woon)."
+    }
+  ],
+  "generated_at": "2026-06-19T00:15:02.410Z"
+}

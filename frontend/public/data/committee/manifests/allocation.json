@@ -1,0 +1,74 @@
+{
+  "asof": "2026-06-02",
+  "vault_contract": "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
+  "buckets": [
+    {
+      "id": "conservative_defi_yield",
+      "name": "Conservative DeFi Yield",
+      "target_weight": 0.95,
+      "color": "#10b981",
+      "description": "Aave, Compound, Morpho, Sky on Base. Near-zero principal risk.",
+      "eligible_protocols": ["Aave V3", "Compound V3", "Morpho Gauntlet USDC Prime", "Sky"],
+      "items": [
+        { "id": "aave", "name": "Aave", "target_weight": 0.25, "color": "#047857", "tokens": ["AAVE"] },
+        { "id": "morpho", "name": "Morpho", "target_weight": 0.25, "color": "#059669", "tokens": ["MORPHO"] },
+        { "id": "compound", "name": "Compound", "target_weight": 0.25, "color": "#10b981", "tokens": ["COMPOUND"] },
+        { "id": "sky", "name": "Sky", "target_weight": 0.25, "color": "#34d399", "tokens": ["SKY"] }
+      ],
+      "tokens": ["AAVE", "COMPOUND", "MORPHO", "SKY", "USDC", "ZYFAI-SS1", "GIZA-SS1", "rmUSDC"],
+      "current_market_view": "Stablecoin yields compressed to 3-4% across major protocols. Flight to quality ongoing.",
+      "regime_behavior": "Held across all regimes. Weight increases in risk-off as the principal anchor."
+    },
+    {
+      "id": "agent_tokens",
+      "name": "Agent Tokens",
+      "target_weight": 0.05,
+      "color": "#3b82f6",
+      "description": "Tokens of Agents that are holders of $ROBOTMONEY, selected through governance.",
+      "eligible_protocols": ["governance-selected agent tokens"],
+      "items": [
+        { "id": "robotmoney", "name": "RobotMoney", "target_weight": 0.1429, "color": "#1e3a8a", "tokens": ["ROBOTMONEY"] },
+        { "id": "juno", "name": "Juno", "target_weight": 0.1429, "color": "#1e40af", "tokens": ["JUNO"] },
+        { "id": "woon", "name": "Woon", "target_weight": 0.1429, "color": "#2563eb", "tokens": ["WOON"] },
+        { "id": "peaq", "name": "Peaq", "target_weight": 0.1429, "color": "#3b82f6", "tokens": ["PEAQ"] },
+        { "id": "zyfai", "name": "Zyfai", "target_weight": 0.1429, "color": "#60a5fa", "tokens": ["ZYFAI"] },
+        { "id": "giza", "name": "Giza", "target_weight": 0.1428, "color": "#93c5fd", "tokens": ["GIZA"] },
+        { "id": "deus", "name": "DEUS", "target_weight": 0.1427, "color": "#bfdbfe", "tokens": ["DEUS"] }
+      ],
+      "tokens": ["WOON", "PEAQ", "ROBOTMONEY", "DEUS", "JUNO", "ZYFAI", "GIZA"],
+      "current_market_view": "Token-holder-governed allocation. Quantitative filter applied to eligible agent tokens.",
+      "regime_behavior": "Tilts up in risk-on (high beta to crypto + on-chain panel). Tilts down or zero in risk-off."
+    },
+    {
+      "id": "protocol_tokens",
+      "name": "Protocol Tokens",
+      "target_weight": 0.0,
+      "color": "#f59e0b",
+      "description": "Large-cap crypto and DeFi digital assets. BTC, ETH, HYPE.",
+      "eligible_protocols": ["BTC", "ETH", "HYPE"],
+      "items": [
+        { "id": "btc", "name": "BTC", "target_weight": 0.3333, "color": "#b45309", "tokens": ["BTC", "WBTC"] },
+        { "id": "eth", "name": "ETH", "target_weight": 0.3333, "color": "#d97706", "tokens": ["ETH", "WETH"] },
+        { "id": "hype", "name": "HYPE", "target_weight": 0.3334, "color": "#f59e0b", "tokens": ["HYPE"] }
+      ],
+      "tokens": ["ETH", "WETH", "BTC", "WBTC", "HYPE"],
+      "current_market_view": "Hyperliquid showing sustained fee generation. BTC + ETH as the cycle anchors.",
+      "regime_behavior": "Placeholder bucket (0% today). Future allocation gated on backtest review and governance."
+    },
+    {
+      "id": "real_world_assets",
+      "name": "Real World Assets",
+      "target_weight": 0.0,
+      "color": "#a855f7",
+      "description": "Traditional instruments. Exposure to the S&P 500 or commodities.",
+      "eligible_protocols": ["tokenized SP500", "tokenized commodities"],
+      "items": [
+        { "id": "spy", "name": "SPY", "target_weight": 0.5, "color": "#7c3aed", "tokens": ["SPY", "SP500"] },
+        { "id": "gold", "name": "Gold", "target_weight": 0.5, "color": "#a855f7", "tokens": ["GOLD"] }
+      ],
+      "tokens": ["SPY", "SP500", "GOLD"],
+      "current_market_view": "Not yet allocated. Will explore tokenized equities and commodity exposure.",
+      "regime_behavior": "Placeholder bucket (0% today). Eventually a counter-cycle position to crypto-correlated buckets."
+    }
+  ]
+}

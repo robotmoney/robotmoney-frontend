@@ -1,0 +1,261 @@
+{
+  "date": "2026-06-21",
+  "subject_id": "robotmoney-allocation",
+  "subject_name": "Robot Money Allocation",
+  "regime_summary": {
+    "composite": 0.5845402261566007,
+    "composite_percentile": 0.7164383561643836,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off",
+    "factor_regime": "risk_on",
+    "macro_percentile": 0.8041095890410959,
+    "onchain_percentile": 0.15753424657534246,
+    "factor_percentile": 0.9922374429223745,
+    "history": [
+      {
+        "date": "2026-06-13",
+        "composite": 0.5411467246223717,
+        "regime": "neutral",
+        "macro": 0.550022047359753,
+        "onchain": 0.3206224665093711,
+        "factor": 0.752795659997991
+      },
+      {
+        "date": "2026-06-14",
+        "composite": 0.5656144942996776,
+        "regime": "neutral",
+        "macro": 0.6339755334149492,
+        "onchain": 0.30983607721156425,
+        "factor": 0.7530318722725194
+      },
+      {
+        "date": "2026-06-15",
+        "composite": 0.5930570291939113,
+        "regime": "risk_on",
+        "macro": 0.6660996006514929,
+        "onchain": 0.3486260749147124,
+        "factor": 0.7644454120155288
+      },
+      {
+        "date": "2026-06-16",
+        "composite": 0.5794503817402853,
+        "regime": "risk_on",
+        "macro": 0.6439575662376553,
+        "onchain": 0.34181654622493624,
+        "factor": 0.7525770327582645
+      },
+      {
+        "date": "2026-06-17",
+        "composite": 0.5737511482879412,
+        "regime": "risk_on",
+        "macro": 0.6207878417774189,
+        "onchain": 0.3448045596456438,
+        "factor": 0.7556610434407608
+      },
+      {
+        "date": "2026-06-18",
+        "composite": 0.5894187946994189,
+        "regime": "risk_on",
+        "macro": 0.6278455205843895,
+        "onchain": 0.36319591893655123,
+        "factor": 0.7772149445773162
+      },
+      {
+        "date": "2026-06-19",
+        "composite": 0.5839598846485993,
+        "regime": "risk_on",
+        "macro": 0.6252064230488122,
+        "onchain": 0.34909306635705895,
+        "factor": 0.7775801645399266
+      },
+      {
+        "date": "2026-06-20",
+        "composite": 0.5845402261566007,
+        "regime": "risk_on",
+        "macro": 0.6224305783431094,
+        "onchain": 0.35397594177590624,
+        "factor": 0.7772141583507863
+      }
+    ]
+  },
+  "subject_snapshot_total_value_usd": null,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "cautious",
+      "confidence": 0.72,
+      "body": "**REGIME**\n- Composite 0.585 at the 72nd percentile, eighth consecutive risk_on print, but on-chain at the 16th — six points lower than the 22nd I flagged June 17.\n- Three-panel range is 83pts (macro 80, factor 99, on-chain 16) — the widest dissent on file this cycle, dominated by the panel the correlation card flags as forward-loaded.\n- Trajectory: composite drifted 0.541 → 0.585 over seven sessions while on-chain deteriorated. The composite is rising on factor strength, not breadth.\n\n**ALLOCATION**\n- Per /blog/regime-conservative-aggressive, the conservative composite is designed to absorb single-panel dissent without tilting — but the 8-year backtest in /articles/treasury-allocation shows alpha came from being de-risked early, not late.\n- Cut Agent Tokens to 2%, redirect 3% to a new RWA sleeve (Gold-weighted, not SPY — factor at 99th makes SPY pro-cyclical here). This is the counter-cycle gap the framework has carried unfunded for three sessions running.\n- Flip trigger: on-chain clears the 33rd for five consecutive sessions → restore Agent Tokens to 5% and unwind RWA.\n\n**WITHIN-BUCKET**\n- Conservative DeFi: Aave 35%, Morpho 30%, Sky 20%, Compound 10% — concentration in any single protocol is the load-bearing risk per /smart-contract-risks, not the bucket itself.\n- Agent Tokens (at 2%): RobotMoney 40%, Juno 20%, Woon 15%, balance split Peaq/Zyfai/Giza/DEUS — cut the long tail first when trimming.\n- RWA (new 3%): Gold 100%, SPY 0% — factor at the 99th percentile means SPY adds beta, not counter-cycle.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-21T02:00:40.868Z",
+      "usage": {
+        "input_tokens": 4218,
+        "cache_creation_input_tokens": 2278,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2278,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 676,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "pull",
+      "stance": "neutral",
+      "confidence": 0.72,
+      "body": "**REGIME**\n- Composite 0.585 at 72nd percentile, eighth consecutive risk_on print, drift sideways from 0.566 last session. Mandate-band, not threshold.\n- Panel dissent widened: macro 80th, factor 99th, on-chain 16th. The forward-loaded crypto panel sits sub-20th for the second week running.\n- Trajectory is flat-to-firming on composite, deteriorating on on-chain. The composite is absorbing the dissent already.\n\n**ALLOCATION**\n- 95/5/0/0 is the governance-approved target. Composite at 0.585 does not cross 0.90. The protocol holds target.\n- The mechanism behind holding: Conservative DeFi receipts clear daily on Base — Aave aToken accrual, Morpho vault shares, Sky sUSDS rate — and that cadence is regime-agnostic. No tilt is authorized to chase a factor panel at the 99th.\n- Inside Agent Tokens, the constituent that moves first is $ROBOTMONEY itself — self-token exposure is structurally honest, the others are venture-shaped. Hold 5%, not above.\n- Flip condition: on-chain panel sub-10th for five consecutive sessions while composite breaks 0.50 — that authorizes trimming Agents toward 2%. Not before.\n\n**WITHIN-BUCKET**\n- Conservative DeFi: Morpho to 35%, Aave to 30%, Sky to 25%, Compound to 10%. Morpho's curated vaults have the cleanest receipt cadence; Compound's rate surface is the laggard.\n- Agent Tokens: RobotMoney to 40%, Woon and Juno to 15% each, Peaq, Zyfai, Giza, DEUS to ~7-8% each. Self-token first, revenue-clearing agents second, the rest are options.\n- Protocol Tokens and RWA stay 0%. No governance signal observed.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-21T02:00:44.369Z",
+      "usage": {
+        "input_tokens": 3094,
+        "cache_creation_input_tokens": 2245,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2245,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 681,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "pull",
+      "stance": "constructive",
+      "confidence": 0.7,
+      "body": "**REGIME**\n- composite 0.585 at the 72nd percentile — eighth straight risk_on print, drifting up from 0.541 a week ago, not down\n- macro 80th and factor 99th are doing the work; on-chain 16th is the lone holdout but it has been sub-33rd for the entire stretch while composite kept climbing\n- trajectory is grindingly constructive — the dissent panel hasn't broken anything yet, and \"wait for on-chain to confirm\" is starting to read as wait for the trade to end\n\n**ALLOCATION**\n- 95/5/0/0 with agent tokens funded to the full 5 — composite at the 72nd percentile is exactly the regime the 5% sleeve exists to express, and agent revenue (woon buybacks, juno fee accrual) has cleared every week the on-chain panel was red\n- inside agent tokens, $ROBOTMONEY and $WOON move first — they have actual cashflow funding the bid, not narrative\n- flip the read if composite breaks 0.50 AND on-chain stays sub-20th in the same week — that's the only setup where i'd concede trimming to 3%\n\n**WITHIN-BUCKET**\n- conservative defi: Morpho 35%, Aave 30%, Sky 20%, Compound 10% — Morpho's curated vaults are the highest yield with the cleanest risk transparency on Base right now\n- agent tokens: RobotMoney 30%, Woon 20%, Juno 20%, Peaq 15%, Giza/Zyfai/DEUS share the rest — cashflow-weighted, not market-cap weighted\n- protocol tokens stay 0 — BTC and ETH are not what this vault is for, and HYPE is a venue bet dressed as a token\n- RWA stays 0 — counter-cycle hedge for a regime we're not in",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-21T02:00:41.435Z",
+      "usage": {
+        "input_tokens": 3094,
+        "cache_creation_input_tokens": 2390,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2390,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 636,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The three voices converge on regime mechanics — composite 0.585 at the 72nd percentile, eighth consecutive risk_on print, with the widest panel dissent on file (macro 80, factor 99, on-chain 16) — but split on what the sub-20th on-chain print means now that it has persisted for weeks while composite drifted up rather than down. On the framework, Athena cuts Agent Tokens to 2% and stands up a 3% Gold-only RWA sleeve to fund the counter-cycle gap, reading factor at the 99th as making SPY pro-cyclical; Robot Money holds 95/5/0/0 as mandate-correct since composite hasn't crossed threshold and Conservative DeFi receipts clear regime-agnostic on Base; Woon funds Agent Tokens to the full 5% and argues agent cashflow has cleared every week on-chain was red. Within Conservative DeFi, Morpho-Aave ordering is near-aligned at 30-35% each with Sky mid and Compound capped at 10%. The contested call remains Agent Tokens — 2 versus 5 — settled by whether on-chain clears the 33rd for five consecutive sessions (toward Woon), stays sub-10th while composite breaks 0.50 (toward Athena), or neither (Robot Money holds).",
+  "committee_recommendation": {
+    "type": "bucket_weights",
+    "weights": {
+      "conservative_defi_yield": 0.95,
+      "agent_tokens": 0.05,
+      "protocol_tokens": 0,
+      "real_world_assets": 0
+    },
+    "rationale": "Hold 95/5/0/0. Composite at 0.585 sits inside the mandate band per /blog/regime-conservative-aggressive and has not crossed any deviation threshold despite on-chain dissent at the 16th — the conservative composite was built to absorb single-panel disagreement without tilting. Athena's RWA sleeve and Woon's full-fund both lack a governance trigger today.",
+    "consensus": [
+      "Composite 0.585 at 72nd percentile, eighth straight risk_on print.",
+      "Panel dissent is widest on file with on-chain the lone holdout.",
+      "Within Conservative DeFi, Morpho and Aave lead, Compound capped at 10%.",
+      "Protocol Tokens stay 0% — no governance signal to activate."
+    ],
+    "disagreements": [
+      {
+        "topic": "Agent Tokens weight",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Cut to 2% — on-chain sub-20th for weeks confirms the dissent, fund counter-cycle."
+          },
+          {
+            "member_id": "woon",
+            "view": "Fund the full 5% — agent cashflow has cleared every red on-chain week."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Hold 5% mandate — composite hasn't crossed threshold, no trim authorized."
+          }
+        ],
+        "what_settles": "On-chain clearing the 33rd for five consecutive sessions resolves toward Woon; sub-10th while composite breaks 0.50 resolves toward Athena."
+      },
+      {
+        "topic": "RWA sleeve activation",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Stand up 3% Gold-only sleeve — factor at 99th makes SPY pro-cyclical."
+          },
+          {
+            "member_id": "woon",
+            "view": "Stay 0% — counter-cycle hedge for a regime we're not in."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Stay 0% — no governance signal observed to activate the bucket."
+          }
+        ],
+        "what_settles": "A governance proposal funding RWA, or composite breaking 0.50 while factor stays above 90th."
+      },
+      {
+        "topic": "Conservative DeFi ordering",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Aave 35 / Morpho 30 — concentration risk is the load-bearing variable per /smart-contract-risks."
+          },
+          {
+            "member_id": "woon",
+            "view": "Morpho 35 / Aave 30 — curated vaults are highest yield with cleanest transparency on Base."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Morpho 35 / Aave 30 — Morpho's receipt cadence is cleanest, Compound is the laggard."
+          }
+        ],
+        "what_settles": "Trailing yield and receipt-cadence comparison across Morpho curated vaults vs Aave aTokens over the next quarter."
+      }
+    ],
+    "within_bucket_weights": {
+      "conservative_defi_yield": {
+        "aave": 0.3,
+        "morpho": 0.35,
+        "compound": 0.1,
+        "sky": 0.25
+      },
+      "agent_tokens": {
+        "robotmoney": 0.35,
+        "juno": 0.17,
+        "woon": 0.17,
+        "peaq": 0.1,
+        "zyfai": 0.07,
+        "giza": 0.07,
+        "deus": 0.07
+      },
+      "protocol_tokens": {
+        "btc": 0.5,
+        "eth": 0.4,
+        "hype": 0.1
+      },
+      "real_world_assets": {
+        "spy": 0.3,
+        "gold": 0.7
+      }
+    }
+  },
+  "social_draft_id": null,
+  "generated_at": "2026-06-21T02:01:10.420Z"
+}

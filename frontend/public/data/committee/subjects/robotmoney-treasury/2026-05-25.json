@@ -1,0 +1,55 @@
+{
+  "subject_id": "robotmoney-treasury",
+  "date": "2026-05-25",
+  "fetched_at": "2026-05-25T23:47:38.782Z",
+  "source_type": "rpc",
+  "total_value_usd": 68347.09,
+  "wallets": [
+    {
+      "label": "primary",
+      "address": "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6",
+      "chain": "base",
+      "value_usd": 68347.09
+    }
+  ],
+  "positions": [
+    {
+      "token": "ROBOTMONEY",
+      "name": "Robot Money",
+      "chain": "base",
+      "balance": 5623021605.16037,
+      "price_usd": 0.00001215143608,
+      "value_usd": 68327.79
+    },
+    {
+      "token": "BNKR",
+      "name": "BankrCoin",
+      "chain": "base",
+      "balance": 25081.308313,
+      "price_usd": 0.0004879657203,
+      "value_usd": 12.24
+    },
+    {
+      "token": "ETH",
+      "name": "Ethereum",
+      "chain": "base",
+      "balance": 0.00335,
+      "price_usd": 2106.26,
+      "value_usd": 7.06
+    },
+    {
+      "token": "USDC",
+      "name": "USD Coin",
+      "chain": "base",
+      "balance": 0.000292,
+      "price_usd": 0.9964241932,
+      "value_usd": 0
+    }
+  ],
+  "notable": [
+    "concentrated in ROBOTMONEY by design — the prop wallet flywheel requires protocol-owned reserves to be deployable",
+    "the LP-locked-until-2100 commitment makes protocol-owned liquidity the load-bearing piece of the buyback mechanism",
+    "subject to all the critiques the IC applies to any self-token-heavy treasury",
+    "concentration: ROBOTMONEY is 100.0% of read value"
+  ]
+}

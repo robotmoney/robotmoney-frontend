@@ -7,18 +7,22 @@ export function registerHeroes(Alpine) {
     _start(container) {
       const p5Constructor = window.p5;
       const sketch = (p) => {
-        let width = 0;
-        let height = 0;
-        const points = [];
+        let W, H;
+        let agents = [];
+        const BG = [5, 5, 8];
+        const ACCENT = [0, 229, 255];
 
         function reset() {
-          width = container.offsetWidth;
-          height = container.offsetHeight;
-          points.length = 0;
-          for (let i = 0; i < 80; i++) {
-            points.push({ x: p.random(width), y: p.random(height), a: p.random(p.TWO_PI) });
-          }
-          p.background(5, 5, 8);
+          W = container.offsetWidth;
+          H = container.offsetHeight;
+          agents = Array.from({ length: Math.min(1300, Math.max(360, Math.floor((W * H) / 900))) }, () => ({
+            x: p.random(W),
+            y: p.random(H),
+            a: p.random(p.TWO_PI),
+            s: p.random(0.45, 1.8),
+            h: p.random(),
+          }));
+          p.background(BG[0], BG[1], BG[2]);
         }
 
         p.setup = function () {
@@ -32,14 +36,20 @@ export function registerHeroes(Alpine) {
         };
         p.draw = function () {
           p.noStroke();
-          p.fill(5, 5, 8, 24);
-          p.rect(0, 0, width, height);
-          p.fill(0, 229, 255, 60);
-          for (const point of points) {
-            point.a += (p.noise(point.x * 0.006, point.y * 0.006, p.frameCount * 0.004) - 0.5) * 0.5;
-            point.x = (point.x + Math.cos(point.a) * 1.2 + width) % width;
-            point.y = (point.y + Math.sin(point.a) * 1.2 + height) % height;
-            p.circle(point.x, point.y, 1.8);
+          p.fill(BG[0], BG[1], BG[2], 18);
+          p.rect(0, 0, W, H);
+          for (const agent of agents) {
+            const n = p.noise(agent.x * 0.003, agent.y * 0.003, p.frameCount * 0.003);
+            agent.a += (n - 0.5) * 0.55;
+            agent.x += Math.cos(agent.a) * agent.s;
+            agent.y += Math.sin(agent.a) * agent.s;
+            if (agent.x < 0) agent.x = W;
+            if (agent.x > W) agent.x = 0;
+            if (agent.y < 0) agent.y = H;
+            if (agent.y > H) agent.y = 0;
+            const alpha = agent.h > 0.82 ? 110 : 42;
+            p.fill(agent.h > 0.82 ? ACCENT[0] : 170, agent.h > 0.82 ? ACCENT[1] : 185, agent.h > 0.82 ? ACCENT[2] : 205, alpha);
+            p.circle(agent.x, agent.y, agent.h > 0.96 ? 2.4 : 1.25);
           }
         };
       };

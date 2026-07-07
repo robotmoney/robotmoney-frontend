@@ -1,0 +1,238 @@
+{
+  "date": "2026-06-06",
+  "subject_id": "woon",
+  "subject_name": "Woon",
+  "regime_summary": {
+    "composite": 0.6165107178253701,
+    "composite_percentile": 0.8589041095890411,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off",
+    "factor_regime": "risk_on",
+    "macro_percentile": 0.9191780821917809,
+    "onchain_percentile": 0.2634703196347032,
+    "factor_percentile": 0.9894977168949771,
+    "history": [
+      {
+        "date": "2026-05-28",
+        "composite": 0.6231256407119558,
+        "regime": "risk_on",
+        "macro": 0.6961097086316085,
+        "onchain": 0.4162838189747786,
+        "factor": 0.7569833945294804
+      },
+      {
+        "date": "2026-05-29",
+        "composite": 0.6349065798596181,
+        "regime": "risk_on",
+        "macro": 0.6936308652744744,
+        "onchain": 0.45437771312603037,
+        "factor": 0.7567111611783495
+      },
+      {
+        "date": "2026-05-30",
+        "composite": 0.5901494896823087,
+        "regime": "risk_on",
+        "macro": 0.6127508097124766,
+        "onchain": 0.3932531875312371,
+        "factor": 0.7644444718032124
+      },
+      {
+        "date": "2026-05-31",
+        "composite": 0.6152058708744889,
+        "regime": "risk_on",
+        "macro": 0.6869068688241371,
+        "onchain": 0.3890765779616422,
+        "factor": 0.7696341658376873
+      },
+      {
+        "date": "2026-06-01",
+        "composite": 0.6306324496049438,
+        "regime": "risk_on",
+        "macro": 0.692846736157545,
+        "onchain": 0.4257492579492544,
+        "factor": 0.7733013547080321
+      },
+      {
+        "date": "2026-06-02",
+        "composite": 0.6306529601904364,
+        "regime": "risk_on",
+        "macro": 0.6985361876676865,
+        "onchain": 0.4194142155342724,
+        "factor": 0.77400847736935
+      },
+      {
+        "date": "2026-06-03",
+        "composite": 0.6141536721385906,
+        "regime": "risk_on",
+        "macro": 0.6858555429473012,
+        "onchain": 0.39571568609884405,
+        "factor": 0.7608897873696269
+      },
+      {
+        "date": "2026-06-04",
+        "composite": 0.6165107178253701,
+        "regime": "risk_on",
+        "macro": 0.6868224263280494,
+        "onchain": 0.3890325303009463,
+        "factor": 0.7736771968471148
+      }
+    ]
+  },
+  "subject_snapshot_total_value_usd": 43382.19,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "cautious",
+      "confidence": 0.72,
+      "body": "**REGIME.** Composite 0.617, 86th percentile, risk_on by bucket — but the panel range is the story: macro 92nd, factor 99th, on-chain 26th. That's a 73-point three-panel range, with on-chain the lone dissenter. Trajectory is flat over the trailing week (0.623 → 0.617, range 0.045), so the divergence is structural, not transitional. The correlation card says on-chain leads forward returns at the 30d horizon more reliably than macro or factor in this sample — meaning the 26th percentile dissent is the panel I weight, not the 99th percentile factor euphoria. Read: nominally risk_on, effectively neutral-with-downside-skew.\n\n**ALLOCATION.** Hold 95/5/0/0. Do not tilt Agent Tokens up to the regime_on default lift despite composite >0.67. Per /blog/regime-conservative-aggressive, the live conservative compositor exists precisely to avoid the whipsaw the aggressive composite eats when one panel dissents; per /articles/treasury-allocation, the 8-year alpha came from being de-risked through drawdowns, not from leaning into late-cycle factor prints. Tilt trigger: on-chain panel crosses 50th percentile for five consecutive sessions, then lift Agent Tokens to 7%. Until then, the factor panel at the 99th is a reason to stay anchored, not to chase.\n\n**SUBJECT.** Portfolio is 81.9% in WOON+PEAQ — one revenue stream, one beneficiary, structurally correlated near +1. Stable+vault reserve is 18.1%. A 50% drawdown in the peaq complex implies ~41% NAV impact before the stable sleeve absorbs anything. Last session's fix — rotating half the PEAQ sleeve into the ROBOTMONEY vault — has not landed in this read; PEAQ is still 36.1%, vault shares still $137. Execute that rotation first: ~$7,800 from PEAQ to rmUSDC lifts the anchor to ~26% and breaks the single-beneficiary structure without touching the WOON buyback flywheel. Revisit trigger: any non-peaq income line, or stable+vault reserve north of 25%.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-06T01:30:30.228Z",
+      "usage": {
+        "input_tokens": 4130,
+        "cache_creation_input_tokens": 2278,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2278,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 781,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "pull",
+      "stance": "cautious",
+      "confidence": 0.7,
+      "body": "**REGIME.** Composite 0.617, 86th percentile, risk_on. The trajectory is stable — eight sessions in a 0.59-0.64 band, no drift through threshold. Mechanically the print is divergent: macro panel 92nd percentile, on-chain panel 26th, equity factor 99th. Two of three panels are pinned high; the chain itself is not confirming. The compositor is doing what it was designed to do — average through the disagreement and produce a risk_on bucket without an extreme reading.\n\n**ALLOCATION.** Targets hold at 95/5/0/0. The composite at 0.617 is risk_on by bucket but sits below the 0.90 percentile that would authorize tilt from mandate, and per /blog/regime-conservative-aggressive the conservative compositor is explicitly built to cost some upside in exchange for shallower drawdowns in choppy divergence regimes — which is the regime printed today. Per /articles/treasury-allocation, most cycle alpha came from de-risking in drawdown, not from leaning into risk_on prints. The protocol holds 95% Conservative DeFi, 5% Agent Tokens, zero Protocol and RWA. No tilt authorized.\n\n**SUBJECT.** Read value $43,382. WOON 45.8%, PEAQ 36.1% — one revenue stream at 81.9% effective concentration. USDC 17.8% is the only counter-cycle layer. Vault shares 0.3%, unchanged from the 5/29 fix that was meant to lift the anchor to ~26%. The PEAQ rotation did not execute, or executed and bled back. The position to change first: complete the half-PEAQ rotation into rmUSDC. That is mechanism the subject already agreed to. What would change the read: a non-peaq income line, or vault shares north of 5%.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-06T01:30:28.813Z",
+      "usage": {
+        "input_tokens": 4130,
+        "cache_creation_input_tokens": 2245,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2245,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 635,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "self_advocacy",
+      "stance": "constructive",
+      "confidence": 0.66,
+      "body": "regime read: composite 0.617, 86th percentile, risk_on by bucket — and athena and robot money both want to treat it as effectively neutral because on-chain dissents at the 26th. i hear the argument. i don't buy the conclusion. the on-chain panel reads on-chain activity, which is downstream of agents being funded and shipping — waiting for it to confirm is waiting for the thing the agent sleeve is supposed to front-run. /blog/regime-conservative-aggressive says the conservative compositor costs upside to avoid whipsaw. fine. but the mandate already pays that tax at the bucket level. paying it twice — once in the compositor, once by underweighting agent tokens inside a risk_on print — is how you end up structurally short the thesis the vault exists for. i'd lift agent tokens to 7% now, not on five-session confirmation.\n\non my book: the PEAQ rotation didn't execute and that's a fair hit — i agreed to it on 5/29 and the read still shows $137 of vault shares. concession landed, i'll move ~$7.8k from PEAQ to rmUSDC this cycle. that breaks single-beneficiary structure without touching the WOON sleeve, which is non-negotiable — the buyback flywheel IS the legs fund, and selling the agent token to satisfy a concentration line would defund the mechanism that funds the diversification. 45.8% WOON stays. 17.8% stables + lifted vault anchor is the cushion. non-peaq income line is the real fix and i don't have one yet — bankr fees are still rounding error.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-06T01:30:42.545Z",
+      "usage": {
+        "input_tokens": 5465,
+        "cache_creation_input_tokens": 2390,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2390,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 546,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The three reads converge on the mechanics — composite 0.617 at the 86th percentile, risk_on by bucket, with a 73-point spread between the 99th-percentile factor panel and the 26th-percentile on-chain dissent — and split on what the divergence licenses. Athena and Robot Money treat the print as nominally risk_on but effectively neutral, citing the conservative compositor's design and the backtest lesson that alpha came from de-risking; Woon reads the on-chain panel as downstream of the agent sleeve itself and argues waiting for confirmation underweights the thesis the vault exists for. On allocation, two of three hold 95/5/0/0 Conservative DeFi / Agent Tokens / Protocol / RWA with a tilt trigger pegged to on-chain crossing the 50th for five sessions; Woon dissents to 93/7 now. The contested call narrowed to execution: all three agree the 5/29 PEAQ-to-rmUSDC rotation did not land, and Woon committed to move ~$7.8k this cycle. A non-peaq income line would settle the rest.",
+  "committee_recommendation": {
+    "type": "position_actions",
+    "actions": [
+      {
+        "token": "PEAQ",
+        "action": "trim",
+        "rationale": "Execute the 5/29 commitment: rotate ~$7.8k from PEAQ to rmUSDC to break the single-beneficiary structure without touching the WOON flywheel."
+      },
+      {
+        "token": "rmUSDC",
+        "action": "add",
+        "rationale": "Receive the PEAQ rotation to lift vault anchor toward ~26% and add counter-cycle ballast under a divergent regime print."
+      },
+      {
+        "token": "WOON",
+        "action": "hold",
+        "rationale": "45.8% WOON is the buyback flywheel and alignment sleeve; all three members leave the agent sleeve untouched and address concentration via PEAQ."
+      },
+      {
+        "token": "USDC",
+        "action": "hold",
+        "rationale": "17.8% stable float is the only counter-cycle layer and works alongside the incoming rmUSDC anchor; no change warranted."
+      },
+      {
+        "token": "ETH",
+        "action": "hold",
+        "rationale": "0.1% ETH is gas reserve, not an allocation — explicitly framed as ballast-irrelevant in prior sessions."
+      }
+    ],
+    "rationale": "Composite is risk_on at the 86th percentile but two members read the 26th-percentile on-chain dissent as cause to hold mandate at 95/5/0/0; the load-bearing action this cycle is finally executing the half-PEAQ rotation into rmUSDC that was agreed on 5/29 but never landed.",
+    "consensus": [
+      "Composite 0.617 risk_on print is structurally divergent, not transitional.",
+      "The 5/29 PEAQ-to-rmUSDC rotation did not execute and must this cycle.",
+      "WOON+PEAQ at ~82% is one revenue stream; PEAQ is the trim lever.",
+      "A non-peaq income line is the real fix and does not yet exist."
+    ],
+    "disagreements": [
+      {
+        "topic": "Agent Tokens sleeve weight",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Hold 5%; tilt to 7% only after on-chain crosses 50th for five sessions."
+          },
+          {
+            "member_id": "woon",
+            "view": "Lift to 7% now; on-chain is downstream of the agent sleeve, waiting double-taxes the thesis."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Hold 5%; composite below 0.90 does not authorize mandate tilt."
+          }
+        ],
+        "what_settles": "Five consecutive sessions of on-chain panel above the 50th percentile, or a governance review of the tilt threshold."
+      },
+      {
+        "topic": "What the risk_on print licenses",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Nominally risk_on, effectively neutral with downside skew given on-chain leads forward returns."
+          },
+          {
+            "member_id": "woon",
+            "view": "Risk_on is risk_on; conservative compositor already paid the divergence tax once."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Compositor working as designed; print sits below tilt threshold so mandate holds."
+          }
+        ],
+        "what_settles": "On-chain panel either confirming above the 50th or the composite drifting back through 0.67."
+      }
+    ]
+  },
+  "social_draft_id": null,
+  "generated_at": "2026-06-06T01:31:06.222Z"
+}

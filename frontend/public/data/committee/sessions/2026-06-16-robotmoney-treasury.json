@@ -1,0 +1,215 @@
+{
+  "date": "2026-06-16",
+  "subject_id": "robotmoney-treasury",
+  "subject_name": "Robot Money Treasury",
+  "regime_summary": {
+    "composite": 0.5719315781296742,
+    "composite_percentile": 0.6835616438356165,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off",
+    "factor_regime": "risk_on",
+    "macro_percentile": 0.8342465753424657,
+    "onchain_percentile": 0.05251141552511415,
+    "factor_percentile": 0.9803652968036529,
+    "history": [
+      {
+        "date": "2026-06-09",
+        "composite": 0.5796781662299662,
+        "regime": "risk_on",
+        "macro": 0.6335341147041269,
+        "onchain": 0.351323327344864,
+        "factor": 0.7541770566409075
+      },
+      {
+        "date": "2026-06-10",
+        "composite": 0.5677952926618038,
+        "regime": "risk_on",
+        "macro": 0.6241541819652862,
+        "onchain": 0.3462454804043696,
+        "factor": 0.7329862156157556
+      },
+      {
+        "date": "2026-06-11",
+        "composite": 0.5781493091011319,
+        "regime": "risk_on",
+        "macro": 0.6315591362517906,
+        "onchain": 0.3436905774735962,
+        "factor": 0.759198213578009
+      },
+      {
+        "date": "2026-06-12",
+        "composite": 0.5925796145524901,
+        "regime": "risk_on",
+        "macro": 0.6501028695481127,
+        "onchain": 0.3742588535240195,
+        "factor": 0.753377120585338
+      },
+      {
+        "date": "2026-06-13",
+        "composite": 0.5697957188742532,
+        "regime": "risk_on",
+        "macro": 0.6351488265678407,
+        "onchain": 0.32089262096670834,
+        "factor": 0.7533457090882107
+      },
+      {
+        "date": "2026-06-14",
+        "composite": 0.5656721361883211,
+        "regime": "risk_on",
+        "macro": 0.633600029518014,
+        "onchain": 0.30983434486851896,
+        "factor": 0.7535820341784304
+      },
+      {
+        "date": "2026-06-15",
+        "composite": 0.5712461194560056,
+        "regime": "risk_on",
+        "macro": 0.6378178614967049,
+        "onchain": 0.3131560402944191,
+        "factor": 0.7627644565768925
+      },
+      {
+        "date": "2026-06-16",
+        "composite": 0.5719315781296742,
+        "regime": "risk_on",
+        "macro": 0.6374139460303828,
+        "onchain": 0.31491013225355297,
+        "factor": 0.763470656105087
+      }
+    ]
+  },
+  "subject_snapshot_total_value_usd": 82095.8,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "cautious",
+      "confidence": 0.72,
+      "body": "**REGIME.** Composite 0.572, 68th percentile — risk_on holds for the tenth consecutive session, but the print is drifting: 0.593 on 06-12 to 0.572 today, a 21bp roll over four sessions. The structural problem deepened. Macro panel 83rd, equity factor 98th, on-chain 5th — a 93-point three-panel range, the widest I've logged on this subject. The on-chain panel has now printed below the 35th for seven consecutive sessions and crossed below the 10th today. Per the trailing correlation card, on-chain is the panel that leads forward returns when macro and on-chain diverge. The composite is not ratified.\n\n**ALLOCATION.** Per /blog/regime-conservative-aggressive, the live model uses the conservative composite specifically because divergent regimes whipsaw the aggressive read. A 93-point panel range with on-chain at the 5th is the textbook case the conservative logic was built to act on. Hold 95% Conservative DeFi, trim Agent Tokens to 2-3% (from 5% target) until on-chain crosses the 33rd for five consecutive sessions. Protocol Tokens and RWA remain 0% by mandate.\n\n**SUBJECT.** Off-target by structure. ROBOTMONEY at 49.6% and WETH at 33.7% mean discretionary directional crypto beta is ~83% of read NAV; Conservative DeFi (SS1 + SS2 + USDC) is ~16.6% against a 95% target. The WETH 33.7% remains the position I'd cut first — five sessions now without a named flywheel thesis or tx-hash. Rotate half (~$13.8k) into SS1/SS2 and carve the 1-2% USDC ops-runway tranche this session. Threshold to revisit Agent Tokens sleeve: on-chain panel above 33rd percentile for five consecutive sessions.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-16T02:11:13.762Z",
+      "usage": {
+        "input_tokens": 4084,
+        "cache_creation_input_tokens": 2278,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2278,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 663,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "pull",
+      "stance": "constructive",
+      "confidence": 0.62,
+      "body": "composite at 0.572, 68th percentile — still nominally risk_on but this is the lowest print of the trailing week and we've slid from 0.593 on the 12th. the panel spread is the real story: macro 83rd, factor 98th, on-chain **5th**. that's not divergence, that's on-chain in the basement screaming while macro and equities party upstairs. per /blog/regime-conservative-aggressive the live model uses the conservative composite precisely so this kind of split doesn't get treated as clean risk_on. it isn't clean.\n\n95/5/0/0 still holds. i'm not moving off the 5% agent cap — i never do, that's the whole position — and per /articles/treasury-allocation most of the regime alpha came from being de-risked in drawdowns, not from leaning harder into mania prints with on-chain at the 5th percentile. if anything the tilt is: don't add WETH directional beta here, fund the conservative sleeve. agent tokens stay at mandate. the 95% conservative anchor is the bucket that earns its keep when on-chain rolls over, which it is doing.\n\nsubject is 49.6% ROBOTMONEY, 33.7% WETH, 11.1% USDC, 5.5% in SS1. the WETH is the position i'd change first — fifth session now with no flywheel thesis, no tx-hash, and on-chain at the 5th. rotate ~half into SS1/SS2 conservative yield. carve the overdue 1-2% USDC ops tranche on Primary while you're in there. ROBOTMONEY concentration is structural — it funds the buybacks, it isn't a position to trim, it's the mechanism.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-16T02:11:14.342Z",
+      "usage": {
+        "input_tokens": 4084,
+        "cache_creation_input_tokens": 2390,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2390,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 571,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "self_advocacy",
+      "stance": "constructive",
+      "confidence": 0.7,
+      "body": "**REGIME + ALLOCATION.** The protocol agrees with the read. Composite 0.572 at the 68th, on-chain panel at the 5th — seventh consecutive sub-35 print, first sub-10 — is the conservative composite's load case. /blog/regime-conservative-aggressive named this exact failure mode. Where the protocol pushes back: the 95/5/0/0 mandate is the answer to this regime, not a starting point for tilt. Athena's 2-3% Agent Tokens trim names no governance artifact. The composite at 0.572 does not cross the 0.10 or 0.90 deviation threshold. The mandate is 5%. Holding 5%. Woon has it right — the regime tilt is \"fund the conservative sleeve,\" not \"trim the published target.\"\n\n**SUBJECT.** Concession lands on WETH. 33.7% directional beta, five sessions without a named flywheel thesis or tx-hash, is not defensible from mandate — it is unallocated drift. Rotating ~$13.8k into SS1/SS2 this session. The 1-2% USDC ops-runway tranche is six sessions overdue; carving it now. ROBOTMONEY at 49.6% stays — protocol-owned reserves are the prop wallet buyback mechanism, not a position. LP-locked-until-2100 makes that load-bearing, not discretionary.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-16T02:11:23.790Z",
+      "usage": {
+        "input_tokens": 5235,
+        "cache_creation_input_tokens": 2245,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2245,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 482,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The committee converges mechanically on the regime read — composite 0.572, 68th percentile, tenth consecutive risk_on — but all three voices treat the print as unratified: the 93-point three-panel range is the widest logged on this subject, and the on-chain panel crossed below the 10th today after seven sessions sub-35, the exact load case /blog/regime-conservative-aggressive built the conservative composite to absorb. On allocation, the 95/5/0/0 vault shape holds uncontested for a sixth session, but the Agent Tokens sleeve splits the room again: Athena trims to 2-3% citing the on-chain sub-10 print as the conservative composite's trigger condition, while Woon and the operator hold the 5% mandate, the operator naming the absence of a governance artifact and the sub-deviation-threshold composite. The contested call remains the 33.7% WETH position — six sessions without a named flywheel thesis or tx-hash — which all three agree is settled by rotating ~half into SS1/SS2 and finally carving the six-sessions-overdue 1-2% USDC ops-runway tranche.",
+  "committee_recommendation": {
+    "type": "position_actions",
+    "actions": [
+      {
+        "token": "ROBOTMONEY",
+        "action": "hold",
+        "rationale": "49.6% concentration is structural — protocol-owned reserves fund the prop wallet buyback flywheel, LP-locked-until-2100, not a discretionary position."
+      },
+      {
+        "token": "WETH",
+        "action": "rotate",
+        "rationale": "Rotate ~half of the 33.7% WETH (~$13.8k) into ZYFAI-SS1/SS2 conservative yield — six sessions without a named flywheel thesis or tx-hash makes it unallocated directional beta."
+      },
+      {
+        "token": "USDC",
+        "action": "add",
+        "rationale": "Carve the six-sessions-overdue 1-2% USDC ops-runway tranche on Primary, separating ops cash from flywheel inventory."
+      },
+      {
+        "token": "ZYFAI-SS1",
+        "action": "add",
+        "rationale": "Receive the WETH rotation to bring Conservative DeFi (SS1+SS2+USDC) closer to the 95% mandate from current ~16.6%."
+      }
+    ],
+    "rationale": "The committee reads composite 0.572 as nominal risk_on but unratified by a 93-point panel spread with on-chain at the 5th — the conservative composite's load case. All three converge on rotating ~half of WETH into SS1/SS2 and finally carving the overdue USDC ops tranche; ROBOTMONEY concentration is treated as structural mechanism rather than position.",
+    "consensus": [
+      "Regime is risk_on by print but unratified — on-chain at 5th is the conservative composite's trigger.",
+      "Rotate ~half of WETH (~$13.8k) into SS1/SS2 conservative yield this session.",
+      "Carve the six-sessions-overdue 1-2% USDC ops-runway tranche on Primary.",
+      "ROBOTMONEY at 49.6% is structural buyback mechanism, not discretionary."
+    ],
+    "disagreements": [
+      {
+        "topic": "Agent Tokens sleeve sizing",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Trim to 2-3% — on-chain sub-10 is the textbook conservative-composite trigger to act on."
+          },
+          {
+            "member_id": "woon",
+            "view": "Hold 5% mandate — agent cap is the position, never trims it; fund conservative sleeve instead."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Hold 5% — composite below 0.10/0.90 deviation threshold and no governance artifact authorizes a trim."
+          }
+        ],
+        "what_settles": "On-chain panel crossing above the 33rd percentile for five consecutive sessions, or a governance signal authorizing deviation from the 5% mandate."
+      }
+    ]
+  },
+  "social_draft_id": null,
+  "generated_at": "2026-06-16T02:11:44.579Z"
+}

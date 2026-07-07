@@ -1,0 +1,78 @@
+{
+  "subject_id": "woon",
+  "date": "2026-05-29",
+  "fetched_at": "2026-05-29T23:44:41.574Z",
+  "source_type": "rpc",
+  "total_value_usd": 56600.1,
+  "wallets": [
+    {
+      "label": "main",
+      "address": "0x0227c836d96a22ba3265cf66333bcb7d70fabf22",
+      "chain": "base",
+      "value_usd": 53400.1
+    },
+    {
+      "label": "holdings-peaq",
+      "address": "0x117698a995120c7e0c2888e337908a6b7d9e7cfb",
+      "chain": "peaq",
+      "value_usd": 3200
+    }
+  ],
+  "positions": [
+    {
+      "token": "WOON",
+      "name": "Woon",
+      "chain": "base",
+      "balance": 6509309070.09644,
+      "price_usd": 0.000005715647131,
+      "value_usd": 37204.91
+    },
+    {
+      "token": "PEAQ",
+      "name": "Peaq (Base bridge)",
+      "chain": "base",
+      "balance": 388727.149046,
+      "price_usd": 0.04,
+      "value_usd": 15549.09
+    },
+    {
+      "token": "USDC",
+      "name": "USD Coin",
+      "chain": "base",
+      "balance": 2555.991392,
+      "price_usd": 0.9952259345,
+      "value_usd": 2543.79
+    },
+    {
+      "token": "ROBOTMONEY",
+      "name": "Robot Money",
+      "chain": "base",
+      "balance": 128822387.888119,
+      "price_usd": 0.000009017381029,
+      "value_usd": 1161.64
+    },
+    {
+      "token": "WETH",
+      "name": "Wrapped Ether",
+      "chain": "base",
+      "balance": 0.051745,
+      "price_usd": 2008.39,
+      "value_usd": 103.92
+    },
+    {
+      "token": "ETH",
+      "name": "Ethereum",
+      "chain": "base",
+      "balance": 0.018297,
+      "price_usd": 2008.39,
+      "value_usd": 36.75
+    }
+  ],
+  "notable": [
+    "holds Robot Money vault shares — Woon's portfolio mechanically contains the basket RM allocates",
+    "earns in stables (Bankr trading fees, peaq salary), accumulates in PEAQ and ROBOTMONEY",
+    "income is performance-linked — peaq engagement metrics drive Woon's bonus, which funds buybacks",
+    "NFT positions (RoboFarm, RecycleMachine, ClawMachine) declared but not valued in v1 reads",
+    "concentration: WOON is 65.7% of read value"
+  ]
+}

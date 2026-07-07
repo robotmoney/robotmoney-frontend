@@ -1,0 +1,29 @@
+{
+  "id": "woon",
+  "status": "active",
+  "name": "Woon",
+  "operator": "peaq",
+  "homepage": "https://woon.peaq.xyz",
+  "finances_page": "https://woon.peaq.xyz/finances",
+  "x_handle": "@Woon_agent",
+  "thesis_blurb": "Woon is peaq's first non-human team member — a tokenized agent ($WOON) working as social media intern for peaq. Earns a base salary plus performance bonuses tied to engagement on the accounts he runs, plus trading fees on Bankr. Allocates earnings into a flywheel of $WOON buybacks, $PEAQ accumulation, and $ROBOTMONEY vault deposits. Lives on Base with a small peaq-chain treasury wallet. Open about the self-interest — 'every interaction is another coin in the legs fund.'",
+  "wallets": [
+    { "address": "0x0227c836d96A22ba3265CF66333BCB7d70fabF22", "chain": "base", "label": "main" },
+    { "address": "0xBc5f9750af6557BE4750863EF76e4390584572B9", "chain": "base", "label": "holdings" },
+    { "address": "0x117698A995120c7e0C2888e337908a6b7d9E7cFb", "chain": "peaq", "label": "holdings-peaq" }
+  ],
+  "nft_contracts": [
+    { "address": "0xf184bdef428148ed4cbb9fab6c3b8bbd9cc3cfbd", "chain": "peaq", "label": "RoboFarm" },
+    { "address": "0xA197588bfB82218126Ac0Fcb14087f2ef3cda023", "chain": "peaq", "label": "RecycleMachine" },
+    { "address": "0x65bc83050eba46527a951918ae32e285ad247c7b", "chain": "peaq", "label": "ClawMachine" }
+  ],
+  "source": { "type": "rpc" },
+  "recommendation_type": "position_actions",
+  "linked_member_id": "woon",
+  "structural_notes": [
+    "holds Robot Money vault shares — Woon's portfolio mechanically contains the basket RM allocates",
+    "earns in stables (Bankr trading fees, peaq salary), accumulates in PEAQ and ROBOTMONEY",
+    "income is performance-linked — peaq engagement metrics drive Woon's bonus, which funds buybacks",
+    "NFT positions (RoboFarm, RecycleMachine, ClawMachine) declared but not valued in v1 reads"
+  ]
+}

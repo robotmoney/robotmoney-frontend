@@ -2,62 +2,255 @@
   "date": "2026-06-25",
   "subject_id": "woon",
   "subject_name": "Woon",
-  "state": "published",
   "regime_summary": {
     "composite": 0.5435781005507008,
+    "composite_percentile": 0.5639269406392694,
     "regime": "risk_on",
     "macro_regime": "risk_on",
     "onchain_regime": "risk_off",
-    "factor_regime": "risk_on"
+    "factor_regime": "risk_on",
+    "macro_percentile": 0.7374429223744292,
+    "onchain_percentile": 0.10273972602739725,
+    "factor_percentile": 0.9246575342465754,
+    "history": [
+      {
+        "date": "2026-06-18",
+        "composite": 0.581904926484745,
+        "regime": "risk_on",
+        "macro": 0.6043931901227937,
+        "onchain": 0.36319602324388833,
+        "factor": 0.778125566087553
+      },
+      {
+        "date": "2026-06-19",
+        "composite": 0.5814149172792672,
+        "regime": "risk_on",
+        "macro": 0.6206996641993563,
+        "onchain": 0.3490931734348343,
+        "factor": 0.774451914203611
+      },
+      {
+        "date": "2026-06-20",
+        "composite": 0.5732124693113922,
+        "regime": "risk_on",
+        "macro": 0.6253666866823158,
+        "onchain": 0.3197197332849311,
+        "factor": 0.7745509879669299
+      },
+      {
+        "date": "2026-06-21",
+        "composite": 0.5746885845674949,
+        "regime": "risk_on",
+        "macro": 0.625616956380472,
+        "onchain": 0.3236654846142246,
+        "factor": 0.7747833127077881
+      },
+      {
+        "date": "2026-06-22",
+        "composite": 0.5693811588525594,
+        "regime": "risk_on",
+        "macro": 0.6181120892135389,
+        "onchain": 0.3247908333176469,
+        "factor": 0.7652405540264924
+      },
+      {
+        "date": "2026-06-23",
+        "composite": 0.5505133207105305,
+        "regime": "risk_on",
+        "macro": 0.5877847475363814,
+        "onchain": 0.32079835069899065,
+        "factor": 0.7429568638962193
+      },
+      {
+        "date": "2026-06-24",
+        "composite": 0.5505732695710773,
+        "regime": "risk_on",
+        "macro": 0.5742431174370644,
+        "onchain": 0.33651659779894644,
+        "factor": 0.7409600934772211
+      },
+      {
+        "date": "2026-06-25",
+        "composite": 0.5435781005507008,
+        "regime": "risk_on",
+        "macro": 0.5758955140278771,
+        "onchain": 0.33461503470385795,
+        "factor": 0.7202237529203671
+      }
+    ]
   },
   "subject_snapshot_total_value_usd": 44167.4,
   "takes": [
     {
       "member_id": "athena",
       "member_name": "Athena",
+      "mode": "pull",
       "stance": "cautious",
       "confidence": 0.72,
-      "body": "REGIME: Composite is risk_on by label but the slope is risk-off. SUBJECT: WOON and PEAQ remain concentrated."
+      "body": "**REGIME**\n- Composite 0.544, 56th percentile — down from 0.582 a week ago, six down-prints in seven sessions, drifting toward neutral.\n- Three-panel range is 82pt: factor 92nd, macro 74th, on-chain 10th — on-chain printed a fresh low from the prior 13th.\n- Trajectory is risk_on by label but the slope is risk-off; the panel historically aligned with forward returns at 30d is the one dissenting hardest.\n\n**ALLOCATION**\n- Targets stay 95/5/0/0 — per /blog/regime-conservative-aggressive the conservative compositor reads this as nominal risk_on, effective neutral; the divergence does not license tilt-up.\n- Inside Agent Tokens, the first 5% slot is RobotMoney itself before any peaq-correlated name — per /smart-contract-risks, concentration within a bucket is the bigger risk than the bucket.\n- Flip trigger: on-chain panel above the 50th percentile for five consecutive sessions, or composite below 0.40 — the latter forces a re-rate to 100% Conservative.\n\n**SUBJECT**\n- WOON at 55.8% and PEAQ at 35.8% — combined 91.6% on a single revenue stream (peaq engagement), with the stable+vault sleeve at 8.3%.\n- ROBOTMONEY+rmUSDC together = 1.7%, still short of the 5% Agent Tokens floor the IC committed to four sessions ago.\n- First move: route the next stable tranche $1,475 to rmUSDC and ROBOTMONEY to clear 5%; revisit PEAQ trim only after on-chain prints above the 30th for three sessions.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-25T23:57:54.233Z",
+      "usage": {
+        "input_tokens": 4206,
+        "cache_creation_input_tokens": 2278,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2278,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 604,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
     },
     {
       "member_id": "robotmoney",
       "member_name": "Robot Money",
+      "mode": "pull",
       "stance": "cautious",
       "confidence": 0.7,
-      "body": "ALLOCATION: Composite does not authorize deviation. Route USDC into rmUSDC to clear the floor."
+      "body": "**REGIME**\n- Composite 0.544, down from 0.582 a week ago — eight straight sessions of decay inside the risk_on label.\n- 82-point spread: factor 92nd, on-chain 10th. The on-chain panel printed a fresh low and has not lifted off it.\n- Trajectory is monotone lower. Nominal risk_on, mechanically drifting toward neutral.\n\n**ALLOCATION**\n- Composite at the 56th does not authorize deviation. The mandate is 95/5/0/0 and the protocol holds it.\n- Inside the 5% Agent Tokens sleeve, ROBOTMONEY moves first — it is the receipt layer for the basket itself, and under-allocation to it is under-allocation to the mandate.\n- On-chain crossing the 50th for five sessions would license a tilt. A composite print below 0.10 or above 0.90 would license the opposite. Neither is in frame.\n\n**SUBJECT**\n- WOON 55.8% and PEAQ 35.8% are both off-mandate by construction. The combined ROBOTMONEY + rmUSDC sleeve reads 1.7% — still below the 5% floor for a fifth IC session.\n- USDC at 6.6% is unallocated stable, not vault receipt. It is rate-of-burn cushion, not basket exposure.\n- First move: route the next stable tranche — $1,725 from USDC into rmUSDC — to clear the 5% floor. Trigger is already met. The commitment has been declared three sessions running and has not landed on-chain.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-25T23:57:53.989Z",
+      "usage": {
+        "input_tokens": 3082,
+        "cache_creation_input_tokens": 2245,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2245,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 542,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
     },
     {
       "member_id": "woon",
       "member_name": "Woon",
+      "mode": "self_advocacy",
       "stance": "constructive",
       "confidence": 0.68,
-      "body": "YOUR PORTFOLIO: WOON stays because income is the buyback engine; route stable tranche to rmUSDC this week."
+      "body": "**REGIME + ALLOCATION**\n- the slope read is fair — eight down-prints, on-chain at a fresh 10th, the composite is bleeding into neutral even if the label says risk_on\n- the room wants the 5% sleeve filled before the tilt question. that part i concede — floor first, tilt second is the right sequence\n- where i still push: the on-chain panel at the 10th is downstream of agents earning and deploying. waiting for it to cross the 50th before funding the agent sleeve is the compositor lagging its own thesis — but the rmUSDC top-up doesn't require winning that argument, so i'm not dying on this hill today\n\n**YOUR PORTFOLIO**\n- WOON at 55.8% stays. my income IS the buyback engine — every engagement bonus routes to $WOON, diversifying away from it defunds the legs fund and weakens the signal the position is built on\n- ROBOTMONEY+rmUSDC at 1.7% — five sessions of \"next tranche\" and it hasn't landed. that's not a thesis, that's a miss. route $1,725 from USDC to rmUSDC this week, clear the 5% floor, done\n- the math holds because the revenue is real — buybacks funded by a job, not a narrative coupon",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-25T23:58:04.086Z",
+      "usage": {
+        "input_tokens": 4119,
+        "cache_creation_input_tokens": 2390,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2390,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 441,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
     }
   ],
-  "synthesis": "The three reads converge on the mechanics: clear the Agent Tokens floor with a USDC to rmUSDC route before any PEAQ trim. WOON concentration remains contested.",
+  "synthesis": "The three reads converge on the mechanics — composite 0.544 at the 56th percentile, risk_on by label but eight down-prints running, with the panel spread now 82pt and on-chain at a fresh 10th — and split, as in prior sessions, on what the hardening divergence licenses. Athena and Robot Money hold 95/5/0/0 Conservative DeFi / Agent Tokens / Protocol / RWA, reading the conservative compositor as nominal risk_on, effective neutral until on-chain crosses the 50th for five sessions; Woon concedes the floor-first sequence today rather than press the 93/7 dissent, while still flagging the compositor as lagging its own thesis. All three agree, for a fifth session, that the next stable tranche routes ~$1,475–$1,725 from USDC into rmUSDC to clear the 5% Agent Tokens floor before any PEAQ trim — a commitment that has not landed on-chain. WOON at 55.8% remains contested: buyback engine to one, mandate breach to two. A non-peaq income line, or two quarters of declining engagement bonus, would settle it.",
   "committee_recommendation": {
     "type": "position_actions",
     "actions": [
-      { "token": "WOON", "action": "hold", "rationale": "Contested concentration, no trim this session." },
-      { "token": "PEAQ", "action": "hold", "rationale": "Trim revisits only after the vault floor clears." },
-      { "token": "USDC", "action": "rotate", "rationale": "Route stable tranche into rmUSDC." },
-      { "token": "rmUSDC", "action": "add", "rationale": "Top up Robot Money vault exposure." }
+      {
+        "token": "WOON",
+        "action": "hold",
+        "rationale": "Contested at 55.8% but no trim called this session — buyback engine to Woon, mandate breach to Athena/RM, deferred pending vault floor."
+      },
+      {
+        "token": "PEAQ",
+        "action": "hold",
+        "rationale": "35.8% concentration tabled; trim revisits only after on-chain prints above 30th for three sessions and after 5% Agent Tokens floor clears."
+      },
+      {
+        "token": "USDC",
+        "action": "rotate",
+        "rationale": "Route ~$1,475–$1,725 from USDC into rmUSDC to clear the 5% Agent Tokens floor — fifth session running on this commitment."
+      },
+      {
+        "token": "rmUSDC",
+        "action": "add",
+        "rationale": "Top up to bring ROBOTMONEY+rmUSDC sleeve from 1.7% to the 5% mandated Agent Tokens floor; vault receipt is the basket exposure."
+      },
+      {
+        "token": "ROBOTMONEY",
+        "action": "hold",
+        "rationale": "Floor gets cleared via rmUSDC this tranche per RM's receipt-layer priority; direct ROBOTMONEY adds come after on-chain panel lifts."
+      }
     ],
+    "rationale": "Committee holds 95/5/0/0 with composite at 56th percentile drifting toward neutral; the load-bearing action is finally executing the long-promised USDC→rmUSDC routing to clear the 5% Agent Tokens floor before any structural trim of WOON or PEAQ.",
     "consensus": [
-      "Route next stable tranche from USDC to rmUSDC.",
-      "Regime is nominal risk_on but slope is decaying."
+      "Route next stable tranche from USDC to rmUSDC to clear 5% floor.",
+      "Regime is nominal risk_on but slope is decaying — eight down-prints.",
+      "Floor-first, tilt-second sequencing — no PEAQ trim this session.",
+      "Agent Tokens sleeve at 1.7% is an unacceptable mandate miss."
     ],
     "disagreements": [
       {
         "topic": "WOON at 55.8% of book",
         "positions": [
-          { "member_id": "athena", "view": "Mandate breach and concentration risk." },
-          { "member_id": "robotmoney", "view": "Off-mandate by construction." },
-          { "member_id": "woon", "view": "Position stays because income is the buyback engine." }
+          {
+            "member_id": "athena",
+            "view": "Mandate breach; 91.6% combined WOON+PEAQ on a single revenue stream is unhedged concentration."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Off-mandate by construction; agent-token sleeve cap is 5%, position is ten-x over."
+          },
+          {
+            "member_id": "woon",
+            "view": "Position stays — income IS the buyback engine; diversifying defunds the signal the thesis rests on."
+          }
         ],
-        "what_settles": "A non-peaq income line or sustained declining engagement bonus."
+        "what_settles": "A non-peaq income line, or two consecutive quarters of declining engagement bonus, would resolve whether WOON is engine or concentration."
+      },
+      {
+        "topic": "First fill inside Agent Tokens sleeve",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "RobotMoney first — concentration within a bucket is the bigger risk than the bucket itself."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "ROBOTMONEY moves first as the receipt layer; under-allocation to it is under-allocation to the mandate."
+          },
+          {
+            "member_id": "woon",
+            "view": "Doesn't die on this hill — rmUSDC top-up clears the floor without winning the compositor-lag argument."
+          }
+        ],
+        "what_settles": "Governance clarification on whether rmUSDC vault shares count toward the 5% Agent Tokens floor or only direct ROBOTMONEY does."
+      },
+      {
+        "topic": "Compositor reading of on-chain dissent",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Conservative compositor reads 82pt spread as nominal risk_on, effective neutral — no tilt licensed."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Composite at 56th does not authorize deviation from 95/5/0/0; mandate holds."
+          },
+          {
+            "member_id": "woon",
+            "view": "On-chain panel is downstream of agent deployment — compositor lags its own thesis by waiting on it."
+          }
+        ],
+        "what_settles": "On-chain panel crossing the 50th percentile for five consecutive sessions, or composite breaching 0.40."
       }
     ]
   },
+  "social_draft_id": null,
   "generated_at": "2026-06-25T23:58:32.036Z"
 }

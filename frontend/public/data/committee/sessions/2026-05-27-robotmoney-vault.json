@@ -1,0 +1,83 @@
+{
+  "date": "2026-05-27",
+  "subject_id": "robotmoney-vault",
+  "subject_name": "Robot Money Vault",
+  "regime_summary": {
+    "composite": 0.5284236978664929,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off"
+  },
+  "subject_snapshot_total_value_usd": 108.79,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "neutral",
+      "confidence": 0.5,
+      "body": "**REGIME.** Composite at 0.528, 71st percentile of trailing 3y — risk-on bucket, holding there for six of the last seven sessions (only 5/20 dipped to neutral at 0.510). The headline number obscures the split: macro panel at the 98th percentile, on-chain at the 26th. That is a 72-point gap. Historically, per the trailing-year correlation card, macro at this percentile reads contrarian on forward returns; on-chain at the 26th reads weakly negative concurrent. Both panels point the same direction on forward — down — even as the composite labels the tape risk-on. The composite is a lagging artifact of the macro spike here, not a clean signal.\n\n**ALLOCATION.** Targets are 95/5/0/0. Given the divergence, I would not tilt up Agent Tokens to the full 5% — the on-chain panel at the 26th percentile is the panel that governs Agent Token beta, and it's risk-off. Per /blog/regime-conservative-aggressive, the conservative composite was chosen specifically because aggressive readings in choppy regimes produce whipsaw losses; this is a choppy-regime setup. Per /articles/treasury-allocation, most of the",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-27T01:35:11.486Z",
+      "usage": {
+        "input_tokens": 4205,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 400,
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "pull",
+      "stance": "neutral",
+      "confidence": 0.5,
+      "body": "**REGIME.** Composite prints 0.528 — 71st percentile of trailing 3y, bucket risk_on but barely clearing the 0.67 panel threshold via composite math. The divergence is the story: macro panel at 98th percentile, on-chain panel at 26th. That gap — 72 percentile points — is not noise. Macro is screaming risk_on while chain activity reads risk_off. The composite reconciles them upward, but the conservative composite (per /blog/regime-conservative-aggressive) was built precisely to discount this kind of one-panel exuberance. Read: nominal risk_on, mechanistically fragile.\n\n**ALLOCATION.** Targets are 95/5/0/0. In a clean risk_on regime, the 5% Agent Tokens sleeve carries its full beta weight — that is the design. But with the on-chain panel at 26th percentile, the high-beta sleeve is leaning into the panel that disagrees. Per /blog/honest-backtesting-weights, point-in-time alpha came mostly from being de-risked in drawdowns, not from leaning into mania. The data implies holding the 95% Conservative anchor at target and not pre-funding the Agent sleeve until on",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-27T01:35:10.622Z",
+      "usage": {
+        "input_tokens": 4284,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 400,
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "pull",
+      "stance": "neutral",
+      "confidence": 0.5,
+      "body": "regime: composite at 0.528, 71st percentile — risk_on but barely clearing the 0.67 bucket threshold from below. the real story is the panel split: macro at 98th percentile, on-chain at 26th. that's a ~72 point spread. translation — tradfi is melting up, the chain is not confirming. for a vault that earns from on-chain activity and holds agent token beta, the on-chain panel is the one i'd weight more honestly. per /blog/regime-conservative-aggressive the live model uses the conservative composite for a reason — divergence like this is exactly when the aggressive read would whipsaw you.\n\nallocation: the 95/5/0/0 targets are fine as a steady-state policy, but i wouldn't push the agent sleeve toward the 5% ceiling here. on-chain at the 26th percentile is not the tape where you scale agent token beta — that's the bucket with the highest correlation to on-chain conditions. per /articles/treasury-allocation most of the cycle alpha came from being de-risked in drawdowns, not pressing risk-on in mania. hold the agent sleeve at or under target until on-chain confirms macro. conservative defi stays anchored at 95.\n\nsubject: actually the v",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-27T01:35:11.810Z",
+      "usage": {
+        "input_tokens": 4658,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 400,
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The committee converged on the regime read with unusual unanimity: the composite at 0.528 nominally prints risk_on, but the 72-point spread between macro (98th percentile) and on-chain (26th percentile) makes it a mechanically fragile reading, exactly the divergence the conservative composite was designed to discount. All three personas flagged that the on-chain panel — the one most coupled to Agent Token beta — is the panel disagreeing. On allocation, the implied tilt is restraint rather than realignment: hold the 95% Conservative DeFi anchor at target, but do not pre-fund the Agent Tokens sleeve toward its 5% ceiling while on-chain refuses to confirm macro. Protocol Tokens and RWA remain placeholder zeros, untouched by the debate. The most contested unsettled question is the subject portfolio itself — the Conservative sleeve sits in a three-way equal split across Aave, Compound, and Morpho with zero Agent Token exposure live; whether that under-allocation is prudent or simply unfunded is what the committee did not resolve.",
+  "social_draft_id": null,
+  "generated_at": "2026-05-27T01:35:18.552Z"
+}

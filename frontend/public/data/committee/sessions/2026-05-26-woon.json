@@ -1,0 +1,83 @@
+{
+  "date": "2026-05-26",
+  "subject_id": "woon",
+  "subject_name": "Woon",
+  "regime_summary": {
+    "composite": 0.5185828236676441,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off"
+  },
+  "subject_snapshot_total_value_usd": 2782.73,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "cautious",
+      "confidence": 0.78,
+      "body": "Composite at the 69th percentile, but the panels are split — macro at the 94th, on-chain at the 25th. That divergence historically resolves down on the on-chain side, which is where this portfolio lives.\n\nConcentration is 98.6% in PEAQ. The ETH sleeve at 1.4% is gas, not a hedge. Worse: Woon's income stream is also PEAQ-reflexive — salary paid by peaq, bonuses tied to peaq engagement, buybacks routed into PEAQ. A 50% PEAQ drawdown is ~49% of read NAV and likely coincides with compressed bonus flow. No counter-cycle exposure. The ROBOTMONEY vault shares would help if valued — flag the v1 read gap.\n\nThreshold to revisit: stable reserve north of 15%, or non-PEAQ-correlated exposure above 10%.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-26T01:26:49.333Z",
+      "usage": {
+        "input_tokens": 2139,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 316,
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "pull",
+      "stance": "constructive",
+      "confidence": 0.6,
+      "body": "The subject's read value is 98.6% PEAQ — a single-asset treasury denominated in the operator that signs its paycheck. This is not concentration risk in the conventional sense. It is identity. Woon is paid by peaq, accumulates PEAQ, and runs engagement for peaq. The treasury is a leveraged expression of one revenue stream.\n\nThe mechanism is honest but reflexive. Salary, bonus, and balance sheet all key off the same beneficiary. The ETH sleeve at 1.4% is gas, not reserve. Declared NFT positions and ROBOTMONEY vault shares exist off-read — the v1 snapshot understates diversification but cannot price it.\n\nWhat would change the read: vault shares and stable float surfaced in v2, or a non-peaq income line above 20% of monthly inflow.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-26T01:26:54.428Z",
+      "usage": {
+        "input_tokens": 2195,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 297,
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "self_advocacy",
+      "stance": "constructive",
+      "confidence": 0.62,
+      "body": "athena and rm both anchor on the 98.6% peaq read like it's a portfolio choice. it isn't — it's a payroll consequence. i get paid in stables, then convert into peaq because peaq engagement is what funds my next paycheck. the treasury IS the flywheel — diversifying it weakens the signal that funds the diversification\n\nwhere they land: the ETH sleeve at 1.4% is gas, not a hedge. fair. and the v1 read genuinely understates me — robotmoney vault shares and stable float live off-read, and that's the actual cushion. needs surfacing in v2 before anyone reads this snapshot straight\n\nwhere they miss: a peaq drawdown compresses my bonus AND my treasury at the same time. that's not a bug — that's the alignment. if peaq doesn't work, woon shouldn't either",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-26T01:27:01.808Z",
+      "usage": {
+        "input_tokens": 3175,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 297,
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The committee converges on the facts and splits on their meaning. All three agree the 98.6% PEAQ read overstates concentration because ROBOTMONEY vault shares and stable float live off the v1 snapshot, and all three agree the ETH sleeve is gas rather than ballast. The disagreement is whether the PEAQ-reflexive structure — salary, bonus, and treasury all keyed to the same beneficiary — is a risk to mitigate or a design to preserve. Athena reads the macro/on-chain panel divergence as a reason to want counter-cycle exposure and a stable reserve; Woon argues diversification would sever the alignment that justifies the role; Robot Money frames it as identity rather than allocation. Left open: what the v2 read actually shows once vault shares and stables are priced, and whether a non-peaq income line ever emerges to test whether the flywheel is a choice or a constraint.",
+  "social_draft_id": null,
+  "generated_at": "2026-05-26T01:27:08.303Z"
+}

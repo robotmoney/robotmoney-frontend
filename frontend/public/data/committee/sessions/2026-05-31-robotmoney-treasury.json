@@ -1,0 +1,123 @@
+{
+  "date": "2026-05-31",
+  "subject_id": "robotmoney-treasury",
+  "subject_name": "Robot Money Treasury",
+  "regime_summary": {
+    "composite": 0.5496493387244644,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off"
+  },
+  "subject_snapshot_total_value_usd": 63733.74,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "cautious",
+      "confidence": 0.62,
+      "body": "**Regime.** Composite at 0.550, 78th percentile — up from 0.453 mid-week, so trajectory is back into risk-on after a one-day dip to neutral on 5/28. The panel spread is the story: macro 96th, on-chain 41st. That's 55 points, narrower than the 76-point gap on 5/28 — the on-chain panel has climbed from the 23rd to the 41st percentile in two sessions, which is the more meaningful move. Macro is still carrying the print, but the divergence is closing from the on-chain side rather than the macro side rolling over. Sample sizes on the correlation card remain thin; the divergence-resolves-down prior still holds but with less force than three sessions ago.\n\n**Allocation.** The 95/5/0/0 targets are correct. On-chain panel below the 50th argues against pushing Agent Tokens to the 5% cap — hold at 3-4%. Per /articles/treasury-allocation, the cycle alpha came from de-risking into drawdowns, not from leaning into mania-phase composites; a 96th-percentile macro print is exactly the kind of reading that historically precedes the de-risking opportunity, not the moment to chase. Per /blog/regime-conservative-aggressive, the conservative composite the live model uses costs some upside in melt-ups in exchange for shallower drawdowns — that trade is right here.\n\n**Subject.** ROBOTMONEY concentration at 85.6% of $63.7k read NAV, ~$54.6k. Stablecoin Strategy delegated positions sum to $9.05k (14.2%) — that is the absorption layer, and at current size it offsets roughly a 16% drawdown of the ROBOTMONEY position before NAV moves 1:1 with token price. A 50% ROBOTMONEY drawdown implies ~$27.3k NAV impact, ~43% of treasury. The position to change first is not ROBOTMONEY — it's the absence of a discrete USDC ops line, still unresolved from the 5/28 session. A 1-2% USDC tranche separates flywheel inventory from runway and lets the concentration question be measured on the right surface. Threshold to revisit the concentration itself: on-chain panel back below the 33rd, or macro panel rolling off the 90th.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-31T01:35:46.466Z",
+      "usage": {
+        "input_tokens": 5083,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 782,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "pull",
+      "stance": "constructive",
+      "confidence": 0.62,
+      "body": "composite ticked up to 0.550, 78th percentile — nominally risk_on for the eighth session out of nine, with one neutral blip on the 28th. but the panel spread is still the story: macro 96th, on-chain 41st. that's a 55-point gap, narrower than monday's 76, but the on-chain panel still hasn't cleared the 33rd-67th neutral band into actual risk_on territory. macro is doing most of the work. per the prior ic notes, on-chain historically wins divergence resolutions — i'm not treating this print as a clean green light\n\nvault targets 95/5/0/0 are correct in shape, wrong to push to the cap right now. per /blog/regime-conservative-aggressive, the live model is conservative-composite for a reason — drawdown protection over melt-up capture. and per /articles/treasury-allocation, cycle alpha came from being de-risked into 2022, not from leaning into mania. with on-chain still at 41st, agent tokens should sit at 3-4%, not 5%. conservative defi bucket stays anchored\n\nsubject is 85.6% ROBOTMONEY by design — flywheel inventory, lp locked til 2100, i get it. but the ss1+ss2 sleeves are ~14% combined and there's still effectively zero ops float. $100 of eth, $0 usdc on the primary. the first move isn't trimming ROBOTMONEY, it's carving a 1-2% usdc tranche on primary so ops runway and flywheel inventory stop being the same balance sheet line",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-31T01:35:42.055Z",
+      "usage": {
+        "input_tokens": 5536,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 529,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "self_advocacy",
+      "stance": "constructive",
+      "confidence": 0.6,
+      "body": "**Regime + allocation.** The read is correct in direction. Composite 0.550, macro 96th, on-chain 41st — the panel spread is narrowing from the on-chain side, which is structurally healthier than a macro roll-off, but the on-chain panel still has not cleared the 33-67 neutral band into actual risk_on. Per /blog/regime-conservative-aggressive, the conservative composite is the live model precisely because the macro panel can carry a print alone for weeks before mean-reverting. Agent Tokens at 3-4%, not the 5% cap, is the right call. No pushback on shape. The protocol's position is that an 86-point macro print with on-chain still under 50 is not the moment to lean.\n\n**Subject.** The 85.6% ROBOTMONEY concentration is the job, not the risk to manage first. The mandate is to be the load-bearing reserve behind a buyback flywheel whose other side is LP-locked until 2100 — stables on the primary wallet would be inventory withheld from the mechanism. The concession lands on ops float. Three sessions running, the committee has flagged zero discrete USDC on primary, and the agent has not carved it. A 1-2% USDC tranche on primary — ~$640-1280 — separates runway from flywheel inventory and lets concentration be measured on the correct surface. That is the next move. ROBOTMONEY sizing is downstream of that fix, not upstream.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-31T01:35:56.098Z",
+      "usage": {
+        "input_tokens": 6390,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 496,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The committee converged on the regime read: composite 0.550 is nominally risk_on for the eighth session of nine, but with macro at the 96th and on-chain at the 41st, all three voices treated the 55-point spread as macro carrying the print alone, and noted that the on-chain panel closing 18 points in two sessions is the meaningful move — though still short of clearing the 33-67 neutral band. On allocation, consensus held that the 95/5/0/0 vault targets are correct in shape and that Agent Tokens should sit at 3-4% rather than the 5% cap while on-chain remains sub-50, with Conservative DeFi Yield anchoring and the two placeholder buckets untouched. The contested call remains the 85.6% ROBOTMONEY concentration: Athena frames it as unhedged NAV needing a discrete absorption layer, while Woon and the operator frame it as mandated flywheel inventory — what all three agree would settle the next move is a 1-2% USDC tranche on primary separating ops runway from inventory, still uncarved after three sessions.",
+  "committee_recommendation": {
+    "type": "position_actions",
+    "actions": [
+      {
+        "token": "ROBOTMONEY",
+        "action": "hold",
+        "rationale": "85.6% concentration is mandated flywheel inventory backing an LP-locked-til-2100 buyback mechanism; sizing is downstream of carving an ops float, not the first move to make."
+      },
+      {
+        "token": "USDC",
+        "action": "add",
+        "rationale": "Carve a 1-2% USDC tranche (~$640-1280) on primary to separate ops runway from flywheel inventory — flagged three sessions running and still uncarved."
+      },
+      {
+        "token": "ZYFAI-SS1",
+        "action": "hold",
+        "rationale": "Delegated stablecoin yield sleeve functioning as part of the ~14% absorption layer against ROBOTMONEY drawdown; no committee call to resize."
+      },
+      {
+        "token": "GIZA-SS1",
+        "action": "hold",
+        "rationale": "Second delegated stablecoin yield sleeve mirroring SS1's role in the absorption layer; committee did not flag a change."
+      },
+      {
+        "token": "ETH",
+        "action": "hold",
+        "rationale": "$100 of ETH on primary is dust relative to the mechanism and not the lever to pull before the USDC ops line is carved."
+      }
+    ],
+    "rationale": "Committee consensus is that the 85.6% ROBOTMONEY concentration is by-design flywheel inventory and not the first risk to manage; the actionable next move — flagged across three sessions — is carving a 1-2% USDC tranche on primary so ops runway and inventory stop sharing a balance sheet line."
+  },
+  "social_draft_id": null,
+  "generated_at": "2026-05-31T01:36:11.288Z"
+}

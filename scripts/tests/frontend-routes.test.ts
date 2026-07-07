@@ -65,7 +65,7 @@ describe("frontend route resolution", () => {
     expect(recommendationActions.map((action) => action.action)).toContain("rotate");
     expect(takes.map((take) => take.memberId)).toEqual(["athena", "robotmoney", "woon"]);
     expect(disagreements.map((item) => item.topic)).toContain("WOON at 55.8% of book");
-    expect(controller.synthesis).toContain("USDC to rmUSDC");
+    expect(controller.synthesis).toContain("USDC into rmUSDC");
   });
 
   test("/committee/members/woon controller resolves manifest and archived takes", async () => {
@@ -75,7 +75,10 @@ describe("frontend route resolution", () => {
     expect(controller.name).toBe("Woon");
     expect(controller.role).toBe("machine economy participant");
     expect(controller.bio).toContain("fellow agent");
-    expect(controller.takes).toHaveLength(1);
+    // Woon sits on every archived session (32 in the reference archive), so the
+    // controller returns its capped window of the 10 most-recent takes; the
+    // newest is Woon's self-advocacy on the 2026-06-25 Woon session.
+    expect(controller.takes).toHaveLength(10);
     expect(controller.takes[0]).toMatchObject({
       date: "2026-06-25",
       subjectId: "woon",

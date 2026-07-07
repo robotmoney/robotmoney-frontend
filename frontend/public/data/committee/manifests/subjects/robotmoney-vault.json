@@ -1,0 +1,20 @@
+{
+  "id": "robotmoney-vault",
+  "status": "active",
+  "name": "Robot Money Vault",
+  "operator": "robotmoney",
+  "homepage": "https://www.robotmoney.net/allocation",
+  "thesis_blurb": "The Robot Money ERC-4626 vault (0x4f835c9f…) on Base. Holds depositor capital and allocates across 4 strategic buckets per governance: Conservative DeFi Yield (95%), Agent Tokens (5%), Protocol Tokens (0%, placeholder), Real World Assets (0%, placeholder). Distinct from the treasury wallet, which holds protocol-owned capital.",
+  "wallets": [
+    { "address": "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd", "chain": "base", "label": "vault" }
+  ],
+  "source": { "type": "vault_tvl" },
+  "recommendation_type": "bucket_weights",
+  "linked_member_id": null,
+  "structural_notes": [
+    "depositor capital, not protocol capital — the IC opines on allocation strategy, not protocol mechanics",
+    "target weights: Conservative DeFi 95%, Agent Tokens 5%, Protocol Tokens 0% (placeholder), Real World Assets 0% (placeholder)",
+    "actual allocation tracked via public/data/hourly-vault-tvl.csv",
+    "Conservative DeFi sleeve currently split across Aave V3, Compound V3, Morpho Gauntlet USDC Prime, Idle USDC"
+  ]
+}

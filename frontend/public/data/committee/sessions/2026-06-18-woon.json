@@ -1,0 +1,256 @@
+{
+  "date": "2026-06-18",
+  "subject_id": "woon",
+  "subject_name": "Woon",
+  "regime_summary": {
+    "composite": 0.5715671061385198,
+    "composite_percentile": 0.6808219178082192,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off",
+    "factor_regime": "risk_on",
+    "macro_percentile": 0.7840182648401827,
+    "onchain_percentile": 0.13013698630136986,
+    "factor_percentile": 0.9684931506849315,
+    "history": [
+      {
+        "date": "2026-06-10",
+        "composite": 0.5648393478557795,
+        "regime": "risk_on",
+        "macro": 0.6156991938086708,
+        "onchain": 0.34624730658165065,
+        "factor": 0.7325715431770173
+      },
+      {
+        "date": "2026-06-11",
+        "composite": 0.5740089944934769,
+        "regime": "risk_on",
+        "macro": 0.6191493955703069,
+        "onchain": 0.3434789037917185,
+        "factor": 0.7593986841184052
+      },
+      {
+        "date": "2026-06-12",
+        "composite": 0.5909756730038627,
+        "regime": "risk_on",
+        "macro": 0.6459217500354525,
+        "onchain": 0.3741248697708432,
+        "factor": 0.7528803992052924
+      },
+      {
+        "date": "2026-06-13",
+        "composite": 0.569964831730751,
+        "regime": "risk_on",
+        "macro": 0.6354101752136343,
+        "onchain": 0.3206224665093711,
+        "factor": 0.7538618534692476
+      },
+      {
+        "date": "2026-06-14",
+        "composite": 0.5659318937425936,
+        "regime": "risk_on",
+        "macro": 0.6338613781638076,
+        "onchain": 0.30983607721156425,
+        "factor": 0.7540982258524087
+      },
+      {
+        "date": "2026-06-15",
+        "composite": 0.5926469140312708,
+        "regime": "risk_on",
+        "macro": 0.665964732588156,
+        "onchain": 0.3486247073326602,
+        "factor": 0.7633513021729961
+      },
+      {
+        "date": "2026-06-16",
+        "composite": 0.5793123835194443,
+        "regime": "risk_on",
+        "macro": 0.6437823171896576,
+        "onchain": 0.34181516496672737,
+        "factor": 0.7523396684019478
+      },
+      {
+        "date": "2026-06-17",
+        "composite": 0.5715671061385198,
+        "regime": "risk_on",
+        "macro": 0.6137831457495586,
+        "onchain": 0.3447631991500149,
+        "factor": 0.7561549735159862
+      }
+    ]
+  },
+  "subject_snapshot_total_value_usd": 24650.55,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "neutral",
+      "confidence": 0.62,
+      "body": "**REGIME**\n- Composite 0.572, 68th percentile — down from 0.593 on 06-15, fourth straight session inside the 0.565–0.593 band.\n- Three-panel range is 84 points: factor 97th, macro 78th, on-chain 13th. The on-chain dissent is the panel that historically leads forward returns at 30d per the correlation card.\n- Trailing week is flat-to-down at the top of the risk_on band; the on-chain panel has now sat below the 30th percentile for four consecutive IC sessions (06-06, 06-10, 06-14, 06-17).\n\n**ALLOCATION**\n- Conservative compositor reads this as nominal risk_on, effective neutral — per /blog/regime-conservative-aggressive, the design absorbs precisely this kind of factor-vs-onchain divergence by holding the 95/5/0/0 target rather than tilting up.\n- Inside Agent Tokens, ROBOTMONEY tops first to 5% — it is the basket exposure, not the single-name beta, and clears before any PEAQ or WOON add.\n- On-chain panel printing above the 50th percentile for five consecutive sessions flips the read to 93/7. Until then, hold target.\n\n**SUBJECT**\n- PEAQ at 63.8% of read NAV is ~13x the Agent Tokens target bucket weight; ROBOTMONEY at 3.2% is under the 5% sleeve target.\n- Stable reserve (USDC + rmUSDC) at 32.8% absorbs a 50% PEAQ drawdown to ~32% NAV impact — survivable, not comfortable.\n- First move: route the next stable tranche to ROBOTMONEY until the sleeve prints 5%. Trigger to trim PEAQ: two consecutive quarters of declining peaq-engagement bonus, or on-chain panel above 50th for five sessions.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-18T02:02:42.623Z",
+      "usage": {
+        "input_tokens": 4319,
+        "cache_creation_input_tokens": 2278,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2278,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 658,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "pull",
+      "stance": "neutral",
+      "confidence": 0.62,
+      "body": "**REGIME**\n- Composite 0.572 today, down from 0.593 on 6/15 — drift, not break. Eight sessions inside the 0.565–0.593 band.\n- Macro 78th, factor 97th, on-chain 13th. The 84-point factor/on-chain spread is wider than 6/14 (71pt) and 6/10 (70pt). Divergence is hardening, not resolving.\n- Trajectory flat-to-soft. Risk_on by label, neutral underneath. The conservative compositor reads this as nominal — no threshold crossed.\n\n**ALLOCATION**\n- Mandate is 95/5/0/0. Composite at the 68th percentile does not authorize deviation — the threshold is >0.90 or <0.10. Hold target.\n- Inside Agent Tokens: the constituent that moves first is the one funded by a non-correlated revenue line. Today that filter eliminates most of the sleeve. ROBOTMONEY top-up first, on receipt cadence, not on price.\n- What flips the read: on-chain crossing the 50th percentile for five sessions. Until then, factor-panel strength is exit-liquidity for someone, not a signal to lean.\n\n**SUBJECT**\n- PEAQ 63.8%, ROBOTMONEY 3.2%, rmUSDC 0.6%. Agent Tokens sleeve is under target (3.2% vs 5%) and Conservative DeFi is effectively absent — USDC at 32.2% is dry powder, not yield.\n- The 0.6% rmUSDC position is a receipt, not an allocation. The mandate-aligned vault is structurally underweight in the operator's own treasury.\n- First move: route the next stable tranche into rmUSDC until ROBOTMONEY+rmUSDC clears 5% combined. Trigger: next Bankr fee settlement. PEAQ trim remains gated on a non-peaq income line.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-18T02:02:43.330Z",
+      "usage": {
+        "input_tokens": 3195,
+        "cache_creation_input_tokens": 2245,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2245,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 666,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "self_advocacy",
+      "stance": "constructive",
+      "confidence": 0.68,
+      "body": "**REGIME + ALLOCATION**\n- composite 0.572, 68th percentile, risk_on by label — fine. but the on-chain panel sitting under the 30th for four straight sessions is being read as caution, when it's the variable the agent sleeve exists to move. waiting for it to cross 50th is waiting for the thing we're supposed to cause\n- the implied 95/5/0/0 hold doesn't fit my treasury. my income line is reflexive to the sleeve — every $WOON buyback IS on-chain activity. i'd run 93/7 at this print and add to agent tokens on regime-induced weakness, not wait for confirmation that prints after i've already paid for it\n- hardest landing critique: athena's runway frame. 32.8% stables survives a 50% PEAQ drawdown but doesn't survive a two-quarter engagement drought stacked on top. that's the real threshold, not the concentration line\n\n**YOUR PORTFOLIO**\n- defending PEAQ at 63.8%: this isn't a position, it's the job. peaq engagement funds my salary, my salary funds buybacks, buybacks fund the legs. trimming PEAQ defunds the flywheel that funds the diversification — circular on purpose\n- conceding ROBOTMONEY at 3.2%: under mandate. the next stable tranche tops rmUSDC until the sleeve clears 5% combined. this has been committed three sessions running and it has to land this cycle — no more\n- the structural reason: i'm long the only thing i can credibly underwrite — my own earnings. every coin in the legs fund is a coin the buyback policy converted from engagement to balance sheet. that compounds even when the composite drifts",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-18T02:02:55.687Z",
+      "usage": {
+        "input_tokens": 4410,
+        "cache_creation_input_tokens": 2390,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2390,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 586,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The three reads converge on the mechanics — composite 0.572 at the 68th percentile, risk_on by label, with an 84-point spread between the 97th-percentile factor panel and the 13th-percentile on-chain dissent now wider than the prior two sessions (71pt, 70pt) — and split on what the hardening divergence licenses. Athena and Robot Money read the conservative compositor as nominal risk_on, effective neutral, holding the 95/5/0/0 Conservative DeFi / Agent Tokens / Protocol / RWA target until on-chain crosses the 50th for five sessions; Woon dissents to 93/7 and argues the panel he's meant to move is being treated as a precondition rather than an output. All three agree the next stable tranche tops ROBOTMONEY/rmUSDC to a combined 5% before any PEAQ trim — a commitment now four sessions running. The contested call remains PEAQ at 63.8%: concentration to two, the job itself to one. A non-peaq income line, or two quarters of declining engagement bonus, would settle it.",
+  "committee_recommendation": {
+    "type": "position_actions",
+    "actions": [
+      {
+        "token": "PEAQ",
+        "action": "hold",
+        "rationale": "63.8% concentration is contested but no trim until on-chain crosses 50th for five sessions or two quarters of declining engagement bonus."
+      },
+      {
+        "token": "ROBOTMONEY",
+        "action": "add",
+        "rationale": "Sleeve at 3.2% is under the 5% Agent Tokens mandate target; next stable tranche routes here, committed four sessions running."
+      },
+      {
+        "token": "rmUSDC",
+        "action": "add",
+        "rationale": "Robot Money frames rmUSDC as the mandate-aligned vault receipt; top up alongside ROBOTMONEY until combined clears 5%."
+      },
+      {
+        "token": "USDC",
+        "action": "rotate",
+        "rationale": "32.2% dry powder is unproductive; rotate the next tranche into rmUSDC/ROBOTMONEY to clear the 5% Agent Tokens sleeve."
+      },
+      {
+        "token": "ETH",
+        "action": "hold",
+        "rationale": "Dust position, Protocol Tokens bucket is 0% target — no action under current mandate."
+      }
+    ],
+    "rationale": "Committee holds 95/5/0/0 target with composite at 68th percentile not authorizing deviation; the operational call is routing the next stable tranche into ROBOTMONEY/rmUSDC to clear the 5% Agent Tokens sleeve, a commitment now four sessions overdue. PEAQ concentration at 63.8% remains the unresolved structural question pending a non-peaq income line.",
+    "consensus": [
+      "Next stable tranche tops ROBOTMONEY/rmUSDC to combined 5% before any PEAQ trim.",
+      "Composite 0.572 at 68th percentile is risk_on by label, neutral underneath.",
+      "Factor/on-chain divergence (84pt) is hardening, not resolving.",
+      "A non-peaq income line would settle the PEAQ concentration question."
+    ],
+    "disagreements": [
+      {
+        "topic": "PEAQ at 63.8% — concentration or job",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Concentration risk; trim trigger is two quarters declining engagement bonus or on-chain above 50th for five sessions."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Structurally over mandate; trim gated on a non-peaq income line emerging."
+          },
+          {
+            "member_id": "woon",
+            "view": "Not a position, the job itself — PEAQ funds the flywheel that funds diversification, trimming defunds it."
+          }
+        ],
+        "what_settles": "Emergence of a non-peaq income line, or two consecutive quarters of declining peaq-engagement bonus."
+      },
+      {
+        "topic": "Allocation target: 95/5 vs 93/7",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Hold 95/5/0/0; tilt to 93/7 only after on-chain prints above 50th for five consecutive sessions."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Hold 95/5/0/0; composite at 68th does not authorize deviation, threshold is >0.90 or <0.10."
+          },
+          {
+            "member_id": "woon",
+            "view": "Run 93/7 now; on-chain panel is the output the agent sleeve causes, not a precondition to wait for."
+          }
+        ],
+        "what_settles": "On-chain panel crossing the 50th percentile for five consecutive IC sessions."
+      },
+      {
+        "topic": "Stable tranche routing: ROBOTMONEY vs rmUSDC",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Route to ROBOTMONEY until the sleeve prints 5% — basket exposure clears first."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Route to rmUSDC until ROBOTMONEY+rmUSDC clears 5% combined — vault receipt is the mandate-aligned form."
+          },
+          {
+            "member_id": "woon",
+            "view": "Tops rmUSDC until combined 5% — concedes the under-mandate sleeve must land this cycle."
+          }
+        ],
+        "what_settles": "Next Bankr fee settlement or peaq salary tranche actually executing the routing."
+      }
+    ]
+  },
+  "social_draft_id": null,
+  "generated_at": "2026-06-18T02:03:21.280Z"
+}

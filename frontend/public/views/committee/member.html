@@ -1,299 +1,67 @@
-<!-- Committee Member Profile Page
-     Dynamic route: /committee/members/[id]
-     Ported from robotmoney-site/src/app/committee/members/[id]/page.tsx
--->
+<!-- Committee member profile, ported from robotmoney-site/src/app/committee/members/[id]/page.tsx. -->
+<section class="cv cv--detail" x-data="memberProfile()">
+  <div class="cv__body cv__body--narrow">
+    <a href="/committee" class="cv__back">← /committee</a>
 
-<section class="section section--member-profile" x-data="memberProfile()">
-  <div class="container">
-    <!-- Back link -->
-    <a href="/committee" class="breadcrumb">← Back to Committee</a>
+    <p class="cv__loading" x-show="loading">Loading member...</p>
+    <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
 
-    <!-- Profile Card -->
-    <div class="profile-card">
-      <img :src="avatar" :alt="name" class="profile-avatar" />
-      <div class="profile-info">
-        <h1 class="profile-name" x-text="name"></h1>
-        <p class="profile-role" x-text="role"></p>
-        <div class="profile-meta">
-          <div class="meta-item">
-            <span class="meta-label">Sessions</span>
-            <span class="meta-value" x-text="totalSessions"></span>
+    <template x-if="!loading && member">
+      <div>
+        <header class="cv__detail-head cv__member-hero">
+          <div class="cv__avatar cv__avatar--large" x-text="initials(member.name)"></div>
+          <div>
+            <p class="cv__eyebrow">committee member</p>
+            <h1 class="cv__detail-title profile-name" x-text="member.name"></h1>
+            <p class="cv__lede cv__lede--compact profile-role" x-text="member.tagline || member.lens"></p>
           </div>
-          <div class="meta-item">
-            <span class="meta-label">Submissions</span>
-            <span class="meta-value" x-text="totalSubmissions"></span>
-          </div>
-          <div class="meta-item">
-            <span class="meta-label">Participation</span>
-            <span class="meta-value" x-text="participationRate + '%'"></span>
-          </div>
-        </div>
-      </div>
-    </div>
+        </header>
 
-    <!-- Bio -->
-    <div class="member-section">
-      <h3 class="section-subtitle">About</h3>
-      <p class="member-bio" x-text="bio"></p>
-    </div>
+        <section class="cv__context-grid">
+          <div class="cv__panel">
+            <p class="cv__panel-label">Mandate</p>
+            <p class="cv__body-copy" x-text="member.mandate || member.tagline"></p>
+          </div>
+          <div class="cv__panel">
+            <p class="cv__panel-label">Biases</p>
+            <ul class="cv__bullet-list">
+              <template x-for="bias in member.biases || []" :key="bias"><li x-text="bias"></li></template>
+            </ul>
+          </div>
+        </section>
 
-    <!-- Voting History -->
-    <div class="member-section">
-      <h3 class="section-subtitle">Recent Submissions</h3>
-      <div class="table-wrapper">
-        <table class="submissions-table">
-          <thead>
-            <tr>
-              <th>Session</th>
-              <th>Date</th>
-              <th class="align-center">Allocation A</th>
-              <th class="align-center">Allocation B</th>
-              <th class="align-center">Allocation C</th>
-              <th class="align-right">Confidence</th>
-            </tr>
-          </thead>
-          <tbody>
-            <template x-for="submission in recentSubmissions" :key="submission.id">
-              <tr>
-                <td>
-                  <a :href="'/committee/' + submission.sessionDate + '/' + submission.sessionSlug" class="link">
-                    <strong x-text="submission.sessionTitle"></strong>
-                  </a>
-                </td>
-                <td x-text="formatDate(submission.date)"></td>
-                <td class="align-center" x-text="submission.a + '%'"></td>
-                <td class="align-center" x-text="submission.b + '%'"></td>
-                <td class="align-center" x-text="submission.c + '%'"></td>
-                <td class="align-right" x-text="submission.confidence + '%'"></td>
-              </tr>
+        <section class="cv__portfolio">
+          <div class="cv__panel-head">
+            <p class="cv__panel-label">Plugin metadata</p>
+            <span class="cv__tag" x-text="member.status || 'active'"></span>
+          </div>
+          <div class="cv__metadata-grid">
+            <div><span>lens</span><b x-text="member.lens || '-'"></b></div>
+            <div><span>mode</span><b x-text="member.mode || '-'"></b></div>
+            <div><span>operator</span><b x-text="member.operator || '-'"></b></div>
+            <div><span>voice doc</span><b x-text="member.voice_doc || '-'"></b></div>
+          </div>
+        </section>
+
+        <section class="cv__takes-section">
+          <p class="cv__panel-label">Recent takes</p>
+          <p class="cv__empty" x-show="!takes.length">No sessions yet.</p>
+          <div class="cv__takes cv__takes--ported">
+            <template x-for="t in takes" :key="`${t.date}-${t.subjectId}`">
+              <article class="cv__take cv__take--ported">
+                <header class="cv__take-head">
+                  <div>
+                    <a class="cv__member-link" :href="`/committee/${t.date}/${t.subjectId}`" x-text="t.subjectName"></a>
+                    <div class="cv__take-lens" x-text="t.date"></div>
+                  </div>
+                  <span class="cv__stance-badge"><span x-text="`${t.stance} / ${fmtPct(t.confidence)}`"></span></span>
+                </header>
+                <div class="cv__take-body" x-html="linkified(t.body || '')"></div>
+              </article>
             </template>
-          </tbody>
-        </table>
+          </div>
+        </section>
       </div>
-    </div>
-
-    <!-- Stats & Charts -->
-    <div class="member-stats">
-      <div class="stat-box">
-        <h4 class="stat-title">Average Allocation Pattern</h4>
-        <div class="stat-chart">
-          <canvas id="avgAllocationChart" x-ref="avgAllocationChart"></canvas>
-        </div>
-      </div>
-
-      <div class="stat-box">
-        <h4 class="stat-title">Confidence Over Time</h4>
-        <div class="stat-chart">
-          <canvas id="confidenceChart" x-ref="confidenceChart"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <div class="section__footer">
-      <p class="section__note">
-        Profile for <strong x-text="name"></strong>. Member of Robot Money Investment Committee since <span x-text="joinDate"></span>.
-      </p>
-    </div>
+    </template>
   </div>
 </section>
-
-<style>
-.section--member-profile {
-  min-height: 100vh;
-  padding: 8rem 1.5rem 5rem;
-  background: var(--color-void);
-}
-
-.breadcrumb {
-  display: inline-block;
-  margin-bottom: 2rem;
-  color: var(--color-accent);
-  text-decoration: none;
-  font-size: 0.9rem;
-  transition: color 0.2s;
-}
-
-.breadcrumb:hover { color: #fff; }
-
-.profile-card {
-  display: grid;
-  grid-template-columns: 150px 1fr;
-  gap: 2rem;
-  padding: 2rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  margin-bottom: 3rem;
-  align-items: center;
-}
-
-.profile-avatar {
-  width: 150px;
-  height: 150px;
-  border-radius: 8px;
-  object-fit: cover;
-}
-
-.profile-name {
-  font-size: 2rem;
-  line-height: 1.2;
-  letter-spacing: -0.025em;
-  color: var(--color-text);
-  margin: 0 0 0.5rem 0;
-}
-
-.profile-role {
-  font-size: 1.1rem;
-  color: var(--color-accent);
-  margin: 0 0 1rem 0;
-}
-
-.profile-meta {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1.5rem;
-}
-
-.meta-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.meta-label {
-  font-size: 0.8rem;
-  color: var(--color-text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-}
-
-.meta-value {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: var(--color-text);
-  font-family: var(--font-mono);
-}
-
-.member-section {
-  margin-bottom: 3rem;
-}
-
-.section-subtitle {
-  font-size: 1.25rem;
-  font-weight: 600;
-  color: var(--color-text);
-  margin-bottom: 1.5rem;
-}
-
-.member-bio {
-  line-height: 1.8;
-  color: var(--color-text-muted);
-}
-
-.table-wrapper {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  overflow: hidden;
-  overflow-x: auto;
-}
-
-.submissions-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.submissions-table thead {
-  background: var(--color-surface-light);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.submissions-table th {
-  padding: 1rem;
-  text-align: left;
-  font-size: 0.85rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--color-text-dim);
-}
-
-.submissions-table td {
-  padding: 1rem;
-  border-top: 1px solid var(--color-border);
-  color: var(--color-text);
-}
-
-.submissions-table tbody tr:hover {
-  background: var(--color-surface-light);
-}
-
-.link {
-  color: var(--color-accent);
-  text-decoration: none;
-  transition: color 0.2s;
-}
-
-.link:hover { color: #fff; }
-
-.align-center { text-align: center; font-family: var(--font-mono); }
-.align-right { text-align: right; font-family: var(--font-mono); }
-
-.member-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 2rem;
-  margin-bottom: 3rem;
-}
-
-.stat-box {
-  padding: 2rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-}
-
-.stat-title {
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: var(--color-text);
-  margin-bottom: 1rem;
-}
-
-.stat-chart {
-  height: 250px;
-}
-
-.section__footer {
-  text-align: center;
-  padding-top: 2rem;
-  border-top: 1px solid var(--color-border);
-}
-
-.section__note {
-  font-size: 0.9rem;
-  color: var(--color-text-muted);
-  margin: 0;
-}
-
-@media (min-width: 768px) {
-  .profile-card {
-    grid-template-columns: 180px 1fr;
-  }
-
-  .profile-avatar {
-    width: 180px;
-    height: 180px;
-  }
-}
-
-@media (min-width: 1024px) {
-  .section--member-profile {
-    padding: 10rem 2rem 6rem;
-  }
-
-  .member-stats {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-</style>
