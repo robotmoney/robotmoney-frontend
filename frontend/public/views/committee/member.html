@@ -3,64 +3,66 @@
   <div class="cv__body cv__body--narrow">
     <a href="/committee" class="cv__back">← /committee</a>
 
-    <p class="cv__loading" x-show="loading">Loading member...</p>
+    <p class="cv__loading" x-show="loading">Loading member…</p>
     <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
 
     <template x-if="!loading && member">
       <div>
-        <header class="cv__detail-head cv__member-hero">
-          <div class="cv__avatar cv__avatar--large" x-text="initials(member.name)"></div>
-          <div>
-            <p class="cv__eyebrow">committee member</p>
+        <header class="cv__profile-head">
+          <div class="cv__avatar cv__avatar--xl" x-text="initials(member.name)"></div>
+          <div class="cv__profile-main">
+            <p class="cv__eyebrow">ic member · <span x-text="member.lens || 'committee lens'"></span></p>
             <h1 class="cv__detail-title profile-name" x-text="member.name"></h1>
-            <p class="cv__lede cv__lede--compact profile-role" x-text="member.tagline || member.lens"></p>
+            <p class="cv__lede cv__lede--compact profile-role" x-text="memberTagline(member)"></p>
           </div>
         </header>
 
-        <section class="cv__context-grid">
-          <div class="cv__panel">
+        <div class="cv__rail-grid cv__rail-grid--compact">
+          <section class="cv__panel">
             <p class="cv__panel-label">Mandate</p>
-            <p class="cv__body-copy" x-text="member.mandate || member.tagline"></p>
-          </div>
-          <div class="cv__panel">
+            <p class="cv__body-copy" x-text="member.mandate || fallbackMandate(member)"></p>
+          </section>
+          <section class="cv__panel">
             <p class="cv__panel-label">Biases</p>
             <ul class="cv__bullet-list">
-              <template x-for="bias in member.biases || []" :key="bias"><li x-text="bias"></li></template>
+              <template x-for="b in memberBiases(member)" :key="b">
+                <li x-text="b"></li>
+              </template>
             </ul>
-          </div>
+          </section>
+        </div>
+
+        <section class="cv__panel cv__plugin">
+          <p class="cv__panel-label">Plug-in metadata</p>
+          <dl class="cv__meta-grid">
+            <dt>mode</dt><dd x-text="member.mode || 'submit'"></dd>
+            <dt>operator</dt><dd x-text="member.operator || 'Robot Money demo loop'"></dd>
+            <dt>status</dt><dd x-text="member.status || 'active'"></dd>
+            <dt>activated</dt><dd x-text="member.activatedAt ? formatDate(member.activatedAt, 'short') : '—'"></dd>
+          </dl>
         </section>
 
-        <section class="cv__portfolio">
-          <div class="cv__panel-head">
-            <p class="cv__panel-label">Plugin metadata</p>
-            <span class="cv__tag" x-text="member.status || 'active'"></span>
-          </div>
-          <div class="cv__metadata-grid">
-            <div><span>lens</span><b x-text="member.lens || '-'"></b></div>
-            <div><span>mode</span><b x-text="member.mode || '-'"></b></div>
-            <div><span>operator</span><b x-text="member.operator || '-'"></b></div>
-            <div><span>voice doc</span><b x-text="member.voice_doc || '-'"></b></div>
-          </div>
-        </section>
-
-        <section class="cv__takes-section">
-          <p class="cv__panel-label">Recent takes</p>
-          <p class="cv__empty" x-show="!takes.length">No sessions yet.</p>
-          <div class="cv__takes cv__takes--ported">
-            <template x-for="t in takes" :key="`${t.date}-${t.subjectId}`">
-              <article class="cv__take cv__take--ported">
-                <header class="cv__take-head">
-                  <div>
-                    <a class="cv__member-link" :href="`/committee/${t.date}/${t.subjectId}`" x-text="t.subjectName"></a>
-                    <div class="cv__take-lens" x-text="t.date"></div>
-                  </div>
-                  <span class="cv__stance-badge"><span x-text="`${t.stance} / ${fmtPct(t.confidence)}`"></span></span>
-                </header>
-                <div class="cv__take-body" x-html="linkified(t.body || '')"></div>
-              </article>
-            </template>
-          </div>
-        </section>
+        <div class="cv__sessions-head">
+          <p class="cv__panel-label">Recent takes (<span x-text="recentTakes().length"></span>)</p>
+        </div>
+        <p class="cv__empty" x-show="recentTakes().length === 0">No sessions yet.</p>
+        <div class="cv__session-list cv__session-list--compact">
+          <template x-for="row in recentTakes().slice(0, 20)" :key="`${row.session.date}-${row.session.subjectId}`">
+            <a class="cv__session-card" :href="`/committee/${row.session.date}/${row.session.subjectId}`">
+              <div class="cv__session-top">
+                <div class="cv__session-titleline">
+                  <span class="cv__date" x-text="formatDate(row.session.date, 'short')"></span>
+                  <span class="cv__session-title" x-text="row.session.subjectName"></span>
+                </div>
+                <span class="cv__stance-badge" :style="stanceStyle(row.take.stance)">
+                  <i :style="`background:${stanceColor(row.take.stance)}`"></i>
+                  <span x-text="`${row.take.stance} · ${fmtPct(row.take.confidence)}`"></span>
+                </span>
+              </div>
+              <p class="cv__session-copy" x-text="row.take.body || row.session.synthesis"></p>
+            </a>
+          </template>
+        </div>
       </div>
     </template>
   </div>

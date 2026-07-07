@@ -61,14 +61,17 @@ async function main() {
 
   // Check that the view HTML files are served by the backend.
   // The SPA serves them as raw fragments that the router injects.
+  // Committee index is the reference-faithful directory (robotmoney-site
+  // src/app/committee/page.tsx): members + subjects rails and a browsable
+  // sessions list. Signed takes + memo links render on the session DETAIL
+  // page (checked below), mirroring the reference layout.
   await checkView("/views/committee.html", [
     "x-data=\"committeeView()\"",
-    "session?.subjectName",
-    "session?.state",
-    "cv__verified",
-    "cv__memo-link",  // memoUrl rendering (Phase 3)
-    "x-for=\"t in takes\"",  // renders the members' signed takes
-    "aggregate.absent",
+    "x-for=\"m in members\"",   // members rail
+    "subjects()",               // subjects rail
+    "publishedSessions()",      // browsable sessions list
+    "cv__session-card",         // per-session card
+    "stanceColor(",             // per-take stance dots on each session
   ]);
   await checkView("/views/regime.html", [
     "x-data=\"regimeView()\"",
@@ -99,8 +102,18 @@ async function main() {
     "x-data=\"walletPerfView()\"",
     "a2-card",  // shared chart-card component
   ]);
-  await checkView("/views/committee/member.html", ["x-data=\"memberProfile()\""]);
-  await checkView("/views/committee/session.html", ["x-data=\"icSessionDetail()\""]);
+  await checkView("/views/committee/member.html", [
+    "x-data=\"memberProfile()\"",
+    "profile-name",  // e2e hook (spa.spec.ts asserts member name)
+  ]);
+  // Session detail renders the members' signed takes + memo links and the
+  // e2e submissions table (spa.spec.ts asserts .session-submissions rows).
+  await checkView("/views/committee/session.html", [
+    "x-data=\"icSessionDetail()\"",
+    "x-for=\"t in takes\"",  // renders the members' signed takes
+    "cv__memo-link",         // memoUrl rendering
+    "session-submissions",   // compact submissions table (e2e hook)
+  ]);
 
   // Router patterns and globally registered factories keep dynamic fragments
   // executable after innerHTML injection.

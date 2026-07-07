@@ -2,61 +2,6 @@
 import { p5Lifecycle } from "./p5-lifecycle.js";
 
 export function registerHeroes(Alpine) {
-  Alpine.data("slimeMoldHero", () => ({
-    ...p5Lifecycle(),
-    _start(container) {
-      const p5Constructor = window.p5;
-      const sketch = (p) => {
-        let W, H;
-        let agents = [];
-        const BG = [5, 5, 8];
-        const ACCENT = [0, 229, 255];
-
-        function reset() {
-          W = container.offsetWidth;
-          H = container.offsetHeight;
-          agents = Array.from({ length: Math.min(1300, Math.max(360, Math.floor((W * H) / 900))) }, () => ({
-            x: p.random(W),
-            y: p.random(H),
-            a: p.random(p.TWO_PI),
-            s: p.random(0.45, 1.8),
-            h: p.random(),
-          }));
-          p.background(BG[0], BG[1], BG[2]);
-        }
-
-        p.setup = function () {
-          p.createCanvas(container.offsetWidth, container.offsetHeight).style("display", "block");
-          p.pixelDensity(Math.min(window.devicePixelRatio || 1, 2));
-          reset();
-        };
-        p.windowResized = function () {
-          p.resizeCanvas(container.offsetWidth, container.offsetHeight);
-          reset();
-        };
-        p.draw = function () {
-          p.noStroke();
-          p.fill(BG[0], BG[1], BG[2], 18);
-          p.rect(0, 0, W, H);
-          for (const agent of agents) {
-            const n = p.noise(agent.x * 0.003, agent.y * 0.003, p.frameCount * 0.003);
-            agent.a += (n - 0.5) * 0.55;
-            agent.x += Math.cos(agent.a) * agent.s;
-            agent.y += Math.sin(agent.a) * agent.s;
-            if (agent.x < 0) agent.x = W;
-            if (agent.x > W) agent.x = 0;
-            if (agent.y < 0) agent.y = H;
-            if (agent.y > H) agent.y = 0;
-            const alpha = agent.h > 0.82 ? 110 : 42;
-            p.fill(agent.h > 0.82 ? ACCENT[0] : 170, agent.h > 0.82 ? ACCENT[1] : 185, agent.h > 0.82 ? ACCENT[2] : 205, alpha);
-            p.circle(agent.x, agent.y, agent.h > 0.96 ? 2.4 : 1.25);
-          }
-        };
-      };
-      this._p5 = new p5Constructor(sketch, container);
-    },
-  }));
-
   Alpine.data("blogHero", () => ({
     ...p5Lifecycle(),
     _start(container) {
@@ -1321,5 +1266,177 @@ export function registerHeroes(Alpine) {
       };
     },
     destroy() { if (this._cleanup) this._cleanup(); },
+  }));
+
+  Alpine.data("slimeMoldHero", () => ({
+    ...p5Lifecycle(),
+    _start(container) {
+      const p5Constructor = window.p5;
+      const BG = [5, 5, 8];
+      const COLORS = [
+        [0, 229, 255],
+        [255, 100, 200],
+        [100, 255, 150],
+        [255, 200, 50],
+        [150, 100, 255],
+      ];
+      const sketch = (p) => {
+        let W, H, trailMap;
+        let agents = [];
+        let cycleTime = 0;
+        const cycleDuration = 800;
+        let isCollapsing = false;
+        let collapseProgress = 0;
+
+        function agentCount() {
+          return Math.max(900, Math.min(3000, Math.floor((W * H) / 260)));
+        }
+
+        function seedAgents(cx = W / 2, cy = H / 2, radiusMin = 30, radiusMax = 150) {
+          agents = [];
+          const n = agentCount();
+          for (let i = 0; i < n; i++) {
+            const angle = p.random(p.TWO_PI);
+            const dist = p.random(radiusMin, Math.min(radiusMax, Math.max(W, H) * 0.22));
+            agents.push({
+              x: cx + p.cos(angle) * dist,
+              y: cy + p.sin(angle) * dist,
+              heading: angle + p.random(-0.5, 0.5),
+              speed: p.random(1, 2.5),
+              sensorDist: p.random(12, 20),
+              sensorAngle: 0.5 + p.random(0.2),
+              steer: 0.15 + p.random(0.15),
+              colorIdx: Math.floor(p.random(COLORS.length)),
+            });
+          }
+        }
+
+        function reset() {
+          W = Math.max(1, container.offsetWidth);
+          H = Math.max(1, container.offsetHeight);
+          trailMap = new Float32Array(W * H);
+          cycleTime = 0;
+          isCollapsing = false;
+          collapseProgress = 0;
+          seedAgents();
+          p.background(BG[0], BG[1], BG[2]);
+        }
+
+        function getTrailValue(x, y) {
+          const ix = Math.floor(x);
+          const iy = Math.floor(y);
+          if (ix >= 0 && ix < W && iy >= 0 && iy < H) return trailMap[ix + iy * W];
+          return 0;
+        }
+
+        p.setup = function () {
+          W = Math.max(1, container.offsetWidth);
+          H = Math.max(1, container.offsetHeight);
+          p.createCanvas(W, H).style("display", "block");
+          p.frameRate(60);
+          reset();
+        };
+
+        p.windowResized = function () {
+          const nextW = Math.max(1, container.offsetWidth);
+          const nextH = Math.max(1, container.offsetHeight);
+          if (nextW === W && nextH === H) return;
+          W = nextW;
+          H = nextH;
+          p.resizeCanvas(W, H);
+          reset();
+        };
+
+        p.draw = function () {
+          p.background(BG[0], BG[1], BG[2], isCollapsing ? 30 : 15);
+          for (let i = 0; i < trailMap.length; i++) trailMap[i] *= 0.96;
+
+          cycleTime++;
+          if (cycleTime > cycleDuration && !isCollapsing) {
+            isCollapsing = true;
+            collapseProgress = 0;
+          }
+          if (isCollapsing) {
+            collapseProgress += 0.02;
+            if (collapseProgress >= 1) {
+              const cx = p.random(W * 0.2, W * 0.8);
+              const cy = p.random(H * 0.2, H * 0.8);
+              seedAgents(cx, cy, 20, 80);
+              trailMap.fill(0);
+              cycleTime = 0;
+              collapseProgress = 0;
+              isCollapsing = false;
+            }
+          }
+
+          for (const a of agents) {
+            const color = COLORS[a.colorIdx];
+            if (isCollapsing) {
+              const dx = W / 2 - a.x;
+              const dy = H / 2 - a.y;
+              a.heading = Math.atan2(dy, dx) + p.random(-0.3, 0.3);
+              a.speed = 3 + p.random(2);
+            } else {
+              const leftVal = getTrailValue(a.x + Math.cos(a.heading - a.sensorAngle) * a.sensorDist, a.y + Math.sin(a.heading - a.sensorAngle) * a.sensorDist);
+              const centerVal = getTrailValue(a.x + Math.cos(a.heading) * a.sensorDist, a.y + Math.sin(a.heading) * a.sensorDist);
+              const rightVal = getTrailValue(a.x + Math.cos(a.heading + a.sensorAngle) * a.sensorDist, a.y + Math.sin(a.heading + a.sensorAngle) * a.sensorDist);
+              if (!(centerVal > leftVal && centerVal > rightVal)) {
+                if (leftVal > rightVal) a.heading -= a.steer * 1.5;
+                else if (rightVal > leftVal) a.heading += a.steer * 1.5;
+                else a.heading += p.random(-0.1, 0.1);
+              }
+              a.heading += p.random(-0.05, 0.05);
+              a.speed = 1.5 + p.random(0.5);
+            }
+
+            a.x += Math.cos(a.heading) * a.speed;
+            a.y += Math.sin(a.heading) * a.speed;
+            if (a.x < 0) a.x = W;
+            if (a.x > W) a.x = 0;
+            if (a.y < 0) a.y = H;
+            if (a.y > H) a.y = 0;
+            const ix = Math.floor(a.x);
+            const iy = Math.floor(a.y);
+            if (ix >= 0 && ix < W && iy >= 0 && iy < H) trailMap[ix + iy * W] = 1;
+            if (!isCollapsing) {
+              p.stroke(color[0], color[1], color[2], 140);
+              p.strokeWeight(1.5);
+              p.point(a.x, a.y);
+            }
+          }
+
+          p.loadPixels();
+          const d = p.pixelDensity();
+          for (let y = 0; y < H; y += 2) {
+            for (let x = 0; x < W; x += 2) {
+              const idx = x + y * W;
+              const val = trailMap[idx];
+              if (val <= 0.08) continue;
+              const colorMix = ((x / W) + (y / H)) * 2.5;
+              const ci = Math.floor(colorMix) % COLORS.length;
+              const ni = (ci + 1) % COLORS.length;
+              const t = colorMix - Math.floor(colorMix);
+              const c1 = COLORS[ci], c2 = COLORS[ni];
+              const r = c1[0] * (1 - t) + c2[0] * t;
+              const g = c1[1] * (1 - t) + c2[1] * t;
+              const b = c1[2] * (1 - t) + c2[2] * t;
+              for (let dy = 0; dy < 2 && y + dy < H; dy++) {
+                for (let dx = 0; dx < 2 && x + dx < W; dx++) {
+                  const pIdx = 4 * ((x + dx) + (y + dy) * W * d) * d;
+                  if (pIdx < p.pixels.length) {
+                    p.pixels[pIdx] = r * val;
+                    p.pixels[pIdx + 1] = g * val;
+                    p.pixels[pIdx + 2] = b * val;
+                    p.pixels[pIdx + 3] = val * 200;
+                  }
+                }
+              }
+            }
+          }
+          p.updatePixels();
+        };
+      };
+      this._p5 = new p5Constructor(sketch, container);
+    },
   }));
 }
