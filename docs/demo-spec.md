@@ -264,6 +264,29 @@ RM never holds the private key at any point.
   so the two layers can never disagree (asserted by
   `scripts/tests/demo-compose-config.test.ts`).
 
+### 7b. Demo readiness gate
+
+The **demo readiness gate** is the `DEMO_HERMETIC=1` boot-and-check step block in the
+required `e2e` workflow (`.github/workflows/e2e.yml`, step "Full-stack demo (demo
+readiness gate)"; job id `e2e`, unchanged so branch protection's required-status-check
+mapping stays intact). On every PR targeting main it boots the full hermetic demo stack
+and runs three loud-failure guards that keep broken demos off main:
+
+- `scripts/demo-frontend-check.ts` — the **core-surface-missing detector**: fetches
+  each route fragment from the live backend and exits non-zero if a core surface marker
+  (e.g. `x-data="committeeView()"`) is absent.
+- `test:browser` (Playwright, `spa.spec.ts`) — drives the rendered SPA.
+- `scripts/demo-rpc-guard.ts` — fails loudly on any live-RPC leak (see §7).
+
+The core-surface detector's own loud-failure path is **self-tested**, not assumed:
+`scripts/tests/demo-frontend-check.test.ts` (run in the required `integration` job via
+`bun run test`) spawns the real `scripts/demo-frontend-check.ts` against an in-process
+stub backend and proves both directions — it exits non-zero when the
+`x-data="committeeView()"` marker is stripped from the served `/views/committee.html`,
+and exits 0 against the correct, unmodified content — so a change that silently weakened
+the detector's assertions is caught. No second demo-boot path is added: the single
+`DEMO_HERMETIC=1` `e2e` job remains the only per-PR consumer of the hermetic stack.
+
 ### 7a. Opt-in real-live-data path (showcase only)
 
 The live path (now the default) can still be tuned via env before `bun run demo`.

@@ -48,7 +48,18 @@ jobs:
       - name: Test MCP
         working-directory: mcp
         run: bun test
-      - name: Full-stack demo
+      # === Demo readiness gate ===
+      # This DEMO_HERMETIC=1 boot-and-check step block IS the "demo readiness" gate.
+      # It boots the full hermetic demo stack and runs the three loud-failure guards
+      # that keep broken demos off main: scripts/demo-frontend-check.ts (core-surface
+      # detector), `test:browser` (Playwright), and scripts/demo-rpc-guard.ts (no live
+      # RPC leak). scripts/demo-frontend-check.ts's own loud-failure path is itself
+      # self-tested by scripts/tests/demo-frontend-check.test.ts (run in the required
+      # `integration` job), which proves it exits non-zero when a core surface marker
+      # is stripped and 0 against correct content. See docs/demo-spec.md §"Demo
+      # readiness gate". The job id below stays `e2e` so branch protection's existing
+      # required-status-check mapping is unaffected.
+      - name: Full-stack demo (demo readiness gate)
         run: bun run scripts/demo.ts
         env:
           CI: "true"
