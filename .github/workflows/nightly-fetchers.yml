@@ -6,6 +6,12 @@
 # RUN_LIVE_FETCHERS=1, so source drift is still caught every day without gating PRs.
 # Per-PR coverage remains the deterministic parser suite (tests/extract.test.ts).
 #
+# Also runs the live Base RPC smoke test (tests/vault-rpc-live.test.ts, issue
+# #40): hits the real configured vault contract over the real Base RPC and
+# fails loudly (non-zero exit) on an unreachable RPC or malformed response.
+# Per-PR coverage for the vault-economics chain client is fully offline
+# (tests/chain-client.test.ts + tests/vault-economics.test.ts, mocked eth_call).
+#
 # CI taxonomy class: heavy (scheduled live external-endpoint drift test). Heavy
 # suites are sweep-only: they must have NO `pull_request` trigger at all, and run
 # only on a schedule and/or push to the default branch. This workflow already
@@ -36,3 +42,9 @@ jobs:
         env:
           RUN_LIVE_FETCHERS: "1"
         timeout-minutes: 15
+      - name: Live Base RPC smoke test (real vault contract)
+        working-directory: backend
+        run: bun test tests/vault-rpc-live.test.ts
+        env:
+          RUN_LIVE_FETCHERS: "1"
+        timeout-minutes: 5
