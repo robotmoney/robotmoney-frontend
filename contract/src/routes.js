@@ -29,6 +29,10 @@ export const ROUTES = {
     vaultEconomics: "/api/dashboards/vault-economics", // GET
   },
 
+  projects: {
+    list: "/api/projects", // GET → aggregated projects directory
+  },
+
   committee: {
     members: "/api/committee/members", // GET
     member: "/api/committee/members/:id", // GET
