@@ -46,6 +46,28 @@ export interface AllocationFramework {
   buckets: AllocationBucket[];
 }
 
+// GET /api/dashboards/vault-economics (issue #40) — live Base RPC read of the
+// vault (TVL, share price, total shares), its idle USDC balance, and exactly
+// three configured adapter holdings, plus a persisted-history-derived 7-day
+// APY. `stale: true` means the live RPC read failed and every value below is
+// either the last persisted sample or null — never a fabricated number.
+export interface VaultEconomicsAdapter {
+  name: string;
+  address: string;
+  balanceUsd: number | null;
+}
+
+export interface VaultEconomics {
+  asOf: string; // ISO 8601
+  stale: boolean;
+  tvlUsd: number | null;
+  sharePrice: number | null;
+  totalShares: number | null;
+  idleUsdc: number | null;
+  apy7d: number | null;
+  adapters: VaultEconomicsAdapter[]; // exactly 3
+}
+
 // One enriched per-indicator object inside a RegimeSnapshot (asof row). Ported
 // from the original's regime-snapshot.json indicator shape. Historical rows carry
 // an empty `indicators` array + the `percentiles` map only.

@@ -3,10 +3,17 @@
 // only parse/clamp request params and forward. API paths, DTOs, and response
 // shapes are unchanged.
 import { fetchRegimeSnapshots, fetchLatestResearchSignal } from "../../analytics/report/projections.ts";
+import { fetchVaultEconomics } from "../../chain/vault-economics.ts";
 
 // GET /api/dashboards/research-signals/:key → latest research signal payload
 export async function getResearchSignal(key: string) {
   return fetchLatestResearchSignal(key);
+}
+
+// GET /api/dashboards/vault-economics → live Base RPC vault economics (TVL,
+// share price, adapters, 7-day APY), degraded/stale on RPC failure.
+export async function getVaultEconomics() {
+  return fetchVaultEconomics();
 }
 
 // GET /api/dashboards/regime-snapshots?range=<n days> → { latest, history }

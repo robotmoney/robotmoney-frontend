@@ -6,7 +6,7 @@ import { ROUTES } from "@robotmoney/contract";
 import { config } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { createComment, listComments } from "./routes/comments.ts";
-import { getRegimeSnapshots, getResearchSignal } from "./routes/dashboards.ts";
+import { getRegimeSnapshots, getResearchSignal, getVaultEconomics } from "./routes/dashboards.ts";
 import { handleCommittee } from "./routes/committee.ts";
 
 function json(data: unknown, status = 200): Response {
@@ -85,6 +85,10 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname === ROUTES.dashboards.regimeSnapshots && req.method === "GET") {
       return json(await getRegimeSnapshots(url));
+    }
+
+    if (pathname === ROUTES.dashboards.vaultEconomics && req.method === "GET") {
+      return json(await getVaultEconomics());
     }
 
     if (pathname.startsWith("/api/dashboards/research-signals/") && req.method === "GET") {

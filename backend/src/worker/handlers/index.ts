@@ -3,6 +3,7 @@
 // recorded in job_runs.
 import { analyticsRun } from "./analytics.ts";
 import * as committee from "./committee.ts";
+import { sampleSharePrice } from "./vault.ts";
 
 export type JobHandler = (payload: Record<string, unknown>) => Promise<unknown>;
 
@@ -13,6 +14,8 @@ export const handlers: Record<string, JobHandler> = {
   "analytics.run": analyticsRun,
   // alias: regime only
   "regime.classify": (p) => analyticsRun({ ...p, tool: "regime" }),
+  // hourly vault share-price sample (feeds the 7-day APY calc)
+  "vault.sample_share_price": sampleSharePrice,
   // committee session lifecycle
   "committee.open_session": committee.openSession,
   "committee.publish_brief": committee.publishBrief,
