@@ -8,6 +8,9 @@ export const ROUTES: {
     researchSignal: string;
     vaultEconomics: string;
   };
+  projects: {
+    list: string;
+  };
   committee: {
     members: string;
     member: string;

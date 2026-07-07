@@ -1,6 +1,7 @@
 export * from "./comments";
 export * from "./dashboards";
 export * from "./committee";
+export * from "./projects";
 export { ROUTES, path } from "./routes";
 export function canonicalizeSubmission(s: {
   memberId: string; date: string; subjectId: string; nonce: string;

@@ -1,0 +1,379 @@
+<!-- Projects — "Agentic Economy Ecosystem" directory
+     Ported from robotmoney-bot-analytics/src/pages/Projects.tsx (Supabase → the
+     new Bun/Postgres backend, issue #70). Buildless: the table is driven by the
+     boot-registered projectsView() factory (alpine/views.js) over /api/projects.
+     Uses the a2 design tokens (shared with /performance + /allocation). Inline
+     <style> applies when the router injects this fragment; the inline factory is
+     registered at boot, not here (router injects via innerHTML — scripts are dead).
+-->
+
+<section class="a2 container" x-data="projectsView()" x-init="load()">
+
+  <!-- Header -->
+  <header class="a2-section__head pj-head">
+    <span class="a2-eyebrow">Analytics</span>
+    <h1 class="pj-title">Agentic Economy <span class="a2-grad">Ecosystem</span></h1>
+    <p class="a2-section__lede">
+      Zero Human Companies, onchain AI agents, and other AI-native economics
+      experiments. Every metric maps to a concrete row in the backend and a
+      specific ingestion pipeline.
+    </p>
+  </header>
+
+  <!-- States -->
+  <p x-show="loading" class="pj-status">Loading…</p>
+  <p x-show="error" x-text="error" class="pj-status pj-status--error" x-cloak></p>
+  <p x-show="!loading && !error && rows.length === 0" class="pj-status" x-cloak>
+    No projects yet.
+  </p>
+
+  <!-- Directory table -->
+  <div class="a2-table__scroll pj-scroll" x-show="!loading && rows.length > 0" x-cloak>
+    <table class="a2-table pj-table">
+      <thead>
+        <tr>
+          <th class="a2-sticky">
+            <button type="button" class="pj-sort" :class="isSort('name') && 'pj-sort--active'" @click="sortBy('name')">
+              Project <span class="pj-sort__i" x-text="sortIcon('name')"></span>
+            </button>
+          </th>
+          <th>
+            <button type="button" class="pj-sort" :class="isSort('mcap') && 'pj-sort--active'" @click="sortBy('mcap')">
+              Market Cap <span class="pj-sort__i" x-text="sortIcon('mcap')"></span>
+            </button>
+          </th>
+          <th>
+            <button type="button" class="pj-sort" :class="isSort('fdv') && 'pj-sort--active'" @click="sortBy('fdv')">
+              FDV <span class="pj-sort__i" x-text="sortIcon('fdv')"></span>
+            </button>
+          </th>
+          <th>MC/FDV</th>
+          <th>
+            <button type="button" class="pj-sort" :class="isSort('pct24h') && 'pj-sort--active'" @click="sortBy('pct24h')">
+              24h % <span class="pj-sort__i" x-text="sortIcon('pct24h')"></span>
+            </button>
+          </th>
+          <th>30d</th>
+          <th>
+            <button type="button" class="pj-sort" :class="isSort('score') && 'pj-sort--active'" @click="sortBy('score')">
+              Data Quality <span class="pj-sort__i" x-text="sortIcon('score')"></span>
+            </button>
+          </th>
+          <th class="pj-l">Description</th>
+          <th class="pj-l">Website</th>
+          <th class="pj-l">Social</th>
+          <th class="pj-l">
+            <button type="button" class="pj-sort" :class="isSort('facets') && 'pj-sort--active'" @click="sortBy('facets')">
+              Facets <span class="pj-sort__i" x-text="sortIcon('facets')"></span>
+            </button>
+          </th>
+          <th>
+            <button type="button" class="pj-sort" :class="isSort('revenue') && 'pj-sort--active'" @click="sortBy('revenue')">
+              Revenue 30d <span class="pj-sort__i" x-text="sortIcon('revenue')"></span>
+            </button>
+          </th>
+          <th>
+            <button type="button" class="pj-sort" :class="isSort('wallet') && 'pj-sort--active'" @click="sortBy('wallet')">
+              Wallet Balance <span class="pj-sort__i" x-text="sortIcon('wallet')"></span>
+            </button>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="row in sortedRows" :key="row.p.id">
+          <tr>
+            <!-- Project -->
+            <td class="a2-sticky pj-name">
+              <div class="pj-name__inner">
+                <template x-if="row.p.logoUrl">
+                  <img :src="row.p.logoUrl" alt="" class="pj-logo" loading="lazy" />
+                </template>
+                <template x-if="!row.p.logoUrl">
+                  <span class="pj-logo pj-logo--fallback" x-text="initials(row.p.displayName)"></span>
+                </template>
+                <span class="pj-name__text" x-text="row.p.displayName"></span>
+              </div>
+            </td>
+
+            <!-- Market Cap (per coin) -->
+            <td class="a2-r">
+              <template x-if="row.p.coins.length > 0">
+                <div>
+                  <template x-for="c in row.p.coins" :key="c.id + '-mc'">
+                    <div class="pj-coinline"><i x-text="c.ticker || '?'"></i> <span x-text="fmtUsd(c.marketCap)"></span></div>
+                  </template>
+                </div>
+              </template>
+              <span x-show="row.p.coins.length === 0" class="a2-dim">—</span>
+            </td>
+
+            <!-- FDV (per coin) -->
+            <td class="a2-r">
+              <template x-if="row.p.coins.length > 0">
+                <div>
+                  <template x-for="c in row.p.coins" :key="c.id + '-fdv'">
+                    <div class="pj-coinline"><i x-text="c.ticker || '?'"></i> <span x-text="fmtUsd(c.fdv)"></span></div>
+                  </template>
+                </div>
+              </template>
+              <span x-show="row.p.coins.length === 0" class="a2-dim">—</span>
+            </td>
+
+            <!-- MC/FDV -->
+            <td class="a2-r" x-text="mcFdvPct(row.p)"></td>
+
+            <!-- 24h % (per coin) -->
+            <td class="a2-r">
+              <template x-if="row.p.coins.length > 0">
+                <div>
+                  <template x-for="c in row.p.coins" :key="c.id + '-pct'">
+                    <div class="pj-coinline" :style="`color:${pctColor(c.percentChange24h)}`" x-text="pctText(c.percentChange24h)"></div>
+                  </template>
+                </div>
+              </template>
+              <span x-show="row.p.coins.length === 0" class="a2-dim">—</span>
+            </td>
+
+            <!-- 30d sparkline -->
+            <td class="pj-c"><span x-html="sparkSvg(row.p.sparkline)"></span></td>
+
+            <!-- Data quality -->
+            <td class="a2-r pj-score" x-text="row.p.dataCoverageScore ?? '—'"></td>
+
+            <!-- Description -->
+            <td class="pj-l pj-desc"><span x-text="row.p.description || '—'"></span></td>
+
+            <!-- Website -->
+            <td class="pj-l">
+              <template x-if="row.p.websiteUrl">
+                <a :href="row.p.websiteUrl" target="_blank" rel="noreferrer" class="pj-link" x-text="cleanUrl(row.p.websiteUrl)"></a>
+              </template>
+              <span x-show="!row.p.websiteUrl" class="a2-dim">—</span>
+            </td>
+
+            <!-- Social -->
+            <td class="pj-l">
+              <template x-if="row.p.twitterHandle">
+                <a :href="twitterUrl(row.p.twitterHandle)" target="_blank" rel="noreferrer" class="pj-link" x-text="twitterLabel(row.p.twitterHandle)"></a>
+              </template>
+              <span x-show="!row.p.twitterHandle" class="a2-dim">—</span>
+            </td>
+
+            <!-- Facets -->
+            <td class="pj-l">
+              <div class="pj-facets">
+                <template x-for="f in facetPills(row.p)" :key="f.label">
+                  <span class="pj-pill" :class="f.on ? 'pj-pill--on' : 'pj-pill--off'" :title="f.hint" x-text="f.label"></span>
+                </template>
+              </div>
+            </td>
+
+            <!-- Revenue 30d -->
+            <td class="a2-r" x-text="fmtUsd(row.p.revenue30d)"></td>
+
+            <!-- Wallet balance -->
+            <td class="a2-r">
+              <template x-if="row.p.wallets.length > 0">
+                <div :title="row.p.wallets.map(w => w.label + ' (' + (w.chain || '?') + '): ' + fmtUsd(w.balanceUsd)).join('\n')">
+                  <span x-text="fmtUsd(row.p.walletTotalUsd)"></span>
+                  <i x-text="row.p.wallets.length + (row.p.wallets.length !== 1 ? ' wallets' : ' wallet')"></i>
+                </div>
+              </template>
+              <span x-show="row.p.wallets.length === 0" class="a2-dim">—</span>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+
+</section>
+
+<style>
+/* ── a2 base tokens (this fragment carries its own copy; the router-injected view
+      does not load /performance's inline styles) ─────────────────────────────── */
+.a2 {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 5rem;
+  color: var(--color-text);
+}
+.a2-eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+.a2-grad {
+  background: linear-gradient(90deg, var(--color-accent), var(--color-blue));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-style: normal;
+  font-weight: 700;
+}
+.a2-section__head { margin-bottom: 2rem; }
+.a2-section__lede {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  margin: 0.75rem 0 0;
+  max-width: 46rem;
+  line-height: 1.6;
+}
+.a2-dim { color: var(--color-text-dim); }
+
+.pj-head { max-width: 1400px; }
+.pj-title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 2.25rem;
+  line-height: 1.05;
+  margin: 0.25rem 0 0;
+}
+.pj-status {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+.pj-status--error { color: var(--color-warn); }
+
+/* ── Table (a2 look) ─────────────────────────────────────────────────────── */
+.a2-table__scroll {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+.pj-scroll { max-height: calc(100vh - 220px); }
+.a2-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.a2-table thead tr {
+  background: var(--color-surface-light);
+  border-bottom: 1px solid var(--color-border);
+}
+.a2-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.a2-table th {
+  padding: 0.7rem 1rem;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  text-align: right;
+  background: var(--color-surface-light);
+}
+.a2-table th.pj-l { text-align: left; }
+.a2-table th.a2-sticky,
+.a2-table td.a2-sticky {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--color-surface-light);
+}
+.a2-table tbody td.a2-sticky { background: var(--color-surface); z-index: 1; }
+.a2-table tbody tr {
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  vertical-align: top;
+}
+.a2-table tbody tr:nth-child(even) { background: var(--color-deep); }
+.a2-table tbody tr:nth-child(even) td.a2-sticky { background: var(--color-deep); }
+.a2-table td { padding: 0.6rem 1rem; color: var(--color-text); }
+.a2-table td.a2-r { text-align: right; }
+.a2-table td.pj-l { text-align: left; white-space: normal; }
+.a2-table td.pj-c { text-align: center; }
+
+/* Sortable header buttons */
+.pj-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pj-sort:hover { color: var(--color-text); }
+.pj-sort--active { color: var(--color-accent); }
+.pj-sort__i { opacity: 0.55; font-size: 0.7em; }
+.pj-sort--active .pj-sort__i { opacity: 1; }
+
+/* Project name cell */
+.pj-name__inner { display: flex; align-items: center; gap: 0.55rem; }
+.pj-logo {
+  width: 26px; height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border);
+  flex-shrink: 0;
+  object-fit: cover;
+}
+.pj-logo--fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-light);
+  font-size: 0.6rem;
+  color: var(--color-text-muted);
+}
+.pj-name__text { font-weight: 700; }
+
+.pj-coinline { line-height: 1.5; }
+.pj-coinline i { font-style: normal; color: var(--color-text-dim); margin-right: 0.4rem; }
+.pj-score { font-weight: 700; }
+.pj-desc { max-width: 22rem; color: var(--color-text-muted); line-height: 1.5; }
+.pj-desc span { display: block; white-space: normal; word-break: break-word; }
+
+.pj-link { color: var(--color-accent); text-decoration: none; }
+.pj-link:hover { text-decoration: underline; }
+
+.a2-table td.a2-r i {
+  display: block;
+  font-style: normal;
+  font-size: 0.6rem;
+  color: var(--color-text-dim);
+  margin-top: 1px;
+}
+
+/* Facet pills */
+.pj-facets { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+.pj-pill {
+  padding: 0.1rem 0.35rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  border: 1px solid;
+  border-radius: 3px;
+}
+.pj-pill--on {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.pj-pill--off {
+  color: var(--color-text-dim);
+  border-color: var(--color-border);
+  background: transparent;
+}
+
+/* Sparkline */
+.pj-spark { display: inline-block; vertical-align: middle; }
+.pj-spark-empty { color: var(--color-text-dim); }
+
+@media (min-width: 768px) {
+  .a2 { padding: 3rem 2rem 5rem; }
+  .pj-title { font-size: 2.75rem; }
+}
+</style>
