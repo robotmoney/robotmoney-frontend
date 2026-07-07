@@ -23,7 +23,7 @@ afterEach(() => {
 // mode, so this mirrors the extended timeouts other suites use around it
 // (hermetic-source.test.ts, analytics-suite.test.ts) rather than the 5s default.
 test(
-  "POST /api/committee/admin/regime returns 2xx for a privileged caller",
+  "POST /api/committee/admin/regime recomputes ONLY the regime composite (tools === ['regime'])",
   async () => {
     config.adminToken = null;
     config.allowInsecure = true;
@@ -37,8 +37,12 @@ test(
     const res = await handleCommittee(req, new URL(req.url));
 
     expect(res).not.toBeNull();
-    expect(res!.status).toBeGreaterThanOrEqual(200);
-    expect(res!.status).toBeLessThan(300);
+    expect(res!.status).toBe(200);
+    // The scoping fix (issue #59): this admin route must NOT recompute the full
+    // suite (regime + both research signals) — only the regime composite, so it
+    // never triggers the multi-minute live SEC EDGAR research crawl that hung
+    // `bun demo`. Object.keys of the scoped runAnalytics result is exactly ["regime"].
+    expect((res!.body as { tools: string[] }).tools).toEqual(["regime"]);
   },
   { timeout: 120_000 },
 );

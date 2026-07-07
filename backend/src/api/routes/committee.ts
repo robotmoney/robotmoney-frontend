@@ -162,7 +162,12 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
         return { status: res.status, body: res };
       }
       case "reset": return { status: 200, body: await ic.resetSessions() };
-      case "regime": return { status: 200, body: { tools: Object.keys(await runAnalytics(typeof b.asof === "string" ? b.asof : new Date().toISOString().slice(0, 10))) } };
+      // Scope to the regime composite only (toolId="regime"). The demo-startup
+      // and ~2-min committee session cycles hit this repeatedly; recomputing the
+      // full suite here re-ran the multi-minute live SEC EDGAR research crawl and
+      // hung `bun demo`. The worker refreshes research signals on its own
+      // independent schedule, so this route never needs them (issue #59).
+      case "regime": return { status: 200, body: { tools: Object.keys(await runAnalytics(typeof b.asof === "string" ? b.asof : new Date().toISOString().slice(0, 10), "regime")) } };
       case "subject": {
         const id = requiredString(b, "id", 100);
         const name = requiredString(b, "name", 200);
