@@ -5,6 +5,17 @@
 /* ── Reset/base ── */
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+/* Mirrors Tailwind Preflight's heading reset (the original site imports
+   "tailwindcss", which applies this globally). Without it, browsers' default
+   UA stylesheet makes every <h1>-<h6> font-weight: bold — and since the
+   Instrument Serif @font-face above only loads weight 400 (no bold cut),
+   every un-italicized-by-class serif-italic heading site-wide was rendering
+   a synthetic/faux-bold instead of the reference's normal weight. Heading
+   classes that ARE meant to be bold already set their own font-weight
+   explicitly (e.g. .hero__title-bold, .docs-index__title), mirroring the
+   original's explicit font-bold/font-semibold Tailwind utility on that
+   element — this reset only removes the *implicit* browser default. */
+h1, h2, h3, h4, h5, h6 { font-weight: inherit; }
 
 html {
   scroll-behavior: smooth;
