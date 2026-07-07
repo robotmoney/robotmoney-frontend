@@ -10,24 +10,34 @@ services:
       - base-rpc-stub
     environment:
       RM_ALLOW_INSECURE: "1"
-      # Base RPC source knob (issue #48). Default HERMETIC: point the vault-economics
-      # eth_call reads (chain/vault-economics.ts) at the in-CI deterministic stub
-      # (base-rpc-stub service) so the demo — and the required `e2e` check — NEVER
-      # touches live, rate-limited Base mainnet (config.ts default mainnet.base.org).
-      # A live showcase can OPT IN by exporting BASE_RPC_URL=https://mainnet.base.org
-      # (or a private RPC) before `bun run demo`. Mirrors the ANALYTICS_SOURCE pattern.
-      BASE_RPC_URL: ${BASE_RPC_URL:-http://base-rpc-stub:8645}
-      # Analytics source knob (issue #13). Default HERMETIC: the demo run is
-      # deterministic + offline (no FRED/Yahoo/EDGAR/... calls), matching the demo
-      # spec and CI. A showcase can OPT IN to the REAL keyless pipeline by exporting
-      # ANALYTICS_SOURCE=live before `bun run demo` — then the API's runAnalytics
-      # (the /committee/admin/regime call) fetches live numbers. The opt-in vars
-      # below only take effect on the live path.
-      ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-hermetic}
-      # Cold-DB floor seed: load the vendored real raw floor ONCE so a fresh live
+      # Data-path knobs (issue #50 — production-parity demo; inverts the
+      # hermetic-by-default wiring of issues #13/#48). DEFAULT = LIVE: with no env
+      # set, BASE_RPC_URL resolves EMPTY so backend config.ts falls through to its
+      # live production default (https://mainnet.base.org) for the vault-economics
+      # eth_call reads (chain/vault-economics.ts). Hermetic/stub mode is an
+      # EXPLICIT OPT-IN: DEMO_HERMETIC=1 (set by .github/workflows/e2e.yml, or
+      # `DEMO_HERMETIC=1 bun run demo` locally) pins the reads at the in-compose
+      # deterministic stub (base-rpc-stub service) so the required `e2e` check
+      # NEVER touches live, rate-limited Base mainnet. An explicit BASE_RPC_URL
+      # always wins over both defaults. scripts/demo-rpc-guard.ts fails the CI
+      # run loudly on any live-RPC leak. Mirrors scripts/lib/demo-env.ts.
+      BASE_RPC_URL: ${BASE_RPC_URL:-${DEMO_HERMETIC:+http://base-rpc-stub:8645}}
+      # RPC provenance marker (config.ts resolveBaseRpcSource): under the hermetic
+      # opt-in the vault-economics DTO carries source:'stub' so stub-served numbers
+      # are never presented as live chain data (empty/unset → 'live').
+      BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-${DEMO_HERMETIC:+stub}}
+      # Analytics source knob (analytics/index.ts resolveAnalyticsSource). DEFAULT =
+      # LIVE: empty/unset resolves to the real keyless pipeline (production parity —
+      # FRED/Yahoo/EDGAR/...). DEMO_HERMETIC=1 pins the deterministic offline seeded
+      # source — the ONLY per-PR / CI behaviour (e2e.yml sets it).
+      ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-${DEMO_HERMETIC:+hermetic}}
+      # Cold-DB floor seed: load the vendored real raw floor ONCE so a fresh LIVE
       # boot doesn't re-fetch years of history (esp. ~200 EDGAR requests). Idempotent
-      # (no-op once warm). Ignored on the hermetic path.
-      ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-0}
+      # (no-op once warm). scripts/lib/demo-env.ts defaults this to 1 on the live
+      # local demo cold-boot path; the hermetic opt-in pins it to 0 so the offline
+      # seeded run stays deterministic. Raw compose (no demo.ts) leaves it off,
+      # matching the prod default.
+      ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-${DEMO_HERMETIC:+0}}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
       # Opt-in on-disk fetch cache TTL (ms) so repeated live boots are fast. 0 = off.
       FETCH_CACHE_TTL_MS: ${FETCH_CACHE_TTL_MS:-0}
@@ -39,12 +49,14 @@ services:
     depends_on:
       - base-rpc-stub
     environment:
-      # Same hermetic Base RPC default as api (issue #48): the worker's share-price
-      # sampler (worker/handlers/vault.ts) also reads the vault over eth_call.
-      BASE_RPC_URL: ${BASE_RPC_URL:-http://base-rpc-stub:8645}
-      # Same source knob for any analytics job the worker processes (default offline).
-      ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-hermetic}
-      ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-0}
+      # Same data-path knobs as api (issue #50): the worker's share-price sampler
+      # (worker/handlers/vault.ts) also reads the vault over eth_call, and its
+      # analytics jobs honor the same source knob. DEFAULT = LIVE; DEMO_HERMETIC=1
+      # is the explicit stubbed/offline opt-in.
+      BASE_RPC_URL: ${BASE_RPC_URL:-${DEMO_HERMETIC:+http://base-rpc-stub:8645}}
+      BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-${DEMO_HERMETIC:+stub}}
+      ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-${DEMO_HERMETIC:+hermetic}}
+      ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-${DEMO_HERMETIC:+0}}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
       FETCH_CACHE_TTL_MS: ${FETCH_CACHE_TTL_MS:-0}
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
@@ -56,10 +68,12 @@ services:
   # Deterministic, request-counting Base JSON-RPC stub (issue #48). Reuses the
   # backend image (bun) to run backend/tests/support/base-rpc-stub.ts, which
   # answers the vault-economics eth_call reads with fixed fixtures and records a
-  # request count. api/worker reach it by service name (BASE_RPC_URL default
-  # above), so the demo's /allocation path — and the required `e2e` check — never
-  # touches live Base mainnet. The host port lets scripts/demo-rpc-guard.ts read
-  # GET /__count and assert zero live calls.
+  # request count. Under the DEMO_HERMETIC=1 opt-in (the only mode CI runs),
+  # api/worker reach it by service name via the BASE_RPC_URL default above, so
+  # the required `e2e` check never touches live Base mainnet; on the default
+  # LIVE path the container still starts but nothing routes to it. The host
+  # port lets scripts/demo-rpc-guard.ts read GET /__count and assert the
+  # hermetic run's reads all landed here (zero live calls).
   base-rpc-stub:
     build:
       context: .

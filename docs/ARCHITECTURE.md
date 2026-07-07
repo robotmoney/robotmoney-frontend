@@ -610,18 +610,29 @@ only) exception to the allocation/vault/wallet out-of-scope line.
 - **`backend/src/chain/vault-economics.ts`** — reads the vault's
   `totalAssets()`/`totalSupply()` (→ `sharePrice = totalAssets / totalSupply`,
   `null` iff `totalSupply = 0`), the vault's idle USDC balance
-  (`USDC.balanceOf(vault)`), and each configured adapter's `totalAssets()`,
+  (`USDC.balanceOf(vault)`), and every **configured** adapter's `totalAssets()`
+  (an unconfigured/placeholder adapter is never `eth_call`'d — see below),
   behind a 30s in-process cache. On any RPC failure it returns
   `stale: true` with the **last-persisted share-price sample** (or `null`) —
   never a fabricated number, never a 5xx.
 - **Config, not on-chain discovery** — `config.vault` (`backend/src/config.ts`)
   holds the vault + USDC addresses (already documented publicly at
   `frontend/public/views/docs/skill/installation.html` and `skills.html`) and
-  the three adapter `{name, address}` entries, all overridable via env
-  (`VAULT_ADDRESS`, `USDC_ADDRESS`, `ADAPTER_MORPHO_ADDRESS`,
-  `ADAPTER_AAVE_ADDRESS`, `ADAPTER_COMPOUND_ADDRESS`). The adapter contract
-  addresses are not published anywhere yet, so their defaults are
-  non-functional placeholders pending real values.
+  the three adapter entries, all overridable via env (`VAULT_ADDRESS`,
+  `USDC_ADDRESS`, `ADAPTER_MORPHO_ADDRESS`, `ADAPTER_AAVE_ADDRESS`,
+  `ADAPTER_COMPOUND_ADDRESS`). The adapter contract addresses are not
+  published anywhere yet, so their defaults are non-functional placeholders
+  pending real values.
+- **RPC provenance + per-adapter `configured` (issue #50).** `config.ts` exports
+  `resolveBaseRpcSource()` (env `BASE_RPC_SOURCE`, fail-closed on an
+  unrecognized value; unset/`live` → `"live"`, `"stub"` → `"stub"`) and
+  `resolveVaultAdapters()` (per-adapter `configured: Boolean(ADAPTER_*_ADDRESS)`),
+  both resolved **at call time** by `vault-economics.ts` (not module load) so the
+  hermetic demo/CI stub (`BASE_RPC_SOURCE=stub`, set alongside `BASE_RPC_URL` by
+  the `DEMO_HERMETIC=1` compose layer) and env-overridden adapters are always
+  reflected. An adapter still at its placeholder address is `configured: false`
+  and its `totalAssets()` is **never called** — its `balanceUsd` is always
+  `null`, never a live-looking `$0`.
 - **`vault_share_price_history`** (migration `0012_vault_share_price_history.sql`)
   — one row per `(vault_address, sample_hour)`, upserted by the hourly
   `vault.sample_share_price` job (`backend/src/worker/handlers/vault.ts`,
@@ -630,12 +641,15 @@ only) exception to the allocation/vault/wallet out-of-scope line.
   `computeApy7d`; fewer than two samples in the lookback yields `null`.
 - **`GET /api/dashboards/vault-economics`** (`ROUTES.dashboards.vaultEconomics`,
   `backend/src/api/routes/dashboards.ts`) returns
-  `{ asOf, stale, tvlUsd, sharePrice, totalShares, idleUsdc, apy7d, adapters }`
-  where `adapters` is exactly the three configured `{name, address,
-  balanceUsd}` entries. `allocationView()` (`frontend/public/assets/js/app/alpine/views.js`)
+  `{ asOf, stale, source, tvlUsd, sharePrice, totalShares, idleUsdc, apy7d, adapters }`
+  where `source` is `'live'` or `'stub'` (RPC provenance — never presented as
+  live when the backend is running against the hermetic stub) and `adapters` is
+  the three `{name, address, configured, balanceUsd}` entries.
+  `allocationView()` (`frontend/public/assets/js/app/alpine/views.js`)
   fetches this on init and binds it into `views/allocation.html`, showing a
-  `stale` badge and last-known/null text instead of the retired static
-  2026-06-26 literals.
+  `stale` badge, a non-live badge when `source === 'stub'`, an explicit
+  "Not configured" cell for a placeholder adapter, and last-known/null text
+  instead of the retired static 2026-06-26 literals.
 - **Preview/demo fidelity (D14)** — `goldens/api-goldens.json` carries a real
   captured `/api/dashboards/vault-economics` entry so `bun run preview` and the
   e2e Playwright spec (`frontend/test/browser/allocation-view.spec.ts`) render

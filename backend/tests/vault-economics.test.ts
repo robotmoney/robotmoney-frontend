@@ -1,11 +1,13 @@
 // Vault-economics handler (backend/src/chain/vault-economics.ts) + sampler
 // (backend/src/worker/handlers/vault.ts): happy path against a mocked
 // `eth_call` transport, totalSupply=0, missing-history APY, RPC-failure
-// degraded payload, and the sampler's one-row-per-run upsert — all against the
-// real (ephemeral) Postgres, never a reachable RPC (test-coverage policy).
+// degraded payload, the sampler's one-row-per-run upsert, RPC/adapter
+// provenance (source live|stub, per-adapter configured), and the
+// never-eth-call-a-placeholder guarantee (issue #50) — all against the real
+// (ephemeral) Postgres, never a reachable RPC (test-coverage policy).
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import { config } from "../src/config.ts";
+import { config, resolveBaseRpcSource, resolveVaultAdapters, type VaultAdapterConfig } from "../src/config.ts";
 import { fetchVaultEconomics, computeApy7d, _resetVaultEconomicsCacheForTests } from "../src/chain/vault-economics.ts";
 import { sampleSharePrice } from "../src/worker/handlers/vault.ts";
 import { ROUTES } from "@robotmoney/contract";
@@ -14,6 +16,15 @@ import { getVaultEconomics } from "../src/api/routes/dashboards.ts";
 const realFetch = globalThis.fetch;
 const VAULT = config.vault.address;
 
+// Non-placeholder adapter addresses used to exercise the ADAPTER_*_ADDRESS
+// env-override → configured:true path. Any well-formed hex address works for
+// the mock transport; these are deliberately distinct from the 0x1111.../
+// 0x2222.../0x3333... placeholders so a test can prove which set was queried.
+const MORPHO_OVERRIDE = "0x" + "aa11".repeat(10);
+const AAVE_OVERRIDE = "0x" + "bb22".repeat(10);
+const COMPOUND_OVERRIDE = "0x" + "cc33".repeat(10);
+const ADAPTER_ENV_KEYS = ["ADAPTER_MORPHO_ADDRESS", "ADAPTER_AAVE_ADDRESS", "ADAPTER_COMPOUND_ADDRESS", "BASE_RPC_SOURCE"] as const;
+
 beforeEach(async () => {
   await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
   _resetVaultEconomicsCacheForTests();
@@ -21,6 +32,11 @@ beforeEach(async () => {
 afterEach(() => {
   globalThis.fetch = realFetch;
   _resetVaultEconomicsCacheForTests();
+  // Every provenance/adapter-override test below mutates process.env directly
+  // (the resolvers read process.env when called with no args, matching how
+  // chain/vault-economics.ts calls them) — always restore to unset so no test
+  // leaks its knobs into the next one.
+  for (const k of ADAPTER_ENV_KEYS) delete process.env[k];
 });
 
 // Encode a uint256 eth_call result word from a decimal string.
@@ -47,20 +63,33 @@ const TOTAL_ASSETS_SEL = "0x01e1d114";
 const TOTAL_SUPPLY_SEL = "0x18160ddd";
 const BALANCE_OF_SEL = "0x70a08231";
 
-function happyPathFixture(): Record<string, string> {
+// `adapters` defaults to the module-load-time placeholder set
+// (config.vault.adapters) purely for callers that don't care whether an
+// adapter is eth_called; tests exercising the configured/unconfigured split
+// pass the freshly-resolved set explicitly (resolveVaultAdapters() reflects
+// whatever ADAPTER_*_ADDRESS the test just set, unlike the frozen
+// config.vault.adapters snapshot).
+function happyPathFixture(adapters: Pick<VaultAdapterConfig, "address">[] = config.vault.adapters): Record<string, string> {
   const fixtures: Record<string, string> = {
     [`${VAULT.toLowerCase()}:${TOTAL_ASSETS_SEL}`]: word(84_320_120_000n), // $84,320.12
     [`${VAULT.toLowerCase()}:${TOTAL_SUPPLY_SEL}`]: word(84_102_550_000n), // 84,102.55 shares
     [`${config.vault.usdc.toLowerCase()}:${BALANCE_OF_SEL}`]: word(1_000_000n), // $1.00 idle
   };
-  for (const a of config.vault.adapters) {
+  for (const a of adapters) {
     fixtures[`${a.address.toLowerCase()}:${TOTAL_ASSETS_SEL}`] = word(28_000_000_000n); // $28,000 each
   }
   return fixtures;
 }
 
 test("fetchVaultEconomics happy path: tvl/sharePrice/totalShares/idle/adapters match hand-computed fixtures", async () => {
-  mockRpc(happyPathFixture());
+  // Configure all three adapters so this test exercises the same "all live and
+  // eth_called" happy path it always has; the placeholder/unconfigured path
+  // is covered by its own test below.
+  process.env.ADAPTER_MORPHO_ADDRESS = MORPHO_OVERRIDE;
+  process.env.ADAPTER_AAVE_ADDRESS = AAVE_OVERRIDE;
+  process.env.ADAPTER_COMPOUND_ADDRESS = COMPOUND_OVERRIDE;
+  const adapters = resolveVaultAdapters();
+  mockRpc(happyPathFixture(adapters));
   const r = await fetchVaultEconomics();
   expect(r.stale).toBe(false);
   expect(r.tvlUsd).toBeCloseTo(84320.12, 6);
@@ -68,8 +97,105 @@ test("fetchVaultEconomics happy path: tvl/sharePrice/totalShares/idle/adapters m
   expect(r.sharePrice).toBeCloseTo(84320120000 / 84102550000, 9);
   expect(r.idleUsdc).toBeCloseTo(1.0, 6);
   expect(r.adapters).toHaveLength(3);
-  for (const a of r.adapters) expect(a.balanceUsd).toBeCloseTo(28000, 6);
+  for (const a of r.adapters) {
+    expect(a.configured).toBe(true);
+    expect(a.balanceUsd).toBeCloseTo(28000, 6);
+  }
   expect(r.adapters.map((a) => a.name)).toEqual(config.vault.adapters.map((a) => a.name));
+});
+
+test("adapters left at their placeholder addresses are configured:false, balanceUsd:null, and are NEVER eth_called", async () => {
+  // No ADAPTER_*_ADDRESS overrides — every adapter stays at its non-functional
+  // placeholder (0x1111.../0x2222.../0x3333...). Deliberately supply NO mock
+  // fixture for any of them: if the handler ever called one, mockRpc would
+  // throw "no fixture" and this test would fail loudly, proving the
+  // never-eth-call-an-unconfigured-adapter guarantee structurally, not just
+  // by asserting the output shape.
+  mockRpc({
+    [`${VAULT.toLowerCase()}:${TOTAL_ASSETS_SEL}`]: word(84_320_120_000n),
+    [`${VAULT.toLowerCase()}:${TOTAL_SUPPLY_SEL}`]: word(84_102_550_000n),
+    [`${config.vault.usdc.toLowerCase()}:${BALANCE_OF_SEL}`]: word(1_000_000n),
+  });
+  const r = await fetchVaultEconomics();
+  expect(r.stale).toBe(false); // proves the run succeeded WITHOUT calling any adapter
+  expect(r.adapters).toHaveLength(3);
+  for (const a of r.adapters) {
+    expect(a.configured).toBe(false);
+    expect(a.balanceUsd).toBeNull();
+  }
+  expect(r.adapters.map((a) => a.address)).toEqual([
+    "0x1111111111111111111111111111111111111111",
+    "0x2222222222222222222222222222222222222222",
+    "0x3333333333333333333333333333333333333333",
+  ]);
+});
+
+test("an ADAPTER_*_ADDRESS override flips only that adapter to configured:true; the others stay unconfigured/null", async () => {
+  process.env.ADAPTER_MORPHO_ADDRESS = MORPHO_OVERRIDE;
+  mockRpc({
+    [`${VAULT.toLowerCase()}:${TOTAL_ASSETS_SEL}`]: word(84_320_120_000n),
+    [`${VAULT.toLowerCase()}:${TOTAL_SUPPLY_SEL}`]: word(84_102_550_000n),
+    [`${config.vault.usdc.toLowerCase()}:${BALANCE_OF_SEL}`]: word(1_000_000n),
+    [`${MORPHO_OVERRIDE.toLowerCase()}:${TOTAL_ASSETS_SEL}`]: word(28_000_000_000n),
+  });
+  const r = await fetchVaultEconomics();
+  expect(r.stale).toBe(false);
+  const morpho = r.adapters.find((a) => a.name === "Morpho")!;
+  expect(morpho.configured).toBe(true);
+  expect(morpho.address).toBe(MORPHO_OVERRIDE);
+  expect(morpho.balanceUsd).toBeCloseTo(28000, 6);
+  for (const a of r.adapters.filter((x) => x.name !== "Morpho")) {
+    expect(a.configured).toBe(false);
+    expect(a.balanceUsd).toBeNull();
+  }
+});
+
+test("resolveVaultAdapters: unset env → all three configured:false at their documented placeholder addresses", () => {
+  const adapters = resolveVaultAdapters({});
+  expect(adapters.every((a) => a.configured === false)).toBe(true);
+  expect(adapters.map((a) => a.address)).toEqual([
+    "0x1111111111111111111111111111111111111111",
+    "0x2222222222222222222222222222222222222222",
+    "0x3333333333333333333333333333333333333333",
+  ]);
+});
+
+test("resolveVaultAdapters: an ADAPTER_*_ADDRESS override is used verbatim and flips configured:true for just that adapter", () => {
+  const adapters = resolveVaultAdapters({ ADAPTER_AAVE_ADDRESS: AAVE_OVERRIDE });
+  const aave = adapters.find((a) => a.name === "Aave")!;
+  expect(aave.configured).toBe(true);
+  expect(aave.address).toBe(AAVE_OVERRIDE);
+  for (const a of adapters.filter((x) => x.name !== "Aave")) expect(a.configured).toBe(false);
+});
+
+test("vault-economics source provenance: unset/empty BASE_RPC_SOURCE resolves 'live'; 'stub' resolves 'stub'", async () => {
+  mockRpc(happyPathFixture());
+  delete process.env.BASE_RPC_SOURCE;
+  const rLive = await fetchVaultEconomics();
+  expect(rLive.source).toBe("live");
+
+  _resetVaultEconomicsCacheForTests();
+  process.env.BASE_RPC_SOURCE = "stub";
+  const rStub = await fetchVaultEconomics();
+  expect(rStub.source).toBe("stub");
+});
+
+test("a degraded (stale) response still carries the correct source provenance", async () => {
+  process.env.BASE_RPC_SOURCE = "stub";
+  globalThis.fetch = (async () => {
+    throw new Error("fetch failed: connection refused");
+  }) as typeof fetch;
+  const r = await fetchVaultEconomics();
+  expect(r.stale).toBe(true);
+  expect(r.source).toBe("stub");
+});
+
+test("resolveBaseRpcSource: unset/empty resolves 'live'; 'stub' resolves 'stub'; anything else fails closed (throws)", () => {
+  expect(resolveBaseRpcSource({})).toBe("live");
+  expect(resolveBaseRpcSource({ BASE_RPC_SOURCE: "" })).toBe("live");
+  expect(resolveBaseRpcSource({ BASE_RPC_SOURCE: "live" })).toBe("live");
+  expect(resolveBaseRpcSource({ BASE_RPC_SOURCE: "stub" })).toBe("stub");
+  expect(() => resolveBaseRpcSource({ BASE_RPC_SOURCE: "bogus" })).toThrow(/invalid BASE_RPC_SOURCE/);
 });
 
 test("totalSupply = 0 yields sharePrice: null without throwing", async () => {

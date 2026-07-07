@@ -8,6 +8,70 @@ function required(name: string): string {
   return v;
 }
 
+// --- Base RPC provenance (issue #50) ----------------------------------------
+// The vault-economics DTO labels where its numbers came from: 'live' (a real
+// Base JSON-RPC endpoint — the production default) or 'stub' (the hermetic
+// demo/CI fixture stub, backend/tests/support/base-rpc-stub.ts). The hermetic
+// demo layer (docker-compose.demo.yml under DEMO_HERMETIC=1) sets
+// BASE_RPC_SOURCE=stub alongside pointing BASE_RPC_URL at the stub, so
+// stub-served payloads are never presented as live chain data. Resolved at
+// CALL time (not module load) by chain/vault-economics.ts so tests can flip
+// the env. Fail-closed: an unrecognized value refuses to resolve rather than
+// silently claiming 'live'.
+export type BaseRpcSource = "live" | "stub";
+export function resolveBaseRpcSource(
+  env: Record<string, string | undefined> = process.env,
+): BaseRpcSource {
+  const raw = env.BASE_RPC_SOURCE;
+  if (raw === undefined || raw === "" || raw === "live") return "live";
+  if (raw === "stub") return "stub";
+  throw new Error(`invalid BASE_RPC_SOURCE "${raw}" — expected "live" | "stub" (or unset for live)`);
+}
+
+// --- Vault adapter set (issues #40/#50) --------------------------------------
+// Decision (issue #40): adapter set comes from config, NOT on-chain discovery.
+// The vault's three real adapter contract addresses are not published anywhere
+// in this repo yet, so the defaults below are deliberately NON-FUNCTIONAL
+// placeholders — override with the real deployed addresses via env once known.
+// IMPORTANT: real overrides must be contract addresses; do NOT use low
+// addresses like 0x0…01/02/03 — on Base (and most EVM chains) those alias the
+// ecrecover/sha256/ripemd160 precompiles, which return real (garbage, for this
+// use) output instead of erroring, silently producing an absurd
+// fabricated-looking balance. The repeating-digit placeholder addresses below
+// are verified empty accounts on Base mainnet.
+//
+// `configured` (issue #50) is true iff the address came from an env override:
+// an adapter still at its placeholder is reported configured:false and is
+// NEVER eth_called by chain/vault-economics.ts (its balanceUsd stays null), so
+// a placeholder can never render as a live-looking $0. Resolved at CALL time
+// so tests can flip the env per case.
+export interface VaultAdapterConfig {
+  name: string;
+  address: string;
+  configured: boolean;
+}
+export function resolveVaultAdapters(
+  env: Record<string, string | undefined> = process.env,
+): VaultAdapterConfig[] {
+  return [
+    {
+      name: "Morpho",
+      address: env.ADAPTER_MORPHO_ADDRESS || "0x1111111111111111111111111111111111111111",
+      configured: Boolean(env.ADAPTER_MORPHO_ADDRESS),
+    },
+    {
+      name: "Aave",
+      address: env.ADAPTER_AAVE_ADDRESS || "0x2222222222222222222222222222222222222222",
+      configured: Boolean(env.ADAPTER_AAVE_ADDRESS),
+    },
+    {
+      name: "Compound",
+      address: env.ADAPTER_COMPOUND_ADDRESS || "0x3333333333333333333333333333333333333333",
+      configured: Boolean(env.ADAPTER_COMPOUND_ADDRESS),
+    },
+  ];
+}
+
 // Fail-closed: default to "prod" when RM_ENV is unset, and REFUSE to start on an
 // unrecognized value (so a typo like "production" can never silently open the
 // privileged surface). The unauthenticated convenience path is opt-in: it is
@@ -58,27 +122,11 @@ export const config = {
     address: process.env.VAULT_ADDRESS || "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
     // USDC on Base, same doc pages.
     usdc: process.env.USDC_ADDRESS || "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-    // Decision (issue #40): adapter set comes from config, NOT on-chain
-    // discovery. The vault's three real adapter contract addresses are not
-    // published anywhere in this repo yet, so the defaults below are
-    // deliberately NON-FUNCTIONAL placeholders — override with the real
-    // deployed addresses via env once known. IMPORTANT: these must be
-    // addresses with NO contract code (an `eth_call` to them then decodes a
-    // clean empty `0x` result as 0n). Do NOT use low addresses like
-    // 0x0…01/02/03 — on Base (and most EVM chains) those alias the
-    // ecrecover/sha256/ripemd160 precompiles, which return real (garbage,
-    // for this use) output instead of erroring, silently producing an
-    // absurd fabricated-looking balance. The repeating-digit addresses below
-    // are verified empty accounts on Base mainnet. A placeholder/wrong
-    // address makes its balance read as 0 — the chain client
-    // (chain/vault-economics.ts) still reports `stale: false` (the RPC itself
-    // is healthy), so this is a config gap to close before adapters are
-    // meaningful, not a fabricated number.
-    adapters: [
-      { name: "Morpho", address: process.env.ADAPTER_MORPHO_ADDRESS || "0x1111111111111111111111111111111111111111" },
-      { name: "Aave", address: process.env.ADAPTER_AAVE_ADDRESS || "0x2222222222222222222222222222222222222222" },
-      { name: "Compound", address: process.env.ADAPTER_COMPOUND_ADDRESS || "0x3333333333333333333333333333333333333333" },
-    ],
+    // Load-time snapshot of the adapter set (see resolveVaultAdapters above,
+    // which chain/vault-economics.ts calls per request so `configured` tracks
+    // the live env). Placeholder (unconfigured) adapters are never eth_called
+    // (issue #50), so a placeholder can never render as a live-looking $0.
+    adapters: resolveVaultAdapters(),
   },
 };
 

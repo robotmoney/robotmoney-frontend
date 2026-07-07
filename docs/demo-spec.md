@@ -244,34 +244,57 @@ RM never holds the private key at any point.
 
 ## 7. Hermeticity and cleanup
 
-- Zero external dependencies (default): the demo must not reach out to FRED, Yahoo,
-  CoinMetrics, or any live API. The hermetic seeded source supplies deterministic
-  data. This is the `bun run demo` default and the ONLY per-PR / CI behaviour.
+- **Production parity by default (issue #50).** `bun run demo` with no extra env
+  runs the **live** data path end-to-end: the real keyless analytics pipeline
+  (FRED/Yahoo/DeFiLlama/EDGAR/…) and a real Base mainnet JSON-RPC read for the
+  `/allocation` vault-economics slice (§10 below). This is a deliberate reversal
+  of the pre-#50 default (which always layered a hermetic stub) — a stakeholder
+  running `bun demo` locally must see production-real numbers unless they
+  explicitly ask for the offline mode.
+- **Hermetic mode is an explicit opt-in:** `DEMO_HERMETIC=1` (env, or
+  `DEMO_HERMETIC=1 bun run demo` locally) pins BOTH pipelines to deterministic,
+  offline fixtures — zero external dependencies (no FRED, Yahoo, CoinMetrics, or
+  live Base RPC calls). `.github/workflows/e2e.yml` sets this for the **required
+  `e2e` check**, which is the ONLY per-PR / CI consumer of the hermetic path;
+  `scripts/demo-rpc-guard.ts` fails that job loudly if the opt-in knob or any
+  hermetic env layer is missing or leaks toward a live host. The resolver
+  (`scripts/lib/demo-env.ts::resolveDemoEnv`, re-exported by `scripts/demo.ts`)
+  is the single source of truth for this default-live/hermetic-opt-in split;
+  `docker-compose.demo.yml`'s own `${DEMO_HERMETIC:+…}` interpolation mirrors it
+  so the two layers can never disagree (asserted by
+  `scripts/tests/demo-compose-config.test.ts`).
 
 ### 7a. Opt-in real-live-data path (showcase only)
 
-A showcase can run the **real** keyless pipeline end-to-end (live regime + research
-numbers) by exporting env before `bun run demo`. Nothing here is reachable from the
-per-PR CI graph — CI/default stay hermetic and offline.
+The live path (now the default) can still be tuned via env before `bun run demo`.
+Nothing here is reachable from the per-PR CI graph — CI always sets
+`DEMO_HERMETIC=1` and stays hermetic and offline.
 
 - **`ANALYTICS_SOURCE`** — the single, authoritative source knob honored by the
   orchestrator (`analytics/index.ts::resolveAnalyticsSource`, called by api + worker):
-  - unset / `live` → real keyless fetchers (production default; the demo opt-in),
-  - `hermetic` → deterministic offline seeded source (CI + the demo default),
+  - unset / `live` → real keyless fetchers (production default; the demo default
+    since issue #50),
+  - `hermetic` → deterministic offline seeded source (CI/`DEMO_HERMETIC=1` only),
   - any other value is **refused loudly** (fail-closed — a typo never silently hits
     the network).
   The legacy `PROVIDER` / `config.analyticsProvider` knob is **deprecated** for source
   selection and no longer influences the live/demo path; do not use it to opt in.
-- **`ANALYTICS_FLOOR_SEED=1`** — one-time cold-DB raw floor seed: load a vendored real
+- **`ANALYTICS_FLOOR_SEED`** — one-time cold-DB raw floor seed: load a vendored real
   `raw_indicator_history` floor once so a fresh live boot doesn't re-fetch years of
   history (esp. ~200 SEC-EDGAR requests) before the first classify. Idempotent
-  (append-only — existing DB rows win on overlap; no-op once warm). `FLOOR_SEED_PATH`
-  overrides the seed file (must be readable inside the container).
+  (append-only — existing DB rows win on overlap; no-op once warm). Defaults to `1`
+  on the live local demo cold-boot path (`scripts/lib/demo-env.ts`); the hermetic
+  opt-in pins it to `0` so the offline seeded run stays byte-for-byte deterministic.
+  `FLOOR_SEED_PATH` overrides the seed file (must be readable inside the container).
 - **`FETCH_CACHE_TTL_MS`** (+ optional `FETCH_CACHE_DIR`) — opt-in on-disk TTL cache
   for the heavy source GETs so repeated live boots are fast and polite to upstreams.
   `0` (default) disables it entirely.
+- **`BASE_RPC_URL`** — the vault-economics eth_call endpoint (§10). Unset on the
+  live path → backend `config.ts` falls through to its production default
+  (`https://mainnet.base.org`); `DEMO_HERMETIC=1` pins it at the in-compose
+  `base-rpc-stub` fixture instead.
 
-Example: `ANALYTICS_SOURCE=live ANALYTICS_FLOOR_SEED=1 FETCH_CACHE_TTL_MS=3600000 bun run demo`.
+Example: `FETCH_CACHE_TTL_MS=3600000 bun run demo` (live path, with a polite cache).
 The live path preserves the honesty model: empty fetch → persisted real floor; a
 no-history indicator is excluded + logged (never synthetic).
 - Random ports (Postgres, API, MCP) + unique compose project name: concurrent runs do
