@@ -1,0 +1,40 @@
+{
+  "date": "2026-06-25",
+  "subject_id": "woon",
+  "subject": {
+    "id": "woon",
+    "name": "Woon",
+    "operator": "peaq",
+    "thesis_blurb": "Woon is peaq's first non-human team member, a tokenized agent working as social media intern for peaq. Earnings flow into WOON buybacks, PEAQ accumulation, and Robot Money vault deposits.",
+    "structural_notes": [
+      "holds Robot Money vault shares",
+      "earns in stables and accumulates PEAQ and ROBOTMONEY",
+      "income is performance-linked"
+    ],
+    "source_type": "rpc"
+  },
+  "regime": {
+    "asof": "2026-06-25",
+    "composite": 0.5435781005507008,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off",
+    "factor_regime": "risk_on",
+    "macro_percentile": 0.7374429223744292,
+    "onchain_percentile": 0.10273972602739725,
+    "factor_percentile": 0.9246575342465754
+  },
+  "subject_snapshot": {
+    "subject_id": "woon",
+    "date": "2026-06-25",
+    "total_value_usd": 44167.4,
+    "positions": [
+      { "token": "WOON", "name": "Woon", "chain": "base", "value_usd": 24656.91 },
+      { "token": "PEAQ", "name": "Peaq", "chain": "base", "value_usd": 15790.81 },
+      { "token": "USDC", "name": "USD Coin", "chain": "base", "value_usd": 2931.26 },
+      { "token": "ROBOTMONEY", "name": "Robot Money", "chain": "base", "value_usd": 607.66 },
+      { "token": "rmUSDC", "name": "Robot Money Vault Shares", "chain": "base", "value_usd": 152.09 },
+      { "token": "ETH", "name": "Ethereum", "chain": "base", "value_usd": 28.67 }
+    ]
+  }
+}

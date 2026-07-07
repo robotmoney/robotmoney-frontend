@@ -2,6 +2,7 @@
      members' signed takes + the aggregate. Injected into #view by the router. -->
 <section class="cv container" x-data="committeeView()" x-init="load()">
   <header class="cv__head">
+    <div class="cv__hero-field" x-data="slimeMoldHero()" aria-hidden="true"></div>
     <span class="cv__eyebrow">Investment Committee</span>
     <h1 class="cv__title">Committee <span class="text-gradient">Session</span></h1>
     <p class="cv__sub" x-show="session" x-cloak>

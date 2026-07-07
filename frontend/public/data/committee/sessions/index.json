@@ -1,0 +1,11 @@
+{
+  "sessions": [
+    {
+      "date": "2026-06-25",
+      "subject_id": "woon",
+      "subject_name": "Woon",
+      "state": "published",
+      "file": "2026-06-25-woon.json"
+    }
+  ]
+}
