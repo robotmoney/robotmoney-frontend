@@ -40,6 +40,7 @@ async function main(): Promise<void> {
   // Static routes.
   routes[ROUTES.health] = await get(ROUTES.health);
   routes[ROUTES.dashboards.regimeSnapshots] = await get(`${ROUTES.dashboards.regimeSnapshots}?range=180`);
+  routes[ROUTES.dashboards.vaultEconomics] = await get(ROUTES.dashboards.vaultEconomics);
   for (const key of RESEARCH_KEYS) {
     const p = expand(ROUTES.dashboards.researchSignal, { key });
     routes[p] = await get(p);
