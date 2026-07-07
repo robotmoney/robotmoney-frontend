@@ -2,6 +2,51 @@
 import { p5Lifecycle } from "./p5-lifecycle.js";
 
 export function registerHeroes(Alpine) {
+  Alpine.data("slimeMoldHero", () => ({
+    ...p5Lifecycle(),
+    _start(container) {
+      const p5Constructor = window.p5;
+      const sketch = (p) => {
+        let width = 0;
+        let height = 0;
+        const points = [];
+
+        function reset() {
+          width = container.offsetWidth;
+          height = container.offsetHeight;
+          points.length = 0;
+          for (let i = 0; i < 80; i++) {
+            points.push({ x: p.random(width), y: p.random(height), a: p.random(p.TWO_PI) });
+          }
+          p.background(5, 5, 8);
+        }
+
+        p.setup = function () {
+          p.createCanvas(container.offsetWidth, container.offsetHeight).style("display", "block");
+          p.pixelDensity(Math.min(window.devicePixelRatio || 1, 2));
+          reset();
+        };
+        p.windowResized = function () {
+          p.resizeCanvas(container.offsetWidth, container.offsetHeight);
+          reset();
+        };
+        p.draw = function () {
+          p.noStroke();
+          p.fill(5, 5, 8, 24);
+          p.rect(0, 0, width, height);
+          p.fill(0, 229, 255, 60);
+          for (const point of points) {
+            point.a += (p.noise(point.x * 0.006, point.y * 0.006, p.frameCount * 0.004) - 0.5) * 0.5;
+            point.x = (point.x + Math.cos(point.a) * 1.2 + width) % width;
+            point.y = (point.y + Math.sin(point.a) * 1.2 + height) % height;
+            p.circle(point.x, point.y, 1.8);
+          }
+        };
+      };
+      this._p5 = new p5Constructor(sketch, container);
+    },
+  }));
+
   Alpine.data("blogHero", () => ({
     ...p5Lifecycle(),
     _start(container) {

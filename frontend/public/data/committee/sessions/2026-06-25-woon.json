@@ -1,0 +1,63 @@
+{
+  "date": "2026-06-25",
+  "subject_id": "woon",
+  "subject_name": "Woon",
+  "state": "published",
+  "regime_summary": {
+    "composite": 0.5435781005507008,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off",
+    "factor_regime": "risk_on"
+  },
+  "subject_snapshot_total_value_usd": 44167.4,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "stance": "cautious",
+      "confidence": 0.72,
+      "body": "REGIME: Composite is risk_on by label but the slope is risk-off. SUBJECT: WOON and PEAQ remain concentrated."
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "stance": "cautious",
+      "confidence": 0.7,
+      "body": "ALLOCATION: Composite does not authorize deviation. Route USDC into rmUSDC to clear the floor."
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "stance": "constructive",
+      "confidence": 0.68,
+      "body": "YOUR PORTFOLIO: WOON stays because income is the buyback engine; route stable tranche to rmUSDC this week."
+    }
+  ],
+  "synthesis": "The three reads converge on the mechanics: clear the Agent Tokens floor with a USDC to rmUSDC route before any PEAQ trim. WOON concentration remains contested.",
+  "committee_recommendation": {
+    "type": "position_actions",
+    "actions": [
+      { "token": "WOON", "action": "hold", "rationale": "Contested concentration, no trim this session." },
+      { "token": "PEAQ", "action": "hold", "rationale": "Trim revisits only after the vault floor clears." },
+      { "token": "USDC", "action": "rotate", "rationale": "Route stable tranche into rmUSDC." },
+      { "token": "rmUSDC", "action": "add", "rationale": "Top up Robot Money vault exposure." }
+    ],
+    "consensus": [
+      "Route next stable tranche from USDC to rmUSDC.",
+      "Regime is nominal risk_on but slope is decaying."
+    ],
+    "disagreements": [
+      {
+        "topic": "WOON at 55.8% of book",
+        "positions": [
+          { "member_id": "athena", "view": "Mandate breach and concentration risk." },
+          { "member_id": "robotmoney", "view": "Off-mandate by construction." },
+          { "member_id": "woon", "view": "Position stays because income is the buyback engine." }
+        ],
+        "what_settles": "A non-peaq income line or sustained declining engagement bonus."
+      }
+    ]
+  },
+  "generated_at": "2026-06-25T23:58:32.036Z"
+}
