@@ -31,7 +31,9 @@ describe("resolveDemoEnv — default live path (production parity)", () => {
     expect(r.composeEnv.BASE_RPC_SOURCE).toBe("live");
     expect(r.composeEnv.ANALYTICS_SOURCE).toBe("live");
     expect(r.composeEnv.ANALYTICS_FLOOR_SEED).toBe("1");
-    expect("DEMO_HERMETIC" in r.composeEnv).toBe(false);
+    // Always present and normalized to "" (never omitted) — see the
+    // stray-value normalization test below for why omission is unsafe.
+    expect(r.composeEnv.DEMO_HERMETIC).toBe("");
   });
 
   test("CI=true alone does NOT select hermetic — the opt-in must be explicit", () => {
@@ -101,5 +103,34 @@ describe("resolveDemoEnv — explicit hermetic opt-in (DEMO_HERMETIC=1)", () => 
     const r = resolveDemoEnv({ DEMO_HERMETIC: "1", BASE_RPC_URL: "http://127.0.0.1:9999" });
     expect(r.baseRpcUrl).toBe("http://127.0.0.1:9999");
     expect(r.baseRpcSource).toBe("stub");
+  });
+});
+
+describe("resolveDemoEnv — composeEnv.DEMO_HERMETIC is always normalized (never a stray ambient value)", () => {
+  // scripts/lib/demo-main.ts merges as `{...process.env, ...resolveDemoEnv(process.env).composeEnv}`.
+  // If composeEnv ever OMITTED the key on the live path (rather than
+  // explicitly emitting ""), a stray non-"1" ambient DEMO_HERMETIC (e.g. an
+  // operator typo `DEMO_HERMETIC=true`, believing any truthy string opts in)
+  // would survive that merge unnormalized and reach docker-compose.demo.yml's
+  // OWN `${DEMO_HERMETIC:+...}` interpolation — which treats ANY non-empty
+  // string as "set" — independently re-pinning BASE_RPC_URL at the stub while
+  // this resolver reports hermetic:false / source:'live' / ANALYTICS_SOURCE
+  // 'live'. That split-brain would mislabel stub-served vault-economics data
+  // as live chain data AND fire real live analytics calls the operator
+  // believed were disabled. composeEnv must always carry an explicit,
+  // normalized value so it wins the merge regardless of what is ambient.
+  test("a stray truthy-but-not-'1' DEMO_HERMETIC resolves to hermetic:false AND is normalized to '' in composeEnv", () => {
+    for (const stray of ["true", "TRUE", "yes", "0", "hermetic"]) {
+      const r = resolveDemoEnv({ DEMO_HERMETIC: stray });
+      expect(r.hermetic).toBe(false);
+      expect(r.composeEnv.DEMO_HERMETIC).toBe("");
+      expect(r.baseRpcSource).toBe("live");
+      expect(r.analyticsSource).toBe("live");
+    }
+  });
+
+  test("composeEnv.DEMO_HERMETIC is always present: '' on the live path, '1' under the opt-in", () => {
+    expect(resolveDemoEnv({}).composeEnv.DEMO_HERMETIC).toBe("");
+    expect(resolveDemoEnv({ DEMO_HERMETIC: "1" }).composeEnv.DEMO_HERMETIC).toBe("1");
   });
 });

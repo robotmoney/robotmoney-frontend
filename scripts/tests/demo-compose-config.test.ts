@@ -113,6 +113,31 @@ describe("docker compose config — demo data path resolution", () => {
     }
   });
 
+  test("a stray ambient DEMO_HERMETIC=true does not leak into the compose-resolved env once demo-main.ts's exact merge order is replicated", () => {
+    // scripts/lib/demo-main.ts builds its docker-compose env as
+    // `{...process.env, ...resolveDemoEnv(process.env).composeEnv}`. Replicate
+    // that exact merge with a stray, non-"1" ambient DEMO_HERMETIC (an operator
+    // typo, e.g. `DEMO_HERMETIC=true bun run demo`, believing any truthy string
+    // opts in) to prove composeEnv's normalization (demo-env.ts always emitting
+    // an explicit "" on the live path) wins the merge — so the stray value can
+    // never independently re-trigger docker-compose.demo.yml's OWN
+    // `${DEMO_HERMETIC:+...}` interpolation while the resolver reports
+    // hermetic:false. Without normalization this would leave BASE_RPC_URL
+    // pinned at the stub (compose-level) while BASE_RPC_SOURCE/ANALYTICS_SOURCE
+    // are forced 'live' (resolver-level) — stub data mislabeled as live, plus
+    // real live analytics calls the operator believed were disabled.
+    const strayAmbient: Record<string, string> = { DEMO_HERMETIC: "true" };
+    const merged = { ...strayAmbient, ...resolveDemoEnv(strayAmbient).composeEnv };
+    expect(merged.DEMO_HERMETIC).toBe(""); // normalized — never the stray "true"
+    const cfg = composeConfig(merged);
+    for (const svc of RPC_CONSUMERS) {
+      const env = serviceEnv(cfg, svc);
+      expect(env.BASE_RPC_URL ?? "").toBe(""); // NOT re-pinned at the stub
+      expect(env.BASE_RPC_SOURCE).toBe("live");
+      expect(env.ANALYTICS_SOURCE).toBe("live");
+    }
+  });
+
   test("no assignment in either compose layer can resolve BASE_RPC_URL to live mainnet", () => {
     // Even with every knob unset the resolved value must never BE mainnet —
     // the live default lives in backend config.ts, not in a compose literal

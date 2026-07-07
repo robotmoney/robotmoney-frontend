@@ -75,7 +75,19 @@ export function resolveDemoEnv(
     BASE_RPC_SOURCE: baseRpcSource,
     ANALYTICS_SOURCE: analyticsSource,
     ANALYTICS_FLOOR_SEED: analyticsFloorSeed,
-    ...(hermetic ? { DEMO_HERMETIC: "1" } : {}),
+    // ALWAYS set (never conditionally omitted) so this normalized value wins
+    // over any stray ambient DEMO_HERMETIC when a caller merges composeEnv on
+    // top of process.env (scripts/lib/demo-main.ts does exactly this:
+    // `{...process.env, ...composeEnv}`). Without this, a mistyped opt-in like
+    // `DEMO_HERMETIC=true` (only the exact string "1" opts in — see `hermetic`
+    // above) would survive the merge unnormalized and reach docker compose's
+    // OWN `${DEMO_HERMETIC:+...}` interpolation, which treats ANY non-empty
+    // string as "set" — independently re-pinning BASE_RPC_URL at the stub
+    // while this resolver reports hermetic:false (source:'live',
+    // ANALYTICS_SOURCE:'live'). That split-brain would both mislabel
+    // stub-served vault-economics data as live chain data AND fire real live
+    // analytics calls the operator believed were disabled.
+    DEMO_HERMETIC: hermetic ? "1" : "",
   };
 
   return { hermetic, baseRpcUrl, baseRpcSource, analyticsSource, analyticsFloorSeed, composeEnv };
