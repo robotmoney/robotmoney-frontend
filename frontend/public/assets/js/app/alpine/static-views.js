@@ -169,32 +169,34 @@ export function registerStaticViews(Alpine) {
       if (!match) return;
       const [, date, subject] = match;
       try {
-        const [session, brief, memberIndex] = await Promise.all([
-          json(`${ARCHIVE_ROOT}/sessions/${date}-${subject}.json`),
-          maybeJson(`${ARCHIVE_ROOT}/briefs/${date}-${subject}.json`),
-          maybeJson(`${ARCHIVE_ROOT}/manifests/members/_index.json`),
+        // Live sessions (e.g. today's) are served by the backend. Querying the
+        // API first keeps them off the static-archive 404 path, whose failed
+        // fetches log console errors the SPA smoke test asserts against.
+        const [res, memberList] = await Promise.all([
+          api.get(path(ROUTES.committee.session, { date, subject })),
+          api.get(ROUTES.committee.members).catch(() => null),
         ]);
-        const normalized = normalizeSession(session, brief);
+        const normalized = normalizeSession({ ...res.session, takes: res.takes }, null);
         this.session = normalized;
         this.subject = normalized.subject;
         this.brief = normalized.brief;
         this.takes = normalized.takes;
-        const ids = (memberIndex?.members || memberIndex || ["athena", "robotmoney", "woon"]).map((m) => m.id || m);
-        this.members = (await Promise.all(ids.map((id) => maybeJson(`${ARCHIVE_ROOT}/manifests/members/${id}.json`)))).filter(Boolean);
+        this.members = memberList?.members || [];
       } catch {
-        // Sessions newer than the static reference archive (e.g. today's live
-        // session) are only served by the backend — fall back to the live API.
+        // Older sessions live only in the committed reference archive.
         try {
-          const [res, memberList] = await Promise.all([
-            api.get(path(ROUTES.committee.session, { date, subject })),
-            api.get(ROUTES.committee.members).catch(() => null),
+          const [session, brief, memberIndex] = await Promise.all([
+            json(`${ARCHIVE_ROOT}/sessions/${date}-${subject}.json`),
+            maybeJson(`${ARCHIVE_ROOT}/briefs/${date}-${subject}.json`),
+            maybeJson(`${ARCHIVE_ROOT}/manifests/members/_index.json`),
           ]);
-          const normalized = normalizeSession({ ...res.session, takes: res.takes }, null);
+          const normalized = normalizeSession(session, brief);
           this.session = normalized;
           this.subject = normalized.subject;
           this.brief = normalized.brief;
           this.takes = normalized.takes;
-          this.members = memberList?.members || [];
+          const ids = (memberIndex?.members || memberIndex || ["athena", "robotmoney", "woon"]).map((m) => m.id || m);
+          this.members = (await Promise.all(ids.map((id) => maybeJson(`${ARCHIVE_ROOT}/manifests/members/${id}.json`)))).filter(Boolean);
         } catch {
           this.error = `No archived committee session found for ${date}/${subject}. The reference archive currently ends at 2026-06-25 for Woon.`;
         }
