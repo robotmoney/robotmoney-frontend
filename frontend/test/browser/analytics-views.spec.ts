@@ -152,6 +152,46 @@ test("regime dashboard renders 3 panels, sparklines, correlations + backtests (e
   expect(await page.locator("canvas").count()).toBeGreaterThanOrEqual(4);
 });
 
+// Regression guard for the dropped-`panels` bug: the live backend used to serve
+// `panels: null` even though the Equity factor index was computed & present, so the
+// /regime view fell back to only two panel cards (macro + on-chain) and silently
+// hid the third. The fix emits `panels: ["macro","onchain","factor"]` on the asof
+// row AND hardens panelsList() to append "factor" whenever factorIndex is present.
+// This test forces the WORST case — a payload with `panels` nulled everywhere but a
+// real factorIndex — and asserts all THREE panel index cards render, incl. the
+// "Equity factor" label. (loadRegimeStub carries panels populated, so nulling it
+// here specifically exercises the fallback path, not the happy path.)
+function loadRegimeStubNullPanels() {
+  const dto = loadRegimeStub();
+  if (dto.latest) dto.latest.panels = null;
+  for (const row of dto.history) row.panels = null;
+  return dto;
+}
+
+test("regime view surfaces the Equity factor panel even when `panels` is null (dropped-field fallback)", async ({ page }) => {
+  await stubEnvironment(page);
+  // Override the regime route with the panels-nulled payload for THIS test only.
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(loadRegimeStubNullPanels()) }));
+  await page.goto("/");
+  await navigate(page, "/regime");
+
+  const latest = loadRegimeStubNullPanels().latest!;
+  expect(latest.panels).toBeNull();
+  expect(latest.factorIndex).not.toBeNull();
+
+  // THREE panel index summary cards (macro + on-chain + equity factor) — plus the
+  // top-line regime card = 4 total, exactly the happy-path count despite null panels.
+  await expect(page.locator(".rv__cards .rv__card")).toHaveCount(4);
+  const indexCards = page.locator(".rv__card:not(.rv__card--regime)");
+  await expect(indexCards).toHaveCount(3);
+  await expect(page.locator(".rv__card-eyebrow", { hasText: "Equity factor index" })).toBeVisible();
+
+  // And all three per-panel tables render, including the equity factor panel.
+  await expect(page.locator(".rv__panel-card")).toHaveCount(3);
+  await expect(page.locator(".rv__panel-card", { hasText: "Equity factor panel" })).toBeVisible();
+});
+
 test("channel-divergence view renders the Stablecoin-vs-QQQ-flow gauge with value + read", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");
