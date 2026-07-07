@@ -2,14 +2,17 @@
      Pixel-perfect static port of robotmoney-site/src/app/allocation/page.tsx.
      Buildless: every pie is a Chart.js pie drawn by the boot-registered
      allocationView() factory (alpine/views.js).
-     Vault economics (Total AUM hero, 7-Day APY, vault pie, vault holdings
-     table, Total Vault Assets / rmUSDC shares) are LIVE: fetched from
+     Vault economics (7-Day APY, vault pie, vault holdings table, Total Vault
+     Assets / rmUSDC shares) are LIVE: fetched from
      GET /api/dashboards/vault-economics (issue #40), which reads the vault via
      Base JSON-RPC behind a short-TTL server cache and degrades to
      `stale: true` + last-known/null values (never fabricated) when the RPC is
      unreachable. Strategy/wallet/buyback sections remain the static port —
      baked from the public/data snapshots (latest 2026-06-26) per
-     .spec/allocation-spec.md — and are out of scope for this feature.
+     .spec/allocation-spec.md — and are out of scope for this feature. The
+     hero's Total AUM combines that static wallet snapshot with the live
+     vault TVL (totalAum() in alpine/views.js), matching the original site's
+     wallet+vault semantics.
      Shares the a2-* design system with performance.html.
 -->
 
@@ -26,12 +29,14 @@
           history across all prop wallets.
         </p>
       </div>
-      <!-- Total AUM is bound to the live vault-economics tvlUsd (issue #40).
-           Wallet/buyback balances are out of scope for this feature, so "AUM"
-           here means vault TVL, not a combined wallet+vault figure. -->
+      <!-- Total AUM = static wallet snapshot (Agent Wallet section below) +
+           live vault-economics tvlUsd (issue #40), matching the original
+           site's combined wallet+vault semantics (robotmoney-site
+           src/app/allocation/page.tsx). See totalAum()/WALLET_SNAPSHOT_TOTAL_USD
+           in alpine/views.js. -->
       <div class="alloc-aum">
         <span class="alloc-aum__label">Total AUM</span>
-        <span class="alloc-aum__value" x-text="fmtUsd(economics?.tvlUsd)">—</span>
+        <span class="alloc-aum__value" x-text="fmtUsd(totalAum())">—</span>
         <span class="alloc-aum__sub" x-text="asOfLabel()">—</span>
       </div>
     </div>
@@ -159,15 +164,22 @@
       </div>
 
       <!-- Vault holdings table — live per-adapter balances from
-           GET /api/dashboards/vault-economics (issue #40). The endpoint only
-           carries {name, address, balanceUsd} per adapter (no separate
-           on-chain balance/price breakdown), so this table is Protocol +
-           Value; the protocol name links to its BaseScan address. -->
+           GET /api/dashboards/vault-economics (issue #40), matching the
+           original site's Protocol/Balance/Price/Value column structure
+           (robotmoney-site src/app/allocation/page.tsx Vault TVL table). The
+           endpoint only carries {name, address, balanceUsd} per adapter — no
+           separate on-chain quantity/price breakdown — but every adapter is a
+           USDC-denominated lending position (chain/vault-economics.ts toUsd()
+           reads totalAssets() as pure USDC units), so Balance and the $1.00
+           peg Price are derivable from balanceUsd without inventing data; the
+           protocol name links to its BaseScan address. -->
       <div class="a2-card alloc-tablecard">
         <table class="alloc-table">
           <thead>
             <tr>
               <th class="alloc-l">Protocol</th>
+              <th class="alloc-r">Balance</th>
+              <th class="alloc-r">Price</th>
               <th class="alloc-r">Value</th>
             </tr>
           </thead>
@@ -178,6 +190,8 @@
                   <span class="alloc-dot" style="background:#10b981;"></span>
                   <a class="alloc-link" target="_blank" rel="noopener" :href="`https://basescan.org/address/${a.address}`" x-text="a.name.toUpperCase()"></a>
                 </td>
+                <td class="alloc-r" x-text="adapterBalance(a)"></td>
+                <td class="alloc-r" x-text="adapterPrice(a)"></td>
                 <!-- issue #50: adapters still at placeholder addresses come back
                      configured:false + balanceUsd:null — shown as an explicit
                      unconfigured state, never a live-looking $0. -->
@@ -825,8 +839,7 @@
   .a2-hero__title { font-size: 3.25rem; }
   .a2-h2 { font-size: 2rem; }
   .alloc-buckets { grid-template-columns: 1fr 1fr; }
-  .alloc-hero__inner { flex-direction: row; align-items: flex-end; }
-  .alloc-aum { align-self: center; }
+  .alloc-hero__inner { flex-direction: row; align-items: center; }
 }
 
 @media (min-width: 1024px) {

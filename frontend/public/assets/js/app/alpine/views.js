@@ -587,12 +587,22 @@ export function registerViews(Alpine) {
   // ── Asset Allocation ───────────────────────────────────────────────────────
   // Strategy/bucket/wallet pies are static Chart.js pies baked from the
   // allocation spec (reconciled against public/data snapshots) — unchanged,
-  // out of scope for issue #40. The vault economics section (hero Total AUM,
-  // 7-Day APY, vault pie, holdings table, Total Vault Assets) is LIVE: fetched
-  // from GET /api/dashboards/vault-economics on init, then the pies are
-  // (re)drawn once the fetch settles so the vault pie reflects real per-adapter
+  // out of scope for issue #40. The vault economics section (7-Day APY, vault
+  // pie, holdings table, Total Vault Assets) is LIVE: fetched from
+  // GET /api/dashboards/vault-economics on init, then the pies are (re)drawn
+  // once the fetch settles so the vault pie reflects real per-adapter
   // balances. The three BIG pies (strategy, vault, wallet) render % datalabels
   // via a small inline plugin; the four MINI bucket pies render none.
+
+  // The hero's "Total AUM" mirrors the original site's semantics
+  // (robotmoney-site src/app/allocation/page.tsx: totalValue + vaultTotalValue)
+  // — wallet holdings PLUS vault TVL, not vault TVL alone. The Agent Wallet
+  // section below is a static snapshot (out of scope for issue #40, no live
+  // wallet-balance pipeline exists yet), so this constant is that same
+  // snapshot's total — keep it in sync with the literal "$71,526" baked into
+  // the Agent Wallet table's Total row further down this view.
+  const WALLET_SNAPSHOT_TOTAL_USD = 71526;
+
   Alpine.data("allocationView", () => ({
     _charts: [],
     economics: null,
@@ -650,11 +660,34 @@ export function registerViews(Alpine) {
       return "$" + n.toLocaleString("en-US", { maximumFractionDigits: Math.abs(n) < 1000 ? 2 : 0 });
     },
     fmtPct(v) { return v == null ? "—" : (Number(v) * 100).toFixed(2) + "%"; },
+    // Hero Total AUM = static wallet snapshot + live vault TVL (see
+    // WALLET_SNAPSHOT_TOTAL_USD above). Mirrors the null-until-live guarantee
+    // of the vault-economics payload: while tvlUsd is unknown (still loading,
+    // or degraded with no persisted sample) this returns null so fmtUsd()
+    // renders "—" rather than showing the static wallet figure alone, which
+    // would understate the true total without disclosing why.
+    totalAum() {
+      const vault = this.economics?.tvlUsd;
+      return vault == null ? null : WALLET_SNAPSHOT_TOTAL_USD + vault;
+    },
     // Per-adapter Value cell (issue #50): an adapter still at its placeholder
     // address is reported configured:false with balanceUsd:null by the API —
     // render an explicit unconfigured state, never a live-looking $0 / dash.
     adapterValue(a) {
       return a && a.configured === false ? "Not configured" : this.fmtUsd(a?.balanceUsd);
+    },
+    // Balance/Price columns (vault TVL table layout parity): every adapter is
+    // a USDC-denominated lending position, so its balance is the same figure
+    // as balanceUsd at a fixed $1.00/unit peg — not a second, independently
+    // fabricated number. Unconfigured/unknown adapters show "—", never a
+    // live-looking $0 or invented price.
+    adapterBalance(a) {
+      return a && a.configured !== false && a.balanceUsd != null
+        ? Number(a.balanceUsd).toLocaleString("en-US", { maximumFractionDigits: 4 })
+        : "—";
+    },
+    adapterPrice(a) {
+      return a && a.configured !== false && a.balanceUsd != null ? "$1.00" : "—";
     },
     asOfLabel() {
       const asOf = this.economics?.asOf;

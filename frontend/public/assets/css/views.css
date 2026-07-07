@@ -413,7 +413,7 @@
 /* research signals (/research/*) */
 .rs { padding: 9rem 1.5rem 6rem; }
 .rs__eyebrow { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: var(--color-accent); }
-.rs__title { font-size: 2.25rem; letter-spacing: -0.02em; margin: 0.5rem 0; }
+.rs__title { font-family: var(--font-serif); font-style: italic; font-weight: 400; font-size: 2.25rem; letter-spacing: -0.02em; margin: 0.5rem 0; }
 .rs__q { color: var(--color-text); font-size: 1.05rem; }
 .rs__asof { color: var(--color-text-muted); font-family: var(--font-mono); font-size: 0.8rem; }
 .rs__loading { color: var(--color-text-muted); font-family: var(--font-mono); }

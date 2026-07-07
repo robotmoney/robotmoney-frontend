@@ -110,6 +110,20 @@ async function navigate(page: Page, path: string) {
   }, path);
 }
 
+// The research heading (.rs__title) is declared with var(--font-serif), which
+// resolves to 'Instrument Serif', Georgia, serif — italic. getComputedStyle
+// reports the declared font-family stack and font-style regardless of whether
+// the Google Fonts @import actually loaded the glyph data, so this assertion
+// is network-independent and safe to run hermetically in CI.
+async function expectResearchTitleUsesSerifItalic(page: Page) {
+  const style = await page.locator(".rs__title").evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { fontFamily: cs.fontFamily, fontStyle: cs.fontStyle };
+  });
+  expect(style.fontFamily).toContain("Instrument Serif");
+  expect(style.fontStyle).toBe("italic");
+}
+
 test("regime dashboard renders 3 panels, sparklines, correlations + backtests (enriched)", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");
@@ -198,6 +212,7 @@ test("channel-divergence view renders the Stablecoin-vs-QQQ-flow gauge with valu
   await navigate(page, "/research/channel-divergence");
 
   await expect(page.locator(".rs__title")).toContainText("Channel divergence");
+  await expectResearchTitleUsesSerifItalic(page);
   const gauges = page.locator(".rs__gauge");
   await expect(gauges).toHaveCount(4);
 
@@ -218,6 +233,7 @@ test("late-cycle view renders the Top-7-vs-SPY gauge with value + read", async (
   await navigate(page, "/research/late-cycle-signals");
 
   await expect(page.locator(".rs__title")).toContainText("Late-cycle");
+  await expectResearchTitleUsesSerifItalic(page);
   const gauges = page.locator(".rs__gauge");
   await expect(gauges).toHaveCount(5);
 
