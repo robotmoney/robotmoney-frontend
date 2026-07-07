@@ -246,6 +246,10 @@ function buildSnapshotRows(
       version: CURRENT_REGIME_VERSION,
       percentiles,
       indicators,
+      // Panel index cards rendered by the /regime view. Three panels: the 2-panel
+      // composite (macro + on-chain) plus the display-only Equity factor index.
+      // Asof-only, matching the other dashboard-level blobs below.
+      panels: isLatest ? ["macro", "onchain", "factor"] : null,
       // Backtest + predictive correlations are asof-only (baked on the latest row,
       // matching the original snapshot); historical rows carry null.
       backtest: isLatest ? backtest : null,

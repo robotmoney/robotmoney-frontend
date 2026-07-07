@@ -137371,7 +137371,11 @@
             "transformed_value": 106.93007317257643
           }
         ],
-        "panels": null,
+        "panels": [
+          "macro",
+          "onchain",
+          "factor"
+        ],
         "bucketThresholds": null,
         "backtest": {
           "eth": {
@@ -168864,7 +168868,11 @@
               "transformed_value": 106.93007317257643
             }
           ],
-          "panels": null,
+          "panels": [
+            "macro",
+            "onchain",
+            "factor"
+          ],
           "bucketThresholds": null,
           "backtest": {
             "eth": {
