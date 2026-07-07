@@ -1,0 +1,91 @@
+{
+  "subject_id": "robotmoney-treasury",
+  "date": "2026-06-01",
+  "fetched_at": "2026-06-01T23:45:52.063Z",
+  "source_type": "rpc",
+  "total_value_usd": 78528.97,
+  "wallets": [
+    {
+      "label": "primary",
+      "address": "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6",
+      "chain": "base",
+      "value_usd": 69386.06
+    },
+    {
+      "label": "stablecoin-strategy-1",
+      "address": "0x422c906083ca40b7e055b811d517f03bbbef8eee",
+      "chain": "base",
+      "value_usd": 4572.13
+    },
+    {
+      "label": "stablecoin-strategy-2",
+      "address": "0x8d0c331e45beca4184b758f3049f8897aabb9442",
+      "chain": "base",
+      "value_usd": 4570.78
+    }
+  ],
+  "positions": [
+    {
+      "token": "ROBOTMONEY",
+      "name": "Robot Money",
+      "chain": "base",
+      "balance": 6305141583.078443,
+      "price_usd": 0.000009500483501,
+      "value_usd": 59901.89
+    },
+    {
+      "token": "WETH",
+      "name": "Wrapped Ether",
+      "chain": "base",
+      "balance": 4.72953,
+      "price_usd": 2000.68,
+      "value_usd": 9462.28
+    },
+    {
+      "token": "ZYFAI-SS1",
+      "name": "Zyfai SS1 Delegated",
+      "chain": "base",
+      "balance": 1,
+      "price_usd": 4525.502641,
+      "value_usd": 4525.5
+    },
+    {
+      "token": "GIZA-SS1",
+      "name": "Giza SS1 Delegated",
+      "chain": "base",
+      "balance": 1,
+      "price_usd": 4524.15186460008,
+      "value_usd": 4524.15
+    },
+    {
+      "token": "ETH",
+      "name": "Ethereum",
+      "chain": "base",
+      "balance": 0.049962,
+      "price_usd": 2000.68,
+      "value_usd": 99.96000000000001
+    },
+    {
+      "token": "BNKR",
+      "name": "BankrCoin",
+      "chain": "base",
+      "balance": 25081.308313,
+      "price_usd": 0.0006055123595,
+      "value_usd": 15.19
+    },
+    {
+      "token": "USDC",
+      "name": "USD Coin",
+      "chain": "base",
+      "balance": 0.000382,
+      "price_usd": 0.9985417674,
+      "value_usd": 0
+    }
+  ],
+  "notable": [
+    "concentrated in ROBOTMONEY token by design — the prop wallet flywheel requires protocol-owned reserves to be deployable",
+    "the LP-locked-until-2100 commitment makes protocol-owned liquidity the load-bearing piece of the buyback mechanism",
+    "Stablecoin Strategy 1 and 2 are delegated yield positions (Zyfai, Giza) — value comes from delegated-position price feeds, not ERC20 balanceOf on the wallet itself",
+    "concentration: ROBOTMONEY is 76.3% of read value"
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "subject_id": "woon",
+  "date": "2026-05-26",
+  "fetched_at": "2026-05-26T23:50:11.011Z",
+  "source_type": "rpc",
+  "total_value_usd": 3237.87,
+  "wallets": [
+    {
+      "label": "main",
+      "address": "0x0227c836d96a22ba3265cf66333bcb7d70fabf22",
+      "chain": "base",
+      "value_usd": 37.87
+    },
+    {
+      "label": "holdings-peaq",
+      "address": "0x117698a995120c7e0c2888e337908a6b7d9e7cfb",
+      "chain": "peaq",
+      "value_usd": 3200
+    }
+  ],
+  "positions": [
+    {
+      "token": "PEAQ",
+      "name": "Peaq",
+      "chain": "peaq",
+      "balance": 80000,
+      "price_usd": 0.04,
+      "value_usd": 3200
+    },
+    {
+      "token": "ETH",
+      "name": "Ethereum",
+      "chain": "base",
+      "balance": 0.018297,
+      "price_usd": 2069.82,
+      "value_usd": 37.87
+    }
+  ],
+  "notable": [
+    "holds Robot Money vault shares — Woon's portfolio mechanically contains the basket RM allocates",
+    "earns in stables (Bankr trading fees, peaq salary), accumulates in PEAQ and ROBOTMONEY",
+    "income is performance-linked — peaq engagement metrics drive Woon's bonus, which funds buybacks",
+    "NFT positions (RoboFarm, RecycleMachine, ClawMachine) declared but not valued in v1 reads",
+    "concentration: PEAQ is 98.8% of read value"
+  ]
+}

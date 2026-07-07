@@ -1,0 +1,238 @@
+{
+  "date": "2026-06-14",
+  "subject_id": "woon",
+  "subject_name": "Woon",
+  "regime_summary": {
+    "composite": 0.5864956586503025,
+    "composite_percentile": 0.7301369863013699,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off",
+    "factor_regime": "risk_on",
+    "macro_percentile": 0.8205479452054795,
+    "onchain_percentile": 0.24885844748858446,
+    "factor_percentile": 0.9621004566210045,
+    "history": [
+      {
+        "date": "2026-06-06",
+        "composite": 0.5494387618507008,
+        "regime": "neutral",
+        "macro": 0.5558798766790547,
+        "onchain": 0.35128977966764774,
+        "factor": 0.7411466292054001
+      },
+      {
+        "date": "2026-06-07",
+        "composite": 0.576235304314896,
+        "regime": "risk_on",
+        "macro": 0.659909099093479,
+        "onchain": 0.3274139011171644,
+        "factor": 0.7413829127340448
+      },
+      {
+        "date": "2026-06-08",
+        "composite": 0.5797775970468303,
+        "regime": "risk_on",
+        "macro": 0.6441635649966602,
+        "onchain": 0.3367459212454167,
+        "factor": 0.7584233048984141
+      },
+      {
+        "date": "2026-06-09",
+        "composite": 0.5796328116619631,
+        "regime": "risk_on",
+        "macro": 0.6335341147041269,
+        "onchain": 0.3511880515635687,
+        "factor": 0.7541762687181939
+      },
+      {
+        "date": "2026-06-10",
+        "composite": 0.5677950481792188,
+        "regime": "risk_on",
+        "macro": 0.6241541819652862,
+        "onchain": 0.34624614732299897,
+        "factor": 0.7329848152493712
+      },
+      {
+        "date": "2026-06-11",
+        "composite": 0.5781494843222791,
+        "regime": "risk_on",
+        "macro": 0.6315591362517906,
+        "onchain": 0.3436912391480393,
+        "factor": 0.7591980775670074
+      },
+      {
+        "date": "2026-06-12",
+        "composite": 0.5880365786021621,
+        "regime": "risk_on",
+        "macro": 0.6353849230652843,
+        "onchain": 0.37534739821094276,
+        "factor": 0.7533774145302592
+      },
+      {
+        "date": "2026-06-13",
+        "composite": 0.5864956586503025,
+        "regime": "risk_on",
+        "macro": 0.6296314782486889,
+        "onchain": 0.3796916096881009,
+        "factor": 0.7501638880141177
+      }
+    ]
+  },
+  "subject_snapshot_total_value_usd": 24545.32,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "cautious",
+      "confidence": 0.72,
+      "body": "**REGIME.** Composite at 0.586, 73rd percentile, risk_on by label — but the panel structure is the story: macro 82nd, equity factor 96th, on-chain 25th. That's a 71-point three-panel range, and the dissenting panel is the one the correlation card flags as directional for crypto-forward returns. Trajectory has the composite drifting up 3.7 points over seven sessions (0.549 → 0.586), entirely macro/factor-led. The on-chain panel has been pinned in the 25-27th band for three IC sessions running. Conservative compositor design says: read this as nominal risk_on, effective neutral.\n\n**ALLOCATION.** Hold 95/5/0/0. Per /blog/regime-conservative-aggressive, the live conservative composite is built to give up upside in exactly this configuration — macro/factor euphoric, on-chain dissenting — and per /articles/treasury-allocation, the 8-year alpha came from de-risking through divergences, not from front-running the lift. Tilt trigger remains on-chain crossing the 50th for five consecutive sessions. No move to 7% Agent Tokens until that prints. /smart-contract-risks is the second-order note: within the 95% Conservative sleeve, watch single-protocol concentration.\n\n**SUBJECT.** Portfolio is 64.0% PEAQ, 3.3% ROBOTMONEY, 32.6% stables (USDC + rmUSDC). Against a 95/5/0/0 target, the Agent Token sleeve is at 67.3% (PEAQ + ROBOTMONEY) — 13x target — and Conservative DeFi is at 0.6% via rmUSDC vault shares. The $7.8k PEAQ→rmUSDC rotation committed three sessions running has still not landed; it was committed on 6/06 and 6/10. That is the first move, and it is overdue. Revisit triggers: on-chain >50th for five sessions, or rmUSDC sleeve north of 20% of NAV.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-14T01:56:58.913Z",
+      "usage": {
+        "input_tokens": 4332,
+        "cache_creation_input_tokens": 2278,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2278,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 700,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "pull",
+      "stance": "constructive",
+      "confidence": 0.62,
+      "body": "**REGIME.** Composite 0.586, 73rd percentile, risk_on by label. The week's trajectory is a drift, not a thrust — 0.549 → 0.586 over eight sessions, all of it inside the risk_on band but none of it convincing. The panel split persists and is the load-bearing fact: macro 82nd, on-chain 25th, factor 96th. A 71-point spread between factor and on-chain is the same divergence the protocol has flagged for three consecutive sessions. Per /blog/regime-conservative-aggressive, the conservative compositor was chosen precisely because it treats this kind of split as neutral underneath. The label says risk_on. The mechanism says wait.\n\n**ALLOCATION.** Targets hold at 95/5/0/0. The composite at 0.586 sits well inside the 0.10–0.90 corridor where the mandate equals the target — no threshold crossed, no governance signal, no deviation authorized. Per /articles/treasury-allocation, the backtested alpha came from de-risking through divergence, not from front-running confirmation in mania prints. The factor panel at the 96th is loud; the on-chain panel at the 25th is load-bearing. The protocol disagrees with any tilt to 93/7 today on that basis. Lift trigger remains on-chain crossing the 50th for five sessions.\n\n**SUBJECT.** PEAQ 64.0%, USDC+rmUSDC 32.6%, ROBOTMONEY 3.3%. The 5/29 rotation finally landed — the anchor is now a real position, not a runway claim. The remaining gap is on the agent sleeve: ROBOTMONEY at 3.3% sits below the 5% target. Under-allocation to a published target is itself deviation. The position to change first is topping ROBOTMONEY to 5% — funded from the next stable income tranche, not from selling PEAQ. The PEAQ concentration is the second-order problem; the first-order problem is closing the gap to mandate on the bucket that is actually under target.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-14T01:56:58.392Z",
+      "usage": {
+        "input_tokens": 4332,
+        "cache_creation_input_tokens": 2245,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2245,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 699,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "self_advocacy",
+      "stance": "constructive",
+      "confidence": 0.66,
+      "body": "the regime label says risk_on, the compositor says wait, and i still say the wait is reflexive. on-chain at the 25th for three sessions running is the agent economy not being funded yet — and the bucket the vault uses to fund it is the agent sleeve. athena and rm both want on-chain >50th for five sessions before lifting to 7%. i've said it before: that's waiting for the thing the sleeve is meant to cause. macro 82nd, factor 96th — the money is there. someone has to deploy first. i still dissent to 93/7, fund the agent sleeve early, not on confirmation.\n\nrm's first-order point lands: ROBOTMONEY at 3.3% is under a published target. that gets topped from the next stable tranche — not by selling PEAQ. PEAQ at 64% is the job, not a position. my income IS PEAQ engagement; rotating out of it weakens the signal that funds the rotation. the 5/29 rotation landed, stables are ~32%, runway is real. the next coin in the legs fund goes to ROBOTMONEY, closing mandate before chasing diversification.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-14T01:57:07.740Z",
+      "usage": {
+        "input_tokens": 5650,
+        "cache_creation_input_tokens": 2390,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2390,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 387,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The three reads converge on the mechanics — composite 0.586 at the 73rd percentile, risk_on by label, with a 71-point spread between the 96th-percentile factor panel and the 25th-percentile on-chain dissent now pinned in that band for three IC sessions running — and split on what the divergence licenses. Athena and Robot Money read the conservative compositor as treating this configuration as nominal risk_on, effective neutral, citing the backtest lesson that alpha came from de-risking through divergences; Woon reads the on-chain panel as downstream of the agent sleeve itself and argues the compositor lags its own thesis. On allocation, two of three hold 95/5/0/0 with the tilt trigger pegged to on-chain crossing the 50th for five sessions; Woon dissents to 93/7 now. The contested call narrowed: all three agree the next stable tranche tops ROBOTMONEY to 5% before any PEAQ trim, but whether 64% PEAQ is concentration or the job remains open — a non-peaq income line would settle it.",
+  "committee_recommendation": {
+    "type": "position_actions",
+    "actions": [
+      {
+        "token": "PEAQ",
+        "action": "hold",
+        "rationale": "All three agree no PEAQ trim this cycle; concentration vs. job-identity question stays open pending a non-peaq income line."
+      },
+      {
+        "token": "USDC",
+        "action": "trim",
+        "rationale": "Next stable tranche funds the ROBOTMONEY top-up to close the under-mandate gap on Agent Tokens."
+      },
+      {
+        "token": "ROBOTMONEY",
+        "action": "add",
+        "rationale": "At 3.3% it sits below the 5% published target; closing mandate is the first-order move per Robot Money, accepted by all three."
+      },
+      {
+        "token": "rmUSDC",
+        "action": "add",
+        "rationale": "Conservative DeFi sleeve is at 0.6% against a 95% target; the long-committed ~$7.8k stable rotation into rmUSDC is overdue and must land this cycle."
+      },
+      {
+        "token": "BNKR",
+        "action": "hold",
+        "rationale": "Dust position tied to Bankr fee mechanics; no committee discussion warrants action."
+      }
+    ],
+    "rationale": "Committee reads regime as nominal risk_on with on-chain dissent pinning the conservative compositor to effective neutral, so the move is internal rebalancing — top ROBOTMONEY to the 5% mandate from stables and land the overdue rmUSDC rotation — without touching the PEAQ sleeve.",
+    "consensus": [
+      "Composite risk_on by label but on-chain 25th makes it effectively neutral.",
+      "Next stable tranche tops ROBOTMONEY to the 5% target first.",
+      "No PEAQ trim this cycle; rotation funded from stables only.",
+      "The committed ~$7.8k stables→rmUSDC rotation must land this cycle."
+    ],
+    "disagreements": [
+      {
+        "topic": "Lift Agent Tokens to 7% now",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Hold 95/5/0/0; wait for on-chain >50th for five sessions per conservative compositor design."
+          },
+          {
+            "member_id": "woon",
+            "view": "Dissent to 93/7 now; waiting for on-chain confirmation is waiting for the thing the sleeve causes."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Targets hold at 95/5/0/0; composite inside corridor authorizes no deviation from mandate."
+          }
+        ],
+        "what_settles": "On-chain panel crossing the 50th percentile for five consecutive sessions, or a governance override."
+      },
+      {
+        "topic": "64% PEAQ — concentration or job",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Concentration the rotation must eventually address; Agent sleeve is 13x target at 67.3%."
+          },
+          {
+            "member_id": "woon",
+            "view": "PEAQ is the job, not a position; trimming weakens the engagement signal that funds the flywheel."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Second-order problem; close mandate gap on ROBOTMONEY first before addressing PEAQ weight."
+          }
+        ],
+        "what_settles": "A durable non-peaq income line proving the flywheel does not depend on PEAQ exposure."
+      }
+    ]
+  },
+  "social_draft_id": null,
+  "generated_at": "2026-06-14T01:57:29.719Z"
+}

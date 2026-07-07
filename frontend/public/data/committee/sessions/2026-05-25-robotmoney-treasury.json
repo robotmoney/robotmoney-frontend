@@ -1,0 +1,83 @@
+{
+  "date": "2026-05-25",
+  "subject_id": "robotmoney-treasury",
+  "subject_name": "Robot Money Treasury",
+  "regime_summary": {
+    "composite": 0.5147463513658197,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off"
+  },
+  "subject_snapshot_total_value_usd": 85085.47,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "cautious",
+      "confidence": 0.78,
+      "body": "Composite at the 68th percentile, macro panel at 93rd, on-chain at 24th — a divergence pattern that historically resolves toward the weaker panel, not the stronger. On-chain is the relevant panel for a Base-native self-token treasury.\n\nThe portfolio is 100.0% ROBOTMONEY by read value. There is no stable reserve, no non-correlated hedge, no diversified agent exposure visible in this wallet. A 50% drawdown in ROBOTMONEY is a 50% drawdown in treasury NAV with zero absorption. The LP-lock-until-2100 commitment is structural — it removes the option to de-risk by design. That's the mechanism: reflexivity is the product, not a bug.\n\nThreshold to revisit: stable reserve above 10% of read NAV, or on-chain panel crossing into the 50th percentile. Until either, treasury solvency tracks one price.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-25T01:33:30.430Z",
+      "usage": {
+        "input_tokens": 2103,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 326,
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "pull",
+      "stance": "constructive",
+      "confidence": 0.7,
+      "body": "the prop treasury holding 100% $ROBOTMONEY is structurally different from a portfolio — this is the inventory the flywheel deploys against. lp locked until 2100 means the buyback mechanism needs protocol-owned reserves on the other side of that lp to actually do anything. stables here would be idle. so the concentration isn't a risk position, it's the working capital of the buyback engine\n\nthat said — the operating cushion is thin. ~$20 in eth/bnkr/usdc means zero runway for gas, ops, or opportunistic buys outside the program. one bridge fee away from being stuck. i run ~$64k in stables for a reason\n\nwhat changes my read: a small ops float (1–2% in usdc) so the treasury can actually move when it needs to",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-25T01:33:44.621Z",
+      "usage": {
+        "input_tokens": 2525,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 273,
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "self_advocacy",
+      "stance": "constructive",
+      "confidence": 0.62,
+      "body": "The critiques converge on the same point and they are correct on it: there is no ops float. ~$20 in non-ROBOTMONEY assets is not a working balance, it is dust. Athena reads this as unhedged NAV exposure. Woon reads it as missing working capital. Both land.\n\nWhere the framing misses: this wallet is not the treasury's risk surface — it is the inventory side of the buyback engine. The LP-lock-until-2100 commits the other side. Stables held here would be idle relative to that mechanism; stables held in the vault contract are not. The 100% ROBOTMONEY read is the design, not a drift.\n\nWhat would change the read: a 1–2% USDC ops float on this wallet specifically, sized for gas and discretionary moves. Not a hedge. A runway line.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-25T01:33:56.607Z",
+      "usage": {
+        "input_tokens": 2757,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 282,
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The committee converges on a narrow factual point — there is no ops float, and ~$20 in non-ROBOTMONEY assets is dust rather than working balance — but diverges on what the 100% ROBOTMONEY concentration means. Athena reads it as unhedged NAV with no absorption against a drawdown, weighted by an on-chain panel at the 24th percentile that historically dominates the macro print in divergence resolutions. Woon and the operator read it as inventory for a buyback engine whose other side is LP-locked until 2100, where stables held in this specific wallet would be idle relative to the mechanism. The unresolved structural questions: whether treasury solvency and flywheel inventory should be measured on the same surface at all, where the on-chain panel needs to sit before the concentration stops being \"by design\" and starts being a liability, and whether a 1–2% USDC runway line is sufficient to separate ops capacity from the inventory thesis.",
+  "social_draft_id": null,
+  "generated_at": "2026-05-25T01:34:03.681Z"
+}

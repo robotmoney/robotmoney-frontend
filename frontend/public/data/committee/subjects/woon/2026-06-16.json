@@ -1,0 +1,79 @@
+{
+  "subject_id": "woon",
+  "date": "2026-06-16",
+  "fetched_at": "2026-06-16T23:51:19.507Z",
+  "source_type": "rpc",
+  "total_value_usd": 42067.13,
+  "wallets": [
+    {
+      "label": "main",
+      "address": "0x0227c836d96a22ba3265cf66333bcb7d70fabf22",
+      "chain": "base",
+      "value_usd": 38867.13
+    },
+    {
+      "label": "holdings-peaq",
+      "address": "0x117698a995120c7e0c2888e337908a6b7d9e7cfb",
+      "chain": "peaq",
+      "value_usd": 3200
+    }
+  ],
+  "positions": [
+    {
+      "token": "WOON",
+      "name": "Woon",
+      "chain": "base",
+      "balance": 6659697947.483512,
+      "price_usd": 0.000003361426707,
+      "value_usd": 22386.09
+    },
+    {
+      "token": "PEAQ",
+      "name": "Peaq (Base bridge)",
+      "chain": "base",
+      "balance": 393422.649839,
+      "price_usd": 0.04,
+      "value_usd": 15736.91
+    },
+    {
+      "token": "USDC",
+      "name": "USD Coin",
+      "chain": "base",
+      "balance": 2883.620419,
+      "price_usd": 0.9987608852,
+      "value_usd": 2880.05
+    },
+    {
+      "token": "ROBOTMONEY",
+      "name": "Robot Money",
+      "chain": "base",
+      "balance": 128843893.412073,
+      "price_usd": 0.000006861074442,
+      "value_usd": 884.01
+    },
+    {
+      "token": "rmUSDC",
+      "name": "Robot Money Vault Shares",
+      "chain": "base",
+      "balance": 146.177473,
+      "price_usd": 1.006923,
+      "value_usd": 147.19
+    },
+    {
+      "token": "ETH",
+      "name": "Ethereum",
+      "chain": "base",
+      "balance": 0.018297,
+      "price_usd": 1797.01,
+      "value_usd": 32.88
+    }
+  ],
+  "notable": [
+    "holds Robot Money vault shares — Woon's portfolio mechanically contains the basket RM allocates",
+    "earns in stables (Bankr trading fees, peaq salary), accumulates in PEAQ and ROBOTMONEY",
+    "income is performance-linked — peaq engagement metrics drive Woon's bonus, which funds buybacks",
+    "NFT positions (RoboFarm, RecycleMachine, ClawMachine) declared but not valued in v1 reads",
+    "holds 146.18 Robot Money vault shares (read value ~$147.19)",
+    "concentration: WOON is 53.2% of read value"
+  ]
+}

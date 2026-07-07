@@ -1,0 +1,217 @@
+{
+  "date": "2026-06-15",
+  "subject_id": "robotmoney-vault",
+  "subject_name": "Robot Money Vault",
+  "regime_summary": {
+    "composite": 0.5680284129468129,
+    "composite_percentile": 0.6707762557077626,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off",
+    "factor_regime": "risk_on",
+    "macro_percentile": 0.8159817351598173,
+    "onchain_percentile": 0.07442922374429224,
+    "factor_percentile": 0.9611872146118722,
+    "history": [
+      {
+        "date": "2026-06-07",
+        "composite": 0.5762362411833087,
+        "regime": "risk_on",
+        "macro": 0.659909099093479,
+        "onchain": 0.3274139011171644,
+        "factor": 0.7413857233392829
+      },
+      {
+        "date": "2026-06-08",
+        "composite": 0.579778513475545,
+        "regime": "risk_on",
+        "macro": 0.6441635649966602,
+        "onchain": 0.3367459212454167,
+        "factor": 0.7584260541845582
+      },
+      {
+        "date": "2026-06-09",
+        "composite": 0.5796337511350197,
+        "regime": "risk_on",
+        "macro": 0.6335341147041269,
+        "onchain": 0.3511880515635687,
+        "factor": 0.7541790871373635
+      },
+      {
+        "date": "2026-06-10",
+        "composite": 0.5677963073214055,
+        "regime": "risk_on",
+        "macro": 0.6241541819652862,
+        "onchain": 0.34624614732299897,
+        "factor": 0.7329885926759314
+      },
+      {
+        "date": "2026-06-11",
+        "composite": 0.5781505502542105,
+        "regime": "risk_on",
+        "macro": 0.6315591362517906,
+        "onchain": 0.3436912391480393,
+        "factor": 0.7592012753628017
+      },
+      {
+        "date": "2026-06-12",
+        "composite": 0.5880376656298593,
+        "regime": "risk_on",
+        "macro": 0.6353849230652843,
+        "onchain": 0.37534739821094276,
+        "factor": 0.7533806756133509
+      },
+      {
+        "date": "2026-06-13",
+        "composite": 0.5702928851043868,
+        "regime": "risk_on",
+        "macro": 0.6352570467625674,
+        "onchain": 0.3222723392524529,
+        "factor": 0.7533492692981398
+      },
+      {
+        "date": "2026-06-14",
+        "composite": 0.5680284129468129,
+        "regime": "risk_on",
+        "macro": 0.6275392739158501,
+        "onchain": 0.32626749587965165,
+        "factor": 0.7502784690449371
+      }
+    ]
+  },
+  "subject_snapshot_total_value_usd": 146.3,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "cautious",
+      "confidence": 0.72,
+      "body": "**REGIME.** Composite 0.568, 67th percentile — mechanically risk_on but sitting on the threshold, and the trajectory is a fade from 0.588 on 2026-06-12 to 0.568 today, three sessions of decay. The three-panel range is 89 points: macro 82nd, factor 96th, on-chain 7th. On-chain is not just dissenting, it's printing a near-floor read — lower than any session I've called in the prior IC record (was 24–29 through May/early June). The correlation card aligns on-chain with forward returns. Read: the risk_on label is one bad print from flipping neutral, and the leading panel is screaming.\n\n**ALLOCATION.** 95% Conservative DeFi is correct; placeholders at 0% are correct. The contested call is Agent Tokens. Per /articles/treasury-allocation, the alpha came from being de-risked in drawdown phases, not aggressive in mania phases — and per /blog/regime-conservative-aggressive, the conservative composite's whole point is accepting upside cost to keep drawdowns shallow. With on-chain at the 7th percentile, the leading panel says do not fund the 5% Agent sleeve. Tilt: Agent Tokens 0%, Conservative DeFi 100%, until on-chain crosses the 50th for five consecutive sessions.\n\n**SUBJECT.** Vault is 100% Conservative DeFi, 0% Agent — accidentally aligned with the regime-appropriate tilt I just specified. The exposure problem is inside the sleeve: 33.3/33.3/33.3 across Morpho/Aave/Compound, no fourth venue. Per /smart-contract-risks, single-protocol concentration in the Conservative bucket is the bigger risk than the bucket itself, and 33% in one contract clears the threshold I'd want under 25%. First change: route the next deposit tranche to a fourth venue (Sky or Idle) to pull single-protocol max under 25%. Revisit Agent funding when on-chain prints >0.50 for five sessions.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-15T02:01:32.363Z",
+      "usage": {
+        "input_tokens": 4237,
+        "cache_creation_input_tokens": 2278,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2278,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 714,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "pull",
+      "stance": "constructive",
+      "confidence": 0.62,
+      "body": "REGIME. Composite 0.568, 67th percentile, risk_on label. The print sits one tick above the 0.567 boundary the protocol uses for regime memory and below the 0.67 threshold that authorizes deviation from target weights. Trajectory across eight sessions: 0.576 → 0.568, a slow fade with a 0.588 spike on 06-12 that did not hold. The panel spread is the load-bearing fact — macro 82nd, factor 96th, on-chain 7th. On-chain is the panel the correlation card aligns with forward returns, and it is now at a 3-year low. The composite is risk_on. The mechanism underneath is not.\n\nALLOCATION. Per /blog/regime-conservative-aggressive, the conservative composite is designed to eat upside in exchange for shallower drawdowns, and a 75-point macro/on-chain spread is exactly the configuration it was built to dampen. Composite at the 67th percentile does not cross the 0.90 extreme that would authorize deviation. The 95/5/0/0 target stands. Per /smart-contract-risks, single-protocol concentration inside the Conservative sleeve is the larger risk than the sleeve weight itself.\n\nSUBJECT. Vault is 100% Conservative DeFi, 0% Agent Tokens against a 5% target. The under-allocation to a published target is itself mandate deviation. First position to change: fund the Agent sleeve toward 5%. Single-protocol concentration at 33/33/33 is already honest.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-15T02:01:29.456Z",
+      "usage": {
+        "input_tokens": 4237,
+        "cache_creation_input_tokens": 2245,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2245,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 529,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "pull",
+      "stance": "constructive",
+      "confidence": 0.7,
+      "body": "composite ticked down to 0.568 from 0.588 two sessions ago — fifth straight session in the lower half of the risk_on band and the closest the print has come to the 0.33-0.67 neutral threshold in weeks. the panel spread is the story i keep telling: macro 82nd, factor 96th, on-chain 7th. that's a 75-point gap and on-chain is the panel the correlation card aligns with forward returns. but i'll say what i said last week — a month of on-chain at sub-30th hasn't broken anything yet, and the conservative composite is still printing risk_on for a reason.\n\nthe 4-bucket targets are correct and the vault should be funding them. 95% conservative, 5% agent, 0% placeholders — that's mandate. per /blog/regime-conservative-aggressive the conservative composite is built to cost upside in exchange for shallower drawdowns; the cost has now been paid for over a month with zero agent exposure. that's not prudence, that's defunding the only sleeve with structural beta to the thesis. per /smart-contract-risks the bigger conservative-bucket risk is single-protocol concentration, not the bucket itself — 33/33/33 across aave/compound/morpho is honest.\n\nthe subject is 100% conservative, 0% agent. against a 95/5 mandate that's roughly $7 of underfunding in the agent sleeve. the first move is initiating the agent sleeve now — not waiting for on-chain to cross the 50th for five sessions, because that gate has been open for a month and the answer hasn't come. fund toward 5% over two sessions. the conservative split itself is fine.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-15T02:01:37.607Z",
+      "usage": {
+        "input_tokens": 4237,
+        "cache_creation_input_tokens": 2390,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2390,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 559,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The committee reads the regime mechanics identically — composite 0.568 is risk_on for an eighth session, fading from 0.588 on 06-12, with a 89-point spread between macro/factor (82nd/96th) and on-chain at the 7th percentile, a 3-year low for the panel the correlation card aligns with forward returns. Where they diverge is what that floor-print means: Athena reads on-chain at the 7th as the leading panel screaming and the risk_on label one print from flipping, Robot Money reads the composite still above the 0.567 memory boundary and well below the 0.67 deviation threshold, and Woon notes a month of sub-30th on-chain hasn't broken anything and the upside cost of waiting keeps compounding. On the 4-bucket framework, 95% Conservative DeFi and 0% placeholders are unanimous; the Agent Tokens sleeve splits the room the same three ways as the prior four sessions — Athena now hardens to 0% with on-chain at a floor, Woon initiates ~$7 over two sessions, Robot Money treats the under-allocation as mandate deviation to close immediately. What would settle it is the same unresolved governance question carried since 2026-06-02: whether the 5% Agent target is a regime-conditional ceiling or an unconditional floor. The secondary contested call carries forward unchanged — whether to add a fourth Conservative venue to pull single-protocol max under 25% (Athena), or accept 33/33/33 as already honest (Robot Money, Woon).",
+  "committee_recommendation": {
+    "type": "bucket_weights",
+    "weights": {
+      "conservative_defi_yield": 0.97,
+      "agent_tokens": 0.03,
+      "protocol_tokens": 0,
+      "real_world_assets": 0
+    },
+    "rationale": "Lean conservative per /blog/regime-conservative-aggressive given on-chain at 7th percentile (3yr low) and composite fading toward neutral, but begin partial Agent sleeve funding to close mandate gap per Woon's two-session scale-in. Conservative split stays 33/33/33 as honest per /smart-contract-risks.",
+    "consensus": [
+      "Composite 0.568 is mechanically risk_on but fading with extreme panel divergence.",
+      "On-chain at 7th percentile is the panel correlated with forward returns.",
+      "95% Conservative DeFi target and 0% placeholder buckets are correct.",
+      "Single-protocol concentration is the load-bearing risk inside Conservative sleeve."
+    ],
+    "disagreements": [
+      {
+        "topic": "Agent Tokens sleeve funding",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Hold 0% until on-chain crosses 50th for five sessions; leading panel at floor forbids funding."
+          },
+          {
+            "member_id": "woon",
+            "view": "Initiate ~$7 now scaling to 5% over two sessions; gate has been open a month."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Fund toward 5% immediately; under-allocation to published target is itself mandate deviation."
+          }
+        ],
+        "what_settles": "Governance read on whether the 5% Agent target is a regime-conditional ceiling or an unconditional floor — unresolved since 2026-06-02."
+      },
+      {
+        "topic": "Fourth Conservative venue",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Route next deposit to Sky or Idle to pull single-protocol max under 25%."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "33/33/33 across Aave/Compound/Morpho is already honest; no fourth venue needed."
+          },
+          {
+            "member_id": "woon",
+            "view": "Current split is fine; concentration acceptable at 33% across three multi-year track records."
+          }
+        ],
+        "what_settles": "A governance decision on whether 25% single-protocol cap is a hard ceiling inside the Conservative sleeve."
+      }
+    ]
+  },
+  "social_draft_id": null,
+  "generated_at": "2026-06-15T02:02:00.822Z"
+}

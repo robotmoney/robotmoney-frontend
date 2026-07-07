@@ -1,0 +1,47 @@
+{
+  "subject_id": "robotmoney-vault",
+  "date": "2026-06-10",
+  "fetched_at": "2026-06-10T23:52:22.175Z",
+  "source_type": "vault_tvl",
+  "total_value_usd": 142.88,
+  "wallets": [
+    {
+      "label": "vault",
+      "address": "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
+      "chain": "base",
+      "value_usd": 142.88
+    }
+  ],
+  "positions": [
+    {
+      "token": "MORPHO",
+      "name": "Morpho Gauntlet USDC Prime",
+      "chain": "base",
+      "balance": 47.636415,
+      "price_usd": 1,
+      "value_usd": 47.64
+    },
+    {
+      "token": "AAVE",
+      "name": "Aave V3",
+      "chain": "base",
+      "balance": 47.621458,
+      "price_usd": 1,
+      "value_usd": 47.62
+    },
+    {
+      "token": "COMPOUND",
+      "name": "Compound V3",
+      "chain": "base",
+      "balance": 47.621934,
+      "price_usd": 1,
+      "value_usd": 47.62
+    }
+  ],
+  "notable": [
+    "depositor capital, not protocol capital — the IC opines on allocation strategy, not protocol mechanics",
+    "target weights: Conservative DeFi 95%, Agent Tokens 5%, Protocol Tokens 0% (placeholder), Real World Assets 0% (placeholder)",
+    "actual allocation tracked via public/data/hourly-vault-tvl.csv",
+    "Conservative DeFi sleeve currently split across Aave V3, Compound V3, Morpho Gauntlet USDC Prime, Idle USDC"
+  ]
+}

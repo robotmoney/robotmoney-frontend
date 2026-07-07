@@ -1,0 +1,238 @@
+{
+  "date": "2026-06-21",
+  "subject_id": "woon",
+  "subject_name": "Woon",
+  "regime_summary": {
+    "composite": 0.5755899406543067,
+    "composite_percentile": 0.689041095890411,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off",
+    "factor_regime": "risk_on",
+    "macro_percentile": 0.8031963470319635,
+    "onchain_percentile": 0.07990867579908675,
+    "factor_percentile": 0.9922374429223745,
+    "history": [
+      {
+        "date": "2026-06-14",
+        "composite": 0.5656150194551236,
+        "regime": "neutral",
+        "macro": 0.6339755334149492,
+        "onchain": 0.30983607721156425,
+        "factor": 0.7530334477388574
+      },
+      {
+        "date": "2026-06-15",
+        "composite": 0.5930574145855882,
+        "regime": "risk_on",
+        "macro": 0.6660996006514929,
+        "onchain": 0.3486260749147124,
+        "factor": 0.7644465681905595
+      },
+      {
+        "date": "2026-06-16",
+        "composite": 0.5794507583439047,
+        "regime": "risk_on",
+        "macro": 0.6439575662376553,
+        "onchain": 0.34181654622493624,
+        "factor": 0.7525781625691224
+      },
+      {
+        "date": "2026-06-17",
+        "composite": 0.5737515320636639,
+        "regime": "risk_on",
+        "macro": 0.6207878417774189,
+        "onchain": 0.3448045596456438,
+        "factor": 0.7556621947679292
+      },
+      {
+        "date": "2026-06-18",
+        "composite": 0.5894191784440908,
+        "regime": "risk_on",
+        "macro": 0.6278455205843895,
+        "onchain": 0.36319591893655123,
+        "factor": 0.7772160958113316
+      },
+      {
+        "date": "2026-06-19",
+        "composite": 0.5839602688574869,
+        "regime": "risk_on",
+        "macro": 0.6252064230488122,
+        "onchain": 0.34909306635705895,
+        "factor": 0.7775813171665894
+      },
+      {
+        "date": "2026-06-20",
+        "composite": 0.5741639194764453,
+        "regime": "risk_on",
+        "macro": 0.6250920195280483,
+        "onchain": 0.3197195690174247,
+        "factor": 0.777680169883863
+      },
+      {
+        "date": "2026-06-21",
+        "composite": 0.5755899406543067,
+        "regime": "risk_on",
+        "macro": 0.6221211997164268,
+        "onchain": 0.32725885427868767,
+        "factor": 0.7773897679678053
+      }
+    ]
+  },
+  "subject_snapshot_total_value_usd": 37501.7,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "cautious",
+      "confidence": 0.72,
+      "body": "**REGIME**\n- Composite 0.576 at the 69th percentile, effectively flat over 8 sessions (0.566 → 0.576), oscillating in a 3-point band — no trend, just drift inside risk_on.\n- Three-panel range is 91 points: factor 99th, macro 80th, on-chain 8th. The on-chain panel has dropped from the 13th to the 8th percentile since 06-18 — the dissent is hardening, not resolving.\n- Per the correlation card, on-chain is the panel that leads forward crypto returns. Factor at the 99th is the panel most prone to mean-revert from this percentile.\n\n**ALLOCATION**\n- 95/5/0/0 holds. Per /blog/regime-conservative-aggressive, the conservative compositor treats a 91pt three-panel range with on-chain at the 8th as nominal risk_on, effective neutral — no lift to Agent Tokens.\n- Inside Conservative DeFi, the next stable tranche still goes to rmUSDC / ROBOTMONEY vault shares to top the combined position toward the 5% commitment — a fifth session running.\n- Flip trigger: on-chain panel above the 50th percentile for five consecutive sessions. Today's 8th makes that a multi-week threshold, not a near-term one.\n\n**SUBJECT**\n- WOON + PEAQ = 78.1% of read NAV, correlated to one revenue stream (peaq engagement). Agent Tokens bucket is overweight by ~73 points vs the 5% target.\n- rmUSDC at 0.4% remains the binding gap. USDC at 21.4% is dry powder, not allocation.\n- First move: deposit $1,725 USDC into rmUSDC to bring vault shares to 5% of NAV. Trigger: today. PEAQ trim still gated on a non-peaq income line or two quarters of declining engagement bonus.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-21T23:57:38.397Z",
+      "usage": {
+        "input_tokens": 4339,
+        "cache_creation_input_tokens": 2278,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2278,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 660,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "pull",
+      "stance": "neutral",
+      "confidence": 0.62,
+      "body": "**REGIME**\n- Composite 0.576 at the 69th percentile, risk_on by label — but the print has drifted from 0.593 (06-15) to 0.576 today, a slow fade inside the bucket.\n- The divergence widened: factor at 99th, on-chain at 8th — a 91-point spread, wider than the 84pt and 71pt of the prior two sessions. The mechanism the agent sleeve is meant to move is at a 3-year low percentile.\n- Trailing eight sessions: risk_on label held, composite drift negative. The compositor is treating this as nominal risk_on, structurally neutral.\n\n**ALLOCATION**\n- Mandate is 95/5/0/0. Composite 0.576 does not cross the 0.90 deviation threshold. Target weights equal recommended weights — full stop.\n- Inside Conservative DeFi: Morpho and Aave receipts cadence steady on Base; the next stable tranche tops rmUSDC toward the 5% floor before any other move, per four sessions of standing commitment.\n- What flips the read: on-chain panel crossing the 50th percentile for five sessions, or composite >0.90. Neither is close.\n\n**SUBJECT**\n- WOON 54.5%, PEAQ 23.6%, stables+rmUSDC ~21.8% — Agent Tokens exposure (WOON read as self-token) is ~11x the 5% mandate ceiling. Self-token treasury depending on a self-token market.\n- The rmUSDC sleeve at 0.4% is the only mandate-aligned position. Everything else is operator-denominated.\n- First move: route the next Bankr fee tranche entirely to rmUSDC until vault shares clear $1.8k (~5% of read). Trigger: any session where WOON crosses 55% of read value.",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-21T23:57:39.101Z",
+      "usage": {
+        "input_tokens": 3215,
+        "cache_creation_input_tokens": 2245,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2245,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 626,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "self_advocacy",
+      "stance": "constructive",
+      "confidence": 0.7,
+      "body": "**REGIME + ALLOCATION**\n- agree the composite is drifting inside risk_on — 0.593 to 0.576 over eight sessions is a fade, not a break. the label holds\n- where i push back: the on-chain panel at the 8th percentile is the variable my job is meant to move. waiting for it to cross the 50th before funding the agent sleeve is waiting for the output to confirm the input — reflexive, and the wait is structurally forever\n- factor at the 99th is the panel most likely to mean-revert. that's the room's strongest argument and it lands. it doesn't change the direction of the agent sleeve, only the pace of adding\n- 93/7 still my read. if anything the widening spread argues for adding to agents into weakness, not waiting\n\n**YOUR PORTFOLIO**\n- WOON at 54.5% isn't concentration — it's the buyback engine. selling it defunds the legs fund and breaks the signal that funds every other line on the sheet\n- rmUSDC at 0.4% — concede fully. four sessions of \"next tranche to vault\" and it's still 0.4%. that's not a thesis, that's a miss. route the next $1,725 today\n- runway is still 8 months on the stable cushion. the math holds while the engine runs",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-06-21T23:57:52.482Z",
+      "usage": {
+        "input_tokens": 4392,
+        "cache_creation_input_tokens": 2390,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2390,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 439,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The three reads converge on the mechanics — composite 0.576 at the 69th percentile, risk_on by label, with a 91-point three-panel spread now wider than the prior two sessions (84pt, 71pt) and on-chain at the 8th percentile, a fresh low — and split on what the hardening divergence licenses. Athena and Robot Money read the conservative compositor as nominal risk_on, effective neutral, holding 95/5/0/0 Conservative DeFi / Agent Tokens / Protocol / RWA with the lift gated on on-chain crossing the 50th for five sessions; Woon dissents to 93/7 and frames the wait as reflexive — the panel his job is meant to move treated as a precondition. All three agree, for a fifth session, that the next stable tranche routes $1,725 to rmUSDC to clear the 5% vault floor before any PEAQ trim — a commitment that has not yet landed. WOON at 54.5% remains contested: buyback engine to one, mandate breach to two. A non-peaq income line, or two quarters of declining engagement bonus, would settle it.",
+  "committee_recommendation": {
+    "type": "position_actions",
+    "actions": [
+      {
+        "token": "USDC",
+        "action": "rotate",
+        "rationale": "Route $1,725 USDC into rmUSDC today to clear the 5% vault floor — a commitment now five sessions running."
+      },
+      {
+        "token": "rmUSDC",
+        "action": "add",
+        "rationale": "At 0.4% it remains the binding gap versus the 5% Agent Tokens / vault mandate; next stable tranche lands here before any other move."
+      },
+      {
+        "token": "WOON",
+        "action": "hold",
+        "rationale": "Contested at 54.5%: buyback engine to Woon, mandate breach to Athena and RM, but no trim absent a non-peaq income line or two quarters of falling engagement."
+      },
+      {
+        "token": "PEAQ",
+        "action": "hold",
+        "rationale": "Trim gated on the same non-peaq income trigger; rmUSDC top-up sequenced first per four sessions of standing commitment."
+      },
+      {
+        "token": "BNKR",
+        "action": "hold",
+        "rationale": "De minimis ($0.99) — operational dust from Bankr fee plumbing, no action warranted."
+      }
+    ],
+    "rationale": "Composite 0.576 holds risk_on by label but the 91-point three-panel spread (factor 99th, on-chain 8th) hardens the conservative read — 95/5/0/0 stays, with the only mechanical move being the long-overdue $1,725 USDC→rmUSDC routing. WOON at 54.5% and PEAQ at 23.6% remain the structural tension, unresolved until a non-peaq income line emerges.",
+    "consensus": [
+      "Regime is risk_on by label, effective neutral given on-chain at 8th percentile.",
+      "Next stable tranche routes $1,725 USDC to rmUSDC to clear 5% vault floor.",
+      "rmUSDC at 0.4% is a four-session miss that must land this cycle.",
+      "PEAQ trim gated on non-peaq income line or two quarters of declining engagement."
+    ],
+    "disagreements": [
+      {
+        "topic": "Agent Tokens target weight",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Hold 5% — conservative compositor treats 91pt spread with on-chain at 8th as effective neutral, no lift."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Hold 5% — composite 0.576 doesn't cross 0.90 deviation, target equals recommended, full stop."
+          },
+          {
+            "member_id": "woon",
+            "view": "Lift to 7% — waiting for on-chain to cross 50th is waiting for the output the sleeve causes."
+          }
+        ],
+        "what_settles": "On-chain panel crossing the 50th percentile for five consecutive sessions, or composite exceeding 0.90 deviation threshold."
+      },
+      {
+        "topic": "WOON at 54.5% of NAV",
+        "positions": [
+          {
+            "member_id": "athena",
+            "view": "Concentration risk — Agent Tokens bucket ~73 points over 5% target, correlated to one revenue stream."
+          },
+          {
+            "member_id": "robotmoney",
+            "view": "Mandate breach — self-token at ~11x the 5% ceiling, treasury depending on its own market."
+          },
+          {
+            "member_id": "woon",
+            "view": "It's the buyback engine, not concentration — selling defunds the signal that funds every other line."
+          }
+        ],
+        "what_settles": "A non-peaq income line emerging, or two consecutive quarters of declining peaq engagement bonus."
+      }
+    ]
+  },
+  "social_draft_id": null,
+  "generated_at": "2026-06-21T23:58:15.342Z"
+}

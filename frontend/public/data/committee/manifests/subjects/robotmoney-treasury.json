@@ -1,0 +1,31 @@
+{
+  "id": "robotmoney-treasury",
+  "status": "active",
+  "name": "Robot Money Treasury",
+  "operator": "robotmoney",
+  "homepage": "https://www.robotmoney.net/allocation",
+  "thesis_blurb": "Robot Money's protocol-owned capital. Three wallets: the Primary (holds the ROBOTMONEY token, ETH, USDC, and runs the prop wallet buyback flywheel) plus two Stablecoin Strategy wallets delegated to external yield engines (Zyfai SS1, Giza SS2). Distinct from the vault contract, which holds depositor capital and is tracked as a separate subject.",
+  "wallets": [
+    { "address": "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6", "chain": "base", "label": "primary" },
+    {
+      "address": "0x422c906083ca40b7e055b811d517f03bbbef8eee",
+      "chain": "base",
+      "label": "stablecoin-strategy-1",
+      "delegated_position": { "symbol": "ZYFAI-SS1", "name": "Zyfai SS1 Delegated", "delegated_to": "0xC125200A1a5710af0D8711085F4407863158976D" }
+    },
+    {
+      "address": "0x8d0c331e45beca4184b758f3049f8897aabb9442",
+      "chain": "base",
+      "label": "stablecoin-strategy-2",
+      "delegated_position": { "symbol": "GIZA-SS1", "name": "Giza SS1 Delegated", "delegated_to": "0x8E5c5Ab532a2D3Cb6b1Dd159707b2A8588Cf8795" }
+    }
+  ],
+  "source": { "type": "rpc" },
+  "recommendation_type": "position_actions",
+  "linked_member_id": "robotmoney",
+  "structural_notes": [
+    "concentrated in ROBOTMONEY token by design — the prop wallet flywheel requires protocol-owned reserves to be deployable",
+    "the LP-locked-until-2100 commitment makes protocol-owned liquidity the load-bearing piece of the buyback mechanism",
+    "Stablecoin Strategy 1 and 2 are delegated yield positions (Zyfai, Giza) — value comes from delegated-position price feeds, not ERC20 balanceOf on the wallet itself"
+  ]
+}

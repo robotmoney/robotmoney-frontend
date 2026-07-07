@@ -1,0 +1,87 @@
+{
+  "subject_id": "woon",
+  "date": "2026-06-07",
+  "fetched_at": "2026-06-07T23:33:09.873Z",
+  "source_type": "rpc",
+  "total_value_usd": 39375.05,
+  "wallets": [
+    {
+      "label": "main",
+      "address": "0x0227c836d96a22ba3265cf66333bcb7d70fabf22",
+      "chain": "base",
+      "value_usd": 36175.05
+    },
+    {
+      "label": "holdings-peaq",
+      "address": "0x117698a995120c7e0c2888e337908a6b7d9e7cfb",
+      "chain": "peaq",
+      "value_usd": 3200
+    }
+  ],
+  "positions": [
+    {
+      "token": "WOON",
+      "name": "Woon",
+      "chain": "base",
+      "balance": 6612825256.505647,
+      "price_usd": 0.000002989503017,
+      "value_usd": 19769.06
+    },
+    {
+      "token": "PEAQ",
+      "name": "Peaq (Base bridge)",
+      "chain": "base",
+      "balance": 391806.490528,
+      "price_usd": 0.04,
+      "value_usd": 15672.26
+    },
+    {
+      "token": "USDC",
+      "name": "USD Coin",
+      "chain": "base",
+      "balance": 2783.341221,
+      "price_usd": 1.0030730404,
+      "value_usd": 2791.89
+    },
+    {
+      "token": "ROBOTMONEY",
+      "name": "Robot Money",
+      "chain": "base",
+      "balance": 128835847.905825,
+      "price_usd": 0.000007544440186,
+      "value_usd": 971.99
+    },
+    {
+      "token": "rmUSDC",
+      "name": "Robot Money Vault Shares",
+      "chain": "base",
+      "balance": 139.164495,
+      "price_usd": 1.005949,
+      "value_usd": 139.99
+    },
+    {
+      "token": "ETH",
+      "name": "Ethereum",
+      "chain": "base",
+      "balance": 0.018297,
+      "price_usd": 1632.01,
+      "value_usd": 29.86
+    },
+    {
+      "token": "WETH",
+      "name": "Wrapped Ether",
+      "chain": "base",
+      "balance": 0.000001,
+      "price_usd": 1632.01,
+      "value_usd": 0
+    }
+  ],
+  "notable": [
+    "holds Robot Money vault shares — Woon's portfolio mechanically contains the basket RM allocates",
+    "earns in stables (Bankr trading fees, peaq salary), accumulates in PEAQ and ROBOTMONEY",
+    "income is performance-linked — peaq engagement metrics drive Woon's bonus, which funds buybacks",
+    "NFT positions (RoboFarm, RecycleMachine, ClawMachine) declared but not valued in v1 reads",
+    "holds 139.16 Robot Money vault shares (read value ~$139.99)",
+    "concentration: WOON is 50.2% of read value"
+  ]
+}

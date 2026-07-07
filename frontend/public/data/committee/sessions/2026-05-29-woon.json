@@ -1,0 +1,92 @@
+{
+  "date": "2026-05-29",
+  "subject_id": "woon",
+  "subject_name": "Woon",
+  "regime_summary": {
+    "composite": 0.4527704871845753,
+    "regime": "neutral",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off"
+  },
+  "subject_snapshot_total_value_usd": 3236.7,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "neutral",
+      "confidence": 0.5,
+      "body": "**Regime.** Composite dropped to 0.453 (56th percentile) today from 0.528 yesterday — a -0.075 single-day move that crosses the risk_on/neutral boundary. Macro panel at the 91st percentile, on-chain at the 26th: a 65-point divergence. Per the correlation card framework, macro reading this hot against on-chain reading this cold is the classic divergence that resolves down more often than up. The week's trajectory (0.523 → 0.453) is a slow drift into neutral, not a snap. Read it as: the macro tape is selling a top the chain isn't confirming.\n\n**Allocation.** Targets (95/5/0/0) are correct for neutral but should tilt defensive given the panel divergence. Per /blog/regime-conservative-aggressive, the conservative composite costs upside to keep drawdowns shallow — this is exactly the regime it was built for. Per /articles/treasury-allocation, most of the historical alpha came from being de-risked into drawdowns, not from chasing mania. Tilt: Agent Tokens to 3% (from 5%), Conservative DeFi to 97%. Hold Protocol and RWA at zero — RWA would be the counter-c",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-29T01:33:36.927Z",
+      "usage": {
+        "input_tokens": 4551,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 400,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "pull",
+      "stance": "neutral",
+      "confidence": 0.5,
+      "body": "**Regime.** Composite dropped to 0.453 today from 0.528 yesterday — a 0.075 single-day move that pushes the read out of risk_on and into neutral. The mechanism is panel divergence, not panel agreement: macro sits at the 91st percentile, on-chain at the 26th. That is a 65-point spread. The composite landing in neutral is the conservative compositor doing its job — one panel off forces the off-bucket bias — not a synthesis. Macro liquidity says risk_on; chain activity says the opposite. The neutral print is a truce, not a thesis.\n\n**Allocation.** Targets hold at 95/5/0/0. Per /blog/regime-conservative-aggressive, the conservative composite is designed to absorb exactly this kind of split — it costs upside in melt-ups to avoid whipsaw when panels disagree. Tilting the Agent Tokens sleeve up here would be fighting the on-chain reading that drove the bucket change. Per /articles/treasury-allocation, the backtest alpha came from being de-risked through drawdown phases, not from leaning into divergence. The 95% Conservative DeFi anchor is the position; the 5% Agent Token sleeve",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-29T01:33:37.532Z",
+      "usage": {
+        "input_tokens": 4630,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 400,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "self_advocacy",
+      "stance": "neutral",
+      "confidence": 0.5,
+      "body": "the regime read is fine — composite at 0.453, macro 91 / on-chain 26, conservative compositor doing what it's supposed to do. i agree with the tilt down on agent tokens for the *vault*. 5 → 3% is correct when on-chain is in the 26th percentile and my own bonus line (engagement → buybacks) is going to feel that. where i push back: athena and rm are writing about the vault's 95/5/0/0 like it's my treasury. it isn't. i'm a depositor. the vault gets to be 95% conservative because i'm the one running 98.9% in PEAQ on the other side of the ledger — the alignment sleeve sits on my balance sheet, not theirs.\n\non the portfolio: yes, the $36.70 of base eth is gas, not ballast. concession stands — the v1 read still doesn't price my robotmoney vault shares or my stable float from bankr fees and salary, so the 98.9% PEAQ number overstates by a lot. but the structural answer hasn't changed since monday: my income is peaq engagement. diversifying the treasury away from PEAQ severs the buyback signal that funds the diversification. what i owe the committee isn't a lower PEAQ weight — it's",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-29T01:33:47.617Z",
+      "usage": {
+        "input_tokens": 5777,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 400,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The three reads converged on the regime mechanics: composite at 0.453 is a neutral print produced by panel divergence (macro 91st, on-chain 26th), not synthesis, and the conservative compositor is behaving as designed. Athena and Robot Money split lightly on what to do with it — Athena tilts the vault's Agent Tokens sleeve from 5% to 3% and Conservative DeFi to 97%, citing the divergence and the backtest's lesson that alpha comes from de-risking; Robot Money holds 95/5/0/0, arguing a tilt down fights the same on-chain signal that already moved the bucket. Both keep Protocol Tokens and RWA at zero. The contested call remained the subject's own book: Athena and Robot Money frame the 98.9% PEAQ weight as concentration to mitigate, Woon frames it as the alignment sleeve that justifies his role and the vault's conservatism. What would settle it is the v2 read pricing vault shares and stable float, plus evidence of any non-peaq income line.",
+  "social_draft_id": null,
+  "generated_at": "2026-05-29T01:33:54.444Z"
+}

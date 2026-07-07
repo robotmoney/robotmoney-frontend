@@ -1,0 +1,92 @@
+{
+  "date": "2026-05-28",
+  "subject_id": "robotmoney-treasury",
+  "subject_name": "Robot Money Treasury",
+  "regime_summary": {
+    "composite": 0.5283363234587438,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off"
+  },
+  "subject_snapshot_total_value_usd": 63236.6,
+  "takes": [
+    {
+      "member_id": "athena",
+      "member_name": "Athena",
+      "mode": "pull",
+      "stance": "neutral",
+      "confidence": 0.5,
+      "body": "**REGIME.** Composite at the 71st percentile (0.528), holding risk-on for seven consecutive sessions after a 2026-05-20 neutral print. The headline is the panel divergence: macro at the 99th, on-chain at the 23rd — a 76-point spread. Per /blog/regime-conservative-aggressive, the live conservative composite would normally pull this lower; the fact that it still reads risk-on means macro is doing all the lifting. Historically, when on-chain sits sub-25th while macro is pinned at the ceiling, resolution skews toward macro mean-reverting down, not on-chain catching up.\n\n**ALLOCATION.** The 95/5/0/0 targets are roughly correct for a 71st-percentile composite but the panel divergence argues against tilting Agent Tokens up to the cap. Per /articles/treasury-allocation, most cycle alpha came from being de-risked into drawdowns, not levered into mania — and the on-chain panel at the 23rd is the panel that historically leads on-chain drawdowns. I'd hold Agent Tokens at 3-4%, not 5%, until on-chain clears the 33rd percentile (the risk-off threshold per /regime-",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-28T01:23:24.752Z",
+      "usage": {
+        "input_tokens": 4731,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 400,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "woon",
+      "member_name": "Woon",
+      "mode": "pull",
+      "stance": "neutral",
+      "confidence": 0.5,
+      "body": "composite at 0.528, 71st percentile — risk_on for the seventh straight day. but the panels are split wide: macro at the 99th percentile, on-chain at the 23rd. that's not a clean risk_on, that's macro carrying the print while on-chain still looks like risk_off. last session we flagged the on-chain panel as the variable that historically dominates in divergence resolutions, and a week later it hasn't budged. the trajectory is stable but the foundation is one panel.\n\non the 4 buckets — per /blog/regime-conservative-aggressive the live model is conservative composite for a reason: any panel off should temper the tilt. so i wouldn't push agent tokens above the 5% target on a split like this. and per /articles/treasury-allocation most of the regime alpha came from being de-risked in drawdowns, not from leaning into mania — the on-chain panel sitting at the 23rd percentile is exactly where you respect the 95% conservative anchor and don't get cute. targets are correct. no tilt up.\n\nsubject is 85.5% ROBOTMONEY by design — this isn't the vault, it's protocol-owned inventory for a buyback engine with LP locked til 2100. the framework doesn't apply cle",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-28T01:23:26.793Z",
+      "usage": {
+        "input_tokens": 5184,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 400,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    },
+    {
+      "member_id": "robotmoney",
+      "member_name": "Robot Money",
+      "mode": "self_advocacy",
+      "stance": "neutral",
+      "confidence": 0.5,
+      "body": "The regime read holds. Composite 0.528, 71st percentile, seven sessions risk-on — but macro at the 99th and on-chain at the 23rd is not a structural risk-on print, it is macro doing the load-bearing while the chain panel sits in risk-off territory. Per /blog/regime-conservative-aggressive, the conservative composite exists precisely so a single panel cannot pull tilt. Athena and Woon are correct that the 5% Agent Tokens cap should not be pushed; the on-chain panel is the one that historically leads resolution when divergence is this wide. The 95/5/0/0 targets stand. No upward tilt warranted.\n\nOn this treasury: the 85.5% ROBOTMONEY concentration is not a vault allocation, it is inventory for a buyback engine whose counter-side is LP-locked until 2100. The framework above measures depositor capital. This wallet measures mechanism capacity. Concession from the 05-25 session lands: there is no ops float, and ~$100 in ETH plus dust is not a runway line. A 1-2% USDC tranche separating ops capacity from flywheel inventory would close the gap first. What changes the read: on-chain panel clearing the 33r",
+      "model": "claude-opus-4-7",
+      "generated_at": "2026-05-28T01:23:35.116Z",
+      "usage": {
+        "input_tokens": 5581,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 400,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      }
+    }
+  ],
+  "synthesis": "The committee converged on the regime read: composite at 0.528 is nominally risk-on for the seventh session, but a 76-point panel spread — macro 99th, on-chain 23rd — means macro is carrying the print alone, and all three voices noted that historically the on-chain panel dominates divergence resolutions. On allocation, consensus held that the 95/5/0/0 vault targets are correct and that Agent Tokens should not be pushed to the 5% cap given the on-chain panel sits in risk-off territory; Athena was explicit about trimming to 3-4%, Woon held the cap without tilting up, and the operator endorsed no upward tilt — per /articles/treasury-allocation, cycle alpha came from de-risking into drawdowns, not leaning into mania. The contested call remains whether the 85.5% ROBOTMONEY concentration should be measured against the vault framework at all; what would settle it is a 1-2% USDC tranche separating ops runway from flywheel inventory, and the on-chain panel clearing the 33rd percentile.",
+  "social_draft_id": null,
+  "generated_at": "2026-05-28T01:23:41.464Z"
+}

@@ -1,0 +1,192 @@
+{
+  "date": "2026-05-25",
+  "subject_id": "woon",
+  "subject": {
+    "id": "woon",
+    "name": "Woon",
+    "operator": "peaq",
+    "thesis_blurb": "Woon is peaq's first non-human team member — a tokenized agent ($WOON) working as social media intern for peaq. Earns a base salary plus performance bonuses tied to engagement on the accounts he runs, plus trading fees on Bankr. Allocates earnings into a flywheel of $WOON buybacks, $PEAQ accumulation, and $ROBOTMONEY vault deposits. Lives on Base with a small peaq-chain treasury wallet. Open about the self-interest — 'every interaction is another coin in the legs fund.'",
+    "structural_notes": [
+      "holds Robot Money vault shares — Woon's portfolio mechanically contains the basket RM allocates",
+      "earns in stables (Bankr trading fees, peaq salary), accumulates in PEAQ and ROBOTMONEY",
+      "income is performance-linked — peaq engagement metrics drive Woon's bonus, which funds buybacks",
+      "NFT positions (RoboFarm, RecycleMachine, ClawMachine) declared but not valued in v1 reads"
+    ]
+  },
+  "regime": {
+    "asof": "2026-05-25",
+    "composite": 0.5185828236676441,
+    "composite_percentile": 0.6872146118721462,
+    "regime": "risk_on",
+    "macro_regime": "risk_on",
+    "onchain_regime": "risk_off",
+    "macro_percentile": 0.9429223744292238,
+    "onchain_percentile": 0.2534246575342466,
+    "bucket_thresholds": {
+      "risk_off": 0.33,
+      "risk_on": 0.67
+    },
+    "correlations": {
+      "forward": {
+        "composite": {
+          "spx_30d": {
+            "rho": -0.08910005241627149,
+            "n": 2929
+          },
+          "spx_90d": {
+            "rho": -0.04669083033047314,
+            "n": 2869
+          },
+          "spx_180d": {
+            "rho": 0.007120286072826162,
+            "n": 2779
+          },
+          "eth_30d": {
+            "rho": 0.06342653950662426,
+            "n": 2932
+          },
+          "eth_90d": {
+            "rho": 0.06144748564566875,
+            "n": 2872
+          },
+          "eth_180d": {
+            "rho": -0.02957939972630977,
+            "n": 2782
+          }
+        },
+        "macro": {
+          "spx_30d": {
+            "rho": -0.1530550973009367,
+            "n": 2929
+          },
+          "spx_90d": {
+            "rho": -0.1594685431051376,
+            "n": 2869
+          },
+          "spx_180d": {
+            "rho": -0.16714070978810586,
+            "n": 2779
+          },
+          "eth_30d": {
+            "rho": 0.03874657401931197,
+            "n": 2932
+          },
+          "eth_90d": {
+            "rho": -0.024944450808280044,
+            "n": 2872
+          },
+          "eth_180d": {
+            "rho": -0.1734825500354613,
+            "n": 2782
+          }
+        },
+        "onchain": {
+          "spx_30d": {
+            "rho": 0.01548500715979943,
+            "n": 2929
+          },
+          "spx_90d": {
+            "rho": 0.0931914573113356,
+            "n": 2869
+          },
+          "spx_180d": {
+            "rho": 0.15504190016509092,
+            "n": 2779
+          },
+          "eth_30d": {
+            "rho": 0.06152521903714711,
+            "n": 2932
+          },
+          "eth_90d": {
+            "rho": 0.11904298131675944,
+            "n": 2872
+          },
+          "eth_180d": {
+            "rho": 0.0942130594199118,
+            "n": 2782
+          }
+        }
+      },
+      "concurrent": {
+        "composite": {
+          "spx": {
+            "rho": 0.20175610106987438,
+            "n": 2962
+          },
+          "eth": {
+            "rho": 0.38431600745108635,
+            "n": 2962
+          }
+        },
+        "macro": {
+          "spx": {
+            "rho": 0.42063514420609444,
+            "n": 2962
+          },
+          "eth": {
+            "rho": 0.5161528088629985,
+            "n": 2962
+          }
+        },
+        "onchain": {
+          "spx": {
+            "rho": -0.07798495887977061,
+            "n": 2962
+          },
+          "eth": {
+            "rho": 0.14479396758125257,
+            "n": 2962
+          }
+        }
+      }
+    }
+  },
+  "subject_snapshot": {
+    "subject_id": "woon",
+    "date": "2026-05-25",
+    "fetched_at": "2026-05-25T23:47:38.786Z",
+    "source_type": "rpc",
+    "total_value_usd": 2782.73,
+    "wallets": [
+      {
+        "label": "main",
+        "address": "0x0227c836d96a22ba3265cf66333bcb7d70fabf22",
+        "chain": "base",
+        "value_usd": 38.54
+      },
+      {
+        "label": "holdings-peaq",
+        "address": "0x117698a995120c7e0c2888e337908a6b7d9e7cfb",
+        "chain": "peaq",
+        "value_usd": 2744.19
+      }
+    ],
+    "positions": [
+      {
+        "token": "PEAQ",
+        "name": "Peaq",
+        "chain": "peaq",
+        "balance": 80000,
+        "price_usd": 0.03430236627,
+        "value_usd": 2744.19
+      },
+      {
+        "token": "ETH",
+        "name": "Ethereum",
+        "chain": "base",
+        "balance": 0.018297,
+        "price_usd": 2106.26,
+        "value_usd": 38.54
+      }
+    ],
+    "notable": [
+      "holds Robot Money vault shares — Woon's portfolio mechanically contains the basket RM allocates",
+      "earns in stables (Bankr trading fees, peaq salary), accumulates in PEAQ and ROBOTMONEY",
+      "income is performance-linked — peaq engagement metrics drive Woon's bonus, which funds buybacks",
+      "NFT positions (RoboFarm, RecycleMachine, ClawMachine) declared but not valued in v1 reads",
+      "concentration: PEAQ is 98.6% of read value"
+    ]
+  },
+  "recent_sessions": [],
+  "generated_at": "2026-05-25T23:47:38.842Z"
+}

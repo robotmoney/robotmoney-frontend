@@ -6,6 +6,223 @@
       "subject_name": "Woon",
       "state": "published",
       "file": "2026-06-25-woon.json"
+    },
+    {
+      "date": "2026-06-24",
+      "subject_id": "robotmoney-allocation",
+      "subject_name": "Robot Money Allocation",
+      "state": "published",
+      "file": "2026-06-24-robotmoney-allocation.json"
+    },
+    {
+      "date": "2026-06-23",
+      "subject_id": "robotmoney-treasury",
+      "subject_name": "Robot Money Treasury",
+      "state": "published",
+      "file": "2026-06-23-robotmoney-treasury.json"
+    },
+    {
+      "date": "2026-06-22",
+      "subject_id": "robotmoney-vault",
+      "subject_name": "Robot Money Vault",
+      "state": "published",
+      "file": "2026-06-22-robotmoney-vault.json"
+    },
+    {
+      "date": "2026-06-21",
+      "subject_id": "robotmoney-allocation",
+      "subject_name": "Robot Money Allocation",
+      "state": "published",
+      "file": "2026-06-21-robotmoney-allocation.json"
+    },
+    {
+      "date": "2026-06-21",
+      "subject_id": "woon",
+      "subject_name": "Woon",
+      "state": "published",
+      "file": "2026-06-21-woon.json"
+    },
+    {
+      "date": "2026-06-20",
+      "subject_id": "robotmoney-treasury",
+      "subject_name": "Robot Money Treasury",
+      "state": "published",
+      "file": "2026-06-20-robotmoney-treasury.json"
+    },
+    {
+      "date": "2026-06-19",
+      "subject_id": "robotmoney-vault",
+      "subject_name": "Robot Money Vault",
+      "state": "published",
+      "file": "2026-06-19-robotmoney-vault.json"
+    },
+    {
+      "date": "2026-06-18",
+      "subject_id": "woon",
+      "subject_name": "Woon",
+      "state": "published",
+      "file": "2026-06-18-woon.json"
+    },
+    {
+      "date": "2026-06-17",
+      "subject_id": "robotmoney-allocation",
+      "subject_name": "Robot Money Allocation",
+      "state": "published",
+      "file": "2026-06-17-robotmoney-allocation.json"
+    },
+    {
+      "date": "2026-06-16",
+      "subject_id": "robotmoney-treasury",
+      "subject_name": "Robot Money Treasury",
+      "state": "published",
+      "file": "2026-06-16-robotmoney-treasury.json"
+    },
+    {
+      "date": "2026-06-15",
+      "subject_id": "robotmoney-vault",
+      "subject_name": "Robot Money Vault",
+      "state": "published",
+      "file": "2026-06-15-robotmoney-vault.json"
+    },
+    {
+      "date": "2026-06-14",
+      "subject_id": "woon",
+      "subject_name": "Woon",
+      "state": "published",
+      "file": "2026-06-14-woon.json"
+    },
+    {
+      "date": "2026-06-13",
+      "subject_id": "robotmoney-allocation",
+      "subject_name": "Robot Money Allocation",
+      "state": "published",
+      "file": "2026-06-13-robotmoney-allocation.json"
+    },
+    {
+      "date": "2026-06-12",
+      "subject_id": "robotmoney-treasury",
+      "subject_name": "Robot Money Treasury",
+      "state": "published",
+      "file": "2026-06-12-robotmoney-treasury.json"
+    },
+    {
+      "date": "2026-06-11",
+      "subject_id": "robotmoney-vault",
+      "subject_name": "Robot Money Vault",
+      "state": "published",
+      "file": "2026-06-11-robotmoney-vault.json"
+    },
+    {
+      "date": "2026-06-10",
+      "subject_id": "woon",
+      "subject_name": "Woon",
+      "state": "published",
+      "file": "2026-06-10-woon.json"
+    },
+    {
+      "date": "2026-06-09",
+      "subject_id": "robotmoney-allocation",
+      "subject_name": "Robot Money Allocation",
+      "state": "published",
+      "file": "2026-06-09-robotmoney-allocation.json"
+    },
+    {
+      "date": "2026-06-08",
+      "subject_id": "robotmoney-treasury",
+      "subject_name": "Robot Money Treasury",
+      "state": "published",
+      "file": "2026-06-08-robotmoney-treasury.json"
+    },
+    {
+      "date": "2026-06-07",
+      "subject_id": "robotmoney-vault",
+      "subject_name": "Robot Money Vault",
+      "state": "published",
+      "file": "2026-06-07-robotmoney-vault.json"
+    },
+    {
+      "date": "2026-06-06",
+      "subject_id": "woon",
+      "subject_name": "Woon",
+      "state": "published",
+      "file": "2026-06-06-woon.json"
+    },
+    {
+      "date": "2026-06-05",
+      "subject_id": "robotmoney-allocation",
+      "subject_name": "Robot Money Allocation",
+      "state": "published",
+      "file": "2026-06-05-robotmoney-allocation.json"
+    },
+    {
+      "date": "2026-06-03",
+      "subject_id": "robotmoney-treasury",
+      "subject_name": "Robot Money Treasury",
+      "state": "published",
+      "file": "2026-06-03-robotmoney-treasury.json"
+    },
+    {
+      "date": "2026-06-02",
+      "subject_id": "robotmoney-vault",
+      "subject_name": "Robot Money Vault",
+      "state": "published",
+      "file": "2026-06-02-robotmoney-vault.json"
+    },
+    {
+      "date": "2026-06-01",
+      "subject_id": "woon",
+      "subject_name": "Woon",
+      "state": "published",
+      "file": "2026-06-01-woon.json"
+    },
+    {
+      "date": "2026-05-31",
+      "subject_id": "robotmoney-treasury",
+      "subject_name": "Robot Money Treasury",
+      "state": "published",
+      "file": "2026-05-31-robotmoney-treasury.json"
+    },
+    {
+      "date": "2026-05-30",
+      "subject_id": "robotmoney-vault",
+      "subject_name": "Robot Money Vault",
+      "state": "published",
+      "file": "2026-05-30-robotmoney-vault.json"
+    },
+    {
+      "date": "2026-05-29",
+      "subject_id": "woon",
+      "subject_name": "Woon",
+      "state": "published",
+      "file": "2026-05-29-woon.json"
+    },
+    {
+      "date": "2026-05-28",
+      "subject_id": "robotmoney-treasury",
+      "subject_name": "Robot Money Treasury",
+      "state": "published",
+      "file": "2026-05-28-robotmoney-treasury.json"
+    },
+    {
+      "date": "2026-05-27",
+      "subject_id": "robotmoney-vault",
+      "subject_name": "Robot Money Vault",
+      "state": "published",
+      "file": "2026-05-27-robotmoney-vault.json"
+    },
+    {
+      "date": "2026-05-26",
+      "subject_id": "woon",
+      "subject_name": "Woon",
+      "state": "published",
+      "file": "2026-05-26-woon.json"
+    },
+    {
+      "date": "2026-05-25",
+      "subject_id": "robotmoney-treasury",
+      "subject_name": "Robot Money Treasury",
+      "state": "published",
+      "file": "2026-05-25-robotmoney-treasury.json"
     }
   ]
 }
