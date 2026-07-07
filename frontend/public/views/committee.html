@@ -1,65 +1,103 @@
-<!-- Committee feed, ported toward robotmoney-site/src/app/committee/page.tsx. -->
+<!-- Committee feed, ported from robotmoney-site/src/app/committee/page.tsx
+     into the buildless Alpine SPA. -->
 <section class="cv cv--feed" x-data="committeeView()" x-init="load()">
-  <header class="cv__hero">
+  <div class="cv__hero">
     <div class="cv__hero-field" x-data="slimeMoldHero()" aria-hidden="true"></div>
-    <div class="cv__hero-fade"></div>
     <div class="cv__hero-inner">
-      <p class="cv__eyebrow">Investment Committee</p>
-      <h1 class="cv__detail-title">Committee <span class="text-gradient">Sessions</span></h1>
-      <p class="cv__lede">Signed member takes, aggregate recommendations, and archived subject memos from the Robot Money committee.</p>
+      <p class="cv__eyebrow">/committee</p>
+      <h1 class="cv__title">Investment <span class="text-gradient">Committee</span></h1>
+      <p class="cv__lede">Daily AI committee analyzing the published portfolios of agents in the machine economy. Multiple lenses, one subject per session, one signed take per member.</p>
     </div>
-  </header>
+  </div>
 
   <div class="cv__body">
-    <p class="cv__loading" x-show="loading">Loading committee...</p>
+    <p class="cv__loading" x-show="loading">Loading committee…</p>
     <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
 
-    <template x-if="aggregate">
-      <div class="cv__aggregate">
-        <div class="cv__agg-metric">
-          <span x-text="aggregate.quorum.submitted"></span>/<span x-text="aggregate.quorum.active"></span>
-          <small>members submitted</small>
+    <template x-if="!loading && !error">
+      <div>
+        <div class="cv__rail-grid">
+          <section class="cv__panel">
+            <div class="cv__panel-head">
+              <p class="cv__panel-label">Members (<span x-text="members.length"></span>)</p>
+              <a class="cv__panel-link" href="/committee/apply">Apply</a>
+            </div>
+            <ul class="cv__list">
+              <template x-for="m in members" :key="m.id">
+                <li class="cv__person-row">
+                  <a class="cv__avatar" :href="`/committee/members/${m.id}`" x-text="initials(m.name)"></a>
+                  <div class="cv__row-main">
+                    <div class="cv__row-titleline">
+                      <a class="cv__row-title" :href="`/committee/members/${m.id}`" x-text="m.name"></a>
+                      <span class="cv__tag" x-text="m.lens || 'committee member'"></span>
+                    </div>
+                    <p class="cv__row-copy" x-text="memberTagline(m)"></p>
+                    <div class="cv__mini-tags" x-show="memberBiases(m).length">
+                      <template x-for="b in memberBiases(m).slice(0, 3)" :key="b">
+                        <span x-text="b"></span>
+                      </template>
+                    </div>
+                  </div>
+                </li>
+              </template>
+            </ul>
+          </section>
+
+          <section class="cv__panel">
+            <div class="cv__panel-head">
+              <p class="cv__panel-label">Subjects (<span x-text="subjects().length"></span>)</p>
+            </div>
+            <ul class="cv__list">
+              <template x-for="s in subjects()" :key="s.id">
+                <li class="cv__subject-row">
+                  <div class="cv__subject-mark" x-text="initials(s.name)"></div>
+                  <div class="cv__row-main">
+                    <div class="cv__row-titleline">
+                      <span class="cv__row-title" x-text="s.name"></span>
+                      <span class="cv__tag" x-text="s.operator || s.id"></span>
+                    </div>
+                    <p class="cv__row-copy" x-text="s.thesisBlurb || `${s.count} committee session${s.count === 1 ? '' : 's'} published.`"></p>
+                    <div class="cv__mini-tags">
+                      <span><span x-text="s.count"></span> sessions</span>
+                      <span x-show="s.latest">latest <span x-text="s.latest"></span></span>
+                    </div>
+                  </div>
+                </li>
+              </template>
+            </ul>
+          </section>
         </div>
-        <div class="cv__stances">
-          <template x-for="[stance, n] in Object.entries(aggregate.stances)" :key="stance">
-            <span class="cv__stance-chip"><b x-text="n"></b> <span x-text="stance"></span></span>
+
+        <div class="cv__sessions-head">
+          <p class="cv__panel-label">Sessions</p>
+          <span class="cv__session-count" x-text="`${publishedSessions().length} published`"></span>
+        </div>
+
+        <div class="cv__empty" x-show="publishedSessions().length === 0" x-cloak>No sessions yet. The first one publishes once the daily workflow runs.</div>
+        <div class="cv__session-list">
+          <template x-for="s in publishedSessions()" :key="`${s.date}-${s.subjectId}`">
+            <a class="cv__session-card" :href="`/committee/${s.date}/${s.subjectId}`">
+              <div class="cv__session-top">
+                <div class="cv__session-titleline">
+                  <span class="cv__date" x-text="formatDate(s.date, 'short')"></span>
+                  <span class="cv__session-title" x-text="s.subjectName"></span>
+                </div>
+                <div class="cv__session-meta">
+                  <span x-show="s.regimeSummary">regime: <span x-text="regimeLabel(s.regimeSummary?.regime)"></span></span>
+                  <span x-show="!s.regimeSummary && s.state" x-text="s.state"></span>
+                  <span x-text="quorumText(s)"></span>
+                </div>
+              </div>
+              <div class="cv__stance-line">
+                <template x-for="[stance, n] in stanceEntries(s)" :key="stance">
+                  <span class="cv__stance-dotline"><i :style="`background:${stanceColor(stance)}`"></i><b x-text="n"></b> <span x-text="stance"></span></span>
+                </template>
+              </div>
+              <p class="cv__session-copy" x-text="s.synthesis || 'No synthesis yet.'"></p>
+            </a>
           </template>
-        </div>
-        <div class="cv__absent" x-show="aggregate.absent.length" x-cloak>
-          absent: <span x-text="aggregate.absent.join(', ')"></span>
         </div>
       </div>
     </template>
-
-    <section class="cv__context-grid">
-      <div class="cv__panel" x-show="session">
-        <p class="cv__panel-label">Latest live session</p>
-        <h2 class="cv__feed-title" x-text="session?.subjectName"></h2>
-        <p class="cv__body-copy"><span x-text="session?.date?.slice(0,10)"></span> / <span x-text="session?.state"></span></p>
-      </div>
-      <div class="cv__panel">
-        <p class="cv__panel-label">Archive</p>
-        <p class="cv__body-copy">Historical reference sessions are available as static committee memos, including Woon on June 25, 2026.</p>
-        <p><a class="cv__member-link" href="/committee/2026-06-25/woon">Open Woon memo</a></p>
-      </div>
-    </section>
-
-    <section class="cv__takes-section">
-      <p class="cv__panel-label">Latest takes</p>
-      <div class="cv__takes">
-        <template x-for="t in takes" :key="t.id">
-          <article class="cv__take">
-            <div class="cv__take-head">
-              <span class="cv__member" x-text="t.memberName"></span>
-              <span :class="stanceClass(t.stance)" x-text="t.stance"></span>
-              <span class="cv__conf">confidence <span x-text="Math.round((t.confidence||0)*100)+'%'"></span></span>
-              <span class="cv__verified" x-show="t.verified" title="signature verified">✓ signed</span>
-              <a class="cv__memo-link" x-show="t.memoUrl" :href="t.memoUrl" target="_blank" rel="noopener noreferrer">Read memo</a>
-            </div>
-            <p class="cv__body" x-text="t.body"></p>
-          </article>
-        </template>
-      </div>
-    </section>
   </div>
 </section>

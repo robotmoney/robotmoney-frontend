@@ -3,55 +3,65 @@
   <div class="cv__body cv__body--narrow">
     <a href="/committee" class="cv__back">← /committee</a>
 
-    <p class="cv__loading" x-show="loading">Loading session...</p>
+    <p class="cv__loading" x-show="loading">Loading session…</p>
     <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
 
     <template x-if="!loading && session">
       <div>
         <header class="cv__detail-head">
-          <p class="cv__eyebrow"><span x-text="formatDate(session.date)"></span> / subject</p>
+          <p class="cv__eyebrow"><span x-text="formatDate(session.date, 'long')"></span> · subject</p>
           <h1 class="cv__detail-title session-title" x-text="session.subjectName"></h1>
-          <p class="cv__lede cv__lede--compact" x-text="briefSummary()"></p>
+          <p class="cv__lede cv__lede--compact" x-text="subject?.thesisBlurb || `${session.subjectName} committee review.`"></p>
           <div class="cv__fact-row">
-            <span>composite <span x-text="fmtNum(session.regimeSummary?.composite, 3)"></span></span>
-            <span>bucket <span x-text="regimeLabel(session.regimeSummary?.regime)"></span></span>
-            <span>macro <span x-text="regimeLabel(session.regimeSummary?.macro_regime || session.regimeSummary?.macroRegime)"></span></span>
-            <span>onchain <span x-text="regimeLabel(session.regimeSummary?.onchain_regime || session.regimeSummary?.onchainRegime)"></span></span>
+            <span x-show="session.regimeSummary">composite <span x-text="fmtNum(session.regimeSummary?.composite, 3)"></span></span>
+            <span x-show="session.regimeSummary">bucket <span x-text="regimeLabel(session.regimeSummary?.regime)"></span></span>
+            <span x-show="session.regimeSummary?.macroRegime">macro <span x-text="regimeLabel(session.regimeSummary?.macroRegime)"></span></span>
+            <span x-show="session.regimeSummary?.onchainRegime">onchain <span x-text="regimeLabel(session.regimeSummary?.onchainRegime)"></span></span>
+            <span x-show="!session.regimeSummary" x-text="session.state"></span>
           </div>
         </header>
 
-        <section class="cv__context-grid">
-          <div class="cv__panel">
-            <p class="cv__panel-label">Regime context</p>
-            <div class="cv__metric-line"><span>Composite</span><b x-text="fmtNum(session.regimeSummary?.composite, 3)"></b></div>
-            <div class="cv__bar"><i :style="`width:${clampPct((session.regimeSummary?.composite || 0) * 100)}%`"></i></div>
-            <div class="cv__sparkline" x-show="regimeSparkline()" x-html="regimeSparkline()"></div>
-            <div class="cv__panel-bars">
-              <template x-for="p in panelInputs()" :key="p.label">
-                <div class="cv__panel-bar">
-                  <span x-text="p.label"></span>
-                  <div><i :style="`width:${clampPct(p.pct * 100)}%`"></i></div>
-                  <b x-text="`${Math.round(p.pct * 100)}%`"></b>
-                </div>
-              </template>
+        <template x-if="session.regimeSummary || brief">
+          <section class="cv__context-grid">
+            <div class="cv__panel" x-show="session.regimeSummary">
+              <p class="cv__panel-label">Regime context</p>
+              <div class="cv__metric-line">
+                <span>Composite</span>
+                <b x-text="fmtNum(session.regimeSummary?.composite, 3)"></b>
+              </div>
+              <div class="cv__bar" x-show="session.regimeSummary?.composite != null">
+                <i :style="`width:${clampPct((session.regimeSummary?.composite || 0) * 100)}%`"></i>
+              </div>
+              <div class="cv__sparkline" x-show="(session.regimeSummary?.history || []).length >= 2" x-html="regimeSparkline()"></div>
+              <div class="cv__panel-bars" x-show="panelInputs().length">
+                <template x-for="p in panelInputs()" :key="p.label">
+                  <div class="cv__panel-bar">
+                    <span x-text="p.label"></span>
+                    <div><i :style="`width:${clampPct(p.pct * 100)}%`"></i></div>
+                    <b x-text="`${Math.round(p.pct * 100)}%`"></b>
+                  </div>
+                </template>
+              </div>
             </div>
-          </div>
-          <div class="cv__panel">
-            <p class="cv__panel-label">Brief</p>
-            <p class="cv__body-copy" x-text="briefSummary()"></p>
-          </div>
-        </section>
+            <div class="cv__panel" x-show="brief">
+              <p class="cv__panel-label">Brief</p>
+              <p class="cv__body-copy" x-text="briefSummary()"></p>
+            </div>
+          </section>
+        </template>
 
-        <section class="cv__portfolio" x-show="positionRows().length">
+        <section class="cv__portfolio" x-show="snapshot">
           <div class="cv__panel-head">
-            <p class="cv__panel-label">Portfolio read · <span x-text="fmtUsd(session.subjectSnapshotTotalValueUsd)"></span> total</p>
-            <span class="cv__tag" x-text="session.date"></span>
+            <p class="cv__panel-label">Portfolio read · <span x-text="fmtUsd(snapshot?.totalValueUsd)"></span> total</p>
+            <span class="cv__tag" x-text="snapshot?.date"></span>
           </div>
           <div class="cv__portfolio-grid">
             <div class="cv__donut-list">
               <template x-for="(p, i) in positionRows().slice(0, 7)" :key="`${p.token}-${p.chain}`">
                 <div class="cv__donut-row" :style="donutStyle(p, i)">
-                  <i></i><span x-text="p.token"></span><b x-text="fmtPct1(p.share)"></b>
+                  <i></i>
+                  <span x-text="p.token"></span>
+                  <b x-text="fmtPct1(p.share)"></b>
                 </div>
               </template>
             </div>
@@ -60,11 +70,22 @@
                 <thead><tr><th>Token</th><th>Chain</th><th class="cv__num">Value</th><th class="cv__num">Share</th></tr></thead>
                 <tbody>
                   <template x-for="p in positionRows().slice(0, 8)" :key="`${p.token}-${p.chain}`">
-                    <tr><td x-text="p.token"></td><td x-text="p.chain"></td><td class="cv__num" x-text="fmtUsd(p.value_usd)"></td><td class="cv__num" x-text="fmtPct1(p.share)"></td></tr>
+                    <tr>
+                      <td x-text="p.token"></td>
+                      <td x-text="p.chain"></td>
+                      <td class="cv__num" x-text="fmtUsd(p.value_usd)"></td>
+                      <td class="cv__num" x-text="fmtPct1(p.share)"></td>
+                    </tr>
                   </template>
                 </tbody>
               </table>
             </div>
+          </div>
+          <div class="cv__notables" x-show="(snapshot?.notable || []).length">
+            <p class="cv__panel-label">Notable</p>
+            <ul>
+              <template x-for="n in (snapshot?.notable || [])" :key="n"><li x-text="n"></li></template>
+            </ul>
           </div>
         </section>
 
@@ -73,18 +94,49 @@
             <p class="cv__panel-label">Committee Recommendation</p>
             <span class="cv__tag" x-text="recommendationKind()"></span>
           </div>
-          <p class="cv__body-copy" x-show="session.committeeRecommendation?.rationale" x-text="session.committeeRecommendation.rationale"></p>
-          <div class="cv__rec-actions" x-show="(session.committeeRecommendation?.actions || []).length">
-            <template x-for="a in session.committeeRecommendation.actions" :key="`${a.token}-${a.action}`">
-              <div class="cv__action-row"><span x-text="a.token"></span><b x-text="a.action"></b><p x-text="a.rationale"></p></div>
-            </template>
-          </div>
+          <template x-if="isRollupRecommendation()">
+            <div>
+              <div class="cv__aggregate cv__aggregate--ported">
+                <div class="cv__agg-metric">
+                  <span x-text="session.committeeRecommendation.quorum?.submitted ?? takes.length"></span>/<span x-text="session.committeeRecommendation.quorum?.active ?? members.length"></span>
+                  <small>members submitted</small>
+                </div>
+                <div class="cv__stances">
+                  <template x-for="[stance, n] in Object.entries(session.committeeRecommendation.stances || {})" :key="stance">
+                    <span class="cv__stance-chip"><i :style="`background:${stanceColor(stance)}`"></i><b x-text="n"></b> <span x-text="stance"></span></span>
+                  </template>
+                </div>
+                <div class="cv__absent" x-show="(session.committeeRecommendation.absent || []).length">
+                  absent: <span x-text="session.committeeRecommendation.absent.join(', ')"></span>
+                </div>
+              </div>
+              <p class="cv__body-copy" x-show="session.committeeRecommendation.meanConfidence != null">
+                Mean confidence <strong x-text="fmtPct(session.committeeRecommendation.meanConfidence)"></strong>.
+              </p>
+            </div>
+          </template>
+          <template x-if="!isRollupRecommendation()">
+            <div class="cv__rich-rec">
+              <p class="cv__body-copy" x-show="session.committeeRecommendation.rationale" x-text="session.committeeRecommendation.rationale"></p>
+              <div class="cv__rec-actions" x-show="(session.committeeRecommendation.actions || []).length">
+                <template x-for="a in session.committeeRecommendation.actions || []" :key="`${a.token}-${a.action}`">
+                  <div class="cv__action-row">
+                    <span x-text="a.token"></span>
+                    <b x-text="a.action"></b>
+                    <p x-text="a.rationale"></p>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
         </section>
 
         <section class="cv__discussion" x-show="consensusItems().length || disagreements().length">
           <div class="cv__panel" x-show="consensusItems().length">
             <p class="cv__panel-label">Consensus</p>
-            <ul class="cv__bullet-list"><template x-for="item in consensusItems()" :key="item"><li x-text="item"></li></template></ul>
+            <ul class="cv__bullet-list">
+              <template x-for="item in consensusItems()" :key="item"><li x-text="item"></li></template>
+            </ul>
           </div>
           <div class="cv__panel cv__panel--accent" x-show="disagreements().length">
             <p class="cv__panel-label">Disagreements</p>
@@ -94,7 +146,10 @@
                   <h3 x-text="d.topic"></h3>
                   <ul>
                     <template x-for="p in d.positions" :key="`${d.topic}-${p.member_id}`">
-                      <li><a :href="`/committee/members/${p.member_id}`" x-text="memberById(p.member_id)?.name || p.member_id"></a><span x-text="p.view"></span></li>
+                      <li>
+                        <a :href="`/committee/members/${p.member_id}`" x-text="memberById(p.member_id)?.name || p.member_id"></a>
+                        <span x-text="p.view"></span>
+                      </li>
                     </template>
                   </ul>
                   <p x-show="d.what_settles"><em>Settles when:</em> <span x-text="d.what_settles"></span></p>
@@ -110,7 +165,7 @@
             <table class="cv__data-table">
               <thead><tr><th>Member</th><th>Stance</th><th class="cv__num">Confidence</th></tr></thead>
               <tbody>
-                <template x-for="t in takes" :key="t.id">
+                <template x-for="t in takes" :key="t.id || t.memberId">
                   <tr><td x-text="t.memberName"></td><td x-text="t.stance"></td><td class="cv__num" x-text="fmtPct(t.confidence)"></td></tr>
                 </template>
               </tbody>
@@ -121,16 +176,23 @@
         <section class="cv__takes-section">
           <p class="cv__panel-label">Member takes</p>
           <div class="cv__takes cv__takes--ported">
-            <template x-for="t in takes" :key="t.id">
+            <template x-for="t in takes" :key="t.id || t.memberId">
               <article class="cv__take cv__take--ported">
                 <header class="cv__take-head">
                   <div class="cv__take-member">
                     <a class="cv__avatar" :href="`/committee/members/${t.memberId}`" x-text="initials(t.memberName)"></a>
-                    <div><a class="cv__member-link" :href="`/committee/members/${t.memberId}`" x-text="t.memberName"></a><div class="cv__take-lens" x-text="memberLens(t.memberId)"></div></div>
+                    <div>
+                      <a class="cv__member-link" :href="`/committee/members/${t.memberId}`" x-text="t.memberName"></a>
+                      <div class="cv__take-lens" x-text="memberLens(t.memberId)"></div>
+                    </div>
                   </div>
-                  <span class="cv__stance-badge" :style="stanceStyle(t.stance)"><i :style="`background:${stanceColor(t.stance)}`"></i><span x-text="`${t.stance} / ${fmtPct(t.confidence)}`"></span></span>
+                  <span class="cv__stance-badge" :style="stanceStyle(t.stance)">
+                    <i :style="`background:${stanceColor(t.stance)}`"></i>
+                    <span x-text="`${t.stance} · ${fmtPct(t.confidence)}`"></span>
+                  </span>
                 </header>
                 <div class="cv__take-body" x-html="linkified(t.body || '')"></div>
+                <a class="cv__memo-link" x-show="t.memoUrl" :href="t.memoUrl" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
               </article>
             </template>
           </div>
