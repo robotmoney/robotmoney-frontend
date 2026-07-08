@@ -26,6 +26,13 @@ export const SUBJECTS = [
   { id: "mav", name: "Mav Holdings" },
 ];
 
+// Target size for the standing demo committee. Onboarding stops admitting new
+// members once the active roster reaches this cap so the committee settles at a
+// realistic, bounded size. MIRROR of backend committee.COMMITTEE_ROSTER_CAP — the
+// mcp package can't import the backend module (separate deps), so this must be
+// kept equal to that canonical value (the backend roster-cap test pins it).
+export const COMMITTEE_ROSTER_CAP = 10;
+
 const adminHeaders: Record<string, string> = process.env.ADMIN_TOKEN
   ? { "X-Admin-Token": process.env.ADMIN_TOKEN }
   : {};
@@ -60,13 +67,44 @@ export type OnboardStage = "keypair" | "apply" | "review" | "activate" | "connec
 export interface OnboardSpec { memberId: string; name: string; lens: string; bias?: number; }
 export interface OnboardResult {
   member: { memberId: string; name: string; lens: string; bias: number; present: true };
-  creds: ExistingCredentials;
+  // null when an already-active member is REUSED (idempotent path): its private
+  // key can't be recovered, so runAgent self-enrolls it for the next session.
+  creds: ExistingCredentials | null;
 }
+
+// Active committee roster size, read from the backend — the gate the standing
+// demo checks against COMMITTEE_ROSTER_CAP before admitting a newcomer.
+export async function activeMemberCount(): Promise<number> {
+  const r = await fetch(`${BACKEND}/api/committee/members`)
+    .then(responseJson)
+    .catch(() => ({ members: [] as { id: string }[] })) as { members?: { id: string }[] };
+  return Array.isArray(r.members) ? r.members.length : 0;
+}
+
+async function activeMemberIds(): Promise<Set<string>> {
+  const r = await fetch(`${BACKEND}/api/committee/members`)
+    .then(responseJson)
+    .catch(() => ({ members: [] as { id: string }[] })) as { members?: { id: string }[] };
+  return new Set((r.members ?? []).map((m) => m.id));
+}
+
 export async function onboardMember(
   spec: OnboardSpec,
   opts?: { reviewMs?: number; onStage?: (stage: OnboardStage, ok: boolean) => void },
 ): Promise<OnboardResult> {
   const emit = (s: OnboardStage, ok = true) => opts?.onStage?.(s, ok);
+
+  // 0. Idempotent: a member already on the active roster (e.g. carried over from
+  //    a prior demo run) is REUSED, never re-applied — the real apply path is
+  //    create-only and a duplicate id would 409. We can't recover its private
+  //    key here, so return without creds; runAgent self-enrolls it next session.
+  if ((await activeMemberIds()).has(spec.memberId)) {
+    (["keypair", "apply", "review", "activate", "connect"] as OnboardStage[]).forEach((s) => emit(s));
+    return {
+      member: { memberId: spec.memberId, name: spec.name, lens: spec.lens, bias: spec.bias ?? 0, present: true },
+      creds: null,
+    };
+  }
 
   // 1. The member generates its OWN ed25519 keypair (RM never sees the private key).
   const { publicKeyB64, privateKey } = await generateKeyPair();
