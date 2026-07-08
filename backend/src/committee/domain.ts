@@ -21,10 +21,27 @@ async function publicKeyFor(memberId: string): Promise<string | null> {
   return rows[0]?.public_key ?? null;
 }
 
+// Fixed target size for the standing demo committee. The onboarding driver stops
+// admitting new members once the active roster reaches this cap, so the committee
+// settles at a realistic, bounded size instead of growing without bound. This is
+// the CANONICAL value: backend/tests/committee-roster-cap.test.ts pins its
+// assertions to this constant (never a literal), and the demo onboarding path
+// (scripts/lib/demo-main.ts → mcp/src/e2e.ts) mirrors it as e2e.COMMITTEE_ROSTER_CAP
+// — the mcp/scripts packages can't import the backend module (separate deps), so
+// that mirror must be kept equal to this value.
+export const COMMITTEE_ROSTER_CAP = 10;
+
 // ── Reads ─────────────────────────────────────────────────────────────────
 export async function getMembers() {
   const rows = await sql`SELECT * FROM committee_members WHERE status = 'active' ORDER BY id`;
   return rows.map(toMember);
+}
+// Read-side count of currently active committee members — the gate the onboarding
+// path checks against COMMITTEE_ROSTER_CAP before admitting a newcomer.
+export async function countActiveMembers(): Promise<number> {
+  const rows = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM committee_members WHERE status = 'active'`;
+  return Number(rows[0]?.n ?? 0);
 }
 export async function getMember(id: string) {
   const row = (await sql`SELECT * FROM committee_members WHERE id = ${id}`)[0];
