@@ -1034,13 +1034,27 @@ async function main(): Promise<void> {
       });
       await sleep(delay);
       const { memberId, name, lens, bias } = plannedNewcomer(n);
+      // Idempotent: never re-onboard a member already on the roster (dedupe).
+      if (e2e.MEMBERS.some((m: { memberId: string }) => m.memberId === memberId)) {
+        log(`onboarding ${memberId} skipped — already on the roster`);
+        continue;
+      }
+      // Roster cap: once the active committee reaches COMMITTEE_ROSTER_CAP, stop
+      // admitting so the demo settles at a realistic, bounded size instead of
+      // growing without bound. Keep polling — if a seat frees, admission resumes.
+      const active = await e2e.activeMemberCount();
+      if (active >= e2e.COMMITTEE_ROSTER_CAP) {
+        state.upcoming = [];
+        log(`roster full (${active}/${e2e.COMMITTEE_ROSTER_CAP}) — onboarding paused`);
+        continue;
+      }
       startOnboarding(memberId, name); // append to the persistent pane + drop from upcoming
       try {
         const { member, creds } = await e2e.onboardMember({ memberId, name, lens, bias }, {
           reviewMs: 6000,
           onStage: (stage: string, ok: boolean) => setOnboardStep(memberId, stage, ok ? "done" : "failed"),
         });
-        onboardedCreds.set(memberId, creds);
+        if (creds) onboardedCreds.set(memberId, creds); // null ⇒ reused member; runAgent self-enrolls
         e2e.MEMBERS.push(member); // grow the roster → joins subsequent sessions
         setOnboardStep(memberId, "session", "running");
         log(`onboarded ${memberId} (#${n + 1}) — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
