@@ -33,7 +33,9 @@
                 <i :style="`width:${clampPct((session.regimeSummary?.composite || 0) * 100)}%`"></i>
               </div>
               <div class="cv__sparkline" x-show="(session.regimeSummary?.history || []).length >= 2" x-html="regimeSparkline()"></div>
-              <div class="cv__panel-bars" x-show="panelInputs().length">
+              <p class="cv__panel-sub" x-show="panelInputs().length >= 2">Panel divergence · 50th-pctile reference</p>
+              <div class="cv__panel-divergence" x-show="panelInputs().length >= 2" x-html="panelDivergenceBars()"></div>
+              <div class="cv__panel-bars" x-show="panelInputs().length === 1">
                 <template x-for="p in panelInputs()" :key="p.label">
                   <div class="cv__panel-bar">
                     <span x-text="p.label"></span>
@@ -117,6 +119,10 @@
           </template>
           <template x-if="!isRollupRecommendation()">
             <div class="cv__rich-rec">
+              <div class="cv__bucket-bars" x-show="isBucketWeights()">
+                <p class="cv__panel-sub">Target open · Actual muted · Recommended accent</p>
+                <div class="cv__bucket-bars-svg" x-html="bucketWeightsBars()"></div>
+              </div>
               <p class="cv__body-copy" x-show="session.committeeRecommendation.rationale" x-text="session.committeeRecommendation.rationale"></p>
               <div class="cv__rec-actions" x-show="(session.committeeRecommendation.actions || []).length">
                 <template x-for="a in session.committeeRecommendation.actions || []" :key="`${a.token}-${a.action}`">

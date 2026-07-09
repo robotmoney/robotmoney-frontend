@@ -12,6 +12,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
 import { generateKeyPair, sign } from "./crypto.ts";
+import { buildMemo, type RegimeContext } from "./memo.ts";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const MCP_URL = process.env.MCP_URL ?? "http://localhost:8788/mcp";
@@ -41,6 +42,7 @@ export function stanceFor(composite: number, bias: number) {
   const confidence = Math.round(Math.min(1, Math.abs(x - 0.5) * 2 + 0.4) * 100) / 100;
   return { stance, confidence };
 }
+
 
 export const textOf = (res: any) => JSON.parse(res.content?.[0]?.text ?? "null");
 
@@ -99,9 +101,21 @@ export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCrede
     const { stance, confidence } = stanceFor(composite, o.bias);
     onProgress?.("thinking", { stance, confidence }); // stance decided
     const provenanceText = provenance.length ? ` [${provenance.join("; ")}]` : "";
-    const memoText = `${o.name} (${o.lens}): regime composite ${composite.toFixed(2)} → ${stance}. ` +
-      `The composite reflects ${composite >= 0.5 ? "favorable" : "unfavorable"} conditions for ${o.subjectId}. ` +
-      `My ${o.lens} lens confirms this outlook.${provenanceText}`;
+    // Weave whatever panel percentiles / regime labels the regime snapshot carried
+    // into a deterministic, reference-shaped 3-section memo (no LLM). Missing panel
+    // fields degrade to composite-derived approximations inside buildMemo.
+    const regimeCtx: RegimeContext = {
+      composite,
+      compositePercentile: regime?.compositePercentile ?? regime?.composite_percentile ?? null,
+      regime: regime?.regime ?? null,
+      macroRegime: regime?.macroRegime ?? regime?.macro_regime ?? null,
+      onchainRegime: regime?.onchainRegime ?? regime?.onchain_regime ?? null,
+      factorRegime: regime?.factorRegime ?? regime?.factor_regime ?? null,
+      macroPercentile: regime?.macroPercentile ?? regime?.macro_percentile ?? null,
+      onchainPercentile: regime?.onchainPercentile ?? regime?.onchain_percentile ?? null,
+      factorPercentile: regime?.factorPercentile ?? regime?.factor_percentile ?? null,
+    };
+    const memoText = buildMemo({ name: o.name, lens: o.lens, subjectId: o.subjectId, stance, confidence }, regimeCtx, provenanceText);
     onProgress?.("reporting", { stance, confidence }); // posting memo, signing, submitting
     const memoResult = textOf(await client.callTool({
       name: "post_memo",
@@ -111,7 +125,7 @@ export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCrede
     const draft = {
       memberId: o.memberId, date: o.date, subjectId: o.subjectId,
       nonce: crypto.randomUUID(), stance, confidence,
-      body: `${o.name} (${o.lens}): regime composite ${composite.toFixed(2)} → ${stance}.${provenanceText}`,
+      body: memoText,
       memoUrl,
     };
     const { canonical } = textOf(await client.callTool({ name: "get_signing_payload", arguments: draft }));

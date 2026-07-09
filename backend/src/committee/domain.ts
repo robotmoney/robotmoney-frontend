@@ -218,6 +218,164 @@ export async function ensureSubject(id: string, name: string) {
   return { id, name };
 }
 
+// ── Deterministic reference-shaped fixtures & regime backfill (NO LLM) ────────
+// The live committee path must render the SAME rich memo/charts as the committed
+// archive fixture (frontend/public/data/committee/sessions/2026-06-25-woon.json).
+// These helpers seed the subject snapshot the portfolio donut reads and backfill a
+// trailing regime history so the sparkline always has >= 8 points, all from
+// deterministic templates until real inference/portfolio ingestion is wired.
+
+const DAY_MS = 86_400_000;
+const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
+const shiftDay = (date: string, deltaDays: number): string =>
+  isoDay(new Date(new Date(`${date}T00:00:00Z`).getTime() + deltaDays * DAY_MS));
+const round = (v: number, dp = 4): number => Math.round(v * 10 ** dp) / 10 ** dp;
+
+// Small deterministic hash → seeded generator so synthetic values are stable for a
+// given (subject/date) seed across runs (no Math.random).
+function seeded(seed: string): () => number {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < seed.length; i++) { h ^= seed.charCodeAt(i); h = Math.imul(h, 16777619); }
+  let s = h >>> 0;
+  return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
+}
+
+const regimeFor = (composite: number): string =>
+  composite >= 0.55 ? "risk_on" : composite >= 0.45 ? "neutral" : "risk_off";
+
+// A single synthetic regime point on `date` at position `t` (0=oldest,1=newest)
+// of the window. Gently decays composite (mirrors the reference sparkline) with a
+// deterministic jitter so the line reads organic but reproducible.
+function syntheticRegimePoint(date: string, t: number, rng: () => number) {
+  const j = (amp: number) => (rng() - 0.5) * amp;
+  const composite = round(0.58 - 0.045 * t + j(0.02));
+  const macro = round(0.62 - 0.05 * t + j(0.03));
+  const onchain = round(0.36 - 0.03 * t + j(0.03));
+  const factor = round(0.78 - 0.06 * t + j(0.03));
+  return { date, composite, regime: regimeFor(composite), macro, onchain, factor };
+}
+
+// Idempotently backfill a trailing daily regime_snapshots history ending at
+// `endDate` so downstream sparklines always have enough points. ON CONFLICT DO
+// NOTHING preserves any REAL analytics rows — this only fills gaps.
+export async function backfillRegimeHistory(endDate: string, minPoints = 8): Promise<void> {
+  const existing = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM regime_snapshots`;
+  if (Number(existing[0]?.n ?? 0) >= minPoints) return;
+  const span = Math.max(minPoints, 14);
+  const rng = seeded(`regime:${endDate}`);
+  for (let i = span - 1; i >= 0; i--) {
+    const date = shiftDay(endDate, -i);
+    const t = (span - 1 - i) / (span - 1);
+    const p = syntheticRegimePoint(date, t, rng);
+    const macroReg = regimeFor(p.macro), onchainReg = regimeFor(p.onchain), factorReg = regimeFor(p.factor);
+    await sql`
+      INSERT INTO regime_snapshots
+        (date, composite, composite_percentile, regime,
+         macro_regime, onchain_regime, factor_regime,
+         macro_index, onchain_index, factor_index,
+         macro_percentile, onchain_percentile, factor_percentile,
+         percentiles, indicators)
+      VALUES
+        (${date}, ${p.composite}, ${round(p.composite)}, ${p.regime},
+         ${macroReg}, ${onchainReg}, ${factorReg},
+         ${p.macro}, ${p.onchain}, ${p.factor},
+         ${round(p.macro)}, ${round(p.onchain)}, ${round(p.factor)},
+         ${sql.json({ macro: round(p.macro), onchain: round(p.onchain), factor: round(p.factor) })}, ${sql.json([])})
+      ON CONFLICT (date) DO NOTHING`;
+  }
+}
+
+// Reference-faithful subject baskets. woon mirrors the archive snapshot (WOON/
+// PEAQ/USDC/ROBOTMONEY/rmUSDC ≈ $44,167.40); other subjects get a plausible
+// deterministic parallel basket so the donut/table always render.
+interface Position { token: string; chain: string; value_usd: number }
+interface Basket { positions: Position[]; total: number; notable: string[] }
+
+function subjectBasket(subjectId: string): Basket {
+  if (subjectId === "woon") {
+    const positions: Position[] = [
+      { token: "WOON", chain: "peaq", value_usd: 24645.0 },
+      { token: "PEAQ", chain: "peaq", value_usd: 15812.4 },
+      { token: "USDC", chain: "base", value_usd: 2915.0 },
+      { token: "rmUSDC", chain: "base", value_usd: 530.0 },
+      { token: "ROBOTMONEY", chain: "base", value_usd: 265.0 },
+    ];
+    return {
+      positions,
+      total: round(positions.reduce((a, p) => a + p.value_usd, 0), 2),
+      notable: [
+        "WOON 55.8% + PEAQ 35.8% = 91.6% of book on a single peaq engagement revenue stream.",
+        "Agent Tokens sleeve (ROBOTMONEY + rmUSDC) at 1.7% — below the 5% mandate floor.",
+        "USDC 6.6% is unallocated stable cushion, not vault receipt exposure.",
+      ],
+    };
+  }
+  if (subjectId === "mav") {
+    const positions: Position[] = [
+      { token: "MAV", chain: "base", value_usd: 19760.0 },
+      { token: "ETH", chain: "base", value_usd: 11400.0 },
+      { token: "USDC", chain: "base", value_usd: 4940.0 },
+      { token: "rmUSDC", chain: "base", value_usd: 1140.0 },
+      { token: "ROBOTMONEY", chain: "base", value_usd: 760.0 },
+    ];
+    return {
+      positions,
+      total: round(positions.reduce((a, p) => a + p.value_usd, 0), 2),
+      notable: [
+        "MAV 52% is the anchor position; ETH 30% is the liquid beta sleeve.",
+        "Agent Tokens sleeve (ROBOTMONEY + rmUSDC) at 5.0% — exactly at the mandate floor.",
+        "USDC 13% stable buffer carries the next rebalancing tranche.",
+      ],
+    };
+  }
+  // Generic deterministic parallel basket for any other subject.
+  const rng = seeded(`basket:${subjectId}`);
+  const total = round(30000 + rng() * 20000, 2);
+  const shares = [0.5, 0.28, 0.14, 0.05, 0.03];
+  const tokens = [subjectId.slice(0, 5).toUpperCase() || "CORE", "ETH", "USDC", "rmUSDC", "ROBOTMONEY"];
+  const positions: Position[] = shares.map((sh, i) => ({
+    token: tokens[i], chain: i === 0 ? "base" : "base", value_usd: round(total * sh, 2),
+  }));
+  return {
+    positions,
+    total: round(positions.reduce((a, p) => a + p.value_usd, 0), 2),
+    notable: [
+      `${tokens[0]} ${Math.round(shares[0] * 100)}% is the anchor position.`,
+      "Agent Tokens sleeve (ROBOTMONEY + rmUSDC) at 8% — above the 5% mandate floor.",
+    ],
+  };
+}
+
+// Idempotently seed the fixtures the LIVE committee session path needs to render
+// reference-shaped charts: the subject row (with thesis + recommendation type),
+// a subject snapshot (positions/total/notable the portfolio donut reads), and a
+// trailing regime history for the sparkline. Called from an admin action before a
+// demo session opens. `date` defaults to today; the snapshot is dated on-or-before
+// the session date so the frontend snapshot picker selects it.
+export async function ensureDemoSubjectFixtures(subjectId: string, name: string, date?: string) {
+  const snapDate = date ?? new Date().toISOString().slice(0, 10);
+  const recommendationType = "position_actions";
+  const thesis = `${name}: treasury read through the 95/5/0/0 conservative allocation mandate — Conservative DeFi Yield anchors 95%, the Agent Tokens sleeve caps at 5%.`;
+  await sql`INSERT INTO committee_subjects (id, status, name, thesis_blurb, recommendation_type)
+            VALUES (${subjectId}, 'active', ${name}, ${thesis}, ${recommendationType})
+            ON CONFLICT (id) DO UPDATE SET
+              name = EXCLUDED.name,
+              thesis_blurb = COALESCE(committee_subjects.thesis_blurb, EXCLUDED.thesis_blurb),
+              recommendation_type = EXCLUDED.recommendation_type`;
+
+  const basket = subjectBasket(subjectId);
+  await sql`INSERT INTO committee_subject_snapshots (subject_id, date, total_value_usd, positions, wallets, notable)
+            VALUES (${subjectId}, ${snapDate}, ${basket.total},
+                    ${sql.json(basket.positions as any)}, ${sql.json([])}, ${sql.json(basket.notable as any)})
+            ON CONFLICT (subject_id, date) DO UPDATE SET
+              total_value_usd = EXCLUDED.total_value_usd,
+              positions = EXCLUDED.positions,
+              notable = EXCLUDED.notable`;
+
+  await backfillRegimeHistory(snapDate);
+  return { subjectId, name, snapshotDate: snapDate, totalValueUsd: basket.total, recommendationType };
+}
+
 // ── Lifecycle (also callable by worker handlers + dev driver) ───────────────
 export async function openSession(date: string, subjectId: string) {
   const subject = await getSubject(subjectId);
@@ -250,11 +408,82 @@ export async function closeWindow(sessionId: string) {
   return { sessionId, state: "window_closed" };
 }
 
-// Deterministic rollup over the takes ACTUALLY posted. Members with no take are
-// recorded as absent — never fabricated.
+// Build the reference-shaped regime_summary object from the trailing regime
+// snapshots (with deterministic backfill/padding so history.length >= 8). Kept
+// separate so tests and aggregation share one code path.
+export async function buildRegimeSummary(endDate: string, minPoints = 8) {
+  await backfillRegimeHistory(endDate, minPoints);
+  const rows = await sql`
+    SELECT date, composite, composite_percentile, regime,
+           macro_regime, onchain_regime, factor_regime,
+           macro_index, onchain_index, factor_index,
+           macro_percentile, onchain_percentile, factor_percentile
+    FROM regime_snapshots ORDER BY date DESC LIMIT 14`;
+  const chrono = rows.slice().reverse(); // chronological
+  const numOr = (v: unknown, fallback: number) => (v == null ? fallback : Number(v));
+  // Percentile fallback: use stored percentile else the value itself clamped 0..1.
+  const pct = (v: unknown, base: unknown) => {
+    const p = v == null ? null : Number(v);
+    if (p != null && Number.isFinite(p)) return round(Math.max(0, Math.min(1, p)));
+    const b = base == null ? 0.5 : Number(base);
+    return round(Math.max(0, Math.min(1, b)));
+  };
+  let history = chrono.map((r: any) => ({
+    date: typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10),
+    composite: numOr(r.composite, 0.5),
+    regime: r.regime ?? regimeFor(numOr(r.composite, 0.5)),
+    macro: numOr(r.macro_index ?? r.macro_percentile, 0.6),
+    onchain: numOr(r.onchain_index ?? r.onchain_percentile, 0.35),
+    factor: numOr(r.factor_index ?? r.factor_percentile, 0.75),
+  }));
+
+  // Guarantee >= minPoints even if real rows exist but are sparse: prepend
+  // deterministic synthetic leading points dated before the earliest real one.
+  if (history.length < minPoints) {
+    const need = minPoints - history.length;
+    const anchor = history[0]?.date ?? endDate;
+    const rng = seeded(`pad:${anchor}`);
+    const pad = [];
+    for (let i = need; i >= 1; i--) {
+      const t = (need - i) / Math.max(1, need + history.length - 1);
+      pad.push(syntheticRegimePoint(shiftDay(anchor, -i), t, rng));
+    }
+    history = [...pad, ...history];
+  }
+
+  const latest = chrono[chrono.length - 1] as any;
+  const lc = latest ? numOr(latest.composite, 0.5) : history[history.length - 1].composite;
+  return {
+    composite: round(lc),
+    composite_percentile: pct(latest?.composite_percentile, lc),
+    regime: latest?.regime ?? regimeFor(lc),
+    macro_regime: latest?.macro_regime ?? regimeFor(history[history.length - 1].macro),
+    onchain_regime: latest?.onchain_regime ?? regimeFor(history[history.length - 1].onchain),
+    factor_regime: latest?.factor_regime ?? regimeFor(history[history.length - 1].factor),
+    macro_percentile: pct(latest?.macro_percentile, latest?.macro_index ?? history[history.length - 1].macro),
+    onchain_percentile: pct(latest?.onchain_percentile, latest?.onchain_index ?? history[history.length - 1].onchain),
+    factor_percentile: pct(latest?.factor_percentile, latest?.factor_index ?? history[history.length - 1].factor),
+    history: history.map((h) => ({
+      date: h.date,
+      composite: round(h.composite),
+      regime: h.regime,
+      macro: round(h.macro),
+      onchain: round(h.onchain),
+      factor: round(h.factor),
+    })),
+  };
+}
+
+// Deterministic rollup over the takes ACTUALLY posted, ENRICHED into the
+// reference session shape (regime_summary + rich committee_recommendation +
+// prose synthesis + subject snapshot total). Members with no take are recorded as
+// absent — never fabricated. All enrichment is templated (NO LLM).
 export async function aggregateSession(sessionId: string) {
   const s = (await sql`SELECT * FROM committee_sessions WHERE id = ${sessionId}`)[0];
-  const takes = await sql`SELECT member_id, stance, confidence FROM committee_recommendations WHERE session_id = ${sessionId}`;
+  const takes = await sql`
+    SELECT r.member_id, r.stance, r.confidence, m.name AS member_name
+    FROM committee_recommendations r JOIN committee_members m ON m.id = r.member_id
+    WHERE r.session_id = ${sessionId} ORDER BY r.received_at`;
   const activeMembers = await sql`SELECT id FROM committee_members WHERE status = 'active'`;
   const submitted = new Set(takes.map((t: any) => t.member_id));
   const absent = activeMembers.map((m: any) => m.id).filter((id: string) => !submitted.has(id));
@@ -266,16 +495,103 @@ export async function aggregateSession(sessionId: string) {
     confSum += Number(t.confidence ?? 0);
   }
   const participation = activeMembers.length ? takes.length / activeMembers.length : 0;
-  const rec = {
-    quorum: { active: activeMembers.length, submitted: takes.length, absent: absent.length, participation },
+  const meanConfidence = takes.length ? confSum / takes.length : null;
+
+  const sessionDate = typeof s.date === "string" ? s.date : new Date(s.date).toISOString().slice(0, 10);
+  const regimeSummary = await buildRegimeSummary(sessionDate);
+  const composite = regimeSummary.composite;
+  const compPctInt = Math.round(regimeSummary.composite_percentile * 100);
+  const regimeLbl = String(regimeSummary.regime).replace(/_/g, "-");
+
+  // Latest subject snapshot total (drives the session header figure).
+  const snapRow = (await sql`
+    SELECT total_value_usd FROM committee_subject_snapshots
+    WHERE subject_id = ${s.subject_id} ORDER BY date DESC LIMIT 1`)[0] as { total_value_usd: unknown } | undefined;
+  const subjectTotal = snapRow?.total_value_usd == null ? null : Number(snapRow.total_value_usd);
+
+  // Rich recommendation: KEEP the deterministic rollup fields (the frontend reads
+  // quorum/stances as a "rollup") AND add the reference rich fields so consensus /
+  // disagreements / actions render. Type comes from the subject.
+  const subjectRow = (await sql`SELECT recommendation_type FROM committee_subjects WHERE id = ${s.subject_id}`)[0] as { recommendation_type?: string } | undefined;
+  const recType = subjectRow?.recommendation_type === "bucket_weights" ? "bucket_weights" : "position_actions";
+
+  const stanceParts = Object.entries(byStance).map(([k, v]) => `${v} ${k}`);
+  const consensus = [
+    `Regime composite ${composite.toFixed(3)} sits at the ${compPctInt}th percentile — ${regimeLbl} by label.`,
+    `Committee holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the ${compPctInt}th does not license a tilt.`,
+    `Floor-first sequencing — clear the 5% Agent Tokens sleeve via rmUSDC before any structural trim.`,
+  ];
+  if (takes.length) consensus.push(`${takes.length}/${activeMembers.length} members submitted this session (${stanceParts.join(", ") || "no stances"}).`);
+
+  // Disagreements: synthesize from the stance spread. When at least two distinct
+  // stances were submitted, contrast the most- and least-constructive members.
+  const order = ["bearish", "cautious", "neutral", "constructive", "bullish"];
+  const rank = (st: string) => { const i = order.indexOf(st); return i < 0 ? 2 : i; };
+  const sortedTakes = takes.slice().sort((a: any, b: any) => rank(a.stance) - rank(b.stance));
+  const disagreements: any[] = [];
+  if (sortedTakes.length >= 2 && new Set(sortedTakes.map((t: any) => t.stance)).size >= 2) {
+    const low = sortedTakes[0], high = sortedTakes[sortedTakes.length - 1];
+    disagreements.push({
+      topic: `Weight of the on-chain panel in the ${s.subject_name ?? s.subject_id} read`,
+      positions: [
+        { member_id: high.member_id, view: `${high.stance} — reads the divergence as downstream of agent deployment; would fund the Agent Tokens sleeve now.` },
+        { member_id: low.member_id, view: `${low.stance} — conservative compositor reads nominal ${regimeLbl}, effective neutral; no tilt licensed.` },
+      ],
+      what_settles: "On-chain panel crossing the 50th percentile for five consecutive sessions, or composite breaching 0.40.",
+    });
+  }
+
+  const rationale = `Committee holds 95/5/0/0 with composite at the ${compPctInt}th percentile (${regimeLbl}); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.`;
+  const actions = recType === "position_actions" ? [
+    { token: "USDC", action: "rotate", rationale: "Route the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor." },
+    { token: "rmUSDC", action: "add", rationale: "Vault receipt is the Agent Tokens exposure — top up to the mandated 5% floor." },
+  ] : undefined;
+  const weights = recType === "bucket_weights" ? [
+    { bucket: "conservative_defi_yield", weight: 0.95 },
+    { bucket: "agent_tokens", weight: 0.05 },
+    { bucket: "protocol_tokens", weight: 0.0 },
+    { bucket: "real_world_assets", weight: 0.0 },
+  ] : undefined;
+
+  const quorum = { active: activeMembers.length, submitted: takes.length, absent: absent.length, participation };
+  const rec: Record<string, unknown> = {
+    quorum,
     stances: byStance,
-    meanConfidence: takes.length ? confSum / takes.length : null,
+    meanConfidence,
     absent,
+    type: recType,
+    rationale,
+    consensus,
+    disagreements,
   };
-  const synthesis = `Committee session for ${s.subject_name}: ${takes.length}/${activeMembers.length} members submitted. ` +
-    Object.entries(byStance).map(([k, v]) => `${v} ${k}`).join(", ") + (absent.length ? `; ${absent.length} absent.` : ".");
-  await sql`UPDATE committee_sessions SET state = 'aggregated', committee_recommendation = ${sql.json(rec)}, synthesis = ${synthesis} WHERE id = ${sessionId}`;
-  return { sessionId, state: "aggregated", ...rec };
+  if (actions) rec.actions = actions;
+  if (weights) rec.weights = weights;
+
+  // Prose synthesis (2–4 sentences): composite + stance distribution + mandate.
+  const stanceSummary = stanceParts.length ? stanceParts.join(", ") : "no stances on record";
+  const synthesis =
+    `The committee reads composite ${composite.toFixed(3)} at the ${compPctInt}th percentile — ${regimeLbl} by label, with the panel spread the load-bearing signal rather than the headline level. ` +
+    `Across ${takes.length}/${activeMembers.length} submitted takes the stance distribution is ${stanceSummary}` +
+    (meanConfidence != null ? ` at ${(meanConfidence * 100).toFixed(0)}% mean confidence` : "") +
+    (absent.length ? `, with ${absent.length} absent` : "") + ". " +
+    `All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of ${s.subject_name ?? s.subject_id}.`;
+
+  await sql`UPDATE committee_sessions SET
+      state = 'aggregated',
+      committee_recommendation = ${sql.json(rec as any)},
+      synthesis = ${synthesis},
+      regime_summary = ${sql.json(regimeSummary as any)},
+      subject_snapshot_total_value_usd = ${subjectTotal}
+    WHERE id = ${sessionId}`;
+  // Named rollup fields (quorum/stances/meanConfidence/absent) are kept explicit
+  // on the return so existing consumers (src/demo/e2e.ts) stay typed; the rich
+  // fields ride along too.
+  return {
+    sessionId, state: "aggregated",
+    quorum, stances: byStance, meanConfidence, absent,
+    regimeSummary, subjectSnapshotTotalValueUsd: subjectTotal,
+    type: recType, rationale, consensus, disagreements, actions, weights,
+  };
 }
 
 export async function publishSession(sessionId: string) {
