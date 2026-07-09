@@ -35,6 +35,16 @@ function startStubBackend(rewrites: Rewrites = {}) {
       if (url.pathname === "/api/committee/sessions") {
         return Response.json({ sessions: [] });
       }
+      // Live prop-wallet feed (issue #84): a minimal valid hermetic payload so
+      // the guard's wallet-balances assertion passes on the POSITIVE path.
+      if (url.pathname === "/api/dashboards/wallet-balances") {
+        const symbols = ["USDC", "ZYFAI-SS1", "GIZA-SS1", "WETH", "ETH", "ROBOTMONEY", "BNKR", "SP500"];
+        return Response.json({
+          asOf: new Date().toISOString(), totalUsd: 1000, source: "stub", priceSource: "stub",
+          holdings: symbols.map((s) => ({ symbol: s, chain: "base", group: "Stable", color: "#10b981", amount: 1, priceUsd: 1, valueUsd: 125, priceSource: "pinned", provenance: "stub" })),
+          history: [{ date: "2026-03-18", byAsset: { WETH: 500, ROBOTMONEY: 500 }, totalUsd: 1000 }],
+        });
+      }
       const rel = url.pathname === "/" ? "/index.html" : url.pathname;
       const safe = normalize(decodeURIComponent(rel)).replace(/^(\.\.(\/|\\|$))+/, "");
       const file = Bun.file(join(publicDir, safe));

@@ -7,6 +7,7 @@ export const ROUTES: {
     regimeSnapshots: string;
     researchSignal: string;
     vaultEconomics: string;
+    walletBalances: string;
   };
   projects: {
     list: string;

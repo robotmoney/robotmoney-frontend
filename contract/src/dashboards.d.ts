@@ -68,6 +68,43 @@ export interface VaultEconomics {
   adapters: VaultEconomicsAdapter[]; // exactly 3
 }
 
+// GET /api/dashboards/wallet-balances (issue #84) — live Base RPC + keyless
+// price valuation of the agent's PROP WALLETS. Replaces the baked
+// WALLET_SNAPSHOT_TOTAL_USD scalar (/allocation hero) and the 99-day
+// walletPerfView series (/performance). Per-holding `provenance` is one of
+// 'live' | 'stub' | 'stale' — a single failing leg degrades to its last
+// persisted sample marked 'stale', never a fabricated or falsely-live number.
+export type WalletHoldingProvenance = "live" | "stub" | "stale";
+
+export interface WalletHolding {
+  symbol: string;
+  chain: "base";
+  group: string; // Stable | Protocol | Agent | Stocks
+  color: string;
+  amount: number | null;
+  priceUsd: number | null;
+  valueUsd: number | null;
+  priceSource: string; // 'pinned' | 'geckoterminal' | 'yahoo'
+  provenance: WalletHoldingProvenance;
+}
+
+// One day of continuous history. byAsset is sparse (only symbols held that day);
+// totalUsd is the sum of the held legs.
+export interface WalletHistoryPoint {
+  date: string; // ISO calendar day
+  byAsset: Record<string, number>;
+  totalUsd: number;
+}
+
+export interface WalletBalances {
+  asOf: string; // ISO 8601
+  totalUsd: number;
+  source: "live" | "stub";
+  priceSource: "live" | "stub";
+  holdings: WalletHolding[]; // the eight fixed labelled series, in group/colour order
+  history: WalletHistoryPoint[];
+}
+
 // One enriched per-indicator object inside a RegimeSnapshot (asof row). Ported
 // from the original's regime-snapshot.json indicator shape. Historical rows carry
 // an empty `indicators` array + the `percentiles` map only.

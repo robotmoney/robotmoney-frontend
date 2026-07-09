@@ -46,14 +46,21 @@ test("renders allocation and dynamic committee routes through Alpine", async ({ 
   await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
   // The allocationView factory draws the strategy/vault/wallet pie canvases.
   await expect(page.locator("canvas").first()).toBeVisible();
-  // Vault-economics content is served by the in-CI deterministic Base RPC stub
-  // (issue #48): the stub's fixed totalAssets fixture ($84,320.12) plus the
-  // static wallet snapshot ($71,526, WALLET_SNAPSHOT_TOTAL_USD in
-  // alpine/views.js — the original site's Total AUM combines wallet + vault,
-  // robotmoney-site src/app/allocation/page.tsx) drive the hero Total AUM, so
-  // /allocation renders live-endpoint-derived content with ZERO live Base
-  // mainnet calls. Auto-retries while the async fetch settles.
-  await expect(page.locator(".alloc-aum__value")).toHaveText("$155,846");
+  // Hero Total AUM combines BOTH live halves (issue #84): the live prop-wallet
+  // feed (GET /api/dashboards/wallet-balances) + the live vault-economics tvlUsd,
+  // both served by the in-CI deterministic Base RPC stub (issue #48) with ZERO
+  // live Base mainnet calls. Derive the expectation from the same endpoints the
+  // page reads so this stays correct as the stub fixtures evolve.
+  const expectedAum = await page.evaluate(async () => {
+    const [w, v] = await Promise.all([
+      fetch("/api/dashboards/wallet-balances").then((r) => r.json()),
+      fetch("/api/dashboards/vault-economics").then((r) => r.json()),
+    ]);
+    const total = w.totalUsd + v.tvlUsd;
+    return "$" + total.toLocaleString("en-US", { maximumFractionDigits: Math.abs(total) < 1000 ? 2 : 0 });
+  });
+  await expect(page.locator(".alloc-aum__value")).toHaveText(expectedAum);
+  await expect(page.locator(".alloc-aum__value")).not.toHaveText("—");
 
   // Test performance page with Wallet Performance heading
   await page.evaluate(() => {

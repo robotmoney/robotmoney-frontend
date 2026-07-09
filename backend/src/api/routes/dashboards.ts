@@ -4,6 +4,7 @@
 // shapes are unchanged.
 import { fetchRegimeSnapshots, fetchLatestResearchSignal } from "../../analytics/report/projections.ts";
 import { fetchVaultEconomics } from "../../chain/vault-economics.ts";
+import { fetchWalletBalances } from "../../chain/wallet-balances.ts";
 
 // GET /api/dashboards/research-signals/:key → latest research signal payload
 export async function getResearchSignal(key: string) {
@@ -14,6 +15,13 @@ export async function getResearchSignal(key: string) {
 // share price, adapters, 7-day APY), degraded/stale on RPC failure.
 export async function getVaultEconomics() {
   return fetchVaultEconomics();
+}
+
+// GET /api/dashboards/wallet-balances → live Base RPC + keyless-price prop-wallet
+// valuation (issue #84): per-holding value/provenance + continuous history. A
+// single failing leg degrades to 'stale', never a 5xx.
+export async function getWalletBalances() {
+  return fetchWalletBalances();
 }
 
 // GET /api/dashboards/regime-snapshots?range=<n days> → { latest, history }

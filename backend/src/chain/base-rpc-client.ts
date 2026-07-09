@@ -12,6 +12,7 @@ const SELECTORS = {
   totalAssets: "0x01e1d114", // totalAssets()
   totalSupply: "0x18160ddd", // totalSupply()
   balanceOf: "0x70a08231", // balanceOf(address)
+  convertToAssets: "0x07a2d13a", // convertToAssets(uint256) — ERC-4626 share→assets NAV
 } as const;
 
 // Left-pad a 20-byte address into a 32-byte (64 hex char) ABI word.
@@ -21,6 +22,12 @@ export function encodeAddressArg(address: string): string {
   return hex.padStart(64, "0");
 }
 
+// Left-pad a uint256 into a 32-byte (64 hex char) ABI word.
+export function encodeUint256Arg(value: bigint): string {
+  if (value < 0n) throw new Error(`invalid uint256: ${value}`);
+  return value.toString(16).padStart(64, "0");
+}
+
 function encodeCall(selector: string, args: string[] = []): string {
   return selector + args.join("");
 }
@@ -28,6 +35,7 @@ function encodeCall(selector: string, args: string[] = []): string {
 export const encodeTotalAssetsCall = (): string => encodeCall(SELECTORS.totalAssets);
 export const encodeTotalSupplyCall = (): string => encodeCall(SELECTORS.totalSupply);
 export const encodeBalanceOfCall = (holder: string): string => encodeCall(SELECTORS.balanceOf, [encodeAddressArg(holder)]);
+export const encodeConvertToAssetsCall = (shares: bigint): string => encodeCall(SELECTORS.convertToAssets, [encodeUint256Arg(shares)]);
 
 // Decode a 32-byte (0x-prefixed hex) eth_call result word to a bigint. An empty
 // `0x` (e.g. a call to an address with no code) decodes to 0n rather than
@@ -77,4 +85,35 @@ export async function callTotalSupply(contractAddress: string, opts: RpcCallOpti
 
 export async function callBalanceOf(tokenAddress: string, holder: string, opts: RpcCallOptions): Promise<bigint> {
   return decodeUint256(await ethCall(tokenAddress, encodeBalanceOfCall(holder), opts));
+}
+
+// ERC-4626 NAV: how many underlying assets a given share count is worth right
+// now. Used to value the yield-bearing strategy positions (ZYFAI-SS1/GIZA-SS1)
+// at NAV rather than a $1-pegged share (issue #84).
+export async function callConvertToAssets(strategyAddress: string, shares: bigint, opts: RpcCallOptions): Promise<bigint> {
+  if (shares === 0n) return 0n;
+  return decodeUint256(await ethCall(strategyAddress, encodeConvertToAssetsCall(shares), opts));
+}
+
+// A single `eth_getBalance` (native ETH balance in wei). Separate JSON-RPC
+// method from eth_call — same transport/error-handling contract (throws on
+// transport/HTTP/JSON-RPC error so callers can degrade a single leg).
+export async function ethGetBalance(address: string, opts: RpcCallOptions): Promise<bigint> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 8000);
+  try {
+    const res = await fetch(opts.rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: [address, "latest"] }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`Base RPC HTTP ${res.status}`);
+    const body = (await res.json()) as { result?: string; error?: { message?: string } };
+    if (body.error) throw new Error(`Base RPC error: ${body.error.message ?? "unknown"}`);
+    if (typeof body.result !== "string") throw new Error("Base RPC: missing result");
+    return decodeUint256(body.result);
+  } finally {
+    clearTimeout(timeout);
+  }
 }

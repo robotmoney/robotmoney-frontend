@@ -72,6 +72,173 @@ export function resolveVaultAdapters(
   ];
 }
 
+// --- Prop-wallet valuation feed (issue #84) ----------------------------------
+// The /allocation + /performance pages value the agent's PROP WALLETS live off
+// Base JSON-RPC + keyless prices, replacing the baked WALLET_SNAPSHOT_TOTAL_USD
+// scalar and the 99-day walletPerfView series that used to live in the frontend
+// (alpine/views.js). Every address/decimals/size below is CONFIG, never a
+// literal in the handler or either Alpine view (AC: config-driven).
+//
+// PRICE_SOURCE mirrors BASE_RPC_SOURCE: 'live' hits the keyless price feeds
+// (GeckoTerminal token_price + Yahoo for SP500); 'stub' serves the deterministic
+// hermetic fixtures in chain/token-prices.ts so a demo never reaches an
+// uncontrolled rate-limited price host. When PRICE_SOURCE is unset it FOLLOWS
+// the RPC source (BASE_RPC_SOURCE) — so the hermetic demo (BASE_RPC_SOURCE=stub,
+// set by DEMO_HERMETIC=1) automatically serves stub prices with no extra env and
+// no live network, while prod stays live. An explicit PRICE_SOURCE overrides.
+// Fail-closed: an unrecognized value refuses rather than silently claiming 'live'.
+export type PriceSource = "live" | "stub";
+export function resolvePriceSource(
+  env: Record<string, string | undefined> = process.env,
+): PriceSource {
+  const raw = env.PRICE_SOURCE;
+  if (raw === undefined || raw === "") return resolveBaseRpcSource(env);
+  if (raw === "live") return "live";
+  if (raw === "stub") return "stub";
+  throw new Error(`invalid PRICE_SOURCE "${raw}" — expected "live" | "stub" (or unset to follow BASE_RPC_SOURCE)`);
+}
+
+// Canonical prop-wallet addresses on Base (Open Question 1 — candidates recovered
+// from the legacy allocation port; override with the confirmed set via
+// PROP_WALLET_ADDRESSES=comma,separated). These are the holders whose balances
+// are summed per tracked asset. Base-only by design (#84 scope).
+export function resolvePropWallets(
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  const raw = env.PROP_WALLET_ADDRESSES;
+  // Candidates recovered from the legacy allocation port (0xfbc2…c9d6 /
+  // 0x422c…8eee / 0x8d0c…9442), padded to valid Base addresses; confirm/override
+  // via PROP_WALLET_ADDRESSES once the canonical set is owner-confirmed (Open Q1).
+  const list = raw
+    ? raw.split(",").map((s) => s.trim()).filter(Boolean)
+    : [
+        "0xfbc200000000000000000000000000000000c9d6",
+        "0x422c000000000000000000000000000000008eee",
+        "0x8d0c000000000000000000000000000000009442",
+      ];
+  return list.map((a) => a.toLowerCase());
+}
+
+// How a tracked asset is valued on chain (Open Questions 5/6 — precision policy
+// + Aave/strategy set resolved here, documented per-kind):
+//   erc20     — ERC-20 balanceOf(wallet); amount = raw / 10^decimals; * price.
+//   native    — native ETH via eth_getBalance(wallet) (18 dp); * price.
+//   aave      — Aave V3 aToken balanceOf(wallet) → underlying (aTokens rebase
+//               1:1 with the underlying) → * underlying price. Config-driven and
+//               EMPTY by default (Open Q6: exact aToken/debt set is owner data —
+//               "do not assume the full legacy map"); add via AAVE_AUSDC_ADDRESS.
+//   strategy  — ERC-4626 share: convertToAssets(balanceOf(wallet)) → USDC (6 dp),
+//               pinned $1 (yield-bearing: valued at NAV, NOT a $1-pegged share).
+//   config    — off-chain size from config * price (SP500; no derivatives API).
+// USDC carries priceKind 'usdc' (pinned $1); crypto legs 'gecko'; SP500 'yahoo'.
+export type ValuationKind = "erc20" | "native" | "aave" | "strategy" | "config";
+export type PriceKind = "usdc" | "gecko" | "yahoo";
+export interface TrackedAsset {
+  symbol: string;
+  group: "Stable" | "Protocol" | "Agent" | "Stocks";
+  color: string;
+  valuationKind: ValuationKind;
+  priceKind: PriceKind;
+  decimals: number;
+  // Token / strategy contract on Base (null for native ETH and the config SP500).
+  address: string | null;
+  // GeckoTerminal pool id for the live OHLCV/price read (Open Question 4 — the
+  // authoritative pool is owner data; the stub price path never uses it).
+  poolId: string | null;
+}
+
+// The eight fixed labelled series, in Stable → Protocol → Agent → Stocks
+// group/colour order (must match the walletPerfView columns retired from
+// alpine/views.js). Addresses default to documented Base tokens; each is
+// overridable via <SYMBOL>_ADDRESS for the confirmed deployment.
+export function resolveTrackedAssets(
+  env: Record<string, string | undefined> = process.env,
+): TrackedAsset[] {
+  const addr = (key: string, fallback: string | null): string | null =>
+    (env[key] || fallback)?.toLowerCase() ?? null;
+  return [
+    { symbol: "USDC", group: "Stable", color: "#10b981", valuationKind: "erc20", priceKind: "usdc",
+      decimals: 6, address: addr("USDC_ADDRESS", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"), poolId: null },
+    // Strategy shares are yield-bearing (valued at NAV, NOT $1-pegged): the
+    // documented addresses are owner data (Open Q2) — non-functional
+    // repeating-digit placeholders until <SYMBOL>_ADDRESS overrides them,
+    // mirroring resolveVaultAdapters()'s placeholder convention (#50).
+    { symbol: "ZYFAI-SS1", group: "Stable", color: "#10b981", valuationKind: "strategy", priceKind: "usdc",
+      decimals: 18, address: addr("ZYFAI_SS1_ADDRESS", "0x4444444444444444444444444444444444444444"), poolId: null },
+    { symbol: "GIZA-SS1", group: "Stable", color: "#10b981", valuationKind: "strategy", priceKind: "usdc",
+      decimals: 18, address: addr("GIZA_SS1_ADDRESS", "0x5555555555555555555555555555555555555555"), poolId: null },
+    { symbol: "WETH", group: "Protocol", color: "#f59e0b", valuationKind: "erc20", priceKind: "gecko",
+      decimals: 18, address: addr("WETH_ADDRESS", "0x4200000000000000000000000000000000000006"), poolId: env.WETH_POOL_ID || null },
+    // Native ETH: balance via eth_getBalance (the `native` kind ignores address),
+    // but priced off WETH's address (canonical wrapped price) so `address` here
+    // is the PRICING address, not a balanceOf target.
+    { symbol: "ETH", group: "Protocol", color: "#f59e0b", valuationKind: "native", priceKind: "gecko",
+      decimals: 18, address: addr("WETH_ADDRESS", "0x4200000000000000000000000000000000000006"), poolId: env.WETH_POOL_ID || null },
+    { symbol: "ROBOTMONEY", group: "Agent", color: "#3b82f6", valuationKind: "erc20", priceKind: "gecko",
+      decimals: 18, address: addr("ROBOTMONEY_ADDRESS", "0x6666666666666666666666666666666666666666"), poolId: env.ROBOTMONEY_POOL_ID || null },
+    { symbol: "BNKR", group: "Agent", color: "#3b82f6", valuationKind: "erc20", priceKind: "gecko",
+      decimals: 18, address: addr("BNKR_ADDRESS", "0x7777777777777777777777777777777777777777"), poolId: env.BNKR_POOL_ID || null },
+    { symbol: "SP500", group: "Stocks", color: "#8b5cf6", valuationKind: "config", priceKind: "yahoo",
+      decimals: 0, address: null, poolId: null },
+    // Optional Aave V3 aToken legs — EMPTY by default (Open Q6, owner data). Each
+    // configured aToken adds a holding valued by balanceOf → underlying × price.
+    // Not part of the fixed 8 chart series unless an operator opts in.
+    ...resolveAaveATokens(env),
+  ];
+}
+
+// Aave V3 aToken legs, config-driven so the exact set stays owner-controlled
+// (Open Q6). Default empty. Currently supports aUSDC via AAVE_AUSDC_ADDRESS
+// (underlying USDC, 6 dp, pinned $1); extend as the confirmed set lands.
+export function resolveAaveATokens(
+  env: Record<string, string | undefined> = process.env,
+): TrackedAsset[] {
+  const out: TrackedAsset[] = [];
+  if (env.AAVE_AUSDC_ADDRESS) {
+    out.push({
+      symbol: "aUSDC", group: "Stable", color: "#10b981", valuationKind: "aave", priceKind: "usdc",
+      decimals: 6, address: env.AAVE_AUSDC_ADDRESS.toLowerCase(), poolId: null,
+    });
+  }
+  return out;
+}
+
+// SP500 position size + ticker (Open Question 3 — owner data; size comes from
+// config because there is no derivatives-venue positions API). Yahoo ticker
+// defaults to ^GSPC (the index the baked series tracked).
+export function resolveSp500(
+  env: Record<string, string | undefined> = process.env,
+): { size: number; ticker: string } {
+  return {
+    size: Number(env.SP500_SIZE ?? "0.6330"),
+    ticker: env.SP500_TICKER || "^GSPC",
+  };
+}
+
+// Config-time double-count guard (AC): a prop wallet must never be the vault or
+// an adapter address (their shares are valued by chain/vault-economics.ts — the
+// OTHER half of Total AUM), and no tracked asset may be the rmUSDC vault share.
+// Throws at startup so a misconfiguration that would double-count TVL can never
+// serve a live-looking number. Called from the API + worker boot.
+export function assertNoVaultAddressCollision(
+  env: Record<string, string | undefined> = process.env,
+): void {
+  const vaultSet = new Set(
+    [config.vault.address, config.vault.usdc, ...resolveVaultAdapters(env).map((a) => a.address)]
+      .map((a) => a.toLowerCase()),
+  );
+  for (const w of resolvePropWallets(env)) {
+    if (vaultSet.has(w)) {
+      throw new Error(`prop-wallet address ${w} collides with the vault/adapter set — would double-count vault TVL`);
+    }
+  }
+  for (const t of resolveTrackedAssets(env)) {
+    if (t.address && t.address === config.vault.address.toLowerCase()) {
+      throw new Error(`tracked asset ${t.symbol} is the rmUSDC vault share (${t.address}) — never track vault shares here`);
+    }
+  }
+}
+
 // Fail-closed: default to "prod" when RM_ENV is unset, and REFUSE to start on an
 // unrecognized value (so a typo like "production" can never silently open the
 // privileged surface). The unauthenticated convenience path is opt-in: it is

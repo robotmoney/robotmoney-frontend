@@ -22,6 +22,7 @@ const PORT = Number(process.env.STUB_PORT ?? 8645);
 const TOTAL_ASSETS = "0x01e1d114"; // totalAssets()
 const TOTAL_SUPPLY = "0x18160ddd"; // totalSupply()
 const BALANCE_OF = "0x70a08231"; // balanceOf(address)
+const CONVERT_TO_ASSETS = "0x07a2d13a"; // convertToAssets(uint256) — ERC-4626 strategy NAV (issue #84)
 
 // config.ts default vault address (the demo runs with no VAULT_ADDRESS override).
 // Adapter reads (any other `to`) return a distinct per-adapter balance.
@@ -36,7 +37,8 @@ function resultFor(to: string, data: string): string {
   const selector = data.slice(0, 10);
   const toLc = to.toLowerCase();
   if (selector === TOTAL_SUPPLY) return word(84_102_550_000n); // 84,102.55 vault shares
-  if (selector === BALANCE_OF) return word(1_000_000n); // $1.00 idle USDC
+  if (selector === BALANCE_OF) return word(1_000_000n); // $1.00 idle USDC / 1 unit prop-wallet balance (issue #84)
+  if (selector === CONVERT_TO_ASSETS) return word(4_500_000_000n); // 4,500 USDC strategy NAV (issue #84)
   if (selector === TOTAL_ASSETS) {
     // Vault TVL vs. each adapter's holdings (mirrors the mocked-suite fixtures).
     return toLc === VAULT ? word(84_320_120_000n) : word(28_000_000_000n);
@@ -54,17 +56,25 @@ Bun.serve({
     }
     if (req.method !== "POST") return new Response("base-rpc-stub", { status: 200 });
     const body = (await req.json().catch(() => null)) as
-      | { id?: number; method?: string; params?: [{ to: string; data: string }] }
+      | { id?: number; method?: string; params?: any[] }
       | null;
+    // Native ETH balance for the prop-wallet valuation feed (issue #84): a fixed
+    // 0.05 ETH per wallet. Counted like eth_call so the demo RPC guard still
+    // proves the wallet path routed to THIS stub, not live mainnet.
+    if (body?.method === "eth_getBalance") {
+      ethCallCount += 1;
+      seen.add(`${String(body.params?.[0]).toLowerCase()}:eth_getBalance`);
+      return Response.json({ jsonrpc: "2.0", id: body.id ?? 1, result: word(50_000_000_000_000_000n) });
+    }
     if (!body || body.method !== "eth_call" || !body.params?.[0]) {
       return Response.json({
         jsonrpc: "2.0",
         id: body?.id ?? 1,
-        error: { code: -32601, message: "base-rpc-stub: eth_call only" },
+        error: { code: -32601, message: "base-rpc-stub: eth_call / eth_getBalance only" },
       });
     }
     ethCallCount += 1;
-    const { to, data } = body.params[0];
+    const { to, data } = body.params[0] as { to: string; data: string };
     seen.add(`${to.toLowerCase()}:${data.slice(0, 10)}`);
     return Response.json({ jsonrpc: "2.0", id: body.id ?? 1, result: resultFor(to, data) });
   },

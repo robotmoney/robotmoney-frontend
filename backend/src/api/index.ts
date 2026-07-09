@@ -3,10 +3,10 @@
 // single-box deployment needs no reverse proxy.
 import { join, normalize } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
-import { config } from "../config.ts";
+import { config, assertNoVaultAddressCollision } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { createComment, listComments } from "./routes/comments.ts";
-import { getRegimeSnapshots, getResearchSignal, getVaultEconomics } from "./routes/dashboards.ts";
+import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances } from "./routes/dashboards.ts";
 import { getProjects } from "./routes/projects.ts";
 import { handleCommittee } from "./routes/committee.ts";
 
@@ -35,6 +35,13 @@ async function serveStatic(pathname: string): Promise<Response | null> {
   }
   return null;
 }
+
+// Config-time double-count guard (issue #84): refuse to boot if a prop-wallet
+// address collides with the vault/adapter set (their shares are the OTHER half
+// of Total AUM, valued by vault-economics), or if a tracked asset is the rmUSDC
+// vault share. Fail-closed at startup — a misconfiguration must never serve a
+// live-looking double-counted number.
+assertNoVaultAddressCollision();
 
 const server = Bun.serve({
   port: config.apiPort,
@@ -90,6 +97,10 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname === ROUTES.dashboards.vaultEconomics && req.method === "GET") {
       return json(await getVaultEconomics());
+    }
+
+    if (pathname === ROUTES.dashboards.walletBalances && req.method === "GET") {
+      return json(await getWalletBalances());
     }
 
     if (pathname === ROUTES.projects.list && req.method === "GET") {

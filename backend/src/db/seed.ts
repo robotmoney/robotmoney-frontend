@@ -9,6 +9,7 @@
 // lets an operator disable a schedule without the seed re-enabling it.
 import { sql, closeDb, jsonValue } from "./client.ts";
 import { seedDemoProjects } from "../projects/demo-seed.ts";
+import { backfillWalletHistory } from "../worker/handlers/wallet.ts";
 
 interface SeedSchedule {
   kind: string;
@@ -34,6 +35,10 @@ const SCHEDULES: SeedSchedule[] = [
   // Hourly vault share-price sample (issue #40) — dense enough for a 7-day APY
   // lookback, cheap on RPC (3 eth_calls/hour). Handler: worker/handlers/vault.ts.
   { kind: "vault.sample_share_price", cron: "0 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Daily prop-wallet balance sample (issue #84) — one row/asset/UTC-day, feeds
+  // the /performance history + the last-live degrade fallback. 00:10 UTC, just
+  // after the day boundary. Handler: worker/handlers/wallet.ts.
+  { kind: "wallet.sample_balances", cron: "10 0 * * *", payload: {}, timezone: "UTC", enabled: true },
   // Committee lifecycle — disabled by default; the demo enqueues these explicitly
   // via the admin enqueue-job endpoint, exercising the real worker claim loop +
   // handler path. Enable manually or change to a real cron for auto-scheduling.
@@ -75,6 +80,14 @@ export async function seed(): Promise<void> {
     `;
   }
   console.log(`seeded job_schedules (${schedules.length} definition(s), idempotent)`);
+
+  // One-time prop-wallet history backfill (issue #84): seed the pre-launch
+  // series carried forward from the baked views.js data so GET
+  // /api/dashboards/wallet-balances returns a continuous /performance history in
+  // every env (including CI/e2e). Idempotent (ON CONFLICT DO NOTHING on
+  // (sample_date, symbol)), so a later live daily sample is never clobbered.
+  const backfilled = await backfillWalletHistory();
+  console.log(`seeded wallet_balance_samples backfill (${backfilled} row candidate(s), idempotent)`);
 
   // Demo-only: populate the "Agentic Economy Ecosystem" projects directory so
   // GET /api/projects returns a full table instead of "No projects yet.". Gated

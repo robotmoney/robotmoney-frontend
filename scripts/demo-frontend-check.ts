@@ -94,6 +94,7 @@ async function main() {
     "alloc-tablecard",             // vault/wallet holdings table card
     "alloc-aum__value",            // hero Total AUM (live vault-economics binding, issue #40)
     "alloc-chip__value",           // 7-day APY chip (live vault-economics binding, issue #40)
+    "walletNonLive()",             // live prop-wallet feed provenance badge (issue #84)
   ]);
   // The wallet-performance charts (walletPerfView(), formerly embedded in
   // allocation.html) moved to their own page under the pixel-perfect lift
@@ -155,6 +156,26 @@ async function main() {
     "href=\"/committee\"",
     "href=\"/regime\"",
   ]);
+
+  // Live prop-wallet valuation feed (issue #84): the /allocation hero + the
+  // /performance charts consume this endpoint. Under the hermetic stack
+  // (BASE_RPC_SOURCE=stub → PRICE_SOURCE follows), it must return 200 with the
+  // eight fixed holdings (each stub-provenanced, not falsely 'live') + a
+  // continuous seeded history — the CI proof the endpoint + both renders are
+  // exercised end to end.
+  const wbRes = await fetch(`${BACKEND}/api/dashboards/wallet-balances`);
+  if (wbRes.ok) {
+    const wb = await wbRes.json();
+    const holdings = wb.holdings ?? [];
+    const provenanceOk = holdings.length >= 8 && holdings.every((h: { provenance: string }) => h.provenance === "stub" || h.provenance === "stale");
+    checks.push({
+      name: "GET /api/dashboards/wallet-balances returns stub-provenanced holdings + history",
+      ok: provenanceOk && (wb.history?.length ?? 0) > 0 && typeof wb.totalUsd === "number",
+      detail: `${holdings.length} holdings, ${wb.history?.length ?? 0} history days, source=${wb.source}`,
+    });
+  } else {
+    checks.push({ name: "GET /api/dashboards/wallet-balances returns data", ok: false, detail: `${wbRes.status}` });
+  }
 
   // Check that the API serves data the views depend on (the committee view
   // loads its data from these endpoints).
