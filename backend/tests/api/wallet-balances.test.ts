@@ -313,6 +313,14 @@ test("history: backfill seeds the pre-launch series; the endpoint returns it as 
   const after = await sql`SELECT count(*)::int AS c FROM wallet_balance_samples`;
   expect(after[0]!.c).toBe(before[0]!.c);
 
+  // Provenance honesty (issue #94): backfilled seed rows are ported baked UI
+  // constants, NOT live chain reads — they must carry 'seed', never 'live'
+  // (migration 0014 invariant). No seeded row may be labelled 'live'.
+  const live = await sql`SELECT count(*)::int AS c FROM wallet_balance_samples WHERE provenance = 'live'`;
+  expect(live[0]!.c).toBe(0);
+  const seed = await sql`SELECT count(*)::int AS c FROM wallet_balance_samples WHERE provenance = 'seed'`;
+  expect(seed[0]!.c).toBe(after[0]!.c);
+
   setBaseEnv();
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
@@ -328,6 +336,16 @@ test("history: backfill seeds the pre-launch series; the endpoint returns it as 
   for (let i = 1; i < r.history.length; i++) {
     expect(r.history[i]!.date >= r.history[i - 1]!.date).toBe(true);
   }
+});
+
+test("AC2 (issue #94): backfillWalletHistory never writes the literal provenance 'live'", async () => {
+  // Source guard: the backfill body must not label seeded rows 'live'. Reading
+  // the handler source keeps this honest even if a future edit reintroduces the
+  // literal without the DB assertion above catching it in a stale fixture.
+  const src = await Bun.file(new URL("../../src/worker/handlers/wallet.ts", import.meta.url)).text();
+  const body = src.slice(src.indexOf("export async function backfillWalletHistory"));
+  expect(body).toContain("'seed'");
+  expect(body).not.toContain("'live'");
 });
 
 test("sampler: sampleWalletBalances upserts exactly one row per held symbol per UTC day (idempotent)", async () => {

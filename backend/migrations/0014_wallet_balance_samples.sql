@@ -16,7 +16,9 @@
 --
 -- Provenance mirrors chain/vault-economics.ts (#50): 'live' = a real Base
 -- JSON-RPC + price read; 'stub' = the hermetic BASE_RPC_SOURCE=stub fixture;
--- 'stale' = a leg that failed live and degraded to its last-persisted value.
+-- 'stale' = a leg that failed live and degraded to its last-persisted value;
+-- 'seed' = a pre-launch history row backfilled from the ported baked constants
+-- (chain/wallet-history-seed.ts), NOT a live chain read.
 -- A value is NEVER fabricated or falsely labelled 'live'.
 CREATE TABLE wallet_balance_samples (
   id           bigserial PRIMARY KEY,
@@ -25,7 +27,7 @@ CREATE TABLE wallet_balance_samples (
   amount       numeric,                -- token amount (nullable: null for a seeded/degraded row with no quantity)
   price_usd    numeric,                -- USD unit price at sample time (nullable)
   value_usd    numeric NOT NULL,       -- amount * price_usd (or config-size * price for SP500)
-  provenance   text NOT NULL DEFAULT 'live', -- 'live' | 'stub' | 'stale'
+  provenance   text NOT NULL DEFAULT 'live', -- 'live' | 'stub' | 'stale' | 'seed'
   sampled_at   timestamptz NOT NULL DEFAULT now(),
   UNIQUE (sample_date, symbol)
 );
