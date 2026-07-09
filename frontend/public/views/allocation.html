@@ -29,15 +29,20 @@
           history across all prop wallets.
         </p>
       </div>
-      <!-- Total AUM = static wallet snapshot (Agent Wallet section below) +
-           live vault-economics tvlUsd (issue #40), matching the original
+      <!-- Total AUM = live prop-wallet total (GET /api/dashboards/wallet-balances)
+           + live vault-economics tvlUsd (issue #84), matching the original
            site's combined wallet+vault semantics (robotmoney-site
-           src/app/allocation/page.tsx). See totalAum()/WALLET_SNAPSHOT_TOTAL_USD
-           in alpine/views.js. -->
+           src/app/allocation/page.tsx). See totalAum() in alpine/views.js. -->
       <div class="alloc-aum">
         <span class="alloc-aum__label">Total AUM</span>
         <span class="alloc-aum__value" x-text="fmtUsd(totalAum())">—</span>
         <span class="alloc-aum__sub" x-text="asOfLabel()">—</span>
+        <span class="alloc-aum__prov alloc-wallet-nonlive" x-show="walletNonLive()" x-cloak>
+          Wallet feed: non-live (stub) data
+        </span>
+        <span class="alloc-aum__prov alloc-wallet-stale" x-show="walletStale()" x-cloak>
+          Wallet feed: stale (last-persisted) data
+        </span>
       </div>
     </div>
   </header>
@@ -578,6 +583,17 @@
   font-size: 0.75rem;
   color: var(--color-warn);
   margin: 0.5rem 0 0;
+}
+
+/* Hero prop-wallet feed provenance badges (issue #84): the wallet half of Total
+   AUM is non-live (stub) or degraded (stale). Distinct classes from the vault
+   badges above so each surface is asserted independently. */
+.alloc-aum__prov {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-warn);
+  margin: 0.35rem 0 0;
 }
 
 /* Unconfigured adapter value — placeholder address, no live balance (issue #50). */

@@ -603,45 +603,62 @@ export function registerViews(Alpine) {
   }));
 
   // ── Wallet performance (allocation2) ──────────────────────────────────────
-  // Full 99-snapshot daily series per asset, baked from unified-wallet-history.csv
-  // (Mar 18–Jun 26 2026). Eight stacked-area series drawn bottom→top exactly as
-  // the original React page: Stable (USDC/ZYFAI-SS1/GIZA-SS1) → Protocol
-  // (WETH/ETH) → Agent (ROBOTMONEY/BNKR) → Stocks (SP500). No fetch; draws once
-  // on init. The allocation chart's percent = value / total AUM * 100, computed
-  // at runtime so the two charts share one data source. The Historical Data
-  // table below reads `rows`/`columns`/`showAll` from this same component.
+  // LIVE daily series per asset (issue #84): fetched on init from
+  // GET /api/dashboards/wallet-balances, replacing the baked 99-snapshot literal
+  // that used to be frozen here (Mar 18–Jun 26 2026). Eight stacked-area series
+  // drawn bottom→top in the endpoint's holdings[] order: Stable
+  // (USDC/ZYFAI-SS1/GIZA-SS1) → Protocol (WETH/ETH) → Agent (ROBOTMONEY/BNKR) →
+  // Stocks (SP500). The allocation chart's percent = value / total AUM * 100,
+  // computed at runtime so the two charts share one data source. The Historical
+  // Data table reads `rows`/`columns`/`showAll` from this same component.
   Alpine.data("walletPerfView", () => ({
     _charts: [],
     showAll: false,
-    labels: ["Mar 18","Mar 19","Mar 20","Mar 21","Mar 22","Mar 23","Mar 25","Mar 26","Mar 27","Mar 28","Mar 29","Mar 30","Mar 31","Apr 1","Apr 2","Apr 3","Apr 4","Apr 5","Apr 6","Apr 7","Apr 8","Apr 9","Apr 10","Apr 11","Apr 12","Apr 13","Apr 14","Apr 15","Apr 16","Apr 17","Apr 18","Apr 19","Apr 20","Apr 21","Apr 22","Apr 23","Apr 24","Apr 25","Apr 26","Apr 27","Apr 28","Apr 29","Apr 30","May 1","May 2","May 3","May 4","May 5","May 6","May 7","May 8","May 9","May 10","May 11","May 12","May 13","May 14","May 15","May 16","May 17","May 18","May 19","May 20","May 21","May 22","May 23","May 24","May 25","May 26","May 27","May 28","May 29","May 30","May 31","Jun 1","Jun 2","Jun 3","Jun 5","Jun 6","Jun 7","Jun 8","Jun 9","Jun 10","Jun 11","Jun 12","Jun 13","Jun 14","Jun 15","Jun 16","Jun 17","Jun 18","Jun 19","Jun 20","Jun 21","Jun 22","Jun 23","Jun 24","Jun 25","Jun 26"],
-    // Per-asset AUM ($) series, index-aligned to `labels`. Colours per spec §3.
-    assets: [
-      { label: "USDC", color: SERIES.emerald, aum: [0,0,0,0,0,0,0,9962,9966,9955,9912,9951,9951,9912,10012,9951,9942,9936,9892,9971,9955,9981,9945,9921,9895,9946,943,935,934,942,940,937,943,939,939,939,937,938,937,934,937,940,933,938,935,934,936,934,941,942,935,942,935,936,936,936,939,935,936,942,941,941,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,9068,9007,9987,10006,14463,14532,14448,14442,14443,14420,14550,9042,9026,9021,9016,9054,9072,8994,9016,8995,9042,9052] },
-      { label: "ZYFAI-SS1", color: SERIES.emerald, aum: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4500,4501,4501,4501,4502,4503,4503,4504,4505,4505,4505,4506,4507,4507,4508,4508,4509,4509,4510,4510,4511,4511,4511,4512,4513,4513,4514,4514,4515,4515,4516,4516,4517,4517,4518,4518,4519,4520,4520,4521,4521,4521,4522,4523,4523,4524,4524,4525,4526,4526,4527,4528,4528,4528,4529,4529,4530,4530,4531,4532,4532,4533,4533,4534,4535,4535,4536,4536,4537,4537,4538,4538] },
-      { label: "GIZA-SS1", color: SERIES.emerald, aum: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4500,4501,4502,4502,4502,4503,4504,4504,4505,4505,0,0,4507,4508,0,0,0,0,0,0,4511,4512,4512,4513,4514,4514,4514,4515,4515,4516,4517,4517,4517,4519,4519,4519,4520,4520,4521,4522,4523,4523,4524,4524,4524,4524,4524,4524,4524,4524,4524,4524,4524,4524,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
-      { label: "WETH", color: SERIES.amber, aum: [21519,20841,20441,20464,19855,19484,22252,13364,13758,14408,14743,15273,15764,16231,16268,16201,16592,16763,17480,17541,18784,18648,19230,20226,20399,20541,19670,20353,20780,18206,18285,18000,17590,18618,19211,20799,20740,20959,21324,21859,21617,22125,21964,22553,23683,24398,24796,26179,26245,26359,25862,26324,26582,27418,27417,26970,27273,28545,28010,27838,28674,28147,0,0,0,0,0,0,0,0,0,0,0,0,0,9478,9003,111,214,23424,24663,25891,24878,24510,25637,25515,25930,26578,28030,27742,26975,26426,26261,26872,26454,26553,25682,24916,24194] },
-      { label: "ETH", color: SERIES.amber, aum: [0,0,0,0,0,0,2137,2069,2042,1995,2004,2031,2072,2100,2083,2044,2048,2059,2133,2106,2233,2181,2188,2249,2222,2193,2343,2323,2371,2426,2437,2356,2271,2320,2307,2395,2337,2309,2319,2360,2294,2290,2251,2254,2293,2323,2348,2371,2377,2355,2288,2314,2332,2372,2342,2286,2255,2297,2223,2180,2191,2105,105,106,106,104,106,104,105,103,101,100,100,101,101,100,93,88,80,78,82,85,82,80,84,83,84,86,91,90,87,86,85,87,86,86,83,81,78] },
-      { label: "ROBOTMONEY", color: "#3b82f6", aum: [51300,45207,36397,31594,27998,27253,38817,35631,35013,45389,49311,45897,43041,39798,34421,40995,37994,36316,37678,39430,41470,46311,53361,42195,42296,42907,44926,42454,47711,48799,47545,41722,32117,31433,24208,27443,25760,21947,19920,18950,24315,28661,32806,32673,36368,33091,31319,41835,37694,32593,29302,26760,30437,35862,31280,39363,54623,42079,41513,42804,46834,74454,81744,81535,123009,100782,93489,85065,68328,60862,54076,55404,50705,54565,57460,59781,51124,40369,41733,43158,48334,49495,40740,38611,37276,36665,41163,40906,42951,44594,39936,38834,39088,40843,37936,37959,36143,31831,30652] },
-      { label: "BNKR", color: "#3b82f6", aum: [12,12,10,10,10,10,10,9,9,9,9,9,9,9,9,8,8,8,8,7,8,8,8,9,9,9,10,9,9,9,9,9,8,9,8,9,8,8,8,8,8,8,8,8,8,8,8,8,8,9,9,9,8,8,8,8,11,10,13,15,16,14,13,14,12,12,13,14,12,13,13,13,15,19,16,16,13,15,13,14,13,13,12,11,11,12,12,12,12,12,12,11,11,12,12,11,11,10,9] },
-      { label: "SP500", color: PALETTE.purple, aum: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4505,4506,4475,4476,4509,4491,4512,4505,4533,4517,4527,4552,4527,4520,4575,4579,4579,4586,4580,4607,4661,4639,4690,4696,4674,4698,4687,4724,4753,4686,4681,4691,4699,4660,4690,4725,4728,4801,4766,4773,4764,4774,4797,4800,4807,4808,4811,4820,4798,4684,4683,4665,4697,4665,4595,4696,4722,4721,4749,4789,4767,4731,4757,4737,4746,4733,4727,4669,4683,4656] },
-    ],
-    totalAum: [72831,66060,56848,52068,47864,46747,63215,61036,60789,71756,75978,73161,70836,68049,62793,69198,66585,65082,67191,69055,72450,77128,84732,74600,74822,75597,67891,75074,80806,83890,82726,76503,66411,66835,60172,65107,63296,55201,53532,57651,62737,63058,66989,67509,72374,69842,68504,84929,80896,75941,72059,70065,74018,80298,75710,83280,98857,87653,86413,87494,92384,119396,95559,95383,136892,114667,107451,98994,82263,74789,68011,69361,64668,68541,71434,83236,74104,63501,64782,90396,96815,99173,89439,86785,86677,85970,90861,91413,89447,90765,85295,83665,83772,86167,82751,82890,80120,75101,73180],
-    // Table column headers (legend order) with their header-dot colour (spec §5).
-    columns: [
-      { sym: "USDC", color: "#10b981" },
-      { sym: "ZYFAI-SS1", color: "#10b981" },
-      { sym: "GIZA-SS1", color: "#10b981" },
-      { sym: "WETH", color: "#f59e0b" },
-      { sym: "ETH", color: "#f59e0b" },
-      { sym: "ROBOTMONEY", color: "#3b82f6" },
-      { sym: "BNKR", color: "#3b82f6" },
-      { sym: "SP500", color: "#8b5cf6" },
-    ],
-    // 99 daily rows: d=date, aum=Total AUM, a={sym:[value_usd,balanceStr]}.
-    // A symbol absent from `a` renders as "–". Balance is pre-formatted (spec §5a).
-    rows: [{"d":"Mar 18","aum":72831,"a":{"WETH":[21519,"9.8392"],"ROBOTMONEY":[51300,"2393688781"],"BNKR":[12,"25081.3100"]}},{"d":"Mar 19","aum":66060,"a":{"WETH":[20841,"9.5076"],"ROBOTMONEY":[45207,"2393688781"],"BNKR":[12,"25081.3083"]}},{"d":"Mar 20","aum":56848,"a":{"WETH":[20441,"9.5076"],"ROBOTMONEY":[36397,"2393688781"],"BNKR":[10,"25081.3083"]}},{"d":"Mar 21","aum":52068,"a":{"WETH":[20464,"9.5076"],"ROBOTMONEY":[31594,"2393688781"],"BNKR":[10,"25081.3083"]}},{"d":"Mar 22","aum":47864,"a":{"WETH":[19855,"9.5076"],"ROBOTMONEY":[27998,"2393688781"],"BNKR":[10,"25081.3083"]}},{"d":"Mar 23","aum":46747,"a":{"WETH":[19484,"9.5076"],"ROBOTMONEY":[27253,"2393688781"],"BNKR":[10,"25081.3083"]}},{"d":"Mar 25","aum":63215,"a":{"WETH":[22252,"10.1715"],"ETH":[2137,"1.0000"],"ROBOTMONEY":[38817,"2982652434"],"BNKR":[10,"25081.3083"]}},{"d":"Mar 26","aum":61036,"a":{"USDC":[9962,"9937.6125"],"WETH":[13364,"6.4577"],"ETH":[2069,"1.0000"],"ROBOTMONEY":[35631,"3124178034"],"BNKR":[9,"25081.3083"]}},{"d":"Mar 27","aum":60789,"a":{"USDC":[9966,"9937.6125"],"WETH":[13758,"6.7372"],"ETH":[2042,"1.0000"],"ROBOTMONEY":[35013,"3178927720"],"BNKR":[9,"25081.3083"]}},{"d":"Mar 28","aum":71756,"a":{"USDC":[9955,"9937.6125"],"WETH":[14408,"7.2212"],"ETH":[1995,"1.0000"],"ROBOTMONEY":[45389,"3233776200"],"BNKR":[9,"25081.3083"]}},{"d":"Mar 29","aum":75978,"a":{"USDC":[9912,"9937.6125"],"WETH":[14743,"7.3564"],"ETH":[2004,"1.0000"],"ROBOTMONEY":[49311,"3251285654"],"BNKR":[9,"25081.3083"]}},{"d":"Mar 30","aum":73161,"a":{"USDC":[9951,"9937.6125"],"WETH":[15273,"7.5194"],"ETH":[2031,"1.0000"],"ROBOTMONEY":[45897,"3277678459"],"BNKR":[9,"25081.3083"]}},{"d":"Mar 31","aum":70836,"a":{"USDC":[9951,"9937.6125"],"WETH":[15764,"7.6079"],"ETH":[2072,"1.0000"],"ROBOTMONEY":[43041,"3294725510"],"BNKR":[9,"25081.3083"]}},{"d":"Apr 1","aum":68049,"a":{"USDC":[9912,"9937.6125"],"WETH":[16231,"7.7294"],"ETH":[2100,"1.0000"],"ROBOTMONEY":[39798,"3319302298"],"BNKR":[9,"25081.3083"]}},{"d":"Apr 2","aum":62793,"a":{"USDC":[10012,"9937.6125"],"WETH":[16268,"7.8088"],"ETH":[2083,"1.0000"],"ROBOTMONEY":[34421,"3338209124"],"BNKR":[9,"25081.3083"]}},{"d":"Apr 3","aum":69198,"a":{"USDC":[9951,"9937.6125"],"WETH":[16201,"7.9258"],"ETH":[2044,"1.0000"],"ROBOTMONEY":[40995,"3359096783"],"BNKR":[8,"25081.3083"]}},{"d":"Apr 4","aum":66585,"a":{"USDC":[9942,"9937.6125"],"WETH":[16592,"8.0997"],"ETH":[2048,"1.0000"],"ROBOTMONEY":[37994,"3388190766"],"BNKR":[8,"25081.3083"]}},{"d":"Apr 5","aum":65082,"a":{"USDC":[9936,"9937.6125"],"WETH":[16763,"8.1421"],"ETH":[2059,"1.0000"],"ROBOTMONEY":[36316,"3398031151"],"BNKR":[8,"25081.3083"]}},{"d":"Apr 6","aum":67191,"a":{"USDC":[9892,"9937.6125"],"WETH":[17480,"8.1954"],"ETH":[2133,"1.0000"],"ROBOTMONEY":[37678,"3408889442"],"BNKR":[8,"25081.3083"]}},{"d":"Apr 7","aum":69055,"a":{"USDC":[9971,"9937.6125"],"WETH":[17541,"8.3290"],"ETH":[2106,"1.0000"],"ROBOTMONEY":[39430,"3429828630"],"BNKR":[7,"25081.3083"]}},{"d":"Apr 8","aum":72450,"a":{"USDC":[9955,"9937.6125"],"WETH":[18784,"8.4136"],"ETH":[2233,"1.0000"],"ROBOTMONEY":[41470,"3447844330"],"BNKR":[8,"25081.3083"]}},{"d":"Apr 9","aum":77128,"a":{"USDC":[9981,"9937.6125"],"WETH":[18648,"8.5509"],"ETH":[2181,"1.0000"],"ROBOTMONEY":[46311,"3469320437"],"BNKR":[8,"25081.3083"]}},{"d":"Apr 10","aum":84732,"a":{"USDC":[9945,"9937.6125"],"WETH":[19230,"8.7874"],"ETH":[2188,"1.0000"],"ROBOTMONEY":[53361,"3494807669"],"BNKR":[8,"25081.3083"]}},{"d":"Apr 11","aum":74600,"a":{"USDC":[9921,"9937.6125"],"WETH":[20226,"8.9938"],"ETH":[2249,"1.0000"],"ROBOTMONEY":[42195,"3535189688"],"BNKR":[9,"25081.3083"]}},{"d":"Apr 12","aum":74822,"a":{"USDC":[9895,"9937.6125"],"WETH":[20399,"9.1784"],"ETH":[2222,"1.0000"],"ROBOTMONEY":[42296,"3571148139"],"BNKR":[9,"25081.3083"]}},{"d":"Apr 13","aum":75597,"a":{"USDC":[9946,"9937.6125"],"WETH":[20541,"9.3666"],"ETH":[2193,"1.0000"],"ROBOTMONEY":[42907,"3606900022"],"BNKR":[9,"25081.3083"]}},{"d":"Apr 14","aum":67891,"a":{"USDC":[943,"937.6126"],"WETH":[19670,"8.3955"],"ETH":[2343,"1.0000"],"ROBOTMONEY":[44926,"3469477631"],"BNKR":[10,"25081.3083"]}},{"d":"Apr 15","aum":75074,"a":{"USDC":[935,"937.6126"],"ZYFAI-SS1":[4500,"1.0000"],"GIZA-SS1":[4500,"1.0000"],"WETH":[20353,"8.7626"],"ETH":[2323,"1.0000"],"ROBOTMONEY":[42454,"3525787026"],"BNKR":[9,"25081.3083"]}},{"d":"Apr 16","aum":80806,"a":{"USDC":[934,"937.6126"],"ZYFAI-SS1":[4501,"1.0000"],"GIZA-SS1":[4501,"1.0000"],"WETH":[20780,"8.7626"],"ETH":[2371,"1.0000"],"ROBOTMONEY":[47711,"3525787026"],"BNKR":[9,"25081.3083"]}},{"d":"Apr 17","aum":83890,"a":{"USDC":[942,"937.6170"],"ZYFAI-SS1":[4501,"1.0000"],"GIZA-SS1":[4502,"1.0000"],"WETH":[18206,"7.5042"],"ETH":[2426,"1.0000"],"ROBOTMONEY":[48799,"3641285272"],"BNKR":[9,"25081.3083"],"SP500":[4505,"0.6330"]}},{"d":"Apr 18","aum":82726,"a":{"USDC":[940,"937.6170"],"ZYFAI-SS1":[4501,"1.0000"],"GIZA-SS1":[4502,"1.0000"],"WETH":[18285,"7.5042"],"ETH":[2437,"1.0000"],"ROBOTMONEY":[47545,"3641285272"],"BNKR":[9,"25081.3083"],"SP500":[4506,"0.6330"]}},{"d":"Apr 19","aum":76503,"a":{"USDC":[937,"937.6170"],"ZYFAI-SS1":[4502,"1.0000"],"GIZA-SS1":[4502,"1.0000"],"WETH":[18000,"7.6386"],"ETH":[2356,"1.0000"],"ROBOTMONEY":[41722,"3667553436"],"BNKR":[9,"25081.3083"],"SP500":[4475,"0.6330"]}},{"d":"Apr 20","aum":66411,"a":{"USDC":[943,"937.6170"],"ZYFAI-SS1":[4503,"1.0000"],"GIZA-SS1":[4503,"1.0000"],"WETH":[17590,"7.7459"],"ETH":[2271,"1.0000"],"ROBOTMONEY":[32117,"3695412759"],"BNKR":[8,"25081.3083"],"SP500":[4476,"0.6330"]}},{"d":"Apr 21","aum":66835,"a":{"USDC":[939,"937.6170"],"ZYFAI-SS1":[4503,"1.0000"],"GIZA-SS1":[4504,"1.0000"],"WETH":[18618,"8.0236"],"ETH":[2320,"1.0000"],"ROBOTMONEY":[31433,"3776208165"],"BNKR":[9,"25081.3083"],"SP500":[4509,"0.6330"]}},{"d":"Apr 22","aum":60172,"a":{"USDC":[939,"937.6170"],"ZYFAI-SS1":[4504,"1.0000"],"GIZA-SS1":[4504,"1.0000"],"WETH":[19211,"8.3257"],"ETH":[2307,"1.0000"],"ROBOTMONEY":[24208,"3851545949"],"BNKR":[8,"25081.3083"],"SP500":[4491,"0.6330"]}},{"d":"Apr 23","aum":65107,"a":{"USDC":[939,"937.6170"],"ZYFAI-SS1":[4505,"1.0000"],"GIZA-SS1":[4505,"1.0000"],"WETH":[20799,"8.6831"],"ETH":[2395,"1.0000"],"ROBOTMONEY":[27443,"3995291567"],"BNKR":[9,"25081.3083"],"SP500":[4512,"0.6330"]}},{"d":"Apr 24","aum":63296,"a":{"USDC":[937,"937.6170"],"ZYFAI-SS1":[4505,"1.0000"],"GIZA-SS1":[4505,"1.0000"],"WETH":[20740,"8.8743"],"ETH":[2337,"1.0000"],"ROBOTMONEY":[25760,"4057482162"],"BNKR":[8,"25081.3083"],"SP500":[4505,"0.6330"]}},{"d":"Apr 25","aum":55201,"a":{"USDC":[938,"937.6170"],"ZYFAI-SS1":[4505,"1.0000"],"WETH":[20959,"9.0750"],"ETH":[2309,"1.0000"],"ROBOTMONEY":[21947,"4141999486"],"BNKR":[8,"25081.3083"],"SP500":[4533,"0.6330"]}},{"d":"Apr 26","aum":53532,"a":{"USDC":[937,"937.6170"],"ZYFAI-SS1":[4506,"1.0000"],"WETH":[21324,"9.1947"],"ETH":[2319,"1.0000"],"ROBOTMONEY":[19920,"4197498481"],"BNKR":[8,"25081.3083"],"SP500":[4517,"0.6330"]}},{"d":"Apr 27","aum":57651,"a":{"USDC":[934,"937.6170"],"ZYFAI-SS1":[4507,"1.0000"],"GIZA-SS1":[4507,"1.0000"],"WETH":[21859,"9.2635"],"ETH":[2360,"1.0000"],"ROBOTMONEY":[18950,"4235947209"],"BNKR":[8,"25081.3083"],"SP500":[4527,"0.6330"]}},{"d":"Apr 28","aum":62737,"a":{"USDC":[937,"937.6170"],"ZYFAI-SS1":[4507,"1.0000"],"GIZA-SS1":[4508,"1.0000"],"WETH":[21617,"9.4211"],"ETH":[2294,"1.0000"],"ROBOTMONEY":[24315,"4327080369"],"BNKR":[8,"25081.3083"],"SP500":[4552,"0.6330"]}},{"d":"Apr 29","aum":63058,"a":{"USDC":[940,"937.6170"],"ZYFAI-SS1":[4508,"1.0000"],"WETH":[22125,"9.6600"],"ETH":[2290,"1.0000"],"ROBOTMONEY":[28661,"4415883884"],"BNKR":[8,"25081.3083"],"SP500":[4527,"0.6330"]}},{"d":"Apr 30","aum":66989,"a":{"USDC":[933,"937.6170"],"ZYFAI-SS1":[4508,"1.0000"],"WETH":[21964,"9.7565"],"ETH":[2251,"1.0000"],"ROBOTMONEY":[32806,"4445318355"],"BNKR":[8,"25081.3083"],"SP500":[4520,"0.6330"]}},{"d":"May 1","aum":67509,"a":{"USDC":[938,"937.6170"],"ZYFAI-SS1":[4509,"1.0000"],"WETH":[22553,"10.0068"],"ETH":[2254,"1.0000"],"ROBOTMONEY":[32673,"4516352257"],"BNKR":[8,"25081.3083"],"SP500":[4575,"0.6330"]}},{"d":"May 2","aum":72374,"a":{"USDC":[935,"937.6170"],"ZYFAI-SS1":[4509,"1.0000"],"WETH":[23683,"10.3279"],"ETH":[2293,"1.0000"],"ROBOTMONEY":[36368,"4621788005"],"BNKR":[8,"25081.3083"],"SP500":[4579,"0.6330"]}},{"d":"May 3","aum":69842,"a":{"USDC":[934,"937.6170"],"ZYFAI-SS1":[4510,"1.0000"],"WETH":[24398,"10.5030"],"ETH":[2323,"1.0000"],"ROBOTMONEY":[33091,"4677503556"],"BNKR":[8,"25081.3083"],"SP500":[4579,"0.6330"]}},{"d":"May 4","aum":68504,"a":{"USDC":[936,"937.6170"],"ZYFAI-SS1":[4510,"1.0000"],"WETH":[24796,"10.5591"],"ETH":[2348,"1.0000"],"ROBOTMONEY":[31319,"4702732114"],"BNKR":[8,"25081.3083"],"SP500":[4586,"0.6330"]}},{"d":"May 5","aum":84929,"a":{"USDC":[934,"937.6170"],"ZYFAI-SS1":[4511,"1.0000"],"GIZA-SS1":[4511,"1.0000"],"WETH":[26179,"11.0400"],"ETH":[2371,"1.0000"],"ROBOTMONEY":[41835,"4833452580"],"BNKR":[8,"25081.3083"],"SP500":[4580,"0.6330"]}},{"d":"May 6","aum":80896,"a":{"USDC":[941,"937.6170"],"ZYFAI-SS1":[4511,"1.0000"],"GIZA-SS1":[4512,"1.0000"],"WETH":[26245,"11.0400"],"ETH":[2377,"1.0000"],"ROBOTMONEY":[37694,"4833452580"],"BNKR":[8,"25081.3083"],"SP500":[4607,"0.6330"]}},{"d":"May 7","aum":75941,"a":{"USDC":[942,"937.6170"],"ZYFAI-SS1":[4511,"1.0000"],"GIZA-SS1":[4512,"1.0000"],"WETH":[26359,"11.1925"],"ETH":[2355,"1.0000"],"ROBOTMONEY":[32593,"4880899626"],"BNKR":[9,"25081.3083"],"SP500":[4661,"0.6330"]}},{"d":"May 8","aum":72059,"a":{"USDC":[935,"937.6170"],"ZYFAI-SS1":[4512,"1.0000"],"GIZA-SS1":[4513,"1.0000"],"WETH":[25862,"11.3030"],"ETH":[2288,"1.0000"],"ROBOTMONEY":[29302,"4929690686"],"BNKR":[9,"25081.3083"],"SP500":[4639,"0.6330"]}},{"d":"May 9","aum":70065,"a":{"USDC":[942,"937.6170"],"ZYFAI-SS1":[4513,"1.0000"],"GIZA-SS1":[4514,"1.0000"],"WETH":[26324,"11.3761"],"ETH":[2314,"1.0000"],"ROBOTMONEY":[26760,"4958714518"],"BNKR":[9,"25081.3083"],"SP500":[4690,"0.6330"]}},{"d":"May 10","aum":74018,"a":{"USDC":[935,"937.6170"],"ZYFAI-SS1":[4513,"1.0000"],"GIZA-SS1":[4514,"1.0000"],"WETH":[26582,"11.4004"],"ETH":[2332,"1.0000"],"ROBOTMONEY":[30437,"4976914168"],"BNKR":[8,"25081.3083"],"SP500":[4696,"0.6330"]}},{"d":"May 11","aum":80298,"a":{"USDC":[936,"937.6170"],"ZYFAI-SS1":[4514,"1.0000"],"GIZA-SS1":[4514,"1.0000"],"WETH":[27418,"11.5595"],"ETH":[2372,"1.0000"],"ROBOTMONEY":[35862,"5037879449"],"BNKR":[8,"25081.3083"],"SP500":[4674,"0.6330"]}},{"d":"May 12","aum":75710,"a":{"USDC":[936,"937.6170"],"ZYFAI-SS1":[4514,"1.0000"],"GIZA-SS1":[4515,"1.0000"],"WETH":[27417,"11.7069"],"ETH":[2342,"1.0000"],"ROBOTMONEY":[31280,"5077104494"],"BNKR":[8,"25081.3083"],"SP500":[4698,"0.6330"]}},{"d":"May 13","aum":83280,"a":{"USDC":[936,"937.6170"],"ZYFAI-SS1":[4515,"1.0000"],"GIZA-SS1":[4515,"1.0000"],"WETH":[26970,"11.7965"],"ETH":[2286,"1.0000"],"ROBOTMONEY":[39363,"5118258882"],"BNKR":[8,"25081.3083"],"SP500":[4687,"0.6330"]}},{"d":"May 14","aum":98857,"a":{"USDC":[939,"937.6170"],"ZYFAI-SS1":[4515,"1.0000"],"GIZA-SS1":[4516,"1.0000"],"WETH":[27273,"12.0962"],"ETH":[2255,"1.0000"],"ROBOTMONEY":[54623,"5195444294"],"BNKR":[11,"25081.3083"],"SP500":[4724,"0.6330"]}},{"d":"May 15","aum":87653,"a":{"USDC":[935,"937.6170"],"ZYFAI-SS1":[4516,"1.0000"],"GIZA-SS1":[4517,"1.0000"],"WETH":[28545,"12.4253"],"ETH":[2297,"1.0000"],"ROBOTMONEY":[42079,"5260035502"],"BNKR":[10,"25081.3083"],"SP500":[4753,"0.6330"]}},{"d":"May 16","aum":86413,"a":{"USDC":[936,"937.6170"],"ZYFAI-SS1":[4516,"1.0000"],"GIZA-SS1":[4517,"1.0000"],"WETH":[28010,"12.6004"],"ETH":[2223,"1.0000"],"ROBOTMONEY":[41513,"5322426946"],"BNKR":[13,"25081.3083"],"SP500":[4686,"0.6330"]}},{"d":"May 17","aum":87494,"a":{"USDC":[942,"937.6170"],"ZYFAI-SS1":[4517,"1.0000"],"GIZA-SS1":[4517,"1.0000"],"WETH":[27838,"12.7686"],"ETH":[2180,"1.0000"],"ROBOTMONEY":[42804,"5374824765"],"BNKR":[15,"25081.3083"],"SP500":[4681,"0.6330"]}},{"d":"May 18","aum":92384,"a":{"USDC":[941,"937.6170"],"ZYFAI-SS1":[4517,"1.0000"],"GIZA-SS1":[4519,"1.0000"],"WETH":[28674,"13.0865"],"ETH":[2191,"1.0000"],"ROBOTMONEY":[46834,"5469597730"],"BNKR":[16,"25081.3083"],"SP500":[4691,"0.6330"]}},{"d":"May 19","aum":119396,"a":{"USDC":[941,"937.6170"],"ZYFAI-SS1":[4518,"1.0000"],"GIZA-SS1":[4519,"1.0000"],"WETH":[28147,"13.3686"],"ETH":[2105,"1.0000"],"ROBOTMONEY":[74454,"5534884669"],"BNKR":[14,"25081.3083"],"SP500":[4699,"0.6330"]}},{"d":"May 20","aum":95559,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4518,"1.0000"],"GIZA-SS1":[4519,"1.0000"],"WETH":[0,"0.0000"],"ETH":[105,"0.0500"],"ROBOTMONEY":[81744,"5623021605"],"BNKR":[13,"25081.3083"],"SP500":[4660,"0.6330"]}},{"d":"May 21","aum":95383,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4519,"1.0000"],"GIZA-SS1":[4520,"1.0000"],"WETH":[0,"0.0000"],"ETH":[106,"0.0500"],"ROBOTMONEY":[81535,"5623021605"],"BNKR":[14,"25081.3083"],"SP500":[4690,"0.6330"]}},{"d":"May 22","aum":136892,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4520,"1.0000"],"GIZA-SS1":[4520,"1.0000"],"WETH":[0,"0.0000"],"ETH":[106,"0.0500"],"ROBOTMONEY":[123009,"5623021605"],"BNKR":[12,"25081.3083"],"SP500":[4725,"0.6330"]}},{"d":"May 23","aum":114667,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4520,"1.0000"],"GIZA-SS1":[4521,"1.0000"],"WETH":[0,"0.0000"],"ETH":[104,"0.0500"],"ROBOTMONEY":[100782,"5623021605"],"BNKR":[12,"25081.3083"],"SP500":[4728,"0.6330"]}},{"d":"May 24","aum":107451,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4521,"1.0000"],"GIZA-SS1":[4522,"1.0000"],"WETH":[0,"0.0000"],"ETH":[106,"0.0500"],"ROBOTMONEY":[93489,"5623021605"],"BNKR":[13,"25081.3083"],"SP500":[4801,"0.6330"]}},{"d":"May 25","aum":98994,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4521,"1.0000"],"GIZA-SS1":[4523,"1.0000"],"WETH":[0,"0.0000"],"ETH":[104,"0.0500"],"ROBOTMONEY":[85065,"5623021605"],"BNKR":[14,"25081.3083"],"SP500":[4766,"0.6330"]}},{"d":"May 26","aum":82263,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4521,"1.0000"],"GIZA-SS1":[4523,"1.0000"],"WETH":[0,"0.0000"],"ETH":[105,"0.0500"],"ROBOTMONEY":[68328,"5623021605"],"BNKR":[12,"25081.3083"],"SP500":[4773,"0.6330"]}},{"d":"May 27","aum":74789,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4522,"1.0000"],"GIZA-SS1":[4524,"1.0000"],"WETH":[0,"0.0000"],"ETH":[103,"0.0500"],"ROBOTMONEY":[60862,"5623021605"],"BNKR":[13,"25081.3083"],"SP500":[4764,"0.6330"]}},{"d":"May 28","aum":68011,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4523,"1.0000"],"GIZA-SS1":[4524,"1.0000"],"WETH":[0,"0.0000"],"ETH":[101,"0.0500"],"ROBOTMONEY":[54076,"5623021605"],"BNKR":[13,"25081.3083"],"SP500":[4774,"0.6330"]}},{"d":"May 29","aum":69361,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4523,"1.0000"],"GIZA-SS1":[4524,"1.0000"],"WETH":[0,"0.0000"],"ETH":[100,"0.0500"],"ROBOTMONEY":[55404,"5623021605"],"BNKR":[13,"25081.3083"],"SP500":[4797,"0.6330"]}},{"d":"May 30","aum":64668,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4524,"1.0000"],"GIZA-SS1":[4524,"1.0000"],"WETH":[0,"0.0000"],"ETH":[100,"0.0500"],"ROBOTMONEY":[50705,"5623021605"],"BNKR":[15,"25081.3083"],"SP500":[4800,"0.6330"]}},{"d":"May 31","aum":68541,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4524,"1.0000"],"GIZA-SS1":[4524,"1.0000"],"WETH":[0,"0.0000"],"ETH":[101,"0.0500"],"ROBOTMONEY":[54565,"5623021605"],"BNKR":[19,"25081.3083"],"SP500":[4807,"0.6330"]}},{"d":"Jun 1","aum":71434,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4525,"1.0000"],"GIZA-SS1":[4524,"1.0000"],"WETH":[0,"0.0000"],"ETH":[101,"0.0500"],"ROBOTMONEY":[57460,"5623021605"],"BNKR":[16,"25081.3083"],"SP500":[4808,"0.6330"]}},{"d":"Jun 2","aum":83236,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4526,"1.0000"],"GIZA-SS1":[4524,"1.0000"],"WETH":[9478,"4.7295"],"ETH":[100,"0.0500"],"ROBOTMONEY":[59781,"6305141583"],"BNKR":[16,"25081.3083"],"SP500":[4811,"0.6330"]}},{"d":"Jun 3","aum":74104,"a":{"USDC":[0,"0.0004"],"ZYFAI-SS1":[4526,"1.0000"],"GIZA-SS1":[4524,"1.0000"],"WETH":[9003,"4.8522"],"ETH":[93,"0.0500"],"ROBOTMONEY":[51124,"6335624373"],"BNKR":[13,"25081.3083"],"SP500":[4820,"0.6330"]}},{"d":"Jun 5","aum":63501,"a":{"USDC":[9068,"9037.4551"],"ZYFAI-SS1":[4527,"1.0000"],"GIZA-SS1":[4524,"1.0000"],"WETH":[111,"0.0629"],"ETH":[88,"0.0500"],"ROBOTMONEY":[40369,"6355729992"],"BNKR":[15,"25081.3083"],"SP500":[4798,"0.6330"]}},{"d":"Jun 6","aum":64782,"a":{"USDC":[9007,"9037.4551"],"ZYFAI-SS1":[4528,"1.0000"],"GIZA-SS1":[4524,"1.0000"],"WETH":[214,"0.1344"],"ETH":[80,"0.0500"],"ROBOTMONEY":[41733,"6382109598"],"BNKR":[13,"25081.3083"],"SP500":[4684,"0.6330"]}},{"d":"Jun 7","aum":90396,"a":{"USDC":[9987,"9975.0720"],"ZYFAI-SS1":[4528,"1.0000"],"GIZA-SS1":[4524,"1.0000"],"WETH":[23424,"15.0658"],"ETH":[78,"0.0500"],"ROBOTMONEY":[43158,"6402003229"],"BNKR":[14,"25081.3083"],"SP500":[4683,"0.6330"]}},{"d":"Jun 8","aum":96815,"a":{"USDC":[10006,"9975.0720"],"ZYFAI-SS1":[4528,"1.0000"],"GIZA-SS1":[4524,"1.0000"],"WETH":[24663,"15.1119"],"ETH":[82,"0.0500"],"ROBOTMONEY":[48334,"6406514796"],"BNKR":[13,"25081.3083"],"SP500":[4665,"0.6330"]}},{"d":"Jun 9","aum":99173,"a":{"USDC":[14463,"14505.3328"],"ZYFAI-SS1":[4529,"1.0000"],"WETH":[25891,"15.1486"],"ETH":[85,"0.0500"],"ROBOTMONEY":[49495,"6413315343"],"BNKR":[13,"25081.3083"],"SP500":[4697,"0.6330"]}},{"d":"Jun 10","aum":89439,"a":{"USDC":[14532,"14505.3328"],"ZYFAI-SS1":[4529,"1.0000"],"WETH":[24878,"15.1796"],"ETH":[82,"0.0500"],"ROBOTMONEY":[40740,"6420314208"],"BNKR":[12,"25081.3083"],"SP500":[4665,"0.6330"]}},{"d":"Jun 11","aum":86785,"a":{"USDC":[14448,"14505.3328"],"ZYFAI-SS1":[4530,"1.0000"],"WETH":[24510,"15.2584"],"ETH":[80,"0.0500"],"ROBOTMONEY":[38611,"6448212319"],"BNKR":[11,"25081.3083"],"SP500":[4595,"0.6330"]}},{"d":"Jun 12","aum":86677,"a":{"USDC":[14442,"14505.3328"],"ZYFAI-SS1":[4530,"1.0000"],"WETH":[25637,"15.3356"],"ETH":[84,"0.0500"],"ROBOTMONEY":[37276,"6469175207"],"BNKR":[11,"25081.3083"],"SP500":[4696,"0.6330"]}},{"d":"Jun 13","aum":85970,"a":{"USDC":[14443,"14505.3328"],"ZYFAI-SS1":[4531,"1.0000"],"WETH":[25515,"15.3686"],"ETH":[83,"0.0500"],"ROBOTMONEY":[36665,"6483871908"],"BNKR":[12,"25081.3083"],"SP500":[4722,"0.6330"]}},{"d":"Jun 14","aum":90861,"a":{"USDC":[14420,"14505.3328"],"ZYFAI-SS1":[4532,"1.0000"],"WETH":[25930,"15.4090"],"ETH":[84,"0.0500"],"ROBOTMONEY":[41163,"6495777062"],"BNKR":[12,"25081.3083"],"SP500":[4721,"0.6330"]}},{"d":"Jun 15","aum":91413,"a":{"USDC":[14550,"14505.3328"],"ZYFAI-SS1":[4532,"1.0000"],"WETH":[26578,"15.4378"],"ETH":[86,"0.0500"],"ROBOTMONEY":[40906,"6499612465"],"BNKR":[12,"25081.3083"],"SP500":[4749,"0.6330"]}},{"d":"Jun 16","aum":89447,"a":{"USDC":[9042,"9037.4050"],"ZYFAI-SS1":[4533,"1.0000"],"WETH":[28030,"15.4378"],"ETH":[91,"0.0500"],"ROBOTMONEY":[42951,"6499612465"],"BNKR":[12,"25081.3083"],"SP500":[4789,"0.6330"]}},{"d":"Jun 17","aum":90765,"a":{"USDC":[9026,"9037.4050"],"ZYFAI-SS1":[4533,"1.0000"],"WETH":[27742,"15.4378"],"ETH":[90,"0.0500"],"ROBOTMONEY":[44594,"6499612465"],"BNKR":[12,"25081.3083"],"SP500":[4767,"0.6330"]}},{"d":"Jun 18","aum":85295,"a":{"USDC":[9021,"9037.4050"],"ZYFAI-SS1":[4534,"1.0000"],"WETH":[26975,"15.4378"],"ETH":[87,"0.0500"],"ROBOTMONEY":[39936,"6499612465"],"BNKR":[12,"25081.3083"],"SP500":[4731,"0.6330"]}},{"d":"Jun 19","aum":83665,"a":{"USDC":[9016,"9037.4050"],"ZYFAI-SS1":[4535,"1.0000"],"WETH":[26426,"15.4378"],"ETH":[86,"0.0500"],"ROBOTMONEY":[38834,"6499612465"],"BNKR":[11,"25081.3083"],"SP500":[4757,"0.6330"]}},{"d":"Jun 20","aum":83772,"a":{"USDC":[9054,"9037.4050"],"ZYFAI-SS1":[4535,"1.0000"],"WETH":[26261,"15.4378"],"ETH":[85,"0.0500"],"ROBOTMONEY":[39088,"6499612465"],"BNKR":[11,"25081.3083"],"SP500":[4737,"0.6330"]}},{"d":"Jun 21","aum":86167,"a":{"USDC":[9072,"9037.4050"],"ZYFAI-SS1":[4536,"1.0000"],"WETH":[26872,"15.4378"],"ETH":[87,"0.0500"],"ROBOTMONEY":[40843,"6499612465"],"BNKR":[12,"25081.3083"],"SP500":[4746,"0.6330"]}},{"d":"Jun 22","aum":82751,"a":{"USDC":[8994,"9037.4050"],"ZYFAI-SS1":[4536,"1.0000"],"WETH":[26454,"15.4378"],"ETH":[86,"0.0500"],"ROBOTMONEY":[37936,"6499612465"],"BNKR":[12,"25081.3083"],"SP500":[4733,"0.6330"]}},{"d":"Jun 23","aum":82890,"a":{"USDC":[9016,"9037.4050"],"ZYFAI-SS1":[4537,"1.0000"],"WETH":[26553,"15.4378"],"ETH":[86,"0.0500"],"ROBOTMONEY":[37959,"6499612465"],"BNKR":[11,"25081.3083"],"SP500":[4727,"0.6330"]}},{"d":"Jun 24","aum":80120,"a":{"USDC":[8995,"9037.4050"],"ZYFAI-SS1":[4537,"1.0000"],"WETH":[25682,"15.4378"],"ETH":[83,"0.0500"],"ROBOTMONEY":[36143,"6499612465"],"BNKR":[11,"25081.3083"],"SP500":[4669,"0.6330"]}},{"d":"Jun 25","aum":75101,"a":{"USDC":[9042,"9037.4050"],"ZYFAI-SS1":[4538,"1.0000"],"WETH":[24916,"15.4378"],"ETH":[81,"0.0500"],"ROBOTMONEY":[31831,"6499612465"],"BNKR":[10,"25081.3083"],"SP500":[4683,"0.6330"]}},{"d":"Jun 26","aum":73180,"a":{"USDC":[9052,"9037.4050"],"ZYFAI-SS1":[4538,"1.0000"],"WETH":[24194,"15.4378"],"ETH":[78,"0.0500"],"ROBOTMONEY":[30652,"6499612465"],"BNKR":[9,"25081.3083"],"SP500":[4656,"0.6330"]}}],
-    init() { this.$nextTick(() => this.draw()); },
-    // Collapsed = last 5 snapshots; "Show All" expands to all 99.
+    loading: true,
+    error: null,
+    // Live prop-wallet feed (issue #84): the eight stacked series + Historical
+    // Data table are derived on init from GET /api/dashboards/wallet-balances
+    // (holdings[] = fixed group/colour order; history[] = continuous, sparse
+    // byAsset per day), NOT baked here. The retired 99-day literal used to be
+    // frozen (Mar 18–Jun 26 2026); it now updates as the daily sampler runs.
+    labels: [],
+    assets: [],
+    totalAum: [],
+    columns: [],
+    rows: [],
+    init() { this.load(); },
+    // ISO calendar day ("2026-03-18") → the compact "Mar 18" label.
+    _fmtDay(iso) {
+      return new Date(iso + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+    },
+    // Fetch the endpoint and build the series/table from it. Colours + series
+    // order come from holdings[] (Stable→Protocol→Agent→Stocks); an asset absent
+    // from a day's byAsset stacks as 0 (chart) / renders "–" (table).
+    async load() {
+      try {
+        const data = await api.get(ROUTES.dashboards.walletBalances);
+        const holdings = data.holdings || [];
+        const history = data.history || [];
+        this.labels = history.map((pt) => this._fmtDay(pt.date));
+        this.totalAum = history.map((pt) => pt.totalUsd);
+        this.columns = holdings.map((h) => ({ sym: h.symbol, color: h.color }));
+        this.assets = holdings.map((h) => ({
+          label: h.symbol, color: h.color,
+          aum: history.map((pt) => (pt.byAsset[h.symbol] ?? 0)),
+        }));
+        this.rows = history.map((pt) => ({
+          d: this._fmtDay(pt.date), aum: pt.totalUsd,
+          a: Object.fromEntries(Object.entries(pt.byAsset).map(([sym, v]) => [sym, [v, ""]])),
+        }));
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.loading = false;
+        this.destroy();
+        this.$nextTick(() => this.draw());
+      }
+    },
+    // Collapsed = last 5 snapshots; "Show All" expands to the full series.
     visibleRows() { return this.showAll ? this.rows : this.rows.slice(-5); },
     fmtUsd(v) { return "$" + Number(v).toLocaleString("en-US"); },
     // Build the eight stacked series. kind "aum" → raw $; "pct" → % of total AUM.
@@ -724,16 +741,14 @@ export function registerViews(Alpine) {
 
   // The hero's "Total AUM" mirrors the original site's semantics
   // (robotmoney-site src/app/allocation/page.tsx: totalValue + vaultTotalValue)
-  // — wallet holdings PLUS vault TVL, not vault TVL alone. The Agent Wallet
-  // section below is a static snapshot (out of scope for issue #40, no live
-  // wallet-balance pipeline exists yet), so this constant is that same
-  // snapshot's total — keep it in sync with the literal "$71,526" baked into
-  // the Agent Wallet table's Total row further down this view.
-  const WALLET_SNAPSHOT_TOTAL_USD = 71526;
-
+  // — wallet holdings PLUS vault TVL, not vault TVL alone. Both halves are now
+  // LIVE (issue #84): the wallet half comes from GET /api/dashboards/wallet-balances
+  // (`wallet.totalUsd`), the vault half from vault-economics (`economics.tvlUsd`).
+  // The baked static wallet-snapshot scalar that used to live here is retired.
   Alpine.data("allocationView", () => ({
     _charts: [],
     economics: null,
+    wallet: null,
     loading: true,
     error: null,
     // Inline datalabels plugin: white mono-bold % just inside each slice edge,
@@ -773,7 +788,15 @@ export function registerViews(Alpine) {
     // their own — this only needs to touch the imperative Chart.js canvas.
     async load() {
       try {
-        this.economics = await api.get(ROUTES.dashboards.vaultEconomics);
+        // Both live halves of Total AUM, fetched in parallel. A failure in
+        // either leaves its half null so totalAum() renders "—" rather than
+        // understating the total (issue #84).
+        const [economics, wallet] = await Promise.all([
+          api.get(ROUTES.dashboards.vaultEconomics),
+          api.get(ROUTES.dashboards.walletBalances),
+        ]);
+        this.economics = economics;
+        this.wallet = wallet;
       } catch (e) {
         this.error = e.message;
       } finally {
@@ -782,21 +805,30 @@ export function registerViews(Alpine) {
         this.$nextTick(() => this.draw());
       }
     },
+    // True when any live source (vault or wallet) is serving stub/degraded data,
+    // so the hero can flag that Total AUM is not fully live chain data.
+    walletNonLive() {
+      return this.wallet?.source === "stub" || (this.wallet?.holdings || []).some((h) => h.provenance === "stub");
+    },
+    walletStale() {
+      return (this.wallet?.holdings || []).some((h) => h.provenance === "stale");
+    },
     fmtUsd(v) {
       if (v == null) return "—";
       const n = Number(v);
       return "$" + n.toLocaleString("en-US", { maximumFractionDigits: Math.abs(n) < 1000 ? 2 : 0 });
     },
     fmtPct(v) { return v == null ? "—" : (Number(v) * 100).toFixed(2) + "%"; },
-    // Hero Total AUM = static wallet snapshot + live vault TVL (see
-    // WALLET_SNAPSHOT_TOTAL_USD above). Mirrors the null-until-live guarantee
-    // of the vault-economics payload: while tvlUsd is unknown (still loading,
-    // or degraded with no persisted sample) this returns null so fmtUsd()
-    // renders "—" rather than showing the static wallet figure alone, which
-    // would understate the true total without disclosing why.
+    // Hero Total AUM = live prop-wallet total (wallet-balances) + live vault TVL
+    // (vault-economics) — issue #84. Null-until-live: if EITHER half is unknown
+    // (still loading, or degraded with no persisted sample) this returns null so
+    // fmtUsd() renders "—" rather than showing one half alone, which would
+    // understate the true total without disclosing why.
     totalAum() {
       const vault = this.economics?.tvlUsd;
-      return vault == null ? null : WALLET_SNAPSHOT_TOTAL_USD + vault;
+      const wallet = this.wallet?.totalUsd;
+      if (vault == null || wallet == null) return null;
+      return wallet + vault;
     },
     // Per-adapter Value cell (issue #50): an adapter still at its placeholder
     // address is reported configured:false with balanceUsd:null by the API —

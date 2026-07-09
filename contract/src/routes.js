@@ -27,6 +27,7 @@ export const ROUTES = {
     regimeSnapshots: "/api/dashboards/regime-snapshots", // GET ?range=
     researchSignal: "/api/dashboards/research-signals/:key", // GET
     vaultEconomics: "/api/dashboards/vault-economics", // GET
+    walletBalances: "/api/dashboards/wallet-balances", // GET — live prop-wallet valuation (#84)
   },
 
   projects: {
