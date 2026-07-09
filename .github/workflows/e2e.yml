@@ -63,6 +63,14 @@ jobs:
         run: bun run scripts/demo.ts
         env:
           CI: "true"
+          # Real committee-member inference (issue #77): each present member's
+          # take is authored by a live claude-opus-4-8 call in mcp/src/inference.ts
+          # (driven via mcp/src/e2e.ts). The key is REQUIRED — authorTake throws
+          # with no template fallback when it is absent, so this job fails loudly
+          # rather than silently emitting fake takes (loud-skip contract). The
+          # ANTHROPIC_API_KEY repository/org secret must be provisioned for this
+          # required check to pass; see blocker issue #92.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # EXPLICIT hermetic opt-in (issue #50, supersedes the #48 wiring): local
           # `bun demo` now defaults to the production-parity LIVE data path, so
           # this required check must opt in to the hermetic mode itself.

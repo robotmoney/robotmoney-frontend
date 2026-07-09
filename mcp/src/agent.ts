@@ -12,7 +12,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
 import { generateKeyPair, sign } from "./crypto.ts";
-import { buildMemo, type RegimeContext } from "./memo.ts";
+import { authorTake, type RegimeContext } from "./inference.ts";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const MCP_URL = process.env.MCP_URL ?? "http://localhost:8788/mcp";
@@ -35,14 +35,6 @@ export interface ExistingCredentials {
 // → reporting → done. Default undefined ⇒ zero behaviour change (standalone e2e).
 export type AgentStage = "connect" | "fetch" | "thinking" | "reporting" | "done";
 export type AgentProgress = (stage: AgentStage, info?: { stance?: string; confidence?: number }) => void;
-
-export function stanceFor(composite: number, bias: number) {
-  const x = composite + bias;
-  const stance = x >= 0.67 ? "bullish" : x >= 0.55 ? "constructive" : x >= 0.45 ? "neutral" : x >= 0.33 ? "cautious" : "bearish";
-  const confidence = Math.round(Math.min(1, Math.abs(x - 0.5) * 2 + 0.4) * 100) / 100;
-  return { stance, confidence };
-}
-
 
 export const textOf = (res: any) => JSON.parse(res.content?.[0]?.text ?? "null");
 
@@ -97,13 +89,15 @@ export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCrede
       provenance = [`RM tool: classify_regime → ${classification.classification} (${classification.explanation})`];
     }
 
-    // 4. decide, get canonical payload, sign, submit — all via MCP
-    const { stance, confidence } = stanceFor(composite, o.bias);
-    onProgress?.("thinking", { stance, confidence }); // stance decided
-    const provenanceText = provenance.length ? ` [${provenance.join("; ")}]` : "";
-    // Weave whatever panel percentiles / regime labels the regime snapshot carried
-    // into a deterministic, reference-shaped 3-section memo (no LLM). Missing panel
-    // fields degrade to composite-derived approximations inside buildMemo.
+    // 4. author the take via a REAL claude-opus-4-8 inference call, get the
+    //    canonical payload, sign, submit — all via MCP. The member persona
+    //    (name, lens, disposition) plus the regime/subject brief are fed to
+    //    Claude; the returned prose (REGIME / ALLOCATION / SUBJECT sections
+    //    ending in a STANCE/CONFIDENCE control line) is parsed into
+    //    stance/confidence, and the control line is stripped from the stored
+    //    body. There is NO deterministic/templated fallback: authorTake throws
+    //    when ANTHROPIC_API_KEY is absent, so a keyless run fails loudly rather
+    //    than emitting a fake take.
     const regimeCtx: RegimeContext = {
       composite,
       compositePercentile: regime?.compositePercentile ?? regime?.composite_percentile ?? null,
@@ -115,17 +109,27 @@ export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCrede
       onchainPercentile: regime?.onchainPercentile ?? regime?.onchain_percentile ?? null,
       factorPercentile: regime?.factorPercentile ?? regime?.factor_percentile ?? null,
     };
-    const memoText = buildMemo({ name: o.name, lens: o.lens, subjectId: o.subjectId, stance, confidence }, regimeCtx, provenanceText);
+    onProgress?.("thinking"); // authoring the take via Claude inference
+    const authored = await authorTake(
+      { memberId: o.memberId, name: o.name, lens: o.lens, bias: o.bias },
+      regimeCtx,
+      o.subjectId,
+    );
+    const { stance, confidence } = authored;
+    // Preserve the optional RM-tool provenance footnote (e.g. cygnus's
+    // classify_regime read) by appending it to the authored body.
+    const provenanceText = provenance.length ? `\n\n_Provenance: ${provenance.join("; ")}_` : "";
+    const body = `${authored.body}${provenanceText}`;
     onProgress?.("reporting", { stance, confidence }); // posting memo, signing, submitting
     const memoResult = textOf(await client.callTool({
       name: "post_memo",
-      arguments: { sessionId: o.sessionId, title: `${o.name}'s analysis of ${o.subjectId}`, body: memoText },
+      arguments: { sessionId: o.sessionId, title: `${o.name}'s analysis of ${o.subjectId}`, body },
     }));
     const memoUrl = memoResult.ok ? memoResult.url : undefined;
     const draft = {
       memberId: o.memberId, date: o.date, subjectId: o.subjectId,
       nonce: crypto.randomUUID(), stance, confidence,
-      body: memoText,
+      body,
       memoUrl,
     };
     const { canonical } = textOf(await client.callTool({ name: "get_signing_payload", arguments: draft }));

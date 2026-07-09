@@ -5,7 +5,7 @@
 // handler → domain) so the demo exercises the real FOR UPDATE SKIP LOCKED claim
 // loop. Multi-session: the second session's brief references the first session's
 // outcome, demonstrating rotation awareness.
-import { runAgent, enroll, stanceFor, textOf } from "./agent.ts";
+import { runAgent, enroll, textOf } from "./agent.ts";
 import type { ExistingCredentials, AgentStage } from "./agent.ts";
 import { generateKeyPair, sign } from "./crypto.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -14,6 +14,55 @@ import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// ── Real-inference take invariants (issue #77) ──────────────────────────────
+// Fingerprint of the RETIRED deterministic buildMemo template: every templated
+// REGIME section carried this exact clause. A real claude-opus-4-8 take will not
+// reproduce it verbatim, so a body that still matches means the fake/templated
+// path leaked back in — fail loudly.
+const OLD_TEMPLATE_RE = /the spread, not the composite, is where the signal lives/i;
+const VALID_STANCES = new Set(["bullish", "constructive", "neutral", "cautious", "bearish"]);
+
+// Post-publish structural assertions over every PRESENT member's authored take.
+// Throws on any failure so the standalone `bun run src/e2e.ts` entrypoint exits
+// non-zero (main() catches and process.exit(1)) — this is the required-CI signal
+// that each take was authored by a real inference call, not a template.
+function assertAuthoredTakes(tag: string, takes: any[]) {
+  // Present-member takes are the ones that actually posted a body; absent
+  // no-shows enrolled but never submitted, so they carry no body.
+  const authored = (takes ?? []).filter(
+    (t) => typeof t?.body === "string" && t.body.trim().length > 0,
+  );
+  if (authored.length === 0) {
+    throw new Error(`${tag}: no authored takes to assert on (expected ≥1 present member)`);
+  }
+  const seenBodies = new Map<string, string>();
+  for (const t of authored) {
+    const who = String(t.memberId);
+    if (OLD_TEMPLATE_RE.test(t.body)) {
+      throw new Error(`${tag}: take for ${who} matches the retired template fingerprint — not a real inference body`);
+    }
+    for (const lead of ["**REGIME**", "**ALLOCATION**", "**SUBJECT**"]) {
+      if (!t.body.includes(lead)) {
+        throw new Error(`${tag}: take for ${who} is missing the ${lead} lead-in`);
+      }
+    }
+    if (!VALID_STANCES.has(String(t.stance))) {
+      throw new Error(`${tag}: take for ${who} has stance '${t.stance}' outside {bullish,constructive,neutral,cautious,bearish}`);
+    }
+    const c = Number(t.confidence);
+    if (!Number.isFinite(c) || c < 0 || c > 1) {
+      throw new Error(`${tag}: take for ${who} has confidence ${t.confidence} outside [0,1]`);
+    }
+    for (const [otherWho, otherBody] of seenBodies) {
+      if (otherBody === t.body) {
+        throw new Error(`${tag}: take for ${who} is byte-identical to ${otherWho} — bodies must be distinct per member`);
+      }
+    }
+    seenBodies.set(who, t.body);
+  }
+  console.log(`${tag}: authored-take invariants passed for ${authored.length} present member(s)`);
+}
 
 export const MEMBERS = [
   { memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1, present: true },
@@ -230,6 +279,12 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   console.log(`${tag} published: state=${pub.session.state}, takes=${pub.takes.length}`);
   console.log(`${tag} synthesis: ${pub.session.synthesis}`);
   console.log(`${tag} absent: ${JSON.stringify(pub.takes.filter((t: any) => t.verified === null || t.verified === false).map((t: any) => t.memberId))}`);
+
+  // Real-inference invariants: every present member's published take must be a
+  // genuine claude-opus-4-8 authoring (non-template body, REGIME/ALLOCATION/
+  // SUBJECT lead-ins, stance in the five-value set, confidence in [0,1], distinct
+  // across members). Throws → exit 1 on any failure.
+  assertAuthoredTakes(tag, pub.takes);
 
   // Verify memos
   for (const r of results) {
