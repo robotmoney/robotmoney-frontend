@@ -7,7 +7,7 @@ import { config, assertNoVaultAddressCollision } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances } from "./routes/dashboards.ts";
-import { getProjects } from "./routes/projects.ts";
+import { getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleCommittee } from "./routes/committee.ts";
 
 function json(data: unknown, status = 200): Response {
@@ -105,6 +105,13 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname === ROUTES.projects.list && req.method === "GET") {
       return json(await getProjects());
+    }
+
+    // Admin-managed overview write (issue #93). Privileged; no AI enrichment.
+    if (pathname.startsWith("/api/projects/admin/") && req.method === "POST") {
+      const slug = decodeURIComponent(pathname.slice("/api/projects/admin/".length));
+      const r = await updateProjectOverview(req, slug);
+      return json(r.body, r.status);
     }
 
     if (pathname.startsWith("/api/dashboards/research-signals/") && req.method === "GET") {

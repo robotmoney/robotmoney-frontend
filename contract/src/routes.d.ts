@@ -11,6 +11,7 @@ export const ROUTES: {
   };
   projects: {
     list: string;
+    adminUpdate: string;
   };
   committee: {
     members: string;
