@@ -233,7 +233,9 @@ export async function syncRevenue(
 // legacy compute was per-project; prod fires it unscoped for the whole directory).
 export async function snapshotDaily(payload: Record<string, unknown> = {}): Promise<HandlerResult> {
   const day = today();
-  const ids = Array.isArray(payload.project_ids) ? (payload.project_ids as string[]) : null;
+  // An explicit empty project_ids:[] must fall back to the whole-directory
+  // (unscoped) query, NOT build `IN ()` — that is invalid SQL and would throw.
+  const ids = Array.isArray(payload.project_ids) && payload.project_ids.length > 0 ? (payload.project_ids as string[]) : null;
   const result = { coins: 0, agents: 0, wallets: 0, vaults: 0 };
 
   await sql.begin(async (tx) => {
@@ -326,7 +328,8 @@ function confidenceFromRank(rank: number | null): SourceConfidence {
 }
 
 export async function recomputeCoverage(payload: Record<string, unknown> = {}): Promise<HandlerResult> {
-  const ids = Array.isArray(payload.project_ids) ? (payload.project_ids as string[]) : null;
+  // Empty project_ids:[] → unscoped (whole directory), never invalid `IN ()`.
+  const ids = Array.isArray(payload.project_ids) && payload.project_ids.length > 0 ? (payload.project_ids as string[]) : null;
   const rows = await sql<Record<string, unknown>[]>`
     SELECT
       p.id, p.logo_url, p.description, p.twitter_handle, p.website_url, p.display_name, p.slug, p.resolved_at,

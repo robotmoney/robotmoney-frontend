@@ -12,6 +12,17 @@ interface JobRow {
   max_attempts: number;
 }
 
+// A handler signals a degraded (non-fatal) run by returning `{ ok:false }`
+// instead of throwing — it kept the last-persisted rows and wrote nothing.
+function isDegradedResult(output: unknown): output is { ok: false; error?: unknown } {
+  return output != null && typeof output === "object" && (output as { ok?: unknown }).ok === false;
+}
+
+function degradedError(output: { error?: unknown }): string {
+  const e = output.error;
+  return e == null ? "degraded (kept last-persisted rows)" : e instanceof Error ? e.message : String(e);
+}
+
 // Claim exactly one due job, lock it, run its handler, and record the outcome.
 // Concurrency-safe across N workers via FOR UPDATE SKIP LOCKED.
 // Returns true if a job was processed (caller can poll faster when busy).
@@ -48,6 +59,43 @@ export async function processOneJob(): Promise<boolean> {
   try {
     if (!handler) throw new Error(`no handler registered for kind "${job.kind}"`);
     const output = await handler(job.payload);
+
+    // A handler that returns { ok:false } DEGRADED (a live provider was
+    // unreachable/slow, so it kept the last-persisted rows and wrote nothing).
+    // Recording that as 'succeeded' is dishonest: it hides every silent no-op
+    // from job_runs alerting and never re-tries the transient blip. Give it a
+    // distinct durable job_runs.status ('degraded') and engage the same
+    // exponential-backoff retry as a hard failure so a transient blip recovers
+    // before the next (up to daily) cron tick. Never escalate to 'dead' —
+    // last-persisted data is already intact and the schedule must keep firing;
+    // once attempts are exhausted we settle the job 'succeeded' and let the next
+    // cron slot re-enqueue a fresh attempt.
+    if (isDegradedResult(output)) {
+      const errText = degradedError(output);
+      const canRetry = job.attempts < job.max_attempts;
+      const backoff = Math.min(MAX_BACKOFF_SECONDS, Math.pow(2, job.attempts));
+      const recorded = await sql.begin(async (tx) => {
+        const upd = canRetry
+          ? await tx`UPDATE jobs
+                        SET status = 'pending',
+                            run_after = now() + (${backoff} || ' seconds')::interval,
+                            locked_at = NULL, locked_by = NULL,
+                            last_error = ${errText}, updated_at = now()
+                      WHERE id = ${job.id} AND locked_by = ${config.workerId} AND status = 'running' RETURNING id`
+          : await tx`UPDATE jobs
+                        SET status = 'succeeded', locked_at = NULL, locked_by = NULL,
+                            last_error = ${errText}, updated_at = now()
+                      WHERE id = ${job.id} AND locked_by = ${config.workerId} AND status = 'running' RETURNING id`;
+        if (upd.length === 0) return false;
+        await tx`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error, output)
+                 VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), 'degraded', ${errText}, ${tx.json(jsonValue(output ?? null))})`;
+        return true;
+      });
+      if (!recorded) console.warn(`job ${job.id} (${job.kind}) lost its lock before completion (reaped) — degraded result discarded`);
+      else console.warn(`job ${job.id} (${job.kind}) DEGRADED — kept last-persisted${canRetry ? `, retry in ${backoff}s` : " (attempts exhausted; next cron re-enqueues)"}: ${errText.split("\n")[0]}`);
+      return true;
+    }
+
     const ok = await sql.begin(async (tx) => {
       const upd = await tx`UPDATE jobs SET status = 'succeeded', locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now()
                            WHERE id = ${job.id} AND locked_by = ${config.workerId} AND status = 'running' RETURNING id`;

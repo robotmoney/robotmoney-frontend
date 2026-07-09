@@ -7,7 +7,10 @@
 // non-success status (degrade-to-persisted, nothing fabricated).
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import { getHandler } from "../src/worker/handlers/index.ts";
+import { config } from "../src/config.ts";
+import { getHandler, handlers } from "../src/worker/handlers/index.ts";
+import { processOneJob } from "../src/worker/loop.ts";
+import { liveProjectsDataSource } from "../src/projects/access/live-source.ts";
 import {
   discover,
   fetchVaults,
@@ -160,4 +163,111 @@ test("a forced extractor failure leaves last-persisted rows intact and reports n
     SELECT market_cap::float8 AS after FROM lobster_coins c JOIN projects p ON p.id = c.project_id
     WHERE p.slug = ${prefix + "-virtuals-protocol"} AND c.ticker = 'VIRTUAL'`;
   expect(after).toBe(before); // last-persisted value untouched
+});
+
+// ── Issue #95: live-fetch timeout ────────────────────────────────────────────
+// A stalled (not errored) provider socket must abort at the hard timeout so the
+// handler fails FAST and degrades to last-persisted — never hangs, pinning the
+// worker slot. Points the live source's Base-RPC eth_call at a server that
+// accepts the connection but never responds, with a 200ms timeout.
+test("a stalled live provider fetch aborts at the timeout and fetchVaults degrades to last-persisted (no hang)", async () => {
+  const server = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) });
+  const prevRpc = config.baseRpcUrl;
+  const prevTimeout = process.env.LIVE_FETCH_TIMEOUT_MS;
+  process.env.LIVE_FETCH_TIMEOUT_MS = "200";
+  config.baseRpcUrl = `http://localhost:${server.port}`;
+
+  let projectId: string | undefined;
+  try {
+    const slug = `wkstall_${crypto.randomUUID().slice(0, 8)}`;
+    const [{ id }] = await sql<{ id: string }[]>`
+      INSERT INTO projects (slug, display_name, status) VALUES (${slug}, 'Stall Vault', 'active') RETURNING id`;
+    projectId = id;
+    const vaultAddr = "0x" + "ab".repeat(20);
+    await sql`INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, data_source, is_active, tvl_usd)
+              VALUES (${projectId}, 'stall', ${vaultAddr}, 'base', 'erc4626', 'live', true, 42424)`;
+
+    const started = Date.now();
+    const res = await fetchVaults({}, liveProjectsDataSource);
+    const elapsed = Date.now() - started;
+
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe("degraded"); // stalled fetch → degrade-to-persisted
+    expect(elapsed).toBeLessThan(5000); // aborted at ~200ms, never hung the slot
+
+    const [{ tvl }] = await sql<{ tvl: number }[]>`
+      SELECT tvl_usd::float8 AS tvl FROM agent_vaults WHERE project_id = ${projectId} AND name = 'stall'`;
+    expect(tvl).toBe(42424); // last-persisted value untouched
+  } finally {
+    config.baseRpcUrl = prevRpc;
+    if (prevTimeout === undefined) delete process.env.LIVE_FETCH_TIMEOUT_MS;
+    else process.env.LIVE_FETCH_TIMEOUT_MS = prevTimeout;
+    server.stop(true);
+    if (projectId) {
+      await sql`DELETE FROM daily_tvl_snapshots WHERE vault_id IN (SELECT id FROM agent_vaults WHERE project_id = ${projectId})`;
+      await sql`DELETE FROM agent_vaults WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM projects WHERE id = ${projectId}`;
+    }
+  }
+}, 15_000);
+
+// ── Issue #95: honest degraded-run signalling in the worker loop ─────────────
+// A handler that returns { ok:false } (degraded) must NOT be recorded as
+// 'succeeded' — the loop must write a distinct non-'succeeded' job_runs row and
+// engage the exponential-backoff retry, but never escalate a persistently-flaky
+// provider to 'dead' (last-persisted data stays, the schedule keeps firing).
+test("the loop records a degraded handler result as a non-'succeeded' job_runs signal and retries with backoff", async () => {
+  const kind = `test.projects_degrade_${crypto.randomUUID().slice(0, 8)}`;
+  handlers[kind] = async () => ({ ok: false, status: "degraded", error: "forced degrade" });
+  const jobIds: number[] = [];
+  try {
+    // Retryable: attempts remain → job goes back to 'pending' with a future
+    // run_after (backoff engaged), and the run is recorded 'degraded'.
+    const [{ id: retryId }] = await sql<{ id: number }[]>`
+      INSERT INTO jobs (kind, priority, max_attempts) VALUES (${kind}, 1000000, 5) RETURNING id`;
+    jobIds.push(retryId);
+    expect(await processOneJob()).toBe(true);
+
+    const [retryJob] = await sql<{ status: string; attempts: number; due: boolean }[]>`
+      SELECT status, attempts, run_after > now() AS due FROM jobs WHERE id = ${retryId}`;
+    expect(retryJob.status).toBe("pending"); // re-queued for retry
+    expect(retryJob.attempts).toBe(1);
+    expect(retryJob.due).toBe(true); // backoff pushed run_after into the future
+
+    const [retryRun] = await sql<{ status: string }[]>`
+      SELECT status FROM job_runs WHERE job_id = ${retryId} ORDER BY id DESC LIMIT 1`;
+    expect(retryRun.status).toBe("degraded");
+    expect(retryRun.status).not.toBe("succeeded");
+
+    // Attempts exhausted (max_attempts=1): must NOT go 'dead' — settle
+    // 'succeeded' so the schedule survives, while still recording 'degraded'.
+    const [{ id: termId }] = await sql<{ id: number }[]>`
+      INSERT INTO jobs (kind, priority, max_attempts) VALUES (${kind}, 1000000, 1) RETURNING id`;
+    jobIds.push(termId);
+    expect(await processOneJob()).toBe(true);
+
+    const [termJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${termId}`;
+    expect(termJob.status).not.toBe("dead"); // never escalate degrade to dead
+    expect(termJob.status).toBe("succeeded"); // last-persisted intact; next cron re-enqueues
+
+    const [termRun] = await sql<{ status: string }[]>`
+      SELECT status FROM job_runs WHERE job_id = ${termId} ORDER BY id DESC LIMIT 1`;
+    expect(termRun.status).toBe("degraded");
+  } finally {
+    delete handlers[kind];
+    if (jobIds.length) {
+      await sql`DELETE FROM job_runs WHERE job_id IN ${sql(jobIds)}`;
+      await sql`DELETE FROM jobs WHERE id IN ${sql(jobIds)}`;
+    }
+  }
+});
+
+// ── Issue #95: empty project_ids guard ───────────────────────────────────────
+// An explicit project_ids:[] must fall back to the whole-directory query, never
+// build invalid `IN ()` SQL (which would throw and fail the run).
+test("snapshotDaily/recomputeCoverage with project_ids:[] emit no invalid IN () SQL", async () => {
+  const snap = await snapshotDaily({ project_ids: [] });
+  expect(snap.ok).toBe(true); // did not throw on `IN ()`
+  const cov = await recomputeCoverage({ project_ids: [] });
+  expect(cov.ok).toBe(true);
 });
