@@ -62,11 +62,17 @@ export async function discover(
   let upserted = 0;
   await sql.begin(async (tx) => {
     for (const p of projects) {
+      // overview_short / overview_long are ADMIN-MANAGED free text (issue #93):
+      // seeded on first insert only, NEVER overwritten on a scheduled re-run.
+      // Their columns are deliberately absent from the DO UPDATE set so an admin
+      // edit (POST /api/projects/admin/:slug) survives every subsequent discovery
+      // pass, while display_name / description / logo / facet columns still refresh.
+      // (No AI/LLM enrichment exists anywhere on this path.)
       const [{ id }] = await tx`
         INSERT INTO projects (slug, display_name, description, overview_short, logo_url, website_url, twitter_handle, is_sticky, status, resolved_at)
         VALUES (${p.slug}, ${p.display_name}, ${p.description}, ${p.description}, ${p.logo_url}, ${p.website_url}, ${p.twitter_handle}, ${p.is_sticky}, 'active', now())
         ON CONFLICT (slug) DO UPDATE SET
-          display_name = EXCLUDED.display_name, description = EXCLUDED.description, overview_short = EXCLUDED.overview_short,
+          display_name = EXCLUDED.display_name, description = EXCLUDED.description,
           logo_url = EXCLUDED.logo_url, website_url = EXCLUDED.website_url, twitter_handle = EXCLUDED.twitter_handle,
           is_sticky = EXCLUDED.is_sticky, status = 'active', resolved_at = now(), updated_at = now()
         RETURNING id`;

@@ -51,6 +51,8 @@ jobs:
         run: bun run typecheck
       - name: No Supabase infra in backend/src (issue #87)
         run: bash backend/scripts/check-no-supabase.sh
+      - name: No AI/LLM overview enrichment in backend/src (issue #93)
+        run: bash backend/scripts/check-no-ai-overview.sh
       - name: Verify vendored contract
         run: bun run check-contract
       - name: Run tests (ephemeral Postgres via Docker)

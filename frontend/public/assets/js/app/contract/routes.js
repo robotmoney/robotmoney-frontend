@@ -32,6 +32,7 @@ export const ROUTES = {
 
   projects: {
     list: "/api/projects", // GET → aggregated projects directory
+    adminUpdate: "/api/projects/admin/:slug", // POST — admin-managed overview write (#93)
   },
 
   committee: {

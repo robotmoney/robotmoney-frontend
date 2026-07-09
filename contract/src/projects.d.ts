@@ -58,3 +58,21 @@ export interface Project {
 export interface ProjectsResponse {
   projects: Project[];
 }
+
+// Admin-managed overview write (issue #93): POST /api/projects/admin/:slug.
+// Admin-authored free text ONLY — no AI/LLM enrichment. At least one field must
+// be present; omitted fields are left untouched.
+export interface ProjectOverviewUpdateRequest {
+  overview_short?: string;
+  overview_long?: string;
+  description?: string;
+}
+
+export interface ProjectOverviewUpdateResponse {
+  project: {
+    slug: string;
+    overview_short: string | null;
+    overview_long: string | null;
+    description: string | null;
+  };
+}

@@ -111,6 +111,34 @@ test("the full pipeline upserts fixture-derived rows; discovery is idempotent", 
   expect(after).toEqual(before);
 });
 
+test("admin-authored overview_short/overview_long survive a re-discovery run while facet columns still refresh (issue #93)", async () => {
+  const prefix = `wkovr_${crypto.randomUUID().slice(0, 8)}`;
+  const src = uniqueSlugSource(prefix);
+
+  await discover({}, src);
+  const slug = `${prefix}-virtuals-protocol`;
+  const [before] = await sql<{ id: string; display_name: string }[]>`
+    SELECT id, display_name FROM projects WHERE slug = ${slug}`;
+  expect(before).toBeTruthy();
+  const fixtureName = before.display_name; // what discovery writes for display_name
+
+  // Simulate an admin edit of the overview text AND drift a refreshable facet
+  // column (display_name) so the re-run can prove it refreshes that column.
+  await sql`UPDATE projects SET
+      overview_short = 'ADMIN SHORT', overview_long = 'ADMIN LONG', display_name = 'STALE NAME'
+    WHERE id = ${before.id}`;
+
+  // A subsequent scheduled discovery pass must NOT clobber the admin overview…
+  await discover({}, src);
+  const [after] = await sql<{ overview_short: string; overview_long: string; display_name: string }[]>`
+    SELECT overview_short, overview_long, display_name FROM projects WHERE id = ${before.id}`;
+  expect(after.overview_short).toBe("ADMIN SHORT");
+  expect(after.overview_long).toBe("ADMIN LONG");
+  // …while still refreshing non-overview columns back to the discovered values.
+  expect(after.display_name).toBe(fixtureName);
+  expect(after.display_name).not.toBe("STALE NAME");
+});
+
 test("a forced extractor failure leaves last-persisted rows intact and reports non-success", async () => {
   const prefix = `wkfail_${crypto.randomUUID().slice(0, 8)}`;
   const src = uniqueSlugSource(prefix);
