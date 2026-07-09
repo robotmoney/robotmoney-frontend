@@ -25,7 +25,10 @@ import { sql } from "../db/client.ts";
 import { callBalanceOf, callConvertToAssets, ethGetBalance, type RpcCallOptions } from "./base-rpc-client.ts";
 import { fetchAssetPriceUsd } from "./token-prices.ts";
 
-export type Provenance = "live" | "stub" | "stale";
+// 'seed' = a pre-launch history row backfilled from the ported baked constants
+// (chain/wallet-history-seed.ts), NOT a live chain read — honesty invariant from
+// migration 0014 ("a value is NEVER fabricated or falsely labelled 'live'").
+export type Provenance = "live" | "stub" | "stale" | "seed";
 
 export interface WalletHolding {
   symbol: string;

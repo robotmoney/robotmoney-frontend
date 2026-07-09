@@ -45,6 +45,9 @@ export async function sampleWalletBalances(_payload: Record<string, unknown>): P
 
 // Idempotent backfill of the pre-launch history. ON CONFLICT DO NOTHING so a
 // later live sample for the same (date, symbol) is never clobbered by a re-run.
+// Rows are labelled provenance 'seed' — these are ported baked UI constants
+// (chain/wallet-history-seed.ts), not live chain reads, so they must NEVER carry
+// 'live' (honesty invariant, migration 0014_wallet_balance_samples.sql).
 export async function backfillWalletHistory(): Promise<number> {
   const rows = walletHistorySeedRows();
   for (const r of rows) {
@@ -52,7 +55,7 @@ export async function backfillWalletHistory(): Promise<number> {
       INSERT INTO wallet_balance_samples
         (sample_date, symbol, amount, price_usd, value_usd, provenance)
       VALUES
-        (${r.date}, ${r.symbol}, NULL, NULL, ${r.valueUsd}, 'live')
+        (${r.date}, ${r.symbol}, NULL, NULL, ${r.valueUsd}, 'seed')
       ON CONFLICT (sample_date, symbol) DO NOTHING
     `;
   }
