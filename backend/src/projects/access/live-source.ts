@@ -17,6 +17,23 @@ import { DISCOVERY_DATASET } from "../fixtures/dataset.ts";
 const CG_BASE = "https://api.coingecko.com/api/v3";
 const DEX_BASE = "https://api.dexscreener.com/latest/dex/tokens";
 
+// Hard per-request timeout for every live provider fetch (mirrors the
+// analytics extract/http.ts fetchJson/fetchText discipline). Without it a
+// stalled — not errored — socket hangs the handler indefinitely and pins the
+// worker slot while the reaper re-queues duplicate work; the abort turns that
+// into a fast throw the degrade-to-persisted path already handles. 8s matches
+// the extract helpers; overridable for tests / a slow private endpoint.
+export function liveFetchTimeoutMs(): number {
+  const raw = Number(process.env.LIVE_FETCH_TIMEOUT_MS ?? 8000);
+  return Number.isFinite(raw) && raw > 0 ? raw : 8000;
+}
+
+// fetch() with the hard timeout applied. AbortSignal.timeout rejects the fetch
+// with a TimeoutError once the deadline passes, so a hung socket fails fast.
+export async function timedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, { ...init, signal: AbortSignal.timeout(liveFetchTimeoutMs()) });
+}
+
 // ERC-20 / ERC-4626 selectors (fetch-vault-data/index.ts).
 const SEL = { asset: "0x38d52e0f", totalAssets: "0x01e1d114", decimals: "0x313ce567" };
 const STABLES = new Set([
@@ -26,7 +43,7 @@ const STABLES = new Set([
 ]);
 
 async function ethCall(to: string, data: string): Promise<string> {
-  const r = await fetch(config.baseRpcUrl, {
+  const r = await timedFetch(config.baseRpcUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to, data }, "latest"] }),
@@ -38,7 +55,7 @@ async function ethCall(to: string, data: string): Promise<string> {
 }
 
 async function dexPriceUsd(chain: string, address: string): Promise<number> {
-  const r = await fetch(`${DEX_BASE}/${address}`, { headers: { accept: "application/json" } });
+  const r = await timedFetch(`${DEX_BASE}/${address}`, { headers: { accept: "application/json" } });
   if (!r.ok) throw new Error(`dexscreener ${r.status}`);
   const j = (await r.json()) as DexPayload;
   const best = (j.pairs ?? [])
@@ -61,13 +78,13 @@ export const liveProjectsDataSource: ProjectsDataSource = {
     const url = `${CG_BASE}/coins/markets?vs_currency=usd&ids=${ids.join(",")}&per_page=250&page=1&sparkline=false&price_change_percentage=24h`;
     const headers: Record<string, string> = { accept: "application/json" };
     if (key) headers["x-cg-demo-api-key"] = key;
-    const r = await fetch(url, { headers });
+    const r = await timedFetch(url, { headers });
     if (!r.ok) throw new Error(`coingecko markets ${r.status}`);
     return (await r.json()) as CoinGeckoMarketRow[];
   },
 
   async dexScreenerToken(address: string): Promise<DexPayload> {
-    const r = await fetch(`${DEX_BASE}/${address}`, { headers: { accept: "application/json" } });
+    const r = await timedFetch(`${DEX_BASE}/${address}`, { headers: { accept: "application/json" } });
     if (!r.ok) throw new Error(`dexscreener ${r.status}`);
     return (await r.json()) as DexPayload;
   },
