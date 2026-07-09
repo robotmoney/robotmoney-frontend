@@ -3,6 +3,7 @@
 // recorded in job_runs.
 import { analyticsRun } from "./analytics.ts";
 import * as committee from "./committee.ts";
+import * as projects from "./projects.ts";
 import { sampleSharePrice } from "./vault.ts";
 import { sampleWalletBalances } from "./wallet.ts";
 
@@ -25,6 +26,15 @@ export const handlers: Record<string, JobHandler> = {
   "committee.close_window": committee.closeWindow,
   "committee.aggregate": committee.aggregateSession,
   "committee.publish": committee.publishSession,
+  // projects "Agentic Economy Ecosystem" data pipelines (issue #87). Ported from
+  // the deprecated bot-analytics edge functions onto the kind→handler pattern.
+  "projects.discover": projects.discover,
+  "projects.refresh_coins": projects.refreshCoins,
+  "projects.refresh_wallets": projects.refreshWallets,
+  "projects.sync_revenue": projects.syncRevenue,
+  "projects.snapshot_daily": projects.snapshotDaily,
+  "projects.fetch_vaults": projects.fetchVaults,
+  "projects.recompute_coverage": projects.recomputeCoverage,
 };
 
 export function getHandler(kind: string): JobHandler | undefined {

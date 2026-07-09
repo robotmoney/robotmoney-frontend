@@ -47,6 +47,20 @@ const SCHEDULES: SeedSchedule[] = [
   { kind: "committee.close_window", cron: "0 8 * * *", payload: {}, timezone: "UTC", enabled: false },
   { kind: "committee.aggregate", cron: "0 9 * * *", payload: {}, timezone: "UTC", enabled: false },
   { kind: "committee.publish", cron: "0 10 * * *", payload: {}, timezone: "UTC", enabled: false },
+  // Projects "Agentic Economy Ecosystem" pipelines (issue #87). Ordered so a
+  // day's chain is coherent: discover identity → refresh live metrics → snapshot
+  // today → roll revenue up → recompute coverage. Daily cadence (not the fast
+  // demo cadence), so a short demo run never races DEMO_SEED_PROJECTS. Each kind
+  // has a handler in worker/handlers/index.ts and upserts on natural keys, so an
+  // extra firing is harmless. In prod the worker needs PROJECTS_SOURCE=live
+  // (select.ts fails closed rather than serving fixture data as production).
+  { kind: "projects.discover", cron: "0 2 * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "projects.refresh_coins", cron: "10 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "projects.refresh_wallets", cron: "20 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "projects.fetch_vaults", cron: "30 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "projects.snapshot_daily", cron: "40 0 * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "projects.sync_revenue", cron: "50 1 * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "projects.recompute_coverage", cron: "0 3 * * *", payload: {}, timezone: "UTC", enabled: true },
 ];
 
 // Fast demo schedules — ONLY added when DEMO_FAST_SCHEDULES is set (the demo

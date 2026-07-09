@@ -7,6 +7,17 @@
 import { test, expect } from "bun:test";
 import { sql } from "../../src/db/client.ts";
 import { fetchProjects } from "../../src/projects/projections.ts";
+import { getProjects } from "../../src/api/routes/projects.ts";
+import {
+  discover,
+  fetchVaults,
+  recomputeCoverage,
+  refreshCoins,
+  refreshWallets,
+  snapshotDaily,
+  syncRevenue,
+} from "../../src/worker/handlers/projects.ts";
+import { uniqueSlugSource } from "../support/projects-fixture-source.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 const dayAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
@@ -109,6 +120,44 @@ test("fetchProjects excludes inactive/low-score projects and sorts sticky-first 
   const nonSticky = mine.filter((p) => !p.isSticky);
   expect(nonSticky[0].id).toBe(big);
   expect(nonSticky[1].id).toBe(small);
+});
+
+test("GET /api/projects serves the populated additive-superset DTO after the pipeline runs on fixtures", async () => {
+  const prefix = `api_${crypto.randomUUID().slice(0, 8)}`;
+  const src = uniqueSlugSource(prefix);
+
+  await discover({}, src);
+  const ids = (await sql<{ id: string }[]>`SELECT id FROM projects WHERE slug LIKE ${prefix + "-%"}`).map((r) => r.id);
+  await refreshCoins({}, src);
+  await refreshWallets({}, src);
+  await fetchVaults({}, src);
+  await snapshotDaily({ project_ids: ids });
+  await syncRevenue({}, src);
+  await recomputeCoverage({ project_ids: ids });
+
+  // The route handler is a thin adapter over fetchProjects — exercise it directly.
+  const res = await getProjects();
+  const mine = res.projects.filter((p) => p.slug.startsWith(prefix));
+  expect(mine.length).toBe(3);
+
+  const virtuals = mine.find((p) => p.slug === `${prefix}-virtuals-protocol`)!;
+  // Market data.
+  expect(virtuals.maxMarketCap).toBe(1_500_000_000);
+  expect(virtuals.coins.some((c) => (c.priceUsd ?? 0) > 0)).toBe(true);
+  // Revenue aggregate.
+  expect(virtuals.revenue30d).toBe(60_000);
+  // Snapshot series.
+  expect(virtuals.sparkline.length).toBeGreaterThan(0);
+  // Additive-superset aggregates (issue #87).
+  expect(virtuals.volume24h).toBe(50_000_000);
+  expect(virtuals.tvlUsd).toBe(1_000_000);
+
+  // Every #70 field still present and typed (contract not reshaped).
+  for (const p of mine) {
+    expect(typeof p.walletTotalUsd).toBe("number");
+    expect(Array.isArray(p.wallets)).toBe(true);
+    expect(p.facets).toHaveProperty("x402");
+  }
 });
 
 test("fetchProjects returns an empty list when no projects qualify", async () => {

@@ -40,13 +40,13 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
   const ids = projects.map((p) => p.id as string);
 
   const [coins, wallets, agents, vaults] = await Promise.all([
-    sql`SELECT id, project_id, name, ticker, market_cap, fdv, percent_change_24h
+    sql`SELECT id, project_id, name, ticker, market_cap, fdv, percent_change_24h, price_usd, volume_24h
         FROM lobster_coins WHERE project_id IN ${sql(ids)} AND is_active = true`,
     sql`SELECT id, project_id, label, balance_usd, chain
         FROM tracked_wallets WHERE project_id IN ${sql(ids)} AND is_active = true`,
     sql`SELECT id, project_id, protocol_standard, x402_score, x402_txn_count, x402_resources_count
         FROM openclaw_agents WHERE project_id IN ${sql(ids)} AND is_active = true`,
-    sql`SELECT id, project_id FROM agent_vaults WHERE project_id IN ${sql(ids)} AND is_active = true`,
+    sql`SELECT id, project_id, tvl_usd FROM agent_vaults WHERE project_id IN ${sql(ids)} AND is_active = true`,
   ]);
 
   const agentIds = agents.map((a) => a.id as string);
@@ -78,6 +78,8 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
       marketCap: num(c.market_cap),
       fdv: num(c.fdv),
       percentChange24h: num(c.percent_change_24h),
+      priceUsd: num(c.price_usd),
+      volume24h: num(c.volume_24h),
     });
     (coinRawByProject.get(pid) ?? coinRawByProject.set(pid, []).get(pid)!).push({ id: c.id as string });
   }
@@ -113,9 +115,12 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
   }
 
   const vaultByProject = new Set<string>();
+  const tvlByProject = new Map<string, number>();
   for (const v of vaults) {
     const pid = v.project_id as string | null;
-    if (pid) vaultByProject.add(pid);
+    if (!pid) continue;
+    vaultByProject.add(pid);
+    tvlByProject.set(pid, (tvlByProject.get(pid) ?? 0) + (num(v.tvl_usd) ?? 0));
   }
 
   const revenueByProject = new Map<string, number>();
@@ -138,6 +143,7 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
     const pwallets = walletsByProject.get(pid) ?? [];
     const maxMarketCap = Math.max(0, ...pcoins.map((c) => c.marketCap ?? 0));
     const maxFdv = Math.max(0, ...pcoins.map((c) => c.fdv ?? 0));
+    const maxVolume24h = Math.max(0, ...pcoins.map((c) => c.volume24h ?? 0));
     const walletTotalUsd = pwallets.reduce((s, w) => s + (w.balanceUsd ?? 0), 0);
     const primaryCoinId = coinRawByProject.get(pid)?.[0]?.id;
     const sparkline = (primaryCoinId && sparksByCoin.get(primaryCoinId)) || [];
@@ -174,6 +180,8 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
       maxMarketCap,
       maxFdv,
       sparkline,
+      volume24h: maxVolume24h,
+      tvlUsd: tvlByProject.get(pid) ?? 0,
       _maxMc: maxMarketCap,
     };
   });

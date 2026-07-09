@@ -9,6 +9,10 @@ export interface ProjectCoin {
   marketCap: number | null;
   fdv: number | null;
   percentChange24h: number | null;
+  // Additive superset (issue #87): refreshed spot price + 24h volume from the
+  // market-refresh pipeline (CoinGecko / DexScreener). Null until first refresh.
+  priceUsd: number | null;
+  volume24h: number | null;
 }
 
 export interface ProjectWallet {
@@ -46,6 +50,9 @@ export interface Project {
   maxMarketCap: number;
   maxFdv: number;
   sparkline: number[]; // 30d primary-coin price series (chronological)
+  // Additive superset (issue #87): new aggregates the ported pipelines produce.
+  volume24h: number; // max 24h trading volume across the project's coins
+  tvlUsd: number; // summed live TVL across the project's vaults (fetch-vault-data)
 }
 
 export interface ProjectsResponse {
