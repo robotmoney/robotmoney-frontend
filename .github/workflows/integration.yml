@@ -49,6 +49,8 @@ jobs:
       - name: Typecheck backend
         working-directory: backend
         run: bun run typecheck
+      - name: No Supabase infra in backend/src (issue #87)
+        run: bash backend/scripts/check-no-supabase.sh
       - name: Verify vendored contract
         run: bun run check-contract
       - name: Run tests (ephemeral Postgres via Docker)

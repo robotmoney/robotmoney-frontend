@@ -35,10 +35,11 @@ const PROJECTS = {
       websiteUrl: "https://alpha.example/", twitterHandle: "@alpha",
       dataCoverageScore: 92, isSticky: false,
       facets: { agent: true, x402: true, coin: true, wallet: true, vault: true },
-      coins: [{ id: "c-alp", ticker: "ALP", name: "Alpha", marketCap: 12_000_000, fdv: 40_000_000, percentChange24h: 4.2 }],
+      coins: [{ id: "c-alp", ticker: "ALP", name: "Alpha", marketCap: 12_000_000, fdv: 40_000_000, percentChange24h: 4.2, priceUsd: 1.5, volume24h: 800_000 }],
       wallets: [{ id: "w1", label: "Treasury", chain: "base", balanceUsd: 1500 }],
       walletTotalUsd: 1500, revenue30d: 350,
       maxMarketCap: 12_000_000, maxFdv: 40_000_000, sparkline: [1.0, 1.1, 1.3, 1.5],
+      volume24h: 800_000, tvlUsd: 1_000_000,
     },
     {
       id: "p-zeta", slug: "zeta", displayName: "Zeta Systems",
@@ -82,14 +83,19 @@ test("routes to /projects and renders the directory table with a2 tokens", async
   await expect(page.locator(".pj-title")).toContainText("Agentic Economy");
   await expect(page.locator(".pj-title .a2-grad")).toBeVisible();
 
+  // Data present → the "No projects yet." empty state must not be shown (issue #87).
+  await expect(page.locator(".pj-status", { hasText: "No projects yet" })).toBeHidden();
+
   // One row per project in the stub.
   await expect(page.locator(".pj-table tbody tr")).toHaveCount(3);
 
-  // Alpha's row surfaces its aggregated numbers.
+  // Alpha's row surfaces its aggregated numbers — every metric comes from the
+  // /api/projects DTO the pipelines populate (market cap, 24h change, revenue).
   const alpha = page.locator(".pj-table tbody tr", { hasText: "Alpha Labs" });
   await expect(alpha).toContainText("$12.00M"); // max market cap
   await expect(alpha).toContainText("$40.00M"); // max fdv
   await expect(alpha).toContainText("+4.20%");  // 24h change
+  await expect(alpha).toContainText("$350");    // trailing-30d revenue
   await expect(alpha.locator(".pj-link", { hasText: "alpha.example" })).toBeVisible();
   await expect(alpha.locator(".pj-link", { hasText: "@alpha" })).toBeVisible();
 
