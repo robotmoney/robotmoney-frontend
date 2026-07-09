@@ -41,6 +41,7 @@ async function main(): Promise<void> {
   routes[ROUTES.health] = await get(ROUTES.health);
   routes[ROUTES.dashboards.regimeSnapshots] = await get(`${ROUTES.dashboards.regimeSnapshots}?range=180`);
   routes[ROUTES.dashboards.vaultEconomics] = await get(ROUTES.dashboards.vaultEconomics);
+  routes[ROUTES.projects.list] = await get(ROUTES.projects.list);
   for (const key of RESEARCH_KEYS) {
     const p = expand(ROUTES.dashboards.researchSignal, { key });
     routes[p] = await get(p);
@@ -57,6 +58,13 @@ async function main(): Promise<void> {
     const p = expand(ROUTES.committee.session, { date: s.date, subject: s.subjectId });
     routes[p] = await get(p);
     routes[ROUTES.committee.brief] = await get(`${ROUTES.committee.brief}?date=${s.date}&subject=${s.subjectId}`);
+  }
+  // Per-subject routes the session detail page fetches for the portfolio donut +
+  // thesis (loadApi → subject + snapshots). Discovered from the sessions list.
+  const subjectIds = [...new Set(sessions.map((s) => s.subjectId))];
+  for (const id of subjectIds) {
+    routes[expand(ROUTES.committee.subject, { id })] = await get(expand(ROUTES.committee.subject, { id }));
+    routes[expand(ROUTES.committee.subjectSnapshots, { id })] = await get(expand(ROUTES.committee.subjectSnapshots, { id }));
   }
 
   const ordered: Record<string, unknown> = {};

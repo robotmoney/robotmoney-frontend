@@ -29,18 +29,26 @@ function camelSession(raw) {
     subjectId: raw.subjectId || raw.subject_id,
     subjectName: raw.subjectName || raw.subject_name,
     state: raw.state || "published",
-    regimeSummary: raw.regimeSummary || (raw.regime_summary ? {
-      composite: raw.regime_summary.composite,
-      compositePercentile: raw.regime_summary.composite_percentile,
-      regime: raw.regime_summary.regime,
-      macroRegime: raw.regime_summary.macro_regime,
-      onchainRegime: raw.regime_summary.onchain_regime,
-      factorRegime: raw.regime_summary.factor_regime,
-      macroPercentile: raw.regime_summary.macro_percentile,
-      onchainPercentile: raw.regime_summary.onchain_percentile,
-      factorPercentile: raw.regime_summary.factor_percentile,
-      history: raw.regime_summary.history || [],
-    } : null),
+    // The API serves regimeSummary with a camelCase OUTER key but snake_case
+    // INNER keys (macro_percentile, macro_regime, …); the archive JSON uses
+    // snake_case throughout. Normalize inner keys from either source so
+    // panelInputs()/regime labels read a consistent camelCase shape.
+    regimeSummary: (() => {
+      const rs = raw.regimeSummary || raw.regime_summary;
+      if (!rs) return null;
+      return {
+        composite: rs.composite,
+        compositePercentile: rs.compositePercentile ?? rs.composite_percentile,
+        regime: rs.regime,
+        macroRegime: rs.macroRegime ?? rs.macro_regime,
+        onchainRegime: rs.onchainRegime ?? rs.onchain_regime,
+        factorRegime: rs.factorRegime ?? rs.factor_regime,
+        macroPercentile: rs.macroPercentile ?? rs.macro_percentile,
+        onchainPercentile: rs.onchainPercentile ?? rs.onchain_percentile,
+        factorPercentile: rs.factorPercentile ?? rs.factor_percentile,
+        history: rs.history || [],
+      };
+    })(),
     subjectSnapshotTotalValueUsd: raw.subjectSnapshotTotalValueUsd ?? raw.subject_snapshot_total_value_usd ?? null,
     synthesis: raw.synthesis || "",
     committeeRecommendation: raw.committeeRecommendation || raw.committee_recommendation || null,
@@ -129,6 +137,21 @@ async function loadArchiveSubject(id) {
 async function loadArchiveSnapshot(subject, date) {
   try { return normalizeSnapshot(await fetchJson(`/data/committee/subjects/${subject}/${date}.json`)); }
   catch (_) { return null; }
+}
+
+// Pick the snapshot to render for a session from the API snapshots list and
+// normalize it into the SAME shape the archive path produces (via
+// normalizeSnapshot), so the portfolio donut/table read identically on both
+// data paths. Chooses the latest snapshot dated on-or-before the session date,
+// else the most recent overall. Returns null on empty/absent input.
+function pickSnapshotFor(snapshots, date) {
+  const list = (snapshots || []).filter(Boolean);
+  if (!list.length) return null;
+  const target = String(date || "");
+  const notAfter = list.filter((s) => String(s.date || "") <= target);
+  const pool = notAfter.length ? notAfter : list;
+  const chosen = pool.reduce((a, b) => (String(a.date || "") >= String(b.date || "") ? a : b));
+  return normalizeSnapshot(chosen);
 }
 
 const helpers = {
@@ -295,17 +318,23 @@ export function registerStaticViews(Alpine) {
       this.brief = await fetchJson(`/data/committee/briefs/${date}-${subject}.json`).catch(() => null);
     },
     async loadApi(date, subject) {
-      const [detail, memberData, brief] = await Promise.all([
+      // Fetch subject + snapshots alongside the session so the live/API path
+      // renders the SAME reference experience as the archive path (charts +
+      // portfolio). Each side-fetch is independently guarded so a missing
+      // subject/snapshot never breaks the takes/session render.
+      const [detail, memberData, brief, subjectData, snapshotData] = await Promise.all([
         api.get(path(ROUTES.committee.session, { date, subject })),
         api.get(ROUTES.committee.members),
         api.get(ROUTES.committee.brief, { date, subject }).catch(() => null),
+        api.get(path(ROUTES.committee.subject, { id: subject })).catch(() => null),
+        api.get(path(ROUTES.committee.subjectSnapshots, { id: subject })).catch(() => null),
       ]);
       this.source = "api";
       this.session = camelSession(detail.session);
       this.takes = (detail.takes || []).map(camelTake);
       this.members = (memberData.members || []).map(camelMember);
-      this.subject = null;
-      this.snapshot = null;
+      this.subject = subjectData ? camelSubject(subjectData) : null;
+      this.snapshot = pickSnapshotFor(snapshotData?.snapshots, date);
       this.brief = brief;
     },
     memberLens(memberId) {
@@ -348,6 +377,106 @@ export function registerStaticViews(Alpine) {
     donutStyle(p, i) {
       const colors = ["#22d3ee", "#a78bfa", "#34d399", "#f59e0b", "#f472b6", "#60a5fa", "#94a3b8"];
       return `--c:${colors[i % colors.length]};--p:${this.clampPct((p.share || 0) * 100)};`;
+    },
+    humanize(id) {
+      return String(id || "").replace(/[_-]+/g, " ").trim();
+    },
+    // Inline-SVG panel-divergence bars (macro/onchain/factor percentiles) with a
+    // dashed 50th-percentile reference line — mirrors the reference
+    // PanelDivergenceBars. Consumes panelInputs() (pct is 0-1). Renders nothing
+    // below 2 panels so it never shows an empty axis.
+    panelDivergenceBars() {
+      const rows = this.panelInputs().filter((p) => Number.isFinite(Number(p.pct)));
+      if (rows.length < 2) return "";
+      const W = 240, labelW = 56, barW = W - labelW, rowH = 16, rowGap = 4;
+      const H = rows.length * rowH + (rows.length - 1) * rowGap + 6;
+      const tick = (p) => labelW + p * barW;
+      const body = rows.map((r, i) => {
+        const y = i * (rowH + rowGap);
+        const pct = this.clampPct(r.pct * 100) / 100;
+        const ty = (y + rowH * 0.7).toFixed(1);
+        return `<g>
+          <text x="0" y="${ty}" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace" style="text-transform:uppercase;letter-spacing:0.05em">${this.escapeHtml(r.label)}</text>
+          <rect x="${labelW}" y="${y + 4}" width="${barW}" height="${rowH - 8}" fill="transparent" stroke="var(--color-border)"/>
+          <rect x="${labelW}" y="${y + 4}" width="${(pct * barW).toFixed(1)}" height="${rowH - 8}" fill="var(--color-accent)" fill-opacity="0.7"/>
+          <text x="${labelW + barW + 4}" y="${ty}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${Math.round(r.pct * 100)}</text>
+        </g>`;
+      }).join("");
+      return `<svg viewBox="0 0 ${W + 24} ${H}" role="img" aria-label="Panel percentile divergence with 50th-percentile reference">
+        ${body}
+        <line x1="${tick(0.5).toFixed(1)}" x2="${tick(0.5).toFixed(1)}" y1="2" y2="${H - 2}" stroke="var(--color-border)" stroke-dasharray="2 2"/>
+      </svg>`;
+    },
+    // Normalize a bucket_weights recommendation into rows the bar chart can draw.
+    // Prefers explicit bucket rows (name/target/actual/recommended) if the
+    // payload carries them; otherwise derives Recommended-only rows from the
+    // weights map (target/actual are unavailable without allocation data).
+    bucketWeights() {
+      const rec = this.session?.committeeRecommendation;
+      if (!rec || rec.type !== "bucket_weights") return [];
+      const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+      if (Array.isArray(rec.buckets) && rec.buckets.length) {
+        return rec.buckets.map((b) => ({
+          name: b.name || this.humanize(b.id),
+          target: num(b.target ?? b.target_weight),
+          actual: num(b.actual ?? b.actual_weight),
+          recommended: num(b.recommended ?? b.weight) ?? 0,
+        }));
+      }
+      const weights = rec.weights;
+      if (!weights || typeof weights !== "object") return [];
+      return Object.entries(weights).map(([id, w]) => ({
+        name: this.humanize(id), target: null, actual: null, recommended: num(w) ?? 0,
+      }));
+    },
+    isBucketWeights() {
+      const rec = this.session?.committeeRecommendation;
+      return !!(rec && rec.type === "bucket_weights" && this.bucketWeights().length);
+    },
+    // Inline-SVG grouped bars per bucket: Target (open outline), Actual (muted
+    // fill), Recommended (accent fill) — mirrors the reference BucketWeightsBars.
+    // Target/Actual rows only appear when at least one bucket supplies them, so
+    // the chart degrades cleanly to Recommended-only when allocation data is
+    // absent. Axis pinned 0-100% for cross-bucket comparability.
+    bucketWeightsBars() {
+      const buckets = this.bucketWeights();
+      if (!buckets.length) return "";
+      const hasTarget = buckets.some((b) => b.target != null);
+      const hasActual = buckets.some((b) => b.actual != null);
+      const series = [
+        hasTarget ? { key: "target", label: "T", fill: "transparent", stroke: "var(--color-text-muted)", txt: "var(--color-text-muted)" } : null,
+        hasActual ? { key: "actual", label: "A", fill: "var(--color-text-dim)", opacity: "0.6", txt: "var(--color-text-muted)" } : null,
+        { key: "recommended", label: "R", fill: "var(--color-accent)", txt: "var(--color-accent)" },
+      ].filter(Boolean);
+      const W = 520, labelW = 130, valW = 40, barW = W - labelW - valW;
+      const nameH = 14, subH = 4, subGap = 4, gap = 8;
+      const groupH = nameH + series.length * (subH + subGap);
+      const H = buckets.length * (groupH + gap) + 4;
+      const x = (v) => labelW + this.clampPct(v * 100) / 100 * barW;
+      const body = buckets.map((b, i) => {
+        const top = i * (groupH + gap);
+        const sub = series.map((s, si) => {
+          const v = b[s.key];
+          const barY = top + nameH + si * (subH + subGap);
+          const txtY = barY + subH + 0.5;
+          if (v == null) {
+            return `<text x="${labelW + barW + 4}" y="${txtY.toFixed(1)}" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace">${s.label} —</text>`;
+          }
+          const w = Math.max(0, x(v) - labelW);
+          const rect = s.fill === "transparent"
+            ? `<rect x="${labelW}" y="${barY}" width="${w.toFixed(1)}" height="${subH}" fill="transparent" stroke="${s.stroke}"/>`
+            : `<rect x="${labelW}" y="${barY}" width="${w.toFixed(1)}" height="${subH}" fill="${s.fill}"${s.opacity ? ` fill-opacity="${s.opacity}"` : ""}/>`;
+          return `${rect}<text x="${labelW + barW + 4}" y="${txtY.toFixed(1)}" fill="${s.txt}" font-size="9" font-family="ui-monospace,monospace">${s.label} ${Math.round(v * 100)}</text>`;
+        }).join("");
+        return `<g>
+          <text x="0" y="${(top + 10).toFixed(1)}" fill="var(--color-text-muted)" font-size="11" font-family="ui-monospace,monospace">${this.escapeHtml(b.name)}</text>
+          <line x1="${x(0.5).toFixed(1)}" x2="${x(0.5).toFixed(1)}" y1="${top + nameH - 2}" y2="${top + groupH}" stroke="var(--color-border)" stroke-dasharray="1 3"/>
+          ${sub}
+        </g>`;
+      }).join("");
+      return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Bucket weights: recommended${hasTarget ? " vs target" : ""}${hasActual ? " vs actual" : ""}">
+        ${body}
+      </svg>`;
     },
     regimeSparkline() {
       const h = this.session?.regimeSummary?.history || [];

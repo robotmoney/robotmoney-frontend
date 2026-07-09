@@ -178,6 +178,12 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
     await admin("regime", { asof: date });
   }
 
+  // Seed the reference-shaped subject fixtures (subject row + subject snapshot the
+  // portfolio donut reads + trailing regime history for the sparkline) BEFORE the
+  // session opens, so the subject/snapshot routes return data for the session date
+  // and the memo page renders full charts. Idempotent; dated at the session date.
+  await admin("subject_fixtures", { id: subject.id, name: subject.name, date });
+
   // Lifecycle through worker job queue.
   await enqueueLifecycleJob("open_session", { date, subjectId: subject.id });
   const sd = await waitForSessionState(date, subject.id, "scheduled");

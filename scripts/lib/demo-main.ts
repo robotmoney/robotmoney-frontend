@@ -842,7 +842,12 @@ async function main(): Promise<void> {
   // own scheduler drives regime + research. CI leaves the flag unset so the seed
   // stays byte-for-byte the prod default (see backend/src/db/seed.ts).
   const fastSchedEnv = process.env.CI ? [] : ["-e", "DEMO_FAST_SCHEDULES=1"];
-  await runCompose(["run", "--rm", "-T", ...fastSchedEnv, "api", "bun", "run", "src/db/migrate.ts"], "migrations");
+  // Demo (local AND CI): populate the projects directory so /api/projects returns
+  // a full "Agentic Economy Ecosystem" table. Demo-only — prod/regular-CI seeds run
+  // `migrate` without this flag, so their seed stays byte-for-byte unchanged (empty
+  // projects tables). Idempotent, so re-running the demo never duplicates rows.
+  const demoSeedProjectsEnv = ["-e", "DEMO_SEED_PROJECTS=1"];
+  await runCompose(["run", "--rm", "-T", ...fastSchedEnv, ...demoSeedProjectsEnv, "api", "bun", "run", "src/db/migrate.ts"], "migrations");
   setStep("migrate", "done");
 
   log("starting api, worker, mcp…");

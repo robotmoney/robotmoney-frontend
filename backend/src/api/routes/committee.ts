@@ -175,6 +175,18 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
           ? { status: 200, body: await ic.ensureSubject(id, name) }
           : { status: 400, body: { error: "id and name required" } };
       }
+      // Seed the reference-shaped demo fixtures (subject row + subject snapshot the
+      // portfolio donut reads + trailing regime history for the sparkline) so the
+      // LIVE session path renders the same charts as the committed archive. Called
+      // by the demo before opening a session. Idempotent.
+      case "subject_fixtures": {
+        const id = requiredString(b, "id", 100);
+        const name = requiredString(b, "name", 200);
+        const date = typeof b.date === "string" ? b.date.slice(0, 10) : undefined;
+        return id && name
+          ? { status: 200, body: await ic.ensureDemoSubjectFixtures(id, name, date) }
+          : { status: 400, body: { error: "id and name required" } };
+      }
       case "open": {
         const date = requiredString(b, "date", 10);
         const subjectId = requiredString(b, "subjectId", 100);

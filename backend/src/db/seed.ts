@@ -8,6 +8,7 @@
 // enabled on an existing row — that lets the scheduler own slot bookkeeping and
 // lets an operator disable a schedule without the seed re-enabling it.
 import { sql, closeDb, jsonValue } from "./client.ts";
+import { seedDemoProjects } from "../projects/demo-seed.ts";
 
 interface SeedSchedule {
   kind: string;
@@ -74,6 +75,15 @@ export async function seed(): Promise<void> {
     `;
   }
   console.log(`seeded job_schedules (${schedules.length} definition(s), idempotent)`);
+
+  // Demo-only: populate the "Agentic Economy Ecosystem" projects directory so
+  // GET /api/projects returns a full table instead of "No projects yet.". Gated
+  // behind DEMO_SEED_PROJECTS so prod/CI seeds stay byte-for-byte unchanged (the
+  // flag is set ONLY on the demo migrate/seed run in scripts/lib/demo-main.ts).
+  // Idempotent (upsert-on-slug + delete/re-insert facets), so safe on every boot.
+  if (process.env.DEMO_SEED_PROJECTS === "1") {
+    await seedDemoProjects();
+  }
 }
 
 // Run directly: `bun run src/db/seed.ts`
