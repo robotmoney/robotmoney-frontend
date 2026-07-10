@@ -2,6 +2,7 @@
 // does its work (idempotently, upserting on natural keys). Returns optional JSON
 // recorded in job_runs.
 import { analyticsRun } from "./analytics.ts";
+import { refreshBuybacks } from "./buybacks.ts";
 import * as committee from "./committee.ts";
 import * as projects from "./projects.ts";
 import { sampleSharePrice } from "./vault.ts";
@@ -20,6 +21,8 @@ export const handlers: Record<string, JobHandler> = {
   "vault.sample_share_price": sampleSharePrice,
   // daily prop-wallet balance sample (feeds the /performance history + last-live fallback)
   "wallet.sample_balances": sampleWalletBalances,
+  // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
+  "buybacks.refresh": refreshBuybacks,
   // committee session lifecycle
   "committee.open_session": committee.openSession,
   "committee.publish_brief": committee.publishBrief,

@@ -10,6 +10,7 @@
 import { sql, closeDb, jsonValue } from "./client.ts";
 import { seedDemoProjects } from "../projects/demo-seed.ts";
 import { backfillWalletHistory } from "../worker/handlers/wallet.ts";
+import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
 
 interface SeedSchedule {
   kind: string;
@@ -39,6 +40,10 @@ const SCHEDULES: SeedSchedule[] = [
   // the /performance history + the last-live degrade fallback. 00:10 UTC, just
   // after the day boundary. Handler: worker/handlers/wallet.ts.
   { kind: "wallet.sample_balances", cron: "10 0 * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Buyback refresh (live-data contract §1) — eth_getLogs indexer that upserts
+  // NEW WETH->ROBOTMONEY buyback swaps into buyback_swaps (keyed on tx_hash). No-op
+  // under a non-live source; degrade-safe on RPC failure. Handler: handlers/buybacks.ts.
+  { kind: "buybacks.refresh", cron: "15 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
   // Committee lifecycle — disabled by default; the demo enqueues these explicitly
   // via the admin enqueue-job endpoint, exercising the real worker claim loop +
   // handler path. Enable manually or change to a real cron for auto-scheduling.
@@ -102,6 +107,19 @@ export async function seed(): Promise<void> {
   // (sample_date, symbol)), so a later live daily sample is never clobbered.
   const backfilled = await backfillWalletHistory();
   console.log(`seeded wallet_balance_samples backfill (${backfilled} row candidate(s), idempotent)`);
+
+  // Allocation framework (live-data contract §4): seed the single admin/committee
+  // -managed row (id=1) from the committee source-of-truth (allocation.json,
+  // copied into ALLOCATION_FRAMEWORK_SEED). ON CONFLICT DO NOTHING so a later
+  // admin rewrite is NEVER clobbered by a re-boot ("projects overviews
+  // admin-managed" policy) — this seed only fills an empty table.
+  await sql`
+    INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
+    VALUES (1, ${ALLOCATION_FRAMEWORK_SEED.asof}, ${ALLOCATION_FRAMEWORK_SEED.vault_contract},
+            ${sql.json(jsonValue(ALLOCATION_FRAMEWORK_SEED.buckets))})
+    ON CONFLICT (id) DO NOTHING
+  `;
+  console.log("seeded allocation_framework (id=1, idempotent — admin edits preserved)");
 
   // Demo-only: populate the "Agentic Economy Ecosystem" projects directory so
   // GET /api/projects returns a full table instead of "No projects yet.". Gated

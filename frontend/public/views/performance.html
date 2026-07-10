@@ -4,9 +4,10 @@
      by the boot-registered walletPerfView() factory (alpine/views.js); the
      constructivist hero is the boot-registered constructivistHero() canvas
      factory (alpine/heroes.js).
-     Numbers are baked from public/data/unified-wallet-history.csv (latest
-     snapshot 2026-06-26; over-time composition is approximated for intermediate
-     dates where the source pulls per-asset data live).
+     Numbers are LIVE from GET /api/dashboards/wallet-balances (per-asset daily
+     series + Historical Data table), fetched on init by walletPerfView() — no
+     baked CSV. The endpoint degrades honestly to stale/seed-labelled rows when
+     a live read is unavailable; nothing is fabricated.
 -->
 
 <section class="a2 container">

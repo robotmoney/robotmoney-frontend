@@ -52,27 +52,89 @@ export interface RpcCallOptions {
   timeoutMs?: number;
 }
 
-// A single `eth_call`. Throws on transport failure, a non-2xx HTTP status, or a
-// JSON-RPC `error` field — callers (chain/vault-economics.ts) catch this and
-// degrade the response rather than propagate a 5xx or fabricate a number.
-export async function ethCall(to: string, data: string, opts: RpcCallOptions): Promise<string> {
+// The SINGLE JSON-RPC transport for every Base read in the app. Throws on
+// transport failure, a non-2xx HTTP status, a JSON-RPC `error` field, or a
+// missing `result` — callers (chain/*.ts) catch this and degrade the response
+// rather than propagate a 5xx or fabricate a value. Every method below (and
+// every chain module) issues its RPC through here so there is exactly one place
+// that speaks JSON-RPC to Base; do NOT hand-roll a `fetch` to the RPC elsewhere.
+export async function rpcRequest<T>(method: string, params: unknown[], opts: RpcCallOptions): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 8000);
   try {
     const res = await fetch(opts.rpcUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to, data }, "latest"] }),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
       signal: controller.signal,
     });
     if (!res.ok) throw new Error(`Base RPC HTTP ${res.status}`);
-    const body = (await res.json()) as { result?: string; error?: { message?: string } };
+    const body = (await res.json()) as { result?: T; error?: { message?: string } };
     if (body.error) throw new Error(`Base RPC error: ${body.error.message ?? "unknown"}`);
-    if (typeof body.result !== "string") throw new Error("Base RPC: missing result");
+    if (body.result === undefined) throw new Error(`Base RPC: missing result for ${method}`);
     return body.result;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// A single `eth_call`. Throws on transport failure, a non-2xx HTTP status, or a
+// JSON-RPC `error` field — callers (chain/vault-economics.ts) catch this and
+// degrade the response rather than propagate a 5xx or fabricate a number.
+export async function ethCall(to: string, data: string, opts: RpcCallOptions): Promise<string> {
+  const result = await rpcRequest<string>("eth_call", [{ to, data }, "latest"], opts);
+  if (typeof result !== "string") throw new Error("Base RPC: missing result");
+  return result;
+}
+
+// A single `eth_getLogs`. Same transport/error-handling contract as ethCall /
+// ethGetBalance (throws on transport/HTTP/JSON-RPC error so callers degrade a
+// single leg rather than propagate a 5xx or fabricate rows). Used by
+// chain/buyback-logs.ts to read ROBOTMONEY Transfer events into the primary
+// prop wallet. `params` is the raw eth_getLogs filter object (address, topics,
+// fromBlock/toBlock as 0x-hex or a tag); the result is the raw log array which
+// the caller decodes.
+export interface EthLog {
+  address: string;
+  topics: string[];
+  data: string;
+  blockNumber: string; // 0x-hex
+  transactionHash: string;
+  logIndex: string; // 0x-hex
+  [k: string]: unknown;
+}
+export interface EthGetLogsParams {
+  address?: string | string[];
+  topics?: (string | string[] | null)[];
+  fromBlock?: string; // 0x-hex block number or tag ('earliest' | 'latest')
+  toBlock?: string; // 0x-hex block number or tag
+  blockHash?: string;
+}
+export async function ethGetLogs(params: EthGetLogsParams, opts: RpcCallOptions): Promise<EthLog[]> {
+  const result = await rpcRequest<EthLog[]>("eth_getLogs", [params], opts);
+  if (!Array.isArray(result)) throw new Error("Base RPC: missing result");
+  return result;
+}
+
+// Latest block height (`eth_blockNumber`), decoded to a number. Same transport
+// as every other read (chain/buyback-logs.ts uses it to bound a log scan).
+export async function ethBlockNumber(opts: RpcCallOptions): Promise<number> {
+  const result = await rpcRequest<string>("eth_blockNumber", [], opts);
+  if (typeof result !== "string") throw new Error("Base RPC: missing result");
+  return parseInt(result, 16);
+}
+
+export interface EthBlock {
+  number: string; // 0x-hex
+  timestamp: string; // 0x-hex unix seconds
+  [k: string]: unknown;
+}
+// A single block header (`eth_getBlockByNumber`, no full tx bodies). Used to map
+// a log's block number to its calendar day. Throws on a missing block.
+export async function ethGetBlockByNumber(blockNumber: number, opts: RpcCallOptions): Promise<EthBlock> {
+  const result = await rpcRequest<EthBlock | null>("eth_getBlockByNumber", ["0x" + blockNumber.toString(16), false], opts);
+  if (!result?.timestamp) throw new Error(`Base RPC: no block ${blockNumber}`);
+  return result;
 }
 
 export async function callTotalAssets(contractAddress: string, opts: RpcCallOptions): Promise<bigint> {
@@ -99,21 +161,7 @@ export async function callConvertToAssets(strategyAddress: string, shares: bigin
 // method from eth_call — same transport/error-handling contract (throws on
 // transport/HTTP/JSON-RPC error so callers can degrade a single leg).
 export async function ethGetBalance(address: string, opts: RpcCallOptions): Promise<bigint> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 8000);
-  try {
-    const res = await fetch(opts.rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: [address, "latest"] }),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`Base RPC HTTP ${res.status}`);
-    const body = (await res.json()) as { result?: string; error?: { message?: string } };
-    if (body.error) throw new Error(`Base RPC error: ${body.error.message ?? "unknown"}`);
-    if (typeof body.result !== "string") throw new Error("Base RPC: missing result");
-    return decodeUint256(body.result);
-  } finally {
-    clearTimeout(timeout);
-  }
+  const result = await rpcRequest<string>("eth_getBalance", [address, "latest"], opts);
+  if (typeof result !== "string") throw new Error("Base RPC: missing result");
+  return decodeUint256(result);
 }
