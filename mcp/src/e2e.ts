@@ -217,7 +217,10 @@ export async function waitForSessionState(date: string, subject: string, expecte
     }
     await sleep(500);
   }
-  throw new Error(`session ${date}/${subject} did not reach '${expectedState}' within ${timeoutMs}ms`);
+  throw new Error(
+    `session ${date}/${subject} did not reach '${expectedState}' within ${timeoutMs}ms ` +
+      `(the worker may still be draining an earlier job — check 'bun run demo:status' or the worker container logs)`,
+  );
 }
 
 export async function enqueueLifecycleJob(action: string, payload: Record<string, unknown> = {}) {

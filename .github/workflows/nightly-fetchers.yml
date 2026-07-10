@@ -12,6 +12,14 @@
 # Per-PR coverage for the vault-economics chain client is fully offline
 # (tests/chain-client.test.ts + tests/vault-economics.test.ts, mocked eth_call).
 #
+# Also runs the live GeckoTerminal token_price smoke test
+# (tests/token-price-live.test.ts): hits the real GeckoTerminal
+# simple/networks/base/token_price endpoint (fetchGeckoTokenPriceUsd in
+# src/chain/token-prices.ts) that feeds the LIVE /allocation and /performance
+# prop-wallet USD valuation for WETH/ROBOTMONEY/BNKR, and fails loudly on an
+# unreachable endpoint or malformed response. Per-PR coverage is fully offline
+# (tests/api/wallet-balances.test.ts, mocked fetch).
+#
 # CI taxonomy class: heavy (scheduled live external-endpoint drift test). Heavy
 # suites are sweep-only: they must have NO `pull_request` trigger at all, and run
 # only on a schedule and/or push to the default branch. This workflow already
@@ -51,6 +59,12 @@ jobs:
       - name: Live Base RPC smoke test (real vault contract)
         working-directory: backend
         run: bun test tests/vault-rpc-live.test.ts
+        env:
+          RUN_LIVE_FETCHERS: "1"
+        timeout-minutes: 5
+      - name: Live GeckoTerminal token_price smoke test (real endpoint)
+        working-directory: backend
+        run: bun test tests/token-price-live.test.ts
         env:
           RUN_LIVE_FETCHERS: "1"
         timeout-minutes: 5
