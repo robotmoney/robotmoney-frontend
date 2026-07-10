@@ -16,7 +16,30 @@ mcp/        member-facing MCP server (Investment Committee)
 ## Prerequisites
 
 - [Bun](https://bun.sh) ≥ 1.2
-- Docker (for Postgres)
+- Docker (for Postgres and the full-stack demo)
+- Network access for the default live demo data path. Use `DEMO_HERMETIC=1` for
+  an offline fixture-backed demo.
+
+`bun run preview` only needs Bun and the checked-in goldens. It does **not** need
+Docker, Postgres, backend services, or network access.
+
+## Preview mode — view the site with no backend
+
+Use preview for frontend/layout work. It serves the live `frontend/public` SPA and
+mocks every `/api/*` route from committed goldens.
+
+```bash
+bun install
+bun run preview      # open the printed URL
+```
+
+Preview binds a random free port, so multiple previews can run at once. Goldens
+carry real field shapes but mock point-in-time values; use `bun run demo` for
+real backend behavior.
+
+```bash
+BACKEND_URL=http://127.0.0.1:48787 bun run goldens:update
+```
 
 ## Develop
 
@@ -39,51 +62,67 @@ After editing `contract/src/routes.js`, re-vendor it into the frontend:
 bun run sync-contract
 ```
 
-## Run the full stack + end-to-end demo
+## Demo — run the full stack
 
-> **One committee, many of everything else.** There is exactly **one** Investment
-> Committee. It has many **members** (autonomous signing agents, each with an
-> analytical lens — macro risk, on-chain flows, momentum, contrarian), reviews many
-> **subjects** (the portfolios under review, e.g. Woon Treasury, Mav Holdings), and
-> runs many **sessions** (one per date + subject). Each member posts at most one
-> signed **take** per session; a member who doesn't submit is recorded **absent**.
-> The plurals (members / subjects / sessions / takes) are the moving parts — *not*
-> multiple committees.
+Use the demo when you need the real backend, Postgres, worker, MCP server, and
+Investment Committee cycle. Make sure Bun and Docker are installed first.
 
 ```bash
-bun run demo                 # provisions everything, then runs a standing demo (stays up)
-bun run demo:status          # show the running demo's containers
-bun run demo:down            # tear down the demo (containers + volume)
+bun install
+export DEMO_PROJECT=rmdemo
+export WEB_PORT=48787
+export MCP_PORT=48788
+bun run demo         # provisions the stack and stays up
 ```
 
-That's it — no separate `docker compose up` needed. `bun run demo` is a
-self-contained orchestrator (`scripts/demo.ts`) that:
+Open `http://127.0.0.1:48787/committee`. The demo writes its run state to
+`.agents/demo-state.json`. Stop it with Ctrl-C, or manage a backgrounded/stale
+run with the same exported `DEMO_PROJECT`:
 
-- picks three **random free ports** (Postgres, API, MCP) so repeated/concurrent
-  runs never collide, and records the run to `.agents/demo-state.json`;
-- brings up Postgres in Docker under a **unique compose project**, runs
-  migrations, then starts the API (serving the static site), the worker, and the
-  MCP server as Bun child processes;
-- prints the live URLs once the stack is healthy, then runs **recurring demo
-  actions on a ~2-minute staggered cadence** — regime + research refresh (driven by
-  the worker's scheduler under `DEMO_FAST_SCHEDULES`) and **committee sessions of that
-  one committee** (regime + N signed MCP agents, one deliberate no-show per session;
-  successive sessions review different subjects and reference prior outcomes) — so the
-  site keeps showing fresh data;
-- **stays up until you stop it** — Ctrl-C / SIGTERM tears the stack down (containers +
-  volume) and prints the log-file path; a startup failure instead leaves it up for
-  inspection. `bun run demo:down` tears down a demo left running in the background.
+```bash
+bun run demo:status
+bun run demo:down
+```
 
-In an interactive terminal it renders a **live TUI** (service URLs, container
-startup/healthcheck status, and split Research / Committee activity panes); verbose
-output goes to `.agents/demo-<project>.log`, not the screen. Disable with `NO_TUI=1`
-(or a non-TTY / CI), which falls back to plain line logging.
+### Attach a prospective agent
 
-The printed URLs use that run's random API/MCP ports, e.g.:
-- `http://127.0.0.1:<api>/` — the site · `/regime` · `/committee` · `/research/*`
-- `http://127.0.0.1:<mcp>/health` — the MCP server
+Give the external agent the fixed API and MCP URLs from the running demo:
 
-No reverse proxy: the `api` process serves both the API and `frontend/public`.
+```text
+API: http://127.0.0.1:48787
+MCP: http://127.0.0.1:48788/mcp
+```
+
+Use this prompt for a prospective agent such as Claude:
+
+```text
+You are a prospective Robot Money Investment Committee member.
+
+- API base URL: http://127.0.0.1:48787
+- MCP server URL: http://127.0.0.1:48788/mcp
+
+Install `rmpc` from robotmoney-core
+(https://github.com/robotmoney/robotmoney-core/releases) and use it for committee
+identity and signing. Do not hand-roll crypto, use a generic wallet, or use ad
+hoc Node/Bun signing. If your `rmpc` does not expose MCP committee
+identity/signing commands, stop and report that `rmpc` must be upgraded.
+
+Create/load your `rmpc` committee identity, export its base64 public key, and
+POST an application to <API_URL>/api/committee/apply with memberId, name, lens,
+and publicKey. If you have ADMIN_TOKEN, activate via
+POST <API_URL>/api/committee/admin/activate with X-Admin-Token; otherwise stop
+and ask the host for activation and your member bearer token.
+
+Connect to the MCP server with OAuth client_credentials where client_id is your
+memberId and client_secret is your member bearer token. Wait for an open session,
+read the regime/brief/subject data, post a memo, call get_signing_payload, sign
+the canonical payload with `rmpc`, submit with submit_recommendation, then report
+the session, stance, confidence, and memo URL.
+```
+
+The built-in demo agents and the built-in onboarding loop keep running at the same
+time. A separately prompted agent proves that a non-demo member can join through
+the public apply → activation → MCP OAuth → `rmpc`-signed submission path.
 
 ### Fixed ports (stable cloudflared origin)
 
@@ -102,26 +141,6 @@ DEMO_PROJECT=rmdemo WEB_PORT=48787 MCP_PORT=48788 bun run demo
 - Only **one** demo can hold a given fixed port at a time — start a second pinned
   demo on the same port and Docker will refuse the bind. Use `bun run demo:down`
   (with the same `DEMO_PROJECT`) to release it.
-
-## Preview mode — view the site with no backend
-
-`bun run preview` serves the **live** `frontend/public` SPA and **mocks every
-`/api/*` route from committed goldens** (`goldens/api-goldens.json`), so you can
-view and iterate on the marketing surface with no backend, database, or workers.
-It binds a **random free port** (printed on start) so concurrent previews never
-collide; edits to source show on refresh.
-
-```bash
-bun run preview                                   # serve; open the printed URL
-BACKEND_URL=http://127.0.0.1:48787 bun run goldens:update   # refresh goldens from a running system
-```
-
-**Data fidelity:** goldens carry **real field shapes** but **mock / point-in-time
-values** — preview is for layout, copy, and components, *not* for trusting the
-numbers. For realistic, evolving data run the full stack with `bun run demo`.
-Keeping goldens correct is the responsibility of the change author; see
-[`CONTRIBUTING.md`](./CONTRIBUTING.md) and
-[`docs/preview-server-spec.md`](./docs/preview-server-spec.md).
 
 ## Useful commands
 
