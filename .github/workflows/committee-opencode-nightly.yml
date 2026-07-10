@@ -1,0 +1,102 @@
+# Nightly REAL committee-member inference check (issue #77).
+#
+# WHY THIS SUITE EXISTS
+# The required per-PR `e2e` authors committee takes with the deterministic
+# stanceFor() + buildMemo() template (mcp/src/agent.ts, memo.ts) — hermetic, no
+# model, no secret. That proves the pipeline, NOT that a real model can author a
+# structured take. This nightly is the only end-to-end proof that each present
+# member's take is genuinely authored by a live language model: it drives a real
+# committee session with COMMITTEE_REAL_INFERENCE=1, which routes every take
+# through the KEYLESS OpenCode Zen call in mcp/src/inference.ts
+# (`opencode run --model opencode/big-pickle --format json`), and then runs the
+# post-publish structural assertions in mcp/src/e2e.ts (assertAuthoredTakes):
+# every take fails the retired-template regex, carries the REGIME/ALLOCATION/
+# SUBJECT lead-ins, has a stance in {bullish,constructive,neutral,cautious,
+# bearish} and confidence in [0,1], and is distinct across members. Any failure —
+# including opencode/zen being unreachable or returning an empty transcript
+# (inference.ts throws loudly) — fails this job. It NEVER silent-skips.
+#
+# WHY NIGHTLY ONLY (NOT EVERY PR)
+# The free OpenCode Zen tier is keyless but slower and more variable than a paid
+# model (a call can take minutes and occasionally returns nothing). Running it on
+# every PR would make the required gate flaky. Nightly gives a daily signal on
+# model/prompt/transcript-schema drift without blocking development — exactly the
+# split robotmoney-core uses in suite-11b-opencode-headless.yml.
+#
+# NO SECRET
+# `opencode/big-pickle` is a free, no-credential OpenCode Zen model. There is no
+# ANTHROPIC_API_KEY (or any secret) anywhere in this path — that is the whole
+# point of the keyless design (closes the #92 no-secret blocker).
+#
+# GOTCHAS
+# - OpenCode is pinned. A failure right after a new OpenCode release is most
+#   likely a `--format json` transcript-schema change (the parser in
+#   mcp/src/inference.ts keys off `{"type":"text","part":{"text":...}}` events);
+#   check the OpenCode changelog before debugging the committee code.
+# - If `opencode/big-pickle` is renamed/removed, set OPENCODE_MODEL to the current
+#   free zen model (from `opencode models`) — inference.ts reads it at call time.
+#
+# CI taxonomy class: heavy (scheduled real external-model drift check). Heavy
+# suites are sweep-only: NO `pull_request` trigger — schedule + on-demand only.
+name: committee-opencode-nightly
+env:
+  CI_CLASS: heavy
+on:
+  schedule:
+    - cron: "37 4 * * *" # nightly 04:37 UTC
+  workflow_dispatch: {}
+
+jobs:
+  committee-real-inference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+
+      # Keyless OpenCode Zen CLI. Pinned to the version whose `--format json`
+      # text-event schema the inference.ts parser targets (verified locally:
+      # opencode 1.16.2, `opencode/big-pickle` present). No API key required.
+      - name: Install OpenCode at pinned version
+        run: bun install -g opencode-ai@1.16.2
+
+      - name: Verify keyless zen model is available
+        # Fail loudly NOW if the pinned free model was renamed/removed, rather
+        # than after a full stack bring-up. Never silent-skips.
+        run: |
+          set -euo pipefail
+          if ! opencode models | grep -qx "opencode/big-pickle"; then
+            echo "FAIL: 'opencode/big-pickle' not in 'opencode models' — the pinned free zen model changed. Set OPENCODE_MODEL to a current free model." >&2
+            opencode models | grep '^opencode/' || true
+            exit 1
+          fi
+          echo "OK: opencode/big-pickle available (opencode $(opencode --version))"
+
+      - name: Install root browser tooling
+        run: bun install --frozen-lockfile
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+      - name: Install MCP deps
+        working-directory: mcp
+        run: bun install --frozen-lockfile
+      - name: Typecheck MCP
+        working-directory: mcp
+        run: bun run typecheck
+
+      # Drive the full hermetic demo stack, but with the REAL keyless inference
+      # path enabled. demo.ts (CI mode) stands up postgres + api + worker + mcp
+      # via docker compose, then runs `bun run src/e2e.ts` (mcp) as a HOST
+      # process — so the opencode binary installed above is on PATH for the
+      # committee agents. COMMITTEE_REAL_INFERENCE=1 routes every take through the
+      # keyless opencode-zen call and turns on the assertAuthoredTakes structural
+      # checks (skipped in the hermetic per-PR default). DEMO_HERMETIC=1 keeps the
+      # vault/analytics reads offline (unchanged from the required e2e).
+      - name: Real committee session + authored-take assertions
+        run: bun run scripts/demo.ts
+        env:
+          CI: "true"
+          COMMITTEE_REAL_INFERENCE: "1"
+          DEMO_HERMETIC: "1"
+        timeout-minutes: 40
