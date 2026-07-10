@@ -1,18 +1,21 @@
 <!-- Asset Allocation
-     Pixel-perfect static port of robotmoney-site/src/app/allocation/page.tsx.
-     Buildless: every pie is a Chart.js pie drawn by the boot-registered
-     allocationView() factory (alpine/views.js).
-     Vault economics (7-Day APY, vault pie, vault holdings table, Total Vault
-     Assets / rmUSDC shares) are LIVE: fetched from
-     GET /api/dashboards/vault-economics (issue #40), which reads the vault via
-     Base JSON-RPC behind a short-TTL server cache and degrades to
-     `stale: true` + last-known/null values (never fabricated) when the RPC is
-     unreachable. Strategy/wallet/buyback sections remain the static port —
-     baked from the public/data snapshots (latest 2026-06-26) per
-     .spec/allocation-spec.md — and are out of scope for this feature. The
-     hero's Total AUM combines that static wallet snapshot with the live
-     vault TVL (totalAum() in alpine/views.js), matching the original site's
-     wallet+vault semantics.
+     Buildless port of robotmoney-site/src/app/allocation/page.tsx — now fully
+     data-driven, no baked DATA literals. Every pie is a Chart.js pie drawn by
+     the boot-registered allocationView() factory (alpine/views.js) from live
+     endpoints:
+       • Strategy pie + 4 mini bucket pies + bucket target weights ←
+         GET /api/dashboards/allocation (admin/committee-managed target weights).
+       • Vault pie / holdings table / TVL / 7-Day APY ←
+         GET /api/dashboards/vault-economics (Base JSON-RPC, short-TTL cache;
+         degrades to `stale`/null, never a fabricated number).
+       • Wallet pie + aggregate holdings table ← GET /api/dashboards/wallet-balances.
+       • Per-wallet sleeve tables ← GET /api/dashboards/wallet-sleeves.
+       • Buyback total + table ← GET /api/dashboards/buybacks (ROBOTMONEY
+         Transfer logs into the primary prop wallet; 10 seeded historical rows).
+     Slice/legend COLOURS are presentation-only (client-side); the numbers are
+     never baked. Each feed degrades independently (loading → "—"/empty state)
+     so one stale endpoint never blanks the page. The hero's Total AUM combines
+     the live wallet total with live vault TVL (totalAum() in alpine/views.js).
      Shares the a2-* design system with performance.html.
 -->
 
@@ -71,7 +74,7 @@
         <div class="a2-card alloc-bucket">
           <div class="alloc-bucket__top">
             <div class="alloc-bucket__info">
-              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#10b981;"></span>95%</div>
+              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#10b981;"></span><span x-text="stratPct(0)">—</span></div>
               <h4 class="alloc-bucket__title">Conservative DeFi Yield</h4>
               <p class="alloc-bucket__desc">Aave, Compound, Morpho, Sky on Base. Near-zero principal risk.</p>
             </div>
@@ -89,7 +92,7 @@
         <div class="a2-card alloc-bucket">
           <div class="alloc-bucket__top">
             <div class="alloc-bucket__info">
-              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#3b82f6;"></span>5%</div>
+              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#3b82f6;"></span><span x-text="stratPct(1)">—</span></div>
               <h4 class="alloc-bucket__title">Agent Tokens</h4>
               <p class="alloc-bucket__desc">Tokens of Agents that are holders of $ROBOTMONEY, selected through governance.</p>
             </div>
@@ -110,7 +113,7 @@
         <div class="a2-card alloc-bucket">
           <div class="alloc-bucket__top">
             <div class="alloc-bucket__info">
-              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#f59e0b;"></span>0%</div>
+              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#f59e0b;"></span><span x-text="stratPct(2)">—</span></div>
               <h4 class="alloc-bucket__title">Protocol Tokens</h4>
               <p class="alloc-bucket__desc">Large-cap crypto and DeFi digital assets. BTC, ETH, HYPE.</p>
             </div>
@@ -127,7 +130,7 @@
         <div class="a2-card alloc-bucket">
           <div class="alloc-bucket__top">
             <div class="alloc-bucket__info">
-              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#a855f7;"></span>0%</div>
+              <div class="alloc-bucket__pct"><span class="alloc-dot" style="background:#a855f7;"></span><span x-text="stratPct(3)">—</span></div>
               <h4 class="alloc-bucket__title">Real World Assets</h4>
               <p class="alloc-bucket__desc">Traditional instruments. Exposure to the S&amp;P 500 or commodities.</p>
             </div>
@@ -244,40 +247,30 @@
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>USDC</td>
-              <td class="alloc-r">9,037.405</td><td class="alloc-r">$0.9983</td><td class="alloc-r alloc-val">$9,022</td>
+            <!-- Live per-asset legs from GET /api/dashboards/wallet-balances
+                 (holdings[]); dot colour + amount/price/value are all served,
+                 never baked. Loading → a single placeholder row; a null leg
+                 renders "—" rather than a fabricated figure. -->
+            <tr x-show="loading">
+              <td class="alloc-sym">Loading…</td><td class="alloc-r">—</td><td class="alloc-r">—</td><td class="alloc-r alloc-val">—</td>
             </tr>
-            <tr>
-              <td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>ZYFAI-SS1</td>
-              <td class="alloc-r">1</td><td class="alloc-r">$4538.49</td><td class="alloc-r alloc-val">$4,538</td>
-            </tr>
-            <tr>
-              <td class="alloc-sym"><span class="alloc-dot" style="background:#3b82f6;"></span>ROBOTMONEY</td>
-              <td class="alloc-r">6499.61M</td><td class="alloc-r">$0.00000451</td><td class="alloc-r alloc-val">$29,300</td>
-            </tr>
-            <tr>
-              <td class="alloc-sym"><span class="alloc-dot" style="background:#3b82f6;"></span>BNKR</td>
-              <td class="alloc-r">25,081.3083</td><td class="alloc-r">$0.000377</td><td class="alloc-r alloc-val">$9</td>
-            </tr>
-            <tr>
-              <td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>WETH</td>
-              <td class="alloc-r">15.4378</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$23,940</td>
-            </tr>
-            <tr>
-              <td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>ETH</td>
-              <td class="alloc-r">0.05</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$77</td>
-            </tr>
-            <tr>
-              <td class="alloc-sym"><span class="alloc-dot" style="background:#8b5cf6;"></span>SP500</td>
-              <td class="alloc-r">0.633</td><td class="alloc-r">$7327.17</td><td class="alloc-r alloc-val">$4,638</td>
+            <template x-for="h in (wallet?.holdings ?? [])" :key="h.symbol">
+              <tr>
+                <td class="alloc-sym"><span class="alloc-dot" :style="`background:${h.color || dotColor(h.symbol)};`"></span><span x-text="h.symbol"></span></td>
+                <td class="alloc-r" x-text="fmtAmount(h.amount)"></td>
+                <td class="alloc-r" x-text="fmtPrice(h.priceUsd)"></td>
+                <td class="alloc-r alloc-val" x-text="fmtUsd(h.valueUsd)"></td>
+              </tr>
+            </template>
+            <tr x-show="!loading && !(wallet?.holdings || []).length">
+              <td class="alloc-sym" colspan="4">No live wallet data available.</td>
             </tr>
           </tbody>
         </table>
         <div class="alloc-tfoot">
           <div class="alloc-tfoot__row">
             <span class="alloc-tfoot__label">Total</span>
-            <span class="alloc-tfoot__value">$71,526</span>
+            <span class="alloc-tfoot__value" x-text="fmtUsd(wallet?.totalUsd)">—</span>
           </div>
         </div>
       </div>
@@ -286,71 +279,46 @@
     <!-- Wallet Holdings (Sleeves) -->
     <h3 class="alloc-sleeves__head">Wallet Holdings (Sleeves)</h3>
 
-    <!-- Sleeve: Bankr -->
-    <div class="a2-card alloc-tablecard alloc-sleeve">
-      <div class="alloc-sleeve__head">
-        <span class="alloc-sleeve__name">Bankr</span>
-        <span class="alloc-sleeve__totalwrap">
-          <span class="alloc-sleeve__total">$43,910</span>
-          <span class="alloc-sleeve__type">prop</span>
-        </span>
+    <!-- Per-wallet sleeves — live from GET /api/dashboards/wallet-sleeves. Each
+         wallet's name / type / total and its per-holding balance/price/value are
+         served (dot colour is presentation-only, keyed by symbol). Loading and
+         empty states are explicit; a null leg renders "—", never a baked figure. -->
+    <div class="a2-card alloc-tablecard alloc-sleeve" x-show="loading">
+      <div class="alloc-sleeve__head"><span class="alloc-sleeve__name">Loading sleeves…</span></div>
+    </div>
+    <template x-for="w in sleeveWallets()" :key="w.address">
+      <div class="a2-card alloc-tablecard alloc-sleeve">
+        <div class="alloc-sleeve__head">
+          <span class="alloc-sleeve__name" x-text="w.name"></span>
+          <span class="alloc-sleeve__totalwrap">
+            <span class="alloc-sleeve__total" x-text="fmtUsd(w.totalUsd)"></span>
+            <span class="alloc-sleeve__type" x-text="w.type"></span>
+          </span>
+        </div>
+        <table class="alloc-table">
+          <thead>
+            <tr><th class="alloc-l">Asset</th><th class="alloc-r">Balance</th><th class="alloc-r">Price</th><th class="alloc-r">Value</th></tr>
+          </thead>
+          <tbody>
+            <template x-for="h in (w.holdings ?? [])" :key="h.symbol">
+              <tr>
+                <td class="alloc-sym"><span class="alloc-dot" :style="`background:${dotColor(h.symbol)};`"></span><span x-text="h.symbol"></span></td>
+                <td class="alloc-r" x-text="fmtAmount(h.amount)"></td>
+                <td class="alloc-r" x-text="fmtPrice(h.priceUsd)"></td>
+                <td class="alloc-r alloc-val" x-text="fmtUsd(h.valueUsd)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
       </div>
-      <table class="alloc-table">
-        <thead>
-          <tr><th class="alloc-l">Asset</th><th class="alloc-r">Balance</th><th class="alloc-r">Price</th><th class="alloc-r">Value</th></tr>
-        </thead>
-        <tbody>
-          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>ETH</td><td class="alloc-r">0.0034</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$5</td></tr>
-          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>WETH</td><td class="alloc-r">0.6026</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$935</td></tr>
-          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>USDC</td><td class="alloc-r">9,037.405</td><td class="alloc-r">$0.9983</td><td class="alloc-r alloc-val">$9,022</td></tr>
-          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#3b82f6;"></span>ROBOTMONEY</td><td class="alloc-r">6499.61M</td><td class="alloc-r">$0.00000451</td><td class="alloc-r alloc-val">$29,300</td></tr>
-          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#3b82f6;"></span>BNKR</td><td class="alloc-r">25,081.3083</td><td class="alloc-r">$0.000377</td><td class="alloc-r alloc-val">$9</td></tr>
-          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#8b5cf6;"></span>SP500</td><td class="alloc-r">0.633</td><td class="alloc-r">$7327.17</td><td class="alloc-r alloc-val">$4,638</td></tr>
-        </tbody>
-      </table>
+    </template>
+    <div class="a2-card alloc-tablecard alloc-sleeve" x-show="!loading && !walletCount()">
+      <div class="alloc-sleeve__head"><span class="alloc-sleeve__name">No live sleeve data available.</span></div>
     </div>
 
-    <!-- Sleeve: Stablecoin Strategy 1 -->
-    <div class="a2-card alloc-tablecard alloc-sleeve">
-      <div class="alloc-sleeve__head">
-        <span class="alloc-sleeve__name">Stablecoin Strategy 1</span>
-        <span class="alloc-sleeve__totalwrap">
-          <span class="alloc-sleeve__total">$27,580</span>
-          <span class="alloc-sleeve__type">prop</span>
-        </span>
-      </div>
-      <table class="alloc-table">
-        <thead>
-          <tr><th class="alloc-l">Asset</th><th class="alloc-r">Balance</th><th class="alloc-r">Price</th><th class="alloc-r">Value</th></tr>
-        </thead>
-        <tbody>
-          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>ETH</td><td class="alloc-r">0.0233</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$36</td></tr>
-          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>WETH</td><td class="alloc-r">14.8352</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$23,006</td></tr>
-          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#10b981;"></span>ZYFAI-SS1</td><td class="alloc-r">1</td><td class="alloc-r">$4538.49</td><td class="alloc-r alloc-val">$4,538</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- Sleeve: Stablecoin Strategy 2 -->
-    <div class="a2-card alloc-tablecard alloc-sleeve">
-      <div class="alloc-sleeve__head">
-        <span class="alloc-sleeve__name">Stablecoin Strategy 2</span>
-        <span class="alloc-sleeve__totalwrap">
-          <span class="alloc-sleeve__total">$36</span>
-          <span class="alloc-sleeve__type">prop</span>
-        </span>
-      </div>
-      <table class="alloc-table">
-        <thead>
-          <tr><th class="alloc-l">Asset</th><th class="alloc-r">Balance</th><th class="alloc-r">Price</th><th class="alloc-r">Value</th></tr>
-        </thead>
-        <tbody>
-          <tr><td class="alloc-sym"><span class="alloc-dot" style="background:#f59e0b;"></span>ETH</td><td class="alloc-r">0.0233</td><td class="alloc-r">$1550.76</td><td class="alloc-r alloc-val">$36</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <p class="alloc-caption">Aggregate view across 3 wallets. Each wallet displays its individual positions.</p>
+    <p class="alloc-caption" x-show="walletCount()" x-cloak>
+      Aggregate view across <span x-text="walletCount()"></span> wallets. Each wallet displays its individual positions.
+    </p>
   </section>
 
   <!-- ── 03 / BUYBACKS — Token Buybacks ──────────────────────────────────── -->
@@ -363,9 +331,13 @@
       </p>
     </div>
 
+    <!-- Total + rows are live from GET /api/dashboards/buybacks (ROBOTMONEY
+         Transfer logs into the primary prop wallet; the 10 historical 2026-03-23
+         rows are the seeded backfill). Nothing is baked; a stub feed is flagged. -->
     <div class="alloc-spent">
       <span class="alloc-spent__label">Total Spent on Buybacks</span>
-      <span class="alloc-spent__value">1.149114 WETH</span>
+      <span class="alloc-spent__value" x-text="fmtWethLabel(buybacks?.totals?.wethSpent)">—</span>
+      <span class="alloc-buyback-nonlive" x-show="buybackNonLive()" x-cloak>Demo data — hermetic stub, not live chain data.</span>
     </div>
 
     <div class="a2-card alloc-tablecard">
@@ -381,23 +353,28 @@
             </tr>
           </thead>
           <tbody>
-            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.116534</td><td class="alloc-r">$253.97</td><td class="alloc-r alloc-val">18.45M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0xa19a086682db8ff57a94e8f594bb542c8e4ba1d8f79bf7ad48717be0587ffa37">0xa19a08...7ffa37</a></td></tr>
-            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.115910</td><td class="alloc-r">$252.61</td><td class="alloc-r alloc-val">17.81M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x9ce840624ce3742bca40f6b672587dfa1ad85ac40476ecb7cb71938a170319bc">0x9ce840...0319bc</a></td></tr>
-            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.115910</td><td class="alloc-r">$252.61</td><td class="alloc-r alloc-val">17.77M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x8dc090ca0ec59882d541dffd52adbe64adbdba4166dd63a230722d2ea0b29266">0x8dc090...b29266</a></td></tr>
-            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.114375</td><td class="alloc-r">$249.26</td><td class="alloc-r alloc-val">18.17M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x1e09868aa284f8a969f7a85a11758e896b786f5f78daf8b503274b2828209361">0x1e0986...209361</a></td></tr>
-            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.114375</td><td class="alloc-r">$249.26</td><td class="alloc-r alloc-val">18.14M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x79594aaa2a4b39bdcbc19ba9f39834963d0f00599b4437e17a517503f996450f">0x79594a...96450f</a></td></tr>
-            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.115006</td><td class="alloc-r">$250.64</td><td class="alloc-r alloc-val">18.20M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x9364ec11ec2543438b2c1efaee79aad6ecc2ef42606ca9efa9f8378ac4837eac">0x9364ec...837eac</a></td></tr>
-            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.114251</td><td class="alloc-r">$248.99</td><td class="alloc-r alloc-val">18.04M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0xd63e11167880ef5ca9d7dfeb2e361b355e93aa01317ccb9ab5bdf5918168eb74">0xd63e11...68eb74</a></td></tr>
-            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.114251</td><td class="alloc-r">$248.99</td><td class="alloc-r alloc-val">17.46M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0xe6d8138395fb5815157cf1197570dd26c10f4fd3c3792e08fa9f38956811ec33">0xe6d813...11ec33</a></td></tr>
-            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.114251</td><td class="alloc-r">$248.99</td><td class="alloc-r alloc-val">17.43M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x81cf52a3f723c48a65c67999b5b4417a67b67687125aec29ba255246a6eba39f">0x81cf52...eba39f</a></td></tr>
-            <tr><td>2026-03-23</td><td class="alloc-r alloc-warn">0.114251</td><td class="alloc-r">$248.99</td><td class="alloc-r alloc-val">17.37M</td><td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" href="https://basescan.org/tx/0x3c9718e37624c0de8b5e295b3e8a9cf5dc98dcd0d08cbad395551c2ce6f8eab9">0x3c9718...f8eab9</a></td></tr>
+            <tr x-show="loading">
+              <td>Loading…</td><td class="alloc-r">—</td><td class="alloc-r">—</td><td class="alloc-r alloc-val">—</td><td class="alloc-r">—</td>
+            </tr>
+            <template x-for="b in buybackRows()" :key="b.txHash">
+              <tr>
+                <td x-text="b.date"></td>
+                <td class="alloc-r alloc-warn" x-text="fmtWeth(b.wethSpent)"></td>
+                <td class="alloc-r" x-text="fmtUsd2(b.valueUsd)"></td>
+                <td class="alloc-r alloc-val" x-text="fmtRmoney(b.robotmoneyReceived)"></td>
+                <td class="alloc-r"><a class="alloc-link" target="_blank" rel="noopener" :href="txUrl(b.txHash)" x-text="shortHash(b.txHash)"></a></td>
+              </tr>
+            </template>
+            <tr x-show="!loading && !buybackRows().length">
+              <td colspan="5">No live buyback data available.</td>
+            </tr>
           </tbody>
-          <tfoot>
+          <tfoot x-show="buybackRows().length" x-cloak>
             <tr class="alloc-table__total">
               <td>TOTAL</td>
-              <td class="alloc-r alloc-warn">1.149114 WETH</td>
-              <td class="alloc-r alloc-val">$2,504.31</td>
-              <td class="alloc-r alloc-val">178.82M</td>
+              <td class="alloc-r alloc-warn" x-text="fmtWethLabel(buybacks?.totals?.wethSpent)"></td>
+              <td class="alloc-r alloc-val" x-text="fmtUsd2(buybacks?.totals?.valueUsd)"></td>
+              <td class="alloc-r alloc-val" x-text="fmtRmoney(buybacks?.totals?.robotmoneyReceived)"></td>
               <td></td>
             </tr>
           </tfoot>
@@ -578,7 +555,8 @@
 
 /* Non-live badge — the payload is served by the hermetic demo/CI RPC stub
    (source:'stub', issue #50); stub numbers are flagged, never shown as live. */
-.alloc-nonlive {
+.alloc-nonlive,
+.alloc-buyback-nonlive {
   font-family: var(--font-mono);
   font-size: 0.75rem;
   color: var(--color-warn);

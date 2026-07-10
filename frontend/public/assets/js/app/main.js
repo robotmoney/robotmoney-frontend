@@ -8,21 +8,31 @@ import { registerHeroes } from "./alpine/heroes.js";
 import { registerStaticViews } from "./alpine/static-views.js";
 import { applyChartDefaults } from "./lib/chart-theme.js";
 import { start } from "./router.js";
+import { api, ROUTES } from "./lib/api.js";
 
-// Terminal boot animation copy — drives the hero's faux deployment log.
-const TERMINAL_LINES = [
-  { text: "$ robot-money init --chain base --vault erc4626", delay: 0 },
-  { text: "  Deploying vault contract...", delay: 800 },
-  { text: "  ✓ Vault deployed at 0x7a3f...b2c1", delay: 1600 },
-  { text: "  ✓ Bucket A: Aave/Compound (33%)", delay: 2200 },
-  { text: "  ✓ Bucket B: Agent-token trading (33%)", delay: 2800 },
-  { text: "  ✓ Bucket C: Revenue liquid tokens (33%)", delay: 3400 },
-  { text: "  Launching $ROBOTMONEY on Base...", delay: 4200 },
-  { text: "  ✓ LP locked until 2100", delay: 5000 },
-  { text: "  ✓ Prop wallet initialized", delay: 5600 },
-  { text: "", delay: 6200 },
-  { text: "  Ready. Accepting deposits.", delay: 6400 },
-];
+// The real vault (source of truth: robotmoney-site config, Base mainnet). This
+// is a public on-chain address, not a fabricated demo value.
+const VAULT_ADDRESS = "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd";
+const shortAddr = (a) => `${a.slice(0, 6)}...${a.slice(-4)}`;
+
+// Build the hero's boot-log lines. The bucket-split lines are injected from the
+// LIVE allocation framework (GET /api/dashboards/allocation) — never a baked
+// 33/33/33 — and are omitted entirely if the feed is unavailable rather than
+// fabricated. Delays are staggered so the log types out over ~7s.
+function buildTerminalLines(bucketLines) {
+  const lines = [
+    { text: "$ robot-money init --chain base --vault erc4626" },
+    { text: "  Deploying vault contract..." },
+    { text: `  ✓ Vault deployed at ${shortAddr(VAULT_ADDRESS)}` },
+    ...bucketLines.map((b) => ({ text: `  ✓ ${b}` })),
+    { text: "  Launching $ROBOTMONEY on Base..." },
+    { text: "  ✓ LP locked until 2100" },
+    { text: "  ✓ Prop wallet initialized" },
+    { text: "" },
+    { text: "  Ready. Accepting deposits." },
+  ];
+  return lines.map((l, i) => ({ ...l, delay: i === 0 ? 0 : 600 + i * 600 }));
+}
 
 // Register every Alpine.data factory the views need, before Alpine starts.
 document.addEventListener("alpine:init", () => {
@@ -33,11 +43,23 @@ document.addEventListener("alpine:init", () => {
   applyChartDefaults();
 
   Alpine.data("terminalBoot", () => ({
-    lines: TERMINAL_LINES,
+    lines: [],
     visible: 0,
     timers: [],
-    start() {
-      this.timers = TERMINAL_LINES.map((line, i) =>
+    async start() {
+      // Pull the real bucket target weights from the allocation framework; on
+      // any failure, omit the split lines (honest — no fabricated 33/33/33).
+      let bucketLines = [];
+      try {
+        const fw = await api.get(ROUTES.dashboards.allocation);
+        bucketLines = (fw?.strategy || [])
+          .filter((s) => Number(s.targetPct) > 0)
+          .map((s) => `${s.label}: ${Math.round(Number(s.targetPct))}%`);
+      } catch (e) {
+        bucketLines = [];
+      }
+      this.lines = buildTerminalLines(bucketLines);
+      this.timers = this.lines.map((line, i) =>
         setTimeout(() => {
           this.visible = i + 1;
         }, line.delay + 500),

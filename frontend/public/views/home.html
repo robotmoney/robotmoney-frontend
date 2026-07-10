@@ -1170,27 +1170,29 @@
 
       <!-- Right — Mechanisms -->
       <div class="token__mechanisms">
-        <!-- Fee routing -->
-        <div class="token__card">
+        <!-- Fee routing — LIVE split from GET /api/dashboards/token-metrics
+             (`feeSplit`) via feeChart(): Creator share = the Protocol leg;
+             Interface & Protocol = Bankr + Clanker summed. No baked 57/43. -->
+        <div class="token__card" x-data="feeChart()">
           <h3 class="token__card-title token__card-title--accent">Fee Routing</h3>
           <div class="token__fees">
             <div class="token__fee">
-              <span class="token__fee-pct">57%</span>
+              <span class="token__fee-pct" x-text="pctLabel(feeCreatorPct())">—</span>
               <div class="token__fee-body">
                 <div class="token__fee-label">Creator share</div>
                 <div class="token__fee-dest">Prop wallet (permanent revenue)</div>
               </div>
-              <div class="token__fee-bar" style="width: 57%;">
+              <div class="token__fee-bar" :style="pctWidth(feeCreatorPct())">
                 <div class="token__fee-bar-fill"></div>
               </div>
             </div>
             <div class="token__fee">
-              <span class="token__fee-pct">43%</span>
+              <span class="token__fee-pct" x-text="pctLabel(feeInterfacePct())">—</span>
               <div class="token__fee-body">
                 <div class="token__fee-label">Interface &amp; Protocol</div>
                 <div class="token__fee-dest">Bankr / Clanker</div>
               </div>
-              <div class="token__fee-bar" style="width: 43%;">
+              <div class="token__fee-bar" :style="pctWidth(feeInterfacePct())">
                 <div class="token__fee-bar-fill"></div>
               </div>
             </div>

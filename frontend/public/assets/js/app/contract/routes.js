@@ -28,6 +28,10 @@ export const ROUTES = {
     researchSignal: "/api/dashboards/research-signals/:key", // GET
     vaultEconomics: "/api/dashboards/vault-economics", // GET
     walletBalances: "/api/dashboards/wallet-balances", // GET — live prop-wallet valuation (#84)
+    buybacks: "/api/dashboards/buybacks", // GET → token buyback history
+    tokenMetrics: "/api/dashboards/token-metrics", // GET → ROBOTMONEY price/supply/marketCap + fee split
+    walletSleeves: "/api/dashboards/wallet-sleeves", // GET → per-prop-wallet holdings breakdown
+    allocation: "/api/dashboards/allocation", // GET → admin/committee-managed strategy+bucket target weights
   },
 
   projects: {

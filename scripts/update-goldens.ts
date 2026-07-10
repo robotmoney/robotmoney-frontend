@@ -42,6 +42,10 @@ async function main(): Promise<void> {
   routes[ROUTES.dashboards.regimeSnapshots] = await get(`${ROUTES.dashboards.regimeSnapshots}?range=180`);
   routes[ROUTES.dashboards.vaultEconomics] = await get(ROUTES.dashboards.vaultEconomics);
   routes[ROUTES.dashboards.walletBalances] = await get(ROUTES.dashboards.walletBalances);
+  routes[ROUTES.dashboards.buybacks] = await get(ROUTES.dashboards.buybacks);
+  routes[ROUTES.dashboards.tokenMetrics] = await get(ROUTES.dashboards.tokenMetrics);
+  routes[ROUTES.dashboards.walletSleeves] = await get(ROUTES.dashboards.walletSleeves);
+  routes[ROUTES.dashboards.allocation] = await get(ROUTES.dashboards.allocation);
   routes[ROUTES.projects.list] = await get(ROUTES.projects.list);
   for (const key of RESEARCH_KEYS) {
     const p = expand(ROUTES.dashboards.researchSignal, { key });
