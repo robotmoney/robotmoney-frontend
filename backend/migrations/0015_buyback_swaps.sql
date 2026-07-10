@@ -33,6 +33,18 @@ CREATE TABLE buyback_swaps (
 );
 CREATE INDEX buyback_swaps_occurred_on_idx ON buyback_swaps (occurred_on DESC);
 
+-- Persisted scan cursor for the eth_getLogs indexer. Progress must survive across
+-- runs INDEPENDENTLY of whether a buyback was found in a window: deriving the
+-- resume point from MAX(buyback_swaps.block_number) alone means an empty window
+-- (or the NULL-block seed rows) never advances the cursor, so a bounded per-run
+-- scan would restart from the same floor forever and never crawl forward to the
+-- live buyback era. A single row holds the highest block already scanned.
+CREATE TABLE buyback_scan_state (
+  id                 int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  last_scanned_block bigint NOT NULL,
+  updated_at         timestamptz NOT NULL DEFAULT now()
+);
+
 -- Real historical buyback set: 10 txs, all 2026-03-23, total 1.149114 WETH /
 -- $2,504.31 / 178.84M ROBOTMONEY. Real BaseScan tx hashes. ON CONFLICT DO
 -- NOTHING so a later live index of the same tx never clobbers this authoritative

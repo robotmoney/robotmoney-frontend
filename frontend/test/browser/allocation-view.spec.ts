@@ -45,6 +45,33 @@ function loadVaultEconomicsGolden(): VaultEconomics {
   return payload as VaultEconomics;
 }
 
+// Generic golden loader for the OTHER dashboard endpoints the allocation view
+// binds (buybacks / wallet-sleeves / allocation framework). Same single source
+// of truth as loadVaultEconomicsGolden — goldens/api-goldens.json.
+function loadGolden<T>(route: string): T {
+  const goldens = JSON.parse(readFileSync(join(process.cwd(), "goldens/api-goldens.json"), "utf8")) as {
+    routes: Record<string, unknown>;
+  };
+  const payload = goldens.routes[route];
+  if (!payload) throw new Error(`no ${route} golden — run \`bun run goldens:update\``);
+  return payload as T;
+}
+
+// Stub one JSON route with a fixed payload; `onHit` records that the SPA
+// actually fetched it (proving the widget renders FROM the API, not a literal).
+async function stubJson(page: Page, glob: string, payload: unknown, onHit?: () => void) {
+  await page.route(glob, (route) => {
+    onHit?.();
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+  });
+}
+
+interface BuybackRow { date: string; txHash: string; wethSpent: number; valueUsd: number; robotmoneyReceived: number }
+interface Buybacks { rows: BuybackRow[]; totals: { wethSpent: number; valueUsd: number; robotmoneyReceived: number }; source: string }
+interface SleeveWallet { name: string; type: string; totalUsd: number; holdings: unknown[] }
+interface WalletSleeves { wallets: SleeveWallet[]; source: string }
+interface AllocationFramework { strategy: { label: string; targetPct: number }[]; buckets: unknown[]; source: string; managed: boolean }
+
 // A live wallet-balances stub. `source`/`provenance` toggle the hero's provenance
 // badge; `totalUsd` drives the Total AUM composition assertion.
 function walletStub(overrides: Partial<WalletBalances> = {}): WalletBalances {
@@ -244,4 +271,108 @@ test("allocation view renders a stale badge and never fabricates numbers when va
     await expect(cells.nth(1)).toHaveText("—");
     await expect(cells.nth(2)).toHaveText("—");
   }
+});
+
+// ── NEW: the buyback / sleeve / allocation-framework bindings render FROM the
+// live API (matching the committed goldens), not from baked literals. Each test
+// intercepts the endpoint under test, records the fetch, and asserts the served
+// DTO drives the DOM. The other feeds fall through to the preview server (which
+// also replays the goldens), so the page renders exactly as in production. ──────
+
+test("Token Buybacks table rows + totals render FROM GET /api/dashboards/buybacks golden, not baked rows", async ({ page }) => {
+  const golden = loadVaultEconomicsGolden();
+  const buybacks = loadGolden<Buybacks>("/api/dashboards/buybacks");
+  expect(buybacks.rows.length).toBeGreaterThan(0);
+  let hit = false;
+  await stubEnvironment(page, golden, walletStub());
+  await stubJson(page, "**/api/dashboards/buybacks", buybacks, () => { hit = true; });
+  await page.goto("/");
+  await navigate(page, "/allocation");
+
+  // One data row (each carries a basescan tx link) per served buyback — the 10
+  // live rows, never a hardcoded set. This locator ignores the loading/empty
+  // placeholder <tr>s (which have no tx link).
+  const dataRows = page.locator(".alloc-table--buyback tbody a.alloc-link");
+  await expect(dataRows).toHaveCount(buybacks.rows.length);
+  expect(hit).toBe(true); // the endpoint was actually fetched
+
+  // Total-spent chip + tfoot totals are computed by the API and echoed verbatim.
+  const wethLabel = buybacks.totals.wethSpent.toFixed(6) + " WETH";
+  await expect(page.locator(".alloc-spent__value")).toHaveText(wethLabel);
+  const totalRow = page.locator(".alloc-table--buyback .alloc-table__total");
+  await expect(totalRow.locator(".alloc-warn")).toHaveText(wethLabel);
+  await expect(totalRow.locator(".alloc-val").first()).toHaveText(
+    "$" + buybacks.totals.valueUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+  );
+  await expect(totalRow.locator(".alloc-val").nth(1)).toHaveText((buybacks.totals.robotmoneyReceived / 1e6).toFixed(2) + "M");
+});
+
+test("per-wallet Sleeves tables render FROM GET /api/dashboards/wallet-sleeves golden (names + totals)", async ({ page }) => {
+  const golden = loadVaultEconomicsGolden();
+  const sleeves = loadGolden<WalletSleeves>("/api/dashboards/wallet-sleeves");
+  expect(sleeves.wallets.length).toBeGreaterThan(0);
+  let hit = false;
+  await stubEnvironment(page, golden, walletStub());
+  await stubJson(page, "**/api/dashboards/wallet-sleeves", sleeves, () => { hit = true; });
+  await page.goto("/");
+  await navigate(page, "/allocation");
+
+  // Exactly one visible sleeve card per served wallet (the loading + empty
+  // placeholder cards are hidden once the feed resolves).
+  const cards = page.locator(".alloc-sleeve:visible");
+  await expect(cards).toHaveCount(sleeves.wallets.length);
+  expect(hit).toBe(true);
+  for (const w of sleeves.wallets) {
+    const card = cards.filter({ hasText: w.name });
+    await expect(card).toHaveCount(1);
+    await expect(card.locator(".alloc-sleeve__name")).toHaveText(w.name);
+    await expect(card.locator(".alloc-sleeve__total")).toHaveText(fmtUsd(w.totalUsd));
+    await expect(card.locator(".alloc-sleeve__type")).toHaveText(w.type);
+  }
+});
+
+test("allocation strategy bucket weights derive FROM GET /api/dashboards/allocation, not the baked [95,5,0,0] literal", async ({ page }) => {
+  const golden = loadVaultEconomicsGolden();
+  const fw = loadGolden<AllocationFramework>("/api/dashboards/allocation");
+  // A payload deliberately DIFFERENT from the retired baked [95,5,0,0] literal:
+  // if the bucket-card %s show 70/30 they can only have come from this response.
+  const mutated: AllocationFramework = {
+    ...fw,
+    strategy: [
+      { label: "Conservative DeFi Yield", targetPct: 70 },
+      { label: "Agent Tokens", targetPct: 30 },
+      { label: "Protocol Tokens", targetPct: 0 },
+      { label: "Real World Assets", targetPct: 0 },
+    ],
+  };
+  let hit = false;
+  await stubEnvironment(page, golden, walletStub());
+  await stubJson(page, "**/api/dashboards/allocation", mutated, () => { hit = true; });
+  await page.goto("/");
+  await navigate(page, "/allocation");
+
+  const pcts = page.locator(".alloc-bucket__pct");
+  await expect(pcts.nth(0)).toContainText("70%");
+  await expect(pcts.nth(1)).toContainText("30%");
+  // Never the old baked [95,5,0,0] literal.
+  await expect(pcts.nth(0)).not.toContainText("95%");
+  await expect(pcts.nth(1)).not.toContainText("5%");
+  expect(hit).toBe(true);
+});
+
+test("allocation strategy bucket weights match the committed golden weights", async ({ page }) => {
+  const golden = loadVaultEconomicsGolden();
+  const fw = loadGolden<AllocationFramework>("/api/dashboards/allocation");
+  let hit = false;
+  await stubEnvironment(page, golden, walletStub());
+  await stubJson(page, "**/api/dashboards/allocation", fw, () => { hit = true; });
+  await page.goto("/");
+  await navigate(page, "/allocation");
+
+  const pcts = page.locator(".alloc-bucket__pct");
+  // stratPct() rounds targetPct to an integer % — assert the golden labels/weights.
+  for (let i = 0; i < fw.strategy.length; i++) {
+    await expect(pcts.nth(i)).toContainText(Math.round(Number(fw.strategy[i]!.targetPct)) + "%");
+  }
+  expect(hit).toBe(true);
 });

@@ -43,6 +43,7 @@ export interface WalletSleeve {
   address: string; // lowercased
   type: string; // "primary" | "strategy"
   totalUsd: number; // sum of holdings[].valueUsd (nulls as 0)
+  stale: boolean; // true when any holding degraded (provenance 'stale') → totalUsd undercounts
   holdings: SleeveHolding[];
 }
 
@@ -50,6 +51,7 @@ export interface WalletSleeves {
   wallets: WalletSleeve[];
   asOf: string;
   source: BaseRpcSource;
+  stale: boolean; // true when ANY sleeve has a degraded holding, so a naive sum of totalUsd is partial
 }
 
 // Which tracked-asset symbols each prop wallet (by resolvePropWallets index)
@@ -150,10 +152,19 @@ export async function getWalletSleeves(): Promise<WalletSleeves> {
 
     const holdings = await Promise.all(walletAssets.map((a) => valueHolding(a, address, source, priceSource)));
     const totalUsd = Math.round(holdings.reduce((sum, h) => sum + (h.valueUsd ?? 0), 0) * 100) / 100;
-    sleeves.push({ name: def.name, address, type: def.type, totalUsd, holdings });
+    // A 'stale' holding means a leg failed and its value is null (counted as 0),
+    // so totalUsd is a partial undercount — flag it so a consumer never reads the
+    // total as a confident live figure (mirrors buybacks/token-metrics honesty).
+    const stale = holdings.some((h) => h.provenance === "stale");
+    sleeves.push({ name: def.name, address, type: def.type, totalUsd, stale, holdings });
   }
 
-  const value: WalletSleeves = { wallets: sleeves, asOf: new Date(now).toISOString(), source };
+  const value: WalletSleeves = {
+    wallets: sleeves,
+    asOf: new Date(now).toISOString(),
+    source,
+    stale: sleeves.some((s) => s.stale),
+  };
   cache = { at: now, value };
   return value;
 }
