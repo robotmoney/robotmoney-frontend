@@ -14,7 +14,7 @@ import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
 import { resolveVaultAdapters, isPlaceholderAddress, resolveBuybackConfig } from "../../src/config.ts";
 import { getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation } from "../../src/api/routes/dashboards.ts";
-import { _resetBuybackCacheForTests } from "../../src/chain/buyback-logs.ts";
+import { _resetBuybackCacheForTests, indexBuybacks } from "../../src/chain/buyback-logs.ts";
 import { _resetTokenMetricsCacheForTests } from "../../src/chain/token-metrics.ts";
 import { _resetWalletSleevesCacheForTests } from "../../src/chain/wallet-sleeves.ts";
 import { _resetAllocationFrameworkCacheForTests, ALLOCATION_FRAMEWORK_SEED } from "../../src/chain/allocation-framework.ts";
@@ -233,5 +233,46 @@ test("allocation: with the row absent, getAllocation falls back to the committee
       ON CONFLICT (id) DO NOTHING
     `;
     resetCaches();
+  }
+});
+
+// ── buyback indexer: persisted scan cursor (regression: stuck-at-floor) ──────
+test("buyback indexer advances a persisted scan cursor across empty windows and resumes past it (never restarts from the floor)", async () => {
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.BUYBACK_FROM_BLOCK = "1000";
+  process.env.BUYBACK_LOG_CHUNK = "100";
+  process.env.BUYBACK_MAX_CHUNKS = "3"; // 3×100 = 300 blocks covered per run
+  const LATEST = 100_000; // far beyond one run's reach → cursor must carry across runs
+  // Empty-log chain: eth_blockNumber → tip, eth_getLogs → [] (no buybacks found),
+  // gecko → a WETH price. If progress depended on finding a row, the cursor would
+  // never move; this proves it advances on scan coverage alone.
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("geckoterminal.com")) {
+      const addr = u.split("/token_price/")[1]?.toLowerCase() ?? "x";
+      return new Response(JSON.stringify({ data: { attributes: { token_prices: { [addr]: "2000" } } } }), { status: 200 });
+    }
+    const body = JSON.parse(String(init?.body)) as { method: string };
+    if (body.method === "eth_blockNumber") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x" + LATEST.toString(16) }), { status: 200 });
+    if (body.method === "eth_getLogs") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] }), { status: 200 });
+    throw new Error(`unexpected ${body.method}`);
+  }) as typeof fetch;
+  try {
+    await sql`DELETE FROM buyback_scan_state`;
+    const r1 = await indexBuybacks();
+    const c1 = await sql<{ b: string }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`;
+    // from=floor 1000; three 100-block chunks → last window ends at 1299.
+    expect(r1.scannedToBlock).toBe(1299);
+    expect(Number(c1[0]!.b)).toBe(1299);
+
+    const r2 = await indexBuybacks();
+    const c2 = await sql<{ b: string }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`;
+    // Resumes at cursor+1 (1300), NOT the floor → advances another 300 blocks.
+    expect(r2.scannedToBlock).toBe(1599);
+    expect(Number(c2[0]!.b)).toBe(1599);
+  } finally {
+    for (const k of ["BUYBACK_FROM_BLOCK", "BUYBACK_LOG_CHUNK", "BUYBACK_MAX_CHUNKS"]) delete process.env[k];
+    await sql`DELETE FROM buyback_scan_state`;
+    _resetBuybackCacheForTests();
   }
 });

@@ -213,19 +213,38 @@ export async function indexBuybacks(): Promise<IndexResult> {
 
   const chunk = Number(process.env.BUYBACK_LOG_CHUNK ?? "9000");
   const maxChunks = Number(process.env.BUYBACK_MAX_CHUNKS ?? "25");
+  const floor = Number(process.env.BUYBACK_FROM_BLOCK ?? "0");
+  if (floor <= 0) {
+    // Scanning from genesis on Base (tens of millions of blocks) at a bounded
+    // maxChunks*chunk per run would take hundreds of runs to crawl to the buyback
+    // era. The cursor below still guarantees eventual progress, but a realistic
+    // floor near the ROBOTMONEY deployment is required for the live feed to catch
+    // up in reasonable time — say so loudly rather than silently crawling.
+    console.warn(
+      "buyback-logs: BUYBACK_FROM_BLOCK is unset/0 — the live indexer will crawl from block 0 and may take many runs to reach the buyback era; set BUYBACK_FROM_BLOCK to a block near ROBOTMONEY deployment.",
+    );
+  }
 
   let indexed = 0;
   let scannedToBlock: number | null = null;
   try {
-    // Incremental: resume just past the highest already-indexed live block; else
-    // start from a configured floor (BUYBACK_FROM_BLOCK) so a first run does not
-    // attempt an unbounded full-history scan on a public RPC.
-    const maxRow = await sql<{ mx: string | null }[]>`SELECT MAX(block_number)::text AS mx FROM buyback_swaps`;
+    // Resume point: the highest block we have already SCANNED (persisted cursor),
+    // independent of whether a buyback was found there — this is what lets a
+    // bounded per-run scan crawl forward across empty windows instead of
+    // restarting from the floor forever (the NULL-block seed rows contribute no
+    // MAX(block_number), so the old row-derived cursor never advanced). We also
+    // never resume before the highest already-indexed live block.
+    const [cursorRow, maxRow] = await Promise.all([
+      sql<{ b: string | null }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`,
+      sql<{ mx: string | null }[]>`SELECT MAX(block_number)::text AS mx FROM buyback_swaps`,
+    ]);
+    const cursor = cursorRow[0]?.b == null ? null : Number(cursorRow[0].b);
     const persistedMax = maxRow[0]?.mx == null ? null : Number(maxRow[0].mx);
-    const floor = Number(process.env.BUYBACK_FROM_BLOCK ?? "0");
-    let from = persistedMax != null ? persistedMax + 1 : floor;
+    let from = Math.max(
+      cursor != null ? cursor + 1 : floor,
+      persistedMax != null ? persistedMax + 1 : floor,
+    );
     const latest = await ethBlockNumber(rpcOpts());
-    scannedToBlock = latest;
 
     // Price the WETH input leg once per run (best-available spot; a just-executed
     // swap is recent so current WETH price ≈ swap price). A price failure aborts
@@ -252,6 +271,10 @@ export async function indexBuybacks(): Promise<IndexResult> {
         if (wethSpent == null) continue;
         const occurredOn = await blockDate(blockNumber);
         const valueUsd = Math.round(wethSpent * wethPriceUsd * 100) / 100;
+        // Idempotent on the tx_hash natural key: a re-scan (overlap/reorg) never
+        // duplicates a swap. NOTE: a single tx emitting multiple ROBOTMONEY-in
+        // legs records only the first (robotmoney_received slightly undercounts
+        // such txs); acceptable for the buyback pattern, tracked as a follow-up.
         const res = await sql`
           INSERT INTO buyback_swaps
             (block_number, tx_hash, log_index, occurred_on, weth_spent, value_usd, robotmoney_received, provenance)
@@ -261,6 +284,14 @@ export async function indexBuybacks(): Promise<IndexResult> {
         `;
         indexed += res.count;
       }
+      // Advance + persist the scan cursor for THIS window regardless of hits, so
+      // the next run resumes past it. scannedToBlock reflects real coverage.
+      scannedToBlock = to;
+      await sql`
+        INSERT INTO buyback_scan_state (id, last_scanned_block, updated_at)
+        VALUES (1, ${to}, now())
+        ON CONFLICT (id) DO UPDATE SET last_scanned_block = EXCLUDED.last_scanned_block, updated_at = now()
+      `;
       from = to + 1;
     }
   } catch (err) {
