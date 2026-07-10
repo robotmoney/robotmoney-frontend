@@ -16,12 +16,21 @@ const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ── Real-inference take invariants (issue #77) ──────────────────────────────
-// Fingerprint of the RETIRED deterministic buildMemo template: every templated
-// REGIME section carried this exact clause. A real claude-opus-4-8 take will not
-// reproduce it verbatim, so a body that still matches means the fake/templated
-// path leaked back in — fail loudly.
+// Fingerprint of the deterministic buildMemo template: every templated REGIME
+// section carries this exact clause. A real keyless opencode-zen take will not
+// reproduce it verbatim, so under COMMITTEE_REAL_INFERENCE a body that still
+// matches means the templated path leaked back into the real path — fail loudly.
 const OLD_TEMPLATE_RE = /the spread, not the composite, is where the signal lives/i;
 const VALID_STANCES = new Set(["bullish", "constructive", "neutral", "cautious", "bearish"]);
+
+// The authored-take structural assertions only apply to the REAL keyless
+// opencode path. The hermetic per-PR default deliberately uses the deterministic
+// buildMemo template (which DOES match OLD_TEMPLATE_RE), so the assertions run
+// ONLY when COMMITTEE_REAL_INFERENCE=1 (the nightly committee-opencode job). This
+// keeps the required per-PR e2e green and offline while still giving the nightly
+// a loud, executed-in-CI check that every present member's take was really
+// authored by a live model.
+const REAL_INFERENCE = process.env.COMMITTEE_REAL_INFERENCE === "1";
 
 // Post-publish structural assertions over every PRESENT member's authored take.
 // Throws on any failure so the standalone `bun run src/e2e.ts` entrypoint exits
@@ -280,11 +289,12 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   console.log(`${tag} synthesis: ${pub.session.synthesis}`);
   console.log(`${tag} absent: ${JSON.stringify(pub.takes.filter((t: any) => t.verified === null || t.verified === false).map((t: any) => t.memberId))}`);
 
-  // Real-inference invariants: every present member's published take must be a
-  // genuine claude-opus-4-8 authoring (non-template body, REGIME/ALLOCATION/
-  // SUBJECT lead-ins, stance in the five-value set, confidence in [0,1], distinct
-  // across members). Throws → exit 1 on any failure.
-  assertAuthoredTakes(tag, pub.takes);
+  // Real-inference invariants (nightly only): every present member's published
+  // take must be a genuine keyless opencode-zen authoring (non-template body,
+  // REGIME/ALLOCATION/SUBJECT lead-ins, stance in the five-value set, confidence
+  // in [0,1], distinct across members). Throws → exit 1 on any failure. Skipped
+  // in the hermetic per-PR default (deterministic buildMemo template).
+  if (REAL_INFERENCE) assertAuthoredTakes(tag, pub.takes);
 
   // Verify memos
   for (const r of results) {

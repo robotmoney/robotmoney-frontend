@@ -63,14 +63,15 @@ jobs:
         run: bun run scripts/demo.ts
         env:
           CI: "true"
-          # Real committee-member inference (issue #77): each present member's
-          # take is authored by a live claude-opus-4-8 call in mcp/src/inference.ts
-          # (driven via mcp/src/e2e.ts). The key is REQUIRED — authorTake throws
-          # with no template fallback when it is absent, so this job fails loudly
-          # rather than silently emitting fake takes (loud-skip contract). The
-          # ANTHROPIC_API_KEY repository/org secret must be provisioned for this
-          # required check to pass; see blocker issue #92.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # This required e2e is HERMETIC (issue #77): committee takes use the
+          # deterministic stanceFor() + buildMemo() template path (mcp/src/agent.ts,
+          # memo.ts) — no live model, NO secret. The REAL keyless opencode-zen
+          # authoring path (mcp/src/inference.ts) is gated behind
+          # COMMITTEE_REAL_INFERENCE=1 and exercised in the nightly
+          # committee-opencode workflow, which loudly asserts every member's take
+          # was really model-authored. Do NOT wire ANTHROPIC_API_KEY (or any
+          # secret) here — the keyless design removed that dependency (closes the
+          # #92 no-secret blocker).
           # EXPLICIT hermetic opt-in (issue #50, supersedes the #48 wiring): local
           # `bun demo` now defaults to the production-parity LIVE data path, so
           # this required check must opt in to the hermetic mode itself.

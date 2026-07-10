@@ -1,41 +1,40 @@
-// Real Claude inference for demo committee-member takes. This is the module that
-// REPLACES the deterministic stanceFor() + templated buildMemo() path in
-// agent.ts: each participating member's take is authored by an actual
-// claude-opus-4-8 call fed the member persona (name, lens, disposition) plus the
-// session brief (regime summary + subject snapshot). It returns REGIME /
-// ALLOCATION / SUBJECT prose ending in a parseable
-// "STANCE: <...> | CONFIDENCE: <0-1>" control line that is parsed out of the
-// stored body. Mirrors the reference authoring path in robotmoney-site
-// scripts/committee/generate-session.js (persona system prompt + brief inputs).
+// Keyless committee-member take authorship. This module authors each participating
+// member's take with a REAL language-model call — but via OpenCode Zen's free,
+// no-credential tier, exactly as robotmoney-core does in
+// `.github/workflows/suite-11b-opencode-headless.yml` ("free, no-credential
+// opencode zen model … avoids drift to a model that would need an API-key secret
+// the repo does not have"). It shells out to
 //
-// LOUD-SKIP CONTRACT: a real inference call depends on ANTHROPIC_API_KEY, an
-// external resource. When the key is absent this module THROWS — it never falls
-// back to a templated body. The required e2e workflow wires ANTHROPIC_API_KEY
-// into the Full-stack demo step so this path executes in CI; absent the key the
-// e2e fails loudly rather than silently degrading to a fake take.
-import { Anthropic } from "@anthropic-ai/sdk";
+//   opencode run "<persona + regime/subject brief>" \
+//     --model opencode/big-pickle --format json --dangerously-skip-permissions
+//
+// parses the NDJSON transcript for the final assistant message text, and returns
+// REGIME / ALLOCATION / SUBJECT prose ending in a parseable
+// "STANCE: <...> | CONFIDENCE: <0-1>" control line (stripped from the stored body
+// by `parseStanceFromBody`). Mirrors the reference authoring path in
+// robotmoney-site scripts/committee/generate-session.js.
+//
+// LOUD-SKIP CONTRACT: the real path depends on the opencode CLI + a reachable
+// zero-credential zen model (an external resource). When the binary is
+// unavailable or the run produces an empty transcript, this module THROWS — it
+// NEVER falls back to a templated body. No API key or secret is used. Because the
+// free zen model is slower and more variable than a paid tier, this real path is
+// exercised in a NIGHTLY job; the required per-PR e2e keeps the deterministic
+// `stanceFor()` + `buildMemo()` (see agent.ts / memo.ts) hermetic default.
+import type { RegimeContext } from "./memo.ts";
 
-// Panel/percentile inputs woven into the authored take's session brief. All
-// optional beyond `composite` — the prompt builder degrades to composite-derived
-// approximations when a panel field is absent.
-export interface RegimeContext {
-  composite: number;
-  compositePercentile?: number | null;
-  regime?: string | null;
-  macroRegime?: string | null;
-  onchainRegime?: string | null;
-  factorRegime?: string | null;
-  macroPercentile?: number | null;
-  onchainPercentile?: number | null;
-  factorPercentile?: number | null;
-}
+export type { RegimeContext };
 
-// Always use claude-opus-4-8 (the current, most-capable Opus tier) per the
-// Anthropic model guidance. Token budget sized for the 3-section take (~180-220
-// words) plus the trailing STANCE/CONFIDENCE control line, with margin so the
-// SUBJECT section and control line never get truncated.
-export const INFERENCE_MODEL = "claude-opus-4-8";
-const MAX_TOKENS_TAKE = 800;
+// Free, no-credential OpenCode Zen model (verified available at opencode 1.16.2).
+// Pinned for determinism; overridable via env so the nightly job (or a local
+// operator) can retarget a renamed/replacement free zen model without a code
+// change. Mirrors robotmoney-core's `opencode/big-pickle` pin. Resolved at call
+// time (not module load) so an env override / test toggle takes effect.
+export const DEFAULT_INFERENCE_MODEL = "opencode/big-pickle";
+const inferenceModel = () => process.env.OPENCODE_MODEL ?? DEFAULT_INFERENCE_MODEL;
+// The opencode binary name/path. Resolved at call time so a unit test can point
+// it at a nonexistent path to prove the loud-throw contract without a live call.
+const opencodeBin = () => process.env.OPENCODE_BIN ?? "opencode";
 
 export const STANCE_VALUES = ["bullish", "constructive", "neutral", "cautious", "bearish"] as const;
 export type Stance = (typeof STANCE_VALUES)[number];
@@ -75,15 +74,31 @@ export function parseStanceFromBody(body: string): ParsedTake {
   return { stance: "neutral", confidence: 0.5, body: trimmed };
 }
 
-// Read the key at call time (not module load) so unit tests can toggle it.
-function requireApiKey(): string {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) {
-    throw new Error(
-      "ANTHROPIC_API_KEY env var required to author committee takes via Claude inference (no template fallback)",
-    );
+// Extract the final assistant message text from an `opencode run --format json`
+// NDJSON transcript. opencode 1.16.x emits one JSON object per line; a finalized
+// assistant text part is `{"type":"text","part":{"type":"text","text":"…"}}` (the
+// CLI only prints a `text` event once the part's `time.end` is set). We
+// concatenate every such part in stream order — that is the model's authored
+// prose. Non-text events (step_start / step_finish / tool_use / reasoning) and
+// unparseable lines are ignored. Returns "" when the transcript carries no
+// assistant text (empty/failed run) so the caller can throw loudly.
+export function extractAssistantText(transcript: string): string {
+  const parts: string[] = [];
+  for (const line of transcript.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    let ev: any;
+    try {
+      ev = JSON.parse(t);
+    } catch {
+      continue;
+    }
+    if (ev?.type === "text") {
+      const text = ev?.part?.text;
+      if (typeof text === "string" && text.trim()) parts.push(text);
+    }
   }
-  return key;
+  return parts.join("\n").trim();
 }
 
 function dispositionLabel(bias: number): string {
@@ -92,54 +107,32 @@ function dispositionLabel(bias: number): string {
   return "runs balanced; you weight the panel spread over the composite label and resist tilting off the mandate";
 }
 
-function systemPromptFor(p: Persona): string {
-  return [
-    `You are ${p.name}, an autonomous voice on the Robot Money Investment Committee.`,
-    ``,
-    `# Lens`,
-    `You read every session through a ${p.lens} lens. That lens — not the headline composite — sets your conviction.`,
-    ``,
-    `# Disposition`,
-    `Your disposition ${dispositionLabel(p.bias)}.`,
-    ``,
-    `# Voice`,
-    `Write in your own distinct voice. One claim per bullet, no run-on sentences, no hedging boilerplate.`,
-    `You reason from the regime and subject snapshot you are given — cite specific numbers, panels, and mechanisms, never vibes.`,
-  ].join("\n");
-}
-
 function pct(fraction: number | null | undefined, fallback: number): string {
   const f = typeof fraction === "number" ? fraction : fallback;
   return `${Math.round(Math.max(0, Math.min(1, f)) * 100)}th`;
 }
 
-function briefFor(regime: RegimeContext, subjectId: string): string {
+// Build the full single-message prompt for opencode `run`. opencode `run` takes
+// one positional prompt (no separate system message), so the persona framing,
+// session brief, and formatting task are woven into one string.
+export function promptFor(p: Persona, regime: RegimeContext, subjectId: string): string {
   const comp = regime.composite;
-  const lines: string[] = [
+  return [
+    `You are ${p.name}, an autonomous voice on the Robot Money Investment Committee.`,
+    `You read every session through a ${p.lens} lens — that lens, not the headline composite, sets your conviction.`,
+    `Your disposition ${dispositionLabel(p.bias)}.`,
+    `Write in your own distinct voice, one claim per bullet, no hedging boilerplate; cite specific numbers, panels, and mechanisms, never vibes.`,
+    ``,
     `# Session brief`,
     `Subject under review: ${subjectId}`,
-    ``,
-    `## Regime`,
-    `Composite ${comp.toFixed(3)} (${pct(regime.compositePercentile, comp)} percentile of trailing 3y) → bucket ${regime.regime ?? "unlabeled"}.`,
+    `Composite ${comp.toFixed(3)} (${pct(regime.compositePercentile, comp)} percentile of trailing 3y) -> bucket ${regime.regime ?? "unlabeled"}.`,
     `  Macro panel:    ${pct(regime.macroPercentile, comp + 0.08)} percentile, bucket ${regime.macroRegime ?? "n/a"}`,
     `  On-chain panel: ${pct(regime.onchainPercentile, comp - 0.2)} percentile, bucket ${regime.onchainRegime ?? "n/a"}`,
     `  Equity factor:  ${pct(regime.factorPercentile, comp + 0.15)} percentile, bucket ${regime.factorRegime ?? "n/a"}`,
-    ``,
-    `## Vault allocation framework (Robot Money governance targets)`,
-    `Targets are 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets.`,
-    `The Agent Tokens sleeve routes through rmUSDC vault receipts.`,
-  ];
-  return lines.join("\n");
-}
-
-function userPromptFor(p: Persona, regime: RegimeContext, subjectId: string): string {
-  return [
-    briefFor(regime, subjectId),
+    `Vault allocation targets are 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets; the Agent Tokens sleeve routes through rmUSDC vault receipts.`,
     ``,
     `# Your task`,
-    `Write a structured take in three bulleted sections. Each section is a bold header line followed by 3 bullets, one claim per bullet. Total ~180-220 words.`,
-    ``,
-    `Format exactly:`,
+    `Write a structured take in exactly three bulleted sections, ~180-220 words total. Each section is a bold header line followed by 3 bullets, one claim per bullet. Reply with ONLY the take (no preamble, no tool calls). Format exactly:`,
     ``,
     `**REGIME**`,
     `- One concrete number from the brief and what it means through your lens`,
@@ -156,35 +149,59 @@ function userPromptFor(p: Persona, regime: RegimeContext, subjectId: string): st
     `- The specific concentration or mechanism risk you underwrite`,
     `- The first move you would make, with a trigger`,
     ``,
-    `Stay in your voice. One claim per bullet.`,
-    `Conclude with one line exactly: STANCE: <bullish|constructive|neutral|cautious|bearish> | CONFIDENCE: <0-1>`,
+    `Stay in your voice. Conclude with one line exactly, and nothing after it:`,
+    `STANCE: <bullish|constructive|neutral|cautious|bearish> | CONFIDENCE: <0-1>`,
   ].join("\n");
+}
+
+// Run the keyless opencode CLI on a prompt and return the concatenated final
+// assistant text. Throws loudly (no template fallback) when the binary cannot be
+// spawned (opencode unavailable) or the run yields no assistant text.
+async function runOpencode(prompt: string): Promise<string> {
+  const bin = opencodeBin();
+  const model = inferenceModel();
+  let proc: ReturnType<typeof Bun.spawn>;
+  try {
+    proc = Bun.spawn(
+      [bin, "run", prompt, "--model", model, "--format", "json", "--dangerously-skip-permissions"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+  } catch (err) {
+    throw new Error(
+      `opencode inference unavailable: failed to spawn '${bin}' (${err instanceof Error ? err.message : String(err)}). ` +
+        `Committee takes require a working keyless opencode CLI; there is NO template fallback in this path.`,
+    );
+  }
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout as ReadableStream).text(),
+    new Response(proc.stderr as ReadableStream).text(),
+    proc.exited,
+  ]);
+  const text = extractAssistantText(stdout);
+  if (!text) {
+    throw new Error(
+      `opencode inference produced an empty transcript (exit ${exitCode}) for model '${model}': ` +
+        `no assistant text in the --format json stream. The keyless zen model is unreachable or returned nothing; ` +
+        `NO template fallback. stderr: ${stderr.slice(0, 400)}`,
+    );
+  }
+  return text;
 }
 
 export interface AuthoredTake extends ParsedTake {
   model: string;
 }
 
-// Author one committee member's take with a real claude-opus-4-8 inference call.
-// Throws (no fallback) when ANTHROPIC_API_KEY is absent. Returns the stored body
-// (control line stripped) plus the parsed stance/confidence.
+// Author one committee member's take with a REAL, keyless opencode-zen call.
+// Throws (no fallback) when opencode is unavailable or the transcript is empty.
+// Returns the stored body (control line stripped) plus the parsed
+// stance/confidence.
 export async function authorTake(
   p: Persona,
   regime: RegimeContext,
   subjectId: string,
 ): Promise<AuthoredTake> {
-  const apiKey = requireApiKey();
-  const client = new Anthropic({ apiKey });
-  const resp = await client.messages.create({
-    model: INFERENCE_MODEL,
-    max_tokens: MAX_TOKENS_TAKE,
-    system: systemPromptFor(p),
-    messages: [{ role: "user", content: userPromptFor(p, regime, subjectId) }],
-  });
-  const text = resp.content
-    .map((b) => (b.type === "text" ? b.text : ""))
-    .join("")
-    .trim();
+  const text = await runOpencode(promptFor(p, regime, subjectId));
   const parsed = parseStanceFromBody(text);
-  return { ...parsed, model: INFERENCE_MODEL };
+  return { ...parsed, model: inferenceModel() };
 }

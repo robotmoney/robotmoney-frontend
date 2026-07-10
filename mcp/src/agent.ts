@@ -12,13 +12,21 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
 import { generateKeyPair, sign } from "./crypto.ts";
-import { authorTake, type RegimeContext } from "./inference.ts";
+import { buildMemo, type RegimeContext } from "./memo.ts";
+import { authorTake } from "./inference.ts";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const MCP_URL = process.env.MCP_URL ?? "http://localhost:8788/mcp";
 const adminHeaders: Record<string, string> = process.env.ADMIN_TOKEN
   ? { "X-Admin-Token": process.env.ADMIN_TOKEN }
   : {};
+
+// Gate the REAL keyless opencode-zen authoring path (mcp/src/inference.ts). Off
+// by default so the required per-PR e2e stays HERMETIC — it uses the
+// deterministic stanceFor() + buildMemo() template below, calls NO live model,
+// and needs NO secret. The nightly committee-opencode job sets
+// COMMITTEE_REAL_INFERENCE=1 to exercise (and loudly assert) the real path.
+const REAL_INFERENCE = process.env.COMMITTEE_REAL_INFERENCE === "1";
 
 export interface AgentOpts {
   memberId: string; name: string; lens: string; bias: number;
@@ -35,6 +43,17 @@ export interface ExistingCredentials {
 // → reporting → done. Default undefined ⇒ zero behaviour change (standalone e2e).
 export type AgentStage = "connect" | "fetch" | "thinking" | "reporting" | "done";
 export type AgentProgress = (stage: AgentStage, info?: { stance?: string; confidence?: number }) => void;
+
+// Deterministic stance derivation from the composite + the member's directional
+// bias. The HERMETIC per-PR default: no LLM, no secret. The real keyless
+// opencode path (REAL_INFERENCE) parses stance/confidence out of the authored
+// take instead.
+export function stanceFor(composite: number, bias: number) {
+  const x = composite + bias;
+  const stance = x >= 0.67 ? "bullish" : x >= 0.55 ? "constructive" : x >= 0.45 ? "neutral" : x >= 0.33 ? "cautious" : "bearish";
+  const confidence = Math.round(Math.min(1, Math.abs(x - 0.5) * 2 + 0.4) * 100) / 100;
+  return { stance, confidence };
+}
 
 export const textOf = (res: any) => JSON.parse(res.content?.[0]?.text ?? "null");
 
@@ -89,15 +108,17 @@ export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCrede
       provenance = [`RM tool: classify_regime → ${classification.classification} (${classification.explanation})`];
     }
 
-    // 4. author the take via a REAL claude-opus-4-8 inference call, get the
-    //    canonical payload, sign, submit — all via MCP. The member persona
-    //    (name, lens, disposition) plus the regime/subject brief are fed to
-    //    Claude; the returned prose (REGIME / ALLOCATION / SUBJECT sections
-    //    ending in a STANCE/CONFIDENCE control line) is parsed into
-    //    stance/confidence, and the control line is stripped from the stored
-    //    body. There is NO deterministic/templated fallback: authorTake throws
-    //    when ANTHROPIC_API_KEY is absent, so a keyless run fails loudly rather
-    //    than emitting a fake take.
+    // 4. author the take, get the canonical payload, sign, submit — all via MCP.
+    //    Two paths share the same regime context and provenance footnote:
+    //      • REAL_INFERENCE (nightly / opt-in): a REAL keyless opencode-zen call
+    //        (mcp/src/inference.ts) authors REGIME / ALLOCATION / SUBJECT prose
+    //        ending in a STANCE/CONFIDENCE control line; the line is parsed into
+    //        stance/confidence and stripped from the stored body. There is NO
+    //        template fallback — authorTake throws when opencode is unavailable
+    //        or the transcript is empty, so the nightly fails loudly.
+    //      • Default (HERMETIC per-PR): the deterministic stanceFor() +
+    //        buildMemo() template — no LLM, no secret — keeps the required e2e
+    //        stable and offline.
     const regimeCtx: RegimeContext = {
       composite,
       compositePercentile: regime?.compositePercentile ?? regime?.composite_percentile ?? null,
@@ -109,17 +130,28 @@ export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCrede
       onchainPercentile: regime?.onchainPercentile ?? regime?.onchain_percentile ?? null,
       factorPercentile: regime?.factorPercentile ?? regime?.factor_percentile ?? null,
     };
-    onProgress?.("thinking"); // authoring the take via Claude inference
-    const authored = await authorTake(
-      { memberId: o.memberId, name: o.name, lens: o.lens, bias: o.bias },
-      regimeCtx,
-      o.subjectId,
-    );
-    const { stance, confidence } = authored;
-    // Preserve the optional RM-tool provenance footnote (e.g. cygnus's
-    // classify_regime read) by appending it to the authored body.
-    const provenanceText = provenance.length ? `\n\n_Provenance: ${provenance.join("; ")}_` : "";
-    const body = `${authored.body}${provenanceText}`;
+    let stance: string;
+    let confidence: number;
+    let body: string;
+    if (REAL_INFERENCE) {
+      onProgress?.("thinking"); // authoring the take via a real keyless opencode call
+      const authored = await authorTake(
+        { memberId: o.memberId, name: o.name, lens: o.lens, bias: o.bias },
+        regimeCtx,
+        o.subjectId,
+      );
+      stance = authored.stance;
+      confidence = authored.confidence;
+      const provenanceText = provenance.length ? `\n\n_Provenance: ${provenance.join("; ")}_` : "";
+      body = `${authored.body}${provenanceText}`;
+    } else {
+      const decided = stanceFor(composite, o.bias);
+      stance = decided.stance;
+      confidence = decided.confidence;
+      onProgress?.("thinking", { stance, confidence }); // stance decided (deterministic)
+      const provenanceText = provenance.length ? ` [${provenance.join("; ")}]` : "";
+      body = buildMemo({ name: o.name, lens: o.lens, subjectId: o.subjectId, stance, confidence }, regimeCtx, provenanceText);
+    }
     onProgress?.("reporting", { stance, confidence }); // posting memo, signing, submitting
     const memoResult = textOf(await client.callTool({
       name: "post_memo",
