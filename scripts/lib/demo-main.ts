@@ -887,6 +887,16 @@ async function main(): Promise<void> {
     await run(["bun", "run", "scripts/demo-rpc-guard.ts"], repoRoot,
       { ...process.env, BASE_RPC_STUB_URL: `http://127.0.0.1:${stubPort}` } as Record<string, string>, "rpc hermetic guard");
 
+    // Additive, env-gated (issue #104): the rmpc-release-e2e nightly reuses this
+    // EXACT boot instead of standing up a parallel stack. Only runs when
+    // RMPC_RELEASE_E2E=1 — unset (and therefore a no-op) in e2e.yml and
+    // committee-opencode-nightly.yml, so this is zero behaviour change there.
+    if (process.env.RMPC_RELEASE_E2E === "1") {
+      console.log("\n[demo] running rmpc release e2e driver…");
+      await run(["bun", "run", "scripts/rmpc-release-e2e.ts"], repoRoot,
+        { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp` } as Record<string, string>, "rmpc release e2e");
+    }
+
     console.log("\n[demo] CI mode — all checks passed, tearing down…");
     cleanup();
     process.exit(0);

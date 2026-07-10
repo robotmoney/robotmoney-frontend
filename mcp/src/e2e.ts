@@ -204,7 +204,10 @@ export async function onboardMember(
   };
 }
 
-async function waitForSessionState(date: string, subject: string, expectedState: string, timeoutMs = 30_000) {
+// Exported (in addition to standalone-main use) so scripts/rmpc-release-e2e.ts
+// (issue #104) can drive the SAME proven job-queue session lifecycle this file's
+// own runSession() uses, instead of hand-rolling a second one.
+export async function waitForSessionState(date: string, subject: string, expectedState: string, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const r = await fetch(`${BACKEND}/api/committee/sessions/${date}/${subject}`);
@@ -217,7 +220,7 @@ async function waitForSessionState(date: string, subject: string, expectedState:
   throw new Error(`session ${date}/${subject} did not reach '${expectedState}' within ${timeoutMs}ms`);
 }
 
-async function enqueueLifecycleJob(action: string, payload: Record<string, unknown> = {}) {
+export async function enqueueLifecycleJob(action: string, payload: Record<string, unknown> = {}) {
   const result = await admin("enqueue-job", { action, ...payload });
   console.log(`  enqueued ${result.kind} (job #${result.jobId})`);
   return result;
