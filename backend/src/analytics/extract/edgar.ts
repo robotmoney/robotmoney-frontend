@@ -14,6 +14,11 @@ import { fetchJson } from "./http.ts";
 
 const UA = "robotmoney-research/1.0 (research@robotmoney.net)";
 
+const PREFLIGHT_TIMEOUT_MS = 5000;
+const PREFLIGHT_MAX_ATTEMPTS = 2;
+const CIRCUIT_BREAKER_THRESHOLD = 3; // consecutive full-retry month misses → abort the sweep
+const MAX_SWEEP_MS = 90_000; // aggregate wall-clock ceiling for the whole sweep
+
 export const edgarUrl = (monthStart: string, monthEnd: string) =>
   `https://efts.sec.gov/LATEST/search-index?q=%22merger%22&forms=S-4&startdt=${monthStart}&enddt=${monthEnd}`;
 
@@ -53,10 +58,11 @@ export async function fetchEdgarMonthCount(
   monthEnd: string,
   timeoutMs = 15000,
   logger: { warn?: (m: string) => void } = console,
+  maxAttempts = 4,
 ): Promise<number | null> {
   const url = edgarUrl(monthStart, monthEnd);
   let lastErr = "unknown error";
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (attempt > 0) await sleep(500 * 2 ** (attempt - 1));
     try {
       const ac = new AbortController();
@@ -91,14 +97,56 @@ export async function fetchEdgarS4Monthly(
   timeoutMs = 15000,
   logger: { warn?: (m: string) => void } = console,
 ): Promise<Point[]> {
+  const months = enumerateMonths(startIso, endIso);
+  if (months.length === 0) return [];
+
   const out: Point[] = [];
   const missing: string[] = [];
-  for (const { monthStart, monthEnd } of enumerateMonths(startIso, endIso)) {
+
+  // Preflight: probe the most recent month first, with a short timeout and a
+  // small attempt budget. If EDGAR is unreachable this fails fast instead of
+  // grinding through the full sweep (each attempt eating up to `timeoutMs`).
+  const last = months[months.length - 1]!;
+  const probe = await fetchEdgarMonthCount(
+    last.monthStart,
+    last.monthEnd,
+    PREFLIGHT_TIMEOUT_MS,
+    { warn: () => {} },
+    PREFLIGHT_MAX_ATTEMPTS,
+  );
+  if (probe == null) {
+    logger.warn?.(`[edgar] S-4: preflight probe failed — EDGAR unreachable, skipping ${months.length}-month sweep`);
+    return [];
+  }
+  out.push({ date: last.monthEnd, value: probe });
+
+  const deadline = Date.now() + MAX_SWEEP_MS;
+  const remaining = months.slice(0, -1);
+  let consecutiveMisses = 0;
+  for (let i = 0; i < remaining.length; i++) {
+    const { monthStart, monthEnd } = remaining[i]!;
+    if (Date.now() > deadline) {
+      logger.warn?.(`[edgar] S-4: aggregate wall-clock ceiling (${MAX_SWEEP_MS}ms) exceeded — skipping ${remaining.length - i} remaining month(s)`);
+      break;
+    }
     const count = await fetchEdgarMonthCount(monthStart, monthEnd, timeoutMs, logger);
-    if (count != null) out.push({ date: monthEnd, value: count });
-    else missing.push(monthStart);
+    if (count != null) {
+      out.push({ date: monthEnd, value: count });
+      consecutiveMisses = 0;
+    } else {
+      missing.push(monthStart);
+      consecutiveMisses++;
+      if (consecutiveMisses >= CIRCUIT_BREAKER_THRESHOLD) {
+        const skipped = remaining.length - i - 1;
+        logger.warn?.(
+          `[edgar] S-4: aborting after ${consecutiveMisses} consecutive unrecovered months — likely no network access, ${skipped} month(s) skipped`,
+        );
+        break;
+      }
+    }
     await sleep(250);
   }
   if (missing.length > 0) logger.warn?.(`[edgar] S-4: ${missing.length} months unrecovered: ${missing.join(", ")}`);
+  out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   return out;
 }
