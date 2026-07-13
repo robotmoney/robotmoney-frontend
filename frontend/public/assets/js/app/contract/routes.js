@@ -50,4 +50,11 @@ export const ROUTES = {
     apply: "/api/committee/apply", // POST
     submit: "/api/committee/submit", // POST
   },
+
+  admin: {
+    auth: "/api/admin/auth", // POST — verify the admin password → { ok: true }
+    jobs: "/api/admin/jobs", // GET ?limit= — task-queue jobs + schedules + status summary
+    job: "/api/admin/jobs/:id", // GET — one job + its recent runs (the logs)
+    runs: "/api/admin/runs", // GET ?kind=&status=&limit= — recent job_runs feed (the logs)
+  },
 };

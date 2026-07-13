@@ -11,15 +11,18 @@ function base() {
   return url.replace(/\/$/, "");
 }
 
-async function request(method, route, { query, body } = {}) {
+async function request(method, route, { query, body, headers } = {}) {
   let url = base() + route;
   if (query) {
     const qs = new URLSearchParams(query).toString();
     if (qs) url += `?${qs}`;
   }
+  // Merge any caller-supplied headers (e.g. the admin X-Admin-Token) with the
+  // Content-Type we set for a JSON body.
+  const merged = { ...(body ? { "Content-Type": "application/json" } : {}), ...headers };
   const res = await fetch(url, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers: Object.keys(merged).length ? merged : undefined,
     body: body ? JSON.stringify(body) : undefined,
     credentials: "include",
   });
@@ -41,4 +44,8 @@ export const api = {
   get: (route, query) => request("GET", route, { query }),
   post: (route, body) => request("POST", route, { body }),
   health: () => request("GET", ROUTES.health),
+  // Admin dashboard helpers: send the operator password as X-Admin-Token (the
+  // same header the backend admin routes constant-time compare against ADMIN_TOKEN).
+  adminGet: (route, token, query) => request("GET", route, { query, headers: { "X-Admin-Token": token } }),
+  adminPost: (route, token, body) => request("POST", route, { body, headers: { "X-Admin-Token": token } }),
 };

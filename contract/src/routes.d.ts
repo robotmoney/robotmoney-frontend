@@ -28,4 +28,10 @@ export const ROUTES: {
     apply: string;
     submit: string;
   };
+  admin: {
+    auth: string;
+    jobs: string;
+    job: string;
+    runs: string;
+  };
 };
