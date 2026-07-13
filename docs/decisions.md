@@ -2,7 +2,7 @@
 
 The significant architecture decisions for this rebuild, with the reasoning and
 the alternatives that were rejected. Newest decisions can supersede older ones;
-each entry stands on its own. See [ARCHITECTURE.md](./ARCHITECTURE.md) for how the
+each entry stands on its own. See [architecture.md](./architecture.md) for how the
 pieces fit together.
 
 ---
@@ -19,10 +19,11 @@ want a lean foundation and only two feature areas carried forward.
 **Scope.** Preserve the marketing UI; cherry-pick the **regime/research** views
 (the regime classifier + its regime-family research signals) and the **Investment
 Committee**. Out of scope: allocation / vault / wallet dashboards, generative-art
-visualizations, blog/media, other editorial pages. **Superseded in part by D15**:
-the `/allocation` page's vault-economics slice (TVL, share price, adapters,
-7-day APY) is brought into scope with a live Base RPC pipeline; wallet-balances
-and buyback stay out of scope.
+visualizations, blog/media, other editorial pages. **Superseded in part by D15
+and D16**: the `/allocation` page's vault-economics slice (TVL, share price,
+adapters, 7-day APY) and the prop-wallet valuation feed (live holdings +
+history) are each brought into scope with a live Base RPC pipeline; buyback
+stays out of scope.
 
 ---
 
@@ -183,7 +184,7 @@ static server are unnecessary. Fewer dependencies, one runtime.
 
 **Decision.** For **production**, deploy `robotmoney.net` with a clean separation
 of concerns across both **tiers** and **vendors**, with **no routing software
-anywhere**. The full map is [TOPOLOGY.md](./TOPOLOGY.md):
+anywhere**. The full map is [topology.md](./topology.md):
 
 - **Cloudflare — DNS + observability only.** Authoritative DNS, proxied TLS/DDoS,
   and monitoring (Health Checks, analytics, Logpush). Configuration, not code — no
@@ -311,3 +312,46 @@ cron-commit machinery.
   is explicit `stale: true` + last-persisted-or-null values, never a made-up
   figure, so the UI can show a clearly-marked degraded state instead of silently
   wrong numbers.
+
+---
+
+## D16 — Live wallet-balances pipeline from Base RPC (supersedes D1's wallet-dashboard exclusion)
+
+**Decision.** Bring the prop-wallet **valuation feed** into scope (issues
+#84/#90) — the `/allocation` hero's total prop-wallet value and the
+`/performance` page's wallet-performance history — superseding D1's "out of
+scope: allocation / vault / wallet dashboards" for this slice only, the same
+way D15 did for vault economics. The backend values each configured prop
+wallet's tracked assets on demand: ERC-20/native balances and ERC-4626
+strategy shares via Base `eth_call` (`backend/src/chain/base-rpc-client.ts`,
+reused from D15), priced through the existing keyless `token-prices.ts`
+(pinned $1 for USDC, GeckoTerminal/Yahoo otherwise), behind a short-TTL
+in-process cache (`backend/src/chain/wallet-balances.ts`). A daily
+`wallet.sample_balances` worker job persists one row per `(sample_date,
+symbol)` into `wallet_balance_samples` (migration `0014_wallet_balance_samples.sql`),
+seeded once with a pre-launch history backfilled from the retired baked
+constants (`chain/wallet-history-seed.ts`, marked `provenance: 'seed'`, never
+`'live'`). Served at `GET /api/dashboards/wallet-balances`
+(`ROUTES.dashboards.walletBalances`); `allocationView()` and the
+`/performance` wallet chart (`frontend/public/assets/js/app/alpine/views.js`)
+fetch and bind it, replacing the retired static `WALLET_SNAPSHOT_TOTAL_USD`
+scalar and the baked 99-day `walletPerfView` series.
+
+**Why.** Same motivation as D15: a baked snapshot permanently diverges from
+real wallet state, defeating D1's "reproduce the look exactly" goal now that
+there are real prop wallets to reflect. Per-holding (not whole-payload)
+degrade keeps one bad chain/price read from blanking the whole feed — each
+tracked asset values independently and falls back to its own last-persisted
+sample.
+
+**Rejected.**
+- **Whole-payload degrade on any single leg's failure** — would turn one
+  flaky price feed (e.g. GeckoTerminal) into a blanked-out total; per-holding
+  fallback isolates the failure to the affected asset.
+- **An archive indexer to reconstruct gap-free pre-launch history** — explicitly
+  out of scope for #84; the one-time seed from the ported baked constants
+  (`provenance: 'seed'`) already carries that history forward honestly, and a
+  full indexer is more machinery than the feature needs.
+- **Fabricating or silently freezing a value on a failed live read** — same
+  invariant as D15: a value is either a real read, a labelled stub, or the
+  last-persisted sample marked `stale`/`seed` — never presented as live.

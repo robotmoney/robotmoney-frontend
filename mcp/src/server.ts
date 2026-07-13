@@ -1,4 +1,4 @@
-// RM-hosted, member-facing MCP server (docs/ARCHITECTURE.md §9.5). Streamable
+// RM-hosted, member-facing MCP server (docs/architecture.md §9.5). Streamable
 // HTTP via the SDK's web-standard transport, served by Bun.serve, with stateful
 // sessions (a transport registry keyed by mcp-session-id). Tools wrap the backend
 // REST API; the member's bearer token (transport identity) is bound at session

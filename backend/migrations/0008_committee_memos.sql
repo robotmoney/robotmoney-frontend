@@ -1,4 +1,4 @@
--- Member-hosted memos (ARCHITECTURE.md §9.3). Members publish long-form analysis
+-- Member-hosted memos (architecture.md §9.3). Members publish long-form analysis
 -- at their own URLs; the memo_url in a submission is covered by the signature and
 -- linked from the published session. For the demo, RM hosts the memo storage so
 -- the post_memo MCP tool and GET serving work out of the box.

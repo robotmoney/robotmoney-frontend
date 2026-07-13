@@ -13,7 +13,7 @@ contributor — human or agent — with a git checkout must be able to **view** 
 site and **iterate** on it without standing up the backend (Bun API + Postgres +
 workers), and must be able to keep the mock data **correct** as the system
 evolves. Supersedes the deprecated single-file `file://` "frozen" distribution
-(removed; see `docs/DECISIONS.md`).
+(removed; see `docs/decisions.md`).
 
 ## 2. Concepts
 

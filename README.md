@@ -3,8 +3,8 @@
 Robot Money site + analytics backend. Buildless frontend (HTML + Alpine + CSS),
 a Bun server, and a Postgres-backed task queue.
 
-**Architecture & rationale:** [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) ·
-[`docs/DECISIONS.md`](./docs/DECISIONS.md)
+**Architecture & rationale:** [`docs/architecture.md`](./docs/architecture.md) ·
+[`docs/decisions.md`](./docs/decisions.md)
 
 ```
 contract/   shared HTTP contract (route paths + DTO types)

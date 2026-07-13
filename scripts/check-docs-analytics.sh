@@ -4,7 +4,7 @@
 # The analytics source selector moved from the retired `PROVIDER=live` /
 # per-run selector module to `ANALYTICS_SOURCE` + resolveAnalyticsSource()
 # (backend/src/analytics/index.ts) over access/data-source.ts. This check fails
-# LOUDLY if docs/ARCHITECTURE.md drifts back to the stale model, or if the
+# LOUDLY if docs/architecture.md drifts back to the stale model, or if the
 # authoritative knob / backtest+correlations surface stops being documented, so
 # a stale selector term cannot silently return. It executes in CI (integration
 # job) and its exit code gates that job.
@@ -19,8 +19,8 @@ set -uo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
 
-ARCH="docs/ARCHITECTURE.md"
-DECISIONS="docs/DECISIONS.md"
+ARCH="docs/architecture.md"
+DECISIONS="docs/decisions.md"
 ENV_EXAMPLE=".env.example"
 SELECT_TS="backend/src/analytics/access/select.ts"
 
@@ -32,7 +32,10 @@ err() { echo "FAIL: $*" >&2; fail=1; }
 [ -f "$ENV_EXAMPLE" ] || { echo "FAIL: $ENV_EXAMPLE missing" >&2; exit 1; }
 
 # 1. Stale `select.ts` reference must not survive once the file is deleted.
-if [ ! -f "$SELECT_TS" ] && grep -nF 'select.ts' "$ARCH"; then
+# Scoped to the analytics-domain path specifically, so other domains' own
+# select.ts files (e.g. backend/src/projects/access/select.ts) don't trip
+# this as a false positive.
+if [ ! -f "$SELECT_TS" ] && grep -nE 'analytics/access/select\.ts' "$ARCH"; then
   err "$ARCH references select.ts but $SELECT_TS no longer exists (stale selector)."
 fi
 

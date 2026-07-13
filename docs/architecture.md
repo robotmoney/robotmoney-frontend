@@ -4,9 +4,9 @@ Robot Money frontend + analytics backend. A clean rewrite of robotmoney.net that
 drops React/Next.js in favor of a **buildless, browser-native** stack, with a
 small HTTP API and a Postgres-backed task queue, self-hosted on DigitalOcean — a
 single `docker-compose` box for CI/demo, and a tiered topology (DO compute+storage,
-Cloudflare for DNS+observability) in production (see [TOPOLOGY.md](./TOPOLOGY.md)).
+Cloudflare for DNS+observability) in production (see [topology.md](./topology.md)).
 
-For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
+For the *why* behind each choice, see [decisions.md](./decisions.md).
 
 ---
 
@@ -18,12 +18,18 @@ For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
   Committee**. Allocation / vault / wallet dashboards are out of scope, **except**
   the `/allocation` page's vault-economics slice (TVL, share price, adapters,
   7-day APY), brought into scope by a live Base RPC pipeline — see
-  [DECISIONS.md §D15](./DECISIONS.md#d15--live-vault-economics-pipeline-from-base-rpc-supersedes-d1s-vault-dashboard-exclusion)
-  and §10 below. Wallet-balances and buyback stay out of scope.
+  [decisions.md §D15](./decisions.md#d15--live-vault-economics-pipeline-from-base-rpc-supersedes-d1s-vault-dashboard-exclusion)
+  and §10 below — **and** the prop-wallet valuation feed (live holdings +
+  history behind `GET /api/dashboards/wallet-balances`), brought into scope the
+  same way — see
+  [decisions.md §D16](./decisions.md#d16--live-wallet-balances-pipeline-from-base-rpc-supersedes-d1s-wallet-dashboard-exclusion)
+  and §10 below. Buyback stays out of scope (the `/allocation` and `/tokenomics`
+  buyback-history sections remain the static port — no live buyback endpoint or
+  worker exists).
 - **No build step.** No bundler, transpiler, or compiler — the browser does all
   the work at runtime; only evergreen browsers are supported.
 - **Consolidate backends onto one Postgres** (Docker for CI/demo; a DO Managed
-  Postgres HA cluster in production — see [TOPOLOGY.md](./TOPOLOGY.md)).
+  Postgres HA cluster in production — see [topology.md](./topology.md)).
 - **Rebuild the data pipeline** as a custom Postgres-backed task queue (replacing
   the old GitHub Actions cron + Node scripts).
 - **Clean frontend/backend separation** — one repo now, designed to split into
@@ -31,7 +37,8 @@ For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
 
 Out of scope for v1: the allocation / vault / wallet dashboards, the generative-art
 visualizations, blog/media editorial, and other secondary pages — **except** the
-live vault-economics slice of `/allocation` (§D15).
+live vault-economics slice of `/allocation` (§D15) and the live prop-wallet
+valuation feed (§D16).
 
 ---
 
@@ -76,7 +83,7 @@ robotmoney-frontend/
   `window.RM_CONFIG.API_BASE_URL` (set by `frontend/public/config.js`). `""` means
   same origin — the default, since the `api` co-serves this surface's SPA assets at
   its subdomain root (in production, `committee.robotmoney.net`; see
-  [TOPOLOGY.md](./TOPOLOGY.md)).
+  [topology.md](./topology.md)).
 - The database schema and migrations live in `backend/`; the frontend knows only
   the DTOs in `contract`.
 
@@ -208,7 +215,7 @@ TypeScript sources directly).
   deep links — so the SPA and its API are **same-origin** (no CORS) with no
   reverse proxy. In production this surface is its own subdomain
   (`committee.robotmoney.net`), Cloudflare-proxied for TLS (see
-  [TOPOLOGY.md](./TOPOLOGY.md)); CORS headers remain for an optional split-origin
+  [topology.md](./topology.md)); CORS headers remain for an optional split-origin
   setup.
 - `src/worker/` — the always-on task-queue worker (see §7).
 - `src/db/` — connection pool (`client.ts`) and the migration runner (`migrate.ts`).
@@ -380,8 +387,8 @@ write a tool + register it + add a job schedule + a route; nothing else changes.
 ## 8. Deployment
 
 Two shapes, one codebase. The canonical map of DNS, origins, tiers, and vendors is
-[TOPOLOGY.md](./TOPOLOGY.md) (decision D13); the GitOps pipeline and the Cloudflare
-/ DO credentials CI needs are in [DEPLOYMENT.md](./DEPLOYMENT.md). This section
+[topology.md](./topology.md) (decision D13); the GitOps pipeline and the Cloudflare
+/ DO credentials CI needs are in [deployment.md](./deployment.md). This section
 covers what *this repo* ships.
 
 **CI & demo — single box**, `docker-compose.yml`:
@@ -393,7 +400,7 @@ covers what *this repo* ships.
   - *demo*: named `pgdata` volume persists across restarts.
 
 **Production — tiered on DigitalOcean, Cloudflare for DNS+observability** (D13;
-credentials in [DEPLOYMENT.md](./DEPLOYMENT.md)):
+credentials in [deployment.md](./deployment.md)):
 
 - **API tier** — `api` + `worker` on a DO droplet at its own subdomain
   (`committee.robotmoney.net`); the `api` co-serves this surface's SPA assets at the
@@ -602,12 +609,15 @@ generation of member takes.
 
 ---
 
-## 10. Vault economics (live chain data)
+## 10. Vault economics & wallet balances (live chain data)
 
-Decision [D15](./DECISIONS.md#d15--live-vault-economics-pipeline-from-base-rpc-supersedes-d1s-vault-dashboard-exclusion)
+Decision [D15](./decisions.md#d15--live-vault-economics-pipeline-from-base-rpc-supersedes-d1s-vault-dashboard-exclusion)
 brought the `/allocation` page's vault-economics slice into scope, backed by a
-real Base (chainId `8453`) JSON-RPC read pipeline — the first (and, per §1,
-only) exception to the allocation/vault/wallet out-of-scope line.
+real Base (chainId `8453`) JSON-RPC read pipeline — the first exception to the
+allocation/vault/wallet out-of-scope line (§1). Decision
+[D16](./decisions.md#d16--live-wallet-balances-pipeline-from-base-rpc-supersedes-d1s-wallet-dashboard-exclusion)
+brought the prop-wallet valuation feed into scope the same way (§10.1). Buyback
+remains the only unexcepted half of the original out-of-scope line.
 
 - **`backend/src/chain/base-rpc-client.ts`** — a minimal `eth_call` client: no
   external chain SDK (ethers/viem), just `fetch` + hand-rolled 4-byte selector
@@ -661,3 +671,106 @@ only) exception to the allocation/vault/wallet out-of-scope line.
   captured `/api/dashboards/vault-economics` entry so `bun run preview` and the
   e2e Playwright spec (`frontend/test/browser/allocation-view.spec.ts`) render
   this section offline.
+
+### 10.1 Wallet balances (prop-wallet valuation)
+
+Decision [D16](./decisions.md#d16--live-wallet-balances-pipeline-from-base-rpc-supersedes-d1s-wallet-dashboard-exclusion)
+brought a live prop-wallet valuation feed into scope (issues #84/#90),
+replacing the baked `WALLET_SNAPSHOT_TOTAL_USD` scalar (the `/allocation` hero)
+and the static 99-day `walletPerfView` series (`/performance`) that used to be
+hardcoded in `alpine/views.js`.
+
+- **`backend/src/chain/wallet-balances.ts`** — values every configured prop
+  wallet's tracked assets on demand: ERC-20 balances and native ETH via
+  `base-rpc-client.ts`, ERC-4626 strategy shares via `convertToAssets()`, and an
+  off-chain SP500 config size, each priced through the existing keyless
+  `token-prices.ts` (pinned $1 for USDC, GeckoTerminal/Yahoo otherwise) — no new
+  chain SDK, same buildless-dependency discipline as §10's vault-economics
+  client. Results are cached in-process for 30s.
+- **Per-holding, not whole-payload, degrade.** Each tracked asset is valued
+  independently: if its live chain read or price fetch fails, only *that*
+  holding falls back to its last-persisted Postgres sample and is marked
+  `provenance: "stale"` — the other holdings and the endpoint as a whole are
+  unaffected. `provenance` is one of `live` (real chain + price read), `stub`
+  (hermetic `BASE_RPC_SOURCE`/`PRICE_SOURCE=stub` fixtures), `stale` (a failed
+  live leg), or `seed` (a pre-launch history row backfilled from the ported
+  baked constants — never presented as a live sample; see
+  `backend/src/chain/wallet-history-seed.ts` and migration `0014`'s honesty
+  invariant). A value is never fabricated and never silently frozen.
+- **`wallet_balance_samples`** persists the last-known amount/price/value per
+  symbol (the degrade floor above); the continuous `history` series read by
+  `fetchWalletBalances()` is sparse per day (some tracked assets are
+  intermittent) and seeded once from the legacy baked series, then accumulated
+  forward.
+- **`GET /api/dashboards/wallet-balances`** (`ROUTES.dashboards.walletBalances`,
+  `backend/src/api/routes/dashboards.ts`) returns
+  `{ asOf, totalUsd, source, priceSource, holdings, history }`. The frontend
+  (`frontend/public/assets/js/app/alpine/views.js`) fetches it for both the
+  `/allocation` hero total and the `/performance` wallet-performance chart,
+  replacing the retired static figures.
+
+---
+
+## 11. Projects directory (agentic-economy analytics)
+
+A first-class read surface, ported off the deprecated `robotmoney-bot-analytics`
+Supabase stack (`src/pages/Projects.tsx`) onto this repo's Postgres backend
+across issues #70, #87, #91, #93, #96, #98. It lists onchain AI agents/coins/
+wallets/vaults ("Zero Human Companies") the way the legacy site did, but reads
+from this repo's own tables and pipelines instead of Supabase.
+
+- **Data model** (`backend/migrations/0013_projects.sql`,
+  `0014_projects_pipelines.sql`) — one identity row per project (`projects`:
+  slug, display name, description, admin-managed `overview_short`/
+  `overview_long`, coverage score, `has_*` facet flags) joined to four facet
+  tables (`openclaw_agents`, `lobster_coins`, `agent_vaults`, `tracked_wallets`)
+  and their daily-snapshot tables (`daily_agent_snapshots`,
+  `daily_coin_snapshots`, `daily_tvl_snapshots`, `daily_wallet_snapshots`,
+  `agent_revenue_daily`) — the append-only history each metric's sparkline/
+  coverage scoring reads.
+- **Read path** — `backend/src/projects/projections.ts` (`fetchProjects()`) is
+  the single aggregation layer: joins the facets onto each project, sums
+  trailing-30d revenue and wallet balances, builds a 30d primary-coin price
+  sparkline, and applies the same `MIN_SCORE` coverage floor and sort order
+  (sticky-pin → max market cap → coverage score) as the original page.
+  `backend/src/api/routes/projects.ts` is a thin adapter exposing
+  `GET /api/projects` (`ROUTES.projects.list`); `frontend/public/views/
+  projects.html` renders it via the boot-registered `projectsView()` factory.
+- **Ingestion pipeline status — partially ported, not the full legacy suite.**
+  `backend/src/worker/handlers/projects.ts` ports six of the ~25 legacy
+  bot-analytics edge functions onto the task queue's kind→handler pattern
+  (`projects.discover`, `.refresh_coins`, `.refresh_wallets`, `.sync_revenue`,
+  `.snapshot_daily`, `.fetch_vaults`, `.recompute_coverage`), scheduled via
+  `job_schedules` (`backend/src/db/seed.ts`) at the same cadence as the legacy
+  crons. Within that ported set, coverage is uneven by design:
+  - **Live and wired**: coin market data (CoinGecko `/coins/markets` +
+    DexScreener best-pair fallback), Virtuals/x402 revenue sync, ERC-4626
+    vault TVL reads (Base RPC), and coverage-score recomputation
+    (`backend/src/projects/access/live-source.ts`).
+  - **Not yet live**: project *discovery* returns a curated static roster
+    (`backend/src/projects/fixtures/dataset.ts`), not the legacy 1963-line
+    autonomous multi-source crawler — a tracked follow-up. Live wallet-balance
+    refresh (the legacy Alchemy-backed port) is unimplemented; the handler
+    throws loudly and degrades to the last-persisted balance rather than
+    fabricating one.
+  - A fresh deploy with no `PROJECTS_SOURCE=live` opt-in serves an empty
+    directory (`{ projects: [] }`), not synthetic data — `selectProjectsDataSource()`
+    (`backend/src/projects/access/select.ts`) is fail-safe toward the hermetic
+    fixture source, and fails closed (refuses to boot the pipeline) if `prod`
+    lacks the explicit live opt-in.
+- **Degrade/honesty contract (issue #98).** Every pipeline handler extracts
+  from its provider(s) *before* writing anything; on any failure it logs
+  loudly, writes nothing (last-persisted rows are left intact), and returns
+  `{ ok: false, status: "degraded" }` rather than a partial or fabricated
+  write — the same discipline as the vault-economics (§10) and wallet-balances
+  (§10.1) chain reads. Live provider fetches carry a hard timeout
+  (`liveFetchTimeoutMs`, default 8s) so a stalled socket fails fast instead of
+  pinning a worker slot.
+- **Admin-managed overviews, no AI enrichment (issue #93/#96).** `overview_short`/
+  `overview_long`/`description` are free text written *only* through the
+  privileged `POST /api/projects/admin/:slug` route
+  (`updateProjectOverview()`, admin-token gated the same way committee routes
+  are). There is no LLM/AI call anywhere on the projects read or write path.
+  The scheduled `projects.discover` upsert deliberately excludes
+  `overview_short`/`overview_long` from its `ON CONFLICT DO UPDATE` set, so a
+  re-run never clobbers admin-authored text.

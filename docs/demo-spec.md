@@ -385,7 +385,7 @@ the TUI shows only distilled state. Layout:
   - **Research** — recent `regime.classify` / `analytics.run` runs, advancing
     queued → running → done as the worker's queue transitions are observed, annotated
     with what landed (e.g. `regime → risk_on 0.76`). Fidelity is queue-level (see
-    demo-plan §10), not fabricated sub-steps. The header shows a live **countdown** to
+    [demo-plan.md §10](./demo-plan.md)), not fabricated sub-steps. The header shows a live **countdown** to
     the next scheduled regime/research run (from `job_schedules.next_run_at`, using the
     DB clock).
   - **One pane per subject** (woon, mav, …) — each subject runs on its **own schedule**

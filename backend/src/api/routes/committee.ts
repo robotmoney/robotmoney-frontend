@@ -103,7 +103,7 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   // if unset, allow only outside prod (demo/ephemeral convenience). This closes
   // the unauthenticated identity-takeover / state-drive holes. Proper
   // per-member onboarding + OAuth is the IC-remainder work.
-  // Roles (docs/ARCHITECTURE.md §9.8):
+  // Roles (docs/architecture.md §9.8):
   //  • host/admin     — privileged() (ADMIN_TOKEN or non-prod). Drives lifecycle
   //                     and member activation; can rotate keys.
   //  • analytics-provider — ANALYTICS_TOKEN bearer. May write the regime.
