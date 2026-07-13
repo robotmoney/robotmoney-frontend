@@ -19,11 +19,17 @@ import { fetchGeckoTokenPriceUsd } from "../src/chain/token-prices.ts";
 const LIVE = process.env.RUN_LIVE_FETCHERS === "1";
 const t = LIVE ? test : test.skip;
 
-// Base WETH — the only priceKind: 'gecko' asset in resolveTrackedAssets
-// (src/config.ts) with a real, non-placeholder default address. ROBOTMONEY
-// and BNKR default to non-functional repeating-digit placeholder addresses
-// that would correctly fail against the real endpoint, so they aren't
-// suitable for a drift check.
+// Base WETH — a priceKind: 'gecko' asset in resolveTrackedAssets
+// (src/config.ts) with a real, non-placeholder default address. WETH is the
+// chosen drift-check asset because it tracks ETH within a stable, wide price
+// band, so a loose sanity bound catches response-shape/decoding drift without
+// flaking on ordinary price movement. ROBOTMONEY now also carries a real gecko
+// default address (0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3), so it is a
+// live-priced asset too; only BNKR still defaults to a non-functional
+// repeating-digit placeholder (0x7777…7777, isPlaceholderAddress→true) that
+// would correctly fail against the real endpoint and is unsuitable for a drift
+// check. WETH stays the single asset asserted here to keep the smoke test
+// robust.
 const WETH_ADDRESS = "0x4200000000000000000000000000000000000006";
 
 if (!LIVE) {
