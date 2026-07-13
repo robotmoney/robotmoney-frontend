@@ -28,23 +28,34 @@ export function resolveBaseRpcSource(
   throw new Error(`invalid BASE_RPC_SOURCE "${raw}" — expected "live" | "stub" (or unset for live)`);
 }
 
+// --- Placeholder-address sentinel (issue #50) --------------------------------
+// A reserved non-functional placeholder is a single hex nibble repeated 40 times
+// (0x0000…0 … 0xffff…f) — verified-empty accounts on Base mainnet used as an
+// "address unset" sentinel. A real deployed contract/wallet address is never of
+// this form. IMPORTANT: never use low addresses like 0x0…01/02/03 as sentinels —
+// on Base (and most EVM chains) those alias the ecrecover/sha256/ripemd160
+// precompiles, which return real (garbage, for this use) output instead of
+// erroring, silently producing an absurd fabricated-looking balance. An address
+// that is a placeholder is reported configured:false and is NEVER eth_called, so
+// it can never render as a live-looking $0.
+const PLACEHOLDER_ADDRESS_RE = /^0x([0-9a-f])\1{39}$/i;
+export function isPlaceholderAddress(address: string | null | undefined): boolean {
+  return !address || PLACEHOLDER_ADDRESS_RE.test(address);
+}
+
 // --- Vault adapter set (issues #40/#50) --------------------------------------
 // Decision (issue #40): adapter set comes from config, NOT on-chain discovery.
-// The vault's three real adapter contract addresses are not published anywhere
-// in this repo yet, so the defaults below are deliberately NON-FUNCTIONAL
-// placeholders — override with the real deployed addresses via env once known.
-// IMPORTANT: real overrides must be contract addresses; do NOT use low
-// addresses like 0x0…01/02/03 — on Base (and most EVM chains) those alias the
-// ecrecover/sha256/ripemd160 precompiles, which return real (garbage, for this
-// use) output instead of erroring, silently producing an absurd
-// fabricated-looking balance. The repeating-digit placeholder addresses below
-// are verified empty accounts on Base mainnet.
+// The three real Base-mainnet adapter contract addresses are baked as defaults
+// so a demo with only DATABASE_URL set reads real per-adapter TVL. Override any
+// of them via ADAPTER_*_ADDRESS for a re-pointed deployment.
 //
-// `configured` (issue #50) is true iff the address came from an env override:
-// an adapter still at its placeholder is reported configured:false and is
-// NEVER eth_called by chain/vault-economics.ts (its balanceUsd stays null), so
-// a placeholder can never render as a live-looking $0. Resolved at CALL time
-// so tests can flip the env per case.
+// `configured` (issue #50) is true iff the resolved address is a REAL
+// (non-placeholder) address — real defaults are configured:true, and an env
+// override still wins (overriding with a placeholder flips it back to false).
+// An adapter that is a placeholder is reported configured:false and is NEVER
+// eth_called by chain/vault-economics.ts (its balanceUsd stays null), so it can
+// never render as a live-looking $0. Resolved at CALL time so tests can flip
+// the env per case.
 export interface VaultAdapterConfig {
   name: string;
   address: string;
@@ -53,22 +64,14 @@ export interface VaultAdapterConfig {
 export function resolveVaultAdapters(
   env: Record<string, string | undefined> = process.env,
 ): VaultAdapterConfig[] {
+  const adapter = (envKey: string, name: string, real: string): VaultAdapterConfig => {
+    const address = env[envKey] || real;
+    return { name, address, configured: !isPlaceholderAddress(address) };
+  };
   return [
-    {
-      name: "Morpho",
-      address: env.ADAPTER_MORPHO_ADDRESS || "0x1111111111111111111111111111111111111111",
-      configured: Boolean(env.ADAPTER_MORPHO_ADDRESS),
-    },
-    {
-      name: "Aave",
-      address: env.ADAPTER_AAVE_ADDRESS || "0x2222222222222222222222222222222222222222",
-      configured: Boolean(env.ADAPTER_AAVE_ADDRESS),
-    },
-    {
-      name: "Compound",
-      address: env.ADAPTER_COMPOUND_ADDRESS || "0x3333333333333333333333333333333333333333",
-      configured: Boolean(env.ADAPTER_COMPOUND_ADDRESS),
-    },
+    adapter("ADAPTER_MORPHO_ADDRESS", "Morpho", "0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9"),
+    adapter("ADAPTER_AAVE_ADDRESS", "Aave", "0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea"),
+    adapter("ADAPTER_COMPOUND_ADDRESS", "Compound", "0x8247da22a59fce074c102431048d0ce7294c2652"),
   ];
 }
 
@@ -98,23 +101,21 @@ export function resolvePriceSource(
   throw new Error(`invalid PRICE_SOURCE "${raw}" — expected "live" | "stub" (or unset to follow BASE_RPC_SOURCE)`);
 }
 
-// Canonical prop-wallet addresses on Base (Open Question 1 — candidates recovered
-// from the legacy allocation port; override with the confirmed set via
-// PROP_WALLET_ADDRESSES=comma,separated). These are the holders whose balances
-// are summed per tracked asset. Base-only by design (#84 scope).
+// Canonical prop-wallet addresses on Base (source of truth: robotmoney-site
+// wallet.ts). These are the holders whose balances are summed per tracked asset;
+// the first is the primary/Bankr wallet (also the buyback destination). Baked as
+// real defaults so a demo with only DATABASE_URL set reads real wallet balances.
+// Override via PROP_WALLET_ADDRESSES=comma,separated. Base-only by design (#84).
 export function resolvePropWallets(
   env: Record<string, string | undefined> = process.env,
 ): string[] {
   const raw = env.PROP_WALLET_ADDRESSES;
-  // Candidates recovered from the legacy allocation port (0xfbc2…c9d6 /
-  // 0x422c…8eee / 0x8d0c…9442), padded to valid Base addresses; confirm/override
-  // via PROP_WALLET_ADDRESSES once the canonical set is owner-confirmed (Open Q1).
   const list = raw
     ? raw.split(",").map((s) => s.trim()).filter(Boolean)
     : [
-        "0xfbc200000000000000000000000000000000c9d6",
-        "0x422c000000000000000000000000000000008eee",
-        "0x8d0c000000000000000000000000000000009442",
+        "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6", // Primary / Bankr
+        "0x422c906083cA40B7E055b811D517f03bBBEf8eeE", // Stablecoin Strategy 1 (ZyfAI)
+        "0x8d0c331e45Beca4184B758f3049F8897AaBb9442", // Stablecoin Strategy 2 (Giza)
       ];
   return list.map((a) => a.toLowerCase());
 }
@@ -159,14 +160,13 @@ export function resolveTrackedAssets(
   return [
     { symbol: "USDC", group: "Stable", color: "#10b981", valuationKind: "erc20", priceKind: "usdc",
       decimals: 6, address: addr("USDC_ADDRESS", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"), poolId: null },
-    // Strategy shares are yield-bearing (valued at NAV, NOT $1-pegged): the
-    // documented addresses are owner data (Open Q2) — non-functional
-    // repeating-digit placeholders until <SYMBOL>_ADDRESS overrides them,
-    // mirroring resolveVaultAdapters()'s placeholder convention (#50).
+    // Strategy shares are yield-bearing (valued at NAV, NOT $1-pegged). The real
+    // delegated strategy-share contracts on Base (ZyfAI / Giza, source of truth:
+    // robotmoney-site) are baked as defaults; override via <SYMBOL>_ADDRESS.
     { symbol: "ZYFAI-SS1", group: "Stable", color: "#10b981", valuationKind: "strategy", priceKind: "usdc",
-      decimals: 18, address: addr("ZYFAI_SS1_ADDRESS", "0x4444444444444444444444444444444444444444"), poolId: null },
+      decimals: 18, address: addr("ZYFAI_SS1_ADDRESS", "0xC125200A1a5710af0D8711085F4407863158976D"), poolId: null },
     { symbol: "GIZA-SS1", group: "Stable", color: "#10b981", valuationKind: "strategy", priceKind: "usdc",
-      decimals: 18, address: addr("GIZA_SS1_ADDRESS", "0x5555555555555555555555555555555555555555"), poolId: null },
+      decimals: 18, address: addr("GIZA_SS1_ADDRESS", "0x8E5c5Ab532a2D3Cb6b1Dd159707b2A8588Cf8795"), poolId: null },
     { symbol: "WETH", group: "Protocol", color: "#f59e0b", valuationKind: "erc20", priceKind: "gecko",
       decimals: 18, address: addr("WETH_ADDRESS", "0x4200000000000000000000000000000000000006"), poolId: env.WETH_POOL_ID || null },
     // Native ETH: balance via eth_getBalance (the `native` kind ignores address),
@@ -175,7 +175,10 @@ export function resolveTrackedAssets(
     { symbol: "ETH", group: "Protocol", color: "#f59e0b", valuationKind: "native", priceKind: "gecko",
       decimals: 18, address: addr("WETH_ADDRESS", "0x4200000000000000000000000000000000000006"), poolId: env.WETH_POOL_ID || null },
     { symbol: "ROBOTMONEY", group: "Agent", color: "#3b82f6", valuationKind: "erc20", priceKind: "gecko",
-      decimals: 18, address: addr("ROBOTMONEY_ADDRESS", "0x6666666666666666666666666666666666666666"), poolId: env.ROBOTMONEY_POOL_ID || null },
+      decimals: 18, address: addr("ROBOTMONEY_ADDRESS", "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3"), poolId: env.ROBOTMONEY_POOL_ID || null },
+    // BNKR (Bankr) real Base address is owner data not yet in-repo — left a
+    // non-functional placeholder (isPlaceholderAddress→true) until BNKR_ADDRESS
+    // overrides it, preserving the #50 honesty contract for any unset address.
     { symbol: "BNKR", group: "Agent", color: "#3b82f6", valuationKind: "erc20", priceKind: "gecko",
       decimals: 18, address: addr("BNKR_ADDRESS", "0x7777777777777777777777777777777777777777"), poolId: env.BNKR_POOL_ID || null },
     { symbol: "SP500", group: "Stocks", color: "#8b5cf6", valuationKind: "config", priceKind: "yahoo",
@@ -212,6 +215,54 @@ export function resolveSp500(
   return {
     size: Number(env.SP500_SIZE ?? "0.6330"),
     ticker: env.SP500_TICKER || "^GSPC",
+  };
+}
+
+// --- ROBOTMONEY token / WETH / buyback feed ----------------------------------
+// Exposed to the token-metrics + token-buyback dashboards (and any other module)
+// so the real Base addresses live in ONE place. All baked as real defaults so a
+// demo with only DATABASE_URL set produces real reads; each is env-overridable.
+
+// The ROBOTMONEY governance/reward ERC-20 on Base (source of truth:
+// robotmoney-site). Backs token-metrics (totalSupply/price/marketCap) and is the
+// Transfer-event source for the buyback feed.
+export function resolveRobotmoneyToken(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return (env.ROBOTMONEY_ADDRESS || "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3").toLowerCase();
+}
+
+// WETH on Base — the buyback swap INPUT leg and the Protocol tracked asset. The
+// GeckoTerminal pool id is optional owner data for the live price read.
+export function resolveWeth(
+  env: Record<string, string | undefined> = process.env,
+): { address: string; poolId: string | null } {
+  return {
+    address: (env.WETH_ADDRESS || "0x4200000000000000000000000000000000000006").toLowerCase(),
+    poolId: env.WETH_POOL_ID || null,
+  };
+}
+
+// Buyback feed config (token-buyback dashboard). Buybacks are ROBOTMONEY
+// transfers INTO the primary prop wallet (WETH → ROBOTMONEY swaps; source of
+// truth: robotmoney-site wallet.ts fetchBuybackTransactions). `source` mirrors
+// BASE_RPC_SOURCE so the hermetic demo/CI (BASE_RPC_SOURCE=stub) never reaches a
+// live log indexer and a stub payload is never labelled live (#50).
+export interface BuybackConfig {
+  primaryWallet: string; // buyback destination (receives ROBOTMONEY)
+  robotmoneyToken: string; // ROBOTMONEY ERC-20 (Transfer event `to` filter)
+  wethToken: string; // WETH ERC-20 (swap input leg)
+  source: BaseRpcSource; // 'live' = eth_getLogs vs Base RPC; 'stub' = hermetic fixture
+}
+export function resolveBuybackConfig(
+  env: Record<string, string | undefined> = process.env,
+): BuybackConfig {
+  const wallets = resolvePropWallets(env);
+  return {
+    primaryWallet: (env.BUYBACK_PRIMARY_WALLET || wallets[0] || "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6").toLowerCase(),
+    robotmoneyToken: resolveRobotmoneyToken(env),
+    wethToken: resolveWeth(env).address,
+    source: resolveBaseRpcSource(env),
   };
 }
 
@@ -295,5 +346,13 @@ export const config = {
     // (issue #50), so a placeholder can never render as a live-looking $0.
     adapters: resolveVaultAdapters(),
   },
+  // Load-time snapshots of the token/wallet/buyback config, exposed so other
+  // modules (token-metrics, wallet-sleeves, buyback-logs dashboards) share one
+  // source of truth. Resolvers above are still called per-request where
+  // provenance/`configured` must track the live env.
+  robotmoney: resolveRobotmoneyToken(),
+  weth: resolveWeth(),
+  propWallets: resolvePropWallets(),
+  buyback: resolveBuybackConfig(),
 };
 

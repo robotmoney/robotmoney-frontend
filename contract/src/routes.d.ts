@@ -8,6 +8,10 @@ export const ROUTES: {
     researchSignal: string;
     vaultEconomics: string;
     walletBalances: string;
+    buybacks: string;
+    tokenMetrics: string;
+    walletSleeves: string;
+    allocation: string;
   };
   projects: {
     list: string;

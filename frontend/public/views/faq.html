@@ -118,11 +118,12 @@
         <h2 class="faq__q">What is the Robot Money regime classifier?</h2>
         <div class="faq__a">
           The Robot Money regime classifier is a daily cross-asset risk-on / risk-off
-          signal that informs the vault&apos;s tactical allocation. It reads 20
-          indicators across two independent panels — 10 macro indicators (yield curve,
-          credit spreads, the dollar, jobless claims, VIX, and others) and 10
-          on-chain indicators (TVL, stablecoin float, active addresses, and others)
-          — and produces a composite regime label recomputed every 24 hours. The
+          signal that informs the vault&apos;s tactical allocation. It reads
+          indicators across three independent panels — a macro panel (yield curve,
+          credit spreads, the dollar, jobless claims, VIX, and others), an on-chain
+          panel (TVL, stablecoin float, active addresses, and others), and an
+          equity-factor panel — and produces a composite regime label recomputed
+          every 24 hours. The
           methodology and live classification are published openly at
           <a class="faq__link" href="/regime">robotmoney.net/regime</a>.
         </div>
@@ -403,10 +404,10 @@
           postures. In risk-on regimes, the protocol increases exposure to
           agent-economy tokens and revenue-generating assets. In risk-off regimes,
           it tilts toward stable yield on lending protocols to preserve capital.
-          The signal is computed from 20 indicators — 10 macro (yield curve slope,
-          credit spreads, DXY, initial jobless claims, VIX, and others) and 10
-          on-chain (total value locked, stablecoin float, active addresses, and
-          others). The methodology is fully documented and the live signal is
+          The signal is computed across three panels — macro (yield curve slope,
+          credit spreads, DXY, initial jobless claims, VIX, and others), on-chain
+          (total value locked, stablecoin float, active addresses, and others), and
+          an equity-factor panel. The methodology is fully documented and the live signal is
           published at
           <a class="faq__link" href="/regime">robotmoney.net/regime</a>.
         </div>

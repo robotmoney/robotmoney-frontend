@@ -104,13 +104,22 @@ test("fetchVaultEconomics happy path: tvl/sharePrice/totalShares/idle/adapters m
   expect(r.adapters.map((a) => a.name)).toEqual(config.vault.adapters.map((a) => a.name));
 });
 
-test("adapters left at their placeholder addresses are configured:false, balanceUsd:null, and are NEVER eth_called", async () => {
-  // No ADAPTER_*_ADDRESS overrides — every adapter stays at its non-functional
-  // placeholder (0x1111.../0x2222.../0x3333...). Deliberately supply NO mock
-  // fixture for any of them: if the handler ever called one, mockRpc would
-  // throw "no fixture" and this test would fail loudly, proving the
-  // never-eth-call-an-unconfigured-adapter guarantee structurally, not just
-  // by asserting the output shape.
+// Reserved "unset" sentinels: a single hex nibble ×40. An adapter explicitly
+// pointed at one of these is reported configured:false and must NEVER be
+// eth_called (issue #50). Since the real deployed addresses are now the DEFAULTS,
+// exercising the unconfigured path requires an explicit placeholder override.
+const MORPHO_PLACEHOLDER = "0x1111111111111111111111111111111111111111";
+const AAVE_PLACEHOLDER = "0x2222222222222222222222222222222222222222";
+const COMPOUND_PLACEHOLDER = "0x3333333333333333333333333333333333333333";
+
+test("adapters explicitly set to placeholder addresses are configured:false, balanceUsd:null, and are NEVER eth_called", async () => {
+  // Explicitly override all three adapters to their non-functional placeholder.
+  // Deliberately supply NO mock fixture for any of them: if the handler ever
+  // called one, mockRpc would throw "no fixture" and this test would fail loudly,
+  // proving the never-eth-call-an-unconfigured-adapter guarantee structurally.
+  process.env.ADAPTER_MORPHO_ADDRESS = MORPHO_PLACEHOLDER;
+  process.env.ADAPTER_AAVE_ADDRESS = AAVE_PLACEHOLDER;
+  process.env.ADAPTER_COMPOUND_ADDRESS = COMPOUND_PLACEHOLDER;
   mockRpc({
     [`${VAULT.toLowerCase()}:${TOTAL_ASSETS_SEL}`]: word(84_320_120_000n),
     [`${VAULT.toLowerCase()}:${TOTAL_SUPPLY_SEL}`]: word(84_102_550_000n),
@@ -123,49 +132,46 @@ test("adapters left at their placeholder addresses are configured:false, balance
     expect(a.configured).toBe(false);
     expect(a.balanceUsd).toBeNull();
   }
-  expect(r.adapters.map((a) => a.address)).toEqual([
-    "0x1111111111111111111111111111111111111111",
-    "0x2222222222222222222222222222222222222222",
-    "0x3333333333333333333333333333333333333333",
-  ]);
+  expect(r.adapters.map((a) => a.address)).toEqual([MORPHO_PLACEHOLDER, AAVE_PLACEHOLDER, COMPOUND_PLACEHOLDER]);
 });
 
-test("an ADAPTER_*_ADDRESS override flips only that adapter to configured:true; the others stay unconfigured/null", async () => {
-  process.env.ADAPTER_MORPHO_ADDRESS = MORPHO_OVERRIDE;
-  mockRpc({
-    [`${VAULT.toLowerCase()}:${TOTAL_ASSETS_SEL}`]: word(84_320_120_000n),
-    [`${VAULT.toLowerCase()}:${TOTAL_SUPPLY_SEL}`]: word(84_102_550_000n),
-    [`${config.vault.usdc.toLowerCase()}:${BALANCE_OF_SEL}`]: word(1_000_000n),
-    [`${MORPHO_OVERRIDE.toLowerCase()}:${TOTAL_ASSETS_SEL}`]: word(28_000_000_000n),
-  });
+test("a placeholder override flips only that adapter to configured:false; the real-default adapters stay configured:true and are eth_called", async () => {
+  // Aave forced to a placeholder; Morpho + Compound stay at their real defaults.
+  process.env.ADAPTER_AAVE_ADDRESS = AAVE_PLACEHOLDER;
+  const adapters = resolveVaultAdapters();
+  // Fixtures only for the configured (real-default) adapters — the placeholder
+  // Aave must never be reached, so it gets no fixture.
+  mockRpc(happyPathFixture(adapters.filter((a) => a.configured)));
   const r = await fetchVaultEconomics();
   expect(r.stale).toBe(false);
-  const morpho = r.adapters.find((a) => a.name === "Morpho")!;
-  expect(morpho.configured).toBe(true);
-  expect(morpho.address).toBe(MORPHO_OVERRIDE);
-  expect(morpho.balanceUsd).toBeCloseTo(28000, 6);
-  for (const a of r.adapters.filter((x) => x.name !== "Morpho")) {
-    expect(a.configured).toBe(false);
-    expect(a.balanceUsd).toBeNull();
+  const aave = r.adapters.find((a) => a.name === "Aave")!;
+  expect(aave.configured).toBe(false);
+  expect(aave.balanceUsd).toBeNull();
+  for (const a of r.adapters.filter((x) => x.name !== "Aave")) {
+    expect(a.configured).toBe(true);
+    expect(a.balanceUsd).toBeCloseTo(28000, 6);
   }
 });
 
-test("resolveVaultAdapters: unset env → all three configured:false at their documented placeholder addresses", () => {
+test("resolveVaultAdapters: unset env → the real deployed adapter addresses, all configured:true (fixes the 'Not configured' demo bug)", () => {
   const adapters = resolveVaultAdapters({});
-  expect(adapters.every((a) => a.configured === false)).toBe(true);
-  expect(adapters.map((a) => a.address)).toEqual([
-    "0x1111111111111111111111111111111111111111",
-    "0x2222222222222222222222222222222222222222",
-    "0x3333333333333333333333333333333333333333",
+  expect(adapters.every((a) => a.configured === true)).toBe(true);
+  expect(adapters.map((a) => a.address.toLowerCase())).toEqual([
+    "0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9",
+    "0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea",
+    "0x8247da22a59fce074c102431048d0ce7294c2652",
   ]);
 });
 
-test("resolveVaultAdapters: an ADAPTER_*_ADDRESS override is used verbatim and flips configured:true for just that adapter", () => {
-  const adapters = resolveVaultAdapters({ ADAPTER_AAVE_ADDRESS: AAVE_OVERRIDE });
-  const aave = adapters.find((a) => a.name === "Aave")!;
+test("resolveVaultAdapters: a real ADAPTER_*_ADDRESS override is used verbatim (stays configured:true); a placeholder override flips that adapter to configured:false", () => {
+  const overridden = resolveVaultAdapters({ ADAPTER_AAVE_ADDRESS: AAVE_OVERRIDE });
+  const aave = overridden.find((a) => a.name === "Aave")!;
   expect(aave.configured).toBe(true);
   expect(aave.address).toBe(AAVE_OVERRIDE);
-  for (const a of adapters.filter((x) => x.name !== "Aave")) expect(a.configured).toBe(false);
+  for (const a of overridden.filter((x) => x.name !== "Aave")) expect(a.configured).toBe(true); // real defaults
+
+  const placeheld = resolveVaultAdapters({ ADAPTER_AAVE_ADDRESS: AAVE_PLACEHOLDER });
+  expect(placeheld.find((a) => a.name === "Aave")!.configured).toBe(false);
 });
 
 test("vault-economics source provenance: unset/empty BASE_RPC_SOURCE resolves 'live'; 'stub' resolves 'stub'", async () => {

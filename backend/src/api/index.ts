@@ -6,7 +6,7 @@ import { ROUTES } from "@robotmoney/contract";
 import { config, assertNoVaultAddressCollision } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { createComment, listComments } from "./routes/comments.ts";
-import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances } from "./routes/dashboards.ts";
+import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation } from "./routes/dashboards.ts";
 import { getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleCommittee } from "./routes/committee.ts";
 
@@ -101,6 +101,22 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname === ROUTES.dashboards.walletBalances && req.method === "GET") {
       return json(await getWalletBalances());
+    }
+
+    if (pathname === ROUTES.dashboards.buybacks && req.method === "GET") {
+      return json(await getBuybacks());
+    }
+
+    if (pathname === ROUTES.dashboards.tokenMetrics && req.method === "GET") {
+      return json(await getTokenMetrics());
+    }
+
+    if (pathname === ROUTES.dashboards.walletSleeves && req.method === "GET") {
+      return json(await getWalletSleeves());
+    }
+
+    if (pathname === ROUTES.dashboards.allocation && req.method === "GET") {
+      return json(await getAllocation());
     }
 
     if (pathname === ROUTES.projects.list && req.method === "GET") {
