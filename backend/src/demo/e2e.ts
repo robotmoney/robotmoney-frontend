@@ -13,7 +13,19 @@ import * as ic from "../committee/domain.ts";
 import { runAnalytics } from "../analytics/index.ts";
 import { hermeticDataSource } from "../analytics/access/hermetic-source.ts";
 
-const API = process.env.API_BASE ?? "http://localhost:8787";
+// Backend base URL. BACKEND_URL is the canonical variable every other driver
+// honors (scripts/demo-frontend-check.ts, scripts/rmpc-release-e2e.ts,
+// mcp/src/e2e.ts, mcp/src/agent.ts) — this file historically read a one-off
+// API_BASE name, so `export BACKEND_URL=…` silently failed to repoint it.
+// API_BASE is DEPRECATED and accepted only as a one-release fallback for any
+// existing invocation; set BACKEND_URL instead. Exported + env-injectable so
+// the precedence is unit-testable hermetically (tests/demo-e2e-env.test.ts).
+export function resolveBackendBase(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return env.BACKEND_URL ?? env.API_BASE ?? "http://localhost:8787";
+}
+const API = resolveBackendBase();
 const today = new Date().toISOString().slice(0, 10);
 const SUBJECT = { id: "woon", name: "Woon Treasury" };
 
@@ -111,4 +123,10 @@ async function main() {
   console.log("=== done ===\n");
 }
 
-main().then(closeDb).catch(async (e) => { console.error(e); await closeDb(); process.exit(1); });
+// Only run the full demo flow when this file is the entry point (e.g.
+// `bun run src/demo/e2e.ts`). Guarded (same pattern as mcp/src/e2e.ts) so unit
+// tests can `import { resolveBackendBase }` WITHOUT triggering a live-DB demo
+// run. Entry-point behaviour is unchanged.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().then(closeDb).catch(async (e) => { console.error(e); await closeDb(); process.exit(1); });
+}

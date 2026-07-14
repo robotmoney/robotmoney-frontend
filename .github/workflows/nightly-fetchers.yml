@@ -44,27 +44,39 @@ jobs:
       - name: Install deps
         working-directory: backend
         run: bun install
+      # EXPECT_LIVE=1 on every live-suite step is the execution-evidence guard
+      # (test-coverage policy invariant 2): each live test file throws at module
+      # load when EXPECT_LIVE=1 but its RUN_LIVE_FETCHERS gate resolves off, so a
+      # gate-name drift between this workflow and the test files fails the
+      # nightly loudly instead of turning every live test into a silent
+      # all-skips green. scripts/tests/nightly-fetchers-guard.test.ts (required
+      # integration root job) asserts this pairing stays present here and in the
+      # test files.
       - name: Live fetcher drift test (real keyless endpoints)
         working-directory: backend
         run: bun test tests/fetchers-live.test.ts
         env:
           RUN_LIVE_FETCHERS: "1"
+          EXPECT_LIVE: "1"
         timeout-minutes: 15
       - name: Live projects provider drift test (CoinGecko + DexScreener, issue #87)
         working-directory: backend
         run: bun test tests/projects-fetchers-live.test.ts
         env:
           RUN_LIVE_FETCHERS: "1"
+          EXPECT_LIVE: "1"
         timeout-minutes: 10
       - name: Live Base RPC smoke test (real vault contract)
         working-directory: backend
         run: bun test tests/vault-rpc-live.test.ts
         env:
           RUN_LIVE_FETCHERS: "1"
+          EXPECT_LIVE: "1"
         timeout-minutes: 5
       - name: Live GeckoTerminal token_price smoke test (real endpoint)
         working-directory: backend
         run: bun test tests/token-price-live.test.ts
         env:
           RUN_LIVE_FETCHERS: "1"
+          EXPECT_LIVE: "1"
         timeout-minutes: 5

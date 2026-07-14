@@ -15,6 +15,24 @@ import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Whether this driver expects the backend's regime-write/admin gates to be OPEN
+// (insecure) — used only to annotate the 5c/5d cross-role log lines truthfully.
+// MUST mirror backend/src/config.ts allowInsecure's opt-IN polarity: insecure
+// ONLY on an explicit RM_ALLOW_INSECURE === "1", and never when ANALYTICS_TOKEN
+// is set (a configured analytics credential closes the regime-write gate in
+// every env). SECURE BY DEFAULT — unset means "enforced". This used to be
+// opt-OUT (`!== "0"`), the opposite polarity of the backend's flag, which is
+// exactly how a fail-open idiom gets copied into new code; the demo harness
+// (scripts/lib/demo-main.ts) now passes RM_ALLOW_INSECURE=1 explicitly to this
+// host-run driver, matching the api container docker-compose.demo.yml runs.
+// Exported + env-injectable so the polarity is unit-testable hermetically
+// (tests/e2e-insecure.test.ts).
+export function regimeWriteInsecure(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return env.RM_ALLOW_INSECURE === "1" && !env.ANALYTICS_TOKEN;
+}
+
 // Run `fn` over `items` with at most `limit` invocations in flight, returning
 // results in INPUT order as PromiseSettledResult — like Promise.allSettled but
 // bounded. A rejecting item never sinks the batch (that is the whole point: one
@@ -497,15 +515,15 @@ async function main() {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ asof: today }),
   });
-  const regimeWriteInsecure = process.env.RM_ALLOW_INSECURE !== "0" && !process.env.ANALYTICS_TOKEN;
-  console.log(`  cross-role: member → regime write → ${regimeWriteRes.status}${regimeWriteInsecure ? " (insecure mode — gate open)" : " (enforced)"}`);
+  const regimeGateOpen = regimeWriteInsecure();
+  console.log(`  cross-role: member → regime write → ${regimeWriteRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
   // 5d. Known member token calling admin lifecycle (same insecure-mode caveat).
   const adminCloseRes = await fetch(`${BACKEND}/api/committee/admin/close`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ sessionId: -1 }),
   });
-  console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeWriteInsecure ? " (insecure mode — gate open)" : " (enforced)"}`);
+  console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
   // Session 2: next day, different subject (demonstrates rotation + cross-session
   // awareness). Eos (onboarded via public apply→activate) participates alongside

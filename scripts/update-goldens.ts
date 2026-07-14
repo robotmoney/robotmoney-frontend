@@ -6,9 +6,11 @@
 // Goldens are mock API responses the preview server replays. Their VALUES may be
 // point-in-time, but their FIELD SHAPES must match the real system — so they are
 // captured from a running backend with real analytics, NOT hand-written and NOT
-// generated from other fixtures. Correct goldens are the responsibility of the
-// agent making the system change (see docs/preview-server-spec.md); a CI drift
-// gate blocks a PR whose goldens no longer match the code.
+// generated from other fixtures. Goldens freshness is ENTIRELY the responsibility
+// of the agent making the system change: a CI drift gate is specified in
+// docs/preview-server-spec.md but NOT yet wired into CI, so nothing blocks a PR
+// whose goldens have drifted from the code — rerun this capture whenever a
+// change alters an API shape.
 //
 // It walks every route the frontend requests (the same route plan the preview
 // server keys on), fetches each from BACKEND_URL, and rewrites the single

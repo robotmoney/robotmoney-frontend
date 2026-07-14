@@ -41,6 +41,11 @@ services:
       # (X-Admin-Token). The api process is the one that authenticates HTTP; the
       # demo sets a random per-launch value (worker doesn't serve the API).
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # Projects data source (backend/src/projects/access/select.ts). Unset →
+      # offline fixture source (demo/dev). FAIL-CLOSED IN PROD: RM_ENV=prod
+      # REQUIRES PROJECTS_SOURCE=live — the projects pipelines throw rather
+      # than serve fixture data as production. See .env.example.
+      PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       # Serve the static frontend from this same process — no Caddy/nginx.
       STATIC_DIR: /srv/frontend
     ports:
@@ -61,6 +66,10 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       RM_ENV: ${RM_ENV:-demo}
       WORKER_ID: ${WORKER_ID:-worker-1}
+      # Same PROJECTS_SOURCE contract as the api service: the worker RUNS the
+      # projects.* cron pipelines, so a prod worker needs PROJECTS_SOURCE=live
+      # (fail-closed — unset throws in prod; unset elsewhere = offline fixture).
+      PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
     depends_on:
       postgres:
         condition: service_healthy

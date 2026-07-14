@@ -890,8 +890,14 @@ async function main(): Promise<void> {
   if (process.env.CI) {
     // CI: run checks then tear down. (Unchanged — pure console, "inherit" stdio.)
     console.log("\n[demo] running committee session…");
+    // RM_ALLOW_INSECURE=1: docker-compose.demo.yml runs the api container with
+    // this flag, so the backend's regime-write/admin gates ARE open here. The
+    // host-run mcp e2e driver is secure-by-default (mcp/src/e2e.ts
+    // regimeWriteInsecure — opt-IN, mirroring backend config.ts allowInsecure),
+    // so tell it explicitly that this stack is insecure, keeping its 5c/5d
+    // cross-role log annotations truthful ("gate open", as before the flip).
     await run(["bun", "run", "src/e2e.ts"], join(repoRoot, "mcp"),
-      { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp` } as Record<string, string>, "committee session");
+      { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp`, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "committee session");
 
     console.log("[demo] running frontend checks…");
     await run(["bun", "run", "scripts/demo-frontend-check.ts"], repoRoot,
