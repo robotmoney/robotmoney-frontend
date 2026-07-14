@@ -22,6 +22,15 @@
     <p class="rv__loading" x-show="loading">Loading regime…</p>
     <p class="rv__error" x-show="error" x-text="error" x-cloak></p>
 
+    <!-- Loud staleness banner: the analytics pipeline forward-fills to today on every
+         run, so a stale latest date means the job isn't refreshing in this deployment
+         and the charts are frozen. Surfaced instead of served silently. -->
+    <div class="rv__stale" x-show="isStale()" x-cloak role="alert"
+         style="display:flex;gap:.6rem;align-items:flex-start;margin:0 0 1.25rem;padding:.85rem 1rem;border:1px solid rgba(245,158,11,.5);border-radius:10px;background:rgba(245,158,11,.1);color:#fbbf24;font-size:.9rem;line-height:1.45">
+      <span aria-hidden="true" style="flex:0 0 auto;font-size:1rem;line-height:1.3">⚠</span>
+      <span><strong style="color:#fbbf24">Regime data may be stale.</strong> <span x-text="staleMessage()"></span></span>
+    </div>
+
     <template x-if="latest">
       <div class="rv__dash">
         <!-- Live composite header -->

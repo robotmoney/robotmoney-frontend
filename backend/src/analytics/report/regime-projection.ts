@@ -91,3 +91,43 @@ export function rowToSnapshot(r: any): RegimeSnapshot {
     extras: r.extras ?? null,
   };
 }
+
+// ─── Freshness / staleness ───────────────────────────────────────────────────
+// The regime pipeline forward-fills its date axis to `asof=today` on EVERY run
+// (analytics/index.ts), so a HEALTHY deployment always serves a snapshot whose
+// newest `date` is today (or, allowing for weekend/holiday EOD settlement, within
+// a couple of days). If the newest `date` lags further, the analytics job is NOT
+// running/refreshing in that deployment and the charts below are FROZEN — the
+// symptom is otherwise silent because the frontend faithfully renders whatever
+// history[] it receives. This makes that staleness explicit (mirroring the
+// `stale:true` honesty convention already used by token-metrics / wallet-balances)
+// so the API and UI can flag it loudly instead of serving frozen data as current.
+//
+// Threshold: 3 days. Daily EOD data can legitimately be 1 day old (today's close
+// not yet settled) and up to ~2 over a weekend; >3 days means no run has landed.
+export const REGIME_STALE_THRESHOLD_DAYS = 3;
+
+export interface RegimeStaleness {
+  asof: string | null; // newest snapshot date served (max history date), YYYY-MM-DD
+  serverDate: string; // the "today" (UTC) the age was measured against
+  ageDays: number | null; // whole days from asof → serverDate; null when no data
+  stale: boolean; // ageDays == null (no data) OR ageDays > thresholdDays
+  thresholdDays: number;
+}
+
+// Pure: given the newest served snapshot date and the server's "today" (both
+// YYYY-MM-DD, UTC), classify freshness. No data at all is treated as stale (a
+// deployment serving zero snapshots is not fresh). Unparseable dates → stale.
+export function computeRegimeStaleness(
+  asof: string | null,
+  serverDate: string,
+  thresholdDays: number = REGIME_STALE_THRESHOLD_DAYS,
+): RegimeStaleness {
+  if (!asof) return { asof: null, serverDate, ageDays: null, stale: true, thresholdDays };
+  const a = Date.parse(`${asof}T00:00:00Z`);
+  const t = Date.parse(`${serverDate}T00:00:00Z`);
+  const ageDays =
+    Number.isFinite(a) && Number.isFinite(t) ? Math.round((t - a) / 86_400_000) : null;
+  const stale = ageDays == null || ageDays > thresholdDays;
+  return { asof, serverDate, ageDays, stale, thresholdDays };
+}

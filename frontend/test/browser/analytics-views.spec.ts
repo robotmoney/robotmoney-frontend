@@ -242,3 +242,36 @@ test("late-cycle view renders the Top-7-vs-SPY gauge with value + read", async (
   await expect(top7.locator(".rs__gauge-pct")).toContainText("91%");
   await expect(top7.locator(".read")).toHaveText("saturated (late-cycle)");
 });
+
+// The loud-staleness surface: when the analytics pipeline stops refreshing in a
+// deployment, the served snapshot freezes and the API reports staleness. The
+// dashboard must warn the viewer LOUDLY rather than render the frozen charts as
+// current (the reported bug). The later-registered route wins in Playwright, so
+// these override the default fresh stub from stubEnvironment().
+test("regime dashboard shows a loud staleness banner when the API reports stale data", async ({ page }) => {
+  await stubEnvironment(page);
+  const stale = { ...loadRegimeStub(), staleness: { asof: "2026-06-29", serverDate: "2026-07-14", ageDays: 15, stale: true, thresholdDays: 3 } };
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(stale) }));
+  await page.goto("/");
+  await navigate(page, "/regime");
+
+  const banner = page.locator(".rv__stale");
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("15 days stale");
+  await expect(banner).toContainText("2026-06-29");
+  // The charts still render beneath the warning (data is shown, just flagged).
+  await expect(page.locator(".rv__dash-title")).toBeVisible();
+});
+
+test("regime dashboard hides the staleness banner when data is fresh", async ({ page }) => {
+  await stubEnvironment(page);
+  const fresh = { ...loadRegimeStub(), staleness: { asof: "2026-07-14", serverDate: "2026-07-14", ageDays: 0, stale: false, thresholdDays: 3 } };
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fresh) }));
+  await page.goto("/");
+  await navigate(page, "/regime");
+
+  await expect(page.locator(".rv__dash-title")).toBeVisible();
+  await expect(page.locator(".rv__stale")).toBeHidden();
+});
