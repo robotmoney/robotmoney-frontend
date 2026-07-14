@@ -1,6 +1,9 @@
-// Pure, dependency-free memo templating for the demo committee member. Kept in
-// its own module (no MCP SDK import) so the deterministic 3-section memo builder
-// is unit-testable without the transport dependencies agent.ts pulls in.
+// Pure memo templating for the demo committee member. Kept in its own module
+// (no MCP SDK import) so the deterministic 3-section memo builder is
+// unit-testable without the transport dependencies agent.ts pulls in. The only
+// import is the shared @robotmoney/contract classifier, so regime labels can
+// never diverge from the backend's canonical thresholds.
+import { classifyRegime } from "@robotmoney/contract";
 
 // ── Deterministic, reference-shaped memo templating (NO LLM) ─────────────────
 // The demo committee member writes a full 3-section memo that mirrors the shape
@@ -35,9 +38,12 @@ function pctOrd(fraction: number): string {
   return `${n}${suffix}`;
 }
 
+// Memos speak the hyphenated vocabulary ("risk-on"); a passed-in label wins,
+// and the composite-derived fallback uses the canonical shared classifier
+// (@robotmoney/contract — 0.33/0.67, matching analyze/regime.ts), hyphenated.
 function regimeLabel(regime?: string | null, composite = 0.5): string {
   if (regime) return regime.replace(/_/g, "-");
-  return composite >= 0.55 ? "risk-on" : composite >= 0.45 ? "neutral" : "risk-off";
+  return classifyRegime(composite).replace(/_/g, "-");
 }
 
 // Map an arbitrary lens string onto one of a fixed set of voice profiles so the

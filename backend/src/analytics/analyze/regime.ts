@@ -2,12 +2,18 @@
 // per-indicator sign-adjusted percentile → panel composites → overall composite +
 // regime label. Persists the full history to regime_snapshots.
 import type { AnalyticTool, ToolContext } from "./tool.ts";
+import { classifyRegime } from "@robotmoney/contract";
 import { percentileInWindow, applySign } from "../transform/math.ts";
 import { saveRegimeSnapshots } from "../store/regime-store.ts";
 
+// The regime thresholds/label rule live in @robotmoney/contract (contract/src/
+// regime.js) — this classifier is the canon they encode (0.33/0.67), and the
+// committee domain layer + MCP memo builder consume the same module so labels
+// can never diverge again. Re-exported here so analytics-side callers/tests can
+// keep importing the label rule from the classifier.
+export { classifyRegime, REGIME_RISK_OFF, REGIME_RISK_ON } from "@robotmoney/contract";
+
 const WINDOW = 90;
-const RISK_OFF = 0.33;
-const RISK_ON = 0.67;
 
 interface Indicator { id: string; name: string; panel: "macro" | "onchain"; sign: 1 | -1; base: number; vol: number; weight: number; }
 
@@ -25,7 +31,7 @@ export const REGIME_INDICATORS: Indicator[] = [
   { id: "BTC_ETH", name: "BTC/ETH ratio", panel: "onchain", sign: 1, base: 18, vol: 0.04, weight: 0.9 },
 ];
 
-const label = (s: number) => (s < RISK_OFF ? "risk_off" : s >= RISK_ON ? "risk_on" : "neutral");
+const label = classifyRegime;
 
 export interface RegimeSnapshot {
   date: string; composite: number; compositePercentile: number;

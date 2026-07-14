@@ -1,4 +1,5 @@
 export * from "./comments";
+export * from "./regime";
 export * from "./dashboards";
 export * from "./committee";
 export * from "./projects";
