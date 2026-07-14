@@ -4,6 +4,7 @@
   "autoupdate": false,
   "permission": {
     "*": "deny",
+    "bash": "allow",
     "robotmoney_*": "allow"
   },
   "mcp": {
