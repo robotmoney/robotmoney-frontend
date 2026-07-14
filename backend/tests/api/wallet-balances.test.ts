@@ -16,7 +16,11 @@ import {
   assertNoVaultAddressCollision,
   config,
 } from "../../src/config.ts";
-import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../../src/chain/wallet-balances.ts";
+import {
+  fetchWalletBalances,
+  fetchPersistedWalletBalances,
+  _resetWalletBalancesCacheForTests,
+} from "../../src/chain/wallet-balances.ts";
 import {
   _resetRpcConcurrencyForTests,
   decodeAggregate3Calls,
@@ -202,13 +206,16 @@ const EXPECT: Record<string, number> = {
   ROBOTMONEY: 30000, BNKR: 10, SP500: 0.633 * 4600,
 };
 
+// AC1 exercises the LIVE read engine (fetchWalletBalances) that the scheduled
+// sampler uses — the request route now serves PERSISTED data (see the dedicated
+// zero-RPC test below), so this validates the sampler's live payload directly.
 test("AC1: stub source → 200-shaped payload; every holding numeric with provenance 'stub'; totalUsd == sum(holdings.valueUsd)", async () => {
   setBaseEnv();
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
   mockChain(stubFixtures());
 
-  const r = await getWalletBalances();
+  const r = await fetchWalletBalances();
   expect(r.source).toBe("stub");
   expect(r.priceSource).toBe("stub");
   expect(r.holdings).toHaveLength(8); // the eight fixed series, no aave leg by default
@@ -421,9 +428,82 @@ test("AC7: the handler builds its path from the shared ROUTES constant", async (
   setBaseEnv();
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
-  mockChain(stubFixtures());
   const r = await getWalletBalances();
   expect(r.holdings).toHaveLength(8);
+});
+
+// ── issue #118: chain reads happen ONLY on the schedule. The REQUEST path must
+// serve persisted samples with ZERO RPC. This is the core new invariant. ───────
+
+test("AC8 (issue #118): the request path serves PERSISTED samples and makes ZERO RPC (never calls fetch)", async () => {
+  setBaseEnv();
+  // Seed the latest sample per symbol directly (as the scheduled sampler would),
+  // with DISTINCT provenance values that must be echoed back verbatim.
+  const today = new Date().toISOString().slice(0, 10);
+  const rows: [string, number, number, number, string][] = [
+    ["USDC", 9052, 1, 9052, "live"],
+    ["WETH", 10, 1700, 17000, "live"],
+    ["ETH", 0.5, 1600, 800, "stub"],
+    ["ROBOTMONEY", 3_000_000_000, 0.00001, 30000, "stale"],
+    ["BNKR", 20000, 0.0005, 10, "seed"],
+  ];
+  for (const [symbol, amount, price, value, prov] of rows) {
+    await sql`
+      INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+      VALUES (${today}, ${symbol}, ${amount}, ${price}, ${value}, ${prov}, now())
+    `;
+  }
+
+  // ANY call to fetch on the request path is a hard failure — the whole point of
+  // #118 is that a client request never touches the RPC (or any host).
+  let fetchCalls = 0;
+  globalThis.fetch = (async (...args: unknown[]) => {
+    fetchCalls++;
+    throw new Error(`request path must not fetch — was called with ${String(args[0])}`);
+  }) as typeof fetch;
+
+  const r = await fetchPersistedWalletBalances();
+  expect(fetchCalls).toBe(0); // ZERO RPC / price fetches on the request path
+
+  const bySym = Object.fromEntries(r.holdings.map((h) => [h.symbol, h]));
+  // Provenance is echoed EXACTLY as persisted — never relabelled.
+  expect(bySym.USDC!.provenance).toBe("live");
+  expect(bySym.USDC!.valueUsd).toBeCloseTo(9052, 6);
+  expect(bySym.WETH!.provenance).toBe("live");
+  expect(bySym.WETH!.valueUsd).toBeCloseTo(17000, 6);
+  expect(bySym.ETH!.provenance).toBe("stub");
+  expect(bySym.ROBOTMONEY!.provenance).toBe("stale");
+  expect(bySym.ROBOTMONEY!.valueUsd).toBeCloseTo(30000, 6);
+  expect(bySym.BNKR!.provenance).toBe("seed");
+  // A tracked symbol with NO persisted sample (GIZA-SS1, ZYFAI-SS1, SP500) →
+  // honest 'stale' with null values, never fabricated.
+  for (const sym of ["GIZA-SS1", "ZYFAI-SS1", "SP500"]) {
+    expect(bySym[sym]!.provenance).toBe("stale");
+    expect(bySym[sym]!.valueUsd).toBeNull();
+  }
+  // Ordering + metadata come from resolveTrackedAssets (samples table has neither).
+  expect(r.holdings.map((h) => h.symbol)).toEqual(resolveTrackedAssets().map((a) => a.symbol));
+  expect(r.holdings).toHaveLength(8);
+  // totalUsd = sum of the non-null latest values.
+  expect(r.totalUsd).toBeCloseTo(9052 + 17000 + 800 + 30000 + 10, 6);
+  // Top-level provenance markers stay config-resolved (no RPC) — badge still works.
+  expect(r.source).toBe("live");
+  expect(r.priceSource).toBe("live");
+});
+
+test("AC8b (issue #118): the request path reflects the LATEST scheduled sample per symbol (newest sample_date wins), never an older row", async () => {
+  setBaseEnv();
+  // An OLD live sample and a NEWER stale degrade for the same symbol: the request
+  // path must serve the NEWEST (the last thing the schedule persisted).
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES ('2026-07-01', 'WETH', 10, 1500, 15000, 'live', '2026-07-01T00:10:00Z'),
+           ('2026-07-13', 'WETH', 10, 1550, 15500, 'stale', '2026-07-13T00:10:00Z')
+  `;
+  const r = await fetchPersistedWalletBalances();
+  const weth = r.holdings.find((h) => h.symbol === "WETH")!;
+  expect(weth.provenance).toBe("stale"); // the newer row
+  expect(weth.valueUsd).toBeCloseTo(15500, 6);
 });
 
 test("history: backfill seeds the pre-launch series; the endpoint returns it as continuous, sparse, group-ordered byAsset days", async () => {

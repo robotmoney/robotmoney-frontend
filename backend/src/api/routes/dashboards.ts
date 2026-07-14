@@ -4,7 +4,7 @@
 // shapes are unchanged.
 import { fetchRegimeSnapshots, fetchLatestResearchSignal } from "../../analytics/report/projections.ts";
 import { fetchVaultEconomics } from "../../chain/vault-economics.ts";
-import { fetchWalletBalances } from "../../chain/wallet-balances.ts";
+import { fetchPersistedWalletBalances } from "../../chain/wallet-balances.ts";
 // Live-data contract (#50 honesty): each chain/db module owns its own short-TTL
 // cache + degrade-to-stale/seed logic, so these handlers stay thin adapters.
 // The module functions share names with our handlers, so import them aliased.
@@ -24,11 +24,14 @@ export async function getVaultEconomics() {
   return fetchVaultEconomics();
 }
 
-// GET /api/dashboards/wallet-balances → live Base RPC + keyless-price prop-wallet
-// valuation (issue #84): per-holding value/provenance + continuous history. A
-// single failing leg degrades to 'stale', never a 5xx.
+// GET /api/dashboards/wallet-balances → prop-wallet valuation (issue #84) served
+// PURELY from persisted samples (issue #118): ZERO RPC on the request path. Chain
+// reads happen only on the backend schedule (worker/handlers/wallet.ts), so a
+// client request never hits the rate-limited public RPC. Per-holding value/
+// provenance reflects the last scheduled sample exactly (live/stub/stale/seed);
+// a symbol with no sample yet is 'stale' with null values, never a 5xx.
 export async function getWalletBalances() {
-  return fetchWalletBalances();
+  return fetchPersistedWalletBalances();
 }
 
 // GET /api/dashboards/regime-snapshots?range=<n days> → { latest, history }

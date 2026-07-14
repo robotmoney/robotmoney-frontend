@@ -330,3 +330,68 @@ export async function fetchWalletBalances(): Promise<WalletBalances> {
   cache = { at: now, value };
   return value;
 }
+
+// REQUEST-PATH reader (issue #118): serve the /api/dashboards/wallet-balances
+// payload PURELY from persisted `wallet_balance_samples` — ZERO chain calls, ZERO
+// price fetches. Chain reads happen ONLY on the backend schedule
+// (worker/handlers/wallet.ts sampleWalletBalances → fetchWalletBalances above),
+// so a client request never touches the rate-limited public RPC. The served
+// provenance is EXACTLY the last scheduled sample per symbol (live/stub/stale/
+// seed) — never relabelled, never fabricated. Payload shape is identical to
+// fetchWalletBalances so the frontend + goldens are unchanged.
+export async function fetchPersistedWalletBalances(): Promise<WalletBalances> {
+  // Top-level provenance markers stay config-resolved (no RPC) so hermetic mode
+  // still reports 'stub' and the frontend walletNonLive() badge keeps working.
+  // Fail-closed resolvers OUTSIDE any try: an invalid marker refuses loudly.
+  const source = resolveBaseRpcSource();
+  const priceSource = resolvePriceSource();
+  const assets = resolveTrackedAssets();
+
+  // Latest sample per symbol. The (sample_date, symbol) upsert keeps one row per
+  // symbol per UTC day, so "newest sample_date wins" is the last scheduled read.
+  const rows = await sql<
+    { symbol: string; amount: string | null; price_usd: string | null; value_usd: string | null; provenance: string; sampled_at: Date }[]
+  >`
+    SELECT DISTINCT ON (symbol) symbol, amount, price_usd, value_usd, provenance, sampled_at
+      FROM wallet_balance_samples
+     ORDER BY symbol, sample_date DESC, sampled_at DESC
+  `;
+  const latest = new Map(rows.map((r) => [r.symbol, r]));
+
+  // Iterate resolveTrackedAssets() (NOT the samples table) so ordering and the
+  // chain/group/color/priceSource metadata the table doesn't store are preserved.
+  const holdings: WalletHolding[] = assets.map((a) => {
+    const base = {
+      symbol: a.symbol,
+      chain: "base" as const,
+      group: a.group,
+      color: a.color,
+      priceSource: PRICE_VENDOR[a.priceKind] ?? a.priceKind,
+    };
+    const row = latest.get(a.symbol);
+    if (!row) {
+      // No scheduled sample yet for this symbol → honest 'stale' with null
+      // values (never fabricate a number the schedule hasn't produced).
+      return { ...base, amount: null, priceUsd: null, valueUsd: null, provenance: "stale" as Provenance };
+    }
+    return {
+      ...base,
+      amount: row.amount == null ? null : Number(row.amount),
+      priceUsd: row.price_usd == null ? null : Number(row.price_usd),
+      valueUsd: row.value_usd == null ? null : Number(row.value_usd),
+      provenance: row.provenance as Provenance, // exactly what the schedule persisted
+    };
+  });
+
+  const totalUsd = holdings.reduce((sum, h) => sum + (h.valueUsd ?? 0), 0);
+  const history = await loadHistory().catch(() => [] as WalletHistoryPoint[]);
+
+  // asOf = freshest served sample's real timestamp (data age), or now() if empty.
+  const asOfMs = rows.reduce((max, r) => {
+    const t = (r.sampled_at instanceof Date ? r.sampled_at : new Date(r.sampled_at)).getTime();
+    return t > max ? t : max;
+  }, 0);
+  const asOf = new Date(asOfMs > 0 ? asOfMs : Date.now()).toISOString();
+
+  return { asOf, totalUsd, source, priceSource, holdings, history };
+}
