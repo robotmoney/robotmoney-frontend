@@ -36,10 +36,12 @@ const SCHEDULES: SeedSchedule[] = [
   // Hourly vault share-price sample (issue #40) — dense enough for a 7-day APY
   // lookback, cheap on RPC (3 eth_calls/hour). Handler: worker/handlers/vault.ts.
   { kind: "vault.sample_share_price", cron: "0 * * * *", payload: {}, timezone: "UTC", enabled: true },
-  // Daily prop-wallet balance sample (issue #84) — one row/asset/UTC-day, feeds
-  // the /performance history + the last-live degrade fallback. 00:10 UTC, just
-  // after the day boundary. Handler: worker/handlers/wallet.ts.
-  { kind: "wallet.sample_balances", cron: "10 0 * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Prop-wallet balance sample (issues #84/#118) — the ONLY place a chain read
+  // happens for wallet balances now (the request path serves persisted data with
+  // ZERO RPC). Runs EVERY MINUTE so the served payload is near-real-time; the
+  // (sample_date, symbol) upsert refreshes today's row each tick (idempotent, no
+  // row growth within a day). Handler: worker/handlers/wallet.ts.
+  { kind: "wallet.sample_balances", cron: "* * * * *", payload: {}, timezone: "UTC", enabled: true },
   // Buyback refresh (live-data contract §1) — eth_getLogs indexer that upserts
   // NEW WETH->ROBOTMONEY buyback swaps into buyback_swaps (keyed on tx_hash). No-op
   // under a non-live source; degrade-safe on RPC failure. Handler: handlers/buybacks.ts.
@@ -99,6 +101,22 @@ export async function seed(): Promise<void> {
     `;
   }
   console.log(`seeded job_schedules (${schedules.length} definition(s), idempotent)`);
+
+  // Cold start (issue #118): enqueue ONE immediate wallet.sample_balances job so
+  // the endpoint has a fresh scheduled sample within seconds of boot instead of
+  // waiting up to a minute for the first cron tick. A CONSTANT dedupe_key fires it
+  // at most once per database; the every-minute cron owns steady-state sampling,
+  // and the (sample_date, symbol) upsert makes any overlap with the first cron
+  // slot idempotent. In the hermetic demo this also guarantees the sampler routes
+  // at least one aggregate3 eth_call to the stub so demo-rpc-guard sees ethCall > 0
+  // (the request path no longer issues RPC). ON CONFLICT mirrors the scheduler's
+  // partial unique index on dedupe_key.
+  await sql`
+    INSERT INTO jobs (kind, payload, dedupe_key)
+    VALUES ('wallet.sample_balances', ${sql.json(jsonValue({}))}, 'wallet.sample_balances:coldstart')
+    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+  `;
+  console.log("enqueued cold-start wallet.sample_balances job (idempotent on dedupe_key)");
 
   // One-time prop-wallet history backfill (issue #84): seed the pre-launch
   // series carried forward from the baked views.js data so GET
