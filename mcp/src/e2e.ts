@@ -5,6 +5,7 @@
 // handler → domain) so the demo exercises the real FOR UPDATE SKIP LOCKED claim
 // loop. Multi-session: the second session's brief references the first session's
 // outcome, demonstrating rotation awareness.
+import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { runAgent, enroll, textOf } from "./agent.ts";
 import type { ExistingCredentials, AgentStage } from "./agent.ts";
 import { generateKeyPair, sign } from "./crypto.ts";
@@ -71,7 +72,8 @@ export async function mapSettledWithConcurrency<T, R>(
 // reproduce it verbatim, so under COMMITTEE_REAL_INFERENCE a body that still
 // matches means the templated path leaked back into the real path — fail loudly.
 const OLD_TEMPLATE_RE = /the spread, not the composite, is where the signal lives/i;
-const VALID_STANCES = new Set(["bullish", "constructive", "neutral", "cautious", "bearish"]);
+// Canonical stance vocabulary from the contract (finding 027) — never re-declared.
+const VALID_STANCES = new Set<string>(STANCES);
 
 // The authored-take structural assertions only apply to the REAL keyless
 // opencode path. The hermetic per-PR default deliberately uses the deterministic
@@ -107,7 +109,7 @@ function assertAuthoredTakes(tag: string, takes: any[]) {
       }
     }
     if (!VALID_STANCES.has(String(t.stance))) {
-      throw new Error(`${tag}: take for ${who} has stance '${t.stance}' outside {bullish,constructive,neutral,cautious,bearish}`);
+      throw new Error(`${tag}: take for ${who} has stance '${t.stance}' outside {${[...STANCES].join(",")}}`);
     }
     const c = Number(t.confidence);
     if (!Number.isFinite(c) || c < 0 || c > 1) {
@@ -123,34 +125,27 @@ function assertAuthoredTakes(tag: string, takes: any[]) {
   console.log(`${tag}: authored-take invariants passed for ${authored.length} present member(s)`);
 }
 
-// Deterministic attendance stand-in for a real no-show simulation. Absence
-// emerges from a RULE (a curated set of habitual no-shows), not a baked boolean:
-// the contrarian member (draco) models an occasional no-show. Kept deterministic
-// (no Math.random / Date) so the required hermetic e2e and any goldens stay
-// reproducible — the roster outcome is fixed (draco absent; athena/boreas/cygnus
-// present). MIRROR of backend demo e2e's attends() — keep the two in sync.
-const NO_SHOWS = new Set(["draco"]);
-function attends(memberId: string): boolean {
-  return !NO_SHOWS.has(memberId);
-}
+// Deterministic attendance comes from the SHARED demo no-show rule in
+// @robotmoney/contract (contract/src/committee.js) — the backend demo e2e
+// consumes the same rule, so the two drivers can no longer drift (finding 008
+// retired the comment-enforced mirror). The roster outcome stays fixed (draco
+// absent; athena/boreas/cygnus present) so the required hermetic e2e and any
+// goldens stay reproducible.
 
 export const MEMBERS = [
-  { memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1, present: attends("athena") },
-  { memberId: "boreas", name: "Boreas", lens: "on-chain flows", bias: 0.0, present: attends("boreas") },
-  { memberId: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: attends("cygnus") },
-  { memberId: "draco", name: "Draco", lens: "contrarian", bias: 0.0, present: attends("draco") },
+  { memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1, present: demoAttends("athena") },
+  { memberId: "boreas", name: "Boreas", lens: "on-chain flows", bias: 0.0, present: demoAttends("boreas") },
+  { memberId: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: demoAttends("cygnus") },
+  { memberId: "draco", name: "Draco", lens: "contrarian", bias: 0.0, present: demoAttends("draco") },
 ];
 export const SUBJECTS = [
   { id: "woon", name: "Woon Treasury" },
   { id: "mav", name: "Mav Holdings" },
 ];
 
-// Target size for the standing demo committee. Onboarding stops admitting new
-// members once the active roster reaches this cap so the committee settles at a
-// realistic, bounded size. MIRROR of backend committee.COMMITTEE_ROSTER_CAP — the
-// mcp package can't import the backend module (separate deps), so this must be
-// kept equal to that canonical value (the backend roster-cap test pins it).
-export const COMMITTEE_ROSTER_CAP = 10;
+// The standing-demo roster cap now lives in @robotmoney/contract
+// (COMMITTEE_ROSTER_CAP) — the mirror this module used to carry is gone;
+// consumers (scripts/lib/demo-main.ts, backend domain) import the contract.
 
 const adminHeaders: Record<string, string> = process.env.ADMIN_TOKEN
   ? { "X-Admin-Token": process.env.ADMIN_TOKEN }
@@ -170,7 +165,7 @@ export type SessionEvent =
 export type SessionProgress = (ev: SessionEvent) => void;
 
 export async function admin(action: string, body: unknown = {}) {
-  const r = await fetch(`${BACKEND}/api/committee/admin/${action}`, {
+  const r = await fetch(`${BACKEND}${routePath(ROUTES.committee.admin.action, { action })}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders }, body: JSON.stringify(body),
   });
   return responseJson(r);
@@ -194,14 +189,14 @@ export interface OnboardResult {
 // Active committee roster size, read from the backend — the gate the standing
 // demo checks against COMMITTEE_ROSTER_CAP before admitting a newcomer.
 export async function activeMemberCount(): Promise<number> {
-  const r = await fetch(`${BACKEND}/api/committee/members`)
+  const r = await fetch(`${BACKEND}${ROUTES.committee.members}`)
     .then(responseJson)
     .catch(() => ({ members: [] as { id: string }[] })) as { members?: { id: string }[] };
   return Array.isArray(r.members) ? r.members.length : 0;
 }
 
 async function activeMemberIds(): Promise<Set<string>> {
-  const r = await fetch(`${BACKEND}/api/committee/members`)
+  const r = await fetch(`${BACKEND}${ROUTES.committee.members}`)
     .then(responseJson)
     .catch(() => ({ members: [] as { id: string }[] })) as { members?: { id: string }[] };
   return new Set((r.members ?? []).map((m) => m.id));
@@ -230,7 +225,7 @@ export async function onboardMember(
   emit("keypair");
 
   // 2. Public apply (no auth) — recorded as 'applied'.
-  const applyRes = await fetch(`${BACKEND}/api/committee/apply`, {
+  const applyRes = await fetch(`${BACKEND}${ROUTES.committee.apply}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ memberId: spec.memberId, name: spec.name, lens: spec.lens, publicKey: publicKeyB64 }),
   }).then((r) => r.json());
@@ -242,7 +237,7 @@ export async function onboardMember(
   emit("review");
 
   // 4. Admin activates — flips applied→active and mints the member's bearer token.
-  const activateRes = await fetch(`${BACKEND}/api/committee/admin/activate`, {
+  const activateRes = await fetch(`${BACKEND}${ROUTES.committee.admin.activate}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: spec.memberId }),
   }).then((r) => r.json());
@@ -271,7 +266,7 @@ export async function onboardMember(
 export async function waitForSessionState(date: string, subject: string, expectedState: string, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const r = await fetch(`${BACKEND}/api/committee/sessions/${date}/${subject}`);
+    const r = await fetch(`${BACKEND}${routePath(ROUTES.committee.session, { date, subject })}`);
     if (r.ok) {
       const data = await responseJson(r);
       if (data.session?.state === expectedState) return data;
@@ -368,7 +363,7 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   await waitForSessionState(date, subject.id, "published");
   emitSession("published", sessionId);
 
-  const pub = await fetch(`${BACKEND}/api/committee/sessions/${date}/${subject.id}`).then(responseJson);
+  const pub = await fetch(`${BACKEND}${routePath(ROUTES.committee.session, { date, subject: subject.id })}`).then(responseJson);
   console.log(`${tag} published: state=${pub.session.state}, takes=${pub.takes.length}`);
   console.log(`${tag} synthesis: ${pub.session.synthesis}`);
   console.log(`${tag} absent: ${JSON.stringify(pub.takes.filter((t: any) => t.verified === null || t.verified === false).map((t: any) => t.memberId))}`);
@@ -416,7 +411,7 @@ async function main() {
 
   // 2. Register a member and exchange credentials for an OAuth access token
   const oauthMember = { memberId: "oauth-test", name: "OAuth Test", lens: "oauth-demo" };
-  const oauthReg = await fetch(`${BACKEND}/api/committee/register`, {
+  const oauthReg = await fetch(`${BACKEND}${ROUTES.committee.register}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ ...oauthMember, publicKey: (await generateKeyPair()).publicKeyB64 }),
   }).then(responseJson);
@@ -459,7 +454,7 @@ async function main() {
   const { publicKeyB64: eosPub, privateKey: eosPriv } = await generateKeyPair();
 
   // 4a. Public apply (no auth required) — member is recorded as 'applied'
-  const applyRes = await fetch(`${BACKEND}/api/committee/apply`, {
+  const applyRes = await fetch(`${BACKEND}${ROUTES.committee.apply}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ memberId: "eos", name: "Eos", lens: "newcomer", publicKey: eosPub }),
   }).then(responseJson);
@@ -467,7 +462,7 @@ async function main() {
   if (applyRes.status !== 201) throw new Error(`apply failed: ${JSON.stringify(applyRes)}`);
 
   // 4b. Admin activates — flips applied→active, mints bearer token
-  const activateRes = await fetch(`${BACKEND}/api/committee/admin/activate`, {
+  const activateRes = await fetch(`${BACKEND}${ROUTES.committee.admin.activate}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: "eos" }),
   }).then(responseJson);
@@ -484,14 +479,14 @@ async function main() {
   // regardless of RM_ALLOW_INSECURE). The demo runs in insecure mode so role
   // gates on regime write (analyticsProvider) and admin lifecycle (privileged)
   // are open — the identity-layer submit checks are the universal enforcement.
-  const testReg = await fetch(`${BACKEND}/api/committee/register`, {
+  const testReg = await fetch(`${BACKEND}${ROUTES.committee.register}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: "cross-role-test", name: "Cross Role Test", publicKey: (await generateKeyPair()).publicKeyB64 }),
   }).then(responseJson);
   const testToken: string = testReg.token;
 
   // 5a. Unknown token → 401 with "unknown member token"
-  const badTokenRes = await fetch(`${BACKEND}/api/committee/submit`, {
+  const badTokenRes = await fetch(`${BACKEND}${ROUTES.committee.submit}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer nonexistent" },
     body: JSON.stringify({ memberId: "cross-role-test", date: today, subjectId: SUBJECTS[0].id, nonce: crypto.randomUUID(), stance: "neutral", confidence: 0.5, signature: "bad" }),
   }).then(responseJson);
@@ -500,7 +495,7 @@ async function main() {
   if (!badTokenOk) throw new Error(`expected 401 unknown token, got ${badTokenRes.status}`);
 
   // 5b. Known token but wrong memberId in body → 403 with "token/member mismatch"
-  const mismatchRes = await fetch(`${BACKEND}/api/committee/submit`, {
+  const mismatchRes = await fetch(`${BACKEND}${ROUTES.committee.submit}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ memberId: "someone-else", date: today, subjectId: SUBJECTS[0].id, nonce: crypto.randomUUID(), stance: "neutral", confidence: 0.5, signature: "bad" }),
   }).then((r) => r.json());
@@ -511,7 +506,7 @@ async function main() {
   // 5c. Known member token calling regime write (would be 403 with
   // ANALYTICS_TOKEN set; in insecure mode the gate is open so we document
   // the expected behaviour rather than assert a specific status).
-  const regimeWriteRes = await fetch(`${BACKEND}/api/committee/regime`, {
+  const regimeWriteRes = await fetch(`${BACKEND}${ROUTES.committee.regime}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ asof: today }),
   });
@@ -519,7 +514,7 @@ async function main() {
   console.log(`  cross-role: member → regime write → ${regimeWriteRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
   // 5d. Known member token calling admin lifecycle (same insecure-mode caveat).
-  const adminCloseRes = await fetch(`${BACKEND}/api/committee/admin/close`, {
+  const adminCloseRes = await fetch(`${BACKEND}${ROUTES.committee.admin.close}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ sessionId: -1 }),
   });
@@ -531,7 +526,7 @@ async function main() {
   const s2 = await runSession(tomorrow, SUBJECTS[1], 2, s1.pub.session.synthesis, existingCreds);
 
   // Verify list_sessions returns both sessions
-  const all = await fetch(`${BACKEND}/api/committee/sessions`).then((r) => r.json());
+  const all = await fetch(`${BACKEND}${ROUTES.committee.sessions}`).then((r) => r.json());
   console.log(`\nsessions listed: ${all.sessions.length} total (expected ≥2)`);
 
   console.log("\n=== done ===\n");

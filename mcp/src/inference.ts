@@ -21,6 +21,8 @@
 // free zen model is slower and more variable than a paid tier, this real path is
 // exercised in a NIGHTLY job; the required per-PR e2e keeps the deterministic
 // `stanceFor()` + `buildMemo()` (see agent.ts / memo.ts) hermetic default.
+import { STANCES } from "@robotmoney/contract";
+import type { Stance } from "@robotmoney/contract";
 import type { RegimeContext } from "./memo.ts";
 
 export type { RegimeContext };
@@ -43,8 +45,10 @@ const opencodeBin = () => process.env.OPENCODE_BIN ?? "opencode";
 // throw loudly — still NO template fallback.
 const timeoutMs = () => Number(process.env.OPENCODE_TIMEOUT_MS ?? 120000);
 
-export const STANCE_VALUES = ["bullish", "constructive", "neutral", "cautious", "bearish"] as const;
-export type Stance = (typeof STANCE_VALUES)[number];
+// Prompt-facing stance vocabulary (most bullish first), DERIVED from the
+// canonical contract tuple (finding 027) — never re-declared locally.
+export const STANCE_VALUES: readonly Stance[] = [...STANCES].reverse();
+export type { Stance };
 
 export interface Persona {
   memberId: string;
@@ -157,7 +161,7 @@ export function promptFor(p: Persona, regime: RegimeContext, subjectId: string):
     `- The first move you would make, with a trigger`,
     ``,
     `Stay in your voice. Conclude with one line exactly, and nothing after it:`,
-    `STANCE: <bullish|constructive|neutral|cautious|bearish> | CONFIDENCE: <0-1>`,
+    `STANCE: <${STANCE_VALUES.join("|")}> | CONFIDENCE: <0-1>`,
   ].join("\n");
 }
 

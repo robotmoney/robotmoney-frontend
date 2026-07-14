@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, visibleLen, type Tui } from "./tui.ts";
 import { resolveDemoEnv } from "./demo-env.ts";
+import { COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..");
@@ -480,13 +481,13 @@ function mapJobState(status: string): ResearchEntry["state"] {
 async function fetchResearchNote(id: number, kind: string, failed: boolean, err: string): Promise<void> {
   if (failed) { researchNotes.set(id, `failed: ${err.split("\n")[0] || "error"}`); return; }
   try {
-    const snap = await fetch(`${backendUrl}/api/dashboards/regime-snapshots?range=1`).then((r) => (r.ok ? r.json() : null));
+    const snap = await fetch(`${backendUrl}${ROUTES.dashboards.regimeSnapshots}?range=1`).then((r) => (r.ok ? r.json() : null));
     const latest = snap?.latest;
     let note = latest
       ? `regime → ${latest.regime ?? "?"}${latest.composite != null ? ` ${Number(latest.composite).toFixed(2)}` : ""}`
       : "regime updated";
     if (kind === "analytics.run") {
-      const sig = await fetch(`${backendUrl}/api/dashboards/research-signals/${researchKeys[0]}`).then((r) => (r.ok ? r.json() : null));
+      const sig = await fetch(`${backendUrl}${routePath(ROUTES.dashboards.researchSignal, { key: researchKeys[0] })}`).then((r) => (r.ok ? r.json() : null));
       if (sig?.signalKey) note += ` · research: ${sig.signalKey}`;
     }
     researchNotes.set(id, `${note} (report written)`);
@@ -998,7 +999,7 @@ async function main(): Promise<void> {
   for (let attempt = 1; attempt <= 3; attempt++) {
     let staleness: { stale?: boolean; asof?: string | null; ageDays?: number | null } | null = null;
     try {
-      const snap = await fetch(`${backendUrl}/api/dashboards/regime-snapshots?range=1`).then((r) => (r.ok ? r.json() : null));
+      const snap = await fetch(`${backendUrl}${ROUTES.dashboards.regimeSnapshots}?range=1`).then((r) => (r.ok ? r.json() : null));
       staleness = snap?.staleness ?? null;
     } catch (err) {
       log(`regime freshness check failed (attempt ${attempt}/3): ${err instanceof Error ? err.message : err}`);
@@ -1111,13 +1112,14 @@ async function main(): Promise<void> {
         log(`onboarding ${memberId} skipped — already on the roster`);
         continue;
       }
-      // Roster cap: once the active committee reaches COMMITTEE_ROSTER_CAP, stop
+      // Roster cap: once the active committee reaches the contract's
+      // COMMITTEE_ROSTER_CAP, stop
       // admitting so the demo settles at a realistic, bounded size instead of
       // growing without bound. Keep polling — if a seat frees, admission resumes.
       const active = await e2e.activeMemberCount();
-      if (active >= e2e.COMMITTEE_ROSTER_CAP) {
+      if (active >= COMMITTEE_ROSTER_CAP) {
         state.upcoming = [];
-        log(`roster full (${active}/${e2e.COMMITTEE_ROSTER_CAP}) — onboarding paused`);
+        log(`roster full (${active}/${COMMITTEE_ROSTER_CAP}) — onboarding paused`);
         continue;
       }
       startOnboarding(memberId, name); // append to the persistent pane + drop from upcoming

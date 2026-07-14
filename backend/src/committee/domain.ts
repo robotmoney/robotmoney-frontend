@@ -1,7 +1,7 @@
 // Committee domain/service layer — the single place the rules live (window
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
-import { classifyRegime } from "@robotmoney/contract";
+import { classifyRegime, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { config } from "../config.ts";
 import { jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
@@ -25,13 +25,13 @@ async function publicKeyFor(memberId: string): Promise<string | null> {
 
 // Fixed target size for the standing demo committee. The onboarding driver stops
 // admitting new members once the active roster reaches this cap, so the committee
-// settles at a realistic, bounded size instead of growing without bound. This is
-// the CANONICAL value: backend/tests/committee-roster-cap.test.ts pins its
-// assertions to this constant (never a literal), and the demo onboarding path
-// (scripts/lib/demo-main.ts → mcp/src/e2e.ts) mirrors it as e2e.COMMITTEE_ROSTER_CAP
-// — the mcp/scripts packages can't import the backend module (separate deps), so
-// that mirror must be kept equal to this value.
-export const COMMITTEE_ROSTER_CAP = 10;
+// settles at a realistic, bounded size instead of growing without bound. The
+// CANONICAL value lives in @robotmoney/contract (contract/src/committee.js) —
+// the shared channel mcp/scripts can also import, retiring the comment-enforced
+// e2e.COMMITTEE_ROSTER_CAP mirror (finding 008). Re-exported under the same name
+// so backend/tests/committee-roster-cap.test.ts (which pins its assertions to
+// this constant, never a literal) keeps reading it from the domain layer.
+export { COMMITTEE_ROSTER_CAP };
 
 // ── Reads ─────────────────────────────────────────────────────────────────
 export async function getMembers() {
@@ -542,8 +542,8 @@ export async function aggregateSession(sessionId: string) {
 
   // Disagreements: synthesize from the stance spread. When at least two distinct
   // stances were submitted, contrast the most- and least-constructive members.
-  const order = ["bearish", "cautious", "neutral", "constructive", "bullish"];
-  const rank = (st: string) => { const i = order.indexOf(st); return i < 0 ? 2 : i; };
+  // The ascending ladder is the canonical contract vocabulary (finding 027).
+  const rank = (st: string) => { const i = (STANCES as readonly string[]).indexOf(st); return i < 0 ? 2 : i; };
   const sortedTakes = takes.slice().sort((a: any, b: any) => rank(a.stance) - rank(b.stance));
   const disagreements: any[] = [];
   if (sortedTakes.length >= 2 && new Set(sortedTakes.map((t: any) => t.stance)).size >= 2) {
@@ -625,7 +625,7 @@ export async function postMemo(token: string, input: { sessionId: string; title?
     VALUES (${memberId}, ${input.sessionId}, ${input.title ?? ""}, ${input.body})
     RETURNING id`;
   const id = rows[0].id;
-  return { ok: true, status: 201, id, url: `/api/committee/memos/${id}` };
+  return { ok: true, status: 201, id, url: routePath(ROUTES.committee.memo, { id }) };
 }
 
 export async function getMemo(id: number) {

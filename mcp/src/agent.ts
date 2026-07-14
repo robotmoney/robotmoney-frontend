@@ -11,6 +11,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
+import { ROUTES, stanceFor } from "@robotmoney/contract";
 import { generateKeyPair, sign } from "./crypto.ts";
 import { buildMemo, type RegimeContext } from "./memo.ts";
 import { authorTake } from "./inference.ts";
@@ -45,15 +46,12 @@ export type AgentStage = "connect" | "fetch" | "thinking" | "reporting" | "done"
 export type AgentProgress = (stage: AgentStage, info?: { stance?: string; confidence?: number }) => void;
 
 // Deterministic stance derivation from the composite + the member's directional
-// bias. The HERMETIC per-PR default: no LLM, no secret. The real keyless
-// opencode path (REAL_INFERENCE) parses stance/confidence out of the authored
-// take instead.
-export function stanceFor(composite: number, bias: number) {
-  const x = composite + bias;
-  const stance = x >= 0.67 ? "bullish" : x >= 0.55 ? "constructive" : x >= 0.45 ? "neutral" : x >= 0.33 ? "cautious" : "bearish";
-  const confidence = Math.round(Math.min(1, Math.abs(x - 0.5) * 2 + 0.4) * 100) / 100;
-  return { stance, confidence };
-}
+// bias. The HERMETIC per-PR default: no LLM, no secret. The ladder itself lives
+// in @robotmoney/contract (contract/src/committee.js) so the backend demo e2e
+// and this agent share ONE bucket rule (finding 008); re-exported to keep this
+// module the local reference point. The real keyless opencode path
+// (REAL_INFERENCE) parses stance/confidence out of the authored take instead.
+export { stanceFor };
 
 export const textOf = (res: any) => JSON.parse(res.content?.[0]?.text ?? "null");
 
@@ -61,7 +59,7 @@ export const textOf = (res: any) => JSON.parse(res.content?.[0]?.text ?? "null")
 // deliberate no-show on the roster so absence is recorded at aggregation.
 export async function enroll(o: { memberId: string; name: string; lens?: string }) {
   const { publicKeyB64 } = await generateKeyPair();
-  await fetch(`${BACKEND}/api/committee/register`, {
+  await fetch(`${BACKEND}${ROUTES.committee.register}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: o.memberId, name: o.name, lens: o.lens, publicKey: publicKeyB64 }),
   });
@@ -73,7 +71,7 @@ export async function runAgent(o: AgentOpts, existingCredentials?: ExistingCrede
   const { publicKeyB64, privateKey } = existingCredentials
     ? { publicKeyB64: "", privateKey: existingCredentials.privateKey }
     : await generateKeyPair();
-  const token = existingCredentials?.token ?? (await fetch(`${BACKEND}/api/committee/register`, {
+  const token = existingCredentials?.token ?? (await fetch(`${BACKEND}${ROUTES.committee.register}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: o.memberId, name: o.name, lens: o.lens, publicKey: publicKeyB64 }),
   }).then(async (r) => (await r.json() as { token: string }))).token;

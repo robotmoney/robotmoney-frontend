@@ -18,6 +18,7 @@
 // stub /api/committee/sessions response, then spawns the real script against it.
 import { describe, expect, test } from "bun:test";
 import { join, normalize } from "node:path";
+import { ROUTES } from "@robotmoney/contract";
 
 const repoRoot = join(import.meta.dir, "../..");
 const publicDir = join(repoRoot, "frontend", "public");
@@ -32,12 +33,12 @@ function startStubBackend(rewrites: Rewrites = {}) {
     port: 0,
     async fetch(req) {
       const url = new URL(req.url);
-      if (url.pathname === "/api/committee/sessions") {
+      if (url.pathname === ROUTES.committee.sessions) {
         return Response.json({ sessions: [] });
       }
       // Live prop-wallet feed (issue #84): a minimal valid hermetic payload so
       // the guard's wallet-balances assertion passes on the POSITIVE path.
-      if (url.pathname === "/api/dashboards/wallet-balances") {
+      if (url.pathname === ROUTES.dashboards.walletBalances) {
         const symbols = ["USDC", "ZYFAI-SS1", "GIZA-SS1", "WETH", "ETH", "ROBOTMONEY", "BNKR", "SP500"];
         return Response.json({
           asOf: new Date().toISOString(), totalUsd: 1000, source: "stub", priceSource: "stub",

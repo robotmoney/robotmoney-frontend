@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
-import { canonicalizeSubmission } from "@robotmoney/contract";
+import { canonicalizeSubmission, classifyRegime, path as routePath, ROUTES } from "@robotmoney/contract";
 import { TokenStore } from "./token-store.ts";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
@@ -33,17 +33,17 @@ function buildServer(memberId: string, memberToken: string) {
   const server = new McpServer({ name: "robotmoney-committee", version: "0.1.0" });
 
   server.registerTool("get_regime", { description: "Latest regime classification statistics.", inputSchema: {} },
-    async () => j((await get(`/api/dashboards/regime-snapshots?range=1`)).latest));
+    async () => j((await get(`${ROUTES.dashboards.regimeSnapshots}?range=1`)).latest));
   server.registerTool("get_open_session", { description: "The committee session currently collecting submissions, if any.", inputSchema: {} },
-    async () => j(await get(`/api/committee/open-session`)));
+    async () => j(await get(ROUTES.committee.openSession)));
   server.registerTool("list_sessions", { description: "All committee sessions.", inputSchema: {} },
-    async () => j(await get(`/api/committee/sessions`)));
+    async () => j(await get(ROUTES.committee.sessions)));
   server.registerTool("get_brief", { description: "The brief for a session.", inputSchema: { date: z.string(), subject: z.string() } },
-    async ({ date, subject }) => j(await get(`/api/committee/brief?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(subject)}`)));
+    async ({ date, subject }) => j(await get(`${ROUTES.committee.brief}?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(subject)}`)));
   server.registerTool("get_subject_snapshot", { description: "Latest snapshot (positions, weights, total value) for a portfolio subject.", inputSchema: { subjectId: z.string() } },
-    async ({ subjectId }) => j({ ...(await get(`/api/committee/subjects/${encodeURIComponent(subjectId)}/snapshots`)) }));
+    async ({ subjectId }) => j({ ...(await get(routePath(ROUTES.committee.subjectSnapshots, { id: subjectId }))) }));
   server.registerTool("get_session", { description: "A committee session with its takes.", inputSchema: { date: z.string(), subject: z.string() } },
-    async ({ date, subject }) => j(await get(`/api/committee/sessions/${encodeURIComponent(date)}/${encodeURIComponent(subject)}`)));
+    async ({ date, subject }) => j(await get(routePath(ROUTES.committee.session, { date, subject }))));
   server.registerTool("get_signing_payload",
     { description: "Canonical bytes to sign for a drafted recommendation.",
       inputSchema: { memberId: z.string(), date: z.string(), subjectId: z.string(), nonce: z.string(), stance: z.string(), confidence: z.number(), body: z.string().optional(), memoUrl: z.string().optional() } },
@@ -52,7 +52,7 @@ function buildServer(memberId: string, memberToken: string) {
     { description: "Submit a signed recommendation (ed25519 signature over the canonical payload).",
       inputSchema: { memberId: z.string(), date: z.string(), subjectId: z.string(), nonce: z.string(), stance: z.string(), confidence: z.number(), body: z.string().optional(), memoUrl: z.string().optional(), signature: z.string() } },
     async (sub) => {
-      const res = await fetch(`${BACKEND}/api/committee/submit`, {
+      const res = await fetch(`${BACKEND}${ROUTES.committee.submit}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(memberToken ? { Authorization: `Bearer ${memberToken}` } : {}) },
         body: JSON.stringify(sub),
@@ -63,7 +63,7 @@ function buildServer(memberId: string, memberToken: string) {
     { description: "Publish a long-form analysis memo for a session. Returns a URL that can be passed as memoUrl in submit_recommendation.",
       inputSchema: { sessionId: z.string(), title: z.string().optional(), body: z.string() } },
     async (input) => {
-      const res = await fetch(`${BACKEND}/api/committee/memos`, {
+      const res = await fetch(`${BACKEND}${ROUTES.committee.memos}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(memberToken ? { Authorization: `Bearer ${memberToken}` } : {}) },
         body: JSON.stringify(input),
@@ -78,9 +78,14 @@ function buildServer(memberId: string, memberToken: string) {
     async ({ composite }) => {
       const regime = composite !== undefined
         ? { composite, macroRegime: null, onchainRegime: null }
-        : (await get(`/api/dashboards/regime-snapshots?range=1`)).latest ?? {};
+        : (await get(`${ROUTES.dashboards.regimeSnapshots}?range=1`)).latest ?? {};
       const c = Number(regime.composite ?? 0.5);
-      const classification = c >= 0.67 ? "risk_on" : c >= 0.45 ? "neutral" : "risk_off";
+      // Canonical shared classifier (@robotmoney/contract, 0.33/0.67 rule) —
+      // this tool previously re-derived its own diverged 0.45/0.67 thresholds
+      // (a composite in [0.33, 0.45) was mislabeled "risk_off"); regime.js
+      // forbids local threshold re-derivation. The prose ladder below stays a
+      // finer-grained gradient on purpose.
+      const classification = classifyRegime(c);
       const explanation = c >= 0.8 ? "Strong risk-on: broad-based expansion across macro and on-chain panels."
         : c >= 0.67 ? "Risk-on: majority of indicators favor risk assets."
         : c >= 0.55 ? "Lean risk-on: some caution warranted but overall constructive."
@@ -93,7 +98,7 @@ function buildServer(memberId: string, memberToken: string) {
     { description: "Compute portfolio concentration metrics (Herfindahl-Hirschman Index, top-3 weight) from the latest subject snapshot.",
       inputSchema: { subjectId: z.string() } },
     async ({ subjectId }) => {
-      const snapshots: any = await get(`/api/committee/subjects/${encodeURIComponent(subjectId)}/snapshots`);
+      const snapshots: any = await get(routePath(ROUTES.committee.subjectSnapshots, { id: subjectId }));
       const positions = snapshots?.snapshots?.[0]?.positions;
       if (!positions || !Array.isArray(positions) || positions.length === 0)
         return j({ error: "no positions found for subject" });
@@ -167,7 +172,7 @@ function oauthError(error: string, description?: string, status = 400): Response
 
 async function validateMemberCredentials(memberId: string, clientSecret: string): Promise<boolean> {
   try {
-    const res = await fetch(`${BACKEND}/api/committee/verify-token`, {
+    const res = await fetch(`${BACKEND}${ROUTES.committee.verifyToken}`, {
       headers: { Authorization: `Bearer ${clientSecret}` },
     });
     if (!res.ok) return false;
@@ -187,7 +192,7 @@ async function resolveBearer(token: string): Promise<{ memberId: string; memberT
   // Legacy direct bearers remain supported, but validate them before allocating
   // transport/session state so arbitrary strings cannot consume session capacity.
   try {
-    const res = await fetch(`${BACKEND}/api/committee/verify-token`, {
+    const res = await fetch(`${BACKEND}${ROUTES.committee.verifyToken}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) return null;

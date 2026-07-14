@@ -6,6 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ROUTES } from "@robotmoney/contract";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -181,12 +182,12 @@ async function main() {
 
   // Check that the API serves data the views depend on (the committee view
   // loads its data from these endpoints).
-  const sessionsRes = await fetch(`${BACKEND}/api/committee/sessions`);
+  const sessionsRes = await fetch(`${BACKEND}${ROUTES.committee.sessions}`);
   if (sessionsRes.ok) {
     const sessions = await sessionsRes.json();
-    checks.push({ name: "GET /api/committee/sessions returns data", ok: true, detail: `${sessions.sessions?.length ?? 0} sessions` });
+    checks.push({ name: `GET ${ROUTES.committee.sessions} returns data`, ok: true, detail: `${sessions.sessions?.length ?? 0} sessions` });
   } else {
-    checks.push({ name: "GET /api/committee/sessions returns data", ok: false, detail: `${sessionsRes.status}` });
+    checks.push({ name: `GET ${ROUTES.committee.sessions} returns data`, ok: false, detail: `${sessionsRes.status}` });
   }
 
   // Report.

@@ -23,6 +23,7 @@ import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { path as routePath, ROUTES } from "@robotmoney/contract";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -164,24 +165,24 @@ async function main(): Promise<void> {
   log(`rmpc identity created — memberId=${MEMBER_ID} publicKey=${publicKeyB64}`);
 
   // ── POST /api/committee/apply ──────────────────────────────────────────────
-  const applyRes = await fetch(`${BACKEND_URL}/api/committee/apply`, {
+  const applyRes = await fetch(`${BACKEND_URL}${ROUTES.committee.apply}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ memberId: MEMBER_ID, name: "RMPC Release E2E", lens: "release-proof", publicKey: publicKeyB64 }),
   });
   const applyBody = await readJson(applyRes);
-  if (applyRes.status !== 201 || !applyBody.ok) fail(`POST /api/committee/apply → ${applyRes.status}: ${JSON.stringify(applyBody)}`);
+  if (applyRes.status !== 201 || !applyBody.ok) fail(`POST ${ROUTES.committee.apply} → ${applyRes.status}: ${JSON.stringify(applyBody)}`);
   log(`applied as ${MEMBER_ID}`);
 
   // ── POST /api/committee/admin/activate ─────────────────────────────────────
-  const activateRes = await fetch(`${BACKEND_URL}/api/committee/admin/activate`, {
+  const activateRes = await fetch(`${BACKEND_URL}${ROUTES.committee.admin.activate}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: MEMBER_ID }),
   });
   const activateBody = await readJson(activateRes);
   if (activateRes.status !== 200 || !activateBody.token) {
-    fail(`POST /api/committee/admin/activate → ${activateRes.status}: ${JSON.stringify(activateBody)}`);
+    fail(`POST ${ROUTES.committee.admin.activate} → ${activateRes.status}: ${JSON.stringify(activateBody)}`);
   }
   const memberToken: string = activateBody.token;
   log(`activated ${MEMBER_ID}`);
@@ -232,11 +233,12 @@ async function main(): Promise<void> {
   log(`submit_recommendation accepted for ${MEMBER_ID}`);
 
   // ── Independent readback + signature re-verification ───────────────────────
-  const sessionRes = await fetch(`${BACKEND_URL}/api/committee/sessions/${TODAY}/${SUBJECT_ID}`);
+  const sessionPath = routePath(ROUTES.committee.session, { date: TODAY, subject: SUBJECT_ID });
+  const sessionRes = await fetch(`${BACKEND_URL}${sessionPath}`);
   const sessionBody = await readJson(sessionRes);
-  if (sessionRes.status !== 200) fail(`GET /api/committee/sessions/${TODAY}/${SUBJECT_ID} → ${sessionRes.status}: ${JSON.stringify(sessionBody)}`);
+  if (sessionRes.status !== 200) fail(`GET ${sessionPath} → ${sessionRes.status}: ${JSON.stringify(sessionBody)}`);
   const take = (sessionBody.takes ?? []).find((t: any) => t.memberId === MEMBER_ID);
-  if (!take) fail(`no take for ${MEMBER_ID} in GET /api/committee/sessions/${TODAY}/${SUBJECT_ID}: ${JSON.stringify(sessionBody.takes)}`);
+  if (!take) fail(`no take for ${MEMBER_ID} in GET ${sessionPath}: ${JSON.stringify(sessionBody.takes)}`);
   if (!take.verified) fail(`take for ${MEMBER_ID} is not server-verified: ${JSON.stringify(take)}`);
 
   // Never trust the server's `verified` bit alone: independently re-verify the

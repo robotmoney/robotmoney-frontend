@@ -24,9 +24,30 @@ export const ROUTES: {
     subjectSnapshots: string;
     sessions: string;
     session: string;
+    openSession: string;
     brief: string;
+    signingPayload: string;
+    memos: string;
+    memo: string;
+    verifyToken: string;
     apply: string;
+    register: string;
+    regime: string;
     submit: string;
+    admin: {
+      action: string;
+      activate: string;
+      reset: string;
+      regime: string;
+      subject: string;
+      subjectFixtures: string;
+      open: string;
+      brief: string;
+      close: string;
+      aggregate: string;
+      publish: string;
+      enqueueJob: string;
+    };
   };
   admin: {
     auth: string;
