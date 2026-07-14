@@ -12,7 +12,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
-import { resolveVaultAdapters, isPlaceholderAddress, resolveBuybackConfig } from "../../src/config.ts";
+import { resolveVaultAdapters, isPlaceholderAddress, resolveBuybackConfig, resolveTrackedAssets } from "../../src/config.ts";
+import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } from "../../src/chain/base-rpc-client.ts";
 import { getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation } from "../../src/api/routes/dashboards.ts";
 import { _resetBuybackCacheForTests, indexBuybacks } from "../../src/chain/buyback-logs.ts";
 import { _resetTokenMetricsCacheForTests } from "../../src/chain/token-metrics.ts";
@@ -38,13 +39,33 @@ afterEach(() => {
   for (const k of ENV_KEYS) delete process.env[k];
 });
 
-// A deterministic Base-RPC + price mock. eth_call answers by selector; a symbol
-// in `failSelectors` throws (forced single-leg failure); gecko/yahoo throw when
-// `failPrice` is set so the live-price degrade path is exercised.
+// A deterministic Base-RPC + price mock. eth_call answers by selector — both
+// single calls (token-metrics) and Multicall3 aggregate3 batches (the batched
+// wallet-sleeves path), whose sub-calls are answered by the same selector rules.
+// `failBalanceOfTargets` reverts JUST those targets' balanceOf sub-calls
+// (success:false — an allowFailure revert), `failCall` throws the whole POST,
+// and `failPrice` throws the gecko/yahoo hosts so each degrade path is
+// exercised. Returns a counter of aggregate3 eth_calls served — the batched
+// call count the sleeves tests assert (mirrors api/wallet-balances.test.ts).
 const TOTAL_SUPPLY = "0x18160ddd";
 const BALANCE_OF = "0x70a08231";
 const CONVERT_TO_ASSETS = "0x07a2d13a";
-function mockChain(opts: { totalSupply?: bigint; failPrice?: boolean; failCall?: boolean } = {}) {
+const GET_ETH_BALANCE = "0x4d2301cc"; // Multicall3 getEthBalance(address)
+const AGGREGATE3 = "0x82ad56cb"; // Multicall3 aggregate3(Call3[])
+function mockChain(opts: { totalSupply?: bigint; failPrice?: boolean; failCall?: boolean; failBalanceOfTargets?: string[] } = {}) {
+  const counter = { aggregateCalls: 0 };
+  // One aggregate3 sub-call, answered with the same fixtures the single-call
+  // branch serves; a target in failBalanceOfTargets reverts (success:false).
+  const subResult = (target: string, callData: string): Aggregate3Result => {
+    const sel = callData.slice(0, 10);
+    if (sel === GET_ETH_BALANCE) return { success: true, returnData: word(50_000_000_000_000_000n) };
+    if (sel === BALANCE_OF) {
+      if (opts.failBalanceOfTargets?.some((a) => a.toLowerCase() === target.toLowerCase())) return { success: false, returnData: "0x" };
+      return { success: true, returnData: word(1_000_000n) };
+    }
+    if (sel === CONVERT_TO_ASSETS) return { success: true, returnData: word(4_500_000_000n) };
+    throw new Error(`mockChain: unexpected sub-call selector ${sel}`);
+  };
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
     const u = String(url);
     if (u.includes("geckoterminal.com") || u.includes("finance.yahoo.com")) {
@@ -56,13 +77,20 @@ function mockChain(opts: { totalSupply?: bigint; failPrice?: boolean; failCall?:
     if (opts.failCall) throw new Error("mockChain: forced RPC failure");
     if (body.method === "eth_getBalance") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: word(50_000_000_000_000_000n) }), { status: 200 });
     if (body.method === "eth_call") {
-      const sel = (body.params[0] as { data: string }).data.slice(0, 10);
+      const data = (body.params[0] as { data: string }).data;
+      const sel = data.slice(0, 10);
+      if (sel === AGGREGATE3) {
+        counter.aggregateCalls += 1;
+        const results = decodeAggregate3Calls(data).map((c) => subResult(c.target, c.callData));
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: encodeAggregate3Result(results) }), { status: 200 });
+      }
       if (sel === TOTAL_SUPPLY) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: word(opts.totalSupply ?? 84_102_550_000n) }), { status: 200 });
       if (sel === BALANCE_OF) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: word(1_000_000n) }), { status: 200 });
       if (sel === CONVERT_TO_ASSETS) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: word(4_500_000_000n) }), { status: 200 });
     }
     throw new Error(`mockChain: unexpected ${body.method}`);
   }) as typeof fetch;
+  return counter;
 }
 
 // ── route wiring ────────────────────────────────────────────────────────────
@@ -166,11 +194,15 @@ test("token-metrics: a failed live price leg degrades priceUsd + marketCap to nu
 });
 
 // ── wallet-sleeves ──────────────────────────────────────────────────────────
-test("wallet-sleeves: per-wallet holdings; totalUsd == sum(holdings.valueUsd); placeholder BNKR is never eth_called", async () => {
+test("wallet-sleeves: per-wallet holdings resolve in ≤2 batched eth_calls; totalUsd == sum(holdings.valueUsd); placeholder BNKR is never eth_called", async () => {
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
-  mockChain();
+  const counter = mockChain();
   const r = await getWalletSleeves();
+  // Multicall3 batching (finding 007): ALL sleeves' chain legs land in round-1
+  // balances + round-2 strategy NAV — TWO aggregate3 eth_calls, never a
+  // per-holding fan-out (mirrors the wallet-balances AC3-batch assertion).
+  expect(counter.aggregateCalls).toBe(2);
   expect(r.source).toBe("stub");
   expect(r.wallets).toHaveLength(3);
   const bankr = r.wallets.find((w) => w.type === "primary")!;
@@ -188,7 +220,34 @@ test("wallet-sleeves: per-wallet holdings; totalUsd == sum(holdings.valueUsd); p
   expect(r.wallets.filter((w) => w.type === "strategy").map((w) => w.holdings.map((h) => h.symbol))).toEqual([["ZYFAI-SS1"], ["GIZA-SS1"]]);
 });
 
-test("wallet-sleeves: a forced RPC failure degrades every holding to value null + provenance 'stale' (never fabricated)", async () => {
+test("wallet-sleeves: ONE reverted sub-call degrades ONLY that holding to stale; every other leg stays valued (per-leg honesty in the batch)", async () => {
+  process.env.BASE_RPC_SOURCE = "stub";
+  process.env.PRICE_SOURCE = "stub";
+  // Revert JUST the WETH balanceOf sub-call (an allowFailure success:false —
+  // the batched analogue of a single reverted eth_call).
+  const weth = resolveTrackedAssets().find((a) => a.symbol === "WETH")!.address!;
+  const counter = mockChain({ failBalanceOfTargets: [weth] });
+  const r = await getWalletSleeves();
+  expect(counter.aggregateCalls).toBe(2); // the failure never falls back to per-leg calls
+  const bankr = r.wallets.find((w) => w.type === "primary")!;
+  const wethHolding = bankr.holdings.find((h) => h.symbol === "WETH")!;
+  // The reverted leg is honestly degraded: null values, provenance 'stale'.
+  expect(wethHolding.amount).toBeNull();
+  expect(wethHolding.priceUsd).toBeNull();
+  expect(wethHolding.valueUsd).toBeNull();
+  expect(wethHolding.provenance).toBe("stale");
+  // Every OTHER holding (this sleeve and the strategy sleeves) stays valued.
+  for (const h of r.wallets.flatMap((w) => w.holdings).filter((h) => h.symbol !== "WETH")) {
+    expect(h.provenance).toBe("stub");
+    expect(typeof h.valueUsd).toBe("number");
+  }
+  // The stale flags roll up: the degraded sleeve + the top level, ONLY those.
+  expect(bankr.stale).toBe(true);
+  expect(r.stale).toBe(true);
+  for (const w of r.wallets.filter((w) => w.type === "strategy")) expect(w.stale).toBe(false);
+});
+
+test("wallet-sleeves: a THROWN batch (forced RPC failure) degrades every holding to value null + provenance 'stale' (never fabricated)", async () => {
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
   mockChain({ failCall: true });
@@ -199,6 +258,7 @@ test("wallet-sleeves: a forced RPC failure degrades every holding to value null 
     expect(h.valueUsd).toBeNull();
     expect(h.provenance).toBe("stale");
   }
+  expect(r.stale).toBe(true);
 });
 
 // ── allocation ──────────────────────────────────────────────────────────────

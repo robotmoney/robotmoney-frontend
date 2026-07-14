@@ -13,6 +13,8 @@ const SELECTORS = {
   totalSupply: "0x18160ddd", // totalSupply()
   balanceOf: "0x70a08231", // balanceOf(address)
   convertToAssets: "0x07a2d13a", // convertToAssets(uint256) — ERC-4626 share→assets NAV
+  asset: "0x38d52e0f", // asset() — ERC-4626 underlying token address
+  decimals: "0x313ce567", // decimals() — ERC-20 token decimals
 } as const;
 
 // Left-pad a 20-byte address into a 32-byte (64 hex char) ABI word.
@@ -36,6 +38,8 @@ export const encodeTotalAssetsCall = (): string => encodeCall(SELECTORS.totalAss
 export const encodeTotalSupplyCall = (): string => encodeCall(SELECTORS.totalSupply);
 export const encodeBalanceOfCall = (holder: string): string => encodeCall(SELECTORS.balanceOf, [encodeAddressArg(holder)]);
 export const encodeConvertToAssetsCall = (shares: bigint): string => encodeCall(SELECTORS.convertToAssets, [encodeUint256Arg(shares)]);
+export const encodeAssetCall = (): string => encodeCall(SELECTORS.asset);
+export const encodeDecimalsCall = (): string => encodeCall(SELECTORS.decimals);
 
 // Decode a 32-byte (0x-prefixed hex) eth_call result word to a bigint. An empty
 // `0x` (e.g. a call to an address with no code) decodes to 0n rather than
@@ -422,6 +426,24 @@ export async function callBalanceOf(tokenAddress: string, holder: string, opts: 
 export async function callConvertToAssets(strategyAddress: string, shares: bigint, opts: RpcCallOptions): Promise<bigint> {
   if (shares === 0n) return 0n;
   return decodeUint256(await ethCall(strategyAddress, encodeConvertToAssetsCall(shares), opts));
+}
+
+// ERC-4626 asset(): the vault's underlying token, decoded from the low 20 bytes
+// of the returned word to a 0x-prefixed address. An empty `0x` return (a call to
+// an address with no code) THROWS rather than fabricating the zero address —
+// callers (projects/access/live-source.ts) catch this and degrade the whole
+// vault read to its last-persisted row.
+export async function callAsset(vaultAddress: string, opts: RpcCallOptions): Promise<string> {
+  const raw = (await ethCall(vaultAddress, encodeAssetCall(), opts)).replace(/^0x/, "");
+  if (raw.length < 40) throw new Error(`Base RPC: empty asset() result from ${vaultAddress}`);
+  return "0x" + raw.slice(-40);
+}
+
+// ERC-20 decimals(), decoded to a plain number. An empty `0x` decodes to 0 (see
+// decodeUint256) — callers decide the fallback from context (live-source falls
+// back to 18 on a 0/garbage decode, matching the legacy edge function).
+export async function callDecimals(tokenAddress: string, opts: RpcCallOptions): Promise<number> {
+  return Number(decodeUint256(await ethCall(tokenAddress, encodeDecimalsCall(), opts)));
 }
 
 // Batch many reads into ONE eth_call via Multicall3 aggregate3. Returns one
