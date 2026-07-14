@@ -1,4 +1,7 @@
 import { test, expect, afterEach } from "bun:test";
+import * as fs from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   parseStanceFromBody,
   extractAssistantText,
@@ -81,9 +84,12 @@ test("extractAssistantText returns '' for a transcript with no assistant text (e
 // fails loudly instead. We point OPENCODE_BIN at a nonexistent path so the spawn
 // cannot succeed, proving the contract WITHOUT any live model call.
 const savedBin = process.env.OPENCODE_BIN;
+const savedTimeout = process.env.OPENCODE_TIMEOUT_MS;
 afterEach(() => {
   if (savedBin === undefined) delete process.env.OPENCODE_BIN;
   else process.env.OPENCODE_BIN = savedBin;
+  if (savedTimeout === undefined) delete process.env.OPENCODE_TIMEOUT_MS;
+  else process.env.OPENCODE_TIMEOUT_MS = savedTimeout;
 });
 
 test("authorTake throws (no fallback) when the opencode binary is unavailable", async () => {
@@ -92,4 +98,33 @@ test("authorTake throws (no fallback) when the opencode binary is unavailable", 
   await expect(
     authorTake({ memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1 }, regime, "woon"),
   ).rejects.toThrow(/opencode/i);
+});
+
+// ── timeout bound: a hung zen call throws instead of blocking forever ─────────
+// Points OPENCODE_BIN at a tiny sleeper that ignores its args and sleeps far
+// longer than the (deliberately tiny) OPENCODE_TIMEOUT_MS. The wrapper must throw
+// loudly WELL before the sleeper finishes — proving one stalled member can't
+// freeze the session, and still WITHOUT any template fallback.
+//
+// The sleeper deliberately does NOT `exec`, so `sleep` is a GRANDCHILD that keeps
+// the inherited stdout/stderr pipes open after the shell is killed. This is the
+// worst case: proc.kill() closing the pipes is NOT sufficient. The Promise.race
+// timeout must reject on its own timer, independent of pipe closure — if the
+// throw depended on the pipes closing, this test would hang to the sleeper's 5s.
+test("authorTake throws (no fallback) when the opencode call exceeds OPENCODE_TIMEOUT_MS", async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), "opencode-sleeper-"));
+  const sleeper = join(dir, "opencode-sleeper.sh");
+  await fs.writeFile(sleeper, "#!/bin/sh\nsleep 5\n");
+  await fs.chmod(sleeper, 0o755);
+
+  process.env.OPENCODE_BIN = sleeper;
+  process.env.OPENCODE_TIMEOUT_MS = "300";
+  const regime: RegimeContext = { composite: 0.544, compositePercentile: 0.56, regime: "risk_on" };
+  try {
+    await expect(
+      authorTake({ memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1 }, regime, "woon"),
+    ).rejects.toThrow(/timed out/i);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
