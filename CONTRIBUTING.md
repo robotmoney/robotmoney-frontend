@@ -84,5 +84,6 @@ Preview mode trades data realism for zero setup:
 - Overall architecture (preview mode is §4): [`docs/architecture.md`](docs/architecture.md)
 - Full-stack demo: [`docs/demo-spec.md`](docs/demo-spec.md)
 - Design decisions (incl. why preview mode replaced the "frozen" bundle): [`docs/decisions.md`](docs/decisions.md)
+- Live-data endpoint contract (buybacks / token metrics / sleeves / framework DTOs + provenance rules): [`docs/contract-live-data.md`](docs/contract-live-data.md)
 - Infra/domain map (D13): [`docs/topology.md`](docs/topology.md)
 - Deployment & credentials (GitOps): [`docs/deployment.md`](docs/deployment.md)

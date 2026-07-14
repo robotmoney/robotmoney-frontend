@@ -23,9 +23,12 @@ For the *why* behind each choice, see [decisions.md](./decisions.md).
   history behind `GET /api/dashboards/wallet-balances`), brought into scope the
   same way — see
   [decisions.md §D16](./decisions.md#d16--live-wallet-balances-pipeline-from-base-rpc-supersedes-d1s-wallet-dashboard-exclusion)
-  and §10 below. Buyback stays out of scope (the `/allocation` and `/tokenomics`
-  buyback-history sections remain the static port — no live buyback endpoint or
-  worker exists).
+  and §10 below. Buybacks — the last static remnant of that line — were brought
+  into scope by
+  [decisions.md §D17](./decisions.md#d17--remove-the-last-baked-frontend-data-live-buybacks-token-metrics-sleeves-supersedes-d1s-remaining-exclusions):
+  `GET /api/dashboards/buybacks` is served live from ROBOTMONEY Transfer logs
+  (`backend/src/chain/buyback-logs.ts`, refreshed by the `buybacks.refresh`
+  worker job). Nothing of the original out-of-scope line remains a static port.
 - **No build step.** No bundler, transpiler, or compiler — the browser does all
   the work at runtime; only evergreen browsers are supported.
 - **Consolidate backends onto one Postgres** (Docker for CI/demo; a DO Managed
@@ -37,8 +40,9 @@ For the *why* behind each choice, see [decisions.md](./decisions.md).
 
 Out of scope for v1: the allocation / vault / wallet dashboards, the generative-art
 visualizations, blog/media editorial, and other secondary pages — **except** the
-live vault-economics slice of `/allocation` (§D15) and the live prop-wallet
-valuation feed (§D16).
+live vault-economics slice of `/allocation` (§D15), the live prop-wallet
+valuation feed (§D16), and the live buyback / token-metrics / wallet-sleeves
+feeds that retired the last baked literals (§D17).
 
 ---
 
@@ -209,7 +213,8 @@ A small server on **Bun** using `Bun.serve` — no framework, no build (Bun runs
 TypeScript sources directly).
 
 - `src/api/index.ts` — the `Bun.serve` entry: a `/health` check and the API routes
-  (`comments`, `dashboards`, `committee`), using `postgres` (postgres.js) with raw SQL.
+  (`comments`, `dashboards`, `committee`, `projects`, `admin`), using `postgres`
+  (postgres.js) with raw SQL.
 - **Serves the static frontend too.** When `STATIC_DIR` is set, the same process
   serves `frontend/public` via `Bun.file`, with an `index.html` fallback for SPA
   deep links — so the SPA and its API are **same-origin** (no CORS) with no
@@ -378,8 +383,10 @@ into six independently testable stages — **access → extract → transform �
   `backtest`/`correlations` on `latest`; `fetchLatestResearchSignal(key)`). The
   contract DTOs **`BacktestPayload`** / **`CorrelationsPayload`**
   (`contract/src/dashboards.d.ts`) type those payloads. The HTTP route
-  `api/routes/dashboards.ts` is a thin adapter — it only parses/clamps `range` and
-  calls these. MCP and the frontend stay consumers across the HTTP boundary.
+  `api/routes/dashboards.ts` stays a thin adapter — for this slice it only
+  parses/clamps `range` and calls these (the same file now fronts ~8 dashboard
+  endpoints, incl. the live chain feeds of §10). MCP and the frontend stay
+  consumers across the HTTP boundary.
 
 Three pipelines run through these stages:
 
@@ -399,11 +406,18 @@ Three pipelines run through these stages:
 - **`late-cycle-signals`** — `SPY`, `RSP`, `MNA`, `MARGIN`, `CONF` → index
   concentration / M&A / margin debt / confidence gauges → **`research_signals`**.
 
-The worker runs the whole suite daily at **06:00 UTC** (`analytics.run`, cron
-`0 6 * * *`); the API exposes regime at `/api/dashboards/regime-snapshots?range=`
+The worker runs the whole suite daily at **22:30 UTC** (`analytics.run`, cron
+`30 22 * * *` — after US market close, so the fetched raw is settled end-of-day
+data); the API exposes regime at `/api/dashboards/regime-snapshots?range=`
 and each research signal at `/api/dashboards/research-signals/:key`; the frontend
 renders `/regime` (including the backtest + predictive-correlations panels) and the
-`/research/*` views (mirroring the original site's surfaces). Adding an analytic =
+`/research/*` views (mirroring the original site's surfaces). The regime DTO also
+carries an explicit **staleness block** — `{ asof, serverDate, ageDays, stale,
+thresholdDays }`, computed in `backend/src/analytics/report/regime-projection.ts`
+(zero snapshots counts as stale, #124) — which `/regime` surfaces as a loud
+staleness banner (`frontend/public/views/regime.html`); the demo boot self-heals
+with loud logging if the boot classify leaves a frozen snapshot
+(`scripts/lib/demo-main.ts`). Adding an analytic =
 write a tool + register it + add a job schedule + a route; nothing else changes.
 
 ---
@@ -608,7 +622,14 @@ signing with its own key) and asserts: regime write lands and reads back; member
 signatures verify; a no-show renders **absent**, not fabricated; out-of-window POSTs
 are rejected; cross-role writes are denied; a published session renders the *real*
 takes. The demo is the same harness at scale. Hermetic: a missing dependency fails
-the run rather than silently skipping.
+the run rather than silently skipping. Real-LLM member takes are a separate
+opt-in: `COMMITTEE_REAL_INFERENCE=1` (exercised by the nightly
+`.github/workflows/committee-opencode-nightly.yml`, never per-PR) swaps the
+templated take for a keyless opencode-zen call that is **time-bounded**
+(`OPENCODE_TIMEOUT_MS`, default 120s — a hung inference kills the subprocess
+instead of freezing the session), and member runs are settled rather than
+`Promise.all`'d, so a per-member inference/session failure renders that member
+**absent** instead of failing the whole session (#122, `mcp/src/e2e.ts`).
 
 ### 9.8 Phase-5 build order & reconciliation
 
@@ -640,14 +661,30 @@ brought the `/allocation` page's vault-economics slice into scope, backed by a
 real Base (chainId `8453`) JSON-RPC read pipeline — the first exception to the
 allocation/vault/wallet out-of-scope line (§1). Decision
 [D16](./decisions.md#d16--live-wallet-balances-pipeline-from-base-rpc-supersedes-d1s-wallet-dashboard-exclusion)
-brought the prop-wallet valuation feed into scope the same way (§10.1). Buyback
-remains the only unexcepted half of the original out-of-scope line.
+brought the prop-wallet valuation feed into scope the same way (§10.1). Decision
+[D17](./decisions.md#d17--remove-the-last-baked-frontend-data-live-buybacks-token-metrics-sleeves-supersedes-d1s-remaining-exclusions)
+(issue #111) then retired the last baked frontend literals entirely: buybacks
+(`GET /api/dashboards/buybacks` — ROBOTMONEY Transfer-log reads in
+`backend/src/chain/buyback-logs.ts`, refreshed by the `buybacks.refresh` job,
+cron `15 */6 * * *`, persisted via migration `0015_buyback_swaps.sql`), token
+metrics (`/token-metrics`), per-wallet sleeves (`/wallet-sleeves`), and the
+`allocation_framework` read are all live endpoints now — nothing of the
+original out-of-scope line remains static. The shared endpoint contract (DTOs,
+provenance fields, degrade rules) those feeds were built against is
+[contract-live-data.md](./contract-live-data.md).
 
-- **`backend/src/chain/base-rpc-client.ts`** — a minimal `eth_call` client: no
+- **`backend/src/chain/base-rpc-client.ts`** — a minimal JSON-RPC client and,
+  since D17, the **single RPC transport** for every chain read in the repo: no
   external chain SDK (ethers/viem), just `fetch` + hand-rolled 4-byte selector
-  encoding for the three read-only calls this feature needs (`totalAssets()`,
-  `totalSupply()`, `balanceOf(address)`) and uint256 decoding. Keeps the
-  buildless-backend dependency footprint (§2) unchanged.
+  encoding and uint256 decoding for the read-only calls the dashboards need
+  (`totalAssets()`, `totalSupply()`, `balanceOf(address)`, …). Two hardening
+  layers (#119): `multicall3Aggregate3()` batches many sub-calls into one
+  `eth_call` via Multicall3, and transient upstream statuses (429/502/503/504)
+  get a bounded retry-with-backoff (honoring `Retry-After`) — a genuine failure
+  still degrades honestly, never masked. Consumers include
+  `vault-economics.ts`, `wallet-balances.ts`, `buyback-logs.ts`,
+  `token-metrics.ts`, and `wallet-sleeves.ts`. Keeps the buildless-backend
+  dependency footprint (§2) unchanged.
 - **`backend/src/chain/vault-economics.ts`** — reads the vault's
   `totalAssets()`/`totalSupply()` (→ `sharePrice = totalAssets / totalSupply`,
   `null` iff `totalSupply = 0`), the vault's idle USDC balance
@@ -661,9 +698,11 @@ remains the only unexcepted half of the original out-of-scope line.
   `frontend/public/views/docs/skill/installation.html` and `skills.html`) and
   the three adapter entries, all overridable via env (`VAULT_ADDRESS`,
   `USDC_ADDRESS`, `ADAPTER_MORPHO_ADDRESS`, `ADAPTER_AAVE_ADDRESS`,
-  `ADAPTER_COMPOUND_ADDRESS`). The adapter contract addresses are not
-  published anywhere yet, so their defaults are non-functional placeholders
-  pending real values.
+  `ADAPTER_COMPOUND_ADDRESS`). Since #112 the three adapter entries ship with
+  **real Base mainnet defaults** (`config.ts`), so a stock deploy is
+  `configured: true` out of the box; overriding one with a reserved
+  placeholder-form address (`PLACEHOLDER_ADDRESS_RE`) flips it back to
+  `configured: false`.
 - **RPC provenance + per-adapter `configured` (issue #50).** `config.ts` exports
   `resolveBaseRpcSource()` (env `BASE_RPC_SOURCE`, fail-closed on an
   unrecognized value; unset/`live` → `"live"`, `"stub"` → `"stub"`) and
@@ -705,17 +744,27 @@ and the static 99-day `walletPerfView` series (`/performance`) that used to be
 hardcoded in `alpine/views.js`.
 
 - **`backend/src/chain/wallet-balances.ts`** — values every configured prop
-  wallet's tracked assets on demand: ERC-20 balances and native ETH via
-  `base-rpc-client.ts`, ERC-4626 strategy shares via `convertToAssets()`, and an
-  off-chain SP500 config size, each priced through the existing keyless
+  wallet's tracked assets **on the worker schedule, never on the request path**
+  (#119): the per-minute `wallet.sample_balances` job
+  (`backend/src/worker/handlers/wallet.ts`, cron `* * * * *` in `db/seed.ts`)
+  drives `sampleWalletBalances()`, which reads ERC-20 balances and native ETH
+  via `base-rpc-client.ts`, ERC-4626 strategy shares via `convertToAssets()`,
+  and an off-chain SP500 config size, each priced through the existing keyless
   `token-prices.ts` (pinned $1 for USDC, GeckoTerminal/Yahoo otherwise) — no new
   chain SDK, same buildless-dependency discipline as §10's vault-economics
-  client. Results are cached in-process for 30s.
-- **Per-holding, not whole-payload, degrade.** Each tracked asset is valued
-  independently: if its live chain read or price fetch fails, only *that*
-  holding falls back to its last-persisted Postgres sample and is marked
-  `provenance: "stale"` — the other holdings and the endpoint as a whole are
-  unaffected. `provenance` is one of `live` (real chain + price read), `stub`
+  client. A 30s in-process cache on the **sampler** keeps back-to-back worker
+  runs cheap; it plays no part in serving requests.
+- **Per-holding degrade, batched reads.** All on-chain amounts of a sample are
+  fetched in at most **two `multicall3Aggregate3()` batches** (one
+  `balanceOf`/`getEthBalance` sub-call per asset × wallet, then one
+  `convertToAssets()` round for strategy NAVs), so a full sample costs ≤2 RPC
+  calls instead of the old ~23-call fan-out the public Base node 429'd (#119).
+  Failure isolation is layered: a reverted sub-call inside a successful batch,
+  or a failed price fetch, degrades only *that* holding to its last-persisted
+  Postgres sample (`provenance: "stale"`); a whole-batch RPC failure degrades
+  **all chain-read legs** of that sample together to their last-persisted
+  values (the config-sized SP500 holding is never a chain read and is
+  unaffected). `provenance` is one of `live` (real chain + price read), `stub`
   (hermetic `BASE_RPC_SOURCE`/`PRICE_SOURCE=stub` fixtures), `stale` (a failed
   live leg), or `seed` (a pre-launch history row backfilled from the ported
   baked constants — never presented as a live sample; see
@@ -728,7 +777,12 @@ hardcoded in `alpine/views.js`.
   forward.
 - **`GET /api/dashboards/wallet-balances`** (`ROUTES.dashboards.walletBalances`,
   `backend/src/api/routes/dashboards.ts`) returns
-  `{ asOf, totalUsd, source, priceSource, holdings, history }`. The frontend
+  `{ asOf, totalUsd, source, priceSource, holdings, history }`, served **purely
+  from the last persisted per-symbol samples** via
+  `fetchPersistedWalletBalances()` — zero RPC on the request path, so a client
+  request can never hit the rate-limited public node; per-holding
+  value/provenance reflects the last scheduled sample exactly, and a symbol
+  with no sample yet is `stale` with null values, never a 5xx. The frontend
   (`frontend/public/assets/js/app/alpine/views.js`) fetches it for both the
   `/allocation` hero total and the `/performance` wallet-performance chart,
   replacing the retired static figures.
