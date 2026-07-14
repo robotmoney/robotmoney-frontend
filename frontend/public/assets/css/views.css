@@ -392,3 +392,86 @@
 .alloc-foot a { color: var(--color-accent); text-decoration: none; }
 .alloc-foot a:hover { text-decoration: underline; }
 @media (min-width: 768px) { .alloc-charts { grid-template-columns: 1fr 1fr; } }
+
+/* ── Admin task-queue dashboard (/admin) ─────────────────────────────────────
+   A password-gated operator view over the Postgres task queue. Reuses the shared
+   .rm-table/.rm-eyebrow component classes; these .adm-* rules cover the page
+   shell, login card, status tiles/badges, clickable rows, and the per-run <pre>
+   log blocks (job_runs.output/error). */
+.adm { padding: 9rem 1.5rem 6rem; }
+.adm-head { margin-bottom: 2rem; }
+.adm-title { font-size: 2.25rem; letter-spacing: -0.02em; margin: 0.5rem 0 0; }
+.adm-lede { color: var(--color-text-muted); font-size: 0.9rem; margin: 0.75rem 0 0; max-width: 44rem; line-height: 1.6; }
+.adm-lede code { font-family: var(--font-mono); color: var(--color-accent); }
+.adm-dim { color: var(--color-text-dim); }
+.adm-msg { margin-top: 0.75rem; }
+
+/* Login card */
+.adm-login {
+  max-width: 30rem; margin: 2rem 0; padding: 1.5rem;
+  border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface);
+}
+.adm-login__title { font-size: 1.1rem; margin: 0 0 0.5rem; }
+.adm-login__hint { color: var(--color-text-muted); font-size: 0.8rem; margin: 0 0 1rem; line-height: 1.5; }
+.adm-login__form { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.adm-input {
+  flex: 1 1 12rem; padding: 0.55rem 0.75rem; font-family: var(--font-mono); font-size: 0.85rem;
+  color: var(--color-text); background: var(--color-deep);
+  border: 1px solid var(--color-border); border-radius: 6px;
+}
+.adm-input:focus { outline: none; border-color: var(--color-accent); }
+
+/* Buttons */
+.adm-btn {
+  padding: 0.5rem 1rem; font-family: var(--font-mono); font-size: 0.78rem; cursor: pointer;
+  color: var(--color-deep); background: var(--color-accent);
+  border: 1px solid var(--color-accent); border-radius: 6px;
+}
+.adm-btn:hover { opacity: 0.9; }
+.adm-btn--ghost { color: var(--color-text-muted); background: transparent; border-color: var(--color-border); }
+.adm-btn--ghost:hover { color: var(--color-text); border-color: var(--color-text-muted); opacity: 1; }
+
+/* Toolbar */
+.adm-toolbar { display: flex; align-items: center; gap: 0.75rem; margin: 0.5rem 0 1.5rem; }
+.adm-toolbar__spacer { flex: 1 1 auto; }
+
+/* Status tiles + badges */
+.adm-tiles { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 2rem; }
+.adm-tile {
+  display: flex; align-items: center; gap: 0.6rem; padding: 0.7rem 1rem;
+  border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface);
+}
+.adm-tile__count { font-family: var(--font-mono); font-weight: 700; font-size: 1.1rem; }
+.adm-badge {
+  display: inline-block; padding: 0.1rem 0.5rem; border-radius: 4px;
+  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
+  border: 1px solid var(--color-border);
+}
+.adm-badge--ok { color: var(--color-accent); border-color: rgba(0, 229, 255, 0.4); background: rgba(0, 229, 255, 0.08); }
+.adm-badge--err { color: var(--color-warn); border-color: rgba(255, 102, 68, 0.4); background: rgba(255, 102, 68, 0.08); }
+.adm-badge--run { color: var(--color-warm); border-color: rgba(232, 166, 64, 0.4); background: rgba(232, 166, 64, 0.08); }
+.adm-badge--idle { color: var(--color-text-muted); }
+
+/* Section headings + tables */
+.adm-h2 { font-size: 1rem; font-family: var(--font-mono); color: var(--color-text-muted); margin: 2rem 0 0.75rem; }
+.adm-h2--flush { margin-top: 0; }
+.adm-table { font-family: var(--font-mono); }
+.adm-table .adm-err { max-width: 24rem; white-space: normal; word-break: break-word; color: var(--color-text-muted); }
+.adm-row { cursor: pointer; }
+.adm-row:hover td { background: var(--color-surface-light); }
+
+/* Job detail + per-run log <pre> blocks */
+.adm-detail {
+  margin: 1.5rem 0; padding: 1rem 1.25rem;
+  border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface);
+}
+.adm-detail__head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.adm-run { margin-top: 1rem; }
+.adm-run__meta { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; font-family: var(--font-mono); font-size: 0.75rem; margin-bottom: 0.4rem; }
+.adm-log {
+  margin: 0.25rem 0 0; padding: 0.75rem 1rem; overflow-x: auto;
+  font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.5; white-space: pre;
+  color: var(--color-text); background: var(--color-deep);
+  border: 1px solid var(--color-border); border-radius: 6px;
+}
+.adm-log--err { color: var(--color-warn); border-color: rgba(255, 102, 68, 0.3); }

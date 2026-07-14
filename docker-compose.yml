@@ -37,6 +37,10 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       RM_ENV: ${RM_ENV:-demo}
       API_PORT: "8787"
+      # Guards the privileged surface incl. the /admin task-queue dashboard
+      # (X-Admin-Token). The api process is the one that authenticates HTTP; the
+      # demo sets a random per-launch value (worker doesn't serve the API).
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       # Serve the static frontend from this same process — no Caddy/nginx.
       STATIC_DIR: /srv/frontend
     ports:
