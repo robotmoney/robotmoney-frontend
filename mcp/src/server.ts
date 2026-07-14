@@ -200,6 +200,7 @@ async function resolveBearer(token: string): Promise<{ memberId: string; memberT
 
 Bun.serve({
   port: PORT,
+  idleTimeout: Number(process.env.MCP_IDLE_TIMEOUT_SECONDS ?? 10),
   async fetch(req) {
     const url = new URL(req.url);
 
