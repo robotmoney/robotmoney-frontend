@@ -3,6 +3,7 @@ export const HOME_VIEW = `${VIEW_DIR}/home.html`;
 export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
 export const PERFORMANCE_VIEW = `${VIEW_DIR}/performance.html`;
 export const PROJECTS_VIEW = `${VIEW_DIR}/projects.html`;
+export const ADMIN_VIEW = `${VIEW_DIR}/admin.html`;
 export const NOT_FOUND_VIEW = `${VIEW_DIR}/not-found.html`;
 
 /** @type {Record<string, string>} */
@@ -13,6 +14,9 @@ const ROUTES = {
   "/performance": PERFORMANCE_VIEW,
   "/allocation2": PERFORMANCE_VIEW, // legacy redirect
   "/projects": PROJECTS_VIEW,
+  // Admin task-queue dashboard. Explicit for clarity; the catch-all below already
+  // resolves /admin → /views/admin.html. Intentionally NOT in the public nav.
+  "/admin": ADMIN_VIEW,
 };
 
 /** @param {string} pathname */

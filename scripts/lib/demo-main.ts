@@ -101,6 +101,17 @@ const mcpUrl = `http://127.0.0.1:${mcpPort}`;
 const composeFiles = "docker-compose.yml:docker-compose.demo.yml";
 const researchKeys = ["channel-divergence", "late-cycle-signals"];
 
+// Admin dashboard password (/admin — the task-queue jobs dashboard, guarded by
+// ADMIN_TOKEN). A FRESH random secret every launch, set on the environment HERE —
+// before dockerEnv/compose interpolation and before any child process or the
+// dynamically-imported mcp/src/e2e.ts reads it — so the api container and every
+// internal admin caller (mcp e2e admin(), onboarding activate, rmpc-release-e2e)
+// authenticate with the SAME value. It is printed ONLY to the interactive TUI
+// (see render()): never passed to log(), never serialized by writeStateFile()
+// (demo-state.json), and never printed in the plain non-TUI READY block.
+const adminPassword = crypto.randomUUID().replace(/-/g, "").slice(0, 20);
+process.env.ADMIN_TOKEN = adminPassword;
+
 // Data-path resolution (issue #50): DEFAULT is production parity (live Base
 // mainnet RPC + live analytics + floor seed); DEMO_HERMETIC=1 is the explicit
 // opt-in for the stubbed/offline path (the ONLY mode CI runs — e2e.yml sets it,
@@ -116,6 +127,10 @@ const dockerEnv: Record<string, string> = {
   COMPOSE_FILE: composeFiles,
   DEMO_PROJECT: project,
   DATABASE_URL: databaseUrl,
+  // Guards the /admin task-queue dashboard (X-Admin-Token). Passed to the api
+  // container via docker-compose's `ADMIN_TOKEN: ${ADMIN_TOKEN:-}` line. Random
+  // per launch; the value is shown ONLY in the interactive TUI (render()).
+  ADMIN_TOKEN: adminPassword,
   WEB_PORT: String(apiPort),
   MCP_PORT: String(mcpPort),
   POSTGRES_PORT: String(pgPort),
@@ -199,6 +214,10 @@ const state: DemoState = {
     { name: "Regime", url: `${backendUrl}/regime` },
     { name: "Committee", url: `${backendUrl}/committee` },
     ...researchKeys.map((k) => ({ name: "Research", url: `${backendUrl}/research/${k}` })),
+    // Admin task-queue jobs dashboard. URL only here (safe to appear anywhere);
+    // the password is rendered on its own line in the TUI Services pane, never
+    // stored in state.services.
+    { name: "Admin", url: `${backendUrl}/admin` },
     { name: "MCP", url: `${mcpUrl}/health` },
   ],
   containers: [
@@ -718,6 +737,10 @@ function render(): string[] {
   // Services pane
   lines.push(hr(W, "Services"));
   for (const s of state.services) lines.push(`  ${color("36", s.name.padEnd(10))} ${s.url}`);
+  // The admin dashboard password — shown ONLY here in the interactive TUI (never
+  // logged, never in demo-state.json, never in the plain READY block). Sign in at
+  // the /admin URL above with this value.
+  lines.push(`  ${color("33", "Admin pass".padEnd(10))} ${color("1;33", adminPassword)}`);
 
   // Startup pane
   lines.push(hr(W, healthChecking ? `Startup ${spinner(frame)}` : "Startup"));
@@ -916,6 +939,8 @@ async function main(): Promise<void> {
     console.log(`  Regime:     ${backendUrl}/regime`);
     console.log(`  Committee:  ${backendUrl}/committee`);
     for (const k of researchKeys) console.log(`  Research:   ${backendUrl}/research/${k}`);
+    // URL only — the admin password is shown in the interactive TUI, never here.
+    console.log(`  Admin:      ${backendUrl}/admin  (password shown in the interactive TUI only)`);
     console.log(`  MCP:        ${mcpUrl}/health`);
     console.log(`  State file: ${stateFile}`);
     console.log(`  Log file:   ${logFile}`);
@@ -957,6 +982,32 @@ async function main(): Promise<void> {
   await e2e.admin("reset");
   const today = new Date().toISOString().slice(0, 10);
   await e2e.admin("regime", { asof: today });
+
+  // Self-heal: verify the boot regime run actually landed a FRESH snapshot before
+  // handing off to the worker's recurring cron. A transient live-fetch failure (or
+  // a throw) can leave the served snapshot frozen at the seed floor, which the
+  // /regime charts would then render silently as if current. The API now reports
+  // `staleness`; retry the run a few times, and if it's still stale, log LOUDLY so
+  // the operator sees it instead of shipping a frozen dashboard.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let staleness: { stale?: boolean; asof?: string | null; ageDays?: number | null } | null = null;
+    try {
+      const snap = await fetch(`${backendUrl}/api/dashboards/regime-snapshots?range=1`).then((r) => (r.ok ? r.json() : null));
+      staleness = snap?.staleness ?? null;
+    } catch (err) {
+      log(`regime freshness check failed (attempt ${attempt}/3): ${err instanceof Error ? err.message : err}`);
+    }
+    if (staleness && !staleness.stale) {
+      log(`regime snapshot fresh (asof ${staleness.asof}, ${staleness.ageDays}d)`);
+      break;
+    }
+    if (attempt < 3) {
+      log(`regime snapshot STALE (asof ${staleness?.asof ?? "none"}) — re-running analytics (attempt ${attempt}/3)`);
+      await e2e.admin("regime", { asof: today }).catch((err: unknown) => log(`regime re-run failed: ${err instanceof Error ? err.message : err}`));
+    } else {
+      log(`⚠ regime snapshot STILL STALE after 3 attempts (asof ${staleness?.asof ?? "none"}) — live fetchers may be blocked in this environment; the /regime charts will show a staleness banner until the worker lands a fresh run`);
+    }
+  }
 
   // Each subject runs on its OWN schedule (own interval + a stagger offset) so woon
   // and mav appear in separate panes on separate cadences. Execution is SERIALIZED

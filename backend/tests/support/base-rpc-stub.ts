@@ -16,6 +16,12 @@
 // recognizable ($84,320.12 TVL) and deterministic. This file is NOT a test
 // (no .test.ts suffix) and never runs under `bun test`; it is launched as a
 // container service by docker-compose.demo.yml.
+import {
+  decodeAggregate3Calls,
+  encodeAggregate3Result,
+  type Aggregate3Result,
+} from "../../src/chain/base-rpc-client.ts";
+
 const PORT = Number(process.env.STUB_PORT ?? 8645);
 
 // eth_call selectors (first 4 bytes of keccak256(signature)); see base-rpc-client.ts.
@@ -23,6 +29,8 @@ const TOTAL_ASSETS = "0x01e1d114"; // totalAssets()
 const TOTAL_SUPPLY = "0x18160ddd"; // totalSupply()
 const BALANCE_OF = "0x70a08231"; // balanceOf(address)
 const CONVERT_TO_ASSETS = "0x07a2d13a"; // convertToAssets(uint256) — ERC-4626 strategy NAV (issue #84)
+const AGGREGATE3 = "0x82ad56cb"; // Multicall3 aggregate3(Call3[]) — batched wallet-balances reads
+const GET_ETH_BALANCE = "0x4d2301cc"; // Multicall3 getEthBalance(address) — native ETH in a batch
 
 // config.ts default vault address (the demo runs with no VAULT_ADDRESS override).
 // Adapter reads (any other `to`) return a distinct per-adapter balance.
@@ -75,7 +83,24 @@ Bun.serve({
     }
     ethCallCount += 1;
     const { to, data } = body.params[0] as { to: string; data: string };
-    seen.add(`${to.toLowerCase()}:${data.slice(0, 10)}`);
+    const selector = data.slice(0, 10);
+    // Multicall3 aggregate3 (issue: 429-storm fix): the wallet-balances feed now
+    // batches every prop-wallet read into ONE eth_call. Decode the Call3[], answer
+    // each sub-call with the SAME resultFor() fixtures (native getEthBalance gets
+    // the fixed 0.05 ETH), and re-encode a success:true aggregate3 result. Counted
+    // as the ONE eth_call it is (ethCallCount already incremented) so the demo RPC
+    // guard's `ethCall > 0` proof holds; each sub-call's to:selector is recorded.
+    if (selector === AGGREGATE3) {
+      const calls = decodeAggregate3Calls(data);
+      const results: Aggregate3Result[] = calls.map((c) => {
+        const sel = c.callData.slice(0, 10);
+        seen.add(`${c.target.toLowerCase()}:${sel}`);
+        if (sel === GET_ETH_BALANCE) return { success: true, returnData: word(50_000_000_000_000_000n) };
+        return { success: true, returnData: resultFor(c.target, c.callData) };
+      });
+      return Response.json({ jsonrpc: "2.0", id: body.id ?? 1, result: encodeAggregate3Result(results) });
+    }
+    seen.add(`${to.toLowerCase()}:${selector}`);
     return Response.json({ jsonrpc: "2.0", id: body.id ?? 1, result: resultFor(to, data) });
   },
 });

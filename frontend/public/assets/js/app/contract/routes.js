@@ -28,6 +28,10 @@ export const ROUTES = {
     researchSignal: "/api/dashboards/research-signals/:key", // GET
     vaultEconomics: "/api/dashboards/vault-economics", // GET
     walletBalances: "/api/dashboards/wallet-balances", // GET — live prop-wallet valuation (#84)
+    buybacks: "/api/dashboards/buybacks", // GET → token buyback history
+    tokenMetrics: "/api/dashboards/token-metrics", // GET → ROBOTMONEY price/supply/marketCap + fee split
+    walletSleeves: "/api/dashboards/wallet-sleeves", // GET → per-prop-wallet holdings breakdown
+    allocation: "/api/dashboards/allocation", // GET → admin/committee-managed strategy+bucket target weights
   },
 
   projects: {
@@ -45,5 +49,12 @@ export const ROUTES = {
     brief: "/api/committee/brief", // GET ?date=&subject=
     apply: "/api/committee/apply", // POST
     submit: "/api/committee/submit", // POST
+  },
+
+  admin: {
+    auth: "/api/admin/auth", // POST — verify the admin password → { ok: true }
+    jobs: "/api/admin/jobs", // GET ?limit= — task-queue jobs + schedules + status summary
+    job: "/api/admin/jobs/:id", // GET — one job + its recent runs (the logs)
+    runs: "/api/admin/runs", // GET ?kind=&status=&limit= — recent job_runs feed (the logs)
   },
 };

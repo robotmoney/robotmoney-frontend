@@ -35,6 +35,13 @@ const inferenceModel = () => process.env.OPENCODE_MODEL ?? DEFAULT_INFERENCE_MOD
 // The opencode binary name/path. Resolved at call time so a unit test can point
 // it at a nonexistent path to prove the loud-throw contract without a live call.
 const opencodeBin = () => process.env.OPENCODE_BIN ?? "opencode";
+// Hard ceiling on a single keyless opencode-zen call (default 120s). The free zen
+// tier is slow AND can hang indefinitely; without a bound one stalled member call
+// would block the whole committee session forever. Resolved at call time (not
+// module load) so the nightly job / an operator / a unit test can override via
+// OPENCODE_TIMEOUT_MS without a code change. On expiry we kill the subprocess and
+// throw loudly — still NO template fallback.
+const timeoutMs = () => Number(process.env.OPENCODE_TIMEOUT_MS ?? 120000);
 
 export const STANCE_VALUES = ["bullish", "constructive", "neutral", "cautious", "bearish"] as const;
 export type Stance = (typeof STANCE_VALUES)[number];
@@ -172,11 +179,36 @@ async function runOpencode(prompt: string): Promise<string> {
         `Committee takes require a working keyless opencode CLI; there is NO template fallback in this path.`,
     );
   }
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout as ReadableStream).text(),
-    new Response(proc.stderr as ReadableStream).text(),
-    proc.exited,
-  ]);
+  // Bound the call: a hung free-tier zen run would otherwise block forever (and
+  // freeze the whole committee session). We RACE the read work against a timeout
+  // that rejects DIRECTLY — so the loud throw fires even if proc.kill() fails to
+  // close the stdout/stderr pipes (e.g. a killed opencode leaves a child holding
+  // them open). Never a template fallback.
+  const ms = timeoutMs();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      try { proc.kill(); } catch { /* best-effort */ }
+      reject(new Error(
+        `opencode inference timed out after ${ms}ms for model '${model}': ` +
+          `the keyless zen model did not respond; NO template fallback. ` +
+          `Override the bound via OPENCODE_TIMEOUT_MS.`,
+      ));
+    }, ms);
+  });
+  let stdout: string, stderr: string, exitCode: number;
+  try {
+    [stdout, stderr, exitCode] = await Promise.race([
+      Promise.all([
+        new Response(proc.stdout as ReadableStream).text(),
+        new Response(proc.stderr as ReadableStream).text(),
+        proc.exited,
+      ]),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
   const text = extractAssistantText(stdout);
   if (!text) {
     throw new Error(

@@ -269,6 +269,10 @@ export function registerViews(Alpine) {
     error: null,
     latest: null,
     history: [],
+    // Freshness of the served snapshot (backend computes it). When `stale`, the
+    // analytics pipeline isn't refreshing in this deployment and the charts below
+    // are frozen — surfaced as a loud banner rather than served silently.
+    staleness: null,
     // History-chart overlay toggles. composite/macro/on-chain/factor are ALWAYS
     // drawn (no per-series toggle, matching the source HistoryChart); only the
     // regime bands + the S&P 500 / ETH price overlays toggle.
@@ -281,6 +285,7 @@ export function registerViews(Alpine) {
         const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: 4000 });
         this.latest = data.latest;
         this.history = data.history || [];
+        this.staleness = data.staleness || null;
         this.loading = false;
         this.$nextTick(() => { this.drawHistory(); this.drawBacktests(); });
       } catch (e) {
@@ -305,6 +310,15 @@ export function registerViews(Alpine) {
     indicatorsIn(panel) {
       const inds = this.latest?.indicators;
       return Array.isArray(inds) ? inds.filter((i) => i.panel === panel) : [];
+    },
+
+    // ── freshness ─────────────────────────────────────────────────────────────
+    isStale() { return !!(this.staleness && this.staleness.stale); },
+    staleMessage() {
+      const s = this.staleness;
+      if (!s) return "";
+      if (s.ageDays == null || s.asof == null) return "No regime data is available — the analytics pipeline has not produced any snapshots in this deployment.";
+      return `Regime data is ${s.ageDays} day${s.ageDays === 1 ? "" : "s"} stale (latest ${s.asof}). The analytics pipeline is not refreshing in this deployment — the charts below are frozen and may not reflect current market data.`;
     },
 
     // ── formatting ──────────────────────────────────────────────────────────
@@ -707,21 +721,47 @@ export function registerViews(Alpine) {
     destroy() { this._charts.forEach((item) => item.destroy()); this._charts = []; },
   }));
 
-  // ── Tokenomics fee distribution (pie) ─────────────────────────────────────
-  // Static Chart.js pie matching the original FeePieChart. The custom legend
-  // below the chart stays in the markup, so the chart's own legend is off.
+  // ── Tokenomics fee distribution (pie + legend + breakdown cards) ──────────
+  // The fee split is LIVE from GET /api/dashboards/token-metrics (`feeSplit`) —
+  // a fixed Clanker-pool config constant surfaced through the API so the
+  // frontend stops baking the Protocol/Bankr/Clanker % literals. This factory
+  // backs both the tokenomics fee section (pie + custom legend + breakdown
+  // cards) and the home page fee-routing card (Creator share vs Interface &
+  // Protocol). Colours are presentation-only, keyed by the split label; the
+  // percentages themselves are never fabricated — a failed fetch degrades to
+  // "—" and an undrawn pie rather than a baked default.
+  const FEE_COLOR = { Protocol: SERIES.emerald, Bankr: SERIES.amber, Clanker: PALETTE.purple };
   Alpine.data("feeChart", () => ({
     _chart: null,
-    init() { this.$nextTick(() => this.draw()); },
+    metrics: null,
+    async init() {
+      try { this.metrics = await api.get(ROUTES.dashboards.tokenMetrics); }
+      catch (e) { this.metrics = null; }
+      this.$nextTick(() => this.draw());
+    },
+    feeSplit() { return this.metrics?.feeSplit || []; },
+    // Legend/card cell text: "Protocol (57%)" and the bare "57%".
+    feeLegend(i) { const f = this.feeSplit()[i]; return f ? `${f.label} (${f.pct}%)` : "—"; },
+    feePctLabel(i) { const f = this.feeSplit()[i]; return f ? `${f.pct}%` : "—"; },
+    feeColor(i) { const f = this.feeSplit()[i]; return (f && FEE_COLOR[f.label]) || PALETTE.textMuted; },
+    // Home fee-routing card: Creator share = the Protocol leg; Interface &
+    // Protocol = every other leg (Bankr + Clanker) summed.
+    feeCreatorPct() { const fs = this.feeSplit(); return fs.length ? fs[0].pct : null; },
+    feeInterfacePct() { const fs = this.feeSplit(); return fs.length ? fs.slice(1).reduce((a, f) => a + f.pct, 0) : null; },
+    pctLabel(v) { return v == null ? "—" : `${v}%`; },
+    pctWidth(v) { return `width:${v == null ? 0 : v}%;`; },
     draw() {
       const canvas = this.$refs.fee;
       if (!canvas || !window.Chart) return;
+      const fs = this.feeSplit();
       this._chart?.destroy();
+      // Honest degrade: no live split → leave the canvas empty, never a baked pie.
+      if (!fs.length) { this._chart = null; return; }
       this._chart = new window.Chart(canvas, {
         type: "pie",
         data: {
-          labels: ["Protocol (57%)", "Bankr (40%)", "Clanker (3%)"],
-          datasets: [{ data: [57, 40, 3], backgroundColor: [SERIES.emerald, SERIES.amber, PALETTE.purple], borderColor: PALETTE.deep, borderWidth: 2 }],
+          labels: fs.map((f) => `${f.label} (${f.pct}%)`),
+          datasets: [{ data: fs.map((f) => f.pct), backgroundColor: fs.map((f) => FEE_COLOR[f.label] || PALETTE.textMuted), borderColor: PALETTE.deep, borderWidth: 2 }],
         },
         options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } } },
       });
@@ -729,15 +769,63 @@ export function registerViews(Alpine) {
     destroy() { this._chart?.destroy(); this._chart = null; },
   }));
 
+  // ── Buyback summary (tokenomics page) ─────────────────────────────────────
+  // Compact live view of GET /api/dashboards/buybacks for the tokenomics
+  // "Buyback History" card (Date / WETH / Value / $RM + total). Same endpoint
+  // and formatters as the full allocation table; a stub feed is flagged and a
+  // failed fetch degrades to an empty state — never the old baked rows.
+  Alpine.data("buybackSummary", () => ({
+    loading: true,
+    buybacks: null,
+    async init() {
+      try { this.buybacks = await api.get(ROUTES.dashboards.buybacks); }
+      catch (e) { this.buybacks = null; }
+      this.loading = false;
+    },
+    rows() { return this.buybacks?.rows || []; },
+    totals() { return this.buybacks?.totals || null; },
+    nonLive() { return this.buybacks?.source === "stub"; },
+    fmtWeth(v) { return v == null ? "—" : Number(v).toFixed(4); },
+    fmtWethLabel(v) { return v == null ? "—" : Number(v).toFixed(6) + " WETH"; },
+    fmtUsd0(v) { return v == null ? "—" : "$" + Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 }); },
+    fmtRmoney(v) { return v == null ? "—" : (Number(v) / 1e6).toFixed(2) + "M"; },
+  }));
+
   // ── Asset Allocation ───────────────────────────────────────────────────────
-  // Strategy/bucket/wallet pies are static Chart.js pies baked from the
-  // allocation spec (reconciled against public/data snapshots) — unchanged,
-  // out of scope for issue #40. The vault economics section (7-Day APY, vault
-  // pie, holdings table, Total Vault Assets) is LIVE: fetched from
-  // GET /api/dashboards/vault-economics on init, then the pies are (re)drawn
-  // once the fetch settles so the vault pie reflects real per-adapter
-  // balances. The three BIG pies (strategy, vault, wallet) render % datalabels
-  // via a small inline plugin; the four MINI bucket pies render none.
+  // EVERY section is now data-driven — no baked DATA literals remain:
+  //   • Strategy pie + 4 mini bucket pies + bucket-card target weights come
+  //     from GET /api/dashboards/allocation (admin/committee-managed target
+  //     weights seeded from committee/allocation.json). Slice/legend COLOURS
+  //     are presentation-only and stay client-side (the DTO carries no colour).
+  //   • Vault pie + holdings table + TVL come from GET /api/dashboards/vault-economics.
+  //   • Wallet pie + aggregate holdings table come from the per-asset legs of
+  //     GET /api/dashboards/wallet-balances (`holdings[]`).
+  //   • The 3 per-wallet sleeve tables come from GET /api/dashboards/wallet-sleeves.
+  //   • The buyback total chip + table come from GET /api/dashboards/buybacks.
+  // Each endpoint is fetched independently (allSettled semantics) so one
+  // degraded feed leaves only its own widget empty/"—" instead of blanking the
+  // page, and nothing is ever fabricated. The three BIG pies (strategy, vault,
+  // wallet) render % datalabels via a small inline plugin; the four MINI bucket
+  // pies render none.
+
+  // Asset dot colour by symbol (presentation-only, mirrors the original design
+  // system). Used for the sleeve tables, whose per-holding DTO carries no colour
+  // (the aggregate wallet-balances holdings do — those use `holding.color`).
+  const ASSET_DOT = {
+    USDC: "#10b981", "ZYFAI-SS1": "#10b981", "GIZA-SS1": "#10b981",
+    ROBOTMONEY: "#3b82f6", BNKR: "#3b82f6",
+    WETH: "#f59e0b", ETH: "#f59e0b", SP500: "#8b5cf6",
+  };
+  const assetDot = (sym) => ASSET_DOT[sym] || "#94a3b8";
+  // Strategy-pie slice colours (4 buckets) + per-bucket mini-pie palettes, in
+  // committee/allocation.json bucket order (defi-yield / agent / protocol / rwa).
+  const STRATEGY_COLORS = ["#10b981", "#3b82f6", "#f59e0b", "#a855f7"];
+  const BUCKET_PALETTES = [
+    ["#047857", "#059669", "#10b981", "#34d399", "#6ee7b7"],
+    ["#1e3a8a", "#1e40af", "#2563eb", "#3b82f6", "#60a5fa", "#93c5fd", "#bfdbfe"],
+    ["#b45309", "#d97706", "#f59e0b", "#fbbf24"],
+    ["#7c3aed", "#a855f7", "#c084fc"],
+  ];
 
   // The hero's "Total AUM" mirrors the original site's semantics
   // (robotmoney-site src/app/allocation/page.tsx: totalValue + vaultTotalValue)
@@ -747,8 +835,11 @@ export function registerViews(Alpine) {
   // The baked static wallet-snapshot scalar that used to live here is retired.
   Alpine.data("allocationView", () => ({
     _charts: [],
-    economics: null,
-    wallet: null,
+    economics: null,   // GET /api/dashboards/vault-economics
+    wallet: null,      // GET /api/dashboards/wallet-balances (aggregate holdings)
+    sleeves: null,     // GET /api/dashboards/wallet-sleeves (per-wallet breakdown)
+    allocationFw: null,// GET /api/dashboards/allocation (target weights)
+    buybacks: null,    // GET /api/dashboards/buybacks
     loading: true,
     error: null,
     // Inline datalabels plugin: white mono-bold % just inside each slice edge,
@@ -787,23 +878,25 @@ export function registerViews(Alpine) {
     // arrives. Alpine's x-text bindings on economics.* update reactively on
     // their own — this only needs to touch the imperative Chart.js canvas.
     async load() {
-      try {
-        // Both live halves of Total AUM, fetched in parallel. A failure in
-        // either leaves its half null so totalAum() renders "—" rather than
-        // understating the total (issue #84).
-        const [economics, wallet] = await Promise.all([
-          api.get(ROUTES.dashboards.vaultEconomics),
-          api.get(ROUTES.dashboards.walletBalances),
-        ]);
-        this.economics = economics;
-        this.wallet = wallet;
-      } catch (e) {
-        this.error = e.message;
-      } finally {
-        this.loading = false;
-        this.destroy();
-        this.$nextTick(() => this.draw());
-      }
+      // Each feed is fetched and assigned INDEPENDENTLY: the reactive x-text
+      // bindings (hero AUM, tables) update the instant that endpoint resolves,
+      // so a slow or failed feed only leaves its own widget in the loading/"—"
+      // state instead of blocking the page. A failed leg becomes null (never a
+      // fabricated value). Total AUM stays null-until-both-live (issue #84).
+      const fetchInto = (key, route) =>
+        api.get(route).then((d) => { this[key] = d; }).catch(() => { this[key] = null; });
+      await Promise.allSettled([
+        fetchInto("economics", ROUTES.dashboards.vaultEconomics),
+        fetchInto("wallet", ROUTES.dashboards.walletBalances),
+        fetchInto("sleeves", ROUTES.dashboards.walletSleeves),
+        fetchInto("allocationFw", ROUTES.dashboards.allocation),
+        fetchInto("buybacks", ROUTES.dashboards.buybacks),
+      ]);
+      // Imperative Chart.js pies are (re)drawn once, after every feed has
+      // settled, from whatever data arrived (missing feeds simply skip their pie).
+      this.loading = false;
+      this.destroy();
+      this.$nextTick(() => this.draw());
     },
     // True when any live source (vault or wallet) is serving stub/degraded data,
     // so the hero can flag that Total AUM is not fully live chain data.
@@ -863,6 +956,40 @@ export function registerViews(Alpine) {
       if (shares == null || price == null) return "—";
       return `${Number(shares).toLocaleString("en-US", { maximumFractionDigits: 2 })} rmUSDC shares @ $${Number(price).toFixed(4)}`;
     },
+    // ── holdings / sleeve table formatters (presentation over live DTOs) ──────
+    dotColor(sym) { return assetDot(sym); },
+    // Token balance: millions-suffixed for large counts, else up to 4 dp.
+    fmtAmount(v) {
+      if (v == null || !isFinite(v)) return "—";
+      const a = Math.abs(v);
+      if (a >= 1e6) return (v / 1e6).toLocaleString("en-US", { maximumFractionDigits: 2 }) + "M";
+      return v.toLocaleString("en-US", { maximumFractionDigits: 4 });
+    },
+    // Unit price: sub-cent prices keep 3 significant figures ($0.00000451),
+    // everything else 2–4 dp ($0.9983 / $1,550.76).
+    fmtPrice(v) {
+      if (v == null || !isFinite(v)) return "—";
+      const a = Math.abs(v);
+      if (a === 0) return "$0";
+      if (a < 0.01) return "$" + Number(v.toPrecision(3)).toString();
+      return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+    },
+    // Always-2dp USD (buyback value cells / totals, which are < $1k but need cents).
+    fmtUsd2(v) { return v == null ? "—" : "$" + Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
+    // ── target weights (allocation framework) ─────────────────────────────────
+    stratPct(i) { const s = this.allocationFw?.strategy?.[i]; return s == null ? "—" : Math.round(Number(s.targetPct)) + "%"; },
+    // ── sleeves ───────────────────────────────────────────────────────────────
+    sleeveWallets() { return this.sleeves?.wallets || []; },
+    walletCount() { return this.sleeveWallets().length; },
+    // ── buybacks ──────────────────────────────────────────────────────────────
+    buybackRows() { return this.buybacks?.rows || []; },
+    fmtWeth(v) { return v == null ? "—" : Number(v).toFixed(6); },
+    fmtWethLabel(v) { return v == null ? "—" : Number(v).toFixed(6) + " WETH"; },
+    // $ROBOTMONEY token count → millions-suffixed ("18.45M").
+    fmtRmoney(v) { return v == null ? "—" : (Number(v) / 1e6).toFixed(2) + "M"; },
+    shortHash(h) { return h ? `${h.slice(0, 8)}...${h.slice(-6)}` : "—"; },
+    txUrl(h) { return `https://basescan.org/tx/${h}`; },
+    buybackNonLive() { return this.buybacks?.source === "stub"; },
     _pie(ref, labels, data, colors, big) {
       const canvas = this.$refs[ref];
       if (!canvas || !window.Chart) return;
@@ -884,19 +1011,28 @@ export function registerViews(Alpine) {
       this._charts.push(instance);
     },
     draw() {
-      // Big strategy pie — 95% conservative, 5% agent, protocol/RWA at 0.
-      this._pie("strategy",
-        ["Conservative DeFi Yield", "Agent Tokens", "Protocol Tokens", "Real World Assets"],
-        [95, 5, 0, 0], ["#10b981", "#3b82f6", "#f59e0b", "#a855f7"], true);
-      // Mini bucket pies (no datalabels).
-      this._pie("mini1", ["Aave", "Morpho", "Compound", "Sky"],
-        [25, 25, 25, 25], ["#047857", "#059669", "#10b981", "#34d399"], false);
-      this._pie("mini2", ["RobotMoney", "Juno", "Woon", "Peaq", "Zyfai", "Giza", "DEUS"],
-        [14.29, 14.29, 14.29, 14.29, 14.29, 14.28, 14.27],
-        ["#1e3a8a", "#1e40af", "#2563eb", "#3b82f6", "#60a5fa", "#93c5fd", "#bfdbfe"], false);
-      this._pie("mini3", ["BTC", "ETH", "HYPE"],
-        [33.33, 33.33, 33.34], ["#b45309", "#d97706", "#f59e0b"], false);
-      this._pie("mini4", ["SPY", "Gold"], [50, 50], ["#7c3aed", "#a855f7"], false);
+      // Big strategy pie + 4 mini bucket pies — target weights from the live
+      // allocation framework (committee/allocation.json). Slice colours are
+      // presentation-only (the DTO carries no colour); weights are never baked.
+      // Honest degrade: if a feed is missing, its pie is simply not drawn — no
+      // fabricated placeholder split.
+      const strat = this.allocationFw?.strategy || [];
+      if (strat.length) {
+        this._pie("strategy",
+          strat.map((s) => s.label),
+          strat.map((s) => Number(s.targetPct) || 0),
+          strat.map((_, i) => STRATEGY_COLORS[i % STRATEGY_COLORS.length]), true);
+      }
+      const buckets = this.allocationFw?.buckets || [];
+      ["mini1", "mini2", "mini3", "mini4"].forEach((ref, i) => {
+        const items = buckets[i]?.items || [];
+        if (!items.length) return;
+        const palette = BUCKET_PALETTES[i] || STRATEGY_COLORS;
+        this._pie(ref,
+          items.map((it) => it.label),
+          items.map((it) => Number(it.targetPct) || 0),
+          items.map((_, j) => palette[j % palette.length]), false);
+      });
       // Vault pie — three adapter slices from the live vault-economics fetch
       // (issue #40). Before the fetch resolves, or when it degrades to
       // stale/null balances, falls back to an equal-thirds placeholder rather
@@ -906,11 +1042,17 @@ export function registerViews(Alpine) {
       const vaultLabels = adapters.length === 3 ? adapters.map((a) => a.name.toUpperCase()) : ["MORPHO", "AAVE", "COMPOUND"];
       const vaultValues = hasLiveBalances ? adapters.map((a) => Math.max(0, Number(a.balanceUsd) || 0)) : [1, 1, 1];
       this._pie("vault", vaultLabels, vaultValues, ["#10b981", "#10b981", "#10b981"], true);
-      // Wallet pie — USD value per asset, colour-grouped.
-      this._pie("wallet",
-        ["USDC", "ZYFAI-SS1", "ROBOTMONEY", "BNKR", "WETH", "ETH", "SP500"],
-        [9022.48, 4538.49, 29299.87, 9.45, 23940.33, 77.48, 4638.10],
-        ["#10b981", "#10b981", "#3b82f6", "#3b82f6", "#f59e0b", "#f59e0b", "#8b5cf6"], true);
+      // Wallet pie — live USD value per asset from wallet-balances holdings[]
+      // (colour-grouped via each holding's own `color`). Assets with no live
+      // value are dropped rather than drawn as a zero/fabricated slice; if the
+      // feed is missing the pie is not drawn at all (honest degrade).
+      const holdings = (this.wallet?.holdings || []).filter((h) => (Number(h.valueUsd) || 0) > 0);
+      if (holdings.length) {
+        this._pie("wallet",
+          holdings.map((h) => h.symbol),
+          holdings.map((h) => Number(h.valueUsd) || 0),
+          holdings.map((h) => h.color || assetDot(h.symbol)), true);
+      }
     },
     destroy() { this._charts.forEach((c) => c.destroy()); this._charts = []; },
   }));
@@ -1058,5 +1200,165 @@ export function registerViews(Alpine) {
         this.submitting = false;
       }
     },
+  }));
+
+  // ── Admin task-queue dashboard (/admin) ───────────────────────────────────
+  // A password-gated operator view over the research/analytics job queue. The
+  // password is the ADMIN_TOKEN secret, sent as X-Admin-Token; the demo prints a
+  // random per-launch password to the interactive TUI only. All four endpoints
+  // are READ-ONLY (GET /api/admin/jobs|jobs/:id|runs; POST /api/admin/auth just
+  // validates the password). The token is kept in sessionStorage so a refresh
+  // stays signed in for the tab, and a 403 anywhere forces re-login (fail-closed).
+  const ADMIN_TOKEN_KEY = "rm_admin_token";
+  Alpine.data("adminJobsView", () => ({
+    authed: false,
+    password: sessionStorage.getItem(ADMIN_TOKEN_KEY) || "",
+    loginError: null,
+    loading: false,
+    error: null,
+    jobs: [],
+    schedules: [],
+    summary: { byStatus: {}, byKind: {} },
+    runs: [],
+    selectedJob: null, // { job, runs } detail for the opened job
+    pollTimer: null,
+
+    // A stored token (from a prior login this tab) → try to load straight into the
+    // dashboard; a 403 there clears it and drops back to the login gate.
+    async init() {
+      if (this.password) {
+        try {
+          await this.load();
+          this.authed = true;
+          this.startPolling();
+        } catch (e) {
+          if (e.status === 403) this._forgetToken();
+        }
+      }
+    },
+
+    _forgetToken() {
+      sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+      this.authed = false;
+      this.stopPolling();
+    },
+
+    // Validate the entered password against POST /api/admin/auth; on ok persist it
+    // and enter the dashboard, else surface the failure on the login card.
+    async login() {
+      this.loginError = null;
+      const token = this.password.trim();
+      if (!token) { this.loginError = "Enter the admin password."; return; }
+      try {
+        await api.adminPost(ROUTES.admin.auth, token);
+        sessionStorage.setItem(ADMIN_TOKEN_KEY, token);
+        this.authed = true;
+        await this.load();
+        this.loadRuns();
+        this.startPolling();
+      } catch (e) {
+        this.loginError = e.status === 403 ? "Incorrect admin password." : e.message;
+      }
+    },
+
+    logout() {
+      this._forgetToken();
+      this.password = "";
+      this.jobs = [];
+      this.schedules = [];
+      this.summary = { byStatus: {}, byKind: {} };
+      this.runs = [];
+      this.selectedJob = null;
+    },
+
+    _token() { return sessionStorage.getItem(ADMIN_TOKEN_KEY) || this.password.trim(); },
+
+    // GET /api/admin/jobs → jobs + schedules + summary. A 403 here (token revoked
+    // or rotated) logs out; other errors surface inline. Rethrows so init() can
+    // distinguish the 403 case on first load.
+    async load() {
+      this.loading = true;
+      this.error = null;
+      try {
+        const data = await api.adminGet(ROUTES.admin.jobs, this._token());
+        this.jobs = data.jobs || [];
+        this.schedules = data.schedules || [];
+        this.summary = data.summary || { byStatus: {}, byKind: {} };
+      } catch (e) {
+        if (e.status === 403) { this.logout(); this.loginError = "Session expired — sign in again."; }
+        else this.error = e.message;
+        throw e;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    // GET /api/admin/jobs/:id → the job + its recent runs (output/error = logs).
+    async openJob(id) {
+      try {
+        this.selectedJob = await api.adminGet(path(ROUTES.admin.job, { id }), this._token());
+      } catch (e) {
+        if (e.status === 403) this.logout();
+        else this.error = e.message;
+      }
+    },
+    closeJob() { this.selectedJob = null; },
+
+    // GET /api/admin/runs → the recent job_runs feed across all jobs.
+    async loadRuns() {
+      try {
+        const data = await api.adminGet(ROUTES.admin.runs, this._token());
+        this.runs = data.runs || [];
+      } catch (e) {
+        if (e.status === 403) this.logout();
+      }
+    },
+
+    // Refresh the jobs table (and open detail, if any) every 5s while signed in.
+    startPolling() {
+      this.stopPolling();
+      this.pollTimer = setInterval(() => {
+        if (!this.authed) return;
+        this.load().catch(() => {});
+        this.loadRuns();
+        if (this.selectedJob?.job?.id != null) this.openJob(this.selectedJob.job.id);
+      }, 5000);
+    },
+    stopPolling() {
+      if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+    },
+    destroy() { this.stopPolling(); },
+
+    // ── formatting ────────────────────────────────────────────────────────
+    statusList() {
+      // Fixed order matching the jobs.status CHECK constraint, plus any extras.
+      const order = ["pending", "running", "succeeded", "failed", "dead"];
+      const seen = new Set(order);
+      const keys = [...order, ...Object.keys(this.summary.byStatus || {}).filter((k) => !seen.has(k))];
+      return keys.map((k) => ({ status: k, count: this.summary.byStatus?.[k] || 0 }));
+    },
+    statusClass(status) {
+      const s = String(status || "");
+      if (s === "succeeded") return "adm-badge adm-badge--ok";
+      if (s === "failed" || s === "dead") return "adm-badge adm-badge--err";
+      if (s === "running") return "adm-badge adm-badge--run";
+      return "adm-badge adm-badge--idle"; // pending / other
+    },
+    fmtTime(iso) {
+      if (!iso) return "—";
+      try {
+        return new Date(iso).toLocaleString("en-US", {
+          month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
+        });
+      } catch (_) { return String(iso); }
+    },
+    // Pretty-print a run's jsonb output (the log). Objects/arrays → indented JSON;
+    // primitives/strings pass through; null/undefined → empty so x-show can hide it.
+    prettyJson(value) {
+      if (value == null) return "";
+      if (typeof value === "string") return value;
+      try { return JSON.stringify(value, null, 2); } catch (_) { return String(value); }
+    },
+    hasOutput(run) { return !!run && run.output != null; },
   }));
 }

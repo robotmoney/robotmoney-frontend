@@ -3,8 +3,10 @@
      Buildless SPA fragment: no inline <script>. The hero flock canvas is the
      boot-registered tokHero() factory (assets/js/app/alpine/heroes.js); the
      Copy button uses the global [data-copy] handler in main.js. The fee
-     distribution is a Chart.js pie (feeChart() factory in alpine/views.js); the
-     buyback bars remain static CSS.
+     distribution pie + legend + breakdown-card percentages are LIVE from
+     GET /api/dashboards/token-metrics (`feeSplit`) via the feeChart() factory,
+     and the Buyback History card is LIVE from GET /api/dashboards/buybacks via
+     the buybackSummary() factory — no baked fee % or buyback rows remain.
 -->
 
 <section class="tok">
@@ -201,12 +203,14 @@
           </ol>
         </div>
 
-        <!-- Buyback history -->
-        <div class="tok__card tok__card--glow">
+        <!-- Buyback history — live from GET /api/dashboards/buybacks
+             (buybackSummary() factory in alpine/views.js). No baked rows; a
+             stub feed is flagged and a failed fetch degrades to an empty state. -->
+        <div class="tok__card tok__card--glow" x-data="buybackSummary()">
           <h4 class="tok__mini-title">Buyback History</h4>
           <div class="tok__bb-summary">
             <span class="tok__bb-summary-label">Total Spent on Buybacks</span>
-            <span class="tok__bb-summary-val">0.412318 WETH</span>
+            <span class="tok__bb-summary-val" x-text="fmtWethLabel(totals()?.wethSpent)">—</span>
           </div>
           <div class="tok__table-wrap">
             <table class="tok__table">
@@ -219,21 +223,28 @@
                 </tr>
               </thead>
               <tbody>
-                <tr><td>2026-06-28</td><td class="tok__r tok__warn">0.1240</td><td class="tok__r">$420</td><td class="tok__r tok__acc">3.1M</td></tr>
-                <tr><td>2026-06-21</td><td class="tok__r tok__warn">0.0980</td><td class="tok__r">$330</td><td class="tok__r tok__acc">2.6M</td></tr>
-                <tr><td>2026-06-14</td><td class="tok__r tok__warn">0.1103</td><td class="tok__r">$372</td><td class="tok__r tok__acc">2.9M</td></tr>
-                <tr><td>2026-06-07</td><td class="tok__r tok__warn">0.0800</td><td class="tok__r">$268</td><td class="tok__r tok__acc">2.2M</td></tr>
+                <tr x-show="loading"><td>Loading…</td><td class="tok__r">—</td><td class="tok__r">—</td><td class="tok__r">—</td></tr>
+                <template x-for="b in rows()" :key="b.txHash">
+                  <tr>
+                    <td x-text="b.date"></td>
+                    <td class="tok__r tok__warn" x-text="fmtWeth(b.wethSpent)"></td>
+                    <td class="tok__r" x-text="fmtUsd0(b.valueUsd)"></td>
+                    <td class="tok__r tok__acc" x-text="fmtRmoney(b.robotmoneyReceived)"></td>
+                  </tr>
+                </template>
+                <tr x-show="!loading && !rows().length"><td colspan="4">No live buyback data available.</td></tr>
               </tbody>
-              <tfoot>
+              <tfoot x-show="rows().length" x-cloak>
                 <tr>
                   <td class="tok__bold">TOTAL</td>
-                  <td class="tok__r tok__bold tok__warn">0.412318 WETH</td>
-                  <td class="tok__r tok__bold tok__acc">$1,390</td>
-                  <td class="tok__r tok__bold tok__acc">10.80M</td>
+                  <td class="tok__r tok__bold tok__warn" x-text="fmtWethLabel(totals()?.wethSpent)"></td>
+                  <td class="tok__r tok__bold tok__acc" x-text="fmtUsd0(totals()?.valueUsd)"></td>
+                  <td class="tok__r tok__bold tok__acc" x-text="fmtRmoney(totals()?.robotmoneyReceived)"></td>
                 </tr>
               </tfoot>
             </table>
           </div>
+          <p x-show="nonLive()" x-cloak style="font-family:var(--font-mono);font-size:0.7rem;color:var(--color-warn);margin:0.5rem 0 0;">Demo data — hermetic stub, not live chain data.</p>
           <div class="tok__bb-foot">
             <a class="tok__inline-link" href="/allocation">View full buyback history &rarr;</a>
           </div>
@@ -249,34 +260,38 @@
         $ROBOTMONEY trades on Uniswap v4. Each swap incurs a 1% fee, split as follows:
       </p>
 
-      <div class="tok__grid tok__grid--2">
+      <!-- Fee split is LIVE from GET /api/dashboards/token-metrics (`feeSplit`,
+           a fixed Clanker-pool config constant) via feeChart(); the pie, the
+           custom legend, and the breakdown-card percentages all bind to it —
+           no baked 57/40/3 literals. Colours are presentation-only. -->
+      <div class="tok__grid tok__grid--2" x-data="feeChart()">
         <!-- Fee distribution pie (Chart.js via feeChart() factory) -->
-        <div class="tok__card" x-data="feeChart()">
+        <div class="tok__card">
           <h4 class="tok__mini-title">Fee Distribution</h4>
           <div class="tok__donut-wrap">
             <canvas x-ref="fee"></canvas>
           </div>
           <div class="tok__legend">
-            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#10b981;"></span>Protocol (57%)</div>
-            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#f59e0b;"></span>Bankr (40%)</div>
-            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#8b5cf6;"></span>Clanker (3%)</div>
+            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#10b981;"></span><span x-text="feeLegend(0)">—</span></div>
+            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#f59e0b;"></span><span x-text="feeLegend(1)">—</span></div>
+            <div class="tok__legend-item"><span class="tok__legend-dot" style="background:#8b5cf6;"></span><span x-text="feeLegend(2)">—</span></div>
           </div>
         </div>
 
         <!-- Fee breakdown cards -->
         <div class="tok__fee-stack">
           <div class="tok__fee-card">
-            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#10b981;"></span><span class="tok__fee-pct">57%</span></div>
+            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#10b981;"></span><span class="tok__fee-pct" x-text="feePctLabel(0)">—</span></div>
             <div class="tok__fee-name">Protocol wallet</div>
             <div class="tok__fee-note">Creator share &mdash; funds buybacks</div>
           </div>
           <div class="tok__fee-card">
-            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#f59e0b;"></span><span class="tok__fee-pct">40%</span></div>
+            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#f59e0b;"></span><span class="tok__fee-pct" x-text="feePctLabel(1)">—</span></div>
             <div class="tok__fee-name">Bankr</div>
             <div class="tok__fee-note">Interface &mdash; distribution partner</div>
           </div>
           <div class="tok__fee-card">
-            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#8b5cf6;"></span><span class="tok__fee-pct">3%</span></div>
+            <div class="tok__fee-head"><span class="tok__legend-dot" style="background:#8b5cf6;"></span><span class="tok__fee-pct" x-text="feePctLabel(2)">—</span></div>
             <div class="tok__fee-name">Clanker Protocol</div>
             <div class="tok__fee-note">Infrastructure</div>
           </div>

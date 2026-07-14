@@ -292,6 +292,30 @@ from the dedupe key; **concurrency safety** from `SKIP LOCKED`. Handlers
 (`worker/handlers/`) are registered per `kind`; the `analytics.run` handler drives
 the analytics suite (§7.1).
 
+### Admin dashboard (task-queue observability)
+
+A read-only operator surface over the queue tables — `backend/src/api/routes/admin.ts`
+serving `/api/admin/*`, and the buildless `/admin` frontend view
+(`frontend/public/views/admin.html` + the `adminJobsView` factory in
+`alpine/views.js`). It SELECTs only; there is no new table:
+
+- `GET /api/admin/jobs` — recent `jobs` (all kinds) + all `job_schedules` + a
+  `{ byStatus, byKind }` count summary.
+- `GET /api/admin/jobs/:id` — one job plus its recent `job_runs` (400 on a
+  non-numeric id, 404 when unknown). A run's `output` (jsonb) and `error` (text)
+  ARE the per-run logs the view pretty-prints.
+- `GET /api/admin/runs?kind=&status=&limit=` — the recent `job_runs` feed across
+  all jobs (the log feed), with optional filters.
+- `POST /api/admin/auth` — validates the password for the login form.
+
+All four are PRIVILEGED with the same guard the committee/projects admin routes
+use: `ADMIN_TOKEN` presented as `X-Admin-Token` (constant-time compared), or —
+only outside prod — the `config.allowInsecure` convenience path. Fail-closed: the
+403 check runs before any DB work. The `/admin` view is intentionally NOT in the
+public nav; the token is kept in `sessionStorage` for the tab. The `bun run demo`
+launcher generates a fresh random password each run and prints it to the
+interactive TUI ONLY (never logged, never written to `demo-state.json`).
+
 ### 7.1 Analytics suite (six-stage pipeline)
 
 All analytics — the regime classifier and the research signals — are instances of

@@ -1,0 +1,158 @@
+<!-- Admin — task-queue (research/analytics) jobs dashboard
+     Password-gated operator view over the Postgres task queue (jobs /
+     job_schedules / job_runs). The password is the ADMIN_TOKEN secret, sent as
+     X-Admin-Token; the demo prints a random per-launch password to the
+     interactive TUI only. Buildless: the adminJobsView() factory (alpine/views.js)
+     is registered at boot and drives every read (router injects this fragment via
+     innerHTML, so inline scripts here would be dead). Styling reuses the shared
+     .rm-* / global component classes plus .adm-* rules in assets/css/views.css.
+     NOT linked from the public nav — reachable only by direct /admin URL.
+-->
+<section class="container adm" x-data="adminJobsView" x-init="init()">
+
+  <header class="adm-head">
+    <span class="rm-eyebrow rm-eyebrow--accent">Operations</span>
+    <h1 class="adm-title">Task Queue Admin</h1>
+    <p class="adm-lede">
+      Research &amp; analytics pipeline jobs, schedules, and per-run logs from the
+      Postgres task queue. Read-only. Guarded by the <code>ADMIN_TOKEN</code> secret.
+    </p>
+  </header>
+
+  <!-- Login gate -->
+  <div x-show="!authed" class="adm-login" x-cloak>
+    <h2 class="adm-login__title">Sign in</h2>
+    <p class="adm-login__hint">
+      Enter the admin password. In the demo it is printed to the interactive TUI
+      only (never logged or written to disk).
+    </p>
+    <form @submit.prevent="login()" class="adm-login__form">
+      <input type="password" x-model="password" class="adm-input" placeholder="Admin password"
+        autocomplete="current-password" aria-label="Admin password" />
+      <button type="submit" class="adm-btn">Sign in</button>
+    </form>
+    <p x-show="loginError" x-text="loginError" class="rm-error adm-msg" x-cloak></p>
+  </div>
+
+  <!-- Dashboard -->
+  <div x-show="authed" x-cloak>
+
+    <div class="adm-toolbar">
+      <span x-show="loading" class="rm-loading">Refreshing…</span>
+      <span x-show="error" x-text="error" class="rm-error"></span>
+      <span class="adm-toolbar__spacer"></span>
+      <button type="button" class="adm-btn adm-btn--ghost" @click="load()">Refresh</button>
+      <button type="button" class="adm-btn adm-btn--ghost" @click="logout()">Sign out</button>
+    </div>
+
+    <!-- Summary tiles: counts by status -->
+    <div class="adm-tiles">
+      <template x-for="s in statusList()" :key="s.status">
+        <div class="adm-tile">
+          <span :class="statusClass(s.status)" x-text="s.status"></span>
+          <span class="adm-tile__count" x-text="s.count"></span>
+        </div>
+      </template>
+    </div>
+
+    <!-- Schedules -->
+    <h2 class="adm-h2">Schedules</h2>
+    <div class="rm-table-scroll">
+      <table class="rm-table adm-table">
+        <thead>
+          <tr>
+            <th>Kind</th><th>Cron</th><th>Enabled</th><th>Next run</th><th>Last enqueued</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="sch in schedules" :key="sch.id">
+            <tr>
+              <td x-text="sch.kind"></td>
+              <td x-text="sch.cron"></td>
+              <td x-text="sch.enabled ? 'yes' : 'no'"></td>
+              <td x-text="fmtTime(sch.next_run_at)"></td>
+              <td x-text="fmtTime(sch.last_enqueued_at)"></td>
+            </tr>
+          </template>
+          <tr x-show="schedules.length === 0"><td class="adm-dim" colspan="5">No schedules.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Jobs -->
+    <h2 class="adm-h2">Jobs</h2>
+    <div class="rm-table-scroll">
+      <table class="rm-table adm-table">
+        <thead>
+          <tr>
+            <th>ID</th><th>Kind</th><th>Status</th><th>Attempts</th><th>Run after</th><th>Last error</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="job in jobs" :key="job.id">
+            <tr class="adm-row" @click="openJob(job.id)">
+              <td x-text="job.id"></td>
+              <td x-text="job.kind"></td>
+              <td><span :class="statusClass(job.status)" x-text="job.status"></span></td>
+              <td x-text="job.attempts + '/' + job.max_attempts"></td>
+              <td x-text="fmtTime(job.run_after)"></td>
+              <td class="adm-err" x-text="job.last_error || '—'"></td>
+            </tr>
+          </template>
+          <tr x-show="jobs.length === 0"><td class="adm-dim" colspan="6">No jobs yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Job detail (job + its runs = the logs) -->
+    <div x-show="selectedJob" class="adm-detail" x-cloak>
+      <div class="adm-detail__head">
+        <h2 class="adm-h2 adm-h2--flush">
+          Job <span x-text="selectedJob?.job?.id"></span> ·
+          <span x-text="selectedJob?.job?.kind"></span>
+          <span :class="statusClass(selectedJob?.job?.status)" x-text="selectedJob?.job?.status"></span>
+        </h2>
+        <button type="button" class="adm-btn adm-btn--ghost" @click="closeJob()">Close</button>
+      </div>
+      <template x-for="run in (selectedJob?.runs || [])" :key="run.id">
+        <div class="adm-run">
+          <div class="adm-run__meta">
+            <span :class="statusClass(run.status)" x-text="run.status"></span>
+            <span class="adm-dim" x-text="'started ' + fmtTime(run.started_at)"></span>
+            <span class="adm-dim" x-text="'finished ' + fmtTime(run.finished_at)"></span>
+          </div>
+          <pre x-show="run.error" class="adm-log adm-log--err" x-text="run.error"></pre>
+          <pre x-show="hasOutput(run)" class="adm-log" x-text="prettyJson(run.output)"></pre>
+        </div>
+      </template>
+      <p x-show="(selectedJob?.runs || []).length === 0" class="adm-dim">No runs recorded for this job.</p>
+    </div>
+
+    <!-- Recent runs feed (logs across all jobs) -->
+    <h2 class="adm-h2">Recent runs</h2>
+    <div class="rm-table-scroll">
+      <table class="rm-table adm-table">
+        <thead>
+          <tr>
+            <th>Run</th><th>Job</th><th>Kind</th><th>Status</th><th>Started</th><th>Finished</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="run in runs" :key="run.id">
+            <tr class="adm-row" @click="openJob(run.job_id)">
+              <td x-text="run.id"></td>
+              <td x-text="run.job_id ?? '—'"></td>
+              <td x-text="run.kind"></td>
+              <td><span :class="statusClass(run.status)" x-text="run.status"></span></td>
+              <td x-text="fmtTime(run.started_at)"></td>
+              <td x-text="fmtTime(run.finished_at)"></td>
+            </tr>
+          </template>
+          <tr x-show="runs.length === 0"><td class="adm-dim" colspan="6">No runs yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+</section>

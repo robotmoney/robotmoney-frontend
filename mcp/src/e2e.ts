@@ -15,6 +15,38 @@ import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Run `fn` over `items` with at most `limit` invocations in flight, returning
+// results in INPUT order as PromiseSettledResult — like Promise.allSettled but
+// bounded. A rejecting item never sinks the batch (that is the whole point: one
+// hung/failing committee member must NOT freeze the whole session). `limit <= 0`
+// or `Infinity` means unbounded (equivalent to Promise.allSettled). Pure and
+// dependency-free so it is unit-testable hermetically.
+export async function mapSettledWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const results = new Array<PromiseSettledResult<R>>(items.length);
+  const bound = limit > 0 && Number.isFinite(limit) ? limit : items.length;
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        results[i] = { status: "fulfilled", value: await fn(items[i], i) };
+      } catch (reason) {
+        results[i] = { status: "rejected", reason };
+      }
+    }
+  }
+  // Spawn at most `bound` (and at most items.length) parallel workers, each
+  // pulling the next index until the queue drains.
+  const workers = Array.from({ length: Math.min(bound, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
 // ── Real-inference take invariants (issue #77) ──────────────────────────────
 // Fingerprint of the deterministic buildMemo template: every templated REGIME
 // section carries this exact clause. A real keyless opencode-zen take will not
@@ -73,11 +105,22 @@ function assertAuthoredTakes(tag: string, takes: any[]) {
   console.log(`${tag}: authored-take invariants passed for ${authored.length} present member(s)`);
 }
 
+// Deterministic attendance stand-in for a real no-show simulation. Absence
+// emerges from a RULE (a curated set of habitual no-shows), not a baked boolean:
+// the contrarian member (draco) models an occasional no-show. Kept deterministic
+// (no Math.random / Date) so the required hermetic e2e and any goldens stay
+// reproducible — the roster outcome is fixed (draco absent; athena/boreas/cygnus
+// present). MIRROR of backend demo e2e's attends() — keep the two in sync.
+const NO_SHOWS = new Set(["draco"]);
+function attends(memberId: string): boolean {
+  return !NO_SHOWS.has(memberId);
+}
+
 export const MEMBERS = [
-  { memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1, present: true },
-  { memberId: "boreas", name: "Boreas", lens: "on-chain flows", bias: 0.0, present: true },
-  { memberId: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: true },
-  { memberId: "draco", name: "Draco", lens: "contrarian", bias: 0.0, present: false }, // absent
+  { memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1, present: attends("athena") },
+  { memberId: "boreas", name: "Boreas", lens: "on-chain flows", bias: 0.0, present: attends("boreas") },
+  { memberId: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: attends("cygnus") },
+  { memberId: "draco", name: "Draco", lens: "contrarian", bias: 0.0, present: attends("draco") },
 ];
 export const SUBJECTS = [
   { id: "woon", name: "Woon Treasury" },
@@ -217,7 +260,10 @@ export async function waitForSessionState(date: string, subject: string, expecte
     }
     await sleep(500);
   }
-  throw new Error(`session ${date}/${subject} did not reach '${expectedState}' within ${timeoutMs}ms`);
+  throw new Error(
+    `session ${date}/${subject} did not reach '${expectedState}' within ${timeoutMs}ms ` +
+      `(the worker may still be draining an earlier job — check 'bun run demo:status' or the worker container logs)`,
+  );
 }
 
 export async function enqueueLifecycleJob(action: string, payload: Record<string, unknown> = {}) {
@@ -262,13 +308,30 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   await Promise.all(absent.map((m) => enroll(m)));
   for (const m of absent) onProgress?.({ type: "member", memberId: m.memberId, stage: "absent" });
   const present = MEMBERS.filter((m) => m.present);
-  const results = await Promise.all(
-    present.map((m) => runAgent(
-      { ...m, date, subjectId: subject.id, sessionId },
-      existingCredentials?.get(m.memberId),
-      onProgress && ((stage, info) => onProgress({ type: "member", memberId: m.memberId, stage, ...info })),
-    )),
-  );
+  // Settle (not all-or-nothing) so ONE member's throw/hang can't reject the whole
+  // batch and leave the session un-published. The hermetic default stays fully
+  // parallel (limit = Infinity) — identical behaviour/timing to the old
+  // Promise.all for the required e2e. Only the REAL keyless-inference path throttles
+  // to COMMITTEE_MAX_CONCURRENCY (default 4) to ease free-tier zen flakiness.
+  const limit = REAL_INFERENCE ? Number(process.env.COMMITTEE_MAX_CONCURRENCY ?? 4) : Infinity;
+  const settled = await mapSettledWithConcurrency(present, limit, (m) => runAgent(
+    { ...m, date, subjectId: subject.id, sessionId },
+    existingCredentials?.get(m.memberId),
+    onProgress && ((stage, info) => onProgress({ type: "member", memberId: m.memberId, stage, ...info })),
+  ));
+  // Partition: fulfilled takes flow downstream; each rejected member is logged and
+  // surfaced to the demo pane as a no-show ('absent') instead of a frozen row, so
+  // the session proceeds to close/aggregate/publish with whatever takes succeeded.
+  const results: Awaited<ReturnType<typeof runAgent>>[] = [];
+  settled.forEach((s, i) => {
+    const m = present[i];
+    if (s.status === "fulfilled") {
+      results.push(s.value);
+    } else {
+      console.log(`  ${m.memberId}: FAILED — ${s.reason}`);
+      onProgress?.({ type: "member", memberId: m.memberId, stage: "absent" });
+    }
+  });
   for (const r of results) {
     const ok = r.result?.verified ? "✓verified" : JSON.stringify(r.result);
     const memo = r.memoUrl ? ` memo=${r.memoUrl}` : "";
