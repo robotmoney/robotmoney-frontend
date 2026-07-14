@@ -2,7 +2,7 @@
 
 The significant architecture decisions for this rebuild, with the reasoning and
 the alternatives that were rejected. Newest decisions can supersede older ones;
-each entry stands on its own. See [ARCHITECTURE.md](./ARCHITECTURE.md) for how the
+each entry stands on its own. See [architecture.md](./architecture.md) for how the
 pieces fit together.
 
 ---
@@ -19,10 +19,12 @@ want a lean foundation and only two feature areas carried forward.
 **Scope.** Preserve the marketing UI; cherry-pick the **regime/research** views
 (the regime classifier + its regime-family research signals) and the **Investment
 Committee**. Out of scope: allocation / vault / wallet dashboards, generative-art
-visualizations, blog/media, other editorial pages. **Superseded in part by D15**:
-the `/allocation` page's vault-economics slice (TVL, share price, adapters,
-7-day APY) is brought into scope with a live Base RPC pipeline; wallet-balances
-and buyback stay out of scope.
+visualizations, blog/media, other editorial pages. **Superseded in part by D15,
+D16, and D17**: the `/allocation` page's vault-economics slice (TVL, share price,
+adapters, 7-day APY) and the prop-wallet valuation feed (live holdings +
+history) are each brought into scope with a live Base RPC pipeline, and D17
+then retired the last baked literals (buybacks, token metrics, wallet sleeves)
+the same way — nothing of this exclusion remains a static port.
 
 ---
 
@@ -183,7 +185,7 @@ static server are unnecessary. Fewer dependencies, one runtime.
 
 **Decision.** For **production**, deploy `robotmoney.net` with a clean separation
 of concerns across both **tiers** and **vendors**, with **no routing software
-anywhere**. The full map is [TOPOLOGY.md](./TOPOLOGY.md):
+anywhere**. The full map is [topology.md](./topology.md):
 
 - **Cloudflare — DNS + observability only.** Authoritative DNS, proxied TLS/DDoS,
   and monitoring (Health Checks, analytics, Logpush). Configuration, not code — no
@@ -282,7 +284,9 @@ behind a short-TTL server cache (`backend/src/chain/vault-economics.ts`). A
 (`vault_share_price_history`, `backend/src/worker/handlers/vault.ts`), served
 at `GET /api/dashboards/vault-economics`. `allocationView()` fetches and binds
 this section; other `/allocation` sections (buyback, wallet balances) remain
-the static port and stay out of scope. The vault's adapter set comes from
+the static port and stay out of scope *(as of this decision — wallet balances
+were since brought into scope by D16 and buybacks by D17)*. The vault's adapter
+set comes from
 **config, not on-chain discovery** — the vault + USDC addresses are the ones
 already documented publicly (`frontend/public/views/docs/skill/installation.html`,
 `skills.html`); the three adapter contract addresses aren't published anywhere
@@ -311,3 +315,102 @@ cron-commit machinery.
   is explicit `stale: true` + last-persisted-or-null values, never a made-up
   figure, so the UI can show a clearly-marked degraded state instead of silently
   wrong numbers.
+
+---
+
+## D16 — Live wallet-balances pipeline from Base RPC (supersedes D1's wallet-dashboard exclusion)
+
+**Decision.** Bring the prop-wallet **valuation feed** into scope (issues
+#84/#90) — the `/allocation` hero's total prop-wallet value and the
+`/performance` page's wallet-performance history — superseding D1's "out of
+scope: allocation / vault / wallet dashboards" for this slice only, the same
+way D15 did for vault economics. The backend values each configured prop
+wallet's tracked assets **on the worker schedule** (never on the request
+path — hardened by #119): ERC-20/native balances and ERC-4626
+strategy shares via Base `eth_call` (`backend/src/chain/base-rpc-client.ts`,
+reused from D15, since batched through ≤2 Multicall3 calls per sample), priced
+through the existing keyless `token-prices.ts` (pinned $1 for USDC,
+GeckoTerminal/Yahoo otherwise), behind a short-TTL in-process cache on the
+sampler (`backend/src/chain/wallet-balances.ts`). The per-minute
+(cron `* * * * *`) `wallet.sample_balances` worker job persists one row per
+`(sample_date, symbol)` into `wallet_balance_samples` (migration
+`0014_wallet_balance_samples.sql`),
+seeded once with a pre-launch history backfilled from the retired baked
+constants (`chain/wallet-history-seed.ts`, marked `provenance: 'seed'`, never
+`'live'`). Served at `GET /api/dashboards/wallet-balances`
+(`ROUTES.dashboards.walletBalances`), which reads only the last persisted
+per-symbol samples — zero chain reads at request time; `allocationView()` and the
+`/performance` wallet chart (`frontend/public/assets/js/app/alpine/views.js`)
+fetch and bind it, replacing the retired static `WALLET_SNAPSHOT_TOTAL_USD`
+scalar and the baked 99-day `walletPerfView` series.
+
+**Why.** Same motivation as D15: a baked snapshot permanently diverges from
+real wallet state, defeating D1's "reproduce the look exactly" goal now that
+there are real prop wallets to reflect. Per-holding (not whole-payload)
+degrade keeps one bad chain/price read from blanking the whole feed — each
+tracked asset values independently and falls back to its own last-persisted
+sample. *(Since #119's Multicall3 batching, per-holding independence holds for
+price legs and for per-sub-call reverts inside a successful batch; a
+whole-batch RPC failure degrades all chain-read legs of that sample together —
+the trade accepted to cut the 429-drawing RPC fan-out to ≤2 calls.)*
+
+**Rejected.**
+- **Whole-payload degrade on any single leg's failure** — would turn one
+  flaky price feed (e.g. GeckoTerminal) into a blanked-out total; per-holding
+  fallback isolates the failure to the affected asset (price legs and per-call
+  reverts still degrade individually post-#119; see above for the batch-level
+  exception).
+- **An archive indexer to reconstruct gap-free pre-launch history** — explicitly
+  out of scope for #84; the one-time seed from the ported baked constants
+  (`provenance: 'seed'`) already carries that history forward honestly, and a
+  full indexer is more machinery than the feature needs.
+- **Fabricating or silently freezing a value on a failed live read** — same
+  invariant as D15: a value is either a real read, a labelled stub, or the
+  last-persisted sample marked `stale`/`seed` — never presented as live.
+
+---
+
+## D17 — Remove the last baked frontend data (live buybacks, token metrics, sleeves; supersedes D1's remaining exclusions)
+
+**Decision.** Remove every remaining baked data literal from the frontend
+(issue #111) — the `/allocation`/`/tokenomics` buyback table, ROBOTMONEY token
+metrics, per-wallet sleeve breakdowns, and the strategy/bucket target weights
+are all served from live API endpoints: `GET /api/dashboards/buybacks`
+(ROBOTMONEY `Transfer`-log reads into the primary prop wallet + WETH/USD swap
+legs, `backend/src/chain/buyback-logs.ts`, refreshed by the `buybacks.refresh`
+job, cron `15 */6 * * *`, persisted via migration `0015_buyback_swaps.sql`),
+`/token-metrics` (`chain/token-metrics.ts`), `/wallet-sleeves`
+(`chain/wallet-sleeves.ts`), and the `allocation_framework` read
+(`chain/allocation-framework.ts`) — ending D1's "buyback stays out of scope"
+remnant: nothing of the original allocation/vault/wallet exclusion remains a
+static port. Real adapter and token addresses ship as `config.ts` defaults
+(retiring the perpetual "Not configured" placeholder adapters; a
+placeholder-form env override still flips an adapter back to
+`configured: false`), and `base-rpc-client.ts` becomes the **single RPC
+transport** for every chain read. The shared endpoint contract the feeds were
+built against (DTOs, provenance fields, degrade rules) is
+[contract-live-data.md](./contract-live-data.md); the frontend binds via
+boot-registered factories in `alpine/views.js` (e.g. `buybackSummary`).
+
+**Why.** Same motivation as D15/D16, applied to the leftovers: a baked literal
+permanently diverges from chain state, and a mixed page — some cells live,
+some frozen at the 2026-06-26 snapshot — is worse than either extreme. One
+transport plus one written contract keeps the honesty rules (provenance
+labels, never a fabricated value, placeholders never `eth_call`ed, resolvers
+read per request) uniform across every dashboard feed instead of re-deriving
+them per endpoint.
+
+**Rejected.**
+- **Keeping the buyback table static** (the last D1 remnant) — it drifts the
+  moment the next buyback lands, and `Transfer` logs are cheaply readable with
+  the transport the repo already has.
+- **A per-feature RPC client** — N copies of encode/timeout/retry logic; a
+  single `base-rpc-client.ts` transport concentrates the later 429/backoff and
+  Multicall3 hardening (#119) in one place.
+- **Shipping placeholder adapter/token addresses** — the real addresses are
+  public chain facts, not secrets; placeholder defaults just rendered
+  permanent "Not configured" cells on a stock deploy.
+
+**Open follow-ups (#112).** Buyback USD valuation prices at spot-at-read
+rather than the swap-leg execution price, and the log scan's reorg margin is a
+fixed constant — both flagged in #112 for a later pass.

@@ -2,7 +2,7 @@
 
 How changes ship to **staging** and **production**, and the exact credentials to
 generate from **Cloudflare** and **DigitalOcean** so CI can deploy. Companion to
-[TOPOLOGY.md](./TOPOLOGY.md) (the map — decision D13) and ARCHITECTURE §8 (what
+[topology.md](./topology.md) (the map — decision D13) and ARCHITECTURE §8 (what
 this repo ships). Assumes **GitHub Actions** as the CI; the credential inventory is
 CI-agnostic, only the storage mechanism (GitHub Environment secrets) is specific.
 
@@ -159,7 +159,7 @@ its subdomain) — not a secret.
 
 ## 7. Checklist — generate and hand to CI
 
-Run the credential doctor from the repository root:
+Run the [credential doctor](./credential-doctor.md) from the repository root:
 
 ```sh
 # Interactive: audit both environments and offer to configure missing values.

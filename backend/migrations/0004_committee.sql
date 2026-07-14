@@ -1,6 +1,6 @@
 -- Investment Committee v0: member key registry, append-only signed
 -- recommendations, session lifecycle state, and an audit log. The signed
--- recommendation is the canonical, attributable record (docs/ARCHITECTURE.md §9).
+-- recommendation is the canonical, attributable record (docs/architecture.md §9).
 
 -- Session lifecycle: scheduled → brief_published → collecting → window_closed
 --                    → aggregated → published

@@ -5,8 +5,8 @@ seamless site, organized by a clean **separation of concerns** — both across
 infrastructure tiers and across **two vendors**. This document is cross-cutting:
 it spans the **marketing** site, **this repo** (Investment Committee + analytics),
 and the **on-chain dapp** (`robotmoney-core`). It is a companion to
-[ARCHITECTURE.md](./ARCHITECTURE.md) (this frontend's internals) and
-[DECISIONS.md](./DECISIONS.md); the production topology here is decision **D13**,
+[architecture.md](./architecture.md) (this frontend's internals) and
+[decisions.md](./decisions.md); the production topology here is decision **D13**,
 which supersedes the single-box parts of D8/D11 (see [§10](#10-relationship-to-existing-decisions)).
 
 ```mermaid

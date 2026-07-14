@@ -304,7 +304,10 @@ Nothing here is reachable from the per-PR CI graph — CI always sets
   selection and no longer influences the live/demo path; do not use it to opt in.
 - **`ANALYTICS_FLOOR_SEED`** — one-time cold-DB raw floor seed: load a vendored real
   `raw_indicator_history` floor once so a fresh live boot doesn't re-fetch years of
-  history (esp. ~200 SEC-EDGAR requests) before the first classify. Idempotent
+  history (esp. ~200 SEC-EDGAR requests; live EDGAR fetches are themselves
+  bounded since #103 — per-request timeouts, a cheap preflight probe, and a hard
+  ~90s aggregate sweep ceiling in `analytics/extract/edgar.ts` — so a slow SEC
+  upstream can't pin the run) before the first classify. Idempotent
   (append-only — existing DB rows win on overlap; no-op once warm). Defaults to `1`
   on the live local demo cold-boot path (`scripts/lib/demo-env.ts`); the hermetic
   opt-in pins it to `0` so the offline seeded run stays byte-for-byte deterministic.
@@ -363,8 +366,12 @@ In an interactive terminal the demo takes over the screen with a zero-dependency
 TUI (`scripts/lib/tui.ts`) that repaints ~4×/s. Raw logs are **suppressed** on screen;
 the TUI shows only distilled state. Layout:
 
-- **Services** — the run's URLs (Site / Regime / Committee / Research per key / MCP), on
-  `127.0.0.1:<random port>`.
+- **Services** — the run's URLs (Site / Regime / Committee / Research per key / MCP /
+  Admin), on `127.0.0.1:<random port>`. The **Admin** entry is the `/admin`
+  task-queue jobs dashboard (#117); its password (`ADMIN_TOKEN`) is a fresh
+  random value generated per run and rendered **only** here, on the pane's
+  `Admin pass` line — never logged, never written to `demo-state.json`
+  (`scripts/lib/demo-main.ts`).
 - **Startup** — per-container status (postgres, api, worker, mcp) plus migrate and the
   `/health` checks, each shown pending / in-progress (spinner) / healthy / failed. After
   bring-up the icons are kept live by polling the **real docker container state**
@@ -385,7 +392,7 @@ the TUI shows only distilled state. Layout:
   - **Research** — recent `regime.classify` / `analytics.run` runs, advancing
     queued → running → done as the worker's queue transitions are observed, annotated
     with what landed (e.g. `regime → risk_on 0.76`). Fidelity is queue-level (see
-    demo-plan §10), not fabricated sub-steps. The header shows a live **countdown** to
+    [demo-plan.md §10](./demo-plan.md)), not fabricated sub-steps. The header shows a live **countdown** to
     the next scheduled regime/research run (from `job_schedules.next_run_at`, using the
     DB clock).
   - **One pane per subject** (woon, mav, …) — each subject runs on its **own schedule**
@@ -416,6 +423,7 @@ scheduled action as it fires.
   Committee:  http://127.0.0.1:<api>/committee
   Research:   http://127.0.0.1:<api>/research/<key>
   MCP:        http://127.0.0.1:<mcp>/health
+  Admin:      http://127.0.0.1:<api>/admin  (password shown in the interactive TUI only)
 
   State file: .agents/demo-state.json
   Log file:   .agents/demo-<project>.log

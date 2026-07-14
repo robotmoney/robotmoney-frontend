@@ -4,9 +4,9 @@ Robot Money frontend + analytics backend. A clean rewrite of robotmoney.net that
 drops React/Next.js in favor of a **buildless, browser-native** stack, with a
 small HTTP API and a Postgres-backed task queue, self-hosted on DigitalOcean — a
 single `docker-compose` box for CI/demo, and a tiered topology (DO compute+storage,
-Cloudflare for DNS+observability) in production (see [TOPOLOGY.md](./TOPOLOGY.md)).
+Cloudflare for DNS+observability) in production (see [topology.md](./topology.md)).
 
-For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
+For the *why* behind each choice, see [decisions.md](./decisions.md).
 
 ---
 
@@ -18,12 +18,21 @@ For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
   Committee**. Allocation / vault / wallet dashboards are out of scope, **except**
   the `/allocation` page's vault-economics slice (TVL, share price, adapters,
   7-day APY), brought into scope by a live Base RPC pipeline — see
-  [DECISIONS.md §D15](./DECISIONS.md#d15--live-vault-economics-pipeline-from-base-rpc-supersedes-d1s-vault-dashboard-exclusion)
-  and §10 below. Wallet-balances and buyback stay out of scope.
+  [decisions.md §D15](./decisions.md#d15--live-vault-economics-pipeline-from-base-rpc-supersedes-d1s-vault-dashboard-exclusion)
+  and §10 below — **and** the prop-wallet valuation feed (live holdings +
+  history behind `GET /api/dashboards/wallet-balances`), brought into scope the
+  same way — see
+  [decisions.md §D16](./decisions.md#d16--live-wallet-balances-pipeline-from-base-rpc-supersedes-d1s-wallet-dashboard-exclusion)
+  and §10 below. Buybacks — the last static remnant of that line — were brought
+  into scope by
+  [decisions.md §D17](./decisions.md#d17--remove-the-last-baked-frontend-data-live-buybacks-token-metrics-sleeves-supersedes-d1s-remaining-exclusions):
+  `GET /api/dashboards/buybacks` is served live from ROBOTMONEY Transfer logs
+  (`backend/src/chain/buyback-logs.ts`, refreshed by the `buybacks.refresh`
+  worker job). Nothing of the original out-of-scope line remains a static port.
 - **No build step.** No bundler, transpiler, or compiler — the browser does all
   the work at runtime; only evergreen browsers are supported.
 - **Consolidate backends onto one Postgres** (Docker for CI/demo; a DO Managed
-  Postgres HA cluster in production — see [TOPOLOGY.md](./TOPOLOGY.md)).
+  Postgres HA cluster in production — see [topology.md](./topology.md)).
 - **Rebuild the data pipeline** as a custom Postgres-backed task queue (replacing
   the old GitHub Actions cron + Node scripts).
 - **Clean frontend/backend separation** — one repo now, designed to split into
@@ -31,7 +40,9 @@ For the *why* behind each choice, see [DECISIONS.md](./DECISIONS.md).
 
 Out of scope for v1: the allocation / vault / wallet dashboards, the generative-art
 visualizations, blog/media editorial, and other secondary pages — **except** the
-live vault-economics slice of `/allocation` (§D15).
+live vault-economics slice of `/allocation` (§D15), the live prop-wallet
+valuation feed (§D16), and the live buyback / token-metrics / wallet-sleeves
+feeds that retired the last baked literals (§D17).
 
 ---
 
@@ -76,7 +87,7 @@ robotmoney-frontend/
   `window.RM_CONFIG.API_BASE_URL` (set by `frontend/public/config.js`). `""` means
   same origin — the default, since the `api` co-serves this surface's SPA assets at
   its subdomain root (in production, `committee.robotmoney.net`; see
-  [TOPOLOGY.md](./TOPOLOGY.md)).
+  [topology.md](./topology.md)).
 - The database schema and migrations live in `backend/`; the frontend knows only
   the DTOs in `contract`.
 
@@ -202,13 +213,14 @@ A small server on **Bun** using `Bun.serve` — no framework, no build (Bun runs
 TypeScript sources directly).
 
 - `src/api/index.ts` — the `Bun.serve` entry: a `/health` check and the API routes
-  (`comments`, `dashboards`, `committee`), using `postgres` (postgres.js) with raw SQL.
+  (`comments`, `dashboards`, `committee`, `projects`, `admin`), using `postgres`
+  (postgres.js) with raw SQL.
 - **Serves the static frontend too.** When `STATIC_DIR` is set, the same process
   serves `frontend/public` via `Bun.file`, with an `index.html` fallback for SPA
   deep links — so the SPA and its API are **same-origin** (no CORS) with no
   reverse proxy. In production this surface is its own subdomain
   (`committee.robotmoney.net`), Cloudflare-proxied for TLS (see
-  [TOPOLOGY.md](./TOPOLOGY.md)); CORS headers remain for an optional split-origin
+  [topology.md](./topology.md)); CORS headers remain for an optional split-origin
   setup.
 - `src/worker/` — the always-on task-queue worker (see §7).
 - `src/db/` — connection pool (`client.ts`) and the migration runner (`migrate.ts`).
@@ -371,25 +383,41 @@ into six independently testable stages — **access → extract → transform �
   `backtest`/`correlations` on `latest`; `fetchLatestResearchSignal(key)`). The
   contract DTOs **`BacktestPayload`** / **`CorrelationsPayload`**
   (`contract/src/dashboards.d.ts`) type those payloads. The HTTP route
-  `api/routes/dashboards.ts` is a thin adapter — it only parses/clamps `range` and
-  calls these. MCP and the frontend stay consumers across the HTTP boundary.
+  `api/routes/dashboards.ts` stays a thin adapter — for this slice it only
+  parses/clamps `range` and calls these (the same file now fronts ~8 dashboard
+  endpoints, incl. the live chain feeds of §10). MCP and the frontend stay
+  consumers across the HTTP boundary.
 
 Three pipelines run through these stages:
 
-- **`regime`** — macro + on-chain indicators (`T10Y2Y`, `HY_OAS`, `VIX`, `DXY`,
-  `COPPER_GOLD`, `ICSA`, `DEFI_TVL`, `STABLES`, `BTC_ACTIVE`, `ETH_TREND`,
-  `BTC_ETH`) → per-indicator sign-adjusted percentile → panel + overall composite +
-  regime label history → **`regime_snapshots`**.
+- **`regime`** — 26 registry indicators (`backend/src/analytics/analyze/indicators.ts`)
+  across three panels: **macro** (`T10Y2Y`, `DFII10`, `T5YIE`, `HY_OAS`, `DXY`,
+  `ICSA`, `VIX`, `COPPER_GOLD`) and **on-chain** (`DEFI_TVL`, `STABLES`,
+  `BTC_ACTIVE`, `ETH_ACTIVE`, `BTC_MVRV`, `BTC_ETH`, `ETH_TREND`, `NEW_TOKENS`,
+  `DEFI_GROWTH`, `STABLES_GROWTH`) drive the 2-panel composite (0.5×macro +
+  0.5×on-chain); a third **factor** panel (`SPX_TREND`, `IWM_SPY`, `SPHB_SPLV`,
+  `MTUM_SPY`, `IWF_IWD`, `XLU_SPY`, `XLP_XLY`, `SHILLER_CAPE`) is fetched,
+  persisted, and served as a **display-only** third index card on `/regime` — it
+  is not part of the composite. Per-indicator sign-adjusted percentile → panel +
+  overall composite + regime label history → **`regime_snapshots`** (`panels`
+  column lists which panels are populated on the asof row).
 - **`channel-divergence`** — `BTC`, `QQQ`, `SPY` → BTC beta vs the risk-appetite
   factor + BTC/QQQ relative strength gauges → **`research_signals`**.
 - **`late-cycle-signals`** — `SPY`, `RSP`, `MNA`, `MARGIN`, `CONF` → index
   concentration / M&A / margin debt / confidence gauges → **`research_signals`**.
 
-The worker runs the whole suite daily at **06:00 UTC** (`analytics.run`, cron
-`0 6 * * *`); the API exposes regime at `/api/dashboards/regime-snapshots?range=`
+The worker runs the whole suite daily at **22:30 UTC** (`analytics.run`, cron
+`30 22 * * *` — after US market close, so the fetched raw is settled end-of-day
+data); the API exposes regime at `/api/dashboards/regime-snapshots?range=`
 and each research signal at `/api/dashboards/research-signals/:key`; the frontend
 renders `/regime` (including the backtest + predictive-correlations panels) and the
-`/research/*` views (mirroring the original site's surfaces). Adding an analytic =
+`/research/*` views (mirroring the original site's surfaces). The regime DTO also
+carries an explicit **staleness block** — `{ asof, serverDate, ageDays, stale,
+thresholdDays }`, computed in `backend/src/analytics/report/regime-projection.ts`
+(zero snapshots counts as stale, #124) — which `/regime` surfaces as a loud
+staleness banner (`frontend/public/views/regime.html`); the demo boot self-heals
+with loud logging if the boot classify leaves a frozen snapshot
+(`scripts/lib/demo-main.ts`). Adding an analytic =
 write a tool + register it + add a job schedule + a route; nothing else changes.
 
 ---
@@ -397,8 +425,8 @@ write a tool + register it + add a job schedule + a route; nothing else changes.
 ## 8. Deployment
 
 Two shapes, one codebase. The canonical map of DNS, origins, tiers, and vendors is
-[TOPOLOGY.md](./TOPOLOGY.md) (decision D13); the GitOps pipeline and the Cloudflare
-/ DO credentials CI needs are in [DEPLOYMENT.md](./DEPLOYMENT.md). This section
+[topology.md](./topology.md) (decision D13); the GitOps pipeline and the Cloudflare
+/ DO credentials CI needs are in [deployment.md](./deployment.md). This section
 covers what *this repo* ships.
 
 **CI & demo — single box**, `docker-compose.yml`:
@@ -410,7 +438,7 @@ covers what *this repo* ships.
   - *demo*: named `pgdata` volume persists across restarts.
 
 **Production — tiered on DigitalOcean, Cloudflare for DNS+observability** (D13;
-credentials in [DEPLOYMENT.md](./DEPLOYMENT.md)):
+credentials in [deployment.md](./deployment.md)):
 
 - **API tier** — `api` + `worker` on a DO droplet at its own subdomain
   (`committee.robotmoney.net`); the `api` co-serves this surface's SPA assets at the
@@ -594,7 +622,14 @@ signing with its own key) and asserts: regime write lands and reads back; member
 signatures verify; a no-show renders **absent**, not fabricated; out-of-window POSTs
 are rejected; cross-role writes are denied; a published session renders the *real*
 takes. The demo is the same harness at scale. Hermetic: a missing dependency fails
-the run rather than silently skipping.
+the run rather than silently skipping. Real-LLM member takes are a separate
+opt-in: `COMMITTEE_REAL_INFERENCE=1` (exercised by the nightly
+`.github/workflows/committee-opencode-nightly.yml`, never per-PR) swaps the
+templated take for a keyless opencode-zen call that is **time-bounded**
+(`OPENCODE_TIMEOUT_MS`, default 120s — a hung inference kills the subprocess
+instead of freezing the session), and member runs are settled rather than
+`Promise.all`'d, so a per-member inference/session failure renders that member
+**absent** instead of failing the whole session (#122, `mcp/src/e2e.ts`).
 
 ### 9.8 Phase-5 build order & reconciliation
 
@@ -619,18 +654,37 @@ generation of member takes.
 
 ---
 
-## 10. Vault economics (live chain data)
+## 10. Vault economics & wallet balances (live chain data)
 
-Decision [D15](./DECISIONS.md#d15--live-vault-economics-pipeline-from-base-rpc-supersedes-d1s-vault-dashboard-exclusion)
+Decision [D15](./decisions.md#d15--live-vault-economics-pipeline-from-base-rpc-supersedes-d1s-vault-dashboard-exclusion)
 brought the `/allocation` page's vault-economics slice into scope, backed by a
-real Base (chainId `8453`) JSON-RPC read pipeline — the first (and, per §1,
-only) exception to the allocation/vault/wallet out-of-scope line.
+real Base (chainId `8453`) JSON-RPC read pipeline — the first exception to the
+allocation/vault/wallet out-of-scope line (§1). Decision
+[D16](./decisions.md#d16--live-wallet-balances-pipeline-from-base-rpc-supersedes-d1s-wallet-dashboard-exclusion)
+brought the prop-wallet valuation feed into scope the same way (§10.1). Decision
+[D17](./decisions.md#d17--remove-the-last-baked-frontend-data-live-buybacks-token-metrics-sleeves-supersedes-d1s-remaining-exclusions)
+(issue #111) then retired the last baked frontend literals entirely: buybacks
+(`GET /api/dashboards/buybacks` — ROBOTMONEY Transfer-log reads in
+`backend/src/chain/buyback-logs.ts`, refreshed by the `buybacks.refresh` job,
+cron `15 */6 * * *`, persisted via migration `0015_buyback_swaps.sql`), token
+metrics (`/token-metrics`), per-wallet sleeves (`/wallet-sleeves`), and the
+`allocation_framework` read are all live endpoints now — nothing of the
+original out-of-scope line remains static. The shared endpoint contract (DTOs,
+provenance fields, degrade rules) those feeds were built against is
+[contract-live-data.md](./contract-live-data.md).
 
-- **`backend/src/chain/base-rpc-client.ts`** — a minimal `eth_call` client: no
+- **`backend/src/chain/base-rpc-client.ts`** — a minimal JSON-RPC client and,
+  since D17, the **single RPC transport** for every chain read in the repo: no
   external chain SDK (ethers/viem), just `fetch` + hand-rolled 4-byte selector
-  encoding for the three read-only calls this feature needs (`totalAssets()`,
-  `totalSupply()`, `balanceOf(address)`) and uint256 decoding. Keeps the
-  buildless-backend dependency footprint (§2) unchanged.
+  encoding and uint256 decoding for the read-only calls the dashboards need
+  (`totalAssets()`, `totalSupply()`, `balanceOf(address)`, …). Two hardening
+  layers (#119): `multicall3Aggregate3()` batches many sub-calls into one
+  `eth_call` via Multicall3, and transient upstream statuses (429/502/503/504)
+  get a bounded retry-with-backoff (honoring `Retry-After`) — a genuine failure
+  still degrades honestly, never masked. Consumers include
+  `vault-economics.ts`, `wallet-balances.ts`, `buyback-logs.ts`,
+  `token-metrics.ts`, and `wallet-sleeves.ts`. Keeps the buildless-backend
+  dependency footprint (§2) unchanged.
 - **`backend/src/chain/vault-economics.ts`** — reads the vault's
   `totalAssets()`/`totalSupply()` (→ `sharePrice = totalAssets / totalSupply`,
   `null` iff `totalSupply = 0`), the vault's idle USDC balance
@@ -644,9 +698,11 @@ only) exception to the allocation/vault/wallet out-of-scope line.
   `frontend/public/views/docs/skill/installation.html` and `skills.html`) and
   the three adapter entries, all overridable via env (`VAULT_ADDRESS`,
   `USDC_ADDRESS`, `ADAPTER_MORPHO_ADDRESS`, `ADAPTER_AAVE_ADDRESS`,
-  `ADAPTER_COMPOUND_ADDRESS`). The adapter contract addresses are not
-  published anywhere yet, so their defaults are non-functional placeholders
-  pending real values.
+  `ADAPTER_COMPOUND_ADDRESS`). Since #112 the three adapter entries ship with
+  **real Base mainnet defaults** (`config.ts`), so a stock deploy is
+  `configured: true` out of the box; overriding one with a reserved
+  placeholder-form address (`PLACEHOLDER_ADDRESS_RE`) flips it back to
+  `configured: false`.
 - **RPC provenance + per-adapter `configured` (issue #50).** `config.ts` exports
   `resolveBaseRpcSource()` (env `BASE_RPC_SOURCE`, fail-closed on an
   unrecognized value; unset/`live` → `"live"`, `"stub"` → `"stub"`) and
@@ -678,3 +734,121 @@ only) exception to the allocation/vault/wallet out-of-scope line.
   captured `/api/dashboards/vault-economics` entry so `bun run preview` and the
   e2e Playwright spec (`frontend/test/browser/allocation-view.spec.ts`) render
   this section offline.
+
+### 10.1 Wallet balances (prop-wallet valuation)
+
+Decision [D16](./decisions.md#d16--live-wallet-balances-pipeline-from-base-rpc-supersedes-d1s-wallet-dashboard-exclusion)
+brought a live prop-wallet valuation feed into scope (issues #84/#90),
+replacing the baked `WALLET_SNAPSHOT_TOTAL_USD` scalar (the `/allocation` hero)
+and the static 99-day `walletPerfView` series (`/performance`) that used to be
+hardcoded in `alpine/views.js`.
+
+- **`backend/src/chain/wallet-balances.ts`** — values every configured prop
+  wallet's tracked assets **on the worker schedule, never on the request path**
+  (#119): the per-minute `wallet.sample_balances` job
+  (`backend/src/worker/handlers/wallet.ts`, cron `* * * * *` in `db/seed.ts`)
+  drives `sampleWalletBalances()`, which reads ERC-20 balances and native ETH
+  via `base-rpc-client.ts`, ERC-4626 strategy shares via `convertToAssets()`,
+  and an off-chain SP500 config size, each priced through the existing keyless
+  `token-prices.ts` (pinned $1 for USDC, GeckoTerminal/Yahoo otherwise) — no new
+  chain SDK, same buildless-dependency discipline as §10's vault-economics
+  client. A 30s in-process cache on the **sampler** keeps back-to-back worker
+  runs cheap; it plays no part in serving requests.
+- **Per-holding degrade, batched reads.** All on-chain amounts of a sample are
+  fetched in at most **two `multicall3Aggregate3()` batches** (one
+  `balanceOf`/`getEthBalance` sub-call per asset × wallet, then one
+  `convertToAssets()` round for strategy NAVs), so a full sample costs ≤2 RPC
+  calls instead of the old ~23-call fan-out the public Base node 429'd (#119).
+  Failure isolation is layered: a reverted sub-call inside a successful batch,
+  or a failed price fetch, degrades only *that* holding to its last-persisted
+  Postgres sample (`provenance: "stale"`); a whole-batch RPC failure degrades
+  **all chain-read legs** of that sample together to their last-persisted
+  values (the config-sized SP500 holding is never a chain read and is
+  unaffected). `provenance` is one of `live` (real chain + price read), `stub`
+  (hermetic `BASE_RPC_SOURCE`/`PRICE_SOURCE=stub` fixtures), `stale` (a failed
+  live leg), or `seed` (a pre-launch history row backfilled from the ported
+  baked constants — never presented as a live sample; see
+  `backend/src/chain/wallet-history-seed.ts` and migration `0014`'s honesty
+  invariant). A value is never fabricated and never silently frozen.
+- **`wallet_balance_samples`** persists the last-known amount/price/value per
+  symbol (the degrade floor above); the continuous `history` series read by
+  `fetchWalletBalances()` is sparse per day (some tracked assets are
+  intermittent) and seeded once from the legacy baked series, then accumulated
+  forward.
+- **`GET /api/dashboards/wallet-balances`** (`ROUTES.dashboards.walletBalances`,
+  `backend/src/api/routes/dashboards.ts`) returns
+  `{ asOf, totalUsd, source, priceSource, holdings, history }`, served **purely
+  from the last persisted per-symbol samples** via
+  `fetchPersistedWalletBalances()` — zero RPC on the request path, so a client
+  request can never hit the rate-limited public node; per-holding
+  value/provenance reflects the last scheduled sample exactly, and a symbol
+  with no sample yet is `stale` with null values, never a 5xx. The frontend
+  (`frontend/public/assets/js/app/alpine/views.js`) fetches it for both the
+  `/allocation` hero total and the `/performance` wallet-performance chart,
+  replacing the retired static figures.
+
+---
+
+## 11. Projects directory (agentic-economy analytics)
+
+A first-class read surface, ported off the deprecated `robotmoney-bot-analytics`
+Supabase stack (`src/pages/Projects.tsx`) onto this repo's Postgres backend
+across issues #70, #87, #91, #93, #96, #98. It lists onchain AI agents/coins/
+wallets/vaults ("Zero Human Companies") the way the legacy site did, but reads
+from this repo's own tables and pipelines instead of Supabase.
+
+- **Data model** (`backend/migrations/0013_projects.sql`,
+  `0014_projects_pipelines.sql`) — one identity row per project (`projects`:
+  slug, display name, description, admin-managed `overview_short`/
+  `overview_long`, coverage score, `has_*` facet flags) joined to four facet
+  tables (`openclaw_agents`, `lobster_coins`, `agent_vaults`, `tracked_wallets`)
+  and their daily-snapshot tables (`daily_agent_snapshots`,
+  `daily_coin_snapshots`, `daily_tvl_snapshots`, `daily_wallet_snapshots`,
+  `agent_revenue_daily`) — the append-only history each metric's sparkline/
+  coverage scoring reads.
+- **Read path** — `backend/src/projects/projections.ts` (`fetchProjects()`) is
+  the single aggregation layer: joins the facets onto each project, sums
+  trailing-30d revenue and wallet balances, builds a 30d primary-coin price
+  sparkline, and applies the same `MIN_SCORE` coverage floor and sort order
+  (sticky-pin → max market cap → coverage score) as the original page.
+  `backend/src/api/routes/projects.ts` is a thin adapter exposing
+  `GET /api/projects` (`ROUTES.projects.list`); `frontend/public/views/
+  projects.html` renders it via the boot-registered `projectsView()` factory.
+- **Ingestion pipeline status — partially ported, not the full legacy suite.**
+  `backend/src/worker/handlers/projects.ts` ports six of the ~25 legacy
+  bot-analytics edge functions onto the task queue's kind→handler pattern
+  (`projects.discover`, `.refresh_coins`, `.refresh_wallets`, `.sync_revenue`,
+  `.snapshot_daily`, `.fetch_vaults`, `.recompute_coverage`), scheduled via
+  `job_schedules` (`backend/src/db/seed.ts`) at the same cadence as the legacy
+  crons. Within that ported set, coverage is uneven by design:
+  - **Live and wired**: coin market data (CoinGecko `/coins/markets` +
+    DexScreener best-pair fallback), Virtuals/x402 revenue sync, ERC-4626
+    vault TVL reads (Base RPC), and coverage-score recomputation
+    (`backend/src/projects/access/live-source.ts`).
+  - **Not yet live**: project *discovery* returns a curated static roster
+    (`backend/src/projects/fixtures/dataset.ts`), not the legacy 1963-line
+    autonomous multi-source crawler — a tracked follow-up. Live wallet-balance
+    refresh (the legacy Alchemy-backed port) is unimplemented; the handler
+    throws loudly and degrades to the last-persisted balance rather than
+    fabricating one.
+  - A fresh deploy with no `PROJECTS_SOURCE=live` opt-in serves an empty
+    directory (`{ projects: [] }`), not synthetic data — `selectProjectsDataSource()`
+    (`backend/src/projects/access/select.ts`) is fail-safe toward the hermetic
+    fixture source, and fails closed (refuses to boot the pipeline) if `prod`
+    lacks the explicit live opt-in.
+- **Degrade/honesty contract (issue #98).** Every pipeline handler extracts
+  from its provider(s) *before* writing anything; on any failure it logs
+  loudly, writes nothing (last-persisted rows are left intact), and returns
+  `{ ok: false, status: "degraded" }` rather than a partial or fabricated
+  write — the same discipline as the vault-economics (§10) and wallet-balances
+  (§10.1) chain reads. Live provider fetches carry a hard timeout
+  (`liveFetchTimeoutMs`, default 8s) so a stalled socket fails fast instead of
+  pinning a worker slot.
+- **Admin-managed overviews, no AI enrichment (issue #93/#96).** `overview_short`/
+  `overview_long`/`description` are free text written *only* through the
+  privileged `POST /api/projects/admin/:slug` route
+  (`updateProjectOverview()`, admin-token gated the same way committee routes
+  are). There is no LLM/AI call anywhere on the projects read or write path.
+  The scheduled `projects.discover` upsert deliberately excludes
+  `overview_short`/`overview_long` from its `ON CONFLICT DO UPDATE` set, so a
+  re-run never clobbers admin-authored text.

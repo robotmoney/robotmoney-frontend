@@ -2,7 +2,7 @@
 
 Audits, configures, and revokes credentials for the Robot Money GitOps deployment
 across **staging** and **production** environments. Implements the credential
-inventory defined in [DEPLOYMENT.md](./DEPLOYMENT.md).
+inventory defined in [deployment.md](./deployment.md).
 
 ## Problem
 
