@@ -6,7 +6,7 @@ import { sql } from "../../db/client.ts";
 import type { RegimeSnapshot } from "@robotmoney/contract";
 // The row→DTO projection lives in a pure, DB-free module so the offline
 // eq-snapshot mapper can reuse the EXACT same projection (see regime-projection.ts).
-import { rowToSnapshot } from "./regime-projection.ts";
+import { rowToSnapshot, computeRegimeStaleness, type RegimeStaleness } from "./regime-projection.ts";
 
 // Latest research-signal payload for a key (or null).
 export async function fetchLatestResearchSignal(key: string) {
@@ -17,8 +17,14 @@ export async function fetchLatestResearchSignal(key: string) {
   return { signalKey: r.signal_key, date, payload: r.payload };
 }
 
-// The most recent `range` regime snapshots → { latest, history } (chronological).
-export async function fetchRegimeSnapshots(range: number): Promise<{ latest: RegimeSnapshot | null; history: RegimeSnapshot[] }> {
+// The most recent `range` regime snapshots → { latest, history, staleness }
+// (chronological). `staleness` flags whether the newest served snapshot is fresh
+// enough to trust: a frozen snapshot (analytics job not running in the deployment)
+// would otherwise be served silently as current — the frontend renders history[]
+// verbatim. Additive: existing `latest`/`history` are unchanged.
+export async function fetchRegimeSnapshots(
+  range: number,
+): Promise<{ latest: RegimeSnapshot | null; history: RegimeSnapshot[]; staleness: RegimeStaleness }> {
   const rows = await sql`
     SELECT * FROM regime_snapshots
     ORDER BY date DESC
@@ -26,5 +32,6 @@ export async function fetchRegimeSnapshots(range: number): Promise<{ latest: Reg
   `;
   const history = rows.map(rowToSnapshot).reverse(); // chronological
   const latest = history.length ? history[history.length - 1] : null;
-  return { latest, history };
+  const staleness = computeRegimeStaleness(latest?.date ?? null, new Date().toISOString().slice(0, 10));
+  return { latest, history, staleness };
 }

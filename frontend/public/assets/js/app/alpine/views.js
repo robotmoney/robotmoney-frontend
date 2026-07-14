@@ -269,6 +269,10 @@ export function registerViews(Alpine) {
     error: null,
     latest: null,
     history: [],
+    // Freshness of the served snapshot (backend computes it). When `stale`, the
+    // analytics pipeline isn't refreshing in this deployment and the charts below
+    // are frozen — surfaced as a loud banner rather than served silently.
+    staleness: null,
     // History-chart overlay toggles. composite/macro/on-chain/factor are ALWAYS
     // drawn (no per-series toggle, matching the source HistoryChart); only the
     // regime bands + the S&P 500 / ETH price overlays toggle.
@@ -281,6 +285,7 @@ export function registerViews(Alpine) {
         const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: 4000 });
         this.latest = data.latest;
         this.history = data.history || [];
+        this.staleness = data.staleness || null;
         this.loading = false;
         this.$nextTick(() => { this.drawHistory(); this.drawBacktests(); });
       } catch (e) {
@@ -305,6 +310,15 @@ export function registerViews(Alpine) {
     indicatorsIn(panel) {
       const inds = this.latest?.indicators;
       return Array.isArray(inds) ? inds.filter((i) => i.panel === panel) : [];
+    },
+
+    // ── freshness ─────────────────────────────────────────────────────────────
+    isStale() { return !!(this.staleness && this.staleness.stale); },
+    staleMessage() {
+      const s = this.staleness;
+      if (!s) return "";
+      if (s.ageDays == null || s.asof == null) return "No regime data is available — the analytics pipeline has not produced any snapshots in this deployment.";
+      return `Regime data is ${s.ageDays} day${s.ageDays === 1 ? "" : "s"} stale (latest ${s.asof}). The analytics pipeline is not refreshing in this deployment — the charts below are frozen and may not reflect current market data.`;
     },
 
     // ── formatting ──────────────────────────────────────────────────────────

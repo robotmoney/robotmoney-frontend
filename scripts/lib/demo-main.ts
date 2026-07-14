@@ -983,6 +983,32 @@ async function main(): Promise<void> {
   const today = new Date().toISOString().slice(0, 10);
   await e2e.admin("regime", { asof: today });
 
+  // Self-heal: verify the boot regime run actually landed a FRESH snapshot before
+  // handing off to the worker's recurring cron. A transient live-fetch failure (or
+  // a throw) can leave the served snapshot frozen at the seed floor, which the
+  // /regime charts would then render silently as if current. The API now reports
+  // `staleness`; retry the run a few times, and if it's still stale, log LOUDLY so
+  // the operator sees it instead of shipping a frozen dashboard.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let staleness: { stale?: boolean; asof?: string | null; ageDays?: number | null } | null = null;
+    try {
+      const snap = await fetch(`${backendUrl}/api/dashboards/regime-snapshots?range=1`).then((r) => (r.ok ? r.json() : null));
+      staleness = snap?.staleness ?? null;
+    } catch (err) {
+      log(`regime freshness check failed (attempt ${attempt}/3): ${err instanceof Error ? err.message : err}`);
+    }
+    if (staleness && !staleness.stale) {
+      log(`regime snapshot fresh (asof ${staleness.asof}, ${staleness.ageDays}d)`);
+      break;
+    }
+    if (attempt < 3) {
+      log(`regime snapshot STALE (asof ${staleness?.asof ?? "none"}) — re-running analytics (attempt ${attempt}/3)`);
+      await e2e.admin("regime", { asof: today }).catch((err: unknown) => log(`regime re-run failed: ${err instanceof Error ? err.message : err}`));
+    } else {
+      log(`⚠ regime snapshot STILL STALE after 3 attempts (asof ${staleness?.asof ?? "none"}) — live fetchers may be blocked in this environment; the /regime charts will show a staleness banner until the worker lands a fresh run`);
+    }
+  }
+
   // Each subject runs on its OWN schedule (own interval + a stagger offset) so woon
   // and mav appear in separate panes on separate cadences. Execution is SERIALIZED
   // (run the earliest-due subject, then reschedule just that one) so two committee
