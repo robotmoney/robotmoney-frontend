@@ -17,6 +17,12 @@ import {
   config,
 } from "../../src/config.ts";
 import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../../src/chain/wallet-balances.ts";
+import {
+  _resetRpcConcurrencyForTests,
+  decodeAggregate3Calls,
+  encodeAggregate3Result,
+  type Aggregate3Result,
+} from "../../src/chain/base-rpc-client.ts";
 import { getWalletBalances } from "../../src/api/routes/dashboards.ts";
 import { sampleWalletBalances, backfillWalletHistory } from "../../src/worker/handlers/wallet.ts";
 
@@ -40,6 +46,7 @@ const ENV_KEYS = [
   "BASE_RPC_SOURCE", "PRICE_SOURCE", "PROP_WALLET_ADDRESSES", "SP500_SIZE",
   "USDC_ADDRESS", "ZYFAI_SS1_ADDRESS", "GIZA_SS1_ADDRESS", "WETH_ADDRESS",
   "ROBOTMONEY_ADDRESS", "BNKR_ADDRESS", "AAVE_AUSDC_ADDRESS",
+  "BASE_RPC_RETRY_BASE_MS", "BASE_RPC_MAX_RETRIES", "BASE_RPC_MAX_CONCURRENCY",
 ] as const;
 
 function setBaseEnv(extra: Record<string, string> = {}) {
@@ -57,10 +64,12 @@ function setBaseEnv(extra: Record<string, string> = {}) {
 beforeEach(async () => {
   await sql`DELETE FROM wallet_balance_samples`;
   _resetWalletBalancesCacheForTests();
+  _resetRpcConcurrencyForTests();
 });
 afterEach(() => {
   globalThis.fetch = realFetch;
   _resetWalletBalancesCacheForTests();
+  _resetRpcConcurrencyForTests();
   for (const k of ENV_KEYS) delete process.env[k];
 });
 
@@ -70,11 +79,13 @@ const E6 = 10n ** 6n;
 
 const BALANCE_OF = "0x70a08231";
 const CONVERT_TO_ASSETS = "0x07a2d13a";
+const GET_ETH_BALANCE = "0x4d2301cc"; // Multicall3 getEthBalance(address)
+const AGGREGATE3 = "0x82ad56cb"; // Multicall3 aggregate3(Call3[])
 
 interface ChainFixtures {
   // eth_call balanceOf(token) → raw balance (single wallet).
   balanceOf?: Record<string, bigint>;
-  // eth_getBalance(wallet) → wei.
+  // getEthBalance(wallet) → wei (native leg, now read via Multicall3).
   native?: bigint;
   // convertToAssets(strategy) → underlying raw (6-dp USDC).
   nav?: Record<string, bigint>;
@@ -82,11 +93,47 @@ interface ChainFixtures {
   gecko?: Record<string, number>;
   // Yahoo SP500 close for the live-price path.
   sp500Price?: number;
-  // Addresses whose balanceOf read should THROW (forced single-leg failure).
+  // Token addresses whose balanceOf sub-call comes back success:false (forced
+  // single-leg failure) — the batched analogue of a reverted allowFailure call.
   failBalanceOf?: string[];
+  // Number of leading aggregate3 requests to answer with HTTP 429 (rate limited)
+  // before a valid 200 — exercises the transport's retry/backoff on the WHOLE
+  // batch through the REAL rpcRequest. Mutated (decremented) in place per request.
+  rateLimitCalls?: number;
 }
 
-function mockChain(fx: ChainFixtures) {
+// Live counter of how many aggregate3 eth_calls the endpoint issued — the whole
+// point of the Multicall3 batching is that this stays 1–2 regardless of fan-out.
+interface MockCounter {
+  aggregateCalls: number;
+}
+
+function mockChain(fx: ChainFixtures): MockCounter {
+  const counter: MockCounter = { aggregateCalls: 0 };
+  // Answer one aggregate3 sub-call using the same per-selector fixtures the old
+  // single-eth_call path used. A failed balanceOf leg → success:false (mirrors an
+  // allowFailure revert); an unknown selector/missing fixture throws (loud).
+  const subResult = (target: string, callData: string): Aggregate3Result => {
+    const toLc = target.toLowerCase();
+    const sel = callData.slice(0, 10);
+    if (sel === GET_ETH_BALANCE) {
+      if (fx.native == null) throw new Error("mockChain: no native fixture");
+      return { success: true, returnData: word(fx.native) };
+    }
+    if (sel === BALANCE_OF) {
+      if (fx.failBalanceOf?.map((a) => a.toLowerCase()).includes(toLc)) return { success: false, returnData: "0x" };
+      const raw = fx.balanceOf?.[toLc];
+      if (raw == null) throw new Error(`mockChain: no balanceOf fixture for ${toLc}`);
+      return { success: true, returnData: word(raw) };
+    }
+    if (sel === CONVERT_TO_ASSETS) {
+      const raw = fx.nav?.[toLc];
+      if (raw == null) throw new Error(`mockChain: no convertToAssets fixture for ${toLc}`);
+      return { success: true, returnData: word(raw) };
+    }
+    throw new Error(`mockChain: unexpected sub-call selector ${sel}`);
+  };
+
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
     const u = String(url);
     if (u.includes("geckoterminal.com")) {
@@ -101,29 +148,32 @@ function mockChain(fx: ChainFixtures) {
       return new Response(JSON.stringify({ chart: { result: [{ timestamp: [1, 2], indicators: { adjclose: [{ adjclose: [p, p] }], quote: [{ close: [p, p] }] } }] } }), { status: 200 });
     }
     const body = JSON.parse(String(init?.body)) as { id?: number; method: string; params: any[] };
+    if (body.method === "eth_call") {
+      const { to, data } = body.params[0] as { to: string; data: string };
+      const selector = data.slice(0, 10);
+      // The wallet-balances feed now issues ONE aggregate3 per round.
+      if (selector === AGGREGATE3) {
+        if (fx.rateLimitCalls && fx.rateLimitCalls > 0) {
+          fx.rateLimitCalls -= 1; // one transient 429 on the whole batch consumed
+          return new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } });
+        }
+        counter.aggregateCalls += 1;
+        const calls = decodeAggregate3Calls(data);
+        const results = calls.map((c) => subResult(c.target, c.callData));
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: encodeAggregate3Result(results) }), { status: 200 });
+      }
+      // Legacy single-call path retained for any direct callers.
+      const single = subResult(to, data);
+      if (!single.success) throw new Error(`mockChain: forced failure for ${to}`);
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: single.returnData }), { status: 200 });
+    }
     if (body.method === "eth_getBalance") {
       if (fx.native == null) throw new Error("mockChain: no native fixture");
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: word(fx.native) }), { status: 200 });
     }
-    if (body.method === "eth_call") {
-      const { to, data } = body.params[0] as { to: string; data: string };
-      const toLc = to.toLowerCase();
-      const selector = data.slice(0, 10);
-      if (selector === BALANCE_OF) {
-        if (fx.failBalanceOf?.map((a) => a.toLowerCase()).includes(toLc)) throw new Error(`mockChain: forced balanceOf failure for ${toLc}`);
-        const raw = fx.balanceOf?.[toLc];
-        if (raw == null) throw new Error(`mockChain: no balanceOf fixture for ${toLc}`);
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: word(raw) }), { status: 200 });
-      }
-      if (selector === CONVERT_TO_ASSETS) {
-        const raw = fx.nav?.[toLc];
-        if (raw == null) throw new Error(`mockChain: no convertToAssets fixture for ${toLc}`);
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: word(raw) }), { status: 200 });
-      }
-      throw new Error(`mockChain: unexpected selector ${selector}`);
-    }
     throw new Error(`mockChain: unexpected method ${body.method}`);
   }) as typeof fetch;
+  return counter;
 }
 
 // Fixtures under PRICE_SOURCE=stub (prices come from token-prices STUB_PRICES:
@@ -243,6 +293,78 @@ test("AC3b: a failing leg with NO persisted history yields valueUsd:null + prove
   // totalUsd simply omits the null leg (never fabricated).
   const sum = r.holdings.reduce((a, h) => a + (h.valueUsd ?? 0), 0);
   expect(r.totalUsd).toBeCloseTo(sum, 9);
+});
+
+// ── Multicall3 batching (public-Base-RPC 429 storm fix) at the ENDPOINT layer.
+// Every prop-wallet read now flows through ONE aggregate3 eth_call per round, so
+// a transient 429 hits the WHOLE batch: the transport's retry masks the blip and
+// EVERY chain leg recovers live; with retry disabled the batch throws and every
+// chain leg degrades to stale. All drive the REAL rpcRequest — nothing bypasses
+// the transport. AC3 above (a success:false sub-call) proves a PERMANENT single
+// leg still degrades in isolation while the others stay live. ──────────────────
+
+test("AC3-retry: a transient 429 on the whole aggregate3 batch is retried and ALL chain legs recover to provenance 'live'", async () => {
+  setBaseEnv({ BASE_RPC_RETRY_BASE_MS: "1" }); // fast backoff; source+price stay live (unset)
+  // The batch eth_call 429s twice, then 200s. Default BASE_RPC_MAX_RETRIES=3 ⇒ round 1 recovers.
+  const fx = stubFixtures();
+  fx.rateLimitCalls = 2;
+  // Live price path (provenance 'live' requires priceSource live too) — supply
+  // the mocked gecko/yahoo fixtures the live legs need.
+  fx.gecko = { [A.WETH]: 1700, [A.ROBOTMONEY]: 0.00002, [A.BNKR]: 0.001 };
+  fx.sp500Price = 4700;
+  mockChain(fx);
+
+  const r = await fetchWalletBalances();
+  const weth = r.holdings.find((h) => h.symbol === "WETH")!;
+  // Distinguishing assertion vs the negative control: the retried batch is LIVE,
+  // not stale, and WETH carries its REAL fixture value (10 WETH × $1700).
+  expect(weth.provenance).toBe("live");
+  expect(weth.valueUsd).toBeCloseTo(10 * 1700, 6);
+  expect(fx.rateLimitCalls).toBe(0); // both transient 429s were consumed
+  for (const h of r.holdings) expect(h.provenance).not.toBe("stale");
+});
+
+test("AC3-retry negative control: the SAME transient 429 with BASE_RPC_MAX_RETRIES=0 makes the batch throw so EVERY chain leg degrades to 'stale' — proving retry (not something else) produces the live outcome", async () => {
+  setBaseEnv({ BASE_RPC_RETRY_BASE_MS: "1", BASE_RPC_MAX_RETRIES: "0" });
+  // last-persisted WETH sample the degrade path falls back to (mirrors AC3).
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance)
+    VALUES ('2026-06-25', 'WETH', 15.4, 1550, 23870, 'live')
+  `;
+  const fx = stubFixtures();
+  fx.rateLimitCalls = 2; // identical fixture to the recovery test
+  process.env.PRICE_SOURCE = "stub"; // keep price fetches off the live gecko path
+  mockChain(fx);
+
+  const r = await fetchWalletBalances();
+  const weth = r.holdings.find((h) => h.symbol === "WETH")!;
+  // With retry disabled the very first 429 throws the whole batch → every chain
+  // leg degrades to stale (SP500 is off-chain config, so it is NOT a chain read).
+  expect(weth.provenance).toBe("stale");
+  expect(weth.valueUsd).toBeCloseTo(23870, 6); // its persisted sample
+  for (const sym of ["USDC", "ETH", "BNKR", "ROBOTMONEY"]) {
+    expect(r.holdings.find((h) => h.symbol === sym)!.provenance).toBe("stale");
+  }
+  expect(r.holdings.find((h) => h.symbol === "SP500")!.provenance).not.toBe("stale");
+  expect(fx.rateLimitCalls).toBe(1); // only ONE batch attempt was made (no retry)
+});
+
+test("AC3-batch: the endpoint issues at most TWO aggregate3 eth_calls regardless of wallet/asset count (was ~23 individual eth_calls)", async () => {
+  // Three prop wallets × the eight tracked assets used to fan out to ~23 separate
+  // eth_calls (3 × {6 balanceOf/getEthBalance} + 2 strategy convertToAssets). With
+  // Multicall3 that collapses to TWO aggregate3 calls: round 1 (all balances) +
+  // round 2 (the two strategies' NAV). This count IS the whole point of the fix.
+  const wallets = ["0x" + "a1".repeat(20), "0x" + "b2".repeat(20), "0x" + "c3".repeat(20)];
+  setBaseEnv();
+  process.env.PROP_WALLET_ADDRESSES = wallets.join(",");
+  process.env.BASE_RPC_SOURCE = "stub";
+  process.env.PRICE_SOURCE = "stub";
+  const counter = mockChain(stubFixtures());
+
+  const r = await fetchWalletBalances();
+  expect(r.holdings).toHaveLength(8); // the full fan-out ran
+  expect(counter.aggregateCalls).toBe(2); // round 1 balances + round 2 strategy NAV
+  expect(counter.aggregateCalls).toBeLessThanOrEqual(2); // never scales with wallet/asset count
 });
 
 test("live price path: PRICE_SOURCE=live executes the GeckoTerminal + Yahoo fetchers and labels provenance 'live'", async () => {

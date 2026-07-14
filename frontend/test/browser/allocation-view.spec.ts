@@ -211,6 +211,30 @@ test("allocation hero flags a stale wallet feed and renders '—' when a wallet 
   await expect(page.locator(".alloc-wallet-stale")).toContainText("stale");
 });
 
+test("a wallet feed that recovered from transient rate-limiting renders LIVE — no stale/non-live badge, live numbers in the hero (429-retry recovery)", async ({ page }) => {
+  // The web-component proof for the 429-retry fix: after the backend transport
+  // retries a transiently rate-limited leg, the wallet-balances payload comes
+  // back FULLY live (every holding provenance 'live', source 'live'). The view
+  // must show NO stale/non-live badge and render the live Total AUM + per-holding
+  // numbers — i.e. the components "see" the recovered live data, not a stale one.
+  const golden = loadVaultEconomicsGolden();
+  const wallet = walletStub({ totalUsd: 61234, source: "live" });
+  // Belt-and-suspenders: every leg is explicitly live (a recovered burst leaves
+  // none stale). Distinct per-holding values so the DOM binding is unambiguous.
+  wallet.holdings = wallet.holdings.map((h, i) => ({ ...h, provenance: "live", valueUsd: 1000 * (i + 1) }));
+  await stubEnvironment(page, golden, wallet);
+  await page.goto("/");
+  await navigate(page, "/allocation");
+
+  // Recovered → fully live: neither the stale nor the non-live wallet badge shows.
+  await expect(page.locator(".alloc-wallet-stale")).toBeHidden();
+  await expect(page.locator(".alloc-wallet-nonlive")).toBeHidden();
+  // Hero Total AUM composes the LIVE wallet total + live vault tvl (recovered
+  // numbers reach the component, never a degraded '—').
+  await expect(page.locator(".alloc-aum__value")).toHaveText(fmtUsd(totalAum(wallet.totalUsd, golden.tvlUsd)));
+  await expect(page.locator(".alloc-aum__value")).not.toHaveText("—");
+});
+
 test("allocation view renders the vault non-live indicator when vault-economics reports source:'stub' (issue #50)", async ({ page }) => {
   const stubPayload: VaultEconomics = {
     asOf: "2026-07-07T20:12:13.482Z",

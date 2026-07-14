@@ -47,32 +47,299 @@ export function decodeUint256(hex: string): bigint {
   return BigInt("0x" + clean);
 }
 
+// --- Multicall3 batch reads (rate-limit mitigation) --------------------------
+// The public Base node 429s under the wallet-balances burst (every prop wallet ×
+// every asset = ~two-dozen simultaneous eth_calls). Multicall3 — deployed at the
+// SAME canonical address on Base as every other EVM chain — collapses that whole
+// burst into ONE eth_call via aggregate3, which returns each sub-call's result
+// with a per-call success flag (allowFailure) so one bad leg never reverts the
+// batch. These are pure, hand-rolled ABI (encode/decode) helpers matching this
+// file's no-SDK philosophy; multicall3Aggregate3() (below) is the one transport
+// call. The single-call helpers (callBalanceOf etc.) remain for vault-economics/
+// buyback which read one contract at a time.
+export const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
+const MULTICALL3_SELECTORS = {
+  aggregate3: "0x82ad56cb", // aggregate3((address target,bool allowFailure,bytes callData)[])
+  getEthBalance: "0x4d2301cc", // getEthBalance(address) — native ETH balance via Multicall3
+} as const;
+
+export interface Call3 {
+  target: string;
+  allowFailure: boolean;
+  callData: string; // 0x-prefixed encoded calldata for the sub-call
+}
+export interface Aggregate3Result {
+  success: boolean;
+  returnData: string; // 0x-prefixed raw return bytes of the sub-call
+}
+
+// One 32-byte ABI word from a number/bigint.
+const abiWord = (n: number | bigint): string => BigInt(n).toString(16).padStart(64, "0");
+// Right-pad a hex byte-string to a whole number of 32-byte words.
+function rightPadWords(hexNo0x: string): string {
+  const rem = hexNo0x.length % 64;
+  return rem === 0 ? hexNo0x : hexNo0x + "0".repeat(64 - rem);
+}
+
+// Multicall3 getEthBalance(address) sub-call calldata (native ETH read).
+export const encodeGetEthBalanceCall = (address: string): string =>
+  MULTICALL3_SELECTORS.getEthBalance + encodeAddressArg(address);
+
+// Encode `aggregate3(Call3[])` calldata. Call3[] is a dynamic array of dynamic
+// tuples (address,bool,bytes): outer offset word (0x20), array length N, N
+// element-offsets (relative to the start of the element region, i.e. right after
+// the length word), then each element = target + allowFailure + inner-bytes
+// offset (0x60) + byteLen + right-padded callData.
+export function encodeAggregate3(calls: Call3[]): string {
+  const n = calls.length;
+  const elements = calls.map((c) => {
+    const cd = c.callData.replace(/^0x/, "").toLowerCase();
+    if (cd.length % 2 !== 0) throw new Error("aggregate3: callData must be whole bytes");
+    const head = encodeAddressArg(c.target) + abiWord(c.allowFailure ? 1 : 0) + abiWord(0x60);
+    const tail = abiWord(cd.length / 2) + rightPadWords(cd);
+    return head + tail;
+  });
+  const offsets: string[] = [];
+  let cursor = n * 32; // element region begins after the N offset words
+  for (const el of elements) {
+    offsets.push(abiWord(cursor));
+    cursor += el.length / 2;
+  }
+  const array = abiWord(n) + offsets.join("") + elements.join("");
+  return MULTICALL3_SELECTORS.aggregate3 + abiWord(0x20) + array;
+}
+
+// Inverse of encodeAggregate3: decode `aggregate3(Call3[])` CALLDATA back to the
+// Call3[] it carries. Used by the hermetic stub + endpoint mock to answer a batch
+// sub-call by sub-call. Tolerates the leading selector being present or absent.
+export function decodeAggregate3Calls(calldata: string): Call3[] {
+  let hex = calldata.replace(/^0x/, "").toLowerCase();
+  if (hex.startsWith("82ad56cb")) hex = hex.slice(8);
+  const wordAt = (b: number): string => hex.slice(b * 2, b * 2 + 64);
+  const numAt = (b: number): number => Number(BigInt("0x" + (wordAt(b) || "0")));
+  const arrStart = numAt(0); // outer offset (0x20)
+  const n = numAt(arrStart);
+  const elemsBase = arrStart + 32;
+  const calls: Call3[] = [];
+  for (let i = 0; i < n; i++) {
+    const elemStart = elemsBase + numAt(elemsBase + i * 32);
+    const target = "0x" + wordAt(elemStart).slice(24); // low 20 bytes of the word
+    const allowFailure = numAt(elemStart + 32) !== 0;
+    const dataStart = elemStart + numAt(elemStart + 64); // + inner offset-to-bytes
+    const byteLen = numAt(dataStart);
+    const callData = "0x" + hex.slice((dataStart + 32) * 2, (dataStart + 32) * 2 + byteLen * 2);
+    calls.push({ target, allowFailure, callData });
+  }
+  return calls;
+}
+
+// Encode an `aggregate3` RETURN value: `(bool success,bytes returnData)[]`. Used
+// by the stub/mock to synthesize a batch response. Symmetric to decodeAggregate3.
+export function encodeAggregate3Result(results: Aggregate3Result[]): string {
+  const n = results.length;
+  const elements = results.map((r) => {
+    const rd = r.returnData.replace(/^0x/, "").toLowerCase();
+    if (rd.length % 2 !== 0) throw new Error("aggregate3 result: returnData must be whole bytes");
+    const head = abiWord(r.success ? 1 : 0) + abiWord(0x40); // success + offset-to-bytes (2 words in)
+    const tail = abiWord(rd.length / 2) + rightPadWords(rd);
+    return head + tail;
+  });
+  const offsets: string[] = [];
+  let cursor = n * 32;
+  for (const el of elements) {
+    offsets.push(abiWord(cursor));
+    cursor += el.length / 2;
+  }
+  const array = abiWord(n) + offsets.join("") + elements.join("");
+  return "0x" + abiWord(0x20) + array;
+}
+
+// Decode an `aggregate3` RETURN value `(bool success,bytes returnData)[]`: skip
+// the outer offset word, read N, read N element-offsets, each element = success
+// word + inner bytes-offset (0x40) + byteLen + data.
+export function decodeAggregate3(resultHex: string): Aggregate3Result[] {
+  const hex = resultHex.replace(/^0x/, "").toLowerCase();
+  if (hex.length === 0) return [];
+  const wordAt = (b: number): string => hex.slice(b * 2, b * 2 + 64);
+  const numAt = (b: number): number => Number(BigInt("0x" + (wordAt(b) || "0")));
+  const arrStart = numAt(0);
+  const n = numAt(arrStart);
+  const elemsBase = arrStart + 32;
+  const out: Aggregate3Result[] = [];
+  for (let i = 0; i < n; i++) {
+    const elemStart = elemsBase + numAt(elemsBase + i * 32);
+    const success = numAt(elemStart) !== 0;
+    const dataStart = elemStart + numAt(elemStart + 32);
+    const byteLen = numAt(dataStart);
+    const returnData = "0x" + hex.slice((dataStart + 32) * 2, (dataStart + 32) * 2 + byteLen * 2);
+    out.push({ success, returnData });
+  }
+  return out;
+}
+
 export interface RpcCallOptions {
   rpcUrl: string;
   timeoutMs?: number;
 }
 
+// --- Rate-limit hardening (issue: public-Base-RPC 429 storm) ------------------
+// The free public Base RPC (https://mainnet.base.org) 429s under the concurrent
+// burst that a single dashboard read fans out (every holding leg × every prop
+// wallet, dozens of simultaneous eth_calls). Two complementary controls, BOTH
+// applied inside this one transport so every caller inherits them without
+// touching its fan-out:
+//
+//   1. A module-level concurrency GATE that serializes the burst into small
+//      waves (this is what actually prevents the 429 storm), and
+//   2. Bounded RETRY-with-backoff on transient statuses (429/502/503/504),
+//      honoring Retry-After, so a momentary rate-limit blip self-heals.
+//
+// HONESTY CONTRACT (unchanged): retry masks a transient blip, NEVER a genuine
+// outage. After retries are exhausted rpcRequest STILL THROWS so callers degrade
+// that single leg to its last-persisted `stale` sample — it never fabricates a
+// value nor falsely reports `live`. Non-transient failures (JSON-RPC `error`,
+// missing `result`, a non-transient non-2xx like 400/500) throw IMMEDIATELY with
+// no retry. The AbortController timeout still bounds total work: if the signal
+// aborts mid-fetch or mid-backoff we stop retrying and throw.
+
+// Transient HTTP statuses worth a retry: 429 (rate limited) plus the 502/503/504
+// gateway/overload family. A 500/400/401/etc. is a hard error — no retry.
+const TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
+// Hard ceiling on any single backoff wait so a hostile/huge Retry-After can't
+// stall a request longer than the AbortController timeout would anyway.
+const MAX_BACKOFF_MS = 30_000;
+
+// Env knobs, read at CALL time (not module load) so tests/deployments can flip
+// them. Fall back to the documented default on unset/empty/garbage.
+function intEnv(name: string, fallback: number, min: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= min ? Math.floor(n) : fallback;
+}
+function maxConcurrency(): number {
+  return intEnv("BASE_RPC_MAX_CONCURRENCY", 4, 1);
+}
+function maxRetries(): number {
+  return intEnv("BASE_RPC_MAX_RETRIES", 3, 0);
+}
+function retryBaseMs(): number {
+  return intEnv("BASE_RPC_RETRY_BASE_MS", 250, 1);
+}
+
+// Hand-rolled async semaphore (no dependency — this repo is buildless). A slot
+// is transferred directly to the next waiter on release so `inFlight` is always
+// exactly the number of running-or-about-to-run requests, bounding peak
+// simultaneous fetches at the configured cap.
+let inFlight = 0;
+const waiters: Array<() => void> = [];
+function acquireSlot(): Promise<void> {
+  if (inFlight < maxConcurrency()) {
+    inFlight++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => waiters.push(resolve));
+}
+function releaseSlot(): void {
+  const next = waiters.shift();
+  if (next) next(); // hand the slot straight to the next waiter; inFlight unchanged
+  else inFlight--;
+}
+
+// Test-only hygiene hook: reset the gate between suites. Not used in prod.
+export function _resetRpcConcurrencyForTests(): void {
+  inFlight = 0;
+  waiters.length = 0;
+}
+
+// Parse a Retry-After header (RFC 7231): either delta-seconds or an HTTP-date.
+// Returns the wait in ms, or null when absent/unparseable.
+function parseRetryAfterMs(header: string | null): number | null {
+  if (!header) return null;
+  const secs = Number(header);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const when = Date.parse(header);
+  if (!Number.isNaN(when)) return Math.max(0, when - Date.now());
+  return null;
+}
+
+// Backoff for the Nth retry (1-based). Honor Retry-After when present; otherwise
+// exponential (base × 2^(n-1)) plus full-base jitter, capped at MAX_BACKOFF_MS.
+function backoffMs(attempt: number, retryAfterHeader: string | null): number {
+  const retryAfter = parseRetryAfterMs(retryAfterHeader);
+  if (retryAfter !== null) return Math.min(retryAfter, MAX_BACKOFF_MS);
+  const base = retryBaseMs();
+  const exp = base * Math.pow(2, attempt - 1);
+  const jitter = Math.random() * base;
+  return Math.min(exp + jitter, MAX_BACKOFF_MS);
+}
+
+// Sleep that rejects the moment the request's AbortController fires (timeout), so
+// a retry loop can never outlive the request's overall deadline.
+function sleepOrAbort(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(new Error("Base RPC aborted before retry"));
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("Base RPC aborted (timeout) during retry backoff"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 // The SINGLE JSON-RPC transport for every Base read in the app. Throws on
-// transport failure, a non-2xx HTTP status, a JSON-RPC `error` field, or a
-// missing `result` — callers (chain/*.ts) catch this and degrade the response
-// rather than propagate a 5xx or fabricate a value. Every method below (and
-// every chain module) issues its RPC through here so there is exactly one place
-// that speaks JSON-RPC to Base; do NOT hand-roll a `fetch` to the RPC elsewhere.
+// transport failure, a non-2xx HTTP status (after exhausting bounded retries on
+// transient statuses), a JSON-RPC `error` field, or a missing `result` — callers
+// (chain/*.ts) catch this and degrade the response rather than propagate a 5xx or
+// fabricate a value. Every method below (and every chain module) issues its RPC
+// through here so there is exactly one place that speaks JSON-RPC to Base; do NOT
+// hand-roll a `fetch` to the RPC elsewhere.
 export async function rpcRequest<T>(method: string, params: unknown[], opts: RpcCallOptions): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 8000);
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
+  const retries = maxRetries();
   try {
-    const res = await fetch(opts.rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`Base RPC HTTP ${res.status}`);
-    const body = (await res.json()) as { result?: T; error?: { message?: string } };
-    if (body.error) throw new Error(`Base RPC error: ${body.error.message ?? "unknown"}`);
-    if (body.result === undefined) throw new Error(`Base RPC: missing result for ${method}`);
-    return body.result;
+    for (let attempt = 0; ; attempt++) {
+      // Acquire a concurrency slot per network attempt (and release it during any
+      // backoff sleep, so a waiting request is never blocked by one that is just
+      // sitting out its backoff).
+      await acquireSlot();
+      let res: Response;
+      try {
+        res = await fetch(opts.rpcUrl, {
+          method: "POST",
+          // A User-Agent is a small robustness win: the public Base node 403s a
+          // header-less POST. Content-Type stays required for JSON-RPC.
+          headers: { "Content-Type": "application/json", "User-Agent": "robotmoney-rmpc/1.0" },
+          body,
+          signal: controller.signal,
+        });
+      } finally {
+        releaseSlot();
+      }
+
+      if (res.ok) {
+        const parsed = (await res.json()) as { result?: T; error?: { message?: string } };
+        if (parsed.error) throw new Error(`Base RPC error: ${parsed.error.message ?? "unknown"}`);
+        if (parsed.result === undefined) throw new Error(`Base RPC: missing result for ${method}`);
+        return parsed.result;
+      }
+
+      // Non-2xx. Retry only transient statuses, only while retries remain, and
+      // only if the request hasn't already been aborted by its timeout.
+      if (TRANSIENT_STATUSES.has(res.status) && attempt < retries && !controller.signal.aborted) {
+        await sleepOrAbort(backoffMs(attempt + 1, res.headers.get("retry-after")), controller.signal);
+        continue;
+      }
+      // Exhausted / non-transient: THROW so the caller degrades to stale. Never
+      // fabricate, never report live off a dead endpoint.
+      throw new Error(`Base RPC HTTP ${res.status}`);
+    }
   } finally {
     clearTimeout(timeout);
   }
@@ -155,6 +422,18 @@ export async function callBalanceOf(tokenAddress: string, holder: string, opts: 
 export async function callConvertToAssets(strategyAddress: string, shares: bigint, opts: RpcCallOptions): Promise<bigint> {
   if (shares === 0n) return 0n;
   return decodeUint256(await ethCall(strategyAddress, encodeConvertToAssetsCall(shares), opts));
+}
+
+// Batch many reads into ONE eth_call via Multicall3 aggregate3. Returns one
+// {success,returnData} per input call, IN ORDER. Throws (like every read here)
+// only on a transport/HTTP/JSON-RPC failure of the batch itself — an individual
+// sub-call that reverts comes back as {success:false} (allowFailure), NOT a
+// throw, so the caller degrades just that leg. This is the single-eth_call path
+// wallet-balances uses to avoid the 429 storm.
+export async function multicall3Aggregate3(calls: Call3[], opts: RpcCallOptions): Promise<Aggregate3Result[]> {
+  if (calls.length === 0) return [];
+  const result = await ethCall(MULTICALL3_ADDRESS, encodeAggregate3(calls), opts);
+  return decodeAggregate3(result);
 }
 
 // A single `eth_getBalance` (native ETH balance in wei). Separate JSON-RPC
