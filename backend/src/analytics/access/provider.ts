@@ -1,9 +1,9 @@
 // The single data seam for the analytics suite. Every tool gets its raw series
 // from a Provider — tools never know whether the data is seeded or live. The
-// default is a deterministic seededProvider (hermetic, no API keys). An opt-in,
-// implemented live FetcherProvider (DefiLlama/Yahoo, all keyless;
-// PROVIDER=live) satisfies the same interface and falls back to seeded per series,
-// so it is the ONLY thing that changes when serving real data.
+// default is a deterministic seededProvider (hermetic, no API keys), consumed
+// by analyze/tool.ts and access/hermetic-source.ts. Live data reaches the
+// orchestrator through access/data-source.ts liveDataSource instead (selected
+// via ANALYTICS_SOURCE — see analytics/index.ts::resolveAnalyticsSource).
 import type { SeriesSpec, Point } from "../types.ts";
 import { lcg, hashStr } from "../transform/math.ts";
 

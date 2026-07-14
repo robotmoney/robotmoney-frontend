@@ -342,11 +342,12 @@ into six independently testable stages — **access → extract → transform �
   **`resolveAnalyticsSource()`** in `backend/src/analytics/index.ts`, is the SINGLE
   authoritative selector: unset/`live` → `liveDataSource`, `hermetic` →
   `hermeticDataSource`, any other value refused loudly (fail-closed). The legacy
-  `PROVIDER` / `config.analyticsProvider` knob is **deprecated for source selection**
-  and is no longer consulted on the live/demo path (see the deprecation note in
-  `config.ts`). The old per-run seeded-vs-live selector module has been deleted; the
-  opt-in `fetcher-provider.ts` it drove is retired from the data path (retained only
-  for legacy provider unit tests).
+  `PROVIDER` env knob, the `config.analyticsProvider` field it fed, and the
+  `fetcher-provider.ts` test scaffolding it drove were **removed** (2026-07-14
+  maintainability review, finding 011 — they had zero production consumers);
+  `ANALYTICS_SOURCE` is the only source selector, and a backend guard test
+  (`tests/no-dead-provider-chain.test.ts`) greps `backend/src` to keep the dead
+  chain from reappearing.
 - **`extract/`** — pull raw series from KEYLESS public sources. `http.ts`
   (timeout/abort fetch, plus an opt-in on-disk TTL cache in `fetch-cache.ts`), one
   pure parser per source — **`fred.ts`, `yahoo.ts`, `defillama.ts`,

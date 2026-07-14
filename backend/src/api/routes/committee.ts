@@ -114,7 +114,9 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   // RM_ALLOW_INSECURE). demo/prod with no token → locked.
   const privileged = () =>
     config.adminToken ? secretEq(req.headers.get("X-Admin-Token"), config.adminToken) : config.allowInsecure;
-  const analyticsProvider = () =>
+  // Named to avoid colliding with the (removed) analytics data-source knob —
+  // this is purely the AUTH check for the analytics-provider ROLE above.
+  const hasAnalyticsProviderRole = () =>
     config.analyticsToken ? secretEq(bearer(req), config.analyticsToken) : config.allowInsecure;
 
   // PUBLIC onboarding: a prospective member submits its public key. The member
@@ -131,7 +133,7 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
 
   // Role-gated regime write: ONLY the analytics-provider may persist the regime.
   if (m === "POST" && p === "/api/committee/regime") {
-    if (!analyticsProvider()) return { status: 403, body: { error: "analytics-provider role required" } };
+    if (!hasAnalyticsProviderRole()) return { status: 403, body: { error: "analytics-provider role required" } };
     const b = await readJsonObject(req) ?? {};
     const asof = typeof b.asof === "string" ? b.asof : new Date().toISOString().slice(0, 10);
     const tools = Object.keys(await runAnalytics(asof));
