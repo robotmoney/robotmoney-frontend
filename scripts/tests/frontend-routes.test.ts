@@ -64,6 +64,9 @@ describe("frontend route resolution", () => {
     const detail = await loadArchiveSession("2026-06-25", "woon");
 
     expect(detail.source).toBe("archive");
+    // camelSession returns null for a nullish payload; assert-and-narrow so the
+    // remaining assertions typecheck against the non-null session shape.
+    if (!detail.session) throw new Error("archive session normalized to null");
     // The archive JSON is snake_case throughout (subject_id, regime_summary,
     // macro_percentile, ...) — the loader must serve the camelCase shape the
     // session view binds to. subjectId (not subject_id) is the exact drift

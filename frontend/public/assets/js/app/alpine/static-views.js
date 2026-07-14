@@ -1,3 +1,9 @@
+// @ts-nocheck — browser-facing plain JS predating the root tsconfig's checkJs
+// coverage. It entered the root TS program when frontend-routes.test.ts was
+// re-pointed at the real archive loaders below (review-maintainability-026);
+// before that it was never typechecked, so this pragma preserves the status
+// quo rather than weakening existing coverage. JSDoc-typing this file is a
+// worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
 
 const STANCE_COLORS = {

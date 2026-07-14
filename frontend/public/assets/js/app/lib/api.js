@@ -1,3 +1,7 @@
+// @ts-nocheck — browser-facing plain JS predating the root tsconfig's checkJs
+// coverage; pulled into the root TS program transitively by
+// frontend-routes.test.ts → static-views.js (never typechecked before that, so
+// this pragma preserves the status quo). JSDoc-typing it is a follow-up.
 // The ONLY way the frontend reaches the backend. Reads the public API origin
 // from window.RM_CONFIG (set by /config.js) and never imports backend code.
 import { ROUTES, path } from "../contract/index.js";
