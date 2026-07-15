@@ -24,10 +24,13 @@
 //       false: the LIVE analytics run landed a fresh snapshot. A dead feed
 //       blocking a factor (the #127 MVRV-404 failure mode) leaves it stale → red.
 //   (d) wallet — /api/dashboards/wallet-balances source === 'live' and every
-//       holding provenance 'live' EXCEPT the documented-allowed degrades of
-//       issue #120: ZYFAI-SS1 / GIZA-SS1 revert on balanceOf on-chain, so those
-//       two legs legitimately serve 'stale'/'seed' and are loud-LOGGED here.
-//       Any OTHER non-live leg is NEW silent staleness and FAILS, naming the leg.
+//       holding provenance 'live'. Issue #120 shipped the smart-account NAV fix
+//       (idle USDC + maintained-vault-list convertToAssets, both proven wallets
+//       not ERC-4626 tokens) so ZYFAI-SS1/GIZA-SS1 now resolve 'live' like any
+//       other leg; ALLOWED_STALE_LEGS stays as a documented, loud-logged
+//       tolerance in case a transport blip degrades just those two legs, but a
+//       'live' steady state no longer routes through it. Any non-live leg
+//       outside that allowlist is NEW silent staleness and FAILS, naming the leg.
 //   (e) allocation — /api/dashboards/vault-economics source === 'live' and
 //       stale === false (the real eth_call reads succeeded).
 //   (f) research — both research-signal keys serve a landed signal (a dead
@@ -49,12 +52,12 @@ const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 export const LIVE_SMOKE_MIN_PUBLISHED_SESSIONS = 2;
 
 /**
- * Documented-allowed stale wallet legs (issue #120): the configured ZYFAI-SS1 /
- * GIZA-SS1 strategy addresses revert on balanceOf, so these two legs can never
- * value live until #120 lands a fix. They are tolerated (and loud-logged) as
- * 'stale'/'seed'; every other leg must be 'live'. When #120 is fixed they turn
- * 'live' and still pass. Keep in sync with that issue — do NOT grow this set to
- * paper over NEW staleness.
+ * Documented-allowed stale wallet legs (issue #120, shipped): ZYFAI-SS1 /
+ * GIZA-SS1 now value live via smart-account NAV (idle USDC + maintained-vault
+ * convertToAssets), so a healthy LIVE boot resolves them 'live' like every
+ * other leg. This allowlist remains ONLY as a documented, loud-logged
+ * tolerance for a transient degrade of just these two legs; every other leg
+ * must be 'live'. Do NOT grow this set to paper over NEW staleness.
  */
 export const ALLOWED_STALE_LEGS: ReadonlySet<string> = new Set(["ZYFAI-SS1", "GIZA-SS1"]);
 
