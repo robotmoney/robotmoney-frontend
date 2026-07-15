@@ -393,6 +393,41 @@ test("live price path: PRICE_SOURCE=live executes the GeckoTerminal + Yahoo fetc
   for (const h of r.holdings) expect(h.provenance).toBe("live");
 });
 
+test("BNKR (issue #148): the REAL baked default address (no BNKR_ADDRESS override) is a non-placeholder and resolves provenance 'live' via GeckoTerminal — regression guard for the address that was stuck 'stale'", async () => {
+  // Deliberately mirror setBaseEnv() for every OTHER asset but leave
+  // BNKR_ADDRESS UNSET so resolveTrackedAssets() falls through to the real
+  // config default. Before #148 that default was the repeating-digit
+  // placeholder 0x7777...7777 — a real (empty) Base account with no token
+  // contract, so GeckoTerminal legitimately had no USD price for it and the
+  // leg permanently degraded to 'stale'. This test would have caught that:
+  // it fails red if the default ever regresses to a placeholder or otherwise
+  // stops resolving live.
+  process.env.PROP_WALLET_ADDRESSES = WALLET;
+  process.env.USDC_ADDRESS = A.USDC;
+  process.env.ZYFAI_SS1_ADDRESS = A.ZYFAI;
+  process.env.GIZA_SS1_ADDRESS = A.GIZA;
+  process.env.WETH_ADDRESS = A.WETH;
+  process.env.ROBOTMONEY_ADDRESS = A.ROBOTMONEY;
+  process.env.SP500_SIZE = "0.633";
+
+  const bnkrAsset = resolveTrackedAssets().find((a) => a.symbol === "BNKR")!;
+  expect(bnkrAsset.address).toBe("0x22af33fe49fd1fa80c7149773dde5890d3c76f3b");
+
+  const fx = stubFixtures();
+  delete fx.balanceOf![A.BNKR]; // the fake test-double address is no longer used
+  fx.balanceOf![bnkrAsset.address!] = 20000n * E18;
+  fx.gecko = { [A.WETH]: 1700, [A.ROBOTMONEY]: 0.00002, [bnkrAsset.address!]: 0.000367390519898331 };
+  fx.sp500Price = 4700;
+  mockChain(fx);
+
+  const r = await fetchWalletBalances();
+  expect(r.priceSource).toBe("live");
+  const bnkr = r.holdings.find((h) => h.symbol === "BNKR")!;
+  expect(bnkr.provenance).toBe("live"); // not 'stale' — the live GeckoTerminal read succeeded
+  expect(bnkr.priceUsd).toBeCloseTo(0.000367390519898331, 12);
+  expect(bnkr.valueUsd).toBeCloseTo(20000 * 0.000367390519898331, 6);
+});
+
 test("AC4: config-time guard fails startup if a prop wallet collides with the vault/adapter set; no rmUSDC vault share is tracked", () => {
   // No collision by default.
   setBaseEnv();
