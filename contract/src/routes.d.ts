@@ -54,6 +54,7 @@ export const ROUTES: {
     rawHistorySeed: string;
     regimeSnapshots: string;
     researchSignals: string;
+    researchEligibility: string;
   };
   admin: {
     auth: string;

@@ -39,13 +39,18 @@ jobs:
           bun-version: "1.3.5"
       - name: Install root tooling
         run: bun install --frozen-lockfile
+      # Installed BEFORE "Check root scripts" (issue #108): scripts/tests/
+      # demo-edgar-bootstrap.test.ts spawns backend/scripts/edgar-seed-bootstrap.ts
+      # as a host-side subprocess (cwd: backend/), which needs backend's own
+      # node_modules (@robotmoney/contract) resolvable — the same reason the
+      # rest of this job's backend steps need it, just moved earlier.
+      - name: Install deps
+        working-directory: backend
+        run: bun install --frozen-lockfile
       - name: Check root scripts
         run: bun run typecheck && bun run test
       - name: Check docs/analytics consistency
         run: bash scripts/check-docs-analytics.sh
-      - name: Install deps
-        working-directory: backend
-        run: bun install --frozen-lockfile
       - name: Typecheck backend
         working-directory: backend
         run: bun run typecheck

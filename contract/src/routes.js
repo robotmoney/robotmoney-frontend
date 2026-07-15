@@ -85,6 +85,10 @@ export const ROUTES = {
     rawHistorySeed: "/api/analytics/raw-history/seed", // POST — cold-DB gap-fill (existing rows win; EDGAR seed ingestion)
     regimeSnapshots: "/api/analytics/regime-snapshots", // POST — snapshot batch upsert on (date)
     researchSignals: "/api/analytics/research-signals", // POST — signal batch upsert on (signal_key, date)
+    // POST — flips job_schedules.research.refresh to enabled (issue #108). Called
+    // ONLY after the EDGAR/MNA seed bootstrap ingests successfully, so a fresh
+    // boot's research schedule never becomes claimable before the floor is seeded.
+    researchEligibility: "/api/analytics/research-eligibility",
   },
 
   admin: {

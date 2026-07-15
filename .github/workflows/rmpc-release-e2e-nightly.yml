@@ -63,6 +63,12 @@ jobs:
       - name: Typecheck MCP
         working-directory: mcp
         run: bun run typecheck
+      # Needed by scripts/demo.ts's host-side EDGAR seed bootstrap step
+      # (backend/scripts/edgar-seed-bootstrap.ts, issue #108) — see e2e.yml's
+      # matching step for the full rationale.
+      - name: Install backend deps (for the host-side EDGAR seed bootstrap step)
+        working-directory: backend
+        run: bun install --frozen-lockfile
 
       # Reuses the EXACT demo stack boot (scripts/demo.ts → scripts/lib/demo-main.ts):
       # postgres + api + worker + mcp via docker compose, migrations, health checks,

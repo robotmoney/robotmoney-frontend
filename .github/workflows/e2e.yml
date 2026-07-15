@@ -48,6 +48,15 @@ jobs:
       - name: Test MCP
         working-directory: mcp
         run: bun test
+      # Needed BEFORE "Full-stack demo" (issue #108): scripts/lib/demo-main.ts
+      # now spawns backend/scripts/edgar-seed-bootstrap.ts as a host-side
+      # subprocess (cwd: backend/) after API health, which needs backend's own
+      # node_modules (@robotmoney/contract) resolvable on this runner — the api
+      # container installs its own copy at image-build time, but that is
+      # invisible to a host-side `bun run` outside docker.
+      - name: Install backend deps (for the host-side EDGAR seed bootstrap step)
+        working-directory: backend
+        run: bun install --frozen-lockfile
       # === Demo readiness gate ===
       # This DEMO_HERMETIC=1 boot-and-check step block IS the "demo readiness" gate.
       # It boots the full hermetic demo stack and runs the three loud-failure guards
