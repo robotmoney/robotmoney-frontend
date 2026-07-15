@@ -5,7 +5,6 @@
 import type { AnalyticTool, ToolContext } from "./tool.ts";
 import { ratio, percentileInWindow } from "../transform/math.ts";
 import type { ResearchPayload, Gauge } from "./research.ts";
-import { persistResearchSignal } from "../store/research-store.ts";
 
 const KEY = "late-cycle-signals";
 
@@ -48,6 +47,4 @@ export const lateCycleTool: AnalyticTool<ResearchPayload> = {
       series: { label: "Index concentration (SPY/RSP)", points: dates.map((date, i) => ({ date, value: Number((concentration[i] ?? 0).toFixed(3)) })).slice(-180) },
     };
   },
-
-  async persist(result, asof) { await persistResearchSignal(KEY, asof, result); },
 };

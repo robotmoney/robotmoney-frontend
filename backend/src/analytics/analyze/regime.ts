@@ -1,10 +1,10 @@
 // Regime classifier as a composable AnalyticTool. Macro + on-chain indicators →
 // per-indicator sign-adjusted percentile → panel composites → overall composite +
-// regime label. Persists the full history to regime_snapshots.
+// regime label. Pure compute — persistence goes through the orchestrator's
+// AnalyticsPersistence port (issue #106).
 import type { AnalyticTool, ToolContext } from "./tool.ts";
 import { classifyRegime } from "@robotmoney/contract";
 import { percentileInWindow, applySign } from "../transform/math.ts";
-import { saveRegimeSnapshots } from "../store/regime-store.ts";
 
 // The regime thresholds/label rule live in @robotmoney/contract (contract/src/
 // regime.js) — this classifier is the canon they encode (0.33/0.67), and the
@@ -88,5 +88,4 @@ export const regimeTool: AnalyticTool<RegimeResult> = {
     return { snapshots };
   },
 
-  async persist(result) { await saveRegimeSnapshots(result.snapshots); },
 };

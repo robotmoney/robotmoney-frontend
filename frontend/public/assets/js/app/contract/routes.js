@@ -75,6 +75,18 @@ export const ROUTES = {
     },
   },
 
+  // Analytics-provider ingestion boundary (issue #106). Every route requires the
+  // ANALYTICS_TOKEN bearer (analytics-provider role); updater processes call
+  // these instead of writing SQL. Mutations validate the whole payload before
+  // opening a transaction and are idempotent on their natural keys. There is NO
+  // generic SQL-over-HTTP endpoint.
+  analytics: {
+    rawHistory: "/api/analytics/raw-history", // GET → persisted floor; POST — batch upsert on (date, indicator)
+    rawHistorySeed: "/api/analytics/raw-history/seed", // POST — cold-DB gap-fill (existing rows win; EDGAR seed ingestion)
+    regimeSnapshots: "/api/analytics/regime-snapshots", // POST — snapshot batch upsert on (date)
+    researchSignals: "/api/analytics/research-signals", // POST — signal batch upsert on (signal_key, date)
+  },
+
   admin: {
     auth: "/api/admin/auth", // POST — verify the admin password → { ok: true }
     jobs: "/api/admin/jobs", // GET ?limit= — task-queue jobs + schedules + status summary

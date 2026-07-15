@@ -10,3 +10,10 @@ export interface SeriesSpec {
 }
 
 export interface Point { date: string; value: number; }
+
+// The persisted-real raw floor shape (raw_indicator_history rows grouped by
+// indicator id, points sorted by date ascending). Shared by the API-owned store
+// writers, the /api/analytics ingestion boundary, and the updater's API client —
+// defined HERE (pure module) so updater code never has to import a SQL-backed
+// store module just for the type (issue #106).
+export type RawIndicatorHistory = Record<string, Point[]>;

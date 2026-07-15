@@ -6,6 +6,7 @@
 import { test, expect, afterEach } from "bun:test";
 import { hermeticDataSource } from "../src/analytics/access/hermetic-source.ts";
 import { resolveAnalyticsSource, runAnalytics } from "../src/analytics/index.ts";
+import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { liveDataSource } from "../src/analytics/access/data-source.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { sql } from "../src/db/client.ts";
@@ -59,7 +60,7 @@ test("runAnalytics(hermetic) persists regime + research OFFLINE (demo/e2e path)"
   await sql`DELETE FROM research_signals WHERE date = ${ASOF}`;
 
   banNetwork();
-  const results = await runAnalytics(ASOF, undefined, hermeticDataSource);
+  const results = await runAnalytics(ASOF, undefined, hermeticDataSource, directAnalyticsPersistence);
   globalThis.fetch = realFetch;
 
   expect(Object.keys(results).sort()).toEqual(["channel-divergence", "late-cycle-signals", "regime"]);

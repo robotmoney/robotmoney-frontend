@@ -19,7 +19,9 @@ export interface AnalyticTool<R = unknown> {
   inputs: string[]; // series ids consumed (provenance/documentation)
   dependsOn?: string[]; // other tool ids this composes
   compute(ctx: ToolContext): Promise<R> | R;
-  persist(result: R, asof: string): Promise<void>; // write to regime_snapshots / research_signals
+  // NOTE (issue #106): tools no longer carry a persist member — persistence is
+  // owned by the orchestrator's AnalyticsPersistence port (analytics/persistence.ts),
+  // so compute stays pure and analyze/* never imports a SQL-backed store.
 }
 
 export class Registry {
@@ -52,7 +54,8 @@ export class Registry {
     return out;
   }
 
-  // Run one tool (and its deps) or all; returns {id: result}. Persists each.
+  // Run one tool (and its deps) or all; returns {id: result}. Pure compute —
+  // callers persist results through the AnalyticsPersistence port (issue #106).
   async run(asof: string, only?: string, provider: Provider = seededProvider) {
     if (only && !this.tools.has(only)) throw new Error(`unknown analytics tool "${only}"`);
     const results = new Map<string, unknown>();
@@ -63,7 +66,6 @@ export class Registry {
     for (const t of plan) {
       const r = await t.compute(ctx);
       results.set(t.id, r);
-      await t.persist(r, asof);
     }
     return Object.fromEntries(results);
   }

@@ -1,4 +1,4 @@
-import { sql } from "../db/client.ts";
+import { sql } from "../db/worker-client.ts";
 
 // Read per call (not at module load) so tests can shorten the window; a live
 // owner renews `locked_at` on a fraction of this interval (loop.ts lease

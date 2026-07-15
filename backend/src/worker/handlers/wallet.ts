@@ -10,7 +10,7 @@
 // backfillWalletHistory: idempotently seeds the pre-launch series carried
 // forward from the baked views.js data (chain/wallet-history-seed.ts). Run from
 // db/seed.ts as part of `bun run migrate`.
-import { sql } from "../../db/client.ts";
+import { sql } from "../../db/worker-client.ts";
 import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../../chain/wallet-balances.ts";
 import { walletHistorySeedRows } from "../../chain/wallet-history-seed.ts";
 

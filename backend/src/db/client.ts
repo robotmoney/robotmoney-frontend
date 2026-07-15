@@ -10,6 +10,12 @@ export const sql = postgres(config.databaseUrl, {
   onnotice: () => {}, // silence NOTICE spam (e.g. "table already exists")
 });
 
+// A database handle store writers accept: either the shared pool or a
+// transaction handle from sql.begin (postgres.js's TransactionSql does not
+// structurally extend Sql — it lacks the pool lifecycle members — so writers
+// that must run inside an API-route transaction take this union; issue #106).
+export type DbHandle = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<{}>;
+
 // postgres.js intentionally requires a structural JSON type with an index
 // signature. Domain DTO interfaces do not carry that signature even when every
 // field is serializable, so keep the assertion at this single persistence seam.

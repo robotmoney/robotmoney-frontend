@@ -12,6 +12,10 @@ import { canonicalizeSubmission, demoAttends, ROUTES, stanceFor } from "@robotmo
 import * as ic from "../committee/domain.ts";
 import { runAnalytics } from "../analytics/index.ts";
 import { hermeticDataSource } from "../analytics/access/hermetic-source.ts";
+// This demo driver already holds DB credentials (it seeds members via SQL), so
+// it persists analytics through the API-owned direct service rather than the
+// worker's HTTP client (issue #106) — demo/e2e tooling, not an updater process.
+import { directAnalyticsPersistence } from "../analytics/store/direct.ts";
 
 // Backend base URL. BACKEND_URL is the canonical variable every other driver
 // honors (scripts/demo-frontend-check.ts, scripts/rmpc-release-e2e.ts,
@@ -85,7 +89,7 @@ async function main() {
   // Demo/e2e MUST be hermetic + offline (demo spec: no FRED/Yahoo/EDGAR/... calls).
   // Pass the deterministic seeded source explicitly so this path never fires the
   // ~200 live EDGAR/fetcher requests the prod `liveDataSource` would.
-  await runAnalytics(today, undefined, hermeticDataSource);
+  await runAnalytics(today, undefined, hermeticDataSource, directAnalyticsPersistence);
   const regime = (await sql`SELECT composite, regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0];
   const composite = Number(regime.composite);
   console.log(`regime: composite=${composite.toFixed(3)} (${regime.regime})`);

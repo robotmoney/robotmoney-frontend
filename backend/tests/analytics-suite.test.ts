@@ -13,6 +13,7 @@
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
+import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import type { Point } from "../src/analytics/types.ts";
 import type { Indicator } from "../src/analytics/analyze/indicators.ts";
 import type { AnalyticsDataSource, ResearchInputs } from "../src/analytics/access/data-source.ts";
@@ -78,7 +79,7 @@ test(
     await sql`DELETE FROM raw_indicator_history`;
     await sql`DELETE FROM research_signals WHERE date = ${ASOF}`;
 
-    const results = await runAnalytics(ASOF, undefined, await fixtureSource());
+    const results = await runAnalytics(ASOF, undefined, await fixtureSource(), directAnalyticsPersistence);
     expect(Object.keys(results).sort()).toEqual(["channel-divergence", "late-cycle-signals", "regime"]);
 
     // ── (1) regime_snapshots landed; latest persisted row IS the as-of day ──
@@ -165,7 +166,7 @@ test(
         return { spx: [], eth: [], tbill3m: [] };
       },
     };
-    await runAnalytics(ASOF, "regime", emptySource);
+    await runAnalytics(ASOF, "regime", emptySource, directAnalyticsPersistence);
     const [{ n: t10After }] = await sql`SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'T10Y2Y'`;
     expect(t10After).toBe(t10Rows); // floor intact — nothing erased by an empty fetch
   },

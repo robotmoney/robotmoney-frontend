@@ -1,5 +1,5 @@
 import parser from "cron-parser";
-import { jsonValue, sql } from "../db/client.ts";
+import { jsonValue, sql } from "../db/worker-client.ts";
 
 interface ScheduleRow {
   id: number;

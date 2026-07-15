@@ -15,7 +15,7 @@
 // intact), and returns a non-success status ({ ok:false, status:"degraded" }).
 // Nothing on the path is fabricated. All writes upsert on natural keys so a
 // re-run never duplicates rows.
-import { sql } from "../../db/client.ts";
+import { sql } from "../../db/worker-client.ts";
 import { selectProjectsDataSource } from "../../projects/access/select.ts";
 import type { ProjectsDataSource } from "../../projects/access/data-source.ts";
 import {

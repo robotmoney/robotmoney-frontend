@@ -1,0 +1,44 @@
+// Shared API credential checks (issue #106 extracted these from the committee
+// router so the /api/analytics boundary reuses the SAME idioms instead of
+// growing a second implementation).
+//
+// Roles (docs/architecture.md §9.8):
+//  • host/admin         — isPrivileged() (ADMIN_TOKEN as X-Admin-Token, or non-prod).
+//  • analytics-provider — hasAnalyticsProviderRole() (ANALYTICS_TOKEN bearer). The
+//    ONLY role that may write analytics data (regime recompute + /api/analytics/*).
+//  • member             — committee_member_keys bearer (checked in the committee
+//    domain layer, not here).
+//
+// Fail-closed: a configured token (constant-time compared) authorizes in any
+// env; WITHOUT a token the role opens only when config.allowInsecure
+// (RM_ENV=ephemeral / explicit RM_ALLOW_INSECURE=1). demo/prod with no token →
+// locked. ADMIN_TOKEN and member bearers are NEVER substitutes for the
+// analytics-provider credential (distinct comparisons against distinct secrets).
+import { createHash, timingSafeEqual } from "node:crypto";
+import { config } from "../config.ts";
+
+export function bearer(req: Request): string | null {
+  const h = req.headers.get("Authorization") ?? "";
+  return h.startsWith("Bearer ") ? h.slice(7) : null;
+}
+
+// Constant-time secret comparison (over fixed-length sha256 hashes so lengths
+// always match and timing doesn't leak the secret).
+export function secretEq(presented: string | null, expected: string): boolean {
+  const a = createHash("sha256").update(presented ?? "").digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
+// host/admin role: ADMIN_TOKEN presented as X-Admin-Token.
+export function isPrivileged(req: Request, cfg: Pick<typeof config, "adminToken" | "allowInsecure"> = config): boolean {
+  return cfg.adminToken ? secretEq(req.headers.get("X-Admin-Token"), cfg.adminToken) : cfg.allowInsecure;
+}
+
+// analytics-provider role: ANALYTICS_TOKEN presented as a Bearer token.
+export function hasAnalyticsProviderRole(
+  req: Request,
+  cfg: Pick<typeof config, "analyticsToken" | "allowInsecure"> = config,
+): boolean {
+  return cfg.analyticsToken ? secretEq(bearer(req), cfg.analyticsToken) : cfg.allowInsecure;
+}

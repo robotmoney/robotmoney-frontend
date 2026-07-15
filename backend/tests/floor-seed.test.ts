@@ -11,11 +11,10 @@ import { gzipSync } from "node:zlib";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { seedRawIndicatorFloor, loadRawFloorSeed } from "../src/analytics/store/floor-seed.ts";
+import { applyRawFloorSeed } from "../src/analytics/store/floor-seed.ts";
+import { loadRawFloorSeed } from "../src/analytics/extract/floor-seed.ts";
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
 import { sql } from "../src/db/client.ts";
-
-const silent = { warn() {}, log() {}, error() {} };
 
 // A tiny two-indicator seed CSV → gz file on disk.
 function writeSeed(): string {
@@ -60,7 +59,7 @@ test("missing seed file fails loudly (never silent-skip)", async () => {
 test("cold DB: seed writes every row; a second run is a no-op (idempotent)", async () => {
   const path = writeSeed();
   try {
-    const first = await seedRawIndicatorFloor({ path, logger: silent });
+    const first = await applyRawFloorSeed(await loadRawFloorSeed(path));
     expect(first.seededPoints).toBe(5); // 3 AAA + 2 BBB
     expect(first.existingPoints).toBe(0);
     expect(first.indicators).toBe(2);
@@ -70,7 +69,7 @@ test("cold DB: seed writes every row; a second run is a no-op (idempotent)", asy
     expect(afterFirst.BBB.map((p) => p.value)).toEqual([10, 20]);
 
     // Idempotent: second run finds every (date,indicator) present → writes nothing.
-    const second = await seedRawIndicatorFloor({ path, logger: silent });
+    const second = await applyRawFloorSeed(await loadRawFloorSeed(path));
     expect(second.seededPoints).toBe(0);
     expect(second.existingPoints).toBe(5);
 
@@ -88,7 +87,7 @@ test("append-only floor: pre-existing DB rows win on overlap; seed only fills ga
     // Simulate a warm DB where AAA@2020-01-02 already holds a REAL fetched value (99).
     await saveRawIndicatorHistory({ AAA: [{ date: "2020-01-02", value: 99 }] });
 
-    const res = await seedRawIndicatorFloor({ path, logger: silent });
+    const res = await applyRawFloorSeed(await loadRawFloorSeed(path));
     // AAA: only 01-01 and 01-03 are missing (01-02 already present) → 2; BBB: both → 2.
     expect(res.seededPoints).toBe(4);
     expect(res.existingPoints).toBe(1);
