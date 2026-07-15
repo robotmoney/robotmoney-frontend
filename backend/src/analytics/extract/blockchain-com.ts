@@ -3,9 +3,11 @@
 //
 //   https://api.blockchain.info/charts/<chart>?timespan=all&format=json&sampled=false
 //
-// We use `n-unique-addresses` (BTC daily active addresses → BTC_ACTIVE) and
-// `mvrv` (BTC_MVRV). timespan=all returns the full ~2009+ series; append-only
-// merge preserves everything accumulated, so we always request the full window.
+// We use `n-unique-addresses` (BTC daily active addresses → BTC_ACTIVE) only.
+// The `mvrv` chart was removed upstream (HTTP 404) — BTC_MVRV now comes from
+// Coinmetrics (btc/CapMVRVCur, see coinmetrics.ts / #127). timespan=all returns
+// the full ~2009+ series; append-only merge preserves everything accumulated,
+// so we always request the full window.
 import type { Point } from "../types.ts";
 import { isoDay } from "../transform/math.ts";
 import { fetchJson } from "./http.ts";

@@ -14,8 +14,10 @@
 //   - defillama_tvl               → DEFI_TVL / DEFI_GROWTH (raw TVL level; the
 //                                    change90 transform is applied downstream)
 //   - defillama_stables           → STABLES / STABLES_GROWTH (raw stable float)
-//   - blockchain_com              → BTC_ACTIVE (n-unique-addresses), BTC_MVRV (mvrv)
-//   - coinmetrics                 → ETH_ACTIVE (eth / AdrActCnt)
+//   - blockchain_com              → BTC_ACTIVE (n-unique-addresses)
+//   - coinmetrics                 → ETH_ACTIVE (eth / AdrActCnt),
+//                                    BTC_MVRV (btc / CapMVRVCur — repointed off the
+//                                    dead blockchain.com mvrv chart, #127)
 //   - geckoterminal_newpools      → NEW_TOKENS (today's 24h count; merged forward)
 //   - shiller_cape / multpl       → SHILLER_CAPE
 //

@@ -12,6 +12,7 @@ import { countNewPools24h, parseNewPoolsPage } from "../src/analytics/extract/ge
 import { parseDatahubCsv, parseMultplHtml, mergeShiller } from "../src/analytics/extract/shiller.ts";
 import { parseEdgarCount, enumerateMonths } from "../src/analytics/extract/edgar.ts";
 import { mergeRatioSeries } from "../src/analytics/extract/sources.ts";
+import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 
 const TS = 1700000000; // seconds → 2023-11-14T22:13:20Z
 const DAY = "2023-11-14";
@@ -166,6 +167,40 @@ test("enumerateMonths: month-start/month-end pairs across a range", () => {
     { monthStart: "2023-12-01", monthEnd: "2023-12-31" },
     { monthStart: "2024-01-01", monthEnd: "2024-01-31" },
   ]);
+});
+
+// #127: blockchain.com removed its `mvrv` chart (the endpoint 404s), so BTC_MVRV
+// was repointed to Coinmetrics community (btc / CapMVRVCur). This registry-wiring
+// assertion is the deterministic per-PR guard that analytics.run can never again
+// route an indicator to the known-dead chart: the only blockchain_com series left
+// is n-unique-addresses (verified live), and the MVRV leg resolves through the
+// coinmetrics extractor whose parser is exercised on a real-shape page below.
+test("BTC_MVRV is wired to Coinmetrics; no indicator references the dead blockchain.com mvrv chart", () => {
+  const mvrv = INDICATORS.find((i) => i.id === "BTC_MVRV");
+  expect(mvrv).toBeDefined();
+  expect(mvrv!.source).toBe("coinmetrics");
+  expect(mvrv!.series).toEqual({ asset: "btc", metric: "CapMVRVCur" });
+  // The dead chart must not be reachable from ANY registry entry.
+  for (const ind of INDICATORS) {
+    if (ind.source !== "blockchain_com") continue;
+    expect(ind.series, `${ind.id}: blockchain.com only serves n-unique-addresses now`).toBe(
+      "n-unique-addresses",
+    );
+  }
+  // Real-shape CapMVRVCur page (captured 2026-07-15) parses to the ratio series
+  // the regime classifier expects (unit ratio2, level transform).
+  const page = {
+    data: [
+      { asset: "btc", time: "2026-07-12T00:00:00.000000000Z", CapMVRVCur: "1.202836" },
+      { asset: "btc", time: "2026-07-13T00:00:00.000000000Z", CapMVRVCur: "1.174318" },
+    ],
+  };
+  const { points, nextToken } = parseCoinmetricsPage(page, "CapMVRVCur");
+  expect(points).toEqual([
+    { date: "2026-07-12", value: 1.202836 },
+    { date: "2026-07-13", value: 1.174318 },
+  ]);
+  expect(nextToken).toBe(null);
 });
 
 test("mergeRatioSeries: a/b on shared dates, skips 0/missing denominators", () => {
