@@ -176,11 +176,18 @@ export function resolveTrackedAssets(
       decimals: 18, address: addr("WETH_ADDRESS", "0x4200000000000000000000000000000000000006"), poolId: env.WETH_POOL_ID || null },
     { symbol: "ROBOTMONEY", group: "Agent", color: "#3b82f6", valuationKind: "erc20", priceKind: "gecko",
       decimals: 18, address: addr("ROBOTMONEY_ADDRESS", "0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3"), poolId: env.ROBOTMONEY_POOL_ID || null },
-    // BNKR (Bankr) real Base address is owner data not yet in-repo — left a
-    // non-functional placeholder (isPlaceholderAddress→true) until BNKR_ADDRESS
-    // overrides it, preserving the #50 honesty contract for any unset address.
+    // BNKR ("BankrCoin") real Base address, confirmed (issue #148) against the
+    // live GeckoTerminal API: /networks/base/tokens/0x22af33...c76f3b resolves
+    // name "BankrCoin"/symbol "BNKR" with an active USD price, and the primary
+    // prop wallet (resolvePropWallets()[0]) holds a non-zero balanceOf it on
+    // Base mainnet. The PRIOR default (0x7777...7777, a repeating-hex-digit
+    // placeholder sentinel — see isPlaceholderAddress above) was never a real
+    // token contract, so GeckoTerminal legitimately had no USD price for it;
+    // that was not a lookup-endpoint bug, just a stale placeholder address left
+    // over from before the real address was confirmed. Override via
+    // BNKR_ADDRESS for a re-pointed deployment.
     { symbol: "BNKR", group: "Agent", color: "#3b82f6", valuationKind: "erc20", priceKind: "gecko",
-      decimals: 18, address: addr("BNKR_ADDRESS", "0x7777777777777777777777777777777777777777"), poolId: env.BNKR_POOL_ID || null },
+      decimals: 18, address: addr("BNKR_ADDRESS", "0x22af33fe49fd1fa80c7149773dde5890d3c76f3b"), poolId: env.BNKR_POOL_ID || null },
     { symbol: "SP500", group: "Stocks", color: "#8b5cf6", valuationKind: "config", priceKind: "yahoo",
       decimals: 0, address: null, poolId: null },
     // Optional Aave V3 aToken legs — EMPTY by default (Open Q6, owner data). Each

@@ -37,13 +37,19 @@ if (process.env.EXPECT_LIVE === "1" && !LIVE) {
 // chosen drift-check asset because it tracks ETH within a stable, wide price
 // band, so a loose sanity bound catches response-shape/decoding drift without
 // flaking on ordinary price movement. ROBOTMONEY now also carries a real gecko
-// default address (0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3), so it is a
-// live-priced asset too; only BNKR still defaults to a non-functional
-// repeating-digit placeholder (0x7777…7777, isPlaceholderAddress→true) that
-// would correctly fail against the real endpoint and is unsuitable for a drift
-// check. WETH stays the single asset asserted here to keep the smoke test
-// robust.
+// default address (0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3).
 const WETH_ADDRESS = "0x4200000000000000000000000000000000000006";
+
+// BNKR ("BankrCoin") — issue #148: the previous default (0x7777…7777) was a
+// non-functional repeating-digit placeholder sentinel (isPlaceholderAddress→
+// true, never a real token contract), so GeckoTerminal legitimately had no
+// USD price for it and the wallet-balances leg was permanently stuck 'stale'.
+// Confirmed against the real GeckoTerminal API: this address resolves
+// name "BankrCoin"/symbol "BNKR" with an active USD price. BNKR trades as a
+// sub-cent microcap, so the sanity bound is wide but still catches
+// response-shape/decoding drift (a NaN/zero/negative price, or an order-of-
+// magnitude decoding bug).
+const BNKR_ADDRESS = "0x22af33fe49fd1fa80c7149773dde5890d3c76f3b";
 
 if (!LIVE) {
   // eslint-disable-next-line no-console
@@ -65,4 +71,11 @@ t("the real GeckoTerminal token_price endpoint answers a sane USD price for Base
   expect(Number.isFinite(price)).toBe(true);
   expect(price).toBeGreaterThan(100);
   expect(price).toBeLessThan(100_000);
+});
+
+t("the real GeckoTerminal token_price endpoint answers a sane USD price for Base BNKR (issue #148 — was stuck 'stale' on the old placeholder address)", async () => {
+  const price = await fetchGeckoTokenPriceUsd(BNKR_ADDRESS);
+  expect(Number.isFinite(price)).toBe(true);
+  expect(price).toBeGreaterThan(0);
+  expect(price).toBeLessThan(1); // sub-cent microcap; catches a decoding/order-of-magnitude regression
 });

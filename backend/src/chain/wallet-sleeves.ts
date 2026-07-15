@@ -14,9 +14,11 @@
 // holds only its delegated ERC-4626 strategy share) — every address/decimals
 // still comes from config (resolveTrackedAssets), never a literal here.
 //
-// Honesty (#50): a placeholder-address asset (e.g. BNKR until BNKR_ADDRESS is
-// set) is NEVER eth_called — it is omitted rather than rendered as a live $0. A
-// failed leg degrades that holding to value null + provenance 'stale'.
+// Honesty (#50): a placeholder-address asset (e.g. an unconfigured Aave
+// aToken leg — every fixed BNKR/WETH/ROBOTMONEY series carries a real default
+// address as of #148) is NEVER eth_called — it is omitted rather than
+// rendered as a live $0. A failed leg degrades that holding to value null +
+// provenance 'stale'.
 import {
   isPlaceholderAddress,
   resolveBaseRpcSource,

@@ -194,7 +194,7 @@ test("token-metrics: a failed live price leg degrades priceUsd + marketCap to nu
 });
 
 // ── wallet-sleeves ──────────────────────────────────────────────────────────
-test("wallet-sleeves: per-wallet holdings resolve in ≤2 batched eth_calls; totalUsd == sum(holdings.valueUsd); placeholder BNKR is never eth_called", async () => {
+test("wallet-sleeves: per-wallet holdings resolve in ≤2 batched eth_calls; totalUsd == sum(holdings.valueUsd); BNKR resolves like every other configured asset (issue #148)", async () => {
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
   const counter = mockChain();
@@ -206,8 +206,11 @@ test("wallet-sleeves: per-wallet holdings resolve in ≤2 batched eth_calls; tot
   expect(r.source).toBe("stub");
   expect(r.wallets).toHaveLength(3);
   const bankr = r.wallets.find((w) => w.type === "primary")!;
-  // BNKR default is a repeating-digit placeholder → omitted, not rendered $0.
-  expect(bankr.holdings.map((h) => h.symbol)).not.toContain("BNKR");
+  // BNKR now carries its real, non-placeholder Base default address (#148) —
+  // it is a normal configured asset and resolves exactly like every other
+  // primary-wallet holding (was previously omitted as a placeholder).
+  expect(isPlaceholderAddress(resolveTrackedAssets().find((a) => a.symbol === "BNKR")!.address)).toBe(false);
+  expect(bankr.holdings.map((h) => h.symbol)).toEqual(["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"]);
   for (const w of r.wallets) {
     for (const h of w.holdings) {
       expect(h.provenance).toBe("stub");
