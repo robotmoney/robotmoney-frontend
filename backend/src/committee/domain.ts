@@ -1,6 +1,8 @@
 // Committee domain/service layer — the single place the rules live (window
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
+import { classifyRegime, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
+import { config } from "../config.ts";
 import { jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import { verifySubmissionSignature } from "../lib/signing.ts";
@@ -23,13 +25,13 @@ async function publicKeyFor(memberId: string): Promise<string | null> {
 
 // Fixed target size for the standing demo committee. The onboarding driver stops
 // admitting new members once the active roster reaches this cap, so the committee
-// settles at a realistic, bounded size instead of growing without bound. This is
-// the CANONICAL value: backend/tests/committee-roster-cap.test.ts pins its
-// assertions to this constant (never a literal), and the demo onboarding path
-// (scripts/lib/demo-main.ts → mcp/src/e2e.ts) mirrors it as e2e.COMMITTEE_ROSTER_CAP
-// — the mcp/scripts packages can't import the backend module (separate deps), so
-// that mirror must be kept equal to this value.
-export const COMMITTEE_ROSTER_CAP = 10;
+// settles at a realistic, bounded size instead of growing without bound. The
+// CANONICAL value lives in @robotmoney/contract (contract/src/committee.js) —
+// the shared channel mcp/scripts can also import, retiring the comment-enforced
+// e2e.COMMITTEE_ROSTER_CAP mirror (finding 008). Re-exported under the same name
+// so backend/tests/committee-roster-cap.test.ts (which pins its assertions to
+// this constant, never a literal) keeps reading it from the domain layer.
+export { COMMITTEE_ROSTER_CAP };
 
 // ── Reads ─────────────────────────────────────────────────────────────────
 export async function getMembers() {
@@ -240,8 +242,10 @@ function seeded(seed: string): () => number {
   return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
 }
 
-const regimeFor = (composite: number): string =>
-  composite >= 0.55 ? "risk_on" : composite >= 0.45 ? "neutral" : "risk_off";
+// Regime labels come from the canonical shared classifier (@robotmoney/contract,
+// canon = backend/src/analytics/analyze/regime.ts's 0.33/0.67 rule). This module
+// previously carried its own diverged 0.45/0.55 rule (maintainability finding 002);
+// never reintroduce a local threshold here.
 
 // A single synthetic regime point on `date` at position `t` (0=oldest,1=newest)
 // of the window. Gently decays composite (mirrors the reference sparkline) with a
@@ -252,13 +256,21 @@ function syntheticRegimePoint(date: string, t: number, rng: () => number) {
   const macro = round(0.62 - 0.05 * t + j(0.03));
   const onchain = round(0.36 - 0.03 * t + j(0.03));
   const factor = round(0.78 - 0.06 * t + j(0.03));
-  return { date, composite, regime: regimeFor(composite), macro, onchain, factor };
+  return { date, composite, regime: classifyRegime(composite), macro, onchain, factor };
 }
 
 // Idempotently backfill a trailing daily regime_snapshots history ending at
 // `endDate` so downstream sparklines always have enough points. ON CONFLICT DO
 // NOTHING preserves any REAL analytics rows — this only fills gaps.
+//
+// DEMO-ONLY synthesis (finding 009): regime_snapshots is owned by the analytics
+// classifier; synthetic rows may be seeded only for demo fixtures, never on a
+// live/prod deployment. Gated on RM_ENV: a prod backend refuses to write
+// synthetic rows (a sparse prod table stays sparse and visibly so). The live
+// aggregation path (buildRegimeSummary) no longer calls this at all — only the
+// demo fixture seeding path (ensureDemoSubjectFixtures) does.
 export async function backfillRegimeHistory(endDate: string, minPoints = 8): Promise<void> {
+  if (config.env === "prod") return; // never write synthetic rows on the live deployment
   const existing = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM regime_snapshots`;
   if (Number(existing[0]?.n ?? 0) >= minPoints) return;
   const span = Math.max(minPoints, 14);
@@ -267,7 +279,7 @@ export async function backfillRegimeHistory(endDate: string, minPoints = 8): Pro
     const date = shiftDay(endDate, -i);
     const t = (span - 1 - i) / (span - 1);
     const p = syntheticRegimePoint(date, t, rng);
-    const macroReg = regimeFor(p.macro), onchainReg = regimeFor(p.onchain), factorReg = regimeFor(p.factor);
+    const macroReg = classifyRegime(p.macro), onchainReg = classifyRegime(p.onchain), factorReg = classifyRegime(p.factor);
     await sql`
       INSERT INTO regime_snapshots
         (date, composite, composite_percentile, regime,
@@ -409,10 +421,15 @@ export async function closeWindow(sessionId: string) {
 }
 
 // Build the reference-shaped regime_summary object from the trailing regime
-// snapshots (with deterministic backfill/padding so history.length >= 8). Kept
+// snapshots (with deterministic IN-MEMORY padding so history.length >= 8). Kept
 // separate so tests and aggregation share one code path.
+//
+// LIVE-PATH honesty (finding 009): this is the live aggregation path, so it
+// never writes to regime_snapshots — stored labels are READ as-is (the
+// classifier owns them) and classifyRegime is only a fallback for rows whose
+// label is null. Sparse histories are padded in memory, not persisted; demo
+// deployments get their >= 8 persisted points from ensureDemoSubjectFixtures.
 export async function buildRegimeSummary(endDate: string, minPoints = 8) {
-  await backfillRegimeHistory(endDate, minPoints);
   const rows = await sql`
     SELECT date, composite, composite_percentile, regime,
            macro_regime, onchain_regime, factor_regime,
@@ -431,7 +448,7 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8) {
   let history = chrono.map((r: any) => ({
     date: typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10),
     composite: numOr(r.composite, 0.5),
-    regime: r.regime ?? regimeFor(numOr(r.composite, 0.5)),
+    regime: r.regime ?? classifyRegime(numOr(r.composite, 0.5)),
     macro: numOr(r.macro_index ?? r.macro_percentile, 0.6),
     onchain: numOr(r.onchain_index ?? r.onchain_percentile, 0.35),
     factor: numOr(r.factor_index ?? r.factor_percentile, 0.75),
@@ -456,10 +473,10 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8) {
   return {
     composite: round(lc),
     composite_percentile: pct(latest?.composite_percentile, lc),
-    regime: latest?.regime ?? regimeFor(lc),
-    macro_regime: latest?.macro_regime ?? regimeFor(history[history.length - 1].macro),
-    onchain_regime: latest?.onchain_regime ?? regimeFor(history[history.length - 1].onchain),
-    factor_regime: latest?.factor_regime ?? regimeFor(history[history.length - 1].factor),
+    regime: latest?.regime ?? classifyRegime(lc),
+    macro_regime: latest?.macro_regime ?? classifyRegime(history[history.length - 1].macro),
+    onchain_regime: latest?.onchain_regime ?? classifyRegime(history[history.length - 1].onchain),
+    factor_regime: latest?.factor_regime ?? classifyRegime(history[history.length - 1].factor),
     macro_percentile: pct(latest?.macro_percentile, latest?.macro_index ?? history[history.length - 1].macro),
     onchain_percentile: pct(latest?.onchain_percentile, latest?.onchain_index ?? history[history.length - 1].onchain),
     factor_percentile: pct(latest?.factor_percentile, latest?.factor_index ?? history[history.length - 1].factor),
@@ -525,8 +542,8 @@ export async function aggregateSession(sessionId: string) {
 
   // Disagreements: synthesize from the stance spread. When at least two distinct
   // stances were submitted, contrast the most- and least-constructive members.
-  const order = ["bearish", "cautious", "neutral", "constructive", "bullish"];
-  const rank = (st: string) => { const i = order.indexOf(st); return i < 0 ? 2 : i; };
+  // The ascending ladder is the canonical contract vocabulary (finding 027).
+  const rank = (st: string) => { const i = (STANCES as readonly string[]).indexOf(st); return i < 0 ? 2 : i; };
   const sortedTakes = takes.slice().sort((a: any, b: any) => rank(a.stance) - rank(b.stance));
   const disagreements: any[] = [];
   if (sortedTakes.length >= 2 && new Set(sortedTakes.map((t: any) => t.stance)).size >= 2) {
@@ -608,7 +625,7 @@ export async function postMemo(token: string, input: { sessionId: string; title?
     VALUES (${memberId}, ${input.sessionId}, ${input.title ?? ""}, ${input.body})
     RETURNING id`;
   const id = rows[0].id;
-  return { ok: true, status: 201, id, url: `/api/committee/memos/${id}` };
+  return { ok: true, status: 201, id, url: routePath(ROUTES.committee.memo, { id }) };
 }
 
 export async function getMemo(id: number) {

@@ -1,4 +1,31 @@
-// Investment Committee API DTOs.
+// Investment Committee API DTOs + types for the runtime constants in
+// committee.js (see that module for the canonical values/semantics).
+
+import type { RegimeLabel } from "./regime";
+
+// ── Runtime constants (committee.js) ────────────────────────────────────────
+
+export type Stance = "bearish" | "cautious" | "neutral" | "constructive" | "bullish";
+
+/** Canonical stance vocabulary, ASCENDING (most bearish → most bullish). */
+export const STANCES: readonly ["bearish", "cautious", "neutral", "constructive", "bullish"];
+
+/** Fixed target size for the standing demo committee roster. */
+export const COMMITTEE_ROSTER_CAP: number;
+
+/** Demo no-show rule: the curated set of habitual no-show member ids. */
+export const DEMO_NO_SHOWS: readonly string[];
+
+/** Whether a demo committee member attends a session (the demo no-show rule). */
+export function demoAttends(memberId: string): boolean;
+
+/**
+ * Deterministic demo stance derivation from the regime composite plus a
+ * member's directional bias (the hermetic no-LLM authoring path).
+ */
+export function stanceFor(composite: number, bias?: number): { stance: Stance; confidence: number };
+
+// ── DTOs ────────────────────────────────────────────────────────────────────
 
 export type MemberStatus = "active" | "inactive" | "applied";
 
@@ -57,6 +84,83 @@ export interface CommitteeTake {
   generatedAt?: string;
 }
 
+// One point of the trailing regime history embedded in a session's
+// regime_summary. Inner keys are the snake_case WIRE/DB dialect (the archive
+// JSON shape) — the camelCase DTO seam stops at the session's top-level keys.
+export interface RegimeHistoryPoint {
+  date: string;
+  composite: number;
+  regime: RegimeLabel;
+  macro: number;
+  onchain: number;
+  factor: number;
+}
+
+// The reference-shaped regime_summary object (backend buildRegimeSummary):
+// latest composite/percentiles/labels plus a >=8-point trailing history.
+// Field names are snake_case on purpose — this object is stored and served
+// verbatim (archive fixtures and live sessions share the shape).
+export interface RegimeSummary {
+  composite: number;
+  composite_percentile: number;
+  regime: RegimeLabel;
+  macro_regime: RegimeLabel;
+  onchain_regime: RegimeLabel;
+  factor_regime: RegimeLabel;
+  macro_percentile: number;
+  onchain_percentile: number;
+  factor_percentile: number;
+  history: RegimeHistoryPoint[];
+}
+
+// Aggregation rollup counts: how many active members, how many submitted, how
+// many were absent, and submitted/active as a fraction.
+export interface CommitteeQuorum {
+  active: number;
+  submitted: number;
+  absent: number;
+  participation: number;
+}
+
+export interface CommitteeDisagreementPosition {
+  member_id: string;
+  view: string;
+}
+
+export interface CommitteeDisagreement {
+  topic: string;
+  positions: CommitteeDisagreementPosition[];
+  what_settles: string;
+}
+
+export interface CommitteeRecommendedAction {
+  token: string;
+  action: string;
+  rationale: string;
+}
+
+export interface CommitteeBucketWeight {
+  bucket: string;
+  weight: number;
+}
+
+// The rich committee_recommendation object the backend aggregateSession builds:
+// the deterministic rollup (quorum/stances/meanConfidence/absent) plus the
+// reference rich fields (rationale/consensus/disagreements and, depending on
+// the subject's recommendation type, actions or weights).
+export interface CommitteeRecommendation {
+  quorum: CommitteeQuorum;
+  stances: Record<string, number>; // stance (Stance vocabulary) → count
+  meanConfidence: number | null;
+  absent: string[];
+  type: "bucket_weights" | "position_actions";
+  rationale: string;
+  consensus: string[];
+  disagreements: CommitteeDisagreement[];
+  actions?: CommitteeRecommendedAction[];
+  weights?: CommitteeBucketWeight[];
+}
+
 export interface CommitteeSession {
   id: string;
   date: string;
@@ -65,10 +169,10 @@ export interface CommitteeSession {
   state: "scheduled" | "collecting" | "window_closed" | "aggregated" | "published";
   windowClosesAt: string | null;
   publishedAt: string | null;
-  regimeSummary: unknown;
+  regimeSummary: RegimeSummary | null;
   subjectSnapshotTotalValueUsd: number | null;
   synthesis: string | null;
-  committeeRecommendation: unknown;
+  committeeRecommendation: CommitteeRecommendation | null;
   socialDraftId: string | null;
   generatedAt: string;
   takes?: CommitteeTake[];

@@ -137,6 +137,12 @@ frontend, never committed (`.env` stays gitignored):
 
 - **`DATABASE_URL`** (§4.3)
 - **`ANTHROPIC_API_KEY`**, **`FRED_API_KEY`**, **`RPC_URL`** — per ARCHITECTURE §8.
+- **`PROJECTS_SOURCE=live`** — not a secret, but **required in prod**: the
+  `/projects` directory pipelines fail closed
+  (`backend/src/projects/access/select.ts` throws
+  `projects pipelines require PROJECTS_SOURCE=live in prod`) rather than serve
+  the vendored fixture directory as production data. Leave unset in demo/dev
+  (offline fixture source); the ephemeral CI env is always hermetic regardless.
 - Any committee signing / MCP secrets as applicable.
 
 The frontend's only input is `API_BASE_URL` in `config.js` (`""` = same origin on
@@ -197,6 +203,8 @@ Do this **once per environment** (staging, then production):
 
 **Application**
 - [ ] `ANTHROPIC_API_KEY`, `FRED_API_KEY`, `RPC_URL`
+- [ ] `PROJECTS_SOURCE=live` in the prod droplet env (§5 — the projects
+      pipelines fail closed without it)
 
 **GitHub**
 - [ ] Create `staging` + `production` **Environments**; load the above as

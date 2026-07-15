@@ -17,6 +17,19 @@ import { callTotalAssets, callTotalSupply } from "../src/chain/base-rpc-client.t
 const LIVE = process.env.RUN_LIVE_FETCHERS === "1";
 const t = LIVE ? test : test.skip;
 
+// Execution-evidence guard (test-coverage policy invariant 2): the nightly
+// workflow sets EXPECT_LIVE=1 alongside the gate. If the gate name ever drifts
+// (in the workflow or here), LIVE resolves false while EXPECT_LIVE=1 — every
+// live test would silently become a skip and the run would stay green while
+// validating nothing. Refuse loudly instead: a module-load throw fails
+// `bun test` non-zero. Asserted present by scripts/tests/nightly-fetchers-guard.test.ts.
+if (process.env.EXPECT_LIVE === "1" && !LIVE) {
+  throw new Error(
+    "[vault-rpc-live] EXPECT_LIVE=1 but the RUN_LIVE_FETCHERS gate is OFF — " +
+      "the workflow/test gate wiring has drifted; refusing an all-skip false-green run",
+  );
+}
+
 if (!LIVE) {
   // eslint-disable-next-line no-console
   console.warn(

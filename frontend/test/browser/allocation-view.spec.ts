@@ -148,7 +148,9 @@ test("allocation view binds vault economics to the golden payload, and Total AUM
   await expect(page.locator(".alloc-aum__value")).not.toHaveText("$71,526");
 
   // The served view must no longer reference the retired baked scalar.
-  const viewSrc = await page.evaluate(async () => (await fetch("/assets/js/app/alpine/views.js")).text());
+  // allocationView lives in its own module since the per-view split of the old
+  // monolithic views.js (review-maintainability finding 025, issue #129).
+  const viewSrc = await page.evaluate(async () => (await fetch("/assets/js/app/alpine/views/allocation.js")).text());
   expect(viewSrc).not.toContain("WALLET_SNAPSHOT_TOTAL_USD");
 
   // 7-Day APY chip == live apy7d (never the retired static 4.06%).

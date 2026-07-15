@@ -4,31 +4,38 @@
 // wallet dimension (UNIQUE (sample_date, symbol) only), so a sleeve MUST do
 // fresh per-wallet on-chain reads — it cannot be derived from that table.
 //
-// Valuation reuses wallet-balances.ts::valueAsset's logic (same valuationKind +
-// fetchAssetPriceUsd), but keyed PER wallet (no sumOverWallets). Which symbols a
-// wallet can hold is domain metadata (the primary/Bankr wallet holds the general
-// tokens; each Stablecoin-Strategy wallet holds only its delegated ERC-4626
-// strategy share) — every address/decimals still comes from config
-// (resolveTrackedAssets), never a literal here.
+// Valuation is the SHARED module (wallet-valuation.ts, finding 007): the same
+// Multicall3 batched reader + per-valuationKind resolution + price/provenance
+// step wallet-balances uses, but keyed PER (wallet, symbol) so amounts stay per
+// wallet (no cross-wallet sum). All sleeves resolve in ≤2 eth_calls total —
+// round 1 balance/getEthBalance legs, round 2 strategy NAV — instead of the old
+// per-holding fan-out. Which symbols a wallet can hold is domain metadata (the
+// primary/Bankr wallet holds the general tokens; each Stablecoin-Strategy wallet
+// holds only its delegated ERC-4626 strategy share) — every address/decimals
+// still comes from config (resolveTrackedAssets), never a literal here.
 //
 // Honesty (#50): a placeholder-address asset (e.g. BNKR until BNKR_ADDRESS is
 // set) is NEVER eth_called — it is omitted rather than rendered as a live $0. A
 // failed leg degrades that holding to value null + provenance 'stale'.
 import {
-  config,
   isPlaceholderAddress,
   resolveBaseRpcSource,
   resolvePriceSource,
   resolvePropWallets,
   resolveTrackedAssets,
   type BaseRpcSource,
-  type PriceSource,
   type TrackedAsset,
 } from "../config.ts";
-import { callBalanceOf, callConvertToAssets, ethGetBalance, type RpcCallOptions } from "./base-rpc-client.ts";
-import { fetchAssetPriceUsd } from "./token-prices.ts";
+import {
+  readChainAmountsBatched,
+  valueLeg,
+  type KeyedAssetRead,
+  type Provenance,
+} from "./wallet-valuation.ts";
 
-export type Provenance = "live" | "stub" | "stale" | "seed";
+// Provenance is defined once in the shared valuation module and re-exported
+// here for callers (same values as wallet-balances: live | stub | stale | seed).
+export type { Provenance };
 
 export interface SleeveHolding {
   symbol: string;
@@ -70,59 +77,6 @@ const SLEEVE_DEFS: SleeveDef[] = [
   { name: "Stablecoin Strategy 2", type: "strategy", symbols: ["GIZA-SS1"] },
 ];
 
-function rpcOpts(): RpcCallOptions {
-  return { rpcUrl: config.baseRpcUrl };
-}
-
-function amountFrom(raw: bigint, decimals: number): number {
-  return Number(raw) / 10 ** decimals;
-}
-
-// One asset's live amount held by a SINGLE wallet (no cross-wallet sum). Mirrors
-// wallet-balances.ts::readAmount per valuationKind.
-async function readAmount(asset: TrackedAsset, wallet: string): Promise<number> {
-  const opts = rpcOpts();
-  switch (asset.valuationKind) {
-    case "erc20":
-    case "aave":
-      return amountFrom(await callBalanceOf(asset.address!, wallet, opts), asset.decimals);
-    case "native":
-      return amountFrom(await ethGetBalance(wallet, opts), asset.decimals);
-    case "strategy": {
-      // ERC-4626 NAV: value this wallet's shares at convertToAssets → USDC (6dp).
-      const shares = await callBalanceOf(asset.address!, wallet, opts);
-      return amountFrom(await callConvertToAssets(asset.address!, shares, opts), 6);
-    }
-    case "config":
-      // Off-chain config size is not a per-wallet on-chain holding — skip.
-      throw new Error(`wallet-sleeves: ${asset.symbol} (config kind) is not a wallet holding`);
-  }
-}
-
-async function valueHolding(
-  asset: TrackedAsset,
-  wallet: string,
-  source: BaseRpcSource,
-  priceSource: PriceSource,
-): Promise<SleeveHolding> {
-  try {
-    const [amount, priceUsd] = await Promise.all([
-      readAmount(asset, wallet),
-      fetchAssetPriceUsd(asset, priceSource),
-    ]);
-    return {
-      symbol: asset.symbol,
-      amount,
-      priceUsd,
-      valueUsd: amount * priceUsd,
-      provenance: source === "stub" || priceSource === "stub" ? "stub" : "live",
-    };
-  } catch (err) {
-    console.error(`wallet-sleeves: ${asset.symbol}@${wallet} read failed, degrading to null:`, err);
-    return { symbol: asset.symbol, amount: null, priceUsd: null, valueUsd: null, provenance: "stale" };
-  }
-}
-
 const CACHE_TTL_MS = 30_000;
 let cache: { at: number; value: WalletSleeves } | null = null;
 
@@ -140,17 +94,37 @@ export async function getWalletSleeves(): Promise<WalletSleeves> {
   const assets = resolveTrackedAssets();
   const bySymbol = new Map(assets.map((a) => [a.symbol, a]));
 
-  const sleeves: WalletSleeve[] = [];
+  // Resolve each sleeve's configured (non-placeholder) assets, then read EVERY
+  // (wallet, asset) leg in ≤2 batched eth_calls via the shared reader. Keys are
+  // "(sleeve index):(symbol)" so nothing sums across wallets — each sleeve keeps
+  // its own amount (unlike the aggregate wallet-balances feed).
+  const resolved: { def: SleeveDef; address: string; walletAssets: TrackedAsset[]; keyOf: (symbol: string) => string }[] = [];
+  const reads: KeyedAssetRead[] = [];
   for (let i = 0; i < SLEEVE_DEFS.length && i < wallets.length; i++) {
     const def = SLEEVE_DEFS[i]!;
     const address = wallets[i]!;
-    // Resolve each configured (non-placeholder) asset for this wallet. A
-    // placeholder-address asset is never eth_called (#50) — it is omitted.
+    // A placeholder-address asset is never eth_called (#50) — it is omitted.
     const walletAssets = def.symbols
       .map((s) => bySymbol.get(s))
       .filter((a): a is TrackedAsset => a != null && (a.valuationKind === "native" || !isPlaceholderAddress(a.address)));
+    const keyOf = (symbol: string): string => `${i}:${symbol}`;
+    for (const a of walletAssets) reads.push({ key: keyOf(a.symbol), asset: a, wallets: [address] });
+    resolved.push({ def, address, walletAssets, keyOf });
+  }
+  const chainAmounts = await readChainAmountsBatched(reads, "wallet-sleeves");
 
-    const holdings = await Promise.all(walletAssets.map((a) => valueHolding(a, address, source, priceSource)));
+  const sleeves: WalletSleeve[] = [];
+  for (const { def, address, walletAssets, keyOf } of resolved) {
+    const holdings = await Promise.all(
+      walletAssets.map(async (a): Promise<SleeveHolding> => {
+        const valued = await valueLeg(a, chainAmounts.get(keyOf(a.symbol)) ?? { ok: false }, source, priceSource);
+        if (!valued.ok) {
+          console.error(`wallet-sleeves: ${a.symbol}@${address} read failed, degrading to null:`, valued.error);
+          return { symbol: a.symbol, amount: null, priceUsd: null, valueUsd: null, provenance: "stale" };
+        }
+        return { symbol: a.symbol, amount: valued.amount, priceUsd: valued.priceUsd, valueUsd: valued.valueUsd, provenance: valued.provenance };
+      }),
+    );
     const totalUsd = Math.round(holdings.reduce((sum, h) => sum + (h.valueUsd ?? 0), 0) * 100) / 100;
     // A 'stale' holding means a leg failed and its value is null (counted as 0),
     // so totalUsd is a partial undercount — flag it so a consumer never reads the

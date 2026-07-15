@@ -10,6 +10,7 @@ import { join } from "node:path";
 const NEW_FILES = [
   "src/chain/token-prices.ts",
   "src/chain/wallet-balances.ts",
+  "src/chain/wallet-valuation.ts", // shared balances/sleeves valuation (finding 007)
   "src/chain/wallet-history-seed.ts",
   "src/worker/handlers/wallet.ts",
   "src/api/routes/dashboards.ts",

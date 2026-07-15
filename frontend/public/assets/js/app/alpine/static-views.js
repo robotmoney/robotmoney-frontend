@@ -1,3 +1,9 @@
+// @ts-nocheck — browser-facing plain JS predating the root tsconfig's checkJs
+// coverage. It entered the root TS program when frontend-routes.test.ts was
+// re-pointed at the real archive loaders below (review-maintainability-026);
+// before that it was never typechecked, so this pragma preserves the status
+// quo rather than weakening existing coverage. JSDoc-typing this file is a
+// worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
 
 const STANCE_COLORS = {
@@ -118,23 +124,31 @@ function normalizeSnapshot(raw) {
   };
 }
 
-async function loadArchiveSession(date, subject) {
+// The archive loaders below are the PRODUCTION static-archive path (sessions
+// dated before 2026-07-01 render from /data/committee/*.json). They are
+// exported so scripts/tests/frontend-routes.test.ts can execute the exact
+// loaders the browser runs against the shipped archive files (review 026:
+// the previous test covered a dead duplicate normalizer instead).
+export async function loadArchiveSession(date, subject) {
   const index = await fetchJson("/data/committee/sessions/index.json");
-  const exists = (index.sessions || []).some((s) => s.date === date && s.subjectId === subject);
+  // index.json entries are snake_case (subject_id) while the API serves
+  // camelCase — read both, matching camelSession's tolerant style, so the
+  // existence check can never diverge from the file it just fetched.
+  const exists = (index.sessions || []).some((s) => s.date === date && (s.subjectId ?? s.subject_id) === subject);
   if (!exists) throw new Error(`archive session missing: ${date}/${subject}`);
   const raw = await fetchJson(`/data/committee/sessions/${date}-${subject}.json`);
   return { session: camelSession(raw), takes: (raw.takes || []).map(camelTake), source: "archive" };
 }
 
-async function loadArchiveMember(id) {
+export async function loadArchiveMember(id) {
   return camelMember(await fetchJson(`/data/committee/manifests/members/${id}.json`));
 }
 
-async function loadArchiveSubject(id) {
+export async function loadArchiveSubject(id) {
   return camelSubject(await fetchJson(`/data/committee/manifests/subjects/${id}.json`));
 }
 
-async function loadArchiveSnapshot(subject, date) {
+export async function loadArchiveSnapshot(subject, date) {
   try { return normalizeSnapshot(await fetchJson(`/data/committee/subjects/${subject}/${date}.json`)); }
   catch (_) { return null; }
 }

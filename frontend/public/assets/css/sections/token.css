@@ -131,7 +131,8 @@
 }
 .token__card-title--accent { color: var(--color-accent); }
 .token__card-title--warn   { color: var(--color-warn); }
-.token__card-title--purple { color: var(--color-purple); }
+/* the Burn dynamics card's title uses mb-4 instead of mb-6 */
+.token__card-title--purple { color: var(--color-purple); margin-bottom: 1rem; }
 
 /* ── Fee routing ── */
 /* space-y-4 */
@@ -246,9 +247,6 @@
 }
 
 /* ── Burn dynamics ── */
-/* this card's title uses mb-4 instead of mb-6 */
-.token__card-title--purple { margin-bottom: 1rem; }
-
 /* text-sm text-muted leading-relaxed */
 .token__burn-text {
   font-size: 0.875rem;

@@ -8,40 +8,40 @@
 import { sql, closeDb } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import { generateKeyPair, signMessage } from "../lib/signing.ts";
-import { canonicalizeSubmission } from "@robotmoney/contract";
+import { canonicalizeSubmission, demoAttends, ROUTES, stanceFor } from "@robotmoney/contract";
 import * as ic from "../committee/domain.ts";
 import { runAnalytics } from "../analytics/index.ts";
 import { hermeticDataSource } from "../analytics/access/hermetic-source.ts";
 
-const API = process.env.API_BASE ?? "http://localhost:8787";
+// Backend base URL. BACKEND_URL is the canonical variable every other driver
+// honors (scripts/demo-frontend-check.ts, scripts/rmpc-release-e2e.ts,
+// mcp/src/e2e.ts, mcp/src/agent.ts) — this file historically read a one-off
+// API_BASE name, so `export BACKEND_URL=…` silently failed to repoint it.
+// API_BASE is DEPRECATED and accepted only as a one-release fallback for any
+// existing invocation; set BACKEND_URL instead. Exported + env-injectable so
+// the precedence is unit-testable hermetically (tests/demo-e2e-env.test.ts).
+export function resolveBackendBase(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return env.BACKEND_URL ?? env.API_BASE ?? "http://localhost:8787";
+}
+const API = resolveBackendBase();
 const today = new Date().toISOString().slice(0, 10);
 const SUBJECT = { id: "woon", name: "Woon Treasury" };
 
-// Deterministic attendance stand-in for a real no-show simulation. Absence
-// emerges from a RULE (a curated set of habitual no-shows), not a baked boolean:
-// the contrarian member (draco) models an occasional no-show. Kept deterministic
-// (no Math.random / Date) so this hermetic e2e stays reproducible — the roster
-// outcome is fixed (draco absent; athena/boreas/cygnus present). MIRROR of the mcp
-// demo e2e's attends() — keep the two in sync.
-const NO_SHOWS = new Set(["draco"]);
-function attends(memberId: string): boolean {
-  return !NO_SHOWS.has(memberId);
-}
+// Attendance (the demo no-show rule) and the deterministic stance ladder both
+// come from the shared contract (contract/src/committee.js) — the mcp demo e2e
+// consumes the SAME rule/ladder, so the two drivers can no longer drift
+// (finding 008 retired the comment-enforced mirrors). The roster outcome stays
+// fixed (draco absent; athena/boreas/cygnus present).
 
 // Members. `bias` shifts the stance vs. the regime; `present:false` = no-show.
 const MEMBERS = [
-  { id: "athena", name: "Athena", lens: "macro risk", bias: -0.1, present: attends("athena") },
-  { id: "boreas", name: "Boreas", lens: "on-chain flows", bias: 0.0, present: attends("boreas") },
-  { id: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: attends("cygnus") },
-  { id: "draco", name: "Draco", lens: "contrarian", bias: 0.0, present: attends("draco") },
+  { id: "athena", name: "Athena", lens: "macro risk", bias: -0.1, present: demoAttends("athena") },
+  { id: "boreas", name: "Boreas", lens: "on-chain flows", bias: 0.0, present: demoAttends("boreas") },
+  { id: "cygnus", name: "Cygnus", lens: "momentum", bias: 0.15, present: demoAttends("cygnus") },
+  { id: "draco", name: "Draco", lens: "contrarian", bias: 0.0, present: demoAttends("draco") },
 ];
-
-function stanceFor(composite: number, bias: number): { stance: string; confidence: number } {
-  const x = composite + bias;
-  const stance = x >= 0.67 ? "bullish" : x >= 0.55 ? "constructive" : x >= 0.45 ? "neutral" : x >= 0.33 ? "cautious" : "bearish";
-  const confidence = Math.round(Math.min(1, Math.abs(x - 0.5) * 2 + 0.4) * 100) / 100;
-  return { stance, confidence };
-}
 
 async function seed() {
   await sql`INSERT INTO committee_subjects (id, status, name, recommendation_type)
@@ -64,7 +64,7 @@ async function seed() {
 
 async function agentSubmit(member: typeof MEMBERS[number], idn: { token: string; privateKey: CryptoKey }, composite: number) {
   // read the brief (proves the read path); decide; sign; submit.
-  await fetch(`${API}/api/committee/brief?date=${today}&subject=${SUBJECT.id}`).then((r) => r.json());
+  await fetch(`${API}${ROUTES.committee.brief}?date=${today}&subject=${SUBJECT.id}`).then((r) => r.json());
   const { stance, confidence } = stanceFor(composite, member.bias);
   const submission = {
     memberId: member.id, date: today, subjectId: SUBJECT.id,
@@ -72,7 +72,7 @@ async function agentSubmit(member: typeof MEMBERS[number], idn: { token: string;
     body: `${member.name} (${member.lens}): regime composite ${composite.toFixed(2)} → ${stance}.`,
   };
   const signature = await signMessage(canonicalizeSubmission(submission), idn.privateKey);
-  const res = await fetch(`${API}/api/committee/submit`, {
+  const res = await fetch(`${API}${ROUTES.committee.submit}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${idn.token}` },
     body: JSON.stringify({ ...submission, signature }),
@@ -111,4 +111,10 @@ async function main() {
   console.log("=== done ===\n");
 }
 
-main().then(closeDb).catch(async (e) => { console.error(e); await closeDb(); process.exit(1); });
+// Only run the full demo flow when this file is the entry point (e.g.
+// `bun run src/demo/e2e.ts`). Guarded (same pattern as mcp/src/e2e.ts) so unit
+// tests can `import { resolveBackendBase }` WITHOUT triggering a live-DB demo
+// run. Entry-point behaviour is unchanged.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().then(closeDb).catch(async (e) => { console.error(e); await closeDb(); process.exit(1); });
+}

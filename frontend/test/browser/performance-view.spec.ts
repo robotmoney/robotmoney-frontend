@@ -112,7 +112,9 @@ test("performance view draws the eight stacked series + Historical Data table fr
 test("the served performance view no longer bakes the frozen walletPerfView series (issue #84)", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");
-  const src = await page.evaluate(async () => (await fetch("/assets/js/app/alpine/views.js")).text());
+  // walletPerfView lives in its own module since the per-view split of the old
+  // monolithic views.js (review-maintainability finding 025, issue #129).
+  const src = await page.evaluate(async () => (await fetch("/assets/js/app/alpine/views/wallet-perf.js")).text());
   // The retired baked arrays (a distinctive frozen totalAum literal + a labels
   // array) must be gone; the live endpoint wiring must be present.
   expect(src).not.toContain("totalAum: [72831");

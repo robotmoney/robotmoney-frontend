@@ -115,18 +115,3 @@ export async function fetchAll(
   }
   return out;
 }
-
-// Back-compat seam for access/fetcher-provider.warm(): pump each resolved series
-// into `set`. One indicator failing only drops its own series (fetchAll isolates
-// per id); the whole call never throws.
-export function loadSources(set: (id: string, pts: Point[]) => void): Promise<void>[] {
-  return [
-    fetchAll()
-      .then((all) => {
-        for (const id in all) if (all[id].length) set(id, all[id]);
-      })
-      .catch(() => {
-        /* whole-batch failure ⇒ every series falls back to seeded */
-      }),
-  ];
-}

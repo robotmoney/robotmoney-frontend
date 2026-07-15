@@ -46,9 +46,33 @@ export const ROUTES = {
     subjectSnapshots: "/api/committee/subjects/:id/snapshots", // GET
     sessions: "/api/committee/sessions", // GET
     session: "/api/committee/sessions/:date/:subject", // GET
+    openSession: "/api/committee/open-session", // GET → session currently collecting, if any
     brief: "/api/committee/brief", // GET ?date=&subject=
-    apply: "/api/committee/apply", // POST
-    submit: "/api/committee/submit", // POST
+    signingPayload: "/api/committee/signing-payload", // POST → canonical bytes a member must sign
+    memos: "/api/committee/memos", // POST (member bearer) — publish a long-form memo
+    memo: "/api/committee/memos/:id", // GET — public memo read
+    verifyToken: "/api/committee/verify-token", // GET (member bearer) → { memberId }
+    apply: "/api/committee/apply", // POST — public onboarding (recorded 'applied', inactive key)
+    register: "/api/committee/register", // POST (privileged) — apply+activate shortcut for demo/E2E
+    regime: "/api/committee/regime", // POST (analytics-provider bearer) — persist the regime
+    submit: "/api/committee/submit", // POST (member bearer, ed25519-signed)
+    // Admin lifecycle (X-Admin-Token). The backend registers ONE dispatcher at
+    // admin.action; the named entries below enumerate the verbs it accepts so
+    // drivers can reference them without re-hardcoding the path.
+    admin: {
+      action: "/api/committee/admin/:action", // POST — generic lifecycle dispatch
+      activate: "/api/committee/admin/activate", // POST — flip applied→active, mint bearer token
+      reset: "/api/committee/admin/reset", // POST — wipe session data (dev/demo)
+      regime: "/api/committee/admin/regime", // POST — recompute the regime composite
+      subject: "/api/committee/admin/subject", // POST — ensure a subject row
+      subjectFixtures: "/api/committee/admin/subject_fixtures", // POST — seed reference-shaped demo fixtures
+      open: "/api/committee/admin/open", // POST — open a session
+      brief: "/api/committee/admin/brief", // POST — publish the brief, open the window
+      close: "/api/committee/admin/close", // POST — close the submission window
+      aggregate: "/api/committee/admin/aggregate", // POST — deterministic rollup
+      publish: "/api/committee/admin/publish", // POST — publish the session
+      enqueueJob: "/api/committee/admin/enqueue-job", // POST — drive lifecycle via the worker job queue
+    },
   },
 
   admin: {

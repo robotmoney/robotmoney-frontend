@@ -48,10 +48,9 @@ const BACKFILL_START = "2018-01-01"; // crypto on-chain coverage starts ~2018 cl
 // Any other value is REFUSED loudly (fail-closed, mirroring config.ts RM_ENV) so a
 // typo like "seeded"/"prod" can never silently fall through to the live network.
 //
-// The legacy `PROVIDER` / `config.analyticsProvider` knob is NOT consulted here —
-// it only fed the retired FetcherProvider test scaffolding (access/fetcher-provider.ts),
-// never this orchestrator. See config.ts for its deprecation note. `ANALYTICS_SOURCE`
-// is the only knob the live/demo data path reads.
+// `ANALYTICS_SOURCE` is the only knob the live/demo data path reads (the legacy
+// `PROVIDER` env knob and its test scaffolding were removed —
+// review-maintainability-011).
 const VALID_ANALYTICS_SOURCES = ["live", "hermetic"] as const;
 
 export function resolveAnalyticsSource(): AnalyticsDataSource {

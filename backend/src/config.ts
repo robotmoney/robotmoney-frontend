@@ -322,13 +322,11 @@ export const config = {
   // it is required (every env); if unset, the role is allowed only outside prod
   // (demo/ephemeral convenience), mirroring adminToken.
   analyticsToken: process.env.ANALYTICS_TOKEN || null,
-  // DEPRECATED for orchestrator source selection — kept only for the retired
-  // FetcherProvider test scaffolding (access/fetcher-provider.ts, tests/providers.test.ts).
-  // The production/demo analytics pipeline (analytics/index.ts runAnalytics) selects its
-  // data source SOLELY via `ANALYTICS_SOURCE` (unset|live → real fetchers, hermetic →
-  // seeded/offline) — see analytics/index.ts::resolveAnalyticsSource. `PROVIDER` no
-  // longer influences the live/demo data path; do NOT use it to opt a demo into real data.
-  analyticsProvider: (process.env.PROVIDER === "live" ? "live" : "seeded") as "live" | "seeded",
+  // NOTE: the analytics pipeline (analytics/index.ts runAnalytics) selects its
+  // data source SOLELY via `ANALYTICS_SOURCE` (unset|live → real fetchers,
+  // hermetic → seeded/offline) — see analytics/index.ts::resolveAnalyticsSource.
+  // The legacy `PROVIDER` env knob and the config field it fed were removed
+  // (review-maintainability-011): they had zero consumers.
   // --- Vault economics (live Base RPC read, issue #40) ---------------------
   // Base mainnet (chainId 8453) JSON-RPC endpoint used for the read-only
   // eth_call vault-economics pipeline (backend/src/chain). No API key required

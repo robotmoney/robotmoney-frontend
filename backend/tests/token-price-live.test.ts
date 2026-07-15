@@ -19,6 +19,19 @@ import { fetchGeckoTokenPriceUsd } from "../src/chain/token-prices.ts";
 const LIVE = process.env.RUN_LIVE_FETCHERS === "1";
 const t = LIVE ? test : test.skip;
 
+// Execution-evidence guard (test-coverage policy invariant 2): the nightly
+// workflow sets EXPECT_LIVE=1 alongside the gate. If the gate name ever drifts
+// (in the workflow or here), LIVE resolves false while EXPECT_LIVE=1 — every
+// live test would silently become a skip and the run would stay green while
+// validating nothing. Refuse loudly instead: a module-load throw fails
+// `bun test` non-zero. Asserted present by scripts/tests/nightly-fetchers-guard.test.ts.
+if (process.env.EXPECT_LIVE === "1" && !LIVE) {
+  throw new Error(
+    "[token-price-live] EXPECT_LIVE=1 but the RUN_LIVE_FETCHERS gate is OFF — " +
+      "the workflow/test gate wiring has drifted; refusing an all-skip false-green run",
+  );
+}
+
 // Base WETH — a priceKind: 'gecko' asset in resolveTrackedAssets
 // (src/config.ts) with a real, non-placeholder default address. WETH is the
 // chosen drift-check asset because it tracks ETH within a stable, wide price

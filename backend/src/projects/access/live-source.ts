@@ -10,6 +10,7 @@
 // live here. Fully-autonomous multi-source discovery (the legacy 1963-line
 // discover-agents crawler) is a tracked follow-up — see the issue open_questions.
 import { config } from "../../config.ts";
+import { callAsset, callDecimals, callTotalAssets, type RpcCallOptions } from "../../chain/base-rpc-client.ts";
 import type { CoinGeckoMarketRow, DexPayload } from "../transforms.ts";
 import type { DiscoveredProject, Erc4626Read, ProjectsDataSource } from "./data-source.ts";
 import { DISCOVERY_DATASET } from "../fixtures/dataset.ts";
@@ -34,24 +35,21 @@ export async function timedFetch(url: string, init: RequestInit = {}): Promise<R
   return fetch(url, { ...init, signal: AbortSignal.timeout(liveFetchTimeoutMs()) });
 }
 
-// ERC-20 / ERC-4626 selectors (fetch-vault-data/index.ts).
-const SEL = { asset: "0x38d52e0f", totalAssets: "0x01e1d114", decimals: "0x313ce567" };
+// Underlying tokens pinned to $1 (fetch-vault-data/index.ts) — everything else
+// is priced via the best-liquidity DexScreener pair on the vault's chain.
 const STABLES = new Set([
   "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", // USDC base
   "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // USDC eth
   "0xdac17f958d2ee523a2206206994597c13d831ec7", // USDT eth
 ]);
 
-async function ethCall(to: string, data: string): Promise<string> {
-  const r = await timedFetch(config.baseRpcUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to, data }, "latest"] }),
-  });
-  if (!r.ok) throw new Error(`base rpc ${r.status}`);
-  const j = (await r.json()) as { result?: string; error?: unknown };
-  if (!j.result || j.result === "0x") throw new Error(`eth_call ${data} empty result`);
-  return j.result;
+// Every Base read goes through chain/base-rpc-client.ts (the SINGLE JSON-RPC
+// transport) so the vault-TVL cron inherits the #119 rate-limit machinery —
+// concurrency gate, 429/Retry-After retry, User-Agent — instead of hand-rolling
+// its own POST (maintainability finding 015). The hard per-request timeout is
+// carried via RpcCallOptions.timeoutMs (same LIVE_FETCH_TIMEOUT_MS knob).
+function baseRpcOpts(): RpcCallOptions {
+  return { rpcUrl: config.baseRpcUrl, timeoutMs: liveFetchTimeoutMs() };
 }
 
 async function dexPriceUsd(chain: string, address: string): Promise<number> {
@@ -90,13 +88,13 @@ export const liveProjectsDataSource: ProjectsDataSource = {
   },
 
   async vaultErc4626Read(vaultAddress: string, chain: string): Promise<Erc4626Read> {
-    const totalAssetsRaw = await ethCall(vaultAddress, SEL.totalAssets);
-    const assetRaw = await ethCall(vaultAddress, SEL.asset);
-    const assetAddr = "0x" + assetRaw.slice(-40);
-    const decRaw = await ethCall(assetAddr, SEL.decimals);
-    const decimals = parseInt(decRaw, 16) || 18;
+    const opts = baseRpcOpts();
+    const totalAssets = await callTotalAssets(vaultAddress, opts);
+    const assetAddr = await callAsset(vaultAddress, opts); // throws on empty (no-code address) → degrade
+    // decimals() decoding to 0/garbage falls back to 18 (legacy edge-fn semantics).
+    const decimals = (await callDecimals(assetAddr, opts)) || 18;
     const assetPriceUsd = STABLES.has(assetAddr.toLowerCase()) ? 1 : await dexPriceUsd(chain, assetAddr);
-    return { totalAssetsRaw: BigInt(totalAssetsRaw).toString(), decimals, assetPriceUsd };
+    return { totalAssetsRaw: totalAssets.toString(), decimals, assetPriceUsd };
   },
 
   async walletBalanceUsd(): Promise<number> {

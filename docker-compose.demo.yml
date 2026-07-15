@@ -31,6 +31,12 @@ services:
       # FRED/Yahoo/EDGAR/...). DEMO_HERMETIC=1 pins the deterministic offline seeded
       # source — the ONLY per-PR / CI behaviour (e2e.yml sets it).
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-${DEMO_HERMETIC:+hermetic}}
+      # Projects data source (backend/src/projects/access/select.ts). The demo
+      # deliberately stays on the offline fixture directory (unset), which is
+      # allowed in demo/ephemeral; only RM_ENV=prod fail-closes on it and
+      # requires an explicit PROJECTS_SOURCE=live. Passthrough so an operator
+      # can opt a standing demo into the live providers.
+      PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       # Cold-DB floor seed: load the vendored real raw floor ONCE so a fresh LIVE
       # boot doesn't re-fetch years of history (esp. ~200 EDGAR requests). Idempotent
       # (no-op once warm). scripts/lib/demo-env.ts defaults this to 1 on the live
@@ -56,6 +62,9 @@ services:
       BASE_RPC_URL: ${BASE_RPC_URL:-${DEMO_HERMETIC:+http://base-rpc-stub:8645}}
       BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-${DEMO_HERMETIC:+stub}}
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-${DEMO_HERMETIC:+hermetic}}
+      # Same PROJECTS_SOURCE passthrough as api — the worker runs the
+      # projects.* pipelines (unset = offline fixture directory; demo-legal).
+      PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-${DEMO_HERMETIC:+0}}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
       FETCH_CACHE_TTL_MS: ${FETCH_CACHE_TTL_MS:-0}
