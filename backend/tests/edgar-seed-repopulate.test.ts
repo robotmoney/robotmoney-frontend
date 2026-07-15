@@ -118,6 +118,28 @@ test("repopulation reports a REJECTED count for a month whose persisted real val
   expect(Number(row!.value)).toBe(12345); // untouched — the seed never overwrites a real observation
 });
 
+// ── authorization: 401/403, zero row changes (issue #108 AC5) ──────────────
+
+test("missing credentials: repopulation client gets 401 and writes zero rows", async () => {
+  await bootstrapEdgarSeed(cfg);
+  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date = '2022-02-28'`;
+
+  await expect(repopulateEdgarSeed({ baseUrl: cfg.baseUrl, token: null })).rejects.toThrow(/HTTP 401/);
+
+  const rows = await sql<{ n: string }[]>`SELECT count(*)::int AS n FROM raw_indicator_history WHERE indicator = 'MNA'`;
+  expect(Number(rows[0]!.n)).toBe(3); // unchanged — the missing row was NOT restored
+});
+
+test("wrong credentials: repopulation client gets 403 and writes zero rows", async () => {
+  await bootstrapEdgarSeed(cfg);
+  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date = '2022-02-28'`;
+
+  await expect(repopulateEdgarSeed({ baseUrl: cfg.baseUrl, token: "wrong-token" })).rejects.toThrow(/HTTP 403/);
+
+  const rows = await sql<{ n: string }[]>`SELECT count(*)::int AS n FROM raw_indicator_history WHERE indicator = 'MNA'`;
+  expect(Number(rows[0]!.n)).toBe(3);
+});
+
 test("repopulation is idempotent: a second run over an already-restored DB seeds nothing further", async () => {
   await bootstrapEdgarSeed(cfg);
   await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA' AND date = '2022-02-28'`;
