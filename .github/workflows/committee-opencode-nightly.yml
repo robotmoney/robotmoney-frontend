@@ -21,7 +21,8 @@
 #
 # GOTCHAS
 # - The standalone OpenCode binary is pinned and checksum-verified in the test
-#   image. Issue #131 tracks removal of the temporary `git init` workaround.
+#   image. Keep the pin at >= 1.18.x: 1.16.2 required a `git init /app`
+#   workaround for headless runs in a non-Git directory (removed by #131).
 #
 # CI taxonomy class: heavy (scheduled real external-model drift check). Heavy
 # suites are sweep-only: NO `pull_request` trigger — schedule + on-demand only.
