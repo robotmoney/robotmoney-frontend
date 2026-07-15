@@ -8,6 +8,7 @@
     "check-contract": "bun scripts/sync-contract.ts --check",
     "check-docs": "bash scripts/check-docs-analytics.sh",
     "test": "bun test scripts/tests",
+    "test:opencode-tools": "bun scripts/opencode-committee-tools-test.ts",
     "test:browser": "playwright test",
     "typecheck": "tsc --noEmit",
     "preview": "bun scripts/serve-preview.ts",
