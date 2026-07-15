@@ -3,10 +3,10 @@
 // from migration 0005, so repeated runs (every boot / migrate) never duplicate
 // rows. Runs as part of `bun run migrate` (migrate.ts calls seed() after DDL).
 //
-// Dev-safe: the only seeded schedule is analytics.run, whose handler upserts on
-// natural keys, so an extra firing is harmless. We DO NOT touch next_run_at /
-// enabled on an existing row — that lets the scheduler own slot bookkeeping and
-// lets an operator disable a schedule without the seed re-enabling it.
+// Dev-safe: every seeded schedule's handler upserts on natural keys, so an
+// extra firing is harmless. We DO NOT touch next_run_at / enabled on an
+// existing row — that lets the scheduler own slot bookkeeping and lets an
+// operator disable a schedule without the seed re-enabling it.
 import { sql, closeDb, jsonValue } from "./client.ts";
 import { seedDemoProjects } from "../projects/demo-seed.ts";
 import { backfillWalletHistory } from "../worker/handlers/wallet.ts";
@@ -29,10 +29,16 @@ interface SeedSchedule {
 // exercising the real worker claim loop + handler path. Scheduled cron
 // triggering (e.g. daily open_session) is a future addition.
 const SCHEDULES: SeedSchedule[] = [
-  // Daily 22:30 UTC: refresh the analytics suite (regime + research signals).
-  // After the US equity close (21:00 UTC) + FRED's daily refresh, mirroring the
-  // original scripts/regime cron so the fetched raw is the settled end-of-day data.
-  { kind: "analytics.run", cron: "30 22 * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Daily 22:30 UTC: regime-only classification. After the US equity close
+  // (21:00 UTC) + FRED's daily refresh, mirroring the original scripts/regime
+  // cron so the fetched raw is the settled end-of-day data. Regime and research
+  // are DISTINCT kinds on independent cadences/lanes (issue #107) — the old
+  // combined `analytics.run` kind is retired below.
+  { kind: "regime.classify", cron: "30 22 * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Daily 23:00 UTC: research-signals refresh (channel-divergence + late-cycle),
+  // AFTER the regime job so the STABLES raw floor it reads is fresh. Runs in the
+  // research lane, so a slow fetch here can never starve committee/regime work.
+  { kind: "research.refresh", cron: "0 23 * * *", payload: {}, timezone: "UTC", enabled: true },
   // Hourly vault share-price sample (issue #40) — dense enough for a 7-day APY
   // lookback, cheap on RPC (3 eth_calls/hour). Handler: worker/handlers/vault.ts.
   { kind: "vault.sample_share_price", cron: "0 * * * *", payload: {}, timezone: "UTC", enabled: true },
@@ -77,13 +83,13 @@ const SCHEDULES: SeedSchedule[] = [
 // These drive the worker's scheduler at a ~2-minute cadence and are STAGGERED by
 // different cron minute offsets (cron is minute-granularity) so the two analytics
 // action types never fire in the same minute:
-//   - regime.classify (regime-only)      → even minutes  (*/2)
-//   - analytics.run    (regime+research) → odd minutes   (1-59/2, offset by 1)
+//   - regime.classify  (regime-only, analytics lane)   → even minutes (*/2)
+//   - research.refresh (research-only, research lane)  → odd minutes  (1-59/2)
 // New (kind, cron) combos, so ON CONFLICT DO NOTHING inserts them once and lets
 // the scheduler own next_run_at/enabled bookkeeping thereafter.
 const FAST_DEMO_SCHEDULES: SeedSchedule[] = [
   { kind: "regime.classify", cron: "*/2 * * * *", payload: {}, timezone: "UTC", enabled: true },
-  { kind: "analytics.run", cron: "1-59/2 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "research.refresh", cron: "1-59/2 * * * *", payload: {}, timezone: "UTC", enabled: true },
 ];
 
 export async function seed(): Promise<void> {
@@ -101,6 +107,20 @@ export async function seed(): Promise<void> {
     `;
   }
   console.log(`seeded job_schedules (${schedules.length} definition(s), idempotent)`);
+
+  // Retire the combined `analytics.run` kind (issue #107). This seed is
+  // otherwise purely additive, so an existing deployment would keep enqueuing a
+  // kind that no longer has a handler or lane. Drop its schedule rows and
+  // dead-letter any not-yet-terminal jobs (job_runs history is preserved).
+  await sql`DELETE FROM job_schedules WHERE kind = 'analytics.run'`;
+  await sql`
+    UPDATE jobs
+       SET status = 'dead',
+           locked_at = NULL, locked_by = NULL,
+           last_error = 'retired kind: analytics.run was split into regime.classify + research.refresh (issue #107)',
+           updated_at = now()
+     WHERE kind = 'analytics.run' AND status IN ('pending', 'running')
+  `;
 
   // Cold start (issue #118): enqueue ONE immediate wallet.sample_balances job so
   // the endpoint has a fresh scheduled sample within seconds of boot instead of
