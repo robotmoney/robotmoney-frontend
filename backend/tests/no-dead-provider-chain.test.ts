@@ -48,14 +48,22 @@ test("fetcher-provider scaffolding is gone from src (file and references)", () =
   expect(grep(/fetcher-provider|FetcherProvider/)).toEqual([]);
 });
 
-test("the only analyticsprovider-ish identifier is the renamed committee auth predicate", () => {
-  // Case-insensitive sweep: every match must be the auth predicate in
-  // api/routes/committee.ts. (The hyphenated "analytics-provider" ROLE string
+test("the only analyticsprovider-ish identifier is the shared auth predicate", () => {
+  // Case-insensitive sweep: every match must be the auth predicate
+  // hasAnalyticsProviderRole — defined in api/auth.ts (issue #106 extracted it
+  // from the committee router so the /api/analytics boundary reuses the same
+  // constant-time check) and referenced only by the API routers that gate the
+  // analytics-provider ROLE. (The hyphenated "analytics-provider" ROLE string
   // is a different, legitimate concept and cannot match this regex.)
+  const allowedFiles = [
+    join("api", "auth.ts"),
+    join("api", "routes", "committee.ts"),
+    join("api", "routes", "analytics.ts"),
+  ];
   const hits = grep(/analyticsprovider/i);
   expect(hits.length).toBeGreaterThan(0); // the predicate itself must survive
   for (const hit of hits) {
-    expect(hit).toContain(join("api", "routes", "committee.ts"));
+    expect(allowedFiles.some((f) => hit.includes(f))).toBe(true);
     expect(hit).toContain("hasAnalyticsProviderRole");
   }
 });
