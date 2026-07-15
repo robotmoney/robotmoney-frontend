@@ -8,7 +8,7 @@
 
 import { withFetchCache } from "./fetch-cache.ts";
 
-const UA = "robotmoney-regime/1.0";
+export const UA = "robotmoney-regime/1.0";
 
 // Fetch JSON with a hard timeout so an unreachable/slow source falls back fast.
 export async function fetchJson(
