@@ -1,7 +1,7 @@
 // Registry mapping job `kind` → handler. A handler receives the job payload and
 // does its work (idempotently, upserting on natural keys). Returns optional JSON
 // recorded in job_runs.
-import { analyticsRun } from "./analytics.ts";
+import { makeAnalyticsHandlers } from "./analytics.ts";
 import { refreshBuybacks } from "./buybacks.ts";
 import * as committee from "./committee.ts";
 import * as projects from "./projects.ts";
@@ -10,13 +10,17 @@ import { sampleWalletBalances } from "./wallet.ts";
 
 export type JobHandler = (payload: Record<string, unknown>) => Promise<unknown>;
 
+const analytics = makeAnalyticsHandlers();
+
 export const handlers: Record<string, JobHandler> = {
   // smoke-test handler
   noop: async (payload) => ({ noop: true, echo: payload }),
-  // run the analytics suite (regime + research signals) → DB
-  "analytics.run": analyticsRun,
-  // alias: regime only
-  "regime.classify": (p) => analyticsRun({ ...p, tool: "regime" }),
+  // regime-only classification → regime_snapshots (analytics lane). The old
+  // combined `analytics.run` kind is RETIRED (issue #107): regime and research
+  // are distinct kinds so a slow research fetch can never starve regime work.
+  "regime.classify": analytics.regimeClassify,
+  // research signals only → research_signals (research lane)
+  "research.refresh": analytics.researchRefresh,
   // hourly vault share-price sample (feeds the 7-day APY calc)
   "vault.sample_share_price": sampleSharePrice,
   // daily prop-wallet balance sample (feeds the /performance history + last-live fallback)

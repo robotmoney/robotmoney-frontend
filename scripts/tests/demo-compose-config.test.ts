@@ -56,7 +56,9 @@ function serviceEnv(cfg: ComposeConfig, svc: string): Record<string, string | nu
   return env;
 }
 
-const RPC_CONSUMERS = ["api", "worker"] as const;
+// Every service whose process reads the Base RPC / analytics knobs: the api and
+// all three worker lanes (issue #107 topology — committee/analytics/research).
+const RPC_CONSUMERS = ["api", "worker-committee", "worker-analytics", "worker-research"] as const;
 
 describe("docker compose config — demo data path resolution", () => {
   test("default (no knobs) resolves the LIVE path: RPC/analytics knobs empty → backend live defaults", () => {

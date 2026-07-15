@@ -91,7 +91,7 @@ if (composeProc.exitCode !== 0) {
   fail(`docker compose config failed (exit ${composeProc.exitCode}): ${new TextDecoder().decode(composeProc.stderr)}`);
 }
 const composeCfg = JSON.parse(new TextDecoder().decode(composeProc.stdout)) as ComposeConfig;
-for (const svc of ["api", "worker"]) {
+for (const svc of ["api", "worker-committee", "worker-analytics", "worker-research"]) {
   const envMap = composeCfg.services?.[svc]?.environment ?? {};
   const rpcUrl = envMap.BASE_RPC_URL ?? "";
   if (!rpcUrl) fail(`resolved compose config leaves ${svc} BASE_RPC_URL empty under DEMO_HERMETIC=1 (would fall through to live mainnet)`);

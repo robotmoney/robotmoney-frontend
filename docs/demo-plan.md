@@ -36,7 +36,7 @@ them.
 Changes:
 - `backend/src/analytics/index.ts` — the `Registry` should already register
   `channel-divergence` and `late-cycle`. Verify both execute when
-  `analytics.run` fires.
+  `research.refresh` fires (issue #107 split the retired `analytics.run`).
 - `mcp/src/e2e.ts` — after seeding regime, also seed at least one research signal
   snapshot (or run the full analytics suite for the demo date).
 - `backend/src/committee/domain.ts` — `publishBrief()` must attach research signals
@@ -203,7 +203,7 @@ P1 (worker) → concurrent (P2, P3) → P5 (authz) → P6 (frontend) → P7 (mul
   `.agents/demo-state.json`.
 - **Recurring, staggered (~2 min) scheduled actions**: regime + research driven by the
   worker's scheduler via fast demo-cadence `job_schedules` rows gated behind
-  `DEMO_FAST_SCHEDULES` (`regime.classify` `*/2`, `analytics.run` `1-59/2`); committee
+  `DEMO_FAST_SCHEDULES` (`regime.classify` `*/2`, `research.refresh` `1-59/2`); committee
   sessions driven by an in-process MCP-agent loop in `demo.ts` reusing the exported
   `runSession` from `mcp/src/e2e.ts` (rotating date/subject, no reset between ticks).
 - **Teardown on exit**: Ctrl-C / SIGTERM tears the stack down (`docker compose down -v`

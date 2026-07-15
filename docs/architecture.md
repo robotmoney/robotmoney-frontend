@@ -279,23 +279,50 @@ CSV/JSON, Upstash Redis (comments), and GitHub-as-DB (committee). Full schema in
 
 ## 7. Task queue & workers
 
-A Postgres-backed queue replaces the old GitHub Actions cron + `scripts/`. The
-worker (`backend/src/worker/`) runs three loops:
+A Postgres-backed queue replaces the old GitHub Actions cron + `scripts/`. Each
+worker process (`backend/src/worker/`, entry `index.ts` → `runtime.ts`) runs
+three loops:
 
-- **Claim loop** (`loop.ts`): claims one due job with `FOR UPDATE SKIP LOCKED`
-  (safe across N workers), runs its handler by `kind`, and records the outcome in
-  `job_runs`. On failure it retries with exponential backoff via `run_after` up to
-  `max_attempts`, then marks the job `dead`.
+- **Claim loop** (`loop.ts`): claims one due job **within its lane's kind
+  allowlist** with `FOR UPDATE SKIP LOCKED` (safe across N workers), runs its
+  handler by `kind`, and records the outcome in `job_runs`. On failure it retries
+  with exponential backoff via `run_after` up to `max_attempts`, then marks the
+  job `dead`. While a handler is live its owner **renews the lease**
+  (`locked_at`, every `JOB_LEASE_RENEW_MS`, default ⅓ of the visibility timeout)
+  so a long job is never reaped and executed concurrently; a lost lease cancels
+  the run (ownership-guarded terminal writes discard the zombie's result).
 - **Scheduler** (`scheduler.ts`): for each due `job_schedules` row it enqueues a
   job with a `dedupe_key` of `kind + slot` (`ON CONFLICT DO NOTHING` → exactly-once
   per slot) and advances `next_run_at` via a cron parser.
 - **Reaper** (`reaper.ts`): requeues jobs stuck in `running` past a visibility
-  timeout (crashed worker), bounded by `max_attempts`.
+  timeout (crashed/abandoned worker — a live owner renews its lease), bounded by
+  `max_attempts`.
+
+**Execution lanes** (issue #107, `worker/lanes.ts`): every worker is pinned to a
+lane via the **required** `WORKER_LANE` env (empty/unknown fails loudly at
+startup). Lanes are deterministic kind allowlists applied inside the claim:
+
+| Lane | Claims | Purpose |
+|------|--------|---------|
+| `committee` | `committee.%` only | **Reserved** interactive session-lifecycle capacity — no other lane may claim these kinds. |
+| `analytics` | everything except `committee.%`/`research.%` | Regime classification + the scheduled data pipelines. |
+| `research` | `research.%` only | Slow external research fetches, quarantined so a blocked fetch can never starve committee/regime work. |
+| `generic` | everything except `committee.%` | Single-process dev convenience; never part of the compose topology and never able to consume reserved capacity. |
+
+The production/default topology is one container per lane
+(`worker-committee`/`worker-analytics`/`worker-research` in
+`docker-compose.yml`); lanes scale independently (`--scale worker-research=2`).
+Worker ids default to `<lane>-<pid>`, so `locked_by`, logs, and the admin jobs
+dashboard are lane-attributable. Shutdown is **bounded**: on SIGINT/SIGTERM a
+worker finishes its in-flight job up to `WORKER_SHUTDOWN_TIMEOUT_MS`, then
+releases anything it still owns back to `pending` — a stopped worker never
+leaves an orphaned `running` row.
 
 **Idempotency** comes from upserting on natural keys; **exactly-once scheduling**
 from the dedupe key; **concurrency safety** from `SKIP LOCKED`. Handlers
-(`worker/handlers/`) are registered per `kind`; the `analytics.run` handler drives
-the analytics suite (§7.1).
+(`worker/handlers/`) are registered per `kind`; the distinct `regime.classify`
+and `research.refresh` handlers drive the analytics suite (§7.1) on independent
+schedules (the combined `analytics.run` kind is retired).
 
 ### Admin dashboard (task-queue observability)
 
@@ -407,9 +434,11 @@ Three pipelines run through these stages:
 - **`late-cycle-signals`** — `SPY`, `RSP`, `MNA`, `MARGIN`, `CONF` → index
   concentration / M&A / margin debt / confidence gauges → **`research_signals`**.
 
-The worker runs the whole suite daily at **22:30 UTC** (`analytics.run`, cron
-`30 22 * * *` — after US market close, so the fetched raw is settled end-of-day
-data); the API exposes regime at `/api/dashboards/regime-snapshots?range=`
+The worker runs regime and research as **distinct jobs** (issue #107):
+`regime.classify` daily at **22:30 UTC** (after US market close, so the fetched
+raw is settled end-of-day data) in the analytics lane, and `research.refresh`
+(both research signals, never the regime tool) daily at **23:00 UTC** in the
+research lane; the API exposes regime at `/api/dashboards/regime-snapshots?range=`
 and each research signal at `/api/dashboards/research-signals/:key`; the frontend
 renders `/regime` (including the backtest + predictive-correlations panels) and the
 `/research/*` views (mirroring the original site's surfaces). The regime DTO also
@@ -432,8 +461,9 @@ covers what *this repo* ships.
 
 **CI & demo — single box**, `docker-compose.yml`:
 
-- `postgres` + `api` + `worker`. The `api` process **also serves the static
-  frontend** (`STATIC_DIR=/srv/frontend`) — one origin, no app-level proxy.
+- `postgres` + `api` + the three worker lanes (`worker-committee` /
+  `worker-analytics` / `worker-research`, §7). The `api` process **also serves
+  the static frontend** (`STATIC_DIR=/srv/frontend`) — one origin, no app-level proxy.
 - **DB modes** are driven by `DATABASE_URL` + the postgres volume:
   - *ephemeral* (CI): throwaway, `docker compose down -v`.
   - *demo*: named `pgdata` volume persists across restarts.
@@ -441,7 +471,7 @@ covers what *this repo* ships.
 **Production — tiered on DigitalOcean, Cloudflare for DNS+observability** (D13;
 credentials in [deployment.md](./deployment.md)):
 
-- **API tier** — `api` + `worker` on a DO droplet at its own subdomain
+- **API tier** — `api` + the worker lanes on a DO droplet at its own subdomain
   (`committee.robotmoney.net`); the `api` co-serves this surface's SPA assets at the
   subdomain root. Cloudflare-proxied; a DO Cloud Firewall limits ingress to
   Cloudflare IPs.

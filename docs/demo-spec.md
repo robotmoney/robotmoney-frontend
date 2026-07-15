@@ -17,8 +17,8 @@ already-running (e.g. backgrounded) demo.
 flowchart TB
     subgraph Scheduler["⏱ Worker Scheduler"]
         SC["tickScheduler() every 30s<br/>reads job_schedules<br/>FOR UPDATE SKIP LOCKED"]
-        SC -->|even minute| R["regime.classify<br/>→ regime snapshot"]
-        SC -->|odd minute| A["analytics.run<br/>→ regime + research"]
+        SC -->|even minute| R["regime.classify<br/>→ regime snapshot<br/>(analytics lane)"]
+        SC -->|odd minute| A["research.refresh<br/>→ research signals<br/>(research lane)"]
         R -->|"poll DB (TUI)"| TP
         A -->|"poll DB (TUI)"| TP
     end
@@ -86,9 +86,10 @@ fresh activity, driven two ways (hybrid):
 - **Regime + research** — driven by the worker's own scheduler. In demo mode
   (`DEMO_FAST_SCHEDULES=1`, set only for the local migrate/seed) the seed appends fast
   demo-cadence rows to `job_schedules` in addition to the default daily 22:30 UTC rows:
-  `regime.classify` on `*/2 * * * *` (regime only) and `analytics.run` on
-  `1-59/2 * * * *` (the full suite — regime + both research signals). The one-minute
-  cron offset staggers them so they fire at different times.
+  `regime.classify` on `*/2 * * * *` (regime only, analytics lane) and
+  `research.refresh` on `1-59/2 * * * *` (both research signals only, research
+  lane — issue #107 split the retired combined `analytics.run` kind). The
+  one-minute cron offset staggers them so they fire at different times.
 - **Committee opinions** — driven by a loop inside `scripts/demo.ts`, because a
   committee session needs live MCP agents to sign + submit takes. After a one-time
   reset + setup, it runs one full session (open → brief → collect → agents →
@@ -394,7 +395,7 @@ the TUI shows only distilled state. Layout:
 - **Activity** (largest region) — Research plus **one pane per committee subject**, laid
   out as responsive columns (side by side when they fit, stacking when the terminal is
   narrow):
-  - **Research** — recent `regime.classify` / `analytics.run` runs, advancing
+  - **Research** — recent `regime.classify` / `research.refresh` runs, advancing
     queued → running → done as the worker's queue transitions are observed, annotated
     with what landed (e.g. `regime → risk_on 0.76`). Fidelity is queue-level (see
     [demo-plan.md §10](./demo-plan.md)), not fabricated sub-steps. The header shows a live **countdown** to
