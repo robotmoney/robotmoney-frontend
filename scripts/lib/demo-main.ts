@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, visibleLen, type Tui } from "./tui.ts";
 import { resolveDemoEnv } from "./demo-env.ts";
+import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
 import { COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -1007,24 +1008,22 @@ async function main(): Promise<void> {
   // a throw) can leave the served snapshot frozen at the seed floor, which the
   // /regime charts would then render silently as if current. The API now reports
   // `staleness`; retry the run a few times, and if it's still stale, log LOUDLY so
-  // the operator sees it instead of shipping a frozen dashboard.
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    let staleness: { stale?: boolean; asof?: string | null; ageDays?: number | null } | null = null;
+  // the operator sees it instead of shipping a frozen dashboard. The fresh/rerun/
+  // give-up decision is the pure decideRegimeBootAction (regime-boot.ts, unit-
+  // tested); this loop keeps only the I/O around it.
+  for (let attempt = 1; attempt <= REGIME_BOOT_MAX_ATTEMPTS; attempt++) {
+    let staleness: RegimeBootStaleness | null = null;
     try {
       const snap = await fetch(`${backendUrl}${ROUTES.dashboards.regimeSnapshots}?range=1`).then((r) => (r.ok ? r.json() : null));
       staleness = snap?.staleness ?? null;
     } catch (err) {
-      log(`regime freshness check failed (attempt ${attempt}/3): ${err instanceof Error ? err.message : err}`);
+      log(`regime freshness check failed (attempt ${attempt}/${REGIME_BOOT_MAX_ATTEMPTS}): ${err instanceof Error ? err.message : err}`);
     }
-    if (staleness && !staleness.stale) {
-      log(`regime snapshot fresh (asof ${staleness.asof}, ${staleness.ageDays}d)`);
-      break;
-    }
-    if (attempt < 3) {
-      log(`regime snapshot STALE (asof ${staleness?.asof ?? "none"}) — re-running analytics (attempt ${attempt}/3)`);
+    const decision = decideRegimeBootAction(staleness, attempt);
+    log(decision.message);
+    if (decision.action === "fresh") break;
+    if (decision.action === "rerun") {
       await e2e.admin("regime", { asof: today }).catch((err: unknown) => log(`regime re-run failed: ${err instanceof Error ? err.message : err}`));
-    } else {
-      log(`⚠ regime snapshot STILL STALE after 3 attempts (asof ${staleness?.asof ?? "none"}) — live fetchers may be blocked in this environment; the /regime charts will show a staleness banner until the worker lands a fresh run`);
     }
   }
 
