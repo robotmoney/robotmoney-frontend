@@ -6,7 +6,7 @@
 // trips a circuit breaker well short of the full range, and an isolated single-
 // month flake does NOT trip the breaker (full range still recovered).
 import { test, expect } from "bun:test";
-import { fetchEdgarS4Monthly } from "../src/analytics/extract/edgar.ts";
+import { fetchEdgarS4Monthly, fetchEdgarMonthCount } from "../src/analytics/extract/edgar.ts";
 
 function okResponse(count: number) {
   return {
@@ -85,6 +85,56 @@ test("fetchEdgarS4Monthly: an isolated single-month flake does not trip the brea
     expect(result.length).toBe(months - 1); // every month recovered except the one flaky miss
     expect(warnings.some((m) => /unrecovered/i.test(m))).toBe(true);
     expect(warnings.some((m) => /consecutive/i.test(m))).toBe(false); // breaker never tripped
+  } finally {
+    globalThis.fetch = orig;
+  }
+}, 10_000);
+
+// Issue #109: fetchEdgarMonthCount's own retry/backoff loop must honor an
+// OPTIONAL absolute `deadlineAt` — a sustained-429 month must NOT run its
+// full maxAttempts×exponential-backoff cycle once the deadline has passed;
+// it must bail out fast. FAKE CLOCK (AC3): the injected `clock` drives both
+// `now()` and `sleep()` — every backoff "sleep" merely advances a counter
+// and resolves immediately, so this test is deterministic and instant, never
+// waiting out a real timer.
+test("fetchEdgarMonthCount: an absolute deadlineAt cuts a sustained-429 retry loop short (fake clock, never runs the full backoff cycle)", async () => {
+  const orig = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return { ok: false, status: 429, json: async () => ({}) } as Response;
+  }) as any;
+  let clock = 0;
+  const fakeClock = {
+    now: () => clock,
+    sleep: async (ms: number) => {
+      clock += ms; // no real timer — the backoff "elapses" instantly
+    },
+  };
+  try {
+    const deadlineAt = 1200; // fake-clock ms: survives attempt 1 + the 500ms backoff, dies before the 1000ms one
+    const result = await fetchEdgarMonthCount("2020-01-01", "2020-01-31", 15000, { warn: () => {} }, 4, deadlineAt, fakeClock);
+    expect(result).toBeNull();
+    // Without deadline propagation this would run all 4 attempts (500+1000+2000ms
+    // of fake-clock backoff); with it, the loop bails once the fake clock
+    // crosses the deadline — never reaching every attempt.
+    expect(calls).toBeLessThan(4);
+    expect(clock).toBeLessThanOrEqual(deadlineAt + 500); // small deterministic tolerance (at most one more backoff step)
+  } finally {
+    globalThis.fetch = orig;
+  }
+}, 10_000);
+
+test("fetchEdgarMonthCount: no deadlineAt behaves exactly as before (unbounded by any outer deadline)", async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ hits: { total: { value: 11 } } }),
+  })) as any;
+  try {
+    const result = await fetchEdgarMonthCount("2020-01-01", "2020-01-31", 15000, { warn: () => {} });
+    expect(result).toBe(11);
   } finally {
     globalThis.fetch = orig;
   }

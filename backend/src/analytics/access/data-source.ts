@@ -11,7 +11,12 @@ import type { Indicator } from "../analyze/indicators.ts";
 import { fetchAll } from "../extract/sources.ts";
 import { fetchYahoo } from "../extract/yahoo.ts";
 import { fetchFred } from "../extract/fred.ts";
-import { fetchEdgarS4Monthly } from "../extract/edgar.ts";
+import { mergeSeries } from "../transform/math.ts";
+import {
+  refreshEdgarIncremental,
+  DEFAULT_EDGAR_REFRESH_DEADLINE_MS,
+  type EdgarRefreshOutcome,
+} from "../edgar-incremental-refresh.ts";
 import type { ChannelInputs, LateCycleInputs } from "../analyze/research-signals.ts";
 import { TOP7 } from "../analyze/research-signals.ts";
 
@@ -20,6 +25,16 @@ export type Logger = {
   warn?: (m: string) => void;
   error?: (m: string) => void;
 };
+
+// Issue #109: the orchestrator (the only place that knows the persisted raw
+// floor) hands the live source its current MNA floor + one absolute hard
+// deadline for the incremental EDGAR sweep. Hermetic/fixture sources ignore
+// this entirely (structurally compatible — TS allows implementing a fewer-
+// parameter function against a type that declares more).
+export interface EdgarPlanContext {
+  persistedMna: Point[]; // the CURRENTLY persisted raw floor for the MNA indicator
+  deadlineAt: number; // absolute epoch-ms hard deadline for the whole sweep
+}
 
 // Extra inputs the research signals need beyond the regime registry. STABLES is
 // NOT here — it is a registry indicator, so the orchestrator sources it from the
@@ -30,9 +45,21 @@ export interface ResearchInputs {
   spy: Point[];
   rsp: Point[];
   top7: Point[][];
+  // The COMPLETE, usable MNA series for signal computation: for the live
+  // source, persisted floor ∪ freshly-fetched incremental rows (or the
+  // floor alone, unchanged, when the refresh degrades — never a partial
+  // fresh batch). Hermetic/fixture sources supply their own complete series
+  // directly, unchanged from before.
   mna: Point[];
   margin: Point[];
   conf: Point[];
+  // Present ONLY when the live source ran the incremental EDGAR refresh
+  // (issue #109). Absent ⇒ treat as complete/up-to-date (hermetic/fixture
+  // sources never gate signal publication on this). When present with
+  // status "degraded", the orchestrator MUST NOT compute/publish
+  // late-cycle-signals this run — it logs the degraded outcome and retains
+  // the last-good persisted signal untouched.
+  mnaRefresh?: EdgarRefreshOutcome;
 }
 
 // Chart-overlay extras the regime backtest + predictive correlations need beyond
@@ -49,8 +76,11 @@ export interface BacktestExtras {
 export interface AnalyticsDataSource {
   // Registry indicator raw series (id → pre-transform {date,value}[]).
   fetchIndicators(indicators: Indicator[], logger?: Logger): Promise<Record<string, Point[]>>;
-  // Research-only inputs (BTC/QQQ/SPY/RSP/top-7/MNA/MARGIN/CONF).
-  fetchResearchInputs(asof: string, logger?: Logger): Promise<ResearchInputs>;
+  // Research-only inputs (BTC/QQQ/SPY/RSP/top-7/MNA/MARGIN/CONF). `edgarCtx`
+  // (issue #109) carries the persisted MNA floor + hard deadline for the
+  // live source's incremental EDGAR sweep; hermetic/fixture sources never
+  // need it (a fewer-parameter implementation is structurally valid TS).
+  fetchResearchInputs(asof: string, logger?: Logger, edgarCtx?: EdgarPlanContext): Promise<ResearchInputs>;
   // Backtest/correlations overlays (SPX/ETH price levels + DTB3 yield). A failed
   // fetch returns [] (logged) → that leg is simply excluded downstream.
   fetchBacktestExtras(logger?: Logger): Promise<BacktestExtras>;
@@ -79,7 +109,7 @@ export const liveDataSource: AnalyticsDataSource = {
     return fetchAll({ logger, indicators });
   },
 
-  async fetchResearchInputs(asof, logger = console): Promise<ResearchInputs> {
+  async fetchResearchInputs(asof, logger = console, edgarCtx): Promise<ResearchInputs> {
     // Channel + late-cycle share Yahoo tickers; fetch the union concurrently.
     const [btc, qqq, spy, rsp, ...top7] = await Promise.all([
       safe("BTC-USD", () => fetchYahoo("BTC-USD", unix(CHANNEL_START)), logger),
@@ -88,12 +118,30 @@ export const liveDataSource: AnalyticsDataSource = {
       safe("RSP", () => fetchYahoo("RSP", unix(LATECYCLE_START)), logger),
       ...TOP7.map((sym) => safe(sym, () => fetchYahoo(sym, unix(LATECYCLE_START)), logger)),
     ]);
-    const [mna, margin, conf] = await Promise.all([
-      safe("EDGAR S-4", () => fetchEdgarS4Monthly(LATECYCLE_START, asof, 15000, logger), logger),
+
+    // Issue #109: EDGAR/MNA is no longer a blind full 2010-to-present crawl
+    // on every run. Plan + fetch ONLY the missing months plus the trailing
+    // revision window against the persisted floor the orchestrator handed
+    // us, under one hard deadline. A degraded refresh (deadline hit, or any
+    // planned month missing/duplicated/invalid) falls back to the persisted
+    // floor UNCHANGED — never a partial fresh batch — and is reported via
+    // `mnaRefresh` so the orchestrator can skip publishing a signal against
+    // incomplete data this run.
+    const persistedMna = edgarCtx?.persistedMna ?? [];
+    const deadlineAt = edgarCtx?.deadlineAt ?? Date.now() + DEFAULT_EDGAR_REFRESH_DEADLINE_MS;
+    const [margin, conf, mnaRefresh] = await Promise.all([
       safe("FRED BOGZ1FL663067003Q", () => fetchFred("BOGZ1FL663067003Q"), logger),
       safe("FRED UMCSENT", () => fetchFred("UMCSENT"), logger),
+      refreshEdgarIncremental({
+        asOf: asof,
+        persistedMonths: persistedMna.map((p) => p.date.slice(0, 7)),
+        deadlineAt,
+        logger,
+      }),
     ]);
-    return { btc, qqq, spy, rsp, top7, mna, margin, conf };
+    const mna = mnaRefresh.status === "degraded" ? persistedMna : mergeSeries(persistedMna, mnaRefresh.newRows);
+
+    return { btc, qqq, spy, rsp, top7, mna, margin, conf, mnaRefresh };
   },
 
   async fetchBacktestExtras(logger = console): Promise<BacktestExtras> {
