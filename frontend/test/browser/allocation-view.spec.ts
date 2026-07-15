@@ -100,9 +100,11 @@ function adapterValue(a: VaultEconomicsAdapter): string {
   return a.configured === false ? "Not configured" : fmtUsd(a.balanceUsd);
 }
 // Hero Total AUM = live prop-wallet total + live vault tvlUsd; null (renders "—")
-// whenever EITHER half is unknown.
+// only when BOTH halves are unknown. If exactly one half is null, the total is
+// the PARTIAL sum of whatever resolved (issue #160) — never blanked to "—"
+// just because one feed degraded.
 function totalAum(walletTotal: number | null, tvlUsd: number | null): number | null {
-  return walletTotal == null || tvlUsd == null ? null : walletTotal + tvlUsd;
+  return walletTotal == null && tvlUsd == null ? null : (walletTotal ?? 0) + (tvlUsd ?? 0);
 }
 function adapterBalance(a: VaultEconomicsAdapter): string {
   return a.configured !== false && a.balanceUsd != null
@@ -281,13 +283,18 @@ test("allocation view renders a stale badge and never fabricates numbers when va
       { name: "Compound", address: "0x3333333333333333333333333333333333333333", configured: true, balanceUsd: null },
     ],
   };
-  await stubEnvironment(page, degraded, walletStub());
+  const wallet = walletStub({ totalUsd: 55000, source: "live" });
+  await stubEnvironment(page, degraded, wallet);
   await page.goto("/");
   await navigate(page, "/allocation");
 
   await expect(page.locator(".alloc-stale")).toBeVisible();
-  // Vault tvl is null → Total AUM is null regardless of the (valid) wallet total.
-  await expect(page.locator(".alloc-aum__value")).toHaveText("—");
+  // Vault tvl is null but the wallet total DID resolve (issue #160) — Total AUM
+  // must render the partial (wallet-only) sum, with the partial-total badge
+  // surfacing that the vault half is missing, never a blanked "—".
+  await expect(page.locator(".alloc-aum__value")).toHaveText(fmtUsd(totalAum(wallet.totalUsd, degraded.tvlUsd)));
+  await expect(page.locator(".alloc-aum__value")).not.toHaveText("—");
+  await expect(page.locator(".alloc-aum-partial")).toBeVisible();
   await expect(page.locator(".alloc-chip__value")).toHaveText("—");
   const rows = page.locator(".alloc-tablecard").first().locator("tbody tr");
   await expect(rows).toHaveCount(3);
@@ -297,6 +304,31 @@ test("allocation view renders a stale badge and never fabricates numbers when va
     await expect(cells.nth(1)).toHaveText("—");
     await expect(cells.nth(2)).toHaveText("—");
   }
+});
+
+test("allocation hero renders a partial Total AUM (never '—') when the wallet feed fails entirely but the vault half resolves (issue #160)", async ({ page }) => {
+  // Simulates the nightly LIVE smoke failure mode: one live feed degrades to
+  // fully unavailable (e.g. a tracked wallet leg's chain read fails with no
+  // persisted fallback) while the other resolves normally. Previously
+  // totalAum() blanked the ENTIRE figure to "—" whenever EITHER half was
+  // null; it must now sum whatever DID resolve and flag the result partial.
+  const golden = loadVaultEconomicsGolden();
+  await page.route("**/api/dashboards/vault-economics", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(golden) }));
+  await page.route("**/api/dashboards/wallet-balances", (route) =>
+    route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "degraded" }) }));
+  for (const [url, file] of Object.entries(vendorScripts)) {
+    await page.route(url, (route) => route.fulfill({
+      path: join(process.cwd(), file),
+      contentType: "application/javascript",
+    }));
+  }
+  await page.goto("/");
+  await navigate(page, "/allocation");
+
+  await expect(page.locator(".alloc-aum__value")).toHaveText(fmtUsd(golden.tvlUsd));
+  await expect(page.locator(".alloc-aum__value")).not.toHaveText("—");
+  await expect(page.locator(".alloc-aum-partial")).toBeVisible();
 });
 
 // ── NEW: the buyback / sleeve / allocation-framework bindings render FROM the

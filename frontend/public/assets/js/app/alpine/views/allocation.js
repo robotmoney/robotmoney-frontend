@@ -126,15 +126,29 @@ export function registerAllocationView(Alpine) {
     },
     fmtPct(v) { return v == null ? "—" : (Number(v) * 100).toFixed(2) + "%"; },
     // Hero Total AUM = live prop-wallet total (wallet-balances) + live vault TVL
-    // (vault-economics) — issue #84. Null-until-live: if EITHER half is unknown
-    // (still loading, or degraded with no persisted sample) this returns null so
-    // fmtUsd() renders "—" rather than showing one half alone, which would
-    // understate the true total without disclosing why.
+    // (vault-economics) — issue #84. Null only while BOTH halves are unknown
+    // (still loading, or neither feed has ever resolved). If exactly one half
+    // degrades to null (issue #160 — e.g. a live RPC read fails for a tracked
+    // wallet leg, or the vault feed has no persisted fallback yet), sum
+    // whatever DID resolve rather than blanking the whole figure to "—": a
+    // partial-but-real total is more useful than hiding it, as long as
+    // aumPartial() below surfaces that it's not the full picture.
     totalAum() {
       const vault = this.economics?.tvlUsd;
       const wallet = this.wallet?.totalUsd;
-      if (vault == null || wallet == null) return null;
-      return wallet + vault;
+      if (vault == null && wallet == null) return null;
+      return (wallet ?? 0) + (vault ?? 0);
+    },
+    // True when the hero Total AUM is a PARTIAL sum — exactly one of the two
+    // live halves (wallet total, vault TVL) failed to resolve, so the number
+    // shown understates the true total. Mirrors the existing
+    // walletNonLive()/walletStale() provenance badges (issue #160): a
+    // degraded input must never be presented as a silently "full-looking"
+    // figure.
+    aumPartial() {
+      const vault = this.economics?.tvlUsd;
+      const wallet = this.wallet?.totalUsd;
+      return (vault == null) !== (wallet == null);
     },
     // Per-adapter Value cell (issue #50): an adapter still at its placeholder
     // address is reported configured:false with balanceUsd:null by the API —
