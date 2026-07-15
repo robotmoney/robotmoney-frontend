@@ -240,7 +240,7 @@ flowchart TB
     end
 
     subgraph Handlers["Registered Handlers"]
-        H1["analytics.run<br/>regime + research signals<br/>daily 22:30 UTC"]
+        H1["regime.classify daily 22:30 UTC<br/>research.refresh daily 23:00 UTC<br/>(distinct kinds, own lanes)"]
         H2["committee.*<br/>session lifecycle<br/>(open → brief → close →<br/>aggregate → publish)"]
     end
 
@@ -261,7 +261,9 @@ flowchart TB
 
 ## 12. Analytics pipeline — research & report jobs
 
-The analytics suite runs as a scheduled job (`analytics.run`, daily 22:30 UTC).
+The analytics suite runs as two scheduled jobs with distinct kinds and lanes
+(issue #107): `regime.classify` (daily 22:30 UTC, analytics lane) and
+`research.refresh` (daily 23:00 UTC, research lane).
 It drives three compute pipelines through a shared 6-stage access → extract →
 transform → analyze → store → report flow:
 
