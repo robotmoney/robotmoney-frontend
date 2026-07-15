@@ -150,6 +150,25 @@ t("Coinmetrics ETH active addresses track the fixture (ETH_ACTIVE)", async () =>
   assertTracks("ETH_ACTIVE", await withRetry(() => fetchCoinmetrics("eth", "AdrActCnt")), fx, 0.5);
 }, 60_000);
 
+t("Coinmetrics BTC MVRV is live + fresh (BTC_MVRV — repointed off dead blockchain.com mvrv, #127)", async () => {
+  // No assertTracks here: the vendored raw-indicator-history fixture predates a
+  // working MVRV fetcher (blockchain.com's chart died before capture), so there is
+  // no fixture series to track. Instead assert the replacement source is ALIVE,
+  // FRESH, and in the plausible MVRV range — a repeat upstream death (0 points or
+  // a stalled tail) fails loudly here, never a silent stale-degrade.
+  const pts = await withRetry(() => fetchCoinmetrics("btc", "CapMVRVCur"));
+  expect(pts.length, "BTC_MVRV: expected a multi-year daily history").toBeGreaterThan(2000);
+  const last = pts.reduce((a, b) => (b.date > a.date ? b : a));
+  const ageDays = (Date.now() - Date.parse(last.date + "T00:00:00Z")) / 86400_000;
+  // eslint-disable-next-line no-console
+  console.log(`[fetchers-live] BTC_MVRV: fetched=${pts.length} last=${last.date} value=${last.value} ageDays=${ageDays.toFixed(0)}`);
+  expect(ageDays, `BTC_MVRV: source is STALE (last ${last.date})`).toBeLessThan(7);
+  // MVRV is a cap ratio: all-time historical range is ~0.4–4.7. Bounds are loose
+  // sanity rails against a unit/definition change, not tight value asserts.
+  expect(last.value).toBeGreaterThan(0.1);
+  expect(last.value).toBeLessThan(10);
+}, 60_000);
+
 t("Shiller CAPE is fresh + tracks the fixture over its raw monthly history (SHILLER_CAPE)", async () => {
   // SHILLER_CAPE is MONTHLY. The fixture stores it forward-filled to daily, and
   // its recent tail is a STALE value (when the fixture was captured, multpl.com

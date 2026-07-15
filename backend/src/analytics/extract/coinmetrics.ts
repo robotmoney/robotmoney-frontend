@@ -5,7 +5,8 @@
 //     ?assets=<asset>&metrics=<metric>&start_time=YYYY-MM-DD&page_size=10000
 //
 // Response is paginated; we follow next_page_token until exhausted. Used for
-// ETH_ACTIVE (asset=eth, metric=AdrActCnt).
+// ETH_ACTIVE (asset=eth, metric=AdrActCnt) and BTC_MVRV (asset=btc,
+// metric=CapMVRVCur — repointed off blockchain.com's removed mvrv chart, #127).
 import type { Point } from "../types.ts";
 import { fetchJson } from "./http.ts";
 

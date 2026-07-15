@@ -8,8 +8,10 @@
 //   → align each registry indicator (forward-fill; zero-fill if align==='zero_fill')
 //   → applyTransform(ind.transform, aligned)
 //   → computeRegime(transformed, dateAxis)
-// Registry indicators absent from the fixture (e.g. BTC_MVRV — a fetcher gap)
-// are fed an all-NaN series so they are excluded via minValidObs, never throw.
+// Registry indicators absent from the fixture (e.g. BTC_MVRV — the fixture was
+// captured while blockchain.com's mvrv chart was dead, before the #127 repoint
+// to Coinmetrics CapMVRVCur) are fed an all-NaN series so they are excluded via
+// minValidObs, never throw.
 //
 // ── Why the historical rows can't be matched to <1e-6, and why that is correct ──
 // update.js's normal cron path calls mergeFrozenIntoResult(): every PAST row is

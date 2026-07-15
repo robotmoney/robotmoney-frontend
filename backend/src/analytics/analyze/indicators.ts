@@ -267,16 +267,16 @@ export const INDICATORS: Indicator[] = [
     id: "BTC_MVRV",
     name: "BTC MVRV",
     panel: "onchain",
-    source: "blockchain_com",
-    series: "mvrv",
+    source: "coinmetrics",
+    series: { asset: "btc", metric: "CapMVRVCur" },
     sign: +1,
     transform: "level",
     unit: "ratio2",
-    source_url: "https://www.blockchain.com/explorer/charts/mvrv",
+    source_url: "https://charts.coinmetrics.io/network-data/btc/CapMVRVCur",
     description:
       "Market Value to Realized Value ratio. Divides BTC market capitalization by its \"realized cap\" — the sum of (price-at-last-move × amount) across all UTXOs. Represents how big a paper gain or loss the average bitcoin holder is sitting on.",
     derivation:
-      "Blockchain.com mvrv chart. Realized cap is computed from on-chain UTXO data.",
+      "Coinmetrics community data, asset=BTC, metric=CapMVRVCur (market cap ÷ realized cap, computed from on-chain UTXO data). Daily. Repointed from blockchain.com's mvrv chart after that endpoint was removed upstream (HTTP 404, #127).",
     interpretation:
       "Below 1 = market cap below cost basis of holders = historical bottoms (March 2020, late 2022). Above 3 = average holder up 3x = historical tops (late 2017, early 2021). Risk-on when rising from low; the indicator becomes a contrarian peak signal above 3.5. Use with care near extremes.",
   },
