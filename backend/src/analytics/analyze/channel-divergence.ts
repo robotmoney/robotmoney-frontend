@@ -5,7 +5,6 @@
 import type { AnalyticTool, ToolContext } from "./tool.ts";
 import { pctChange, rollingBeta, ratio, percentileInWindow, clamp01 } from "../transform/math.ts";
 import type { ResearchPayload } from "./research.ts";
-import { persistResearchSignal } from "../store/research-store.ts";
 
 const KEY = "channel-divergence";
 
@@ -50,6 +49,4 @@ export const channelDivergenceTool: AnalyticTool<ResearchPayload> = {
       series: { label: "BTC/QQQ ratio", points: dates.map((date, i) => ({ date, value: Number((ratioSeries[i + 1] ?? 0).toFixed(2)) })).slice(-180) },
     };
   },
-
-  async persist(result, asof) { await persistResearchSignal(KEY, asof, result); },
 };

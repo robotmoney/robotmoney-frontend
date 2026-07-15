@@ -49,6 +49,12 @@ export const ROUTES: {
       enqueueJob: string;
     };
   };
+  analytics: {
+    rawHistory: string;
+    rawHistorySeed: string;
+    regimeSnapshots: string;
+    researchSignals: string;
+  };
   admin: {
     auth: string;
     jobs: string;

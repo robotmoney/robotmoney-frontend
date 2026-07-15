@@ -20,10 +20,10 @@ import { INDICATORS } from "./analyze/indicators.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { applyTransform } from "./transform/transforms.ts";
 import { buildDateAxis, alignDailyForwardFill, alignDailyZeroFill, mergeSeries } from "./transform/math.ts";
-import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "./store/raw-history-store.ts";
-import { seedRawIndicatorFloor } from "./store/floor-seed.ts";
-import { saveRegimeSnapshots, type RegimeSnapshotRow } from "./store/regime-store.ts";
-import { persistResearchSignal } from "./store/research-store.ts";
+import { loadRawFloorSeed } from "./extract/floor-seed.ts";
+import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
+import type { AnalyticsPersistence } from "./persistence.ts";
+import { analyticsApiClient } from "./api-client.ts";
 import { computeChannelDivergence, computeLateCycle } from "./analyze/research-signals.ts";
 import { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 import {
@@ -67,28 +67,43 @@ const nn = (v: number | undefined): number | null =>
 
 // Run the analytics suite (or one tool) for `asof`, persisting each output.
 // `source` defaults to the real live fetchers; tests inject a fixture source.
+//
+// PERSISTENCE BOUNDARY (issue #106): this orchestrator never writes SQL. Every
+// read/write of the analytics tables goes through the injected
+// AnalyticsPersistence port. The DEFAULT is the authenticated HTTP client
+// (analytics/api-client.ts) — what updater processes (the worker) use, wired
+// from ANALYTICS_API_URL + ANALYTICS_TOKEN at call time. The API process (its
+// committee regime routes), tests, and demo tooling inject the API-owned direct
+// service (analytics/store/direct.ts) instead.
 export async function runAnalytics(
   asof: string,
   toolId?: string,
   source: AnalyticsDataSource = resolveAnalyticsSource(),
+  persistence: AnalyticsPersistence = analyticsApiClient(),
 ): Promise<Record<string, unknown>> {
   const logger: Logger = console;
   const want = (id: string) => !toolId || toolId === id;
   const results: Record<string, unknown> = {};
 
-  let persisted: Awaited<ReturnType<typeof loadRawIndicatorHistory>> | null = null;
-  const getPersisted = async () => (persisted ??= await loadRawIndicatorHistory());
+  let persisted: Awaited<ReturnType<AnalyticsPersistence["loadRawHistory"]>> | null = null;
+  const getPersisted = async () => (persisted ??= await persistence.loadRawHistory());
   let mergedRaw: Record<string, { date: string; value: number }[]> | null = null;
 
   // ── REGIME ────────────────────────────────────────────────────────────────
   if (want("regime")) {
     // Opt-in cold-DB floor seed (issue #13): on the real-live demo path a fresh DB
     // would re-fetch years of history (esp. ~200 EDGAR requests) before the first
-    // classify. ANALYTICS_FLOOR_SEED=1 loads the vendored real floor ONCE (idempotent
-    // gap-fill; no-op once warm) so getPersisted() below sees it. Off by default →
-    // CI/hermetic runs never touch it.
+    // classify. ANALYTICS_FLOOR_SEED=1 parses the vendored real floor and submits
+    // it through the seed-ingestion port (server-side gap-fill: existing rows win,
+    // idempotent, no-op once warm) so getPersisted() below sees it. Off by
+    // default → CI/hermetic runs never touch it.
     if (process.env.ANALYTICS_FLOOR_SEED === "1") {
-      await seedRawIndicatorFloor({ logger });
+      const res = await persistence.seedRawHistory(await loadRawFloorSeed());
+      if (res.seededPoints > 0) {
+        logger.log?.(`[analytics] floor seed: wrote ${res.seededPoints} real rows across ${res.indicators} indicator(s) (cold-DB gap fill); ${res.existingPoints} already present`);
+      } else {
+        logger.log?.(`[analytics] floor seed: no-op — floor already warm (${res.existingPoints} rows present)`);
+      }
     }
     const floor = await getPersisted();
     const fetched = await source.fetchIndicators(INDICATORS, logger);
@@ -114,7 +129,7 @@ export async function runAnalytics(
     if (excluded > 0) logger.warn?.(`[analytics] ${excluded} indicator(s) excluded entirely (no data)`);
 
     // Persist the append-only merged floor back before computing.
-    await saveRawIndicatorHistory(merged);
+    await persistence.saveRawHistory(merged);
     mergedRaw = merged;
 
     const dateAxis = buildDateAxis(BACKFILL_START, asof);
@@ -146,7 +161,7 @@ export async function runAnalytics(
     }
 
     const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, backtest, correlations);
-    await saveRegimeSnapshots(rows);
+    await persistence.saveRegimeSnapshots(rows);
 
     const last = dateAxis.length - 1;
     results.regime = {
@@ -171,7 +186,7 @@ export async function runAnalytics(
         { btc: inputs.btc, qqq: inputs.qqq, spy: inputs.spy, stables },
         asof,
       );
-      await persistResearchSignal("channel-divergence", asof, payload);
+      await persistence.saveResearchSignal("channel-divergence", asof, payload);
       results["channel-divergence"] = payload;
     }
 
@@ -180,17 +195,12 @@ export async function runAnalytics(
         { spy: inputs.spy, rsp: inputs.rsp, top7: inputs.top7, mna: inputs.mna, margin: inputs.margin, conf: inputs.conf },
         asof,
       );
-      await persistResearchSignal("late-cycle-signals", asof, payload);
+      await persistence.saveResearchSignal("late-cycle-signals", asof, payload);
       results["late-cycle-signals"] = payload;
     }
   }
 
   return results;
-}
-
-// Back-compat: callers that just want today's regime persisted.
-export async function runRegime(asof: string): Promise<void> {
-  await runAnalytics(asof, "regime");
 }
 
 // ─── snapshot-row builder (mirrors update.js writeFullHistoryCsv + writeSnapshot) ─

@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { sql } from "../src/db/client.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
+import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { liveDataSource } from "../src/analytics/access/data-source.ts";
 import { seededProvider } from "../src/analytics/access/provider.ts";
 import { saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
@@ -108,7 +109,7 @@ test(
 
     try {
       // DEFAULT/LIVE source explicitly — NOT the hermetic or a fixture source.
-      await runAnalytics(ASOF, "regime", liveDataSource);
+      await runAnalytics(ASOF, "regime", liveDataSource, directAnalyticsPersistence);
     } finally {
       console.warn = origWarn;
       (globalThis as any).fetch = origFetch;

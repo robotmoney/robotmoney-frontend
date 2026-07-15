@@ -114,6 +114,15 @@ const researchKeys = ["channel-divergence", "late-cycle-signals"];
 const adminPassword = crypto.randomUUID().replace(/-/g, "").slice(0, 20);
 process.env.ADMIN_TOKEN = adminPassword;
 
+// Analytics-provider bearer credential (issue #106). The worker's analytics
+// updater jobs submit computed outputs through the authenticated
+// /api/analytics/* boundary; the api verifies this same shared secret. A FRESH
+// random value per launch, set here (before compose interpolation) so both
+// containers agree. NEVER printed — not in logs, not in the TUI, not in
+// demo-state.json.
+const analyticsToken = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+process.env.ANALYTICS_TOKEN = analyticsToken;
+
 // Data-path resolution (issue #50): DEFAULT is production parity (live Base
 // mainnet RPC + live analytics + floor seed); DEMO_HERMETIC=1 is the explicit
 // opt-in for the stubbed/offline path (the ONLY mode CI runs — e2e.yml sets it,
@@ -133,6 +142,10 @@ const dockerEnv: Record<string, string> = {
   // container via docker-compose's `ADMIN_TOKEN: ${ADMIN_TOKEN:-}` line. Random
   // per launch; the value is shown ONLY in the interactive TUI (render()).
   ADMIN_TOKEN: adminPassword,
+  // Analytics-provider bearer (issue #106): api verifies, worker submits with
+  // it (docker-compose's `ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}` lines). Never
+  // printed anywhere.
+  ANALYTICS_TOKEN: analyticsToken,
   WEB_PORT: String(apiPort),
   MCP_PORT: String(mcpPort),
   POSTGRES_PORT: String(pgPort),

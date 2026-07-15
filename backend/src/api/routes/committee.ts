@@ -1,12 +1,12 @@
 // Committee REST handlers — thin transport over the domain layer. Used by the web
 // frontend (reads) and as the sibling to the MCP write tools (the MCP server
 // calls these under the hood). Returns {status, body} for the Bun router to send.
-import { createHash, timingSafeEqual } from "node:crypto";
 import { canonicalizeSubmission, ROUTES } from "@robotmoney/contract";
 import * as ic from "../../committee/domain.ts";
-import { config } from "../../config.ts";
 import { isPlausibleKey } from "../../lib/keys.ts";
-import { runAnalytics } from "../../analytics/index.ts";
+import { resolveAnalyticsSource, runAnalytics } from "../../analytics/index.ts";
+import { directAnalyticsPersistence } from "../../analytics/store/direct.ts";
+import { bearer, hasAnalyticsProviderRole, isPrivileged } from "../auth.ts";
 import { jsonValue, sql } from "../../db/client.ts";
 import {
   parseApply,
@@ -17,18 +17,9 @@ import {
   requiredString,
 } from "../validation.ts";
 
-function bearer(req: Request): string | null {
-  const h = req.headers.get("Authorization") ?? "";
-  return h.startsWith("Bearer ") ? h.slice(7) : null;
-}
-
-// Constant-time secret comparison (over fixed-length sha256 hashes so lengths
-// always match and timing doesn't leak the secret).
-function secretEq(presented: string | null, expected: string): boolean {
-  const a = createHash("sha256").update(presented ?? "").digest();
-  const b = createHash("sha256").update(expected).digest();
-  return timingSafeEqual(a, b);
-}
+// bearer()/secretEq()/isPrivileged()/hasAnalyticsProviderRole() live in
+// api/auth.ts (issue #106) so the /api/analytics boundary reuses the exact same
+// constant-time credential idioms as this router.
 
 // The committee endpoint paths come from the shared contract (finding 019 —
 // routes.js is the single source of truth for URLs; no literals here). Param
@@ -118,21 +109,8 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   // if unset, allow only outside prod (demo/ephemeral convenience). This closes
   // the unauthenticated identity-takeover / state-drive holes. Proper
   // per-member onboarding + OAuth is the IC-remainder work.
-  // Roles (docs/architecture.md §9.8):
-  //  • host/admin     — privileged() (ADMIN_TOKEN or non-prod). Drives lifecycle
-  //                     and member activation; can rotate keys.
-  //  • analytics-provider — ANALYTICS_TOKEN bearer. May write the regime.
-  //  • member         — committee_member_keys bearer. May submit (enforced in
-  //                     submitRecommendation).
-  // Fail-closed: a token (constant-time compared) authorizes in any env; WITHOUT
-  // a token the role opens only when config.allowInsecure (ephemeral / explicit
-  // RM_ALLOW_INSECURE). demo/prod with no token → locked.
-  const privileged = () =>
-    config.adminToken ? secretEq(req.headers.get("X-Admin-Token"), config.adminToken) : config.allowInsecure;
-  // Named to avoid colliding with the (removed) analytics data-source knob —
-  // this is purely the AUTH check for the analytics-provider ROLE above.
-  const hasAnalyticsProviderRole = () =>
-    config.analyticsToken ? secretEq(bearer(req), config.analyticsToken) : config.allowInsecure;
+  // Role definitions + the fail-closed rule live in api/auth.ts (issue #106).
+  const privileged = () => isPrivileged(req);
 
   // PUBLIC onboarding: a prospective member submits its public key. The member
   // is recorded as 'applied' (NOT active) with an INACTIVE key — it cannot
@@ -147,11 +125,16 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   }
 
   // Role-gated regime write: ONLY the analytics-provider may persist the regime.
+  // Narrowed (issue #106): scoped to the regime composite (toolId="regime") — the
+  // full research suite is the worker's own scheduled job, not a committee-facing
+  // behavior — and the orchestrator persists through the API-OWNED direct
+  // persistence service (analytics/store/direct.ts), never ad-hoc SQL: the
+  // fetch/compute stages carry no store or db/client imports.
   if (m === "POST" && p === C.regime) {
-    if (!hasAnalyticsProviderRole()) return { status: 403, body: { error: "analytics-provider role required" } };
+    if (!hasAnalyticsProviderRole(req)) return { status: 403, body: { error: "analytics-provider role required" } };
     const b = await readJsonObject(req) ?? {};
     const asof = typeof b.asof === "string" ? b.asof : new Date().toISOString().slice(0, 10);
-    const tools = Object.keys(await runAnalytics(asof));
+    const tools = Object.keys(await runAnalytics(asof, "regime", resolveAnalyticsSource(), directAnalyticsPersistence));
     return { status: 200, body: { ok: true, tools } };
   }
 
@@ -184,7 +167,7 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
       // full suite here re-ran the multi-minute live SEC EDGAR research crawl and
       // hung `bun demo`. The worker refreshes research signals on its own
       // independent schedule, so this route never needs them (issue #59).
-      case "regime": return { status: 200, body: { tools: Object.keys(await runAnalytics(typeof b.asof === "string" ? b.asof : new Date().toISOString().slice(0, 10), "regime")) } };
+      case "regime": return { status: 200, body: { tools: Object.keys(await runAnalytics(typeof b.asof === "string" ? b.asof : new Date().toISOString().slice(0, 10), "regime", resolveAnalyticsSource(), directAnalyticsPersistence)) } };
       case "subject": {
         const id = requiredString(b, "id", 100);
         const name = requiredString(b, "name", 200);

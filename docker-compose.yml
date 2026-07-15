@@ -39,7 +39,21 @@ x-worker-base: &worker-base
 # elsewhere = offline fixture).
 x-worker-env: &worker-env
   DATABASE_URL: ${DATABASE_URL}
+  # Optional queue-scoped restricted role (migrations/0016_worker_role.sql):
+  # point the worker's pool at rm_worker so DB permissions enforce that it can
+  # never mutate analytics data tables (issue #106). Falls back to DATABASE_URL
+  # when unset.
+  WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
   RM_ENV: ${RM_ENV:-demo}
+  # Updater → API wiring (issue #106): analytics jobs submit computed outputs
+  # through the authenticated /api/analytics/* boundary on the api service —
+  # never direct SQL. The token is the same shared secret the api verifies;
+  # a worker REFUSES to boot in demo/prod without it
+  # (assertAnalyticsUpdaterCredentials). Shared across lanes: every lane runs
+  # the same worker entry (only the analytics lane submits, but the boot guard
+  # is uniform and the secret is one deployment value).
+  ANALYTICS_API_URL: http://api:8787
+  ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
 
 services:
@@ -72,6 +86,10 @@ services:
       # (X-Admin-Token). The api process is the one that authenticates HTTP; the
       # demo sets a random per-launch value (worker doesn't serve the API).
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # Analytics-provider bearer credential (issue #106): the api VERIFIES it on
+      # POST /api/committee/regime + every /api/analytics/* route. Fail-closed:
+      # unset locks those routes except under RM_ALLOW_INSECURE/ephemeral.
+      ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
       # Projects data source (backend/src/projects/access/select.ts). Unset →
       # offline fixture source (demo/dev). FAIL-CLOSED IN PROD: RM_ENV=prod
       # REQUIRES PROJECTS_SOURCE=live — the projects pipelines throw rather

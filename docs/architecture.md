@@ -213,8 +213,8 @@ A small server on **Bun** using `Bun.serve` — no framework, no build (Bun runs
 TypeScript sources directly).
 
 - `src/api/index.ts` — the `Bun.serve` entry: a `/health` check and the API routes
-  (`comments`, `dashboards`, `committee`, `projects`, `admin`), using `postgres`
-  (postgres.js) with raw SQL.
+  (`comments`, `dashboards`, `committee`, `projects`, `admin`, `analytics`), using
+  `postgres` (postgres.js) with raw SQL.
 - **Serves the static frontend too.** When `STATIC_DIR` is set, the same process
   serves `frontend/public` via `Bun.file`, with an `index.html` fallback for SPA
   deep links — so the SPA and its API are **same-origin** (no CORS) with no
@@ -223,7 +223,10 @@ TypeScript sources directly).
   [topology.md](./topology.md)); CORS headers remain for an optional split-origin
   setup.
 - `src/worker/` — the always-on task-queue worker (see §7).
-- `src/db/` — connection pool (`client.ts`) and the migration runner (`migrate.ts`).
+- `src/db/` — connection pools (`client.ts` for the API/migrations;
+  `worker-client.ts` for the worker's queue-scoped access, honoring
+  `WORKER_DATABASE_URL` → the restricted `rm_worker` role of migration
+  `0016_worker_role.sql`) and the migration runner (`migrate.ts`).
 - `src/lib/` — small helpers (e.g. `keys.ts`, sha256 access-key hashing).
 - `migrations/` — forward-only numbered `*.sql`, applied once each, tracked in
   `schema_migrations`. Safe to run on every boot.
@@ -248,9 +251,16 @@ Four distinctions, kept deliberately separate:
   Committee membership starts with `apply` (metadata + public key), followed by
   an administrator-controlled `applied → active` transition.
 - **Scoped roles.** Every write is authorized to a role: members write only their
-  own recommendations, the analytics provider only regime data, the host only
-  session lifecycle, the public reads only — currently enforced in the API layer.
-  Migration `0007_committee_rls_stub.sql` documents deferred Postgres RLS; it is
+  own recommendations, the analytics provider only analytics data (the regime
+  recompute + the typed `/api/analytics/*` ingestion routes, `ANALYTICS_TOKEN`
+  bearer — `ADMIN_TOKEN` and member bearers are never substitutes), the host only
+  session lifecycle, the public reads only — enforced in the API layer
+  (`src/api/auth.ts` holds the shared constant-time credential checks). The
+  worker's own database role is restricted too: migration `0016_worker_role.sql`
+  provisions `rm_worker`, which can run the queue lifecycle and the non-analytics
+  samplers but is DENIED insert/update/delete on the analytics data tables, so
+  the API boundary is backed by database permissions. Migration
+  `0007_committee_rls_stub.sql` documents deferred Postgres RLS; it is
   intentionally not active until requests use transaction-scoped database roles.
 
 ---
@@ -388,19 +398,27 @@ into six independently testable stages — **access → extract → transform �
   is identical suite-wide; `grid.ts` reshapes gappy real series onto the dense
   daily grid (`shapeDaily` forward-fill, `ratioByDate`).
 - **`analyze/`** — the computations (pure, DB-free). `tool.ts` is the
-  `AnalyticTool` interface (`id, kind, inputs, dependsOn, compute, persist`) + a
-  `Registry` that topologically orders `dependsOn` and runs/persists tools — a tool
+  `AnalyticTool` interface (`id, kind, inputs, dependsOn, compute`) + a
+  `Registry` that topologically orders `dependsOn` and runs tools — a tool
   may **compose** another's output (e.g. a future "regime tempered by
   channel-divergence") with no special-casing. `research.ts` holds the research
   payload shape; `regime.ts`, `channel-divergence.ts`, `late-cycle.ts` are the
-  tools (their `compute()` is pure; `persist()` is a one-line delegate to `store/`).
+  tools (pure compute only — persistence is owned by the orchestrator's
+  `AnalyticsPersistence` port, issue #106; analyze/ never imports a store).
   `backtest.ts` (`computeBacktest`) and `correlations.ts` (`computeCorrelations`)
   add the asof-only regime **backtest** + predictive **correlations** payloads
   (ported from the original `regime-snapshot.json`).
-- **`store/`** — the only SQL writes. `regime-store.ts` (`saveRegimeSnapshots`),
-  `research-store.ts` (`persistResearchSignal`), and `raw-history-store.ts` (the
-  append-only persisted raw floor) all upsert on natural keys; `floor-seed.ts`
-  performs the opt-in cold-DB floor seed (`ANALYTICS_FLOOR_SEED=1`).
+- **`store/`** — the only SQL writes, and **API-owned** (issue #106): only the
+  API process (its `/api/analytics` + committee regime routes via
+  `store/direct.ts`), tests, and migration/demo tooling may import these
+  writers. `regime-store.ts` (`saveRegimeSnapshots`), `research-store.ts`
+  (`persistResearchSignal`), and `raw-history-store.ts` (the append-only
+  persisted raw floor) all upsert on natural keys and accept an injectable
+  handle so the API routes wrap each ingestion batch in one transaction;
+  `floor-seed.ts` (`applyRawFloorSeed`) is the server-side gap-fill behind the
+  seed-ingestion endpoint (parsing of the vendored seed lives in
+  `extract/floor-seed.ts`; the orchestrator triggers it via
+  `ANALYTICS_FLOOR_SEED=1`).
   `saveRegimeSnapshots` also bakes the asof-only **`backtest`** + **`correlations`**
   jsonb payloads onto the latest `regime_snapshots` row (columns added by migration
   `0010_backtest_correlations.sql`; NULL on historical rows), sourced via
@@ -415,6 +433,26 @@ into six independently testable stages — **access → extract → transform �
   parses/clamps `range` and calls these (the same file now fronts ~8 dashboard
   endpoints, incl. the live chain feeds of §10). MCP and the frontend stay
   consumers across the HTTP boundary.
+
+**Persistence boundary (issue #106).** The orchestrator
+(`analytics/index.ts::runAnalytics`) never writes SQL: every analytics-table
+read/write goes through the `AnalyticsPersistence` port
+(`analytics/persistence.ts`). Updater processes — the worker's `regime.classify`
+and `research.refresh` jobs (issue #107 lanes) — use the HTTP implementation
+(`analytics/api-client.ts`), submitting through the authenticated typed routes
+`GET/POST /api/analytics/raw-history`, `POST /api/analytics/raw-history/seed`,
+`POST /api/analytics/regime-snapshots`, and `POST /api/analytics/research-signals`
+(`api/routes/analytics.ts`) with the analytics-provider bearer
+(`ANALYTICS_TOKEN`; wiring: `ANALYTICS_API_URL`). Mutations validate the entire
+payload before opening a transaction, are idempotent on their natural keys, and
+there is NO generic SQL-over-HTTP endpoint. The API process injects the direct
+service (`analytics/store/direct.ts`) instead; the worker's boot fails loudly in
+demo/prod without its token (`assertAnalyticsUpdaterCredentials`), its DB pool
+(`db/worker-client.ts`) is queue-scoped (`rm_worker`,
+`0016_worker_role.sql` — analytics-table writes are DENIED at the database), and
+`tests/analytics-api-boundary.test.ts` fails CI if updater/orchestrator/worker
+modules import `db/client.ts`, `postgres`, a SQL tag, or an analytics store
+writer.
 
 Three pipelines run through these stages:
 
@@ -637,9 +675,10 @@ source.
 
 ### 9.6 RM analytics provider (the data utility)
 
-The regime classifier runs on the provider's own infrastructure and **writes regime
-snapshots to Postgres under a scoped credential** — same pattern as a member posting
-a take, different scope. Members consume it **optionally** via the regime read
+The regime classifier runs on the provider's own infrastructure and **submits
+regime snapshots through the authenticated `/api/analytics` boundary under a
+scoped credential** (`ANALYTICS_TOKEN`; issue #106 — never direct SQL), the same
+pattern as a member posting a take, different scope. Members consume it **optionally** via the regime read
 (`ROUTES.dashboards.regimeSnapshots`) and may record which RM tools vs. their own
 data they used. Producer (privileged write) and consumers (read) are cleanly
 separated; this actor can later be a third party with no change.

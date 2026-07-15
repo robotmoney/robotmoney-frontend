@@ -5,7 +5,7 @@
 // hour never duplicates a slot. This is what the seeded
 // `vault.sample_share_price` cron (db/seed.ts, hourly) fires.
 import { config } from "../../config.ts";
-import { sql } from "../../db/client.ts";
+import { sql } from "../../db/worker-client.ts";
 import { callTotalAssets, callTotalSupply } from "../../chain/base-rpc-client.ts";
 
 export async function sampleSharePrice(_payload: Record<string, unknown>): Promise<unknown> {

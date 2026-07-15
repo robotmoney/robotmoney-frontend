@@ -10,6 +10,7 @@ import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBala
 import { getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleCommittee } from "./routes/committee.ts";
 import { handleAdmin } from "./routes/admin.ts";
+import { handleAnalytics } from "./routes/analytics.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -139,6 +140,13 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname.startsWith("/api/committee/")) {
       const r = await handleCommittee(req, url);
+      if (r) return json(r.body, r.status);
+    }
+
+    // Analytics ingestion boundary (issue #106): the analytics-provider-only
+    // typed read/mutation surface updater processes use instead of direct SQL.
+    if (pathname.startsWith("/api/analytics/")) {
+      const r = await handleAnalytics(req, url);
       if (r) return json(r.body, r.status);
     }
 

@@ -4,20 +4,27 @@
 // overlap, never deletes — see mergeSeries), and writes the merged result back.
 // This is what keeps the pipeline honest: a failed/empty fetch degrades to real
 // persisted history, never to synthetic data. Pure I/O — no compute.
-import { sql } from "../../db/client.ts";
+//
+// API-OWNED (issue #106): only the API process (via api/routes/analytics.ts +
+// store/direct.ts) and migration/demo tooling may import this module. Updater/
+// orchestrator/worker code persists through the AnalyticsPersistence port
+// (analytics/persistence.ts) instead — enforced by
+// tests/analytics-api-boundary.test.ts. Writers accept an injectable Sql handle
+// so the API routes can wrap a whole ingestion batch in ONE transaction.
+import { sql, type DbHandle } from "../../db/client.ts";
+import type { Point, RawIndicatorHistory } from "../types.ts";
 
-export interface DatedValue {
-  date: string; // YYYY-MM-DD
-  value: number;
-}
-
-export type RawIndicatorHistory = Record<string, DatedValue[]>;
+// Back-compat aliases: the row shapes now live in the pure types module
+// (analytics/types.ts) so updater/API-client code can import them without
+// touching this SQL module.
+export type DatedValue = Point;
+export type { RawIndicatorHistory };
 
 // Load the whole persisted floor, grouped by indicator id and sorted by date
 // ascending. `date::text` yields a clean 'YYYY-MM-DD' string (postgres.js would
 // otherwise hand back a JS Date).
-export async function loadRawIndicatorHistory(): Promise<RawIndicatorHistory> {
-  const rows = await sql<{ indicator: string; date: string; value: number }[]>`
+export async function loadRawIndicatorHistory(db: DbHandle = sql): Promise<RawIndicatorHistory> {
+  const rows = await db<{ indicator: string; date: string; value: number }[]>`
     SELECT indicator, date::text AS date, value
     FROM raw_indicator_history
     ORDER BY indicator, date`;
@@ -31,7 +38,10 @@ export async function loadRawIndicatorHistory(): Promise<RawIndicatorHistory> {
 // Persist merged history back, upserting on (date, indicator) so re-runs
 // overwrite rather than duplicate. Non-finite values are skipped (the floor only
 // stores real observations). No-op for empty input.
-export async function saveRawIndicatorHistory(byIndicator: RawIndicatorHistory): Promise<void> {
+export async function saveRawIndicatorHistory(
+  byIndicator: RawIndicatorHistory,
+  db: DbHandle = sql,
+): Promise<void> {
   const rows: { date: string; indicator: string; value: number }[] = [];
   for (const [indicator, points] of Object.entries(byIndicator)) {
     for (const p of points) {
@@ -46,8 +56,8 @@ export async function saveRawIndicatorHistory(byIndicator: RawIndicatorHistory):
   const CHUNK = 5000; // 5000 × 3 = 15000 params per statement
   for (let i = 0; i < rows.length; i += CHUNK) {
     const batch = rows.slice(i, i + CHUNK);
-    await sql`
-      INSERT INTO raw_indicator_history ${sql(batch, "date", "indicator", "value")}
+    await db`
+      INSERT INTO raw_indicator_history ${db(batch, "date", "indicator", "value")}
       ON CONFLICT (date, indicator) DO UPDATE SET value = EXCLUDED.value`;
   }
 }

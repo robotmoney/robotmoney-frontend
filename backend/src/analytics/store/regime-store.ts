@@ -8,7 +8,7 @@
 // per-indicator `percentiles` map, and the richer per-indicator objects
 // ({raw_value, raw_date, transformed_value, percentile, signed_percentile,
 // panel_weight, sparkline}) in the `indicators` jsonb. Pure I/O — no compute.
-import { sql } from "../../db/client.ts";
+import { sql, type DbHandle } from "../../db/client.ts";
 import type postgres from "postgres";
 // The row shape lives in the pure (DB-free) projection module so the shared eq
 // mapper can import it without pulling in this Postgres client. Re-exported here
@@ -16,18 +16,21 @@ import type postgres from "postgres";
 import type { RegimeSnapshotRow } from "../report/regime-projection.ts";
 export type { RegimeSnapshotRow };
 
-export async function saveRegimeSnapshots(snapshots: RegimeSnapshotRow[]): Promise<void> {
+export async function saveRegimeSnapshots(
+  snapshots: RegimeSnapshotRow[],
+  db: DbHandle = sql,
+): Promise<void> {
   // The orchestrator persists the full recomputed history (~3k rows) each run, so
   // pipeline the upserts in bounded concurrent chunks rather than one blocking
   // round-trip per row. Upsert semantics (ON CONFLICT (date)) are unchanged.
   const CHUNK = 250;
   for (let i = 0; i < snapshots.length; i += CHUNK) {
-    await Promise.all(snapshots.slice(i, i + CHUNK).map(upsertSnapshot));
+    await Promise.all(snapshots.slice(i, i + CHUNK).map((s) => upsertSnapshot(s, db)));
   }
 }
 
-async function upsertSnapshot(s: RegimeSnapshotRow): Promise<void> {
-  await sql`
+async function upsertSnapshot(s: RegimeSnapshotRow, db: DbHandle): Promise<void> {
+  await db`
       INSERT INTO regime_snapshots
         (date, composite, composite_percentile, regime,
          macro_regime, onchain_regime, factor_regime,
@@ -40,13 +43,13 @@ async function upsertSnapshot(s: RegimeSnapshotRow): Promise<void> {
          ${s.macroRegime}, ${s.onchainRegime}, ${s.factorRegime},
          ${s.macroIndex ?? null}, ${s.onchainIndex ?? null}, ${s.factorIndex ?? null},
          ${s.macroPercentile ?? null}, ${s.onchainPercentile ?? null}, ${s.factorPercentile ?? null},
-         ${s.panelWeights == null ? null : sql.json(s.panelWeights)}, ${s.version ?? null},
-         ${sql.json(s.percentiles)}, ${sql.json(s.indicators as unknown as postgres.JSONValue)},
-         ${s.panels == null ? null : sql.json(s.panels as postgres.JSONValue)},
-         ${s.bucketThresholds == null ? null : sql.json(s.bucketThresholds as postgres.JSONValue)},
-         ${s.backtest == null ? null : sql.json(s.backtest as postgres.JSONValue)},
-         ${s.correlations == null ? null : sql.json(s.correlations as postgres.JSONValue)},
-         ${s.extras == null ? null : sql.json(s.extras as postgres.JSONValue)})
+         ${s.panelWeights == null ? null : db.json(s.panelWeights)}, ${s.version ?? null},
+         ${db.json(s.percentiles)}, ${db.json(s.indicators as unknown as postgres.JSONValue)},
+         ${s.panels == null ? null : db.json(s.panels as postgres.JSONValue)},
+         ${s.bucketThresholds == null ? null : db.json(s.bucketThresholds as postgres.JSONValue)},
+         ${s.backtest == null ? null : db.json(s.backtest as postgres.JSONValue)},
+         ${s.correlations == null ? null : db.json(s.correlations as postgres.JSONValue)},
+         ${s.extras == null ? null : db.json(s.extras as postgres.JSONValue)})
       ON CONFLICT (date) DO UPDATE SET
         composite = EXCLUDED.composite,
         composite_percentile = EXCLUDED.composite_percentile,

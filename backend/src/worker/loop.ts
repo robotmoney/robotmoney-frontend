@@ -1,4 +1,4 @@
-import { jsonValue, sql } from "../db/client.ts";
+import { jsonValue, sql } from "../db/worker-client.ts";
 import { config } from "../config.ts";
 import { getHandler } from "./handlers/index.ts";
 import { LANES, type Lane } from "./lanes.ts";
