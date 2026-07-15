@@ -437,8 +437,8 @@ into six independently testable stages — **access → extract → transform �
 **Persistence boundary (issue #106).** The orchestrator
 (`analytics/index.ts::runAnalytics`) never writes SQL: every analytics-table
 read/write goes through the `AnalyticsPersistence` port
-(`analytics/persistence.ts`). Updater processes — the worker's `analytics.run` /
-`regime.classify` jobs — use the HTTP implementation
+(`analytics/persistence.ts`). Updater processes — the worker's `regime.classify`
+and `research.refresh` jobs (issue #107 lanes) — use the HTTP implementation
 (`analytics/api-client.ts`), submitting through the authenticated typed routes
 `GET/POST /api/analytics/raw-history`, `POST /api/analytics/raw-history/seed`,
 `POST /api/analytics/regime-snapshots`, and `POST /api/analytics/research-signals`
