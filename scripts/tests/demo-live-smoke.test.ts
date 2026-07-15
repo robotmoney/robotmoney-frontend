@@ -1,10 +1,10 @@
-// Self-test for the nightly LIVE-path smoke gate (issue #128).
-// scripts/demo-live-smoke.ts is the assertion driver the nightly
-// demo-live-smoke workflow runs against a NON-hermetic demo boot
-// (scripts/lib/demo-main.ts, DEMO_LIVE_SMOKE=1). Its whole value is the
-// loud-failure guarantee — starvation, a dead feed, or a LIVE-only provenance
-// regression must turn the job red — so this suite proves BOTH directions
-// (test-coverage policy: exit 0 must never mean "nothing ran"):
+// Self-test for the LIVE-path smoke gate (issue #128; issue #147 made this the
+// unconditional assertion every CI demo boot runs — required per-PR `e2e.yml`
+// AND the nightly demo-live-smoke-nightly.yml sweep). scripts/demo-live-smoke.ts
+// is the assertion driver. Its whole value is the loud-failure guarantee —
+// starvation, a dead feed, or a LIVE-only provenance regression must turn the
+// job red — so this suite proves BOTH directions (test-coverage policy: exit 0
+// must never mean "nothing ran"):
 //
 //   - POSITIVE: against a stub backend serving a healthy LIVE steady state
 //     (2 published sessions, fresh regime staleness, live wallet/vault
@@ -12,7 +12,7 @@
 //     signals) the script exits 0 — the pass path is not vacuously red.
 //   - NEGATIVE: forcing each failure mode (single published session = #101
 //     starvation; stale regime snapshot; a NEW silently-stale wallet leg;
-//     DEMO_HERMETIC=1) exits NON-ZERO naming the failed leg/feed.
+//     a missing research signal) exits NON-ZERO naming the failed leg/feed.
 //
 // The pure evaluators are also tested directly for the allowlist edge cases.
 // The deadline is shortened via DEMO_LIVE_SMOKE_DEADLINE_MS (test-only hook) so
@@ -89,8 +89,6 @@ async function runSmoke(backend: ReturnType<typeof startStubBackend>, env: Recor
     env: {
       ...process.env,
       BACKEND_URL: `http://localhost:${backend.port}`,
-      // Pinned EXPLICITLY per case (never inherited from the ambient CI env).
-      DEMO_HERMETIC: "",
       // Test-only: shrink the schedule-derived poll budget so red paths finish fast.
       DEMO_LIVE_SMOKE_DEADLINE_MS: "1",
       ...env,
@@ -158,17 +156,6 @@ describe("demo-live-smoke (nightly LIVE gate self-test, issue #128)", () => {
       const r = await runSmoke(backend);
       expect(r.exitCode).not.toBe(0);
       expect(r.output).toContain('research: signal "late-cycle-signals" not served');
-    } finally {
-      backend.stop(true);
-    }
-  }, 20_000);
-
-  test("DEMO_HERMETIC=1 → refuses to certify (exit non-zero) without touching the backend", async () => {
-    const backend = startStubBackend();
-    try {
-      const r = await runSmoke(backend, { DEMO_HERMETIC: "1" });
-      expect(r.exitCode).not.toBe(0);
-      expect(r.output).toContain("hermetic");
     } finally {
       backend.stop(true);
     }

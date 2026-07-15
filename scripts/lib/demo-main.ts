@@ -77,15 +77,10 @@ function parsePort(name: string): number | undefined {
 const fixedApiPort = parsePort("WEB_PORT");
 const fixedMcpPort = parsePort("MCP_PORT");
 const fixedPgPort = parsePort("POSTGRES_PORT");
-// Host port for the hermetic Base RPC stub (issue #48) — no preferred default,
-// nothing external routes to it; the post-run RPC guard reads its /__count over
-// this host port to assert zero live Base mainnet calls.
-const fixedStubPort = parsePort("BASE_RPC_STUB_PORT");
 const heldPorts: Held[] = [];
 const apiPort = await allocatePort(fixedApiPort, 48787, heldPorts);
 const mcpPort = await allocatePort(fixedMcpPort, 48788, heldPorts);
 const pgPort = await allocatePort(fixedPgPort, undefined, heldPorts);
-const stubPort = await allocatePort(fixedStubPort, undefined, heldPorts);
 await Promise.all(heldPorts.map((s) => new Promise<void>((r) => s.close(() => r()))));
 // Pin the compose project name when DEMO_PROJECT is set (re-runs reuse/tear down the
 // same containers); otherwise a fresh random project per run. dockerEnv sets
@@ -124,27 +119,10 @@ process.env.ADMIN_TOKEN = adminPassword;
 const analyticsToken = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
 process.env.ANALYTICS_TOKEN = analyticsToken;
 
-// Data-path resolution (issue #50): DEFAULT is production parity (live Base
-// mainnet RPC + live analytics + floor seed); DEMO_HERMETIC=1 is the explicit
-// opt-in for the stubbed/offline path (the ONLY mode CI runs — e2e.yml sets it,
-// and scripts/demo-rpc-guard.ts fails the CI run loudly if it is missing).
+// Data-path resolution (issue #147: DEMO_HERMETIC and the stubbed/offline path
+// were removed entirely — every boot, local or CI, is production parity: live
+// Base mainnet RPC + live analytics + floor seed).
 const demoEnv = resolveDemoEnv(process.env);
-
-// Nightly LIVE-path smoke (issue #128): DEMO_LIVE_SMOKE=1 runs the CI flow
-// against the DEFAULT production-parity LIVE data path and swaps the hermetic
-// RPC guard for scripts/demo-live-smoke.ts (LIVE steady-state assertions:
-// >=2 published committee sessions, fresh regime snapshot, live wallet/vault
-// provenance). Contradictory knobs are refused loudly UP FRONT: a hermetic boot
-// must never be certified as LIVE (the mirror of demo-rpc-guard.ts, which
-// refuses to certify a non-hermetic boot as hermetic).
-const liveSmoke = process.env.DEMO_LIVE_SMOKE === "1";
-if (liveSmoke && demoEnv.hermetic) {
-  console.error(
-    "[demo] DEMO_LIVE_SMOKE=1 and DEMO_HERMETIC=1 are contradictory — the LIVE smoke " +
-      "must boot the non-hermetic (production-parity) data path. Unset one of them.",
-  );
-  process.exit(1);
-}
 
 // Env shared by every `docker compose` call — pins the project, selects the
 // demo override, resolves the data path, and sets random host ports + credentials.
@@ -166,7 +144,6 @@ const dockerEnv: Record<string, string> = {
   WEB_PORT: String(apiPort),
   MCP_PORT: String(mcpPort),
   POSTGRES_PORT: String(pgPort),
-  BASE_RPC_STUB_PORT: String(stubPort),
   POSTGRES_USER: DB_USER,
   POSTGRES_PASSWORD: DB_PASSWORD,
   POSTGRES_DB: DB_NAME,
@@ -346,10 +323,8 @@ log(
     `pg=:${pgPort}${fx(fixedPgPort !== undefined)}`,
 );
 log(
-  demoEnv.hermetic
-    ? "data path: HERMETIC (explicit DEMO_HERMETIC=1 — stubbed Base RPC + offline seeded analytics, zero live calls)"
-    : `data path: LIVE (production parity — Base RPC ${demoEnv.baseRpcUrl ?? "config default https://mainnet.base.org"}, ` +
-        `ANALYTICS_SOURCE=${demoEnv.analyticsSource}, ANALYTICS_FLOOR_SEED=${demoEnv.analyticsFloorSeed})`,
+  `data path: LIVE (production parity — Base RPC ${demoEnv.baseRpcUrl ?? "config default https://mainnet.base.org"}, ` +
+    `ANALYTICS_SOURCE=${demoEnv.analyticsSource}, ANALYTICS_FLOOR_SEED=${demoEnv.analyticsFloorSeed})`,
 );
 
 // --- Container lifecycle --------------------------------------------------
@@ -905,14 +880,15 @@ async function main(): Promise<void> {
 
   log("running migrations…");
   setStep("migrate", "running");
-  // LOCAL only: seed the fast (~2 min, staggered) demo schedules so the worker's
-  // own scheduler drives regime + research. CI leaves the flag unset so the seed
-  // stays byte-for-byte the prod default (see backend/src/db/seed.ts) — EXCEPT
-  // the nightly LIVE smoke (issue #128), which seeds them so the worker's own
-  // scheduler fires LIVE regime.classify + research.refresh in their lanes
-  // during the smoke window (the exact concurrent-lane surface where the #101
-  // starvation lived), not just the driver's explicit enqueues.
-  const fastSchedEnv = process.env.CI && !liveSmoke ? [] : ["-e", "DEMO_FAST_SCHEDULES=1"];
+  // Seed the fast (~2 min, staggered) demo schedules so the worker's own
+  // scheduler drives regime + research. Issue #147: every boot — local AND
+  // CI — is now the LIVE production-parity path, and the required per-PR e2e
+  // gate asserts a real LIVE steady state (fresh regime, landed research
+  // signals) via scripts/demo-live-smoke.ts below, so the fast schedules are
+  // ALWAYS seeded (previously CI left them at the slow prod default under the
+  // now-removed DEMO_HERMETIC path, which didn't need live analytics/research
+  // to actually land within the CI window).
+  const fastSchedEnv = ["-e", "DEMO_FAST_SCHEDULES=1"];
   // Demo (local AND CI): populate the projects directory so /api/projects returns
   // a full "Agentic Economy Ecosystem" table. Demo-only — prod/regular-CI seeds run
   // `migrate` without this flag, so their seed stays byte-for-byte unchanged (empty
@@ -975,25 +951,14 @@ async function main(): Promise<void> {
     await run(["bun", "run", "test:browser"], repoRoot,
       { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "browser checks");
 
-    if (liveSmoke) {
-      // Nightly LIVE-path smoke (issue #128): this boot is non-hermetic, so the
-      // hermetic RPC guard does not apply. Instead assert the LIVE steady state
-      // (>=2 published committee sessions, fresh regime snapshot, wallet/vault
-      // provenance live with only the documented #120 degrades, research signals
-      // served). Fails loudly, naming the leg/feed — never a skip.
-      console.log("[demo] asserting LIVE steady state (demo-live-smoke)…");
-      await run(["bun", "run", "scripts/demo-live-smoke.ts"], repoRoot,
-        { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "live smoke assertions");
-    } else {
-      // Hermetic Base RPC guard (issue #48): the browser suite just drove
-      // /allocation, whose vault-economics fetch reads the vault over eth_call.
-      // Assert those reads hit the in-CI stub (BASE_RPC_STUB_URL/__count > 0) and
-      // that no e2e path resolves to live Base mainnet — fails the check loudly on
-      // any live-RPC leak.
-      console.log("[demo] asserting hermetic Base RPC (zero live mainnet calls)…");
-      await run(["bun", "run", "scripts/demo-rpc-guard.ts"], repoRoot,
-        { ...process.env, BASE_RPC_STUB_URL: `http://127.0.0.1:${stubPort}` } as Record<string, string>, "rpc hermetic guard");
-    }
+    // LIVE steady-state smoke (issue #128, now the ONLY CI path since issue #147
+    // removed DEMO_HERMETIC and the hermetic RPC guard): assert >=2 published
+    // committee sessions, a fresh regime snapshot, wallet/vault provenance live
+    // (with only the documented #120 degrades), and both research signals
+    // served. Fails loudly, naming the leg/feed — never a skip.
+    console.log("[demo] asserting LIVE steady state (demo-live-smoke)…");
+    await run(["bun", "run", "scripts/demo-live-smoke.ts"], repoRoot,
+      { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "live smoke assertions");
 
     // Additive, env-gated (issue #104): the rmpc-release-e2e nightly reuses this
     // EXACT boot instead of standing up a parallel stack. Only runs when

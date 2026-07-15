@@ -27,10 +27,11 @@ export interface VaultAdapterHolding {
 export interface VaultEconomics {
   asOf: string;
   stale: boolean;
-  // Provenance (issue #50): 'live' = a real Base JSON-RPC endpoint;
-  // 'stub' = the hermetic demo/CI fixture stub (BASE_RPC_SOURCE=stub, set by
-  // the DEMO_HERMETIC=1 compose layer). Stub-served payloads are never
-  // presented as live chain data — the allocation UI renders a non-live
+  // Provenance (issue #50): 'live' = a real Base JSON-RPC endpoint (the ONLY
+  // value the demo/CI path resolves since issue #147 removed DEMO_HERMETIC and
+  // the hermetic fixture stub); 'stub' = a deterministic fixture value backend
+  // unit tests set directly via BASE_RPC_SOURCE=stub. Stub-served payloads are
+  // never presented as live chain data — the allocation UI renders a non-live
   // indicator off this field.
   source: BaseRpcSource;
   tvlUsd: number | null;

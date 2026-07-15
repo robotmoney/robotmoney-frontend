@@ -1,29 +1,28 @@
-// LIVE-path steady-state smoke assertions (issue #128 — closes the #101 CI gap).
+// LIVE-path steady-state smoke assertions (issue #128 — originally closed the
+// #101 CI gap in the nightly-only lane; issue #147 later removed DEMO_HERMETIC
+// and the hermetic demo path entirely, so this script now runs on EVERY demo
+// boot in CI — the required per-PR `e2e` gate AND the nightly
+// demo-live-smoke-nightly.yml sweep both invoke it via the same
+// scripts/lib/demo-main.ts CI path; no logic is duplicated between them).
 //
 // WHY THIS EXISTS
-// The required per-PR e2e gate boots the demo ONLY under DEMO_HERMETIC=1, so the
-// LIVE `bun run demo` data path (the DEFAULT, production-parity path) is
-// otherwise absent from CI — worker-lane starvation (#101), a dead external feed
-// blocking a factor (#127), and LIVE-only provenance drift all stay invisible
-// while CI is green. This script runs INSIDE the nightly demo-live-smoke
-// workflow's CI boot (scripts/lib/demo-main.ts under DEMO_LIVE_SMOKE=1, no
-// DEMO_HERMETIC) after the committee driver + the MODE-AWARE frontend checks
-// (issue #134, reused as-is — it already asserts LIVE wallet provenance on a
-// LIVE boot) + browser checks, while the LIVE stack is still up. It asserts the
-// stack reached a healthy LIVE steady state:
+// Worker-lane starvation (#101), a dead external feed blocking a factor (#127),
+// and LIVE-only provenance drift must not stay invisible while CI is green.
+// This script runs after the committee driver + the frontend checks (issue
+// #134, already asserts LIVE wallet provenance) + browser checks, while the
+// LIVE stack is still up. It asserts the stack reached a healthy LIVE steady
+// state:
 //
-//   (a) NOT hermetic — refuses to certify a DEMO_HERMETIC=1 boot (the exact
-//       mirror of scripts/demo-rpc-guard.ts's opposite guard).
-//   (b) committee — >= LIVE_SMOKE_MIN_PUBLISHED_SESSIONS sessions reached state
+//   (a) committee — >= LIVE_SMOKE_MIN_PUBLISHED_SESSIONS sessions reached state
 //       'published' (the #101 single-worker starvation guard). The mcp e2e
 //       driver publishes two sessions through the REAL worker job queue
 //       (committee lane, per-state deadlines in mcp/src/e2e.ts), so a starved
 //       lane already fails the driver; this re-asserts the published rows
 //       actually landed and are served.
-//   (c) regime — /api/dashboards/regime-snapshots reports staleness.stale ===
+//   (b) regime — /api/dashboards/regime-snapshots reports staleness.stale ===
 //       false: the LIVE analytics run landed a fresh snapshot. A dead feed
 //       blocking a factor (the #127 MVRV-404 failure mode) leaves it stale → red.
-//   (d) wallet — /api/dashboards/wallet-balances source === 'live' and every
+//   (c) wallet — /api/dashboards/wallet-balances source === 'live' and every
 //       holding provenance 'live'. Issue #120 shipped the smart-account NAV fix
 //       (idle USDC + maintained-vault-list convertToAssets, both proven wallets
 //       not ERC-4626 tokens) so ZYFAI-SS1/GIZA-SS1 now resolve 'live' like any
@@ -31,9 +30,9 @@
 //       tolerance in case a transport blip degrades just those two legs, but a
 //       'live' steady state no longer routes through it. Any non-live leg
 //       outside that allowlist is NEW silent staleness and FAILS, naming the leg.
-//   (e) allocation — /api/dashboards/vault-economics source === 'live' and
+//   (d) allocation — /api/dashboards/vault-economics source === 'live' and
 //       stale === false (the real eth_call reads succeeded).
-//   (f) research — both research-signal keys serve a landed signal (a dead
+//   (e) research — both research-signal keys serve a landed signal (a dead
 //       research leg → null/404 → red).
 //
 // NEVER SKIPS: every failure exits non-zero and names the leg/feed that failed.
@@ -77,16 +76,6 @@ export const LIVE_SMOKE_DEADLINE_MS = 2 * COMMITTEE_INTERVAL_MS;
 // Each takes the parsed API payload (null ⇒ the fetch failed / non-2xx) and
 // returns failure strings naming the leg/feed. Unit-tested directly in
 // scripts/tests/demo-live-smoke.test.ts.
-
-export function evaluateHermeticGuard(env: Record<string, string | undefined>): string[] {
-  if (env.DEMO_HERMETIC === "1") {
-    return [
-      "boot: DEMO_HERMETIC=1 is set — this is a hermetic stack, not the LIVE data path. " +
-        "The LIVE smoke must never certify a hermetic boot (mirror of demo-rpc-guard.ts).",
-    ];
-  }
-  return [];
-}
 
 interface SessionRow { state?: string; date?: string; subjectId?: string }
 export function evaluateSessions(body: { sessions?: SessionRow[] } | null): string[] {
@@ -200,13 +189,6 @@ export async function collectFailures(backend: string): Promise<string[]> {
 
 async function main(): Promise<void> {
   console.log(`\n=== LIVE-path smoke assertions (${BACKEND}) — issue #128 ===\n`);
-
-  // (a) Hard guard first: never certify a hermetic boot as LIVE. No polling.
-  const guard = evaluateHermeticGuard(process.env);
-  if (guard.length > 0) {
-    for (const f of guard) console.error(`  ✗ ${f}`);
-    process.exit(1);
-  }
 
   const deadlineMs = Number(process.env.DEMO_LIVE_SMOKE_DEADLINE_MS ?? "") || LIVE_SMOKE_DEADLINE_MS;
   const deadline = Date.now() + deadlineMs;

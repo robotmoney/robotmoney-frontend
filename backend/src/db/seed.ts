@@ -140,10 +140,10 @@ export async function seed(): Promise<void> {
   // waiting up to a minute for the first cron tick. A CONSTANT dedupe_key fires it
   // at most once per database; the every-minute cron owns steady-state sampling,
   // and the (sample_date, symbol) upsert makes any overlap with the first cron
-  // slot idempotent. In the hermetic demo this also guarantees the sampler routes
-  // at least one aggregate3 eth_call to the stub so demo-rpc-guard sees ethCall > 0
-  // (the request path no longer issues RPC). ON CONFLICT mirrors the scheduler's
-  // partial unique index on dedupe_key.
+  // slot idempotent. On the demo's LIVE data path (issue #147) this also
+  // guarantees the sampler issues at least one real aggregate3 eth_call within
+  // seconds of boot, rather than waiting on the cron. ON CONFLICT mirrors the
+  // scheduler's partial unique index on dedupe_key.
   await sql`
     INSERT INTO jobs (kind, payload, dedupe_key)
     VALUES ('wallet.sample_balances', ${sql.json(jsonValue({}))}, 'wallet.sample_balances:coldstart')

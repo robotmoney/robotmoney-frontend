@@ -245,44 +245,43 @@ RM never holds the private key at any point.
 
 ## 7. Hermeticity and cleanup
 
-- **Production parity by default (issue #50).** `bun run demo` with no extra env
-  runs the **live** data path end-to-end: the real keyless analytics pipeline
-  (FRED/Yahoo/DeFiLlama/EDGAR/…) and a real Base mainnet JSON-RPC read for the
-  `/allocation` vault-economics slice (§10 below). This is a deliberate reversal
-  of the pre-#50 default (which always layered a hermetic stub) — a stakeholder
-  running `bun demo` locally must see production-real numbers unless they
-  explicitly ask for the offline mode.
-- **Hermetic mode is an explicit opt-in:** `DEMO_HERMETIC=1` (env, or
-  `DEMO_HERMETIC=1 bun run demo` locally) pins BOTH pipelines to deterministic,
-  offline fixtures — zero external dependencies (no FRED, Yahoo, CoinMetrics, or
-  live Base RPC calls). `.github/workflows/e2e.yml` sets this for the **required
-  `e2e` check**, which is the ONLY per-PR / CI consumer of the hermetic path;
-  `scripts/demo-rpc-guard.ts` fails that job loudly if the opt-in knob or any
-  hermetic env layer is missing or leaks toward a live host. The resolver
-  (`scripts/lib/demo-env.ts::resolveDemoEnv`, re-exported by `scripts/demo.ts`)
-  is the single source of truth for this default-live/hermetic-opt-in split;
-  `docker-compose.demo.yml`'s own `${DEMO_HERMETIC:+…}` interpolation mirrors it
-  so the two layers can never disagree (asserted by
-  `scripts/tests/demo-compose-config.test.ts`).
+- **Production parity, always (issues #50, #147).** `bun run demo` — local or CI,
+  including the required per-PR `e2e` gate — runs the **live** data path
+  end-to-end: the real keyless analytics pipeline (FRED/Yahoo/DeFiLlama/EDGAR/…)
+  and a real Base mainnet JSON-RPC read for the `/allocation` vault-economics
+  slice (§10 below). There is no hermetic/offline demo mode: issue #147 removed
+  `DEMO_HERMETIC`, the in-compose `base-rpc-stub` fixture service, and
+  `scripts/demo-rpc-guard.ts` entirely (decision: issue #163 — every PR's merge
+  gate now depends on live external providers). A required credential or
+  provider that is unavailable must fail the boot loudly (non-zero exit,
+  actionable message naming the missing dependency) — never a silent fallback
+  to a fixture or stub.
+- The resolver (`scripts/lib/demo-env.ts::resolveDemoEnv`, re-exported by
+  `scripts/demo.ts`) is the single source of truth for the live data path;
+  `docker-compose.demo.yml` mirrors its defaults so the two layers can never
+  disagree (asserted by `scripts/tests/demo-compose-config.test.ts`).
 
 ### 7b. Demo readiness gate
 
-The **demo readiness gate** is the `DEMO_HERMETIC=1` boot-and-check step block in the
-required `e2e` workflow (`.github/workflows/e2e.yml`, step "Full-stack demo (demo
+The **demo readiness gate** is the LIVE boot-and-check step block in the required
+`e2e` workflow (`.github/workflows/e2e.yml`, step "Full-stack demo (demo
 readiness gate)"; job id `e2e`, unchanged so branch protection's required-status-check
-mapping stays intact). On every PR targeting main it boots the full hermetic demo stack
-and runs three loud-failure guards that keep broken demos off main:
+mapping stays intact). On every PR targeting main it boots the full LIVE demo stack
+and runs the loud-failure guards that keep broken demos off main:
 
 - `scripts/demo-frontend-check.ts` — the **core-surface-missing detector**: fetches
   each route fragment from the live backend and exits non-zero if a core surface marker
   (e.g. `x-data="committeeView()"`) is absent. Its wallet-balances provenance
-  assertion is **mode-aware** (issue #134): it derives the expected provenance from
-  the same `DEMO_HERMETIC` resolver the boot uses (`scripts/lib/demo-env.ts`) —
-  hermetic boots assert `stub`, LIVE boots assert `live` (`stale`/`seed` are
-  allowed degrades, loudly logged) — so no supported demo mode has an
-  expected-and-ignored failure, and the opposite mode's provenance fails loudly.
+  assertion (issue #134) always expects `live` (`stale`/`seed` are allowed
+  degrades, loudly logged) now that there is only one supported demo mode.
 - `test:browser` (Playwright, `spa.spec.ts`) — drives the rendered SPA.
-- `scripts/demo-rpc-guard.ts` — fails loudly on any live-RPC leak (see §7).
+- `scripts/demo-live-smoke.ts` (issue #128) — asserts the LIVE steady state:
+  ≥2 published committee sessions (the #101 starvation guard), a fresh regime
+  snapshot, wallet + vault-economics provenance `live` (only the documented
+  #120 ZYFAI/GIZA degrades tolerated, loud-logged), and both research signals
+  landed. This is the SAME script + assertions the nightly
+  `demo-live-smoke-nightly.yml` sweep runs — reused as-is, not re-authored, so
+  the required gate and the nightly sweep can never drift apart.
 
 The core-surface detector's own loud-failure path is **self-tested**, not assumed:
 `scripts/tests/demo-frontend-check.test.ts` (run in the required `integration` job via
@@ -290,20 +289,28 @@ The core-surface detector's own loud-failure path is **self-tested**, not assume
 stub backend and proves both directions — it exits non-zero when the
 `x-data="committeeView()"` marker is stripped from the served `/views/committee.html`,
 and exits 0 against the correct, unmodified content — so a change that silently weakened
-the detector's assertions is caught. No second demo-boot path is added: the single
-`DEMO_HERMETIC=1` `e2e` job remains the only per-PR consumer of the hermetic stack.
+the detector's assertions is caught. The `demo-live-smoke.ts` assertions are likewise
+self-tested by `scripts/tests/demo-live-smoke.test.ts`.
 
-### 7a. Opt-in real-live-data path (showcase only)
+Because every PR's required gate now depends on live external providers (public
+Base mainnet RPC, FRED/Coin Metrics/GeckoTerminal/Yahoo/EDGAR), this job runs
+slower and is occasionally flakier against those upstreams than the retired
+hermetic boot was — an accepted, deliberate consequence of issue #147/#163. A
+genuinely-unreachable external provider after real retries is a legitimate
+external blocker to file, not a bug in the workflow.
 
-The live path (now the default) can still be tuned via env before `bun run demo`.
-Nothing here is reachable from the per-PR CI graph — CI always sets
-`DEMO_HERMETIC=1` and stays hermetic and offline.
+### 7a. Tuning the live path
+
+The live path (the only path) can still be tuned via env before `bun run demo`.
 
 - **`ANALYTICS_SOURCE`** — the single, authoritative source knob honored by the
   orchestrator (`analytics/index.ts::resolveAnalyticsSource`, called by api + worker):
-  - unset / `live` → real keyless fetchers (production default; the demo default
-    since issue #50),
-  - `hermetic` → deterministic offline seeded source (CI/`DEMO_HERMETIC=1` only),
+  - unset / `live` → real keyless fetchers (the only value the demo default
+    selects),
+  - `hermetic` → the deterministic offline seeded source backend unit tests
+    depend on directly (`backend/src/analytics/access/hermetic-source.ts`);
+    still a valid explicit override for local debugging, but no demo default
+    ever selects it,
   - any other value is **refused loudly** (fail-closed — a typo never silently hits
     the network).
   The legacy `PROVIDER` / `config.analyticsProvider` knob is **deprecated** for source
@@ -315,18 +322,16 @@ Nothing here is reachable from the per-PR CI graph — CI always sets
   ~90s aggregate sweep ceiling in `analytics/extract/edgar.ts` — so a slow SEC
   upstream can't pin the run) before the first classify. Idempotent
   (append-only — existing DB rows win on overlap; no-op once warm). Defaults to `1`
-  on the live local demo cold-boot path (`scripts/lib/demo-env.ts`); the hermetic
-  opt-in pins it to `0` so the offline seeded run stays byte-for-byte deterministic.
+  on every demo boot (`scripts/lib/demo-env.ts`); set `0` explicitly to disable it.
   `FLOOR_SEED_PATH` overrides the seed file (must be readable inside the container).
 - **`FETCH_CACHE_TTL_MS`** (+ optional `FETCH_CACHE_DIR`) — opt-in on-disk TTL cache
   for the heavy source GETs so repeated live boots are fast and polite to upstreams.
   `0` (default) disables it entirely.
-- **`BASE_RPC_URL`** — the vault-economics eth_call endpoint (§10). Unset on the
-  live path → backend `config.ts` falls through to its production default
-  (`https://mainnet.base.org`); `DEMO_HERMETIC=1` pins it at the in-compose
-  `base-rpc-stub` fixture instead.
+- **`BASE_RPC_URL`** — the vault-economics eth_call endpoint (§10). Unset →
+  backend `config.ts` falls through to its production default
+  (`https://mainnet.base.org`); set explicitly to point at a private RPC.
 
-Example: `FETCH_CACHE_TTL_MS=3600000 bun run demo` (live path, with a polite cache).
+Example: `FETCH_CACHE_TTL_MS=3600000 bun run demo` (with a polite cache).
 The live path preserves the honesty model: empty fetch → persisted real floor; a
 no-history indicator is excluded + logged (never synthetic).
 - Random ports (Postgres, API, MCP) + unique compose project name: concurrent runs do

@@ -1,9 +1,9 @@
 // Frontend-structure check. Runs after the E2E committee session while the
-// stack is live (hermetic CI boot) and once at startup on local boots. It
-// verifies route fragments and the API data they consume. Data-provenance
-// expectations are MODE-AWARE (issue #134): derived from the same
-// DEMO_HERMETIC signal the boot resolver uses (scripts/lib/demo-env.ts), so no
-// supported demo mode has an expected-and-ignored failure.
+// stack is live and once at startup on local boots. It verifies route
+// fragments and the API data they consume. Data-provenance expectations
+// (issue #134) always assert LIVE provenance now — issue #147 removed
+// DEMO_HERMETIC and the hermetic demo path entirely, so there is only one
+// supported demo mode left.
 //
 // This is intentionally not a browser-rendering test; it guards the buildless
 // view contract cheaply and rejects inline scripts that innerHTML would ignore.
@@ -11,7 +11,6 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ROUTES } from "@robotmoney/contract";
-import { resolveDemoEnv } from "./lib/demo-env.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -164,19 +163,13 @@ async function main() {
   ]);
 
   // Live prop-wallet valuation feed (issue #84): the /allocation hero + the
-  // /performance charts consume this endpoint. The expected provenance is
-  // MODE-AWARE (issue #134), derived from the same DEMO_HERMETIC signal the
-  // boot resolver uses (resolveDemoEnv, scripts/lib/demo-env.ts):
-  //   - hermetic (DEMO_HERMETIC=1, the required e2e path): stub-served chain
-  //     reads → top-level source AND holdings provenance must be 'stub'.
-  //   - LIVE (default): real chain reads → source + provenance must be 'live'.
-  // 'stale'/'seed' are explicitly-ALLOWED degrades in both modes (schedule not
-  // yet sampled at boot, or a degraded leg — values are never fabricated), but
-  // they are loudly logged. A holding carrying the OTHER mode's provenance is a
-  // genuine regression (stub data presented on a LIVE boot, or live reads
-  // leaking into hermetic CI) and fails the check in either mode.
-  const { hermetic } = resolveDemoEnv();
-  const expectedProvenance = hermetic ? "stub" : "live";
+  // /performance charts consume this endpoint. Every demo boot is now LIVE
+  // (issue #147 removed DEMO_HERMETIC and the hermetic path entirely), so the
+  // expected provenance is always 'live'. 'stale'/'seed' are explicitly-ALLOWED
+  // degrades (schedule not yet sampled at boot, or a degraded leg — values are
+  // never fabricated), but they are loudly logged. Any OTHER provenance (e.g.
+  // 'stub') is a genuine regression and fails the check.
+  const expectedProvenance = "live";
   const allowedDegrades = ["stale", "seed"];
   const wbRes = await fetch(`${BACKEND}/api/dashboards/wallet-balances`);
   if (wbRes.ok) {
@@ -189,7 +182,7 @@ async function main() {
     }
     const provenanceOk = holdings.length >= 8 && wrong.length === 0 && wb.source === expectedProvenance;
     checks.push({
-      name: `GET /api/dashboards/wallet-balances returns ${expectedProvenance}-provenanced holdings + history (${hermetic ? "hermetic" : "live"} boot)`,
+      name: `GET /api/dashboards/wallet-balances returns ${expectedProvenance}-provenanced holdings + history (live boot)`,
       ok: provenanceOk && (wb.history?.length ?? 0) > 0 && typeof wb.totalUsd === "number",
       detail: `${holdings.length} holdings, ${wb.history?.length ?? 0} history days, source=${wb.source} (expected ${expectedProvenance})${wrong.length > 0 ? `, wrong-provenance legs: ${wrong.map((h) => `${h.symbol}=${h.provenance}`).join(", ")}` : ""}`,
     });

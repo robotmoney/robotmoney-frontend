@@ -17,8 +17,11 @@ mcp/        member-facing MCP server (Investment Committee)
 
 - [Bun](https://bun.sh) ≥ 1.2
 - Docker (for Postgres and the full-stack demo)
-- Network access for the default live demo data path. Use `DEMO_HERMETIC=1` for
-  an offline fixture-backed demo.
+- Network access — `bun run demo` always boots the production-parity LIVE data
+  path (public Base mainnet RPC + the keyless analytics/research providers).
+  There is no offline/hermetic demo mode; a required credential or provider
+  that is unreachable fails the boot loudly instead of falling back to a
+  fixture (issue #147).
 
 `bun run preview` only needs Bun and the checked-in goldens. It does **not** need
 Docker, Postgres, backend services, or network access.

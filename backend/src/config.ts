@@ -10,12 +10,13 @@ function required(name: string): string {
 
 // --- Base RPC provenance (issue #50) ----------------------------------------
 // The vault-economics DTO labels where its numbers came from: 'live' (a real
-// Base JSON-RPC endpoint — the production default) or 'stub' (the hermetic
-// demo/CI fixture stub, backend/tests/support/base-rpc-stub.ts). The hermetic
-// demo layer (docker-compose.demo.yml under DEMO_HERMETIC=1) sets
-// BASE_RPC_SOURCE=stub alongside pointing BASE_RPC_URL at the stub, so
-// stub-served payloads are never presented as live chain data. Resolved at
-// CALL time (not module load) by chain/vault-economics.ts so tests can flip
+// Base JSON-RPC endpoint — the production default, and the ONLY source the
+// demo/CI path selects since issue #147 removed DEMO_HERMETIC and the
+// hermetic demo/CI fixture stub entirely) or 'stub' (a deterministic fixture
+// value backend unit tests set directly via BASE_RPC_SOURCE=stub with their
+// own in-process mocked transport — see backend/tests/vault-economics.test.ts
+// — so stub-served payloads are never presented as live chain data). Resolved
+// at CALL time (not module load) by chain/vault-economics.ts so tests can flip
 // the env. Fail-closed: an unrecognized value refuses to resolve rather than
 // silently claiming 'live'.
 export type BaseRpcSource = "live" | "stub";
@@ -84,11 +85,12 @@ export function resolveVaultAdapters(
 //
 // PRICE_SOURCE mirrors BASE_RPC_SOURCE: 'live' hits the keyless price feeds
 // (GeckoTerminal token_price + Yahoo for SP500); 'stub' serves the deterministic
-// hermetic fixtures in chain/token-prices.ts so a demo never reaches an
+// fixtures in chain/token-prices.ts that backend unit tests set directly (see
+// backend/tests/api/wallet-balances.test.ts) so those tests never reach an
 // uncontrolled rate-limited price host. When PRICE_SOURCE is unset it FOLLOWS
-// the RPC source (BASE_RPC_SOURCE) — so the hermetic demo (BASE_RPC_SOURCE=stub,
-// set by DEMO_HERMETIC=1) automatically serves stub prices with no extra env and
-// no live network, while prod stays live. An explicit PRICE_SOURCE overrides.
+// the RPC source (BASE_RPC_SOURCE) — 'live' unless a test explicitly sets
+// BASE_RPC_SOURCE=stub. The demo/CI path (issue #147) never selects 'stub' for
+// either knob; both always resolve 'live'. An explicit PRICE_SOURCE overrides.
 // Fail-closed: an unrecognized value refuses rather than silently claiming 'live'.
 export type PriceSource = "live" | "stub";
 export function resolvePriceSource(

@@ -5,7 +5,7 @@
 // bring-up — demo-main allocates ports, opens log files, and drives docker
 // compose at module load, so it is only imported when this file is executed
 // directly.
-export { resolveDemoEnv, HERMETIC_STUB_RPC_URL, type DemoEnvResolution } from "./lib/demo-env.ts";
+export { resolveDemoEnv, type DemoEnvResolution } from "./lib/demo-env.ts";
 
 if (import.meta.main) {
   await import("./lib/demo-main.ts");
