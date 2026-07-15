@@ -1,5 +1,9 @@
-// Hermetic frontend-structure check. Runs after the E2E committee session while
-// the stack is live. It verifies route fragments and the API data they consume.
+// Frontend-structure check. Runs after the E2E committee session while the
+// stack is live (hermetic CI boot) and once at startup on local boots. It
+// verifies route fragments and the API data they consume. Data-provenance
+// expectations are MODE-AWARE (issue #134): derived from the same
+// DEMO_HERMETIC signal the boot resolver uses (scripts/lib/demo-env.ts), so no
+// supported demo mode has an expected-and-ignored failure.
 //
 // This is intentionally not a browser-rendering test; it guards the buildless
 // view contract cheaply and rejects inline scripts that innerHTML would ignore.
@@ -7,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ROUTES } from "@robotmoney/contract";
+import { resolveDemoEnv } from "./lib/demo-env.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -159,22 +164,34 @@ async function main() {
   ]);
 
   // Live prop-wallet valuation feed (issue #84): the /allocation hero + the
-  // /performance charts consume this endpoint. Under the hermetic stack
-  // (BASE_RPC_SOURCE=stub → PRICE_SOURCE follows), it must return 200 with the
-  // eight fixed holdings (each stub- or stale-provenanced) + a continuous
-  // seeded history. Under live mode with real network access, a successful
-  // fetch legitimately reports 'live' provenance too — accepted here so this
-  // non-fatal smoke check doesn't false-fail outside hermetic mode. The CI
-  // proof the endpoint + both renders are exercised end to end.
+  // /performance charts consume this endpoint. The expected provenance is
+  // MODE-AWARE (issue #134), derived from the same DEMO_HERMETIC signal the
+  // boot resolver uses (resolveDemoEnv, scripts/lib/demo-env.ts):
+  //   - hermetic (DEMO_HERMETIC=1, the required e2e path): stub-served chain
+  //     reads → top-level source AND holdings provenance must be 'stub'.
+  //   - LIVE (default): real chain reads → source + provenance must be 'live'.
+  // 'stale'/'seed' are explicitly-ALLOWED degrades in both modes (schedule not
+  // yet sampled at boot, or a degraded leg — values are never fabricated), but
+  // they are loudly logged. A holding carrying the OTHER mode's provenance is a
+  // genuine regression (stub data presented on a LIVE boot, or live reads
+  // leaking into hermetic CI) and fails the check in either mode.
+  const { hermetic } = resolveDemoEnv();
+  const expectedProvenance = hermetic ? "stub" : "live";
+  const allowedDegrades = ["stale", "seed"];
   const wbRes = await fetch(`${BACKEND}/api/dashboards/wallet-balances`);
   if (wbRes.ok) {
     const wb = await wbRes.json();
-    const holdings = wb.holdings ?? [];
-    const provenanceOk = holdings.length >= 8 && holdings.every((h: { provenance: string }) => h.provenance === "stub" || h.provenance === "stale" || h.provenance === "live");
+    const holdings: { symbol: string; provenance: string }[] = wb.holdings ?? [];
+    const wrong = holdings.filter((h) => h.provenance !== expectedProvenance && !allowedDegrades.includes(h.provenance));
+    const degraded = holdings.filter((h) => allowedDegrades.includes(h.provenance));
+    if (degraded.length > 0) {
+      console.log(`  ! wallet-balances degraded legs (allowed, non-${expectedProvenance}): ${degraded.map((h) => `${h.symbol}=${h.provenance}`).join(", ")}`);
+    }
+    const provenanceOk = holdings.length >= 8 && wrong.length === 0 && wb.source === expectedProvenance;
     checks.push({
-      name: "GET /api/dashboards/wallet-balances returns stub-provenanced holdings + history",
+      name: `GET /api/dashboards/wallet-balances returns ${expectedProvenance}-provenanced holdings + history (${hermetic ? "hermetic" : "live"} boot)`,
       ok: provenanceOk && (wb.history?.length ?? 0) > 0 && typeof wb.totalUsd === "number",
-      detail: `${holdings.length} holdings, ${wb.history?.length ?? 0} history days, source=${wb.source}`,
+      detail: `${holdings.length} holdings, ${wb.history?.length ?? 0} history days, source=${wb.source} (expected ${expectedProvenance})${wrong.length > 0 ? `, wrong-provenance legs: ${wrong.map((h) => `${h.symbol}=${h.provenance}`).join(", ")}` : ""}`,
     });
   } else {
     checks.push({ name: "GET /api/dashboards/wallet-balances returns data", ok: false, detail: `${wbRes.status}` });
