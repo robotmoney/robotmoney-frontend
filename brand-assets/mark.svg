@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 548 548" fill="currentColor">
+  <!-- Robot Money mark, geometric reconstruction 2026-07-15.
+       Source of truth: the handmade lockup (see lockup.svg). This file replaces
+       the potrace autotrace with exact primitives: circle r=273.29 centered
+       (273.58, 274.3); wedge vertices on-rim at -37.61deg and 90.07deg, inner
+       vertex (168.2, 331.9). Verified by overlay against the trace. -->
+  <path d="M490.08 107.52 A273.29 273.29 0 1 0 273.26 547.59 L168.2 331.9 Z M490.08 107.52 L273.26 547.59 A273.29 273.29 0 0 0 490.08 107.52 Z"/>
+</svg>
