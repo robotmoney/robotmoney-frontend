@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, visibleLen, type Tui } from "./tui.ts";
 import { resolveDemoEnv } from "./demo-env.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
+import { COMMITTEE_INTERVAL_MS, COMMITTEE_STAGGER_MS } from "./demo-schedule.ts";
 import { COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -128,6 +129,22 @@ process.env.ANALYTICS_TOKEN = analyticsToken;
 // opt-in for the stubbed/offline path (the ONLY mode CI runs — e2e.yml sets it,
 // and scripts/demo-rpc-guard.ts fails the CI run loudly if it is missing).
 const demoEnv = resolveDemoEnv(process.env);
+
+// Nightly LIVE-path smoke (issue #128): DEMO_LIVE_SMOKE=1 runs the CI flow
+// against the DEFAULT production-parity LIVE data path and swaps the hermetic
+// RPC guard for scripts/demo-live-smoke.ts (LIVE steady-state assertions:
+// >=2 published committee sessions, fresh regime snapshot, live wallet/vault
+// provenance). Contradictory knobs are refused loudly UP FRONT: a hermetic boot
+// must never be certified as LIVE (the mirror of demo-rpc-guard.ts, which
+// refuses to certify a non-hermetic boot as hermetic).
+const liveSmoke = process.env.DEMO_LIVE_SMOKE === "1";
+if (liveSmoke && demoEnv.hermetic) {
+  console.error(
+    "[demo] DEMO_LIVE_SMOKE=1 and DEMO_HERMETIC=1 are contradictory — the LIVE smoke " +
+      "must boot the non-hermetic (production-parity) data path. Unset one of them.",
+  );
+  process.exit(1);
+}
 
 // Env shared by every `docker compose` call — pins the project, selects the
 // demo override, resolves the data path, and sets random host ports + credentials.
@@ -889,8 +906,12 @@ async function main(): Promise<void> {
   setStep("migrate", "running");
   // LOCAL only: seed the fast (~2 min, staggered) demo schedules so the worker's
   // own scheduler drives regime + research. CI leaves the flag unset so the seed
-  // stays byte-for-byte the prod default (see backend/src/db/seed.ts).
-  const fastSchedEnv = process.env.CI ? [] : ["-e", "DEMO_FAST_SCHEDULES=1"];
+  // stays byte-for-byte the prod default (see backend/src/db/seed.ts) — EXCEPT
+  // the nightly LIVE smoke (issue #128), which seeds them so the worker's own
+  // scheduler fires LIVE regime.classify + research.refresh in their lanes
+  // during the smoke window (the exact concurrent-lane surface where the #101
+  // starvation lived), not just the driver's explicit enqueues.
+  const fastSchedEnv = process.env.CI && !liveSmoke ? [] : ["-e", "DEMO_FAST_SCHEDULES=1"];
   // Demo (local AND CI): populate the projects directory so /api/projects returns
   // a full "Agentic Economy Ecosystem" table. Demo-only — prod/regular-CI seeds run
   // `migrate` without this flag, so their seed stays byte-for-byte unchanged (empty
@@ -934,14 +955,25 @@ async function main(): Promise<void> {
     await run(["bun", "run", "test:browser"], repoRoot,
       { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "browser checks");
 
-    // Hermetic Base RPC guard (issue #48): the browser suite just drove
-    // /allocation, whose vault-economics fetch reads the vault over eth_call.
-    // Assert those reads hit the in-CI stub (BASE_RPC_STUB_URL/__count > 0) and
-    // that no e2e path resolves to live Base mainnet — fails the check loudly on
-    // any live-RPC leak.
-    console.log("[demo] asserting hermetic Base RPC (zero live mainnet calls)…");
-    await run(["bun", "run", "scripts/demo-rpc-guard.ts"], repoRoot,
-      { ...process.env, BASE_RPC_STUB_URL: `http://127.0.0.1:${stubPort}` } as Record<string, string>, "rpc hermetic guard");
+    if (liveSmoke) {
+      // Nightly LIVE-path smoke (issue #128): this boot is non-hermetic, so the
+      // hermetic RPC guard does not apply. Instead assert the LIVE steady state
+      // (>=2 published committee sessions, fresh regime snapshot, wallet/vault
+      // provenance live with only the documented #120 degrades, research signals
+      // served). Fails loudly, naming the leg/feed — never a skip.
+      console.log("[demo] asserting LIVE steady state (demo-live-smoke)…");
+      await run(["bun", "run", "scripts/demo-live-smoke.ts"], repoRoot,
+        { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "live smoke assertions");
+    } else {
+      // Hermetic Base RPC guard (issue #48): the browser suite just drove
+      // /allocation, whose vault-economics fetch reads the vault over eth_call.
+      // Assert those reads hit the in-CI stub (BASE_RPC_STUB_URL/__count > 0) and
+      // that no e2e path resolves to live Base mainnet — fails the check loudly on
+      // any live-RPC leak.
+      console.log("[demo] asserting hermetic Base RPC (zero live mainnet calls)…");
+      await run(["bun", "run", "scripts/demo-rpc-guard.ts"], repoRoot,
+        { ...process.env, BASE_RPC_STUB_URL: `http://127.0.0.1:${stubPort}` } as Record<string, string>, "rpc hermetic guard");
+    }
 
     // Additive, env-gated (issue #104): the rmpc-release-e2e nightly reuses this
     // EXACT boot instead of standing up a parallel stack. Only runs when
@@ -1046,10 +1078,11 @@ async function main(): Promise<void> {
   // sessions never run concurrently and race on the shared member roster. runSession
   // with sessionIndex>0 self-seeds the (subject, regime) for its date, so no subject
   // needs pre-seeding here.
-  const COMMITTEE_INTERVAL_MS = 120_000; // ~2 min per subject
+  // Cadence constants live in scripts/lib/demo-schedule.ts (shared with the
+  // nightly LIVE smoke, which derives its deadlines from them — issue #128).
   interface SubjectSchedule { subject: { id: string; name: string }; intervalMs: number; nextAt: number; runs: number; }
   const schedules: SubjectSchedule[] = e2e.SUBJECTS.map((s: { id: string; name: string }, i: number) => ({
-    subject: s, intervalMs: COMMITTEE_INTERVAL_MS, nextAt: Date.now() + i * 60_000, runs: 0,
+    subject: s, intervalMs: COMMITTEE_INTERVAL_MS, nextAt: Date.now() + i * COMMITTEE_STAGGER_MS, runs: 0,
   }));
   // Populate the per-subject panes and seed their countdowns.
   for (const sch of schedules) {

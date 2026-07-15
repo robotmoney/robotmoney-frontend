@@ -1,0 +1,88 @@
+# Nightly non-hermetic LIVE-path demo smoke gate (issue #128; closes the #101
+# CI blind spot).
+#
+# WHY THIS SUITE EXISTS
+# The required per-PR `e2e` gate boots the demo ONLY under DEMO_HERMETIC=1
+# (stubbed Base RPC + offline seeded analytics), so the LIVE `bun run demo`
+# data path — the DEFAULT, production-parity path an operator actually runs —
+# is otherwise absent from CI: worker-lane starvation (#101), a dead external
+# feed blocking a factor (#127's MVRV 404), and LIVE-only provenance drift all
+# stay invisible while CI is green. This nightly boots the SAME demo stack
+# WITHOUT the hermetic opt-in, against real live upstreams (Base mainnet RPC,
+# FRED/Coin Metrics/GeckoTerminal/Yahoo/EDGAR), and asserts the LIVE steady
+# state:
+#   - >=2 committee sessions publish through the REAL worker job queue within
+#     their per-state deadlines (the #101 starvation guard, now across the #107
+#     worker lanes — the fast demo schedules are seeded so LIVE analytics and
+#     research fire in their own lanes concurrently with the committee work);
+#   - the MODE-AWARE frontend check (issue #134) asserts LIVE wallet provenance
+#     as part of the boot, and scripts/demo-live-smoke.ts then asserts the
+#     regime snapshot is FRESH (staleness.stale=false), wallet + vault-economics
+#     provenance is 'live' (only the documented #120 ZYFAI/GIZA degrades are
+#     tolerated, loud-logged), and both research signals landed;
+#   - any failure names the leg/feed that failed.
+#
+# WHY NIGHTLY ONLY (NOT EVERY PR)
+# Live upstreams are rate-limited and inherently variable — gating every PR's
+# required checks on them would make the required suite flaky for reasons
+# unrelated to the diff. Nightly gives a daily signal that the LIVE path stays
+# healthy, without blocking development. Same split as
+# committee-opencode-nightly.yml / nightly-fetchers.yml / rmpc-release-e2e-nightly.yml.
+#
+# NEVER SKIPS
+# There is no .skip/self-skip anywhere in this path. scripts/lib/demo-main.ts
+# refuses a contradictory DEMO_HERMETIC=1 boot up front (exit 1);
+# scripts/demo-live-smoke.ts exits non-zero on starvation, a stale snapshot, a
+# NEW silently-stale leg, or a missing signal — an unavailable LIVE leg turns
+# this job RED, never green-via-skip. The loud-failure paths of the smoke
+# script are themselves proven by scripts/tests/demo-live-smoke.test.ts in the
+# required integration root job.
+#
+# NO SECRET
+# Every live upstream here is keyless (public Base RPC + keyless analytics
+# fetchers). Committee takes use the deterministic template path — real model
+# inference stays in committee-opencode-nightly.yml.
+#
+# CI taxonomy class: heavy (scheduled, full docker-compose stack + real live
+# external endpoints). Heavy suites are sweep-only: NO `pull_request` trigger —
+# schedule + on-demand only. This is intentionally NOT a required per-PR gate.
+name: demo-live-smoke-nightly
+env:
+  CI_CLASS: heavy
+on:
+  schedule:
+    - cron: "41 6 * * *" # nightly 06:41 UTC (offset from the other nightlies)
+  workflow_dispatch: {}
+
+jobs:
+  demo-live-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Install root browser tooling
+        run: bun install --frozen-lockfile
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+      - name: Install MCP deps
+        working-directory: mcp
+        run: bun install --frozen-lockfile
+
+      # Reuses the EXACT demo stack boot (scripts/demo.ts → scripts/lib/demo-main.ts):
+      # postgres + api + worker lanes + mcp via docker compose, migrations (with the
+      # fast demo schedules so LIVE analytics/research fire during the run), the
+      # committee driver (publishes 2 sessions through the real worker queue), the
+      # mode-aware frontend checks (#134) and browser checks — then, because
+      # DEMO_LIVE_SMOKE=1 and DEMO_HERMETIC is UNSET, scripts/demo-live-smoke.ts
+      # asserts the LIVE steady state before teardown. Do NOT add DEMO_HERMETIC
+      # here: booting the default LIVE data path is the entire point, and
+      # demo-main.ts exits 1 on the contradictory combination.
+      - name: Boot LIVE (non-hermetic) demo stack + LIVE smoke assertions
+        run: bun run scripts/demo.ts
+        env:
+          CI: "true"
+          DEMO_LIVE_SMOKE: "1"
+        timeout-minutes: 40
