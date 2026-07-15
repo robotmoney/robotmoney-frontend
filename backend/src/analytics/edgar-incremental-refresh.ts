@@ -27,6 +27,12 @@ import type { Point } from "./types.ts";
 
 export type EdgarRefreshStatus = "up-to-date" | "updated" | "degraded";
 
+// Default hard-deadline budget for the whole incremental sweep — matches the
+// legacy full-crawl's MAX_SWEEP_MS aggregate ceiling (extract/edgar.ts), so a
+// slow upstream degrades at the same bound the prior behavior already
+// tolerated, never worse.
+export const DEFAULT_EDGAR_REFRESH_DEADLINE_MS = 90_000;
+
 export interface EdgarRefreshOutcome {
   status: EdgarRefreshStatus;
   plannedMonths: number;

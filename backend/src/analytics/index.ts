@@ -34,8 +34,13 @@ import {
 import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 import { liveDataSource, type AnalyticsDataSource, type Logger } from "./access/data-source.ts";
 import { hermeticDataSource } from "./access/hermetic-source.ts";
+import { DEFAULT_EDGAR_REFRESH_DEADLINE_MS } from "./edgar-incremental-refresh.ts";
 
 const BACKFILL_START = "2018-01-01"; // crypto on-chain coverage starts ~2018 cleanly
+// Issue #109: hard-deadline budget the orchestrator grants the live source's
+// incremental EDGAR sweep — a single named constant so the value is never
+// silently redeclared/drifted between call sites.
+const EDGAR_REFRESH_DEADLINE_MS = DEFAULT_EDGAR_REFRESH_DEADLINE_MS;
 
 // ─── The ONE analytics source knob ──────────────────────────────────────────
 // `ANALYTICS_SOURCE` is the single, authoritative selector the orchestrator (and
@@ -176,12 +181,20 @@ export async function runAnalytics(
 
   // ── RESEARCH SIGNALS ────────────────────────────────────────────────────────
   if (want("channel-divergence") || want("late-cycle-signals")) {
-    const inputs = await source.fetchResearchInputs(asof, logger);
+    // Issue #109: hand the live source its persisted MNA floor + one hard
+    // deadline so it plans/fetches only the missing+revisable EDGAR months
+    // (never the whole 2010-to-present range). Hermetic/fixture sources
+    // ignore this context entirely.
+    const floor = await getPersisted();
+    const inputs = await source.fetchResearchInputs(asof, logger, {
+      persistedMna: floor.MNA ?? [],
+      deadlineAt: Date.now() + EDGAR_REFRESH_DEADLINE_MS,
+    });
 
     if (want("channel-divergence")) {
       // STABLES is a registry indicator → source it from the persisted raw floor
       // (matching channel-divergence.js, which reads raw-indicator-history.csv).
-      const stables = mergedRaw?.STABLES ?? (await getPersisted()).STABLES ?? [];
+      const stables = mergedRaw?.STABLES ?? floor.STABLES ?? [];
       const payload = computeChannelDivergence(
         { btc: inputs.btc, qqq: inputs.qqq, spy: inputs.spy, stables },
         asof,
@@ -191,12 +204,39 @@ export async function runAnalytics(
     }
 
     if (want("late-cycle-signals")) {
-      const payload = computeLateCycle(
-        { spy: inputs.spy, rsp: inputs.rsp, top7: inputs.top7, mna: inputs.mna, margin: inputs.margin, conf: inputs.conf },
-        asof,
-      );
-      await persistence.saveResearchSignal("late-cycle-signals", asof, payload);
-      results["late-cycle-signals"] = payload;
+      const refresh = inputs.mnaRefresh;
+      if (refresh) {
+        logger.log?.(
+          `[analytics] EDGAR MNA refresh: status=${refresh.status} planned=${refresh.plannedMonths} ` +
+            `new=${refresh.newMonths} revised=${refresh.revisedMonths} fetched=${refresh.fetchedMonths} ` +
+            `missing=${refresh.missingMonths} rejected=${refresh.rejectedMonths}`,
+        );
+      }
+      if (refresh?.status === "degraded") {
+        // HONESTY (issue #109 AC5): an incomplete incremental refresh must
+        // NEVER turn into a recomputed/published late-cycle signal — no
+        // partial history, no partial signal. Retain the last-good
+        // persisted floor AND signal untouched this run.
+        logger.warn?.(
+          `[analytics] late-cycle-signals: EDGAR refresh degraded (${refresh.reason}) — ` +
+            "retaining last-good signal, NOT recomputing/publishing this run",
+        );
+        results["late-cycle-signals"] = { skipped: true, reason: refresh.reason };
+      } else {
+        // Submit ONLY the freshly-fetched rows (a small idempotent upsert
+        // batch on (date, indicator)) — never the whole merged series —
+        // BEFORE computing/publishing the dependent signal, so a signal is
+        // never published against data that was never durably persisted.
+        if (refresh && refresh.newRows.length > 0) {
+          await persistence.saveRawHistory({ MNA: refresh.newRows });
+        }
+        const payload = computeLateCycle(
+          { spy: inputs.spy, rsp: inputs.rsp, top7: inputs.top7, mna: inputs.mna, margin: inputs.margin, conf: inputs.conf },
+          asof,
+        );
+        await persistence.saveResearchSignal("late-cycle-signals", asof, payload);
+        results["late-cycle-signals"] = payload;
+      }
     }
   }
 
