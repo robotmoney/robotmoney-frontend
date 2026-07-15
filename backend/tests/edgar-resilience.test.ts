@@ -6,7 +6,7 @@
 // trips a circuit breaker well short of the full range, and an isolated single-
 // month flake does NOT trip the breaker (full range still recovered).
 import { test, expect } from "bun:test";
-import { fetchEdgarS4Monthly } from "../src/analytics/extract/edgar.ts";
+import { fetchEdgarS4Monthly, fetchEdgarMonthCount } from "../src/analytics/extract/edgar.ts";
 
 function okResponse(count: number) {
   return {
@@ -85,6 +85,48 @@ test("fetchEdgarS4Monthly: an isolated single-month flake does not trip the brea
     expect(result.length).toBe(months - 1); // every month recovered except the one flaky miss
     expect(warnings.some((m) => /unrecovered/i.test(m))).toBe(true);
     expect(warnings.some((m) => /consecutive/i.test(m))).toBe(false); // breaker never tripped
+  } finally {
+    globalThis.fetch = orig;
+  }
+}, 10_000);
+
+// Issue #109: fetchEdgarMonthCount's own retry/backoff loop must honor an
+// OPTIONAL absolute `deadlineAt` — a sustained-429 month must NOT run its
+// full maxAttempts×exponential-backoff cycle (which would take several
+// real seconds) once the deadline has passed; it must bail out fast.
+test("fetchEdgarMonthCount: an absolute deadlineAt cuts a sustained-429 retry loop short (never runs the full backoff cycle)", async () => {
+  const orig = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return { ok: false, status: 429, json: async () => ({}) } as Response;
+  }) as any;
+  try {
+    const start = Date.now();
+    const deadlineAt = start + 50; // real ms — well short of 500+1000+2000ms of backoff
+    const result = await fetchEdgarMonthCount("2020-01-01", "2020-01-31", 15000, { warn: () => {} }, 4, deadlineAt);
+    const elapsed = Date.now() - start;
+    expect(result).toBeNull();
+    // Without deadline propagation this would take >3.5s (500+1000+2000ms of
+    // backoff sleeps); with it, it must return well before the first full
+    // backoff sleep completes.
+    expect(elapsed).toBeLessThan(1000);
+    expect(calls).toBeLessThan(4); // never reaches all 4 attempts
+  } finally {
+    globalThis.fetch = orig;
+  }
+}, 10_000);
+
+test("fetchEdgarMonthCount: no deadlineAt behaves exactly as before (unbounded by any outer deadline)", async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ hits: { total: { value: 11 } } }),
+  })) as any;
+  try {
+    const result = await fetchEdgarMonthCount("2020-01-01", "2020-01-31", 15000, { warn: () => {} });
+    expect(result).toBe(11);
   } finally {
     globalThis.fetch = orig;
   }
