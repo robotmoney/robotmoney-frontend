@@ -28,7 +28,20 @@ const publicDir = join(repoRoot, "frontend", "public");
 // core-surface marker from /views/committee.html so the guard must fail.
 type Rewrites = Record<string, (text: string) => string>;
 
-function startStubBackend(rewrites: Rewrites = {}) {
+// Minimal valid wallet-balances payload (issue #84) whose provenance markers
+// are parameterized so the mode-aware expectation (issue #134) can be proven in
+// both directions: source/provenance 'stub' for hermetic runs, 'live' for LIVE
+// runs, plus per-leg degrade overrides.
+function walletPayload(provenance: "stub" | "live", legOverrides: Record<string, string> = {}) {
+  const symbols = ["USDC", "ZYFAI-SS1", "GIZA-SS1", "WETH", "ETH", "ROBOTMONEY", "BNKR", "SP500"];
+  return {
+    asOf: new Date().toISOString(), totalUsd: 1000, source: provenance, priceSource: provenance,
+    holdings: symbols.map((s) => ({ symbol: s, chain: "base", group: "Stable", color: "#10b981", amount: 1, priceUsd: 1, valueUsd: 125, priceSource: "pinned", provenance: legOverrides[s] ?? provenance })),
+    history: [{ date: "2026-03-18", byAsset: { WETH: 500, ROBOTMONEY: 500 }, totalUsd: 1000 }],
+  };
+}
+
+function startStubBackend(rewrites: Rewrites = {}, wallet: ReturnType<typeof walletPayload> = walletPayload("stub")) {
   return Bun.serve({
     port: 0,
     async fetch(req) {
@@ -36,15 +49,8 @@ function startStubBackend(rewrites: Rewrites = {}) {
       if (url.pathname === ROUTES.committee.sessions) {
         return Response.json({ sessions: [] });
       }
-      // Live prop-wallet feed (issue #84): a minimal valid hermetic payload so
-      // the guard's wallet-balances assertion passes on the POSITIVE path.
       if (url.pathname === ROUTES.dashboards.walletBalances) {
-        const symbols = ["USDC", "ZYFAI-SS1", "GIZA-SS1", "WETH", "ETH", "ROBOTMONEY", "BNKR", "SP500"];
-        return Response.json({
-          asOf: new Date().toISOString(), totalUsd: 1000, source: "stub", priceSource: "stub",
-          holdings: symbols.map((s) => ({ symbol: s, chain: "base", group: "Stable", color: "#10b981", amount: 1, priceUsd: 1, valueUsd: 125, priceSource: "pinned", provenance: "stub" })),
-          history: [{ date: "2026-03-18", byAsset: { WETH: 500, ROBOTMONEY: 500 }, totalUsd: 1000 }],
-        });
+        return Response.json(wallet);
       }
       const rel = url.pathname === "/" ? "/index.html" : url.pathname;
       const safe = normalize(decodeURIComponent(rel)).replace(/^(\.\.(\/|\\|$))+/, "");
@@ -61,10 +67,14 @@ function startStubBackend(rewrites: Rewrites = {}) {
 // process's Bun.serve stub over HTTP, and spawnSync blocks the JS event loop that
 // stub needs to answer those requests — a same-thread deadlock that only resolves
 // via the bun:test timeout.
-async function runCheck(backend: ReturnType<typeof startStubBackend>) {
+async function runCheck(backend: ReturnType<typeof startStubBackend>, hermetic = true) {
   const proc = Bun.spawn(["bun", "run", "scripts/demo-frontend-check.ts"], {
     cwd: repoRoot,
-    env: { ...process.env, BACKEND_URL: `http://localhost:${backend.port}` },
+    // DEMO_HERMETIC is pinned EXPLICITLY per case (never inherited from the
+    // ambient CI env) — the script's mode-aware provenance expectation
+    // (issue #134) resolves it via the same resolveDemoEnv the boot uses, where
+    // only the exact string "1" opts into hermetic.
+    env: { ...process.env, BACKEND_URL: `http://localhost:${backend.port}`, DEMO_HERMETIC: hermetic ? "1" : "" },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -75,7 +85,7 @@ async function runCheck(backend: ReturnType<typeof startStubBackend>) {
 }
 
 describe("scripts/demo-frontend-check.ts (demo readiness gate self-test)", () => {
-  test("exits 0 against the real, unmodified view content", async () => {
+  test("exits 0 against the real, unmodified view content (hermetic mode, stub payload)", async () => {
     const backend = startStubBackend();
     try {
       const { exitCode, stdout, stderr } = await runCheck(backend);
@@ -104,6 +114,64 @@ describe("scripts/demo-frontend-check.ts (demo readiness gate self-test)", () =>
       expect(exitCode).not.toBe(0);
       // Prove the failure is the stripped marker, not incidental noise.
       expect(stdout).toContain(marker);
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
+});
+
+// Mode-aware wallet-balances provenance expectation (issue #134): hermetic
+// boots must assert 'stub', LIVE boots must assert 'live', 'stale'/'seed' are
+// allowed degrades in both, and the OTHER mode's provenance is a loud failure
+// in both directions — no supported mode has an expected-and-ignored failure.
+describe("mode-aware wallet-balances provenance (issue #134)", () => {
+  test("LIVE mode (DEMO_HERMETIC unset): live-provenanced payload passes", async () => {
+    const backend = startStubBackend({}, walletPayload("live"));
+    try {
+      const { exitCode, stdout, stderr } = await runCheck(backend, false);
+      if (exitCode !== 0) {
+        console.error(stdout);
+        console.error(stderr);
+      }
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("returns live-provenanced holdings");
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
+
+  test("LIVE mode: stub-provenanced payload FAILS loudly (stub data presented on a LIVE boot)", async () => {
+    const backend = startStubBackend({}, walletPayload("stub"));
+    try {
+      const { exitCode, stdout } = await runCheck(backend, false);
+      expect(exitCode).not.toBe(0);
+      expect(stdout).toContain("source=stub (expected live)");
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
+
+  test("hermetic mode: live-provenanced payload FAILS loudly (live reads leaking into hermetic CI)", async () => {
+    const backend = startStubBackend({}, walletPayload("live"));
+    try {
+      const { exitCode, stdout } = await runCheck(backend, true);
+      expect(exitCode).not.toBe(0);
+      expect(stdout).toContain("source=live (expected stub)");
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
+
+  test("LIVE mode: 'stale'/'seed' degraded legs are allowed but loudly logged", async () => {
+    const backend = startStubBackend({}, walletPayload("live", { "ZYFAI-SS1": "stale", SP500: "seed" }));
+    try {
+      const { exitCode, stdout, stderr } = await runCheck(backend, false);
+      if (exitCode !== 0) {
+        console.error(stdout);
+        console.error(stderr);
+      }
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("degraded legs (allowed, non-live): ZYFAI-SS1=stale, SP500=seed");
     } finally {
       backend.stop(true);
     }

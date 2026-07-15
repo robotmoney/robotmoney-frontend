@@ -274,7 +274,12 @@ and runs three loud-failure guards that keep broken demos off main:
 
 - `scripts/demo-frontend-check.ts` — the **core-surface-missing detector**: fetches
   each route fragment from the live backend and exits non-zero if a core surface marker
-  (e.g. `x-data="committeeView()"`) is absent.
+  (e.g. `x-data="committeeView()"`) is absent. Its wallet-balances provenance
+  assertion is **mode-aware** (issue #134): it derives the expected provenance from
+  the same `DEMO_HERMETIC` resolver the boot uses (`scripts/lib/demo-env.ts`) —
+  hermetic boots assert `stub`, LIVE boots assert `live` (`stale`/`seed` are
+  allowed degrades, loudly logged) — so no supported demo mode has an
+  expected-and-ignored failure, and the opposite mode's provenance fails loudly.
 - `test:browser` (Playwright, `spa.spec.ts`) — drives the rendered SPA.
 - `scripts/demo-rpc-guard.ts` — fails loudly on any live-RPC leak (see §7).
 
