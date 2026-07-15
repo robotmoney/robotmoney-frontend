@@ -1,6 +1,9 @@
 import { sql } from "../db/client.ts";
 
-const VISIBILITY_TIMEOUT_SECONDS = Number(process.env.JOB_VISIBILITY_TIMEOUT ?? 300);
+// Read per call (not at module load) so tests can shorten the window; a live
+// owner renews `locked_at` on a fraction of this interval (loop.ts lease
+// renewal), so only genuinely crashed/abandoned owners ever trip it.
+const visibilityTimeoutSeconds = () => Number(process.env.JOB_VISIBILITY_TIMEOUT ?? 300);
 
 // Requeue jobs that have been 'running' longer than the visibility timeout —
 // their worker presumably crashed. Bounded by max_attempts: exhausted jobs go
@@ -18,7 +21,7 @@ export async function reapStuckJobs(): Promise<number> {
            last_error = COALESCE(last_error, '') || ' [reaped: lock expired]',
            updated_at = now()
      WHERE status = 'running'
-       AND locked_at < now() - (${VISIBILITY_TIMEOUT_SECONDS} || ' seconds')::interval
+       AND locked_at < now() - (${visibilityTimeoutSeconds()} || ' seconds')::interval
      RETURNING id
   `;
   if (reaped.length > 0) console.warn(`reaper requeued/killed ${reaped.length} stuck job(s)`);
