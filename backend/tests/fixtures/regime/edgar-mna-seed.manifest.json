@@ -1,0 +1,10 @@
+{
+  "formatVersion": 1,
+  "indicator": "MNA",
+  "source": "sec-edgar-fts-s4",
+  "startMonth": "2010-01",
+  "endMonth": "2026-06",
+  "asOf": "2026-07-15",
+  "rowCount": 198,
+  "checksum": "701c339780c33f6dc00ef37fce0a7f6f66ae810fc16bea29f5d03d9f87bcba81"
+}

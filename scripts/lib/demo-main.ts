@@ -267,6 +267,7 @@ const state: DemoState = {
     { name: "migrate", status: "pending" },
     { name: "api /health", status: "pending" },
     { name: "mcp /health", status: "pending" },
+    { name: "edgar seed", status: "pending" },
   ],
   research: [],
   committees: {},
@@ -934,6 +935,25 @@ async function main(): Promise<void> {
   setContainer("mcp", "healthy");
   setStep("mcp /health", "done");
   log("api + mcp healthy");
+
+  // EDGAR/MNA seed bootstrap (issue #108) — AFTER migrations + API readiness,
+  // BEFORE the research schedule may fire. Loads the committed seed artifact
+  // and ingests it through the authenticated analytics seed API (server-side
+  // gap-fill: existing real rows always win, a second run is a no-op), then
+  // ONLY on success flips job_schedules.research.refresh to enabled (seeded
+  // disabled by db/seed.ts). A failure here throws — this is a required boot
+  // step, not a best-effort one — so research.refresh is left disabled rather
+  // than risk a cold-DB EDGAR crawl on the worker's very first run.
+  setStep("edgar seed", "running");
+  log("ingesting EDGAR/MNA seed + enabling the research schedule…");
+  await run(
+    ["bun", "run", "scripts/edgar-seed-bootstrap.ts"],
+    join(repoRoot, "backend"),
+    { ...process.env, ANALYTICS_API_URL: backendUrl, ANALYTICS_TOKEN: analyticsToken } as Record<string, string>,
+    "edgar seed bootstrap",
+  );
+  setStep("edgar seed", "done");
+  log("EDGAR/MNA seed ingested — research.refresh is now eligible");
 
   if (process.env.CI) {
     // CI: run checks then tear down. (Unchanged — pure console, "inherit" stdio.)
