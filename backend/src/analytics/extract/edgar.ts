@@ -49,19 +49,32 @@ export function parseEdgarCount(j: unknown): number | null {
   return Number.isFinite(v) ? Number(v) : null;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// Injectable clock for deadline-aware retry loops — tests drive `now`/`sleep`
+// deterministically (a fake-clock test never waits out a real backoff sleep);
+// production omits this and gets the real wall clock.
+export interface Clock {
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+}
+const REAL_CLOCK: Clock = { now: Date.now, sleep };
 
 // One month's S-4 count with 4 attempts / exponential backoff. Retries 429/5xx;
 // gives up (returns null) on other 4xx. Loud-logs the final failure.
 //
-// `deadlineAt` (issue #109) — an OPTIONAL absolute epoch-ms cutoff propagated
-// by the incremental research refresh's hard deadline: checked before every
-// attempt AND before/after every backoff sleep, and used to cap each
-// request's own abort timeout to whatever budget remains. Once the deadline
-// has passed, this returns null immediately — no further request, retry
-// sleep, or parse is ever attempted. Omitted (the default), this behaves
-// exactly as before (unbounded by any outer deadline) — every existing
-// caller (the seed generator, the legacy full sweep) is unaffected.
+// `deadlineAt` (issue #109) — an OPTIONAL absolute epoch-ms cutoff (same
+// clock as `clock.now`) propagated by the incremental research refresh's
+// hard deadline: checked before every attempt AND before/after every backoff
+// sleep, and used to cap each request's own abort timeout to whatever
+// budget remains. Once the deadline has passed, this returns null
+// immediately — no further request, retry sleep, or parse is ever
+// attempted. Omitted (the default), this behaves exactly as before
+// (unbounded by any outer deadline) — every existing caller (the seed
+// generator, the legacy full sweep) is unaffected. `clock` is likewise
+// optional and defaults to the real wall clock; only fake-clock tests of
+// this retry loop's OWN deadline handling supply one (the request's abort
+// timer itself still uses a real setTimeout — there is no fake network I/O).
 export async function fetchEdgarMonthCount(
   monthStart: string,
   monthEnd: string,
@@ -69,29 +82,30 @@ export async function fetchEdgarMonthCount(
   logger: { warn?: (m: string) => void } = console,
   maxAttempts = 4,
   deadlineAt?: number,
+  clock: Clock = REAL_CLOCK,
 ): Promise<number | null> {
   const url = edgarUrl(monthStart, monthEnd);
   let lastErr = "unknown error";
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+    if (deadlineAt !== undefined && clock.now() >= deadlineAt) {
       lastErr = "hard deadline exceeded";
       break;
     }
     if (attempt > 0) {
       const backoff = 500 * 2 ** (attempt - 1);
-      const budget = deadlineAt !== undefined ? deadlineAt - Date.now() : Infinity;
+      const budget = deadlineAt !== undefined ? deadlineAt - clock.now() : Infinity;
       if (budget <= 0) {
         lastErr = "hard deadline exceeded";
         break;
       }
-      await sleep(Math.min(backoff, budget));
-      if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+      await clock.sleep(Math.min(backoff, budget));
+      if (deadlineAt !== undefined && clock.now() >= deadlineAt) {
         lastErr = "hard deadline exceeded";
         break;
       }
     }
     const attemptTimeoutMs =
-      deadlineAt !== undefined ? Math.max(0, Math.min(timeoutMs, deadlineAt - Date.now())) : timeoutMs;
+      deadlineAt !== undefined ? Math.max(0, Math.min(timeoutMs, deadlineAt - clock.now())) : timeoutMs;
     if (attemptTimeoutMs <= 0) {
       lastErr = "hard deadline exceeded";
       break;

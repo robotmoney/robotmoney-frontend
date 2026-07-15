@@ -21,7 +21,10 @@ import {
   alignDailyForwardFill,
   rollingPercentileRank,
   pctChangeLag,
+  mergeSeries,
 } from "../src/analytics/transform/math.ts";
+import { refreshEdgarIncremental } from "../src/analytics/edgar-incremental-refresh.ts";
+import { EDGAR_REVISION_WINDOW_MONTHS } from "../src/analytics/extract/edgar-fetch-plan.ts";
 
 type Pt = { date: string; value: number | null };
 const arr = (pts: Pt[]) => pts.map((p) => (p.value == null ? NaN : p.value));
@@ -111,6 +114,65 @@ test("late-cycle fidelity: mna_pct, margin_debt_yoy(+pct), consumer_conf_pct rep
   console.log(`[research-fidelity] consumer_conf_pct: compared=${c.n} maxDiff=${c.max}`);
   expect(c.n).toBeGreaterThan(700);
   expect(c.max).toBeLessThan(5e-3);
+});
+
+// Issue #109: the fidelity guarantee above must ALSO hold when the MNA
+// series is assembled via the NEW incremental-refresh code path
+// (refreshEdgarIncremental + mergeSeries(persistedFloor, newRows)) instead
+// of a single embedded fixture array. Split the committed reference's own
+// mna_s4_monthly into "already persisted" (everything except the trailing
+// revision window) + "freshly fetched" (the trailing window, requested
+// through refreshEdgarIncremental with a deterministic fetchMonth double
+// that reproduces the reference's OWN values exactly) — the merge must
+// reconstruct the reference byte-for-byte, and mna_pct recomputed from that
+// merge must match the committed mna_pct within the SAME tolerance as the
+// fixture-only test above.
+test("late-cycle fidelity via the incremental EDGAR refresh path: persisted-floor ∪ freshly-fetched revision window reproduces the committed reference exactly", async () => {
+  const lc = await loadJsonGz("late-cycle-signals.json.gz");
+  const START = lc.spec.start;
+  const PCT_WIN = lc.spec.percentile_window_days;
+  const axis = buildDateAxis(START, lc.asof);
+
+  const mnaFull = arrPts(lc.indicators.mna_s4_monthly); // ascending, 2010-01-31..2026-06-30
+  const asOfMonth = lc.asof.slice(0, 7);
+  const revisionMonthKeys = new Set<string>();
+  {
+    const [y, m] = asOfMonth.split("-").map(Number) as [number, number];
+    for (let k = 0; k < EDGAR_REVISION_WINDOW_MONTHS; k++) {
+      let yy = y, mm = m - k;
+      while (mm <= 0) { mm += 12; yy -= 1; }
+      revisionMonthKeys.add(`${yy}-${String(mm).padStart(2, "0")}`);
+    }
+  }
+  const persistedPoints = mnaFull.filter((p) => !revisionMonthKeys.has(p.date.slice(0, 7)));
+  const revisionPoints = mnaFull.filter((p) => revisionMonthKeys.has(p.date.slice(0, 7)));
+  expect(revisionPoints.length).toBe(EDGAR_REVISION_WINDOW_MONTHS); // sanity: the split is exact
+  const byMonthStart = new Map(revisionPoints.map((p) => [`${p.date.slice(0, 7)}-01`, p.value]));
+
+  const outcome = await refreshEdgarIncremental({
+    asOf: lc.asof,
+    persistedMonths: persistedPoints.map((p) => p.date.slice(0, 7)),
+    deadlineAt: Date.now() + 30_000,
+    requestDelayMs: 0,
+    logger: { log: () => {}, warn: () => {} },
+    fetchMonth: async (monthStart: string) => {
+      const v = byMonthStart.get(monthStart);
+      if (v === undefined) throw new Error(`unexpected EDGAR request for ${monthStart} — plan should be exactly the revision window`);
+      return v;
+    },
+  });
+  expect(outcome.status).toBe("updated");
+  expect(outcome.newRows.length).toBe(EDGAR_REVISION_WINDOW_MONTHS);
+
+  const merged = mergeSeries(persistedPoints, outcome.newRows);
+  expect(merged).toEqual(mnaFull); // byte-for-byte reproduction of the committed reference
+
+  const mnaAligned = alignDailyForwardFill(merged, axis);
+  const mnaPct = rollingPercentileRank(mnaAligned, PCT_WIN);
+  const m = maxDiffAtEmbeddedDates(lc.indicators.mna_pct, axis, mnaPct);
+  console.log(`[research-fidelity] mna_pct (via refreshEdgarIncremental): compared=${m.n} maxDiff=${m.max}`);
+  expect(m.n).toBeGreaterThan(700);
+  expect(m.max).toBeLessThan(5e-3); // same tolerance as the fixture-only fidelity test above
 });
 
 function arrPts(pts: { date: string; value: number }[]): { date: string; value: number }[] {

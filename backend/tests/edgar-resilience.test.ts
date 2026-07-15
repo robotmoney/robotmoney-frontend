@@ -92,26 +92,34 @@ test("fetchEdgarS4Monthly: an isolated single-month flake does not trip the brea
 
 // Issue #109: fetchEdgarMonthCount's own retry/backoff loop must honor an
 // OPTIONAL absolute `deadlineAt` — a sustained-429 month must NOT run its
-// full maxAttempts×exponential-backoff cycle (which would take several
-// real seconds) once the deadline has passed; it must bail out fast.
-test("fetchEdgarMonthCount: an absolute deadlineAt cuts a sustained-429 retry loop short (never runs the full backoff cycle)", async () => {
+// full maxAttempts×exponential-backoff cycle once the deadline has passed;
+// it must bail out fast. FAKE CLOCK (AC3): the injected `clock` drives both
+// `now()` and `sleep()` — every backoff "sleep" merely advances a counter
+// and resolves immediately, so this test is deterministic and instant, never
+// waiting out a real timer.
+test("fetchEdgarMonthCount: an absolute deadlineAt cuts a sustained-429 retry loop short (fake clock, never runs the full backoff cycle)", async () => {
   const orig = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = (async () => {
     calls++;
     return { ok: false, status: 429, json: async () => ({}) } as Response;
   }) as any;
+  let clock = 0;
+  const fakeClock = {
+    now: () => clock,
+    sleep: async (ms: number) => {
+      clock += ms; // no real timer — the backoff "elapses" instantly
+    },
+  };
   try {
-    const start = Date.now();
-    const deadlineAt = start + 50; // real ms — well short of 500+1000+2000ms of backoff
-    const result = await fetchEdgarMonthCount("2020-01-01", "2020-01-31", 15000, { warn: () => {} }, 4, deadlineAt);
-    const elapsed = Date.now() - start;
+    const deadlineAt = 1200; // fake-clock ms: survives attempt 1 + the 500ms backoff, dies before the 1000ms one
+    const result = await fetchEdgarMonthCount("2020-01-01", "2020-01-31", 15000, { warn: () => {} }, 4, deadlineAt, fakeClock);
     expect(result).toBeNull();
-    // Without deadline propagation this would take >3.5s (500+1000+2000ms of
-    // backoff sleeps); with it, it must return well before the first full
-    // backoff sleep completes.
-    expect(elapsed).toBeLessThan(1000);
-    expect(calls).toBeLessThan(4); // never reaches all 4 attempts
+    // Without deadline propagation this would run all 4 attempts (500+1000+2000ms
+    // of fake-clock backoff); with it, the loop bails once the fake clock
+    // crosses the deadline — never reaching every attempt.
+    expect(calls).toBeLessThan(4);
+    expect(clock).toBeLessThanOrEqual(deadlineAt + 500); // small deterministic tolerance (at most one more backoff step)
   } finally {
     globalThis.fetch = orig;
   }
