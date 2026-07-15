@@ -53,20 +53,52 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // One month's S-4 count with 4 attempts / exponential backoff. Retries 429/5xx;
 // gives up (returns null) on other 4xx. Loud-logs the final failure.
+//
+// `deadlineAt` (issue #109) — an OPTIONAL absolute epoch-ms cutoff propagated
+// by the incremental research refresh's hard deadline: checked before every
+// attempt AND before/after every backoff sleep, and used to cap each
+// request's own abort timeout to whatever budget remains. Once the deadline
+// has passed, this returns null immediately — no further request, retry
+// sleep, or parse is ever attempted. Omitted (the default), this behaves
+// exactly as before (unbounded by any outer deadline) — every existing
+// caller (the seed generator, the legacy full sweep) is unaffected.
 export async function fetchEdgarMonthCount(
   monthStart: string,
   monthEnd: string,
   timeoutMs = 15000,
   logger: { warn?: (m: string) => void } = console,
   maxAttempts = 4,
+  deadlineAt?: number,
 ): Promise<number | null> {
   const url = edgarUrl(monthStart, monthEnd);
   let lastErr = "unknown error";
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (attempt > 0) await sleep(500 * 2 ** (attempt - 1));
+    if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+      lastErr = "hard deadline exceeded";
+      break;
+    }
+    if (attempt > 0) {
+      const backoff = 500 * 2 ** (attempt - 1);
+      const budget = deadlineAt !== undefined ? deadlineAt - Date.now() : Infinity;
+      if (budget <= 0) {
+        lastErr = "hard deadline exceeded";
+        break;
+      }
+      await sleep(Math.min(backoff, budget));
+      if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+        lastErr = "hard deadline exceeded";
+        break;
+      }
+    }
+    const attemptTimeoutMs =
+      deadlineAt !== undefined ? Math.max(0, Math.min(timeoutMs, deadlineAt - Date.now())) : timeoutMs;
+    if (attemptTimeoutMs <= 0) {
+      lastErr = "hard deadline exceeded";
+      break;
+    }
     try {
       const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), timeoutMs);
+      const timer = setTimeout(() => ac.abort(), attemptTimeoutMs);
       let res: Response;
       try {
         res = await fetch(url, { signal: ac.signal, headers: { "user-agent": UA, accept: "application/json" } });
@@ -85,7 +117,7 @@ export async function fetchEdgarMonthCount(
       lastErr = String(e?.message ?? e);
     }
   }
-  logger.warn?.(`[edgar] S-4 ${monthStart}: ${lastErr} (giving up after 4 tries)`);
+  logger.warn?.(`[edgar] S-4 ${monthStart}: ${lastErr} (giving up after ${maxAttempts} tries)`);
   return null;
 }
 
