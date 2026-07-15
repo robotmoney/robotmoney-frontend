@@ -91,7 +91,7 @@ test("only API persistence + migration/demo tooling import the analytics store w
 
 // ── PART 2: the worker's update clients over the REAL boundary ──────────────
 test(
-  "worker analytics job: regime + research clients persist ONLY via authenticated HTTP; queue lifecycle completes",
+  "worker analytics jobs (regime.classify + research.refresh): update clients persist ONLY via authenticated HTTP; queue lifecycle completes",
   async () => {
     const TOKEN = "tok_analytics_worker_boundary";
     const requests: { method: string; path: string; auth: string | null }[] = [];
@@ -128,20 +128,28 @@ test(
       await sql`DELETE FROM regime_snapshots`;
       await sql`DELETE FROM research_signals`;
       const asof = new Date().toISOString().slice(0, 10);
-      const [{ id: jobId }] = await sql`
-        INSERT INTO jobs (kind, payload) VALUES ('analytics.run', ${sql.json({ asof })}) RETURNING id`;
+      // The two lane-scoped analytics kinds (issue #107 retired `analytics.run`):
+      // regime.classify exercises the regime update client, research.refresh the
+      // research update clients — both must submit over the boundary.
+      const [{ id: regimeJobId }] = await sql`
+        INSERT INTO jobs (kind, payload) VALUES ('regime.classify', ${sql.json({ asof })}) RETURNING id`;
+      const [{ id: researchJobId }] = await sql`
+        INSERT INTO jobs (kind, payload) VALUES ('research.refresh', ${sql.json({ asof })}) RETURNING id`;
 
       expect(await processOneJob()).toBe(true);
+      expect(await processOneJob()).toBe(true);
 
-      // Queue lifecycle completed normally.
-      const [job] = await sql`SELECT status, last_error FROM jobs WHERE id = ${jobId}`;
-      expect(job.status).toBe("succeeded");
-      const runs = await sql`SELECT status FROM job_runs WHERE job_id = ${jobId}`;
-      expect(runs.length).toBe(1);
-      expect(runs[0].status).toBe("succeeded");
+      // Queue lifecycle completed normally for BOTH jobs.
+      for (const jobId of [regimeJobId, researchJobId]) {
+        const [job] = await sql`SELECT status, last_error FROM jobs WHERE id = ${jobId}`;
+        expect(job.status).toBe("succeeded");
+        const runs = await sql`SELECT status FROM job_runs WHERE job_id = ${jobId}`;
+        expect(runs.length).toBe(1);
+        expect(runs[0].status).toBe("succeeded");
+      }
 
       // Every persistence call went over HTTP with the bearer credential.
-      expect(requests.length).toBeGreaterThanOrEqual(4); // floor read, floor write, snapshots, 2 research signals
+      expect(requests.length).toBeGreaterThanOrEqual(4); // floor read(s), floor write, snapshots, research signals
       for (const r of requests) {
         expect(r.path.startsWith("/api/analytics/")).toBe(true);
         expect(r.auth).toBe(`Bearer ${TOKEN}`);
