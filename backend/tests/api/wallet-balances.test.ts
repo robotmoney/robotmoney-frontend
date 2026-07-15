@@ -28,7 +28,8 @@ import {
   type Aggregate3Result,
 } from "../../src/chain/base-rpc-client.ts";
 import { getWalletBalances } from "../../src/api/routes/dashboards.ts";
-import { sampleWalletBalances, backfillWalletHistory } from "../../src/worker/handlers/wallet.ts";
+import { sampleWalletBalances } from "../../src/worker/handlers/wallet.ts";
+import { backfillWalletHistory } from "../../src/db/seed.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -544,7 +545,7 @@ test("AC2 (issue #94): backfillWalletHistory never writes the literal provenance
   // Source guard: the backfill body must not label seeded rows 'live'. Reading
   // the handler source keeps this honest even if a future edit reintroduces the
   // literal without the DB assertion above catching it in a stale fixture.
-  const src = await Bun.file(new URL("../../src/worker/handlers/wallet.ts", import.meta.url)).text();
+  const src = await Bun.file(new URL("../../src/db/seed.ts", import.meta.url)).text();
   const body = src.slice(src.indexOf("export async function backfillWalletHistory"));
   expect(body).toContain("'seed'");
   expect(body).not.toContain("'live'");

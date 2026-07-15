@@ -9,7 +9,7 @@
 // operator disable a schedule without the seed re-enabling it.
 import { sql, closeDb, jsonValue } from "./client.ts";
 import { seedDemoProjects } from "../projects/demo-seed.ts";
-import { backfillWalletHistory } from "../worker/handlers/wallet.ts";
+import { walletHistorySeedRows } from "../chain/wallet-history-seed.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
 
 interface SeedSchedule {
@@ -178,4 +178,29 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       process.exitCode = 1;
       return closeDb();
     });
+}
+// Idempotent backfill of the pre-launch prop-wallet history (issue #84).
+// ON CONFLICT DO NOTHING so a later live sample for the same (date, symbol) is
+// never clobbered by a re-run. Rows are labelled provenance 'seed' — these are
+// ported baked UI constants (chain/wallet-history-seed.ts), not live chain
+// reads, so they must NEVER carry 'live' (honesty invariant, migration
+// 0014_wallet_balance_samples.sql).
+//
+// Lives HERE (not in worker/handlers/wallet.ts) because it is migrate/seed
+// tooling on the migration pool: issue #106 gave the worker its own
+// queue-scoped pool (db/worker-client.ts), and a seed that queried through that
+// second pool would leave `bun run migrate` with open sockets it never closes
+// (the demo's migrate one-shot would hang forever).
+export async function backfillWalletHistory(): Promise<number> {
+  const rows = walletHistorySeedRows();
+  for (const r of rows) {
+    await sql`
+      INSERT INTO wallet_balance_samples
+        (sample_date, symbol, amount, price_usd, value_usd, provenance)
+      VALUES
+        (${r.date}, ${r.symbol}, NULL, NULL, ${r.valueUsd}, 'seed')
+      ON CONFLICT (sample_date, symbol) DO NOTHING
+    `;
+  }
+  return rows.length;
 }
