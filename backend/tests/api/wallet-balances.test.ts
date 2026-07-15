@@ -52,6 +52,9 @@ const ENV_KEYS = [
   "USDC_ADDRESS", "ZYFAI_SS1_ADDRESS", "GIZA_SS1_ADDRESS", "WETH_ADDRESS",
   "ROBOTMONEY_ADDRESS", "BNKR_ADDRESS", "AAVE_AUSDC_ADDRESS",
   "BASE_RPC_RETRY_BASE_MS", "BASE_RPC_MAX_RETRIES", "BASE_RPC_MAX_CONCURRENCY",
+  "STRATEGY_VAULT_GTUSDCP_ADDRESS", "STRATEGY_VAULT_STEAKUSDC_ADDRESS",
+  "STRATEGY_VAULT_CUSDCV3_ADDRESS", "STRATEGY_VAULT_ABASUSDC_ADDRESS",
+  "STRATEGY_VAULT_CSHYUSDC_ADDRESS",
 ] as const;
 
 function setBaseEnv(extra: Record<string, string> = {}) {
@@ -88,11 +91,18 @@ const GET_ETH_BALANCE = "0x4d2301cc"; // Multicall3 getEthBalance(address)
 const AGGREGATE3 = "0x82ad56cb"; // Multicall3 aggregate3(Call3[])
 
 interface ChainFixtures {
-  // eth_call balanceOf(token) → raw balance (single wallet).
+  // eth_call balanceOf(token) → raw balance, ignoring the holder arg (fine when
+  // only one holder ever queries that target in a given test).
   balanceOf?: Record<string, bigint>;
+  // eth_call balanceOf(token) → raw balance, KEYED BY HOLDER too (target →
+  // holder → balance). Checked before the holder-agnostic `balanceOf` map so a
+  // test can give the SAME target (e.g. USDC) different balances per holder —
+  // needed for the strategy NAV idle-USDC read, which queries USDC.balanceOf
+  // for the smart-account address, distinct from the primary wallet's USDC leg.
+  balanceOfByHolder?: Record<string, Record<string, bigint>>;
   // getEthBalance(wallet) → wei (native leg, now read via Multicall3).
   native?: bigint;
-  // convertToAssets(strategy) → underlying raw (6-dp USDC).
+  // convertToAssets(vault) → underlying raw (6-dp USDC).
   nav?: Record<string, bigint>;
   // GeckoTerminal token_price (address → USD) for the live-price path.
   gecko?: Record<string, number>;
@@ -127,8 +137,15 @@ function mockChain(fx: ChainFixtures): MockCounter {
     }
     if (sel === BALANCE_OF) {
       if (fx.failBalanceOf?.map((a) => a.toLowerCase()).includes(toLc)) return { success: false, returnData: "0x" };
+      // Decode the single `balanceOf(address holder)` arg (low 20 bytes of the
+      // one 32-byte word after the 4-byte selector) so the SAME target can be
+      // queried for different holders (e.g. USDC for the primary wallet AND
+      // for a strategy smart-account's idle balance).
+      const holderLc = ("0x" + callData.slice(-40)).toLowerCase();
+      const byHolder = fx.balanceOfByHolder?.[toLc]?.[holderLc];
+      if (byHolder != null) return { success: true, returnData: word(byHolder) };
       const raw = fx.balanceOf?.[toLc];
-      if (raw == null) throw new Error(`mockChain: no balanceOf fixture for ${toLc}`);
+      if (raw == null) throw new Error(`mockChain: no balanceOf fixture for ${toLc} (holder ${holderLc})`);
       return { success: true, returnData: word(raw) };
     }
     if (sel === CONVERT_TO_ASSETS) {
@@ -183,19 +200,24 @@ function mockChain(fx: ChainFixtures): MockCounter {
 
 // Fixtures under PRICE_SOURCE=stub (prices come from token-prices STUB_PRICES:
 // WETH/ETH 1600, ROBOTMONEY 1e-5, BNKR 5e-4, SP500 4600; USDC/strategy $1).
+// ZYFAI-SS1/GIZA-SS1 are smart-account NAV legs (issues #120/#145): with no
+// STRATEGY_VAULT_*_ADDRESS configured (the default), NAV = idle USDC balance
+// of the account, read via USDC.balanceOf(account) — same target (A.USDC) the
+// primary wallet's own USDC leg queries, but a DIFFERENT holder, hence
+// balanceOfByHolder rather than the holder-agnostic `balanceOf` map.
 function stubFixtures(): ChainFixtures {
   return {
     balanceOf: {
-      [A.USDC]: 9052n * E6, // 9052 USDC → $9052
-      [A.ZYFAI]: 1n, // non-zero shares → convertToAssets is called
-      [A.GIZA]: 1n,
+      [A.USDC]: 9052n * E6, // primary wallet's USDC → $9052
       [A.WETH]: 10n * E18, // 10 WETH → $16,000
       [A.ROBOTMONEY]: 3_000_000_000n * E18, // 3e9 → $30,000 @ 1e-5
       [A.BNKR]: 20000n * E18, // 20,000 → $10 @ 5e-4
     },
-    nav: {
-      [A.ZYFAI]: 4538n * E6, // NAV → $4538
-      [A.GIZA]: 4524n * E6, // NAV → $4524
+    balanceOfByHolder: {
+      [A.USDC]: {
+        [A.ZYFAI]: 4538n * E6, // ZYFAI-SS1 account idle USDC → NAV $4538 (no vaults configured)
+        [A.GIZA]: 4524n * E6, // GIZA-SS1 account idle USDC → NAV $4524
+      },
     },
     native: 500000000000000000n, // 0.5 ETH → $800
   };
@@ -359,9 +381,12 @@ test("AC3-retry negative control: the SAME transient 429 with BASE_RPC_MAX_RETRI
 
 test("AC3-batch: the endpoint issues at most TWO aggregate3 eth_calls regardless of wallet/asset count (was ~23 individual eth_calls)", async () => {
   // Three prop wallets × the eight tracked assets used to fan out to ~23 separate
-  // eth_calls (3 × {6 balanceOf/getEthBalance} + 2 strategy convertToAssets). With
-  // Multicall3 that collapses to TWO aggregate3 calls: round 1 (all balances) +
-  // round 2 (the two strategies' NAV). This count IS the whole point of the fix.
+  // eth_calls. With Multicall3 that collapses to ONE round-1 aggregate3 call
+  // (balances + each strategy account's idle-USDC/vault-share reads); round 2
+  // (per-vault convertToAssets) only fires when a vault is actually configured
+  // (issues #120/#145 — see the dedicated NAV test below), so with the default
+  // EMPTY vault list this stays at ONE call. This bound (never scaling with
+  // wallet/asset count) is the whole point of the fix.
   const wallets = ["0x" + "a1".repeat(20), "0x" + "b2".repeat(20), "0x" + "c3".repeat(20)];
   setBaseEnv();
   process.env.PROP_WALLET_ADDRESSES = wallets.join(",");
@@ -371,8 +396,31 @@ test("AC3-batch: the endpoint issues at most TWO aggregate3 eth_calls regardless
 
   const r = await fetchWalletBalances();
   expect(r.holdings).toHaveLength(8); // the full fan-out ran
-  expect(counter.aggregateCalls).toBe(2); // round 1 balances + round 2 strategy NAV
+  expect(counter.aggregateCalls).toBe(1); // round 1 only — no vault configured, so no round 2
   expect(counter.aggregateCalls).toBeLessThanOrEqual(2); // never scales with wallet/asset count
+});
+
+test("NAV (issues #120/#145): a configured strategy vault is queried for shares in round 1 and convertToAssets in round 2; NAV = idle USDC + vault assets", async () => {
+  setBaseEnv({ STRATEGY_VAULT_GTUSDCP_ADDRESS: "0x" + "aa".repeat(20) });
+  process.env.BASE_RPC_SOURCE = "stub";
+  process.env.PRICE_SOURCE = "stub";
+  const VAULT = "0x" + "aa".repeat(20);
+  const fx = stubFixtures();
+  fx.balanceOfByHolder![VAULT] = { [A.ZYFAI]: 1_000n * E6, [A.GIZA]: 0n }; // ZYFAI-SS1 holds 1000 (raw) gtUSDCp shares; GIZA holds none
+  fx.nav = { [VAULT]: 1_050n * E6 }; // convertToAssets(1000 shares) → 1050 USDC (accrued yield)
+  const counter = mockChain(fx);
+
+  const r = await fetchWalletBalances();
+  const bySym = Object.fromEntries(r.holdings.map((h) => [h.symbol, h]));
+  // ZYFAI-SS1 NAV = idle 4538 USDC + 1050 USDC vault assets = 5588.
+  expect(bySym["ZYFAI-SS1"]!.provenance).toBe("stub");
+  expect(bySym["ZYFAI-SS1"]!.amount).toBeCloseTo(5588, 6);
+  expect(bySym["ZYFAI-SS1"]!.valueUsd).toBeCloseTo(5588, 6);
+  // GIZA-SS1 holds no shares in the configured vault → NAV = idle-only, unaffected.
+  expect(bySym["GIZA-SS1"]!.provenance).toBe("stub");
+  expect(bySym["GIZA-SS1"]!.amount).toBeCloseTo(4524, 6);
+  // Round 2 (convertToAssets) fires because ZYFAI-SS1 has non-zero vault shares.
+  expect(counter.aggregateCalls).toBe(2);
 });
 
 test("live price path: PRICE_SOURCE=live executes the GeckoTerminal + Yahoo fetchers and labels provenance 'live'", async () => {

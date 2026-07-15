@@ -6,10 +6,11 @@
 //     (wallet, asset) leg, no cross-wallet sum).
 // Everything that must stay identical between them lives here exactly once:
 //   1. the Multicall3 BATCHED chain-amount reader (the #119 429-storm fix:
-//      ≤2 eth_calls total — round 1 balance/getEthBalance legs, round 2 ERC-4626
-//      convertToAssets NAV for each strategy with shares),
+//      ≤2 eth_calls total — round 1 balance/getEthBalance legs (+ each
+//      strategy account's idle USDC and maintained-vault share balances,
+//      #120/#145), round 2 ERC-4626 convertToAssets NAV per vault with shares),
 //   2. the per-valuationKind amount resolution (erc20 / aave aToken / native /
-//      strategy round-2 NAV at 6 dp underlying USDC), and
+//      strategy = idle USDC + Σ vault NAV, all at 6 dp underlying USDC), and
 //   3. the price + degradation valuation step (keyless price read + the
 //      'stub'/'live' provenance rule).
 // The one thing that legitimately differs — HOW legs aggregate — is the caller's
@@ -22,7 +23,14 @@
 // batch; a value is never fabricated and provenance is never falsely 'live' —
 // callers turn a failed key into their own degrade shape (last-persisted
 // 'stale' sample for balances, null-valued 'stale' holding for sleeves).
-import { config, type BaseRpcSource, type PriceSource, type TrackedAsset } from "../config.ts";
+import {
+  config,
+  resolveStrategyVaults,
+  resolveTrackedAssets,
+  type BaseRpcSource,
+  type PriceSource,
+  type TrackedAsset,
+} from "../config.ts";
 import {
   decodeUint256,
   encodeBalanceOfCall,
@@ -66,11 +74,16 @@ export interface KeyedAssetRead {
 
 // Read EVERY keyed leg's on-chain amount in at most TWO eth_calls via Multicall3,
 // regardless of wallet/asset count — this is the 429-storm fix. Round 1 batches
-// one balanceOf / getEthBalance sub-call per leg; round 2 batches
-// convertToAssets(shares) for each strategy KEY that has shares. Provenance
-// honesty is preserved EXACTLY: a reverted sub-call (success:false) fails just
-// its key; a thrown batch fails every key (matching the old all-fail path).
-// `logLabel` names the calling feed in the degrade logs.
+// one balanceOf / getEthBalance sub-call per (key × wallet) for erc20/aave/
+// native legs; for `strategy` keys (issues #120/#145 — the address is the
+// agent's SMART-ACCOUNT WALLET itself, not an ERC-4626 share token) round 1
+// instead queries the ACCOUNT's idle USDC balance plus its share balance in
+// each configured vault (resolveStrategyVaults() — owner-maintained, empty by
+// default). Round 2 batches convertToAssets(shares) for every (key, vault)
+// pair with a non-zero share balance; NAV = idleUsdc + Σ vault assets.
+// Provenance honesty is preserved EXACTLY: a reverted sub-call (success:false)
+// fails just its key; a thrown batch fails every key (matching the old
+// all-fail path). `logLabel` names the calling feed in the degrade logs.
 export async function readChainAmountsBatched(
   reads: KeyedAssetRead[],
   logLabel: string,
@@ -86,21 +99,49 @@ export async function readChainAmountsBatched(
     }
   }
 
-  // ── Round 1: one sub-call per (key × wallet). ──────────────────────────────
-  const legs: { key: string }[] = [];
+  // USDC address comes from the SAME resolver every "erc20" USDC leg uses
+  // (resolveTrackedAssets, env-overridable) so the idle-balance target always
+  // matches whichever USDC contract this deployment is configured against.
+  const usdcAddress = resolveTrackedAssets().find((a) => a.symbol === "USDC")?.address;
+  const strategyVaults = resolveStrategyVaults();
+
+  // ── Round 1: balance sub-calls. ────────────────────────────────────────────
+  // erc20/aave/native → one balanceOf/getEthBalance per (key × wallet), summed.
+  // strategy → idle USDC balanceOf(account) + balanceOf(account) on each
+  // maintained vault (account = the strategy's own smart-account address).
+  type Leg =
+    | { key: string; kind: "balance" }
+    | { key: string; kind: "idleUsdc" }
+    | { key: string; kind: "vaultShare"; vaultIndex: number };
+  const legs: Leg[] = [];
   const calls: Call3[] = [];
   for (const r of reads) {
+    if (r.asset.valuationKind === "strategy") {
+      const account = r.asset.address!;
+      if (!usdcAddress) {
+        throw new Error(`${logLabel}: ${r.asset.symbol} strategy NAV needs a resolved USDC address`);
+      }
+      calls.push({ target: usdcAddress, allowFailure: true, callData: encodeBalanceOfCall(account) });
+      legs.push({ key: r.key, kind: "idleUsdc" });
+      for (let vi = 0; vi < strategyVaults.length; vi++) {
+        calls.push({ target: strategyVaults[vi]!.address, allowFailure: true, callData: encodeBalanceOfCall(account) });
+        legs.push({ key: r.key, kind: "vaultShare", vaultIndex: vi });
+      }
+      continue;
+    }
     for (const w of r.wallets) {
       // native → Multicall3 getEthBalance(wallet); every other kind (erc20 /
-      // aave aToken / strategy shares) → balanceOf(wallet) on the token/strategy.
+      // aave aToken) → balanceOf(wallet) on the token.
       const target = r.asset.valuationKind === "native" ? MULTICALL3_ADDRESS : r.asset.address!;
       const callData = r.asset.valuationKind === "native" ? encodeGetEthBalanceCall(w) : encodeBalanceOfCall(w);
       calls.push({ target, allowFailure: true, callData });
-      legs.push({ key: r.key });
+      legs.push({ key: r.key, kind: "balance" });
     }
   }
 
-  const rawSum = new Map<string, bigint>();
+  const rawSum = new Map<string, bigint>(); // erc20/aave/native keys
+  const idleUsdcRaw = new Map<string, bigint>(); // strategy keys
+  const vaultSharesRaw = new Map<string, Map<number, bigint>>(); // strategy key -> vaultIndex -> shares
   const errored = new Set<string>();
   let round1: Aggregate3Result[];
   try {
@@ -113,43 +154,57 @@ export async function readChainAmountsBatched(
     return out;
   }
   for (let i = 0; i < legs.length; i++) {
+    const leg = legs[i]!;
     const r = round1[i];
-    const key = legs[i]!.key;
     if (!r || !r.success) {
-      errored.add(key); // a reverted sub-call fails just this key
+      errored.add(leg.key); // a reverted sub-call fails the whole key (its NAV)
       continue;
     }
-    rawSum.set(key, (rawSum.get(key) ?? 0n) + decodeUint256(r.returnData));
-  }
-
-  // ── Round 2: ERC-4626 NAV convertToAssets(shares) per strategy w/ shares. ──
-  const navCalls: Call3[] = [];
-  const navKeys: string[] = [];
-  for (const r of reads) {
-    if (r.asset.valuationKind !== "strategy" || errored.has(r.key)) continue;
-    const shares = rawSum.get(r.key) ?? 0n;
-    if (shares > 0n) {
-      navCalls.push({ target: r.asset.address!, allowFailure: true, callData: encodeConvertToAssetsCall(shares) });
-      navKeys.push(r.key);
+    const value = decodeUint256(r.returnData);
+    if (leg.kind === "balance") {
+      rawSum.set(leg.key, (rawSum.get(leg.key) ?? 0n) + value);
+    } else if (leg.kind === "idleUsdc") {
+      idleUsdcRaw.set(leg.key, value);
+    } else if (value > 0n) {
+      let byVault = vaultSharesRaw.get(leg.key);
+      if (!byVault) {
+        byVault = new Map();
+        vaultSharesRaw.set(leg.key, byVault);
+      }
+      byVault.set(leg.vaultIndex, value);
     }
   }
-  const navRaw = new Map<string, bigint>();
+
+  // ── Round 2: ERC-4626 NAV convertToAssets(shares) per (key, vault) w/ shares. ──
+  const navCalls: Call3[] = [];
+  const navKeys: { key: string; vaultIndex: number }[] = [];
+  for (const r of reads) {
+    if (r.asset.valuationKind !== "strategy" || errored.has(r.key)) continue;
+    const byVault = vaultSharesRaw.get(r.key);
+    if (!byVault) continue;
+    for (const [vaultIndex, shares] of byVault) {
+      navCalls.push({ target: strategyVaults[vaultIndex]!.address, allowFailure: true, callData: encodeConvertToAssetsCall(shares) });
+      navKeys.push({ key: r.key, vaultIndex });
+    }
+  }
+  const vaultAssetsRaw = new Map<string, bigint>(); // strategy key -> summed vault assets (6dp USDC)
   if (navCalls.length > 0) {
     let round2: Aggregate3Result[];
     try {
       round2 = await multicall3Aggregate3(navCalls, opts);
     } catch (err) {
       console.error(`${logLabel}: batched round-2 NAV multicall failed, degrading strategy legs to stale:`, err);
-      for (const k of navKeys) errored.add(k);
+      for (const nk of navKeys) errored.add(nk.key);
       round2 = [];
     }
     for (let i = 0; i < navKeys.length; i++) {
       const r = round2[i];
+      const { key } = navKeys[i]!;
       if (!r || !r.success) {
-        errored.add(navKeys[i]!);
+        errored.add(key);
         continue;
       }
-      navRaw.set(navKeys[i]!, decodeUint256(r.returnData));
+      vaultAssetsRaw.set(key, (vaultAssetsRaw.get(key) ?? 0n) + decodeUint256(r.returnData));
     }
   }
 
@@ -166,10 +221,12 @@ export async function readChainAmountsBatched(
         out.set(r.key, { ok: true, amount: amountFrom(rawSum.get(r.key) ?? 0n, r.asset.decimals) });
         break;
       case "strategy": {
-        // shares==0 → NAV is 0 with no round-2 call (matches callConvertToAssets(0)).
-        const shares = rawSum.get(r.key) ?? 0n;
-        const assetsRaw = shares > 0n ? (navRaw.get(r.key) ?? 0n) : 0n;
-        out.set(r.key, { ok: true, amount: amountFrom(assetsRaw, 6) }); // underlying USDC (6 dp)
+        // NAV = idle USDC + Σ convertToAssets(shares) over the maintained vault
+        // list — 0 vaults configured degrades gracefully to idle-only, still a
+        // real non-reverting live read of the account (issues #120/#145).
+        const idle = idleUsdcRaw.get(r.key) ?? 0n;
+        const vaultAssets = vaultAssetsRaw.get(r.key) ?? 0n;
+        out.set(r.key, { ok: true, amount: amountFrom(idle + vaultAssets, 6) }); // underlying USDC (6 dp)
         break;
       }
     }

@@ -199,10 +199,13 @@ test("wallet-sleeves: per-wallet holdings resolve in ≤2 batched eth_calls; tot
   process.env.PRICE_SOURCE = "stub";
   const counter = mockChain();
   const r = await getWalletSleeves();
-  // Multicall3 batching (finding 007): ALL sleeves' chain legs land in round-1
-  // balances + round-2 strategy NAV — TWO aggregate3 eth_calls, never a
-  // per-holding fan-out (mirrors the wallet-balances AC3-batch assertion).
-  expect(counter.aggregateCalls).toBe(2);
+  // Multicall3 batching (finding 007): ALL sleeves' chain legs (including each
+  // strategy account's idle-USDC + vault-share reads, issues #120/#145) land
+  // in round 1 — ONE aggregate3 eth_call, never a per-holding fan-out (mirrors
+  // the wallet-balances AC3-batch assertion). Round 2 (per-vault
+  // convertToAssets) only fires when a vault is configured (no
+  // STRATEGY_VAULT_*_ADDRESS is set here), so it stays at ONE.
+  expect(counter.aggregateCalls).toBe(1);
   expect(r.source).toBe("stub");
   expect(r.wallets).toHaveLength(3);
   const bankr = r.wallets.find((w) => w.type === "primary")!;
@@ -231,7 +234,7 @@ test("wallet-sleeves: ONE reverted sub-call degrades ONLY that holding to stale;
   const weth = resolveTrackedAssets().find((a) => a.symbol === "WETH")!.address!;
   const counter = mockChain({ failBalanceOfTargets: [weth] });
   const r = await getWalletSleeves();
-  expect(counter.aggregateCalls).toBe(2); // the failure never falls back to per-leg calls
+  expect(counter.aggregateCalls).toBe(1); // the failure never falls back to per-leg calls
   const bankr = r.wallets.find((w) => w.type === "primary")!;
   const wethHolding = bankr.holdings.find((h) => h.symbol === "WETH")!;
   // The reverted leg is honestly degraded: null values, provenance 'stale'.

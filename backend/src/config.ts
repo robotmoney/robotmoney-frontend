@@ -128,8 +128,13 @@ export function resolvePropWallets(
 //               1:1 with the underlying) → * underlying price. Config-driven and
 //               EMPTY by default (Open Q6: exact aToken/debt set is owner data —
 //               "do not assume the full legacy map"); add via AAVE_AUSDC_ADDRESS.
-//   strategy  — ERC-4626 share: convertToAssets(balanceOf(wallet)) → USDC (6 dp),
-//               pinned $1 (yield-bearing: valued at NAV, NOT a $1-pegged share).
+//   strategy  — smart-account NAV (issues #120/#145 — `address` is the AGENT'S
+//               SMART-ACCOUNT WALLET itself, a Safe/Kernel account, NOT an
+//               ERC-4626 share token; balanceOf on it always reverts): amount =
+//               idleUsdc(account) + Σ over resolveStrategyVaults() of
+//               convertToAssets(balanceOf(account)), all 6 dp USDC. Reported
+//               plain 'live' like every other kind (owner decision: no distinct
+//               provenance/badge despite the vault list's rotation-drift risk).
 //   config    — off-chain size from config * price (SP500; no derivatives API).
 // USDC carries priceKind 'usdc' (pinned $1); crypto legs 'gecko'; SP500 'yahoo'.
 export type ValuationKind = "erc20" | "native" | "aave" | "strategy" | "config";
@@ -160,9 +165,11 @@ export function resolveTrackedAssets(
   return [
     { symbol: "USDC", group: "Stable", color: "#10b981", valuationKind: "erc20", priceKind: "usdc",
       decimals: 6, address: addr("USDC_ADDRESS", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"), poolId: null },
-    // Strategy shares are yield-bearing (valued at NAV, NOT $1-pegged). The real
-    // delegated strategy-share contracts on Base (ZyfAI / Giza, source of truth:
-    // robotmoney-site) are baked as defaults; override via <SYMBOL>_ADDRESS.
+    // These addresses are the agent's delegated smart-account WALLETS on Base
+    // (ZyfAI Safe / Giza Kernel account, source of truth: robotmoney-site),
+    // proven by on-chain investigation (#120) — NOT ERC-4626 share tokens.
+    // Valued at account NAV (see the `strategy` ValuationKind doc above), not a
+    // $1-pegged share. Baked as defaults; override via <SYMBOL>_ADDRESS.
     { symbol: "ZYFAI-SS1", group: "Stable", color: "#10b981", valuationKind: "strategy", priceKind: "usdc",
       decimals: 18, address: addr("ZYFAI_SS1_ADDRESS", "0xC125200A1a5710af0D8711085F4407863158976D"), poolId: null },
     { symbol: "GIZA-SS1", group: "Stable", color: "#10b981", valuationKind: "strategy", priceKind: "usdc",
@@ -209,6 +216,43 @@ export function resolveAaveATokens(
       symbol: "aUSDC", group: "Stable", color: "#10b981", valuationKind: "aave", priceKind: "usdc",
       decimals: 6, address: env.AAVE_AUSDC_ADDRESS.toLowerCase(), poolId: null,
     });
+  }
+  return out;
+}
+
+// --- Strategy smart-account NAV vault list (issues #120/#145) ---------------
+// ZYFAI-SS1 / GIZA-SS1 are proven smart-account WALLETS (a Gnosis Safe and a
+// ZeroDev Kernel account, not ERC-20/ERC-4626 share tokens — balanceOf on the
+// account itself always reverts, permanently). The resolved decision (#145):
+// value each leg as account NAV = idle USDC(account) + Σ over a MAINTAINED
+// vault-share list of convertToAssets(balanceOf(account)), reported as plain
+// `live` (not a distinct provenance — the owner explicitly declined a special
+// value/badge despite the documented drift risk of the agent rotating to an
+// unlisted vault). This mirrors resolveAaveATokens below: owner-maintained,
+// EMPTY-safe by default, opt-in per vault via <SYMBOL>_VAULT_ADDRESS — NOT an
+// on-chain discovery mechanism (the agent rotates vaults every 1-2 days per
+// the #120 investigation, so a scanner would still need a maintained
+// candidate list; see #120's research comment for the full rationale). With
+// no vault configured, NAV degrades gracefully to idle-USDC-only (still a
+// real, non-reverting live read of the account).
+export interface StrategyVaultConfig {
+  symbol: string; // e.g. "gtUSDCp" — the observed vault-share label, not a chart series
+  address: string; // ERC-4626 vault contract on Base (lowercased)
+}
+const STRATEGY_VAULT_CANDIDATES: { symbol: string; envKey: string }[] = [
+  { symbol: "gtUSDCp", envKey: "STRATEGY_VAULT_GTUSDCP_ADDRESS" },
+  { symbol: "steakUSDC", envKey: "STRATEGY_VAULT_STEAKUSDC_ADDRESS" },
+  { symbol: "cUSDCv3", envKey: "STRATEGY_VAULT_CUSDCV3_ADDRESS" },
+  { symbol: "aBasUSDC", envKey: "STRATEGY_VAULT_ABASUSDC_ADDRESS" },
+  { symbol: "CSHYUSDC", envKey: "STRATEGY_VAULT_CSHYUSDC_ADDRESS" },
+];
+export function resolveStrategyVaults(
+  env: Record<string, string | undefined> = process.env,
+): StrategyVaultConfig[] {
+  const out: StrategyVaultConfig[] = [];
+  for (const c of STRATEGY_VAULT_CANDIDATES) {
+    const address = env[c.envKey];
+    if (address) out.push({ symbol: c.symbol, address: address.toLowerCase() });
   }
   return out;
 }
