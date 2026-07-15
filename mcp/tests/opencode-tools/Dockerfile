@@ -9,16 +9,15 @@ FROM dependencies AS service
 COPY mcp/ /app/
 
 FROM dependencies AS agent
-ARG OPENCODE_VERSION=1.16.2
-ARG OPENCODE_LINUX_X64_SHA256=06a79c5bb7f8d01716b2440712cf67facd36db59188809aeb232374b206bd429
+# OpenCode >= 1.18.x performs headless inference and MCP tool calls in a
+# non-Git working directory; 1.16.2 silently emitted only `step_start` there,
+# which forced a `git init /app` workaround (removed by issue #131).
+ARG OPENCODE_VERSION=1.18.1
+ARG OPENCODE_LINUX_X64_SHA256=9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b994816acf192159511
 ARG RMPC_VERSION=v0.3.2
 ARG RMPC_LINUX_X64_SHA256=56342cba710ac4053b6ae9fd68f02cc15a5ff6ddb978e2581da54084d3a704e4
-# Temporary compatibility workaround tracked by
-# https://github.com/robotmoney/robotmoney-frontend/issues/131. OpenCode supports
-# non-Git projects, but this pinned CLI/model currently returns no headless text
-# or tool calls until the working directory is initialized as a repository.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git jq \
+    && apt-get install -y --no-install-recommends ca-certificates curl jq \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSLo /tmp/opencode.tar.gz \
       "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz" \
@@ -32,4 +31,3 @@ RUN apt-get update \
     && rm /tmp/opencode.tar.gz /tmp/rmpc.tar.gz
 COPY mcp/ /app/
 COPY mcp/tests/opencode-tools/opencode.json /app/opencode.json
-RUN git init /app

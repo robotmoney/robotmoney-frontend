@@ -225,7 +225,6 @@ invariant(state.verifiedSubmissions === 2, "expected two independently verified 
 console.log(JSON.stringify({
   ok: true,
   cli: "opencode run",
-  workaround: "git init (issue #131)",
   scenarios: ["onboarding-pending", "first-participation", "steady-state"],
   verifiedSubmissions: state.verifiedSubmissions,
 }));
