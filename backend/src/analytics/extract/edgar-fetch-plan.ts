@@ -87,7 +87,15 @@ export interface EdgarPointRow {
   value: number;
 }
 
-export type EdgarBatchValidation = { ok: true; rows: EdgarPointRow[] } | { ok: false; reason: string };
+export type EdgarBatchValidation =
+  | { ok: true; rows: EdgarPointRow[] }
+  // `missingCount` — planned months with NO usable response at all (`null`
+  // in `fetched`: unrecovered after retries, or never attempted/canceled by
+  // a deadline). `rejectedCount` — planned months that DID get a response,
+  // but it failed validation (mismatched/out-of-range date, invalid value,
+  // duplicate). Distinct metrics (issue #109 AC9: planned/fetched/
+  // revised/missing/rejected/persisted counts).
+  | { ok: false; reason: string; missingCount: number; rejectedCount: number };
 
 // PURE: validate a fetched batch against its plan BEFORE it is ever
 // submitted or used to recompute a signal. Every planned month must have
@@ -98,37 +106,63 @@ export type EdgarBatchValidation = { ok: true; rows: EdgarPointRow[] } | { ok: f
 // mismatched/out-of-range date. Bounds are compared at MONTH granularity
 // (not the literal `asof` day) so the current, still-incomplete month —
 // always legitimately planned/stamped on its own month-end — is never
-// rejected merely because `asof` falls mid-month. A single bad entry fails
-// the WHOLE batch — never a partial commit.
+// rejected merely because `asof` falls mid-month. Every entry is checked
+// (never fail-fast) so the caller gets an accurate missing/rejected count;
+// a single bad entry still fails the WHOLE batch — never a partial commit.
 export function validateEdgarBatch(
   plan: readonly EdgarPlanMonth[],
   fetched: readonly (Point | null)[],
   opts: { floorStart?: string; asOf: string },
 ): EdgarBatchValidation {
   if (fetched.length !== plan.length) {
-    return { ok: false, reason: `fetched ${fetched.length} result(s) for a ${plan.length}-month plan` };
+    return {
+      ok: false,
+      reason: `fetched ${fetched.length} result(s) for a ${plan.length}-month plan`,
+      missingCount: plan.length,
+      rejectedCount: 0,
+    };
   }
   const floorMonth = monthKey(opts.floorStart ?? EDGAR_FLOOR_START);
   const asOfMonth = monthKey(opts.asOf);
   const seen = new Set<string>();
   const rows: EdgarPointRow[] = [];
+  const reasons: string[] = [];
+  let missingCount = 0;
+  let rejectedCount = 0;
   for (let i = 0; i < plan.length; i++) {
     const month = plan[i]!;
     const pt = fetched[i];
-    if (pt == null) return { ok: false, reason: `month ${month.monthStart} is missing (unrecovered/canceled)` };
+    if (pt == null) {
+      missingCount++;
+      reasons.push(`month ${month.monthStart} is missing (unrecovered/canceled)`);
+      continue;
+    }
     if (pt.date !== month.monthEnd) {
-      return { ok: false, reason: `month ${month.monthStart}: expected date ${month.monthEnd}, got ${JSON.stringify(pt.date)}` };
+      rejectedCount++;
+      reasons.push(`month ${month.monthStart}: expected date ${month.monthEnd}, got ${JSON.stringify(pt.date)}`);
+      continue;
     }
     const ptMonth = monthKey(pt.date);
     if (ptMonth < floorMonth || ptMonth > asOfMonth) {
-      return { ok: false, reason: `month ${month.monthStart}: date ${pt.date} is out of range [${floorMonth}, ${asOfMonth}]` };
+      rejectedCount++;
+      reasons.push(`month ${month.monthStart}: date ${pt.date} is out of range [${floorMonth}, ${asOfMonth}]`);
+      continue;
     }
     if (!Number.isFinite(pt.value) || !Number.isInteger(pt.value) || pt.value < 0) {
-      return { ok: false, reason: `month ${month.monthStart}: value ${pt.value} is not a finite non-negative integer` };
+      rejectedCount++;
+      reasons.push(`month ${month.monthStart}: value ${pt.value} is not a finite non-negative integer`);
+      continue;
     }
-    if (seen.has(pt.date)) return { ok: false, reason: `duplicate date ${pt.date} in fetched batch` };
+    if (seen.has(pt.date)) {
+      rejectedCount++;
+      reasons.push(`duplicate date ${pt.date} in fetched batch`);
+      continue;
+    }
     seen.add(pt.date);
     rows.push({ date: pt.date, value: pt.value });
+  }
+  if (missingCount > 0 || rejectedCount > 0) {
+    return { ok: false, reason: reasons.join("; "), missingCount, rejectedCount };
   }
   rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   return { ok: true, rows };

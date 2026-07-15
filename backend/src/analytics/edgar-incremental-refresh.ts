@@ -30,8 +30,14 @@ export type EdgarRefreshStatus = "up-to-date" | "updated" | "degraded";
 export interface EdgarRefreshOutcome {
   status: EdgarRefreshStatus;
   plannedMonths: number;
-  fetchedMonths: number;
-  missingMonths: number;
+  // Planned months NOT already in the persisted floor (genuinely new) vs
+  // already-persisted months re-fetched for the trailing revision window —
+  // issue #109 AC9's "planned/.../revised/..." metrics.
+  newMonths: number;
+  revisedMonths: number;
+  fetchedMonths: number; // planned months successfully fetched + validated this run
+  missingMonths: number; // planned months with no usable response (unrecovered/canceled)
+  rejectedMonths: number; // planned months with a response that failed validation
   reason?: string;
   // The freshly-fetched rows ONLY (never the whole merged series) — empty
   // unless status === "updated". The caller submits these (and only these)
@@ -70,8 +76,21 @@ export async function refreshEdgarIncremental(opts: EdgarIncrementalRefreshOptio
 
   if (plan.length === 0) {
     logger.log?.("[edgar] MNA refresh: up to date — 0 month(s) planned, 0 request(s)");
-    return { status: "up-to-date", plannedMonths: 0, fetchedMonths: 0, missingMonths: 0, newRows: [] };
+    return {
+      status: "up-to-date",
+      plannedMonths: 0,
+      newMonths: 0,
+      revisedMonths: 0,
+      fetchedMonths: 0,
+      missingMonths: 0,
+      rejectedMonths: 0,
+      newRows: [],
+    };
   }
+
+  const persistedSet = new Set(opts.persistedMonths);
+  const newMonths = plan.filter((m) => !persistedSet.has(m.monthStart.slice(0, 7))).length;
+  const revisedMonths = plan.length - newMonths;
 
   const fetched: (Point | null)[] = [];
   let abortedByDeadline = false;
@@ -114,8 +133,11 @@ export async function refreshEdgarIncremental(opts: EdgarIncrementalRefreshOptio
     return {
       status: "degraded",
       plannedMonths: plan.length,
+      newMonths,
+      revisedMonths,
       fetchedMonths: plan.length - missingBeforeValidation,
       missingMonths: missingBeforeValidation,
+      rejectedMonths: 0,
       reason,
       newRows: [],
     };
@@ -123,25 +145,33 @@ export async function refreshEdgarIncremental(opts: EdgarIncrementalRefreshOptio
 
   const validation = validateEdgarBatch(plan, fetched, { floorStart, asOf: opts.asOf });
   if (!validation.ok) {
-    logger.warn?.(`[edgar] MNA refresh DEGRADED: ${validation.reason} — retaining last-good, no partial commit`);
+    logger.warn?.(
+      `[edgar] MNA refresh DEGRADED: ${validation.reason} — missing=${validation.missingCount} rejected=${validation.rejectedCount} — retaining last-good, no partial commit`,
+    );
     return {
       status: "degraded",
       plannedMonths: plan.length,
-      fetchedMonths: plan.length - missingBeforeValidation,
-      missingMonths: missingBeforeValidation,
+      newMonths,
+      revisedMonths,
+      fetchedMonths: plan.length - validation.missingCount - validation.rejectedCount,
+      missingMonths: validation.missingCount,
+      rejectedMonths: validation.rejectedCount,
       reason: validation.reason,
       newRows: [],
     };
   }
 
   logger.log?.(
-    `[edgar] MNA refresh: planned=${plan.length} fetched=${validation.rows.length} missing=0 status=updated`,
+    `[edgar] MNA refresh: planned=${plan.length} new=${newMonths} revised=${revisedMonths} fetched=${validation.rows.length} missing=0 rejected=0 status=updated`,
   );
   return {
     status: "updated",
     plannedMonths: plan.length,
+    newMonths,
+    revisedMonths,
     fetchedMonths: validation.rows.length,
     missingMonths: 0,
+    rejectedMonths: 0,
     newRows: validation.rows,
   };
 }
