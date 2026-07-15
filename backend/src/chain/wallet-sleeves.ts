@@ -10,9 +10,11 @@
 // wallet (no cross-wallet sum). All sleeves resolve in ≤2 eth_calls total —
 // round 1 balance/getEthBalance legs, round 2 strategy NAV — instead of the old
 // per-holding fan-out. Which symbols a wallet can hold is domain metadata (the
-// primary/Bankr wallet holds the general tokens; each Stablecoin-Strategy wallet
-// holds only its delegated ERC-4626 strategy share) — every address/decimals
-// still comes from config (resolveTrackedAssets), never a literal here.
+// primary/Bankr wallet holds the general tokens; each Stablecoin-Strategy
+// "wallet" here is really its own delegated smart-account WALLET, valued at
+// account NAV — issues #120/#145, see wallet-valuation.ts) — every
+// address/decimals still comes from config (resolveTrackedAssets), never a
+// literal here.
 //
 // Honesty (#50): a placeholder-address asset (e.g. an unconfigured Aave
 // aToken leg — every fixed BNKR/WETH/ROBOTMONEY series carries a real default
@@ -65,8 +67,10 @@ export interface WalletSleeves {
 
 // Which tracked-asset symbols each prop wallet (by resolvePropWallets index)
 // holds. The primary/Bankr wallet carries the general tokens; each strategy
-// wallet carries only its delegated ERC-4626 strategy share (source of truth:
-// robotmoney-site prop-wallet metadata). Symbols resolve to config addresses via
+// "wallet" carries only its own strategy symbol, which values the smart-account
+// NAV of a DIFFERENT address (asset.address, not this wallet's — issues
+// #120/#145; source of truth: robotmoney-site prop-wallet metadata). Symbols
+// resolve to config addresses via
 // resolveTrackedAssets — no address literal lives here.
 interface SleeveDef {
   name: string;
