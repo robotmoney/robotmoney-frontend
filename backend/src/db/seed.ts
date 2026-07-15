@@ -38,7 +38,17 @@ const SCHEDULES: SeedSchedule[] = [
   // Daily 23:00 UTC: research-signals refresh (channel-divergence + late-cycle),
   // AFTER the regime job so the STABLES raw floor it reads is fresh. Runs in the
   // research lane, so a slow fetch here can never starve committee/regime work.
-  { kind: "research.refresh", cron: "0 23 * * *", payload: {}, timezone: "UTC", enabled: true },
+  //
+  // Seeded DISABLED (issue #108): a freshly-migrated database has no persisted
+  // EDGAR/MNA history for the late-cycle input, so its first research run
+  // would otherwise be eligible to fire before the committed seed is loaded.
+  // `backend/scripts/edgar-seed-bootstrap.ts` (run once after migrations + API
+  // readiness) flips this to enabled via POST
+  // /api/analytics/research-eligibility ONLY after seed ingestion succeeds. An
+  // ALREADY-migrated database keeps whatever value is stored (ON CONFLICT DO
+  // NOTHING below never touches an existing row), so this only affects a
+  // fresh boot.
+  { kind: "research.refresh", cron: "0 23 * * *", payload: {}, timezone: "UTC", enabled: false },
   // Hourly vault share-price sample (issue #40) — dense enough for a 7-day APY
   // lookback, cheap on RPC (3 eth_calls/hour). Handler: worker/handlers/vault.ts.
   { kind: "vault.sample_share_price", cron: "0 * * * *", payload: {}, timezone: "UTC", enabled: true },
@@ -87,9 +97,12 @@ const SCHEDULES: SeedSchedule[] = [
 //   - research.refresh (research-only, research lane)  → odd minutes  (1-59/2)
 // New (kind, cron) combos, so ON CONFLICT DO NOTHING inserts them once and lets
 // the scheduler own next_run_at/enabled bookkeeping thereafter.
+// research.refresh is seeded DISABLED here too (issue #108) — the demo's
+// edgar-seed-bootstrap step flips it on after the fast demo's seed ingestion
+// completes, same as the daily schedule above.
 const FAST_DEMO_SCHEDULES: SeedSchedule[] = [
   { kind: "regime.classify", cron: "*/2 * * * *", payload: {}, timezone: "UTC", enabled: true },
-  { kind: "research.refresh", cron: "1-59/2 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "research.refresh", cron: "1-59/2 * * * *", payload: {}, timezone: "UTC", enabled: false },
 ];
 
 export async function seed(): Promise<void> {

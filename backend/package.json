@@ -11,6 +11,9 @@
     "api": "bun run src/api/index.ts",
     "worker": "bun run src/worker/index.ts",
     "migrate": "bun run src/db/migrate.ts",
+    "edgar-seed:bootstrap": "bun run scripts/edgar-seed-bootstrap.ts",
+    "edgar-seed:repopulate": "bun run scripts/edgar-seed-repopulate.ts",
+    "edgar-seed:regenerate": "bun run scripts/edgar-seed-regenerate.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
