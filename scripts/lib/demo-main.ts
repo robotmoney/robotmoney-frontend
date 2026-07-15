@@ -224,7 +224,12 @@ const state: DemoState = {
   containers: [
     { name: "postgres", phase: "pending" },
     { name: "api", phase: "pending" },
-    { name: "worker", phase: "pending" },
+    // One container per worker execution lane (issue #107): committee is the
+    // reserved interactive lane; analytics (regime + pipelines) and research
+    // run independently so a blocked research fetch can't starve the others.
+    { name: "worker-committee", phase: "pending" },
+    { name: "worker-analytics", phase: "pending" },
+    { name: "worker-research", phase: "pending" },
     { name: "mcp", phase: "pending" },
   ],
   steps: [
@@ -452,9 +457,10 @@ async function run(cmd: string[], cwd: string, env: Record<string, string>, labe
 }
 
 // --- Research polling (no backend change) ---------------------------------
-// The worker's scheduler drives regime.classify (even min) + analytics.run (odd
-// min) via the fast demo schedules. We observe them by polling the REAL task
-// queue over `docker compose exec -T postgres psql`. The `jobs` table carries the
+// The worker's scheduler drives regime.classify (even min, analytics lane) +
+// research.refresh (odd min, research lane) via the fast demo schedules. We
+// observe them by polling the REAL task queue over
+// `docker compose exec -T postgres psql`. The `jobs` table carries the
 // honest lifecycle state (pending→running→succeeded/failed); `job_runs` only ever
 // holds terminal rows (see worker/loop.ts), so we read state from `jobs` and join
 // job_runs for the finished timestamp/error. Notes for finished runs are fetched
@@ -463,9 +469,10 @@ async function run(cmd: string[], cwd: string, env: Record<string, string>, labe
 const researchNotes = new Map<number, string>();
 // Countdown to the next worker-scheduled run per kind. We ask the DB for the
 // seconds remaining (authoritative — avoids host/container clock skew) each poll
-// and interpolate between polls in render(). regime.classify + analytics.run can
-// each have BOTH a default daily row and a fast demo row enabled, so we take the
-// SOONEST (MIN) upcoming run per kind.
+// and interpolate between polls in render(). regime.classify + research.refresh
+// can each have BOTH a default daily row and a fast demo row enabled, so we take
+// the SOONEST (MIN) upcoming run per kind — the two countdowns are INDEPENDENT
+// (separate kinds, separate schedules, separate lanes).
 interface NextRun { secondsUntil: number; fetchedAt: number; }
 const nextRuns: Record<string, NextRun> = {};
 function secsUntilNext(kind: string): number | null {
@@ -481,14 +488,18 @@ function mapJobState(status: string): ResearchEntry["state"] {
 async function fetchResearchNote(id: number, kind: string, failed: boolean, err: string): Promise<void> {
   if (failed) { researchNotes.set(id, `failed: ${err.split("\n")[0] || "error"}`); return; }
   try {
-    const snap = await fetch(`${backendUrl}${ROUTES.dashboards.regimeSnapshots}?range=1`).then((r) => (r.ok ? r.json() : null));
-    const latest = snap?.latest;
-    let note = latest
-      ? `regime → ${latest.regime ?? "?"}${latest.composite != null ? ` ${Number(latest.composite).toFixed(2)}` : ""}`
-      : "regime updated";
-    if (kind === "analytics.run") {
+    // Kind-scoped summary (issue #107: regime and research are distinct jobs) —
+    // a regime job reports the landed snapshot, a research job the landed signal.
+    let note = "updated";
+    if (kind === "regime.classify") {
+      const snap = await fetch(`${backendUrl}${ROUTES.dashboards.regimeSnapshots}?range=1`).then((r) => (r.ok ? r.json() : null));
+      const latest = snap?.latest;
+      note = latest
+        ? `regime → ${latest.regime ?? "?"}${latest.composite != null ? ` ${Number(latest.composite).toFixed(2)}` : ""}`
+        : "regime updated";
+    } else if (kind === "research.refresh") {
       const sig = await fetch(`${backendUrl}${routePath(ROUTES.dashboards.researchSignal, { key: researchKeys[0] })}`).then((r) => (r.ok ? r.json() : null));
-      if (sig?.signalKey) note += ` · research: ${sig.signalKey}`;
+      note = sig?.signalKey ? `research: ${sig.signalKey}` : "research updated";
     }
     researchNotes.set(id, `${note} (report written)`);
   } catch (e) {
@@ -501,7 +512,7 @@ async function pollResearch(): Promise<void> {
     "COALESCE(to_char(jr.finished_at,'HH24:MI:SS'), to_char(j.run_after,'HH24:MI:SS')), " +
     "COALESCE(jr.error,'') " +
     "FROM jobs j LEFT JOIN job_runs jr ON jr.job_id = j.id " +
-    "WHERE j.kind IN ('analytics.run','regime.classify') ORDER BY j.id DESC LIMIT 8";
+    "WHERE j.kind IN ('regime.classify','research.refresh') ORDER BY j.id DESC LIMIT 8";
   const r = Bun.spawnSync(
     ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", DB_USER, "-d", DB_NAME, "-tAF", "|", "-c", q],
     { cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe" },
@@ -533,7 +544,7 @@ async function pollNextRuns(): Promise<void> {
   const q =
     "SELECT kind, MIN(GREATEST(0, EXTRACT(EPOCH FROM (next_run_at - now()))))::int " +
     "FROM job_schedules WHERE enabled AND next_run_at IS NOT NULL " +
-    "AND kind IN ('analytics.run','regime.classify') GROUP BY kind";
+    "AND kind IN ('regime.classify','research.refresh') GROUP BY kind";
   const r = Bun.spawnSync(
     ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", DB_USER, "-d", DB_NAME, "-tAF", "|", "-c", q],
     { cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe" },
@@ -691,7 +702,7 @@ function columns(panes: string[][], width: number): string[] {
 function renderResearch(height: number): string[] {
   const out = [
     color("1", "Research") +
-      color("2", `  next regime ${fmtCountdown(secsUntilNext("regime.classify"))} · research ${fmtCountdown(secsUntilNext("analytics.run"))}`),
+      color("2", `  next regime ${fmtCountdown(secsUntilNext("regime.classify"))} · research ${fmtCountdown(secsUntilNext("research.refresh"))}`),
   ];
   out.push(color("2", "kind                 state    detail"));
   for (const e of state.research.slice(0, Math.max(0, height - 2))) {
@@ -874,10 +885,11 @@ async function main(): Promise<void> {
   await runCompose(["run", "--rm", "-T", ...fastSchedEnv, ...demoSeedProjectsEnv, "api", "bun", "run", "src/db/migrate.ts"], "migrations");
   setStep("migrate", "done");
 
-  log("starting api, worker, mcp…");
-  for (const n of ["api", "worker", "mcp"]) setContainer(n, "starting");
+  const WORKER_LANES = ["worker-committee", "worker-analytics", "worker-research"];
+  log("starting api, worker lanes (committee/analytics/research), mcp…");
+  for (const n of ["api", ...WORKER_LANES, "mcp"]) setContainer(n, "starting");
   await runCompose(["up", "-d"], "start services");
-  setContainer("worker", "healthy", "running"); // no /health endpoint — up ⇒ running
+  for (const n of WORKER_LANES) setContainer(n, "healthy", "running"); // no /health endpoint — up ⇒ running
   setStep("api /health", "running");
   await waitForHttp(`${backendUrl}/health`);
   setContainer("api", "healthy");

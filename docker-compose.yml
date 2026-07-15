@@ -9,7 +9,38 @@
 #   ephemeral (CI)  : run with a throwaway volume / `docker compose down -v`
 #   demo            : named volume `pgdata` persists across restarts
 #   prod            : point DATABASE_URL at an external/managed Postgres and run
-#                     only `api` + `worker` (docker compose up api worker)
+#                     only `api` + the worker lanes
+#                     (docker compose up api worker-committee worker-analytics worker-research)
+
+# Task-queue worker lanes (issue #107): one container per execution lane. This
+# IS the production/default lane topology:
+#   worker-committee — RESERVED for interactive committee session-lifecycle
+#                      jobs (committee.%); no other lane may claim them.
+#   worker-analytics — regime classification + the scheduled data pipelines
+#                      (everything except committee.% / research.%).
+#   worker-research  — research.% only, so a slow/blocked research fetch can
+#                      never occupy a committee or regime slot.
+# WORKER_LANE is REQUIRED by the worker entry (fails loudly when empty/unknown);
+# WORKER_ID defaults to `<lane>-<pid>` (unique per container, lane-visible in
+# locked_by/logs/admin dashboard). Scale a lane independently, e.g.
+# `docker compose up -d --scale worker-research=2`.
+x-worker-base: &worker-base
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  command: ["bun", "run", "src/worker/index.ts"]
+  depends_on:
+    postgres:
+      condition: service_healthy
+  restart: unless-stopped
+
+# Shared worker env. The worker RUNS the projects.* cron pipelines, so a prod
+# worker needs PROJECTS_SOURCE=live (fail-closed — unset throws in prod; unset
+# elsewhere = offline fixture).
+x-worker-env: &worker-env
+  DATABASE_URL: ${DATABASE_URL}
+  RM_ENV: ${RM_ENV:-demo}
+  PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
 
 services:
   postgres:
@@ -57,23 +88,23 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  worker:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    command: ["bun", "run", "src/worker/index.ts"]
+  worker-committee:
+    <<: *worker-base
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      RM_ENV: ${RM_ENV:-demo}
-      WORKER_ID: ${WORKER_ID:-worker-1}
-      # Same PROJECTS_SOURCE contract as the api service: the worker RUNS the
-      # projects.* cron pipelines, so a prod worker needs PROJECTS_SOURCE=live
-      # (fail-closed — unset throws in prod; unset elsewhere = offline fixture).
-      PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
+      <<: *worker-env
+      WORKER_LANE: committee
+
+  worker-analytics:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      WORKER_LANE: analytics
+
+  worker-research:
+    <<: *worker-base
+    environment:
+      <<: *worker-env
+      WORKER_LANE: research
 
   # Member-facing MCP server (committee). Talks to the API by service name.
   mcp:

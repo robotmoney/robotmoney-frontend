@@ -49,26 +49,33 @@ services:
       FETCH_CACHE_TTL_MS: ${FETCH_CACHE_TTL_MS:-0}
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
 
-  worker:
+  # All three worker lanes (issue #107: worker-committee reserved for the
+  # interactive committee lifecycle; worker-analytics for regime + pipelines;
+  # worker-research for the research fetches) get the same demo data-path knobs
+  # as api (issue #50): the analytics worker's share-price sampler
+  # (worker/handlers/vault.ts) reads the vault over eth_call, and the
+  # analytics/research jobs honor the same source knob. DEFAULT = LIVE;
+  # DEMO_HERMETIC=1 is the explicit stubbed/offline opt-in.
+  worker-committee: &demo-worker
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
     depends_on:
       - base-rpc-stub
     environment:
-      # Same data-path knobs as api (issue #50): the worker's share-price sampler
-      # (worker/handlers/vault.ts) also reads the vault over eth_call, and its
-      # analytics jobs honor the same source knob. DEFAULT = LIVE; DEMO_HERMETIC=1
-      # is the explicit stubbed/offline opt-in.
       BASE_RPC_URL: ${BASE_RPC_URL:-${DEMO_HERMETIC:+http://base-rpc-stub:8645}}
       BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-${DEMO_HERMETIC:+stub}}
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-${DEMO_HERMETIC:+hermetic}}
-      # Same PROJECTS_SOURCE passthrough as api — the worker runs the
+      # Same PROJECTS_SOURCE passthrough as api — the analytics worker runs the
       # projects.* pipelines (unset = offline fixture directory; demo-legal).
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-${DEMO_HERMETIC:+0}}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
       FETCH_CACHE_TTL_MS: ${FETCH_CACHE_TTL_MS:-0}
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
+
+  worker-analytics: *demo-worker
+
+  worker-research: *demo-worker
 
   mcp:
     labels:
