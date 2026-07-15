@@ -472,6 +472,55 @@ Three pipelines run through these stages:
 - **`late-cycle-signals`** — `SPY`, `RSP`, `MNA`, `MARGIN`, `CONF` → index
   concentration / M&A / margin debt / confidence gauges → **`research_signals`**.
 
+**EDGAR/MNA seed (issue #108).** `late-cycle-signals`'s `MNA` input is a
+monthly count of SEC EDGAR S-4 filings back to 2010-01 — a fresh live database
+would otherwise have to crawl ~200 EDGAR requests before its first research
+run. The repo commits a canonical, versioned seed instead:
+`backend/tests/fixtures/regime/edgar-mna-seed.csv.gz` (a `date,indicator,value`
+CSV, gzipped) plus `edgar-mna-seed.manifest.json` (format version, indicator
+key, source, declared start/end month, the pinned as-of date the regeneration
+ran, exact row count, and a sha256 checksum of the canonical **decompressed**
+content — independent of gzip timestamp/metadata bytes). Format, checksum, and
+full structural validation (unique ascending month-end dates, contiguous
+monthly coverage, finite non-negative integer counts, single indicator, no
+rows past the pinned as-of) live in
+`analytics/extract/edgar-seed.ts` — pure, no I/O.
+
+- **Bootstrap** (`analytics/edgar-seed-loader.ts::bootstrapEdgarSeed` →
+  `backend/scripts/edgar-seed-bootstrap.ts`) loads + validates the committed
+  artifact and submits it through the SAME authenticated seed-ingestion
+  endpoint the vendored floor seed uses (`POST
+  /api/analytics/raw-history/seed` → `store/floor-seed.ts`'s server-side
+  gap-fill: existing real rows always win, a second run is a no-op). On
+  success it calls `POST /api/analytics/research-eligibility`, which flips
+  `job_schedules.research.refresh` to `enabled` — seeded **disabled** by
+  `db/seed.ts` specifically so a fresh database's research schedule cannot
+  become claimable before the floor is seeded. `scripts/lib/demo-main.ts` runs
+  this CLI once, right after API health and before anything else (CI checks or
+  the local action loops) that could observe a fired `research.refresh` job.
+- **Repopulation** (`edgar-seed-loader.ts::repopulateEdgarSeed` →
+  `backend/scripts/edgar-seed-repopulate.ts`) is an operator command for a
+  database that lost some MNA rows: it diffs the committed artifact against
+  whatever is persisted and reports `seeded` (restored), `existing` (already
+  present, same value), and `rejected` (already present with a *different*,
+  real value — correctly left standing) counts.
+- **Regeneration** (`extract/edgar-seed-generator.ts` →
+  `backend/scripts/edgar-seed-regenerate.ts`) is the ONLY way the committed
+  pair is ever produced or replaced — never implicit in migrations, demo boot,
+  or required per-PR CI. An operator runs `bun run edgar-seed:regenerate --end
+  <last day of a complete month> --asof <today>` (optionally `--start`,
+  default the declared 2010-01-01 baseline); it fetches live EDGAR bounded
+  (one request/month via `extract/edgar.ts`'s retry/backoff), REFUSES to write
+  anything if even one month is unrecoverable (never a partial seed), and
+  atomically replaces both files (temp-write → round-trip through the exact
+  parse/validate path → rename) so a failed regeneration never corrupts the
+  committed pair. **Credentials:** none — EDGAR's full-text-search API is
+  keyless; only a descriptive User-Agent is sent. **Review expectations:** a
+  PR that regenerates the seed must be reviewed like a data change, not a code
+  change — check the manifest's `rowCount`/`startMonth`/`endMonth`/`asOf` are
+  what's expected and that the diff is additive (new trailing months), never a
+  silent revision of historical counts.
+
 The worker runs regime and research as **distinct jobs** (issue #107):
 `regime.classify` daily at **22:30 UTC** (after US market close, so the fetched
 raw is settled end-of-day data) in the analytics lane, and `research.refresh`
