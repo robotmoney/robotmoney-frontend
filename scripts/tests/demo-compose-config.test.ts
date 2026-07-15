@@ -1,20 +1,21 @@
-// Compose-layer test for the demo data path (issue #50). Shells
+// Compose-layer test for the demo data path (issue #50; issue #147 removed
+// DEMO_HERMETIC and the base-rpc-stub service entirely). Shells
 // `docker compose -f docker-compose.yml -f docker-compose.demo.yml config`
-// (offline — pure interpolation, no daemon-side state, no containers) under
-// both env sets and asserts the RESOLVED api/worker environment:
+// (offline — pure interpolation, no daemon-side state, no containers) and
+// asserts the RESOLVED api/worker environment:
 //
-//   - hermetic opt-in set (DEMO_HERMETIC=1) → BASE_RPC_URL pinned at the
-//     in-compose base-rpc-stub endpoint, ANALYTICS_SOURCE=hermetic,
-//     BASE_RPC_SOURCE=stub (DTO provenance), ANALYTICS_FLOOR_SEED=0;
-//   - otherwise → the live path: all four resolve EMPTY, so backend config.ts
-//     falls through to its live production defaults (BASE_RPC_URL
-//     https://mainnet.base.org, analytics live).
+//   - by default (no knobs) every RPC/analytics knob resolves EMPTY, so
+//     backend config.ts falls through to its live production defaults
+//     (BASE_RPC_URL https://mainnet.base.org, analytics live);
+//   - going through the scripts/lib/demo-env.ts resolver (the path
+//     `bun run demo` actually takes) pins ANALYTICS_SOURCE=live,
+//     BASE_RPC_SOURCE=live, ANALYTICS_FLOOR_SEED=1 explicitly;
+//   - an explicit BASE_RPC_URL override beats both defaults.
 //
 // It also proves the resolver layer (scripts/lib/demo-env.ts) and the compose
-// interpolation layer agree when composed, and that an explicit BASE_RPC_URL
-// override beats both defaults. Docker is a hard dependency of this repo's
-// test harness (the backend suite boots ephemeral Postgres through it); a
-// missing docker CLI fails this test loudly — never a silent skip
+// interpolation layer agree when composed. Docker is a hard dependency of this
+// repo's test harness (the backend suite boots ephemeral Postgres through it);
+// a missing docker CLI fails this test loudly — never a silent skip
 // (test-coverage policy).
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
@@ -32,7 +33,7 @@ function baseEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v === undefined) continue;
-    if (["DEMO_HERMETIC", "BASE_RPC_URL", "BASE_RPC_SOURCE", "ANALYTICS_SOURCE", "ANALYTICS_FLOOR_SEED", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME"].includes(k)) continue;
+    if (["BASE_RPC_URL", "BASE_RPC_SOURCE", "ANALYTICS_SOURCE", "ANALYTICS_FLOOR_SEED", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME"].includes(k)) continue;
     env[k] = v;
   }
   env.DEMO_PROJECT = "compose-config-test"; // used by labels; avoids interpolation warnings
@@ -61,6 +62,11 @@ function serviceEnv(cfg: ComposeConfig, svc: string): Record<string, string | nu
 const RPC_CONSUMERS = ["api", "worker-committee", "worker-analytics", "worker-research"] as const;
 
 describe("docker compose config — demo data path resolution", () => {
+  test("no base-rpc-stub service exists anymore", () => {
+    const cfg = composeConfig({});
+    expect(cfg.services?.["base-rpc-stub"]).toBeUndefined();
+  });
+
   test("default (no knobs) resolves the LIVE path: RPC/analytics knobs empty → backend live defaults", () => {
     const cfg = composeConfig({});
     for (const svc of RPC_CONSUMERS) {
@@ -74,27 +80,16 @@ describe("docker compose config — demo data path resolution", () => {
     }
   });
 
-  test("hermetic opt-in (DEMO_HERMETIC=1) pins the stub endpoint + hermetic analytics + stub provenance", () => {
-    const cfg = composeConfig({ DEMO_HERMETIC: "1" });
-    for (const svc of RPC_CONSUMERS) {
-      const env = serviceEnv(cfg, svc);
-      expect(env.BASE_RPC_URL).toBe("http://base-rpc-stub:8645");
-      expect(env.BASE_RPC_URL).not.toContain("mainnet.base.org");
-      expect(env.ANALYTICS_SOURCE).toBe("hermetic");
-      expect(env.BASE_RPC_SOURCE).toBe("stub");
-      expect(env.ANALYTICS_FLOOR_SEED).toBe("0");
-    }
-  });
-
-  test("explicit BASE_RPC_URL override beats both defaults", () => {
-    const cfg = composeConfig({ DEMO_HERMETIC: "1", BASE_RPC_URL: "http://127.0.0.1:9999" });
+  test("explicit BASE_RPC_URL override is honored", () => {
+    const cfg = composeConfig({ BASE_RPC_URL: "http://127.0.0.1:9999" });
     for (const svc of RPC_CONSUMERS) {
       expect(serviceEnv(cfg, svc).BASE_RPC_URL).toBe("http://127.0.0.1:9999");
     }
   });
 
-  test("compose layer agrees with the scripts/lib/demo-env.ts resolver layer in both modes", () => {
-    // Live: the resolver sets ANALYTICS_SOURCE=live + floor seed 1 and leaves
+  test("compose layer agrees with the scripts/lib/demo-env.ts resolver layer", () => {
+    // The resolver (the path `bun run demo` actually takes) sets
+    // ANALYTICS_SOURCE=live + BASE_RPC_SOURCE=live + floor seed 1 and leaves
     // BASE_RPC_URL unset; compose must pass those through untouched.
     const live = composeConfig(resolveDemoEnv({}).composeEnv);
     for (const svc of RPC_CONSUMERS) {
@@ -104,52 +99,14 @@ describe("docker compose config — demo data path resolution", () => {
       expect(env.BASE_RPC_SOURCE).toBe("live");
       expect(env.ANALYTICS_FLOOR_SEED).toBe("1");
     }
-    // Hermetic: resolver + compose must land on the exact same stub pin.
-    const hermetic = composeConfig(resolveDemoEnv({ DEMO_HERMETIC: "1" }).composeEnv);
-    for (const svc of RPC_CONSUMERS) {
-      const env = serviceEnv(hermetic, svc);
-      expect(env.BASE_RPC_URL).toBe("http://base-rpc-stub:8645");
-      expect(env.ANALYTICS_SOURCE).toBe("hermetic");
-      expect(env.BASE_RPC_SOURCE).toBe("stub");
-      expect(env.ANALYTICS_FLOOR_SEED).toBe("0");
-    }
-  });
-
-  test("a stray ambient DEMO_HERMETIC=true does not leak into the compose-resolved env once demo-main.ts's exact merge order is replicated", () => {
-    // scripts/lib/demo-main.ts builds its docker-compose env as
-    // `{...process.env, ...resolveDemoEnv(process.env).composeEnv}`. Replicate
-    // that exact merge with a stray, non-"1" ambient DEMO_HERMETIC (an operator
-    // typo, e.g. `DEMO_HERMETIC=true bun run demo`, believing any truthy string
-    // opts in) to prove composeEnv's normalization (demo-env.ts always emitting
-    // an explicit "" on the live path) wins the merge — so the stray value can
-    // never independently re-trigger docker-compose.demo.yml's OWN
-    // `${DEMO_HERMETIC:+...}` interpolation while the resolver reports
-    // hermetic:false. Without normalization this would leave BASE_RPC_URL
-    // pinned at the stub (compose-level) while BASE_RPC_SOURCE/ANALYTICS_SOURCE
-    // are forced 'live' (resolver-level) — stub data mislabeled as live, plus
-    // real live analytics calls the operator believed were disabled.
-    const strayAmbient: Record<string, string> = { DEMO_HERMETIC: "true" };
-    const merged = { ...strayAmbient, ...resolveDemoEnv(strayAmbient).composeEnv };
-    expect(merged.DEMO_HERMETIC).toBe(""); // normalized — never the stray "true"
-    const cfg = composeConfig(merged);
-    for (const svc of RPC_CONSUMERS) {
-      const env = serviceEnv(cfg, svc);
-      expect(env.BASE_RPC_URL ?? "").toBe(""); // NOT re-pinned at the stub
-      expect(env.BASE_RPC_SOURCE).toBe("live");
-      expect(env.ANALYTICS_SOURCE).toBe("live");
-    }
   });
 
   test("no assignment in either compose layer can resolve BASE_RPC_URL to live mainnet", () => {
     // Even with every knob unset the resolved value must never BE mainnet —
-    // the live default lives in backend config.ts, not in a compose literal
-    // (so the hermetic e2e guard can prove zero-live-RPC from env layers).
-    const knobSets: Record<string, string>[] = [{}, { DEMO_HERMETIC: "1" }];
-    for (const knobs of knobSets) {
-      const cfg = composeConfig(knobs);
-      for (const svc of RPC_CONSUMERS) {
-        expect(serviceEnv(cfg, svc).BASE_RPC_URL ?? "").not.toContain("mainnet.base.org");
-      }
+    // the live default lives in backend config.ts, not in a compose literal.
+    const cfg = composeConfig({});
+    for (const svc of RPC_CONSUMERS) {
+      expect(serviceEnv(cfg, svc).BASE_RPC_URL ?? "").not.toContain("mainnet.base.org");
     }
   });
 });

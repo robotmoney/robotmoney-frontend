@@ -826,9 +826,10 @@ provenance fields, degrade rules) those feeds were built against is
   `resolveBaseRpcSource()` (env `BASE_RPC_SOURCE`, fail-closed on an
   unrecognized value; unset/`live` → `"live"`, `"stub"` → `"stub"`) and
   `resolveVaultAdapters()` (per-adapter `configured: Boolean(ADAPTER_*_ADDRESS)`),
-  both resolved **at call time** by `vault-economics.ts` (not module load) so the
-  hermetic demo/CI stub (`BASE_RPC_SOURCE=stub`, set alongside `BASE_RPC_URL` by
-  the `DEMO_HERMETIC=1` compose layer) and env-overridden adapters are always
+  both resolved **at call time** by `vault-economics.ts` (not module load) so
+  tests that flip `BASE_RPC_SOURCE=stub` directly (issue #147 removed the
+  hermetic demo/CI stub that used to set this automatically — the demo/CI path
+  now always resolves `'live'`) and env-overridden adapters are always
   reflected. An adapter still at its placeholder address is `configured: false`
   and its `totalAssets()` is **never called** — its `balanceUsd` is always
   `null`, never a live-looking `$0`.

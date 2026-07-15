@@ -1,37 +1,39 @@
-# Nightly non-hermetic LIVE-path demo smoke gate (issue #128; closes the #101
-# CI blind spot).
+# Nightly LIVE-path demo smoke gate (issue #128; closed the original #101 CI
+# blind spot; issue #147 later made the LIVE boot the ONLY demo path — see
+# below for why this nightly still earns its keep alongside the now-live
+# required `e2e` gate).
 #
 # WHY THIS SUITE EXISTS
-# The required per-PR `e2e` gate boots the demo ONLY under DEMO_HERMETIC=1
-# (stubbed Base RPC + offline seeded analytics), so the LIVE `bun run demo`
-# data path — the DEFAULT, production-parity path an operator actually runs —
-# is otherwise absent from CI: worker-lane starvation (#101), a dead external
-# feed blocking a factor (#127's MVRV 404), and LIVE-only provenance drift all
-# stay invisible while CI is green. This nightly boots the SAME demo stack
-# WITHOUT the hermetic opt-in, against real live upstreams (Base mainnet RPC,
-# FRED/Coin Metrics/GeckoTerminal/Yahoo/EDGAR), and asserts the LIVE steady
-# state:
+# Originally: the required per-PR `e2e` gate booted the demo ONLY under
+# DEMO_HERMETIC=1 (stubbed Base RPC + offline seeded analytics), so the LIVE
+# `bun run demo` data path was otherwise absent from CI. Issue #147 removed
+# DEMO_HERMETIC entirely (decision: issue #163) — `.github/workflows/e2e.yml`
+# now boots this SAME LIVE stack and runs these SAME assertions on every PR.
+# This nightly is kept as an independent, PR-cadence-agnostic signal: a dead
+# external feed (e.g. #127's MVRV 404) or worker-lane starvation (#101) that
+# appears on a quiet day with no open PRs would otherwise go unnoticed until
+# the next PR happens to open. It boots the identical demo stack against real
+# live upstreams (Base mainnet RPC, FRED/Coin Metrics/GeckoTerminal/Yahoo/
+# EDGAR) and asserts the LIVE steady state:
 #   - >=2 committee sessions publish through the REAL worker job queue within
 #     their per-state deadlines (the #101 starvation guard, now across the #107
 #     worker lanes — the fast demo schedules are seeded so LIVE analytics and
 #     research fire in their own lanes concurrently with the committee work);
-#   - the MODE-AWARE frontend check (issue #134) asserts LIVE wallet provenance
-#     as part of the boot, and scripts/demo-live-smoke.ts then asserts the
-#     regime snapshot is FRESH (staleness.stale=false), wallet + vault-economics
-#     provenance is 'live' (only the documented #120 ZYFAI/GIZA degrades are
-#     tolerated, loud-logged), and both research signals landed;
+#   - the frontend check asserts LIVE wallet provenance as part of the boot,
+#     and scripts/demo-live-smoke.ts then asserts the regime snapshot is FRESH
+#     (staleness.stale=false), wallet + vault-economics provenance is 'live'
+#     (only the documented #120 ZYFAI/GIZA degrades are tolerated, loud-logged),
+#     and both research signals landed;
 #   - any failure names the leg/feed that failed.
 #
-# WHY NIGHTLY ONLY (NOT EVERY PR)
-# Live upstreams are rate-limited and inherently variable — gating every PR's
-# required checks on them would make the required suite flaky for reasons
-# unrelated to the diff. Nightly gives a daily signal that the LIVE path stays
-# healthy, without blocking development. Same split as
-# committee-opencode-nightly.yml / nightly-fetchers.yml / rmpc-release-e2e-nightly.yml.
+# WHY THIS DOES NOT DUPLICATE e2e.yml's LOGIC
+# Both workflows drive the exact same `scripts/demo.ts` → `scripts/lib/demo-main.ts`
+# boot and the exact same `scripts/demo-live-smoke.ts` assertion script — no
+# assertion logic is re-authored here. This workflow only supplies an
+# independent SCHEDULE (not tied to PR activity) around that shared code.
 #
 # NEVER SKIPS
-# There is no .skip/self-skip anywhere in this path. scripts/lib/demo-main.ts
-# refuses a contradictory DEMO_HERMETIC=1 boot up front (exit 1);
+# There is no .skip/self-skip anywhere in this path.
 # scripts/demo-live-smoke.ts exits non-zero on starvation, a stale snapshot, a
 # NEW silently-stale leg, or a missing signal — an unavailable LIVE leg turns
 # this job RED, never green-via-skip. The loud-failure paths of the smoke
@@ -45,7 +47,8 @@
 #
 # CI taxonomy class: heavy (scheduled, full docker-compose stack + real live
 # external endpoints). Heavy suites are sweep-only: NO `pull_request` trigger —
-# schedule + on-demand only. This is intentionally NOT a required per-PR gate.
+# schedule + on-demand only. (The required per-PR signal for this same LIVE
+# behavior now lives in the `e2e` job, not here.)
 name: demo-live-smoke-nightly
 env:
   CI_CLASS: heavy
@@ -72,17 +75,16 @@ jobs:
         run: bun install --frozen-lockfile
 
       # Reuses the EXACT demo stack boot (scripts/demo.ts → scripts/lib/demo-main.ts):
-      # postgres + api + worker lanes + mcp via docker compose, migrations (with the
-      # fast demo schedules so LIVE analytics/research fire during the run), the
+      # postgres + api + worker lanes + mcp via docker compose, migrations (fast
+      # demo schedules seeded so LIVE analytics/research fire during the run), the
       # committee driver (publishes 2 sessions through the real worker queue), the
-      # mode-aware frontend checks (#134) and browser checks — then, because
-      # DEMO_LIVE_SMOKE=1 and DEMO_HERMETIC is UNSET, scripts/demo-live-smoke.ts
-      # asserts the LIVE steady state before teardown. Do NOT add DEMO_HERMETIC
-      # here: booting the default LIVE data path is the entire point, and
-      # demo-main.ts exits 1 on the contradictory combination.
-      - name: Boot LIVE (non-hermetic) demo stack + LIVE smoke assertions
+      # frontend + browser checks, and scripts/demo-live-smoke.ts's LIVE
+      # steady-state assertions before teardown — every one of these now runs
+      # unconditionally in CI (issue #147 removed DEMO_HERMETIC and the hermetic
+      # opt-in it used to gate against), the exact same boot `.github/workflows/e2e.yml`
+      # runs on every PR. This job's only distinguishing input is the schedule below.
+      - name: Boot LIVE demo stack + LIVE smoke assertions
         run: bun run scripts/demo.ts
         env:
           CI: "true"
-          DEMO_LIVE_SMOKE: "1"
         timeout-minutes: 40

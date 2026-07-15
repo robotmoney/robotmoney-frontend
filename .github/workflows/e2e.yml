@@ -1,5 +1,16 @@
 # End-to-end tier of the test pyramid: stands up the full stack (api + worker +
-# mcp + postgres via docker compose) and drives the demo lifecycle end to end.
+# mcp + postgres via docker compose) and drives the demo lifecycle end to end
+# against LIVE external providers (issue #147: DEMO_HERMETIC and the stubbed
+# demo path were removed entirely — this required gate now boots the SAME
+# production-parity LIVE data path `bun run demo` always resolves, and every
+# PR's merge gate depends on live upstreams: public Base mainnet RPC,
+# FRED/Coin Metrics/GeckoTerminal/Yahoo/EDGAR. This is a deliberate,
+# owner-approved architecture decision — issue #163 — that trades required-CI
+# determinism for proving the demo's real, product-parity behavior on every
+# PR; expect this job to run slower and be occasionally flakier against live
+# upstreams than the old hermetic boot was. A genuinely-unreachable external
+# provider after real retries is a legitimate external blocker, not a bug in
+# this workflow — file it, don't silently skip the assertion).
 #
 # CI taxonomy class: system-correctness (integration/e2e/cross-component). Per the
 # taxonomy gating matrix this is DEFERRED until a PR is ready for review: it must
@@ -9,10 +20,10 @@
 #     ready re-triggers the workflow (default PR types would not).
 #   - the job `if:` guard skips the run while the PR is still a draft.
 #   - `paths-ignore: ['**.md','**.txt']` bypasses this code check on docs-only PRs.
-# A nightly sweep is intentionally NOT added: the intended triggers are ready PRs
-# + push main (a full-stack docker-compose run is too expensive to schedule
-# daily). The taxonomy grader flags a missing nightly sweep only as an optional
-# full-sweep warning, never an error.
+# A nightly sweep is intentionally NOT added here: demo-live-smoke-nightly.yml
+# already runs the same LIVE boot on a schedule (independent of PR cadence) so
+# an external-provider outage is caught even on a quiet day; adding a second
+# nightly sweep of the identical assertions would be pure duplication.
 name: e2e
 env:
   CI_CLASS: system-correctness
@@ -58,11 +69,15 @@ jobs:
         working-directory: backend
         run: bun install --frozen-lockfile
       # === Demo readiness gate ===
-      # This DEMO_HERMETIC=1 boot-and-check step block IS the "demo readiness" gate.
-      # It boots the full hermetic demo stack and runs the three loud-failure guards
+      # This boot-and-check step block IS the "demo readiness" gate. It boots the
+      # full LIVE demo stack (issue #147: no hermetic mode exists anymore — every
+      # boot resolves live external providers) and runs the loud-failure guards
       # that keep broken demos off main: scripts/demo-frontend-check.ts (core-surface
-      # detector), `test:browser` (Playwright), and scripts/demo-rpc-guard.ts (no live
-      # RPC leak). scripts/demo-frontend-check.ts's own loud-failure path is itself
+      # detector), `test:browser` (Playwright), and scripts/demo-live-smoke.ts
+      # (issue #128's LIVE steady-state assertions — reused as-is, not re-authored:
+      # >=2 published committee sessions, fresh regime snapshot, live wallet/vault
+      # provenance with only the documented #120 degrades, both research signals
+      # landed). scripts/demo-frontend-check.ts's own loud-failure path is itself
       # self-tested by scripts/tests/demo-frontend-check.test.ts (run in the required
       # `integration` job), which proves it exits non-zero when a core surface marker
       # is stripped and 0 against correct content. See docs/demo-spec.md §"Demo
@@ -72,24 +87,23 @@ jobs:
         run: bun run scripts/demo.ts
         env:
           CI: "true"
-          # This required e2e is HERMETIC (issue #77): committee takes use the
-          # deterministic stanceFor() + buildMemo() template path (mcp/src/agent.ts,
-          # memo.ts) — no live model, NO secret. The REAL keyless opencode-zen
-          # authoring path (mcp/src/inference.ts) is gated behind
-          # COMMITTEE_REAL_INFERENCE=1 and exercised in the nightly
-          # committee-opencode workflow, which loudly asserts every member's take
-          # was really model-authored. Do NOT wire ANTHROPIC_API_KEY (or any
-          # secret) here — the keyless design removed that dependency (closes the
-          # #92 no-secret blocker).
-          # EXPLICIT hermetic opt-in (issue #50, supersedes the #48 wiring): local
-          # `bun demo` now defaults to the production-parity LIVE data path, so
-          # this required check must opt in to the hermetic mode itself.
-          # DEMO_HERMETIC=1 (resolved by scripts/lib/demo-env.ts and mirrored by
-          # docker-compose.demo.yml interpolation) pins the vault-economics
-          # eth_call reads to the in-CI stub (base-rpc-stub service) and the
-          # analytics to the offline seeded source, so this job NEVER reads live,
-          # rate-limited Base mainnet (config.ts default https://mainnet.base.org)
-          # or live analytics hosts. The demo's scripts/demo-rpc-guard.ts fails
-          # this job loudly if this knob is missing or any layer leaks live RPC.
-          DEMO_HERMETIC: "1"
-        timeout-minutes: 20
+          # This required e2e boots the LIVE data path (issue #147 — DEMO_HERMETIC
+          # removed): committee takes use the deterministic stanceFor() +
+          # buildMemo() template path (mcp/src/agent.ts, memo.ts) — no live model,
+          # NO secret. The REAL keyless opencode-zen authoring path
+          # (mcp/src/inference.ts) is gated behind COMMITTEE_REAL_INFERENCE=1 and
+          # exercised in the nightly committee-opencode workflow, which loudly
+          # asserts every member's take was really model-authored. Do NOT wire
+          # ANTHROPIC_API_KEY (or any secret) here — the keyless design removed
+          # that dependency (closes the #92 no-secret blocker).
+          #
+          # Every OTHER external dependency here IS live and keyless: public Base
+          # mainnet JSON-RPC (vault-economics eth_call reads), and the keyless
+          # analytics/research fetchers (FRED/Coin Metrics/GeckoTerminal/Yahoo/
+          # EDGAR). A required credential or provider that is unreachable fails
+          # this job loudly (scripts/lib/demo-env.ts / the api's own startup
+          # checks) — never a silent fallback to a fixture or stub. Expect this
+          # job to run longer and be occasionally flakier against live upstreams
+          # than the retired hermetic boot was — an accepted, deliberate
+          # consequence of issue #147/#163, not a bug in this workflow.
+        timeout-minutes: 40

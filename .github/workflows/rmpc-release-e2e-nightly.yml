@@ -72,14 +72,15 @@ jobs:
 
       # Reuses the EXACT demo stack boot (scripts/demo.ts → scripts/lib/demo-main.ts):
       # postgres + api + worker + mcp via docker compose, migrations, health checks,
-      # then the existing required-tier checks (hermetic committee session, frontend
-      # checks, browser checks, RPC guard) — RMPC_RELEASE_E2E=1 additionally runs
-      # scripts/rmpc-release-e2e.ts against that SAME booted stack before teardown, so
-      # there is no parallel stack bring-up for this driver.
+      # then the existing required-tier checks (LIVE committee session, frontend
+      # checks, browser checks, live steady-state smoke — issue #147 removed
+      # DEMO_HERMETIC and the hermetic path entirely, so every boot is LIVE now) —
+      # RMPC_RELEASE_E2E=1 additionally runs scripts/rmpc-release-e2e.ts against
+      # that SAME booted stack before teardown, so there is no parallel stack
+      # bring-up for this driver.
       - name: Boot demo stack + rmpc release e2e driver
         run: bun run scripts/demo.ts
         env:
           CI: "true"
-          DEMO_HERMETIC: "1"
           RMPC_RELEASE_E2E: "1"
         timeout-minutes: 40

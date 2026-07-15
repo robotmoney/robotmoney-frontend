@@ -1,53 +1,46 @@
-// Demo data-path resolver (issue #50). Single source of truth for which data
-// path a `bun run demo` stack runs on:
+// Demo data-path resolver. Single source of truth for which data path a
+// `bun run demo` stack — and the required per-PR e2e gate — runs on: ALWAYS
+// the production-parity LIVE path.
 //
-//   DEFAULT (no env)      → PRODUCTION PARITY. BASE_RPC_URL is left unset so the
-//                           backend's config.ts falls through to its live default
-//                           (https://mainnet.base.org), ANALYTICS_SOURCE=live, and
-//                           ANALYTICS_FLOOR_SEED=1 so a cold live boot seeds the
-//                           vendored raw-indicator floor instead of re-fetching
-//                           years of history.
-//   DEMO_HERMETIC=1       → EXPLICIT hermetic opt-in (set by the required e2e CI
-//                           workflow, .github/workflows/e2e.yml, and available
-//                           locally as `DEMO_HERMETIC=1 bun run demo`). Pins the
-//                           vault-economics eth_call reads at the in-compose
-//                           deterministic stub (base-rpc-stub service,
-//                           backend/tests/support/base-rpc-stub.ts), the analytics
-//                           at the offline seeded source, marks the RPC provenance
-//                           as `stub` (BASE_RPC_SOURCE → the vault-economics DTO's
-//                           source:'stub'), and disables the floor seed. Zero live
-//                           mainnet / live analytics calls — enforced post-run by
-//                           scripts/demo-rpc-guard.ts.
+// Issue #147 removed DEMO_HERMETIC and the stubbed/offline demo path entirely
+// (decision: issue #163). There is no hermetic opt-in anymore: every
+// `bun run demo` invocation, local or CI, resolves live external providers
+// (Base mainnet RPC, FRED/Coin Metrics/GeckoTerminal/Yahoo/EDGAR). A required
+// credential or provider that is unavailable must fail loudly (non-zero exit,
+// actionable message) — never silently fall back to a fixture or stub.
 //
-// Explicit BASE_RPC_URL / ANALYTICS_SOURCE / ANALYTICS_FLOOR_SEED env overrides
-// always win over both defaults. docker-compose.demo.yml mirrors the same
-// DEMO_HERMETIC conditional in its interpolation defaults so BOTH layers agree
-// even when compose is invoked without this resolver (see the compose-config
-// test, scripts/tests/demo-compose-config.test.ts).
+//   BASE_RPC_URL is left unset so the backend's config.ts falls through to its
+//   live default (https://mainnet.base.org); ANALYTICS_SOURCE=live; and
+//   ANALYTICS_FLOOR_SEED=1 so a cold live boot seeds the vendored raw-indicator
+//   floor instead of re-fetching years of history.
 //
-// This module is imported by scripts/demo.ts (which re-exports it for the unit
-// tests in scripts/tests/demo-env.test.ts) and MUST stay side-effect free.
-
-export const HERMETIC_STUB_RPC_URL = "http://base-rpc-stub:8645";
+// Explicit BASE_RPC_URL / ANALYTICS_SOURCE / ANALYTICS_FLOOR_SEED env
+// overrides always win (e.g. pointing at a private RPC, or setting
+// ANALYTICS_SOURCE=hermetic to reuse the deterministic offline analytics
+// fixture backend unit tests depend on directly —
+// backend/src/analytics/access/hermetic-source.ts — for local debugging).
+// That fixture is NOT selected by any demo default; ANALYTICS_SOURCE is a
+// general backend config knob unrelated to the removed DEMO_HERMETIC wiring.
+//
+// This module is imported by scripts/demo.ts (which re-exports it for the
+// unit tests in scripts/tests/demo-env.test.ts) and MUST stay side-effect free.
 
 export interface DemoEnvResolution {
-  /** True iff the explicit hermetic opt-in knob (DEMO_HERMETIC=1) is set. */
-  hermetic: boolean;
   /**
    * Resolved BASE_RPC_URL for the api/worker containers. `undefined` means
    * "leave unset" → backend config.ts falls through to its live production
    * default (https://mainnet.base.org).
    */
   baseRpcUrl: string | undefined;
-  /** Vault-economics DTO provenance the backend will report. */
-  baseRpcSource: "live" | "stub";
+  /** Vault-economics DTO provenance the backend will report — always 'live'. */
+  baseRpcSource: "live";
   /** Resolved ANALYTICS_SOURCE for the api/worker containers. */
   analyticsSource: string;
   /** Resolved ANALYTICS_FLOOR_SEED for the api/worker containers. */
   analyticsFloorSeed: string;
   /**
    * The exact env entries `scripts/demo.ts` merges into every `docker compose`
-   * invocation. BASE_RPC_URL is intentionally ABSENT on the live path (so the
+   * invocation. BASE_RPC_URL is intentionally ABSENT unless overridden (so the
    * compose default and backend config default both apply).
    */
   composeEnv: Record<string, string>;
@@ -56,39 +49,19 @@ export interface DemoEnvResolution {
 export function resolveDemoEnv(
   env: Record<string, string | undefined> = process.env,
 ): DemoEnvResolution {
-  // Explicit opt-in ONLY. CI does NOT imply hermetic: the e2e workflow must set
-  // DEMO_HERMETIC=1 itself, and scripts/demo-rpc-guard.ts fails the CI run
-  // loudly when the hermetic layer is missing — a new CI demo consumer can
-  // never silently reach live mainnet.
-  const hermetic = env.DEMO_HERMETIC === "1";
-
-  const baseRpcUrl = env.BASE_RPC_URL || (hermetic ? HERMETIC_STUB_RPC_URL : undefined);
-  const baseRpcSource: "live" | "stub" = hermetic ? "stub" : "live";
-  const analyticsSource = env.ANALYTICS_SOURCE || (hermetic ? "hermetic" : "live");
-  // Cold-DB floor seed: on by default for the LIVE local demo cold-boot path
-  // (idempotent; no-op once warm); pinned off under hermetic so the offline
-  // seeded run stays byte-for-byte deterministic.
-  const analyticsFloorSeed = env.ANALYTICS_FLOOR_SEED || (hermetic ? "0" : "1");
+  const baseRpcUrl = env.BASE_RPC_URL || undefined;
+  const baseRpcSource: "live" = "live";
+  const analyticsSource = env.ANALYTICS_SOURCE || "live";
+  // Cold-DB floor seed: on by default so a cold live boot doesn't re-fetch
+  // years of history (idempotent; no-op once warm).
+  const analyticsFloorSeed = env.ANALYTICS_FLOOR_SEED || "1";
 
   const composeEnv: Record<string, string> = {
     ...(baseRpcUrl !== undefined ? { BASE_RPC_URL: baseRpcUrl } : {}),
     BASE_RPC_SOURCE: baseRpcSource,
     ANALYTICS_SOURCE: analyticsSource,
     ANALYTICS_FLOOR_SEED: analyticsFloorSeed,
-    // ALWAYS set (never conditionally omitted) so this normalized value wins
-    // over any stray ambient DEMO_HERMETIC when a caller merges composeEnv on
-    // top of process.env (scripts/lib/demo-main.ts does exactly this:
-    // `{...process.env, ...composeEnv}`). Without this, a mistyped opt-in like
-    // `DEMO_HERMETIC=true` (only the exact string "1" opts in — see `hermetic`
-    // above) would survive the merge unnormalized and reach docker compose's
-    // OWN `${DEMO_HERMETIC:+...}` interpolation, which treats ANY non-empty
-    // string as "set" — independently re-pinning BASE_RPC_URL at the stub
-    // while this resolver reports hermetic:false (source:'live',
-    // ANALYTICS_SOURCE:'live'). That split-brain would both mislabel
-    // stub-served vault-economics data as live chain data AND fire real live
-    // analytics calls the operator believed were disabled.
-    DEMO_HERMETIC: hermetic ? "1" : "",
   };
 
-  return { hermetic, baseRpcUrl, baseRpcSource, analyticsSource, analyticsFloorSeed, composeEnv };
+  return { baseRpcUrl, baseRpcSource, analyticsSource, analyticsFloorSeed, composeEnv };
 }

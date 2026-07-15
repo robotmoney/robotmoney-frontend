@@ -23,8 +23,9 @@ Everything here follows the **issue #50 honesty contract** already enforced by
 
 Shared conventions (identical to `wallet-balances`):
 - `asOf`: ISO-8601 timestamp of the read (`new Date(now).toISOString()`).
-- `source`: `resolveBaseRpcSource()` result — `"live"` in prod/demo, `"stub"`
-  in the hermetic CI/demo layer (`BASE_RPC_SOURCE=stub`).
+- `source`: `resolveBaseRpcSource()` result — always `"live"` in prod/demo
+  (issue #147 removed the hermetic CI/demo layer); `"stub"` is still a valid
+  value backend unit tests set directly via `BASE_RPC_SOURCE=stub`.
 - Short-TTL in-process cache (`CACHE_TTL_MS = 30_000`) + a
   `_reset<Name>CacheForTests()` export, matching the existing modules.
 - Handlers are thin adapters in `backend/src/api/routes/dashboards.ts` that just
