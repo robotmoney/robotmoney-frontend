@@ -1,8 +1,14 @@
 <!-- Admin — member detail (/admin/committee/members/:id): activate/deactivate/
      reactivate/rotate-key/reject with confirm+reason, one-time credential
-     reveal, participation history. Never renders token_hash or a bearer token
-     in the detail JSON. Issue #159. Buildless — factory registered at boot
-     (alpine/views/admin/committee-member.js). -->
+     reveal. Never renders token_hash or a bearer token in the detail JSON.
+     Issue #159. Buildless — factory registered at boot
+     (alpine/views/admin/committee-member.js).
+
+     Participation history and active-key metadata were dropped from this page
+     (PR #172 review): the real backend (issue #152/PR #169) has no endpoint
+     that joins a member to its cross-session recommendations, and never
+     surfaces committee_member_keys metadata over the admin API — building
+     those sections would mean fabricating data with no backing route. -->
 <section class="container adm" x-data="adminCommitteeMember" x-init="init()">
 
   <header class="adm-head">
@@ -29,10 +35,9 @@
         <dl class="adm-meta-grid">
           <dt>Name</dt><dd x-text="member.name"></dd>
           <dt>Status</dt><dd x-text="member.status"></dd>
-          <dt>Application status</dt><dd x-text="member.applicationStatus || '—'"></dd>
+          <dt>Application</dt><dd x-text="pendingApplication ? pendingApplication.status : '—'"></dd>
           <dt>Contact email</dt><dd x-text="member.contactEmail || '—'"></dd>
           <dt>Lens</dt><dd x-text="member.lens || '—'"></dd>
-          <dt>Active key</dt><dd x-text="member.activeKeyId || '—'"></dd>
           <dt>Applied</dt><dd x-text="member.appliedAt || '—'"></dd>
           <dt>Activated</dt><dd x-text="member.activatedAt || '—'"></dd>
         </dl>
@@ -49,8 +54,8 @@
           <div class="adm-modal__panel">
             <h3>Confirm <span x-text="confirm?.action"></span> for <span x-text="member.name"></span></h3>
             <p class="adm-dim">This changes committee membership state; existing recommendations and roster snapshots are never rewritten.</p>
-            <label class="adm-field" x-show="confirm?.action === 'reactivate' || confirm?.action === 'rotate-key'">
-              <span>New public key</span>
+            <label class="adm-field" x-show="confirm?.action === 'rotate-key'">
+              <span>New public key (optional — omit to rotate the credential against the existing on-file key)</span>
               <input type="text" x-model="confirm.publicKey" class="adm-input" data-testid="member-action-public-key" />
             </label>
             <label class="adm-field">
@@ -75,25 +80,6 @@
               <button type="button" class="adm-btn adm-btn--ghost" @click="dismissCredential()" data-testid="credential-dismiss">I've copied it — dismiss</button>
             </div>
           </div>
-        </div>
-
-        <h2 class="adm-h2">Participation history</h2>
-        <div class="rm-table-scroll">
-          <table class="rm-table adm-table">
-            <thead><tr><th>Date</th><th>Topic</th><th>Roster state</th><th>Stance</th><th>Received</th></tr></thead>
-            <tbody>
-              <template x-for="row in participationRows()" :key="row.sessionId">
-                <tr>
-                  <td x-text="row.date"></td>
-                  <td x-text="row.subjectName || row.subjectId"></td>
-                  <td x-text="row.rosterStatus"></td>
-                  <td x-text="row.stance || '—'"></td>
-                  <td x-text="row.receivedAt ? fmtUtc(row.receivedAt) : '—'"></td>
-                </tr>
-              </template>
-              <tr x-show="participationRows().length === 0"><td class="adm-dim" colspan="5">No sessions yet.</td></tr>
-            </tbody>
-          </table>
         </div>
 
         <h2 class="adm-h2">Detail (redacted)</h2>

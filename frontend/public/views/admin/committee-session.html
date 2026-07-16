@@ -1,9 +1,18 @@
 <!-- Admin — session detail (/admin/committee/sessions/:id): UTC-first timeline,
-     roster matrix (expected/excused/submitted/absent) with a collapsed
-     signature/canonical-payload disclosure, read-only aggregate, and guarded
-     lifecycle action controls. No control here can edit or delete an accepted
+     roster matrix (expected/excused/submitted/absent) with a per-member
+     recommendation disclosure, read-only aggregate, and guarded lifecycle
+     action controls. No control here can edit or delete an accepted
      recommendation. Issue #159. Buildless — factory registered at boot
-     (alpine/views/admin/committee-session.js). -->
+     (alpine/views/admin/committee-session.js).
+
+     Reconciled to the real backend (issue #152/PR #169) per PR #172 review:
+     dropped "Linked jobs" (no session-scoped job read exists), the
+     nonce/signature/canonicalPayload disclosure (never returned by any
+     route), the "publish_brief"/"reopen_window" pseudo-actions (only
+     cancel/close/reopen/aggregate/publish are real HTTP actions), and the
+     briefOpensAt/publishAt/version timeline fields (no GET route exposes
+     them). The aggregate section now reads the persisted
+     committeeRecommendation/synthesis columns instead of a fabricated DTO. -->
 <section class="container adm" x-data="adminCommitteeSession" x-init="init()">
 
   <header class="adm-head">
@@ -33,29 +42,14 @@
 
         <h2 class="adm-h2">Timeline (UTC — local secondary)</h2>
         <dl class="adm-meta-grid">
-          <dt>Brief opens</dt><dd><span x-text="fmtUtc(session.briefOpensAt)"></span> <span class="adm-dim" x-text="'(' + fmtLocal(session.briefOpensAt) + ' local)'"></span></dd>
           <dt>Window closes</dt><dd><span x-text="fmtUtc(session.windowClosesAt)"></span> <span class="adm-dim" x-text="'(' + fmtLocal(session.windowClosesAt) + ' local)'"></span></dd>
-          <dt>Publish at</dt><dd><span x-text="fmtUtc(session.publishAt)"></span> <span class="adm-dim" x-text="'(' + fmtLocal(session.publishAt) + ' local)'"></span></dd>
           <dt>Published</dt><dd x-text="session.publishedAt ? fmtUtc(session.publishedAt) : '—'"></dd>
-          <dt>Version</dt><dd x-text="session.version"></dd>
         </dl>
-
-        <h3 class="adm-h2 adm-h2--flush">Linked jobs</h3>
-        <div class="rm-table-scroll">
-          <table class="rm-table adm-table">
-            <thead><tr><th>Action</th><th>Job id</th><th>Status</th><th>Run after</th></tr></thead>
-            <tbody>
-              <template x-for="j in (session.jobs || [])" :key="j.action">
-                <tr><td x-text="j.action"></td><td x-text="j.jobId ?? '—'"></td><td x-text="j.status ?? '—'"></td><td x-text="fmtUtc(j.runAfter)"></td></tr>
-              </template>
-            </tbody>
-          </table>
-        </div>
 
         <!-- ── Lifecycle actions — only server-legal transitions are enabled ── -->
         <h2 class="adm-h2">Actions</h2>
         <div class="adm-toolbar">
-          <template x-for="action in ['publish_brief', 'close_window', 'reopen_window', 'aggregate', 'publish', 'cancel']" :key="action">
+          <template x-for="action in ['close', 'reopen', 'aggregate', 'publish', 'cancel']" :key="action">
             <button type="button" class="adm-btn" :class="!isLegalAction(action) && 'adm-btn--ghost'"
               :disabled="!isLegalAction(action)" @click="openActionConfirm(action)"
               :data-testid="'session-action-' + action">
@@ -64,18 +58,14 @@
           </template>
         </div>
         <p x-show="actionResult" class="adm-dim" data-testid="action-result">
-          Job <span x-text="actionResult?.jobId"></span><span x-show="actionResult?.existing"> (idempotent: reused an existing queued job)</span>
+          <span x-show="actionResult?.state">New state: <span x-text="actionResult?.state"></span></span>
+          <span x-show="actionResult?.idempotent"> (idempotent: already in this state, no change made)</span>
         </p>
         <p x-show="actionError" x-text="actionError" class="rm-error" data-testid="action-error"></p>
 
         <div x-show="actionConfirm" x-cloak class="adm-modal" data-testid="session-action-confirm">
           <div class="adm-modal__panel">
             <h3>Confirm <span x-text="actionConfirm ? actionLabel(actionConfirm.action) : ''"></span></h3>
-            <p class="adm-dim">Enqueues the same worker kind used by scheduled actions and returns a job id (202).</p>
-            <label class="adm-field" x-show="actionConfirm?.action === 'reopen_window'">
-              <span>New window-close time (ISO instant)</span>
-              <input type="text" x-model="actionConfirm.windowClosesAt" class="adm-input" data-testid="action-window-closes" />
-            </label>
             <label class="adm-field">
               <span>Reason</span>
               <textarea x-model="actionConfirm.reason" class="adm-input" rows="2" placeholder="10–500 characters" data-testid="action-reason"></textarea>
@@ -133,28 +123,25 @@
               <template x-for="row in rosterRows()" :key="row.memberId">
                 <tr>
                   <td x-text="row.memberName || row.memberId"></td>
-                  <td x-text="row.status"></td>
+                  <td x-text="rowStatus(row)"></td>
                   <td x-text="row.recommendation?.stance || '—'"></td>
                   <td x-text="row.recommendation?.confidence ?? '—'"></td>
                   <td x-text="row.recommendation?.receivedAt ? fmtUtc(row.recommendation.receivedAt) : '—'"></td>
                   <td>
                     <button type="button" class="adm-btn adm-btn--ghost" x-show="row.recommendation" @click="toggleDisclosure(row.memberId)" :data-testid="'disclosure-toggle-' + row.memberId">
-                      <span x-text="expandedRecommendation === row.memberId ? 'Hide' : 'Signature/payload'"></span>
+                      <span x-text="expandedRecommendation === row.memberId ? 'Hide' : 'Detail'"></span>
                     </button>
-                    <button type="button" class="adm-btn adm-btn--ghost" x-show="rosterEditable() && row.status === 'expected'" @click="openRosterForm('excuse', row.memberId)" :data-testid="'roster-excuse-' + row.memberId">Excuse</button>
-                    <button type="button" class="adm-btn adm-btn--ghost" x-show="rosterEditable() && row.status === 'excused'" @click="openRosterForm('restore', row.memberId)" :data-testid="'roster-restore-' + row.memberId">Restore</button>
+                    <button type="button" class="adm-btn adm-btn--ghost" x-show="rosterEditable() && row.rosterStatus === 'expected'" @click="openRosterForm('excuse', row.memberId)" :data-testid="'roster-excuse-' + row.memberId">Excuse</button>
+                    <button type="button" class="adm-btn adm-btn--ghost" x-show="rosterEditable() && row.rosterStatus === 'excused'" @click="openRosterForm('restore', row.memberId)" :data-testid="'roster-restore-' + row.memberId">Restore</button>
                   </td>
                 </tr>
               </template>
               <template x-for="row in rosterRows()" :key="row.memberId + '-disclosure'">
                 <tr x-show="expandedRecommendation === row.memberId && row.recommendation" :data-testid="'disclosure-row-' + row.memberId">
                   <td colspan="6">
+                    <p><strong>Verified:</strong> <span x-text="row.recommendation?.verified ? 'yes' : 'no'"></span></p>
                     <p><strong>Body:</strong> <span x-text="row.recommendation?.body || '—'"></span></p>
                     <p><strong>Memo:</strong> <span x-text="row.recommendation?.memoUrl || '—'"></span></p>
-                    <p><strong>Nonce:</strong> <code x-text="row.recommendation?.nonce"></code></p>
-                    <p><strong>Signature:</strong> <code x-text="row.recommendation?.signature"></code></p>
-                    <p><strong>Canonical payload:</strong></p>
-                    <pre class="adm-log" x-text="row.recommendation?.canonicalPayload"></pre>
                   </td>
                 </tr>
               </template>
@@ -163,28 +150,29 @@
           </table>
         </div>
 
-        <!-- ── Aggregate (read-only; no edit/delete control exists) ───────── -->
-        <template x-if="session.aggregate">
+        <!-- ── Aggregate (read-only; persisted onto the session row by the
+             `aggregate` action — no edit/delete control exists) ──────────── -->
+        <template x-if="aggregate()">
           <div>
             <h2 class="adm-h2">Aggregate</h2>
             <dl class="adm-meta-grid">
-              <dt>Expected</dt><dd x-text="session.aggregate.expectedCount"></dd>
-              <dt>Submitted</dt><dd x-text="session.aggregate.submittedCount"></dd>
-              <dt>Absent</dt><dd x-text="session.aggregate.absentCount"></dd>
-              <dt>Mean confidence</dt><dd x-text="session.aggregate.meanConfidence ?? '—'"></dd>
+              <dt>Active</dt><dd x-text="aggregate().quorum?.active"></dd>
+              <dt>Submitted</dt><dd x-text="aggregate().quorum?.submitted"></dd>
+              <dt>Absent</dt><dd x-text="(aggregate().quorum?.absent || []).length"></dd>
+              <dt>Mean confidence</dt><dd x-text="aggregate().meanConfidence ?? '—'"></dd>
             </dl>
             <h3 class="adm-h2 adm-h2--flush">Stances</h3>
             <ul class="adm-bullet-list">
-              <template x-for="[stance, count] in Object.entries(session.aggregate.stances || {})" :key="stance">
+              <template x-for="[stance, count] in Object.entries(aggregate().stances || {})" :key="stance">
                 <li><span x-text="stance"></span>: <span x-text="count"></span></li>
               </template>
             </ul>
+            <h3 class="adm-h2 adm-h2--flush">Synthesis</h3>
+            <p class="adm-dim" x-text="synthesis() || '—'"></p>
             <h3 class="adm-h2 adm-h2--flush">Consensus</h3>
             <ul class="adm-bullet-list">
-              <template x-for="c in (session.aggregate.consensus || [])" :key="c"><li x-text="c"></li></template>
+              <template x-for="c in (aggregate().consensus || [])" :key="c"><li x-text="c"></li></template>
             </ul>
-            <h3 class="adm-h2 adm-h2--flush">Source recommendation ids</h3>
-            <p class="adm-dim" x-text="(session.aggregate.sourceRecommendationIds || []).join(', ') || '—'"></p>
           </div>
         </template>
       </div>

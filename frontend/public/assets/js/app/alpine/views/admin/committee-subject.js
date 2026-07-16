@@ -1,6 +1,14 @@
 // Alpine factory for /admin/committee/subjects/:id — topic detail, edit (with
 // optimistic-lock version conflicts), and deactivation. Issue #159 —
 // docs/plan-admin-surface.md §4 US-C1.
+//
+// Reconciled to the REAL backend (issue #152/PR #169) per PR #172 review: the
+// backend has no GET .../subjects/:id at all (committee-admin.ts's `subjects`
+// route only owns list+create at length-1 and update+deactivate at length-3;
+// see backend/src/api/routes/committee-admin.ts) — this page fetches the full
+// admin subjects LIST and picks its row client-side. Edits go via
+// POST .../subjects/:id/update (not PATCH), and the optimistic-lock field is
+// `expectedVersion` (not `version`).
 import { api, ROUTES, path } from "../../../lib/api.js";
 import { adminAuthState, fmtUtc } from "./shared.js";
 
@@ -38,7 +46,11 @@ export function registerAdminCommitteeSubject(Alpine) {
       this.loading = true;
       this.error = null;
       try {
-        this.topic = await api.adminGet(path(ROUTES.admin.committee.subject, { id: this.subjectId }), this._token());
+        const res = await api.adminGet(ROUTES.committee.admin.subjects, this._token());
+        if (!Array.isArray(res.subjects)) throw new Error("admin subjects response missing 'subjects' array");
+        const found = res.subjects.find((s) => s.id === this.subjectId);
+        if (!found) throw new Error(`topic '${this.subjectId}' not found`);
+        this.topic = found;
       } catch (e) {
         if (e.status === 403) this._handle403();
         else this.error = e.message;
@@ -50,7 +62,7 @@ export function registerAdminCommitteeSubject(Alpine) {
 
     startEdit() {
       this.editForm = {
-        version: this.topic.version,
+        expectedVersion: this.topic.version,
         name: this.topic.name || "",
         operator: this.topic.operator || "",
         thesisBlurb: this.topic.thesisBlurb || "",
@@ -89,7 +101,7 @@ export function registerAdminCommitteeSubject(Alpine) {
       this.submitting = true;
       try {
         const body = {
-          version: this.editForm.version,
+          expectedVersion: this.editForm.expectedVersion,
           name: this.editForm.name,
           operator: this.editForm.operator,
           thesisBlurb: this.editForm.thesisBlurb,
@@ -101,7 +113,11 @@ export function registerAdminCommitteeSubject(Alpine) {
           structuralNotes: this.topic.structuralNotes || [],
           reason: this.editForm.reason,
         };
-        await api.adminPatch(path(ROUTES.admin.committee.subject, { id: this.subjectId }), this._token(), body);
+        await api.adminPost(
+          path(ROUTES.committee.admin.subjectUpdate, { id: this.subjectId }),
+          this._token(),
+          body,
+        );
         this.editing = false;
         await this.load();
       } catch (e) {
@@ -122,9 +138,9 @@ export function registerAdminCommitteeSubject(Alpine) {
       this.submitting = true;
       try {
         await api.adminPost(
-          path(ROUTES.admin.committee.subjectDeactivate, { id: this.subjectId }),
+          path(ROUTES.committee.admin.subjectDeactivate, { id: this.subjectId }),
           this._token(),
-          { version: this.topic.version, reason: this.deactivateReason.trim() },
+          { expectedVersion: this.topic.version, reason: this.deactivateReason.trim() },
         );
         this.deactivateOpen = false;
         await this.load();

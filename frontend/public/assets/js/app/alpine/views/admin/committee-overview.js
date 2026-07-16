@@ -1,6 +1,14 @@
 // Alpine factory for /admin/committee: topics/members/sessions overview,
 // topic create, member manual-add (one-time credential reveal), and session
 // scheduling. Issue #159 — see docs/plan-admin-surface.md §4 US-C1/US-C2/US-C3.
+//
+// Reconciled to the REAL backend (issue #152/PR #169, backend/src/api/routes/
+// committee-admin.ts) per PR #172 review: routes live at
+// ROUTES.committee.admin.* (not a since-removed ROUTES.admin.committee.*),
+// topics/members list envelopes are keyed `subjects`/`members` (not `items`),
+// and there is no admin session-list endpoint at all — the sessions tab reads
+// the PUBLIC ROUTES.committee.sessions list instead (issue #152's admin
+// surface only exposes session CREATE + per-session roster/lifecycle).
 import { api, ROUTES, path } from "../../../lib/api.js";
 import { adminAuthState, fmtUtc, fmtLocal } from "./shared.js";
 
@@ -121,13 +129,22 @@ export function registerAdminCommitteeOverview(Alpine) {
       this.error = null;
       try {
         const [topicsRes, membersRes, sessionsRes] = await Promise.all([
-          api.adminGet(ROUTES.admin.committee.subjects, this._token()),
-          api.adminGet(ROUTES.admin.committee.members, this._token()),
-          api.adminGet(ROUTES.admin.committee.sessions, this._token()),
+          api.adminGet(ROUTES.committee.admin.subjects, this._token()),
+          api.adminGet(ROUTES.committee.admin.members, this._token()),
+          // No admin session-list route exists — the public list is the only
+          // place `state`/date/subject are ever enumerable together.
+          api.adminGet(ROUTES.committee.sessions, this._token()),
         ]);
-        this.topics = topicsRes.items || [];
-        this.members = membersRes.items || [];
-        this.sessions = sessionsRes.items || [];
+        // Defensive shape validation (PR #172 review): a response missing its
+        // expected array key is a contract mismatch, not an empty list — treat
+        // it the same as the existing 403/409 error path rather than silently
+        // rendering an empty page.
+        if (!Array.isArray(topicsRes.subjects)) throw new Error("admin subjects response missing 'subjects' array");
+        if (!Array.isArray(membersRes.members)) throw new Error("admin members response missing 'members' array");
+        if (!Array.isArray(sessionsRes.sessions)) throw new Error("committee sessions response missing 'sessions' array");
+        this.topics = topicsRes.subjects;
+        this.members = membersRes.members;
+        this.sessions = sessionsRes.sessions;
       } catch (e) {
         if (e.status === 403) this._handle403();
         else this.error = e.message;
@@ -167,7 +184,7 @@ export function registerAdminCommitteeOverview(Alpine) {
           structuralNotes: [],
           reason: this.topicForm.reason,
         };
-        await api.adminPost(ROUTES.admin.committee.subjects, this._token(), body);
+        await api.adminPost(ROUTES.committee.admin.subjects, this._token(), body);
         this.showTopicForm = false;
         this.topicForm = emptyTopicForm();
         await this.loadAll();
@@ -189,13 +206,16 @@ export function registerAdminCommitteeOverview(Alpine) {
           memberId: this.memberForm.memberId,
           name: this.memberForm.name,
           publicKey: this.memberForm.publicKey,
-          contactEmail: this.memberForm.contactEmail || null,
+          // Backend field is `contact`, not `contactEmail`
+          // (backend/src/api/validation.ts parseManualMember).
+          contact: this.memberForm.contactEmail || null,
           lens: this.memberForm.lens || null,
           reason: this.memberForm.reason,
         };
-        const res = await api.adminPost(ROUTES.admin.committee.members, this._token(), body);
+        const res = await api.adminPost(ROUTES.committee.admin.members, this._token(), body);
         this.showMemberForm = false;
-        this.credentialReveal = { memberId: this.memberForm.memberId, token: res.credential?.token || "" };
+        // addMemberAdmin() returns `token` at the top level, not `credential.token`.
+        this.credentialReveal = { memberId: this.memberForm.memberId, token: res.token || "" };
         this.memberForm = emptyMemberForm();
         await this.loadAll();
       } catch (e) {
@@ -214,7 +234,7 @@ export function registerAdminCommitteeOverview(Alpine) {
       this.sessionSubmitting = true;
       try {
         const body = { ...this.sessionForm };
-        await api.adminPost(ROUTES.admin.committee.sessions, this._token(), body);
+        await api.adminPost(ROUTES.committee.admin.sessionCreate, this._token(), body);
         this.showSessionForm = false;
         this.sessionForm = emptySessionForm();
         await this.loadAll();
