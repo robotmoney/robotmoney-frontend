@@ -35,6 +35,8 @@ import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 import { liveDataSource, type AnalyticsDataSource, type Logger } from "./access/data-source.ts";
 import { hermeticDataSource } from "./access/hermetic-source.ts";
 import { DEFAULT_EDGAR_REFRESH_DEADLINE_MS } from "./edgar-incremental-refresh.ts";
+import { TelemetryCollector, submitTelemetrySafely, type TelemetrySink, type TelemetryRunStatus } from "./telemetry.ts";
+import { telemetryHttpSink } from "./telemetry-client.ts";
 
 const BACKFILL_START = "2018-01-01"; // crypto on-chain coverage starts ~2018 cleanly
 // Issue #109: hard-deadline budget the orchestrator grants the live source's
@@ -80,20 +82,37 @@ const nn = (v: number | undefined): number | null =>
 // from ANALYTICS_API_URL + ANALYTICS_TOKEN at call time. The API process (its
 // committee regime routes), tests, and demo tooling inject the API-owned direct
 // service (analytics/store/direct.ts) instead.
+//
+// TELEMETRY (issue #151): every access/extract/transform/analyze/store/report
+// boundary this call actually executes is recorded into a TelemetryCollector
+// and submitted ONCE at the end through the injected TelemetrySink — same
+// port/default-HTTP/direct-SQL-for-API-and-tests split as AnalyticsPersistence
+// above. Submission is STRICTLY best-effort (submitTelemetrySafely never
+// throws): a telemetry outage can never affect the canonical analytics rows
+// already written above, nor this function's return value. The outcome is
+// attached to the returned object as a non-enumerable `__telemetry` property
+// (invisible to `Object.keys`/JSON shape assertions) so callers that care —
+// the worker handlers, which fold it into job_runs.output — can still see it.
 export async function runAnalytics(
   asof: string,
   toolId?: string,
   source: AnalyticsDataSource = resolveAnalyticsSource(),
   persistence: AnalyticsPersistence = analyticsApiClient(),
+  telemetry: TelemetrySink = telemetryHttpSink(),
+  jobId?: number,
 ): Promise<Record<string, unknown>> {
   const logger: Logger = console;
   const want = (id: string) => !toolId || toolId === id;
   const results: Record<string, unknown> = {};
+  const sourceLabel = source === hermeticDataSource ? "hermetic" : source === liveDataSource ? "live" : "fixture";
+  const collector = new TelemetryCollector();
+  let runFailed: unknown = null;
 
   let persisted: Awaited<ReturnType<AnalyticsPersistence["loadRawHistory"]>> | null = null;
   const getPersisted = async () => (persisted ??= await persistence.loadRawHistory());
   let mergedRaw: Record<string, { date: string; value: number }[]> | null = null;
 
+  try {
   // ── REGIME ────────────────────────────────────────────────────────────────
   if (want("regime")) {
     // Opt-in cold-DB floor seed (issue #13): on the real-live demo path a fresh DB
@@ -110,9 +129,12 @@ export async function runAnalytics(
         logger.log?.(`[analytics] floor seed: no-op — floor already warm (${res.existingPoints} rows present)`);
       }
     }
+    let t0 = new Date();
     const floor = await getPersisted();
     const fetched = await source.fetchIndicators(INDICATORS, logger);
+    collector.stage("access", "ok", `fetched ${INDICATORS.length} registry indicator(s) from the ${sourceLabel} source`, t0);
 
+    t0 = new Date();
     const merged: Record<string, { date: string; value: number }[]> = {};
     let emptyFetches = 0;
     let excluded = 0;
@@ -124,19 +146,30 @@ export async function runAnalytics(
       if (f.length === 0 && prior.length > 0) {
         emptyFetches++;
         logger.warn?.(`[analytics] ${ind.id}: fetch returned 0 rows — using persisted ${prior.length} rows (real floor, no synthetic fallback)`);
+        collector.warn("extract", `${ind.id}: fetch returned 0 rows — using persisted ${prior.length} rows (real floor, no synthetic fallback)`);
       }
       if (m.length === 0) {
         excluded++;
         logger.warn?.(`[analytics] ${ind.id}: NO history at all — excluded from composite (all-NaN → weight 0)`);
+        collector.warn("extract", `${ind.id}: no history at all — excluded from composite`);
       }
     }
     if (emptyFetches > 0) logger.warn?.(`[analytics] ${emptyFetches} indicator(s) fell back to the persisted real floor`);
     if (excluded > 0) logger.warn?.(`[analytics] ${excluded} indicator(s) excluded entirely (no data)`);
+    collector.stage(
+      "extract",
+      excluded > 0 ? "warn" : emptyFetches > 0 ? "warn" : "ok",
+      `merged persisted floor with fetched data: ${emptyFetches} fallback, ${excluded} excluded (of ${INDICATORS.length})`,
+      t0,
+    );
 
     // Persist the append-only merged floor back before computing.
+    t0 = new Date();
     await persistence.saveRawHistory(merged);
     mergedRaw = merged;
+    collector.stage("store", "ok", "persisted append-only merged raw indicator floor", t0);
 
+    t0 = new Date();
     const dateAxis = buildDateAxis(BACKFILL_START, asof);
     const transformed: Record<string, number[]> = {};
     const lastRaw: Record<string, { date: string; value: number } | null> = {};
@@ -146,7 +179,9 @@ export async function runAnalytics(
       const aligner = ind.align === "zero_fill" ? alignDailyZeroFill : alignDailyForwardFill;
       transformed[ind.id] = applyTransform(ind.transform, aligner(s, dateAxis));
     }
+    collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${INDICATORS.length} indicator(s)`, t0);
 
+    t0 = new Date();
     const r2 = computeRegime(transformed, dateAxis); // [macro, onchain]
     const r3 = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"]); // +factor
 
@@ -158,17 +193,36 @@ export async function runAnalytics(
     const extras = await source.fetchBacktestExtras(logger);
     let backtest: BacktestPayload | null = null;
     let correlations: CorrelationsPayload | null = null;
+    let analyzeStatus: "ok" | "warn" = "ok";
     try {
       correlations = computeCorrelations(dateAxis, r2, extras);
       backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, r2, extras));
     } catch (e: any) {
       logger.error?.(`[analytics] backtest/correlations failed: ${e?.message ?? e}`);
+      collector.warn("analyze", `backtest/correlations failed: ${e?.message ?? e}`);
+      analyzeStatus = "warn";
     }
-
-    const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, backtest, correlations);
-    await persistence.saveRegimeSnapshots(rows);
-
     const last = dateAxis.length - 1;
+    collector.stage(
+      "analyze",
+      analyzeStatus,
+      `computed regime composite=${nn(r2.composite[last])} regime=${r2.regime[last] ?? "insufficient_history"}`,
+      t0,
+    );
+    collector.artifact("analyze", "regime-composite", {
+      composite: nn(r2.composite[last]),
+      compositePercentile: nn(r2.compositePercentile[last]),
+      regime: r2.regime[last] ?? null,
+    });
+
+    t0 = new Date();
+    const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, backtest, correlations);
+    collector.stage("report", "ok", `built ${rows.length} snapshot row(s) for persistence`, t0);
+
+    t0 = new Date();
+    await persistence.saveRegimeSnapshots(rows);
+    collector.stage("store", "ok", `persisted ${rows.length} regime snapshot row(s)`, t0);
+
     results.regime = {
       asof,
       rows: rows.length,
@@ -185,21 +239,36 @@ export async function runAnalytics(
     // deadline so it plans/fetches only the missing+revisable EDGAR months
     // (never the whole 2010-to-present range). Hermetic/fixture sources
     // ignore this context entirely.
+    let t0 = new Date();
     const floor = await getPersisted();
     const inputs = await source.fetchResearchInputs(asof, logger, {
       persistedMna: floor.MNA ?? [],
       deadlineAt: Date.now() + EDGAR_REFRESH_DEADLINE_MS,
     });
+    collector.stage("access", "ok", `fetched research inputs from the ${sourceLabel} source`, t0);
 
     if (want("channel-divergence")) {
+      t0 = new Date();
       // STABLES is a registry indicator → source it from the persisted raw floor
       // (matching channel-divergence.js, which reads raw-indicator-history.csv).
       const stables = mergedRaw?.STABLES ?? floor.STABLES ?? [];
-      const payload = computeChannelDivergence(
-        { btc: inputs.btc, qqq: inputs.qqq, spy: inputs.spy, stables },
-        asof,
+      const bundle = { btc: inputs.btc, qqq: inputs.qqq, spy: inputs.spy, stables };
+      collector.stage(
+        "transform",
+        "ok",
+        `assembled channel-divergence input bundle (btc=${bundle.btc.length}, qqq=${bundle.qqq.length}, spy=${bundle.spy.length}, stables=${bundle.stables.length} points)`,
+        t0,
       );
+
+      t0 = new Date();
+      const payload = computeChannelDivergence(bundle, asof);
+      collector.stage("analyze", "ok", "computed channel-divergence signal", t0);
+      collector.artifact("report", "channel-divergence-signal", payload);
+
+      t0 = new Date();
       await persistence.saveResearchSignal("channel-divergence", asof, payload);
+      collector.stage("store", "ok", "persisted channel-divergence research signal", t0);
+
       results["channel-divergence"] = payload;
     }
 
@@ -212,6 +281,10 @@ export async function runAnalytics(
             `missing=${refresh.missingMonths} rejected=${refresh.rejectedMonths}`,
         );
       }
+      t0 = new Date();
+      const bundle = { spy: inputs.spy, rsp: inputs.rsp, top7: inputs.top7, mna: inputs.mna, margin: inputs.margin, conf: inputs.conf };
+      collector.stage("transform", "ok", `assembled late-cycle-signals input bundle (mna=${bundle.mna.length} points)`, t0);
+
       if (refresh?.status === "degraded") {
         // HONESTY (issue #109 AC5): an incomplete incremental refresh must
         // NEVER turn into a recomputed/published late-cycle signal — no
@@ -221,6 +294,9 @@ export async function runAnalytics(
           `[analytics] late-cycle-signals: EDGAR refresh degraded (${refresh.reason}) — ` +
             "retaining last-good signal, NOT recomputing/publishing this run",
         );
+        collector.warn("analyze", `EDGAR MNA refresh degraded (${refresh.reason}) — retaining last-good signal, not recomputing`);
+        collector.stage("analyze", "warn", `skipped recompute: EDGAR refresh degraded (${refresh.reason})`, t0);
+        collector.stage("store", "warn", "skipped — retained last-good persisted signal, nothing new written", new Date());
         results["late-cycle-signals"] = { skipped: true, reason: refresh.reason };
       } else {
         // Submit ONLY the freshly-fetched rows (a small idempotent upsert
@@ -228,18 +304,46 @@ export async function runAnalytics(
         // BEFORE computing/publishing the dependent signal, so a signal is
         // never published against data that was never durably persisted.
         if (refresh && refresh.newRows.length > 0) {
+          t0 = new Date();
           await persistence.saveRawHistory({ MNA: refresh.newRows });
+          collector.stage("store", "ok", `persisted ${refresh.newRows.length} freshly-fetched MNA row(s)`, t0);
         }
-        const payload = computeLateCycle(
-          { spy: inputs.spy, rsp: inputs.rsp, top7: inputs.top7, mna: inputs.mna, margin: inputs.margin, conf: inputs.conf },
-          asof,
-        );
+        t0 = new Date();
+        const payload = computeLateCycle(bundle, asof);
+        collector.stage("analyze", "ok", "computed late-cycle-signals signal", t0);
+        collector.artifact("report", "late-cycle-signals-signal", payload);
+
+        t0 = new Date();
         await persistence.saveResearchSignal("late-cycle-signals", asof, payload);
+        collector.stage("store", "ok", "persisted late-cycle-signals research signal", t0);
         results["late-cycle-signals"] = payload;
       }
     }
   }
+  } catch (e) {
+    runFailed = e;
+  }
 
+  // ── TELEMETRY SUBMISSION (issue #151, best-effort, non-fatal) ──────────────
+  const overallStatus: TelemetryRunStatus = runFailed
+    ? "failed"
+    : collector.warnings.length > 0
+      ? "degraded"
+      : "succeeded";
+  const submission = collector.build({
+    kind: toolId ?? "suite",
+    asof,
+    source: sourceLabel,
+    status: overallStatus,
+    summary: runFailed ? { error: (runFailed as any)?.message ?? String(runFailed) } : results,
+    jobId: jobId ?? null,
+  });
+  const telemetryOutcome = await submitTelemetrySafely(telemetry, submission, logger);
+  // Non-enumerable so `Object.keys(results)`/JSON-shape assertions of the
+  // canonical tool outputs are never affected by telemetry outcome exposure.
+  Object.defineProperty(results, "__telemetry", { value: telemetryOutcome, enumerable: false, writable: true, configurable: true });
+
+  if (runFailed) throw runFailed;
   return results;
 }
 

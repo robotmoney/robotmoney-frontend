@@ -89,6 +89,10 @@ export const ROUTES = {
     // ONLY after the EDGAR/MNA seed bootstrap ingests successfully, so a fresh
     // boot's research schedule never becomes claimable before the floor is seeded.
     researchEligibility: "/api/analytics/research-eligibility",
+    // POST — submit one run's structured telemetry (stages/warnings/artifacts/
+    // outcome; issue #151). Non-fatal to callers: a failed submission never
+    // blocks the canonical analytics writes above.
+    telemetry: "/api/analytics/telemetry",
   },
 
   admin: {
@@ -96,5 +100,11 @@ export const ROUTES = {
     jobs: "/api/admin/jobs", // GET ?limit= — task-queue jobs + schedules + status summary
     job: "/api/admin/jobs/:id", // GET — one job + its recent runs (the logs)
     runs: "/api/admin/runs", // GET ?kind=&status=&limit= — recent job_runs feed (the logs)
+    // Research pipeline telemetry admin surface (issue #151). X-Admin-Token.
+    researchRuns: "/api/admin/research/runs", // GET ?kind=&status=&limit= — run list
+    researchRun: "/api/admin/research/runs/:id", // GET — run detail: stage timeline, warnings, artifacts, freshness
+    researchRawSeries: "/api/admin/research/raw-series/:indicator", // GET ?from=&to=&limit= — allowlisted raw_indicator_history read
+    researchSignal: "/api/admin/research/signals/:key", // GET ?from=&to=&limit= — allowlisted research_signals read
+    researchRerun: "/api/admin/research/rerun", // POST — enqueue a complete or single-tool rerun for a given as-of date
   },
 };
