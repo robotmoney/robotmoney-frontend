@@ -1,21 +1,26 @@
-<!-- Admin — task-queue (research/analytics) jobs dashboard
-     Password-gated operator view over the Postgres task queue (jobs /
-     job_schedules / job_runs). The password is the ADMIN_TOKEN secret, sent as
-     X-Admin-Token; the demo prints a random per-launch password to the
-     interactive TUI only. Buildless: the adminJobsView() factory (alpine/views.js)
-     is registered at boot and drives every read (router injects this fragment via
-     innerHTML, so inline scripts here would be dead). Styling reuses the shared
-     .rm-* / global component classes plus .adm-* rules in assets/css/views.css.
-     NOT linked from the public nav — reachable only by direct /admin URL.
--->
-<section class="container adm" x-data="adminJobsView" x-init="init()">
+<!-- Admin — operator surface over the research/analytics task queue and
+     pipeline telemetry (issue #157; docs/plan-admin-surface.md §7).
+     Password-gated (ADMIN_TOKEN secret, sent as X-Admin-Token; the demo prints
+     a random per-launch password to the interactive TUI only). Buildless: the
+     adminSurfaceView() factory (alpine/views/admin-surface.js) is registered at
+     boot and drives every read/write — the router injects this fragment via
+     innerHTML, so inline scripts here would be dead. One shell fragment serves
+     /admin and every /admin/* subpath (frontend/public/assets/js/app/routes.js);
+     this component reads location.pathname to pick a section. Committee topic/
+     member/roster/session management is explicitly OUT of scope here (#157) —
+     only overview, research, and queue operate through this view.
+     Styling reuses the shared .rm-* / global component classes plus the
+     .adm-* rules in assets/css/views.css.
+     NOT linked from the public nav — reachable only by direct /admin URL. -->
+<section class="container adm" x-data="adminSurfaceView" x-init="init()">
 
   <header class="adm-head">
     <span class="rm-eyebrow rm-eyebrow--accent">Operations</span>
-    <h1 class="adm-title">Task Queue Admin</h1>
+    <h1 class="adm-title">Admin</h1>
     <p class="adm-lede">
-      Research &amp; analytics pipeline jobs, schedules, and per-run logs from the
-      Postgres task queue. Read-only. Guarded by the <code>ADMIN_TOKEN</code> secret.
+      Research pipeline health, per-run stage traces, and task-queue operations.
+      Read-mostly; reruns and retries are explicit, reasoned, and always create a
+      new job rather than mutate history. Guarded by the <code>ADMIN_TOKEN</code> secret.
     </p>
   </header>
 
@@ -34,124 +39,378 @@
     <p x-show="loginError" x-text="loginError" class="rm-error adm-msg" x-cloak></p>
   </div>
 
-  <!-- Dashboard -->
+  <!-- Shell -->
   <div x-show="authed" x-cloak>
 
+    <nav class="adm-nav" aria-label="Admin sections">
+      <button type="button" class="adm-nav__link" :class="section === 'overview' && 'adm-nav__link--active'"
+        @click="goSection('overview')">Overview</button>
+      <button type="button" class="adm-nav__link" :class="section === 'research' && 'adm-nav__link--active'"
+        @click="goSection('research')">Research</button>
+      <button type="button" class="adm-nav__link" :class="section === 'queue' && 'adm-nav__link--active'"
+        @click="goSection('queue')">Queue</button>
+    </nav>
+
     <div class="adm-toolbar">
-      <span x-show="loading" class="rm-loading">Refreshing…</span>
-      <span x-show="error" x-text="error" class="rm-error"></span>
+      <span x-show="overviewLoading || researchLoading || queueLoading || researchDetailLoading" class="rm-loading">Refreshing…</span>
+      <span class="adm-dim" x-show="lastRefreshedAt" x-text="'last refreshed ' + fmtTime(lastRefreshedAt)"></span>
       <span class="adm-toolbar__spacer"></span>
-      <button type="button" class="adm-btn adm-btn--ghost" @click="load()">Refresh</button>
+      <button type="button" class="adm-btn adm-btn--ghost" @click="loadSection()">Refresh</button>
+      <button type="button" class="adm-btn adm-btn--ghost" @click="togglePause()"
+        x-text="paused ? 'Resume polling' : 'Pause polling'"></button>
       <button type="button" class="adm-btn adm-btn--ghost" @click="logout()">Sign out</button>
     </div>
 
-    <!-- Summary tiles: counts by status -->
-    <div class="adm-tiles">
-      <template x-for="s in statusList()" :key="s.status">
-        <div class="adm-tile">
-          <span :class="statusClass(s.status)" x-text="s.status"></span>
-          <span class="adm-tile__count" x-text="s.count"></span>
-        </div>
-      </template>
-    </div>
+    <!-- ── Overview ─────────────────────────────────────────────────────── -->
+    <template x-if="section === 'overview'">
+      <div>
+        <p x-show="overviewError" x-text="overviewError" class="rm-error"></p>
+        <p x-show="!overviewLoading && !overviewError && !overview" class="adm-dim">No overview data yet.</p>
 
-    <!-- Schedules -->
-    <h2 class="adm-h2">Schedules</h2>
-    <div class="rm-table-scroll">
-      <table class="rm-table adm-table">
-        <thead>
-          <tr>
-            <th>Kind</th><th>Cron</th><th>Enabled</th><th>Next run</th><th>Last enqueued</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template x-for="sch in schedules" :key="sch.id">
-            <tr>
-              <td x-text="sch.kind"></td>
-              <td x-text="sch.cron"></td>
-              <td x-text="sch.enabled ? 'yes' : 'no'"></td>
-              <td x-text="fmtTime(sch.next_run_at)"></td>
-              <td x-text="fmtTime(sch.last_enqueued_at)"></td>
-            </tr>
-          </template>
-          <tr x-show="schedules.length === 0"><td class="adm-dim" colspan="5">No schedules.</td></tr>
-        </tbody>
-      </table>
-    </div>
+        <template x-if="overview">
+          <div>
+            <div class="adm-tiles">
+              <template x-for="s in statusList()" :key="s.status">
+                <div class="adm-tile">
+                  <span :class="statusClass(s.status)" x-text="s.status"></span>
+                  <span class="adm-tile__count" x-text="s.count"></span>
+                </div>
+              </template>
+            </div>
 
-    <!-- Jobs -->
-    <h2 class="adm-h2">Jobs</h2>
-    <div class="rm-table-scroll">
-      <table class="rm-table adm-table">
-        <thead>
-          <tr>
-            <th>ID</th><th>Kind</th><th>Status</th><th>Attempts</th><th>Run after</th><th>Last error</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template x-for="job in jobs" :key="job.id">
-            <tr class="adm-row" @click="openJob(job.id)">
-              <td x-text="job.id"></td>
-              <td x-text="job.kind"></td>
-              <td><span :class="statusClass(job.status)" x-text="job.status"></span></td>
-              <td x-text="job.attempts + '/' + job.max_attempts"></td>
-              <td x-text="fmtTime(job.run_after)"></td>
-              <td class="adm-err" x-text="job.last_error || '—'"></td>
-            </tr>
-          </template>
-          <tr x-show="jobs.length === 0"><td class="adm-dim" colspan="6">No jobs yet.</td></tr>
-        </tbody>
-      </table>
-    </div>
+            <h2 class="adm-h2 adm-h2--flush">Alerts</h2>
+            <div class="adm-alerts">
+              <template x-for="a in overviewAlerts()" :key="a.id || (a.kind + a.level)">
+                <div :class="alertClass(a.level)">
+                  <span :class="statusClass(a.level)" x-text="a.level"></span>
+                  <span x-text="a.kind"></span>
+                  <span x-text="a.message"></span>
+                </div>
+              </template>
+              <p x-show="overviewAlerts().length === 0" class="adm-dim">No active alerts — everything healthy.</p>
+            </div>
 
-    <!-- Job detail (job + its runs = the logs) -->
-    <div x-show="selectedJob" class="adm-detail" x-cloak>
-      <div class="adm-detail__head">
-        <h2 class="adm-h2 adm-h2--flush">
-          Job <span x-text="selectedJob?.job?.id"></span> ·
-          <span x-text="selectedJob?.job?.kind"></span>
-          <span :class="statusClass(selectedJob?.job?.status)" x-text="selectedJob?.job?.status"></span>
-        </h2>
-        <button type="button" class="adm-btn adm-btn--ghost" @click="closeJob()">Close</button>
-      </div>
-      <template x-for="run in (selectedJob?.runs || [])" :key="run.id">
-        <div class="adm-run">
-          <div class="adm-run__meta">
-            <span :class="statusClass(run.status)" x-text="run.status"></span>
-            <span class="adm-dim" x-text="'started ' + fmtTime(run.started_at)"></span>
-            <span class="adm-dim" x-text="'finished ' + fmtTime(run.finished_at)"></span>
+            <h2 class="adm-h2">Next scheduled runs</h2>
+            <div class="rm-table-scroll">
+              <table class="rm-table adm-table">
+                <thead><tr><th>Kind</th><th>Enabled</th><th>Next run</th></tr></thead>
+                <tbody>
+                  <template x-for="sch in (overview.nextSchedules || [])" :key="sch.kind">
+                    <tr>
+                      <td x-text="sch.kind"></td>
+                      <td x-text="sch.enabled ? 'yes' : 'no'"></td>
+                      <td x-text="fmtTime(sch.nextRunAt)"></td>
+                    </tr>
+                  </template>
+                  <tr x-show="(overview.nextSchedules || []).length === 0"><td class="adm-dim" colspan="3">No enabled schedules.</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
-          <pre x-show="run.error" class="adm-log adm-log--err" x-text="run.error"></pre>
-          <pre x-show="hasOutput(run)" class="adm-log" x-text="prettyJson(run.output)"></pre>
-        </div>
-      </template>
-      <p x-show="(selectedJob?.runs || []).length === 0" class="adm-dim">No runs recorded for this job.</p>
-    </div>
+        </template>
+      </div>
+    </template>
 
-    <!-- Recent runs feed (logs across all jobs) -->
-    <h2 class="adm-h2">Recent runs</h2>
-    <div class="rm-table-scroll">
-      <table class="rm-table adm-table">
-        <thead>
-          <tr>
-            <th>Run</th><th>Job</th><th>Kind</th><th>Status</th><th>Started</th><th>Finished</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template x-for="run in runs" :key="run.id">
-            <tr class="adm-row" @click="openJob(run.job_id)">
-              <td x-text="run.id"></td>
-              <td x-text="run.job_id ?? '—'"></td>
-              <td x-text="run.kind"></td>
-              <td><span :class="statusClass(run.status)" x-text="run.status"></span></td>
-              <td x-text="fmtTime(run.started_at)"></td>
-              <td x-text="fmtTime(run.finished_at)"></td>
-            </tr>
+    <!-- ── Research ─────────────────────────────────────────────────────── -->
+    <template x-if="section === 'research'">
+      <div>
+
+        <!-- Run detail -->
+        <template x-if="selectedResearchRunId">
+          <div class="adm-detail">
+            <div class="adm-detail__head">
+              <h2 class="adm-h2 adm-h2--flush">
+                Research run <span x-text="selectedResearchRunId"></span>
+                <span x-show="selectedResearchRun?.run" :class="statusClass(selectedResearchRun?.run?.status)"
+                  x-text="selectedResearchRun?.run?.status"></span>
+              </h2>
+              <button type="button" class="adm-btn adm-btn--ghost" @click="closeResearchRun()">Close</button>
+            </div>
+
+            <p x-show="researchDetailLoading" class="rm-loading">Loading run…</p>
+            <p x-show="researchDetailError" x-text="researchDetailError" class="rm-error"></p>
+
+            <template x-if="selectedResearchRun?.run">
+              <div>
+                <p class="adm-dim">
+                  job <span x-text="selectedResearchRun.run.jobId ?? '—'"></span> ·
+                  attempt <span x-text="selectedResearchRun.run.attempt"></span> ·
+                  as-of <span x-text="selectedResearchRun.run.asof"></span> ·
+                  source <span x-text="selectedResearchRun.run.sourceMode"></span> ·
+                  tools <span x-text="(selectedResearchRun.run.tools || []).join(', ')"></span>
+                </p>
+                <a class="adm-link" target="_blank" rel="noopener" :href="publicReportHref(selectedResearchRun.run.tools)">Open public report ↗</a>
+                <template x-if="selectedResearchRun.run.jobId">
+                  <button type="button" class="adm-btn adm-btn--ghost" @click="goSection('queue'); openJob(selectedResearchRun.run.jobId)">View queue job</button>
+                </template>
+
+                <h2 class="adm-h2">Stages</h2>
+                <div class="adm-stages">
+                  <template x-for="stg in stagesOf(selectedResearchRun)" :key="stg.id">
+                    <div class="adm-stage">
+                      <span class="adm-stage__name" x-text="stg.stage"></span>
+                      <span :class="statusClass(stg.status)" x-text="stg.status"></span>
+                      <span class="adm-dim" x-text="stg.toolId"></span>
+                      <span class="adm-dim" x-text="stg.startedAt ? fmtTime(stg.startedAt) : ''"></span>
+                      <pre x-show="stg.summary && Object.keys(stg.summary).length" class="adm-log" x-text="prettyJson(stg.summary)"></pre>
+                      <pre x-show="stg.error" class="adm-log adm-log--err" x-text="stg.error"></pre>
+                    </div>
+                  </template>
+                  <p x-show="stagesOf(selectedResearchRun).length === 0" class="adm-dim">No stage detail recorded for this run.</p>
+                </div>
+
+                <h2 class="adm-h2">Artifacts</h2>
+                <div class="adm-artifacts">
+                  <template x-for="art in (selectedResearchRun.artifacts || [])" :key="art.id">
+                    <div class="adm-run">
+                      <div class="adm-artifact__head">
+                        <span x-text="art.toolId"></span>
+                        <span x-text="art.kind"></span>
+                        <span x-text="art.artifactKey"></span>
+                        <span class="adm-dim" x-show="art.rowCount != null" x-text="art.rowCount + ' rows'"></span>
+                        <span class="adm-dim" x-show="art.firstDate" x-text="art.firstDate + ' → ' + art.lastDate"></span>
+                        <a class="adm-link" target="_blank" rel="noopener" :href="rawSeriesHref(art.artifactKey)" x-show="art.kind === 'raw-series'">Raw series ↗</a>
+                      </div>
+                      <pre x-show="art.preview" class="adm-log" x-text="prettyJson(art.preview)"></pre>
+                    </div>
+                  </template>
+                  <p x-show="(selectedResearchRun.artifacts || []).length === 0" class="adm-dim">No artifacts recorded for this run.</p>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- Run list + rerun -->
+        <template x-if="!selectedResearchRunId">
+          <div>
+            <h2 class="adm-h2 adm-h2--flush">Request a rerun</h2>
+            <form class="adm-form" @submit.prevent="submitRerun()">
+              <div class="adm-form__row">
+                <label for="rerun-kind">Kind</label>
+                <select id="rerun-kind" x-model="rerun.kind">
+                  <option value="regime.classify">regime.classify</option>
+                  <option value="research.refresh">research.refresh</option>
+                </select>
+              </div>
+              <div class="adm-form__row" x-show="rerun.kind === 'research.refresh'">
+                <label for="rerun-tool">Tool (optional — blank reruns both)</label>
+                <select id="rerun-tool" x-model="rerun.toolId">
+                  <option value="">both</option>
+                  <option value="channel-divergence">channel-divergence</option>
+                  <option value="late-cycle-signals">late-cycle-signals</option>
+                </select>
+              </div>
+              <div class="adm-form__row">
+                <label for="rerun-asof">As-of date</label>
+                <input id="rerun-asof" type="date" x-model="rerun.asof" />
+              </div>
+              <div class="adm-form__row">
+                <label for="rerun-reason">Reason (10–500 characters)</label>
+                <textarea id="rerun-reason" x-model="rerun.reason" placeholder="Why does this rerun need to happen?"></textarea>
+              </div>
+              <button type="submit" class="adm-btn" :disabled="!rerunValid() || rerunSubmitting">Request rerun</button>
+              <p x-show="rerunError" x-text="rerunError" class="rm-error"></p>
+              <p x-show="rerunResult" class="adm-success">
+                Queued as job <a class="adm-link" href="#" @click.prevent="goSection('queue'); openJob(rerunResult.jobId)" x-text="rerunResult?.jobId"></a>.
+              </p>
+            </form>
+
+            <h2 class="adm-h2">Filters</h2>
+            <div class="adm-filters">
+              <div class="adm-field"><span>Job kind</span>
+                <select x-model="researchFilters.kind">
+                  <option value="">any</option>
+                  <option value="regime.classify">regime.classify</option>
+                  <option value="research.refresh">research.refresh</option>
+                </select>
+              </div>
+              <div class="adm-field"><span>Tool</span>
+                <select x-model="researchFilters.tool">
+                  <option value="">any</option>
+                  <option value="regime">regime</option>
+                  <option value="channel-divergence">channel-divergence</option>
+                  <option value="late-cycle-signals">late-cycle-signals</option>
+                </select>
+              </div>
+              <div class="adm-field"><span>Status</span>
+                <select x-model="researchFilters.status">
+                  <option value="">any</option>
+                  <option value="running">running</option>
+                  <option value="succeeded">succeeded</option>
+                  <option value="warning">warning</option>
+                  <option value="failed">failed</option>
+                </select>
+              </div>
+              <div class="adm-field"><span>As-of</span><input type="date" x-model="researchFilters.asof" /></div>
+              <div class="adm-field"><span>Job id</span><input type="text" x-model="researchFilters.jobId" placeholder="job id" /></div>
+              <button type="button" class="adm-btn adm-btn--ghost" @click="applyResearchFilters()">Apply</button>
+              <button type="button" class="adm-btn adm-btn--ghost" @click="clearResearchFilters()">Clear</button>
+            </div>
+
+            <p x-show="researchError" x-text="researchError" class="rm-error"></p>
+            <div class="rm-table-scroll">
+              <table class="rm-table adm-table">
+                <thead>
+                  <tr>
+                    <th>Run</th><th>Job</th><th>Kind</th><th>Tools</th><th>As-of</th><th>Stage</th><th>Status</th><th>Warnings</th><th>Started</th><th>Finished</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="run in researchRuns" :key="run.id">
+                    <tr class="adm-row" @click="openResearchRun(run.id)">
+                      <td x-text="run.id"></td>
+                      <td x-text="run.jobId ?? '—'"></td>
+                      <td x-text="run.jobKind"></td>
+                      <td x-text="(run.tools || []).join(', ')"></td>
+                      <td x-text="run.asof"></td>
+                      <td x-text="run.currentStage"></td>
+                      <td><span :class="statusClass(run.status)" x-text="run.status"></span></td>
+                      <td x-text="run.warningCount ?? 0"></td>
+                      <td x-text="fmtTime(run.startedAt)"></td>
+                      <td x-text="fmtTime(run.finishedAt)"></td>
+                    </tr>
+                  </template>
+                  <tr x-show="!researchLoading && researchRuns.length === 0"><td class="adm-dim" colspan="10">No research runs found.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <!-- ── Queue ────────────────────────────────────────────────────────── -->
+    <template x-if="section === 'queue'">
+      <div>
+        <p x-show="queueError" x-text="queueError" class="rm-error"></p>
+
+        <h2 class="adm-h2 adm-h2--flush">Filters</h2>
+        <div class="adm-filters">
+          <div class="adm-field"><span>Kind</span><input type="text" x-model="queueFilters.kind" placeholder="job kind" /></div>
+          <div class="adm-field"><span>Status</span>
+            <select x-model="queueFilters.status">
+              <option value="">any</option>
+              <option value="pending">pending</option>
+              <option value="running">running</option>
+              <option value="succeeded">succeeded</option>
+              <option value="failed">failed</option>
+              <option value="dead">dead</option>
+              <option value="cancelled">cancelled</option>
+            </select>
+          </div>
+          <div class="adm-field"><span>Scope type</span><input type="text" x-model="queueFilters.scopeType" placeholder="e.g. committee_session" /></div>
+          <div class="adm-field"><span>Scope id</span><input type="text" x-model="queueFilters.scopeId" placeholder="scope id" /></div>
+          <button type="button" class="adm-btn adm-btn--ghost" @click="applyQueueFilters()">Apply</button>
+          <button type="button" class="adm-btn adm-btn--ghost" @click="clearQueueFilters()">Clear</button>
+        </div>
+
+        <!-- Schedules -->
+        <h2 class="adm-h2">Schedules</h2>
+        <div class="rm-table-scroll">
+          <table class="rm-table adm-table">
+            <thead>
+              <tr><th>Kind</th><th>Cron</th><th>Enabled</th><th>Next run</th><th>Last enqueued</th></tr>
+            </thead>
+            <tbody>
+              <template x-for="sch in schedules" :key="sch.id">
+                <tr>
+                  <td x-text="sch.kind"></td>
+                  <td x-text="sch.cron"></td>
+                  <td x-text="sch.enabled ? 'yes' : 'no'"></td>
+                  <td x-text="fmtTime(sch.next_run_at)"></td>
+                  <td x-text="fmtTime(sch.last_enqueued_at)"></td>
+                </tr>
+              </template>
+              <tr x-show="schedules.length === 0"><td class="adm-dim" colspan="5">No schedules.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Jobs -->
+        <h2 class="adm-h2">Jobs</h2>
+        <div class="rm-table-scroll">
+          <table class="rm-table adm-table">
+            <thead>
+              <tr>
+                <th>ID</th><th>Kind</th><th>Status</th><th>Attempts</th><th>Run after</th><th>Last error</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="job in jobs" :key="job.id">
+                <tr class="adm-row" @click="openJob(job.id)">
+                  <td x-text="job.id"></td>
+                  <td x-text="job.kind"></td>
+                  <td><span :class="statusClass(job.status)" x-text="job.status"></span></td>
+                  <td x-text="job.attempts + '/' + job.max_attempts"></td>
+                  <td x-text="fmtTime(job.run_after)"></td>
+                  <td class="adm-err" x-text="job.last_error || '—'"></td>
+                </tr>
+              </template>
+              <tr x-show="!queueLoading && jobs.length === 0"><td class="adm-dim" colspan="6">No jobs found.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Job detail (job + its runs = the logs) -->
+        <div x-show="selectedJob" class="adm-detail" x-cloak>
+          <div class="adm-detail__head">
+            <h2 class="adm-h2 adm-h2--flush">
+              Job <span x-text="selectedJob?.job?.id"></span> ·
+              <span x-text="selectedJob?.job?.kind"></span>
+              <span :class="statusClass(selectedJob?.job?.status)" x-text="selectedJob?.job?.status"></span>
+            </h2>
+            <button type="button" class="adm-btn adm-btn--ghost" @click="closeJob()">Close</button>
+          </div>
+
+          <button type="button" class="adm-btn" x-show="canRetry(selectedJob?.job)" @click="retryJob(selectedJob.job.id)">
+            Retry as new job
+          </button>
+          <p x-show="retryError" x-text="retryError" class="rm-error"></p>
+          <p x-show="retryResult" class="adm-success">
+            Retried as job <a class="adm-link" href="#" @click.prevent="openJob(retryResult.jobId)" x-text="retryResult?.jobId"></a>.
+          </p>
+
+          <template x-for="run in (selectedJob?.runs || [])" :key="run.id">
+            <div class="adm-run">
+              <div class="adm-run__meta">
+                <span :class="statusClass(run.status)" x-text="run.status"></span>
+                <span class="adm-dim" x-text="'started ' + fmtTime(run.started_at)"></span>
+                <span class="adm-dim" x-text="'finished ' + fmtTime(run.finished_at)"></span>
+              </div>
+              <pre x-show="run.error" class="adm-log adm-log--err" x-text="run.error"></pre>
+              <pre x-show="hasOutput(run)" class="adm-log" x-text="prettyJson(run.output)"></pre>
+            </div>
           </template>
-          <tr x-show="runs.length === 0"><td class="adm-dim" colspan="6">No runs yet.</td></tr>
-        </tbody>
-      </table>
-    </div>
+          <p x-show="(selectedJob?.runs || []).length === 0" class="adm-dim">No runs recorded for this job.</p>
+        </div>
+
+        <!-- Recent runs feed (logs across all jobs) -->
+        <h2 class="adm-h2">Recent runs</h2>
+        <div class="rm-table-scroll">
+          <table class="rm-table adm-table">
+            <thead>
+              <tr>
+                <th>Run</th><th>Job</th><th>Kind</th><th>Status</th><th>Started</th><th>Finished</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="run in runs" :key="run.id">
+                <tr class="adm-row" @click="openJob(run.job_id)">
+                  <td x-text="run.id"></td>
+                  <td x-text="run.job_id ?? '—'"></td>
+                  <td x-text="run.kind"></td>
+                  <td><span :class="statusClass(run.status)" x-text="run.status"></span></td>
+                  <td x-text="fmtTime(run.started_at)"></td>
+                  <td x-text="fmtTime(run.finished_at)"></td>
+                </tr>
+              </template>
+              <tr x-show="!queueLoading && runs.length === 0"><td class="adm-dim" colspan="6">No runs yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
 
   </div>
 

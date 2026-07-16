@@ -124,10 +124,18 @@ export const ROUTES = {
 
   admin: {
     auth: "/api/admin/auth", // POST — verify the admin password → { ok: true }
-    jobs: "/api/admin/jobs", // GET ?limit= — task-queue jobs + schedules + status summary
+    // GET — health cards + alert feed (queue counts, last success/failure by
+    // kind, stale research signals, next enabled schedules). See
+    // docs/plan-admin-surface.md US-A2. Route shape fixed here so the #157
+    // frontend and the #155 backend converge on the same path on rebase.
+    overview: "/api/admin/overview",
+    jobs: "/api/admin/jobs", // GET ?limit=&kind=&status=&scope_type=&scope_id=&from=&to= — task-queue jobs + schedules + status summary
     job: "/api/admin/jobs/:id", // GET — one job + its recent runs (the logs)
+    jobRetry: "/api/admin/jobs/:id/retry", // POST — clone a dead job into a new pending job (US-Q1)
     runs: "/api/admin/runs", // GET ?kind=&status=&limit= — recent job_runs feed (the logs)
-    // Research pipeline telemetry admin surface (issue #151). X-Admin-Token.
+    // Research pipeline telemetry admin surface (issue #151, consumed by the
+    // #157 operator UI per docs/plan-admin-surface.md US-R1..US-R4).
+    // X-Admin-Token. Shape fixed by the #151 backend; frontend converges here.
     researchRuns: "/api/admin/research/runs", // GET ?kind=&status=&limit= — run list
     researchRun: "/api/admin/research/runs/:id", // GET — run detail: stage timeline, warnings, artifacts, freshness
     researchRawSeries: "/api/admin/research/raw-series/:indicator", // GET ?from=&to=&limit= — allowlisted raw_indicator_history read

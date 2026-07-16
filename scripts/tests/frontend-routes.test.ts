@@ -46,6 +46,22 @@ describe("frontend route resolution", () => {
     expect(viewFor("/research/channel-divergence")).toBe("/views/research/channel-divergence.html");
   });
 
+  test("resolves every /admin subpath to the one buildless admin shell fragment", () => {
+    // The admin shell (adminSurfaceView) reads location.pathname itself to pick
+    // a section — /admin/research, /admin/research/runs/:id, and /admin/queue
+    // must NOT fall through to the generic catch-all, which would request a
+    // nonexistent per-path view fragment and 404 (issue #157 AC1).
+    expect(viewFor("/admin")).toBe("/views/admin.html");
+    expect(viewFor("/admin/research")).toBe("/views/admin.html");
+    expect(viewFor("/admin/research/runs/abc-123")).toBe("/views/admin.html");
+    expect(viewFor("/admin/queue")).toBe("/views/admin.html");
+    // Other supported admin paths (committee/audit sections are out of #157's
+    // scope but still route to the shell) resolve the same way.
+    expect(viewFor("/admin/committee")).toBe("/views/admin.html");
+    expect(viewFor("/admin/audit")).toBe("/views/admin.html");
+    expect(viewFor("/admin/")).toBe("/views/admin.html");
+  });
+
   test("resolves dynamic committee routes to reusable fragments", () => {
     expect(viewFor("/committee/members/athena")).toBe("/views/committee/member.html");
     expect(viewFor("/committee/members/woon")).toBe("/views/committee/member.html");

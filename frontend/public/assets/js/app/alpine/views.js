@@ -19,7 +19,7 @@ import { registerAllocationView } from "./views/allocation.js";
 import { registerCommitteeView } from "./views/committee.js";
 import { registerCommentsThread } from "./views/comments.js";
 import { registerApplyForm } from "./views/apply-form.js";
-import { registerAdminJobsView } from "./views/admin-jobs.js";
+import { registerAdminSurfaceView } from "./views/admin-surface.js";
 
 export function registerViews(Alpine) {
   registerProjectsView(Alpine);
@@ -32,5 +32,5 @@ export function registerViews(Alpine) {
   registerCommitteeView(Alpine);
   registerCommentsThread(Alpine);
   registerApplyForm(Alpine);
-  registerAdminJobsView(Alpine);
+  registerAdminSurfaceView(Alpine);
 }
