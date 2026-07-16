@@ -8,7 +8,12 @@ import * as projects from "./projects.ts";
 import { sampleSharePrice } from "./vault.ts";
 import { sampleWalletBalances } from "./wallet.ts";
 
-export type JobHandler = (payload: Record<string, unknown>) => Promise<unknown>;
+// `jobId` is the claimed job's row id (loop.ts passes `job.id`). It is optional
+// and source-compatible: existing handlers that only take `payload` remain
+// valid JobHandlers (JS ignores the extra arg), while handlers that need to
+// link their output back to the originating job (e.g. analytics telemetry,
+// issue #179) can accept it as a second parameter.
+export type JobHandler = (payload: Record<string, unknown>, jobId?: number) => Promise<unknown>;
 
 const analytics = makeAnalyticsHandlers();
 
@@ -35,12 +40,19 @@ export const handlers: Record<string, JobHandler> = {
   "committee.publish": committee.publishSession,
   // projects "Agentic Economy Ecosystem" data pipelines (issue #87). Ported from
   // the deprecated bot-analytics edge functions onto the kind→handler pattern.
-  "projects.discover": projects.discover,
-  "projects.refresh_coins": projects.refreshCoins,
-  "projects.refresh_wallets": projects.refreshWallets,
-  "projects.sync_revenue": projects.syncRevenue,
+  // discover/refreshCoins/refreshWallets/syncRevenue/fetchVaults each already
+  // declare their OWN second parameter — a `ProjectsDataSource` test-injection
+  // seam (default `selectProjectsDataSource()`), unrelated to the job id — so
+  // they are wrapped down to single-arity here rather than passed directly:
+  // registering them as-is would let loop.ts's `job.id` (a number) flow into
+  // that `source` slot, which is both a type error against the widened
+  // `JobHandler` and a runtime miswiring.
+  "projects.discover": (payload) => projects.discover(payload),
+  "projects.refresh_coins": (payload) => projects.refreshCoins(payload),
+  "projects.refresh_wallets": (payload) => projects.refreshWallets(payload),
+  "projects.sync_revenue": (payload) => projects.syncRevenue(payload),
   "projects.snapshot_daily": projects.snapshotDaily,
-  "projects.fetch_vaults": projects.fetchVaults,
+  "projects.fetch_vaults": (payload) => projects.fetchVaults(payload),
   "projects.recompute_coverage": projects.recomputeCoverage,
 };
 

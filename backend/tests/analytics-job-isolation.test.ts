@@ -9,9 +9,15 @@
 import { test, expect, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
-import { makeAnalyticsHandlers, RESEARCH_TOOLS, REGIME_TOOL } from "../src/worker/handlers/analytics.ts";
+import { makeAnalyticsHandlers, RESEARCH_TOOLS, REGIME_TOOL, type AnalyticsRunner } from "../src/worker/handlers/analytics.ts";
 import { tickScheduler } from "../src/worker/scheduler.ts";
 import { seed } from "../src/db/seed.ts";
+import { processOneJob } from "../src/worker/loop.ts";
+import { LANES } from "../src/worker/lanes.ts";
+import { runAnalytics } from "../src/analytics/index.ts";
+import { hermeticDataSource } from "../src/analytics/access/hermetic-source.ts";
+import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
+import { directTelemetrySink } from "../src/analytics/store/telemetry-direct.ts";
 
 beforeEach(async () => { await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY CASCADE`; });
 
@@ -129,3 +135,42 @@ test("scheduler: separate per-kind dedupe keys — one slot per kind, never cros
   for (const j of jobs) expect(j.dedupe_key.startsWith(`${j.kind}:`)).toBe(true); // key namespaced by kind
   expect(new Set(jobs.map((j) => j.dedupe_key)).size).toBe(jobs.length); // all keys distinct
 });
+
+// Issue #179 — worker/loop.ts previously dropped `job.id` when invoking a
+// handler (`handler(job.payload)`), so `research_pipeline_runs.job_id` was
+// ALWAYS NULL for real job executions even though the handler layer already
+// accepted (and threaded through) an optional `jobId` param. This drives a
+// REAL end-to-end `processOneJob()` claim — not just the handler in isolation
+// — through the direct (SQL-backed) analytics persistence/telemetry ports
+// (the same API-owned path analytics-telemetry.test.ts exercises) and asserts
+// the persisted `research_pipeline_runs.job_id` matches the claimed job's id.
+test(
+  "processOneJob threads the claimed job.id into the analytics handler, and it lands in research_pipeline_runs.job_id",
+  async () => {
+    const directRunner: AnalyticsRunner = (asof, toolId, jobId) =>
+      runAnalytics(asof, toolId, hermeticDataSource, directAnalyticsPersistence, directTelemetrySink, jobId);
+    // Swap in a real (non-HTTP) analytics runner for this one claim, then
+    // restore the production registry entry — mirrors the test-kind injection
+    // pattern in worker-lease.test.ts.
+    const originalHandler = handlers["regime.classify"];
+    handlers["regime.classify"] = makeAnalyticsHandlers(directRunner).regimeClassify;
+    try {
+      const [{ id: jobId }] = await sql<{ id: number }[]>`
+        INSERT INTO jobs (kind, payload) VALUES ('regime.classify', ${sql.json({ asof: "2026-05-15" })}) RETURNING id`;
+
+      expect(await processOneJob({ lane: LANES.analytics })).toBe(true);
+
+      const [jobRow] = await sql`SELECT status FROM jobs WHERE id = ${jobId}`;
+      expect(jobRow.status).toBe("succeeded");
+
+      const [run] = await sql<{ job_id: number | null }[]>`
+        SELECT job_id FROM research_pipeline_runs WHERE kind = 'regime' ORDER BY id DESC LIMIT 1`;
+      expect(run).toBeDefined();
+      expect(run.job_id).not.toBeNull();
+      expect(Number(run.job_id)).toBe(Number(jobId)); // the claimed job's id, not NULL (the bug this test guards)
+    } finally {
+      handlers["regime.classify"] = originalHandler;
+    }
+  },
+  { timeout: 60_000 },
+);
