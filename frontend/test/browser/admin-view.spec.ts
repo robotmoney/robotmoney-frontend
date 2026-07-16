@@ -356,6 +356,11 @@ test("admin view: a mocked 403 clears the token, stops polling, and shows sessio
 });
 
 // ── Committee operations surface fixtures (issue #159) ──────────────────────
+// Reconciled to the REAL backend (issue #152/PR #169) per PR #172 review:
+// these mocks now serve the actual, already-shipped URL prefix
+// (/api/committee/admin/*, backend/src/api/routes/committee-admin.ts) with
+// its real verbs, action names, and response envelopes — not the invented
+// /api/admin/committee/* contract that no backend route ever implemented.
 
 const TOPIC_FIXTURE = {
   id: "woon-vault", status: "active", name: "Woon Vault", operator: "Woon Labs",
@@ -363,27 +368,25 @@ const TOPIC_FIXTURE = {
   wallets: [{ address: "0xabc0000000000000000000000000000000dead", chain: "base", label: "main" }],
   nftContracts: [], source: { type: "rpc" }, recommendationType: "position_actions",
   linkedMemberId: null, structuralNotes: [], lastReviewed: null,
-  version: 3, updatedAt: "2026-07-15T10:00:00.000Z",
+  version: 3, createdAt: "2026-06-01T00:00:00.000Z", updatedAt: "2026-07-15T10:00:00.000Z",
 };
 
+// toMemberAdmin()'s exact shape — no applicationStatus/activeKeyId/participation
+// (none of those exist on the real backend's member projection or any route).
 const MEMBER_APPLIED = {
-  id: "nova", status: "applied", name: "Nova", tagline: null, lens: "risk", mandate: null,
-  biases: null, voiceMd: null, mode: null, operator: null, avatar: null,
-  appliedAt: "2026-07-10T00:00:00.000Z", activatedAt: null,
-  version: 1, updatedAt: "2026-07-10T00:00:00.000Z", contactEmail: "nova@example.com",
-  applicationStatus: "pending", activeKeyId: null, activeKeyCreatedAt: null, participation: [],
+  id: "nova", status: "applied", version: 1, name: "Nova", tagline: null, lens: "risk",
+  mandate: null, contactEmail: "nova@example.com",
+  appliedAt: "2026-07-10T00:00:00.000Z", activatedAt: null, updatedAt: "2026-07-10T00:00:00.000Z",
 };
+// listApplicationsAdmin() row — raw snake_case, cross-referenced by member_id
+// to derive "applied + reviewable" (there is no applicationStatus field on
+// the member itself).
+const NOVA_APPLICATION = { id: 1, member_id: "nova", status: "pending", created_at: "2026-07-10T00:00:00.000Z", reviewed_at: null };
 
 const MEMBER_ACTIVE = {
-  id: "athena", status: "active", name: "Athena", tagline: "macro lens", lens: "macro", mandate: null,
-  biases: null, voiceMd: null, mode: null, operator: null, avatar: null,
-  appliedAt: "2026-06-01T00:00:00.000Z", activatedAt: "2026-06-02T00:00:00.000Z",
-  version: 2, updatedAt: "2026-06-02T00:00:00.000Z", contactEmail: "athena@example.com",
-  applicationStatus: "approved", activeKeyId: "key-1", activeKeyCreatedAt: "2026-06-02T00:00:00.000Z",
-  participation: [
-    { sessionId: "sess-1", date: "2026-07-01", subjectId: "woon-vault", subjectName: "Woon Vault",
-      rosterStatus: "submitted", stance: "bullish", receivedAt: "2026-07-01T20:00:00.000Z" },
-  ],
+  id: "athena", status: "active", version: 2, name: "Athena", tagline: "macro lens", lens: "macro",
+  mandate: null, contactEmail: "athena@example.com",
+  appliedAt: "2026-06-01T00:00:00.000Z", activatedAt: "2026-06-02T00:00:00.000Z", updatedAt: "2026-06-02T00:00:00.000Z",
   // Stray field a buggy backend must never send — proves the client's own
   // defense-in-depth redaction (never trust the wire alone for secrets).
   token_hash: "should-never-render-raw",
@@ -392,51 +395,57 @@ const MEMBER_ACTIVE = {
 // Third member state (inactive) — exercises the "Inactive" filter tab and the
 // reactivate action, neither of which the applied/active fixtures above cover.
 const MEMBER_INACTIVE = {
-  id: "cleo", status: "inactive", name: "Cleo", tagline: null, lens: "yield", mandate: null,
-  biases: null, voiceMd: null, mode: null, operator: null, avatar: null,
-  appliedAt: "2026-05-01T00:00:00.000Z", activatedAt: "2026-05-02T00:00:00.000Z",
-  version: 1, updatedAt: "2026-06-15T00:00:00.000Z", contactEmail: "cleo@example.com",
-  applicationStatus: "approved", activeKeyId: null, activeKeyCreatedAt: null, participation: [],
+  id: "cleo", status: "inactive", version: 1, name: "Cleo", tagline: null, lens: "yield",
+  mandate: null, contactEmail: "cleo@example.com",
+  appliedAt: "2026-05-01T00:00:00.000Z", activatedAt: "2026-05-02T00:00:00.000Z", updatedAt: "2026-06-15T00:00:00.000Z",
 };
 
-// Shared 3-member roster (submitted/expected/absent) reused by the default
-// sessionFixture(); a 4th `excused` row is layered on top only by the roster
-// test that needs it, so the default row-count assertions elsewhere are undisturbed.
-function baseRoster() {
+// GET .../sessions/:id/roster rows — getSessionRoster()'s raw, unprojected
+// (snake_case) shape. All three start `expected`; a 4th `excused` row is
+// layered on top only by the roster test that needs it.
+interface RosterRowFixture {
+  member_id: string; member_name: string; member_lens: string | null; status: "expected" | "excused";
+  included_at: string | null; excused_at: string | null; reason: string | null;
+}
+
+function baseRosterRows(): RosterRowFixture[] {
   return [
-    { memberId: "athena", memberName: "Athena", memberLens: "macro", status: "submitted",
-      includedAt: "2026-07-19T00:00:00.000Z", excusedAt: null, reason: null,
-      recommendation: {
-        id: "rec-1", stance: "bullish", confidence: 0.8, receivedAt: "2026-07-20T15:00:00.000Z",
-        verified: true, body: "Rotate into WOON.", memoUrl: null, nonce: "nonce-1",
-        signature: "sig-athena-abcdef", canonicalPayload: "canonical-payload-athena",
-      } },
-    { memberId: "nova", memberName: "Nova", memberLens: "risk", status: "expected",
-      includedAt: "2026-07-19T00:00:00.000Z", excusedAt: null, reason: null, recommendation: null },
-    { memberId: "robotmoney", memberName: "Robotmoney", memberLens: "protocol", status: "absent",
-      includedAt: "2026-07-19T00:00:00.000Z", excusedAt: null, reason: null, recommendation: null },
+    { member_id: "athena", member_name: "Athena", member_lens: "macro", status: "expected",
+      included_at: "2026-07-19T00:00:00.000Z", excused_at: null, reason: null },
+    { member_id: "nova", member_name: "Nova", member_lens: "risk", status: "expected",
+      included_at: "2026-07-19T00:00:00.000Z", excused_at: null, reason: null },
+    { member_id: "robotmoney", member_name: "Robotmoney", member_lens: "protocol", status: "expected",
+      included_at: "2026-07-19T00:00:00.000Z", excused_at: null, reason: null },
   ];
 }
 
-function sessionFixture(overrides: Record<string, unknown> = {}) {
+// Public per-member submission content (committee/projections.ts toTake(), via
+// GET /api/committee/sessions/:date/:subject). Only Athena has submitted —
+// Nova/Robotmoney stay "expected" (rendered as "absent" until they submit).
+// No nonce/signature/canonicalPayload field exists on any read route.
+function baseTakes() {
+  return [
+    { id: 1, memberId: "athena", memberName: "Athena", stance: "bullish", confidence: 0.8,
+      body: "Rotate into WOON.", memoUrl: null, verified: true, receivedAt: "2026-07-20T15:00:00.000Z" },
+  ];
+}
+
+// Public session summary (committee/projections.ts toSession()) — the ONLY
+// session read surface. No version/briefOpensAt/publishAt field exists here
+// (those are only ever returned transiently by the create-session response).
+function sessionSummary(overrides: Record<string, unknown> = {}) {
   return {
-    id: "sess-1", version: 2, updatedAt: "2026-07-19T00:00:00.000Z",
-    date: "2026-07-20", subjectId: "woon-vault", subjectName: "Woon Vault",
-    state: "collecting",
-    briefOpensAt: "2026-07-20T14:00:00.000Z",
-    windowClosesAt: "2026-07-20T20:00:00.000Z",
-    publishAt: "2026-07-20T21:00:00.000Z",
-    publishedAt: null, cancelledAt: null,
-    roster: baseRoster(),
-    jobs: [{ action: "close_window", jobId: 501, status: "pending", runAfter: "2026-07-20T20:00:00.000Z" }],
-    events: [{ id: 1, fromState: null, toState: "scheduled", action: "create", actor: "admin", reason: "scheduled",
-      jobId: null, at: "2026-07-19T00:00:00.000Z" }],
-    aggregate: null,
-    nextLegalActions: ["close_window", "cancel"],
+    id: "sess-1", date: "2026-07-20", subjectId: "woon-vault", subjectName: "Woon Vault",
+    state: "collecting", windowClosesAt: "2026-07-20T20:00:00.000Z", publishedAt: null,
+    regimeSummary: null, subjectSnapshotTotalValueUsd: null, synthesis: null,
+    committeeRecommendation: null, socialDraftId: null, generatedAt: "2026-07-19T00:00:00.000Z",
     ...overrides,
   };
 }
 
+// Generic admin audit feed (/api/admin/audit) — a SEPARATE, still-unimplemented
+// surface from the committee-scoped one above (see contract/src/routes.js);
+// only the standalone /admin/audit page test at the bottom of this file uses it.
 const AUDIT_FIXTURE = {
   items: [
     { id: 1, at: "2026-07-20T15:05:00.000Z", actor: "admin", action: "committee.member.activate",
@@ -451,73 +460,75 @@ const AUDIT_FIXTURE = {
   nextCursor: null,
 };
 
-async function mockCommitteeApi(page: Page, opts: { session?: ReturnType<typeof sessionFixture> } = {}): Promise<void> {
+async function mockCommitteeApi(
+  page: Page,
+  opts: { session?: ReturnType<typeof sessionSummary>; rosterRows?: ReturnType<typeof baseRosterRows>; takes?: ReturnType<typeof baseTakes> } = {},
+): Promise<void> {
   await mockVendorScripts(page);
   await page.route("**/api/admin/auth", (route) => route.fulfill(jsonReply({ ok: true })));
 
-  await page.route(/\/api\/admin\/committee\/subjects(\?|$)/, (route) => {
-    if (route.request().method() === "POST") {
-      return route.fulfill(jsonReply({ item: { ...TOPIC_FIXTURE, id: "new-topic" }, auditRequestId: "req-topic" }, 201));
-    }
-    return route.fulfill(jsonReply({ items: [TOPIC_FIXTURE], nextCursor: null }));
-  });
-  await page.route(/\/api\/admin\/committee\/subjects\/woon-vault$/, (route) => {
-    if (route.request().method() === "PATCH") {
-      return route.fulfill(jsonReply({ item: { ...TOPIC_FIXTURE, version: 4 }, auditRequestId: "req-edit" }));
-    }
-    return route.fulfill(jsonReply(TOPIC_FIXTURE));
-  });
-  await page.route(/\/api\/admin\/committee\/subjects\/woon-vault\/deactivate$/, (route) =>
-    route.fulfill(jsonReply({ item: { ...TOPIC_FIXTURE, status: "inactive", version: 4 }, auditRequestId: "req-deact" })));
+  const session = opts.session || sessionSummary();
+  const rosterRows = opts.rosterRows || baseRosterRows();
+  const takes = opts.takes || baseTakes();
 
-  await page.route(/\/api\/admin\/committee\/members(\?|$)/, (route) => {
+  // ── Topics ──────────────────────────────────────────────────────────────
+  await page.route(/\/api\/committee\/admin\/subjects$/, (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill(jsonReply({ ok: true, status: 201, subject: { ...TOPIC_FIXTURE, id: "new-topic" } }, 201));
+    }
+    return route.fulfill(jsonReply({ subjects: [TOPIC_FIXTURE] }));
+  });
+  await page.route(/\/api\/committee\/admin\/subjects\/woon-vault\/update$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, subject: { ...TOPIC_FIXTURE, version: 4 } })));
+  await page.route(/\/api\/committee\/admin\/subjects\/woon-vault\/deactivate$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, subject: { ...TOPIC_FIXTURE, status: "inactive", version: 4 } })));
+
+  // ── Members ─────────────────────────────────────────────────────────────
+  await page.route(/\/api\/committee\/admin\/members$/, (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill(jsonReply({ ok: true, status: 201, member: { ...MEMBER_APPLIED, id: "new-member" }, token: "member-bearer-token-abc123" }, 201));
+    }
+    return route.fulfill(jsonReply({ members: [MEMBER_APPLIED, MEMBER_ACTIVE, MEMBER_INACTIVE] }));
+  });
+  await page.route(/\/api\/committee\/admin\/applications(\?.*)?$/, (route) =>
+    route.fulfill(jsonReply({ applications: [NOVA_APPLICATION] })));
+  // activate/reject are the SAME endpoint (POST .../review, body {decision}).
+  await page.route(/\/api\/committee\/admin\/members\/nova\/review$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, memberId: "nova", memberStatus: "active", token: "activated-bearer-token-xyz789" })));
+  // reactivate mints a fresh credential WITHOUT taking a new public key.
+  await page.route(/\/api\/committee\/admin\/members\/cleo\/reactivate$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_INACTIVE, status: "active" }, token: "reactivated-bearer-token-def456" })));
+  await page.route(/\/api\/committee\/admin\/members\/athena\/rotate-key$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, memberId: "athena", token: "rotated-bearer-token-ghi789" })));
+
+  // ── Sessions ────────────────────────────────────────────────────────────
+  await page.route(/\/api\/committee\/admin\/sessions$/, (route) => {
     if (route.request().method() === "POST") {
       return route.fulfill(jsonReply({
-        item: { ...MEMBER_APPLIED, id: "new-member" },
-        auditRequestId: "req-member",
-        credential: { token: "member-bearer-token-abc123" },
+        ok: true, status: 201,
+        session: { id: "sess-1", date: "2026-07-20", subjectId: "woon-vault", subjectName: "Woon Vault", state: "scheduled", version: 1 },
+        rosterSize: 3, jobIds: [501, 502, 503, 504],
       }, 201));
     }
-    return route.fulfill(jsonReply({ items: [MEMBER_APPLIED, MEMBER_ACTIVE, MEMBER_INACTIVE], nextCursor: null }));
+    return route.fulfill(jsonReply({ error: "no admin session-list route exists" }, 404));
   });
-  await page.route(/\/api\/admin\/committee\/members\/nova$/, (route) => route.fulfill(jsonReply(MEMBER_APPLIED)));
-  await page.route(/\/api\/admin\/committee\/members\/athena$/, (route) => route.fulfill(jsonReply(MEMBER_ACTIVE)));
-  await page.route(/\/api\/admin\/committee\/members\/cleo$/, (route) => route.fulfill(jsonReply(MEMBER_INACTIVE)));
-  await page.route(/\/api\/admin\/committee\/members\/nova\/activate$/, (route) =>
-    route.fulfill(jsonReply({
-      item: { ...MEMBER_APPLIED, status: "active", applicationStatus: "approved" },
-      auditRequestId: "req-activate",
-      credential: { token: "activated-bearer-token-xyz789" },
-    })));
-  await page.route(/\/api\/admin\/committee\/members\/cleo\/reactivate$/, (route) =>
-    route.fulfill(jsonReply({
-      item: { ...MEMBER_INACTIVE, status: "active", applicationStatus: "approved" },
-      auditRequestId: "req-reactivate",
-      credential: { token: "reactivated-bearer-token-def456" },
-    })));
-  await page.route(/\/api\/admin\/committee\/members\/athena\/rotate-key$/, (route) =>
-    route.fulfill(jsonReply({
-      item: { ...MEMBER_ACTIVE, activeKeyId: "key-2" },
-      auditRequestId: "req-rotate",
-      credential: { token: "rotated-bearer-token-ghi789" },
-    })));
-
-  await page.route(/\/api\/admin\/committee\/sessions(\?|$)/, (route) => {
-    if (route.request().method() === "POST") {
-      return route.fulfill(jsonReply({ item: sessionFixture(), auditRequestId: "req-session" }, 201));
-    }
-    return route.fulfill(jsonReply({ items: [sessionFixture()], nextCursor: null }));
+  // No admin session-list route exists — the overview's Sessions tab and the
+  // session detail page both read the PUBLIC list/detail routes instead.
+  await page.route(/\/api\/committee\/sessions$/, (route) => route.fulfill(jsonReply({ sessions: [session] })));
+  await page.route(/\/api\/committee\/sessions\/2026-07-20\/woon-vault$/, (route) =>
+    route.fulfill(jsonReply({ session, takes })));
+  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/roster$/, (route) => route.fulfill(jsonReply({ roster: rosterRows })));
+  // Three separate roster-mutation endpoints, never a single PATCH.
+  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/roster\/(add|excuse|restore)$/, (route) => {
+    const memberId = route.request().postDataJSON()?.memberId;
+    return route.fulfill(jsonReply({ ok: true, status: 200, sessionId: "sess-1", memberId }));
   });
-  const session = opts.session || sessionFixture();
-  await page.route(/\/api\/admin\/committee\/sessions\/sess-1$/, (route) => route.fulfill(jsonReply(session)));
-  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/roster$/, (route) =>
-    route.fulfill(jsonReply({ item: session, auditRequestId: "req-roster" })));
-  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/actions\/close_window$/, (route) =>
-    route.fulfill(jsonReply({ jobId: 999, auditRequestId: "req-action", existing: false }, 202)));
-  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/actions\/aggregate$/, (route) =>
-    route.fulfill(jsonReply({ jobId: 501, auditRequestId: "req-action-2", existing: true }, 202)));
-  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/actions\/cancel$/, (route) =>
-    route.fulfill(jsonReply({ error: "invalid_transition", code: "invalid_transition" }, 409)));
+  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/close$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, session: { id: "sess-1", state: "window_closed", version: 3 } })));
+  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/aggregate$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, idempotent: true, session: { id: "sess-1", state: "aggregated", version: 3 } })));
+  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/cancel$/, (route) =>
+    route.fulfill(jsonReply({ ok: false, status: 409, error: "illegal_transition:published->cancelled" }, 409)));
 
   await page.route(/\/api\/admin\/audit(\?|$)/, (route) => route.fulfill(jsonReply(AUDIT_FIXTURE)));
 }
@@ -559,9 +570,9 @@ test("committee admin: direct navigation and back/forward across nested routes",
 test("committee admin: a mocked 403 logs out and shows session-expired", async ({ page }) => {
   await mockVendorScripts(page);
   await page.route("**/api/admin/auth", (route) => route.fulfill(jsonReply({ ok: true })));
-  await page.route(/\/api\/admin\/committee\/subjects(\?|$)/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
-  await page.route(/\/api\/admin\/committee\/members(\?|$)/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
-  await page.route(/\/api\/admin\/committee\/sessions(\?|$)/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
+  await page.route(/\/api\/committee\/admin\/subjects$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
+  await page.route(/\/api\/committee\/admin\/members$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
+  await page.route(/\/api\/committee\/sessions$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
 
   await signIn(page, "/admin/committee");
   await expect(page.getByText("Session expired — sign in again.")).toBeVisible();
@@ -597,12 +608,12 @@ test("committee admin: topic form rejects invalid input and create posts the exa
   await expect(page.getByTestId("topic-form").getByText(/rpc topics require/)).toBeVisible();
 
   let captured: unknown = null;
-  await page.route(/\/api\/admin\/committee\/subjects(\?|$)/, async (route) => {
+  await page.route(/\/api\/committee\/admin\/subjects$/, async (route) => {
     if (route.request().method() === "POST") {
       captured = route.request().postDataJSON();
-      return route.fulfill(jsonReply({ item: { ...TOPIC_FIXTURE, id: "new-topic" }, auditRequestId: "req-topic" }, 201));
+      return route.fulfill(jsonReply({ ok: true, status: 201, subject: { ...TOPIC_FIXTURE, id: "new-topic" } }, 201));
     }
-    return route.fulfill(jsonReply({ items: [TOPIC_FIXTURE], nextCursor: null }));
+    return route.fulfill(jsonReply({ subjects: [TOPIC_FIXTURE] }));
   });
   await page.getByTestId("topic-add-wallet").click();
   await page.locator(".adm-wallet-row input").first().fill("0x00000000000000000000000000000000000001");
@@ -622,39 +633,31 @@ test("committee admin: topic edit surfaces a 400 (unknown field) and a 409 (stal
   await signIn(page, "/admin/committee/subjects/woon-vault");
   await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
 
-  await page.route(/\/api\/admin\/committee\/subjects\/woon-vault$/, (route) => {
-    if (route.request().method() === "PATCH") {
-      return route.fulfill(jsonReply({ error: "unknown field: bogus" }, 400));
-    }
-    return route.fulfill(jsonReply(TOPIC_FIXTURE));
-  });
+  await page.route(/\/api\/committee\/admin\/subjects\/woon-vault\/update$/, (route) =>
+    route.fulfill(jsonReply({ error: "unknown field: bogus" }, 400)));
   await page.getByTestId("topic-edit-toggle").click();
   await page.getByTestId("edit-reason").fill("Editing for coverage purposes.");
   await page.getByTestId("edit-submit").click();
   await expect(page.getByText("unknown field: bogus")).toBeVisible();
 
-  await page.route(/\/api\/admin\/committee\/subjects\/woon-vault$/, (route) => {
-    if (route.request().method() === "PATCH") return route.fulfill(jsonReply({ error: "stale_version", code: "stale_version" }, 409));
-    return route.fulfill(jsonReply(TOPIC_FIXTURE));
-  });
+  await page.route(/\/api\/committee\/admin\/subjects\/woon-vault\/update$/, (route) =>
+    route.fulfill(jsonReply({ ok: false, status: 409, error: "stale_version" }, 409)));
   await page.getByTestId("edit-submit").click();
   await expect(page.getByText(/stale version/)).toBeVisible();
 });
 
-// AC: a successful topic edit PATCHes the dedicated endpoint and asserts the
-// exact request body (mirrors the create-test pattern above).
-test("committee admin: topic edit succeeds and posts the exact PATCH body", async ({ page }) => {
+// AC: a successful topic edit POSTs the dedicated `.../update` endpoint (not
+// PATCH) and asserts the exact request body, keyed `expectedVersion` (not
+// `version` — the field the real backend's parseExpectedVersion reads).
+test("committee admin: topic edit succeeds and posts the exact update body", async ({ page }) => {
   await mockCommitteeApi(page);
   await signIn(page, "/admin/committee/subjects/woon-vault");
   await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
 
   let captured: unknown = null;
-  await page.route(/\/api\/admin\/committee\/subjects\/woon-vault$/, async (route) => {
-    if (route.request().method() === "PATCH") {
-      captured = route.request().postDataJSON();
-      return route.fulfill(jsonReply({ item: { ...TOPIC_FIXTURE, name: "Woon Vault Renamed", version: 4 }, auditRequestId: "req-edit" }));
-    }
-    return route.fulfill(jsonReply(TOPIC_FIXTURE));
+  await page.route(/\/api\/committee\/admin\/subjects\/woon-vault\/update$/, async (route) => {
+    captured = route.request().postDataJSON();
+    return route.fulfill(jsonReply({ ok: true, status: 200, subject: { ...TOPIC_FIXTURE, name: "Woon Vault Renamed", version: 4 } }));
   });
 
   await page.getByTestId("topic-edit-toggle").click();
@@ -664,23 +667,23 @@ test("committee admin: topic edit succeeds and posts the exact PATCH body", asyn
 
   await expect(page.getByTestId("topic-edit-form")).not.toBeVisible();
   expect(captured).toMatchObject({
-    version: 3, name: "Woon Vault Renamed", operator: "Woon Labs",
+    expectedVersion: 3, name: "Woon Vault Renamed", operator: "Woon Labs",
     thesisBlurb: "A vault strategy thesis.", source: { type: "rpc" },
     reason: "Renaming for accuracy and coverage.",
   });
 });
 
 // AC: the deactivate flow (toggle → reason → confirm) POSTs the dedicated
-// deactivate endpoint and asserts version/reason in the request body.
-test("committee admin: topic deactivate flow posts to the dedicated endpoint with version and reason", async ({ page }) => {
+// deactivate endpoint and asserts expectedVersion/reason in the request body.
+test("committee admin: topic deactivate flow posts to the dedicated endpoint with expectedVersion and reason", async ({ page }) => {
   await mockCommitteeApi(page);
   await signIn(page, "/admin/committee/subjects/woon-vault");
   await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
 
   let captured: unknown = null;
-  await page.route(/\/api\/admin\/committee\/subjects\/woon-vault\/deactivate$/, async (route) => {
+  await page.route(/\/api\/committee\/admin\/subjects\/woon-vault\/deactivate$/, async (route) => {
     captured = route.request().postDataJSON();
-    return route.fulfill(jsonReply({ item: { ...TOPIC_FIXTURE, status: "inactive", version: 4 }, auditRequestId: "req-deact" }));
+    return route.fulfill(jsonReply({ ok: true, status: 200, subject: { ...TOPIC_FIXTURE, status: "inactive", version: 4 } }));
   });
 
   await page.getByTestId("topic-deactivate-toggle").click();
@@ -689,7 +692,7 @@ test("committee admin: topic deactivate flow posts to the dedicated endpoint wit
   await page.getByTestId("deactivate-confirm-submit").click();
 
   await expect(page.getByTestId("deactivate-confirm")).not.toBeVisible();
-  expect(captured).toMatchObject({ version: 3, reason: "Deactivating this topic for coverage." });
+  expect(captured).toMatchObject({ expectedVersion: 3, reason: "Deactivating this topic for coverage." });
 });
 
 // AC: applied/active/inactive filtering + one-time credential reveal + no
@@ -756,14 +759,16 @@ test("committee admin: inactive filter, manual-add credential reveal, and reacti
   await page.getByTestId("credential-dismiss").click();
   await expect(page.getByTestId("credential-modal")).not.toBeVisible();
 
-  // Reactivate: Cleo is inactive, so `member-reactivate` (which requires a new
-  // public key) is the offered action; its response mints a fresh credential.
+  // Reactivate: Cleo is inactive, so `member-reactivate` is the offered
+  // action. Unlike rotate-key, reactivate does NOT take a new public key (it
+  // reuses the member's last on-file key) — the public-key field stays
+  // hidden for this action.
   await page.getByTestId("member-filter-inactive").click();
   await page.getByRole("cell", { name: "Cleo", exact: true }).click();
   await expect(page.getByRole("heading", { name: /Member cleo/ })).toBeVisible();
 
   await page.getByTestId("member-reactivate").click();
-  await page.getByTestId("member-action-public-key").fill("new-pubkey-1");
+  await expect(page.getByTestId("member-action-public-key")).toBeHidden();
   await page.getByTestId("member-action-reason").fill("Reactivating after cooldown period.");
   await page.getByTestId("member-action-submit").click();
 
@@ -790,7 +795,10 @@ test("committee admin: inactive filter, manual-add credential reveal, and reacti
 });
 
 // AC: session scheduling reason/ISO-ordering validation + UTC/local rendering
-// + linked jobs + roster snapshot + disabled illegal-transition controls.
+// + roster snapshot + disabled illegal-transition controls. "Linked jobs" is
+// gone (no session-scoped job read exists on the real backend — see
+// mockCommitteeApi's header comment), and legal actions are now the 5 real
+// action names, computed client-side from the session's `state`.
 test("committee admin: session create validation, UTC/local timeline, roster, and disabled illegal actions", async ({ page }) => {
   await mockCommitteeApi(page);
   await signIn(page, "/admin/committee");
@@ -810,28 +818,31 @@ test("committee admin: session create validation, UTC/local timeline, roster, an
   await expect(page.getByText(/briefOpensAt < windowClosesAt < publishAt/)).toBeVisible();
 
   await page.goto("/admin/committee/sessions/sess-1");
-  // Scoped to the timeline definition list — the linked-jobs table separately
-  // renders the same instant for its run_after column.
+  // Timeline now only has Window closes / Published (no version/briefOpensAt/
+  // publishAt — no GET route exposes them).
   await expect(page.locator(".adm-meta-grid").getByText("2026-07-20 20:00:00 UTC")).toBeVisible();
-  await expect(page.getByText(/local\)/)).toHaveCount(3);
-
-  await expect(page.getByText("close_window")).toBeVisible();
-  await expect(page.getByText("501")).toBeVisible();
+  await expect(page.getByText(/local\)/)).toHaveCount(1);
 
   await expect(page.getByRole("cell", { name: "Athena", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "Nova", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "Robotmoney", exact: true })).toBeVisible();
 
-  // Only actions in nextLegalActions (close_window, cancel) are enabled.
-  await expect(page.getByTestId("session-action-close_window")).toBeEnabled();
+  // Default fixture state is "collecting" → only close/cancel are legal
+  // (backend/src/committee/admin.ts TRANSITIONS, restricted to the 5 real
+  // HTTP actions).
+  await expect(page.getByTestId("session-action-close")).toBeEnabled();
   await expect(page.getByTestId("session-action-cancel")).toBeEnabled();
   await expect(page.getByTestId("session-action-publish")).toBeDisabled();
   await expect(page.getByTestId("session-action-aggregate")).toBeDisabled();
+  await expect(page.getByTestId("session-action-reopen")).toBeDisabled();
 });
 
-// AC: roster/recommendation matrix — one row per snapshot, distinct states,
-// read-only recommendation, collapsed disclosure.
-test("committee admin: roster matrix states, filter, and collapsed signature disclosure", async ({ page }) => {
+// AC: roster/recommendation matrix — one row per roster snapshot, distinct
+// derived states, read-only recommendation detail, collapsed disclosure.
+// The disclosure no longer shows a signature/canonicalPayload/nonce — no
+// route anywhere returns them; it shows verified/body/memoUrl instead (see
+// committee-session.js's header comment for the full route composition).
+test("committee admin: roster matrix states, filter, and collapsed recommendation disclosure", async ({ page }) => {
   await mockCommitteeApi(page);
   await signIn(page, "/admin/committee/sessions/sess-1");
 
@@ -844,15 +855,19 @@ test("committee admin: roster matrix states, filter, and collapsed signature dis
   await page.getByTestId("disclosure-toggle-athena").click();
   const disclosure = page.getByTestId("disclosure-row-athena");
   await expect(disclosure).toBeVisible();
-  await expect(disclosure).toContainText("sig-athena-abcdef");
-  await expect(disclosure).toContainText("canonical-payload-athena");
+  await expect(disclosure).toContainText("Verified: yes");
+  await expect(disclosure).toContainText("Rotate into WOON.");
 
   await page.getByTestId("roster-filter").selectOption("submitted");
   await expect(page.getByRole("cell", { name: "Athena", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "Nova", exact: true })).toHaveCount(0);
 
+  // Nova/Robotmoney are on the frozen `expected` roster but never submitted —
+  // derived as "absent" (rowStatus()), since the backend roster row itself
+  // only ever says expected/excused.
   await page.getByTestId("roster-filter").selectOption("absent");
   await expect(page.getByRole("cell", { name: "Robotmoney", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Nova", exact: true })).toBeVisible();
 
   // No admin control can edit or delete the accepted recommendation itself —
   // the only per-row controls are the disclosure toggle and roster
@@ -862,15 +877,17 @@ test("committee admin: roster matrix states, filter, and collapsed signature dis
 });
 
 // AC: an `excused` roster row renders distinctly, is isolated by the
-// "excused" filter, and the excuse/restore controls submit roster mutations.
+// "excused" filter, and the excuse/restore controls each hit their OWN POST
+// endpoint (never a single PATCH with an `operation` field), body `{memberId}`
+// only — no `version` (roster rows aren't optimistic-locked on the real backend).
 test("committee admin: excused roster row renders distinctly and excuse/restore submit roster mutations", async ({ page }) => {
-  const excusedRoster = [
-    ...baseRoster(),
-    { memberId: "ren", memberName: "Ren", memberLens: "growth", status: "excused",
-      includedAt: "2026-07-19T00:00:00.000Z", excusedAt: "2026-07-19T01:00:00.000Z",
-      reason: "Conflict of interest disclosed.", recommendation: null },
+  const excusedRosterRows: RosterRowFixture[] = [
+    ...baseRosterRows(),
+    { member_id: "ren", member_name: "Ren", member_lens: "growth", status: "excused",
+      included_at: "2026-07-19T00:00:00.000Z", excused_at: "2026-07-19T01:00:00.000Z",
+      reason: "Conflict of interest disclosed." },
   ];
-  await mockCommitteeApi(page, { session: sessionFixture({ roster: excusedRoster }) });
+  await mockCommitteeApi(page, { rosterRows: excusedRosterRows });
   await signIn(page, "/admin/committee/sessions/sess-1");
 
   // The excused row renders distinctly (its own state cell) alongside the
@@ -884,11 +901,11 @@ test("committee admin: excused roster row renders distinctly and excuse/restore 
   await expect(page.getByRole("cell", { name: "Athena", exact: true })).toHaveCount(0);
   await page.getByTestId("roster-filter").selectOption("all");
 
-  // Restore Ren (excused → expected) — asserts operation/memberId/reason.
+  // Restore Ren (excused → expected) — its own endpoint, body {memberId, reason}.
   let capturedRestore: unknown = null;
-  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/roster$/, async (route) => {
+  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/roster\/restore$/, async (route) => {
     capturedRestore = route.request().postDataJSON();
-    return route.fulfill(jsonReply({ item: sessionFixture({ roster: excusedRoster }), auditRequestId: "req-roster-restore" }));
+    return route.fulfill(jsonReply({ ok: true, status: 200, sessionId: "sess-1", memberId: "ren" }));
   });
   await page.getByTestId("roster-restore-ren").click();
   await expect(page.getByTestId("roster-form")).toBeVisible();
@@ -896,14 +913,16 @@ test("committee admin: excused roster row renders distinctly and excuse/restore 
   await page.getByTestId("roster-submit").click();
   await expect(page.getByTestId("roster-form")).not.toBeVisible();
   expect(capturedRestore).toMatchObject({
-    operation: "restore", memberId: "ren", reason: "Restoring Ren to the roster ahead of window close.",
+    memberId: "ren", reason: "Restoring Ren to the roster ahead of window close.",
   });
+  expect(capturedRestore).not.toHaveProperty("operation");
+  expect(capturedRestore).not.toHaveProperty("version");
 
-  // Excuse Nova (expected → excused) — asserts operation/memberId/reason.
+  // Excuse Nova (expected → excused) — its own endpoint, body {memberId, reason}.
   let capturedExcuse: unknown = null;
-  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/roster$/, async (route) => {
+  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/roster\/excuse$/, async (route) => {
     capturedExcuse = route.request().postDataJSON();
-    return route.fulfill(jsonReply({ item: sessionFixture({ roster: excusedRoster }), auditRequestId: "req-roster-excuse" }));
+    return route.fulfill(jsonReply({ ok: true, status: 200, sessionId: "sess-1", memberId: "nova" }));
   });
   await page.getByTestId("roster-excuse-nova").click();
   await expect(page.getByTestId("roster-form")).toBeVisible();
@@ -911,20 +930,24 @@ test("committee admin: excused roster row renders distinctly and excuse/restore 
   await page.getByTestId("roster-submit").click();
   await expect(page.getByTestId("roster-form")).not.toBeVisible();
   expect(capturedExcuse).toMatchObject({
-    operation: "excuse", memberId: "nova", reason: "Excusing Nova due to a scheduling conflict.",
+    memberId: "nova", reason: "Excusing Nova due to a scheduling conflict.",
   });
 });
 
-// AC: aggregate fields render from a read-only aggregated session.
-test("committee admin: aggregate view renders stance counts, consensus, and source ids", async ({ page }) => {
+// AC: aggregate fields render from a read-only aggregated session. Unlike the
+// original invented AdminSessionAggregate DTO, this data is the REAL
+// persisted shape (committee/domain.ts aggregateSession() writes
+// committeeRecommendation + synthesis onto the session row itself; toSession()
+// reads them straight back — no sourceRecommendationIds field exists).
+test("committee admin: aggregate view renders quorum, stance counts, synthesis, and consensus", async ({ page }) => {
   await mockCommitteeApi(page, {
-    session: sessionFixture({
+    session: sessionSummary({
       state: "aggregated",
-      nextLegalActions: ["publish"],
-      aggregate: {
+      synthesis: "The committee reads a bullish tilt across the panel.",
+      committeeRecommendation: {
+        quorum: { active: 3, submitted: 1, absent: ["nova", "robotmoney"], participation: 0.33 },
         stances: { bullish: 1, neutral: 0 }, meanConfidence: 0.8,
-        expectedCount: 3, submittedCount: 1, absentCount: 1,
-        consensus: ["Rotate into WOON"], disagreements: [], sourceRecommendationIds: ["rec-1"],
+        consensus: ["Rotate into WOON"], disagreements: [],
       },
     }),
   });
@@ -933,34 +956,40 @@ test("committee admin: aggregate view renders stance counts, consensus, and sour
   await expect(page.getByRole("heading", { name: "Aggregate" })).toBeVisible();
   await expect(page.getByText("bullish: 1")).toBeVisible();
   await expect(page.locator(".adm-bullet-list").getByText("Rotate into WOON", { exact: true })).toBeVisible();
-  await expect(page.getByText("rec-1")).toBeVisible();
+  await expect(page.getByText("The committee reads a bullish tilt across the panel.")).toBeVisible();
 });
 
-// AC: lifecycle actions — confirm+reason required, 202 job response, idempotent
-// existing-job handling, and a visible 409 error.
-test("committee admin: lifecycle action requires confirm+reason, shows 202 job, idempotent reuse, and 409", async ({ page }) => {
+// AC: lifecycle actions — confirm+reason required, synchronous state-change
+// response (never a 202 job envelope — no jobId/existing field exists on this
+// backend), idempotent no-op handling, and a visible 409 error.
+test("committee admin: lifecycle action requires confirm+reason, shows the new state, idempotent reuse, and 409", async ({ page }) => {
   await mockCommitteeApi(page);
   await signIn(page, "/admin/committee/sessions/sess-1");
 
   let capturedBody: unknown = null;
-  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/actions\/close_window$/, async (route) => {
+  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/close$/, async (route) => {
     capturedBody = route.request().postDataJSON();
-    return route.fulfill(jsonReply({ jobId: 999, auditRequestId: "req-action", existing: false }, 202));
+    return route.fulfill(jsonReply({ ok: true, status: 200, session: { id: "sess-1", state: "window_closed", version: 3 } }));
   });
 
-  await page.getByTestId("session-action-close_window").click();
+  await page.getByTestId("session-action-close").click();
   await page.getByTestId("action-confirm-submit").click();
   await expect(page.getByText("Reason must be 10–500 characters.")).toBeVisible();
 
   await page.getByTestId("action-reason").fill("Closing the window ahead of schedule.");
   await page.getByTestId("action-confirm-submit").click();
-  await expect(page.getByTestId("action-result")).toContainText("999");
-  // Every lifecycle request is version-bearing (optimistic concurrency).
-  expect(capturedBody).toMatchObject({ version: 2, reason: "Closing the window ahead of schedule." });
+  await expect(page.getByTestId("action-result")).toContainText("window_closed");
+  // No `expectedVersion` — the backend never exposes a session's current
+  // version over any GET route, and the field is optional when omitted.
+  expect(capturedBody).toMatchObject({ reason: "Closing the window ahead of schedule." });
+  expect(capturedBody).not.toHaveProperty("expectedVersion");
+  expect(capturedBody).not.toHaveProperty("version");
 
-  // Re-open the session detail with an aggregated-eligible state to exercise the
-  // idempotent existing:true branch on the aggregate action.
-  await mockCommitteeApi(page, { session: sessionFixture({ state: "window_closed", nextLegalActions: ["aggregate", "reopen_window", "cancel"] }) });
+  // Re-open the session detail in `window_closed` (aggregate/reopen/cancel are
+  // legal from there) to exercise the idempotent no-op branch on aggregate.
+  await mockCommitteeApi(page, { session: sessionSummary({ state: "window_closed" }) });
+  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/aggregate$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, idempotent: true, session: { id: "sess-1", state: "window_closed", version: 3 } })));
   await page.goto("/admin/committee/sessions/sess-1");
   await page.getByTestId("session-action-aggregate").click();
   await page.getByTestId("action-reason").fill("Aggregating after window close.");
@@ -968,6 +997,8 @@ test("committee admin: lifecycle action requires confirm+reason, shows 202 job, 
   await expect(page.getByTestId("action-result")).toContainText("idempotent");
 
   // A concurrent state change surfaces the server's 409 clearly.
+  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/cancel$/, (route) =>
+    route.fulfill(jsonReply({ ok: false, status: 409, error: "terminal_state:published" }, 409)));
   await page.getByTestId("session-action-cancel").click();
   await page.getByTestId("action-reason").fill("Cancelling due to topic deprecation.");
   await page.getByTestId("action-confirm-submit").click();
