@@ -1,6 +1,12 @@
 // Alpine factory for the admin task-queue dashboard (/admin). Moved verbatim
 // from the monolithic views.js (finding 025).
 import { api, ROUTES, path } from "../../lib/api.js";
+import {
+  forgetAdminToken,
+  isAdminAuthError,
+  persistAdminToken,
+  readStoredAdminToken,
+} from "../../lib/admin-auth.js";
 
 export function registerAdminJobsView(Alpine) {
   // ── Admin task-queue dashboard (/admin) ───────────────────────────────────
@@ -8,12 +14,12 @@ export function registerAdminJobsView(Alpine) {
   // password is the ADMIN_TOKEN secret, sent as X-Admin-Token; the demo prints a
   // random per-launch password to the interactive TUI only. All four endpoints
   // are READ-ONLY (GET /api/admin/jobs|jobs/:id|runs; POST /api/admin/auth just
-  // validates the password). The token is kept in sessionStorage so a refresh
-  // stays signed in for the tab, and a 403 anywhere forces re-login (fail-closed).
-  const ADMIN_TOKEN_KEY = "rm_admin_token";
+  // validates the password). The token is kept in sessionStorage (lib/admin-auth.js,
+  // shared with the other admin modules) so a refresh stays signed in for the tab,
+  // and a 403 anywhere forces re-login (fail-closed).
   Alpine.data("adminJobsView", () => ({
     authed: false,
-    password: sessionStorage.getItem(ADMIN_TOKEN_KEY) || "",
+    password: readStoredAdminToken(),
     loginError: null,
     loading: false,
     error: null,
@@ -33,13 +39,13 @@ export function registerAdminJobsView(Alpine) {
           this.authed = true;
           this.startPolling();
         } catch (e) {
-          if (e.status === 403) this._forgetToken();
+          if (isAdminAuthError(e)) this._forgetToken();
         }
       }
     },
 
     _forgetToken() {
-      sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+      forgetAdminToken();
       this.authed = false;
       this.stopPolling();
     },
@@ -52,13 +58,13 @@ export function registerAdminJobsView(Alpine) {
       if (!token) { this.loginError = "Enter the admin password."; return; }
       try {
         await api.adminPost(ROUTES.admin.auth, token);
-        sessionStorage.setItem(ADMIN_TOKEN_KEY, token);
+        persistAdminToken(token);
         this.authed = true;
         await this.load();
         this.loadRuns();
         this.startPolling();
       } catch (e) {
-        this.loginError = e.status === 403 ? "Incorrect admin password." : e.message;
+        this.loginError = isAdminAuthError(e) ? "Incorrect admin password." : e.message;
       }
     },
 
@@ -72,7 +78,7 @@ export function registerAdminJobsView(Alpine) {
       this.selectedJob = null;
     },
 
-    _token() { return sessionStorage.getItem(ADMIN_TOKEN_KEY) || this.password.trim(); },
+    _token() { return readStoredAdminToken() || this.password.trim(); },
 
     // GET /api/admin/jobs → jobs + schedules + summary. A 403 here (token revoked
     // or rotated) logs out; other errors surface inline. Rethrows so init() can
@@ -86,7 +92,7 @@ export function registerAdminJobsView(Alpine) {
         this.schedules = data.schedules || [];
         this.summary = data.summary || { byStatus: {}, byKind: {} };
       } catch (e) {
-        if (e.status === 403) { this.logout(); this.loginError = "Session expired — sign in again."; }
+        if (isAdminAuthError(e)) { this.logout(); this.loginError = "Session expired — sign in again."; }
         else this.error = e.message;
         throw e;
       } finally {
@@ -99,7 +105,7 @@ export function registerAdminJobsView(Alpine) {
       try {
         this.selectedJob = await api.adminGet(path(ROUTES.admin.job, { id }), this._token());
       } catch (e) {
-        if (e.status === 403) this.logout();
+        if (isAdminAuthError(e)) this.logout();
         else this.error = e.message;
       }
     },
@@ -111,7 +117,7 @@ export function registerAdminJobsView(Alpine) {
         const data = await api.adminGet(ROUTES.admin.runs, this._token());
         this.runs = data.runs || [];
       } catch (e) {
-        if (e.status === 403) this.logout();
+        if (isAdminAuthError(e)) this.logout();
       }
     },
 

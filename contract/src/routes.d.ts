@@ -62,10 +62,17 @@ export const ROUTES: {
     jobs: string;
     job: string;
     runs: string;
+    // Research pipeline telemetry admin surface (issue #151, landed).
     researchRuns: string;
     researchRun: string;
     researchRawSeries: string;
     researchSignal: string;
     researchRerun: string;
+    // Reserved sub-namespaces for the rest of the Admin surface phase (issue
+    // #176 seam). Typed loosely as string maps so #152/#155 can add entries
+    // without editing this shared declaration's structure — see routes.js for
+    // ownership per namespace.
+    committee: Record<string, string>;
+    operations: Record<string, string>;
   };
 };

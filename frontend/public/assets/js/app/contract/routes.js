@@ -100,11 +100,26 @@ export const ROUTES = {
     jobs: "/api/admin/jobs", // GET ?limit= — task-queue jobs + schedules + status summary
     job: "/api/admin/jobs/:id", // GET — one job + its recent runs (the logs)
     runs: "/api/admin/runs", // GET ?kind=&status=&limit= — recent job_runs feed (the logs)
-    // Research pipeline telemetry admin surface (issue #151). X-Admin-Token.
+    // Research pipeline telemetry admin surface (issue #151, landed). X-Admin-Token.
     researchRuns: "/api/admin/research/runs", // GET ?kind=&status=&limit= — run list
     researchRun: "/api/admin/research/runs/:id", // GET — run detail: stage timeline, warnings, artifacts, freshness
     researchRawSeries: "/api/admin/research/raw-series/:indicator", // GET ?from=&to=&limit= — allowlisted raw_indicator_history read
     researchSignal: "/api/admin/research/signals/:key", // GET ?from=&to=&limit= — allowlisted research_signals read
     researchRerun: "/api/admin/research/rerun", // POST — enqueue a complete or single-tool rerun for a given as-of date
+    // Sub-namespaces reserved for the rest of the Admin surface phase
+    // (docs/plan-admin-surface.md §6.3 route table; issue #176 integration
+    // seam). Each PR fills in ONLY its own namespace — this keeps the
+    // same-phase route additions in disjoint object literals instead of one
+    // flat `admin: {}` block every PR edits at the same lines.
+    committee: {
+      // Reserved for issue #152 (committee admin topics/members/roster/lifecycle).
+      // Canonical family is /api/admin/committee/*, distinct from the legacy
+      // committee.admin.* dispatcher above (/api/committee/admin/:action). Session
+      // lifecycle actions here are QUEUED (202 + job envelope, never synchronous) —
+      // see the issue #176 seam-report and backend/src/admin/committee-routes.ts.
+    },
+    operations: {
+      // Reserved for issue #155 (overview, schedule toggle, dead-job retry, audit).
+    },
   },
 };

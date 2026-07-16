@@ -52,6 +52,24 @@ These decisions are not open implementation questions:
   scheduling uses one-off queue jobs scoped to a specific session. Empty-payload
   recurring rows cannot identify a subject or session and must not be enabled by
   this UI.
+- **Committee lifecycle status semantics (settled by issue #176's integration
+  scout, recorded here to remove ambiguity):** every `POST
+  /api/admin/committee/sessions/:id/actions/:action` call (brief, close,
+  reopen, cancel, aggregate, publish) is a QUEUED operation. It enqueues a
+  worker job and returns **202** with `{ jobId, auditRequestId, existing }` —
+  never a synchronous 200/201 mutation of session state, per §6.3's "Manual
+  actions enqueue the same worker kind used by scheduled actions and return
+  202 with a job id." The sole synchronous case in this family is an
+  already-applied repeat, which returns 200 with `{ idempotent: true }` and no
+  new job. This route family lives under the canonical `/api/admin/committee/*`
+  prefix (`backend/src/admin/committee-routes.ts`), distinct from the legacy
+  `/api/committee/admin/:action` demo dispatcher, which §6.3 already says the
+  new browser must not call. If an implementation of issue #152 has landed
+  guarded transitions as synchronous responses on the legacy dispatcher
+  instead, that is not this contract: it needs an additive job-enqueuing
+  handler on the canonical route before merge so the shipped backend matches
+  the committee UI (issue #159), which was built against the queued-202
+  contract.
 
 ## 3. Current product baseline
 
