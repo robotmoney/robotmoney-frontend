@@ -17,7 +17,11 @@ import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } 
 import { getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation } from "../../src/api/routes/dashboards.ts";
 import { _resetBuybackCacheForTests, indexBuybacks } from "../../src/chain/buyback-logs.ts";
 import { _resetTokenMetricsCacheForTests } from "../../src/chain/token-metrics.ts";
-import { _resetWalletSleevesCacheForTests } from "../../src/chain/wallet-sleeves.ts";
+import {
+  _resetWalletSleevesCacheForTests,
+  getWalletSleeves as readWalletSleeves,
+  type WalletSleeveReaders,
+} from "../../src/chain/wallet-sleeves.ts";
 import { _resetAllocationFrameworkCacheForTests, ALLOCATION_FRAMEWORK_SEED } from "../../src/chain/allocation-framework.ts";
 
 const realFetch = globalThis.fetch;
@@ -265,6 +269,47 @@ test("wallet-sleeves: a THROWN batch (forced RPC failure) degrades every holding
     expect(h.provenance).toBe("stale");
   }
   expect(r.stale).toBe(true);
+});
+
+test("wallet-sleeves seam: amount and price readers inject independently and persisted-price provenance reaches the unchanged DTO", async () => {
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.PRICE_SOURCE = "live";
+  const amountKeys: string[] = [];
+  const pricedSymbols: string[] = [];
+  const readers: WalletSleeveReaders = {
+    async readChainAmounts(reads) {
+      amountKeys.push(...reads.map((read) => read.key));
+      return new Map(reads.map((read) => [read.key, { ok: true as const, amount: 2 }]));
+    },
+    priceReader: {
+      async read(asset) {
+        pricedSymbols.push(asset.symbol);
+        if (asset.symbol === "ROBOTMONEY") {
+          return {
+            kind: "persisted" as const,
+            priceUsd: 3,
+            provenance: "stale" as const,
+            sampledAt: "2026-07-16T12:00:00.000Z",
+          };
+        }
+        return { kind: "provider" as const, priceUsd: 4, provenance: "live" as const };
+      },
+    },
+  };
+
+  const r = await readWalletSleeves(readers);
+  expect(Object.keys(r).sort()).toEqual(["asOf", "source", "stale", "wallets"]);
+  expect(r.source).toBe("live");
+  expect(amountKeys).toHaveLength(7);
+  expect(pricedSymbols).toHaveLength(7);
+
+  const robotmoney = r.wallets.find((wallet) => wallet.type === "primary")!.holdings.find((holding) => holding.symbol === "ROBOTMONEY")!;
+  expect(robotmoney).toEqual({ symbol: "ROBOTMONEY", amount: 2, priceUsd: 3, valueUsd: 6, provenance: "stale" });
+  expect(r.wallets.find((wallet) => wallet.type === "primary")!.stale).toBe(true);
+  expect(r.stale).toBe(true);
+
+  const providerHolding = r.wallets.find((wallet) => wallet.type === "primary")!.holdings.find((holding) => holding.symbol === "USDC")!;
+  expect(providerHolding).toEqual({ symbol: "USDC", amount: 2, priceUsd: 4, valueUsd: 8, provenance: "live" });
 });
 
 // ── allocation ──────────────────────────────────────────────────────────────

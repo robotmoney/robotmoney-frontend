@@ -31,10 +31,13 @@ import {
   type TrackedAsset,
 } from "../config.ts";
 import {
+  providerWalletPriceReader,
   readChainAmountsBatched,
   valueLeg,
+  type ChainAmount,
   type KeyedAssetRead,
   type Provenance,
+  type WalletPriceReader,
 } from "./wallet-valuation.ts";
 
 // Provenance is defined once in the shared valuation module and re-exported
@@ -65,6 +68,22 @@ export interface WalletSleeves {
   stale: boolean; // true when ANY sleeve has a degraded holding, so a naive sum of totalUsd is partial
 }
 
+// Stub-only dependency seam for scout #175. Production callers omit this and
+// retain the existing Multicall3 + provider-price behavior. Tests and #173 can
+// supply amount and price readers independently; a future persisted quote is
+// explicitly discriminated by WalletPriceReader and must carry stale/seed
+// provenance rather than being relabelled live. See docs/architecture.md §10.1
+// and docs/contract-live-data.md §3.
+export interface WalletSleeveReaders {
+  readChainAmounts(reads: KeyedAssetRead[], logLabel: string): Promise<Map<string, ChainAmount>>;
+  priceReader: WalletPriceReader;
+}
+
+const defaultWalletSleeveReaders: WalletSleeveReaders = {
+  readChainAmounts: readChainAmountsBatched,
+  priceReader: providerWalletPriceReader,
+};
+
 // Which tracked-asset symbols each prop wallet (by resolvePropWallets index)
 // holds. The primary/Bankr wallet carries the general tokens; each strategy
 // "wallet" carries only its own strategy symbol, which values the smart-account
@@ -90,9 +109,10 @@ export function _resetWalletSleevesCacheForTests(): void {
   cache = null;
 }
 
-export async function getWalletSleeves(): Promise<WalletSleeves> {
+export async function getWalletSleeves(readers: WalletSleeveReaders = defaultWalletSleeveReaders): Promise<WalletSleeves> {
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_TTL_MS) return cache.value;
+  const useProductionCache = readers === defaultWalletSleeveReaders;
+  if (useProductionCache && cache && now - cache.at < CACHE_TTL_MS) return cache.value;
 
   const source = resolveBaseRpcSource();
   const priceSource = resolvePriceSource();
@@ -117,13 +137,19 @@ export async function getWalletSleeves(): Promise<WalletSleeves> {
     for (const a of walletAssets) reads.push({ key: keyOf(a.symbol), asset: a, wallets: [address] });
     resolved.push({ def, address, walletAssets, keyOf });
   }
-  const chainAmounts = await readChainAmountsBatched(reads, "wallet-sleeves");
+  const chainAmounts = await readers.readChainAmounts(reads, "wallet-sleeves");
 
   const sleeves: WalletSleeve[] = [];
   for (const { def, address, walletAssets, keyOf } of resolved) {
     const holdings = await Promise.all(
       walletAssets.map(async (a): Promise<SleeveHolding> => {
-        const valued = await valueLeg(a, chainAmounts.get(keyOf(a.symbol)) ?? { ok: false }, source, priceSource);
+        const valued = await valueLeg(
+          a,
+          chainAmounts.get(keyOf(a.symbol)) ?? { ok: false },
+          source,
+          priceSource,
+          readers.priceReader,
+        );
         if (!valued.ok) {
           console.error(`wallet-sleeves: ${a.symbol}@${address} read failed, degrading to null:`, valued.error);
           return { symbol: a.symbol, amount: null, priceUsd: null, valueUsd: null, provenance: "stale" };
@@ -145,6 +171,6 @@ export async function getWalletSleeves(): Promise<WalletSleeves> {
     source,
     stale: sleeves.some((s) => s.stale),
   };
-  cache = { at: now, value };
+  if (useProductionCache) cache = { at: now, value };
   return value;
 }
