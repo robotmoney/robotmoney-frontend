@@ -143,5 +143,26 @@ export const ROUTES = {
     researchRawSeries: "/api/admin/research/raw-series/:indicator", // GET ?from=&to=&limit= — allowlisted raw_indicator_history read
     researchSignal: "/api/admin/research/signals/:key", // GET ?from=&to=&limit= — allowlisted research_signals read
     researchRerun: "/api/admin/research/rerun", // POST — enqueue a complete or single-tool rerun for a given as-of date
+    // Append-only mutation history for every admin write (issue #159 §9/US-A3).
+    audit: "/api/admin/audit", // GET ?actor=&action=&targetType=&targetId=&outcome=&limit=&cursor=
+    // Committee operations surface (issue #159; docs/plan-admin-surface.md §6.3
+    // and §7.1). All routes require X-Admin-Token; mutations require a 10..500
+    // char `reason` and (for edits) the current optimistic-lock `version`.
+    committee: {
+      subjects: "/api/admin/committee/subjects", // GET list / POST create a topic
+      subject: "/api/admin/committee/subjects/:id", // GET detail / PATCH edit
+      subjectDeactivate: "/api/admin/committee/subjects/:id/deactivate", // POST
+      members: "/api/admin/committee/members", // GET (applied|active|inactive) / POST manual add
+      member: "/api/admin/committee/members/:id", // GET detail / PATCH profile fields
+      memberActivate: "/api/admin/committee/members/:id/activate", // POST → { credential }
+      memberDeactivate: "/api/admin/committee/members/:id/deactivate", // POST
+      memberReactivate: "/api/admin/committee/members/:id/reactivate", // POST → { credential }
+      memberRotateKey: "/api/admin/committee/members/:id/rotate-key", // POST → { credential }
+      memberReject: "/api/admin/committee/members/:id/reject", // POST
+      sessions: "/api/admin/committee/sessions", // GET list / POST schedule a session
+      session: "/api/admin/committee/sessions/:id", // GET complete operational DTO
+      sessionRoster: "/api/admin/committee/sessions/:id/roster", // PATCH add/excuse/restore (pre-collecting only)
+      sessionAction: "/api/admin/committee/sessions/:id/actions/:action", // POST → 202 job envelope
+    },
   },
 };

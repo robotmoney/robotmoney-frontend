@@ -34,6 +34,20 @@ const OVERVIEW_FIXTURE = {
 
 const EMPTY_OVERVIEW = { queueCounts: {}, alerts: [], nextSchedules: [] };
 
+// Standalone vendor-script mock, reused directly by the committee/audit surface
+// helpers below (issue #159) — mockAdminApi (issue #157) inlines the same loop
+// for its own single page.route("**/api/admin/**") catch-all matcher.
+async function mockVendorScripts(page: Page): Promise<void> {
+  for (const [url, file] of Object.entries(vendorScripts)) {
+    await page.route(url, (route) => route.fulfill({
+      path: join(process.cwd(), file),
+      contentType: "application/javascript",
+    }));
+  }
+}
+
+// ── Queue dashboard fixtures (unchanged surface — /admin) ───────────────────
+
 const JOBS_FIXTURE = {
   jobs: [
     { id: 42, kind: "research.refresh", status: "succeeded", priority: 0, attempts: 1, max_attempts: 5,
@@ -202,6 +216,12 @@ test("admin view: overview alerts, tiles, and next-schedule table render from mo
 
   const deadTile = page.locator(".adm-tile", { hasText: "dead" });
   await expect(deadTile.locator(".adm-tile__count")).toHaveText("1");
+
+  // Nav reaches the committee operations surface (issue #159); Audit is an
+  // in-shell section here (issue #155), not a separate route — see
+  // admin-surface.spec.ts for its dedicated coverage.
+  await expect(page.locator(".adm-nav__link", { hasText: "Committee" })).toHaveAttribute("href", "/admin/committee");
+  await expect(page.getByRole("button", { name: "Audit", exact: true })).toBeVisible();
 });
 
 test("admin view: overview empty state renders visible copy, no alerts", async ({ page }) => {
@@ -333,4 +353,445 @@ test("admin view: a mocked 403 clears the token, stops polling, and shows sessio
   requestedPaths.length = 0;
   await page.clock.runFor(20_000);
   expect(requestedPaths.length).toBe(0);
+});
+
+// ── Committee operations surface fixtures (issue #159) ──────────────────────
+
+const TOPIC_FIXTURE = {
+  id: "woon-vault", status: "active", name: "Woon Vault", operator: "Woon Labs",
+  homepage: null, xHandle: null, thesisBlurb: "A vault strategy thesis.",
+  wallets: [{ address: "0xabc0000000000000000000000000000000dead", chain: "base", label: "main" }],
+  nftContracts: [], source: { type: "rpc" }, recommendationType: "position_actions",
+  linkedMemberId: null, structuralNotes: [], lastReviewed: null,
+  version: 3, updatedAt: "2026-07-15T10:00:00.000Z",
+};
+
+const MEMBER_APPLIED = {
+  id: "nova", status: "applied", name: "Nova", tagline: null, lens: "risk", mandate: null,
+  biases: null, voiceMd: null, mode: null, operator: null, avatar: null,
+  appliedAt: "2026-07-10T00:00:00.000Z", activatedAt: null,
+  version: 1, updatedAt: "2026-07-10T00:00:00.000Z", contactEmail: "nova@example.com",
+  applicationStatus: "pending", activeKeyId: null, activeKeyCreatedAt: null, participation: [],
+};
+
+const MEMBER_ACTIVE = {
+  id: "athena", status: "active", name: "Athena", tagline: "macro lens", lens: "macro", mandate: null,
+  biases: null, voiceMd: null, mode: null, operator: null, avatar: null,
+  appliedAt: "2026-06-01T00:00:00.000Z", activatedAt: "2026-06-02T00:00:00.000Z",
+  version: 2, updatedAt: "2026-06-02T00:00:00.000Z", contactEmail: "athena@example.com",
+  applicationStatus: "approved", activeKeyId: "key-1", activeKeyCreatedAt: "2026-06-02T00:00:00.000Z",
+  participation: [
+    { sessionId: "sess-1", date: "2026-07-01", subjectId: "woon-vault", subjectName: "Woon Vault",
+      rosterStatus: "submitted", stance: "bullish", receivedAt: "2026-07-01T20:00:00.000Z" },
+  ],
+  // Stray field a buggy backend must never send — proves the client's own
+  // defense-in-depth redaction (never trust the wire alone for secrets).
+  token_hash: "should-never-render-raw",
+};
+
+function sessionFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "sess-1", version: 2, updatedAt: "2026-07-19T00:00:00.000Z",
+    date: "2026-07-20", subjectId: "woon-vault", subjectName: "Woon Vault",
+    state: "collecting",
+    briefOpensAt: "2026-07-20T14:00:00.000Z",
+    windowClosesAt: "2026-07-20T20:00:00.000Z",
+    publishAt: "2026-07-20T21:00:00.000Z",
+    publishedAt: null, cancelledAt: null,
+    roster: [
+      { memberId: "athena", memberName: "Athena", memberLens: "macro", status: "submitted",
+        includedAt: "2026-07-19T00:00:00.000Z", excusedAt: null, reason: null,
+        recommendation: {
+          id: "rec-1", stance: "bullish", confidence: 0.8, receivedAt: "2026-07-20T15:00:00.000Z",
+          verified: true, body: "Rotate into WOON.", memoUrl: null, nonce: "nonce-1",
+          signature: "sig-athena-abcdef", canonicalPayload: "canonical-payload-athena",
+        } },
+      { memberId: "nova", memberName: "Nova", memberLens: "risk", status: "expected",
+        includedAt: "2026-07-19T00:00:00.000Z", excusedAt: null, reason: null, recommendation: null },
+      { memberId: "robotmoney", memberName: "Robotmoney", memberLens: "protocol", status: "absent",
+        includedAt: "2026-07-19T00:00:00.000Z", excusedAt: null, reason: null, recommendation: null },
+    ],
+    jobs: [{ action: "close_window", jobId: 501, status: "pending", runAfter: "2026-07-20T20:00:00.000Z" }],
+    events: [{ id: 1, fromState: null, toState: "scheduled", action: "create", actor: "admin", reason: "scheduled",
+      jobId: null, at: "2026-07-19T00:00:00.000Z" }],
+    aggregate: null,
+    nextLegalActions: ["close_window", "cancel"],
+    ...overrides,
+  };
+}
+
+const AUDIT_FIXTURE = {
+  items: [
+    { id: 1, at: "2026-07-20T15:05:00.000Z", actor: "admin", action: "committee.member.activate",
+      targetType: "committee_member", targetId: "nova", reason: "Approved after review",
+      outcome: "succeeded", requestId: "req-1", jobId: null, sessionId: null,
+      beforeSummary: { status: "applied" }, afterSummary: { status: "active", token: "must-be-redacted" } },
+    { id: 2, at: "2026-07-19T09:00:00.000Z", actor: "admin", action: "committee.subject.create",
+      targetType: "committee_subject", targetId: "woon-vault", reason: "New topic",
+      outcome: "succeeded", requestId: "req-2", jobId: null, sessionId: null,
+      beforeSummary: null, afterSummary: { id: "woon-vault" } },
+  ],
+  nextCursor: null,
+};
+
+async function mockCommitteeApi(page: Page, opts: { session?: ReturnType<typeof sessionFixture> } = {}): Promise<void> {
+  await mockVendorScripts(page);
+  await page.route("**/api/admin/auth", (route) => route.fulfill(jsonReply({ ok: true })));
+
+  await page.route(/\/api\/admin\/committee\/subjects(\?|$)/, (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill(jsonReply({ item: { ...TOPIC_FIXTURE, id: "new-topic" }, auditRequestId: "req-topic" }, 201));
+    }
+    return route.fulfill(jsonReply({ items: [TOPIC_FIXTURE], nextCursor: null }));
+  });
+  await page.route(/\/api\/admin\/committee\/subjects\/woon-vault$/, (route) => {
+    if (route.request().method() === "PATCH") {
+      return route.fulfill(jsonReply({ item: { ...TOPIC_FIXTURE, version: 4 }, auditRequestId: "req-edit" }));
+    }
+    return route.fulfill(jsonReply(TOPIC_FIXTURE));
+  });
+  await page.route(/\/api\/admin\/committee\/subjects\/woon-vault\/deactivate$/, (route) =>
+    route.fulfill(jsonReply({ item: { ...TOPIC_FIXTURE, status: "inactive", version: 4 }, auditRequestId: "req-deact" })));
+
+  await page.route(/\/api\/admin\/committee\/members(\?|$)/, (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill(jsonReply({
+        item: { ...MEMBER_APPLIED, id: "new-member" },
+        auditRequestId: "req-member",
+        credential: { token: "member-bearer-token-abc123" },
+      }, 201));
+    }
+    return route.fulfill(jsonReply({ items: [MEMBER_APPLIED, MEMBER_ACTIVE], nextCursor: null }));
+  });
+  await page.route(/\/api\/admin\/committee\/members\/nova$/, (route) => route.fulfill(jsonReply(MEMBER_APPLIED)));
+  await page.route(/\/api\/admin\/committee\/members\/athena$/, (route) => route.fulfill(jsonReply(MEMBER_ACTIVE)));
+  await page.route(/\/api\/admin\/committee\/members\/nova\/activate$/, (route) =>
+    route.fulfill(jsonReply({
+      item: { ...MEMBER_APPLIED, status: "active", applicationStatus: "approved" },
+      auditRequestId: "req-activate",
+      credential: { token: "activated-bearer-token-xyz789" },
+    })));
+
+  await page.route(/\/api\/admin\/committee\/sessions(\?|$)/, (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill(jsonReply({ item: sessionFixture(), auditRequestId: "req-session" }, 201));
+    }
+    return route.fulfill(jsonReply({ items: [sessionFixture()], nextCursor: null }));
+  });
+  const session = opts.session || sessionFixture();
+  await page.route(/\/api\/admin\/committee\/sessions\/sess-1$/, (route) => route.fulfill(jsonReply(session)));
+  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/roster$/, (route) =>
+    route.fulfill(jsonReply({ item: session, auditRequestId: "req-roster" })));
+  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/actions\/close_window$/, (route) =>
+    route.fulfill(jsonReply({ jobId: 999, auditRequestId: "req-action", existing: false }, 202)));
+  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/actions\/aggregate$/, (route) =>
+    route.fulfill(jsonReply({ jobId: 501, auditRequestId: "req-action-2", existing: true }, 202)));
+  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/actions\/cancel$/, (route) =>
+    route.fulfill(jsonReply({ error: "invalid_transition", code: "invalid_transition" }, 409)));
+
+  await page.route(/\/api\/admin\/audit(\?|$)/, (route) => route.fulfill(jsonReply(AUDIT_FIXTURE)));
+}
+
+async function signIn(page: Page, path: string): Promise<void> {
+  await page.goto(path);
+  // Scoped to the login card specifically — every admin page also carries
+  // several (initially hidden) .adm-input form fields of its own, which would
+  // otherwise make this a strict-mode-ambiguous locator.
+  await page.locator(".adm-login .adm-input").fill("demo-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+}
+
+// AC: route map + direct navigation + back/forward.
+test("committee admin: direct navigation and back/forward across nested routes", async ({ page }) => {
+  await mockCommitteeApi(page);
+
+  await signIn(page, "/admin/committee");
+  await expect(page.getByRole("heading", { name: "Committee Operations" })).toBeVisible();
+
+  await page.getByRole("cell", { name: "Woon Vault" }).click();
+  await expect(page).toHaveURL(/\/admin\/committee\/subjects\/woon-vault$/);
+  await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/admin\/committee$/);
+  await expect(page.getByRole("heading", { name: "Committee Operations" })).toBeVisible();
+
+  await page.goForward();
+  await expect(page).toHaveURL(/\/admin\/committee\/subjects\/woon-vault$/);
+
+  // Direct navigation (full document load) to a nested :id route also resolves,
+  // using the token already persisted in this tab's sessionStorage.
+  await page.goto("/admin/committee/members/athena");
+  await expect(page.getByRole("heading", { name: /Member athena/ })).toBeVisible();
+});
+
+// AC: 403 clears token, stops polling, clears sensitive state, session-expired message.
+test("committee admin: a mocked 403 logs out and shows session-expired", async ({ page }) => {
+  await mockVendorScripts(page);
+  await page.route("**/api/admin/auth", (route) => route.fulfill(jsonReply({ ok: true })));
+  await page.route(/\/api\/admin\/committee\/subjects(\?|$)/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
+  await page.route(/\/api\/admin\/committee\/members(\?|$)/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
+  await page.route(/\/api\/admin\/committee\/sessions(\?|$)/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
+
+  await signIn(page, "/admin/committee");
+  await expect(page.getByText("Session expired — sign in again.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
+
+  const token = await page.evaluate(() => sessionStorage.getItem("rm_admin_token"));
+  expect(token).toBeNull();
+});
+
+// AC: topic form validation + successful create asserts endpoint/body.
+test("committee admin: topic form rejects invalid input and create posts the exact body", async ({ page }) => {
+  await mockCommitteeApi(page);
+  await signIn(page, "/admin/committee");
+
+  await page.getByTestId("new-topic-toggle").click();
+  await page.getByTestId("topic-submit").click();
+  await expect(page.getByTestId("topic-form").getByText(/Topic id must match/)).toBeVisible();
+  await expect(page.getByTestId("topic-form").getByText("Name is required.")).toBeVisible();
+
+  // Invalid id (uppercase) is rejected client-side before any request fires.
+  await page.getByTestId("topic-id").fill("Not_Valid_ID!");
+  await page.getByTestId("topic-name").fill("New Topic");
+  await page.getByTestId("topic-operator").fill("Op Co");
+  await page.getByTestId("topic-thesis").fill("Thesis text.");
+  await page.getByTestId("topic-reason").fill("Adding this topic for coverage.");
+  await page.getByTestId("topic-submit").click();
+  await expect(page.getByTestId("topic-form").getByText(/Topic id must match/)).toBeVisible();
+
+  // rpc source requires at least one wallet.
+  await page.getByTestId("topic-id").fill("new-topic");
+  await page.getByTestId("topic-source-type").selectOption("rpc");
+  await page.getByTestId("topic-submit").click();
+  await expect(page.getByTestId("topic-form").getByText(/rpc topics require/)).toBeVisible();
+
+  let captured: unknown = null;
+  await page.route(/\/api\/admin\/committee\/subjects(\?|$)/, async (route) => {
+    if (route.request().method() === "POST") {
+      captured = route.request().postDataJSON();
+      return route.fulfill(jsonReply({ item: { ...TOPIC_FIXTURE, id: "new-topic" }, auditRequestId: "req-topic" }, 201));
+    }
+    return route.fulfill(jsonReply({ items: [TOPIC_FIXTURE], nextCursor: null }));
+  });
+  await page.getByTestId("topic-add-wallet").click();
+  await page.locator(".adm-wallet-row input").first().fill("0x00000000000000000000000000000000000001");
+  await page.locator(".adm-wallet-row input").nth(1).fill("base");
+  await page.getByTestId("topic-submit").click();
+
+  await expect(page.getByTestId("topic-form")).not.toBeVisible();
+  expect(captured).toMatchObject({
+    id: "new-topic", name: "New Topic", operator: "Op Co", thesisBlurb: "Thesis text.",
+    source: { type: "rpc" }, reason: "Adding this topic for coverage.",
+  });
+});
+
+// AC: server-side rejection of an unrecognized field / stale version surfaces inline.
+test("committee admin: topic edit surfaces a 400 (unknown field) and a 409 (stale version)", async ({ page }) => {
+  await mockCommitteeApi(page);
+  await signIn(page, "/admin/committee/subjects/woon-vault");
+  await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
+
+  await page.route(/\/api\/admin\/committee\/subjects\/woon-vault$/, (route) => {
+    if (route.request().method() === "PATCH") {
+      return route.fulfill(jsonReply({ error: "unknown field: bogus" }, 400));
+    }
+    return route.fulfill(jsonReply(TOPIC_FIXTURE));
+  });
+  await page.getByTestId("topic-edit-toggle").click();
+  await page.getByTestId("edit-reason").fill("Editing for coverage purposes.");
+  await page.getByTestId("edit-submit").click();
+  await expect(page.getByText("unknown field: bogus")).toBeVisible();
+
+  await page.route(/\/api\/admin\/committee\/subjects\/woon-vault$/, (route) => {
+    if (route.request().method() === "PATCH") return route.fulfill(jsonReply({ error: "stale_version", code: "stale_version" }, 409));
+    return route.fulfill(jsonReply(TOPIC_FIXTURE));
+  });
+  await page.getByTestId("edit-submit").click();
+  await expect(page.getByText(/stale version/)).toBeVisible();
+});
+
+// AC: applied/active/inactive filtering + one-time credential reveal + no
+// token_hash/bearer token rendered in detail JSON.
+test("committee admin: member filters, one-time credential reveal, and redacted detail JSON", async ({ page }) => {
+  await mockCommitteeApi(page);
+  await signIn(page, "/admin/committee");
+  await page.getByRole("button", { name: "Members" }).click();
+
+  await page.getByTestId("member-filter-applied").click();
+  await expect(page.getByRole("cell", { name: "Nova", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Athena", exact: true })).toHaveCount(0);
+
+  await page.getByTestId("member-filter-active").click();
+  await expect(page.getByRole("cell", { name: "Athena", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Nova", exact: true })).toHaveCount(0);
+
+  await page.getByTestId("member-filter-applied").click();
+  await page.getByRole("cell", { name: "Nova", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /Member nova/ })).toBeVisible();
+
+  await page.getByTestId("member-activate").click();
+  await page.getByTestId("member-action-reason").fill("Approved after review of application.");
+  await page.getByTestId("member-action-submit").click();
+
+  const tokenEl = page.getByTestId("credential-token");
+  await expect(tokenEl).toBeVisible();
+  await expect(tokenEl).toHaveText("activated-bearer-token-xyz789");
+  await page.getByTestId("credential-dismiss").click();
+  await expect(page.getByTestId("credential-modal")).not.toBeVisible();
+
+  // Navigate to a member whose fixture carries a stray token_hash — the
+  // rendered detail JSON must never show it raw.
+  await page.goto("/admin/committee/members/athena");
+  const detailJson = page.getByTestId("member-json");
+  await expect(detailJson).toBeVisible();
+  await expect(detailJson).not.toContainText("should-never-render-raw");
+  await expect(detailJson).toContainText("[redacted]");
+});
+
+// AC: session scheduling reason/ISO-ordering validation + UTC/local rendering
+// + linked jobs + roster snapshot + disabled illegal-transition controls.
+test("committee admin: session create validation, UTC/local timeline, roster, and disabled illegal actions", async ({ page }) => {
+  await mockCommitteeApi(page);
+  await signIn(page, "/admin/committee");
+  await page.getByRole("button", { name: "Sessions" }).click();
+  await page.getByTestId("new-session-toggle").click();
+
+  await page.getByTestId("session-submit").click();
+  await expect(page.getByTestId("session-form").getByText("Select an active topic.")).toBeVisible();
+
+  await page.getByTestId("session-subject").selectOption("woon-vault");
+  await page.getByTestId("session-date").fill("2026-07-20");
+  await page.getByTestId("session-brief-opens").fill("2026-07-20T20:00:00Z");
+  await page.getByTestId("session-window-closes").fill("2026-07-20T14:00:00Z"); // before brief-opens: illegal order
+  await page.getByTestId("session-publish-at").fill("2026-07-20T21:00:00Z");
+  await page.getByTestId("session-reason").fill("Scheduling this session for coverage.");
+  await page.getByTestId("session-submit").click();
+  await expect(page.getByText(/briefOpensAt < windowClosesAt < publishAt/)).toBeVisible();
+
+  await page.goto("/admin/committee/sessions/sess-1");
+  // Scoped to the timeline definition list — the linked-jobs table separately
+  // renders the same instant for its run_after column.
+  await expect(page.locator(".adm-meta-grid").getByText("2026-07-20 20:00:00 UTC")).toBeVisible();
+  await expect(page.getByText(/local\)/)).toHaveCount(3);
+
+  await expect(page.getByText("close_window")).toBeVisible();
+  await expect(page.getByText("501")).toBeVisible();
+
+  await expect(page.getByRole("cell", { name: "Athena", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Nova", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Robotmoney", exact: true })).toBeVisible();
+
+  // Only actions in nextLegalActions (close_window, cancel) are enabled.
+  await expect(page.getByTestId("session-action-close_window")).toBeEnabled();
+  await expect(page.getByTestId("session-action-cancel")).toBeEnabled();
+  await expect(page.getByTestId("session-action-publish")).toBeDisabled();
+  await expect(page.getByTestId("session-action-aggregate")).toBeDisabled();
+});
+
+// AC: roster/recommendation matrix — one row per snapshot, distinct states,
+// read-only recommendation, collapsed disclosure.
+test("committee admin: roster matrix states, filter, and collapsed signature disclosure", async ({ page }) => {
+  await mockCommitteeApi(page);
+  await signIn(page, "/admin/committee/sessions/sess-1");
+
+  const rows = page.getByTestId("roster-table").locator("tbody tr");
+  // 3 roster rows + 3 (initially hidden) disclosure rows + 1 (hidden) empty-state row.
+  await expect(rows).toHaveCount(7);
+
+  await expect(page.getByTestId("disclosure-row-athena")).toBeHidden();
+  await expect(page.getByTestId("disclosure-toggle-athena")).toBeVisible();
+  await page.getByTestId("disclosure-toggle-athena").click();
+  const disclosure = page.getByTestId("disclosure-row-athena");
+  await expect(disclosure).toBeVisible();
+  await expect(disclosure).toContainText("sig-athena-abcdef");
+  await expect(disclosure).toContainText("canonical-payload-athena");
+
+  await page.getByTestId("roster-filter").selectOption("submitted");
+  await expect(page.getByRole("cell", { name: "Athena", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Nova", exact: true })).toHaveCount(0);
+
+  await page.getByTestId("roster-filter").selectOption("absent");
+  await expect(page.getByRole("cell", { name: "Robotmoney", exact: true })).toBeVisible();
+
+  // No admin control can edit or delete the accepted recommendation itself —
+  // the only per-row controls are the disclosure toggle and roster
+  // add/excuse/restore, never an edit/delete on the recommendation.
+  await expect(page.getByText("Edit recommendation")).toHaveCount(0);
+  await expect(page.getByText("Delete recommendation")).toHaveCount(0);
+});
+
+// AC: aggregate fields render from a read-only aggregated session.
+test("committee admin: aggregate view renders stance counts, consensus, and source ids", async ({ page }) => {
+  await mockCommitteeApi(page, {
+    session: sessionFixture({
+      state: "aggregated",
+      nextLegalActions: ["publish"],
+      aggregate: {
+        stances: { bullish: 1, neutral: 0 }, meanConfidence: 0.8,
+        expectedCount: 3, submittedCount: 1, absentCount: 1,
+        consensus: ["Rotate into WOON"], disagreements: [], sourceRecommendationIds: ["rec-1"],
+      },
+    }),
+  });
+  await signIn(page, "/admin/committee/sessions/sess-1");
+
+  await expect(page.getByRole("heading", { name: "Aggregate" })).toBeVisible();
+  await expect(page.getByText("bullish: 1")).toBeVisible();
+  await expect(page.locator(".adm-bullet-list").getByText("Rotate into WOON", { exact: true })).toBeVisible();
+  await expect(page.getByText("rec-1")).toBeVisible();
+});
+
+// AC: lifecycle actions — confirm+reason required, 202 job response, idempotent
+// existing-job handling, and a visible 409 error.
+test("committee admin: lifecycle action requires confirm+reason, shows 202 job, idempotent reuse, and 409", async ({ page }) => {
+  await mockCommitteeApi(page);
+  await signIn(page, "/admin/committee/sessions/sess-1");
+
+  await page.getByTestId("session-action-close_window").click();
+  await page.getByTestId("action-confirm-submit").click();
+  await expect(page.getByText("Reason must be 10–500 characters.")).toBeVisible();
+
+  await page.getByTestId("action-reason").fill("Closing the window ahead of schedule.");
+  await page.getByTestId("action-confirm-submit").click();
+  await expect(page.getByTestId("action-result")).toContainText("999");
+
+  // Re-open the session detail with an aggregated-eligible state to exercise the
+  // idempotent existing:true branch on the aggregate action.
+  await mockCommitteeApi(page, { session: sessionFixture({ state: "window_closed", nextLegalActions: ["aggregate", "reopen_window", "cancel"] }) });
+  await page.goto("/admin/committee/sessions/sess-1");
+  await page.getByTestId("session-action-aggregate").click();
+  await page.getByTestId("action-reason").fill("Aggregating after window close.");
+  await page.getByTestId("action-confirm-submit").click();
+  await expect(page.getByTestId("action-result")).toContainText("idempotent");
+
+  // A concurrent state change surfaces the server's 409 clearly.
+  await page.getByTestId("session-action-cancel").click();
+  await page.getByTestId("action-reason").fill("Cancelling due to topic deprecation.");
+  await page.getByTestId("action-confirm-submit").click();
+  await expect(page.getByTestId("action-error")).toContainText("409");
+});
+
+// AC: audit filters, actor/action/target/reason/outcome rendering, append-only
+// presentation, and redaction of secrets/token/signature/etc.
+test("committee admin: audit filters, rendering, and redaction", async ({ page }) => {
+  await mockCommitteeApi(page);
+  await signIn(page, "/admin/audit");
+
+  await expect(page.getByRole("cell", { name: "committee.member.activate" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Approved after review" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "succeeded" })).toHaveCount(2);
+
+  // No delete/update control exists on this append-only surface.
+  await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
+
+  await page.getByTestId("audit-row-1").click();
+  const detail = page.getByTestId("audit-detail-1");
+  await expect(detail).toBeVisible();
+  await expect(detail).not.toContainText("must-be-redacted");
+  await expect(detail).toContainText("[redacted]");
+
+  await page.getByTestId("audit-filter-actor").fill("admin");
+  await page.getByTestId("audit-filter-apply").click();
+  await expect(page.getByRole("cell", { name: "committee.member.activate" })).toBeVisible();
 });

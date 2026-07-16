@@ -1,0 +1,100 @@
+<!-- Admin — topic detail (/admin/committee/subjects/:id): edit with optimistic
+     concurrency and deactivate. Issue #159. Buildless — factory registered at
+     boot (alpine/views/admin/committee-subject.js). -->
+<section class="container adm" x-data="adminCommitteeSubject" x-init="init()">
+
+  <header class="adm-head">
+    <a href="/admin/committee" class="cv__back">← /admin/committee</a>
+    <h1 class="adm-title">Topic <span x-text="subjectId"></span></h1>
+  </header>
+
+  <div x-show="!authed" class="adm-login" x-cloak>
+    <h2 class="adm-login__title">Sign in</h2>
+    <p x-show="sessionExpired" x-text="'Session expired — sign in again.'" class="rm-error adm-msg"></p>
+    <form @submit.prevent="loginAndLoad(() => load())" class="adm-login__form">
+      <input type="password" x-model="password" class="adm-input" placeholder="Admin password" aria-label="Admin password" />
+      <button type="submit" class="adm-btn">Sign in</button>
+    </form>
+    <p x-show="loginError" x-text="loginError" class="rm-error adm-msg" x-cloak></p>
+  </div>
+
+  <div x-show="authed" x-cloak>
+    <span x-show="loading" class="rm-loading">Loading…</span>
+    <span x-show="error" x-text="error" class="rm-error"></span>
+
+    <template x-if="topic && !editing">
+      <div>
+        <dl class="adm-meta-grid">
+          <dt>Name</dt><dd x-text="topic.name"></dd>
+          <dt>Status</dt><dd><span :class="topic.status === 'active' ? 'adm-badge adm-badge--ok' : 'adm-badge adm-badge--idle'" x-text="topic.status"></span></dd>
+          <dt>Operator</dt><dd x-text="topic.operator"></dd>
+          <dt>Thesis</dt><dd x-text="topic.thesisBlurb"></dd>
+          <dt>Source type</dt><dd x-text="topic.source?.type"></dd>
+          <dt>Recommendation type</dt><dd x-text="topic.recommendationType"></dd>
+          <dt>Version</dt><dd x-text="topic.version"></dd>
+          <dt>Updated</dt><dd x-text="fmtUtc(topic.updatedAt)"></dd>
+        </dl>
+
+        <div class="adm-toolbar">
+          <button type="button" class="adm-btn" @click="startEdit()" data-testid="topic-edit-toggle">Edit</button>
+          <button type="button" class="adm-btn adm-btn--ghost" x-show="topic.status === 'active'" @click="openDeactivate()" data-testid="topic-deactivate-toggle">Deactivate</button>
+        </div>
+
+        <div x-show="deactivateOpen" x-cloak class="adm-modal" data-testid="deactivate-confirm">
+          <div class="adm-modal__panel">
+            <h3>Deactivate <span x-text="topic.name"></span>?</h3>
+            <p class="adm-dim">Prevents new sessions. Existing sessions, briefs, snapshots, and recommendations are unchanged.</p>
+            <label class="adm-field">
+              <span>Reason</span>
+              <textarea x-model="deactivateReason" class="adm-input" rows="2" placeholder="10–500 characters" data-testid="deactivate-reason"></textarea>
+            </label>
+            <span x-show="deactivateError" x-text="deactivateError" class="rm-error"></span>
+            <div class="adm-toolbar">
+              <button type="button" class="adm-btn" :disabled="submitting" @click="confirmDeactivate()" data-testid="deactivate-confirm-submit">Confirm deactivate</button>
+              <button type="button" class="adm-btn adm-btn--ghost" @click="cancelDeactivate()">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <form x-show="editing" x-cloak @submit.prevent="submitEdit()" class="adm-form" data-testid="topic-edit-form">
+      <label class="adm-field">
+        <span>Name</span>
+        <input type="text" x-model="editForm.name" class="adm-input" data-testid="edit-name" />
+        <span x-show="editErrors.name" x-text="editErrors.name" class="rm-error"></span>
+      </label>
+      <label class="adm-field">
+        <span>Operator</span>
+        <input type="text" x-model="editForm.operator" class="adm-input" data-testid="edit-operator" />
+        <span x-show="editErrors.operator" x-text="editErrors.operator" class="rm-error"></span>
+      </label>
+      <label class="adm-field">
+        <span>Thesis</span>
+        <textarea x-model="editForm.thesisBlurb" class="adm-input" rows="2" data-testid="edit-thesis"></textarea>
+        <span x-show="editErrors.thesisBlurb" x-text="editErrors.thesisBlurb" class="rm-error"></span>
+      </label>
+      <label class="adm-field">
+        <span>Source type</span>
+        <select x-model="editForm.sourceType" class="adm-input" data-testid="edit-source-type">
+          <option value="rpc">rpc</option>
+          <option value="manual">manual</option>
+          <option value="vault_tvl">vault_tvl</option>
+          <option value="framework">framework</option>
+        </select>
+        <span x-show="editErrors.wallets" x-text="editErrors.wallets" class="rm-error"></span>
+      </label>
+      <label class="adm-field">
+        <span>Reason</span>
+        <textarea x-model="editForm.reason" class="adm-input" rows="2" placeholder="10–500 characters" data-testid="edit-reason"></textarea>
+        <span x-show="editErrors.reason" x-text="editErrors.reason" class="rm-error"></span>
+      </label>
+      <span x-show="editErrors.form" x-text="editErrors.form" class="rm-error adm-msg"></span>
+      <div class="adm-toolbar">
+        <button type="submit" class="adm-btn" :disabled="submitting" data-testid="edit-submit">Save</button>
+        <button type="button" class="adm-btn adm-btn--ghost" @click="cancelEdit()">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+</section>
