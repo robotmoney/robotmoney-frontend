@@ -34,7 +34,7 @@ afterAll(() => {
 });
 beforeEach(async () => {
   slowGate = gate();
-  await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY`;
+  await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY CASCADE`;
 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

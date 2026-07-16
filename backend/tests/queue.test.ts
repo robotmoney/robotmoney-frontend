@@ -10,7 +10,7 @@ beforeAll(() => {
   handlers["test.fail"] = async () => { throw new Error("boom"); };
 });
 // Isolate each test: clear the queue + schedules so processOneJob claims only our job.
-beforeEach(async () => { await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY`; });
+beforeEach(async () => { await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY CASCADE`; });
 
 test("processOneJob: success → succeeded + a job_runs row", async () => {
   const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('test.ok','{}') RETURNING id`;

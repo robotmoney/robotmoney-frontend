@@ -43,7 +43,7 @@ afterAll(() => { handlers["regime.classify"] = realRegime; });
 beforeEach(async () => {
   executed.length = 0;
   researchGate = gate();
-  await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY`;
+  await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY CASCADE`;
 });
 
 async function enqueue(kind: string, priority = 0): Promise<number> {

@@ -13,7 +13,7 @@ import { makeAnalyticsHandlers, RESEARCH_TOOLS, REGIME_TOOL } from "../src/worke
 import { tickScheduler } from "../src/worker/scheduler.ts";
 import { seed } from "../src/db/seed.ts";
 
-beforeEach(async () => { await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY`; });
+beforeEach(async () => { await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY CASCADE`; });
 
 test("registry: regime.classify and research.refresh are distinct kinds; analytics.run is retired", () => {
   expect(typeof handlers["regime.classify"]).toBe("function");
