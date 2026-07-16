@@ -55,10 +55,9 @@ describe("frontend route resolution", () => {
     expect(viewFor("/admin/research")).toBe("/views/admin.html");
     expect(viewFor("/admin/research/runs/abc-123")).toBe("/views/admin.html");
     expect(viewFor("/admin/queue")).toBe("/views/admin.html");
-    // Other supported admin paths (committee/audit sections are out of #157's
-    // scope but still route to the shell) resolve the same way.
-    expect(viewFor("/admin/committee")).toBe("/views/admin.html");
-    expect(viewFor("/admin/audit")).toBe("/views/admin.html");
+    // Committee/audit (issue #159, landed after #157) are their own routes
+    // with dedicated fragments — see "resolves admin committee operations
+    // routes" below — not part of this shell's catch-all.
     expect(viewFor("/admin/")).toBe("/views/admin.html");
   });
 
