@@ -74,6 +74,19 @@ export interface VaultSampleReader {
   apy7d(vaultAddress: string): Promise<number | null>;
 }
 
+// Resolved open question — `vault.sample_share_price` schedule/producer
+// ownership (for #173's "verify and repair the persisted fallback path"
+// deliverable): registration is a single `job_schedules` seed row,
+// `{ kind: "vault.sample_share_price", cron: "0 * * * *" }` (hourly, top of
+// hour) in backend/src/db/seed.ts. Generic due-job dispatch lives in
+// backend/src/worker/scheduler.ts (`tickScheduler`). The only handler that
+// ever writes `vault_share_price_history` is `sampleSharePrice` in
+// backend/src/worker/handlers/vault.ts. There is exactly one producer and one
+// schedule owner — #173 should verify this job is enabled and actually
+// running in the target deployment (cf. the regime-projection staleness class
+// of bug: a missing/disabled scheduled job reads as "no data", not an error)
+// rather than adding a second write path.
+
 // Stub-only dependency boundary for scout #175. The default implementations
 // preserve the current all-or-nothing live failure boundary and exact DTO.
 // Issue #173 may later settle core and adapter reads independently and enforce
@@ -102,6 +115,21 @@ const rpcVaultAdapterReader: VaultAdapterReader = {
   },
 };
 
+// Resolved open question — vault address normalization (#173's implementation,
+// not changed here): `vault_share_price_history.vault_address` is a plain
+// `text` column (backend/migrations/0012_vault_share_price_history.sql), so
+// Postgres `=` is case-sensitive. Both the writer
+// (backend/src/worker/handlers/vault.ts, `sampleSharePrice`) and this reader
+// store/compare `config.vault.address` verbatim — currently safe only because
+// the compiled-in default is already all-lowercase. An operator-supplied
+// `VAULT_ADDRESS` env var is NOT normalized at load (backend/src/config.ts),
+// unlike `resolveRobotmoneyToken`/`resolveWeth`/adapter address resolvers,
+// which already `.toLowerCase()` (config.ts's own vault/token-address
+// equality check at "the vault leg of `resolveTrackedAssets`" also lowercases
+// the vault side). Rule for #173: normalize with `.toLowerCase()` at both the
+// INSERT in `sampleSharePrice` and every `WHERE vault_address = …` read here,
+// matching the existing config.ts precedent, rather than adding a citext
+// column or migrating historical rows.
 async function lastPersistedSample(vaultAddress: string): Promise<PersistedVaultSample> {
   const rows = await sql<{ sample_hour: Date; total_assets: string; total_supply: string; share_price: string | null }[]>`
     SELECT sample_hour, total_assets, total_supply, share_price
