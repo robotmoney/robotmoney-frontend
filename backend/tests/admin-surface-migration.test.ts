@@ -438,3 +438,50 @@ test("orphan subject_id references get inactive placeholders and unknown statuse
     db`UPDATE committee_members SET status = 'not-a-real-status' WHERE id = 'legacy-member-1'`,
   )).toBe(true);
 });
+
+test("audit_log retains scope and supports request, target, reason, before/after, outcome, and job/session references, with the required indexes", async () => {
+  const cols = await db<{ column_name: string }[]>`
+    SELECT column_name FROM information_schema.columns WHERE table_name = 'audit_log'`;
+  expect(cols.map((c) => c.column_name).sort()).toEqual(
+    [
+      "id", "actor", "action", "scope", "at",
+      "request_id", "target_type", "target_id", "reason",
+      "before_state", "after_state", "outcome", "job_id", "session_id",
+    ].sort(),
+  );
+
+  const [{ id: jobId }] = await db<{ id: number }[]>`
+    INSERT INTO jobs (kind, payload) VALUES ('audit-fk-test', '{}'::jsonb) RETURNING id`;
+
+  const [row] = await db<{
+    request_id: string; target_type: string; target_id: string; reason: string;
+    before_state: unknown; after_state: unknown; outcome: string; job_id: number; session_id: string;
+  }[]>`
+    INSERT INTO audit_log (actor, action, scope, target_type, target_id, reason, before_state, after_state, job_id, session_id)
+    VALUES ('admin', 'audit_columns_test', '{}'::jsonb, 'job', ${String(jobId)}, 'testing audit columns',
+            ${db.json({ status: "pending" })}, ${db.json({ status: "cancelled" })}, ${jobId}, ${s1Id})
+    RETURNING request_id, target_type, target_id, reason, before_state, after_state, outcome, job_id, session_id`;
+  expect(row.request_id).toBeTruthy();
+  expect(row.target_type).toBe("job");
+  expect(row.target_id).toBe(String(jobId));
+  expect(row.reason).toBe("testing audit columns");
+  expect(row.before_state).toEqual({ status: "pending" });
+  expect(row.after_state).toEqual({ status: "cancelled" });
+  expect(row.outcome).toBe("succeeded"); // default, not passed explicitly
+  expect(row.job_id).toBe(jobId);
+  expect(row.session_id).toBe(s1Id);
+
+  // ON DELETE SET NULL: deleting the referenced job/session never deletes the audit row.
+  await db`DELETE FROM jobs WHERE id = ${jobId}`;
+  const [afterDelete] = await db<{ job_id: number | null; outcome: string }[]>`
+    SELECT job_id, outcome FROM audit_log WHERE action = 'audit_columns_test'`;
+  expect(afterDelete.job_id).toBeNull();
+  expect(afterDelete.outcome).toBe("succeeded");
+
+  const idx = await db<{ indexname: string }[]>`
+    SELECT indexname FROM pg_indexes WHERE tablename = 'audit_log'
+      AND indexname IN ('audit_log_at_idx', 'audit_log_target_idx', 'audit_log_request_idx')`;
+  expect(idx.map((i) => i.indexname).sort()).toEqual(
+    ["audit_log_at_idx", "audit_log_request_idx", "audit_log_target_idx"],
+  );
+});
