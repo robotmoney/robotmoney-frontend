@@ -1,0 +1,32 @@
+# Doc-correctness tier of the test pyramid (issue #165). Every code-check
+# workflow in this repo (e2e, integration) carries a
+# `paths-ignore: ['**.md', '**.txt']` bypass, so a PR that changes only
+# Markdown (e.g. a docs-only spec drop) triggers zero of them — `gh pr checks`
+# reports nothing to gate on. Per the CI taxonomy, `doc-correctness` is the one
+# class explicitly required to still run on docs-only PRs, so it is the check
+# that gives a pure-docs PR any CI signal at all. Deliberately lightweight —
+# no external linter dependency, no network access, just the sanity checks in
+# scripts/lint-docs.sh (kebab-case docs/*.md filenames, no unresolved conflict
+# markers, no empty doc files).
+#
+# CI taxonomy class: doc-correctness. Per the taxonomy gating matrix this must
+# run on every PR (draft AND ready-for-review) and on push to main — unlike
+# the code-check classes, it carries no `paths-ignore` and no draft `if:`
+# guard, since running it is the entire point on a docs-only diff.
+name: docs-lint
+env:
+  CI_CLASS: doc-correctness
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  docs-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint docs
+        run: bash scripts/lint-docs.sh
