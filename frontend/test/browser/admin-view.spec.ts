@@ -162,7 +162,12 @@ function mockAdminApi(page: Page, overrides: { overview?: unknown; jobRetryStatu
 async function login(page: Page): Promise<void> {
   await page.goto("/admin");
   await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
-  await page.locator(".adm-input").fill(ADMIN_PASSWORD);
+  await expect(page.locator("table.adm-table").first()).not.toBeVisible();
+
+  // Submit a password → POST /api/admin/auth (mocked ok) → dashboard loads.
+  // Target by accessible name, not the shared .adm-input class — issue #155
+  // added several more .adm-input filter fields (queue/audit) to the dashboard.
+  await page.getByLabel("Admin password").fill(ADMIN_PASSWORD);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.locator(".adm-nav")).toBeVisible();
 }

@@ -6,13 +6,18 @@
 // section to render and keeps navigating with history.pushState so deep links
 // like /admin/research/runs/:id are shareable. Committee topic/member/roster/
 // session management is explicitly OUT of scope for this view (#157 scope) —
-// only overview, research (pipeline telemetry), and queue (jobs/schedules/
-// retry) operate through it.
+// only overview, research (pipeline telemetry), queue (jobs/schedules/retry),
+// and the audit log operate through it.
 //
 // Auth: unchanged from the prior dashboard — the ADMIN_TOKEN secret is sent as
 // X-Admin-Token and kept in sessionStorage (rm_admin_token) so a refresh stays
 // signed in for the tab; any 403 forces re-login (fail-closed) and clears all
 // section state so nothing sensitive lingers in memory.
+//
+// Queue schedule toggles and the redacted audit log (issue #155,
+// docs/plan-admin-surface.md US-Q2/US-A3) are additive on top of the #157
+// shell: schedule enable/disable lives inside the existing Queue section, and
+// audit gets its own top-level nav section.
 import { api, ROUTES, path } from "../../lib/api.js";
 
 const ADMIN_TOKEN_KEY = "rm_admin_token";
@@ -20,6 +25,7 @@ const ADMIN_TOKEN_KEY = "rm_admin_token";
 function sectionFromPath(pathname) {
   if (pathname.startsWith("/admin/research")) return "research";
   if (pathname.startsWith("/admin/queue")) return "queue";
+  if (pathname.startsWith("/admin/audit")) return "audit";
   return "overview";
 }
 
@@ -57,6 +63,14 @@ export function registerAdminSurfaceView(Alpine) {
     queueError: null,
     retryResult: null,
     retryError: null,
+    schedulePending: null, // schedule id currently being toggled (US-Q2)
+
+    // ── audit (US-A3) ────────────────────────────────────────────────────
+    auditItems: [],
+    auditNextCursor: null,
+    auditFilters: { actor: "", action: "", targetType: "", targetId: "" },
+    auditLoading: false,
+    auditError: null,
 
     // ── research ──────────────────────────────────────────────────────────
     researchRuns: [],
@@ -138,6 +152,10 @@ export function registerAdminSurfaceView(Alpine) {
       this.researchRuns = [];
       this.selectedResearchRun = null;
       this.rerunResult = null;
+      this.schedulePending = null;
+      this.auditItems = [];
+      this.auditNextCursor = null;
+      this.auditError = null;
     },
 
     // ── navigation ───────────────────────────────────────────────────────
@@ -156,6 +174,7 @@ export function registerAdminSurfaceView(Alpine) {
       this.lastRefreshedAt = new Date().toISOString();
       if (this.section === "overview") return this.loadOverview();
       if (this.section === "queue") return this.loadQueue();
+      if (this.section === "audit") return this.loadAudit();
       if (this.section === "research") {
         if (this.selectedResearchRunId) return this.openResearchRun(this.selectedResearchRunId, { pushUrl: false });
         return this.loadResearchRuns();
@@ -242,6 +261,70 @@ export function registerAdminSurfaceView(Alpine) {
         if (!this._handleError(e)) this.retryError = e.message;
       }
     },
+
+    // PATCH /api/admin/schedules/:id — toggle ONLY `enabled` on an analytics
+    // schedule (US-Q2). Cron/timezone/kind/payload are read-only; the
+    // committee.* demo rows are protected server-side (409) and never offered
+    // a toggle control here.
+    isCommitteeSchedule(schedule) { return String(schedule?.kind || "").startsWith("committee."); },
+    async toggleSchedule(schedule) {
+      const reason = window.prompt(
+        `Reason for ${schedule.enabled ? "disabling" : "enabling"} "${schedule.kind}" (10-500 characters):`, "",
+      );
+      if (reason == null) return; // cancelled
+      const trimmed = reason.trim();
+      if (trimmed.length < 10 || trimmed.length > 500) {
+        this.queueError = "Reason must be 10-500 characters.";
+        return;
+      }
+      this.schedulePending = schedule.id;
+      try {
+        await api.adminPatch(path(ROUTES.admin.schedule, { id: schedule.id }), this._token(), {
+          enabled: !schedule.enabled,
+          reason: trimmed,
+        });
+        await this.loadQueue();
+      } catch (e) {
+        if (!this._handleError(e)) this.queueError = e.message;
+      } finally {
+        this.schedulePending = null;
+      }
+    },
+
+    // ── audit (US-A3) ────────────────────────────────────────────────────
+    // GET /api/admin/audit → redacted (token/header/cookie/secret/password/
+    // signature keys stripped server-side before the row leaves the process),
+    // filtered, cursor-paginated audit_log feed.
+    _auditQuery() {
+      const f = this.auditFilters;
+      const query = {};
+      if (f.actor) query.actor = f.actor;
+      if (f.action) query.action = f.action;
+      if (f.targetType) query.targetType = f.targetType;
+      if (f.targetId) query.targetId = f.targetId;
+      return query;
+    },
+    async loadAudit({ append = false } = {}) {
+      this.auditLoading = true;
+      this.auditError = null;
+      try {
+        const query = this._auditQuery();
+        if (append && this.auditNextCursor) query.cursor = this.auditNextCursor;
+        const data = await api.adminGet(ROUTES.admin.audit, this._token(), query);
+        this.auditItems = append ? [...this.auditItems, ...(data.items || [])] : (data.items || []);
+        this.auditNextCursor = data.nextCursor || null;
+      } catch (e) {
+        if (!this._handleError(e)) this.auditError = e.message;
+      } finally {
+        this.auditLoading = false;
+      }
+    },
+    applyAuditFilters() { this.loadAudit(); },
+    clearAuditFilters() {
+      this.auditFilters = { actor: "", action: "", targetType: "", targetId: "" };
+      this.loadAudit();
+    },
+    loadMoreAudit() { if (this.auditNextCursor) this.loadAudit({ append: true }); },
 
     // ── research (US-R1..US-R4) ──────────────────────────────────────────
     async loadResearchRuns() {

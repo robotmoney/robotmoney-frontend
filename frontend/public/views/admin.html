@@ -1,5 +1,6 @@
-<!-- Admin — operator surface over the research/analytics task queue and
-     pipeline telemetry (issue #157; docs/plan-admin-surface.md §7).
+<!-- Admin — operator surface over the research/analytics task queue,
+     pipeline telemetry, and the redacted audit log (issue #157 + issue #155;
+     docs/plan-admin-surface.md §7).
      Password-gated (ADMIN_TOKEN secret, sent as X-Admin-Token; the demo prints
      a random per-launch password to the interactive TUI only). Buildless: the
      adminSurfaceView() factory (alpine/views/admin-surface.js) is registered at
@@ -8,7 +9,7 @@
      /admin and every /admin/* subpath (frontend/public/assets/js/app/routes.js);
      this component reads location.pathname to pick a section. Committee topic/
      member/roster/session management is explicitly OUT of scope here (#157) —
-     only overview, research, and queue operate through this view.
+     only overview, research, queue, and audit operate through this view.
      Styling reuses the shared .rm-* / global component classes plus the
      .adm-* rules in assets/css/views.css.
      NOT linked from the public nav — reachable only by direct /admin URL. -->
@@ -49,10 +50,12 @@
         @click="goSection('research')">Research</button>
       <button type="button" class="adm-nav__link" :class="section === 'queue' && 'adm-nav__link--active'"
         @click="goSection('queue')">Queue</button>
+      <button type="button" class="adm-nav__link" :class="section === 'audit' && 'adm-nav__link--active'"
+        @click="goSection('audit')">Audit</button>
     </nav>
 
     <div class="adm-toolbar">
-      <span x-show="overviewLoading || researchLoading || queueLoading || researchDetailLoading" class="rm-loading">Refreshing…</span>
+      <span x-show="overviewLoading || researchLoading || queueLoading || researchDetailLoading || auditLoading" class="rm-loading">Refreshing…</span>
       <span class="adm-dim" x-show="lastRefreshedAt" x-text="'last refreshed ' + fmtTime(lastRefreshedAt)"></span>
       <span class="adm-toolbar__spacer"></span>
       <button type="button" class="adm-btn adm-btn--ghost" @click="loadSection()">Refresh</button>
@@ -89,6 +92,11 @@
               </template>
               <p x-show="overviewAlerts().length === 0" class="adm-dim">No active alerts — everything healthy.</p>
             </div>
+            <p x-show="overview" class="adm-dim adm-msg">
+              Server date <span x-text="overview?.serverDate"></span> ·
+              next committee event:
+              <span x-text="overview?.nextCommitteeEvent ? (overview.nextCommitteeEvent.kind + ' @ ' + fmtTime(overview.nextCommitteeEvent.runAfter)) : 'none scheduled'"></span>
+            </p>
 
             <h2 class="adm-h2">Next scheduled runs</h2>
             <div class="rm-table-scroll">
@@ -310,7 +318,7 @@
         <div class="rm-table-scroll">
           <table class="rm-table adm-table">
             <thead>
-              <tr><th>Kind</th><th>Cron</th><th>Enabled</th><th>Next run</th><th>Last enqueued</th></tr>
+              <tr><th>Kind</th><th>Cron</th><th>Enabled</th><th>Next run</th><th>Last enqueued</th><th>Toggle</th></tr>
             </thead>
             <tbody>
               <template x-for="sch in schedules" :key="sch.id">
@@ -320,9 +328,19 @@
                   <td x-text="sch.enabled ? 'yes' : 'no'"></td>
                   <td x-text="fmtTime(sch.next_run_at)"></td>
                   <td x-text="fmtTime(sch.last_enqueued_at)"></td>
+                  <td>
+                    <button
+                      type="button" class="adm-btn adm-btn--ghost"
+                      x-show="!isCommitteeSchedule(sch)"
+                      :disabled="schedulePending === sch.id"
+                      @click="toggleSchedule(sch)"
+                      x-text="sch.enabled ? 'Disable' : 'Enable'"
+                    ></button>
+                    <span x-show="isCommitteeSchedule(sch)" class="adm-dim">legacy/demo — not product scheduling</span>
+                  </td>
                 </tr>
               </template>
-              <tr x-show="schedules.length === 0"><td class="adm-dim" colspan="5">No schedules.</td></tr>
+              <tr x-show="schedules.length === 0"><td class="adm-dim" colspan="6">No schedules.</td></tr>
             </tbody>
           </table>
         </div>
@@ -408,6 +426,52 @@
               <tr x-show="!queueLoading && runs.length === 0"><td class="adm-dim" colspan="6">No runs yet.</td></tr>
             </tbody>
           </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- ── Audit (issue #155, US-A3) ────────────────────────────────────── -->
+    <!-- Append-only, redacted: tokens, headers, cookies, secrets, passwords,
+         and signatures are stripped server-side before a row ever leaves the
+         process — never merely omitted client-side. -->
+    <template x-if="section === 'audit'">
+      <div>
+        <p x-show="auditError" x-text="auditError" class="rm-error"></p>
+
+        <h2 class="adm-h2 adm-h2--flush">Filters</h2>
+        <div class="adm-filters">
+          <input class="adm-input" type="text" x-model="auditFilters.actor" placeholder="actor" aria-label="Filter by actor" />
+          <input class="adm-input" type="text" x-model="auditFilters.action" placeholder="action" aria-label="Filter by action" />
+          <input class="adm-input" type="text" x-model="auditFilters.targetType" placeholder="target type" aria-label="Filter by target type" />
+          <input class="adm-input" type="text" x-model="auditFilters.targetId" placeholder="target id" aria-label="Filter by target id" />
+          <button type="button" class="adm-btn adm-btn--ghost" @click="applyAuditFilters()">Apply</button>
+          <button type="button" class="adm-btn adm-btn--ghost" @click="clearAuditFilters()">Clear</button>
+        </div>
+
+        <div class="rm-table-scroll">
+          <table class="rm-table adm-table">
+            <thead>
+              <tr>
+                <th>At</th><th>Actor</th><th>Action</th><th>Target</th><th>Reason</th><th>Outcome</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="a in auditItems" :key="a.id">
+                <tr>
+                  <td x-text="fmtTime(a.at)"></td>
+                  <td x-text="a.actor"></td>
+                  <td x-text="a.action"></td>
+                  <td x-text="a.target_type ? (a.target_type + ':' + a.target_id) : '—'"></td>
+                  <td x-text="a.reason || '—'"></td>
+                  <td x-text="a.outcome"></td>
+                </tr>
+              </template>
+              <tr x-show="!auditLoading && auditItems.length === 0"><td class="adm-dim" colspan="6">No audit events.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="adm-pager" x-show="auditNextCursor">
+          <button type="button" class="adm-btn adm-btn--ghost" @click="loadMoreAudit()">Load more audit events</button>
         </div>
       </div>
     </template>
