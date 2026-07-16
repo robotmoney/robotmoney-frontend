@@ -49,6 +49,44 @@ import { fetchAssetPriceUsd } from "./token-prices.ts";
 // migration 0014 ("a value is NEVER fabricated or falsely labelled 'live'").
 export type Provenance = "live" | "stub" | "stale" | "seed";
 
+// Price-reader seam for allocation live-data reliability (scout #175).
+// Canonical behavior: docs/architecture.md §10.1 and
+// docs/contract-live-data.md §3. The production reader below still performs
+// exactly the existing provider call. The discriminated result lets #173 add a
+// bounded wallet_balance_samples reader without making a persisted quote look
+// live or coupling its freshness policy to the sleeve projection.
+//
+// Resolved open question — max persisted-price age for a `kind: "persisted"`
+// quote (#173's implementation, not built here): `wallet.sample_balances`
+// writes `wallet_balance_samples` on a 1-minute cron (backend/src/db/seed.ts,
+// `job_schedules` row `wallet.sample_balances`). No existing constant governs
+// per-symbol price staleness; the nearest precedent is
+// `REGIME_STALE_THRESHOLD_DAYS` (analytics/report/regime-projection.ts),
+// which sets a ~3x-cadence staleness bound for a daily job. Applying the same
+// ~3-5x-cadence multiple to a 1-minute cadence recommends a **5-minute** max
+// age: recent enough that a request-time price never looks "live", generous
+// enough to absorb one missed/late worker tick. #173 should read this value
+// off the sample's `sampled_at`/`sample_date` column and reject (fall through
+// to "no persisted price available") anything older, never silently reuse an
+// arbitrarily stale row.
+export type WalletPriceQuote =
+  | { kind: "provider"; priceUsd: number; provenance: "live" | "stub" }
+  | { kind: "persisted"; priceUsd: number; provenance: "stale" | "seed"; sampledAt: string };
+
+export interface WalletPriceReader {
+  read(asset: TrackedAsset, source: BaseRpcSource, priceSource: PriceSource): Promise<WalletPriceQuote>;
+}
+
+export const providerWalletPriceReader: WalletPriceReader = {
+  async read(asset, source, priceSource) {
+    return {
+      kind: "provider",
+      priceUsd: await fetchAssetPriceUsd(asset, priceSource),
+      provenance: source === "stub" || priceSource === "stub" ? "stub" : "live",
+    };
+  },
+};
+
 function rpcOpts(): RpcCallOptions {
   return { rpcUrl: config.baseRpcUrl };
 }
@@ -251,18 +289,19 @@ export async function valueLeg(
   chainAmount: ChainAmount,
   source: BaseRpcSource,
   priceSource: PriceSource,
+  priceReader: WalletPriceReader = providerWalletPriceReader,
 ): Promise<LegValuation> {
   // The chain read failed (a reverted sub-call or a thrown batch) → degrade.
   if (!chainAmount.ok) return { ok: false, error: new Error(`${asset.symbol} chain read unavailable`) };
   try {
-    const priceUsd = await fetchAssetPriceUsd(asset, priceSource);
+    const quote = await priceReader.read(asset, source, priceSource);
     const amount = chainAmount.amount;
     return {
       ok: true,
       amount,
-      priceUsd,
-      valueUsd: amount * priceUsd,
-      provenance: source === "stub" || priceSource === "stub" ? "stub" : "live",
+      priceUsd: quote.priceUsd,
+      valueUsd: amount * quote.priceUsd,
+      provenance: quote.provenance,
     };
   } catch (err) {
     return { ok: false, error: err };

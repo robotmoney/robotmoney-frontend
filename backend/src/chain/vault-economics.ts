@@ -46,34 +46,91 @@ function rpcOpts(): RpcCallOptions {
   return { rpcUrl: config.baseRpcUrl };
 }
 
-interface LiveRead {
+export interface VaultCoreRead {
   totalAssets: bigint;
   totalSupply: bigint;
   idle: bigint;
-  // Parallel to the adapters argument: null for an UNCONFIGURED (placeholder)
-  // adapter, which is never eth_called (issue #50).
-  adapterBalances: (bigint | null)[];
 }
 
-async function readLive(adapters: VaultAdapterConfig[]): Promise<LiveRead> {
-  const opts = rpcOpts();
-  const [totalAssets, totalSupply, idle, ...adapterBalances] = await Promise.all([
-    callTotalAssets(config.vault.address, opts),
-    callTotalSupply(config.vault.address, opts),
-    callBalanceOf(config.vault.usdc, config.vault.address, opts),
-    ...adapters.map((a) => (a.configured ? callTotalAssets(a.address, opts) : Promise.resolve(null))),
-  ]);
-  return { totalAssets, totalSupply, idle, adapterBalances };
+export interface VaultCoreReader {
+  read(vaultAddress: string, usdcAddress: string, opts: RpcCallOptions): Promise<VaultCoreRead>;
 }
 
-interface PersistedSample {
+export interface VaultAdapterReader {
+  // Parallel to adapters: null means an unconfigured placeholder and must not
+  // trigger an RPC call.
+  read(adapters: VaultAdapterConfig[], opts: RpcCallOptions): Promise<(bigint | null)[]>;
+}
+
+export interface PersistedVaultSample {
   asOf: string | null;
   totalAssets: number | null;
   totalSupply: number | null;
   sharePrice: number | null;
 }
 
-async function lastPersistedSample(vaultAddress: string): Promise<PersistedSample> {
+export interface VaultSampleReader {
+  latest(vaultAddress: string): Promise<PersistedVaultSample>;
+  apy7d(vaultAddress: string): Promise<number | null>;
+}
+
+// Resolved open question — `vault.sample_share_price` schedule/producer
+// ownership (for #173's "verify and repair the persisted fallback path"
+// deliverable): registration is a single `job_schedules` seed row,
+// `{ kind: "vault.sample_share_price", cron: "0 * * * *" }` (hourly, top of
+// hour) in backend/src/db/seed.ts. Generic due-job dispatch lives in
+// backend/src/worker/scheduler.ts (`tickScheduler`). The only handler that
+// ever writes `vault_share_price_history` is `sampleSharePrice` in
+// backend/src/worker/handlers/vault.ts. There is exactly one producer and one
+// schedule owner — #173 should verify this job is enabled and actually
+// running in the target deployment (cf. the regime-projection staleness class
+// of bug: a missing/disabled scheduled job reads as "no data", not an error)
+// rather than adding a second write path.
+
+// Stub-only dependency boundary for scout #175. The default implementations
+// preserve the current all-or-nothing live failure boundary and exact DTO.
+// Issue #173 may later settle core and adapter reads independently and enforce
+// normalized-address/freshness policy in the sample reader. Canonical behavior:
+// docs/architecture.md §10 and docs/contract-live-data.md honesty rules.
+export interface VaultEconomicsReaders {
+  core: VaultCoreReader;
+  adapters: VaultAdapterReader;
+  samples: VaultSampleReader;
+}
+
+const rpcVaultCoreReader: VaultCoreReader = {
+  async read(vaultAddress, usdcAddress, opts) {
+    const [totalAssets, totalSupply, idle] = await Promise.all([
+      callTotalAssets(vaultAddress, opts),
+      callTotalSupply(vaultAddress, opts),
+      callBalanceOf(usdcAddress, vaultAddress, opts),
+    ]);
+    return { totalAssets, totalSupply, idle };
+  },
+};
+
+const rpcVaultAdapterReader: VaultAdapterReader = {
+  async read(adapters, opts) {
+    return Promise.all(adapters.map((a) => (a.configured ? callTotalAssets(a.address, opts) : Promise.resolve(null))));
+  },
+};
+
+// Resolved open question — vault address normalization (#173's implementation,
+// not changed here): `vault_share_price_history.vault_address` is a plain
+// `text` column (backend/migrations/0012_vault_share_price_history.sql), so
+// Postgres `=` is case-sensitive. Both the writer
+// (backend/src/worker/handlers/vault.ts, `sampleSharePrice`) and this reader
+// store/compare `config.vault.address` verbatim — currently safe only because
+// the compiled-in default is already all-lowercase. An operator-supplied
+// `VAULT_ADDRESS` env var is NOT normalized at load (backend/src/config.ts),
+// unlike `resolveRobotmoneyToken`/`resolveWeth`/adapter address resolvers,
+// which already `.toLowerCase()` (config.ts's own vault/token-address
+// equality check at "the vault leg of `resolveTrackedAssets`" also lowercases
+// the vault side). Rule for #173: normalize with `.toLowerCase()` at both the
+// INSERT in `sampleSharePrice` and every `WHERE vault_address = …` read here,
+// matching the existing config.ts precedent, rather than adding a citext
+// column or migrating historical rows.
+async function lastPersistedSample(vaultAddress: string): Promise<PersistedVaultSample> {
   const rows = await sql<{ sample_hour: Date; total_assets: string; total_supply: string; share_price: string | null }[]>`
     SELECT sample_hour, total_assets, total_supply, share_price
       FROM vault_share_price_history
@@ -90,6 +147,17 @@ async function lastPersistedSample(vaultAddress: string): Promise<PersistedSampl
     sharePrice: row.share_price == null ? null : Number(row.share_price),
   };
 }
+
+const postgresVaultSampleReader: VaultSampleReader = {
+  latest: lastPersistedSample,
+  apy7d: computeApy7d,
+};
+
+const defaultVaultEconomicsReaders: VaultEconomicsReaders = {
+  core: rpcVaultCoreReader,
+  adapters: rpcVaultAdapterReader,
+  samples: postgresVaultSampleReader,
+};
 
 // 7-day APY from persisted hourly samples: (1 + growth)^(365/daysElapsed) - 1,
 // where growth is the share-price change between the earliest and latest
@@ -127,9 +195,10 @@ export function _resetVaultEconomicsCacheForTests(): void {
   cache = null;
 }
 
-export async function fetchVaultEconomics(): Promise<VaultEconomics> {
+export async function fetchVaultEconomics(readers: VaultEconomicsReaders = defaultVaultEconomicsReaders): Promise<VaultEconomics> {
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_TTL_MS) return cache.value;
+  const useProductionCache = readers === defaultVaultEconomicsReaders;
+  if (useProductionCache && cache && now - cache.at < CACHE_TTL_MS) return cache.value;
 
   // Resolved per call (not module load) so the provenance marker and the
   // adapter `configured` flags always track the current env — and so tests can
@@ -141,19 +210,25 @@ export async function fetchVaultEconomics(): Promise<VaultEconomics> {
 
   let result: VaultEconomics;
   try {
-    const live = await readLive(adapters);
-    const sharePrice = live.totalSupply === 0n ? null : Number(live.totalAssets) / Number(live.totalSupply);
+    // Keep the existing all-or-nothing behavior in the scout: either reader
+    // rejecting still enters the aggregate persisted fallback below. #173 owns
+    // changing that policy after the contracts have landed.
+    const [core, adapterBalances] = await Promise.all([
+      readers.core.read(config.vault.address, config.vault.usdc, rpcOpts()),
+      readers.adapters.read(adapters, rpcOpts()),
+    ]);
+    const sharePrice = core.totalSupply === 0n ? null : Number(core.totalAssets) / Number(core.totalSupply);
     result = {
       asOf: new Date(now).toISOString(),
       stale: false,
       source,
-      tvlUsd: toUsd(live.totalAssets),
+      tvlUsd: toUsd(core.totalAssets),
       sharePrice,
-      totalShares: toUsd(live.totalSupply),
-      idleUsdc: toUsd(live.idle),
-      apy7d: await computeApy7d(config.vault.address),
+      totalShares: toUsd(core.totalSupply),
+      idleUsdc: toUsd(core.idle),
+      apy7d: await readers.samples.apy7d(config.vault.address),
       adapters: adapters.map((a, i) => {
-        const balance = live.adapterBalances[i];
+        const balance = adapterBalances[i];
         return {
           name: a.name,
           address: a.address,
@@ -166,8 +241,8 @@ export async function fetchVaultEconomics(): Promise<VaultEconomics> {
     };
   } catch (err) {
     console.error("vault-economics: Base RPC read failed, degrading to last-persisted values:", err);
-    const persisted = await lastPersistedSample(config.vault.address).catch(
-      (): PersistedSample => ({ asOf: null, totalAssets: null, totalSupply: null, sharePrice: null }),
+    const persisted = await readers.samples.latest(config.vault.address).catch(
+      (): PersistedVaultSample => ({ asOf: null, totalAssets: null, totalSupply: null, sharePrice: null }),
     );
     result = {
       asOf: persisted.asOf ?? new Date(now).toISOString(),
@@ -177,10 +252,10 @@ export async function fetchVaultEconomics(): Promise<VaultEconomics> {
       sharePrice: persisted.sharePrice,
       totalShares: persisted.totalSupply,
       idleUsdc: null, // no persisted history for idle balance / per-adapter breakdown
-      apy7d: await computeApy7d(config.vault.address).catch(() => null),
+      apy7d: await readers.samples.apy7d(config.vault.address).catch(() => null),
       adapters: adapters.map((a) => ({ name: a.name, address: a.address, configured: a.configured, balanceUsd: null })),
     };
   }
-  cache = { at: now, value: result };
+  if (useProductionCache) cache = { at: now, value: result };
   return result;
 }

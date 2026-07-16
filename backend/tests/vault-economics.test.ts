@@ -8,7 +8,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { config, resolveBaseRpcSource, resolveVaultAdapters, type VaultAdapterConfig } from "../src/config.ts";
-import { fetchVaultEconomics, computeApy7d, _resetVaultEconomicsCacheForTests } from "../src/chain/vault-economics.ts";
+import {
+  fetchVaultEconomics,
+  computeApy7d,
+  _resetVaultEconomicsCacheForTests,
+  type VaultEconomicsReaders,
+} from "../src/chain/vault-economics.ts";
 import { sampleSharePrice } from "../src/worker/handlers/vault.ts";
 import { ROUTES } from "@robotmoney/contract";
 import { getVaultEconomics } from "../src/api/routes/dashboards.ts";
@@ -81,6 +86,34 @@ function happyPathFixture(adapters: Pick<VaultAdapterConfig, "address">[] = conf
   return fixtures;
 }
 
+function deterministicVaultReaders(): VaultEconomicsReaders {
+  return {
+    core: {
+      async read() {
+        return { totalAssets: 84_320_120_000n, totalSupply: 84_102_550_000n, idle: 1_000_000n };
+      },
+    },
+    adapters: {
+      async read(adapters) {
+        return adapters.map((adapter) => (adapter.configured ? 28_000_000_000n : null));
+      },
+    },
+    samples: {
+      async latest() {
+        return {
+          asOf: "2026-07-16T12:00:00.000Z",
+          totalAssets: 80_000,
+          totalSupply: 79_000,
+          sharePrice: 80_000 / 79_000,
+        };
+      },
+      async apy7d() {
+        return 0.05;
+      },
+    },
+  };
+}
+
 test("fetchVaultEconomics happy path: tvl/sharePrice/totalShares/idle/adapters match hand-computed fixtures", async () => {
   // Configure all three adapters so this test exercises the same "all live and
   // eth_called" happy path it always has; the placeholder/unconfigured path
@@ -102,6 +135,91 @@ test("fetchVaultEconomics happy path: tvl/sharePrice/totalShares/idle/adapters m
     expect(a.balanceUsd).toBeCloseTo(28000, 6);
   }
   expect(r.adapters.map((a) => a.name)).toEqual(config.vault.adapters.map((a) => a.name));
+});
+
+test("vault seam: deterministic core, adapter, and sample readers preserve the public DTO and source provenance", async () => {
+  process.env.BASE_RPC_SOURCE = "stub";
+  const r = await fetchVaultEconomics(deterministicVaultReaders());
+  expect(Object.keys(r).sort()).toEqual([
+    "adapters",
+    "apy7d",
+    "asOf",
+    "idleUsdc",
+    "sharePrice",
+    "source",
+    "stale",
+    "totalShares",
+    "tvlUsd",
+  ]);
+  expect(r.source).toBe("stub");
+  expect(r.stale).toBe(false);
+  expect(r.tvlUsd).toBeCloseTo(84_320.12, 6);
+  expect(r.totalShares).toBeCloseTo(84_102.55, 6);
+  expect(r.idleUsdc).toBe(1);
+  expect(r.apy7d).toBe(0.05);
+  expect(r.adapters).toHaveLength(3);
+});
+
+test("vault seam: an independently failing adapter reader retains the scout's current aggregate fallback behavior", async () => {
+  const readers = deterministicVaultReaders();
+  let coreReads = 0;
+  readers.core.read = async () => {
+    coreReads += 1;
+    return { totalAssets: 84_320_120_000n, totalSupply: 84_102_550_000n, idle: 1_000_000n };
+  };
+  readers.adapters.read = async () => {
+    throw new Error("deterministic adapter failure");
+  };
+
+  const r = await fetchVaultEconomics(readers);
+  expect(coreReads).toBe(1);
+  expect(r.stale).toBe(true);
+  expect(r.tvlUsd).toBe(80_000);
+  expect(r.totalShares).toBe(79_000);
+  expect(r.sharePrice).toBeCloseTo(80_000 / 79_000, 9);
+  expect(r.idleUsdc).toBeNull();
+  expect(r.adapters.every((adapter) => adapter.balanceUsd === null)).toBe(true);
+});
+
+test("vault seam: an independently failing core reader reaches the persisted-sample reader", async () => {
+  const readers = deterministicVaultReaders();
+  let sampleReads = 0;
+  readers.core.read = async () => {
+    throw new Error("deterministic core failure");
+  };
+  const latest = readers.samples.latest;
+  readers.samples.latest = async (address) => {
+    sampleReads += 1;
+    return latest(address);
+  };
+
+  const r = await fetchVaultEconomics(readers);
+  expect(sampleReads).toBe(1);
+  expect(r.stale).toBe(true);
+  expect(r.asOf).toBe("2026-07-16T12:00:00.000Z");
+  expect(r.tvlUsd).toBe(80_000);
+});
+
+test("vault seam: a failed persisted-sample reader degrades to the existing all-null 200-shaped DTO", async () => {
+  const readers = deterministicVaultReaders();
+  readers.core.read = async () => {
+    throw new Error("deterministic core failure");
+  };
+  readers.samples.latest = async () => {
+    throw new Error("deterministic sample failure");
+  };
+  readers.samples.apy7d = async () => {
+    throw new Error("deterministic APY failure");
+  };
+
+  const r = await fetchVaultEconomics(readers);
+  expect(r.stale).toBe(true);
+  expect(r.tvlUsd).toBeNull();
+  expect(r.sharePrice).toBeNull();
+  expect(r.totalShares).toBeNull();
+  expect(r.idleUsdc).toBeNull();
+  expect(r.apy7d).toBeNull();
+  expect(r.adapters).toHaveLength(3);
 });
 
 // Reserved "unset" sentinels: a single hex nibble ×40. An adapter explicitly
