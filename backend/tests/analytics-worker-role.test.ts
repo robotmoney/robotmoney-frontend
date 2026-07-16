@@ -169,6 +169,69 @@ test("analytics telemetry tables (analytics_runs/analytics_stage_runs/analytics_
   await sql`DELETE FROM analytics_runs WHERE id = ${runId}`;
 });
 
+// Research pipeline telemetry tables (migration 0018, issue #151): structured
+// per-run records of runAnalytics stage/warning/artifact output. Same
+// boundary as analytics_runs/analytics_stage_runs/analytics_artifacts above —
+// persisted ONLY through the authenticated /api/analytics/telemetry route,
+// never direct SQL from the worker — so rm_worker must be able to READ these
+// (admin projections) but never mutate them. Flagged as a non-blocking
+// advisory during the PR #168 compliance review (issue #181); this pins the
+// permission boundary against the SAME shared, already-migrated database the
+// rest of the suite uses.
+test("research pipeline telemetry tables (research_pipeline_runs/_stages/_warnings/_artifacts) DENY insert/update/delete to the worker role, reads still allowed", async () => {
+  const [{ id: runId }] = await sql<{ id: number }[]>`
+    INSERT INTO research_pipeline_runs (kind, asof, source, status, started_at)
+    VALUES ('regime', '1997-01-01', 'hermetic', 'succeeded', now())
+    RETURNING id`;
+  const [{ id: stageId }] = await sql<{ id: number }[]>`
+    INSERT INTO research_pipeline_stages (run_id, stage, sequence, status, summary, started_at, finished_at)
+    VALUES (${runId}, 'access', 1, 'ok', 'ok', now(), now())
+    RETURNING id`;
+  const [{ id: warningId }] = await sql<{ id: number }[]>`
+    INSERT INTO research_pipeline_warnings (run_id, stage, message)
+    VALUES (${runId}, 'access', 'role-test warning')
+    RETURNING id`;
+  const [{ id: artifactId }] = await sql<{ id: number }[]>`
+    INSERT INTO research_pipeline_artifacts (run_id, stage, kind, preview)
+    VALUES (${runId}, 'access', 'indicator', '{}'::jsonb)
+    RETURNING id`;
+
+  const denied = async (q: Promise<unknown>) => {
+    try {
+      await q;
+      return null;
+    } catch (e) {
+      return (e as { code?: string }).code ?? "unknown";
+    }
+  };
+
+  expect(await denied(worker`INSERT INTO research_pipeline_runs (kind, asof, source, status, started_at)
+    VALUES ('x', '1997-01-01', 'hermetic', 'succeeded', now())`)).toBe("42501");
+  expect(await denied(worker`UPDATE research_pipeline_runs SET status = 'failed' WHERE id = ${runId}`)).toBe("42501");
+  expect(await denied(worker`DELETE FROM research_pipeline_runs WHERE id = ${runId}`)).toBe("42501");
+
+  expect(await denied(worker`INSERT INTO research_pipeline_stages (run_id, stage, sequence, status, summary, started_at, finished_at)
+    VALUES (${runId}, 'extract', 2, 'ok', 'ok', now(), now())`)).toBe("42501");
+  expect(await denied(worker`UPDATE research_pipeline_stages SET status = 'error' WHERE id = ${stageId}`)).toBe("42501");
+  expect(await denied(worker`DELETE FROM research_pipeline_stages WHERE id = ${stageId}`)).toBe("42501");
+
+  expect(await denied(worker`INSERT INTO research_pipeline_warnings (run_id, stage, message)
+    VALUES (${runId}, 'extract', 'worker warning')`)).toBe("42501");
+  expect(await denied(worker`UPDATE research_pipeline_warnings SET message = 'changed' WHERE id = ${warningId}`)).toBe("42501");
+  expect(await denied(worker`DELETE FROM research_pipeline_warnings WHERE id = ${warningId}`)).toBe("42501");
+
+  expect(await denied(worker`INSERT INTO research_pipeline_artifacts (run_id, stage, kind, preview)
+    VALUES (${runId}, 'extract', 'indicator', '{}'::jsonb)`)).toBe("42501");
+  expect(await denied(worker`UPDATE research_pipeline_artifacts SET checksum = 'x' WHERE id = ${artifactId}`)).toBe("42501");
+  expect(await denied(worker`DELETE FROM research_pipeline_artifacts WHERE id = ${artifactId}`)).toBe("42501");
+
+  const [read] = await worker`SELECT id FROM research_pipeline_runs WHERE id = ${runId}`;
+  expect(read.id).toBe(runId);
+
+  // Cleanup with the owner connection (cascades stages/warnings/artifacts).
+  await sql`DELETE FROM research_pipeline_runs WHERE id = ${runId}`;
+});
+
 test("scoped queue lifecycle (jobs.scope_type/scope_id) still works under the restricted role after migration 0017", async () => {
   const [{ id }] = await worker`
     INSERT INTO jobs (kind, payload, scope_type, scope_id) VALUES ('scoped-noop', '{}', 'committee_session', 'role-test-scope')
