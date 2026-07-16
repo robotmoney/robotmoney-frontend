@@ -201,14 +201,19 @@ export interface RpcCallOptions {
 // HONESTY CONTRACT (unchanged): retry masks a transient blip, NEVER a genuine
 // outage. After retries are exhausted rpcRequest STILL THROWS so callers degrade
 // that single leg to its last-persisted `stale` sample — it never fabricates a
-// value nor falsely reports `live`. Non-transient failures (JSON-RPC `error`,
-// missing `result`, a non-transient non-2xx like 400/500) throw IMMEDIATELY with
-// no retry. The AbortController timeout still bounds total work: if the signal
-// aborts mid-fetch or mid-backoff we stop retrying and throw.
+// value nor falsely reports `live`. Non-transient failures (a contract-revert
+// JSON-RPC `error`, missing `result`, a non-transient non-2xx like 400/500) throw
+// IMMEDIATELY with no retry. The AbortController timeout still bounds total work:
+// if the signal aborts mid-fetch or mid-backoff we stop retrying and throw.
 
 // Transient HTTP statuses worth a retry: 429 (rate limited) plus the 502/503/504
 // gateway/overload family. A 500/400/401/etc. is a hard error — no retry.
 const TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
+// Base's public RPC also reports throttling as HTTP 200 with JSON-RPC code
+// -32016 (`over rate limit`). Treat that exact provider-declared condition like
+// HTTP 429. Do not message-match generic errors: execution reverts and other
+// hard JSON-RPC failures must remain immediate so retry cannot hide bad calls.
+const TRANSIENT_RPC_ERROR_CODES = new Set([-32016]);
 // Hard ceiling on any single backoff wait so a hostile/huge Retry-After can't
 // stall a request longer than the AbortController timeout would anyway.
 const MAX_BACKOFF_MS = 30_000;
@@ -328,8 +333,21 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
       }
 
       if (res.ok) {
-        const parsed = (await res.json()) as { result?: T; error?: { message?: string } };
-        if (parsed.error) throw new Error(`Base RPC error: ${parsed.error.message ?? "unknown"}`);
+        const parsed = (await res.json()) as { result?: T; error?: { code?: number; message?: string } };
+        if (parsed.error) {
+          if (
+            parsed.error.code != null &&
+            TRANSIENT_RPC_ERROR_CODES.has(parsed.error.code) &&
+            attempt < retries &&
+            !controller.signal.aborted
+          ) {
+            await sleepOrAbort(backoffMs(attempt + 1, null), controller.signal);
+            continue;
+          }
+          throw new Error(
+            `Base RPC error${parsed.error.code == null ? "" : ` ${parsed.error.code}`}: ${parsed.error.message ?? "unknown"}`,
+          );
+        }
         if (parsed.result === undefined) throw new Error(`Base RPC: missing result for ${method}`);
         return parsed.result;
       }
