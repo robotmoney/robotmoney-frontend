@@ -107,3 +107,58 @@ export function parsePositiveNumber(value: unknown, fallback: number): number {
     ? value
     : fallback;
 }
+
+// ── Admin surface DTOs (issue #152) ─────────────────────────────────────────
+
+export function parseSubjectCreate(body: JsonObject | null): {
+  id: string; name: string; operator?: string; homepage?: string; xHandle?: string; thesisBlurb?: string;
+  wallets?: unknown; nftContracts?: unknown; source?: unknown; recommendationType?: string;
+  linkedMemberId?: string; structuralNotes?: unknown; lastReviewed?: string;
+} | null {
+  if (!body) return null;
+  const id = requiredString(body, "id", 100);
+  const name = requiredString(body, "name", 200);
+  if (!id || !name) return null;
+  return {
+    id, name,
+    operator: optionalString(body, "operator", 200),
+    homepage: optionalString(body, "homepage", 500),
+    xHandle: optionalString(body, "xHandle", 200),
+    thesisBlurb: optionalString(body, "thesisBlurb", 4000),
+    wallets: body.wallets,
+    nftContracts: body.nftContracts,
+    source: body.source,
+    recommendationType: optionalString(body, "recommendationType", 100),
+    linkedMemberId: optionalString(body, "linkedMemberId", 100),
+    structuralNotes: body.structuralNotes,
+    lastReviewed: optionalString(body, "lastReviewed", 10),
+  };
+}
+
+export function parseExpectedVersion(body: JsonObject | null): number | null {
+  const v = body?.expectedVersion;
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : null;
+}
+
+export function parseManualMember(body: JsonObject | null): {
+  memberId: string; name: string; publicKey: string; lens?: string; contact?: string;
+} | null {
+  if (!body) return null;
+  const memberId = requiredString(body, "memberId", 100);
+  const name = requiredString(body, "name", 200);
+  const publicKey = requiredString(body, "publicKey", 1000);
+  if (!memberId || !name || !publicKey) return null;
+  return { memberId, name, publicKey, lens: optionalString(body, "lens", 500), contact: optionalString(body, "contact", 320) };
+}
+
+export function parseSessionCreate(body: JsonObject | null): {
+  date: string; subjectId: string; scheduledAt?: string; windowMinutes?: number;
+} | null {
+  if (!body) return null;
+  const date = requiredString(body, "date", 10);
+  const subjectId = requiredString(body, "subjectId", 100);
+  if (!date || !subjectId) return null;
+  const scheduledAt = optionalString(body, "scheduledAt", 40);
+  const windowMinutes = typeof body.windowMinutes === "number" ? body.windowMinutes : undefined;
+  return { date, subjectId, scheduledAt, windowMinutes };
+}
