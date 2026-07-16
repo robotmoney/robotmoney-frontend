@@ -6,12 +6,12 @@
 //   - the seed defines independent cadences and retires analytics.run rows;
 //   - the scheduler derives independent per-kind dedupe keys.
 // Runs in the required backend-integration job against ephemeral Postgres.
-import { test, expect, beforeEach } from "bun:test";
+import { test, expect, beforeEach, afterAll } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { makeAnalyticsHandlers, RESEARCH_TOOLS, REGIME_TOOL, type AnalyticsRunner } from "../src/worker/handlers/analytics.ts";
 import { tickScheduler } from "../src/worker/scheduler.ts";
-import { seed } from "../src/db/seed.ts";
+import { seed, seedJobSchedules } from "../src/db/seed.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { LANES } from "../src/worker/lanes.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
@@ -20,6 +20,11 @@ import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { directTelemetrySink } from "../src/analytics/store/telemetry-direct.ts";
 
 beforeEach(async () => { await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY CASCADE`; });
+// This file's beforeEach TRUNCATEs job_schedules for isolation; restore the
+// production seed rows once the file's own tests are done so later test files
+// sharing this ephemeral Postgres (e.g. tests/api/admin-surface.test.ts, which
+// asserts regime.classify is seeded enabled=true) don't see an empty table.
+afterAll(async () => { await seedJobSchedules(); });
 
 test("registry: regime.classify and research.refresh are distinct kinds; analytics.run is retired", () => {
   expect(typeof handlers["regime.classify"]).toBe("function");

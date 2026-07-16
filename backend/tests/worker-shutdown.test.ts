@@ -7,11 +7,12 @@
 //     to 'pending' — no orphaned 'running' row owned by a stopped worker, and
 //     the zombie's eventual completion is discarded.
 // Runs in the required backend-integration job against ephemeral Postgres.
-import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { LANES } from "../src/worker/lanes.ts";
 import { startWorker, type WorkerHandle } from "../src/worker/runtime.ts";
+import { seedJobSchedules } from "../src/db/seed.ts";
 
 function gate() {
   let open!: () => void;
@@ -25,6 +26,11 @@ beforeAll(() => {
   handlers["test.shutdown_slow"] = async () => { await new Promise((r) => setTimeout(r, 800)); return { ok: true }; };
   handlers["research.test_shutdown_hang"] = async () => { await hangGate.opened; return { ok: true }; };
 });
+// This file's beforeEach TRUNCATEs job_schedules for isolation; restore the
+// production seed rows once the file's own tests are done so later test files
+// sharing this ephemeral Postgres (e.g. tests/api/admin-surface.test.ts, which
+// asserts regime.classify is seeded enabled=true) don't see an empty table.
+afterAll(async () => { await seedJobSchedules(); });
 beforeEach(async () => {
   hangGate = gate();
   await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY CASCADE`;

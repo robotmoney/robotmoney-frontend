@@ -1,9 +1,10 @@
-import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { reapStuckJobs } from "../src/worker/reaper.ts";
 import { tickScheduler } from "../src/worker/scheduler.ts";
+import { seedJobSchedules } from "../src/db/seed.ts";
 
 beforeAll(() => {
   handlers["test.ok"] = async () => ({ ok: true });
@@ -11,6 +12,11 @@ beforeAll(() => {
 });
 // Isolate each test: clear the queue + schedules so processOneJob claims only our job.
 beforeEach(async () => { await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY CASCADE`; });
+// Restore the production seed rows once this file's own tests are done so
+// later test files sharing this ephemeral Postgres (e.g.
+// tests/api/admin-surface.test.ts, which asserts regime.classify is seeded
+// enabled=true) don't see an empty job_schedules table.
+afterAll(async () => { await seedJobSchedules(); });
 
 test("processOneJob: success → succeeded + a job_runs row", async () => {
   const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('test.ok','{}') RETURNING id`;

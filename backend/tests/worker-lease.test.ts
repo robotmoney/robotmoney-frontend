@@ -12,6 +12,7 @@ import { handlers } from "../src/worker/handlers/index.ts";
 import { processOneJob, releaseOwnedJobs } from "../src/worker/loop.ts";
 import { LANES } from "../src/worker/lanes.ts";
 import { reapStuckJobs } from "../src/worker/reaper.ts";
+import { seedJobSchedules } from "../src/db/seed.ts";
 
 function gate() {
   let open!: () => void;
@@ -32,6 +33,11 @@ afterAll(() => {
   if (savedEnv.visibility === undefined) delete process.env.JOB_VISIBILITY_TIMEOUT; else process.env.JOB_VISIBILITY_TIMEOUT = savedEnv.visibility;
   if (savedEnv.renew === undefined) delete process.env.JOB_LEASE_RENEW_MS; else process.env.JOB_LEASE_RENEW_MS = savedEnv.renew;
 });
+// This file's beforeEach TRUNCATEs job_schedules for isolation; restore the
+// production seed rows once the file's own tests are done so later test files
+// sharing this ephemeral Postgres (e.g. tests/api/admin-surface.test.ts, which
+// asserts regime.classify is seeded enabled=true) don't see an empty table.
+afterAll(async () => { await seedJobSchedules(); });
 beforeEach(async () => {
   slowGate = gate();
   await sql`TRUNCATE jobs, job_runs, job_schedules RESTART IDENTITY CASCADE`;
