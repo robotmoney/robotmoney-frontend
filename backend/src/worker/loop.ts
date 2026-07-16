@@ -106,7 +106,10 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
   // we lost the lock — bail without recording.
   try {
     if (!handler) throw new Error(`no handler registered for kind "${job.kind}"`);
-    const output = await handler(job.payload);
+    // Pass the claimed job's id so handlers that persist their own telemetry
+    // (e.g. analytics regime/research runs → research_pipeline_runs.job_id,
+    // issue #179) can link output rows back to the originating job.
+    const output = await handler(job.payload, job.id);
 
     // A handler that returns { ok:false } DEGRADED (a live provider was
     // unreachable/slow, so it kept the last-persisted rows and wrote nothing).
