@@ -55,9 +55,11 @@ describe("frontend route resolution", () => {
     expect(viewFor("/admin/research")).toBe("/views/admin.html");
     expect(viewFor("/admin/research/runs/abc-123")).toBe("/views/admin.html");
     expect(viewFor("/admin/queue")).toBe("/views/admin.html");
-    // Committee/audit (issue #159, landed after #157) are their own routes
-    // with dedicated fragments — see "resolves admin committee operations
-    // routes" below — not part of this shell's catch-all.
+    // Audit (issue #155/PR #170) is an in-shell section, not a separate
+    // route — /admin/audit falls through to this same catch-all. Committee
+    // (issue #159) IS its own route with dedicated fragments — see
+    // "resolves admin committee operations routes" below.
+    expect(viewFor("/admin/audit")).toBe("/views/admin.html");
     expect(viewFor("/admin/")).toBe("/views/admin.html");
   });
 
@@ -79,7 +81,6 @@ describe("frontend route resolution", () => {
     expect(viewFor("/admin/committee/sessions/9f2c1e0a-aaaa-bbbb-cccc-000000000001")).toBe(
       "/views/admin/committee-session.html",
     );
-    expect(viewFor("/admin/audit")).toBe("/views/admin/audit.html");
   });
 
   test("every admin route fragment referenced by the router exists on disk", async () => {
@@ -89,7 +90,6 @@ describe("frontend route resolution", () => {
       "/admin/committee/subjects/woon-vault",
       "/admin/committee/members/athena",
       "/admin/committee/sessions/9f2c1e0a-aaaa-bbbb-cccc-000000000001",
-      "/admin/audit",
     ];
     for (const p of paths) {
       const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));

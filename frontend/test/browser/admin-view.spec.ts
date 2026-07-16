@@ -443,23 +443,6 @@ function sessionSummary(overrides: Record<string, unknown> = {}) {
   };
 }
 
-// Generic admin audit feed (/api/admin/audit) — a SEPARATE, still-unimplemented
-// surface from the committee-scoped one above (see contract/src/routes.js);
-// only the standalone /admin/audit page test at the bottom of this file uses it.
-const AUDIT_FIXTURE = {
-  items: [
-    { id: 1, at: "2026-07-20T15:05:00.000Z", actor: "admin", action: "committee.member.activate",
-      targetType: "committee_member", targetId: "nova", reason: "Approved after review",
-      outcome: "succeeded", requestId: "req-1", jobId: null, sessionId: null,
-      beforeSummary: { status: "applied" }, afterSummary: { status: "active", token: "must-be-redacted" } },
-    { id: 2, at: "2026-07-19T09:00:00.000Z", actor: "admin", action: "committee.subject.create",
-      targetType: "committee_subject", targetId: "woon-vault", reason: "New topic",
-      outcome: "succeeded", requestId: "req-2", jobId: null, sessionId: null,
-      beforeSummary: null, afterSummary: { id: "woon-vault" } },
-  ],
-  nextCursor: null,
-};
-
 async function mockCommitteeApi(
   page: Page,
   opts: { session?: ReturnType<typeof sessionSummary>; rosterRows?: ReturnType<typeof baseRosterRows>; takes?: ReturnType<typeof baseTakes> } = {},
@@ -529,8 +512,6 @@ async function mockCommitteeApi(
     route.fulfill(jsonReply({ ok: true, status: 200, idempotent: true, session: { id: "sess-1", state: "aggregated", version: 3 } })));
   await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/cancel$/, (route) =>
     route.fulfill(jsonReply({ ok: false, status: 409, error: "illegal_transition:published->cancelled" }, 409)));
-
-  await page.route(/\/api\/admin\/audit(\?|$)/, (route) => route.fulfill(jsonReply(AUDIT_FIXTURE)));
 }
 
 async function signIn(page: Page, path: string): Promise<void> {
@@ -1005,26 +986,10 @@ test("committee admin: lifecycle action requires confirm+reason, shows the new s
   await expect(page.getByTestId("action-error")).toContainText("409");
 });
 
-// AC: audit filters, actor/action/target/reason/outcome rendering, append-only
-// presentation, and redaction of secrets/token/signature/etc.
-test("committee admin: audit filters, rendering, and redaction", async ({ page }) => {
-  await mockCommitteeApi(page);
-  await signIn(page, "/admin/audit");
-
-  await expect(page.getByRole("cell", { name: "committee.member.activate" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "Approved after review" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "succeeded" })).toHaveCount(2);
-
-  // No delete/update control exists on this append-only surface.
-  await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
-
-  await page.getByTestId("audit-row-1").click();
-  const detail = page.getByTestId("audit-detail-1");
-  await expect(detail).toBeVisible();
-  await expect(detail).not.toContainText("must-be-redacted");
-  await expect(detail).toContainText("[redacted]");
-
-  await page.getByTestId("audit-filter-actor").fill("admin");
-  await page.getByTestId("audit-filter-apply").click();
-  await expect(page.getByRole("cell", { name: "committee.member.activate" })).toBeVisible();
-});
+// Audit filters/rendering/redaction coverage moved: issue #159 originally
+// shipped its own standalone /admin/audit page + fictional camelCase
+// AdminAuditEntry contract, but #155/PR #170's real, backend-backed audit
+// feed (snake_case AdminAuditRow, GET /api/admin/audit) landed as an
+// in-shell /admin section first — see admin-surface.spec.ts for its
+// dedicated, real-shape coverage. The standalone page was a duplicate and
+// was removed (PR #172).

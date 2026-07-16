@@ -438,9 +438,10 @@ export interface SessionActionResponse {
 // sessions), not a committee-only feed. `scope` is a free-form JSON blob
 // whose keys vary per `action` (e.g. session_transition carries
 // {sessionId, from, to, action}); there is no targetType/targetId/reason/
-// outcome/requestId/jobId column — those belonged to the invented generic
-// `/api/admin/audit` design (a separate, still-unbuilt surface — see
-// ROUTES.admin.audit — not this committee-scoped one).
+// outcome/requestId/jobId column — those belong to the SEPARATE, real,
+// already-shipped generic `/api/admin/audit` feed (issue #155/PR #170 —
+// see AdminAuditRow/AdminAuditResponse above, and ROUTES.admin.audit), not
+// this committee-scoped one.
 export interface CommitteeAuditEntry {
   id: number | string;
   actor: string;

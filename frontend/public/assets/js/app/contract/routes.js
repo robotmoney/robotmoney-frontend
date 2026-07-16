@@ -143,10 +143,6 @@ export const ROUTES = {
     researchRawSeries: "/api/admin/research/raw-series/:indicator", // GET ?from=&to=&limit= — allowlisted raw_indicator_history read
     researchSignal: "/api/admin/research/signals/:key", // GET ?from=&to=&limit= — allowlisted research_signals read
     researchRerun: "/api/admin/research/rerun", // POST — enqueue a complete or single-tool rerun for a given as-of date
-    // Append-only mutation history for every admin write (issue #159 §9/US-A3).
-    // NOT YET IMPLEMENTED by the backend (no /api/admin/audit route exists) —
-    // distinct from the committee-scoped audit feed below, which IS live.
-    audit: "/api/admin/audit", // GET ?actor=&action=&targetType=&targetId=&outcome=&limit=&cursor=
   },
 
   // Committee operations surface (issue #159 UI over issue #152/PR #169's
