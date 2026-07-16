@@ -389,6 +389,35 @@ const MEMBER_ACTIVE = {
   token_hash: "should-never-render-raw",
 };
 
+// Third member state (inactive) — exercises the "Inactive" filter tab and the
+// reactivate action, neither of which the applied/active fixtures above cover.
+const MEMBER_INACTIVE = {
+  id: "cleo", status: "inactive", name: "Cleo", tagline: null, lens: "yield", mandate: null,
+  biases: null, voiceMd: null, mode: null, operator: null, avatar: null,
+  appliedAt: "2026-05-01T00:00:00.000Z", activatedAt: "2026-05-02T00:00:00.000Z",
+  version: 1, updatedAt: "2026-06-15T00:00:00.000Z", contactEmail: "cleo@example.com",
+  applicationStatus: "approved", activeKeyId: null, activeKeyCreatedAt: null, participation: [],
+};
+
+// Shared 3-member roster (submitted/expected/absent) reused by the default
+// sessionFixture(); a 4th `excused` row is layered on top only by the roster
+// test that needs it, so the default row-count assertions elsewhere are undisturbed.
+function baseRoster() {
+  return [
+    { memberId: "athena", memberName: "Athena", memberLens: "macro", status: "submitted",
+      includedAt: "2026-07-19T00:00:00.000Z", excusedAt: null, reason: null,
+      recommendation: {
+        id: "rec-1", stance: "bullish", confidence: 0.8, receivedAt: "2026-07-20T15:00:00.000Z",
+        verified: true, body: "Rotate into WOON.", memoUrl: null, nonce: "nonce-1",
+        signature: "sig-athena-abcdef", canonicalPayload: "canonical-payload-athena",
+      } },
+    { memberId: "nova", memberName: "Nova", memberLens: "risk", status: "expected",
+      includedAt: "2026-07-19T00:00:00.000Z", excusedAt: null, reason: null, recommendation: null },
+    { memberId: "robotmoney", memberName: "Robotmoney", memberLens: "protocol", status: "absent",
+      includedAt: "2026-07-19T00:00:00.000Z", excusedAt: null, reason: null, recommendation: null },
+  ];
+}
+
 function sessionFixture(overrides: Record<string, unknown> = {}) {
   return {
     id: "sess-1", version: 2, updatedAt: "2026-07-19T00:00:00.000Z",
@@ -398,19 +427,7 @@ function sessionFixture(overrides: Record<string, unknown> = {}) {
     windowClosesAt: "2026-07-20T20:00:00.000Z",
     publishAt: "2026-07-20T21:00:00.000Z",
     publishedAt: null, cancelledAt: null,
-    roster: [
-      { memberId: "athena", memberName: "Athena", memberLens: "macro", status: "submitted",
-        includedAt: "2026-07-19T00:00:00.000Z", excusedAt: null, reason: null,
-        recommendation: {
-          id: "rec-1", stance: "bullish", confidence: 0.8, receivedAt: "2026-07-20T15:00:00.000Z",
-          verified: true, body: "Rotate into WOON.", memoUrl: null, nonce: "nonce-1",
-          signature: "sig-athena-abcdef", canonicalPayload: "canonical-payload-athena",
-        } },
-      { memberId: "nova", memberName: "Nova", memberLens: "risk", status: "expected",
-        includedAt: "2026-07-19T00:00:00.000Z", excusedAt: null, reason: null, recommendation: null },
-      { memberId: "robotmoney", memberName: "Robotmoney", memberLens: "protocol", status: "absent",
-        includedAt: "2026-07-19T00:00:00.000Z", excusedAt: null, reason: null, recommendation: null },
-    ],
+    roster: baseRoster(),
     jobs: [{ action: "close_window", jobId: 501, status: "pending", runAfter: "2026-07-20T20:00:00.000Z" }],
     events: [{ id: 1, fromState: null, toState: "scheduled", action: "create", actor: "admin", reason: "scheduled",
       jobId: null, at: "2026-07-19T00:00:00.000Z" }],
@@ -461,15 +478,28 @@ async function mockCommitteeApi(page: Page, opts: { session?: ReturnType<typeof 
         credential: { token: "member-bearer-token-abc123" },
       }, 201));
     }
-    return route.fulfill(jsonReply({ items: [MEMBER_APPLIED, MEMBER_ACTIVE], nextCursor: null }));
+    return route.fulfill(jsonReply({ items: [MEMBER_APPLIED, MEMBER_ACTIVE, MEMBER_INACTIVE], nextCursor: null }));
   });
   await page.route(/\/api\/admin\/committee\/members\/nova$/, (route) => route.fulfill(jsonReply(MEMBER_APPLIED)));
   await page.route(/\/api\/admin\/committee\/members\/athena$/, (route) => route.fulfill(jsonReply(MEMBER_ACTIVE)));
+  await page.route(/\/api\/admin\/committee\/members\/cleo$/, (route) => route.fulfill(jsonReply(MEMBER_INACTIVE)));
   await page.route(/\/api\/admin\/committee\/members\/nova\/activate$/, (route) =>
     route.fulfill(jsonReply({
       item: { ...MEMBER_APPLIED, status: "active", applicationStatus: "approved" },
       auditRequestId: "req-activate",
       credential: { token: "activated-bearer-token-xyz789" },
+    })));
+  await page.route(/\/api\/admin\/committee\/members\/cleo\/reactivate$/, (route) =>
+    route.fulfill(jsonReply({
+      item: { ...MEMBER_INACTIVE, status: "active", applicationStatus: "approved" },
+      auditRequestId: "req-reactivate",
+      credential: { token: "reactivated-bearer-token-def456" },
+    })));
+  await page.route(/\/api\/admin\/committee\/members\/athena\/rotate-key$/, (route) =>
+    route.fulfill(jsonReply({
+      item: { ...MEMBER_ACTIVE, activeKeyId: "key-2" },
+      auditRequestId: "req-rotate",
+      credential: { token: "rotated-bearer-token-ghi789" },
     })));
 
   await page.route(/\/api\/admin\/committee\/sessions(\?|$)/, (route) => {
@@ -611,6 +641,57 @@ test("committee admin: topic edit surfaces a 400 (unknown field) and a 409 (stal
   await expect(page.getByText(/stale version/)).toBeVisible();
 });
 
+// AC: a successful topic edit PATCHes the dedicated endpoint and asserts the
+// exact request body (mirrors the create-test pattern above).
+test("committee admin: topic edit succeeds and posts the exact PATCH body", async ({ page }) => {
+  await mockCommitteeApi(page);
+  await signIn(page, "/admin/committee/subjects/woon-vault");
+  await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
+
+  let captured: unknown = null;
+  await page.route(/\/api\/admin\/committee\/subjects\/woon-vault$/, async (route) => {
+    if (route.request().method() === "PATCH") {
+      captured = route.request().postDataJSON();
+      return route.fulfill(jsonReply({ item: { ...TOPIC_FIXTURE, name: "Woon Vault Renamed", version: 4 }, auditRequestId: "req-edit" }));
+    }
+    return route.fulfill(jsonReply(TOPIC_FIXTURE));
+  });
+
+  await page.getByTestId("topic-edit-toggle").click();
+  await page.getByTestId("edit-name").fill("Woon Vault Renamed");
+  await page.getByTestId("edit-reason").fill("Renaming for accuracy and coverage.");
+  await page.getByTestId("edit-submit").click();
+
+  await expect(page.getByTestId("topic-edit-form")).not.toBeVisible();
+  expect(captured).toMatchObject({
+    version: 3, name: "Woon Vault Renamed", operator: "Woon Labs",
+    thesisBlurb: "A vault strategy thesis.", source: { type: "rpc" },
+    reason: "Renaming for accuracy and coverage.",
+  });
+});
+
+// AC: the deactivate flow (toggle → reason → confirm) POSTs the dedicated
+// deactivate endpoint and asserts version/reason in the request body.
+test("committee admin: topic deactivate flow posts to the dedicated endpoint with version and reason", async ({ page }) => {
+  await mockCommitteeApi(page);
+  await signIn(page, "/admin/committee/subjects/woon-vault");
+  await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
+
+  let captured: unknown = null;
+  await page.route(/\/api\/admin\/committee\/subjects\/woon-vault\/deactivate$/, async (route) => {
+    captured = route.request().postDataJSON();
+    return route.fulfill(jsonReply({ item: { ...TOPIC_FIXTURE, status: "inactive", version: 4 }, auditRequestId: "req-deact" }));
+  });
+
+  await page.getByTestId("topic-deactivate-toggle").click();
+  await expect(page.getByTestId("deactivate-confirm")).toBeVisible();
+  await page.getByTestId("deactivate-reason").fill("Deactivating this topic for coverage.");
+  await page.getByTestId("deactivate-confirm-submit").click();
+
+  await expect(page.getByTestId("deactivate-confirm")).not.toBeVisible();
+  expect(captured).toMatchObject({ version: 3, reason: "Deactivating this topic for coverage." });
+});
+
 // AC: applied/active/inactive filtering + one-time credential reveal + no
 // token_hash/bearer token rendered in detail JSON.
 test("committee admin: member filters, one-time credential reveal, and redacted detail JSON", async ({ page }) => {
@@ -647,6 +728,65 @@ test("committee admin: member filters, one-time credential reveal, and redacted 
   await expect(detailJson).toBeVisible();
   await expect(detailJson).not.toContainText("should-never-render-raw");
   await expect(detailJson).toContainText("[redacted]");
+});
+
+// AC: the "Inactive" filter renders the inactive set; manual-add, reactivate,
+// and rotate-key each mint and reveal their own one-time credential exactly once.
+test("committee admin: inactive filter, manual-add credential reveal, and reactivate/rotate-key credentials", async ({ page }) => {
+  await mockCommitteeApi(page);
+  await signIn(page, "/admin/committee");
+  await page.getByRole("button", { name: "Members" }).click();
+
+  await page.getByTestId("member-filter-inactive").click();
+  await expect(page.getByRole("cell", { name: "Cleo", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Athena", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("cell", { name: "Nova", exact: true })).toHaveCount(0);
+
+  // Manual-add: drive the form to completion and assert the one-time reveal.
+  await page.getByTestId("new-member-toggle").click();
+  await page.getByTestId("member-id").fill("newmember");
+  await page.getByTestId("member-name").fill("New Member");
+  await page.getByTestId("member-public-key").fill("pubkey-abc");
+  await page.getByTestId("member-reason").fill("Manually adding this member for coverage.");
+  await page.getByTestId("member-submit").click();
+
+  const addToken = page.getByTestId("credential-token");
+  await expect(addToken).toBeVisible();
+  await expect(addToken).toHaveText("member-bearer-token-abc123");
+  await page.getByTestId("credential-dismiss").click();
+  await expect(page.getByTestId("credential-modal")).not.toBeVisible();
+
+  // Reactivate: Cleo is inactive, so `member-reactivate` (which requires a new
+  // public key) is the offered action; its response mints a fresh credential.
+  await page.getByTestId("member-filter-inactive").click();
+  await page.getByRole("cell", { name: "Cleo", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /Member cleo/ })).toBeVisible();
+
+  await page.getByTestId("member-reactivate").click();
+  await page.getByTestId("member-action-public-key").fill("new-pubkey-1");
+  await page.getByTestId("member-action-reason").fill("Reactivating after cooldown period.");
+  await page.getByTestId("member-action-submit").click();
+
+  const reactivateToken = page.getByTestId("credential-token");
+  await expect(reactivateToken).toBeVisible();
+  await expect(reactivateToken).toHaveText("reactivated-bearer-token-def456");
+  await page.getByTestId("credential-dismiss").click();
+  await expect(page.getByTestId("credential-modal")).not.toBeVisible();
+
+  // Rotate key: Athena is active, so `member-rotate-key` is offered; its
+  // response mints a distinct fresh credential, shown exactly once.
+  await page.goto("/admin/committee/members/athena");
+  await expect(page.getByRole("heading", { name: /Member athena/ })).toBeVisible();
+
+  await page.getByTestId("member-rotate-key").click();
+  await page.getByTestId("member-action-public-key").fill("new-pubkey-2");
+  await page.getByTestId("member-action-reason").fill("Rotating key due to suspected exposure.");
+  await page.getByTestId("member-action-submit").click();
+
+  const rotateToken = page.getByTestId("credential-token");
+  await expect(rotateToken).toBeVisible();
+  await expect(rotateToken).toHaveText("rotated-bearer-token-ghi789");
+  await expect(rotateToken).not.toHaveText("reactivated-bearer-token-def456");
 });
 
 // AC: session scheduling reason/ISO-ordering validation + UTC/local rendering
@@ -719,6 +859,60 @@ test("committee admin: roster matrix states, filter, and collapsed signature dis
   // add/excuse/restore, never an edit/delete on the recommendation.
   await expect(page.getByText("Edit recommendation")).toHaveCount(0);
   await expect(page.getByText("Delete recommendation")).toHaveCount(0);
+});
+
+// AC: an `excused` roster row renders distinctly, is isolated by the
+// "excused" filter, and the excuse/restore controls submit roster mutations.
+test("committee admin: excused roster row renders distinctly and excuse/restore submit roster mutations", async ({ page }) => {
+  const excusedRoster = [
+    ...baseRoster(),
+    { memberId: "ren", memberName: "Ren", memberLens: "growth", status: "excused",
+      includedAt: "2026-07-19T00:00:00.000Z", excusedAt: "2026-07-19T01:00:00.000Z",
+      reason: "Conflict of interest disclosed.", recommendation: null },
+  ];
+  await mockCommitteeApi(page, { session: sessionFixture({ roster: excusedRoster }) });
+  await signIn(page, "/admin/committee/sessions/sess-1");
+
+  // The excused row renders distinctly (its own state cell) alongside the
+  // submitted/expected/absent rows already covered by the matrix test above.
+  const renRow = page.getByRole("row", { name: /Ren/ });
+  await expect(renRow).toBeVisible();
+  await expect(renRow).toContainText("excused");
+
+  await page.getByTestId("roster-filter").selectOption("excused");
+  await expect(page.getByRole("cell", { name: "Ren", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Athena", exact: true })).toHaveCount(0);
+  await page.getByTestId("roster-filter").selectOption("all");
+
+  // Restore Ren (excused → expected) — asserts operation/memberId/reason.
+  let capturedRestore: unknown = null;
+  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/roster$/, async (route) => {
+    capturedRestore = route.request().postDataJSON();
+    return route.fulfill(jsonReply({ item: sessionFixture({ roster: excusedRoster }), auditRequestId: "req-roster-restore" }));
+  });
+  await page.getByTestId("roster-restore-ren").click();
+  await expect(page.getByTestId("roster-form")).toBeVisible();
+  await page.getByTestId("roster-reason").fill("Restoring Ren to the roster ahead of window close.");
+  await page.getByTestId("roster-submit").click();
+  await expect(page.getByTestId("roster-form")).not.toBeVisible();
+  expect(capturedRestore).toMatchObject({
+    operation: "restore", memberId: "ren", reason: "Restoring Ren to the roster ahead of window close.",
+  });
+
+  // Excuse Nova (expected → excused) — asserts operation/memberId/reason.
+  let capturedExcuse: unknown = null;
+  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/roster$/, async (route) => {
+    capturedExcuse = route.request().postDataJSON();
+    return route.fulfill(jsonReply({ item: sessionFixture({ roster: excusedRoster }), auditRequestId: "req-roster-excuse" }));
+  });
+  await page.getByTestId("roster-excuse-nova").click();
+  await expect(page.getByTestId("roster-form")).toBeVisible();
+  await page.getByTestId("roster-reason").fill("Excusing Nova due to a scheduling conflict.");
+  await page.getByTestId("roster-submit").click();
+  await expect(page.getByTestId("roster-form")).not.toBeVisible();
+  expect(capturedExcuse).toMatchObject({
+    operation: "excuse", memberId: "nova", reason: "Excusing Nova due to a scheduling conflict.",
+  });
 });
 
 // AC: aggregate fields render from a read-only aggregated session.
