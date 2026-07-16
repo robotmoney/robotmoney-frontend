@@ -458,3 +458,55 @@
   border: 1px solid var(--color-border); border-radius: 6px;
 }
 .adm-log--err { color: var(--color-warn); border-color: rgba(255, 102, 68, 0.3); }
+
+/* ── Admin surface (#157): section nav, alerts, filters, stage timeline,
+   artifact previews, and mutation forms layered onto the /admin shell above. */
+.adm-nav { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0 0 1.5rem; }
+.adm-nav__link {
+  padding: 0.4rem 0.9rem; font-family: var(--font-mono); font-size: 0.78rem; cursor: pointer;
+  color: var(--color-text-muted); background: transparent;
+  border: 1px solid var(--color-border); border-radius: 999px;
+}
+.adm-nav__link:hover { color: var(--color-text); }
+.adm-nav__link--active { color: var(--color-deep); background: var(--color-accent); border-color: var(--color-accent); }
+
+.adm-alerts { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 2rem; }
+.adm-alert {
+  display: flex; gap: 0.6rem; align-items: baseline; padding: 0.6rem 0.9rem;
+  border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface);
+  font-family: var(--font-mono); font-size: 0.8rem;
+}
+.adm-alert--healthy { border-color: rgba(0, 229, 255, 0.3); }
+.adm-alert--stale, .adm-alert--degraded { border-color: rgba(232, 166, 64, 0.4); }
+.adm-alert--failed, .adm-alert--dead { border-color: rgba(255, 102, 68, 0.4); }
+
+.adm-filters { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin: 0.5rem 0 1.25rem; }
+.adm-filters select, .adm-filters input { padding: 0.4rem 0.6rem; font-family: var(--font-mono); font-size: 0.78rem;
+  color: var(--color-text); background: var(--color-deep); border: 1px solid var(--color-border); border-radius: 6px; }
+.adm-field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.72rem; color: var(--color-text-muted); }
+
+.adm-stages { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.75rem 0 1.5rem; }
+.adm-stage {
+  display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: baseline; padding: 0.6rem 0.9rem;
+  border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface);
+}
+.adm-stage__name { font-family: var(--font-mono); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; min-width: 6rem; }
+
+.adm-artifacts { display: flex; flex-direction: column; gap: 0.75rem; }
+.adm-artifact__head { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: baseline; font-family: var(--font-mono); font-size: 0.75rem; }
+
+.adm-link { color: var(--color-accent); text-decoration: none; font-family: var(--font-mono); font-size: 0.78rem; }
+.adm-link:hover { text-decoration: underline; }
+
+.adm-form { display: flex; flex-direction: column; gap: 0.65rem; max-width: 32rem; margin: 0.5rem 0 1.5rem; }
+.adm-form__row { display: flex; flex-direction: column; gap: 0.3rem; }
+.adm-form__row label { font-family: var(--font-mono); font-size: 0.72rem; color: var(--color-text-muted); }
+.adm-form textarea {
+  padding: 0.55rem 0.75rem; font-family: var(--font-mono); font-size: 0.82rem;
+  color: var(--color-text); background: var(--color-deep);
+  border: 1px solid var(--color-border); border-radius: 6px; resize: vertical; min-height: 4.5rem;
+}
+.adm-form select { padding: 0.5rem 0.7rem; font-family: var(--font-mono); font-size: 0.82rem;
+  color: var(--color-text); background: var(--color-deep); border: 1px solid var(--color-border); border-radius: 6px; }
+.adm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.adm-success { color: var(--color-accent); font-family: var(--font-mono); font-size: 0.8rem; margin: 0.25rem 0 0; }

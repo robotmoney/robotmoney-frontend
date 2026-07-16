@@ -338,8 +338,8 @@ schedules (the combined `analytics.run` kind is retired).
 
 A read-only operator surface over the queue tables — `backend/src/api/routes/admin.ts`
 serving `/api/admin/*`, and the buildless `/admin` frontend view
-(`frontend/public/views/admin.html` + the `adminJobsView` factory in
-`alpine/views.js`). It SELECTs only; there is no new table:
+(`frontend/public/views/admin.html` + the `adminSurfaceView` factory in
+`alpine/views/admin-surface.js`). It SELECTs only; there is no new table:
 
 - `GET /api/admin/jobs` — recent `jobs` (all kinds) + all `job_schedules` + a
   `{ byStatus, byKind }` count summary.
@@ -357,6 +357,17 @@ only outside prod — the `config.allowInsecure` convenience path. Fail-closed: 
 public nav; the token is kept in `sessionStorage` for the tab. The `bun run demo`
 launcher generates a fresh random password each run and prints it to the
 interactive TUI ONLY (never logged, never written to `demo-state.json`).
+
+The frontend shell also renders `/admin/research` and `/admin/queue` sections
+(stage timeline, bounded artifact previews, filtered queue jobs, controlled
+rerun/dead-job retry — issue #157) against the `admin.overview`,
+`admin.researchRuns`, `admin.researchRun`, and `admin.jobRetry` routes declared
+in `contract/src/routes.js`. Every `/admin/*` path resolves to this one shell
+fragment (`frontend/public/assets/js/app/routes.js`); the component reads
+`location.pathname` to pick a section. See `docs/plan-admin-surface.md` for the
+full target contract — the backend routes those sections call are delivered by
+issue #155 and exercised here only through Playwright's mocked API fixtures
+until that lands.
 
 ### 7.1 Analytics suite (six-stage pipeline)
 

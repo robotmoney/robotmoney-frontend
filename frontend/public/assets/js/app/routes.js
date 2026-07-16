@@ -22,6 +22,11 @@ const ROUTES = {
 /** @param {string} pathname */
 export function viewFor(pathname) {
   if (ROUTES[pathname]) return ROUTES[pathname];
+  // Every /admin subpath (research, research/runs/:id, queue, committee/*,
+  // audit, ...) resolves to the one buildless admin shell fragment; the shell
+  // itself reads location.pathname to pick a section. Otherwise the catch-all
+  // below would request a nonexistent per-path view fragment and 404.
+  if (pathname === "/admin" || pathname.startsWith("/admin/")) return ADMIN_VIEW;
   if (/^\/committee\/members\/[^/]+\/?$/.test(pathname)) {
     return `${VIEW_DIR}/committee/member.html`;
   }
