@@ -61,6 +61,61 @@ test("seed: independent regime/research cadences; analytics.run schedules delete
   expect(job.last_error).toContain("retired kind");
 });
 
+// AC3 (issue #151) — telemetry failures are non-fatal to canonical analytics
+// persistence but must still surface in job output and admin status. These
+// tests prove the handler layer (the object `worker/loop.ts` persists to
+// job_runs.output, and what GET /api/admin/jobs/:id then returns verbatim —
+// see backend/tests/api/admin-jobs.test.ts for the admin-status pass-through)
+// folds runAnalytics's non-enumerable `__telemetry` outcome into a plain,
+// enumerable `telemetry` field without perturbing the canonical `tools` list.
+function withTelemetry(out: Record<string, unknown>, outcome: unknown): Record<string, unknown> {
+  Object.defineProperty(out, "__telemetry", { value: outcome, enumerable: false });
+  return out;
+}
+
+test("regime.classify folds a successful telemetry outcome into output.telemetry", async () => {
+  const h = makeAnalyticsHandlers(async (asof, tool) => withTelemetry({ [tool as string]: { asof } }, { ok: true, runId: 42 }));
+  const out = (await h.regimeClassify({ asof: "2026-07-15" })) as { tools: string[]; telemetry: { ok: boolean; runId: number } };
+  expect(out.tools).toEqual([REGIME_TOOL]);
+  expect(out.telemetry).toEqual({ ok: true, runId: 42 });
+});
+
+test("regime.classify folds a FAILED telemetry outcome into output.telemetry without perturbing the canonical result (AC3: non-fatal, still surfaced)", async () => {
+  const h = makeAnalyticsHandlers(async (asof, tool) =>
+    withTelemetry({ [tool as string]: { asof } }, { ok: false, error: "simulated telemetry outage" }),
+  );
+  const out = (await h.regimeClassify({ asof: "2026-07-15" })) as {
+    asof: string;
+    tools: string[];
+    telemetry: { ok: boolean; error: string };
+  };
+  // Canonical output is unaffected by the telemetry failure.
+  expect(out.asof).toBe("2026-07-15");
+  expect(out.tools).toEqual([REGIME_TOOL]);
+  // The failure is surfaced on the handler's own return value — the exact
+  // object worker/loop.ts writes to job_runs.output (status stays
+  // succeeded/degraded per existing analytics-result semantics, unaffected by
+  // telemetry) and GET /api/admin/jobs/:id returns to the admin.
+  expect(out.telemetry.ok).toBe(false);
+  expect(out.telemetry.error).toContain("simulated telemetry outage");
+});
+
+test("research.refresh folds each tool's telemetry outcome — including a per-tool failure — into a telemetry map keyed by tool", async () => {
+  const h = makeAnalyticsHandlers(async (asof, tool) => {
+    const outcome = tool === RESEARCH_TOOLS[0] ? { ok: false, error: "simulated telemetry outage" } : { ok: true, runId: 7 };
+    return withTelemetry({ [tool as string]: { asof } }, outcome);
+  });
+  const out = (await h.researchRefresh({ asof: "2026-07-15" })) as {
+    tools: string[];
+    telemetry: Record<string, { ok: boolean; error?: string; runId?: number }>;
+  };
+  expect(out.tools).toEqual([...RESEARCH_TOOLS]);
+  expect(out.telemetry[RESEARCH_TOOLS[0]].ok).toBe(false);
+  expect(out.telemetry[RESEARCH_TOOLS[0]].error).toContain("simulated telemetry outage");
+  expect(out.telemetry[RESEARCH_TOOLS[1]].ok).toBe(true);
+  expect(out.telemetry[RESEARCH_TOOLS[1]].runId).toBe(7);
+});
+
 test("scheduler: separate per-kind dedupe keys — one slot per kind, never cross-kind", async () => {
   await sql`INSERT INTO job_schedules (kind, cron, enabled, next_run_at)
             VALUES ('regime.classify', '*/2 * * * *', true, now() - interval '3 minutes'),
