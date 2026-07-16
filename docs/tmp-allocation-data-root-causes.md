@@ -219,3 +219,62 @@ Changes currently in the adhoc worktree:
 Live probing after these changes showed the Base chain reads recovering. It
 also proved that GeckoTerminal's persistent HTTP 429 is a separate remaining
 cause for the priced Bankr holdings. No production deployment has been changed.
+
+## CI evidence: PR #174, e2e run 29508089249 (2026-07-16)
+
+The required `e2e` job's "Full-stack demo (demo readiness gate)" step failed
+after `scripts/demo-live-smoke.ts` polled for its full `LIVE_SMOKE_DEADLINE_MS`
+(240s) budget without reaching a clean LIVE steady state. This was investigated
+to distinguish a regression in this PR's degrade path from a pre-existing
+external-provider limitation (already documented above as "persistently
+quota-limited from this deployment/IP").
+
+Findings from the full job log
+(`gh api repos/robotmoney/robotmoney-frontend/actions/jobs/87654037048/logs`):
+
+- The poll trace shows the failing-check count fluctuating (5 → 4 → 2 → 1 →
+  **6**) over the 240s window, bottoming out at a single outstanding check
+  around the 130s mark before a fresh wave of `429`s pushed it back up to 6
+  in the last ~60s. This is the signature of retries succeeding
+  intermittently against a provider whose quota keeps re-triggering, not a
+  code path that never recovers.
+- Every failure at teardown was a **caught, logged degrade**, matching this
+  PR's own new code paths exactly:
+  - `worker-analytics-1 | wallet-balances: BNKR live read failed, degrading
+    to last-persisted sample` — the persisted-fallback path added in
+    `695bd22` (`chain/wallet-valuation.ts`), returning `{ok:false}` from
+    `valueLeg()` rather than throwing uncaught (verified against
+    `backend/src/chain/wallet-valuation.ts:333-354`).
+  - `api-1 | vault-economics: adapter Aave read failed, degrading only that
+    adapter` — the `Promise.allSettled` isolation added in `695bd22`
+    (`chain/vault-economics.ts`).
+  - `error: Base RPC HTTP 429` / `error: 429 Too Many Requests for
+    api.geckoterminal.com` — the retry-then-throw contract in
+    `base-rpc-client.ts::rpcRequest` and `token-prices.ts::
+    fetchGeckoTokenPriceUsdUncached`, both added/hardened in `c5f86f7`,
+    behaving exactly as documented: retries mask a transient blip, then
+    throw so the caller degrades honestly. No unhandled rejection or
+    container crash appears anywhere in the log.
+- `demo-live-smoke.ts` itself is working as designed (issue #128/#163): it
+  requires `wallet-balances.source==='live'` and `vault-economics.stale===
+  false` (see `evaluateWallet`/`evaluateVaultEconomics` in
+  `scripts/demo-live-smoke.ts`), treating any other outcome — including an
+  honestly-degraded `stale` leg outside the documented `#120` allowlist — as
+  a named, loud CI failure. The workflow's own header comment in
+  `.github/workflows/e2e.yml` calls this out explicitly: "a genuinely-
+  unreachable external provider after real retries is a legitimate external
+  blocker, not a bug in this workflow — file it, don't silently skip the
+  assertion." That is a deliberate, owner-approved architecture decision
+  (issue #163), not a misclassification this PR should relax. Weakening the
+  gate to accept `stale` provenance as success would hide the exact class of
+  regression #128 exists to catch (a dead/blocked feed silently going stale
+  on a LIVE boot).
+
+**Conclusion**: this is the known, already-documented pre-existing
+GeckoTerminal/Base-RPC quota exhaustion for this CI deployment/IP (see
+"Root causes, ranked" #3 above), not a regression introduced by this PR —
+the PR's own retry/backoff and fallback code is demonstrably active and
+correctly classified as caught degrade, not a crash. Consistent with this
+repo's prior 429-flake precedent, the correct remedy is re-running the `e2e`
+job for a fresh attempt against the live upstreams, not changing
+`demo-live-smoke.ts`'s pass/fail semantics.
