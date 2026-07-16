@@ -40,6 +40,19 @@ function requireAdmin(req: Request, cfg: AdminAuthConfig = globalConfig): boolea
     : cfg.allowInsecure;
 }
 
+// Clamp a `?limit=` query param to [1, max] with a default when unset/invalid.
+// Note: an absent/empty param must fall back to `def` — `Number(null)`/`Number("")`
+// are 0 (not NaN), which would otherwise clamp up to 1 and truncate the result.
+// Used by the pre-existing (legacy) research-telemetry read endpoints below,
+// which silently clamp rather than 400 on a malformed limit; parseLimit (below)
+// is the stricter behavior for the issue #155 list endpoints only.
+function clampLimit(raw: string | null, def = 100, max = 500): number {
+  if (raw == null || raw === "") return def;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(max, Math.max(1, Math.floor(n)));
+}
+
 const FORBIDDEN = { status: 403, body: { error: "admin authorization required" } } as const;
 const BAD = (error: string) => ({ status: 400, body: { error } }) as const;
 
