@@ -112,18 +112,19 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
     return { ok: false, status: 409, error: "submission window closed" };
 
   // Roster gate (issue #152, AC6): sessions created through the admin surface
-  // (committee/admin.ts createSessionAdmin) carry a FROZEN expected roster
+  // (committee/admin.ts createSessionAdmin) carry a FROZEN expected roster in
+  // the canonical committee_session_members table (issue #150's migration),
   // snapshotted at creation time. When one exists, only a member with a
-  // non-excused row on it may submit — this is what makes the roster
-  // authoritative rather than advisory. Sessions with NO roster rows are the
-  // legacy/demo path (committee/domain.ts openSession, used by the worker and
-  // the pre-#152 admin dispatcher) and are unaffected: this check is a no-op
-  // for them, so existing behavior is preserved exactly.
+  // non-excused ('expected') row on it may submit — this is what makes the
+  // roster authoritative rather than advisory. Sessions with NO roster rows
+  // are the legacy/demo path (committee/domain.ts openSession, used by the
+  // worker and the pre-#152 admin dispatcher) and are unaffected: this check
+  // is a no-op for them, so existing behavior is preserved exactly.
   const rosterRows = await sql<{ status: string }[]>`
-    SELECT status FROM committee_session_roster WHERE session_id = ${session.id}`;
+    SELECT status FROM committee_session_members WHERE session_id = ${session.id}`;
   if (rosterRows.length > 0) {
     const mine = (await sql<{ status: string }[]>`
-      SELECT status FROM committee_session_roster WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
+      SELECT status FROM committee_session_members WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
     if (!mine) return { ok: false, status: 403, error: "member is not on this session's expected roster" };
     if (mine.status === "excused") return { ok: false, status: 403, error: "member is excused from this session" };
   }
@@ -519,14 +520,14 @@ export async function aggregateSession(sessionId: string) {
     FROM committee_recommendations r JOIN committee_members m ON m.id = r.member_id
     WHERE r.session_id = ${sessionId} ORDER BY r.received_at`;
   // Denominator (issue #152, AC6): prefer the session's FROZEN roster
-  // (non-excused rows) over live committee_members so a member added/removed
-  // AFTER the session was created never rewrites an already-scheduled
-  // session's quorum math. Falls back to live active members when the
-  // session has no roster snapshot at all (the legacy/demo openSession path,
-  // and old sessions predating the 0017 backfill's zero-member edge case) —
-  // this keeps the pre-#152 demo/worker behavior unchanged.
+  // (committee_session_members, non-excused rows) over live committee_members
+  // so a member added/removed AFTER the session was created never rewrites an
+  // already-scheduled session's quorum math. Falls back to live active
+  // members when the session has no roster snapshot at all (the legacy/demo
+  // openSession path) — this keeps the pre-#152 demo/worker behavior
+  // unchanged.
   const rosterRows = await sql<{ id: string }[]>`
-    SELECT member_id AS id FROM committee_session_roster WHERE session_id = ${sessionId} AND status != 'excused'`;
+    SELECT member_id AS id FROM committee_session_members WHERE session_id = ${sessionId} AND status != 'excused'`;
   const activeMembers = rosterRows.length > 0
     ? rosterRows
     : await sql`SELECT id FROM committee_members WHERE status = 'active'`;

@@ -1,14 +1,15 @@
-// Committee admin surface (issue #152): migration-backed schema assertions
-// plus domain-level integration coverage for topic/member/session/roster/
-// lifecycle/audit mutations. Runs against the ephemeral Postgres from
-// tests/preload.ts (already fully migrated, incl. 0017) — the migration test
-// below additionally RE-APPLIES 0017's real SQL file against freshly-inserted
-// legacy-shaped rows to prove its backfill/constraints work on preexisting
-// data, not just an empty schema.
-import { afterAll, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+// Committee admin surface (issue #152): domain-level integration coverage for
+// topic/member/session/roster/lifecycle/audit mutations, built on top of the
+// CANONICAL schema issue #150 already landed (backend/migrations/
+// 0017_admin_surface.sql — committee_session_members, committee_session_events,
+// version columns, extended audit_log). AC1's migration-backed coverage
+// (applying 0017 to representative legacy data) already exists as
+// backend/tests/admin-surface-migration.test.ts from #150 — this suite does
+// not duplicate it, only relies on it having run.
+//
+// Runs against the ephemeral Postgres from tests/preload.ts (already fully
+// migrated).
+import { expect, test } from "bun:test";
 import * as admin from "../src/committee/admin.ts";
 import * as ic from "../src/committee/domain.ts";
 import { sql } from "../src/db/client.ts";
@@ -16,7 +17,6 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
-const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
 async function activeMember(name = "member") {
   const id = rid("m");
@@ -37,86 +37,17 @@ async function signedSubmission(m: { id: string; privateKey: CryptoKey }, date: 
   return { ...sub, signature };
 }
 
-// ── AC1: migration-backed test — apply 0017 to representative legacy data ──
-// Explicit generous per-test timeout: this test re-runs the full 0017 DDL
-// file (a real CROSS JOIN backfill), which can be slow on a shared/loaded CI
-// runner even though the query volume itself is tiny.
-test("0017 (re-applied): legacy-shaped rows stay queryable, roster backfills, constraints + events/audit fields exist", async () => {
-  const subjectId = rid("legsub");
-  const memberId = rid("legmem");
-  await sql`INSERT INTO committee_subjects (id, status, name) VALUES (${subjectId}, 'active', 'Legacy Subject')`;
-  await sql`INSERT INTO committee_members (id, status, name) VALUES (${memberId}, 'active', 'Legacy Member')`;
-  const appRows = await sql`INSERT INTO committee_applications (member_id, payload, status) VALUES (${memberId}, ${sql.json({ memberId } as any)}, 'approved') RETURNING id`;
-  const sessionRows = await sql`
-    INSERT INTO committee_sessions (date, subject_id, subject_name, state)
-    VALUES (${"2020-01-01"}, ${subjectId}, 'Legacy Subject', 'window_closed')
-    RETURNING id`;
-  const sessionId = sessionRows[0].id as string;
-  const recRows = await sql`
-    INSERT INTO committee_recommendations (session_id, member_id, subject_id, date, nonce, stance, confidence, body, payload, signature, verified)
-    VALUES (${sessionId}, ${memberId}, ${subjectId}, ${"2020-01-01"}, ${rid("nonce")}, 'bullish', 0.5, 'legacy take', ${sql.json({} as any)}, 'sig', true)
-    RETURNING id`;
-  const briefRows = await sql`INSERT INTO committee_briefs (date, subject_id, body) VALUES (${"2020-01-01"}, ${subjectId}, ${sql.json({} as any)}) RETURNING id`;
-  const snapRows = await sql`INSERT INTO committee_subject_snapshots (subject_id, date, total_value_usd) VALUES (${subjectId}, ${"2020-01-01"}, 100) RETURNING id`;
-  const jobRows = await sql`INSERT INTO jobs (kind, payload) VALUES ('committee.aggregate', ${sql.json({ sessionId } as any)}) RETURNING id`;
-
-  // This LEGACY session predates any roster snapshot: no committee_session_roster
-  // row exists for (sessionId, memberId) yet.
-  const preBackfill = await sql`SELECT 1 FROM committee_session_roster WHERE session_id = ${sessionId} AND member_id = ${memberId}`;
-  expect(preBackfill.length).toBe(0);
-
-  // Re-apply the REAL 0017 migration file (idempotent: ADD COLUMN IF NOT
-  // EXISTS / CREATE TABLE IF NOT EXISTS / ON CONFLICT DO NOTHING) so its
-  // backfill INSERT runs again against this now-existing legacy session.
-  const ddl = await readFile(join(migrationsDir, "0017_committee_admin_surface.sql"), "utf8");
-  await sql.unsafe(ddl);
-
-  // Existing rows across every table this issue's AC names remain queryable.
-  expect((await sql`SELECT id FROM committee_subjects WHERE id = ${subjectId}`).length).toBe(1);
-  expect((await sql`SELECT id FROM committee_members WHERE id = ${memberId}`).length).toBe(1);
-  expect((await sql`SELECT id FROM committee_applications WHERE id = ${appRows[0].id}`).length).toBe(1);
-  expect((await sql`SELECT id FROM committee_sessions WHERE id = ${sessionId}`).length).toBe(1);
-  expect((await sql`SELECT id FROM committee_recommendations WHERE id = ${recRows[0].id}`).length).toBe(1);
-  expect((await sql`SELECT id FROM committee_briefs WHERE id = ${briefRows[0].id}`).length).toBe(1);
-  expect((await sql`SELECT id FROM committee_subject_snapshots WHERE id = ${snapRows[0].id}`).length).toBe(1);
-  expect((await sql`SELECT id FROM jobs WHERE id = ${jobRows[0].id}`).length).toBe(1);
-
-  // Required columns/defaults exist (version fields).
-  const subjRow = (await sql`SELECT version FROM committee_subjects WHERE id = ${subjectId}`)[0];
-  expect(Number(subjRow.version)).toBe(1);
-  const memRow = (await sql`SELECT version FROM committee_members WHERE id = ${memberId}`)[0];
-  expect(Number(memRow.version)).toBe(1);
-  const sessRow = (await sql`SELECT version FROM committee_sessions WHERE id = ${sessionId}`)[0];
-  expect(Number(sessRow.version)).toBe(1);
-
-  // Roster backfill: the legacy session now has a snapshot row for the
-  // (still-active) legacy member.
-  const backfilled = await sql`SELECT status FROM committee_session_roster WHERE session_id = ${sessionId} AND member_id = ${memberId}`;
-  expect(backfilled.length).toBe(1);
-  expect(backfilled[0].status).toBe("active");
-
-  // Required constraint: UNIQUE (session_id, member_id) on the roster table.
-  let duplicateRosterRowRejected = false;
-  try {
-    await sql`INSERT INTO committee_session_roster (session_id, member_id, status) VALUES (${sessionId}, ${memberId}, 'active')`;
-  } catch {
-    duplicateRosterRowRejected = true;
-  }
-  expect(duplicateRosterRowRejected).toBe(true);
-
-  // committee_session_events exists and is insertable (FK-constrained).
-  await sql`INSERT INTO committee_session_events (session_id, from_state, to_state, actor) VALUES (${sessionId}, 'window_closed', 'aggregated', 'test')`;
-  const events = await sql`SELECT to_state FROM committee_session_events WHERE session_id = ${sessionId}`;
-  expect(events.some((e: any) => e.to_state === "aggregated")).toBe(true);
-
-  // Audit fields: the pre-existing audit_log table is untouched/queryable and
-  // carries the new filter indexes.
-  await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('test', 'legacy_check', ${sql.json({ sessionId } as any)})`;
-  const idxRows = await sql<{ indexname: string }[]>`SELECT indexname FROM pg_indexes WHERE tablename = 'audit_log'`;
-  const idxNames = idxRows.map((r) => r.indexname);
-  expect(idxNames).toContain("audit_log_action_at_idx");
-  expect(idxNames).toContain("audit_log_actor_at_idx");
-}, 30_000);
+// Valid, correctly-ordered briefOpensAt < windowClosesAt < publishAt for a
+// given UTC calendar date, matching docs/plan-admin-surface.md §6.3's
+// SessionCreateRequest shape.
+function sessionTimes(date: string) {
+  return {
+    date,
+    briefOpensAt: `${date}T09:00:00Z`,
+    windowClosesAt: `${date}T10:00:00Z`,
+    publishAt: `${date}T10:05:00Z`,
+  };
+}
 
 // ── AC2: topic create/edit/deactivate — versioned, immutable id, stale_version ──
 test("topics: create validates fields, edit is versioned (409 stale_version), deactivate is versioned", async () => {
@@ -212,25 +143,37 @@ test("members: application review approve/reject", async () => {
   await ic.applyMember({ memberId: memberId2, name: "Applicant2", publicKey: pk2 });
   const reject = await admin.reviewApplicationAdmin(memberId2, "reject");
   expect(reject.status).toBe(200);
-  const rejected = (await admin.listMembersAdmin()).find((m: any) => m.id === memberId2);
-  expect(rejected!.status).toBe("rejected");
+  // committee_members.status has no 'rejected' value (CHECK constraint from
+  // #150's migration) — the member folds to 'inactive' and the REJECTION
+  // itself is recorded on the application row.
+  const rejectedMember = (await admin.listMembersAdmin()).find((m: any) => m.id === memberId2);
+  expect(rejectedMember!.status).toBe("inactive");
+  const apps = await admin.listApplicationsAdmin("rejected");
+  expect(apps.some((a: any) => a.member_id === memberId2)).toBe(true);
 });
 
 // ── AC4 (session creation): UTC validation, roster snapshot, 4 dedup jobs ──
-test("session creation: rejects bad date, date/scheduledAt mismatch, inactive topic; snapshots the active roster; enqueues exactly 4 deduped jobs", async () => {
+test("session creation: rejects bad date, timestamp ordering, date/briefOpensAt mismatch, inactive topic; snapshots the active roster; enqueues exactly 4 deduped jobs", async () => {
   const subjectId = await activeSubject();
   const m1 = await activeMember("m1");
   const m2 = await activeMember("m2");
 
-  expect((await admin.createSessionAdmin({ date: "not-a-date", subjectId })).status).toBe(400);
-  expect((await admin.createSessionAdmin({ date: "2026-08-01", subjectId, scheduledAt: "2026-08-02T00:00:00Z" })).status).toBe(400);
+  expect((await admin.createSessionAdmin({ ...sessionTimes("2026-08-01"), date: "not-a-date" })).status).toBe(400);
+  expect(
+    (await admin.createSessionAdmin({ date: "2026-08-01", subjectId, briefOpensAt: "2026-08-02T09:00:00Z", windowClosesAt: "2026-08-01T10:00:00Z", publishAt: "2026-08-01T10:05:00Z" }))
+      .status,
+  ).toBe(400); // date mismatch (briefOpensAt is 08-02, date is 08-01)
+  expect(
+    (await admin.createSessionAdmin({ date: "2026-08-01", subjectId, briefOpensAt: "2026-08-01T10:00:00Z", windowClosesAt: "2026-08-01T09:00:00Z", publishAt: "2026-08-01T10:05:00Z" }))
+      .status,
+  ).toBe(400); // bad ordering (windowClosesAt before briefOpensAt)
 
   const inactiveSubject = rid("inact");
   await sql`INSERT INTO committee_subjects (id, status, name) VALUES (${inactiveSubject}, 'inactive', 'Inactive')`;
-  expect((await admin.createSessionAdmin({ date: "2026-08-01", subjectId: inactiveSubject })).status).toBe(409);
+  expect((await admin.createSessionAdmin({ ...sessionTimes("2026-08-01"), subjectId: inactiveSubject })).status).toBe(409);
 
   const date = "2026-08-01";
-  const created = await admin.createSessionAdmin({ date, subjectId });
+  const created = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId });
   expect(created.status).toBe(201);
   // This suite shares one committee (no tenant isolation, by design) with
   // other test files that also register active members and never deactivate
@@ -244,13 +187,16 @@ test("session creation: rejects bad date, date/scheduledAt mismatch, inactive to
   const rosterIds = roster.map((r: any) => r.member_id);
   expect(rosterIds).toEqual(expect.arrayContaining([m1.id, m2.id]));
 
-  const jobs = await sql<{ kind: string }[]>`SELECT kind FROM jobs WHERE payload->>'sessionId' = ${sessionId} ORDER BY kind`;
+  const jobs = await sql<{ kind: string; dedupe_key: string }[]>`
+    SELECT kind, dedupe_key FROM jobs WHERE payload->>'sessionId' = ${sessionId} ORDER BY kind`;
   expect(jobs.map((j) => j.kind).sort()).toEqual(
     ["committee.aggregate", "committee.close_window", "committee.publish", "committee.publish_brief"].sort(),
   );
+  // Canonical scoped dedupe key shape (docs §6.3): committee:<session-id>:<action>.
+  expect(jobs.every((j) => j.dedupe_key.startsWith(`committee:${sessionId}:`))).toBe(true);
 
   // Recreating the still-scheduled session is idempotent on jobs (dedupe_key).
-  const again = await admin.createSessionAdmin({ date, subjectId });
+  const again = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId });
   expect(again.status).toBe(200);
   const jobsAgain = await sql`SELECT id FROM jobs WHERE payload->>'sessionId' = ${sessionId}`;
   expect(jobsAgain.length).toBe(4);
@@ -260,7 +206,7 @@ test("session creation: rejects bad date, date/scheduledAt mismatch, inactive to
 test("roster: add/excuse/restore work pre-collection and are blocked after collecting starts", async () => {
   const subjectId = await activeSubject();
   const m1 = await activeMember("r1");
-  const created = await admin.createSessionAdmin({ date: "2026-08-05", subjectId });
+  const created = await admin.createSessionAdmin({ ...sessionTimes("2026-08-05"), subjectId });
   const sessionId = (created as any).session.id as string;
 
   const m2 = await activeMember("r2"); // registered AFTER creation — not on the frozen snapshot
@@ -282,7 +228,7 @@ test("roster: add/excuse/restore work pre-collection and are blocked after colle
 test("submission: a member off the frozen roster (or excused) is rejected; a roster member succeeds", async () => {
   const subjectId = await activeSubject();
   const onRoster = await activeMember("onroster");
-  const created = await admin.createSessionAdmin({ date: "2026-08-06", subjectId });
+  const created = await admin.createSessionAdmin({ ...sessionTimes("2026-08-06"), subjectId });
   const sessionId = (created as any).session.id as string;
   const offRoster = await activeMember("offroster"); // registered after snapshot
   await ic.publishBrief(sessionId, 60);
@@ -299,7 +245,7 @@ test("aggregate: quorum denominator is the frozen roster (excluding excused), no
   const subjectId = await activeSubject();
   const a = await activeMember("agg-a");
   const b = await activeMember("agg-b");
-  const created = await admin.createSessionAdmin({ date: "2026-08-07", subjectId });
+  const created = await admin.createSessionAdmin({ ...sessionTimes("2026-08-07"), subjectId });
   const sessionId = (created as any).session.id as string;
   // The roster snapshot legitimately includes every OTHER globally-active
   // member too (this suite shares one committee with other test files) — the
@@ -330,11 +276,11 @@ test("aggregate: quorum denominator is the frozen roster (excluding excused), no
 test("guarded lifecycle: legal transitions succeed with one event+audit row; illegal/terminal/stale are rejected; repeats are idempotent", async () => {
   const subjectId = await activeSubject();
   await activeMember("lc1");
-  const created = await admin.createSessionAdmin({ date: "2026-08-08", subjectId });
+  const created = await admin.createSessionAdmin({ ...sessionTimes("2026-08-08"), subjectId });
   const sessionId = (created as any).session.id as string;
 
-  const auditCountFor = async (action: string) =>
-    Number((await sql`SELECT count(*)::int AS n FROM audit_log WHERE action = 'session_transition' AND scope->>'sessionId' = ${sessionId} AND scope->>'to' = ${action}`)[0].n);
+  const auditCountFor = async (toState: string) =>
+    Number((await sql`SELECT count(*)::int AS n FROM audit_log WHERE action = 'session_transition' AND scope->>'sessionId' = ${sessionId} AND scope->>'to' = ${toState}`)[0].n);
   const eventCountFor = async (toState: string) =>
     Number((await sql`SELECT count(*)::int AS n FROM committee_session_events WHERE session_id = ${sessionId} AND to_state = ${toState}`)[0].n);
 
@@ -356,6 +302,11 @@ test("guarded lifecycle: legal transitions succeed with one event+audit row; ill
   expect((close as any).session.version).toBe(2);
   expect(await eventCountFor("window_closed")).toBe(1);
   expect(await auditCountFor("window_closed")).toBe(1);
+
+  // Every real transition's event row carries the canonical action verb
+  // (docs §4 US-C4), not just the target state.
+  const eventRow = (await sql`SELECT action FROM committee_session_events WHERE session_id = ${sessionId} AND to_state = 'window_closed'`)[0];
+  expect(eventRow.action).toBe("close_window");
 
   // Idempotent repeat: same state again → 200, no version bump, no new event/audit row.
   const closeAgain = await admin.closeSessionAdmin(sessionId, 2);
@@ -387,11 +338,14 @@ test("guarded lifecycle: legal transitions succeed with one event+audit row; ill
 
 test("guarded lifecycle: cancel is legal from a non-terminal state and is itself terminal", async () => {
   const subjectId = await activeSubject();
-  const created = await admin.createSessionAdmin({ date: "2026-08-09", subjectId });
+  const created = await admin.createSessionAdmin({ ...sessionTimes("2026-08-09"), subjectId });
   const sessionId = (created as any).session.id as string;
-  const cancel = await admin.cancelSessionAdmin(sessionId, 1);
+  const cancel = await admin.cancelSessionAdmin(sessionId, 1, admin.ADMIN_ACTOR, "operator error");
   expect(cancel.status).toBe(200);
   expect((cancel as any).session.state).toBe("cancelled");
+  const eventRow = (await sql`SELECT action, reason FROM committee_session_events WHERE session_id = ${sessionId} AND to_state = 'cancelled'`)[0];
+  expect(eventRow.action).toBe("cancel");
+  expect(eventRow.reason).toBe("operator error");
   const again = await admin.closeSessionAdmin(sessionId, 2);
   expect(again.status).toBe(409);
   expect((again as any).error).toContain("terminal_state");
@@ -412,9 +366,4 @@ test("audit: listAuditLog filters by actor/action and redacts to non-credential 
     expect(r).not.toHaveProperty("token_hash");
     expect(JSON.stringify(r.scope ?? {})).not.toMatch(/tok_/);
   }
-});
-
-afterAll(async () => {
-  // No explicit cleanup: every row here uses a crypto.randomUUID-suffixed id
-  // (rid()), matching the isolation convention used across this test suite.
 });

@@ -152,13 +152,14 @@ export function parseManualMember(body: JsonObject | null): {
 }
 
 export function parseSessionCreate(body: JsonObject | null): {
-  date: string; subjectId: string; scheduledAt?: string; windowMinutes?: number;
+  date: string; subjectId: string; briefOpensAt: string; windowClosesAt: string; publishAt: string;
 } | null {
   if (!body) return null;
   const date = requiredString(body, "date", 10);
   const subjectId = requiredString(body, "subjectId", 100);
-  if (!date || !subjectId) return null;
-  const scheduledAt = optionalString(body, "scheduledAt", 40);
-  const windowMinutes = typeof body.windowMinutes === "number" ? body.windowMinutes : undefined;
-  return { date, subjectId, scheduledAt, windowMinutes };
+  const briefOpensAt = requiredString(body, "briefOpensAt", 40);
+  const windowClosesAt = requiredString(body, "windowClosesAt", 40);
+  const publishAt = requiredString(body, "publishAt", 40);
+  if (!date || !subjectId || !briefOpensAt || !windowClosesAt || !publishAt) return null;
+  return { date, subjectId, briefOpensAt, windowClosesAt, publishAt };
 }

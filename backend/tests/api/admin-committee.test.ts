@@ -157,7 +157,10 @@ test("sessions: create (201) with bad payload â†’ 400; unknown subject/session â
   expect(bad?.status).toBe(400);
 
   const notFoundSubject = await call(
-    req("POST", "/api/committee/admin/sessions", { token: PROD.adminToken, body: { date: "2026-08-01", subjectId: rid("nope") } }),
+    req("POST", "/api/committee/admin/sessions", {
+      token: PROD.adminToken,
+      body: { date: "2026-08-01", subjectId: rid("nope"), briefOpensAt: "2026-08-01T09:00:00Z", windowClosesAt: "2026-08-01T10:00:00Z", publishAt: "2026-08-01T10:05:00Z" },
+    }),
     PROD,
   );
   expect(notFoundSubject?.status).toBe(404);

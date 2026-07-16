@@ -67,8 +67,6 @@ function toMemberAdmin(row: Record<string, any>) {
     contactEmail: row.contact_email ?? null,
     appliedAt: row.applied_at ?? null,
     activatedAt: row.activated_at ?? null,
-    deactivatedAt: row.deactivated_at ?? null,
-    rejectedAt: row.rejected_at ?? null,
     updatedAt: row.updated_at,
   };
 }
@@ -231,10 +229,14 @@ export async function reviewApplicationAdmin(
     const row = (await tx`SELECT id, status FROM committee_members WHERE id = ${memberId} FOR UPDATE`)[0];
     if (!row) return err(404, "no such applicant");
     if (row.status !== "applied") return err(409, `cannot reject a member in status=${row.status}`);
-    await tx`UPDATE committee_members SET status = 'rejected', rejected_at = now(), version = version + 1, updated_at = now() WHERE id = ${memberId}`;
+    // committee_members.status has no 'rejected' value (CHECK constraint from
+    // #150's migration 0017_admin_surface.sql only allows applied/active/
+    // inactive) — the rejection itself is recorded on the APPLICATION; the
+    // member row folds to 'inactive', its key stays inactive (never issued).
+    await tx`UPDATE committee_members SET status = 'inactive', version = version + 1, updated_at = now() WHERE id = ${memberId}`;
     await tx`UPDATE committee_applications SET status = 'rejected', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
     await audit(actor, "member_reject", { memberId }, tx);
-    return { ok: true, status: 200, memberId, memberStatus: "rejected" };
+    return { ok: true, status: 200, memberId, memberStatus: "inactive", applicationStatus: "rejected" };
   });
 }
 
@@ -248,7 +250,7 @@ export async function deactivateMemberAdmin(
     if (!row) return err(404, "member not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
     const upd = await tx`
-      UPDATE committee_members SET status = 'inactive', deactivated_at = now(), version = version + 1, updated_at = now()
+      UPDATE committee_members SET status = 'inactive', version = version + 1, updated_at = now()
       WHERE id = ${memberId} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
@@ -315,11 +317,16 @@ export async function rotateMemberKeyAdmin(
 }
 
 // ── Sessions: creation with a frozen roster snapshot ────────────────────────
+// Field/validation shape matches docs/plan-admin-surface.md §6.3
+// SessionCreateRequest: three explicit ISO instants, ordering
+// briefOpensAt < windowClosesAt < publishAt, and `date` must equal the UTC
+// date of briefOpensAt.
 export interface SessionCreateInput {
   date: string; // YYYY-MM-DD, UTC calendar date
   subjectId: string;
-  scheduledAt?: string; // ISO instant; its UTC date must equal `date`
-  windowMinutes?: number; // default 60, used to schedule the close job
+  briefOpensAt: string; // ISO instant
+  windowClosesAt: string; // ISO instant
+  publishAt: string; // ISO instant
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -330,19 +337,27 @@ function isValidUtcDate(date: string): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === date;
 }
 
+// Job kinds + their canonical scoped dedupe key, per docs §4 US-C3/§6.3:
+// `committee:<session-id>:<action>`.
 const SESSION_JOB_KINDS = ["committee.publish_brief", "committee.close_window", "committee.aggregate", "committee.publish"] as const;
+const JOB_ACTION: Record<(typeof SESSION_JOB_KINDS)[number], string> = {
+  "committee.publish_brief": "publish_brief",
+  "committee.close_window": "close_window",
+  "committee.aggregate": "aggregate",
+  "committee.publish": "publish",
+};
 
 export async function createSessionAdmin(input: SessionCreateInput, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
   if (!isValidUtcDate(input.date)) return err(400, "date must be a valid UTC calendar date (YYYY-MM-DD)");
-  let scheduled: Date | null = null;
-  if (input.scheduledAt !== undefined) {
-    scheduled = new Date(input.scheduledAt);
-    if (Number.isNaN(scheduled.getTime())) return err(400, "scheduledAt must be a valid ISO timestamp");
-    if (scheduled.toISOString().slice(0, 10) !== input.date) return err(400, "scheduledAt date does not match date (date mismatch)");
-  }
-  const windowMinutes = Number.isFinite(input.windowMinutes) && (input.windowMinutes as number) > 0 ? (input.windowMinutes as number) : 60;
-  const closesAt = new Date((scheduled ?? new Date()).getTime() + windowMinutes * 60_000);
-  if (scheduled && closesAt.getTime() <= scheduled.getTime()) return err(400, "invalid timestamp ordering: window must close after it opens");
+  const briefOpensAt = new Date(input.briefOpensAt);
+  const windowClosesAt = new Date(input.windowClosesAt);
+  const publishAt = new Date(input.publishAt);
+  if ([briefOpensAt, windowClosesAt, publishAt].some((d) => Number.isNaN(d.getTime())))
+    return err(400, "briefOpensAt, windowClosesAt, and publishAt must be valid ISO timestamps");
+  if (briefOpensAt.toISOString().slice(0, 10) !== input.date)
+    return err(400, "briefOpensAt date does not match date (date mismatch)");
+  if (!(briefOpensAt.getTime() < windowClosesAt.getTime() && windowClosesAt.getTime() < publishAt.getTime()))
+    return err(400, "invalid timestamp ordering: briefOpensAt < windowClosesAt < publishAt required");
 
   const subject = (await sql`SELECT id, status, name FROM committee_subjects WHERE id = ${input.subjectId}`)[0] as
     | { id: string; status: string; name: string }
@@ -357,37 +372,47 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
 
   return sql.begin(async (tx) => {
     const rows = existing
-      ? await tx`UPDATE committee_sessions SET version = version + 1 WHERE id = ${existing.id} RETURNING id, date, subject_id, subject_name, state, version`
+      ? await tx`
+          UPDATE committee_sessions SET
+            brief_opens_at = ${briefOpensAt}, window_closes_at = ${windowClosesAt}, publish_at = ${publishAt}, version = version + 1
+          WHERE id = ${existing.id}
+          RETURNING id, date, subject_id, subject_name, state, version`
       : await tx`
-          INSERT INTO committee_sessions (date, subject_id, subject_name, state)
-          VALUES (${input.date}, ${input.subjectId}, ${subject.name}, 'scheduled')
+          INSERT INTO committee_sessions (date, subject_id, subject_name, state, brief_opens_at, window_closes_at, publish_at)
+          VALUES (${input.date}, ${input.subjectId}, ${subject.name}, 'scheduled', ${briefOpensAt}, ${windowClosesAt}, ${publishAt})
           RETURNING id, date, subject_id, subject_name, state, version`;
     const session = rows[0];
     const sessionId = session.id as string;
 
-    // Frozen roster: snapshot every currently-active member. Later member
-    // activation/deactivation NEVER rewrites this list (roster add/excuse/
-    // restore are the only sanctioned edits, and only before collecting).
-    const activeMembers = await tx`SELECT id FROM committee_members WHERE status = 'active'`;
+    // Frozen roster: snapshot every currently-active member (name/lens
+    // denormalized at snapshot time) into the CANONICAL committee_session_members
+    // table (docs §5.3 / issue #150's migration). Later member activation/
+    // deactivation NEVER rewrites this list — roster add/excuse are the only
+    // sanctioned edits, and only before collecting begins.
+    const activeMembers = await tx<{ id: string; name: string; lens: string | null }[]>`
+      SELECT id, name, lens FROM committee_members WHERE status = 'active'`;
     for (const m of activeMembers) {
-      await tx`INSERT INTO committee_session_roster (session_id, member_id, status) VALUES (${sessionId}, ${m.id}, 'active')
-                ON CONFLICT (session_id, member_id) DO NOTHING`;
+      await tx`
+        INSERT INTO committee_session_members (session_id, member_id, member_name, member_lens, status)
+        VALUES (${sessionId}, ${m.id}, ${m.name}, ${m.lens}, 'expected')
+        ON CONFLICT (session_id, member_id) DO NOTHING`;
     }
 
-    // Exactly four deduplicated, session-scoped jobs — dedupe_key includes the
-    // sessionId so re-creating a still-scheduled session never double-enqueues.
+    // Exactly four deduplicated, session-scoped jobs (docs §4 US-C3): dedupe
+    // key `committee:<session-id>:<action>` so re-creating a still-scheduled
+    // session never double-enqueues.
     const jobTimes: Record<(typeof SESSION_JOB_KINDS)[number], Date> = {
-      "committee.publish_brief": scheduled ?? new Date(),
-      "committee.close_window": closesAt,
-      "committee.aggregate": new Date(closesAt.getTime() + 1_000),
-      "committee.publish": new Date(closesAt.getTime() + 2_000),
+      "committee.publish_brief": briefOpensAt,
+      "committee.close_window": windowClosesAt,
+      "committee.aggregate": new Date(windowClosesAt.getTime() + 1_000),
+      "committee.publish": publishAt,
     };
     const jobIds: number[] = [];
     for (const kind of SESSION_JOB_KINDS) {
-      const dedupeKey = `${kind}:${sessionId}`;
+      const dedupeKey = `committee:${sessionId}:${JOB_ACTION[kind]}`;
       const r = await tx`
-        INSERT INTO jobs (kind, payload, run_after, dedupe_key)
-        VALUES (${kind}, ${tx.json({ sessionId, windowMinutes } as any)}, ${jobTimes[kind]}, ${dedupeKey})
+        INSERT INTO jobs (kind, payload, run_after, dedupe_key, scope_type, scope_id, requested_by)
+        VALUES (${kind}, ${tx.json({ sessionId } as any)}, ${jobTimes[kind]}, ${dedupeKey}, 'committee_session', ${sessionId}, ${actor})
         ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
         RETURNING id`;
       if (r[0]) jobIds.push(Number(r[0].id));
@@ -405,6 +430,9 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
 }
 
 // ── Roster add/excuse/restore (only before collecting begins) ──────────────
+// Backed by the CANONICAL committee_session_members table (issue #150). Status
+// vocabulary is 'expected' | 'excused' (not 'active'); there is no separate
+// "restored" marker — restoring simply flips status back to 'expected'.
 async function requireRosterEditable(tx: DbHandle, sessionId: string) {
   const s = (await tx`SELECT id, state FROM committee_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
     | { id: string; state: string }
@@ -415,19 +443,23 @@ async function requireRosterEditable(tx: DbHandle, sessionId: string) {
 }
 
 export async function getSessionRoster(sessionId: string) {
-  return sql`SELECT member_id, status, snapshotted_at, excused_at, restored_at FROM committee_session_roster WHERE session_id = ${sessionId} ORDER BY member_id`;
+  return sql`
+    SELECT member_id, member_name, member_lens, status, included_at, excused_at, reason
+    FROM committee_session_members WHERE session_id = ${sessionId} ORDER BY member_id`;
 }
 
 export async function rosterAddAdmin(sessionId: string, memberId: string, actor: Actor = ADMIN_ACTOR): Promise<AdminResult> {
   return sql.begin(async (tx) => {
     const gate = await requireRosterEditable(tx, sessionId);
     if (!gate.ok) return err(gate.status, gate.error);
-    const member = (await tx`SELECT id FROM committee_members WHERE id = ${memberId}`)[0];
+    const member = (await tx<{ id: string; name: string; lens: string | null }[]>`SELECT id, name, lens FROM committee_members WHERE id = ${memberId}`)[0];
     if (!member) return err(404, "member not found");
-    await tx`INSERT INTO committee_session_roster (session_id, member_id, status) VALUES (${sessionId}, ${memberId}, 'active')
-              ON CONFLICT (session_id, member_id) DO UPDATE SET status = 'active', restored_at = now()`;
+    await tx`
+      INSERT INTO committee_session_members (session_id, member_id, member_name, member_lens, status)
+      VALUES (${sessionId}, ${memberId}, ${member.name}, ${member.lens}, 'expected')
+      ON CONFLICT (session_id, member_id) DO UPDATE SET status = 'expected', excused_at = NULL`;
     await audit(actor, "roster_add", { sessionId, memberId }, tx);
-    return { ok: true, status: 200, sessionId, memberId, status_: "active" };
+    return { ok: true, status: 200, sessionId, memberId, memberStatus: "expected" };
   });
 }
 
@@ -435,7 +467,7 @@ export async function rosterExcuseAdmin(sessionId: string, memberId: string, act
   return sql.begin(async (tx) => {
     const gate = await requireRosterEditable(tx, sessionId);
     if (!gate.ok) return err(gate.status, gate.error);
-    const upd = await tx`UPDATE committee_session_roster SET status = 'excused', excused_at = now() WHERE session_id = ${sessionId} AND member_id = ${memberId} RETURNING member_id`;
+    const upd = await tx`UPDATE committee_session_members SET status = 'excused', excused_at = now() WHERE session_id = ${sessionId} AND member_id = ${memberId} RETURNING member_id`;
     if (upd.length === 0) return err(404, "member is not on this session's roster");
     await audit(actor, "roster_excuse", { sessionId, memberId }, tx);
     return { ok: true, status: 200, sessionId, memberId };
@@ -446,7 +478,7 @@ export async function rosterRestoreAdmin(sessionId: string, memberId: string, ac
   return sql.begin(async (tx) => {
     const gate = await requireRosterEditable(tx, sessionId);
     if (!gate.ok) return err(gate.status, gate.error);
-    const upd = await tx`UPDATE committee_session_roster SET status = 'active', restored_at = now() WHERE session_id = ${sessionId} AND member_id = ${memberId} RETURNING member_id`;
+    const upd = await tx`UPDATE committee_session_members SET status = 'expected', excused_at = NULL WHERE session_id = ${sessionId} AND member_id = ${memberId} RETURNING member_id`;
     if (upd.length === 0) return err(404, "member is not on this session's roster");
     await audit(actor, "roster_restore", { sessionId, memberId }, tx);
     return { ok: true, status: 200, sessionId, memberId };
@@ -457,7 +489,8 @@ export async function rosterRestoreAdmin(sessionId: string, memberId: string, ac
 // Session states: scheduled → collecting → window_closed → aggregated →
 // published, with `cancelled` reachable from any non-terminal state and
 // `window_closed` reopenable back to `collecting`. published/cancelled are
-// terminal — no further transition is ever legal.
+// terminal — no further transition is ever legal. Action names and the legal
+// matrix match docs/plan-admin-surface.md §4 US-C4 exactly.
 const TERMINAL = new Set(["published", "cancelled"]);
 const TRANSITIONS: Record<string, readonly string[]> = {
   scheduled: ["collecting", "cancelled"],
@@ -467,6 +500,13 @@ const TRANSITIONS: Record<string, readonly string[]> = {
   published: [],
   cancelled: [],
 };
+const ACTION_FOR_TO_STATE: Record<string, string> = {
+  collecting: "publish_brief", // scheduled -> collecting; window_closed -> collecting is "reopen" (passed explicitly)
+  window_closed: "close_window",
+  aggregated: "aggregate",
+  published: "publish",
+  cancelled: "cancel",
+};
 
 export interface GuardedTransitionResult extends AdminResult {
   session?: { id: string; state: string; version: number };
@@ -474,17 +514,19 @@ export interface GuardedTransitionResult extends AdminResult {
 }
 
 // Advances committee_sessions.state under an optimistic-concurrency + legal-
-// transition guard, and writes exactly one committee_session_events row and
-// one audit_log row for every REAL transition, transactionally. Re-requesting
-// the CURRENT state is idempotent (200, no version bump, no new event/audit
-// row); requesting a transition out of a terminal state, or one not in the
-// legal table, is 409.
+// transition guard, and writes exactly one committee_session_events row
+// (with the NOT NULL `action` column the canonical schema requires) and one
+// audit_log row for every REAL transition, transactionally. Re-requesting the
+// CURRENT state is idempotent (200, no version bump, no new event/audit row);
+// requesting a transition out of a terminal state, or one not in the legal
+// table, is 409.
 export async function guardedTransition(
   sessionId: string,
   toState: string,
   actor: Actor,
-  opts: { expectedVersion?: number } = {},
+  opts: { expectedVersion?: number; action?: string; reason?: string } = {},
 ): Promise<GuardedTransitionResult> {
+  const action = opts.action ?? ACTION_FOR_TO_STATE[toState] ?? toState;
   return sql.begin(async (tx) => {
     const row = (await tx`SELECT id, state, version FROM committee_sessions WHERE id = ${sessionId} FOR UPDATE`)[0] as
       | { id: string; state: string; version: number }
@@ -498,22 +540,24 @@ export async function guardedTransition(
     const legal = TRANSITIONS[row.state] ?? [];
     if (!legal.includes(toState)) return err(409, `illegal_transition:${row.state}->${toState}`);
     const upd = await tx`UPDATE committee_sessions SET state = ${toState}, version = version + 1 WHERE id = ${sessionId} RETURNING id, state, version`;
-    await tx`INSERT INTO committee_session_events (session_id, from_state, to_state, actor) VALUES (${sessionId}, ${row.state}, ${toState}, ${actor})`;
-    await audit(actor, "session_transition", { sessionId, from: row.state, to: toState }, tx);
+    await tx`
+      INSERT INTO committee_session_events (session_id, from_state, to_state, action, actor, reason)
+      VALUES (${sessionId}, ${row.state}, ${toState}, ${action}, ${actor}, ${opts.reason ?? null})`;
+    await audit(actor, "session_transition", { sessionId, from: row.state, to: toState, action }, tx);
     return { ok: true, status: 200, session: { id: upd[0].id, state: upd[0].state, version: Number(upd[0].version) } };
   });
 }
 
-export async function cancelSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {
-  return guardedTransition(sessionId, "cancelled", actor, { expectedVersion });
+export async function cancelSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR, reason?: string) {
+  return guardedTransition(sessionId, "cancelled", actor, { expectedVersion, reason });
 }
 
-export async function closeSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {
-  return guardedTransition(sessionId, "window_closed", actor, { expectedVersion });
+export async function closeSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR, reason?: string) {
+  return guardedTransition(sessionId, "window_closed", actor, { expectedVersion, reason });
 }
 
-export async function reopenSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {
-  return guardedTransition(sessionId, "collecting", actor, { expectedVersion });
+export async function reopenSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR, reason?: string) {
+  return guardedTransition(sessionId, "collecting", actor, { expectedVersion, action: "reopen", reason });
 }
 
 export async function aggregateSessionAdmin(sessionId: string, expectedVersion: number | undefined, actor: Actor = ADMIN_ACTOR) {
