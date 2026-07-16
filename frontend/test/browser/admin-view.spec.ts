@@ -748,6 +748,12 @@ test("committee admin: lifecycle action requires confirm+reason, shows 202 job, 
   await mockCommitteeApi(page);
   await signIn(page, "/admin/committee/sessions/sess-1");
 
+  let capturedBody: unknown = null;
+  await page.route(/\/api\/admin\/committee\/sessions\/sess-1\/actions\/close_window$/, async (route) => {
+    capturedBody = route.request().postDataJSON();
+    return route.fulfill(jsonReply({ jobId: 999, auditRequestId: "req-action", existing: false }, 202));
+  });
+
   await page.getByTestId("session-action-close_window").click();
   await page.getByTestId("action-confirm-submit").click();
   await expect(page.getByText("Reason must be 10–500 characters.")).toBeVisible();
@@ -755,6 +761,8 @@ test("committee admin: lifecycle action requires confirm+reason, shows 202 job, 
   await page.getByTestId("action-reason").fill("Closing the window ahead of schedule.");
   await page.getByTestId("action-confirm-submit").click();
   await expect(page.getByTestId("action-result")).toContainText("999");
+  // Every lifecycle request is version-bearing (optimistic concurrency).
+  expect(capturedBody).toMatchObject({ version: 2, reason: "Closing the window ahead of schedule." });
 
   // Re-open the session detail with an aggregated-eligible state to exercise the
   // idempotent existing:true branch on the aggregate action.
