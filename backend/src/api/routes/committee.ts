@@ -3,6 +3,7 @@
 // calls these under the hood). Returns {status, body} for the Bun router to send.
 import { canonicalizeSubmission, ROUTES } from "@robotmoney/contract";
 import * as ic from "../../committee/domain.ts";
+import { handleCommitteeAdmin } from "./committee-admin.ts";
 import { isPlausibleKey } from "../../lib/keys.ts";
 import { resolveAnalyticsSource, runAnalytics } from "../../analytics/index.ts";
 import { directAnalyticsPersistence } from "../../analytics/store/direct.ts";
@@ -147,6 +148,16 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
     if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
     return { status: 201, body: await ic.registerMember(b) };
+  }
+
+  // Admin surface (issue #152): topics/members/roster/lifecycle/audit — owns
+  // its own sub-resource paths (subjects/members/applications/sessions/audit)
+  // under the SAME admin prefix, checked first so it never falls into the
+  // single-segment dispatcher below. Returns null (falls through) for any
+  // path it doesn't own.
+  if (p.startsWith(ADMIN_PREFIX)) {
+    const adminSurface = await handleCommitteeAdmin(req, url);
+    if (adminSurface) return adminSurface;
   }
 
   // Admin lifecycle. Drives a session for demos/E2E.
