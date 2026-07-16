@@ -72,6 +72,33 @@ export const ROUTES = {
       aggregate: "/api/committee/admin/aggregate", // POST — deterministic rollup
       publish: "/api/committee/admin/publish", // POST — publish the session
       enqueueJob: "/api/committee/admin/enqueue-job", // POST — drive lifecycle via the worker job queue
+
+      // Admin surface (issue #152): topics/members/roster/lifecycle/audit.
+      // Distinct sub-resource paths (never a single-segment :action) so they
+      // never collide with the generic dispatcher above.
+      subjects: "/api/committee/admin/subjects", // GET list (all statuses) / POST create
+      subjectUpdate: "/api/committee/admin/subjects/:id/update", // POST — versioned edit (409 stale_version)
+      subjectDeactivate: "/api/committee/admin/subjects/:id/deactivate", // POST — versioned deactivate
+
+      members: "/api/committee/admin/members", // GET list (all statuses, redacted) / POST manual add
+      applications: "/api/committee/admin/applications", // GET ?status= — application review queue
+      memberReview: "/api/committee/admin/members/:id/review", // POST { decision: approve|reject }
+      memberDeactivate: "/api/committee/admin/members/:id/deactivate", // POST — versioned
+      memberReactivate: "/api/committee/admin/members/:id/reactivate", // POST — versioned, mints a fresh credential
+      memberRotateKey: "/api/committee/admin/members/:id/rotate-key", // POST — one-time credential in the response only
+
+      sessionCreate: "/api/committee/admin/sessions", // POST — UTC-validated, snapshots the roster, enqueues 4 scoped jobs
+      sessionRoster: "/api/committee/admin/sessions/:id/roster", // GET — the frozen expected roster
+      rosterAdd: "/api/committee/admin/sessions/:id/roster/add", // POST { memberId } — before collecting only
+      rosterExcuse: "/api/committee/admin/sessions/:id/roster/excuse", // POST { memberId } — before collecting only
+      rosterRestore: "/api/committee/admin/sessions/:id/roster/restore", // POST { memberId } — before collecting only
+      sessionCancel: "/api/committee/admin/sessions/:id/cancel", // POST — versioned guarded transition
+      sessionClose: "/api/committee/admin/sessions/:id/close", // POST — versioned guarded transition
+      sessionReopen: "/api/committee/admin/sessions/:id/reopen", // POST — versioned guarded transition
+      sessionAggregate: "/api/committee/admin/sessions/:id/aggregate", // POST — versioned guarded transition
+      sessionPublish: "/api/committee/admin/sessions/:id/publish", // POST — versioned guarded transition
+
+      audit: "/api/committee/admin/audit", // GET ?actor=&action=&since=&until=&limit= — redacted audit trail
     },
   },
 
