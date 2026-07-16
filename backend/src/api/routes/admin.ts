@@ -1,18 +1,23 @@
-// Admin dashboard for the Postgres task queue (research/analytics pipeline). A
-// READ-ONLY surface over the queue tables from migration 0003: `jobs`,
-// `job_schedules`, and `job_runs` — where `job_runs.output` (jsonb) + `error`
-// (text) ARE the per-run logs. No new table; this handler only SELECTs.
+// Admin dashboard over the Postgres task queue (research/analytics pipeline)
+// plus the overview/retry/schedule-toggle/audit surface added by issue #155
+// (docs/plan-admin-surface.md). `jobs`, `job_schedules`, and `job_runs` are
+// migration 0003's tables — `job_runs.output` (jsonb) + `error` (text) ARE the
+// per-run logs; `jobs.scope_type/scope_id/requested_by/audit_request_id` and
+// the extended `audit_log` columns are migration 0017's additions.
 //
 // PRIVILEGED with the same guard the committee/projects admin routes use: if
 // ADMIN_TOKEN is set, require it as X-Admin-Token (constant-time compared, works
 // in every env incl. a public box); if unset, allow only outside prod
 // (config.allowInsecure — demo/ephemeral convenience). Fail-closed: prod with no
-// token → 403, checked BEFORE any DB work.
-import { createHash, timingSafeEqual } from "node:crypto";
+// token → 403, checked BEFORE any DB work or body parsing on every owned route.
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { config as globalConfig } from "../../config.ts";
 import { sql, jsonValue } from "../../db/client.ts";
 import { INDICATORS } from "../../analytics/analyze/indicators.ts";
 import { computeRegimeStaleness } from "../../analytics/report/regime-projection.ts";
+import { decodeCursor, encodeCursor } from "../../admin/cursor.ts";
+import { recordAudit, redactAuditRow } from "../../admin/audit.ts";
+import { getOverviewProjection, PRODUCTION_KINDS } from "../../admin/overview.ts";
 
 // Constant-time secret comparison (over fixed-length sha256 hashes so lengths
 // always match and timing doesn't leak the secret) — mirrors projects.ts.
@@ -35,18 +40,86 @@ function requireAdmin(req: Request, cfg: AdminAuthConfig = globalConfig): boolea
     : cfg.allowInsecure;
 }
 
-// Clamp a `?limit=` query param to [1, max] with a default when unset/invalid.
-// Note: an absent/empty param must fall back to `def` — `Number(null)`/`Number("")`
-// are 0 (not NaN), which would otherwise clamp up to 1 and truncate the result.
-function clampLimit(raw: string | null, def = 100, max = 500): number {
+const FORBIDDEN = { status: 403, body: { error: "admin authorization required" } } as const;
+const BAD = (error: string) => ({ status: 400, body: { error } }) as const;
+
+// Raised by the shared list-param parsing below; every catch site maps it to
+// a 400 (never a 500) — this is the mechanism behind "400 responses for
+// malformed cursor, limit, date, status, or scope parameters" (issue #155 AC).
+class ValidationError extends Error {}
+
+// Strict limit parsing for the new/extended list endpoints (docs/plan-admin-
+// surface.md §6.3: "limit default 50/max 200"). Unlike the legacy behavior,
+// an EXPLICITLY supplied but malformed limit is a 400, not a silent clamp —
+// only an absent/empty param falls back to the default.
+function parseLimit(raw: string | null, def = 50, max = 200): number {
   if (raw == null || raw === "") return def;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return def;
-  return Math.min(max, Math.max(1, Math.floor(n)));
+  if (!Number.isInteger(n) || n < 1 || n > max) {
+    throw new ValidationError(`limit must be an integer between 1 and ${max}`);
+  }
+  return n;
 }
 
-// The run columns exposed to the dashboard (job_runs.output/error = the logs).
-const FORBIDDEN = { status: 403, body: { error: "admin authorization required" } } as const;
+function parseCursor(raw: string | null): { id: number } | null {
+  try {
+    return decodeCursor(raw);
+  } catch {
+    throw new ValidationError("malformed cursor");
+  }
+}
+
+const JOB_STATUSES = ["pending", "running", "succeeded", "failed", "dead", "cancelled"];
+function parseJobStatus(raw: string | null): string | null {
+  if (raw == null || raw === "") return null;
+  if (!JOB_STATUSES.includes(raw)) throw new ValidationError(`status must be one of ${JOB_STATUSES.join(", ")}`);
+  return raw;
+}
+
+const RUN_STATUSES = ["succeeded", "failed", "degraded", "dead"];
+function parseRunStatus(raw: string | null): string | null {
+  if (raw == null || raw === "") return null;
+  if (!RUN_STATUSES.includes(raw)) throw new ValidationError(`status must be one of ${RUN_STATUSES.join(", ")}`);
+  return raw;
+}
+
+// A bare date (YYYY-MM-DD) or a full ISO instant — both parse via Date.parse.
+function parseDateParam(raw: string | null, name: string): Date | null {
+  if (raw == null || raw === "") return null;
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t)) throw new ValidationError(`${name} must be a valid ISO date`);
+  return new Date(t);
+}
+
+// scope_id only makes sense alongside scope_type (it is not a globally unique
+// key on its own) — supplying one without the other is a malformed filter.
+function parseScope(url: URL): { scopeType: string | null; scopeId: string | null } {
+  const scopeType = url.searchParams.get("scopeType");
+  const scopeId = url.searchParams.get("scopeId");
+  if (scopeId && !scopeType) {
+    throw new ValidationError("scopeId requires scopeType");
+  }
+  return { scopeType: scopeType || null, scopeId: scopeId || null };
+}
+
+function validateReason(raw: unknown): string {
+  if (typeof raw !== "string") throw new ValidationError("reason is required");
+  const trimmed = raw.trim();
+  if (trimmed.length < 10 || trimmed.length > 500) {
+    throw new ValidationError("reason must be 10..500 characters");
+  }
+  return trimmed;
+}
+
+function rejectUnknownFields(body: unknown, allowed: string[]): Record<string, unknown> {
+  if (body == null || typeof body !== "object" || Array.isArray(body)) {
+    throw new ValidationError("body must be a JSON object");
+  }
+  const b = body as Record<string, unknown>;
+  const unknown = Object.keys(b).filter((k) => !allowed.includes(k));
+  if (unknown.length) throw new ValidationError(`unknown field(s): ${unknown.join(", ")}`);
+  return b;
+}
 
 // ── Research pipeline telemetry admin surface (issue #151) ──────────────────
 // Job kinds/tools this endpoint may enqueue a rerun for. Duplicated (not
@@ -82,7 +155,7 @@ function runFreshness(asof: string) {
 
 // Returns { status, body } or null if the path isn't an /api/admin route this
 // handler owns (so index.ts falls through to its 404). Every owned route is
-// fail-closed: the 403 guard runs before any DB query.
+// fail-closed: the 403 guard runs before any DB query or body parsing.
 export async function handleAdmin(
   req: Request,
   url: URL,
@@ -98,32 +171,123 @@ export async function handleAdmin(
     return { status: 200, body: { ok: true } };
   }
 
-  // GET /api/admin/jobs — recent jobs (all kinds) + all schedules + a status/kind
-  // summary computed with GROUP BY.
-  if (m === "GET" && p === "/api/admin/jobs") {
+  // GET /api/admin/overview — health cards + explicit alert feed (issue #155,
+  // US-A2). Queue counts, production-kind (regime.classify/research.refresh)
+  // run health, regime + research staleness, enabled analytics schedules, the
+  // next queued committee event, and a not_run/running/degraded/failed/dead/
+  // stale/healthy alert feed.
+  if (m === "GET" && p === "/api/admin/overview") {
     if (!requireAdmin(req, cfg)) return FORBIDDEN;
-    const limit = clampLimit(url.searchParams.get("limit"));
-    const jobs = await sql`
-      SELECT id, kind, status, priority, attempts, max_attempts, run_after,
-             locked_at, locked_by, last_error, created_at, updated_at
-        FROM jobs
-       ORDER BY id DESC
-       LIMIT ${limit}`;
-    const schedules = await sql`
-      SELECT id, kind, cron, timezone, enabled, last_enqueued_at, next_run_at
-        FROM job_schedules
-       ORDER BY kind`;
-    const byStatusRows = await sql`SELECT status, count(*)::int AS n FROM jobs GROUP BY status`;
-    const byKindRows = await sql`SELECT kind, count(*)::int AS n FROM jobs GROUP BY kind`;
-    const byStatus: Record<string, number> = {};
-    for (const r of byStatusRows) byStatus[r.status] = r.n;
-    const byKind: Record<string, number> = {};
-    for (const r of byKindRows) byKind[r.kind] = r.n;
-    return { status: 200, body: { jobs, schedules, summary: { byStatus, byKind } } };
+    return { status: 200, body: await getOverviewProjection() };
   }
 
-  // GET /api/admin/jobs/:id — one job plus its recent runs (the logs). Reject a
-  // non-numeric id with 400; 404 when the id doesn't exist.
+  // GET /api/admin/jobs — cursor-paginated jobs (kind/status/scope/created-range
+  // filters) + all schedules + a status/kind summary. `jobs`/`schedules`/
+  // `summary` are the original response shape (backward compatible); `nextCursor`
+  // is additive.
+  if (m === "GET" && p === "/api/admin/jobs") {
+    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    try {
+      const limit = parseLimit(url.searchParams.get("limit"));
+      const cursor = parseCursor(url.searchParams.get("cursor"));
+      const kind = url.searchParams.get("kind");
+      const status = parseJobStatus(url.searchParams.get("status"));
+      const { scopeType, scopeId } = parseScope(url);
+      const createdFrom = parseDateParam(url.searchParams.get("createdFrom"), "createdFrom");
+      const createdTo = parseDateParam(url.searchParams.get("createdTo"), "createdTo");
+
+      const conds = [];
+      if (kind) conds.push(sql`kind = ${kind}`);
+      if (status) conds.push(sql`status = ${status}`);
+      if (scopeType) conds.push(sql`scope_type = ${scopeType}`);
+      if (scopeId) conds.push(sql`scope_id = ${scopeId}`);
+      if (createdFrom) conds.push(sql`created_at >= ${createdFrom}`);
+      if (createdTo) conds.push(sql`created_at <= ${createdTo}`);
+      if (cursor) conds.push(sql`id < ${cursor.id}`);
+      const where = conds.length ? sql`WHERE ${conds.reduce((a, b) => sql`${a} AND ${b}`)}` : sql``;
+
+      const rows = await sql`
+        SELECT id, kind, status, priority, attempts, max_attempts, run_after,
+               locked_at, locked_by, last_error, created_at, updated_at,
+               scope_type, scope_id, requested_by
+          FROM jobs
+          ${where}
+         ORDER BY id DESC
+         LIMIT ${limit + 1}`;
+      const hasMore = rows.length > limit;
+      const jobs = hasMore ? rows.slice(0, limit) : rows;
+      const nextCursor = hasMore ? encodeCursor(jobs[jobs.length - 1].id) : null;
+
+      const schedules = await sql`
+        SELECT id, kind, cron, timezone, enabled, last_enqueued_at, next_run_at
+          FROM job_schedules
+         ORDER BY kind`;
+      const byStatusRows = await sql`SELECT status, count(*)::int AS n FROM jobs GROUP BY status`;
+      const byKindRows = await sql`SELECT kind, count(*)::int AS n FROM jobs GROUP BY kind`;
+      const byStatus: Record<string, number> = {};
+      for (const r of byStatusRows) byStatus[r.status] = r.n;
+      const byKind: Record<string, number> = {};
+      for (const r of byKindRows) byKind[r.kind] = r.n;
+      return { status: 200, body: { jobs, schedules, summary: { byStatus, byKind }, nextCursor } };
+    } catch (e) {
+      if (e instanceof ValidationError) return BAD(e.message);
+      throw e;
+    }
+  }
+
+  // POST /api/admin/jobs/:id/retry — clone a DEAD job into a new pending job
+  // with a unique manual dedupe key. Never mutates the source row. (issue #155,
+  // US-Q1.) Checked before the generic GET /api/admin/jobs/:id below since both
+  // share the /api/admin/jobs/:id prefix.
+  if (m === "POST" && /^\/api\/admin\/jobs\/[^/]+\/retry$/.test(p)) {
+    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    const idStr = decodeURIComponent(p.split("/")[4]);
+    if (!/^\d+$/.test(idStr)) return { status: 400, body: { error: "job id must be numeric" } };
+    const id = Number(idStr);
+    try {
+      const body = await req.json().catch(() => null);
+      const b = rejectUnknownFields(body, ["reason"]);
+      const reason = validateReason(b.reason);
+
+      return await sql.begin(async (tx) => {
+        const [job] = await tx`SELECT * FROM jobs WHERE id = ${id} FOR UPDATE`;
+        if (!job) return { status: 404, body: { error: "job not found" } };
+        if (job.status !== "dead") {
+          return {
+            status: 409,
+            body: { error: "only a dead job can be retried", code: "invalid_transition", current: job.status },
+          };
+        }
+        const dedupeKey = `admin-retry:${id}:${randomUUID()}`;
+        const auditRequestId = randomUUID();
+        const [clone] = await tx`
+          INSERT INTO jobs (kind, payload, priority, dedupe_key, scope_type, scope_id, requested_by, audit_request_id)
+          VALUES (${job.kind}, ${tx.json(job.payload)}, ${job.priority}, ${dedupeKey},
+                  ${job.scope_type}, ${job.scope_id}, 'admin', ${auditRequestId})
+          RETURNING id`;
+        const newJobId = Number(clone.id);
+        const audit = await recordAudit(tx, {
+          actor: "admin",
+          action: "retry_job",
+          targetType: "job",
+          targetId: String(newJobId),
+          reason,
+          beforeState: { sourceJobId: id, status: job.status },
+          afterState: { newJobId, status: "pending" },
+          jobId: newJobId,
+          scope: { sourceJobId: id, newJobId },
+        });
+        return { status: 202, body: { jobId: newJobId, sourceJobId: id, auditRequestId: audit.request_id } };
+      });
+    } catch (e) {
+      if (e instanceof ValidationError) return BAD(e.message);
+      throw e;
+    }
+  }
+
+  // GET /api/admin/jobs/:id — one job (incl. scope/audit-request domain links)
+  // plus its recent runs (the logs). Reject a non-numeric id with 400; 404 when
+  // the id doesn't exist.
   if (m === "GET" && p.startsWith("/api/admin/jobs/")) {
     if (!requireAdmin(req, cfg)) return FORBIDDEN;
     const idStr = decodeURIComponent(p.slice("/api/admin/jobs/".length));
@@ -131,7 +295,8 @@ export async function handleAdmin(
     const id = Number(idStr);
     const [job] = await sql`
       SELECT id, kind, payload, status, priority, attempts, max_attempts, run_after,
-             locked_at, locked_by, last_error, dedupe_key, created_at, updated_at
+             locked_at, locked_by, last_error, dedupe_key, created_at, updated_at,
+             scope_type, scope_id, requested_by, audit_request_id
         FROM jobs WHERE id = ${id}`;
     if (!job) return { status: 404, body: { error: "job not found" } };
     const runs = await sql`
@@ -142,27 +307,135 @@ export async function handleAdmin(
     return { status: 200, body: { job, runs } };
   }
 
-  // GET /api/admin/runs — the recent job_runs feed across all jobs (the logs),
-  // optionally filtered by ?kind= and ?status=.
+  // GET /api/admin/runs — cursor-paginated job_runs feed, optionally filtered by
+  // ?kind=&status=&scopeType=&scopeId= (scope filters join through the owning job).
   if (m === "GET" && p === "/api/admin/runs") {
     if (!requireAdmin(req, cfg)) return FORBIDDEN;
-    const limit = clampLimit(url.searchParams.get("limit"));
-    const kind = url.searchParams.get("kind");
-    const status = url.searchParams.get("status");
-    // Compose an optional WHERE from only the filters that were supplied.
-    const conds = [];
-    if (kind) conds.push(sql`kind = ${kind}`);
-    if (status) conds.push(sql`status = ${status}`);
-    const where = conds.length
-      ? sql`WHERE ${conds.reduce((a, b) => sql`${a} AND ${b}`)}`
-      : sql``;
-    const runs = await sql`
-      SELECT id, job_id, kind, started_at, finished_at, status, error, output
-        FROM job_runs
-        ${where}
-       ORDER BY started_at DESC
-       LIMIT ${limit}`;
-    return { status: 200, body: { runs } };
+    try {
+      const limit = parseLimit(url.searchParams.get("limit"));
+      const cursor = parseCursor(url.searchParams.get("cursor"));
+      const kind = url.searchParams.get("kind");
+      const status = parseRunStatus(url.searchParams.get("status"));
+      const { scopeType, scopeId } = parseScope(url);
+
+      const conds = [];
+      if (kind) conds.push(sql`r.kind = ${kind}`);
+      if (status) conds.push(sql`r.status = ${status}`);
+      if (scopeType) conds.push(sql`j.scope_type = ${scopeType}`);
+      if (scopeId) conds.push(sql`j.scope_id = ${scopeId}`);
+      if (cursor) conds.push(sql`r.id < ${cursor.id}`);
+      const where = conds.length ? sql`WHERE ${conds.reduce((a, b) => sql`${a} AND ${b}`)}` : sql``;
+
+      const rows = await sql`
+        SELECT r.id, r.job_id, r.kind, r.started_at, r.finished_at, r.status, r.error, r.output
+          FROM job_runs r
+          LEFT JOIN jobs j ON j.id = r.job_id
+          ${where}
+         ORDER BY r.id DESC
+         LIMIT ${limit + 1}`;
+      const hasMore = rows.length > limit;
+      const runs = hasMore ? rows.slice(0, limit) : rows;
+      const nextCursor = hasMore ? encodeCursor(runs[runs.length - 1].id) : null;
+      return { status: 200, body: { runs, nextCursor } };
+    } catch (e) {
+      if (e instanceof ValidationError) return BAD(e.message);
+      throw e;
+    }
+  }
+
+  // PATCH /api/admin/schedules/:id — toggle ONLY `enabled` on an analytics
+  // (regime.classify / research.refresh) job_schedules row. Cron, timezone,
+  // kind, and payload are read-only; the five disabled `committee.*` demo rows
+  // are protected and cannot be enabled/disabled from here. (issue #155, US-Q1.)
+  if (m === "PATCH" && /^\/api\/admin\/schedules\/[^/]+$/.test(p)) {
+    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    const idStr = decodeURIComponent(p.slice("/api/admin/schedules/".length));
+    if (!/^\d+$/.test(idStr)) return { status: 400, body: { error: "schedule id must be numeric" } };
+    const id = Number(idStr);
+    try {
+      const body = await req.json().catch(() => null);
+      const b = rejectUnknownFields(body, ["enabled", "reason"]);
+      if (typeof b.enabled !== "boolean") throw new ValidationError("enabled must be a boolean");
+      const reason = validateReason(b.reason);
+      const enabled = b.enabled;
+
+      return await sql.begin(async (tx) => {
+        const [schedule] = await tx`SELECT * FROM job_schedules WHERE id = ${id} FOR UPDATE`;
+        if (!schedule) return { status: 404, body: { error: "schedule not found" } };
+        if (schedule.kind.startsWith("committee.")) {
+          return {
+            status: 409,
+            body: {
+              error: "legacy/demo committee schedule — not product scheduling; cannot be toggled",
+              code: "invalid_transition",
+            },
+          };
+        }
+        if (!(PRODUCTION_KINDS as readonly string[]).includes(schedule.kind)) {
+          throw new ValidationError(`schedule kind "${schedule.kind}" is not an analytics schedule`);
+        }
+        const [updated] = await tx`
+          UPDATE job_schedules SET enabled = ${enabled} WHERE id = ${id}
+          RETURNING id, kind, cron, enabled`;
+        const audit = await recordAudit(tx, {
+          actor: "admin",
+          action: "toggle_schedule",
+          targetType: "job_schedule",
+          targetId: String(id),
+          reason,
+          beforeState: { enabled: schedule.enabled },
+          afterState: { enabled },
+        });
+        return { status: 200, body: { item: updated, auditRequestId: audit.request_id } };
+      });
+    } catch (e) {
+      if (e instanceof ValidationError) return BAD(e.message);
+      throw e;
+    }
+  }
+
+  // GET /api/admin/audit — cursor-paginated, filtered, REDACTED audit_log feed.
+  // Filters: actor, action, targetType, targetId, from, to. Token/authorization/
+  // header/cookie/secret/password/signature keys are stripped from any nested
+  // JSON before the row leaves this process (never merely omitted client-side).
+  if (m === "GET" && p === "/api/admin/audit") {
+    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    try {
+      const limit = parseLimit(url.searchParams.get("limit"));
+      const cursor = parseCursor(url.searchParams.get("cursor"));
+      const actor = url.searchParams.get("actor");
+      const action = url.searchParams.get("action");
+      const targetType = url.searchParams.get("targetType");
+      const targetId = url.searchParams.get("targetId");
+      const from = parseDateParam(url.searchParams.get("from"), "from");
+      const to = parseDateParam(url.searchParams.get("to"), "to");
+
+      const conds = [];
+      if (actor) conds.push(sql`actor = ${actor}`);
+      if (action) conds.push(sql`action = ${action}`);
+      if (targetType) conds.push(sql`target_type = ${targetType}`);
+      if (targetId) conds.push(sql`target_id = ${targetId}`);
+      if (from) conds.push(sql`at >= ${from}`);
+      if (to) conds.push(sql`at <= ${to}`);
+      if (cursor) conds.push(sql`id < ${cursor.id}`);
+      const where = conds.length ? sql`WHERE ${conds.reduce((a, b) => sql`${a} AND ${b}`)}` : sql``;
+
+      const rows = await sql`
+        SELECT id, request_id, actor, action, target_type, target_id, reason,
+               before_state, after_state, outcome, job_id, session_id, scope, at
+          FROM audit_log
+          ${where}
+         ORDER BY id DESC
+         LIMIT ${limit + 1}`;
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
+      const items = page.map(redactAuditRow);
+      const nextCursor = hasMore ? encodeCursor(page[page.length - 1].id) : null;
+      return { status: 200, body: { items, nextCursor } };
+    } catch (e) {
+      if (e instanceof ValidationError) return BAD(e.message);
+      throw e;
+    }
   }
 
   // GET /api/admin/research/runs — research pipeline telemetry run list
