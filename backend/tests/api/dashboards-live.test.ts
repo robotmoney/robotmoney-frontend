@@ -271,6 +271,51 @@ test("wallet-sleeves: a THROWN batch (forced RPC failure) degrades every holding
   expect(r.stale).toBe(true);
 });
 
+test("wallet-sleeves (#173): a failed live price read falls back to a recent persisted wallet_balance_samples price; the chain amount stays fresh and an over-age/missing sample still degrades honestly", async () => {
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.PRICE_SOURCE = "live";
+  mockChain({ failPrice: true });
+
+  const fresh = new Date(Date.now() - 60_000); // 1 minute old — inside the 5-minute limit
+  const tooOld = new Date(Date.now() - 6 * 60_000); // 6 minutes old — outside the limit
+  await sql`DELETE FROM wallet_balance_samples WHERE symbol IN ('WETH', 'ROBOTMONEY')`;
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES
+      (current_date, 'WETH', 1, 2500, 2500, 'live', ${fresh}),
+      (current_date - 1, 'ROBOTMONEY', 1, 0.00002, 0.00002, 'live', ${tooOld})
+  `;
+  try {
+    const r = await getWalletSleeves();
+    const bankr = r.wallets.find((w) => w.type === "primary")!;
+
+    const weth = bankr.holdings.find((h) => h.symbol === "WETH")!;
+    expect(weth.priceUsd).toBe(2500); // recent persisted price used as the fallback
+    expect(weth.provenance).toBe("stale"); // never relabelled 'live'
+    expect(weth.amount).not.toBeNull(); // the AMOUNT is still the fresh chain read
+    expect(weth.valueUsd).toBeCloseTo(weth.amount! * 2500, 6);
+
+    const robotmoney = bankr.holdings.find((h) => h.symbol === "ROBOTMONEY")!;
+    // The only persisted ROBOTMONEY sample is 6 minutes old — over the 5-minute
+    // limit — so it is NOT eligible; the holding degrades honestly to null,
+    // exactly like a symbol with no persisted sample at all.
+    expect(robotmoney.priceUsd).toBeNull();
+    expect(robotmoney.valueUsd).toBeNull();
+    expect(robotmoney.provenance).toBe("stale");
+
+    const bnkr = bankr.holdings.find((h) => h.symbol === "BNKR")!;
+    // No persisted sample at all for BNKR → exhausted fallback, honest null/stale.
+    expect(bnkr.priceUsd).toBeNull();
+    expect(bnkr.valueUsd).toBeNull();
+    expect(bnkr.provenance).toBe("stale");
+
+    expect(bankr.stale).toBe(true);
+    expect(r.stale).toBe(true);
+  } finally {
+    await sql`DELETE FROM wallet_balance_samples WHERE symbol IN ('WETH', 'ROBOTMONEY')`;
+  }
+});
+
 test("wallet-sleeves seam: amount and price readers inject independently and persisted-price provenance reaches the unchanged DTO", async () => {
   process.env.BASE_RPC_SOURCE = "live";
   process.env.PRICE_SOURCE = "live";

@@ -168,14 +168,34 @@ only by symbol and has no wallet dimension.
    429 retries. **Implemented experimentally; tests pass, but the live provider
    remains persistently quota-limited from this deployment/IP.**
 4. Change wallet sleeves to reuse the latest persisted per-symbol price while
-   continuing to read per-wallet amounts from chain. This is the likely durable
-   fix for the remaining sleeve values; retries alone cannot repair an exhausted
-   keyless quota.
+   continuing to read per-wallet amounts from chain. **Implemented**:
+   `chain/wallet-valuation.ts::persistedFallbackWalletPriceReader` tries the
+   live provider first, then falls back to the newest `wallet_balance_samples`
+   row for that symbol when it is ≤5 minutes old (`MAX_PERSISTED_PRICE_AGE_MS`);
+   the chain amount is always the fresh read, only the price falls back, and
+   provenance is honestly `stale` (never relabelled `live`). Wired as
+   `wallet-sleeves.ts`'s default `priceReader`. Covered by
+   `tests/api/dashboards-live.test.ts` (fresh fallback, over-age exclusion,
+   and no-sample exhaustion cases).
 5. Independently inspect `vault.sample_share_price` job runs and
-   `vault_share_price_history`; transport hardening does not repair missing
-   persisted fallback history.
+   `vault_share_price_history`. **Verified**: there is exactly one producer
+   (`worker/handlers/vault.ts::sampleSharePrice`) and one schedule
+   (`job_schedules` row `vault.sample_share_price`, hourly at minute zero,
+   `db/seed.ts`). **Repaired**: `config.vault.address` was not normalized —
+   an operator-supplied `VAULT_ADDRESS` could write/read under different
+   casing than the compiled-in default, silently missing the fallback row.
+   `config.vault.address` is now lowercased at load (`config.ts`), and every
+   persisted-sample read additionally matches on `lower(vault_address)` to
+   recognize any legacy mixed-case row (`chain/vault-economics.ts`).
 6. Consider isolating vault calls or using Multicall3 so a single adapter
-   failure cannot erase successful core vault values.
+   failure cannot erase successful core vault values. **Implemented**: core
+   and adapter reads are now settled independently
+   (`Promise.allSettled`) in `fetchVaultEconomics`, and the default
+   `VaultAdapterReader` isolates each adapter's `eth_call` the same way — a
+   failed/reverted adapter degrades only that adapter's `balanceUsd` to
+   `null`; live core totals and unrelated adapter values are preserved. The
+   vault-wide aggregate persisted-sample fallback still applies, but only when
+   the CORE read itself fails. Covered by `tests/vault-economics.test.ts`.
 
 ## Adhoc debugging status
 

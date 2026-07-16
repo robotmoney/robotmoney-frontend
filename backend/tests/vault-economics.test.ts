@@ -160,12 +160,18 @@ test("vault seam: deterministic core, adapter, and sample readers preserve the p
   expect(r.adapters).toHaveLength(3);
 });
 
-test("vault seam: an independently failing adapter reader retains the scout's current aggregate fallback behavior", async () => {
+test("vault seam (#173): a failed adapter reader degrades ONLY the adapters — core totals stay live and the persisted-sample reader is never invoked", async () => {
   const readers = deterministicVaultReaders();
   let coreReads = 0;
   readers.core.read = async () => {
     coreReads += 1;
     return { totalAssets: 84_320_120_000n, totalSupply: 84_102_550_000n, idle: 1_000_000n };
+  };
+  let sampleReads = 0;
+  const latest = readers.samples.latest;
+  readers.samples.latest = async (address) => {
+    sampleReads += 1;
+    return latest(address);
   };
   readers.adapters.read = async () => {
     throw new Error("deterministic adapter failure");
@@ -173,12 +179,56 @@ test("vault seam: an independently failing adapter reader retains the scout's cu
 
   const r = await fetchVaultEconomics(readers);
   expect(coreReads).toBe(1);
-  expect(r.stale).toBe(true);
-  expect(r.tvlUsd).toBe(80_000);
-  expect(r.totalShares).toBe(79_000);
-  expect(r.sharePrice).toBeCloseTo(80_000 / 79_000, 9);
-  expect(r.idleUsdc).toBeNull();
+  expect(sampleReads).toBe(0); // core succeeded → the persisted aggregate fallback is never consulted
+  expect(r.stale).toBe(true); // stale because every configured adapter is missing, not because core failed
+  expect(r.tvlUsd).toBeCloseTo(84_320.12, 6); // LIVE core totals, not the 80_000 persisted-sample fixture
+  expect(r.totalShares).toBeCloseTo(84_102.55, 6);
+  expect(r.sharePrice).toBeCloseTo(84_320_120_000 / 84_102_550_000, 9);
+  expect(r.idleUsdc).toBeCloseTo(1, 6);
   expect(r.adapters.every((adapter) => adapter.balanceUsd === null)).toBe(true);
+});
+
+test("vault seam (#173): a failed core reader does not suppress adapter data the adapter reader still returned", async () => {
+  const readers = deterministicVaultReaders();
+  readers.core.read = async () => {
+    throw new Error("deterministic core failure");
+  };
+  let adapterReads = 0;
+  readers.adapters.read = async (configured) => {
+    adapterReads += 1;
+    return configured.map((a) => (a.configured ? 28_000_000_000n : null));
+  };
+
+  const r = await fetchVaultEconomics(readers);
+  expect(adapterReads).toBe(1);
+  expect(r.stale).toBe(true); // stale because core degraded to the persisted sample
+  expect(r.tvlUsd).toBe(80_000); // persisted-sample fallback, since core failed
+  // Adapter data the adapter reader DID return is preserved, not wiped by the
+  // unrelated core failure.
+  expect(r.adapters.every((adapter) => adapter.balanceUsd === 28_000)).toBe(true);
+});
+
+test("#173 fix (default rpcVaultAdapterReader): one reverted adapter eth_call degrades ONLY that adapter; the others keep their live values", async () => {
+  process.env.ADAPTER_MORPHO_ADDRESS = MORPHO_OVERRIDE;
+  process.env.ADAPTER_AAVE_ADDRESS = AAVE_OVERRIDE;
+  process.env.ADAPTER_COMPOUND_ADDRESS = COMPOUND_OVERRIDE;
+  const adapters = resolveVaultAdapters();
+  const fixtures = happyPathFixture(adapters);
+  // Delete just Aave's fixture so its eth_call throws ("no fixture for ...")
+  // while Morpho/Compound and the vault core all still resolve normally.
+  delete fixtures[`${AAVE_OVERRIDE.toLowerCase()}:${TOTAL_ASSETS_SEL}`];
+  mockRpc(fixtures);
+
+  const r = await fetchVaultEconomics();
+  expect(r.stale).toBe(true); // one configured adapter is missing
+  expect(r.tvlUsd).toBeCloseTo(84_320.12, 6); // core totals unaffected
+  const aave = r.adapters.find((a) => a.name === "Aave")!;
+  expect(aave.configured).toBe(true);
+  expect(aave.balanceUsd).toBeNull(); // the one that reverted
+  for (const a of r.adapters.filter((x) => x.name !== "Aave")) {
+    expect(a.configured).toBe(true);
+    expect(a.balanceUsd).toBeCloseTo(28_000, 6); // unrelated adapters keep their live values
+  }
 });
 
 test("vault seam: an independently failing core reader reaches the persisted-sample reader", async () => {
