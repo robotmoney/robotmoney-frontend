@@ -318,31 +318,31 @@ test("telemetry: 401 with no bearer, 403 with a wrong/admin/member bearer — ZE
             VALUES (${memberId}, ${"B".repeat(44)}, ${hashKey(memberToken)})`;
 
   const body = validTelemetryBody();
-  const [{ n: before }] = await sql`SELECT COUNT(*)::int AS n FROM analytics_runs`;
+  const [{ n: before }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
   expect((await call(req("POST", A.telemetry, body)))?.status).toBe(401);
   expect((await call(req("POST", A.telemetry, body, "wrong-token")))?.status).toBe(403);
   expect((await call(req("POST", A.telemetry, body, ADMIN)))?.status).toBe(403);
   expect((await call(req("POST", A.telemetry, body, memberToken)))?.status).toBe(403);
-  const [{ n: afterRejections }] = await sql`SELECT COUNT(*)::int AS n FROM analytics_runs`;
+  const [{ n: afterRejections }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
   expect(afterRejections).toBe(before);
 
   const res = await call(req("POST", A.telemetry, body, TOKEN));
   expect(res?.status).toBe(200);
   const ok = res?.body as { ok: boolean; runId: number };
   expect(ok.ok).toBe(true);
-  const [run] = await sql`SELECT kind, status FROM analytics_runs WHERE id = ${ok.runId}`;
+  const [run] = await sql`SELECT kind, status FROM research_pipeline_runs WHERE id = ${ok.runId}`;
   expect(run.kind).toBe((body as any).run.kind);
   expect(run.status).toBe("succeeded");
-  const stages = await sql`SELECT stage FROM analytics_run_stages WHERE run_id = ${ok.runId}`;
+  const stages = await sql`SELECT stage FROM research_pipeline_stages WHERE run_id = ${ok.runId}`;
   expect(stages.length).toBe(1);
-  const artifacts = await sql`SELECT kind, preview FROM analytics_run_artifacts WHERE run_id = ${ok.runId}`;
+  const artifacts = await sql`SELECT kind, preview FROM research_pipeline_artifacts WHERE run_id = ${ok.runId}`;
   expect(artifacts.length).toBe(1);
   expect(artifacts[0].preview).toEqual({ a: 1 });
 });
 
 test("telemetry: DTO validation rejects malformed run/stage/warning/artifact payloads with zero row changes", async () => {
   prodAuth();
-  const [{ n: before }] = await sql`SELECT COUNT(*)::int AS n FROM analytics_runs`;
+  const [{ n: before }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
   const good = validTelemetryBody();
   const badBodies: unknown[] = [
     null,
@@ -366,6 +366,6 @@ test("telemetry: DTO validation rejects malformed run/stage/warning/artifact pay
   for (const body of badBodies) {
     expect((await call(req("POST", A.telemetry, body, TOKEN)))?.status).toBe(400);
   }
-  const [{ n: after }] = await sql`SELECT COUNT(*)::int AS n FROM analytics_runs`;
+  const [{ n: after }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
   expect(after).toBe(before);
 });

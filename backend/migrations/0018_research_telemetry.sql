@@ -6,11 +6,20 @@
 -- NOTE (issue #151 depends on #150 "admin surface data and audit foundation",
 -- which had not landed when this migration was authored): #150 was scoped to
 -- own migration 0017 with a broader admin-surface schema (queue scope/cancel
--- metadata, committee versioning, audit_log extension, etc). This migration is
--- deliberately narrow — ONLY the research-telemetry tables this issue's ACs
--- require — so it can land independently. When #150 lands its own 0017, the
--- migration numbers will need renumbering during rebase; this file's content
--- does not depend on anything #150 introduces.
+-- metadata, committee versioning, audit_log extension, etc), including its
+-- own placeholder `analytics_runs`/`analytics_stage_runs`/`analytics_artifacts`
+-- tables (docs/plan-admin-surface.md §5.2) that #150 explicitly left
+-- unimplemented ("Out of scope: Analytics telemetry endpoint implementation
+-- and worker instrumentation" — issue #150). This migration renumbers to 0018
+-- during rebase (mechanical) AND uses distinct `research_pipeline_*` table
+-- names (not mechanical) because #150's placeholder tables use an incompatible
+-- schema (uuid PK, job_kind/source_mode/attempt columns) for the same table
+-- name this migration originally claimed. #150's tables are untouched here —
+-- renaming them would require rewriting its already-merged, already-tested
+-- migration/tests; this migration owns the fully-implemented store+API path
+-- (telemetry-store.ts, api/routes/admin.ts, api/routes/analytics.ts) so it
+-- renames its own tables instead. #150's tables remain dead scaffolding
+-- unless a future issue wires them up.
 --
 -- Persisted ONLY through the authenticated /api/analytics/telemetry boundary
 -- (analytics-provider bearer) — the API process owns all telemetry SQL, mirroring
@@ -18,7 +27,7 @@
 -- migration 0009/0016. The worker role may READ (admin projections proxy through
 -- the API, but tests/tooling may still want read access) but must NEVER write
 -- these tables directly.
-CREATE TABLE analytics_runs (
+CREATE TABLE research_pipeline_runs (
   id           bigserial PRIMARY KEY,
   -- Soft reference to jobs(id) — deliberately NOT a foreign key, mirroring the
   -- existing job_runs.job_id convention (migration 0003_task_queue.sql), so
@@ -35,14 +44,14 @@ CREATE TABLE analytics_runs (
   summary      jsonb NOT NULL DEFAULT '{}'::jsonb, -- small result summary (composite/regime/rows count etc.) — never a full series
   created_at   timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX analytics_runs_job_idx ON analytics_runs (job_id);
-CREATE INDEX analytics_runs_kind_asof_idx ON analytics_runs (kind, asof DESC);
-CREATE INDEX analytics_runs_created_idx ON analytics_runs (created_at DESC);
-CREATE INDEX analytics_runs_status_idx ON analytics_runs (status);
+CREATE INDEX research_pipeline_runs_job_idx ON research_pipeline_runs (job_id);
+CREATE INDEX research_pipeline_runs_kind_asof_idx ON research_pipeline_runs (kind, asof DESC);
+CREATE INDEX research_pipeline_runs_created_idx ON research_pipeline_runs (created_at DESC);
+CREATE INDEX research_pipeline_runs_status_idx ON research_pipeline_runs (status);
 
-CREATE TABLE analytics_run_stages (
+CREATE TABLE research_pipeline_stages (
   id           bigserial PRIMARY KEY,
-  run_id       bigint NOT NULL REFERENCES analytics_runs(id) ON DELETE CASCADE,
+  run_id       bigint NOT NULL REFERENCES research_pipeline_runs(id) ON DELETE CASCADE,
   stage        text NOT NULL CHECK (stage IN ('access', 'extract', 'transform', 'analyze', 'store', 'report')),
   sequence     int NOT NULL,
   status       text NOT NULL CHECK (status IN ('ok', 'warn', 'error')),
@@ -51,32 +60,32 @@ CREATE TABLE analytics_run_stages (
   finished_at  timestamptz NOT NULL,
   UNIQUE (run_id, sequence)
 );
-CREATE INDEX analytics_run_stages_run_idx ON analytics_run_stages (run_id);
+CREATE INDEX research_pipeline_stages_run_idx ON research_pipeline_stages (run_id);
 
-CREATE TABLE analytics_run_warnings (
+CREATE TABLE research_pipeline_warnings (
   id         bigserial PRIMARY KEY,
-  run_id     bigint NOT NULL REFERENCES analytics_runs(id) ON DELETE CASCADE,
+  run_id     bigint NOT NULL REFERENCES research_pipeline_runs(id) ON DELETE CASCADE,
   stage      text NOT NULL,
   message    text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX analytics_run_warnings_run_idx ON analytics_run_warnings (run_id);
+CREATE INDEX research_pipeline_warnings_run_idx ON research_pipeline_warnings (run_id);
 
 -- Bounded artifact previews ONLY — the persistence boundary (api/routes) caps
 -- payload size and this table stores a truncated preview, never a complete
 -- time series (issue #151 explicit out-of-scope guard).
-CREATE TABLE analytics_run_artifacts (
+CREATE TABLE research_pipeline_artifacts (
   id         bigserial PRIMARY KEY,
-  run_id     bigint NOT NULL REFERENCES analytics_runs(id) ON DELETE CASCADE,
+  run_id     bigint NOT NULL REFERENCES research_pipeline_runs(id) ON DELETE CASCADE,
   stage      text NOT NULL,
   kind       text NOT NULL,
   checksum   text,
   preview    jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX analytics_run_artifacts_run_idx ON analytics_run_artifacts (run_id);
+CREATE INDEX research_pipeline_artifacts_run_idx ON research_pipeline_artifacts (run_id);
 
 -- Worker-role boundary (mirrors migration 0016_worker_role.sql / 0009_analytics_v2):
 -- the worker submits telemetry through the authenticated HTTP boundary, never
 -- direct SQL, so its database role must not be able to mutate these tables.
-REVOKE INSERT, UPDATE, DELETE ON analytics_runs, analytics_run_stages, analytics_run_warnings, analytics_run_artifacts FROM rm_worker;
+REVOKE INSERT, UPDATE, DELETE ON research_pipeline_runs, research_pipeline_stages, research_pipeline_warnings, research_pipeline_artifacts FROM rm_worker;

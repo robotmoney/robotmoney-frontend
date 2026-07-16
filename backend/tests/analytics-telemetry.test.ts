@@ -31,10 +31,10 @@ const telemetryOf = (results: Record<string, unknown>): TelemetryOutcome => (res
 async function loadRun(runId: number) {
   const [run] = await sql`
     SELECT id, job_id, kind, asof::text AS asof, source, status, started_at, finished_at, checksum, summary, created_at
-      FROM analytics_runs WHERE id = ${runId}`;
-  const stages = await sql`SELECT * FROM analytics_run_stages WHERE run_id = ${runId} ORDER BY sequence`;
-  const warnings = await sql`SELECT * FROM analytics_run_warnings WHERE run_id = ${runId}`;
-  const artifacts = await sql`SELECT * FROM analytics_run_artifacts WHERE run_id = ${runId}`;
+      FROM research_pipeline_runs WHERE id = ${runId}`;
+  const stages = await sql`SELECT * FROM research_pipeline_stages WHERE run_id = ${runId} ORDER BY sequence`;
+  const warnings = await sql`SELECT * FROM research_pipeline_warnings WHERE run_id = ${runId}`;
+  const artifacts = await sql`SELECT * FROM research_pipeline_artifacts WHERE run_id = ${runId}`;
   return { run, stages, warnings, artifacts };
 }
 
@@ -136,7 +136,7 @@ test(
   "AC3: an injected telemetry write failure leaves canonical analytics rows unchanged, returns the normal analytics result, and exposes the failure on the result",
   async () => {
     await sql`DELETE FROM regime_snapshots WHERE date = ${ASOF}`;
-    const [{ n: runsBefore }] = await sql`SELECT COUNT(*)::int AS n FROM analytics_runs`;
+    const [{ n: runsBefore }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
 
     const failingSink: TelemetrySink = {
       async submitRun(_run: TelemetryRunSubmission): Promise<TelemetrySubmitResult> {
@@ -162,7 +162,7 @@ test(
     expect(snap).toBeDefined();
 
     // No telemetry row was written — the failure was in submission, not schema.
-    const [{ n: runsAfter }] = await sql`SELECT COUNT(*)::int AS n FROM analytics_runs`;
+    const [{ n: runsAfter }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
     expect(runsAfter).toBe(runsBefore);
   },
   { timeout: 60_000 },

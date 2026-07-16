@@ -63,7 +63,7 @@ let seededRunId: number;
 let seededJobId: number;
 
 afterAll(async () => {
-  await sql`DELETE FROM analytics_runs WHERE kind = ${KIND}`;
+  await sql`DELETE FROM research_pipeline_runs WHERE kind = ${KIND}`;
   await sql`DELETE FROM jobs WHERE kind LIKE ${"art_test_%"}`;
 });
 

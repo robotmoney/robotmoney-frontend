@@ -182,8 +182,8 @@ export async function handleAdmin(
     const rows = await sql`
       SELECT r.id, r.job_id, r.kind, r.asof::text AS asof, r.source, r.status,
              r.started_at, r.finished_at, r.checksum, r.created_at,
-             (SELECT count(*)::int FROM analytics_run_warnings w WHERE w.run_id = r.id) AS warning_count
-        FROM analytics_runs r
+             (SELECT count(*)::int FROM research_pipeline_warnings w WHERE w.run_id = r.id) AS warning_count
+        FROM research_pipeline_runs r
         ${where}
        ORDER BY r.created_at DESC
        LIMIT ${limit}`;
@@ -201,15 +201,15 @@ export async function handleAdmin(
     const id = Number(idStr);
     const [run] = await sql`
       SELECT id, job_id, kind, asof::text AS asof, source, status, started_at, finished_at, checksum, summary, created_at
-        FROM analytics_runs WHERE id = ${id}`;
+        FROM research_pipeline_runs WHERE id = ${id}`;
     if (!run) return { status: 404, body: { error: "run not found" } };
     const stages = await sql`
       SELECT stage, sequence, status, summary, started_at, finished_at
-        FROM analytics_run_stages WHERE run_id = ${id} ORDER BY sequence ASC`;
+        FROM research_pipeline_stages WHERE run_id = ${id} ORDER BY sequence ASC`;
     const warnings = await sql`
-      SELECT stage, message, created_at FROM analytics_run_warnings WHERE run_id = ${id} ORDER BY created_at ASC`;
+      SELECT stage, message, created_at FROM research_pipeline_warnings WHERE run_id = ${id} ORDER BY created_at ASC`;
     const artifacts = await sql`
-      SELECT stage, kind, checksum, preview, created_at FROM analytics_run_artifacts WHERE run_id = ${id} ORDER BY created_at ASC`;
+      SELECT stage, kind, checksum, preview, created_at FROM research_pipeline_artifacts WHERE run_id = ${id} ORDER BY created_at ASC`;
     return {
       status: 200,
       body: { run: { ...run, freshness: runFreshness(run.asof) }, stages, warnings, artifacts },
