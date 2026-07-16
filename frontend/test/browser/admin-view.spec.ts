@@ -153,6 +153,10 @@ function mockAdminApi(page: Page, overrides: { overview?: unknown; jobRetryStatu
     if (method === "GET" && /^\/api\/admin\/research\/runs\/[^/]+$/.test(p)) {
       return route.fulfill(jsonReply(RESEARCH_RUN_DETAIL));
     }
+    // Audit (issue #155) is exercised by admin-surface.spec.ts's dedicated
+    // tests; mocked here too so a stray loadAudit() (e.g. via goSection)
+    // never 403s and logs this suite's dashboard back out mid-test.
+    if (method === "GET" && p === "/api/admin/audit") return route.fulfill(jsonReply({ items: [], nextCursor: null }));
     return route.fulfill(jsonReply({ error: `no mock for ${method} ${p}` }, 404));
   });
 
