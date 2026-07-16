@@ -47,6 +47,26 @@ export const ROUTES: {
       aggregate: string;
       publish: string;
       enqueueJob: string;
+      subjects: string;
+      subjectUpdate: string;
+      subjectDeactivate: string;
+      members: string;
+      applications: string;
+      memberReview: string;
+      memberDeactivate: string;
+      memberReactivate: string;
+      memberRotateKey: string;
+      sessionCreate: string;
+      sessionRoster: string;
+      rosterAdd: string;
+      rosterExcuse: string;
+      rosterRestore: string;
+      sessionCancel: string;
+      sessionClose: string;
+      sessionReopen: string;
+      sessionAggregate: string;
+      sessionPublish: string;
+      audit: string;
     };
   };
   analytics: {
