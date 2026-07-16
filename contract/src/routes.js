@@ -129,10 +129,12 @@ export const ROUTES = {
     // docs/plan-admin-surface.md US-A2. Route shape fixed here so the #157
     // frontend and the #155 backend converge on the same path on rebase.
     overview: "/api/admin/overview",
-    jobs: "/api/admin/jobs", // GET ?limit=&kind=&status=&scope_type=&scope_id=&from=&to= — task-queue jobs + schedules + status summary
+    jobs: "/api/admin/jobs", // GET ?limit=&cursor=&kind=&status=&scopeType=&scopeId=&createdFrom=&createdTo= — task-queue jobs + schedules + status summary
     job: "/api/admin/jobs/:id", // GET — one job + its recent runs (the logs)
     jobRetry: "/api/admin/jobs/:id/retry", // POST — clone a dead job into a new pending job (US-Q1)
-    runs: "/api/admin/runs", // GET ?kind=&status=&limit= — recent job_runs feed (the logs)
+    runs: "/api/admin/runs", // GET ?kind=&status=&limit=&cursor= — recent job_runs feed (the logs)
+    schedule: "/api/admin/schedules/:id", // PATCH — toggle enabled on an analytics job_schedules row (issue #155)
+    audit: "/api/admin/audit", // GET ?actor=&action=&targetType=&targetId=&from=&to=&limit=&cursor= — redacted, filtered audit_log feed (issue #155)
     // Research pipeline telemetry admin surface (issue #151, consumed by the
     // #157 operator UI per docs/plan-admin-surface.md US-R1..US-R4).
     // X-Admin-Token. Shape fixed by the #151 backend; frontend converges here.

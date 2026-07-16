@@ -105,7 +105,15 @@ const FAST_DEMO_SCHEDULES: SeedSchedule[] = [
   { kind: "research.refresh", cron: "1-59/2 * * * *", payload: {}, timezone: "UTC", enabled: false },
 ];
 
-export async function seed(): Promise<void> {
+// Seeds the canonical job_schedules rows (+ retires the combined analytics.run
+// kind) WITHOUT the heavier wallet-history/allocation-framework/demo-project
+// seeding below. Extracted so any test that TRUNCATEs the shared job_schedules
+// table (worker-lanes/worker-lease/queue/analytics-job-isolation/
+// worker-shutdown — see their `afterAll`) can cheaply restore the production
+// baseline for later test files sharing the same ephemeral Postgres, instead
+// of every truncating file needing to know the full seed() cost (e.g. the
+// wallet_balance_samples backfill loop).
+export async function seedJobSchedules(): Promise<void> {
   const schedules = process.env.DEMO_FAST_SCHEDULES
     ? [...SCHEDULES, ...FAST_DEMO_SCHEDULES]
     : SCHEDULES;
@@ -134,6 +142,10 @@ export async function seed(): Promise<void> {
            updated_at = now()
      WHERE kind = 'analytics.run' AND status IN ('pending', 'running')
   `;
+}
+
+export async function seed(): Promise<void> {
+  await seedJobSchedules();
 
   // Cold start (issue #118): enqueue ONE immediate wallet.sample_balances job so
   // the endpoint has a fresh scheduled sample within seconds of boot instead of

@@ -79,9 +79,13 @@ export const ROUTES: {
   };
   admin: {
     auth: string;
+    overview: string;
     jobs: string;
     job: string;
+    jobRetry: string;
     runs: string;
+    schedule: string;
+    audit: string;
     researchRuns: string;
     researchRun: string;
     researchRawSeries: string;

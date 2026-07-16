@@ -16,6 +16,7 @@ import { handlers } from "../src/worker/handlers/index.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { LANES, resolveLane, describeLane } from "../src/worker/lanes.ts";
 import { startWorker, type WorkerHandle } from "../src/worker/runtime.ts";
+import { seedJobSchedules } from "../src/db/seed.ts";
 
 // Gate that lets tests block a handler "indefinitely" and release it later.
 function gate() {
@@ -39,6 +40,11 @@ beforeAll(() => {
   handlers["regime.classify"] = async (p) => { executed.push(`regime.classify:${p.jobId ?? ""}`); return { ok: true }; };
 });
 afterAll(() => { handlers["regime.classify"] = realRegime; });
+// This file's beforeEach TRUNCATEs job_schedules for isolation; restore the
+// production seed rows once the file's own tests are done so later test files
+// sharing this ephemeral Postgres (e.g. tests/api/admin-surface.test.ts, which
+// asserts regime.classify is seeded enabled=true) don't see an empty table.
+afterAll(async () => { await seedJobSchedules(); });
 
 beforeEach(async () => {
   executed.length = 0;
