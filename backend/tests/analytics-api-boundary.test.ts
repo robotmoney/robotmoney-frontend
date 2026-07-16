@@ -124,7 +124,7 @@ test(
       process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
       process.env.ANALYTICS_TOKEN = TOKEN;
 
-      await sql`TRUNCATE jobs, job_runs RESTART IDENTITY`;
+      await sql`TRUNCATE jobs, job_runs RESTART IDENTITY CASCADE`;
       await sql`DELETE FROM regime_snapshots`;
       await sql`DELETE FROM research_signals`;
       const asof = new Date().toISOString().slice(0, 10);

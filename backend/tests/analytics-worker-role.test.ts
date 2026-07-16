@@ -120,3 +120,60 @@ test("non-analytics sampler tables stay writable to the worker role (legacy hand
                VALUES ('0xroletest', '1997-01-01T00:00:00Z', 0, 0)`;
   await worker`DELETE FROM vault_share_price_history WHERE vault_address = '0xroletest'`;
 });
+
+// Admin surface telemetry tables (migration 0017, issue #150): the worker
+// must be able to READ them (committee/admin projections) but never mutate
+// them — writes go only through the authenticated analytics-provider
+// endpoints. Full idempotency/backfill coverage lives in
+// admin-surface-migration.test.ts; this pins the permission boundary against
+// the SAME shared, already-migrated database the rest of the suite uses.
+test("analytics telemetry tables (analytics_runs/analytics_stage_runs/analytics_artifacts) DENY insert/update/delete to the worker role, reads still allowed", async () => {
+  const [{ id: runId }] = await sql`
+    INSERT INTO analytics_runs (job_kind, attempt, asof, source_mode, created_by)
+    VALUES ('regime.classify', 1, '1997-01-01', 'hermetic', 'role-test')
+    RETURNING id`;
+  const [{ id: stageId }] = await sql<{ id: number }[]>`
+    INSERT INTO analytics_stage_runs (analytics_run_id, tool_id, stage, sequence)
+    VALUES (${runId}, 'regime', 'access', 1) RETURNING id`;
+  await sql`INSERT INTO analytics_artifacts (analytics_run_id, stage_run_id, tool_id, kind, artifact_key)
+             VALUES (${runId}, ${stageId}, 'regime', 'indicator', 'ROLE_TEST_TELEMETRY')`;
+
+  const denied = async (q: Promise<unknown>) => {
+    try {
+      await q;
+      return null;
+    } catch (e) {
+      return (e as { code?: string }).code ?? "unknown";
+    }
+  };
+
+  expect(await denied(worker`INSERT INTO analytics_runs (job_kind, attempt, asof, source_mode, created_by)
+    VALUES ('x', 1, '1997-01-01', 'hermetic', 'worker')`)).toBe("42501");
+  expect(await denied(worker`UPDATE analytics_runs SET status = 'failed' WHERE id = ${runId}`)).toBe("42501");
+  expect(await denied(worker`DELETE FROM analytics_runs WHERE id = ${runId}`)).toBe("42501");
+
+  expect(await denied(worker`INSERT INTO analytics_stage_runs (analytics_run_id, tool_id, stage, sequence)
+    VALUES (${runId}, 'regime', 'extract', 2)`)).toBe("42501");
+  expect(await denied(worker`UPDATE analytics_stage_runs SET status = 'failed' WHERE id = ${stageId}`)).toBe("42501");
+  expect(await denied(worker`DELETE FROM analytics_stage_runs WHERE id = ${stageId}`)).toBe("42501");
+
+  expect(await denied(worker`INSERT INTO analytics_artifacts (analytics_run_id, tool_id, kind, artifact_key)
+    VALUES (${runId}, 'regime', 'indicator', 'ROLE_TEST_TELEMETRY_2')`)).toBe("42501");
+  expect(await denied(worker`UPDATE analytics_artifacts SET checksum = 'x' WHERE artifact_key = 'ROLE_TEST_TELEMETRY'`)).toBe("42501");
+  expect(await denied(worker`DELETE FROM analytics_artifacts WHERE artifact_key = 'ROLE_TEST_TELEMETRY'`)).toBe("42501");
+
+  const [read] = await worker`SELECT id FROM analytics_runs WHERE id = ${runId}`;
+  expect(read.id).toBe(runId);
+
+  // Cleanup with the owner connection (cascades stage runs + artifacts).
+  await sql`DELETE FROM analytics_runs WHERE id = ${runId}`;
+});
+
+test("scoped queue lifecycle (jobs.scope_type/scope_id) still works under the restricted role after migration 0017", async () => {
+  const [{ id }] = await worker`
+    INSERT INTO jobs (kind, payload, scope_type, scope_id) VALUES ('scoped-noop', '{}', 'committee_session', 'role-test-scope')
+    RETURNING id`;
+  await worker`UPDATE jobs SET status = 'cancelled' WHERE id = ${id}`;
+  const [job] = await worker`SELECT status, scope_type, scope_id FROM jobs WHERE id = ${id}`;
+  expect(job).toEqual({ status: "cancelled", scope_type: "committee_session", scope_id: "role-test-scope" });
+});
