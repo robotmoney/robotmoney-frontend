@@ -100,6 +100,36 @@ test("job detail returns the job + its runs including the output/error logs", as
   expect((ok?.output as { note: string }).note).toBe("analytics ok");
 });
 
+// AC3 (issue #151) — a non-fatal telemetry write failure must still be
+// visible in admin status. worker/loop.ts persists whatever the handler
+// returns (including a `telemetry` field folded in by
+// worker/handlers/analytics.ts) verbatim into job_runs.output, and this
+// endpoint returns that output verbatim — proven generically above by the
+// `note` field; this asserts the specific `telemetry` shape survives too.
+test("job detail surfaces a non-fatal telemetry failure recorded in a run's output (AC3: job output + admin status)", async () => {
+  const [job] = await sql`
+    INSERT INTO jobs ${sql({ kind: KIND, status: "succeeded", attempts: 1, last_error: null })}
+    RETURNING id`;
+  const jobId = Number(job.id);
+  await sql`
+    INSERT INTO job_runs ${sql({
+      job_id: jobId, kind: KIND, status: "succeeded", error: null,
+      output: sql.json(jsonValue({
+        asof: "2026-07-15",
+        tools: ["regime"],
+        telemetry: { ok: false, error: "simulated telemetry outage" },
+      })),
+    })}`;
+
+  const res = await call(req("GET", `/api/admin/jobs/${jobId}`, PROD.adminToken), PROD);
+  expect(res?.status).toBe(200);
+  const body = res?.body as { runs: { output: { telemetry: { ok: boolean; error: string } } }[] };
+  const run = body.runs.find((r) => (r.output as any)?.telemetry !== undefined);
+  expect(run).toBeDefined();
+  expect(run!.output.telemetry.ok).toBe(false);
+  expect(run!.output.telemetry.error).toContain("simulated telemetry outage");
+});
+
 test("runs feed filtered by ?kind= returns the inserted runs (the log feed)", async () => {
   await seed();
   const res = await call(req("GET", `/api/admin/runs?kind=${KIND}`, PROD.adminToken), PROD);

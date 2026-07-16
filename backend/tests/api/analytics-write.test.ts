@@ -283,3 +283,89 @@ test("GET raw-history returns the persisted floor to the analytics-provider", as
   const history = (res?.body as { history: Record<string, { date: string; value: number }[]> }).history;
   expect(history[ind]).toEqual([{ date: "2021-05-05", value: 7 }]);
 });
+
+// ── POST /api/analytics/telemetry (issue #151) — same analytics-provider-only
+// boundary as every mutation above, just with its own DTO shape (a run with
+// stages/warnings/artifacts) rather than a natural-key batch.
+function validTelemetryBody(kind = `tel-${rid()}`): unknown {
+  const now = new Date().toISOString();
+  return {
+    run: {
+      kind,
+      asof: "1999-01-04",
+      source: "hermetic",
+      status: "succeeded",
+      startedAt: now,
+      finishedAt: now,
+      checksum: "abc",
+      summary: { composite: 0.5 },
+      stages: [
+        { stage: "access", sequence: 1, status: "ok", summary: "fetched", startedAt: now, finishedAt: now },
+      ],
+      warnings: [],
+      artifacts: [{ stage: "access", kind: "sample", checksum: "def", preview: { a: 1 } }],
+      jobId: null,
+    },
+  };
+}
+
+test("telemetry: 401 with no bearer, 403 with a wrong/admin/member bearer — ZERO row changes; 200 with the valid token", async () => {
+  prodAuth();
+  const memberId = `az_${crypto.randomUUID().slice(0, 8)}`;
+  const memberToken = `tok_member_${crypto.randomUUID().slice(0, 8)}`;
+  await sql`INSERT INTO committee_members (id, status, name) VALUES (${memberId}, 'active', ${memberId})`;
+  await sql`INSERT INTO committee_member_keys (member_id, public_key, token_hash)
+            VALUES (${memberId}, ${"B".repeat(44)}, ${hashKey(memberToken)})`;
+
+  const body = validTelemetryBody();
+  const [{ n: before }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
+  expect((await call(req("POST", A.telemetry, body)))?.status).toBe(401);
+  expect((await call(req("POST", A.telemetry, body, "wrong-token")))?.status).toBe(403);
+  expect((await call(req("POST", A.telemetry, body, ADMIN)))?.status).toBe(403);
+  expect((await call(req("POST", A.telemetry, body, memberToken)))?.status).toBe(403);
+  const [{ n: afterRejections }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
+  expect(afterRejections).toBe(before);
+
+  const res = await call(req("POST", A.telemetry, body, TOKEN));
+  expect(res?.status).toBe(200);
+  const ok = res?.body as { ok: boolean; runId: number };
+  expect(ok.ok).toBe(true);
+  const [run] = await sql`SELECT kind, status FROM research_pipeline_runs WHERE id = ${ok.runId}`;
+  expect(run.kind).toBe((body as any).run.kind);
+  expect(run.status).toBe("succeeded");
+  const stages = await sql`SELECT stage FROM research_pipeline_stages WHERE run_id = ${ok.runId}`;
+  expect(stages.length).toBe(1);
+  const artifacts = await sql`SELECT kind, preview FROM research_pipeline_artifacts WHERE run_id = ${ok.runId}`;
+  expect(artifacts.length).toBe(1);
+  expect(artifacts[0].preview).toEqual({ a: 1 });
+});
+
+test("telemetry: DTO validation rejects malformed run/stage/warning/artifact payloads with zero row changes", async () => {
+  prodAuth();
+  const [{ n: before }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
+  const good = validTelemetryBody();
+  const badBodies: unknown[] = [
+    null,
+    {},
+    { run: {} }, // missing every field
+    { run: { ...(good as any).run, kind: "" } }, // empty kind
+    { run: { ...(good as any).run, asof: "not-a-date" } },
+    { run: { ...(good as any).run, source: "" } },
+    { run: { ...(good as any).run, status: "not-a-status" } },
+    { run: { ...(good as any).run, startedAt: "not-a-timestamp" } },
+    { run: { ...(good as any).run, summary: "not-an-object" } },
+    { run: { ...(good as any).run, stages: [{ stage: "not-a-stage", sequence: 1, status: "ok", summary: "x", startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }] } },
+    { run: { ...(good as any).run, stages: [{ stage: "access", sequence: 1, status: "not-a-status", summary: "x", startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }] } },
+    { run: { ...(good as any).run, stages: [
+      { stage: "access", sequence: 1, status: "ok", summary: "x", startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() },
+      { stage: "extract", sequence: 1, status: "ok", summary: "x", startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() },
+    ] } }, // duplicate sequence
+    { run: { ...(good as any).run, warnings: [{ stage: "access", message: "" }] } }, // empty message
+    { run: { ...(good as any).run, artifacts: [{ stage: "access", kind: "x", checksum: null, preview: "x".repeat(30_000) }] } }, // oversized preview
+  ];
+  for (const body of badBodies) {
+    expect((await call(req("POST", A.telemetry, body, TOKEN)))?.status).toBe(400);
+  }
+  const [{ n: after }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
+  expect(after).toBe(before);
+});

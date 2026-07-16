@@ -55,11 +55,17 @@ export const ROUTES: {
     regimeSnapshots: string;
     researchSignals: string;
     researchEligibility: string;
+    telemetry: string;
   };
   admin: {
     auth: string;
     jobs: string;
     job: string;
     runs: string;
+    researchRuns: string;
+    researchRun: string;
+    researchRawSeries: string;
+    researchSignal: string;
+    researchRerun: string;
   };
 };
