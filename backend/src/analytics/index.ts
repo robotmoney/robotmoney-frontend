@@ -35,7 +35,13 @@ import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 import { liveDataSource, type AnalyticsDataSource, type Logger } from "./access/data-source.ts";
 import { hermeticDataSource } from "./access/hermetic-source.ts";
 import { DEFAULT_EDGAR_REFRESH_DEADLINE_MS } from "./edgar-incremental-refresh.ts";
-import { TelemetryCollector, submitTelemetrySafely, type TelemetrySink, type TelemetryRunStatus } from "./telemetry.ts";
+import {
+  TelemetryCollector,
+  submitTelemetrySafely,
+  boundedPreview,
+  type TelemetrySink,
+  type TelemetryRunStatus,
+} from "./telemetry.ts";
 import { telemetryHttpSink } from "./telemetry-client.ts";
 
 const BACKFILL_START = "2018-01-01"; // crypto on-chain coverage starts ~2018 cleanly
@@ -71,6 +77,26 @@ export function resolveAnalyticsSource(): AnalyticsDataSource {
 
 const nn = (v: number | undefined): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
+
+// Issue #180: research-signal payloads (channel-divergence/late-cycle-signals)
+// carry a full multi-year daily series (research-signals.ts::seriesOf), unlike
+// results.regime above which is already small scalars. Migration 0018 documents
+// research_pipeline_runs.summary as "small result summary ... never a full
+// series" — the same bound the artifact previews already get via
+// boundedPreview() (telemetry.ts). Apply that same truncation to ONLY the
+// research-signal entries of the telemetry summary, leaving regime (and any
+// other) entries untouched so regime telemetry behavior is unperturbed.
+const RESEARCH_SIGNAL_TELEMETRY_KEYS = ["channel-divergence", "late-cycle-signals"] as const;
+function boundedTelemetrySummary(raw: Record<string, unknown>): Record<string, unknown> {
+  let out = raw;
+  for (const key of RESEARCH_SIGNAL_TELEMETRY_KEYS) {
+    if (key in raw) {
+      if (out === raw) out = { ...raw };
+      out[key] = boundedPreview(raw[key]);
+    }
+  }
+  return out;
+}
 
 // Run the analytics suite (or one tool) for `asof`, persisting each output.
 // `source` defaults to the real live fetchers; tests inject a fixture source.
@@ -335,7 +361,7 @@ export async function runAnalytics(
     asof,
     source: sourceLabel,
     status: overallStatus,
-    summary: runFailed ? { error: (runFailed as any)?.message ?? String(runFailed) } : results,
+    summary: runFailed ? { error: (runFailed as any)?.message ?? String(runFailed) } : boundedTelemetrySummary(results),
     jobId: jobId ?? null,
   });
   const telemetryOutcome = await submitTelemetrySafely(telemetry, submission, logger);

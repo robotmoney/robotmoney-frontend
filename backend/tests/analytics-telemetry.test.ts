@@ -85,6 +85,74 @@ test(
       expect(typeof w.message).toBe("string");
       expect(w.message.length).toBeGreaterThan(0);
     }
+
+    // Issue #180 (non-perturbation guard): regime's telemetry summary is
+    // already small scalars — the research-signal bounding fix must leave it
+    // untouched (never wrapped in a {truncated:true,...} preview shell).
+    expect((run.summary as any).regime).toBeDefined();
+    expect((run.summary as any).regime.rows).toBeGreaterThan(0);
+    expect((run.summary as any).regime.truncated).toBeUndefined();
+  },
+  { timeout: 60_000 },
+);
+
+test(
+  "issue #180: research_pipeline_runs.summary for a research-signal run is bounded, never the full multi-year daily series",
+  async () => {
+    // channel-divergence's canonical payload embeds several full 2018..asof
+    // daily series (research-signals.ts::seriesOf: btc_price, qqq_price,
+    // indicators.*) — thousands of {date,value} points, comfortably over
+    // telemetry.ts's MAX_PREVIEW_BYTES (4000). Without the fix this lands
+    // verbatim in research_pipeline_runs.summary, contradicting migration
+    // 0018's "never a full series" contract.
+    const results = await runAnalytics(
+      ASOF,
+      "channel-divergence",
+      hermeticDataSource,
+      directAnalyticsPersistence,
+      directTelemetrySink,
+    );
+    const outcome = telemetryOf(results);
+    expect(outcome.ok).toBe(true);
+
+    // Sanity: the canonical (non-telemetry) tool output for THIS run really
+    // does carry the full multi-year daily series — otherwise a bounded
+    // summary would prove nothing.
+    const canonical = (results["channel-divergence"] as any).btc_price;
+    expect(Array.isArray(canonical)).toBe(true);
+    expect(canonical.length).toBeGreaterThan(1000);
+
+    const { run } = await loadRun(outcome.runId!);
+    const persistedSignal = (run.summary as any)["channel-divergence"];
+    expect(persistedSignal).toBeDefined();
+    // Bounded the same way artifact previews are (boundedPreview(): a
+    // {truncated:true,...} shell), never the raw multi-thousand-point series.
+    expect(persistedSignal.truncated).toBe(true);
+    expect(persistedSignal.btc_price).toBeUndefined();
+    expect(JSON.stringify(run.summary).length).toBeLessThan(20_000);
+  },
+  { timeout: 60_000 },
+);
+
+test(
+  "issue #180: research_pipeline_runs.summary for a late-cycle-signals run is also bounded",
+  async () => {
+    const results = await runAnalytics(
+      ASOF,
+      "late-cycle-signals",
+      hermeticDataSource,
+      directAnalyticsPersistence,
+      directTelemetrySink,
+    );
+    const outcome = telemetryOf(results);
+    expect(outcome.ok).toBe(true);
+
+    const { run } = await loadRun(outcome.runId!);
+    const persistedSignal = (run.summary as any)["late-cycle-signals"];
+    expect(persistedSignal).toBeDefined();
+    expect(persistedSignal.truncated).toBe(true);
+    expect(persistedSignal.spy_price).toBeUndefined();
+    expect(JSON.stringify(run.summary).length).toBeLessThan(20_000);
   },
   { timeout: 60_000 },
 );
