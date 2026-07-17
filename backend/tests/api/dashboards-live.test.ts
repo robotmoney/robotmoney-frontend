@@ -23,6 +23,7 @@ import {
   type WalletSleeveReaders,
 } from "../../src/chain/wallet-sleeves.ts";
 import { _resetAllocationFrameworkCacheForTests, ALLOCATION_FRAMEWORK_SEED } from "../../src/chain/allocation-framework.ts";
+import { _resetTokenPriceCacheForTests } from "../../src/chain/token-prices.ts";
 
 const realFetch = globalThis.fetch;
 const word = (n: bigint): string => "0x" + n.toString(16).padStart(64, "0");
@@ -34,6 +35,18 @@ function resetCaches() {
   _resetTokenMetricsCacheForTests();
   _resetWalletSleevesCacheForTests();
   _resetAllocationFrameworkCacheForTests();
+  // The GeckoTerminal price cache in chain/token-prices.ts is a MODULE-LEVEL,
+  // process-wide cache (30s TTL) keyed by token address — it survives across
+  // test FILES, not just tests, because bun:test runs every file in one
+  // process. Several tests in this file and tests/api/wallet-balances.test.ts
+  // deliberately leave BNKR_ADDRESS unset to exercise the REAL default token
+  // address (issue #148's regression guard); without this reset, a price
+  // successfully cached for that real address by an earlier test/file (e.g.
+  // wallet-balances.test.ts's #148 test, which runs immediately before this
+  // file) silently answers a LATER test's `mockChain({ failPrice: true })`
+  // straight from cache — bypassing the forced-failure mock entirely and
+  // masking the exact degrade path issue #173 added tests for.
+  _resetTokenPriceCacheForTests();
 }
 
 beforeEach(resetCaches);
