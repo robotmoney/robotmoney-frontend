@@ -1,17 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
-
-// Same vendor-script interception as spa.spec.ts: serve Alpine (+ chart/p5) from
-// node_modules so the SPA boots without reaching a CDN. The admin view only needs
-// Alpine, but we mock all three to match the shared boot.
-const vendorScripts = {
-  "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
-    "node_modules/alpinejs/dist/cdn.min.js",
-  "https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js":
-    "node_modules/chart.js/dist/chart.umd.min.js",
-  "https://cdn.jsdelivr.net/npm/p5@1.11.2/lib/p5.min.js":
-    "node_modules/p5/lib/p5.min.js",
-};
+import { mockVendorScripts } from "./vendor-scripts.ts";
 
 const ADMIN_PASSWORD = "demo-password";
 
@@ -34,17 +23,18 @@ const OVERVIEW_FIXTURE = {
 
 const EMPTY_OVERVIEW = { queueCounts: {}, alerts: [], nextSchedules: [] };
 
-// Standalone vendor-script mock, reused directly by the committee/audit surface
-// helpers below (issue #159) — mockAdminApi (issue #157) inlines the same loop
-// for its own single page.route("**/api/admin/**") catch-all matcher.
-async function mockVendorScripts(page: Page): Promise<void> {
-  for (const [url, file] of Object.entries(vendorScripts)) {
-    await page.route(url, (route) => route.fulfill({
-      path: join(process.cwd(), file),
-      contentType: "application/javascript",
-    }));
-  }
-}
+// vendorScripts CDN interception is shared with admin-live.spec.ts (issue
+// #185) via ./vendor-scripts.ts — mockAdminApi (issue #157) below re-lists
+// the same URL→file pairs inline for its own single
+// page.route("**/api/admin/**") catch-all matcher.
+const vendorScripts = {
+  "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
+    "node_modules/alpinejs/dist/cdn.min.js",
+  "https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js":
+    "node_modules/chart.js/dist/chart.umd.min.js",
+  "https://cdn.jsdelivr.net/npm/p5@1.11.2/lib/p5.min.js":
+    "node_modules/p5/lib/p5.min.js",
+};
 
 // ── Queue dashboard fixtures (unchanged surface — /admin) ───────────────────
 
