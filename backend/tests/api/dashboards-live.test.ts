@@ -23,6 +23,7 @@ import {
   type WalletSleeveReaders,
 } from "../../src/chain/wallet-sleeves.ts";
 import { _resetAllocationFrameworkCacheForTests, ALLOCATION_FRAMEWORK_SEED } from "../../src/chain/allocation-framework.ts";
+import { _resetTokenPriceCacheForTests } from "../../src/chain/token-prices.ts";
 
 const realFetch = globalThis.fetch;
 const word = (n: bigint): string => "0x" + n.toString(16).padStart(64, "0");
@@ -34,6 +35,18 @@ function resetCaches() {
   _resetTokenMetricsCacheForTests();
   _resetWalletSleevesCacheForTests();
   _resetAllocationFrameworkCacheForTests();
+  // The GeckoTerminal price cache in chain/token-prices.ts is a MODULE-LEVEL,
+  // process-wide cache (30s TTL) keyed by token address — it survives across
+  // test FILES, not just tests, because bun:test runs every file in one
+  // process. Several tests in this file and tests/api/wallet-balances.test.ts
+  // deliberately leave BNKR_ADDRESS unset to exercise the REAL default token
+  // address (issue #148's regression guard); without this reset, a price
+  // successfully cached for that real address by an earlier test/file (e.g.
+  // wallet-balances.test.ts's #148 test, which runs immediately before this
+  // file) silently answers a LATER test's `mockChain({ failPrice: true })`
+  // straight from cache — bypassing the forced-failure mock entirely and
+  // masking the exact degrade path issue #173 added tests for.
+  _resetTokenPriceCacheForTests();
 }
 
 beforeEach(resetCaches);
@@ -269,6 +282,63 @@ test("wallet-sleeves: a THROWN batch (forced RPC failure) degrades every holding
     expect(h.provenance).toBe("stale");
   }
   expect(r.stale).toBe(true);
+});
+
+test("wallet-sleeves (#173): a failed live price read falls back to a recent persisted wallet_balance_samples price; the chain amount stays fresh and an over-age/missing sample still degrades honestly", async () => {
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.PRICE_SOURCE = "live";
+  mockChain({ failPrice: true });
+
+  const fresh = new Date(Date.now() - 60_000); // 1 minute old — inside the 5-minute limit
+  const tooOld = new Date(Date.now() - 6 * 60_000); // 6 minutes old — outside the limit
+  // Unconditional (whole-table), not scoped to WETH/ROBOTMONEY: this test's BNKR
+  // assertion below depends on NO persisted sample existing for BNKR, and that
+  // absence must be actively established, not inherited. tests/api/wallet-balances.test.ts
+  // (which bun:test can run immediately before this file, e.g. in CI's discovery
+  // order) writes real wallet_balance_samples rows for BNKR (and other symbols)
+  // in the same shared Postgres and does not always clean up its own last write —
+  // the next file's beforeEach in that file only guards *that* file's tests. A
+  // WHERE-scoped delete here left a fresh cross-file BNKR row in place, which was
+  // then read back as a valid persisted-price fallback instead of the "exhausted,
+  // honest null" path this test exists to cover.
+  await sql`DELETE FROM wallet_balance_samples`;
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES
+      (current_date, 'WETH', 1, 2500, 2500, 'live', ${fresh}),
+      (current_date - 1, 'ROBOTMONEY', 1, 0.00002, 0.00002, 'live', ${tooOld})
+  `;
+  try {
+    const r = await getWalletSleeves();
+    const bankr = r.wallets.find((w) => w.type === "primary")!;
+
+    const weth = bankr.holdings.find((h) => h.symbol === "WETH")!;
+    expect(weth.priceUsd).toBe(2500); // recent persisted price used as the fallback
+    expect(weth.provenance).toBe("stale"); // never relabelled 'live'
+    expect(weth.amount).not.toBeNull(); // the AMOUNT is still the fresh chain read
+    expect(weth.valueUsd).toBeCloseTo(weth.amount! * 2500, 6);
+
+    const robotmoney = bankr.holdings.find((h) => h.symbol === "ROBOTMONEY")!;
+    // The only persisted ROBOTMONEY sample is 6 minutes old — over the 5-minute
+    // limit — so it is NOT eligible; the holding degrades honestly to null,
+    // exactly like a symbol with no persisted sample at all.
+    expect(robotmoney.priceUsd).toBeNull();
+    expect(robotmoney.valueUsd).toBeNull();
+    expect(robotmoney.provenance).toBe("stale");
+
+    const bnkr = bankr.holdings.find((h) => h.symbol === "BNKR")!;
+    // No persisted sample at all for BNKR → exhausted fallback, honest null/stale.
+    expect(bnkr.priceUsd).toBeNull();
+    expect(bnkr.valueUsd).toBeNull();
+    expect(bnkr.provenance).toBe("stale");
+
+    expect(bankr.stale).toBe(true);
+    expect(r.stale).toBe(true);
+  } finally {
+    // Whole-table, matching the setup delete above — leave the table clean for
+    // whichever test/file runs next (see comment above on cross-file pollution).
+    await sql`DELETE FROM wallet_balance_samples`;
+  }
 });
 
 test("wallet-sleeves seam: amount and price readers inject independently and persisted-price provenance reaches the unchanged DTO", async () => {

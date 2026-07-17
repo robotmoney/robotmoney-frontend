@@ -31,7 +31,7 @@ import {
   type TrackedAsset,
 } from "../config.ts";
 import {
-  providerWalletPriceReader,
+  persistedFallbackWalletPriceReader,
   readChainAmountsBatched,
   valueLeg,
   type ChainAmount,
@@ -68,12 +68,14 @@ export interface WalletSleeves {
   stale: boolean; // true when ANY sleeve has a degraded holding, so a naive sum of totalUsd is partial
 }
 
-// Stub-only dependency seam for scout #175. Production callers omit this and
-// retain the existing Multicall3 + provider-price behavior. Tests and #173 can
-// supply amount and price readers independently; a future persisted quote is
-// explicitly discriminated by WalletPriceReader and must carry stale/seed
-// provenance rather than being relabelled live. See docs/architecture.md §10.1
-// and docs/contract-live-data.md §3.
+// Dependency seam established by scout #175, activated by #173: production
+// serves persistedFallbackWalletPriceReader below, which tries the live
+// provider first and falls back to a recent wallet_balance_samples price
+// (≤5 minutes old) only when the provider read fails — the chain amount is
+// always fresh. Tests can still supply amount and price readers independently;
+// a persisted quote is explicitly discriminated by WalletPriceReader and must
+// carry stale/seed provenance rather than being relabelled live. See
+// docs/architecture.md §10.1 and docs/contract-live-data.md §3.
 export interface WalletSleeveReaders {
   readChainAmounts(reads: KeyedAssetRead[], logLabel: string): Promise<Map<string, ChainAmount>>;
   priceReader: WalletPriceReader;
@@ -81,7 +83,7 @@ export interface WalletSleeveReaders {
 
 const defaultWalletSleeveReaders: WalletSleeveReaders = {
   readChainAmounts: readChainAmountsBatched,
-  priceReader: providerWalletPriceReader,
+  priceReader: persistedFallbackWalletPriceReader,
 };
 
 // Which tracked-asset symbols each prop wallet (by resolvePropWallets index)

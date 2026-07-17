@@ -31,6 +31,7 @@ import {
   type PriceSource,
   type TrackedAsset,
 } from "../config.ts";
+import { sql } from "../db/client.ts";
 import {
   decodeUint256,
   encodeBalanceOfCall,
@@ -84,6 +85,51 @@ export const providerWalletPriceReader: WalletPriceReader = {
       priceUsd: await fetchAssetPriceUsd(asset, priceSource),
       provenance: source === "stub" || priceSource === "stub" ? "stub" : "live",
     };
+  },
+};
+
+// Max age (#173, resolved by scout #175's open-question note above) for a
+// `wallet_balance_samples` row to still be eligible as a fallback price when
+// the live provider read fails (e.g. GeckoTerminal's keyless quota is
+// exhausted). `wallet.sample_balances` writes this table on a 1-minute cron —
+// 5 minutes is a ~3-5x-cadence staleness bound, generous enough to absorb one
+// missed tick, recent enough that the fallback quote never reads as live.
+export const MAX_PERSISTED_PRICE_AGE_MS = 5 * 60_000;
+
+async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number; sampledAt: string } | null> {
+  const rows = await sql<{ price_usd: string | null; sampled_at: Date }[]>`
+    SELECT price_usd, sampled_at
+      FROM wallet_balance_samples
+     WHERE symbol = ${symbol}
+       AND price_usd IS NOT NULL
+       AND sampled_at <= now()
+     ORDER BY sampled_at DESC
+     LIMIT 1
+  `;
+  const row = rows[0];
+  if (!row || row.price_usd == null) return null;
+  const sampledAtMs = row.sampled_at.getTime();
+  if (Date.now() - sampledAtMs > MAX_PERSISTED_PRICE_AGE_MS) return null; // too old — not eligible
+  return { priceUsd: Number(row.price_usd), sampledAt: row.sampled_at.toISOString() };
+}
+
+// Falls back to a recent persisted PER-SYMBOL price (wallet_balance_samples,
+// ≤MAX_PERSISTED_PRICE_AGE_MS old) when the live provider price read fails —
+// e.g. GeckoTerminal's keyless quota is exhausted (#173). The chain AMOUNT is
+// always the caller's fresh on-chain read; only the price falls back, and it
+// is never relabelled 'live' — provenance is honestly 'stale' with the
+// sample's real sampledAt preserved. A missing or over-age sample rethrows the
+// original provider error so the caller degrades exactly as before (never a
+// fabricated price, never a silently-exhausted fallback masquerading as data).
+export const persistedFallbackWalletPriceReader: WalletPriceReader = {
+  async read(asset, source, priceSource) {
+    try {
+      return await providerWalletPriceReader.read(asset, source, priceSource);
+    } catch (err) {
+      const persisted = await recentPersistedPrice(asset.symbol).catch(() => null);
+      if (!persisted) throw err;
+      return { kind: "persisted", priceUsd: persisted.priceUsd, provenance: "stale", sampledAt: persisted.sampledAt };
+    }
   },
 };
 

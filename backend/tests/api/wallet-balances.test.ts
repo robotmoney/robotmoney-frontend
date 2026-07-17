@@ -30,6 +30,7 @@ import {
 import { getWalletBalances } from "../../src/api/routes/dashboards.ts";
 import { sampleWalletBalances } from "../../src/worker/handlers/wallet.ts";
 import { backfillWalletHistory } from "../../src/db/seed.ts";
+import { _resetTokenPriceCacheForTests } from "../../src/chain/token-prices.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -73,11 +74,21 @@ beforeEach(async () => {
   await sql`DELETE FROM wallet_balance_samples`;
   _resetWalletBalancesCacheForTests();
   _resetRpcConcurrencyForTests();
+  // The GeckoTerminal price cache (chain/token-prices.ts) is a MODULE-LEVEL,
+  // process-wide cache (30s TTL) keyed by token address, so it survives across
+  // test FILES within the same `bun test` run, not just across tests here. The
+  // #148 test below deliberately leaves BNKR_ADDRESS unset to exercise the REAL
+  // default token address; without this reset, a price cached here for that
+  // real address can silently answer a price read in a LATER test/file (e.g.
+  // tests/api/dashboards-live.test.ts's #173 forced-failure case) straight from
+  // cache, bypassing that test's mock entirely.
+  _resetTokenPriceCacheForTests();
 });
 afterEach(() => {
   globalThis.fetch = realFetch;
   _resetWalletBalancesCacheForTests();
   _resetRpcConcurrencyForTests();
+  _resetTokenPriceCacheForTests();
   for (const k of ENV_KEYS) delete process.env[k];
 });
 

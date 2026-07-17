@@ -388,7 +388,14 @@ export const config = {
   vault: {
     // RobotMoneyVault on Base, documented publicly at
     // frontend/public/views/docs/skill/installation.html and skill.html.
-    address: process.env.VAULT_ADDRESS || "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
+    // Normalized lowercase (issue #173): vault_share_price_history.vault_address
+    // is a plain `text` column, so Postgres `=` is case-sensitive. Both the
+    // hourly sampler's INSERT (worker/handlers/vault.ts) and every persisted
+    // fallback read (chain/vault-economics.ts) key off this value, so
+    // normalizing it once here — matching resolveRobotmoneyToken/resolveWeth's
+    // existing `.toLowerCase()` precedent — keeps the writer and reader
+    // identity-equal without a citext migration.
+    address: (process.env.VAULT_ADDRESS || "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd").toLowerCase(),
     // USDC on Base, same doc pages.
     usdc: process.env.USDC_ADDRESS || "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     // Load-time snapshot of the adapter set (see resolveVaultAdapters above,

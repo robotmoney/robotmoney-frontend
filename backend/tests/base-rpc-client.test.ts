@@ -37,6 +37,9 @@ function okResult(result: unknown): Response {
 function status(code: number, headers?: Record<string, string>): Response {
   return new Response("rate limited", { status: code, headers });
 }
+function rpcError(code: number, message: string): Response {
+  return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code, message } }), { status: 200 });
+}
 
 beforeEach(() => {
   // Keep retries plentiful but each backoff ~instant so the suite is quick.
@@ -127,6 +130,30 @@ test("BASE_RPC_MAX_RETRIES=0 disables retry: a single 429 throws immediately", a
   expect(calls).toBe(1);
 });
 
+test("Base JSON-RPC -32016 over-rate-limit then success retries and returns the result", async () => {
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return calls === 1 ? rpcError(-32016, "over rate limit") : okResult("0xabc");
+  }) as typeof fetch;
+
+  const out = await rpcRequest<string>("eth_call", [{}, "latest"], OK);
+  expect(out).toBe("0xabc");
+  expect(calls).toBe(2);
+});
+
+test("persistent Base JSON-RPC -32016 exhausts retries and still throws", async () => {
+  process.env.BASE_RPC_MAX_RETRIES = "2";
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return rpcError(-32016, "over rate limit");
+  }) as typeof fetch;
+
+  await expect(rpcRequest<string>("eth_call", [{}, "latest"], OK)).rejects.toThrow(/-32016.*over rate limit/);
+  expect(calls).toBe(3);
+});
+
 test("a non-transient HTTP status (400) throws IMMEDIATELY with no retry", async () => {
   let calls = 0;
   globalThis.fetch = (async () => {
@@ -147,13 +174,11 @@ test("HTTP 500 is treated as non-transient: throws immediately, no retry", async
   expect(calls).toBe(1);
 });
 
-test("a JSON-RPC `error` field throws IMMEDIATELY with no retry", async () => {
+test("a hard JSON-RPC contract error throws IMMEDIATELY with no retry", async () => {
   let calls = 0;
   globalThis.fetch = (async () => {
     calls++;
-    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { message: "execution reverted" } }), {
-      status: 200,
-    });
+    return rpcError(3, "execution reverted");
   }) as typeof fetch;
   await expect(rpcRequest<string>("eth_call", [{}, "latest"], OK)).rejects.toThrow(/execution reverted/);
   expect(calls).toBe(1);

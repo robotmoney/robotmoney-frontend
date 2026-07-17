@@ -87,11 +87,13 @@ export interface VaultSampleReader {
 // of bug: a missing/disabled scheduled job reads as "no data", not an error)
 // rather than adding a second write path.
 
-// Stub-only dependency boundary for scout #175. The default implementations
-// preserve the current all-or-nothing live failure boundary and exact DTO.
-// Issue #173 may later settle core and adapter reads independently and enforce
-// normalized-address/freshness policy in the sample reader. Canonical behavior:
-// docs/architecture.md §10 and docs/contract-live-data.md honesty rules.
+// Dependency boundary established by scout #175, activated by #173: core and
+// adapter reads are settled INDEPENDENTLY in fetchVaultEconomics below, so a
+// failed adapter reader degrades only the adapter legs (core totals stay live)
+// and a failed core reader degrades only the core legs (via the persisted
+// sample, without discarding adapter data the adapter reader still returned).
+// The public DTO shape is unchanged. Canonical behavior: docs/architecture.md
+// §10 and docs/contract-live-data.md honesty rules.
 export interface VaultEconomicsReaders {
   core: VaultCoreReader;
   adapters: VaultAdapterReader;
@@ -109,32 +111,36 @@ const rpcVaultCoreReader: VaultCoreReader = {
   },
 };
 
+// Per-adapter isolation (#173): a reverted/thrown eth_call for ONE adapter
+// must never take down the others (Promise.all would reject as a whole on the
+// first rejection). Promise.allSettled degrades only the failed adapter's slot
+// to null; every other configured adapter's balance is unaffected — a failed
+// adapter call never erases an unrelated adapter's value.
 const rpcVaultAdapterReader: VaultAdapterReader = {
   async read(adapters, opts) {
-    return Promise.all(adapters.map((a) => (a.configured ? callTotalAssets(a.address, opts) : Promise.resolve(null))));
+    const settled = await Promise.allSettled(
+      adapters.map((a) => (a.configured ? callTotalAssets(a.address, opts) : Promise.resolve(null))),
+    );
+    return settled.map((r, i) => {
+      if (r.status === "fulfilled") return r.value;
+      console.error(`vault-economics: adapter ${adapters[i]!.name} read failed, degrading only that adapter:`, r.reason);
+      return null;
+    });
   },
 };
 
-// Resolved open question — vault address normalization (#173's implementation,
-// not changed here): `vault_share_price_history.vault_address` is a plain
-// `text` column (backend/migrations/0012_vault_share_price_history.sql), so
-// Postgres `=` is case-sensitive. Both the writer
-// (backend/src/worker/handlers/vault.ts, `sampleSharePrice`) and this reader
-// store/compare `config.vault.address` verbatim — currently safe only because
-// the compiled-in default is already all-lowercase. An operator-supplied
-// `VAULT_ADDRESS` env var is NOT normalized at load (backend/src/config.ts),
-// unlike `resolveRobotmoneyToken`/`resolveWeth`/adapter address resolvers,
-// which already `.toLowerCase()` (config.ts's own vault/token-address
-// equality check at "the vault leg of `resolveTrackedAssets`" also lowercases
-// the vault side). Rule for #173: normalize with `.toLowerCase()` at both the
-// INSERT in `sampleSharePrice` and every `WHERE vault_address = …` read here,
-// matching the existing config.ts precedent, rather than adding a citext
-// column or migrating historical rows.
+// Vault address normalization (#173): `vault_share_price_history.vault_address`
+// is a plain `text` column (backend/migrations/0012_vault_share_price_history.sql),
+// so Postgres `=` is case-sensitive. `config.vault.address` is normalized
+// lowercase at load (backend/src/config.ts), matching the sampler's INSERT
+// (worker/handlers/vault.ts). The `lower(vault_address) = lower(...)`
+// comparison below additionally recognizes any legacy mixed-case row written
+// before that normalization, rather than requiring a citext migration.
 async function lastPersistedSample(vaultAddress: string): Promise<PersistedVaultSample> {
   const rows = await sql<{ sample_hour: Date; total_assets: string; total_supply: string; share_price: string | null }[]>`
     SELECT sample_hour, total_assets, total_supply, share_price
       FROM vault_share_price_history
-     WHERE vault_address = ${vaultAddress}
+     WHERE lower(vault_address) = lower(${vaultAddress})
      ORDER BY sample_hour DESC
      LIMIT 1
   `;
@@ -168,7 +174,7 @@ export async function computeApy7d(vaultAddress: string): Promise<number | null>
   const rows = await sql<{ sample_hour: Date; share_price: string }[]>`
     SELECT sample_hour, share_price
       FROM vault_share_price_history
-     WHERE vault_address = ${vaultAddress}
+     WHERE lower(vault_address) = lower(${vaultAddress})
        AND share_price IS NOT NULL
        AND sample_hour >= now() - interval '7 days'
      ORDER BY sample_hour ASC
@@ -208,54 +214,78 @@ export async function fetchVaultEconomics(readers: VaultEconomicsReaders = defau
   const source = resolveBaseRpcSource();
   const adapters = resolveVaultAdapters();
 
-  let result: VaultEconomics;
-  try {
-    // Keep the existing all-or-nothing behavior in the scout: either reader
-    // rejecting still enters the aggregate persisted fallback below. #173 owns
-    // changing that policy after the contracts have landed.
-    const [core, adapterBalances] = await Promise.all([
-      readers.core.read(config.vault.address, config.vault.usdc, rpcOpts()),
-      readers.adapters.read(adapters, rpcOpts()),
-    ]);
-    const sharePrice = core.totalSupply === 0n ? null : Number(core.totalAssets) / Number(core.totalSupply);
-    result = {
-      asOf: new Date(now).toISOString(),
-      stale: false,
-      source,
-      tvlUsd: toUsd(core.totalAssets),
-      sharePrice,
-      totalShares: toUsd(core.totalSupply),
-      idleUsdc: toUsd(core.idle),
-      apy7d: await readers.samples.apy7d(config.vault.address),
-      adapters: adapters.map((a, i) => {
-        const balance = adapterBalances[i];
-        return {
-          name: a.name,
-          address: a.address,
-          configured: a.configured,
-          // Unconfigured (placeholder) adapters are never eth_called: null,
-          // not a live-looking $0 (issue #50).
-          balanceUsd: balance == null ? null : toUsd(balance),
-        };
-      }),
-    };
-  } catch (err) {
-    console.error("vault-economics: Base RPC read failed, degrading to last-persisted values:", err);
+  // Core and adapters are read INDEPENDENTLY (#173): a thrown adapter reader
+  // must never erase successful core totals, and a thrown core reader must
+  // never suppress adapter data the adapter reader DID manage to return.
+  // allSettled means neither promise's rejection cancels or masks the other.
+  const [coreSettled, adapterSettled] = await Promise.allSettled([
+    readers.core.read(config.vault.address, config.vault.usdc, rpcOpts()),
+    readers.adapters.read(adapters, rpcOpts()),
+  ]);
+
+  let coreFailed = false;
+  let tvlUsd: number | null;
+  let sharePrice: number | null;
+  let totalShares: number | null;
+  let idleUsdc: number | null;
+  let asOf: string;
+  if (coreSettled.status === "fulfilled") {
+    const core = coreSettled.value;
+    tvlUsd = toUsd(core.totalAssets);
+    sharePrice = core.totalSupply === 0n ? null : Number(core.totalAssets) / Number(core.totalSupply);
+    totalShares = toUsd(core.totalSupply);
+    idleUsdc = toUsd(core.idle);
+    asOf = new Date(now).toISOString();
+  } else {
+    coreFailed = true;
+    console.error("vault-economics: vault core read failed, degrading to last-persisted values:", coreSettled.reason);
     const persisted = await readers.samples.latest(config.vault.address).catch(
       (): PersistedVaultSample => ({ asOf: null, totalAssets: null, totalSupply: null, sharePrice: null }),
     );
-    result = {
-      asOf: persisted.asOf ?? new Date(now).toISOString(),
-      stale: true,
-      source,
-      tvlUsd: persisted.totalAssets,
-      sharePrice: persisted.sharePrice,
-      totalShares: persisted.totalSupply,
-      idleUsdc: null, // no persisted history for idle balance / per-adapter breakdown
-      apy7d: await readers.samples.apy7d(config.vault.address).catch(() => null),
-      adapters: adapters.map((a) => ({ name: a.name, address: a.address, configured: a.configured, balanceUsd: null })),
-    };
+    tvlUsd = persisted.totalAssets;
+    sharePrice = persisted.sharePrice;
+    totalShares = persisted.totalSupply;
+    idleUsdc = null; // no persisted history for idle balance / per-adapter breakdown
+    asOf = persisted.asOf ?? new Date(now).toISOString();
   }
+
+  // adapterBalances[i] === null covers BOTH an unconfigured placeholder (never
+  // eth_called, issue #50) and a configured adapter whose read failed; only the
+  // latter should mark the response stale, so track it separately.
+  let adaptersFailed = false;
+  let adapterBalances: (bigint | null)[];
+  if (adapterSettled.status === "fulfilled") {
+    adapterBalances = adapterSettled.value;
+  } else {
+    adaptersFailed = true;
+    console.error("vault-economics: vault adapter read failed, degrading only the adapter legs:", adapterSettled.reason);
+    adapterBalances = adapters.map(() => null);
+  }
+  const adapterDtos = adapters.map((a, i) => {
+    const balance = adapterBalances[i];
+    return {
+      name: a.name,
+      address: a.address,
+      configured: a.configured,
+      // Unconfigured (placeholder) adapters are never eth_called: null,
+      // not a live-looking $0 (issue #50).
+      balanceUsd: balance == null ? null : toUsd(balance),
+    };
+  });
+  const anyConfiguredAdapterMissing = adapterDtos.some((a) => a.configured && a.balanceUsd == null);
+  const stale = coreFailed || adaptersFailed || anyConfiguredAdapterMissing;
+
+  const result: VaultEconomics = {
+    asOf,
+    stale,
+    source,
+    tvlUsd,
+    sharePrice,
+    totalShares,
+    idleUsdc,
+    apy7d: await readers.samples.apy7d(config.vault.address).catch(() => null),
+    adapters: adapterDtos,
+  };
   if (useProductionCache) cache = { at: now, value: result };
   return result;
 }
