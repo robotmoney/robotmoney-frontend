@@ -291,7 +291,17 @@ test("wallet-sleeves (#173): a failed live price read falls back to a recent per
 
   const fresh = new Date(Date.now() - 60_000); // 1 minute old — inside the 5-minute limit
   const tooOld = new Date(Date.now() - 6 * 60_000); // 6 minutes old — outside the limit
-  await sql`DELETE FROM wallet_balance_samples WHERE symbol IN ('WETH', 'ROBOTMONEY')`;
+  // Unconditional (whole-table), not scoped to WETH/ROBOTMONEY: this test's BNKR
+  // assertion below depends on NO persisted sample existing for BNKR, and that
+  // absence must be actively established, not inherited. tests/api/wallet-balances.test.ts
+  // (which bun:test can run immediately before this file, e.g. in CI's discovery
+  // order) writes real wallet_balance_samples rows for BNKR (and other symbols)
+  // in the same shared Postgres and does not always clean up its own last write —
+  // the next file's beforeEach in that file only guards *that* file's tests. A
+  // WHERE-scoped delete here left a fresh cross-file BNKR row in place, which was
+  // then read back as a valid persisted-price fallback instead of the "exhausted,
+  // honest null" path this test exists to cover.
+  await sql`DELETE FROM wallet_balance_samples`;
   await sql`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES
@@ -325,7 +335,9 @@ test("wallet-sleeves (#173): a failed live price read falls back to a recent per
     expect(bankr.stale).toBe(true);
     expect(r.stale).toBe(true);
   } finally {
-    await sql`DELETE FROM wallet_balance_samples WHERE symbol IN ('WETH', 'ROBOTMONEY')`;
+    // Whole-table, matching the setup delete above — leave the table clean for
+    // whichever test/file runs next (see comment above on cross-file pollution).
+    await sql`DELETE FROM wallet_balance_samples`;
   }
 });
 
