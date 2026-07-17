@@ -144,4 +144,12 @@ export const ROUTES = {
     researchSignal: "/api/admin/research/signals/:key", // GET ?from=&to=&limit= — allowlisted research_signals read
     researchRerun: "/api/admin/research/rerun", // POST — enqueue a complete or single-tool rerun for a given as-of date
   },
+
+  // Committee operations surface (issue #159 UI over issue #152/PR #169's
+  // already-shipped backend; docs/plan-admin-surface.md §6.3 and §7.1). This
+  // is the SAME table `committee.admin.*` above (backend/src/api/routes/
+  // committee-admin.ts) — there is deliberately no second `admin.committee.*`
+  // route table for this feature, so the frontend and backend can never drift
+  // onto two different URL prefixes again (see PR #172 review). Consumers:
+  // frontend/public/assets/js/app/alpine/views/admin/committee-*.js.
 };

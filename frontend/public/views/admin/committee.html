@@ -1,0 +1,286 @@
+<!-- Admin — committee operations overview (/admin/committee)
+     Topics, members, and sessions in one tabbed surface, plus topic create,
+     member manual-add (one-time credential reveal), and session scheduling.
+     Password-gated by the same rm_admin_token as /admin. Buildless: the
+     adminCommitteeOverview() factory (alpine/views/admin/committee-overview.js)
+     is registered at boot; the router injects this fragment via innerHTML so
+     inline scripts here would be dead. Issue #159.
+-->
+<section class="container adm" x-data="adminCommitteeOverview" x-init="init()">
+
+  <header class="adm-head">
+    <span class="rm-eyebrow rm-eyebrow--accent">Operations</span>
+    <h1 class="adm-title">Committee Operations</h1>
+    <p class="adm-lede">
+      Manage topics, members, and session scheduling. Guarded by the
+      <code>ADMIN_TOKEN</code> secret.
+    </p>
+  </header>
+
+  <!-- Login gate -->
+  <div x-show="!authed" class="adm-login" x-cloak>
+    <h2 class="adm-login__title">Sign in</h2>
+    <p x-show="sessionExpired" x-text="'Session expired — sign in again.'" class="rm-error adm-msg"></p>
+    <form @submit.prevent="loginAndLoad(() => loadAll())" class="adm-login__form">
+      <input type="password" x-model="password" class="adm-input" placeholder="Admin password"
+        autocomplete="current-password" aria-label="Admin password" />
+      <button type="submit" class="adm-btn">Sign in</button>
+    </form>
+    <p x-show="loginError" x-text="loginError" class="rm-error adm-msg" x-cloak></p>
+  </div>
+
+  <div x-show="authed" x-cloak>
+
+    <nav class="adm-nav">
+      <!-- /admin is the single shell for Overview/Research/Queue/Audit
+           (issue #155) — no separate /admin/audit route exists (see PR #172). -->
+      <a href="/admin" class="adm-nav__link">Admin</a>
+      <a href="/admin/committee" class="adm-nav__link adm-nav__link--active">Committee</a>
+    </nav>
+
+    <div class="adm-toolbar">
+      <span x-show="loading" class="rm-loading">Refreshing…</span>
+      <span x-show="error" x-text="error" class="rm-error"></span>
+      <span class="adm-toolbar__spacer"></span>
+      <button type="button" class="adm-btn adm-btn--ghost" @click="loadAll()">Refresh</button>
+      <button type="button" class="adm-btn adm-btn--ghost" @click="logout()">Sign out</button>
+    </div>
+
+    <div class="adm-tabs">
+      <button type="button" class="adm-tab" :class="tab === 'topics' && 'adm-tab--active'" @click="setTab('topics')">Topics</button>
+      <button type="button" class="adm-tab" :class="tab === 'members' && 'adm-tab--active'" @click="setTab('members')">Members</button>
+      <button type="button" class="adm-tab" :class="tab === 'sessions' && 'adm-tab--active'" @click="setTab('sessions')">Sessions</button>
+    </div>
+
+    <!-- ── Topics ─────────────────────────────────────────────────────── -->
+    <section x-show="tab === 'topics'" x-cloak>
+      <div class="adm-toolbar">
+        <span class="adm-toolbar__spacer"></span>
+        <button type="button" class="adm-btn" @click="showTopicForm = !showTopicForm" data-testid="new-topic-toggle">New topic</button>
+      </div>
+
+      <form x-show="showTopicForm" x-cloak @submit.prevent="submitTopic()" class="adm-form" data-testid="topic-form">
+        <label class="adm-field">
+          <span>Topic id</span>
+          <input type="text" x-model="topicForm.id" class="adm-input" placeholder="e.g. woon-vault" data-testid="topic-id" />
+          <span x-show="topicErrors.id" x-text="topicErrors.id" class="rm-error"></span>
+        </label>
+        <label class="adm-field">
+          <span>Name</span>
+          <input type="text" x-model="topicForm.name" class="adm-input" data-testid="topic-name" />
+          <span x-show="topicErrors.name" x-text="topicErrors.name" class="rm-error"></span>
+        </label>
+        <label class="adm-field">
+          <span>Operator</span>
+          <input type="text" x-model="topicForm.operator" class="adm-input" data-testid="topic-operator" />
+          <span x-show="topicErrors.operator" x-text="topicErrors.operator" class="rm-error"></span>
+        </label>
+        <label class="adm-field">
+          <span>Thesis</span>
+          <textarea x-model="topicForm.thesisBlurb" class="adm-input" rows="2" data-testid="topic-thesis"></textarea>
+          <span x-show="topicErrors.thesisBlurb" x-text="topicErrors.thesisBlurb" class="rm-error"></span>
+        </label>
+        <label class="adm-field">
+          <span>Source type</span>
+          <select x-model="topicForm.sourceType" class="adm-input" data-testid="topic-source-type">
+            <option value="rpc">rpc</option>
+            <option value="manual">manual</option>
+            <option value="vault_tvl">vault_tvl</option>
+            <option value="framework">framework</option>
+          </select>
+        </label>
+        <label class="adm-field">
+          <span>Recommendation type</span>
+          <select x-model="topicForm.recommendationType" class="adm-input" data-testid="topic-rec-type">
+            <option value="position_actions">position_actions</option>
+            <option value="bucket_weights">bucket_weights</option>
+          </select>
+        </label>
+        <div class="adm-field">
+          <span>Wallets</span>
+          <template x-for="(w, i) in topicForm.wallets" :key="i">
+            <div class="adm-wallet-row">
+              <input type="text" x-model="w.address" class="adm-input" placeholder="address" />
+              <input type="text" x-model="w.chain" class="adm-input" placeholder="chain" />
+              <button type="button" class="adm-btn adm-btn--ghost" @click="removeWalletRow(i)">Remove</button>
+            </div>
+          </template>
+          <button type="button" class="adm-btn adm-btn--ghost" @click="addWalletRow()" data-testid="topic-add-wallet">Add wallet</button>
+          <span x-show="topicErrors.wallets" x-text="topicErrors.wallets" class="rm-error"></span>
+        </div>
+        <label class="adm-field">
+          <span>Reason</span>
+          <textarea x-model="topicForm.reason" class="adm-input" rows="2" placeholder="10–500 characters" data-testid="topic-reason"></textarea>
+          <span x-show="topicErrors.reason" x-text="topicErrors.reason" class="rm-error"></span>
+        </label>
+        <span x-show="topicErrors.form" x-text="topicErrors.form" class="rm-error adm-msg"></span>
+        <div class="adm-toolbar">
+          <button type="submit" class="adm-btn" :disabled="topicSubmitting" data-testid="topic-submit">Create topic</button>
+          <button type="button" class="adm-btn adm-btn--ghost" @click="showTopicForm = false">Cancel</button>
+        </div>
+      </form>
+
+      <div class="rm-table-scroll">
+        <table class="rm-table adm-table">
+          <thead><tr><th>Id</th><th>Name</th><th>Status</th><th>Source</th><th>Recommendation</th></tr></thead>
+          <tbody>
+            <template x-for="t in topics" :key="t.id">
+              <tr class="adm-row" @click="location.href = topicHref(t.id)">
+                <td x-text="t.id"></td>
+                <td x-text="t.name"></td>
+                <td><span :class="t.status === 'active' ? 'adm-badge adm-badge--ok' : 'adm-badge adm-badge--idle'" x-text="t.status"></span></td>
+                <td x-text="t.source?.type"></td>
+                <td x-text="t.recommendationType"></td>
+              </tr>
+            </template>
+            <tr x-show="topics.length === 0"><td class="adm-dim" colspan="5">No topics yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Members ────────────────────────────────────────────────────── -->
+    <section x-show="tab === 'members'" x-cloak>
+      <div class="adm-toolbar">
+        <div class="adm-tabs adm-tabs--sub">
+          <button type="button" class="adm-tab" :class="memberFilter === 'applied' && 'adm-tab--active'" @click="memberFilter = 'applied'" data-testid="member-filter-applied">Applied</button>
+          <button type="button" class="adm-tab" :class="memberFilter === 'active' && 'adm-tab--active'" @click="memberFilter = 'active'" data-testid="member-filter-active">Active</button>
+          <button type="button" class="adm-tab" :class="memberFilter === 'inactive' && 'adm-tab--active'" @click="memberFilter = 'inactive'" data-testid="member-filter-inactive">Inactive</button>
+        </div>
+        <span class="adm-toolbar__spacer"></span>
+        <button type="button" class="adm-btn" @click="showMemberForm = !showMemberForm" data-testid="new-member-toggle">Manual add</button>
+      </div>
+
+      <form x-show="showMemberForm" x-cloak @submit.prevent="submitManualMember()" class="adm-form" data-testid="member-form">
+        <label class="adm-field">
+          <span>Member id</span>
+          <input type="text" x-model="memberForm.memberId" class="adm-input" data-testid="member-id" />
+          <span x-show="memberErrors.memberId" x-text="memberErrors.memberId" class="rm-error"></span>
+        </label>
+        <label class="adm-field">
+          <span>Name</span>
+          <input type="text" x-model="memberForm.name" class="adm-input" data-testid="member-name" />
+          <span x-show="memberErrors.name" x-text="memberErrors.name" class="rm-error"></span>
+        </label>
+        <label class="adm-field">
+          <span>Public key</span>
+          <input type="text" x-model="memberForm.publicKey" class="adm-input" data-testid="member-public-key" />
+          <span x-show="memberErrors.publicKey" x-text="memberErrors.publicKey" class="rm-error"></span>
+        </label>
+        <label class="adm-field">
+          <span>Contact email (optional)</span>
+          <input type="email" x-model="memberForm.contactEmail" class="adm-input" />
+        </label>
+        <label class="adm-field">
+          <span>Reason</span>
+          <textarea x-model="memberForm.reason" class="adm-input" rows="2" placeholder="10–500 characters" data-testid="member-reason"></textarea>
+          <span x-show="memberErrors.reason" x-text="memberErrors.reason" class="rm-error"></span>
+        </label>
+        <span x-show="memberErrors.form" x-text="memberErrors.form" class="rm-error adm-msg"></span>
+        <div class="adm-toolbar">
+          <button type="submit" class="adm-btn" :disabled="memberSubmitting" data-testid="member-submit">Add member</button>
+          <button type="button" class="adm-btn adm-btn--ghost" @click="showMemberForm = false">Cancel</button>
+        </div>
+      </form>
+
+      <!-- One-time credential reveal: copy + acknowledge; dismiss/navigate destroys the plaintext. -->
+      <div x-show="credentialReveal" x-cloak class="adm-modal" data-testid="credential-modal">
+        <div class="adm-modal__panel">
+          <h3>New bearer token for <span x-text="credentialReveal?.memberId"></span></h3>
+          <p class="adm-dim">This token is shown once and cannot be retrieved later.</p>
+          <pre class="adm-log" x-text="credentialReveal?.token" data-testid="credential-token"></pre>
+          <div class="adm-toolbar">
+            <button type="button" class="adm-btn" :data-copy="credentialReveal?.token">Copy</button>
+            <button type="button" class="adm-btn adm-btn--ghost" @click="dismissCredential()" data-testid="credential-dismiss">I've copied it — dismiss</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="rm-table-scroll">
+        <table class="rm-table adm-table">
+          <thead><tr><th>Id</th><th>Name</th><th>Status</th><th>Applied</th><th>Activated</th></tr></thead>
+          <tbody>
+            <template x-for="m in filteredMembers()" :key="m.id">
+              <tr class="adm-row" @click="location.href = memberHref(m.id)">
+                <td x-text="m.id"></td>
+                <td x-text="m.name"></td>
+                <td x-text="m.status"></td>
+                <td x-text="m.appliedAt || '—'"></td>
+                <td x-text="m.activatedAt || '—'"></td>
+              </tr>
+            </template>
+            <tr x-show="filteredMembers().length === 0"><td class="adm-dim" colspan="5">No members in this state.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Sessions ───────────────────────────────────────────────────── -->
+    <section x-show="tab === 'sessions'" x-cloak>
+      <div class="adm-toolbar">
+        <span class="adm-toolbar__spacer"></span>
+        <button type="button" class="adm-btn" @click="showSessionForm = !showSessionForm" data-testid="new-session-toggle">Schedule session</button>
+      </div>
+
+      <form x-show="showSessionForm" x-cloak @submit.prevent="submitSession()" class="adm-form" data-testid="session-form">
+        <label class="adm-field">
+          <span>Topic</span>
+          <select x-model="sessionForm.subjectId" class="adm-input" data-testid="session-subject">
+            <option value="">Select an active topic…</option>
+            <template x-for="t in activeTopics()" :key="t.id">
+              <option :value="t.id" x-text="t.name"></option>
+            </template>
+          </select>
+          <span x-show="sessionErrors.subjectId" x-text="sessionErrors.subjectId" class="rm-error"></span>
+        </label>
+        <label class="adm-field">
+          <span>Session date (UTC)</span>
+          <input type="date" x-model="sessionForm.date" class="adm-input" data-testid="session-date" />
+          <span x-show="sessionErrors.date" x-text="sessionErrors.date" class="rm-error"></span>
+        </label>
+        <label class="adm-field">
+          <span>Brief opens at (ISO instant)</span>
+          <input type="text" x-model="sessionForm.briefOpensAt" class="adm-input" placeholder="2026-07-20T14:00:00Z" data-testid="session-brief-opens" />
+        </label>
+        <label class="adm-field">
+          <span>Window closes at (ISO instant)</span>
+          <input type="text" x-model="sessionForm.windowClosesAt" class="adm-input" placeholder="2026-07-20T20:00:00Z" data-testid="session-window-closes" />
+        </label>
+        <label class="adm-field">
+          <span>Publish at (ISO instant)</span>
+          <input type="text" x-model="sessionForm.publishAt" class="adm-input" placeholder="2026-07-20T21:00:00Z" data-testid="session-publish-at" />
+        </label>
+        <span x-show="sessionErrors.order" x-text="sessionErrors.order" class="rm-error"></span>
+        <label class="adm-field">
+          <span>Reason</span>
+          <textarea x-model="sessionForm.reason" class="adm-input" rows="2" placeholder="10–500 characters" data-testid="session-reason"></textarea>
+          <span x-show="sessionErrors.reason" x-text="sessionErrors.reason" class="rm-error"></span>
+        </label>
+        <span x-show="sessionErrors.form" x-text="sessionErrors.form" class="rm-error adm-msg"></span>
+        <div class="adm-toolbar">
+          <button type="submit" class="adm-btn" :disabled="sessionSubmitting" data-testid="session-submit">Schedule</button>
+          <button type="button" class="adm-btn adm-btn--ghost" @click="showSessionForm = false">Cancel</button>
+        </div>
+      </form>
+
+      <div class="rm-table-scroll">
+        <table class="rm-table adm-table">
+          <thead><tr><th>Date (UTC)</th><th>Topic</th><th>State</th><th>Window closes</th></tr></thead>
+          <tbody>
+            <template x-for="s in sessions" :key="s.id">
+              <tr class="adm-row" @click="location.href = sessionHref(s.id)">
+                <td x-text="s.date"></td>
+                <td x-text="s.subjectName || s.subjectId"></td>
+                <td><span :class="stateClass(s.state)" x-text="s.state"></span></td>
+                <td x-text="fmtUtc(s.windowClosesAt)"></td>
+              </tr>
+            </template>
+            <tr x-show="sessions.length === 0"><td class="adm-dim" colspan="4">No sessions scheduled.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+
+</section>

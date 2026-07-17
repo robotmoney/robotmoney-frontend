@@ -20,6 +20,10 @@ import { registerCommitteeView } from "./views/committee.js";
 import { registerCommentsThread } from "./views/comments.js";
 import { registerApplyForm } from "./views/apply-form.js";
 import { registerAdminSurfaceView } from "./views/admin-surface.js";
+import { registerAdminCommitteeOverview } from "./views/admin/committee-overview.js";
+import { registerAdminCommitteeSubject } from "./views/admin/committee-subject.js";
+import { registerAdminCommitteeMember } from "./views/admin/committee-member.js";
+import { registerAdminCommitteeSession } from "./views/admin/committee-session.js";
 
 export function registerViews(Alpine) {
   registerProjectsView(Alpine);
@@ -33,4 +37,8 @@ export function registerViews(Alpine) {
   registerCommentsThread(Alpine);
   registerApplyForm(Alpine);
   registerAdminSurfaceView(Alpine);
+  registerAdminCommitteeOverview(Alpine);
+  registerAdminCommitteeSubject(Alpine);
+  registerAdminCommitteeMember(Alpine);
+  registerAdminCommitteeSession(Alpine);
 }

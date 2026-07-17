@@ -6,10 +6,15 @@
      adminSurfaceView() factory (alpine/views/admin-surface.js) is registered at
      boot and drives every read/write — the router injects this fragment via
      innerHTML, so inline scripts here would be dead. One shell fragment serves
-     /admin and every /admin/* subpath (frontend/public/assets/js/app/routes.js);
-     this component reads location.pathname to pick a section. Committee topic/
-     member/roster/session management is explicitly OUT of scope here (#157) —
-     only overview, research, queue, and audit operate through this view.
+     /admin and non-committee /admin/* subpath (frontend/public/assets/js/app/
+     routes.js); this component reads location.pathname to pick a section.
+     Committee topic/member/roster/session management (issue #159) is a
+     separate route/shell, linked from the nav below — overview, research,
+     queue, and audit (issue #155) all operate through this one view. There is
+     no separate /admin/audit route: issue #159 originally shipped one, but
+     #155/PR#170's real, backend-backed audit feed landed as an in-shell
+     section here first, so the standalone page was dropped as a duplicate
+     (see PR #172).
      Styling reuses the shared .rm-* / global component classes plus the
      .adm-* rules in assets/css/views.css.
      NOT linked from the public nav — reachable only by direct /admin URL. -->
@@ -43,6 +48,11 @@
   <!-- Shell -->
   <div x-show="authed" x-cloak>
 
+    <!-- Overview/Research/Queue switch sections within this shell in place
+         (issue #157, @click="goSection(...)"); Committee/Audit are separate
+         routes with their own shells (issue #159, plain <a> navigation). Not
+         in the public nav — only reachable once signed in here. Committee/
+         audit each re-check rm_admin_token on their own. -->
     <nav class="adm-nav" aria-label="Admin sections">
       <button type="button" class="adm-nav__link" :class="section === 'overview' && 'adm-nav__link--active'"
         @click="goSection('overview')">Overview</button>
@@ -52,6 +62,7 @@
         @click="goSection('queue')">Queue</button>
       <button type="button" class="adm-nav__link" :class="section === 'audit' && 'adm-nav__link--active'"
         @click="goSection('audit')">Audit</button>
+      <a href="/admin/committee" class="adm-nav__link">Committee</a>
     </nav>
 
     <div class="adm-toolbar">

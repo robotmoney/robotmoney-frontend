@@ -55,9 +55,10 @@ describe("frontend route resolution", () => {
     expect(viewFor("/admin/research")).toBe("/views/admin.html");
     expect(viewFor("/admin/research/runs/abc-123")).toBe("/views/admin.html");
     expect(viewFor("/admin/queue")).toBe("/views/admin.html");
-    // Other supported admin paths (committee/audit sections are out of #157's
-    // scope but still route to the shell) resolve the same way.
-    expect(viewFor("/admin/committee")).toBe("/views/admin.html");
+    // Audit (issue #155/PR #170) is an in-shell section, not a separate
+    // route — /admin/audit falls through to this same catch-all. Committee
+    // (issue #159) IS its own route with dedicated fragments — see
+    // "resolves admin committee operations routes" below.
     expect(viewFor("/admin/audit")).toBe("/views/admin.html");
     expect(viewFor("/admin/")).toBe("/views/admin.html");
   });
@@ -67,6 +68,33 @@ describe("frontend route resolution", () => {
     expect(viewFor("/committee/members/woon")).toBe("/views/committee/member.html");
     expect(viewFor("/committee/2026-07-01/woon")).toBe("/views/committee/session.html");
     expect(viewFor("/committee/2026-06-25/woon")).toBe("/views/committee/session.html");
+  });
+
+  // Admin committee operations surface (issue #159) — every nested path in
+  // docs/plan-admin-surface.md §7.1's route list resolves to a shipped
+  // fragment, including :id detail pages.
+  test("resolves admin committee operations routes", () => {
+    expect(viewFor("/admin")).toBe("/views/admin.html");
+    expect(viewFor("/admin/committee")).toBe("/views/admin/committee.html");
+    expect(viewFor("/admin/committee/subjects/woon-vault")).toBe("/views/admin/committee-subject.html");
+    expect(viewFor("/admin/committee/members/athena")).toBe("/views/admin/committee-member.html");
+    expect(viewFor("/admin/committee/sessions/9f2c1e0a-aaaa-bbbb-cccc-000000000001")).toBe(
+      "/views/admin/committee-session.html",
+    );
+  });
+
+  test("every admin route fragment referenced by the router exists on disk", async () => {
+    const paths = [
+      "/admin",
+      "/admin/committee",
+      "/admin/committee/subjects/woon-vault",
+      "/admin/committee/members/athena",
+      "/admin/committee/sessions/9f2c1e0a-aaaa-bbbb-cccc-000000000001",
+    ];
+    for (const p of paths) {
+      const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));
+      expect(await file.exists()).toBe(true);
+    }
   });
 
   test("/committee contains the hero canvas mount surface", async () => {
