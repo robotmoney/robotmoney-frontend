@@ -83,7 +83,10 @@ test("admin-live: overview loads the real GET /api/admin/overview envelope (queu
   // actually reached the DOM (proves the frontend parsed these exact keys,
   // not that a request merely round-tripped).
   await expect(page.locator(".adm-nav__link--active")).toHaveText("Overview");
-  await expect(page.locator(".adm-toolbar .rm-error")).toBeHidden();
+  // The overview section only renders once `overview` is truthy
+  // (admin.html: `<template x-if="overview">`) — its presence proves
+  // loadOverview() resolved without throwing.
+  await expect(page.locator(".adm-tiles")).toBeVisible();
 
   const scheduleRows = page.locator(".rm-table.adm-table tbody tr");
   if (body.nextSchedules.length === 0) {
