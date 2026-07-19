@@ -10,6 +10,9 @@
 #      2026-07-10 after SCREAMING_SNAKE/Caps-Dash drift).
 #   2. no tracked *.md file contains an unresolved git conflict marker.
 #   3. no tracked docs/*.md file is empty.
+#   4. the IC committee docs (issue #187) never regress to the legacy
+#      /api/ic/submit design: no reference to /api/ic/submit or the
+#      x-ic-key header, per that issue's own acceptance criterion.
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -40,6 +43,19 @@ for f in docs/*.md; do
   [ -e "$f" ] || continue
   if [ ! -s "$f" ]; then
     err "$f is empty"
+  fi
+done
+
+# 4. IC committee docs (issue #187) must never reference the legacy
+#    /api/ic/submit endpoint or its x-ic-key header.
+ic_docs=(
+  "frontend/public/views/docs/investment-committee/participation.html"
+  "frontend/public/views/docs/investment-committee/api-reference.html"
+)
+for f in "${ic_docs[@]}"; do
+  [ -e "$f" ] || continue
+  if grep -qE '/api/ic/submit|x-ic-key' "$f"; then
+    err "$f still references the legacy /api/ic/submit endpoint or x-ic-key header (issue #187 AC1)"
   fi
 done
 
