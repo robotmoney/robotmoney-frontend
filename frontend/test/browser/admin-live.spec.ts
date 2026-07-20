@@ -109,39 +109,49 @@ test("admin-live: overview loads the real GET /api/admin/overview envelope (queu
 
   // From here on, build DOM-comparison expectations from Alpine's LIVE
   // reactive state, not the `body` captured above from a single network
-  // response. Against this spec's deliberately-unmocked, still-changing live
-  // backend, `body` can go stale by the time later assertions run — CI hit
-  // this twice on different fields (a schedule-row count, then an alert
-  // message) even after pausing the shell's 5s auto-poll immediately on
-  // login, because the capture (this test's own `waitForResponse`) and the
-  // render (whatever the page fetched) are still two independent reads that
-  // can land on either side of a race under load. Reading `overview` back
-  // out of the live Alpine component is the same object admin.html's x-text
-  // bindings render from, so comparing against it can never diverge from
-  // the DOM by construction — there is only one source of truth.
-  const liveOverview = await page.evaluate(() => {
-    const el = document.querySelector('[x-data="adminSurfaceView"]');
-    // @ts-expect-error -- Alpine is a global from the vendor CDN script, not a module import
-    return window.Alpine.$data(el).overview;
-  });
-  expect(liveOverview).not.toBeNull();
+  // response — `body` can go stale by the time later assertions run against
+  // this spec's deliberately-unmocked, still-changing live backend. Reading
+  // `overview` back out of the live Alpine component is the same object
+  // admin.html's x-text bindings render from.
+  //
+  // Critically, `readLiveOverview()` is called freshly IMMEDIATELY BEFORE
+  // EACH comparison below, never captured once and reused: holding a single
+  // snapshot across two temporally-separated assertions just moves the same
+  // stale-vs-live race up one level (CI hit exactly this — a snapshot taken
+  // before the schedule check still matched, then went stale by the time
+  // the alert check ran several `await expect(...)` calls later, e.g. an
+  // async error-retry path or a background reload touching `overview`
+  // in between). Re-reading right before each use means every individual
+  // comparison is internally consistent with the DOM at that instant, even
+  // if `overview` changes between the two checks.
+  async function readLiveOverview() {
+    const overview = await page.evaluate(() => {
+      const el = document.querySelector('[x-data="adminSurfaceView"]');
+      // @ts-expect-error -- Alpine is a global from the vendor CDN script, not a module import
+      return window.Alpine.$data(el).overview;
+    });
+    expect(overview).not.toBeNull();
+    return overview;
+  }
 
   // admin.html's schedule table keeps an x-show="...length === 0" fallback
   // <tr> ("No enabled schedules.") in the DOM at all times (just hidden),
   // alongside the x-for rows — an unscoped locator overcounts by one when
   // the list is non-empty. Scope to :visible, same fix as the committee
   // tab-row locators below.
+  const scheduleOverview = await readLiveOverview();
   const scheduleRows = page.locator(".rm-table.adm-table tbody tr:visible");
-  if (liveOverview.enabledAnalyticsSchedules.length === 0) {
+  if (scheduleOverview.enabledAnalyticsSchedules.length === 0) {
     await expect(page.getByText("No enabled schedules.")).toBeVisible();
   } else {
-    await expect(scheduleRows).toHaveCount(liveOverview.enabledAnalyticsSchedules.length);
+    await expect(scheduleRows).toHaveCount(scheduleOverview.enabledAnalyticsSchedules.length);
     await expect(
-      page.getByRole("cell", { name: liveOverview.enabledAnalyticsSchedules[0].kind, exact: true }).first(),
+      page.getByRole("cell", { name: scheduleOverview.enabledAnalyticsSchedules[0].kind, exact: true }).first(),
     ).toBeVisible();
   }
 
-  if (liveOverview.alerts.length === 0) {
+  const alertOverview = await readLiveOverview();
+  if (alertOverview.alerts.length === 0) {
     await expect(page.getByText("No active alerts — everything healthy.")).toBeVisible();
   } else {
     // Deliberately NOT asserting an exact alert message string here.
@@ -149,14 +159,12 @@ test("admin-live: overview loads the real GET /api/admin/overview envelope (queu
     // regime.classify / research.refresh's live run status, and this demo
     // environment's schedules fire on a ~2min cron — so "regime.classify
     // last run: not_run" can flip to a real timestamp/result mid-test, on a
-    // different alert each run, no matter which two reads are compared (CI
-    // hit this on three separate alerts across three different fix
-    // attempts: poll-pause, response-capture, then live-Alpine-state-read).
-    // The alert *count* is structurally stable (one row per production
-    // kind + regime + research signal, a fixed set independent of their
-    // live status), so assert that instead of any live-changing text.
+    // different alert each run. The alert *count* is structurally stable
+    // (one row per production kind + regime + research signal, a fixed set
+    // independent of their live status), so assert that instead of any
+    // live-changing text.
     const alertRows = page.locator(".adm-alerts > div");
-    await expect(alertRows).toHaveCount(liveOverview.alerts.length);
+    await expect(alertRows).toHaveCount(alertOverview.alerts.length);
     await expect(alertRows.first()).toBeVisible();
   }
 });
