@@ -406,15 +406,17 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
       returns <code>401</code>.
     </p>
     <div class="docs-callout docs-callout--note">
-      <div class="docs-callout__label">Staging/production MCP URL: ask your operator</div>
+      <div class="docs-callout__label">Staging/production MCP URL</div>
       <div class="docs-callout__body">
-        <code>docs/topology.md</code> and <code>docs/deployment.md</code>
-        confirm the MCP server is co-hosted on the same droplet as the
-        committee API/worker (it's part of that surface's
-        <code>/health</code> check) and is meant to be reachable by URL, but
-        neither document publishes an exact production path or port for it
-        the way they do for the REST API host. Don't guess a URL — confirm
-        the live MCP endpoint with whoever runs your environment.
+        MCP is published on its own subdomain, distinct from the REST API
+        host, per <code>docs/topology.md</code> §3.1 and
+        <code>docs/deployment.md</code> §2 (decision D18):
+        <code>https://mcp.staging.robotmoney.net:8443/mcp</code> (staging)
+        and <code>https://mcp.robotmoney.net:8443/mcp</code> (production).
+        Port <code>8443</code> is one of Cloudflare's supported
+        proxied-HTTPS ports — the MCP container is co-located on the same
+        droplet as the committee API but listens on its own port, since it's
+        its own service.
       </div>
     </div>
     <p>
@@ -524,8 +526,10 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
       token as <code>client_id</code>/<code>client_secret</code>, then read
       the brief, sign with its own key, and call
       <code>submit_recommendation</code>. That's the same shape you'd run
-      against staging or production once your operator gives you the real
-      MCP URL — only the host changes.
+      against staging or production — point the client at
+      <code>https://mcp.staging.robotmoney.net:8443/mcp</code> or
+      <code>https://mcp.robotmoney.net:8443/mcp</code> (see the callout
+      above) instead of the local demo URL; only the host and port change.
     </p>
 
     <h2 id="sample-python">Sample: Python script</h2>

@@ -49,10 +49,18 @@ separate subdomains, droplet, Space, Postgres, and firewall. Store secrets as
 |---|---|---|
 | Marketing host | `staging.robotmoney.net` | `robotmoney.net`, `www.` |
 | IC + analytics host | `committee.staging.robotmoney.net` | `committee.robotmoney.net` |
+| IC MCP host (D18) | `mcp.staging.robotmoney.net:8443` | `mcp.robotmoney.net:8443` |
 | Dapp host | `app.staging.robotmoney.net` | `app.robotmoney.net` |
 | Droplets | staging droplets | production droplets |
 | Spaces (marketing) | `rm-marketing-staging` | `rm-marketing-prod` |
 | Postgres | single-node (cost) | **HA cluster** |
+
+The MCP host (`mcp.`) is co-located on the **same droplet** as `committee.`
+(both are this repo's surface) but runs as its own container on its own
+Cloudflare-proxied port — see
+[topology.md §3.1](./topology.md#31-mcp-hostname-and-port-d18) for why it
+needs a distinct port (`8443`, a Cloudflare-supported proxied-HTTPS port)
+instead of a path under `committee.`.
 
 ---
 
@@ -82,11 +90,14 @@ Worker, and marketing is reached DNS-only so Cloudflare does not cache it.)
 
 ### 3.3 Origin CA certificate (for the proxied app subdomains)
 
-The `committee.`/`app.` droplets are Cloudflare-proxied, so each serves a
+The `committee.`/`mcp.`/`app.` droplets are Cloudflare-proxied, so each serves a
 **Cloudflare Origin CA certificate** (a long-lived cert Cloudflare issues for
 origin pulls; generated once in the dashboard or via API). Install the cert + key
 on the droplet (injected at deploy as **`CF_ORIGIN_CERT`** / **`CF_ORIGIN_KEY`**).
-This is config, not running software.
+This is config, not running software. `mcp.` shares the `committee.` droplet
+(topology.md §3.1), so a single Origin CA cert covering both hostnames (or two
+certs installed side by side) is sufficient — no separate droplet-provisioning
+step.
 
 ---
 
@@ -192,6 +203,9 @@ Do this **once per environment** (staging, then production):
 - [ ] Scoped API token (DNS + Health Checks + Analytics + Logpush) → `CF_API_TOKEN`
 - [ ] `CF_ACCOUNT_ID`, `CF_ZONE_ID`
 - [ ] Origin CA cert + key for the proxied app subdomains → `CF_ORIGIN_CERT` / `CF_ORIGIN_KEY`
+- [ ] `mcp.<env.>robotmoney.net` DNS record (proxied, port `8443`) provisioned
+      and covered by the Origin CA cert (D18; manual one-time operator action
+      per the GitOps convention above — not automated by CI)
 
 **DigitalOcean** (compute + storage)
 - [ ] Scoped API token → `DO_API_TOKEN`

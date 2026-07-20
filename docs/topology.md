@@ -8,6 +8,7 @@ and the **on-chain dapp** (`robotmoney-core`). It is a companion to
 [architecture.md](./architecture.md) (this frontend's internals) and
 [decisions.md](./decisions.md); the production topology here is decision **D13**,
 which supersedes the single-box parts of D8/D11 (see [§10](#10-relationship-to-existing-decisions)).
+**D18** refines D13's surface list with a fourth subdomain, `mcp.` (§3.1).
 
 ```mermaid
 flowchart LR
@@ -96,12 +97,40 @@ Each surface is its own hostname, resolved by a plain DNS record:
 |----------|---------|-------------|--------|
 | `robotmoney.net`, `www.` | Marketing | Static → **DO Spaces CDN** | marketing UI (this repo, D1) |
 | `committee.robotmoney.net` | IC + analytics | API → **DO droplet** (Bun) + Data → **Postgres HA** | `robotmoney-frontend` (this repo) |
+| `mcp.robotmoney.net` | IC MCP server (member-facing agents) | API → **DO droplet**, port `8443` (co-located with the `committee.` droplet; own container/port, see §3.1) | `robotmoney-frontend` (this repo, `mcp/`) |
 | `app.robotmoney.net` | Dapp | API → **DO droplet** (`rmpc` + gateway) | `robotmoney-core` |
 
 Each app is served at **its own root**, so there is **no path-prefix and no
 base-path handling** — the SPA history router (D4) and import maps (D2) work
 unmodified. The SPA and its API are **same-origin** on the same subdomain (no CORS
 within a surface).
+
+### 3.1 MCP hostname and port (D18)
+
+The MCP server (`mcp/src/server.ts`) is a fourth, independently-addressed
+surface, not a path under `committee.`: it runs as its own container
+(`mcp` in `docker-compose.yml`), so it gets its own subdomain per the §3
+convention rather than a reverse-proxied path (D13's "no reverse proxy"
+rule would otherwise be violated). It is deployed to the **same droplet**
+as `committee.` (both are this repo's `robotmoney-frontend` surface, and
+the `/health` contract already couples IC health to MCP reachability —
+§9), so it cannot also claim port `443`/`8787` — those are already the
+`committee.` API's Cloudflare-proxied port. Instead `mcp.` is a **proxied**
+(orange-cloud) record like `committee.`/`app.`, on Cloudflare's alternate
+proxied-HTTPS port **`8443`** (one of Cloudflare's fixed list of ports it
+will forward proxied traffic to on any plan — no Origin Rule, no
+reverse proxy, no new vendor permission): `MCP_PORT=8443` in the prod/staging
+droplet env is all that's required, since `mcp/src/server.ts` already reads
+`MCP_PORT` directly into `Bun.serve({ port })`. The droplet's Cloud Firewall
+(§4) allows this port from Cloudflare's IP ranges the same way it already
+allows `443` for `committee.`.
+
+Full endpoint: `https://mcp.staging.robotmoney.net:8443/mcp` (staging),
+`https://mcp.robotmoney.net:8443/mcp` (production) — see
+[deployment.md §2](./deployment.md#2-environments--staging--production-isolated)
+for the environment table and
+[participation.html](../frontend/public/views/docs/investment-committee/participation.html#mcp)
+for the member-facing connection instructions.
 
 ---
 
@@ -192,6 +221,9 @@ own same-host API) use CORS.
 
 ## 10. Relationship to existing decisions
 
+- **D13 (vendor-split tiered topology)** — **surface list refined by D18:** MCP
+  (`mcp.`) is documented as a fourth subdomain-routed surface, co-located on the
+  `committee.` droplet on its own Cloudflare-proxied port (§3.1).
 - **D11 (single box, no reverse proxy)** — **superseded for production by D13.**
   Production splits across subdomains on DO with Cloudflare for DNS+observability;
   there is still **no reverse proxy** (host-based DNS routing, not a proxy). The
