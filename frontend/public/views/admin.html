@@ -94,10 +94,10 @@
 
             <h2 class="adm-h2 adm-h2--flush">Alerts</h2>
             <div class="adm-alerts">
-              <template x-for="a in overviewAlerts()" :key="a.id || (a.kind + a.level)">
+              <template x-for="a in overviewAlerts()" :key="a.source">
                 <div :class="alertClass(a.level)">
                   <span :class="statusClass(a.level)" x-text="a.level"></span>
-                  <span x-text="a.kind"></span>
+                  <span x-text="a.source"></span>
                   <span x-text="a.message"></span>
                 </div>
               </template>

@@ -12,8 +12,8 @@ const ADMIN_PASSWORD = "demo-password";
 const OVERVIEW_FIXTURE = {
   queueCounts: { pending: 2, running: 1, succeeded: 40, failed: 1, dead: 1, cancelled: 0 },
   alerts: [
-    { id: "a1", level: "dead", kind: "queue", message: "1 job is dead and needs a manual retry." },
-    { id: "a2", level: "stale", kind: "research", message: "late-cycle-signals is 3 days stale." },
+    { level: "dead", source: "queue", message: "1 job is dead and needs a manual retry." },
+    { level: "stale", source: "research:late-cycle-signals", message: "late-cycle-signals is 3 days stale." },
   ],
   enabledAnalyticsSchedules: [
     { id: 1, kind: "regime.classify", cron: "30 22 * * *", nextRunAt: "2026-07-16T22:30:00.000Z" },
