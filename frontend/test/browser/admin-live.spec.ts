@@ -107,25 +107,44 @@ test("admin-live: overview loads the real GET /api/admin/overview envelope (queu
   // loadOverview() resolved without throwing.
   await expect(page.locator(".adm-tiles")).toBeVisible();
 
+  // From here on, build DOM-comparison expectations from Alpine's LIVE
+  // reactive state, not the `body` captured above from a single network
+  // response. Against this spec's deliberately-unmocked, still-changing live
+  // backend, `body` can go stale by the time later assertions run — CI hit
+  // this twice on different fields (a schedule-row count, then an alert
+  // message) even after pausing the shell's 5s auto-poll immediately on
+  // login, because the capture (this test's own `waitForResponse`) and the
+  // render (whatever the page fetched) are still two independent reads that
+  // can land on either side of a race under load. Reading `overview` back
+  // out of the live Alpine component is the same object admin.html's x-text
+  // bindings render from, so comparing against it can never diverge from
+  // the DOM by construction — there is only one source of truth.
+  const liveOverview = await page.evaluate(() => {
+    const el = document.querySelector('[x-data="adminSurfaceView"]');
+    // @ts-expect-error -- Alpine is a global from the vendor CDN script, not a module import
+    return window.Alpine.$data(el).overview;
+  });
+  expect(liveOverview).not.toBeNull();
+
   // admin.html's schedule table keeps an x-show="...length === 0" fallback
   // <tr> ("No enabled schedules.") in the DOM at all times (just hidden),
   // alongside the x-for rows — an unscoped locator overcounts by one when
   // the list is non-empty. Scope to :visible, same fix as the committee
   // tab-row locators below.
   const scheduleRows = page.locator(".rm-table.adm-table tbody tr:visible");
-  if (body.enabledAnalyticsSchedules.length === 0) {
+  if (liveOverview.enabledAnalyticsSchedules.length === 0) {
     await expect(page.getByText("No enabled schedules.")).toBeVisible();
   } else {
-    await expect(scheduleRows).toHaveCount(body.enabledAnalyticsSchedules.length);
+    await expect(scheduleRows).toHaveCount(liveOverview.enabledAnalyticsSchedules.length);
     await expect(
-      page.getByRole("cell", { name: body.enabledAnalyticsSchedules[0].kind, exact: true }).first(),
+      page.getByRole("cell", { name: liveOverview.enabledAnalyticsSchedules[0].kind, exact: true }).first(),
     ).toBeVisible();
   }
 
-  if (body.alerts.length === 0) {
+  if (liveOverview.alerts.length === 0) {
     await expect(page.getByText("No active alerts — everything healthy.")).toBeVisible();
   } else {
-    await expect(page.getByText(body.alerts[0].message)).toBeVisible();
+    await expect(page.getByText(liveOverview.alerts[0].message)).toBeVisible();
   }
 });
 
@@ -176,21 +195,37 @@ test("admin-live: committee subjects/members lists load the real 'subjects'/'mem
   // "table.adm-table tbody tr.adm-row" locator overcounts by summing every
   // tab's rows. Playwright's :visible pseudo-class excludes elements hidden
   // by any ancestor's display:none, scoping the count to the active tab.
+  //
+  // The row-count expectations below are built from Alpine's LIVE reactive
+  // state (this.topics / this.members), not the subjectsBody/membersBody
+  // captured above — same defensive pattern as the overview test's
+  // liveOverview read: comparing against the exact object committee.html's
+  // x-for bindings render from can never diverge from the DOM, whereas two
+  // independent reads of a live, unmocked backend legitimately can (this is
+  // the same class of race that hit the overview test's assertions in CI).
   const topicRows = page.locator("table.adm-table tbody tr.adm-row:visible");
-  if (subjectsBody.subjects.length === 0) {
+  const liveTopics: Array<{ id: string }> = await page.evaluate(() => {
+    const el = document.querySelector('[x-data="adminCommitteeOverview"]');
+    // @ts-expect-error -- Alpine is a global from the vendor CDN script, not a module import
+    return window.Alpine.$data(el).topics;
+  });
+  if (liveTopics.length === 0) {
     await expect(page.getByText("No topics yet.")).toBeVisible();
   } else {
-    await expect(topicRows).toHaveCount(subjectsBody.subjects.length);
-    await expect(page.getByRole("cell", { name: subjectsBody.subjects[0].id, exact: true }).first()).toBeVisible();
+    await expect(topicRows).toHaveCount(liveTopics.length);
+    await expect(page.getByRole("cell", { name: liveTopics[0].id, exact: true }).first()).toBeVisible();
   }
 
   await page.getByRole("button", { name: "Members", exact: true }).click();
 
   // memberFilter defaults to "active" (committee-overview.js) — apply the
   // same filter to the live payload before asserting the rendered row count.
-  const activeMembers = (membersBody.members as Array<{ status?: string }>).filter(
-    (m) => (m.status || "applied") === "active",
-  );
+  const liveMembers: Array<{ status?: string }> = await page.evaluate(() => {
+    const el = document.querySelector('[x-data="adminCommitteeOverview"]');
+    // @ts-expect-error -- Alpine is a global from the vendor CDN script, not a module import
+    return window.Alpine.$data(el).members;
+  });
+  const activeMembers = liveMembers.filter((m) => (m.status || "applied") === "active");
   const memberRows = page.locator("table.adm-table tbody tr.adm-row:visible");
   if (activeMembers.length === 0) {
     await expect(page.getByText("No members in this state.")).toBeVisible();
