@@ -4,6 +4,7 @@
   "private": true,
   "description": "Single-folder home for the split-ready frontend/ + backend/ + contract/ (+ mcp/).",
   "scripts": {
+    "postinstall": "bun install --cwd backend && bun install --cwd mcp",
     "sync-contract": "bun scripts/sync-contract.ts",
     "check-contract": "bun scripts/sync-contract.ts --check",
     "check-docs": "bash scripts/check-docs-analytics.sh",
