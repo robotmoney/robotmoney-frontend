@@ -57,7 +57,7 @@ async function login(page: Page): Promise<void> {
   await expect(page.locator(".adm-nav")).toBeVisible();
 }
 
-test("admin-live: overview loads the real GET /api/admin/overview envelope (queueCounts/alerts/nextSchedules)", async ({ page }) => {
+test("admin-live: overview loads the real GET /api/admin/overview envelope (queueCounts/alerts/enabledAnalyticsSchedules)", async ({ page }) => {
   const overviewResponsePromise = page.waitForResponse(
     (res) => new URL(res.url()).pathname === "/api/admin/overview" && res.request().method() === "GET",
   );
@@ -70,14 +70,19 @@ test("admin-live: overview loads the real GET /api/admin/overview envelope (queu
 
   // The real response envelope keys the frontend reads (admin-surface.js
   // loadOverview(): overview.queueCounts / overview.alerts /
-  // overview.nextSchedules) — a future rename of any of these in
+  // overview.enabledAnalyticsSchedules) — a future rename of any of these in
   // backend/src/admin/overview.ts fails this assertion against live data,
-  // not just a fixture that was hand-updated to match.
+  // not just a fixture that was hand-updated to match. This assertion itself
+  // caught a real bug during #185's development: admin.html previously read
+  // the never-shipped `overview.nextSchedules` key, so the "Next scheduled
+  // runs" table silently rendered empty in production — fixed alongside this
+  // test (contract/src/admin.d.ts's AdminOverview.enabledAnalyticsSchedules
+  // is, and always was, the real key).
   expect(body).toHaveProperty("queueCounts");
   expect(body).toHaveProperty("alerts");
-  expect(body).toHaveProperty("nextSchedules");
+  expect(body).toHaveProperty("enabledAnalyticsSchedules");
   expect(Array.isArray(body.alerts)).toBe(true);
-  expect(Array.isArray(body.nextSchedules)).toBe(true);
+  expect(Array.isArray(body.enabledAnalyticsSchedules)).toBe(true);
 
   // Overview is the default landing section — assert the real payload
   // actually reached the DOM (proves the frontend parsed these exact keys,
@@ -89,11 +94,13 @@ test("admin-live: overview loads the real GET /api/admin/overview envelope (queu
   await expect(page.locator(".adm-tiles")).toBeVisible();
 
   const scheduleRows = page.locator(".rm-table.adm-table tbody tr");
-  if (body.nextSchedules.length === 0) {
+  if (body.enabledAnalyticsSchedules.length === 0) {
     await expect(page.getByText("No enabled schedules.")).toBeVisible();
   } else {
-    await expect(scheduleRows).toHaveCount(body.nextSchedules.length);
-    await expect(page.getByRole("cell", { name: body.nextSchedules[0].kind, exact: true }).first()).toBeVisible();
+    await expect(scheduleRows).toHaveCount(body.enabledAnalyticsSchedules.length);
+    await expect(
+      page.getByRole("cell", { name: body.enabledAnalyticsSchedules[0].kind, exact: true }).first(),
+    ).toBeVisible();
   }
 
   if (body.alerts.length === 0) {
@@ -144,7 +151,13 @@ test("admin-live: committee subjects/members lists load the real 'subjects'/'mem
   // keys from the live response, not merely that a request round-tripped.
   await expect(page.locator(".adm-toolbar .rm-error")).toBeHidden();
 
-  const topicRows = page.locator("table.adm-table tbody tr.adm-row");
+  // committee.html's Topics/Members/Sessions tabs are toggled with x-show,
+  // not x-if — the other two tabs' <table class="adm-table"> rows stay in
+  // the DOM (just display:none) while Topics is active, so an unscoped
+  // "table.adm-table tbody tr.adm-row" locator overcounts by summing every
+  // tab's rows. Playwright's :visible pseudo-class excludes elements hidden
+  // by any ancestor's display:none, scoping the count to the active tab.
+  const topicRows = page.locator("table.adm-table tbody tr.adm-row:visible");
   if (subjectsBody.subjects.length === 0) {
     await expect(page.getByText("No topics yet.")).toBeVisible();
   } else {
@@ -159,7 +172,7 @@ test("admin-live: committee subjects/members lists load the real 'subjects'/'mem
   const activeMembers = (membersBody.members as Array<{ status?: string }>).filter(
     (m) => (m.status || "applied") === "active",
   );
-  const memberRows = page.locator("table.adm-table tbody tr.adm-row");
+  const memberRows = page.locator("table.adm-table tbody tr.adm-row:visible");
   if (activeMembers.length === 0) {
     await expect(page.getByText("No members in this state.")).toBeVisible();
   } else {

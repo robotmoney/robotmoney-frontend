@@ -15,13 +15,13 @@ const OVERVIEW_FIXTURE = {
     { id: "a1", level: "dead", kind: "queue", message: "1 job is dead and needs a manual retry." },
     { id: "a2", level: "stale", kind: "research", message: "late-cycle-signals is 3 days stale." },
   ],
-  nextSchedules: [
-    { kind: "regime.classify", enabled: true, nextRunAt: "2026-07-16T22:30:00.000Z" },
-    { kind: "research.refresh", enabled: true, nextRunAt: "2026-07-16T23:00:00.000Z" },
+  enabledAnalyticsSchedules: [
+    { id: 1, kind: "regime.classify", cron: "30 22 * * *", nextRunAt: "2026-07-16T22:30:00.000Z" },
+    { id: 2, kind: "research.refresh", cron: "0 23 * * *", nextRunAt: "2026-07-16T23:00:00.000Z" },
   ],
 };
 
-const EMPTY_OVERVIEW = { queueCounts: {}, alerts: [], nextSchedules: [] };
+const EMPTY_OVERVIEW = { queueCounts: {}, alerts: [], enabledAnalyticsSchedules: [] };
 
 // vendorScripts CDN interception is shared with admin-live.spec.ts (issue
 // #185) via ./vendor-scripts.ts — mockAdminApi (issue #157) below re-lists
