@@ -46,10 +46,25 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
+      # Playwright's CLI/transform runs on Node.js (its bin is `#!/usr/bin/env
+      # node`); `bun run test:browser` shells out to it. `setup-bun` does NOT
+      # provide node, so on a self-hosted runner without a system node the
+      # Playwright build fails for EVERY spec ("2 errors building …") and no
+      # browser test runs. Provision node explicitly so this required gate is
+      # runner-independent instead of relying on node happening to be
+      # pre-installed on the host.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - name: Install root browser tooling
         run: bun install --frozen-lockfile
       - name: Install Chromium
-        run: bunx playwright install --with-deps chromium
+        # Browser binary only — Chromium's system libraries are provisioned on
+        # the self-hosted runner host. The `--with-deps` variant shells out to
+        # `sudo apt-get`, which fails on this runner (the runner user has no
+        # passwordless sudo and no TTY); the binary itself installs into the
+        # runner user's cache with no elevation.
+        run: bunx playwright install chromium
       - name: Install deps
         working-directory: mcp
         run: bun install --frozen-lockfile

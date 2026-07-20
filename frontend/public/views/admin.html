@@ -94,10 +94,10 @@
 
             <h2 class="adm-h2 adm-h2--flush">Alerts</h2>
             <div class="adm-alerts">
-              <template x-for="a in overviewAlerts()" :key="a.id || (a.kind + a.level)">
+              <template x-for="a in overviewAlerts()" :key="a.source">
                 <div :class="alertClass(a.level)">
                   <span :class="statusClass(a.level)" x-text="a.level"></span>
-                  <span x-text="a.kind"></span>
+                  <span x-text="a.source"></span>
                   <span x-text="a.message"></span>
                 </div>
               </template>
@@ -112,16 +112,15 @@
             <h2 class="adm-h2">Next scheduled runs</h2>
             <div class="rm-table-scroll">
               <table class="rm-table adm-table">
-                <thead><tr><th>Kind</th><th>Enabled</th><th>Next run</th></tr></thead>
+                <thead><tr><th>Kind</th><th>Next run</th></tr></thead>
                 <tbody>
-                  <template x-for="sch in (overview.nextSchedules || [])" :key="sch.kind">
+                  <template x-for="sch in (overview.enabledAnalyticsSchedules || [])" :key="sch.id">
                     <tr>
                       <td x-text="sch.kind"></td>
-                      <td x-text="sch.enabled ? 'yes' : 'no'"></td>
                       <td x-text="fmtTime(sch.nextRunAt)"></td>
                     </tr>
                   </template>
-                  <tr x-show="(overview.nextSchedules || []).length === 0"><td class="adm-dim" colspan="3">No enabled schedules.</td></tr>
+                  <tr x-show="(overview.enabledAnalyticsSchedules || []).length === 0"><td class="adm-dim" colspan="2">No enabled schedules.</td></tr>
                 </tbody>
               </table>
             </div>

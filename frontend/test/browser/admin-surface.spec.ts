@@ -22,7 +22,7 @@ const OVERVIEW_FIXTURE = {
   serverDate: "2026-07-16",
   queueCounts: { pending: 1, running: 0, succeeded: 10, failed: 0, dead: 1, cancelled: 0 },
   alerts: [{ id: "a1", level: "dead", kind: "queue", message: "1 job is dead and needs a manual retry." }],
-  nextSchedules: [],
+  enabledAnalyticsSchedules: [],
   nextCommitteeEvent: null,
 };
 
