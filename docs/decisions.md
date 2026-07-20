@@ -414,3 +414,51 @@ them per endpoint.
 **Open follow-ups (#112).** Buyback USD valuation prices at spot-at-read
 rather than the swap-leg execution price, and the log scan's reorg margin is a
 fixed constant — both flagged in #112 for a later pass.
+
+---
+
+## D18 — Publish the MCP server as a fourth subdomain-routed surface (refines D13)
+
+**Decision.** Give the IC MCP server (`mcp/src/server.ts`) its own hostname
+instead of leaving it undocumented (issue #189): `mcp.staging.robotmoney.net`
+(staging) / `mcp.robotmoney.net` (production), Cloudflare-proxied like
+`committee.`/`app.` (topology.md §3.1). It is deployed to the **same DO
+droplet** as `committee.` (it is this repo's surface, and the `/health`
+contract already couples IC health to MCP reachability — topology.md §9), but
+runs as its **own container** (`mcp` service in `docker-compose.yml`) on its
+**own port**, so it cannot share `committee.`'s proxied port `443`. It uses
+Cloudflare's alternate proxied-HTTPS port **`8443`** (one of Cloudflare's
+fixed supported-port list, forwarded on any plan with no Origin Rule and no
+reverse proxy): `MCP_PORT=8443` in the droplet env is the only production
+config this requires, since `mcp/src/server.ts` already reads `MCP_PORT`
+straight into `Bun.serve({ port })`. Full endpoint:
+`https://mcp.<staging.>robotmoney.net:8443/mcp`, replacing the "ask your
+operator" placeholder previously in `participation.html`.
+
+**Why.** D13 established subdomain-per-surface as the mechanism for adding a
+new independently-addressed surface without a reverse proxy; MCP is exactly
+that — a distinct container/port that must not become a path prefix under
+`committee.` (which would require path-routing software D13 explicitly
+rejects). Reusing a Cloudflare-supported alternate port keeps the "no
+Worker, no reverse proxy, no new vendor permission" property intact instead
+of reaching for Cloudflare Origin Rules or a second droplet.
+
+**Relationship.** Refines D13 (topology.md §3/§3.1): the surface table gains a
+fourth row; the "no reverse proxy" and "no routing software" properties are
+unchanged. No code change — `mcp/src/server.ts` and `docker-compose.yml`
+were already correctly parameterized (`MCP_PORT`, own service block); this is
+a docs-only, config-value decision.
+
+**Alternatives rejected.**
+- **Path-prefix under `committee.` (e.g. `committee.robotmoney.net/mcp`)** —
+  requires a reverse proxy or path-routing software on the `committee.`
+  droplet process; rejected by D13's "no routing software" rule the same way
+  a Cloudflare Worker router was rejected there.
+- **A second droplet just for MCP** — real infra/cost for a service that is
+  already correctly isolated by container + port on the existing droplet;
+  no isolation benefit big enough to justify it here.
+- **Cloudflare Origin Rules to remap `mcp.` port 443 → origin `8788`** — works,
+  but adds a Cloudflare permission/config surface (`Zone · Origin Rules ·
+  Edit`) not otherwise needed anywhere in this repo's deployment; a
+  Cloudflare-supported alternate port achieves the same "one droplet, two
+  proxied listeners" outcome with zero new vendor surface.
