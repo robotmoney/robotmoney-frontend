@@ -144,7 +144,20 @@ test("admin-live: overview loads the real GET /api/admin/overview envelope (queu
   if (liveOverview.alerts.length === 0) {
     await expect(page.getByText("No active alerts — everything healthy.")).toBeVisible();
   } else {
-    await expect(page.getByText(liveOverview.alerts[0].message)).toBeVisible();
+    // Deliberately NOT asserting an exact alert message string here.
+    // backend/src/admin/overview.ts derives each alert's level/message from
+    // regime.classify / research.refresh's live run status, and this demo
+    // environment's schedules fire on a ~2min cron — so "regime.classify
+    // last run: not_run" can flip to a real timestamp/result mid-test, on a
+    // different alert each run, no matter which two reads are compared (CI
+    // hit this on three separate alerts across three different fix
+    // attempts: poll-pause, response-capture, then live-Alpine-state-read).
+    // The alert *count* is structurally stable (one row per production
+    // kind + regime + research signal, a fixed set independent of their
+    // live status), so assert that instead of any live-changing text.
+    const alertRows = page.locator(".adm-alerts > div");
+    await expect(alertRows).toHaveCount(liveOverview.alerts.length);
+    await expect(alertRows.first()).toBeVisible();
   }
 });
 
