@@ -55,6 +55,20 @@ async function login(page: Page): Promise<void> {
   await page.getByLabel("Admin password").fill(ADMIN_PASSWORD);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.locator(".adm-nav")).toBeVisible();
+
+  // admin-surface.js's startPolling() begins re-fetching the active section
+  // every 5s the instant sign-in resolves. Against the LIVE backend this spec
+  // deliberately does not mock, that data changes between polls (alert
+  // levels, schedule counts, job progress) — so a test that captures one
+  // response and, a few `await expect(...)` calls later, still expects the
+  // DOM to match it can lose a genuine race if a poll tick lands in between
+  // (observed in CI: an alert message and a schedule-row count each
+  // mismatched on separate runs). Immediately clicking the app's own real
+  // "Pause polling" control (not a network mock — admin endpoints stay 100%
+  // live and unmocked) freezes the shell before the 5s interval can fire
+  // again, so every assertion in this file compares against the same single
+  // response it captured.
+  await page.getByRole("button", { name: "Pause polling", exact: true }).click();
 }
 
 test("admin-live: overview loads the real GET /api/admin/overview envelope (queueCounts/alerts/enabledAnalyticsSchedules)", async ({ page }) => {
