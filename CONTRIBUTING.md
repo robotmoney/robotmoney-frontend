@@ -78,6 +78,61 @@ Preview mode trades data realism for zero setup:
   preview is the right surface for iterating quickly on the **marketing surface**
   itself.
 
+## Where changes go (and who can add files)
+
+This repo holds the **implementation** of the site + analytics backend. Where a
+file goes — and whether you may add one at all — is governed below and enforced
+on every PR by `scripts/check-contribution.ts` plus `.github/CODEOWNERS`.
+
+### Placement map
+
+| Kind of change | Location |
+| --- | --- |
+| Site UI | `frontend/public/` — `views/`, `assets/css/`, `assets/js/app/`, `assets/` |
+| Server / queue / workers / migrations | `backend/` |
+| Shared HTTP contract | `contract/` — re-vendor with `bun run sync-contract`, never hand-edit |
+| Committee MCP server | `mcp/` |
+| Tooling & CI scripts | `scripts/` — tests in `scripts/tests/` |
+| Technical docs about this repo | `docs/*.md` — kebab-case |
+| Workflows | `.github/workflows/` |
+| Root | config only — new root files/dirs are a review flag |
+
+### What belongs in this repo
+
+- This repo = **implementation** + docs describing this repo's behavior.
+- **Decisions live upstream.** Brand, voice, color, strategy decisions belong in
+  `robotmoney-context` (`brand/brand-sheet.md`); here you implement and link —
+  you do not author the decision.
+- **Roadmap / rollout / phase / TODO state** lives in the GitHub Plan issue, not
+  a committed `.md` (the create-gate flags markdown task-lists added under `docs/`).
+- **Provisional / unratified decisions** stay in the PR or issue thread until
+  ratified upstream; they do not merge to main.
+- **One concern per PR.**
+
+### Who can add files (the create-gate)
+
+- **Casual contributors** (anyone not listed in `.github/CODEOWNERS`): EDIT any
+  existing file freely, and you may CREATE only test files (`*.test.ts`,
+  `*.spec.ts`, or files under a `tests/`/`test/` directory). Any other new file
+  needs a codeowner — as the author, or approving the PR. If you need a new doc,
+  view, migration, workflow, or top-level directory, ask a codeowner
+  (`@LextotheX`, `@cmatthewbell`, `@lucky-tensor`).
+- **Codeowners** may create files anywhere.
+- **Why:** new files are new surface and new placement decisions; the PR that
+  motivated this rule added eleven, several in the wrong repo.
+
+### How it is enforced
+
+- `.github/CODEOWNERS` requires owner review on the sensitive paths (with branch
+  protection "Require review from Code Owners").
+- `scripts/check-contribution.ts` runs in the `docs-lint` job on every PR:
+  author-aware, it blocks a non-owner from creating files outside the allowlist
+  and flags roadmap task-lists added under `docs/`. Run it locally with
+  `bun run check:contribution`.
+- Judgment calls (is a new file justified, is this a decision that belongs
+  upstream, is the PR one concern) are for the PR reviewer. NOTE: a follow-up
+  will add an automated reviewer agent for these; for now they are human-reviewed.
+
 ## Where things are documented
 
 - Preview server + goldens design & the drift gate: [`docs/preview-server-spec.md`](docs/preview-server-spec.md)

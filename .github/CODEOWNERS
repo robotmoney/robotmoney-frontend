@@ -1,0 +1,19 @@
+# CODEOWNERS — the maintainers who may create new files anywhere and whose
+# review is required on the sensitive paths below.
+#
+# scripts/check-contribution.ts reads the distinct @logins in THIS file as the
+# owner set for its author-aware create-gate. There is deliberately NO global
+# "* @owner" line: casual contributors may EDIT any existing file freely; only
+# creating new files (outside the CONTRIBUTING allowlist) and the sensitive
+# paths below are gated. For these rules to BLOCK a merge, enable branch
+# protection: Settings > Branches > Require review from Code Owners.
+
+# Governance — only owners may change the rules themselves
+/.github/                         @LextotheX @cmatthewbell @lucky-tensor
+/CONTRIBUTING.md                  @LextotheX @cmatthewbell @lucky-tensor
+/scripts/check-contribution.ts    @LextotheX @cmatthewbell @lucky-tensor
+
+# Sensitive surfaces — owner review on any change
+/contract/                        @LextotheX @cmatthewbell @lucky-tensor
+/backend/**/migrations/           @LextotheX @cmatthewbell @lucky-tensor
+/docs/                            @LextotheX @cmatthewbell @lucky-tensor
