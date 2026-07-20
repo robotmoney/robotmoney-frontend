@@ -93,7 +93,12 @@ test("admin-live: overview loads the real GET /api/admin/overview envelope (queu
   // loadOverview() resolved without throwing.
   await expect(page.locator(".adm-tiles")).toBeVisible();
 
-  const scheduleRows = page.locator(".rm-table.adm-table tbody tr");
+  // admin.html's schedule table keeps an x-show="...length === 0" fallback
+  // <tr> ("No enabled schedules.") in the DOM at all times (just hidden),
+  // alongside the x-for rows — an unscoped locator overcounts by one when
+  // the list is non-empty. Scope to :visible, same fix as the committee
+  // tab-row locators below.
+  const scheduleRows = page.locator(".rm-table.adm-table tbody tr:visible");
   if (body.enabledAnalyticsSchedules.length === 0) {
     await expect(page.getByText("No enabled schedules.")).toBeVisible();
   } else {
