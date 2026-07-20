@@ -59,7 +59,12 @@ jobs:
       - name: Install root browser tooling
         run: bun install --frozen-lockfile
       - name: Install Chromium
-        run: bunx playwright install --with-deps chromium
+        # Browser binary only — Chromium's system libraries are provisioned on
+        # the self-hosted runner host. The `--with-deps` variant shells out to
+        # `sudo apt-get`, which fails on this runner (the runner user has no
+        # passwordless sudo and no TTY); the binary itself installs into the
+        # runner user's cache with no elevation.
+        run: bunx playwright install chromium
       - name: Install deps
         working-directory: mcp
         run: bun install --frozen-lockfile
