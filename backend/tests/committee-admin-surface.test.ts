@@ -9,7 +9,7 @@
 //
 // Runs against the ephemeral Postgres from tests/preload.ts (already fully
 // migrated).
-import { expect, test } from "bun:test";
+import { beforeAll, expect, test } from "bun:test";
 import * as admin from "../src/committee/admin.ts";
 import * as ic from "../src/committee/domain.ts";
 import { sql } from "../src/db/client.ts";
@@ -17,6 +17,17 @@ import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
+
+// All committee test files share ONE ephemeral Postgres (tests/preload.ts). With
+// COMMITTEE_ROSTER_CAP now hard-enforced on every transition-to-active, a roster
+// left full by an earlier-running file would make this file's first member
+// admission 409. Reset the roster so this file admits its own members from empty,
+// independent of file order. The suite's shared-committee assertions here are all
+// containment/`>=` (arrayContaining, rosterSize >= 2), so a clean start still
+// satisfies them.
+beforeAll(async () => {
+  await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
+});
 
 async function activeMember(name = "member") {
   const id = rid("m");

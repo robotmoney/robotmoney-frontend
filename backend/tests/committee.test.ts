@@ -1,9 +1,20 @@
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import * as ic from "../src/committee/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
+import { sql } from "../src/db/client.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
+
+// All committee test files share ONE ephemeral Postgres (tests/preload.ts). Now
+// that COMMITTEE_ROSTER_CAP is hard-enforced on every transition-to-active, a
+// roster left full by an earlier-running file would make this file's real
+// apply→activate / registerMember admissions 409 ("roster full"). Start from a
+// clean roster so this file's ~6 admissions are order-independent and well under
+// the cap. (CASCADE also clears member keys / session-member rows.)
+beforeAll(async () => {
+  await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
+});
 
 async function activeMember() {
   const id = rid("m");

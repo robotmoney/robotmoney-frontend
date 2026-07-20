@@ -3,7 +3,7 @@
 // server, the worker, and the dev driver all call these; they never diverge.
 import { classifyRegime, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { config } from "../config.ts";
-import { jsonValue, sql } from "../db/client.ts";
+import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import { verifySubmissionSignature } from "../lib/signing.ts";
 import { toBrief, toMember, toMemo, toSession, toSnapshot, toSubject, toTake } from "./projections.ts";
@@ -23,11 +23,14 @@ async function publicKeyFor(memberId: string): Promise<string | null> {
   return rows[0]?.public_key ?? null;
 }
 
-// Fixed target size for the standing demo committee. The onboarding driver stops
-// admitting new members once the active roster reaches this cap, so the committee
-// settles at a realistic, bounded size instead of growing without bound. The
-// CANONICAL value lives in @robotmoney/contract (contract/src/committee.js) —
-// the shared channel mcp/scripts can also import, retiring the comment-enforced
+// Fixed maximum size for the standing committee. HARD-ENFORCED at every
+// transition-to-active in the domain/admin layer (activateMember, admin manual
+// add, admin reactivate, and the demo registerMember shortcut) via
+// assertRosterCapacity below — an over-cap admission is refused with a 409, not
+// merely warned about. (The onboarding demo driver also self-throttles ahead of
+// the write, but the write path is now the authoritative gate.) The CANONICAL
+// value lives in @robotmoney/contract (contract/src/committee.js) — the shared
+// channel mcp/scripts can also import, retiring the comment-enforced
 // e2e.COMMITTEE_ROSTER_CAP mirror (finding 008). Re-exported under the same name
 // so backend/tests/committee-roster-cap.test.ts (which pins its assertions to
 // this constant, never a literal) keeps reading it from the domain layer.
@@ -44,6 +47,32 @@ export async function countActiveMembers(): Promise<number> {
   const rows = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM committee_members WHERE status = 'active'`;
   return Number(rows[0]?.n ?? 0);
+}
+
+// Serialize every roster-admission transaction on one advisory key. A bare
+// count()-then-write is a TOCTOU race: two concurrent activations each read
+// count=CAP-1 and both admit, blowing past COMMITTEE_ROSTER_CAP. A txn-scoped
+// advisory lock forces admissions one-at-a-time and auto-releases at commit.
+// Call this FIRST inside any transaction that flips/creates a member to
+// 'active', before the write. Pass the member id as `exemptMemberId` when the
+// operation may target an already-active member (idempotent re-register) so a
+// no-op re-activation doesn't spuriously trip the cap.
+const ROSTER_ADMISSION_LOCK = 0x1cc0de; // stable arbitrary key for the committee roster
+export async function assertRosterCapacity(
+  tx: DbHandle,
+  exemptMemberId?: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  await tx`SELECT pg_advisory_xact_lock(${ROSTER_ADMISSION_LOCK})`;
+  if (exemptMemberId) {
+    const active = await tx`SELECT 1 FROM committee_members WHERE id = ${exemptMemberId} AND status = 'active'`;
+    if (active.length > 0) return { ok: true }; // idempotent no-op; slot already counted
+  }
+  const rows = await tx<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM committee_members WHERE status = 'active'`;
+  const n = Number(rows[0]?.n ?? 0);
+  if (n >= COMMITTEE_ROSTER_CAP)
+    return { ok: false, status: 409, error: `committee roster full (${n}/${COMMITTEE_ROSTER_CAP})` };
+  return { ok: true };
 }
 export async function getMember(id: string) {
   const row = (await sql`SELECT * FROM committee_members WHERE id = ${id}`)[0];
@@ -200,6 +229,10 @@ export async function activateMember(memberId: string) {
     const key = (await tx`SELECT id FROM committee_member_keys WHERE member_id = ${memberId} AND active = false ORDER BY created_at DESC LIMIT 1 FOR UPDATE`)[0] as { id: number } | undefined;
     if (!key) return { ok: false, status: 409, error: "no pending key; member must apply first" };
     const token = `tok_${memberId}_${crypto.randomUUID()}`;
+    // Capacity gate: an 'applied' member is not yet active, so no exemption —
+    // this admission must fit under COMMITTEE_ROSTER_CAP or it's refused.
+    const cap = await assertRosterCapacity(tx);
+    if (!cap.ok) return cap;
     const upd = await tx`UPDATE committee_member_keys SET active = true, token_hash = ${hashKey(token)} WHERE id = ${key.id} AND active = false RETURNING id`;
     if (upd.length === 0) return { ok: false, status: 409, error: "activation raced; retry" };
     await tx`UPDATE committee_members SET status = 'active', activated_at = now() WHERE id = ${memberId}`;
@@ -216,13 +249,21 @@ export async function activateMember(memberId: string) {
 // applyMember → activateMember. Private keys never leave the member.
 export async function registerMember(input: { memberId: string; name: string; lens?: string; publicKey: string }) {
   const token = `tok_${input.memberId}_${crypto.randomUUID()}`;
-  await sql`INSERT INTO committee_members (id, status, name, lens)
-            VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null})
-            ON CONFLICT (id) DO UPDATE SET status = 'active', name = EXCLUDED.name, lens = EXCLUDED.lens`;
-  await sql`DELETE FROM committee_member_keys WHERE member_id = ${input.memberId}`;
-  await sql`INSERT INTO committee_member_keys (member_id, public_key, token_hash)
-            VALUES (${input.memberId}, ${input.publicKey}, ${hashKey(token)})`;
-  return { memberId: input.memberId, token };
+  // Transactional so the capacity gate and the writes are one atomic admission.
+  // Exempt this id: re-registering an ALREADY-active member is idempotent
+  // (ON CONFLICT DO UPDATE, same slot) and must not trip the cap; only a NET-NEW
+  // active member counts against COMMITTEE_ROSTER_CAP.
+  return await sql.begin(async (tx) => {
+    const cap = await assertRosterCapacity(tx, input.memberId);
+    if (!cap.ok) return cap;
+    await tx`INSERT INTO committee_members (id, status, name, lens)
+             VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null})
+             ON CONFLICT (id) DO UPDATE SET status = 'active', name = EXCLUDED.name, lens = EXCLUDED.lens`;
+    await tx`DELETE FROM committee_member_keys WHERE member_id = ${input.memberId}`;
+    await tx`INSERT INTO committee_member_keys (member_id, public_key, token_hash)
+             VALUES (${input.memberId}, ${input.publicKey}, ${hashKey(token)})`;
+    return { memberId: input.memberId, token };
+  });
 }
 
 // Dev-only: wipe session data so a demo can be re-run for today's subject.
