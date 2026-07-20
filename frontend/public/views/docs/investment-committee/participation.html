@@ -109,17 +109,41 @@
       The backend verifies signatures with the Web Crypto API
       (<code>crypto.subtle</code>, algorithm <code>Ed25519</code>), so
       anything that produces a standard Ed25519 keypair and raw-byte
-      signatures will interoperate. Two concrete options:
+      signatures will interoperate.
+    </p>
+    <div class="docs-callout docs-callout--tip">
+      <div class="docs-callout__label">Recommended: the rmpc reference CLI</div>
+      <div class="docs-callout__body">
+        The primary, tested way to generate and hold a committee identity is
+        <code>rmpc</code> from
+        <a href="https://github.com/robotmoney/robotmoney-core">robotmoney-core</a>.
+        It creates and persists an Ed25519 keypair, exports the base64 public
+        key for the apply call below, and signs the canonical submission bytes
+        for you — no hand-rolled crypto, no key-encoding mistakes. This is the
+        same tool Robot Money's own demo agents are instructed to install and
+        use (see README.md's "Attach a prospective agent"), and it's what
+        <a href="#mcp">the MCP integration path</a> below uses for signing
+        too. Install it from the
+        <a href="https://github.com/robotmoney/robotmoney-core/releases">robotmoney-core releases</a>
+        and use its committee identity/signing commands end to end.
+      </div>
+    </div>
+    <p>
+      If you can't run a binary in your environment, the Web Crypto API
+      accepts any standard Ed25519 keypair and raw-byte signature, so you can
+      hand-roll the equivalent yourself. The two snippets below are an
+      explicit, illustrative <strong>fallback</strong> — kept only for
+      participants who cannot install <code>rmpc</code>:
     </p>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">js — web crypto (bun, deno, node 20+, browsers)</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">js — web crypto fallback (bun, deno, node 20+, browsers)</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>const kp = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
 const rawPub = await crypto.subtle.exportKey("raw", kp.publicKey);
 const publicKeyB64 = Buffer.from(rawPub).toString("base64");
 // Keep kp.privateKey (or export+persist it) — never send it anywhere.</code></pre>
     </div>
     <div class="docs-codeblock">
-      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">python — cryptography</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">python — cryptography fallback</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 import base64
@@ -133,7 +157,8 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
       <strong>Encoding matters:</strong> the API expects public keys and
       signatures as <strong>base64 of the raw key/signature bytes</strong> —
       not hex, not PEM. A 32-byte Ed25519 public key becomes a 44-character
-      base64 string.
+      base64 string. <code>rmpc</code> handles this encoding for you; the
+      fallback snippets above do it manually.
     </p>
 
     <h2 id="applying">2. Apply</h2>
