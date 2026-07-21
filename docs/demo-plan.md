@@ -200,18 +200,28 @@ P1 (worker) → concurrent (P2, P3) → P5 (authz) → P6 (frontend) → P7 (mul
 `bun run demo` runs as a long-lived **standing demo** rather than a one-shot:
 
 - **Bring-up + healthcheck + READY route table**, then a run state file at
-  `.agents/demo-state.json`.
+  `.agents/demo-state.json` (also records the postgres data location).
+- **Resumable data (optional)**: `bun run demo -- --pg-data <host-dir>` bind-mounts
+  postgres to a host directory so a reboot resumes from it (a CLI argument, never an env
+  var; recorded in the state file). Without it, each run uses a fresh named volume
+  `<project>_pgdata` labeled `robotmoney.demo=1`.
 - **Recurring, staggered (~2 min) scheduled actions**: regime + research driven by the
   worker's scheduler via fast demo-cadence `job_schedules` rows gated behind
   `DEMO_MODE` (`regime.classify` `*/2`, `research.refresh` `1-59/2`; the same flag
   slows `wallet.sample_balances` to hourly for per-IP provider-quota protection); committee
   sessions driven by an in-process MCP-agent loop in `demo.ts` reusing the exported
   `runSession` from `mcp/src/e2e.ts` (rotating date/subject, no reset between ticks).
-- **Teardown on exit**: Ctrl-C / SIGTERM tears the stack down (`docker compose down -v`
-  + removes the state file) and prints the log path; a **startup failure** is the
-  exception and leaves containers up for inspection. `bun run demo:down` /
-  `bun run demo:status` handle an already-running (e.g. backgrounded) demo.
-- CI (`process.env.CI`) still runs the checks once and tears down.
+- **Teardown on exit — keeps data**: Ctrl-C / SIGTERM tears the stack down
+  (`docker compose down`, **no `-v`** — containers + network go, postgres data and the
+  state file are **kept**) and prints the log path plus a resume/reclaim hint; a
+  **startup failure** is the exception and leaves containers up for inspection.
+  `bun run demo:down` tears down an already-running (e.g. backgrounded) demo the same way;
+  `bun run demo:status` shows it (including the data location); `bun run demo:clean` is
+  the only command that deletes demo data volumes (by `robotmoney.demo=1` label; loud
+  skip on in-use; never a `--pg-data` host dir).
+- CI (`process.env.CI`) runs the checks once, tears down (no `-v`), then reclaims **only
+  its own run's** volume (scoped by `robotmoney.demo.project` label) so the shared
+  self-hosted runner leaks nothing.
 
 See demo-spec.md §0.
 

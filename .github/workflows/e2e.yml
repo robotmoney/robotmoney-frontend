@@ -102,6 +102,16 @@ jobs:
         run: bun run scripts/demo.ts
         env:
           CI: "true"
+          # Pin a deterministic, per-run compose project name (issue: demo
+          # persistent volumes). Teardown now keeps the postgres volume by default,
+          # so this required boot on the SHARED self-hosted runner must reclaim its
+          # OWN volume and no one else's. A pinned name makes the volume label
+          # (robotmoney.demo.project=<this>) unique per run+attempt, so both the
+          # in-process cleanup (demo-main.ts cleanCiVolume) and the always() backstop
+          # step below can scope the delete to exactly this run — never the co-tenant
+          # standing demo. Keeps the required rmdemo_ prefix; underscores are valid
+          # in a compose project name. run_attempt makes reruns collision-free.
+          DEMO_PROJECT: rmdemo_ci_${{ github.run_id }}_${{ github.run_attempt }}
           # This required e2e boots the LIVE data path (issue #147 — DEMO_HERMETIC
           # removed): committee takes use the deterministic stanceFor() +
           # buildMemo() template path (mcp/src/agent.ts, memo.ts) — no live model,
@@ -122,3 +132,16 @@ jobs:
           # than the retired hermetic boot was — an accepted, deliberate
           # consequence of issue #147/#163, not a bug in this workflow.
         timeout-minutes: 40
+      # Volume-leak backstop (issue: demo persistent volumes). The demo boot above
+      # reclaims its own volume on both success and failure (demo-main.ts
+      # cleanCiVolume). This always() step is the belt-and-suspenders case: if the
+      # boot step is KILLED (e.g. the 40-min timeout) it never reaches its own
+      # teardown, so reclaim here too. Scoped to THIS run's project label — it
+      # deletes only rmdemo_ci_<run>_<attempt>_pgdata, never the standing demo that
+      # shares this self-hosted runner. Never touches --pg-data host dirs (CI does
+      # not use --pg-data; they are not docker volumes anyway).
+      - name: Reclaim this run's demo volume (no leaks on the shared runner)
+        if: always()
+        run: bun run scripts/demo-clean.ts --project "$DEMO_PROJECT"
+        env:
+          DEMO_PROJECT: rmdemo_ci_${{ github.run_id }}_${{ github.run_attempt }}
