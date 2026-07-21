@@ -31,6 +31,7 @@ const tokenStore = new TokenStore(ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL);
 
 function buildServer(memberId: string, memberToken: string) {
   const server = new McpServer({ name: "robotmoney-committee", version: "0.1.0" });
+  const weightsSchema = z.array(z.object({ bucket: z.string(), weight: z.number().nonnegative() })).optional();
 
   server.registerTool("get_regime", { description: "Latest regime classification statistics.", inputSchema: {} },
     async () => j((await get(`${ROUTES.dashboards.regimeSnapshots}?range=1`)).latest));
@@ -46,11 +47,11 @@ function buildServer(memberId: string, memberToken: string) {
     async ({ date, subject }) => j(await get(routePath(ROUTES.committee.session, { date, subject }))));
   server.registerTool("get_signing_payload",
     { description: "Canonical bytes to sign for a drafted recommendation.",
-      inputSchema: { memberId: z.string(), date: z.string(), subjectId: z.string(), nonce: z.string(), stance: z.string(), confidence: z.number(), body: z.string().optional(), memoUrl: z.string().optional() } },
+      inputSchema: { memberId: z.string(), date: z.string(), subjectId: z.string(), nonce: z.string(), stance: z.string(), confidence: z.number(), body: z.string().optional(), memoUrl: z.string().optional(), weights: weightsSchema } },
     async (sub) => j({ canonical: canonicalizeSubmission(sub) }));
   server.registerTool("submit_recommendation",
     { description: "Submit a signed recommendation (ed25519 signature over the canonical payload).",
-      inputSchema: { memberId: z.string(), date: z.string(), subjectId: z.string(), nonce: z.string(), stance: z.string(), confidence: z.number(), body: z.string().optional(), memoUrl: z.string().optional(), signature: z.string() } },
+      inputSchema: { memberId: z.string(), date: z.string(), subjectId: z.string(), nonce: z.string(), stance: z.string(), confidence: z.number(), body: z.string().optional(), memoUrl: z.string().optional(), weights: weightsSchema, signature: z.string() } },
     async (sub) => {
       const res = await fetch(`${BACKEND}${ROUTES.committee.submit}`, {
         method: "POST",

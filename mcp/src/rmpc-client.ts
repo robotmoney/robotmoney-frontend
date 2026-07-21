@@ -26,6 +26,7 @@ export interface SubmissionDraft {
   confidence: number;
   body?: string;
   memoUrl?: string;
+  weights?: { bucket: string; weight: number }[];
 }
 
 export interface SubmitViaMcpOpts {

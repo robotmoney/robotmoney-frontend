@@ -12,6 +12,9 @@ export function canonicalizeSubmission(s) {
     confidence: s.confidence,
     body: s.body ?? "",
     memoUrl: s.memoUrl ?? "",
+    ...(s.weights != null ? {
+      weights: s.weights.map((entry) => ({ bucket: entry.bucket, weight: entry.weight })),
+    } : {}),
   };
   return JSON.stringify(ordered);
 }

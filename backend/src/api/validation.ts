@@ -31,6 +31,25 @@ export function optionalString(
   return value ?? undefined;
 }
 
+function optionalWeights(body: JsonObject): { bucket: string; weight: number }[] | null | undefined {
+  if (body.weights == null) return undefined;
+  if (!Array.isArray(body.weights) || body.weights.length === 0) return null;
+
+  const seen = new Set<string>();
+  const weights: { bucket: string; weight: number }[] = [];
+  let total = 0;
+  for (const entry of body.weights) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const bucket = requiredString(entry as JsonObject, "bucket", 100);
+    const weight = (entry as JsonObject).weight;
+    if (!bucket || seen.has(bucket) || typeof weight !== "number" || !Number.isFinite(weight) || weight < 0) return null;
+    seen.add(bucket);
+    weights.push({ bucket, weight });
+    total += weight;
+  }
+  return total > 0 && Number.isFinite(total) ? weights : null;
+}
+
 export function parseApply(body: JsonObject | null): ApplyInput | null {
   if (!body) return null;
   const memberId = requiredString(body, "memberId", 100);
@@ -55,11 +74,12 @@ export function parseSubmission(body: JsonObject | null): SubmissionInput | null
   const stance = requiredString(body, "stance", 100);
   const signature = requiredString(body, "signature", 2000);
   const confidence = body.confidence;
+  const weights = optionalWeights(body);
   if (
     !memberId || !date || !subjectId || !nonce || !stance || !signature ||
     !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
     typeof confidence !== "number" || !Number.isFinite(confidence) ||
-    confidence < 0 || confidence > 1
+    confidence < 0 || confidence > 1 || weights === null
   ) return null;
   return {
     memberId,
@@ -71,6 +91,7 @@ export function parseSubmission(body: JsonObject | null): SubmissionInput | null
     signature,
     body: optionalString(body, "body", 10_000),
     memoUrl: optionalString(body, "memoUrl", 2000),
+    weights,
   };
 }
 
@@ -84,11 +105,12 @@ export function parseSigningDraft(
   const nonce = requiredString(body, "nonce", 200);
   const stance = requiredString(body, "stance", 100);
   const confidence = body.confidence;
+  const weights = optionalWeights(body);
   if (
     !memberId || !date || !subjectId || !nonce || !stance ||
     !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
     typeof confidence !== "number" || !Number.isFinite(confidence) ||
-    confidence < 0 || confidence > 1
+    confidence < 0 || confidence > 1 || weights === null
   ) return null;
   return {
     memberId,
@@ -99,6 +121,7 @@ export function parseSigningDraft(
     confidence,
     body: optionalString(body, "body", 10_000),
     memoUrl: optionalString(body, "memoUrl", 2000),
+    weights,
   };
 }
 
