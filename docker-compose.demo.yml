@@ -35,8 +35,15 @@ services:
       # the prod default.
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
-      # Opt-in on-disk fetch cache TTL (ms) so repeated live boots are fast. 0 = off.
-      FETCH_CACHE_TTL_MS: ${FETCH_CACHE_TTL_MS:-0}
+      # PINNED literal (not a passthrough): this overlay IS the demo, so every
+      # runtime container knows it. DEMO_MODE is the single "this stack is the
+      # demo" signal — the backend selects hard-coded demo values off it (e.g.
+      # the 1h provider-cache TTLs in analytics/extract/fetch-cache.ts and
+      # chain/token-prices.ts) instead of growing per-property env knobs. The
+      # cache TTLs exist because the standing demo and the self-hosted CI
+      # runner share one host IP against GeckoTerminal + the public Base RPC.
+      DEMO_MODE: "1"
+      # Cache DIRECTORY (a path is genuinely environmental, unlike the TTLs).
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
 
   # All three worker lanes (issue #107: worker-committee reserved for the
@@ -58,7 +65,10 @@ services:
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
-      FETCH_CACHE_TTL_MS: ${FETCH_CACHE_TTL_MS:-0}
+      # Same pinned demo signal as api — the analytics worker's samplers are the
+      # main provider-quota consumers, so the DEMO_MODE-selected 1h cache TTLs
+      # (analytics/extract/fetch-cache.ts, chain/token-prices.ts) matter most here.
+      DEMO_MODE: "1"
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
 
   worker-analytics: *demo-worker
@@ -67,4 +77,23 @@ services:
 
   mcp:
     labels:
+      robotmoney.demo.project: ${DEMO_PROJECT}
+
+# Namespace the postgres data volume so `bun run demo:clean` (scripts/demo-clean.ts)
+# can find and delete demo pgdata volumes by LABEL, never by fragile name-substring
+# matching. Two labels, mirroring the per-container label pattern above:
+#   - robotmoney.demo=1              → "this volume belongs to the demo" (the filter
+#                                       demo:clean uses to enumerate ALL demo volumes).
+#   - robotmoney.demo.project=<proj> → which run created it (lets CI / demo:clean
+#                                       scope a delete to a single run's volume).
+# Demo lifecycle (issue: demo persistent volumes): teardown (SIGTERM/Ctrl-C and
+# `demo:down`) now keeps this volume — `docker compose down` WITHOUT -v — so demo
+# data survives a reboot. `demo:clean` is the ONLY path that deletes it. When the
+# operator passes `bun run demo -- --pg-data <host-dir>`, postgres is bind-mounted
+# to that host dir instead (a generated overlay replaces this mount by target
+# path), so NO named volume is created and demo:clean never touches the host dir.
+volumes:
+  pgdata:
+    labels:
+      robotmoney.demo: "1"
       robotmoney.demo.project: ${DEMO_PROJECT}

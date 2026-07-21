@@ -3,8 +3,11 @@
 What `bun run demo` must demonstrate to exercise the full Investment Committee lifecycle —
 a single command that provisions everything, runs the session lifecycle end-to-end, and
 keeps the stack live as a **standing demo** (see §0). Ctrl-C / SIGTERM tears the stack
-down; a startup failure leaves it up for inspection; `bun run demo:down` tears down an
-already-running (e.g. backgrounded) demo.
+down **but keeps the postgres data** (see §0(c)); a startup failure leaves it up for
+inspection; `bun run demo:down` tears down an already-running (e.g. backgrounded) demo,
+also keeping its data. `bun run demo -- --pg-data <host-dir>` bind-mounts postgres to a
+host directory so a reboot resumes from it; `bun run demo:clean` is the only command that
+deletes demo data volumes.
 
 > **One committee, not many.** Everything below exercises the *single* Investment
 > Committee. The harness drives it through **two sessions** (session 1 = today's
@@ -78,18 +81,38 @@ three phases and stays up until you stop it (Ctrl-C / SIGTERM):
 **(a) Bring-up.** Build images → start Postgres → migrate (seeds `job_schedules`) →
 start api + worker + mcp → wait for `/health` on api and mcp. Once healthy it writes a
 run state file at `.agents/demo-state.json` (compose project name + this run's random
-ports + compose env, so teardown can find the run) and prints the READY route table.
+ports + compose env + the postgres data location, so teardown/status can find the run)
+and prints the READY route table.
+
+**Postgres data location.** By default each run uses a fresh anonymous named volume
+`<project>_pgdata`, labeled `robotmoney.demo=1` (so `demo:clean` can find it). Passing
+`bun run demo -- --pg-data <host-dir>` instead bind-mounts postgres's data directory to
+`<host-dir>` (created if absent), so the SAME value on a later boot resumes the SAME
+data — this is a CLI **argument**, never an env var, and is recorded in the state file.
+Reuse constraints: the same postgres major (17) and the same baked-in demo credentials;
+migrate + seed are idempotent (`backend/src/db/seed.ts` uses `ON CONFLICT DO NOTHING`),
+so re-booting on old data converges rather than duplicating rows. (Bind mounts were
+verified working on the Linux CI host — postgres:17-alpine chowns the bind dir to its own
+container user and inits/resumes cleanly — so the named-volume fallback was not needed.)
 
 **(b) Staggered scheduled actions (~2 min cadence).** The demo continuously produces
 fresh activity, driven two ways (hybrid):
 
 - **Regime + research** — driven by the worker's own scheduler. In demo mode
-  (`DEMO_FAST_SCHEDULES=1`, set only for the local migrate/seed) the seed appends fast
+  (`DEMO_MODE=1` — the single demo-stack flag, pinned on every demo container by
+  `docker-compose.demo.yml` and passed to the migrate/seed one-shot; it replaced
+  the old `DEMO_FAST_SCHEDULES`) the seed appends fast
   demo-cadence rows to `job_schedules` in addition to the default daily 22:30 UTC rows:
   `regime.classify` on `*/2 * * * *` (regime only, analytics lane) and
   `research.refresh` on `1-59/2 * * * *` (both research signals only, research
   lane — issue #107 split the retired combined `analytics.run` kind). The
   one-minute cron offset staggers them so they fire at different times.
+  `DEMO_MODE` also SLOWS the wallet sampler: it seeds an hourly
+  `wallet.sample_balances` row (`3 * * * *`, staggered off the hourly vault
+  sample) and disables the per-minute baseline — the standing demo and the
+  self-hosted CI runner share one host IP, and per-minute GeckoTerminal/Base-RPC
+  sampling exhausts the per-IP quotas (hourly token prices are an accepted demo
+  tradeoff; the seed's cold-start enqueue still lands a live sample at boot).
 - **Committee opinions** — driven by a loop inside `scripts/demo.ts`, because a
   committee session needs live MCP agents to sign + submit takes. After a one-time
   reset + setup, it runs one full session (open → brief → collect → agents →
@@ -103,18 +126,32 @@ One immediate tick of each runs at startup so the site has data on first load; t
 one-shot frontend check (`scripts/demo-frontend-check.ts`) also runs once,
 non-fatally.
 
-**(c) Teardown.** The stack stays up until you stop it. **Ctrl-C / SIGTERM tears it
-down** (`docker compose down -v`), printing the log-file path first (the log persists for
-post-mortem) and removing the state file. A **startup failure** is the exception: it
-dumps diagnostics and leaves the containers up for inspection. For a demo that is already
+**(c) Teardown — keeps data by default.** The stack stays up until you stop it. **Ctrl-C
+/ SIGTERM tears it down** (`docker compose down`, **no `-v`**), printing the log-file path
+first (the log persists for post-mortem). Containers + network are removed but the
+**postgres data volume (or `--pg-data` host dir) is KEPT**, so a later `bun run demo`
+resumes from it. The state file is **kept too** — the data it points to survives, so the
+pointer must survive; it is overwritten by the next boot and only cleared when
+`demo:clean` deletes the volume it names. A **startup failure** is the exception: it dumps
+diagnostics and leaves the containers up for inspection. For a demo that is already
 running (e.g. started in the background, or its process was killed with SIGKILL):
 
-- `bun run demo:down` — `docker compose down -v` for the recorded run + removes the
-  state file.
+- `bun run demo:down` — `docker compose down` (no `-v`) for the recorded run; keeps the
+  data volume/dir and the state file.
 - `bun run demo:status` — `docker compose ps` for the recorded run (also prints the log
-  path).
+  path and the postgres data location). A stopped-but-preserved demo shows no running
+  containers while the state file still points at the kept data.
+- `bun run demo:clean` — the **only** command that deletes demo data. It removes every
+  volume labeled `robotmoney.demo=1` (with `--project <name>` it scopes to one run),
+  listing what it removed and **loudly skipping** any in-use volume (a demo still running
+  on it). It **never** touches a `--pg-data` host directory (those are not docker volumes).
 
-CI (`process.env.CI`) is unchanged: it runs the checks once and then tears down.
+CI (`process.env.CI`) runs the checks once and then tears down; because keep-by-default
+would leak a volume on the **shared self-hosted runner**, the CI path additionally
+reclaims **its own run's** volume (scoped by the `robotmoney.demo.project` label) on both
+success and failure, and `.github/workflows/e2e.yml` has an `if: always()` backstop for a
+killed/timed-out boot — so CI leaves zero volumes behind while never touching a co-tenant
+standing demo.
 
 ## 1. Lifecycle stages
 
@@ -324,27 +361,33 @@ The live path (the only path) can still be tuned via env before `bun run demo`.
   (append-only — existing DB rows win on overlap; no-op once warm). Defaults to `1`
   on every demo boot (`scripts/lib/demo-env.ts`); set `0` explicitly to disable it.
   `FLOOR_SEED_PATH` overrides the seed file (must be readable inside the container).
-- **`FETCH_CACHE_TTL_MS`** (+ optional `FETCH_CACHE_DIR`) — opt-in on-disk TTL cache
-  for the heavy source GETs so repeated live boots are fast and polite to upstreams.
-  `0` (default) disables it entirely.
+- On-disk fetch cache — no TTL knob anymore (the old `FETCH_CACHE_TTL_MS` env
+  was removed): the TTL is mode-selected in
+  `backend/src/analytics/extract/fetch-cache.ts` — 1 hour under `DEMO_MODE`
+  (per-IP quota protection; the demo host also runs the self-hosted CI runner),
+  off everywhere else. Optional `FETCH_CACHE_DIR` still overrides the cache
+  directory (a path is genuinely environmental; the TTL is not).
 - **`BASE_RPC_URL`** — the vault-economics eth_call endpoint (§10). Unset →
   backend `config.ts` falls through to its production default
   (`https://mainnet.base.org`); set explicitly to point at a private RPC.
 
-Example: `FETCH_CACHE_TTL_MS=3600000 bun run demo` (with a polite cache).
 The live path preserves the honesty model: empty fetch → persisted real floor; a
 no-history indicator is excluded + logged (never synthetic).
 - Random ports (Postgres, API, MCP) + unique compose project name: concurrent runs do
   not collide. The run identity (project + ports + compose env) is written to
   `.agents/demo-state.json` so the explicit teardown command can find it.
 - **Teardown on exit (local).** Ctrl-C / SIGTERM tears the stack down
-  (`docker compose down -v`, wipes the volume, removes the state file) and prints the
-  log-file path first. A **startup failure** is the exception — it leaves the stack
-  RUNNING so it can be inspected. `bun run demo:down` tears down an already-running demo
-  (e.g. one started in the background); `bun run demo:status` shows the running
-  containers and the log path.
-- **CI is the exception:** when `process.env.CI` is set the demo runs its checks once
-  and then tears down (`docker compose down -v`) so no containers/volumes leak.
+  (`docker compose down`, **no `-v`** — containers + network removed, postgres data
+  **kept**, state file **kept**) and prints the log-file path first. A **startup failure**
+  is the exception — it leaves the stack RUNNING so it can be inspected. `bun run
+  demo:down` tears down an already-running demo the same way (keeps data); `bun run
+  demo:status` shows the containers, the log path, and the postgres data location; `bun
+  run demo:clean` is the only command that deletes demo data volumes (by
+  `robotmoney.demo=1` label; loud skip on in-use; never a `--pg-data` host dir).
+- **CI reclaims its own volume:** when `process.env.CI` is set the demo runs its checks
+  once, tears down (`docker compose down`, no `-v`), then deletes **only its own run's**
+  volume (scoped by the `robotmoney.demo.project` label) so the shared self-hosted runner
+  leaks nothing while a co-tenant standing demo is untouched.
 - A missing Docker dependency (Postgres image, build failure) must fail the run
   loudly, never silently skip.
 
@@ -412,14 +455,15 @@ the TUI shows only distilled state. Layout:
     thinking → reporting → waiting; no-shows absent), and a per-subject **countdown** to
     its next session (`running…` while in progress).
 - **Log footer** — the last few distilled events plus: `Ctrl-C / SIGTERM tears down the
-  stack (containers + volume)`.
+  stack (containers + network; postgres data kept)`.
 
 Full verbose output from every process (api, worker, mcp, migrations, the committee
 driver, and the orchestrator's own narration) is written to
 `.agents/demo-<project>.log` (path shown in the TUI header, recorded in the state file,
 and shown by `bun run demo:status`). On Ctrl-C / SIGTERM the terminal is restored first,
-the log path is printed, and the stack is torn down. A startup failure instead restores
-the terminal and leaves the containers up for inspection (with the log path).
+the log path is printed, the stack is torn down (data kept), and a resume/reclaim hint is
+printed. A startup failure instead restores the terminal and leaves the containers up for
+inspection (with the log path).
 
 ### 10.2 Plain fallback (non-TTY, CI, `--no-tui` / `NO_TUI=1`)
 
@@ -438,8 +482,10 @@ scheduled action as it fires.
 
   State file: .agents/demo-state.json
   Log file:   .agents/demo-<project>.log
+  PG data:    volume <project>_pgdata (fresh-per-run; kept on teardown)
   Demo actions run on a ~2-min staggered cadence.
-  Ctrl-C / SIGTERM tears down the stack (containers + volume).
+  Ctrl-C / SIGTERM tears down the stack (containers + network; postgres data kept).
+  Reclaim stopped demos' data volumes with: bun run demo:clean
 ```
 
 ## 11. New-member onboarding (growing committee)

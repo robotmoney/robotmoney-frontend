@@ -153,7 +153,9 @@ bun run api                  # API only (no static)   — backend/
 bun run worker               # task-queue worker      — backend/
 bun test                     # hermetic suite (spins ephemeral Postgres) — backend/
 bun run typecheck            # tsc --noEmit            — backend/
-bun run demo:down            # tear down the standing demo (containers + volume)
+bun run demo:down            # tear down the standing demo (containers + network; KEEPS pg data)
+bun run demo:clean           # delete stopped demos' pg data volumes (label robotmoney.demo=1)
+bun run demo -- --pg-data <host-dir>   # resumable demo: bind postgres data to <host-dir>
 bun run preview              # serve the SPA with /api/* mocked from goldens (random port) — root
 bun run goldens:update       # recapture goldens from a running backend (BACKEND_URL) — root
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)

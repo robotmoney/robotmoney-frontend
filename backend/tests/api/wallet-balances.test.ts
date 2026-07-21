@@ -170,10 +170,19 @@ function mockChain(fx: ChainFixtures): MockCounter {
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
     const u = String(url);
     if (u.includes("geckoterminal.com")) {
-      const addr = u.split("/token_price/")[1]!.toLowerCase();
-      const price = fx.gecko?.[addr];
-      if (price == null) throw new Error(`mockChain: no gecko price for ${addr}`);
-      return new Response(JSON.stringify({ data: { attributes: { token_prices: { [addr]: String(price) } } } }), { status: 200 });
+      // token_price now takes a comma-separated address list (token-prices.ts
+      // micro-batches every same-burst leg into ONE request — the demo/CI
+      // quota fix). Serve EVERY requested address from the fixture book; a
+      // missing fixture still throws LOUDLY (a typo in a test must fail the
+      // batch, never silently degrade a leg to 'stale').
+      const addrs = u.split("/token_price/")[1]!.toLowerCase().split(",");
+      const token_prices: Record<string, string> = {};
+      for (const addr of addrs) {
+        const price = fx.gecko?.[addr];
+        if (price == null) throw new Error(`mockChain: no gecko price for ${addr}`);
+        token_prices[addr] = String(price);
+      }
+      return new Response(JSON.stringify({ data: { attributes: { token_prices } } }), { status: 200 });
     }
     if (u.includes("finance.yahoo.com")) {
       if (fx.sp500Price == null) throw new Error("mockChain: no sp500Price fixture");

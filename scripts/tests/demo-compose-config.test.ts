@@ -110,3 +110,49 @@ describe("docker compose config — demo data path resolution", () => {
     }
   });
 });
+
+describe("DEMO_MODE — the single pinned demo-stack signal (per-IP quota protection)", () => {
+  // The demo overlay IS the demo, so DEMO_MODE is a pinned "1" literal (never a
+  // ${...} passthrough): every api/worker container knows it unconditionally,
+  // and the backend selects its hard-coded demo values off it (1h provider-cache
+  // TTLs in analytics/extract/fetch-cache.ts + chain/token-prices.ts; the seed's
+  // hourly wallet sampler). Motivation: the standing demo and the self-hosted CI
+  // runner share one host IP against GeckoTerminal + the public Base RPC.
+  test("compose pins DEMO_MODE=1 on api and every worker lane, regardless of caller env", () => {
+    // Even an explicit attempt to unset it from the caller env must not win —
+    // a pinned literal ignores interpolation.
+    const cfg = composeConfig({ DEMO_MODE: "" });
+    for (const svc of RPC_CONSUMERS) {
+      expect(serviceEnv(cfg, svc).DEMO_MODE).toBe("1");
+    }
+  });
+
+  test("the retired per-property cache knobs are NOT compose passthroughs anymore", () => {
+    // FETCH_CACHE_TTL_MS / GECKO_PRICE_CACHE_TTL_MS were replaced by
+    // DEMO_MODE-selected constants in the backend. Setting them in the caller
+    // env must not reach any container — if a key reappears here, someone
+    // re-introduced an env tuning surface the review explicitly removed.
+    const cfg = composeConfig({ FETCH_CACHE_TTL_MS: "123", GECKO_PRICE_CACHE_TTL_MS: "456" });
+    for (const svc of RPC_CONSUMERS) {
+      const env = serviceEnv(cfg, svc);
+      expect("FETCH_CACHE_TTL_MS" in env).toBe(false);
+      expect("GECKO_PRICE_CACHE_TTL_MS" in env).toBe(false);
+    }
+  });
+
+  test("demo-main passes -e DEMO_MODE=1 on the migrate/seed one-shot and no retired flag survives", async () => {
+    // The migrate/seed `compose run` is where the seed's demo gating executes;
+    // this wiring guard proves the flag actually reaches it (deliberate
+    // redundancy with the compose pin above) and that the retired
+    // DEMO_FAST_SCHEDULES / DEMO_SLOW_SAMPLERS names are fully gone from the
+    // demo wiring + seed, so a stale reference can't silently gate anything.
+    const demoMain = await Bun.file(join(repoRoot, "scripts/lib/demo-main.ts")).text();
+    expect(demoMain).toContain('"-e", "DEMO_MODE=1"');
+    const seed = await Bun.file(join(repoRoot, "backend/src/db/seed.ts")).text();
+    expect(seed).toContain("process.env.DEMO_MODE");
+    for (const retired of ["DEMO_FAST_SCHEDULES", "DEMO_SLOW_SAMPLERS"]) {
+      expect(demoMain).not.toContain(retired);
+      expect(seed).not.toContain(retired);
+    }
+  });
+});

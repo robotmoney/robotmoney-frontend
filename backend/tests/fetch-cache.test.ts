@@ -1,17 +1,43 @@
-// Hermetic (no network, no DB) coverage for the opt-in fetch cache (issue #13).
-// Proves: disabled by default (no memoization), memoizes within the TTL, and
-// re-fetches after the TTL expires. The "fetcher" is a local counter — the network
-// is never touched — and a temp dir + injected clock make the disk/TTL logic
-// deterministic. Runs in per-PR CI (offline).
+// Hermetic (no network, no DB) coverage for the fetch cache (issue #13).
+// Proves: disabled outside demo mode (no memoization), memoizes within the TTL,
+// re-fetches after the TTL expires, and the TTL default is MODE-selected (the
+// old FETCH_CACHE_TTL_MS env knob was removed: DEMO_MODE → 1h for per-IP
+// provider-quota protection on the shared demo/CI host, everything else → off).
+// The "fetcher" is a local counter — the network is never touched — and a temp
+// dir + injected clock make the disk/TTL logic deterministic. Runs in per-PR CI
+// (offline).
 import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { withFetchCache } from "../src/analytics/extract/fetch-cache.ts";
+import {
+  cacheTtlMs,
+  DEMO_FETCH_CACHE_TTL_MS,
+  PROD_FETCH_CACHE_TTL_MS,
+  withFetchCache,
+} from "../src/analytics/extract/fetch-cache.ts";
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), "rm-fetch-cache-"));
 }
+
+test("TTL default is mode-selected: off without DEMO_MODE, 1h with it (no env tuning knob)", () => {
+  const saved = process.env.DEMO_MODE;
+  try {
+    delete process.env.DEMO_MODE;
+    expect(cacheTtlMs()).toBe(PROD_FETCH_CACHE_TTL_MS);
+    expect(PROD_FETCH_CACHE_TTL_MS).toBe(0); // prod/CI/hermetic: no disk, no staleness
+    process.env.DEMO_MODE = "1";
+    expect(cacheTtlMs()).toBe(DEMO_FETCH_CACHE_TTL_MS);
+    expect(DEMO_FETCH_CACHE_TTL_MS).toBe(3_600_000); // hourly-fresh demo tradeoff
+    // An explicit per-call ttlMs (tests, tooling) still beats the mode default.
+    expect(cacheTtlMs({ ttlMs: 5 })).toBe(5);
+    expect(cacheTtlMs({ ttlMs: 0 })).toBe(0);
+  } finally {
+    if (saved === undefined) delete process.env.DEMO_MODE;
+    else process.env.DEMO_MODE = saved;
+  }
+});
 
 test("disabled by default (ttl<=0): every call re-runs the fetcher", async () => {
   const dir = tmp();

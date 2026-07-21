@@ -1,6 +1,10 @@
 // Status of the standing local demo. Reads .agents/demo-state.json, rebuilds the
 // docker compose env, and runs `docker compose ps` so you can confirm the stack
-// is still up (the demo never auto-tears-down). Tear down with `bun run demo:down`.
+// is still up. Teardown (`bun run demo:down` or Ctrl-C) KEEPS the postgres data
+// (issue: demo persistent volumes), so this state file may describe a STOPPED demo
+// whose data survives — `docker compose ps` then shows no running containers while
+// the PG-data line below still points at the kept volume / --pg-data dir. Tear down
+// with `bun run demo:down`; reclaim stopped demos' data with `bun run demo:clean`.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +24,10 @@ interface DemoState {
   dbPassword: string;
   dbName: string;
   logFile?: string;
+  // Data location (issue: demo persistent volumes): exactly one is set — a
+  // `--pg-data` host bind dir, or the fresh-per-run named volume kept on teardown.
+  pgDataDir?: string;
+  pgVolume?: string;
   createdAt: string;
 }
 
@@ -49,6 +57,11 @@ console.log(`[demo:status]   Site:      http://127.0.0.1:${s.apiPort}/`);
 console.log(`[demo:status]   MCP:       http://127.0.0.1:${s.mcpPort}/health`);
 console.log(`[demo:status]   state file: ${stateFile}`);
 if (s.logFile) console.log(`[demo:status]   log file:   ${s.logFile}`);
+if (s.pgDataDir) {
+  console.log(`[demo:status]   pg data:    --pg-data ${s.pgDataDir}  (bind; resume: bun run demo -- --pg-data ${s.pgDataDir})`);
+} else {
+  console.log(`[demo:status]   pg data:    volume ${s.pgVolume ?? `${s.project}_pgdata`}  (kept on teardown; reclaim: bun run demo:clean)`);
+}
 console.log("");
 
 const r = Bun.spawnSync(["docker", "compose", "ps"], {

@@ -320,8 +320,11 @@ export async function readChainAmountsBatched(
 
 // The price + degradation valuation step, shared verbatim by both feeds: a
 // pre-batched chain amount is priced with a per-asset keyless read
-// (gecko/yahoo/pinned — DIFFERENT hosts than the rate-limited RPC, so prices
-// stay per-asset and unbatched). Any failure (the chain read degraded upstream,
+// (gecko/yahoo/pinned — DIFFERENT hosts than the rate-limited RPC; the READ
+// stays per-asset so each leg degrades alone, while token-prices.ts
+// transparently coalesces a same-burst fan-out of gecko reads into one
+// comma-separated token_price request — the demo/CI quota fix, cf. #202).
+// Any failure (the chain read degraded upstream,
 // OR the price fetch throws) comes back as {ok:false} so each caller applies its
 // OWN degrade shape — this module never fabricates a value and never labels a
 // degraded leg 'live'. Provenance: 'stub' when either source is the hermetic
