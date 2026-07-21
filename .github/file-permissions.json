@@ -1,0 +1,14 @@
+{
+  "//": "Deny by default. Maps GitHub login (lowercase) -> permitted path globs per operation. Operations: create | edit | delete. 'all' is shorthand granting create+edit+delete for its globs. '*' is the baseline unioned into EVERY author, including logins not otherwise listed. An author with no matching glob for an operation on a path is BLOCKED. Globs use Bun.Glob syntax.",
+  "users": {
+    "lucky-tensor": { "all": ["**"] },
+    "lextothex":    { "all": ["**"] },
+    "cmatthewbell": { "all": ["**"] },
+    "fernandesdavid": {
+      "edit":   ["frontend/**", "docs/**"],
+      "create": ["frontend/**", "docs/**", "brand-assets/**", "docs/marketing/**"],
+      "delete": ["docs/marketing/**"]
+    },
+    "*":            { "create": [], "edit": [], "delete": [] }
+  }
+}

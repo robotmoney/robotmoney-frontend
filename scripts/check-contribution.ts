@@ -1,19 +1,22 @@
-// Contribution governance gate — an author-aware file-CREATION guard.
+// Contribution governance gate — an author-aware, per-operation file guard.
 //
 // What it enforces:
-//   1. create-gate: casual contributors (PR authors who are NOT codeowners) may
-//      edit existing files freely, but may only ADD brand-new files inside a
-//      small allowlist (test files). Everything else is a violation and they are
-//      redirected to CONTRIBUTING.md "Where changes go" or asked to have a
-//      codeowner add the file. Owners bypass the create-gate entirely — they may
-//      create files anywhere.
+//   1. create/edit/delete gate: every mutation in this PR's diff is classified
+//      as a create, edit, or delete of a path, and checked against an explicit
+//      per-GitHub-user authorization dictionary (.github/file-permissions.json).
+//      The dictionary is DENY BY DEFAULT: an author with no matching glob for
+//      the operation on the path is BLOCKED and redirected to CONTRIBUTING.md
+//      "Where changes go" (or asked to have an admin grant it).
 //   2. pm-state: for ALL authors, roadmap/checklist markdown task-list items must
 //      not be committed into docs (they belong in the GitHub Plan issue).
 //
-// The owner set is read from .github/CODEOWNERS — the single source of truth for
-// who may create files. This gate is DIFF-SCOPED (only files added in this PR's
-// range are examined) and AUTHOR-AWARE (behavior depends on PR_AUTHOR's owner
-// membership). It is a deterministic, non-network CI check.
+// The permission model is the single source of truth in
+// .github/file-permissions.json — a deny-by-default dictionary mapping each
+// GitHub login to permitted path globs per operation (create/edit/delete, with
+// an `all` shorthand and a `*` baseline unioned into every author). This gate
+// is DIFF-SCOPED (only files changed in this PR's range are examined) and
+// AUTHOR-AWARE (behavior depends on PR_AUTHOR's grants). It is a deterministic,
+// non-network CI check.
 //
 // The human-judgment contribution rules (tone, scope, where prose belongs) live
 // in CONTRIBUTING.md and are enforced by human reviewers — NOT by this script.
@@ -25,36 +28,87 @@ import { execFileSync } from "node:child_process";
 // Pure helpers (unit-tested)
 // ---------------------------------------------------------------------------
 
-/**
- * Collect every distinct @login token from a CODEOWNERS file.
- *
- * Comment lines (starting with #) are ignored for @login harvesting — owners
- * appear only as path-rule targets on non-comment lines. Logins are returned
- * lowercased and with the leading @ stripped.
- */
-export function parseOwners(text: string): Set<string> {
-  const owners = new Set<string>();
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line.length === 0) continue;
-    if (line.startsWith("#")) continue; // comment: no owner context
-    for (const match of line.matchAll(/@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)/g)) {
-      owners.add(match[1].toLowerCase());
-    }
-  }
-  return owners;
+export type Op = "create" | "edit" | "delete";
+
+/** A single user's grants — permitted globs per operation, plus the 'all' shorthand. */
+export interface UserGrant {
+  create?: string[];
+  edit?: string[];
+  delete?: string[];
+  all?: string[];
+}
+
+/** The parsed permission dictionary. Keys are lowercased GitHub logins (and '*'). */
+export interface Policy {
+  users: Record<string, UserGrant>;
 }
 
 /**
- * True when a NON-owner is allowed to add this new file. Rule: test files only.
- * The path is repo-relative with forward slashes.
+ * Parse the .github/file-permissions.json text into a Policy.
+ *
+ * Tolerates missing/empty/invalid text -> an empty users map. Any key starting
+ * with "//" (documentation/comment keys) is ignored at both the top level and
+ * inside the users map. User logins are lowercased.
  */
-export function isAllowedCreation(path: string): boolean {
+export function parsePolicy(text: string): Policy {
+  const users: Record<string, UserGrant> = {};
+  const trimmed = (text ?? "").trim();
+  if (trimmed === "") return { users };
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(trimmed);
+  } catch {
+    return { users };
+  }
+  if (raw === null || typeof raw !== "object") return { users };
+
+  const rawUsers = (raw as Record<string, unknown>).users;
+  if (rawUsers === null || typeof rawUsers !== "object") return { users };
+
+  for (const [login, grantRaw] of Object.entries(rawUsers as Record<string, unknown>)) {
+    if (login.startsWith("//")) continue; // documentation key
+    if (grantRaw === null || typeof grantRaw !== "object") continue;
+    const g = grantRaw as Record<string, unknown>;
+    const grant: UserGrant = {};
+    for (const op of ["create", "edit", "delete", "all"] as const) {
+      const v = g[op];
+      if (Array.isArray(v)) grant[op] = v.filter((x): x is string => typeof x === "string");
+    }
+    users[login.toLowerCase()] = grant;
+  }
+  return { users };
+}
+
+/**
+ * The union of globs that apply to `user` for operation `op`:
+ *   users[user][op] ∪ users[user].all ∪ users['*'][op] ∪ users['*'].all
+ * (any missing entry contributes []). User keys are matched case-insensitively.
+ */
+export function effectiveGlobs(policy: Policy, user: string, op: Op): string[] {
+  const key = user.toLowerCase();
+  const specific = policy.users[key];
+  const baseline = policy.users["*"];
+  const out: string[] = [];
+  const push = (arr?: string[]) => {
+    if (arr) for (const g of arr) out.push(g);
+  };
+  push(specific?.[op]);
+  push(specific?.all);
+  push(baseline?.[op]);
+  push(baseline?.all);
+  return out;
+}
+
+/**
+ * True iff `path` (normalized to forward slashes) matches any glob in
+ * effectiveGlobs(policy, user, op) via Bun.Glob.
+ */
+export function isPermitted(policy: Policy, user: string, op: Op, path: string): boolean {
   const p = path.replace(/\\/g, "/");
-  if (p.endsWith(".test.ts")) return true;
-  if (p.endsWith(".spec.ts")) return true;
-  const segments = p.split("/");
-  if (segments.includes("tests") || segments.includes("test")) return true;
+  for (const glob of effectiveGlobs(policy, user, op)) {
+    if (new Bun.Glob(glob).match(p)) return true;
+  }
   return false;
 }
 
@@ -83,7 +137,7 @@ function git(args: string[], cwd: string): string {
 
 function tryGit(args: string[], cwd: string): { ok: true; out: string } | { ok: false } {
   // Suppress git's own diagnostic stderr — failures here are expected and
-  // handled by callers (missing CODEOWNERS, unfetched base ref, etc.).
+  // handled by callers (missing policy file, unfetched base ref, etc.).
   try {
     const out = execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     return { ok: true, out };
@@ -122,72 +176,65 @@ function main(): void {
   }
   const mergeBase = mergeBaseResult.out.trim();
 
-  // Owner set — single source of truth. Read CODEOWNERS as it exists at HEAD
-  // (the PR tip, where the file is committed in CI); if absent there, fall back
-  // to the merge base. Using git (not node:fs) keeps this to a single import.
-  // If it does not exist in either, the owner set is empty.
-  const codeownersAtHead = tryGit(["show", "HEAD:.github/CODEOWNERS"], repoRoot);
-  const codeownersAtBase = tryGit(["show", `${mergeBase}:.github/CODEOWNERS`], repoRoot);
-  const codeownersText = codeownersAtHead.ok
-    ? codeownersAtHead.out
-    : codeownersAtBase.ok
-      ? codeownersAtBase.out
-      : "";
-  const owners = parseOwners(codeownersText);
-  const ownerList = [...owners].map((o) => `@${o}`);
-  const ownerListStr = ownerList.length > 0 ? ownerList.join(" ") : "(no codeowners configured)";
-  const authorIsOwner = owners.has(prAuthor.toLowerCase());
-
-  // Existing top-level entries at the merge base (to detect new top-level paths).
-  const topLevel = new Set<string>();
-  const lsTree = tryGit(["ls-tree", mergeBase, "--name-only"], repoRoot);
-  if (lsTree.ok) {
-    for (const name of lsTree.out.split("\n")) {
-      const n = name.trim();
-      if (n.length > 0) topLevel.add(n);
-    }
-  }
+  // Permission dictionary — the single source of truth. Read it as it exists at
+  // HEAD (the PR tip, where the file is committed in CI); if absent there, fall
+  // back to the merge base, then to an empty policy. Using git (not node:fs)
+  // keeps this to a single non-JSON import and makes the read diff-scoped.
+  const policyAtHead = tryGit(["show", "HEAD:.github/file-permissions.json"], repoRoot);
+  const policyAtBase = tryGit(["show", `${mergeBase}:.github/file-permissions.json`], repoRoot);
+  const policyText = policyAtHead.ok
+    ? policyAtHead.out
+    : policyAtBase.ok
+      ? policyAtBase.out
+      : "{}";
+  const policy = parsePolicy(policyText);
 
   const violations: string[] = [];
 
-  // --- Check 1: create-gate (non-owners only) --------------------------------
-  const addedRaw = git(["diff", "--name-status", "--diff-filter=A", mergeBase, "HEAD"], repoRoot);
-  const addedFiles: string[] = [];
-  for (const line of addedRaw.split("\n")) {
+  // --- Check 1: create/edit/delete gate --------------------------------------
+  // Classify every mutation in the diff and check it against the dictionary.
+  const nameStatus = git(
+    ["diff", "--name-status", "--diff-filter=ADMRC", mergeBase, "HEAD"],
+    repoRoot,
+  );
+  const ops: Array<{ op: Op; path: string }> = [];
+  for (const line of nameStatus.split("\n")) {
     if (line.trim() === "") continue;
-    // Format: "A\t<path>"
     const parts = line.split("\t");
-    if (parts[0].trim() === "A" && parts[1]) addedFiles.push(parts[1].trim());
+    const status = parts[0].trim();
+    const code = status[0];
+    if (code === "A") {
+      if (parts[1]) ops.push({ op: "create", path: parts[1].trim() });
+    } else if (code === "M") {
+      if (parts[1]) ops.push({ op: "edit", path: parts[1].trim() });
+    } else if (code === "D") {
+      if (parts[1]) ops.push({ op: "delete", path: parts[1].trim() });
+    } else if (code === "R") {
+      // R<score>\told\tnew — a rename is a delete of old + a create of new.
+      if (parts[1]) ops.push({ op: "delete", path: parts[1].trim() });
+      if (parts[2]) ops.push({ op: "create", path: parts[2].trim() });
+    } else if (code === "C") {
+      // C<score>\told\tnew — a copy is a create of new (old is untouched).
+      if (parts[2]) ops.push({ op: "create", path: parts[2].trim() });
+    }
   }
 
-  if (!authorIsOwner) {
-    for (const p of addedFiles) {
-      if (isAllowedCreation(p)) continue;
+  for (const { op, path } of ops) {
+    if (isPermitted(policy, prAuthor, op, path)) continue;
 
-      const firstSegment = p.replace(/\\/g, "/").split("/")[0];
-      const introducesNewTopLevel = !topLevel.has(firstSegment);
+    let message =
+      `@${prAuthor} is not allowed to ${op} this file ` +
+      `(deny-by-default; grant it in .github/file-permissions.json or ask an admin). ` +
+      `See CONTRIBUTING.md "Where changes go".`;
 
-      let message: string;
-      if (introducesNewTopLevel) {
-        message =
-          `casual contributors may not introduce a new top-level path (${firstSegment}/); ` +
-          `edit existing files freely, add tests, or ask a codeowner (${ownerListStr}) to add it. ` +
-          `See CONTRIBUTING.md "Where changes go".`;
-      } else {
-        message =
-          `casual contributors may not create new files here; edit existing files freely, add tests, ` +
-          `or ask a codeowner (${ownerListStr}) to add it. See CONTRIBUTING.md "Where changes go".`;
-      }
-
-      // Redirect hint for new committed docs.
-      const norm = p.replace(/\\/g, "/");
-      if (norm.startsWith("docs/") && norm.endsWith(".md")) {
-        message +=
-          " docs decisions belong upstream in robotmoney-context; roadmap/checklist state belongs in the GitHub Plan issue.";
-      }
-
-      violations.push(`${p}: [create-gate] ${message}`);
+    // Redirect hint for new committed docs.
+    const norm = path.replace(/\\/g, "/");
+    if (op === "create" && norm.startsWith("docs/") && norm.endsWith(".md")) {
+      message +=
+        " docs decisions belong upstream in robotmoney-context; roadmap/checklist state belongs in the GitHub Plan issue.";
     }
+
+    violations.push(`${path}: [permission] ${message}`);
   }
 
   // --- Check 2: pm-state (all authors) ---------------------------------------
