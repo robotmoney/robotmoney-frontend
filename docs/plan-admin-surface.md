@@ -260,8 +260,11 @@ Acceptance:
   atomically revokes old keys before issuing a new token.
 - Rejecting an application sets its application status to `rejected`, sets the
   member inactive, and leaves its key inactive.
-- `COMMITTEE_ROSTER_CAP` remains a demo-driver limit. The production admin API
-  displays a warning at that count but does not block a deliberate manual add.
+- `COMMITTEE_ROSTER_CAP` is HARD-ENFORCED on every transition-to-active. The
+  production admin API (manual add, activate/approve, reactivate — and the demo
+  `registerMember` shortcut) refuses an admission that would exceed the cap with
+  a 409, race-safely (a transaction-scoped advisory lock serializes admissions
+  so two concurrent activations cannot both slip past the last free seat).
 - All writes require the current member `version`; stale writes return 409.
 
 ### US-C3 — Schedule and observe a committee session

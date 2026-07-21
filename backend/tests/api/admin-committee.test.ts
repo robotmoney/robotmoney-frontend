@@ -3,14 +3,24 @@
 // same idiom as routes/admin.ts). Runs against the ephemeral Postgres from
 // tests/preload.ts. Also asserts documented 200/201/404/409 envelopes and
 // that a path this handler does not own falls through as null.
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { generateKeyPair } from "../../src/lib/signing.ts";
 import { handleCommitteeAdmin } from "../../src/api/routes/committee-admin.ts";
+import { sql } from "../../src/db/client.ts";
 
 const PROD = { adminToken: "s3cret-committee-admin-token", allowInsecure: false } as const;
 const INSECURE = { adminToken: null, allowInsecure: true } as const;
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
+
+// All committee test files share ONE ephemeral Postgres (tests/preload.ts). With
+// COMMITTEE_ROSTER_CAP now hard-enforced on every transition-to-active, a roster
+// left full by an earlier-running file would make this file's manual member add
+// return 409 instead of the expected 201. Reset the roster so this file admits
+// its own members from empty, independent of file order.
+beforeAll(async () => {
+  await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
+});
 
 function req(method: string, path: string, opts: { token?: string; body?: unknown; rawBody?: string } = {}): Request {
   const headers: Record<string, string> = { "Content-Type": "application/json" };

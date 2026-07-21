@@ -11,7 +11,7 @@
 // rollup), it composes those functions rather than duplicating them.
 import { sql, type DbHandle } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
-import { activateMember, aggregateSession as domainAggregateSession } from "./domain.ts";
+import { activateMember, aggregateSession as domainAggregateSession, assertRosterCapacity } from "./domain.ts";
 
 type Actor = string;
 export const ADMIN_ACTOR = "admin";
@@ -201,6 +201,9 @@ export async function addMemberAdmin(input: ManualMemberInput, actor: Actor = AD
   if (existing) return err(409, "memberId already registered");
   const token = `tok_${input.memberId}_${crypto.randomUUID()}`;
   return sql.begin(async (tx) => {
+    // Capacity gate: a brand-new active member must fit under COMMITTEE_ROSTER_CAP.
+    const cap = await assertRosterCapacity(tx);
+    if (!cap.ok) return err(cap.status, cap.error);
     const rows = await tx`
       INSERT INTO committee_members (id, status, name, lens, contact_email, applied_at, activated_at)
       VALUES (${input.memberId}, 'active', ${input.name}, ${input.lens ?? null}, ${input.contact ?? null}, now(), now())
@@ -276,6 +279,10 @@ export async function reactivateMemberAdmin(
       | { public_key: string }
       | undefined;
     if (!lastKey) return err(409, "member has no on-file public key; use rotate-key with a new one");
+    // Capacity gate: reactivation raises the active count, so the member (which
+    // is currently 'inactive') must fit under COMMITTEE_ROSTER_CAP — no exemption.
+    const cap = await assertRosterCapacity(tx);
+    if (!cap.ok) return err(cap.status, cap.error);
     const upd = await tx`
       UPDATE committee_members SET status = 'active', version = version + 1, updated_at = now()
       WHERE id = ${memberId} AND version = ${expectedVersion}

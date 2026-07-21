@@ -147,7 +147,13 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     const b = parseApply(await readJsonObject(req));
     if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
     if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
-    return { status: 201, body: await ic.registerMember(b) };
+    // registerMember now enforces COMMITTEE_ROSTER_CAP; a refused over-cap
+    // admission returns { ok:false, status, error } (rolled back, member NOT
+    // added) — surface that status instead of a misleading 201, mirroring the
+    // admin activate route below.
+    const registered = await ic.registerMember(b);
+    if ("ok" in registered) return { status: registered.status, body: registered };
+    return { status: 201, body: registered };
   }
 
   // Admin surface (issue #152): topics/members/roster/lifecycle/audit — owns
