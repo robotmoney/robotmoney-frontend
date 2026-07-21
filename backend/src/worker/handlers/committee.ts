@@ -1,5 +1,5 @@
 import * as ic from "../../committee/domain.ts";
-import { sql } from "../../db/client.ts";
+import { sql } from "../../db/worker-client.ts";
 import { sendCommitteeActivationEmail } from "../../lib/email.ts";
 import { SITE_PATHS, path as routePath } from "@robotmoney/contract";
 

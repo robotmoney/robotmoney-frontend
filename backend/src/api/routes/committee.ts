@@ -11,6 +11,7 @@ import { bearer, hasAnalyticsProviderRole, isPrivileged } from "../auth.ts";
 import { jsonValue, sql } from "../../db/client.ts";
 import {
   parseApply,
+  parseManualMember,
   parsePositiveNumber,
   parseSigningDraft,
   parseSubmission,
@@ -175,7 +176,7 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   // harness. Privileged because it can rotate/replace an existing member's key.
   if (m === "POST" && p === C.register) {
     if (!privileged()) return { status: 403, body: { error: "onboarding requires admin authorization" } };
-    const b = parseApply(await readJsonObject(req));
+    const b = parseManualMember(await readJsonObject(req));
     if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
     if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
     // registerMember now enforces COMMITTEE_ROSTER_CAP; a refused over-cap
