@@ -80,6 +80,7 @@ export function toTake(row: Row): CommitteeTake {
     confidence: row.confidence == null ? null : Number(row.confidence),
     body: row.body ?? null,
     memoUrl: row.memo_url ?? null,
+    proposedWeights: row.payload?.proposedWeights ?? null,
     verified: Boolean(row.verified),
     receivedAt: instant(row.received_at) ?? "",
   };

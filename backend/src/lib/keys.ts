@@ -7,5 +7,8 @@ export function hashKey(key: string): string {
 }
 
 export function isPlausibleKey(key: string): boolean {
-  return typeof key === "string" && key.trim().length >= 16;
+  if (typeof key !== "string") return false;
+  const normalized = key.trim();
+  if (!/^[A-Za-z0-9+/]{43}=$/.test(normalized)) return false;
+  return Buffer.from(normalized, "base64").byteLength === 32;
 }

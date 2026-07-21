@@ -34,6 +34,7 @@ export function registerAdminCommitteeMember(Alpine) {
     submitting: false,
 
     credentialReveal: null, // { token } — cleared on dismiss/navigate
+    actionNotice: null,
     fmtUtc,
 
     async init() {
@@ -115,9 +116,12 @@ export function registerAdminCommitteeMember(Alpine) {
         body.reason = trimmedReason;
         const res = await api.adminPost(route, this._token(), body);
         this.confirm = null;
-        // Credential-minting actions (manual add / reactivate / rotate-key /
-        // approve) return `token` at the top level, never `credential.token`.
+        // Reactivation/rotation may return a one-time admin-managed token. A
+        // newly approved applicant claims its own credential with key proof.
         if (res.token) this.credentialReveal = { token: res.token };
+        this.actionNotice = res.claimRequired
+          ? `Approved. The applicant can claim access at ${res.statusUrl}.`
+          : null;
         await this.load();
       } catch (e) {
         if (e.status === 403) return this._handle403();

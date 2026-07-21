@@ -49,6 +49,7 @@
           <button type="button" class="adm-btn" x-show="canRotateKey()" @click="openConfirm('rotate-key')" data-testid="member-rotate-key">Rotate key</button>
           <button type="button" class="adm-btn adm-btn--ghost" x-show="canReject()" @click="openConfirm('reject')" data-testid="member-reject">Reject</button>
         </div>
+        <p class="adm-msg" x-show="actionNotice" x-text="actionNotice" x-cloak></p>
 
         <div x-show="confirm" x-cloak class="adm-modal" data-testid="member-action-confirm">
           <div class="adm-modal__panel">

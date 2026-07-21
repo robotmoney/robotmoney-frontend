@@ -35,6 +35,9 @@ const RE_SUBJECT_SNAPSHOTS = templateRe(C.subjectSnapshots); // /api/committee/s
 const RE_SUBJECT = templateRe(C.subject); // /api/committee/subjects/:id
 const RE_SESSION = templateRe(C.session); // /api/committee/sessions/:date/:subject
 const RE_MEMO = templateRe(C.memo, { id: "\\d+" }); // /api/committee/memos/:id (numeric only, as before)
+const RE_APPLICATION_STATUS = templateRe(C.applicationStatus);
+const RE_CLAIM_CHALLENGE = templateRe(C.claimChallenge);
+const RE_CLAIM_TOKEN = templateRe(C.claimToken);
 const ADMIN_PREFIX = C.admin.action.replace(":action", ""); // /api/committee/admin/
 
 // Returns { status, body } or null if the path isn't a committee route.
@@ -53,7 +56,11 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     const id = decodeURIComponent(p.split("/")[4] ?? "");
     return { status: 200, body: await ic.getSubject(id) };
   }
-  if (m === "GET" && p === C.sessions) return { status: 200, body: { sessions: await ic.listSessions() } };
+  if (m === "GET" && p === C.sessions) {
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return { status: 400, body: { error: "limit must be an integer from 1 to 100" } };
+    return { status: 200, body: await ic.listSessions({ limit, cursor: url.searchParams.get("cursor") }) };
+  }
   if (m === "GET" && p === C.openSession) return { status: 200, body: await ic.getOpenSession() };
   if (m === "GET" && RE_SESSION.test(p)) {
     const [, , , , date, subject] = p.split("/");
@@ -63,7 +70,31 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   if (m === "GET" && p === C.brief) {
     const date = url.searchParams.get("date") ?? "";
     const subject = url.searchParams.get("subject") ?? "";
-    return { status: 200, body: await ic.getBrief(date, subject) };
+    const requestedMember = url.searchParams.get("memberId");
+    const tokenMember = bearer(req) ? await ic.memberIdForToken(bearer(req)!) : null;
+    return { status: 200, body: await ic.getBrief(date, subject, tokenMember ?? requestedMember) };
+  }
+
+  if (m === "GET" && RE_APPLICATION_STATUS.test(p)) {
+    const memberId = decodeURIComponent(p.split("/")[4] ?? "");
+    const status = await ic.applicationStatus(memberId);
+    return { status: status ? 200 : 404, body: status ?? { error: "application not found" } };
+  }
+
+  if (m === "POST" && RE_CLAIM_CHALLENGE.test(p)) {
+    const memberId = decodeURIComponent(p.split("/")[4] ?? "");
+    const res = await ic.createTokenClaimChallenge(memberId);
+    return { status: res.status, body: res };
+  }
+
+  if (m === "POST" && RE_CLAIM_TOKEN.test(p)) {
+    const memberId = decodeURIComponent(p.split("/")[4] ?? "");
+    const body = await readJsonObject(req);
+    const challenge = body && requiredString(body, "challenge", 500);
+    const signature = body && requiredString(body, "signature", 2000);
+    if (!challenge || !signature) return { status: 400, body: { error: "challenge and signature required" } };
+    const res = await ic.claimMemberToken(memberId, challenge, signature);
+    return { status: res.status, body: res };
   }
 
   // get_signing_payload: return the exact canonical bytes the member must sign.
@@ -119,7 +150,7 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   // record but NEVER overwrites an already-active member's key (that's admin).
   if (m === "POST" && p === C.apply) {
     const b = parseApply(await readJsonObject(req));
-    if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
+    if (!b) return { status: 400, body: { error: "valid memberId, name, publicKey, and keyProofSignature required" } };
     if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
     const res = await ic.applyMember(b);
     return { status: res.status, body: res };

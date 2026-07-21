@@ -3,7 +3,7 @@
 // robotmoney-core unit/integration-tests rmpc's own crypto/CLI behavior in
 // isolation; this script is the ONLY thing that proves a released binary
 // actually drives identity create → show-public-key → POST /api/committee/apply
-// → POST /api/committee/admin/activate → MCP OAuth client_credentials →
+// → admin approval → signed credential claim → MCP OAuth client_credentials →
 // get_signing_payload → rmpc committee-identity sign → submit_recommendation
 // against a LIVE robotmoney-frontend backend+MCP stack, then reads the result
 // back and independently re-verifies the signature.
@@ -23,7 +23,7 @@ import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { path as routePath, ROUTES } from "@robotmoney/contract";
+import { applicationProofMessage, path as routePath, ROUTES } from "@robotmoney/contract";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -164,28 +164,63 @@ async function main(): Promise<void> {
   const publicKeyB64: string = shown.public_key;
   log(`rmpc identity created — memberId=${MEMBER_ID} publicKey=${publicKeyB64}`);
 
+  const applicationProofFile = join(workDir, "application-proof.txt");
+  writeFileSync(applicationProofFile, applicationProofMessage(MEMBER_ID, publicKeyB64));
+  const applicationProof = runRmpcJson(
+    rmpcPath,
+    ["committee-identity", "--path", keystorePath, "sign", "--payload-file", applicationProofFile],
+    rmpcEnv,
+  );
+  if (!applicationProof.ok || typeof applicationProof.signature !== "string")
+    fail(`committee-identity application proof failed: ${JSON.stringify(applicationProof)}`);
+
   // ── POST /api/committee/apply ──────────────────────────────────────────────
   const applyRes = await fetch(`${BACKEND_URL}${ROUTES.committee.apply}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ memberId: MEMBER_ID, name: "RMPC Release E2E", lens: "release-proof", publicKey: publicKeyB64 }),
+    body: JSON.stringify({ memberId: MEMBER_ID, name: "RMPC Release E2E", lens: "release-proof", publicKey: publicKeyB64, keyProofSignature: applicationProof.signature }),
   });
   const applyBody = await readJson(applyRes);
   if (applyRes.status !== 201 || !applyBody.ok) fail(`POST ${ROUTES.committee.apply} → ${applyRes.status}: ${JSON.stringify(applyBody)}`);
   log(`applied as ${MEMBER_ID}`);
 
-  // ── POST /api/committee/admin/activate ─────────────────────────────────────
+  // ── Admin approval + member-signed credential claim ────────────────────────
   const activateRes = await fetch(`${BACKEND_URL}${ROUTES.committee.admin.activate}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: MEMBER_ID }),
   });
   const activateBody = await readJson(activateRes);
-  if (activateRes.status !== 200 || !activateBody.token) {
+  if (activateRes.status !== 200 || !activateBody.claimRequired) {
     fail(`POST ${ROUTES.committee.admin.activate} → ${activateRes.status}: ${JSON.stringify(activateBody)}`);
   }
-  const memberToken: string = activateBody.token;
-  log(`activated ${MEMBER_ID}`);
+  const challengePath = routePath(ROUTES.committee.claimChallenge, { member: MEMBER_ID });
+  const challengeRes = await fetch(`${BACKEND_URL}${challengePath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const challengeBody = await readJson(challengeRes);
+  if (challengeRes.status !== 201 || typeof challengeBody.challenge !== "string")
+    fail(`POST ${challengePath} → ${challengeRes.status}: ${JSON.stringify(challengeBody)}`);
+  const challengeFile = join(workDir, "claim-challenge.txt");
+  writeFileSync(challengeFile, challengeBody.challenge);
+  const challengeSignature = runRmpcJson(
+    rmpcPath,
+    ["committee-identity", "--path", keystorePath, "sign", "--payload-file", challengeFile],
+    rmpcEnv,
+  );
+  const claimPath = routePath(ROUTES.committee.claimToken, { member: MEMBER_ID });
+  const claimRes = await fetch(`${BACKEND_URL}${claimPath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ challenge: challengeBody.challenge, signature: challengeSignature.signature }),
+  });
+  const claimBody = await readJson(claimRes);
+  if (claimRes.status !== 200 || typeof claimBody.token !== "string")
+    fail(`POST ${claimPath} → ${claimRes.status}: ${JSON.stringify(claimBody)}`);
+  const memberToken: string = claimBody.token;
+  log(`approved and claimed credential for ${MEMBER_ID}`);
 
   // ── Open a distinctly-namespaced session (reuses mcp/src/e2e.ts's proven
   // job-queue lifecycle — the same path the required e2e + nightly committee

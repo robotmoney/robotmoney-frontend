@@ -3,6 +3,8 @@ import { parseApply, parseSigningDraft, parseSubmission } from "../src/api/valid
 
 test("committee request parsers reject malformed and out-of-range input", () => {
   expect(parseApply({ memberId: "", name: "A", publicKey: "key" })).toBeNull();
+  expect(parseApply({ memberId: "a", name: "A", publicKey: "key" })).toBeNull();
+  expect(parseApply({ memberId: "a", name: "A", publicKey: "key", keyProofSignature: "proof" })?.keyProofSignature).toBe("proof");
   expect(parseSubmission({
     memberId: "a",
     date: "not-a-date",
@@ -35,4 +37,16 @@ test("signing drafts and submissions share normalized fields", () => {
   };
   expect(parseSigningDraft(draft)?.memberId).toBe("athena");
   expect(parseSubmission({ ...draft, signature: "signature" })?.body).toBe("analysis");
+});
+
+test("signing drafts and submissions accept only finite proposed-weight maps", () => {
+  const draft = {
+    memberId: "athena", date: "2026-07-01", subjectId: "woon", nonce: "nonce",
+    stance: "constructive", confidence: 0.75,
+    proposedWeights: { conservative_defi_yield: 0.9, agent_tokens: 0.1 },
+  };
+  expect(parseSigningDraft(draft)?.proposedWeights).toEqual(draft.proposedWeights);
+  expect(parseSubmission({ ...draft, signature: "signature" })?.proposedWeights).toEqual(draft.proposedWeights);
+  expect(parseSigningDraft({ ...draft, proposedWeights: [] })).toBeNull();
+  expect(parseSubmission({ ...draft, proposedWeights: { agent_tokens: Number.NaN }, signature: "signature" })).toBeNull();
 });

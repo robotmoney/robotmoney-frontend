@@ -5,7 +5,7 @@
 // handler → domain) so the demo exercises the real FOR UPDATE SKIP LOCKED claim
 // loop. Multi-session: the second session's brief references the first session's
 // outcome, demonstrating rotation awareness.
-import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
+import { applicationProofMessage, demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { runAgent, enroll, textOf } from "./agent.ts";
 import type { ExistingCredentials, AgentStage } from "./agent.ts";
 import { generateKeyPair, sign } from "./crypto.ts";
@@ -171,6 +171,25 @@ export async function admin(action: string, body: unknown = {}) {
   return responseJson(r);
 }
 
+async function claimMemberCredential(memberId: string, privateKey: CryptoKey): Promise<string> {
+  const challenge = await fetch(`${BACKEND}${routePath(ROUTES.committee.claimChallenge, { member: memberId })}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  }).then(responseJson);
+  if (challenge.status !== 201 || !challenge.challenge)
+    throw new Error(`claim challenge failed for ${memberId}: ${JSON.stringify(challenge)}`);
+  const signature = await sign(challenge.challenge, privateKey);
+  const claimed = await fetch(`${BACKEND}${routePath(ROUTES.committee.claimToken, { member: memberId })}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ challenge: challenge.challenge, signature }),
+  }).then(responseJson);
+  if (claimed.status !== 200 || !claimed.token)
+    throw new Error(`credential claim failed for ${memberId}: ${JSON.stringify(claimed)}`);
+  return claimed.token;
+}
+
 // Prospective-member onboarding (public apply → admin review/activate → MCP OAuth
 // connect). Additive + optional: used by the standing demo to periodically admit a
 // NEW committee member and grow the roster. Emits one onStage(stage, ok) per gate so
@@ -223,11 +242,12 @@ export async function onboardMember(
   // 1. The member generates its OWN ed25519 keypair (RM never sees the private key).
   const { publicKeyB64, privateKey } = await generateKeyPair();
   emit("keypair");
+  const keyProofSignature = await sign(applicationProofMessage(spec.memberId, publicKeyB64), privateKey);
 
   // 2. Public apply (no auth) — recorded as 'applied'.
   const applyRes = await fetch(`${BACKEND}${ROUTES.committee.apply}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ memberId: spec.memberId, name: spec.name, lens: spec.lens, publicKey: publicKeyB64 }),
+    body: JSON.stringify({ memberId: spec.memberId, name: spec.name, lens: spec.lens, publicKey: publicKeyB64, keyProofSignature }),
   }).then((r) => r.json());
   if (applyRes.status !== 201) { emit("apply", false); throw new Error(`apply failed: ${JSON.stringify(applyRes)}`); }
   emit("apply");
@@ -236,12 +256,14 @@ export async function onboardMember(
   await sleep(opts?.reviewMs ?? 4000);
   emit("review");
 
-  // 4. Admin activates — flips applied→active and mints the member's bearer token.
+  // 4. Admin approves the public key; the member signs a challenge and claims
+  //    its own bearer token, so the administrator never sees the credential.
   const activateRes = await fetch(`${BACKEND}${ROUTES.committee.admin.activate}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: spec.memberId }),
   }).then((r) => r.json());
-  if (activateRes.status !== 200 || !activateRes.token) { emit("activate", false); throw new Error(`activate failed: ${JSON.stringify(activateRes)}`); }
+  if (activateRes.status !== 200 || !activateRes.claimRequired) { emit("activate", false); throw new Error(`activate failed: ${JSON.stringify(activateRes)}`); }
+  const memberToken = await claimMemberCredential(spec.memberId, privateKey);
   emit("activate");
 
   // 5. Connect: exchange the bearer token for an MCP OAuth 2.1 access token
@@ -249,14 +271,14 @@ export async function onboardMember(
   const MCP_BASE = (process.env.MCP_URL ?? "http://localhost:8788/mcp").replace(/\/mcp\/?$/, "");
   const tok = await fetch(`${MCP_BASE}/mcp/oauth/token`, {
     method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "client_credentials", client_id: spec.memberId, client_secret: activateRes.token }),
+    body: new URLSearchParams({ grant_type: "client_credentials", client_id: spec.memberId, client_secret: memberToken }),
   }).then((r) => r.json());
   if (!tok.access_token) { emit("connect", false); throw new Error(`oauth connect failed for ${spec.memberId}`); }
   emit("connect");
 
   return {
     member: { memberId: spec.memberId, name: spec.name, lens: spec.lens, bias: spec.bias ?? 0, present: true },
-    creds: { token: activateRes.token, privateKey },
+    creds: { token: memberToken, privateKey },
   };
 }
 
@@ -452,25 +474,27 @@ async function main() {
   // The agent (eos) will participate in session 2 alongside existing members.
   const eosDate = today;
   const { publicKeyB64: eosPub, privateKey: eosPriv } = await generateKeyPair();
+  const eosProof = await sign(applicationProofMessage("eos", eosPub), eosPriv);
 
   // 4a. Public apply (no auth required) — member is recorded as 'applied'
   const applyRes = await fetch(`${BACKEND}${ROUTES.committee.apply}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ memberId: "eos", name: "Eos", lens: "newcomer", publicKey: eosPub }),
+    body: JSON.stringify({ memberId: "eos", name: "Eos", lens: "newcomer", publicKey: eosPub, keyProofSignature: eosProof }),
   }).then(responseJson);
   console.log(`\n  onboard eos: apply → status=${applyRes.status} memberStatus=${applyRes.memberStatus}`);
   if (applyRes.status !== 201) throw new Error(`apply failed: ${JSON.stringify(applyRes)}`);
 
-  // 4b. Admin activates — flips applied→active, mints bearer token
+  // 4b. Admin approves; Eos proves private-key possession to claim the token.
   const activateRes = await fetch(`${BACKEND}${ROUTES.committee.admin.activate}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId: "eos" }),
   }).then(responseJson);
-  console.log(`  onboard eos: activate → status=${activateRes.status} token=${activateRes.token ? "✓" : "✗"}`);
-  if (activateRes.status !== 200 || !activateRes.token) throw new Error(`activate failed: ${JSON.stringify(activateRes)}`);
+  console.log(`  onboard eos: approve → status=${activateRes.status} claimRequired=${activateRes.claimRequired ? "✓" : "✗"}`);
+  if (activateRes.status !== 200 || !activateRes.claimRequired) throw new Error(`activate failed: ${JSON.stringify(activateRes)}`);
+  const eosToken = await claimMemberCredential("eos", eosPriv);
 
   // 4c. Eos is now a full committee member. Add to the roster for session 2.
-  const eosCreds: ExistingCredentials = { token: activateRes.token, privateKey: eosPriv };
+  const eosCreds: ExistingCredentials = { token: eosToken, privateKey: eosPriv };
   const existingCreds = new Map<string, ExistingCredentials>([["eos", eosCreds]]);
   MEMBERS.push({ memberId: "eos", name: "Eos", lens: "newcomer", bias: 0.05, present: true });
 

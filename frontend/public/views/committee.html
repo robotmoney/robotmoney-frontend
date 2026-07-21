@@ -97,6 +97,7 @@
             </a>
           </template>
         </div>
+        <button class="cv__submit" type="button" x-show="nextCursor" :disabled="loading" @click="loadMore()">Load more sessions</button>
       </div>
     </template>
   </div>

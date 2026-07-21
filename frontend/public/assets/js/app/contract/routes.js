@@ -53,6 +53,9 @@ export const ROUTES = {
     memo: "/api/committee/memos/:id", // GET — public memo read
     verifyToken: "/api/committee/verify-token", // GET (member bearer) → { memberId }
     apply: "/api/committee/apply", // POST — public onboarding (recorded 'applied', inactive key)
+    applicationStatus: "/api/committee/applications/:member/status", // GET: public application/claim state
+    claimChallenge: "/api/committee/applications/:member/claim-challenge", // POST: short-lived proof-of-key challenge
+    claimToken: "/api/committee/applications/:member/claim-token", // POST: signature proof, returns bearer exactly once
     register: "/api/committee/register", // POST (privileged) — apply+activate shortcut for demo/E2E
     regime: "/api/committee/regime", // POST (analytics-provider bearer) — persist the regime
     submit: "/api/committee/submit", // POST (member bearer, ed25519-signed)
@@ -61,7 +64,7 @@ export const ROUTES = {
     // drivers can reference them without re-hardcoding the path.
     admin: {
       action: "/api/committee/admin/:action", // POST — generic lifecycle dispatch
-      activate: "/api/committee/admin/activate", // POST — flip applied→active, mint bearer token
+      activate: "/api/committee/admin/activate", // POST: approve applied member; member claims its own token
       reset: "/api/committee/admin/reset", // POST — wipe session data (dev/demo)
       regime: "/api/committee/admin/regime", // POST — recompute the regime composite
       subject: "/api/committee/admin/subject", // POST — ensure a subject row

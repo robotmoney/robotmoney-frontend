@@ -1,11 +1,12 @@
 // Committee domain/service layer — the single place the rules live (window
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
-import { classifyRegime, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
+import { applicationProofMessage, classifyRegime, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES, SITE_PATHS, STANCES } from "@robotmoney/contract";
 import { config } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
-import { verifySubmissionSignature } from "../lib/signing.ts";
+import { verifyMessageSignature, verifySubmissionSignature } from "../lib/signing.ts";
+import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
 import { toBrief, toMember, toMemo, toSession, toSnapshot, toSubject, toTake } from "./projections.ts";
 
 // ── Identity ──────────────────────────────────────────────────────────────
@@ -89,9 +90,31 @@ export async function getSubjectSnapshots(id: string) {
   return rows.map(toSnapshot);
 }
 
-export async function listSessions() {
-  const rows = await sql`SELECT * FROM committee_sessions ORDER BY date DESC, generated_at DESC`;
-  return rows.map(toSession);
+interface SessionCursor { generatedAt: string; id: string }
+function encodeSessionCursor(row: any): string {
+  return Buffer.from(JSON.stringify({ generatedAt: new Date(row.generated_at).toISOString(), id: String(row.id) })).toString("base64url");
+}
+function decodeSessionCursor(cursor?: string | null): SessionCursor | null {
+  if (!cursor) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    return typeof parsed.generatedAt === "string" && typeof parsed.id === "string" ? parsed : null;
+  } catch { return null; }
+}
+
+export async function listSessions(opts: { limit?: number; cursor?: string | null } = {}) {
+  const limit = Math.max(1, Math.min(100, Math.trunc(opts.limit ?? 50)));
+  const cursor = decodeSessionCursor(opts.cursor);
+  const rows = cursor
+    ? await sql`SELECT * FROM committee_sessions
+                WHERE (generated_at, id) < (${cursor.generatedAt}::timestamptz, ${cursor.id}::uuid)
+                ORDER BY generated_at DESC, id DESC LIMIT ${limit + 1}`
+    : await sql`SELECT * FROM committee_sessions ORDER BY generated_at DESC, id DESC LIMIT ${limit + 1}`;
+  const page = rows.slice(0, limit);
+  return {
+    sessions: page.map(toSession),
+    nextCursor: rows.length > limit && page.length ? encodeSessionCursor(page[page.length - 1]) : null,
+  };
 }
 
 export async function getOpenSession() {
@@ -109,29 +132,69 @@ export async function getSession(
   if (!s) return null;
   const takes = await sql`
     SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
-           r.memo_url, r.verified, r.received_at
+           r.memo_url, r.payload, r.verified, r.received_at
     FROM committee_recommendations r
     JOIN committee_members m ON m.id = r.member_id
     WHERE r.session_id = ${s.id} ORDER BY r.received_at`;
   return { session: toSession(s), takes: takes.map(toTake) };
 }
 
-export async function getBrief(date: string, subjectId: string) {
+async function allocationBucketIds(): Promise<string[]> {
+  const row = (await sql<{ buckets: Array<{ id?: string }> }[]>`SELECT buckets FROM allocation_framework WHERE id = 1`)[0];
+  const buckets = Array.isArray(row?.buckets) && row.buckets.length ? row.buckets : ALLOCATION_FRAMEWORK_SEED.buckets;
+  return buckets.map((bucket) => String(bucket.id ?? "")).filter(Boolean);
+}
+
+export async function getBrief(date: string, subjectId: string, memberId?: string | null) {
   const r = await sql`SELECT id, date, subject_id, body, created_at FROM committee_briefs
                       WHERE date = ${date} AND subject_id = ${subjectId} ORDER BY created_at DESC LIMIT 1`;
-  return r[0] ? toBrief(r[0]) : null;
+  if (!r[0]) return null;
+  const session = (await sql`SELECT id, window_closes_at FROM committee_sessions WHERE date = ${date} AND subject_id = ${subjectId}`)[0];
+  const alreadySubmitted = Boolean(memberId && session && (await sql`
+    SELECT 1 FROM committee_recommendations WHERE session_id = ${session.id} AND member_id = ${memberId} LIMIT 1`).length);
+  return {
+    ...toBrief(r[0]),
+    deadline: session?.window_closes_at ? new Date(session.window_closes_at).toISOString() : null,
+    responseSchema: {
+      stance: [...STANCES],
+      confidence: { minimum: 0, maximum: 1 },
+      proposedWeights: { optional: true as const, buckets: await allocationBucketIds(), sum: 1 },
+    },
+    promptGuidance: [
+      "REGIME: state the regime read and the evidence that matters.",
+      "ALLOCATION: explain the portfolio implication and optionally propose bucket weights.",
+      "SUBJECT: address the named subject, its concentration, risks, and next action.",
+    ],
+    alreadySubmitted,
+  };
 }
 
 // ── Submit (verify identity + window + signature + nonce) ───────────────────
 export interface SubmissionInput {
   memberId: string; date: string; subjectId: string; nonce: string;
   stance: string; confidence: number; body?: string; memoUrl?: string; signature: string;
+  proposedWeights?: Record<string, number>;
+}
+
+async function validateProposedWeights(weights?: Record<string, number>): Promise<string | null> {
+  if (weights == null) return null;
+  const entries = Object.entries(weights);
+  if (!entries.length) return "proposedWeights must contain at least one bucket";
+  const allowed = new Set(await allocationBucketIds());
+  for (const [bucket, weight] of entries) {
+    if (!allowed.has(bucket)) return `unknown allocation bucket: ${bucket}`;
+    if (!Number.isFinite(weight) || weight < 0 || weight > 1) return `weight for ${bucket} must be between 0 and 1`;
+  }
+  const sum = entries.reduce((total, [, weight]) => total + weight, 0);
+  return Math.abs(sum - 1) <= 0.001 ? null : `proposedWeights must sum to 1 (received ${sum})`;
 }
 
 export async function submitRecommendation(token: string, sub: SubmissionInput) {
   const memberId = await memberIdForToken(token);
   if (!memberId) return { ok: false, status: 401, error: "unknown member token" };
   if (memberId !== sub.memberId) return { ok: false, status: 403, error: "token/member mismatch" };
+  const weightsError = await validateProposedWeights(sub.proposedWeights);
+  if (weightsError) return { ok: false, status: 400, error: weightsError };
 
   const session = (await sql`SELECT * FROM committee_sessions
                              WHERE date = ${sub.date} AND subject_id = ${sub.subjectId}`)[0];
@@ -140,15 +203,9 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   if (session.window_closes_at && new Date(session.window_closes_at).getTime() < Date.now())
     return { ok: false, status: 409, error: "submission window closed" };
 
-  // Roster gate (issue #152, AC6): sessions created through the admin surface
-  // (committee/admin.ts createSessionAdmin) carry a FROZEN expected roster in
-  // the canonical committee_session_members table (issue #150's migration),
-  // snapshotted at creation time. When one exists, only a member with a
-  // non-excused ('expected') row on it may submit — this is what makes the
-  // roster authoritative rather than advisory. Sessions with NO roster rows
-  // are the legacy/demo path (committee/domain.ts openSession, used by the
-  // worker and the pre-#152 admin dispatcher) and are unaffected: this check
-  // is a no-op for them, so existing behavior is preserved exactly.
+  // The session's frozen roster is authoritative: daily-cron and admin-created
+  // sessions both snapshot active membership when they open. A zero-member
+  // session has no roster rows and remains usable for isolated legacy fixtures.
   const rosterRows = await sql<{ status: string }[]>`
     SELECT status FROM committee_session_members WHERE session_id = ${session.id}`;
   if (rosterRows.length > 0) {
@@ -179,7 +236,10 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
       RETURNING id`;
     if (rows.length === 0) return { ok: false, status: 409, error: "submission window closed" };
     await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'submit_recommendation', ${sql.json({ sessionId: session.id })})`;
-    return { ok: true, status: 201, recommendationId: rows[0].id, verified: true };
+    return {
+      ok: true, status: 201, recommendationId: rows[0].id, verified: true,
+      url: routePath(SITE_PATHS.committeeReceipt, { date: sub.date, subject: sub.subjectId, member: memberId }),
+    };
   } catch (e: any) {
     if (String(e?.message ?? e).includes("duplicate") || e?.code === "23505")
       return { ok: false, status: 409, error: "already submitted (member/nonce or session/member)" };
@@ -192,7 +252,21 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
 // member stays status='applied' and the key is registered INACTIVE (no token,
 // cannot submit). An admin then `activate`s the member, which flips it active,
 // activates the key, and mints a bearer token. RM never holds private keys.
-export interface ApplyInput { memberId: string; name: string; lens?: string; publicKey: string; contact?: string }
+export interface ApplyInput {
+  memberId: string;
+  name: string;
+  lens?: string;
+  publicKey: string;
+  contact?: string;
+  operator?: string;
+  thesis?: string;
+  mandate?: string;
+  biases?: string[];
+  voiceMd?: string;
+  wallets?: string[];
+  avatar?: string;
+  keyProofSignature?: string;
+}
 
 export async function applyMember(input: ApplyInput) {
   // CREATE-ONLY: a memberId is first-come. If it already exists (in ANY state),
@@ -201,13 +275,23 @@ export async function applyMember(input: ApplyInput) {
   // key/identity (which the admin would then activate).
   const existing = (await sql`SELECT id FROM committee_members WHERE id = ${input.memberId}`)[0] as { id: string } | undefined;
   if (existing) return { ok: false, status: 409, error: "memberId already registered; re-apply or key rotation requires admin" };
+  if (!input.keyProofSignature || !await verifyMessageSignature(
+    applicationProofMessage(input.memberId, input.publicKey),
+    input.keyProofSignature,
+    input.publicKey,
+  )) return { ok: false, status: 400, error: "public key proof failed" };
 
   try {
     await sql.begin(async (tx) => {
-      await tx`INSERT INTO committee_members (id, status, name, lens, contact_email, applied_at)
-               VALUES (${input.memberId}, 'applied', ${input.name}, ${input.lens ?? null}, ${input.contact ?? null}, now())`;
+      await tx`INSERT INTO committee_members
+               (id, status, name, tagline, lens, mandate, biases, voice_md, operator, avatar, contact_email, applied_at)
+               VALUES (${input.memberId}, 'applied', ${input.name}, ${input.thesis ?? null}, ${input.lens ?? null},
+                       ${input.mandate ?? null}, ${tx.json((input.biases ?? null) as any)}, ${input.voiceMd ?? null},
+                       ${input.operator ?? null}, ${tx.json((input.avatar ? { url: input.avatar } : null) as any)},
+                       ${input.contact ?? null}, now())`;
       await tx`INSERT INTO committee_member_keys (member_id, public_key, active) VALUES (${input.memberId}, ${input.publicKey}, false)`;
-      await tx`INSERT INTO committee_applications (member_id, payload, status) VALUES (${input.memberId}, ${tx.json(input as any)}, 'pending')`;
+      const { keyProofSignature: _, ...application } = input;
+      await tx`INSERT INTO committee_applications (member_id, payload, status) VALUES (${input.memberId}, ${tx.json(application as any)}, 'pending')`;
       // actor is the request source, NOT the self-asserted body identity.
       await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('public:apply', 'apply', ${tx.json({ memberId: input.memberId })})`;
     });
@@ -216,28 +300,124 @@ export async function applyMember(input: ApplyInput) {
       return { ok: false, status: 409, error: "memberId already registered" };
     throw e;
   }
-  return { ok: true, status: 201, memberStatus: "applied" as const };
+  return {
+    ok: true,
+    status: 201,
+    memberId: input.memberId,
+    memberStatus: "applied" as const,
+    statusUrl: routePath(SITE_PATHS.committeeApplication, { member: input.memberId }),
+  };
 }
 
-// Admin-only. Transactional: locks the member + its pending key, activates that
-// exact key, binds an unguessable bearer (only its hash stored), and only then
-// flips the member active — so a concurrent /apply cannot strand activation.
+// Admin-only. Approval activates the exact pending public key but deliberately
+// does not mint or reveal a bearer credential. The member claims that separately
+// by signing a short-lived challenge with its private Ed25519 key.
 export async function activateMember(memberId: string) {
   return await sql.begin(async (tx) => {
     const existing = (await tx`SELECT id FROM committee_members WHERE id = ${memberId} FOR UPDATE`)[0] as { id: string } | undefined;
     if (!existing) return { ok: false, status: 404, error: "no such applicant" };
     const key = (await tx`SELECT id FROM committee_member_keys WHERE member_id = ${memberId} AND active = false ORDER BY created_at DESC LIMIT 1 FOR UPDATE`)[0] as { id: number } | undefined;
     if (!key) return { ok: false, status: 409, error: "no pending key; member must apply first" };
-    const token = `tok_${memberId}_${crypto.randomUUID()}`;
     // Capacity gate: an 'applied' member is not yet active, so no exemption —
     // this admission must fit under COMMITTEE_ROSTER_CAP or it's refused.
     const cap = await assertRosterCapacity(tx);
     if (!cap.ok) return cap;
-    const upd = await tx`UPDATE committee_member_keys SET active = true, token_hash = ${hashKey(token)} WHERE id = ${key.id} AND active = false RETURNING id`;
+    const upd = await tx`UPDATE committee_member_keys
+                         SET active = true, token_hash = NULL, token_claimed_at = NULL
+                         WHERE id = ${key.id} AND active = false RETURNING id`;
     if (upd.length === 0) return { ok: false, status: 409, error: "activation raced; retry" };
     await tx`UPDATE committee_members SET status = 'active', activated_at = now() WHERE id = ${memberId}`;
     await tx`UPDATE committee_applications SET status = 'approved', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
+    const contact = (await tx`SELECT contact_email FROM committee_members WHERE id = ${memberId}`)[0]?.contact_email as string | null;
+    let activationEmailQueued = false;
+    if (contact && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) {
+      const queued = await tx`
+        INSERT INTO jobs (kind, payload, dedupe_key)
+        VALUES ('committee.activation_email', ${tx.json({ memberId } as any)}, ${`committee:activation-email:${memberId}`})
+        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+        RETURNING id`;
+      activationEmailQueued = queued.length > 0;
+    }
     await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'activate_member', ${tx.json({ memberId })})`;
+    return {
+      ok: true,
+      status: 200,
+      memberId,
+      claimRequired: true,
+      activationEmailQueued,
+      statusUrl: routePath(SITE_PATHS.committeeApplication, { member: memberId }),
+    };
+  });
+}
+
+export async function applicationStatus(memberId: string) {
+  const row = (await sql`
+    SELECT m.id, m.status, m.applied_at, m.activated_at,
+           a.status AS application_status, k.active AS key_active,
+           k.token_hash, k.token_claimed_at
+    FROM committee_members m
+    LEFT JOIN LATERAL (
+      SELECT status FROM committee_applications WHERE member_id = m.id ORDER BY created_at DESC LIMIT 1
+    ) a ON true
+    LEFT JOIN LATERAL (
+      SELECT active, token_hash, token_claimed_at FROM committee_member_keys WHERE member_id = m.id ORDER BY created_at DESC LIMIT 1
+    ) k ON true
+    WHERE m.id = ${memberId}`)[0] as any;
+  if (!row) return null;
+  return {
+    memberId: row.id,
+    memberStatus: row.status,
+    applicationStatus: row.application_status ?? null,
+    appliedAt: row.applied_at ?? null,
+    activatedAt: row.activated_at ?? null,
+    claimable: row.status === "active" && row.key_active === true && row.token_hash == null && row.token_claimed_at == null,
+    claimed: row.token_hash != null || row.token_claimed_at != null,
+  };
+}
+
+export async function createTokenClaimChallenge(memberId: string) {
+  return sql.begin(async (tx) => {
+    const key = (await tx`
+      SELECT id, token_hash, token_claimed_at FROM committee_member_keys
+      WHERE member_id = ${memberId} AND active = true
+      ORDER BY created_at DESC LIMIT 1 FOR UPDATE`)[0] as { id: number; token_hash: string | null; token_claimed_at: Date | null } | undefined;
+    if (!key) return { ok: false, status: 409, error: "application is not approved" };
+    if (key.token_hash || key.token_claimed_at) return { ok: false, status: 409, error: "credential already claimed" };
+    await tx`UPDATE committee_token_claims SET used_at = now() WHERE member_id = ${memberId} AND used_at IS NULL`;
+    const challenge = `robotmoney:claim:${memberId}:${crypto.randomUUID()}`;
+    const expiresAt = new Date(Date.now() + 10 * 60_000);
+    await tx`INSERT INTO committee_token_claims (member_id, key_id, challenge, expires_at)
+             VALUES (${memberId}, ${key.id}, ${challenge}, ${expiresAt})`;
+    return { ok: true, status: 201, memberId, challenge, expiresAt: expiresAt.toISOString() };
+  });
+}
+
+export async function claimMemberToken(memberId: string, challenge: string, signature: string) {
+  return sql.begin(async (tx) => {
+    const row = (await tx`
+      SELECT c.id, c.challenge, c.expires_at, c.used_at, k.id AS key_id,
+             k.public_key, k.token_hash, k.token_claimed_at
+      FROM committee_token_claims c
+      JOIN committee_member_keys k ON k.id = c.key_id
+      WHERE c.member_id = ${memberId} AND c.challenge = ${challenge} AND k.active = true
+      FOR UPDATE OF c, k`)[0] as any;
+    if (!row || row.used_at || new Date(row.expires_at).getTime() <= Date.now())
+      return { ok: false, status: 409, error: "challenge is invalid, expired, or already used" };
+    if (row.token_hash || row.token_claimed_at)
+      return { ok: false, status: 409, error: "credential already claimed" };
+    if (!await verifyMessageSignature(challenge, signature, row.public_key))
+      return { ok: false, status: 400, error: "invalid signature" };
+
+    const token = `tok_${memberId}_${crypto.randomUUID()}`;
+    const updated = await tx`
+      UPDATE committee_member_keys
+      SET token_hash = ${hashKey(token)}, token_claimed_at = now()
+      WHERE id = ${row.key_id} AND token_hash IS NULL AND token_claimed_at IS NULL
+      RETURNING id`;
+    if (updated.length === 0) return { ok: false, status: 409, error: "credential already claimed" };
+    await tx`UPDATE committee_token_claims SET used_at = now() WHERE id = ${row.id}`;
+    await tx`INSERT INTO audit_log (actor, action, scope)
+             VALUES (${memberId}, 'claim_member_token', ${tx.json({ memberId })})`;
     return { ok: true, status: 200, memberId, token };
   });
 }
@@ -344,13 +524,13 @@ export async function backfillRegimeHistory(endDate: string, minPoints = 8): Pro
         (date, composite, composite_percentile, regime,
          macro_regime, onchain_regime, factor_regime,
          macro_index, onchain_index, factor_index,
-         macro_percentile, onchain_percentile, factor_percentile,
+         macro_percentile, onchain_percentile, factor_percentile, synthetic,
          percentiles, indicators)
       VALUES
         (${date}, ${p.composite}, ${round(p.composite)}, ${p.regime},
          ${macroReg}, ${onchainReg}, ${factorReg},
          ${p.macro}, ${p.onchain}, ${p.factor},
-         ${round(p.macro)}, ${round(p.onchain)}, ${round(p.factor)},
+         ${round(p.macro)}, ${round(p.onchain)}, ${round(p.factor)}, true,
          ${sql.json({ macro: round(p.macro), onchain: round(p.onchain), factor: round(p.factor) })}, ${sql.json([])})
       ON CONFLICT (date) DO NOTHING`;
   }
@@ -450,12 +630,32 @@ export async function ensureDemoSubjectFixtures(subjectId: string, name: string,
 // ── Lifecycle (also callable by worker handlers + dev driver) ───────────────
 export async function openSession(date: string, subjectId: string) {
   const subject = await getSubject(subjectId);
-  const r = (await sql`
-    INSERT INTO committee_sessions (date, subject_id, subject_name, state)
-    VALUES (${date}, ${subjectId}, ${subject?.name ?? subjectId}, 'scheduled')
-    ON CONFLICT (date, subject_id) DO UPDATE SET state = 'scheduled'
-    RETURNING id, date, subject_id, subject_name, state`)[0];
-  return r;
+  return sql.begin(async (tx) => {
+    const r = (await tx`
+      INSERT INTO committee_sessions (date, subject_id, subject_name, state)
+      VALUES (${date}, ${subjectId}, ${subject?.name ?? subjectId}, 'scheduled')
+      ON CONFLICT (date, subject_id) DO UPDATE SET subject_name = EXCLUDED.subject_name
+      RETURNING id, date, subject_id, subject_name, state`)[0];
+    await tx`
+      INSERT INTO committee_session_members (session_id, member_id, member_name, member_lens, status)
+      SELECT ${r.id}, id, name, lens, 'expected' FROM committee_members WHERE status = 'active'
+      ON CONFLICT (session_id, member_id) DO NOTHING`;
+    return r;
+  });
+}
+
+export async function subjectForDailySession(date: string): Promise<string | null> {
+  const subjects = await sql<{ id: string }[]>`SELECT id FROM committee_subjects WHERE status = 'active' ORDER BY id`;
+  if (!subjects.length) return null;
+  const day = Math.floor(new Date(`${date}T00:00:00Z`).getTime() / DAY_MS);
+  return subjects[((day % subjects.length) + subjects.length) % subjects.length]?.id ?? null;
+}
+
+export async function sessionIdForState(state: string): Promise<string | null> {
+  const row = (await sql<{ id: string }[]>`
+    SELECT id FROM committee_sessions WHERE state = ${state}
+    ORDER BY date DESC, generated_at DESC LIMIT 1`)[0];
+  return row?.id ?? null;
 }
 
 export async function publishBrief(sessionId: string, windowMinutes = 60, prevOutcome?: string) {
@@ -466,10 +666,22 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     SELECT signal_key, date, payload FROM research_signals
     WHERE date = ${s.date} ORDER BY signal_key`;
   const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
-  const body = { regime, subject: await getSubject(s.subject_id), recentSessions: recent, previousSession, researchSignals };
+  const closes = new Date(Date.now() + windowMinutes * 60_000);
+  const body = {
+    regime, subject: await getSubject(s.subject_id), recentSessions: recent, previousSession, researchSignals,
+    deadline: closes.toISOString(),
+    responseSchema: {
+      stance: [...STANCES], confidence: { minimum: 0, maximum: 1 },
+      proposedWeights: { optional: true, buckets: await allocationBucketIds(), sum: 1 },
+    },
+    promptGuidance: [
+      "REGIME: state the regime read and the evidence that matters.",
+      "ALLOCATION: explain the portfolio implication and optionally propose bucket weights.",
+      "SUBJECT: address the named subject, its concentration, risks, and next action.",
+    ],
+  };
   await sql`INSERT INTO committee_briefs (date, subject_id, body) VALUES (${s.date}, ${s.subject_id}, ${sql.json(jsonValue(body))})
             ON CONFLICT (date, subject_id) DO UPDATE SET body = EXCLUDED.body`;
-  const closes = new Date(Date.now() + windowMinutes * 60_000);
   await sql`UPDATE committee_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
   return { sessionId, state: "collecting", windowClosesAt: closes.toISOString() };
 }
@@ -493,7 +705,7 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8) {
     SELECT date, composite, composite_percentile, regime,
            macro_regime, onchain_regime, factor_regime,
            macro_index, onchain_index, factor_index,
-           macro_percentile, onchain_percentile, factor_percentile
+           macro_percentile, onchain_percentile, factor_percentile, synthetic
     FROM regime_snapshots ORDER BY date DESC LIMIT 14`;
   const chrono = rows.slice().reverse(); // chronological
   const numOr = (v: unknown, fallback: number) => (v == null ? fallback : Number(v));
@@ -511,6 +723,7 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8) {
     macro: numOr(r.macro_index ?? r.macro_percentile, 0.6),
     onchain: numOr(r.onchain_index ?? r.onchain_percentile, 0.35),
     factor: numOr(r.factor_index ?? r.factor_percentile, 0.75),
+    synthetic: Boolean(r.synthetic),
   }));
 
   // Guarantee >= minPoints even if real rows exist but are sparse: prepend
@@ -522,7 +735,7 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8) {
     const pad = [];
     for (let i = need; i >= 1; i--) {
       const t = (need - i) / Math.max(1, need + history.length - 1);
-      pad.push(syntheticRegimePoint(shiftDay(anchor, -i), t, rng));
+      pad.push({ ...syntheticRegimePoint(shiftDay(anchor, -i), t, rng), synthetic: true });
     }
     history = [...pad, ...history];
   }
@@ -539,6 +752,7 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8) {
     macro_percentile: pct(latest?.macro_percentile, latest?.macro_index ?? history[history.length - 1].macro),
     onchain_percentile: pct(latest?.onchain_percentile, latest?.onchain_index ?? history[history.length - 1].onchain),
     factor_percentile: pct(latest?.factor_percentile, latest?.factor_index ?? history[history.length - 1].factor),
+    synthetic: history.some((h) => h.synthetic),
     history: history.map((h) => ({
       date: h.date,
       composite: round(h.composite),
@@ -546,6 +760,7 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8) {
       macro: round(h.macro),
       onchain: round(h.onchain),
       factor: round(h.factor),
+      synthetic: Boolean(h.synthetic),
     })),
   };
 }
@@ -557,7 +772,7 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8) {
 export async function aggregateSession(sessionId: string) {
   const s = (await sql`SELECT * FROM committee_sessions WHERE id = ${sessionId}`)[0];
   const takes = await sql`
-    SELECT r.member_id, r.stance, r.confidence, m.name AS member_name
+    SELECT r.member_id, r.stance, r.confidence, r.body, r.payload, m.name AS member_name
     FROM committee_recommendations r JOIN committee_members m ON m.id = r.member_id
     WHERE r.session_id = ${sessionId} ORDER BY r.received_at`;
   // Denominator (issue #152, AC6): prefer the session's FROZEN roster
@@ -604,41 +819,53 @@ export async function aggregateSession(sessionId: string) {
 
   const stanceParts = Object.entries(byStance).map(([k, v]) => `${v} ${k}`);
   const consensus = [
-    `Regime composite ${composite.toFixed(3)} sits at the ${compPctInt}th percentile — ${regimeLbl} by label.`,
-    `Committee holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the ${compPctInt}th does not license a tilt.`,
-    `Floor-first sequencing — clear the 5% Agent Tokens sleeve via rmUSDC before any structural trim.`,
+    `Regime composite ${composite.toFixed(3)} is at the ${compPctInt}th percentile (${regimeLbl}).`,
+    `${takes.length}/${activeMembers.length} members submitted (${stanceParts.join(", ") || "no stances"}).`,
   ];
-  if (takes.length) consensus.push(`${takes.length}/${activeMembers.length} members submitted this session (${stanceParts.join(", ") || "no stances"}).`);
+  if (meanConfidence != null) consensus.push(`Mean submitted confidence is ${(meanConfidence * 100).toFixed(0)}%.`);
 
   // Disagreements: synthesize from the stance spread. When at least two distinct
   // stances were submitted, contrast the most- and least-constructive members.
   // The ascending ladder is the canonical contract vocabulary (finding 027).
   const rank = (st: string) => { const i = (STANCES as readonly string[]).indexOf(st); return i < 0 ? 2 : i; };
   const sortedTakes = takes.slice().sort((a: any, b: any) => rank(a.stance) - rank(b.stance));
+  const extractQuote = (body: unknown, stance: unknown): string | null => {
+    if (typeof body !== "string" || !body.trim()) return null;
+    const lines = body.split(/\n+/).map((line) => line.trim().replace(/^[-*]\s+/, "")).filter((line) => line && !/^\*\*[A-Z ]+\*\*$/.test(line));
+    const keyword = String(stance ?? "").toLowerCase();
+    return lines.find((line) => keyword && line.toLowerCase().includes(keyword)) ?? lines[0] ?? null;
+  };
   const disagreements: any[] = [];
   if (sortedTakes.length >= 2 && new Set(sortedTakes.map((t: any) => t.stance)).size >= 2) {
     const low = sortedTakes[0], high = sortedTakes[sortedTakes.length - 1];
-    disagreements.push({
-      topic: `Weight of the on-chain panel in the ${s.subject_name ?? s.subject_id} read`,
+    const highQuote = extractQuote(high.body, high.stance);
+    const lowQuote = extractQuote(low.body, low.stance);
+    if (highQuote && lowQuote) disagreements.push({
+      topic: "Stance spread",
       positions: [
-        { member_id: high.member_id, view: `${high.stance} — reads the divergence as downstream of agent deployment; would fund the Agent Tokens sleeve now.` },
-        { member_id: low.member_id, view: `${low.stance} — conservative compositor reads nominal ${regimeLbl}, effective neutral; no tilt licensed.` },
+        { member_id: high.member_id, view: highQuote },
+        { member_id: low.member_id, view: lowQuote },
       ],
-      what_settles: "On-chain panel crossing the 50th percentile for five consecutive sessions, or composite breaching 0.40.",
     });
   }
 
-  const rationale = `Committee holds 95/5/0/0 with composite at the ${compPctInt}th percentile (${regimeLbl}); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.`;
-  const actions = recType === "position_actions" ? [
-    { token: "USDC", action: "rotate", rationale: "Route the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor." },
-    { token: "rmUSDC", action: "add", rationale: "Vault receipt is the Agent Tokens exposure — top up to the mandated 5% floor." },
-  ] : undefined;
-  const weights = recType === "bucket_weights" ? [
-    { bucket: "conservative_defi_yield", weight: 0.95 },
-    { bucket: "agent_tokens", weight: 0.05 },
-    { bucket: "protocol_tokens", weight: 0.0 },
-    { bucket: "real_world_assets", weight: 0.0 },
-  ] : undefined;
+  const proposals = takes
+    .map((take: any) => ({ take, weights: take.payload?.proposedWeights }))
+    .filter((row: any) => row.weights && typeof row.weights === "object");
+  let weights: Array<{ bucket: string; weight: number }> | undefined;
+  if (proposals.length) {
+    const confidenceTotal = proposals.reduce((sum: number, row: any) => sum + Math.max(0, Number(row.take.confidence ?? 0)), 0);
+    const denominator = confidenceTotal > 0 ? confidenceTotal : proposals.length;
+    const buckets = await allocationBucketIds();
+    weights = buckets.map((bucket) => ({
+      bucket,
+      weight: round(proposals.reduce((sum: number, row: any) => {
+        const confidence = confidenceTotal > 0 ? Math.max(0, Number(row.take.confidence ?? 0)) : 1;
+        return sum + Number(row.weights[bucket] ?? 0) * confidence;
+      }, 0) / denominator),
+    }));
+  }
+  const rationale = weights ? `Confidence-weighted mean of ${proposals.length} submitted allocation proposal${proposals.length === 1 ? "" : "s"}.` : undefined;
 
   const quorum = { active: activeMembers.length, submitted: takes.length, absent: absent.length, participation };
   const rec: Record<string, unknown> = {
@@ -647,21 +874,21 @@ export async function aggregateSession(sessionId: string) {
     meanConfidence,
     absent,
     type: recType,
-    rationale,
     consensus,
     disagreements,
   };
-  if (actions) rec.actions = actions;
+  if (rationale) rec.rationale = rationale;
   if (weights) rec.weights = weights;
 
   // Prose synthesis (2–4 sentences): composite + stance distribution + mandate.
   const stanceSummary = stanceParts.length ? stanceParts.join(", ") : "no stances on record";
+  const quoteSummary = disagreements[0]?.positions?.map((position: any) => `${position.member_id}: “${position.view}”`).join(" ") ?? "";
   const synthesis =
-    `The committee reads composite ${composite.toFixed(3)} at the ${compPctInt}th percentile — ${regimeLbl} by label, with the panel spread the load-bearing signal rather than the headline level. ` +
-    `Across ${takes.length}/${activeMembers.length} submitted takes the stance distribution is ${stanceSummary}` +
+    `Composite ${composite.toFixed(3)} is at the ${compPctInt}th percentile (${regimeLbl}). ` +
+    `${takes.length}/${activeMembers.length} members submitted; the stance distribution is ${stanceSummary}` +
     (meanConfidence != null ? ` at ${(meanConfidence * 100).toFixed(0)}% mean confidence` : "") +
-    (absent.length ? `, with ${absent.length} absent` : "") + ". " +
-    `All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of ${s.subject_name ?? s.subject_id}.`;
+    (absent.length ? `, with ${absent.length} absent` : "") + "." +
+    (quoteSummary ? ` Verbatim member views: ${quoteSummary}` : "");
 
   await sql`UPDATE committee_sessions SET
       state = 'aggregated',
@@ -677,7 +904,7 @@ export async function aggregateSession(sessionId: string) {
     sessionId, state: "aggregated",
     quorum, stances: byStance, meanConfidence, absent,
     regimeSummary, subjectSnapshotTotalValueUsd: subjectTotal,
-    type: recType, rationale, consensus, disagreements, actions, weights,
+    type: recType, rationale, consensus, disagreements, weights,
   };
 }
 

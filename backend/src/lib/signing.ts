@@ -27,6 +27,24 @@ export async function verifySubmissionSignature(
   }
 }
 
+export async function verifyMessageSignature(
+  message: string,
+  signatureB64: string,
+  publicKeyB64: string,
+): Promise<boolean> {
+  try {
+    const pub = await crypto.subtle.importKey("raw", b64ToBytes(publicKeyB64), ALG, false, ["verify"]);
+    return await crypto.subtle.verify(
+      ALG,
+      pub,
+      b64ToBytes(signatureB64),
+      new TextEncoder().encode(message),
+    );
+  } catch {
+    return false;
+  }
+}
+
 // Helpers for seeding/tests/agents (key generation + signing). In production a
 // member generates and holds their own private key; these exist so the demo
 // harness and member agents can create identities.

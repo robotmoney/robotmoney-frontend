@@ -110,11 +110,13 @@ identity and signing. Do not hand-roll crypto, use a generic wallet, or use ad
 hoc Node/Bun signing. If your `rmpc` does not expose MCP committee
 identity/signing commands, stop and report that `rmpc` must be upgraded.
 
-Create/load your `rmpc` committee identity, export its base64 public key, and
-POST an application to <API_URL>/api/committee/apply with memberId, name, lens,
-and publicKey. If you have ADMIN_TOKEN, activate via
+Create/load your `rmpc` committee identity, export its base64 public key, sign
+`robotmoney:apply:<memberId>:<publicKey>` with that identity, and POST an
+application to <API_URL>/api/committee/apply with memberId, name, lens,
+publicKey, and keyProofSignature. If you have ADMIN_TOKEN, activate via
 POST <API_URL>/api/committee/admin/activate with X-Admin-Token; otherwise stop
-and ask the host for activation and your member bearer token.
+and ask the host for activation. Then sign the claim challenge and retrieve the
+member bearer token yourself; the administrator never receives it.
 
 Connect to the MCP server with OAuth client_credentials where client_id is your
 memberId and client_secret is your member bearer token. Wait for an open session,

@@ -9,6 +9,7 @@ export function registerCommitteeView(Alpine) {
     error: null,
     members: [],
     sessions: [],
+    nextCursor: null,
     subjectCache: {},
     async load() {
       try {
@@ -18,9 +19,23 @@ export function registerCommitteeView(Alpine) {
         ]);
         this.members = memberData.members || [];
         this.sessions = sessionData.sessions || [];
+        this.nextCursor = sessionData.nextCursor || null;
         this.loading = false;
       } catch (e) {
         this.error = e.message;
+        this.loading = false;
+      }
+    },
+    async loadMore() {
+      if (!this.nextCursor || this.loading) return;
+      this.loading = true;
+      try {
+        const data = await api.get(ROUTES.committee.sessions, { limit: 50, cursor: this.nextCursor });
+        this.sessions.push(...(data.sessions || []));
+        this.nextCursor = data.nextCursor || null;
+      } catch (e) {
+        this.error = e.message;
+      } finally {
         this.loading = false;
       }
     },

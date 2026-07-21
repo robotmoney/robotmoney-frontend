@@ -1,0 +1,53 @@
+<section class="cv cv--detail" x-data="icTakeDetail()">
+  <div class="cv__body cv__body--narrow">
+    <a class="cv__back" :href="session ? `/committee/${session.date}/${session.subjectId}` : '/committee'">← session</a>
+    <p class="cv__loading" x-show="loading">Loading verified take…</p>
+    <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
+
+    <template x-if="!loading && take">
+      <article>
+        <header class="cv__detail-head">
+          <p class="cv__eyebrow"><span x-text="formatDate(session.date, 'long')"></span> · <span x-text="subject?.name || session.subjectName"></span></p>
+          <h1 class="cv__detail-title" x-text="`${member?.name || take.memberName}: ${take.stance}`"></h1>
+          <div class="cv__fact-row">
+            <span x-text="take.verified ? '✓ signature verified' : 'signature not verified'"></span>
+            <span x-text="`confidence ${fmtPct(take.confidence)}`"></span>
+            <span x-text="take.receivedAt ? `received ${new Date(take.receivedAt).toLocaleString()}` : 'receipt time unavailable'"></span>
+            <span x-text="source === 'archive' ? 'published archive' : 'live API'"></span>
+          </div>
+        </header>
+
+        <section class="cv__panel">
+          <p class="cv__panel-label">Subject context</p>
+          <h2 x-text="subject?.name || session.subjectName"></h2>
+          <p class="cv__body-copy" x-text="subject?.thesisBlurb || `${session.subjectName} committee review.`"></p>
+          <a :href="`/committee/${session.date}/${session.subjectId}`">Open full session →</a>
+        </section>
+
+        <section class="cv__take cv__take--ported">
+          <header class="cv__take-head">
+            <div class="cv__take-member">
+              <a class="cv__avatar" :href="`/committee/members/${take.memberId}`" x-text="initials(member?.name || take.memberName)"></a>
+              <div>
+                <a class="cv__member-link" :href="`/committee/members/${take.memberId}`" x-text="member?.name || take.memberName"></a>
+                <div class="cv__take-lens" x-text="member?.lens || 'committee member'"></div>
+              </div>
+            </div>
+            <span class="cv__stance-badge" :style="stanceStyle(take.stance)"><i :style="`background:${stanceColor(take.stance)}`"></i><span x-text="`${take.stance} · ${fmtPct(take.confidence)}`"></span></span>
+          </header>
+          <div class="cv__take-body" x-html="linkified(take.body || '')"></div>
+          <a class="cv__memo-link" x-show="take.memoUrl" :href="take.memoUrl" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
+        </section>
+
+        <section class="cv__panel" x-show="weightRows().length">
+          <p class="cv__panel-label">Proposed allocation</p>
+          <dl class="cv__meta-grid">
+            <template x-for="[bucket, weight] in weightRows()" :key="bucket"><div><dt x-text="bucket.replace(/[_-]+/g, ' ')"></dt><dd x-text="fmtPct(weight)"></dd></div></template>
+          </dl>
+        </section>
+
+        <button class="cv__submit" type="button" @click="copyLink()" x-text="copied ? 'Copied' : 'Copy shareable receipt link'"></button>
+      </article>
+    </template>
+  </div>
+</section>

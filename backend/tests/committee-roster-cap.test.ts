@@ -12,7 +12,8 @@ import { test, expect } from "bun:test";
 import * as ic from "../src/committee/domain.ts";
 import { COMMITTEE_ROSTER_CAP, countActiveMembers } from "../src/committee/domain.ts";
 import * as admin from "../src/committee/admin.ts";
-import { generateKeyPair } from "../src/lib/signing.ts";
+import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
+import { applicationProofMessage } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 
 // Isolate: own the committee_members table so countActiveMembers() reflects only
@@ -24,8 +25,9 @@ async function resetRoster() {
 // Onboard a member through the REAL public path (apply → activate). Returns the
 // activation result so the caller can assert on status/ok — NO cap pre-check.
 async function onboard(memberId: string) {
-  const { publicKeyB64 } = await generateKeyPair();
-  const applied = await ic.applyMember({ memberId, name: memberId, publicKey: publicKeyB64 });
+  const { publicKeyB64, privateKey } = await generateKeyPair();
+  const keyProofSignature = await signMessage(applicationProofMessage(memberId, publicKeyB64), privateKey);
+  const applied = await ic.applyMember({ memberId, name: memberId, publicKey: publicKeyB64, keyProofSignature });
   expect(applied.status).toBe(201); // application is always allowed
   return ic.activateMember(memberId);
 }

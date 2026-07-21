@@ -14,7 +14,7 @@ import * as admin from "../src/committee/admin.ts";
 import * as ic from "../src/committee/domain.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeSubmission } from "@robotmoney/contract";
+import { applicationProofMessage, canonicalizeSubmission } from "@robotmoney/contract";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -142,16 +142,23 @@ test("members: manual add mints a one-time credential; deactivate revokes keys; 
 
 test("members: application review approve/reject", async () => {
   const memberId = rid("mapp");
-  const { publicKeyB64 } = await generateKeyPair();
-  await ic.applyMember({ memberId, name: "Applicant", publicKey: publicKeyB64 });
+  const { publicKeyB64, privateKey } = await generateKeyPair();
+  const keyProofSignature = await signMessage(applicationProofMessage(memberId, publicKeyB64), privateKey);
+  await ic.applyMember({ memberId, name: "Applicant", publicKey: publicKeyB64, keyProofSignature });
 
   const approve = await admin.reviewApplicationAdmin(memberId, "approve");
   expect(approve.status).toBe(200);
-  expect(typeof (approve as any).token).toBe("string");
+  expect(approve).not.toHaveProperty("token");
+  expect((approve as any).claimRequired).toBe(true);
+  const challenge = await ic.createTokenClaimChallenge(memberId);
+  const signature = await signMessage((challenge as any).challenge, privateKey);
+  const claimed = await ic.claimMemberToken(memberId, (challenge as any).challenge, signature);
+  expect(await ic.memberIdForToken((claimed as any).token)).toBe(memberId);
 
   const memberId2 = rid("mrej");
-  const { publicKeyB64: pk2 } = await generateKeyPair();
-  await ic.applyMember({ memberId: memberId2, name: "Applicant2", publicKey: pk2 });
+  const { publicKeyB64: pk2, privateKey: privateKey2 } = await generateKeyPair();
+  const keyProofSignature2 = await signMessage(applicationProofMessage(memberId2, pk2), privateKey2);
+  await ic.applyMember({ memberId: memberId2, name: "Applicant2", publicKey: pk2, keyProofSignature: keyProofSignature2 });
   const reject = await admin.reviewApplicationAdmin(memberId2, "reject");
   expect(reject.status).toBe(200);
   // committee_members.status has no 'rejected' value (CHECK constraint from

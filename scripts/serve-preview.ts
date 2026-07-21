@@ -16,6 +16,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { injectSiteMeta, SITE_REDIRECTS } from "@robotmoney/contract";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC = join(repoRoot, "frontend/public");
@@ -38,6 +39,11 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
 
+    const redirect = SITE_REDIRECTS[path];
+    if (redirect && (req.method === "GET" || req.method === "HEAD")) {
+      return new Response(null, { status: 301, headers: { Location: `${redirect}${url.search}` } });
+    }
+
     // Mock the API from the goldens: GETs by pathname (query dropped — a golden
     // is one point in time); writes are accepted no-ops (no mutable state here).
     if (path.startsWith("/api/") || path === "/health") {
@@ -48,8 +54,14 @@ const server = Bun.serve({
 
     // Live static SPA, with an index.html fallback for client routes (/regime …).
     const file = Bun.file(join(PUBLIC, path === "/" ? "/index.html" : path));
-    if (await file.exists()) return new Response(file);
-    return new Response(Bun.file(join(PUBLIC, "index.html")), { headers: { "content-type": "text/html" } });
+    if (await file.exists()) {
+      if (path === "/") {
+        return new Response(injectSiteMeta(await file.text(), path), { headers: { "content-type": "text/html; charset=utf-8" } });
+      }
+      return new Response(file);
+    }
+    const shell = Bun.file(join(PUBLIC, "index.html"));
+    return new Response(injectSiteMeta(await shell.text(), path), { headers: { "content-type": "text/html; charset=utf-8" } });
   },
 });
 

@@ -2,7 +2,7 @@
 // answers the JSON API and serves the static frontend (STATIC_DIR), so a
 // single-box deployment needs no reverse proxy.
 import { join, normalize } from "node:path";
-import { ROUTES } from "@robotmoney/contract";
+import { injectSiteMeta, ROUTES, SITE_REDIRECTS } from "@robotmoney/contract";
 import { config, assertNoVaultAddressCollision } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { createComment, listComments } from "./routes/comments.ts";
@@ -28,12 +28,23 @@ async function serveStatic(pathname: string): Promise<Response | null> {
   if (pathname.endsWith("/")) filePath = join(filePath, "index.html");
 
   const file = Bun.file(filePath);
-  if (await file.exists()) return new Response(file);
+  if (await file.exists()) {
+    if (filePath.endsWith("index.html")) {
+      return new Response(injectSiteMeta(await file.text(), pathname), {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+    return new Response(file);
+  }
 
   // No file extension → treat as a client route, serve the shell.
   if (!safe.split("/").pop()!.includes(".")) {
     const index = Bun.file(join(config.staticDir, "index.html"));
-    if (await index.exists()) return new Response(index);
+    if (await index.exists()) {
+      return new Response(injectSiteMeta(await index.text(), pathname), {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
   }
   return null;
 }
@@ -77,6 +88,14 @@ const server = Bun.serve({
 });
 
 async function route(req: Request, url: URL, pathname: string, clientIp: string): Promise<Response> {
+    const redirect = SITE_REDIRECTS[pathname];
+    if (redirect && (req.method === "GET" || req.method === "HEAD")) {
+      return new Response(null, {
+        status: 301,
+        headers: { Location: `${redirect}${url.search}` },
+      });
+    }
+
     if (pathname === ROUTES.health) {
       let db = "down";
       try { await sql`SELECT 1`; db = "up"; } catch { db = "down"; }

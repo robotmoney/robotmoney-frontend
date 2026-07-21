@@ -23,7 +23,7 @@ function regReq(headers: Record<string, string> = {}) {
   return new Request(`http://x${REG}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...headers },
-    body: JSON.stringify({ memberId: id, name: id, publicKey: "A".repeat(44) }),
+    body: JSON.stringify({ memberId: id, name: id, publicKey: `${"A".repeat(43)}=` }),
   });
 }
 const call = (req: Request) => handleCommittee(req, new URL(req.url));

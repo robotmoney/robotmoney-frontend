@@ -23,11 +23,10 @@ interface SeedSchedule {
 // Keep this list small and harmless. Each kind MUST have a handler registered in
 // backend/src/worker/handlers/index.ts and be idempotent on natural keys.
 //
-// Committee schedules are intentionally no-cron (never auto-enqueued by the
-// scheduler). The demo script enqueues lifecycle jobs explicitly via the
-// admin enqueue-job endpoint, which lets the demo control the pace while still
-// exercising the real worker claim loop + handler path. Scheduled cron
-// triggering (e.g. daily open_session) is a future addition.
+export function committeeSchedulesEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return env.RM_ENV === "prod" && !env.DEMO_MODE;
+}
+
 const SCHEDULES: SeedSchedule[] = [
   // Daily 22:30 UTC: regime-only classification. After the US equity close
   // (21:00 UTC) + FRED's daily refresh, mirroring the original scripts/regime
@@ -62,9 +61,9 @@ const SCHEDULES: SeedSchedule[] = [
   // NEW WETH->ROBOTMONEY buyback swaps into buyback_swaps (keyed on tx_hash). No-op
   // under a non-live source; degrade-safe on RPC failure. Handler: handlers/buybacks.ts.
   { kind: "buybacks.refresh", cron: "15 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
-  // Committee lifecycle — disabled by default; the demo enqueues these explicitly
-  // via the admin enqueue-job endpoint, exercising the real worker claim loop +
-  // handler path. Enable manually or change to a real cron for auto-scheduling.
+  // Committee lifecycle. The rows stay disabled in dev/CI where demos drive the
+  // lifecycle explicitly. seedJobSchedules() enables and verifies all five in
+  // RM_ENV=prod, including already-existing deployments.
   { kind: "committee.open_session", cron: "0 6 * * *", payload: {}, timezone: "UTC", enabled: false },
   { kind: "committee.publish_brief", cron: "0 7 * * *", payload: {}, timezone: "UTC", enabled: false },
   { kind: "committee.close_window", cron: "0 8 * * *", payload: {}, timezone: "UTC", enabled: false },
@@ -132,6 +131,7 @@ const SLOW_DEMO_SAMPLER_SCHEDULES: SeedSchedule[] = [
 // of every truncating file needing to know the full seed() cost (e.g. the
 // wallet_balance_samples backfill loop).
 export async function seedJobSchedules(): Promise<void> {
+  const prodCommittee = committeeSchedulesEnabled();
   const schedules = process.env.DEMO_MODE
     ? [...SCHEDULES, ...FAST_DEMO_SCHEDULES, ...SLOW_DEMO_SAMPLER_SCHEDULES]
     : SCHEDULES;
@@ -141,11 +141,25 @@ export async function seedJobSchedules(): Promise<void> {
     // (next_run_at, last_enqueued_at, enabled) survive untouched.
     await sql`
       INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
-      VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled})
+      VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.kind.startsWith("committee.") ? prodCommittee : s.enabled})
       ON CONFLICT (kind, cron) DO NOTHING
     `;
   }
   console.log(`seeded job_schedules (${schedules.length} definition(s), idempotent)`);
+
+  if (prodCommittee) {
+    const expected = SCHEDULES.filter((schedule) => schedule.kind.startsWith("committee."));
+    for (const schedule of expected) {
+      await sql`UPDATE job_schedules SET enabled = true
+                WHERE kind = ${schedule.kind} AND cron = ${schedule.cron}`;
+    }
+    const verified = await sql<{ kind: string; enabled: boolean }[]>`
+      SELECT kind, enabled FROM job_schedules WHERE kind LIKE 'committee.%' AND enabled`;
+    const enabledKinds = new Set(verified.map((row) => row.kind));
+    const missing = expected.map((row) => row.kind).filter((kind) => !enabledKinds.has(kind));
+    if (missing.length) throw new Error(`production committee schedules failed boot verification: ${missing.join(", ")}`);
+    console.log(`verified production committee schedules (${expected.length}/${expected.length} enabled)`);
+  }
 
   // DEMO_MODE also disables the per-minute wallet-sampler baseline: inserting
   // the hourly (kind, cron) row above only makes it COEXIST with "* * * * *" —

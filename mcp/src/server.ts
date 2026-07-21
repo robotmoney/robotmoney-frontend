@@ -39,18 +39,18 @@ function buildServer(memberId: string, memberToken: string) {
   server.registerTool("list_sessions", { description: "All committee sessions.", inputSchema: {} },
     async () => j(await get(ROUTES.committee.sessions)));
   server.registerTool("get_brief", { description: "The brief for a session.", inputSchema: { date: z.string(), subject: z.string() } },
-    async ({ date, subject }) => j(await get(`${ROUTES.committee.brief}?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(subject)}`)));
+    async ({ date, subject }) => j(await get(`${ROUTES.committee.brief}?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(subject)}&memberId=${encodeURIComponent(memberId)}`)));
   server.registerTool("get_subject_snapshot", { description: "Latest snapshot (positions, weights, total value) for a portfolio subject.", inputSchema: { subjectId: z.string() } },
     async ({ subjectId }) => j({ ...(await get(routePath(ROUTES.committee.subjectSnapshots, { id: subjectId }))) }));
   server.registerTool("get_session", { description: "A committee session with its takes.", inputSchema: { date: z.string(), subject: z.string() } },
     async ({ date, subject }) => j(await get(routePath(ROUTES.committee.session, { date, subject }))));
   server.registerTool("get_signing_payload",
     { description: "Canonical bytes to sign for a drafted recommendation.",
-      inputSchema: { memberId: z.string(), date: z.string(), subjectId: z.string(), nonce: z.string(), stance: z.string(), confidence: z.number(), body: z.string().optional(), memoUrl: z.string().optional() } },
+      inputSchema: { memberId: z.string(), date: z.string(), subjectId: z.string(), nonce: z.string(), stance: z.string(), confidence: z.number(), body: z.string().optional(), memoUrl: z.string().optional(), proposedWeights: z.record(z.string(), z.number()).optional() } },
     async (sub) => j({ canonical: canonicalizeSubmission(sub) }));
   server.registerTool("submit_recommendation",
     { description: "Submit a signed recommendation (ed25519 signature over the canonical payload).",
-      inputSchema: { memberId: z.string(), date: z.string(), subjectId: z.string(), nonce: z.string(), stance: z.string(), confidence: z.number(), body: z.string().optional(), memoUrl: z.string().optional(), signature: z.string() } },
+      inputSchema: { memberId: z.string(), date: z.string(), subjectId: z.string(), nonce: z.string(), stance: z.string(), confidence: z.number(), body: z.string().optional(), memoUrl: z.string().optional(), proposedWeights: z.record(z.string(), z.number()).optional(), signature: z.string() } },
     async (sub) => {
       const res = await fetch(`${BACKEND}${ROUTES.committee.submit}`, {
         method: "POST",

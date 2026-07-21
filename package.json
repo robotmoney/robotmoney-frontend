@@ -9,6 +9,9 @@
     "check-contract": "bun scripts/sync-contract.ts --check",
     "check-docs": "bash scripts/check-docs-analytics.sh",
     "check:contribution": "bun scripts/check-contribution.ts",
+    "site:generate": "bun scripts/generate-site-index.ts",
+    "site:check": "bun scripts/generate-site-index.ts --check",
+    "staging:check": "bun scripts/check-staging.ts",
     "test": "bun test scripts/tests",
     "test:opencode-tools": "bun scripts/opencode-committee-tools-test.ts",
     "test:browser": "playwright test",
@@ -20,7 +23,8 @@
     "demo:status": "bun scripts/demo-status.ts",
     "demo:clean": "bun scripts/demo-clean.ts",
     "credentials": "bun scripts/gitops-credentials.ts",
-    "credentials:check": "bun scripts/gitops-credentials.ts --check"
+    "credentials:check": "bun scripts/gitops-credentials.ts --check",
+    "committee:agent": "bun scripts/committee-starter-agent.ts"
   },
   "dependencies": {
     "libsodium-wrappers": "^0.8.4"

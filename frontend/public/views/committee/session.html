@@ -21,6 +21,11 @@
           </div>
         </header>
 
+        <div class="cv__panel cv__panel--accent" x-show="source === 'archive' || session.regimeSummary?.synthetic" x-cloak>
+          <p class="cv__panel-label">Data provenance</p>
+          <p class="cv__body-copy" x-text="source === 'archive' ? 'Published reference archive. Some historical examples may be synthetic.' : 'Synthetic demo points are included in the regime history and are labeled in the chart data.'"></p>
+        </div>
+
         <template x-if="session.regimeSummary || brief">
           <section class="cv__context-grid">
             <div class="cv__panel" x-show="session.regimeSummary">
@@ -124,15 +129,6 @@
                 <div class="cv__bucket-bars-svg" x-html="bucketWeightsBars()"></div>
               </div>
               <p class="cv__body-copy" x-show="session.committeeRecommendation.rationale" x-text="session.committeeRecommendation.rationale"></p>
-              <div class="cv__rec-actions" x-show="(session.committeeRecommendation.actions || []).length">
-                <template x-for="a in session.committeeRecommendation.actions || []" :key="`${a.token}-${a.action}`">
-                  <div class="cv__action-row">
-                    <span x-text="a.token"></span>
-                    <b x-text="a.action"></b>
-                    <p x-text="a.rationale"></p>
-                  </div>
-                </template>
-              </div>
             </div>
           </template>
         </section>
@@ -172,7 +168,7 @@
               <thead><tr><th>Member</th><th>Stance</th><th class="cv__num">Confidence</th></tr></thead>
               <tbody>
                 <template x-for="t in takes" :key="t.id || t.memberId">
-                  <tr><td x-text="t.memberName"></td><td x-text="t.stance"></td><td class="cv__num" x-text="fmtPct(t.confidence)"></td></tr>
+                  <tr><td><a :href="`/committee/${session.date}/${session.subjectId}/${t.memberId}`" x-text="t.memberName"></a> <span x-show="t.verified" title="Ed25519 signature verified">✓</span></td><td x-text="t.stance"></td><td class="cv__num" x-text="fmtPct(t.confidence)"></td></tr>
                 </template>
               </tbody>
             </table>
@@ -188,7 +184,7 @@
                   <div class="cv__take-member">
                     <a class="cv__avatar" :href="`/committee/members/${t.memberId}`" x-text="initials(t.memberName)"></a>
                     <div>
-                      <a class="cv__member-link" :href="`/committee/members/${t.memberId}`" x-text="t.memberName"></a>
+                      <a class="cv__member-link" :href="`/committee/${session.date}/${session.subjectId}/${t.memberId}`" x-text="t.memberName"></a>
                       <div class="cv__take-lens" x-text="memberLens(t.memberId)"></div>
                     </div>
                   </div>
@@ -198,6 +194,14 @@
                   </span>
                 </header>
                 <div class="cv__take-body" x-html="linkified(t.body || '')"></div>
+                <div class="cv__mini-tags">
+                  <span x-show="t.verified">✓ verified signature</span>
+                  <span x-show="t.receivedAt" x-text="`received ${new Date(t.receivedAt).toLocaleString()}`"></span>
+                  <a :href="`/committee/${session.date}/${session.subjectId}/${t.memberId}`">permalink</a>
+                </div>
+                <dl class="cv__meta-grid" x-show="Object.keys(t.proposedWeights || {}).length">
+                  <template x-for="[bucket, weight] in Object.entries(t.proposedWeights || {})" :key="bucket"><div><dt x-text="bucket.replace(/[_-]+/g, ' ')"></dt><dd x-text="fmtPct(weight)"></dd></div></template>
+                </dl>
                 <a class="cv__memo-link" x-show="t.memoUrl" :href="t.memoUrl" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
               </article>
             </template>

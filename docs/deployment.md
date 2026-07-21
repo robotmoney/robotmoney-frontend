@@ -62,6 +62,22 @@ Cloudflare-proxied port — see
 needs a distinct port (`8443`, a Cloudflare-supported proxied-HTTPS port)
 instead of a path under `committee.`.
 
+### 2.1 Staging release gate
+
+After the current `main` image and static bundle are deployed, run the read-only
+smoke check from the repository root:
+
+```sh
+bun run staging:check
+```
+
+The release is ready for review only when the marketing shell returns HTML and
+both health probes plus OAuth discovery return successful `application/json`
+payloads. Override `STAGING_MARKETING_URL`, `STAGING_API_URL`, or
+`STAGING_MCP_URL` when verifying an origin before DNS is switched. A failure is
+an infrastructure/deploy signal; do not accept a `200 text/html` fallback for a
+JSON endpoint.
+
 ---
 
 ## 3. Cloudflare credentials
@@ -148,6 +164,10 @@ frontend, never committed (`.env` stays gitignored):
 
 - **`DATABASE_URL`** (§4.3)
 - **`ANTHROPIC_API_KEY`**, **`FRED_API_KEY`**, **`RPC_URL`** — per ARCHITECTURE §8.
+- **`RESEND_API_KEY`**, **`COMMITTEE_EMAIL_FROM`**: activation notification
+  delivery (for example `Robot Money <committee@robotmoney.net>`). Verify the
+  sender domain in Resend first. `PUBLIC_SITE_ORIGIN` may override the default
+  `https://www.robotmoney.net` link origin for staging.
 - **`PROJECTS_SOURCE=live`** — not a secret, but **required in prod**: the
   `/projects` directory pipelines fail closed
   (`backend/src/projects/access/select.ts` throws

@@ -75,6 +75,7 @@ export interface CommitteeTake {
   confidence: number | null;
   body: string | null;
   memoUrl?: string | null;
+  proposedWeights?: Record<string, number> | null;
   verified: boolean;
   receivedAt: string;
   // Optional provenance (legacy/prototype; absent for signed recommendations).
@@ -94,6 +95,7 @@ export interface RegimeHistoryPoint {
   macro: number;
   onchain: number;
   factor: number;
+  synthetic?: boolean;
 }
 
 // The reference-shaped regime_summary object (backend buildRegimeSummary):
@@ -110,6 +112,7 @@ export interface RegimeSummary {
   macro_percentile: number;
   onchain_percentile: number;
   factor_percentile: number;
+  synthetic?: boolean;
   history: RegimeHistoryPoint[];
 }
 
@@ -130,13 +133,13 @@ export interface CommitteeDisagreementPosition {
 export interface CommitteeDisagreement {
   topic: string;
   positions: CommitteeDisagreementPosition[];
-  what_settles: string;
+  what_settles?: string;
 }
 
 export interface CommitteeRecommendedAction {
   token: string;
   action: string;
-  rationale: string;
+  rationale?: string;
 }
 
 export interface CommitteeBucketWeight {
@@ -154,7 +157,7 @@ export interface CommitteeRecommendation {
   meanConfidence: number | null;
   absent: string[];
   type: "bucket_weights" | "position_actions";
-  rationale: string;
+  rationale?: string;
   consensus: string[];
   disagreements: CommitteeDisagreement[];
   actions?: CommitteeRecommendedAction[];
@@ -186,6 +189,14 @@ export interface CommitteeBrief {
   date: string;
   subjectId: string;
   body: unknown;
+  deadline?: string | null;
+  responseSchema?: {
+    stance: readonly string[];
+    confidence: { minimum: number; maximum: number };
+    proposedWeights: { optional: true; buckets: readonly string[]; sum: number };
+  };
+  promptGuidance?: readonly string[];
+  alreadySubmitted?: boolean;
   createdAt: string;
 }
 
@@ -212,5 +223,6 @@ export interface CommitteeSubmission {
   stance: string;
   confidence: number;
   body: string;
+  proposedWeights?: Record<string, number>;
   signature: string;
 }

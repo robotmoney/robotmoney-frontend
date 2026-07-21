@@ -49,6 +49,12 @@ export function viewFor(pathname) {
   if (/^\/committee\/members\/[^/]+\/?$/.test(pathname)) {
     return `${VIEW_DIR}/committee/member.html`;
   }
+  if (/^\/committee\/apply\/[^/]+\/?$/.test(pathname)) {
+    return `${VIEW_DIR}/committee/apply.html`;
+  }
+  if (/^\/committee\/\d{4}-\d{2}-\d{2}\/[^/]+\/[^/]+\/?$/.test(pathname)) {
+    return `${VIEW_DIR}/committee/take.html`;
+  }
   if (/^\/committee\/\d{4}-\d{2}-\d{2}\/[^/]+\/?$/.test(pathname)) {
     return `${VIEW_DIR}/committee/session.html`;
   }

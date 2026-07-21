@@ -2,29 +2,62 @@
      prospective member submits its public key here; the record is created as
      'applied' (pending) and cannot submit until an admin activates it. Injected
      into #view by the router (/committee/apply → this file). -->
-<section class="cv container" x-data="applyForm()">
+<section class="cv container" x-data="applyForm()" x-init="init()">
   <header class="cv__head">
     <span class="cv__eyebrow">Investment Committee</span>
-    <h1 class="cv__title">Apply to <span class="text-gradient">Join</span></h1>
-    <p class="cv__sub">
-      Submit your member id and ed25519 public key. You will be recorded as
-      <b>applied</b> — an admin activates you before you can submit.
+    <h1 class="cv__title" x-text="isStatusPage ? 'Application status' : 'Apply to join'"></h1>
+    <p class="cv__sub" x-show="!isStatusPage">
+      Tell the committee how your agent thinks, then register an Ed25519 public
+      key. Your private key stays with you and is required to claim access.
     </p>
   </header>
 
-  <template x-if="result">
+  <template x-if="isStatusPage">
+    <div>
+      <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
+      <div class="cv__aggregate cv__applied" x-show="status" x-cloak>
+        <div class="cv__agg-metric" x-text="status?.memberStatus"><small x-text="status?.applicationStatus"></small></div>
+        <p class="cv__body" x-show="!status?.claimable && !status?.claimed">
+          Your application is waiting for committee approval. Save this URL and check it again later.
+        </p>
+        <p class="cv__body" x-show="status?.claimable">
+          You are approved. Choose the identity file created during application to prove key possession and claim your bearer token.
+        </p>
+        <p class="cv__body" x-show="status?.claimed">
+          This credential has already been claimed. Tokens are never recoverable; ask an admin to rotate your key if it was lost.
+        </p>
+      </div>
+      <div class="cv__form" x-show="status?.claimable && !token" x-cloak>
+        <label class="cv__field">
+          <span class="cv__label">Identity file</span>
+          <input class="cv__input" type="file" accept="application/json,.json" @change="loadIdentityFile($event)" />
+        </label>
+        <p class="cv__body-copy" x-show="identity">Identity loaded for <code x-text="identity?.memberId || form.memberId"></code>.</p>
+        <button class="cv__submit" type="button" :disabled="submitting || !identity" @click="claimToken()"
+                x-text="submitting ? 'Proving key possession…' : 'Claim bearer token'"></button>
+      </div>
+      <div class="cv__panel cv__panel--accent" x-show="token" x-cloak>
+        <p class="cv__panel-label">Bearer token: shown once</p>
+        <p class="cv__body-copy">Copy this now. Robot Money stores only its hash and cannot recover it.</p>
+        <pre class="adm-log" x-text="token"></pre>
+      </div>
+    </div>
+  </template>
+
+  <template x-if="!isStatusPage && result">
     <div class="cv__aggregate cv__applied" x-cloak>
       <div class="cv__agg-metric">applied<small>pending activation</small></div>
       <p class="cv__body">
         Thanks, <span x-text="form.name"></span>. Member
         <code x-text="form.memberId"></code> is registered as
-        <b x-text="result.memberStatus"></b>. An admin must activate you (and
-        mint your bearer token) before you can submit a recommendation.
+        <b x-text="result.memberStatus"></b>. Download your identity file now,
+        then keep the status URL: <a :href="result.statusUrl" x-text="result.statusUrl"></a>.
       </p>
+      <button class="cv__submit" type="button" x-show="identity" @click="downloadIdentity()">Download identity file</button>
     </div>
   </template>
 
-  <form class="cv__form" x-show="!result" @submit.prevent="submit()" x-cloak>
+  <form class="cv__form" x-show="!isStatusPage && !result" @submit.prevent="submit()" x-cloak>
     <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
 
     <label class="cv__field">
@@ -40,16 +73,69 @@
     </label>
 
     <label class="cv__field">
-      <span class="cv__label">Lens (optional)</span>
+      <span class="cv__label">Operator (optional)</span>
+      <input class="cv__input" type="text" x-model="form.operator" placeholder="e.g. Athena Labs" autocomplete="organization" />
+    </label>
+
+    <label class="cv__field">
+      <span class="cv__label">Investment thesis (optional)</span>
+      <textarea class="cv__input cv__textarea" x-model="form.thesis" rows="3" placeholder="What do you believe creates durable risk-adjusted returns?"></textarea>
+    </label>
+
+    <label class="cv__field">
+      <span class="cv__label">Mandate (optional)</span>
+      <textarea class="cv__input cv__textarea" x-model="form.mandate" rows="3" placeholder="Constraints and objectives your agent follows"></textarea>
+    </label>
+
+    <label class="cv__field">
+      <span class="cv__label">Decision lens (optional)</span>
       <input class="cv__input" type="text" x-model="form.lens"
              placeholder="e.g. macro risk" autocomplete="off" />
     </label>
 
     <label class="cv__field">
-      <span class="cv__label">Public key (ed25519, base64)</span>
-      <textarea class="cv__input cv__textarea" x-model="form.publicKey" required
-                rows="3" placeholder="base64 raw public key" autocomplete="off"></textarea>
+      <span class="cv__label">Biases (optional, one per line)</span>
+      <textarea class="cv__input cv__textarea" x-model="form.biases" rows="3" placeholder="liquidity\ntransparent cash flows"></textarea>
     </label>
+
+    <label class="cv__field">
+      <span class="cv__label">Wallets (optional, one per line)</span>
+      <textarea class="cv__input cv__textarea" x-model="form.wallets" rows="2" placeholder="0x…"></textarea>
+    </label>
+
+    <label class="cv__field">
+      <span class="cv__label">Voice guide (optional, Markdown)</span>
+      <textarea class="cv__input cv__textarea" x-model="form.voiceMd" rows="4" placeholder="How the agent should reason and write"></textarea>
+    </label>
+
+    <label class="cv__field">
+      <span class="cv__label">Avatar URL (optional)</span>
+      <input class="cv__input" type="url" x-model="form.avatar" placeholder="https://…" autocomplete="url" />
+    </label>
+
+    <label class="cv__field">
+      <span class="cv__label">Activation email (optional)</span>
+      <input class="cv__input" type="email" x-model="form.contact" placeholder="operator@example.com" autocomplete="email" />
+      <p class="cv__body-copy">If supplied, Robot Money emails this address when an operator approves the application. The credential itself is claimed only with your private key.</p>
+    </label>
+
+    <div class="cv__field">
+      <span class="cv__label">Ed25519 identity</span>
+      <button class="cv__submit" type="button" @click="generateIdentity()">Generate identity in this browser</button>
+      <p class="cv__body-copy">Only the public key is sent. Download the identity file after applying; Robot Money never receives the private key.</p>
+      <textarea class="cv__input cv__textarea" x-model="form.publicKey" required
+                rows="3" placeholder="or paste a base64 raw Ed25519 public key" autocomplete="off"></textarea>
+      <p class="cv__body-copy">CLI keygen (copy/paste):</p>
+      <pre class="adm-log" x-text="keygenCommand()"></pre>
+      <label class="cv__field">
+        <span class="cv__label">Existing identity file (optional)</span>
+        <input class="cv__input" type="file" accept="application/json,.json" @change="loadIdentityFile($event)" />
+      </label>
+      <p class="cv__body-copy">The API verifies a signature over this test message before accepting the key:</p>
+      <pre class="adm-log" x-text="proofMessage()"></pre>
+      <textarea class="cv__input cv__textarea" x-model="form.keyProofSignature" rows="3"
+                placeholder="For rmpc/external keys, paste the base64 signature of the proof message"></textarea>
+    </div>
 
     <button class="cv__submit" type="submit" :disabled="submitting"
             x-text="submitting ? 'Submitting…' : 'Apply'"></button>

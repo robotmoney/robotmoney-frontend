@@ -3,6 +3,20 @@ import type { canonicalizeSubmission } from "@robotmoney/contract";
 
 export type JsonObject = Record<string, unknown>;
 
+function optionalWeights(value: unknown): Record<string, number> | undefined | null {
+  if (value == null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) return null;
+  const entries = Object.entries(value);
+  if (entries.length === 0 || entries.length > 32) return null;
+  const out: Record<string, number> = {};
+  for (const [rawKey, rawValue] of entries) {
+    const key = rawKey.trim();
+    if (!key || key.length > 100 || typeof rawValue !== "number" || !Number.isFinite(rawValue)) return null;
+    out[key] = rawValue;
+  }
+  return out;
+}
+
 export async function readJsonObject(req: Request): Promise<JsonObject | null> {
   const value = await req.json().catch(() => null);
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -31,18 +45,37 @@ export function optionalString(
   return value ?? undefined;
 }
 
+function optionalStringArray(body: JsonObject, key: string, maxItems = 20, maxLength = 500): string[] | undefined | null {
+  if (body[key] == null) return undefined;
+  if (!Array.isArray(body[key]) || body[key].length > maxItems) return null;
+  const values = body[key].map((value) => typeof value === "string" ? value.trim() : "");
+  if (values.some((value) => !value || value.length > maxLength)) return null;
+  return values;
+}
+
 export function parseApply(body: JsonObject | null): ApplyInput | null {
   if (!body) return null;
   const memberId = requiredString(body, "memberId", 100);
   const name = requiredString(body, "name", 200);
   const publicKey = requiredString(body, "publicKey", 1000);
-  if (!memberId || !name || !publicKey) return null;
+  const keyProofSignature = requiredString(body, "keyProofSignature", 2000);
+  const biases = optionalStringArray(body, "biases");
+  const wallets = optionalStringArray(body, "wallets", 20, 200);
+  if (!memberId || !name || !publicKey || !keyProofSignature || biases === null || wallets === null) return null;
   return {
     memberId,
     name,
     publicKey,
+    keyProofSignature,
     lens: optionalString(body, "lens", 500),
     contact: optionalString(body, "contact", 320),
+    operator: optionalString(body, "operator", 200),
+    thesis: optionalString(body, "thesis", 1000),
+    mandate: optionalString(body, "mandate", 2000),
+    biases,
+    voiceMd: optionalString(body, "voiceMd", 10_000),
+    wallets,
+    avatar: optionalString(body, "avatar", 2000),
   };
 }
 
@@ -55,11 +88,12 @@ export function parseSubmission(body: JsonObject | null): SubmissionInput | null
   const stance = requiredString(body, "stance", 100);
   const signature = requiredString(body, "signature", 2000);
   const confidence = body.confidence;
+  const proposedWeights = optionalWeights(body.proposedWeights);
   if (
     !memberId || !date || !subjectId || !nonce || !stance || !signature ||
     !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
     typeof confidence !== "number" || !Number.isFinite(confidence) ||
-    confidence < 0 || confidence > 1
+    confidence < 0 || confidence > 1 || proposedWeights === null
   ) return null;
   return {
     memberId,
@@ -71,6 +105,7 @@ export function parseSubmission(body: JsonObject | null): SubmissionInput | null
     signature,
     body: optionalString(body, "body", 10_000),
     memoUrl: optionalString(body, "memoUrl", 2000),
+    proposedWeights,
   };
 }
 
@@ -84,11 +119,12 @@ export function parseSigningDraft(
   const nonce = requiredString(body, "nonce", 200);
   const stance = requiredString(body, "stance", 100);
   const confidence = body.confidence;
+  const proposedWeights = optionalWeights(body.proposedWeights);
   if (
     !memberId || !date || !subjectId || !nonce || !stance ||
     !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
     typeof confidence !== "number" || !Number.isFinite(confidence) ||
-    confidence < 0 || confidence > 1
+    confidence < 0 || confidence > 1 || proposedWeights === null
   ) return null;
   return {
     memberId,
@@ -99,6 +135,7 @@ export function parseSigningDraft(
     confidence,
     body: optionalString(body, "body", 10_000),
     memoUrl: optionalString(body, "memoUrl", 2000),
+    proposedWeights,
   };
 }
 

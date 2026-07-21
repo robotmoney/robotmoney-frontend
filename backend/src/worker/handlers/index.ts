@@ -38,6 +38,7 @@ export const handlers: Record<string, JobHandler> = {
   "committee.close_window": committee.closeWindow,
   "committee.aggregate": committee.aggregateSession,
   "committee.publish": committee.publishSession,
+  "committee.activation_email": committee.sendActivationEmail,
   // projects "Agentic Economy Ecosystem" data pipelines (issue #87). Ported from
   // the deprecated bot-analytics edge functions onto the kind→handler pattern.
   // discover/refreshCoins/refreshWallets/syncRevenue/fetchVaults each already

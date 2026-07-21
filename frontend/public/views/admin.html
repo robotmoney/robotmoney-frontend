@@ -86,10 +86,32 @@
             <div class="adm-tiles">
               <template x-for="s in statusList()" :key="s.status">
                 <div class="adm-tile">
-                  <span :class="statusClass(s.status)" x-text="s.status"></span>
+                  <span :class="statusClass(s.status)" x-text="s.status + ' jobs'"></span>
                   <span class="adm-tile__count" x-text="s.count"></span>
                 </div>
               </template>
+            </div>
+
+            <div class="adm-detail__head">
+              <h2 class="adm-h2">Pending committee applications (<span x-text="pendingApplications.length"></span>)</h2>
+              <a class="adm-link" href="/admin/committee">Open committee management →</a>
+            </div>
+            <p x-show="applicationError" x-text="applicationError" class="rm-error"></p>
+            <div class="rm-table-scroll">
+              <table class="rm-table adm-table">
+                <thead><tr><th>Applicant</th><th>Lens</th><th>Applied</th><th>Action</th></tr></thead>
+                <tbody>
+                  <template x-for="application in pendingApplications" :key="application.id">
+                    <tr>
+                      <td><a class="adm-link" :href="`/admin/committee/members/${application.member_id}`" x-text="applicationName(application)"></a></td>
+                      <td x-text="application.payload?.lens || 'Not provided'"></td>
+                      <td x-text="fmtTime(application.created_at)"></td>
+                      <td><button type="button" class="adm-btn" :disabled="applicationPending === application.member_id" @click="approveApplication(application)" x-text="applicationPending === application.member_id ? 'Approving…' : 'Approve'"></button></td>
+                    </tr>
+                  </template>
+                  <tr x-show="pendingApplications.length === 0"><td class="adm-dim" colspan="4">No pending applications.</td></tr>
+                </tbody>
+              </table>
             </div>
 
             <h2 class="adm-h2 adm-h2--flush">Alerts</h2>

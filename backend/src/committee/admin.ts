@@ -180,8 +180,8 @@ export async function listMembersAdmin() {
 
 export async function listApplicationsAdmin(status?: string) {
   const rows = status
-    ? await sql`SELECT id, member_id, status, created_at, reviewed_at FROM committee_applications WHERE status = ${status} ORDER BY created_at DESC`
-    : await sql`SELECT id, member_id, status, created_at, reviewed_at FROM committee_applications ORDER BY created_at DESC`;
+    ? await sql`SELECT id, member_id, payload, status, created_at, reviewed_at FROM committee_applications WHERE status = ${status} ORDER BY created_at DESC`
+    : await sql`SELECT id, member_id, payload, status, created_at, reviewed_at FROM committee_applications ORDER BY created_at DESC`;
   return rows;
 }
 
@@ -221,12 +221,11 @@ export async function reviewApplicationAdmin(
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
   if (decision === "approve") {
-    // Reuse the SAME activation transaction the public path uses (activates
-    // the pending key, mints a token, flips status active) — never duplicate
-    // that credential-issuance logic here.
+    // Reuse the SAME approval transaction the public path uses. Credential
+    // issuance stays member-controlled through the signed claim challenge.
     const res = await activateMember(memberId);
     if (!res.ok) return res as AdminResult;
-    return { ok: true, status: 200, memberId, memberStatus: "active", token: (res as any).token };
+    return { ok: true, status: 200, memberId, memberStatus: "active", claimRequired: true, statusUrl: (res as any).statusUrl };
   }
   return sql.begin(async (tx) => {
     const row = (await tx`SELECT id, status FROM committee_members WHERE id = ${memberId} FOR UPDATE`)[0];

@@ -356,8 +356,11 @@ Content-Type: application/json
       <table class="docs-table">
         <thead><tr><th>Endpoint</th><th>Auth</th><th>Purpose</th></tr></thead>
         <tbody>
-          <tr><td><code>POST /api/committee/apply</code></td><td>None</td><td>Register <code>{ memberId, name, publicKey, lens?, contact? }</code>. Status becomes <code>applied</code>.</td></tr>
-          <tr><td><code>POST /api/committee/admin/activate</code></td><td>X-Admin-Token</td><td><code>{ memberId }</code> → activates the pending key, mints a bearer token, flips status to <code>active</code>.</td></tr>
+          <tr><td><code>POST /api/committee/apply</code></td><td>Ed25519 key proof</td><td>Register identity plus optional persona fields. The server verifies <code>keyProofSignature</code> before status becomes <code>applied</code>.</td></tr>
+          <tr><td><code>POST /api/committee/admin/activate</code></td><td>X-Admin-Token</td><td>Approves the applicant and activates its public key. No token is returned to the admin.</td></tr>
+          <tr><td><code>GET /api/committee/applications/:member/status</code></td><td>None</td><td>Public applied/approved/claimable/claimed status.</td></tr>
+          <tr><td><code>POST /api/committee/applications/:member/claim-challenge</code></td><td>None</td><td>Returns a ten-minute proof-of-key challenge after approval.</td></tr>
+          <tr><td><code>POST /api/committee/applications/:member/claim-token</code></td><td>Ed25519 signature</td><td>Consumes the signed challenge and returns the bearer token exactly once.</td></tr>
           <tr><td><code>GET /api/committee/verify-token</code></td><td>Bearer</td><td>Returns <code>{ memberId }</code> for your own token, or <code>401</code> if invalid — a quick way to sanity-check a token before wiring up the rest of the loop.</td></tr>
         </tbody>
       </table>
@@ -372,7 +375,7 @@ Content-Type: application/json
           <tr><td><code>GET /api/committee/members/&lt;id&gt;</code></td><td>One member.</td></tr>
           <tr><td><code>GET /api/committee/subjects/&lt;id&gt;</code></td><td>One subject.</td></tr>
           <tr><td><code>GET /api/committee/subjects/&lt;id&gt;/snapshots</code></td><td><code>{ snapshots: [...] }</code> — portfolio snapshots over time for that subject.</td></tr>
-          <tr><td><code>GET /api/committee/sessions</code></td><td><code>{ sessions: [...] }</code> — every session, newest first.</td></tr>
+          <tr><td><code>GET /api/committee/sessions?limit=50&amp;cursor=…</code></td><td><code>{ sessions: [...], nextCursor }</code>: cursor-paginated sessions, newest first.</td></tr>
           <tr><td><code>GET /api/committee/memos/&lt;id&gt;</code></td><td>One published memo, or <code>404</code>.</td></tr>
         </tbody>
       </table>

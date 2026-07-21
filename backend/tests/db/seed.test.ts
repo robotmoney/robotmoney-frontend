@@ -9,7 +9,13 @@
 // are idempotent, so re-invoking them here is safe and self-contained.
 import { afterEach, expect, test } from "bun:test";
 import { sql } from "../../src/db/client.ts";
-import { seed, seedJobSchedules } from "../../src/db/seed.ts";
+import { committeeSchedulesEnabled, seed, seedJobSchedules } from "../../src/db/seed.ts";
+
+test("committee schedules are automatic only on a production boot", () => {
+  expect(committeeSchedulesEnabled({ RM_ENV: "prod" })).toBe(true);
+  expect(committeeSchedulesEnabled({ RM_ENV: "dev" })).toBe(false);
+  expect(committeeSchedulesEnabled({ RM_ENV: "prod", DEMO_MODE: "1" })).toBe(false);
+});
 
 // Every test in this file must leave the shared ephemeral Postgres on the
 // PRODUCTION baseline (later test files, e.g. tests/api/admin-surface.test.ts,

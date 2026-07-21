@@ -52,6 +52,7 @@ function camelSession(raw) {
         macroPercentile: rs.macroPercentile ?? rs.macro_percentile,
         onchainPercentile: rs.onchainPercentile ?? rs.onchain_percentile,
         factorPercentile: rs.factorPercentile ?? rs.factor_percentile,
+        synthetic: Boolean(rs.synthetic),
         history: rs.history || [],
       };
     })(),
@@ -73,6 +74,7 @@ function camelTake(raw) {
     body: raw.body || "",
     model: raw.model,
     memoUrl: raw.memoUrl || raw.memo_url,
+    proposedWeights: raw.proposedWeights || raw.proposed_weights || null,
     verified: raw.verified,
     receivedAt: raw.receivedAt || raw.received_at || raw.generated_at || raw.generatedAt,
   };
@@ -438,6 +440,12 @@ export function registerStaticViews(Alpine) {
         }));
       }
       const weights = rec.weights;
+      if (Array.isArray(weights)) {
+        return weights.map((row) => ({
+          name: this.humanize(row.bucket || row.id), target: null, actual: null,
+          recommended: num(row.weight ?? row.recommended) ?? 0,
+        }));
+      }
       if (!weights || typeof weights !== "object") return [];
       return Object.entries(weights).map(([id, w]) => ({
         name: this.humanize(id), target: null, actual: null, recommended: num(w) ?? 0,
@@ -511,6 +519,55 @@ export function registerStaticViews(Alpine) {
     },
     disagreements() {
       return this.session?.committeeRecommendation?.disagreements || [];
+    },
+  }));
+
+  Alpine.data("icTakeDetail", () => ({
+    ...helpers,
+    loading: true,
+    error: null,
+    source: null,
+    session: null,
+    subject: null,
+    member: null,
+    take: null,
+    copied: false,
+    async init() {
+      const match = location.pathname.match(/^\/committee\/(\d{4}-\d{2}-\d{2})\/([^/]+)\/([^/]+)\/?$/);
+      if (!match) { this.error = "Take not found"; this.loading = false; return; }
+      const [, date, subjectId, memberId] = match.map((part) => decodeURIComponent(part));
+      try {
+        let detail;
+        if (archivePreferred(date)) {
+          detail = await loadArchiveSession(date, subjectId);
+          this.source = "archive";
+          this.member = await loadArchiveMember(memberId).catch(() => null);
+          this.subject = await loadArchiveSubject(subjectId).catch(() => null);
+        } else {
+          const [sessionData, memberData, subjectData] = await Promise.all([
+            api.get(path(ROUTES.committee.session, { date, subject: subjectId })),
+            api.get(path(ROUTES.committee.member, { id: memberId })),
+            api.get(path(ROUTES.committee.subject, { id: subjectId })),
+          ]);
+          detail = { session: camelSession(sessionData.session), takes: (sessionData.takes || []).map(camelTake) };
+          this.source = "api";
+          this.member = camelMember(memberData);
+          this.subject = camelSubject(subjectData);
+        }
+        this.session = detail.session;
+        this.take = detail.takes.find((take) => take.memberId === memberId) || null;
+        if (!this.take) throw new Error("No submission from this member in this session");
+      } catch (e) {
+        this.error = e.message || "Take not found";
+      } finally {
+        this.loading = false;
+      }
+    },
+    weightRows() { return Object.entries(this.take?.proposedWeights || {}); },
+    async copyLink() {
+      await navigator.clipboard.writeText(location.href);
+      this.copied = true;
+      setTimeout(() => { this.copied = false; }, 1500);
     },
   }));
 }

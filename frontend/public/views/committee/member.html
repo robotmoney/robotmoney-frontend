@@ -48,7 +48,7 @@
         <p class="cv__empty" x-show="recentTakes().length === 0">No sessions yet.</p>
         <div class="cv__session-list cv__session-list--compact">
           <template x-for="row in recentTakes().slice(0, 20)" :key="`${row.session.date}-${row.session.subjectId}`">
-            <a class="cv__session-card" :href="`/committee/${row.session.date}/${row.session.subjectId}`">
+            <a class="cv__session-card" :href="`/committee/${row.session.date}/${row.session.subjectId}/${member.id}`">
               <div class="cv__session-top">
                 <div class="cv__session-titleline">
                   <span class="cv__date" x-text="formatDate(row.session.date, 'short')"></span>

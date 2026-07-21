@@ -51,6 +51,9 @@ export function registerAdminSurfaceView(Alpine) {
     overview: null,
     overviewLoading: false,
     overviewError: null,
+    pendingApplications: [],
+    applicationPending: null,
+    applicationError: null,
 
     // ── queue ─────────────────────────────────────────────────────────────
     jobs: [],
@@ -142,6 +145,8 @@ export function registerAdminSurfaceView(Alpine) {
       this._forgetToken();
       this.password = "";
       this.overview = null;
+      this.pendingApplications = [];
+      this.applicationError = null;
       this.jobs = [];
       this.schedules = [];
       this.summary = { byStatus: {}, byKind: {} };
@@ -186,7 +191,12 @@ export function registerAdminSurfaceView(Alpine) {
       this.overviewLoading = true;
       this.overviewError = null;
       try {
-        this.overview = await api.adminGet(ROUTES.admin.overview, this._token());
+        const [overview, applications] = await Promise.all([
+          api.adminGet(ROUTES.admin.overview, this._token()),
+          api.adminGet(ROUTES.committee.admin.applications, this._token(), { status: "pending" }),
+        ]);
+        this.overview = overview;
+        this.pendingApplications = applications.applications || [];
         this.summary = this.overview?.queueCounts ? { byStatus: this.overview.queueCounts, byKind: {} } : this.summary;
       } catch (e) {
         if (!this._handleError(e)) this.overviewError = e.message;
@@ -195,6 +205,19 @@ export function registerAdminSurfaceView(Alpine) {
       }
     },
     overviewAlerts() { return this.overview?.alerts || []; },
+    applicationName(application) { return application?.payload?.name || application?.member_id; },
+    async approveApplication(application) {
+      this.applicationPending = application.member_id;
+      this.applicationError = null;
+      try {
+        await api.adminPost(path(ROUTES.committee.admin.memberReview, { id: application.member_id }), this._token(), { decision: "approve" });
+        await this.loadOverview();
+      } catch (e) {
+        if (!this._handleError(e)) this.applicationError = e.message;
+      } finally {
+        this.applicationPending = null;
+      }
+    },
 
     // ── queue (US-Q1) ────────────────────────────────────────────────────
     async loadQueue() {

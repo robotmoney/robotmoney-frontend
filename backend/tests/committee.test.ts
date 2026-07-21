@@ -1,7 +1,7 @@
 import { test, expect, beforeAll } from "bun:test";
 import * as ic from "../src/committee/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeSubmission } from "@robotmoney/contract";
+import { applicationProofMessage, canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
@@ -25,18 +25,49 @@ async function activeMember() {
 
 test("apply is create-only (existing memberId rejected)", async () => {
   const id = rid("a");
-  const { publicKeyB64 } = await generateKeyPair();
-  expect((await ic.applyMember({ memberId: id, name: "A", publicKey: publicKeyB64 })).status).toBe(201);
+  const { publicKeyB64, privateKey } = await generateKeyPair();
+  const keyProofSignature = await signMessage(applicationProofMessage(id, publicKeyB64), privateKey);
+  expect((await ic.applyMember({ memberId: id, name: "A", publicKey: publicKeyB64, keyProofSignature })).status).toBe(201);
   expect((await ic.applyMember({ memberId: id, name: "A2", publicKey: publicKeyB64 })).status).toBe(409);
+
+  const badId = rid("bad-proof");
+  const badKeys = await generateKeyPair();
+  const badProof = await signMessage(applicationProofMessage("somebody-else", badKeys.publicKeyB64), badKeys.privateKey);
+  expect((await ic.applyMember({ memberId: badId, name: "Bad", publicKey: badKeys.publicKeyB64, keyProofSignature: badProof })).status).toBe(400);
+  expect(await ic.getMember(badId)).toBeNull();
 });
 
-test("apply → activate mints a usable token; re-activate finds no pending key", async () => {
+test("apply → approve → signed challenge returns the token only to the member", async () => {
   const id = rid("b");
-  const { publicKeyB64 } = await generateKeyPair();
-  await ic.applyMember({ memberId: id, name: "B", publicKey: publicKeyB64 });
+  const { publicKeyB64, privateKey } = await generateKeyPair();
+  const keyProofSignature = await signMessage(applicationProofMessage(id, publicKeyB64), privateKey);
+  const applied = await ic.applyMember({
+    memberId: id,
+    name: "B",
+    publicKey: publicKeyB64,
+    keyProofSignature,
+    operator: "B Labs",
+    thesis: "Prefer durable, transparent yield.",
+    mandate: "Protect principal first.",
+    biases: ["liquidity"],
+    wallets: ["0xabc"],
+    contact: "b@example.com",
+  });
+  expect(applied.statusUrl).toBe(`/committee/apply/${id}`);
   const act = await ic.activateMember(id);
   expect(act.status).toBe(200);
-  expect(await ic.memberIdForToken(act.token!)).toBe(id);
+  expect(act).not.toHaveProperty("token");
+  expect(act.activationEmailQueued).toBe(true);
+  expect((await ic.applicationStatus(id))?.claimable).toBe(true);
+
+  const challenge = await ic.createTokenClaimChallenge(id);
+  expect(challenge.status).toBe(201);
+  const signature = await signMessage(challenge.challenge!, privateKey);
+  const claimed = await ic.claimMemberToken(id, challenge.challenge!, signature);
+  expect(claimed.status).toBe(200);
+  expect(await ic.memberIdForToken(claimed.token!)).toBe(id);
+  expect((await ic.applicationStatus(id))?.claimed).toBe(true);
+  expect((await ic.claimMemberToken(id, challenge.challenge!, signature)).status).toBe(409);
   expect((await ic.activateMember(id)).status).toBe(409);
 });
 
@@ -44,10 +75,12 @@ test("submit: signature verify/reject, window, duplicate", async () => {
   const subj = rid("s");
   await ic.ensureSubject(subj, "S");
   const date = "2026-06-30";
+  const m = await activeMember();
+  const m2 = await activeMember();
+  const m3 = await activeMember();
   const session = await ic.openSession(date, subj);
   await ic.publishBrief(session.id, 60);
 
-  const m = await activeMember();
   const base = { memberId: m.id, date, subjectId: subj, stance: "bullish", confidence: 0.9, body: "x" };
   const signed = async (nonce: string) => {
     const sub = { ...base, nonce };
@@ -67,14 +100,12 @@ test("submit: signature verify/reject, window, duplicate", async () => {
   expect((await ic.submitRecommendation(m.token, await signed("n2"))).status).toBe(409);
 
   // tampered signature → 400 (fresh member to avoid the per-member dup guard)
-  const m2 = await activeMember();
   const s2 = { memberId: m2.id, date, subjectId: subj, nonce: "n3", stance: "bullish", confidence: 0.5, body: "y" };
   const wrongSig = await signMessage(canonicalizeSubmission({ ...s2, stance: "bearish" }), m2.privateKey);
   expect((await ic.submitRecommendation(m2.token, { ...s2, signature: wrongSig })).status).toBe(400);
 
   // window closed → 409
   await ic.closeWindow(session.id);
-  const m3 = await activeMember();
   const s3 = { memberId: m3.id, date, subjectId: subj, nonce: "n4", stance: "neutral", confidence: 0.5, body: "z" };
   const sig3 = await signMessage(canonicalizeSubmission(s3), m3.privateKey);
   expect((await ic.submitRecommendation(m3.token, { ...s3, signature: sig3 })).status).toBe(409);
@@ -99,20 +130,21 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   const subj = rid("sub");
   await ic.ensureDemoSubjectFixtures(subj, "Woon Treasury", "2026-07-05");
   const date = "2026-07-05";
+  const members = [await activeMember(), await activeMember()];
   const session = await ic.openSession(date, subj);
   await ic.publishBrief(session.id, 60);
 
-  // Two members with DISTINCT stances so a disagreement is synthesized.
-  const submit = async (stance: string, confidence: number) => {
-    const m = await activeMember();
-    const sub = { memberId: m.id, date, subjectId: subj, nonce: rid("n"), stance, confidence, body: memoBody(subj) };
+  // Two members with DISTINCT stances and allocation proposals so the
+  // disagreement is extractive and the recommendation is data-derived.
+  const submit = async (m: Awaited<ReturnType<typeof activeMember>>, stance: string, confidence: number, proposedWeights: Record<string, number>) => {
+    const sub = { memberId: m.id, date, subjectId: subj, nonce: rid("n"), stance, confidence, body: memoBody(subj), proposedWeights };
     const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
     const res = await ic.submitRecommendation(m.token, { ...sub, signature });
     expect(res.status).toBe(201);
     return m.id;
   };
-  await submit("bullish", 0.8);
-  await submit("cautious", 0.7);
+  await submit(members[0], "bullish", 0.8, { conservative_defi_yield: 0.8, agent_tokens: 0.2 });
+  await submit(members[1], "cautious", 0.7, { conservative_defi_yield: 1, agent_tokens: 0 });
 
   await ic.closeWindow(session.id);
   await ic.aggregateSession(session.id);
@@ -142,8 +174,19 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(rec.consensus.length).toBeGreaterThan(0);
   expect(Array.isArray(rec.disagreements)).toBe(true);
   expect(rec.disagreements.length).toBeGreaterThanOrEqual(1);
-  expect(rec.disagreements[0]).toHaveProperty("what_settles");
+  for (const position of rec.disagreements[0].positions) {
+    const take = detail!.takes.find((candidate) => candidate.memberId === position.member_id);
+    expect(take?.body).toContain(position.view);
+  }
   expect(["position_actions", "bucket_weights"]).toContain(rec.type);
+  expect(rec.actions).toBeUndefined();
+  expect(rec.weights).toEqual([
+    { bucket: "conservative_defi_yield", weight: 0.8933 },
+    { bucket: "agent_tokens", weight: 0.1067 },
+    { bucket: "protocol_tokens", weight: 0 },
+    { bucket: "real_world_assets", weight: 0 },
+  ]);
+  expect(detail!.takes[0].proposedWeights).toBeTruthy();
 
   // Synthesis is prose, not a one-liner rollup.
   expect(typeof s.synthesis).toBe("string");
