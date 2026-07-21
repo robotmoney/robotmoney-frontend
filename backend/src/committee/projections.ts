@@ -6,6 +6,7 @@ import type {
   CommitteeTake,
   SubjectSnapshot,
 } from "@robotmoney/contract";
+import { verifyStoredSubmissionSignature } from "../lib/signing.ts";
 
 type Row = Record<string, any>;
 
@@ -84,6 +85,31 @@ export function toTake(row: Row): CommitteeTake {
     verified: Boolean(row.verified),
     receivedAt: instant(row.received_at) ?? "",
   };
+}
+
+/**
+ * Project the signed payload itself and recompute its verification result.
+ * The denormalized columns and stored `verified` flag are intentionally not
+ * authorities for a public receipt.
+ */
+export async function toVerifiedTake(row: Row): Promise<CommitteeTake> {
+  const payload = row.payload && typeof row.payload === "object" ? row.payload : {};
+  const verified = typeof row.signature === "string" && typeof row.public_key === "string"
+    ? await verifyStoredSubmissionSignature({
+      submission: payload,
+      signatureB64: row.signature,
+      publicKeyB64: row.public_key,
+    })
+    : false;
+
+  return toTake({
+    ...row,
+    stance: payload.stance ?? row.stance,
+    confidence: payload.confidence ?? row.confidence,
+    body: payload.body ?? row.body,
+    memo_url: payload.memoUrl ?? row.memo_url,
+    verified,
+  });
 }
 
 export function toBrief(row: Row): CommitteeBrief {

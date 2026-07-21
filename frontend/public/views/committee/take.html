@@ -1,0 +1,48 @@
+<!-- Public, server-verified committee take receipt (issue #207). -->
+<section class="cv cv--detail" x-data="committeeTakeReceipt()" data-committee-take-receipt>
+  <div class="cv__body cv__body--narrow">
+    <a href="/committee" class="cv__back">← /committee</a>
+
+    <p class="cv__loading" x-show="loading">Verifying take…</p>
+    <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
+
+    <template x-if="!loading && take">
+      <article class="cv__take cv__take--ported">
+        <header class="cv__detail-head">
+          <p class="cv__eyebrow">committee take · verification receipt</p>
+          <h1 class="cv__detail-title" x-text="signer?.name || take.memberName"></h1>
+          <div class="cv__receipt-status">
+            <span class="cv__stance-badge" :style="stanceStyle(take.stance)">
+              <i :style="`background:${stanceColor(take.stance)}`"></i>
+              <span x-text="`${take.stance} · ${fmtPct(take.confidence)}`"></span>
+            </span>
+            <span
+              class="cv__verified"
+              :class="{ 'cv__verified--negative': !take.verified }"
+              data-verified-badge
+              :data-take-id="take.id"
+              x-text="take.verified ? '✓ server verified' : '✕ not verified'"
+            ></span>
+          </div>
+        </header>
+
+        <div class="cv__take-body" x-html="linkified(take.body || '')"></div>
+
+        <section class="cv__panel">
+          <p class="cv__panel-label">Signer</p>
+          <dl class="cv__meta-grid">
+            <dt>member</dt><dd><a :href="`/committee/members/${signer?.id}`" x-text="signer?.name || take.memberName"></a></dd>
+            <dt>member id</dt><dd x-text="signer?.id || take.memberId"></dd>
+            <dt>public key fingerprint</dt><dd class="cv__fingerprint" x-text="signer?.publicKeyFingerprint || 'unavailable'"></dd>
+          </dl>
+        </section>
+
+        <section class="cv__panel" x-show="memo">
+          <p class="cv__panel-label">Memo</p>
+          <h2 x-text="memo?.title || 'Member memo'"></h2>
+          <div class="cv__take-body" x-html="linkified(memo?.body || '')"></div>
+        </section>
+      </article>
+    </template>
+  </div>
+</section>

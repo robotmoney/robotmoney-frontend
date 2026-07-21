@@ -46,6 +46,8 @@ export const ROUTES = {
     subjectSnapshots: "/api/committee/subjects/:id/snapshots", // GET
     sessions: "/api/committee/sessions", // GET
     session: "/api/committee/sessions/:date/:subject", // GET
+    take: "/api/committee/takes/:id", // GET — public read-time-verified receipt
+    takePermalink: "/committee/takes/:id", // rendered public verification receipt
     openSession: "/api/committee/open-session", // GET → session currently collecting, if any
     brief: "/api/committee/brief", // GET ?date=&subject=
     signingPayload: "/api/committee/signing-payload", // POST → canonical bytes a member must sign

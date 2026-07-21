@@ -24,6 +24,8 @@ export const ROUTES: {
     subjectSnapshots: string;
     sessions: string;
     session: string;
+    take: string;
+    takePermalink: string;
     openSession: string;
     brief: string;
     signingPayload: string;

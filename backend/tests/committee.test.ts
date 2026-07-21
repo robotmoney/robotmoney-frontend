@@ -1,8 +1,9 @@
 import { test, expect, beforeAll } from "bun:test";
 import * as ic from "../src/committee/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeSubmission } from "@robotmoney/contract";
+import { canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { handleCommittee } from "../src/api/routes/committee.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -48,7 +49,17 @@ test("submit: signature verify/reject, window, duplicate", async () => {
   await ic.publishBrief(session.id, 60);
 
   const m = await activeMember();
-  const base = { memberId: m.id, date, subjectId: subj, stance: "bullish", confidence: 0.9, body: "x" };
+  const memo = await ic.postMemo(m.token, { sessionId: session.id, title: "Signed memo", body: "memo evidence" });
+  if (!("url" in memo)) throw new Error(`memo creation failed: ${JSON.stringify(memo)}`);
+  const base = {
+    memberId: m.id,
+    date,
+    subjectId: subj,
+    stance: "bullish",
+    confidence: 0.9,
+    body: "x",
+    memoUrl: memo.url,
+  };
   const signed = async (nonce: string) => {
     const sub = { ...base, nonce };
     return { ...sub, signature: await signMessage(canonicalizeSubmission(sub), m.privateKey) };
@@ -62,6 +73,41 @@ test("submit: signature verify/reject, window, duplicate", async () => {
   expect(detail?.session).not.toHaveProperty("subject_id");
   expect(detail?.takes[0].memberId).toBe(m.id);
   expect(detail?.takes[0]).not.toHaveProperty("member_id");
+  expect(detail?.takes[0].verified).toBe(true);
+
+  if (!("recommendationId" in ok)) throw new Error(`submission failed: ${JSON.stringify(ok)}`);
+  const receiptPath = routePath(ROUTES.committee.take, { id: ok.recommendationId });
+  const receiptResult = await handleCommittee(new Request(`http://localhost${receiptPath}`), new URL(`http://localhost${receiptPath}`));
+  expect(receiptResult?.status).toBe(200);
+  const receipt = receiptResult?.body as any;
+  expect(receipt.take.verified).toBe(true);
+  expect(receipt.take.body).toBe("x");
+  expect(receipt.memo.body).toBe("memo evidence");
+  expect(receipt.signer).toEqual(expect.objectContaining({ id: m.id, name: m.id }));
+  expect(receipt.signer.publicKeyFingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+  expect(JSON.stringify(receipt.signer)).not.toContain("publicKeyB64");
+
+  // Required negative control: the stored submit-time flag stays true, but a
+  // changed persisted payload must make both public read surfaces report false.
+  await sql`UPDATE committee_recommendations
+            SET payload = jsonb_set(payload, '{body}', to_jsonb(${"tampered after insert"}::text)),
+                verified = true
+            WHERE id = ${ok.recommendationId}`;
+  const tamperedSessionPath = routePath(ROUTES.committee.session, { date, subject: subj });
+  const tamperedSessionResult = await handleCommittee(
+    new Request(`http://localhost${tamperedSessionPath}`),
+    new URL(`http://localhost${tamperedSessionPath}`),
+  );
+  expect(tamperedSessionResult?.status).toBe(200);
+  const tamperedSession = tamperedSessionResult?.body as any;
+  expect(tamperedSession.takes[0].body).toBe("tampered after insert");
+  expect(tamperedSession.takes[0].verified).toBe(false);
+
+  const tamperedReceiptResult = await handleCommittee(
+    new Request(`http://localhost${receiptPath}`),
+    new URL(`http://localhost${receiptPath}`),
+  );
+  expect((tamperedReceiptResult?.body as any).take.verified).toBe(false);
 
   // same member, same session → 409 (one take per member)
   expect((await ic.submitRecommendation(m.token, await signed("n2"))).status).toBe(409);
