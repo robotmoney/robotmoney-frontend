@@ -78,3 +78,22 @@ services:
   mcp:
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
+
+# Namespace the postgres data volume so `bun run demo:clean` (scripts/demo-clean.ts)
+# can find and delete demo pgdata volumes by LABEL, never by fragile name-substring
+# matching. Two labels, mirroring the per-container label pattern above:
+#   - robotmoney.demo=1              → "this volume belongs to the demo" (the filter
+#                                       demo:clean uses to enumerate ALL demo volumes).
+#   - robotmoney.demo.project=<proj> → which run created it (lets CI / demo:clean
+#                                       scope a delete to a single run's volume).
+# Demo lifecycle (issue: demo persistent volumes): teardown (SIGTERM/Ctrl-C and
+# `demo:down`) now keeps this volume — `docker compose down` WITHOUT -v — so demo
+# data survives a reboot. `demo:clean` is the ONLY path that deletes it. When the
+# operator passes `bun run demo -- --pg-data <host-dir>`, postgres is bind-mounted
+# to that host dir instead (a generated overlay replaces this mount by target
+# path), so NO named volume is created and demo:clean never touches the host dir.
+volumes:
+  pgdata:
+    labels:
+      robotmoney.demo: "1"
+      robotmoney.demo.project: ${DEMO_PROJECT}
