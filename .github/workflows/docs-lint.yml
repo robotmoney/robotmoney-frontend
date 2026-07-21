@@ -13,6 +13,15 @@
 # run on every PR (draft AND ready-for-review) and on push to main — unlike
 # the code-check classes, it carries no `paths-ignore` and no draft `if:`
 # guard, since running it is the entire point on a docs-only diff.
+#
+# This doc-correctness job now ALSO runs scripts/check-contribution.ts on pull
+# requests: an author-aware, deny-by-default file gate. Every create/edit/delete
+# in the PR diff is checked against .github/file-permissions.json, which maps
+# each GitHub login to permitted path globs per operation; an author with no
+# matching glob for the operation on the path is blocked. The same script also
+# runs a docs task-list PM-state check (roadmap/checklist checkboxes belong in
+# the GitHub Plan issue, not committed docs). It carries no paths-ignore so it
+# still runs on docs-only PRs.
 name: docs-lint
 env:
   CI_CLASS: doc-correctness
@@ -28,5 +37,18 @@ jobs:
     runs-on: [self-hosted, robotmoney-self-hosted]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Lint docs
         run: bash scripts/lint-docs.sh
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Contribution governance check
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          git fetch --no-tags origin "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          bun scripts/check-contribution.ts

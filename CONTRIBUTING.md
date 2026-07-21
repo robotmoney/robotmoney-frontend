@@ -78,6 +78,131 @@ Preview mode trades data realism for zero setup:
   preview is the right surface for iterating quickly on the **marketing surface**
   itself.
 
+## Where changes go (and who can add files)
+
+This repo holds the **implementation** of the site + analytics backend. Where a
+file goes — and whether you may create, edit, or delete one at all — is governed
+below. The **single source of truth** for who may touch what is
+`.github/file-permissions.json`, enforced on every PR by
+`scripts/check-contribution.ts`. There is **no owner file and no owner-review
+mechanism** — the dictionary is the only authorization surface.
+
+### Placement map
+
+| Kind of change | Location |
+| --- | --- |
+| Site UI | `frontend/public/` — `views/`, `assets/css/`, `assets/js/app/`, `assets/` |
+| Server / queue / workers / migrations | `backend/` |
+| Shared HTTP contract | `contract/` — re-vendor with `bun run sync-contract`, never hand-edit |
+| Committee MCP server | `mcp/` |
+| Tooling & CI scripts | `scripts/` — tests in `scripts/tests/` |
+| Technical docs about this repo | `docs/*.md` — kebab-case |
+| Workflows | `.github/workflows/` |
+| Root | config only — new root files/dirs are a review flag |
+
+### What belongs in this repo
+
+- This repo = **implementation** + docs describing this repo's behavior.
+- **Decisions live upstream.** Brand, voice, color, strategy decisions belong in
+  `robotmoney-context` (`brand/brand-sheet.md`); here you implement and link —
+  you do not author the decision.
+- **Roadmap / rollout / phase / TODO state** lives in the GitHub Plan issue, not
+  a committed `.md` (the create-gate flags markdown task-lists added under `docs/`).
+- **Provisional / unratified decisions** stay in the PR or issue thread until
+  ratified upstream; they do not merge to main.
+- **One concern per PR.**
+
+### Who can change files (the file-permissions dictionary)
+
+Permissions are an **explicit per-GitHub-user dictionary** in
+`.github/file-permissions.json`, and the model is **deny by default**. Each
+GitHub login maps to a set of permitted path globs **per operation**:
+
+- `create` — add a brand-new file at a path.
+- `edit` — modify an existing file.
+- `delete` — remove a file.
+- `all` — shorthand that grants `create` + `edit` + `delete` for its globs.
+- `"*"` — a **baseline** entry whose globs are **unioned into every author**,
+  including logins not otherwise listed.
+
+**How the gate maps a diff to operations:** adding a file = `create`, modifying
+= `edit`, removing = `delete`, and **renaming = `delete` of the old path +
+`create` of the new path** (both halves must be permitted). An operation is
+permitted iff the path matches at least one glob drawn from the union of the
+author's own grants (`[op]` and `all`) and the `"*"` baseline (`[op]` and
+`all`). Globs use `Bun.Glob` syntax (`**` spans directories).
+
+> **Consequence — read this:** an author with **no entry** in the dictionary
+> (and an empty `"*"` baseline) is **fully blocked — they cannot even edit an
+> existing file**, let alone create or delete one. There is no implicit
+> "anyone may edit" fallback. Every contributor who needs to change anything
+> must be **listed explicitly** (or granted broadly via `"*"`).
+
+**Worked example.** A dictionary entry looks like:
+
+```json
+"fernandezdavid": { "edit": ["frontend/**", "docs/**"], "create": ["**/*.test.ts"] }
+```
+
+`fernandezdavid` may **edit** anything under `frontend/` or `docs/` and **create**
+test files anywhere, but may **not** create non-test files (e.g. a new view),
+**delete** anything, or touch `contract/`, `backend/**/migrations/`, or
+`.github/` — those stay with the admins until explicitly granted.
+
+Today the dictionary seeds three admins (`lucky-tensor`, `lextothex`,
+`cmatthewbell`) with `all: ["**"]` (full access) and an empty `"*"` baseline.
+
+**Why:** new files are new surface and new placement decisions; making every
+operation an explicit, reviewable grant keeps that surface deliberate.
+
+### Agent workflow — do this before opening a PR
+
+An autonomous agent (or a human) can follow this checklist deterministically:
+
+1. **Determine the PR author login** — the GitHub identity the commits will be
+   attributed to (this is what the gate reads as `PR_AUTHOR`).
+2. **Confirm that login has an entry** in `.github/file-permissions.json` (or is
+   covered by a non-empty `"*"` baseline). If it has neither, it is **fully
+   blocked — it cannot even edit** — and an admin must add it first.
+3. **For every file you intend to add/edit/delete**, confirm the author's grant
+   for that **operation** matches the path (remember: a rename needs `delete` of
+   the old path **and** `create` of the new).
+4. **Run the gate locally** and ensure it exits `0` before pushing:
+
+   ```bash
+   PR_AUTHOR=<login> BASE_REF=origin/main bun run check:contribution
+   ```
+
+5. **If blocked**, either place the change where the author **is** permitted, or
+   ask an admin to add/extend a grant in `.github/file-permissions.json` (that
+   file is itself **admin-only** to edit). **Do not** work around the gate.
+
+### Sensitive surfaces are protected implicitly
+
+Because the dictionary is deny-by-default, `contract/`,
+`backend/**/migrations/`, `.github/`, `docs/`, and
+`scripts/check-contribution.ts` are only touchable by logins **explicitly
+granted** those globs — today, the three admins. There is no separate
+owner-review mechanism guarding them; the grant list **is** the guard.
+
+### How it is enforced (and the honest limits)
+
+- `scripts/check-contribution.ts` runs in the `docs-lint` job on every PR. It is
+  **diff-scoped** (only the paths changed in this PR's range are examined),
+  **author-aware** (it reads `PR_AUTHOR`), and **deny-by-default**: it classifies
+  each changed path as a create/edit/delete and blocks any operation the author
+  is not granted in `.github/file-permissions.json`. It also flags roadmap
+  task-lists added under `docs/`. Run it locally with
+  `bun run check:contribution`.
+- **Enforcement reality on this repo:** the gate is only a **CI check**. On this
+  private/free plan there is **no branch protection**, so a human clicking
+  *Merge* on GitHub can bypass a red check. The real enforcement is that merges
+  go through the **automated loop / merge tooling**, which refuses to merge
+  unless all checks are green — not the GitHub merge button.
+- Judgment calls (is a new file justified, is this a decision that belongs
+  upstream, is the PR one concern) are for the PR reviewer. NOTE: a follow-up
+  will add an automated reviewer agent for these; for now they are human-reviewed.
+
 ## Where things are documented
 
 - Preview server + goldens design & the drift gate: [`docs/preview-server-spec.md`](docs/preview-server-spec.md)
