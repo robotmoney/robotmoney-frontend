@@ -880,21 +880,30 @@ async function main(): Promise<void> {
 
   log("running migrations…");
   setStep("migrate", "running");
-  // Seed the fast (~2 min, staggered) demo schedules so the worker's own
-  // scheduler drives regime + research. Issue #147: every boot — local AND
-  // CI — is now the LIVE production-parity path, and the required per-PR e2e
-  // gate asserts a real LIVE steady state (fresh regime, landed research
-  // signals) via scripts/demo-live-smoke.ts below, so the fast schedules are
-  // ALWAYS seeded (previously CI left them at the slow prod default under the
-  // now-removed DEMO_HERMETIC path, which didn't need live analytics/research
-  // to actually land within the CI window).
-  const fastSchedEnv = ["-e", "DEMO_FAST_SCHEDULES=1"];
+  // DEMO_MODE — the single "this stack is the demo" flag (it replaced the
+  // retired per-property fast-schedules flag). docker-compose.demo.yml pins it on
+  // every demo container (and `compose run` applies that service env to this
+  // one-shot too); the explicit -e here is deliberate redundancy so the seed's
+  // demo gating never silently depends on which overlay files a future
+  // invocation composes. Under DEMO_MODE the seed (backend/src/db/seed.ts):
+  //   - adds the fast (~2 min, staggered) regime/research schedules so the
+  //     worker's own scheduler drives them — the required per-PR e2e gate
+  //     asserts a real LIVE steady state via scripts/demo-live-smoke.ts (#147);
+  //   - adds an HOURLY wallet.sample_balances row and disables the per-minute
+  //     baseline (per-IP quota protection: the standing demo and the
+  //     self-hosted CI runner share one host IP, and the per-minute sampler's
+  //     ~3 GeckoTerminal price calls + several Base RPC eth_calls per tick
+  //     exhaust both providers' quotas, starving CI on the same host; hourly
+  //     token prices are an accepted demo tradeoff). The seed's cold-start
+  //     enqueue still lands a live sample at boot, so the live-smoke gate's
+  //     "live within the deadline" contract is unaffected.
+  const demoModeEnv = ["-e", "DEMO_MODE=1"];
   // Demo (local AND CI): populate the projects directory so /api/projects returns
   // a full "Agentic Economy Ecosystem" table. Demo-only — prod/regular-CI seeds run
   // `migrate` without this flag, so their seed stays byte-for-byte unchanged (empty
   // projects tables). Idempotent, so re-running the demo never duplicates rows.
   const demoSeedProjectsEnv = ["-e", "DEMO_SEED_PROJECTS=1"];
-  await runCompose(["run", "--rm", "-T", ...fastSchedEnv, ...demoSeedProjectsEnv, "api", "bun", "run", "src/db/migrate.ts"], "migrations");
+  await runCompose(["run", "--rm", "-T", ...demoModeEnv, ...demoSeedProjectsEnv, "api", "bun", "run", "src/db/migrate.ts"], "migrations");
   setStep("migrate", "done");
 
   const WORKER_LANES = ["worker-committee", "worker-analytics", "worker-research"];

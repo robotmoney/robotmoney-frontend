@@ -87,8 +87,11 @@ function mockChain(opts: { totalSupply?: bigint; failPrice?: boolean; failCall?:
     const u = String(url);
     if (u.includes("geckoterminal.com") || u.includes("finance.yahoo.com")) {
       if (opts.failPrice) throw new Error("mockChain: forced price failure");
-      const addr = u.split("/token_price/")[1]?.toLowerCase() ?? "x";
-      return new Response(JSON.stringify({ data: { attributes: { token_prices: { [addr]: "0.5" } } } }), { status: 200 });
+      // token_price takes a comma-separated address list (token-prices.ts
+      // micro-batches same-burst legs into one request) — answer every
+      // requested address at the fixed fixture price.
+      const addrs = (u.split("/token_price/")[1] ?? "x").toLowerCase().split(",");
+      return new Response(JSON.stringify({ data: { attributes: { token_prices: Object.fromEntries(addrs.map((a) => [a, "0.5"])) } } }), { status: 200 });
     }
     const body = JSON.parse(String(init?.body)) as { id?: number; method: string; params: any[] };
     if (opts.failCall) throw new Error("mockChain: forced RPC failure");
@@ -430,8 +433,9 @@ test("buyback indexer advances a persisted scan cursor across empty windows and 
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
     const u = String(url);
     if (u.includes("geckoterminal.com")) {
-      const addr = u.split("/token_price/")[1]?.toLowerCase() ?? "x";
-      return new Response(JSON.stringify({ data: { attributes: { token_prices: { [addr]: "2000" } } } }), { status: 200 });
+      // Comma-separated batch URL (see mockChain above) — answer every address.
+      const addrs = (u.split("/token_price/")[1] ?? "x").toLowerCase().split(",");
+      return new Response(JSON.stringify({ data: { attributes: { token_prices: Object.fromEntries(addrs.map((a) => [a, "2000"])) } } }), { status: 200 });
     }
     const body = JSON.parse(String(init?.body)) as { method: string };
     if (body.method === "eth_blockNumber") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x" + LATEST.toString(16) }), { status: 200 });

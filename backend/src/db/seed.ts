@@ -86,9 +86,11 @@ const SCHEDULES: SeedSchedule[] = [
   { kind: "projects.recompute_coverage", cron: "0 3 * * *", payload: {}, timezone: "UTC", enabled: true },
 ];
 
-// Fast demo schedules — ONLY added when DEMO_FAST_SCHEDULES is set (the demo
-// script sets it on the migrate/seed run). Prod/CI leave the flag unset, so the
-// default seed above is byte-for-byte unchanged there.
+// Fast demo schedules — ONLY added when DEMO_MODE is set (the single "this
+// stack is the demo" flag: scripts/lib/demo-main.ts sets it on the migrate/seed
+// one-shot and docker-compose.demo.yml pins it on every demo container; it
+// replaced the retired per-property fast-schedules flag). Prod/CI leave it unset,
+// so the default seed above is byte-for-byte unchanged there.
 //
 // These drive the worker's scheduler at a ~2-minute cadence and are STAGGERED by
 // different cron minute offsets (cron is minute-granularity) so the two analytics
@@ -105,6 +107,22 @@ const FAST_DEMO_SCHEDULES: SeedSchedule[] = [
   { kind: "research.refresh", cron: "1-59/2 * * * *", payload: {}, timezone: "UTC", enabled: false },
 ];
 
+// Slow demo samplers — also gated on DEMO_MODE. The standing local demo and
+// the self-hosted CI runner share ONE host IP, and the every-minute
+// wallet.sample_balances baseline (~3 GeckoTerminal price calls + several Base
+// RPC eth_calls per tick) exhausts both providers' per-IP quotas, starving CI
+// jobs on the same host. Demo decision: token prices refreshing once an hour
+// is fine there, so the demo samples wallet balances HOURLY — staggered to
+// minute 3 so it never fires in the same minute as vault.sample_share_price
+// ("0 * * * *"). The conflict key is (kind, cron), so this row merely COEXISTS
+// with the per-minute baseline; seedJobSchedules() additionally DISABLES that
+// baseline row under DEMO_MODE (see below) — that is what actually switches
+// the cadence. Prod/CI leave the flag unset, so the default seed above is
+// byte-for-byte unchanged there.
+const SLOW_DEMO_SAMPLER_SCHEDULES: SeedSchedule[] = [
+  { kind: "wallet.sample_balances", cron: "3 * * * *", payload: {}, timezone: "UTC", enabled: true },
+];
+
 // Seeds the canonical job_schedules rows (+ retires the combined analytics.run
 // kind) WITHOUT the heavier wallet-history/allocation-framework/demo-project
 // seeding below. Extracted so any test that TRUNCATEs the shared job_schedules
@@ -114,8 +132,8 @@ const FAST_DEMO_SCHEDULES: SeedSchedule[] = [
 // of every truncating file needing to know the full seed() cost (e.g. the
 // wallet_balance_samples backfill loop).
 export async function seedJobSchedules(): Promise<void> {
-  const schedules = process.env.DEMO_FAST_SCHEDULES
-    ? [...SCHEDULES, ...FAST_DEMO_SCHEDULES]
+  const schedules = process.env.DEMO_MODE
+    ? [...SCHEDULES, ...FAST_DEMO_SCHEDULES, ...SLOW_DEMO_SAMPLER_SCHEDULES]
     : SCHEDULES;
   for (const s of schedules) {
     // ON CONFLICT DO NOTHING keeps this purely additive/idempotent: the row is
@@ -128,6 +146,25 @@ export async function seedJobSchedules(): Promise<void> {
     `;
   }
   console.log(`seeded job_schedules (${schedules.length} definition(s), idempotent)`);
+
+  // DEMO_MODE also disables the per-minute wallet-sampler baseline: inserting
+  // the hourly (kind, cron) row above only makes it COEXIST with "* * * * *" —
+  // flipping the per-minute row off is what makes hourly sampling take effect
+  // (quota protection: the standing demo and the self-hosted CI runner share
+  // one IP against GeckoTerminal + the public Base RPC). This is a deliberate,
+  // demo-gated exception to the "never touch enabled on an existing row" rule
+  // in the header — and it is one-directional (only ever sets false), so an
+  // operator's manual disable is never re-enabled by a re-run. Idempotent: the
+  // `AND enabled` guard makes re-runs no-ops. The cold-start immediate enqueue
+  // in seed() below is deliberately untouched — the CI live-smoke gate depends
+  // on a fresh boot reaching 'live' wallet provenance within seconds.
+  if (process.env.DEMO_MODE) {
+    await sql`
+      UPDATE job_schedules SET enabled = false
+       WHERE kind = 'wallet.sample_balances' AND cron = '* * * * *' AND enabled
+    `;
+    console.log("DEMO_MODE: disabled per-minute wallet.sample_balances (hourly demo cadence owns sampling)");
+  }
 
   // Retire the combined `analytics.run` kind (issue #107). This seed is
   // otherwise purely additive, so an existing deployment would keep enqueuing a

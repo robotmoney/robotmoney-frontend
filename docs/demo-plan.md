@@ -203,7 +203,8 @@ P1 (worker) → concurrent (P2, P3) → P5 (authz) → P6 (frontend) → P7 (mul
   `.agents/demo-state.json`.
 - **Recurring, staggered (~2 min) scheduled actions**: regime + research driven by the
   worker's scheduler via fast demo-cadence `job_schedules` rows gated behind
-  `DEMO_FAST_SCHEDULES` (`regime.classify` `*/2`, `research.refresh` `1-59/2`); committee
+  `DEMO_MODE` (`regime.classify` `*/2`, `research.refresh` `1-59/2`; the same flag
+  slows `wallet.sample_balances` to hourly for per-IP provider-quota protection); committee
   sessions driven by an in-process MCP-agent loop in `demo.ts` reusing the exported
   `runSession` from `mcp/src/e2e.ts` (rotating date/subject, no reset between ticks).
 - **Teardown on exit**: Ctrl-C / SIGTERM tears the stack down (`docker compose down -v`
