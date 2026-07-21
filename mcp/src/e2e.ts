@@ -6,7 +6,7 @@
 // loop. Multi-session: the second session's brief references the first session's
 // outcome, demonstrating rotation awareness.
 import { applicationProofMessage, demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
-import { runAgent, enroll, textOf } from "./agent.ts";
+import { runAgent, textOf } from "./agent.ts";
 import type { ExistingCredentials, AgentStage } from "./agent.ts";
 import { generateKeyPair, sign } from "./crypto.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -326,6 +326,23 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   // and the memo page renders full charts. Idempotent; dated at the session date.
   await admin("subject_fixtures", { id: subject.id, name: subject.name, date });
 
+  // A session freezes the active roster when it opens. Provision every demo
+  // member before that snapshot, including the deliberate no-show. Agents that
+  // submit later reuse these credentials instead of re-registering after the
+  // window opens and falling outside the frozen roster.
+  const sessionCredentials = new Map(existingCredentials ?? []);
+  for (const member of MEMBERS) {
+    if (sessionCredentials.has(member.memberId)) continue;
+    const { publicKeyB64, privateKey } = await generateKeyPair();
+    const registered = await fetch(`${BACKEND}${ROUTES.committee.register}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...adminHeaders },
+      body: JSON.stringify({ memberId: member.memberId, name: member.name, lens: member.lens, publicKey: publicKeyB64 }),
+    }).then(responseJson);
+    if (!registered.token) throw new Error(`pre-enrollment failed for ${member.memberId}: ${JSON.stringify(registered)}`);
+    sessionCredentials.set(member.memberId, { token: registered.token, privateKey });
+  }
+
   // Lifecycle through worker job queue.
   await enqueueLifecycleJob("open_session", { date, subjectId: subject.id });
   const sd = await waitForSessionState(date, subject.id, "scheduled");
@@ -337,10 +354,9 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   emitSession("collecting", sessionId);
   console.log(`${tag} session ${sessionId}: brief published, window open`);
 
-  // Enroll the no-show, then run present agents (some may have externally-
-  // provisioned credentials from the public apply → activate path).
+  // Record the no-show, then run present agents with credentials that were
+  // provisioned before the session froze its roster.
   const absent = MEMBERS.filter((m) => !m.present);
-  await Promise.all(absent.map((m) => enroll(m)));
   for (const m of absent) onProgress?.({ type: "member", memberId: m.memberId, stage: "absent" });
   const present = MEMBERS.filter((m) => m.present);
   // Settle (not all-or-nothing) so ONE member's throw/hang can't reject the whole
@@ -351,7 +367,7 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   const limit = REAL_INFERENCE ? Number(process.env.COMMITTEE_MAX_CONCURRENCY ?? 4) : Infinity;
   const settled = await mapSettledWithConcurrency(present, limit, (m) => runAgent(
     { ...m, date, subjectId: subject.id, sessionId },
-    existingCredentials?.get(m.memberId),
+    sessionCredentials.get(m.memberId),
     onProgress && ((stage, info) => onProgress({ type: "member", memberId: m.memberId, stage, ...info })),
   ));
   // Partition: fulfilled takes flow downstream; each rejected member is logged and

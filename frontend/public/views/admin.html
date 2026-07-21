@@ -98,7 +98,7 @@
             </div>
             <p x-show="applicationError" x-text="applicationError" class="rm-error"></p>
             <div class="rm-table-scroll">
-              <table class="rm-table adm-table">
+              <table class="rm-table adm-applications-table">
                 <thead><tr><th>Applicant</th><th>Lens</th><th>Applied</th><th>Action</th></tr></thead>
                 <tbody>
                   <template x-for="application in pendingApplications" :key="application.id">

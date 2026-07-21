@@ -190,10 +190,15 @@ export function registerAdminSurfaceView(Alpine) {
     async loadOverview() {
       this.overviewLoading = true;
       this.overviewError = null;
+      this.applicationError = null;
       try {
         const [overview, applications] = await Promise.all([
           api.adminGet(ROUTES.admin.overview, this._token()),
-          api.adminGet(ROUTES.committee.admin.applications, this._token(), { status: "pending" }),
+          api.adminGet(ROUTES.committee.admin.applications, this._token(), { status: "pending" })
+            .catch((e) => {
+              this.applicationError = `Pending applications unavailable: ${e.message}`;
+              return { applications: [] };
+            }),
         ]);
         this.overview = overview;
         this.pendingApplications = applications.applications || [];
