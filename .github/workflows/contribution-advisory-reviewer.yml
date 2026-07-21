@@ -1,0 +1,28 @@
+# Disabled-trigger seam for issue #197's keyless OpenCode contribution reviewer.
+# The eventual reviewer is intentionally absent: this manual-only no-op exposes
+# its PR-number input and least-privilege permissions without invoking a model or
+# posting to GitHub. Issue #197 will add the heavy scheduled/manual execution.
+name: contribution-advisory-reviewer
+env:
+  CI_CLASS: ignore
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review after issue #197 is implemented"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  reviewer-stub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report disabled reviewer seam
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          echo "::notice::Contribution advisory reviewer for PR #${PR_NUMBER} is a disabled stub pending issue #197."
