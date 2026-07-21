@@ -214,3 +214,19 @@ export interface CommitteeSubmission {
   body: string;
   signature: string;
 }
+
+/**
+ * Durable committee-agent health event shape reserved for issue #208.
+ * This scout adds no storage or route behavior. The eventual admin projection
+ * follows docs/plan-admin-surface.md: bounded details, no secrets, append-only
+ * auditability.
+ */
+export interface CommitteeAgentHealthEvent {
+  id: string;
+  memberId: string;
+  sessionId: string | null;
+  eventType: "absence" | "rejected_signature";
+  reason: string;
+  detail: Record<string, unknown> | null;
+  occurredAt: string;
+}

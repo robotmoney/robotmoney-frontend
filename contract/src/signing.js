@@ -15,3 +15,17 @@ export function canonicalizeSubmission(s) {
   };
   return JSON.stringify(ordered);
 }
+
+// Token-claim challenges deliberately use a separate signing domain from
+// committee submissions. Issue #205 owns persistence, expiry enforcement, and
+// claim behavior; this scout only establishes the protocol seam. Canonical
+// onboarding behavior is documented in
+// frontend/public/views/docs/investment-committee/participation.html.
+export function canonicalizeClaimChallenge(challenge) {
+  return JSON.stringify({
+    purpose: "committee-token-claim-v1",
+    memberId: challenge.memberId,
+    challenge: challenge.challenge,
+    expiresAt: challenge.expiresAt,
+  });
+}
