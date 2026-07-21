@@ -105,13 +105,26 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(brief?.body?.prompt.system).toContain("Author only your own analysis");
   expect(brief?.body?.prompt.user).toContain("Woon Treasury");
   expect(brief?.body?.takeSchema.stance.enum).toEqual(["bearish", "cautious", "neutral", "constructive", "bullish"]);
+  expect(brief?.body?.takeSchema.confidence).toEqual({ type: "number", minimum: 0, maximum: 1 });
+  expect(brief?.body?.takeSchema.body).toEqual({ type: "string" });
   expect(brief?.body?.takeSchema.weights.optional).toBe(true);
   expect(brief?.body?.windowClosesAt).toBe(publishedBrief.windowClosesAt);
+  expect(brief?.body?.windowClosesAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  expect(new Date(brief!.body!.windowClosesAt).toISOString()).toBe(brief?.body?.windowClosesAt);
 
   // Two members with DISTINCT stances so a disagreement is synthesized.
   const submit = async (stance: string, confidence: number) => {
     const m = await activeMember();
-    const sub = { memberId: m.id, date, subjectId: subj, nonce: rid("n"), stance, confidence, body: memoBody(subj) };
+    const sub = {
+      memberId: m.id,
+      date,
+      subjectId: subj,
+      nonce: rid("n"),
+      stance,
+      confidence,
+      body: memoBody(subj),
+      weights: [{ bucket: "must_not_aggregate_for_position_actions", weight: 1 }],
+    };
     const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
     const res = await ic.submitRecommendation(m.token, { ...sub, signature });
     expect(res.status).toBe(201);
@@ -150,6 +163,8 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(rec.disagreements.length).toBeGreaterThanOrEqual(1);
   expect(rec.disagreements[0]).toHaveProperty("what_settles");
   expect(["position_actions", "bucket_weights"]).toContain(rec.type);
+  expect(rec.type).toBe("position_actions");
+  expect(rec.weights).toBeUndefined();
 
   // Synthesis is prose, not a one-liner rollup.
   expect(typeof s.synthesis).toBe("string");

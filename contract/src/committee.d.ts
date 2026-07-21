@@ -137,7 +137,7 @@ export interface CommitteeDisagreement {
 export interface CommitteeRecommendedAction {
   token: string;
   action: string;
-  rationale?: string;
+  rationale: string;
 }
 
 export interface CommitteeBucketWeight {
@@ -155,7 +155,7 @@ export interface CommitteeRecommendation {
   meanConfidence: number | null;
   absent: string[];
   type: "bucket_weights" | "position_actions";
-  rationale: string;
+  rationale?: string;
   consensus: string[];
   disagreements: CommitteeDisagreement[];
   actions?: CommitteeRecommendedAction[];
