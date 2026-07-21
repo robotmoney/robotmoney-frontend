@@ -6,8 +6,8 @@
     "cmatthewbell": { "all": ["**"] },
     "fernandesdavid": {
       "edit":   ["frontend/**", "docs/**"],
-      "create": ["frontend/**", "docs/**", "brand-assets/**", "docs/marketing/**"],
-      "delete": ["docs/marketing/**"]
+      "create": ["brand-assets/**", "docs/marketing/**"],
+      "delete": ["brand-assets/**", "docs/marketing/**"]
     },
     "*":            { "create": [], "edit": [], "delete": [] }
   }
