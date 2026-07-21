@@ -1,0 +1,18 @@
+diff --git a/docs/brand-direction.md b/docs/brand-direction.md
+new file mode 100644
+--- /dev/null
++++ b/docs/brand-direction.md
+@@ -0,0 +1,7 @@
++# New brand direction
++
++Our voice is now playful and our primary color is orange.
++
++## Rollout
++- [ ] Update the website
++- [ ] Rewrite campaign copy
+diff --git a/frontend/public/views/home.html b/frontend/public/views/home.html
+--- a/frontend/public/views/home.html
++++ b/frontend/public/views/home.html
+@@ -1 +1 @@
+-<h1>Robot Money</h1>
++<h1>Fun Money Robots</h1>
