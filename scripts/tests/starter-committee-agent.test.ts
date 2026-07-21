@@ -1,0 +1,67 @@
+import { describe, expect, test } from "bun:test";
+import { canonicalizeSubmission } from "@robotmoney/contract";
+import {
+  canonicalizeDraftForTransport,
+  deterministicAuthorTake,
+  signDraft,
+  type StarterSession,
+  type SubmissionDraft,
+} from "../starter-committee-agent.ts";
+
+const draft: SubmissionDraft = {
+  memberId: "starter-test",
+  date: "2026-07-21",
+  subjectId: "starter-agent",
+  nonce: "fixed-test-nonce",
+  stance: "neutral",
+  confidence: 0.5,
+  body: "A deterministic test take.",
+  memoUrl: "/api/committee/memos/42",
+};
+
+describe("starter committee agent canonical signing", () => {
+  test("REST and MCP use byte-identical @robotmoney/contract canonicalization", () => {
+    const expected = canonicalizeSubmission(draft);
+    expect(canonicalizeDraftForTransport("rest", draft)).toBe(expected);
+    expect(canonicalizeDraftForTransport("mcp", draft)).toBe(expected);
+    expect(canonicalizeDraftForTransport("rest", draft)).toBe(
+      canonicalizeDraftForTransport("mcp", draft),
+    );
+  });
+
+  test("Web Crypto signature verifies independently and rejects a tampered field", async () => {
+    const keys = (await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"])) as CryptoKeyPair;
+    const { canonical, signature } = await signDraft("rest", draft, keys.privateKey);
+    const signatureBytes = Buffer.from(signature, "base64");
+    const encoder = new TextEncoder();
+
+    expect(
+      await crypto.subtle.verify("Ed25519", keys.publicKey, signatureBytes, encoder.encode(canonical)),
+    ).toBe(true);
+
+    const tampered = canonicalizeSubmission({ ...draft, confidence: 0.9 });
+    expect(
+      await crypto.subtle.verify("Ed25519", keys.publicKey, signatureBytes, encoder.encode(tampered)),
+    ).toBe(false);
+  });
+
+  test("default authoring callback is typed, deterministic, and model-free", async () => {
+    const session = {
+      id: "7",
+      date: "2026-07-21",
+      subjectId: "starter-agent",
+      subjectName: "Starter Agent Exercise",
+    } as StarterSession;
+    const brief = {
+      id: "11",
+      date: session.date,
+      subjectId: session.subjectId,
+      body: { prompt: "operator-owned" },
+      createdAt: "2026-07-21T00:00:00.000Z",
+    };
+    const first = await deterministicAuthorTake({ session, brief });
+    const second = await deterministicAuthorTake({ session, brief });
+    expect(first).toEqual(second);
+    expect(first.body).toContain("replace deterministicAuthorTake with your model callback");
+  });
+});

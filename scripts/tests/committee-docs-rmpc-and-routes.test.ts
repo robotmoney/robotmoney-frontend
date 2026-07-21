@@ -74,6 +74,16 @@ describe("participation.html promotes rmpc as the recommended signing tool", () 
   });
 });
 
+describe("participation.html links the runnable starter committee agent", () => {
+  test("wiring quickstart names the repo-native starter", () => {
+    const section = extractSection(read(PARTICIPATION), "starter-agent-quickstart");
+    expect(section).toContain("scripts/starter-committee-agent.ts");
+    expect(section).toContain("--transport=rest");
+    expect(section).toContain("--transport=mcp");
+    expect(section).toContain("client_credentials");
+  });
+});
+
 describe("documented /api/committee/... paths match contract/src/routes.js", () => {
   const contractPaths = flattenRoutes(ROUTES).filter((p) => p.startsWith("/api/committee"));
   const normalizedContract = new Set(contractPaths.map(normalize));

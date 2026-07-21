@@ -23,6 +23,7 @@
     "credentials:check": "bun scripts/gitops-credentials.ts --check"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "libsodium-wrappers": "^0.8.4"
   },
   "devDependencies": {
