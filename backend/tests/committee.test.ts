@@ -100,12 +100,31 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   await ic.ensureDemoSubjectFixtures(subj, "Woon Treasury", "2026-07-05");
   const date = "2026-07-05";
   const session = await ic.openSession(date, subj);
-  await ic.publishBrief(session.id, 60);
+  const publishedBrief = await ic.publishBrief(session.id, 60);
+  const brief = await ic.getBrief(date, subj);
+  expect(brief?.body?.prompt.system).toContain("Author only your own analysis");
+  expect(brief?.body?.prompt.user).toContain("Woon Treasury");
+  expect(brief?.body?.takeSchema.stance.enum).toEqual(["bearish", "cautious", "neutral", "constructive", "bullish"]);
+  expect(brief?.body?.takeSchema.confidence).toEqual({ type: "number", minimum: 0, maximum: 1 });
+  expect(brief?.body?.takeSchema.body).toEqual({ type: "string" });
+  expect(brief?.body?.takeSchema.weights.optional).toBe(true);
+  expect(brief?.body?.windowClosesAt).toBe(publishedBrief.windowClosesAt);
+  expect(brief?.body?.windowClosesAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  expect(new Date(brief!.body!.windowClosesAt).toISOString()).toBe(brief?.body?.windowClosesAt);
 
   // Two members with DISTINCT stances so a disagreement is synthesized.
   const submit = async (stance: string, confidence: number) => {
     const m = await activeMember();
-    const sub = { memberId: m.id, date, subjectId: subj, nonce: rid("n"), stance, confidence, body: memoBody(subj) };
+    const sub = {
+      memberId: m.id,
+      date,
+      subjectId: subj,
+      nonce: rid("n"),
+      stance,
+      confidence,
+      body: memoBody(subj),
+      weights: [{ bucket: "must_not_aggregate_for_position_actions", weight: 1 }],
+    };
     const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
     const res = await ic.submitRecommendation(m.token, { ...sub, signature });
     expect(res.status).toBe(201);
@@ -144,6 +163,8 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(rec.disagreements.length).toBeGreaterThanOrEqual(1);
   expect(rec.disagreements[0]).toHaveProperty("what_settles");
   expect(["position_actions", "bucket_weights"]).toContain(rec.type);
+  expect(rec.type).toBe("position_actions");
+  expect(rec.weights).toBeUndefined();
 
   // Synthesis is prose, not a one-liner rollup.
   expect(typeof s.synthesis).toBe("string");
@@ -154,4 +175,109 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(body).toContain("**REGIME**");
   expect(body).toContain("**ALLOCATION**");
   expect(body).toContain("**SUBJECT**");
+});
+
+test("bucket aggregation computes the normalized unweighted mean and attributes only stored non-empty bodies", async () => {
+  const subjectId = rid("weighted");
+  const date = "2026-07-06";
+  await ic.ensureSubject(subjectId, "Weighted Subject");
+  const members = await Promise.all([activeMember(), activeMember(), activeMember()]);
+  const session = await ic.openSession(date, subjectId);
+  for (const member of members) {
+    await sql`INSERT INTO committee_session_members (session_id, member_id, member_name, status)
+              VALUES (${session.id}, ${member.id}, ${member.id}, 'expected')`;
+  }
+  await ic.publishBrief(session.id, 60);
+
+  const fixtures = [
+    {
+      stance: "bullish",
+      confidence: 0.9,
+      body: "Member one supports the submitted allocation because liquidity is observable.",
+      weights: [{ bucket: "alpha", weight: 2 }, { bucket: "beta", weight: 1 }],
+    },
+    {
+      stance: "cautious",
+      confidence: 0.6,
+      body: "Member two prefers a larger beta sleeve until volatility settles.",
+      weights: [{ bucket: "alpha", weight: 1 }, { bucket: "beta", weight: 3 }, { bucket: "gamma", weight: 1 }],
+    },
+    {
+      stance: "neutral",
+      confidence: 0.3,
+      body: "",
+      weights: [{ bucket: "beta", weight: 1 }, { bucket: "gamma", weight: 1 }],
+    },
+  ];
+  for (let index = 0; index < fixtures.length; index++) {
+    const submission = {
+      memberId: members[index].id,
+      date,
+      subjectId,
+      nonce: rid("weight_nonce"),
+      ...fixtures[index],
+    };
+    const signature = await signMessage(canonicalizeSubmission(submission), members[index].privateKey);
+    expect((await ic.submitRecommendation(members[index].token, { ...submission, signature })).status).toBe(201);
+  }
+
+  await ic.closeWindow(session.id);
+  await ic.aggregateSession(session.id);
+  const detail = await ic.getSession(date, subjectId);
+  const recommendation: any = detail?.session.committeeRecommendation;
+
+  const bucketNames = [...new Set(fixtures.flatMap((fixture) => fixture.weights.map((entry) => entry.bucket)))].sort();
+  const expected = bucketNames.map((bucket) => {
+    const mean = fixtures.reduce((sum, fixture) => {
+      const total = fixture.weights.reduce((inner, entry) => inner + entry.weight, 0);
+      return sum + (fixture.weights.find((entry) => entry.bucket === bucket)?.weight ?? 0) / total;
+    }, 0) / fixtures.length;
+    return { bucket, weight: mean };
+  });
+  const expectedTotal = expected.reduce((sum, entry) => sum + entry.weight, 0);
+  const expectedRounded = expected.map((entry) => ({ ...entry, weight: Math.round((entry.weight / expectedTotal) * 1e8) / 1e8 }));
+  expectedRounded[expectedRounded.length - 1].weight = Math.round((1 - expectedRounded.slice(0, -1).reduce((sum, entry) => sum + entry.weight, 0)) * 1e8) / 1e8;
+
+  expect(recommendation.weights).toEqual(expectedRounded);
+  expect(recommendation.weights).not.toEqual([
+    { bucket: "conservative_defi_yield", weight: 0.95 },
+    { bucket: "agent_tokens", weight: 0.05 },
+    { bucket: "protocol_tokens", weight: 0 },
+    { bucket: "real_world_assets", weight: 0 },
+  ]);
+  const storedBodyByMember = new Map(detail!.takes.map((take) => [take.memberId, take.body ?? ""]));
+  for (const disagreement of recommendation.disagreements) {
+    for (const position of disagreement.positions) {
+      expect(storedBodyByMember.get(position.member_id)).toContain(position.view);
+      expect(position.member_id).not.toBe(members[2].id);
+    }
+  }
+  expect(recommendation.rationale).toBe(`${fixtures[0].body}\n\n${fixtures[1].body}`);
+  expect(detail?.session.synthesis).toBe(`${fixtures[0].body}\n\n${fixtures[1].body}`);
+  expect(recommendation.stances.neutral).toBe(1);
+  expect(detail?.takes[2].weights).toEqual(fixtures[2].weights);
+});
+
+test("aggregation omits invented prose and weights when no eligible body or valid weighted take exists", async () => {
+  const subjectId = rid("empty");
+  const date = "2026-07-07";
+  await ic.ensureSubject(subjectId, "Empty Body Subject");
+  const member = await activeMember();
+  const session = await ic.openSession(date, subjectId);
+  await sql`INSERT INTO committee_session_members (session_id, member_id, member_name, status)
+            VALUES (${session.id}, ${member.id}, ${member.id}, 'expected')`;
+  await ic.publishBrief(session.id, 60);
+  const submission = { memberId: member.id, date, subjectId, nonce: rid("empty_nonce"), stance: "neutral", confidence: 0.5, body: "" };
+  const signature = await signMessage(canonicalizeSubmission(submission), member.privateKey);
+  expect((await ic.submitRecommendation(member.token, { ...submission, signature })).status).toBe(201);
+  await ic.closeWindow(session.id);
+  await ic.aggregateSession(session.id);
+
+  const detail = await ic.getSession(date, subjectId);
+  const recommendation: any = detail?.session.committeeRecommendation;
+  expect(recommendation.weights).toBeUndefined();
+  expect(recommendation.disagreements).toEqual([]);
+  expect(recommendation.rationale).toBeUndefined();
+  expect(recommendation.stances).toEqual({ neutral: 1 });
+  expect(detail?.session.synthesis).toBeNull();
 });

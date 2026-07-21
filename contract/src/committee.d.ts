@@ -75,6 +75,7 @@ export interface CommitteeTake {
   confidence: number | null;
   body: string | null;
   memoUrl?: string | null;
+  weights?: CommitteeBucketWeight[];
   verified: boolean;
   receivedAt: string;
   // Optional provenance (legacy/prototype; absent for signed recommendations).
@@ -154,7 +155,7 @@ export interface CommitteeRecommendation {
   meanConfidence: number | null;
   absent: string[];
   type: "bucket_weights" | "position_actions";
-  rationale: string;
+  rationale?: string;
   consensus: string[];
   disagreements: CommitteeDisagreement[];
   actions?: CommitteeRecommendedAction[];
@@ -185,8 +186,31 @@ export interface CommitteeBrief {
   id: string;
   date: string;
   subjectId: string;
-  body: unknown;
+  body: CommitteeBriefBody | null;
   createdAt: string;
+}
+
+export interface CommitteeBriefBody {
+  regime: unknown;
+  subject: CommitteeSubject | null;
+  recentSessions: unknown[];
+  previousSession?: { outcome: string };
+  researchSignals: unknown[];
+  prompt: { system: string; user: string };
+  takeSchema: {
+    stance: { type: "string"; enum: Stance[] };
+    confidence: { type: "number"; minimum: 0; maximum: 1 };
+    body: { type: "string" };
+    weights: {
+      type: "array";
+      optional: true;
+      items: {
+        bucket: { type: "string" };
+        weight: { type: "number"; minimum: 0 };
+      };
+    };
+  };
+  windowClosesAt: string;
 }
 
 export interface SubjectSnapshot {
@@ -212,6 +236,8 @@ export interface CommitteeSubmission {
   stance: string;
   confidence: number;
   body: string;
+  memoUrl?: string;
+  weights?: CommitteeBucketWeight[];
   signature: string;
 }
 

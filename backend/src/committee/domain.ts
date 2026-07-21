@@ -109,7 +109,7 @@ export async function getSession(
   if (!s) return null;
   const takes = await sql`
     SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
-           r.memo_url, r.verified, r.received_at
+           r.memo_url, r.payload, r.verified, r.received_at
     FROM committee_recommendations r
     JOIN committee_members m ON m.id = r.member_id
     WHERE r.session_id = ${s.id} ORDER BY r.received_at`;
@@ -125,7 +125,8 @@ export async function getBrief(date: string, subjectId: string) {
 // ── Submit (verify identity + window + signature + nonce) ───────────────────
 export interface SubmissionInput {
   memberId: string; date: string; subjectId: string; nonce: string;
-  stance: string; confidence: number; body?: string; memoUrl?: string; signature: string;
+  stance: string; confidence: number; body?: string; memoUrl?: string;
+  weights?: { bucket: string; weight: number }[]; signature: string;
 }
 
 export async function submitRecommendation(token: string, sub: SubmissionInput) {
@@ -466,12 +467,38 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     SELECT signal_key, date, payload FROM research_signals
     WHERE date = ${s.date} ORDER BY signal_key`;
   const previousSession = prevOutcome ? { outcome: prevOutcome } : undefined;
-  const body = { regime, subject: await getSubject(s.subject_id), recentSessions: recent, previousSession, researchSignals };
+  const subject = await getSubject(s.subject_id);
+  const closes = new Date(Date.now() + windowMinutes * 60_000);
+  const windowClosesAt = closes.toISOString();
+  const body = {
+    regime,
+    subject,
+    recentSessions: recent,
+    previousSession,
+    researchSignals,
+    prompt: {
+      system: "You are an investment committee member. Author only your own analysis and do not attribute invented statements to other members.",
+      user: `Review the supplied committee context for ${subject?.name ?? s.subject_id} on ${typeof s.date === "string" ? s.date : new Date(s.date).toISOString().slice(0, 10)} and return one take matching takeSchema.`,
+    },
+    takeSchema: {
+      stance: { type: "string", enum: [...STANCES] },
+      confidence: { type: "number", minimum: 0, maximum: 1 },
+      body: { type: "string" },
+      weights: {
+        type: "array",
+        optional: true,
+        items: {
+          bucket: { type: "string" },
+          weight: { type: "number", minimum: 0 },
+        },
+      },
+    },
+    windowClosesAt,
+  };
   await sql`INSERT INTO committee_briefs (date, subject_id, body) VALUES (${s.date}, ${s.subject_id}, ${sql.json(jsonValue(body))})
             ON CONFLICT (date, subject_id) DO UPDATE SET body = EXCLUDED.body`;
-  const closes = new Date(Date.now() + windowMinutes * 60_000);
   await sql`UPDATE committee_sessions SET state = 'collecting', window_closes_at = ${closes} WHERE id = ${sessionId}`;
-  return { sessionId, state: "collecting", windowClosesAt: closes.toISOString() };
+  return { sessionId, state: "collecting", windowClosesAt };
 }
 
 export async function closeWindow(sessionId: string) {
@@ -554,10 +581,50 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8) {
 // reference session shape (regime_summary + rich committee_recommendation +
 // prose synthesis + subject snapshot total). Members with no take are recorded as
 // absent — never fabricated. All enrichment is templated (NO LLM).
+function normalizedTakeWeights(value: unknown): { bucket: string; weight: number }[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const seen = new Set<string>();
+  const entries: { bucket: string; weight: number }[] = [];
+  let total = 0;
+  for (const candidate of value) {
+    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+    const bucket = (candidate as { bucket?: unknown }).bucket;
+    const weight = (candidate as { weight?: unknown }).weight;
+    if (typeof bucket !== "string" || bucket.trim() === "" || seen.has(bucket) ||
+        typeof weight !== "number" || !Number.isFinite(weight) || weight < 0) return null;
+    seen.add(bucket);
+    entries.push({ bucket, weight });
+    total += weight;
+  }
+  if (!(total > 0) || !Number.isFinite(total)) return null;
+  return entries.map(({ bucket, weight }) => ({ bucket, weight: weight / total }));
+}
+
+function meanTakeWeights(takes: any[]): { bucket: string; weight: number }[] | undefined {
+  const normalized = takes
+    .map((take) => normalizedTakeWeights(take.payload?.weights))
+    .filter((weights): weights is { bucket: string; weight: number }[] => weights !== null);
+  if (normalized.length === 0) return undefined;
+
+  const totals = new Map<string, number>();
+  for (const weights of normalized) {
+    for (const { bucket, weight } of weights) totals.set(bucket, (totals.get(bucket) ?? 0) + weight);
+  }
+  const averaged = [...totals.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([bucket, total]) => ({ bucket, weight: total / normalized.length }));
+  const averageTotal = averaged.reduce((sum, entry) => sum + entry.weight, 0);
+  const result = averaged.map(({ bucket, weight }) => ({ bucket, weight: round(weight / averageTotal, 8) }));
+  const finalIndex = result.length - 1;
+  const prefixTotal = result.slice(0, finalIndex).reduce((sum, entry) => sum + entry.weight, 0);
+  result[finalIndex].weight = round(1 - prefixTotal, 8);
+  return result;
+}
+
 export async function aggregateSession(sessionId: string) {
   const s = (await sql`SELECT * FROM committee_sessions WHERE id = ${sessionId}`)[0];
-  const takes = await sql`
-    SELECT r.member_id, r.stance, r.confidence, m.name AS member_name
+  const takeRows = await sql`
+    SELECT r.member_id, r.stance, r.confidence, r.body, r.payload, m.name AS member_name
     FROM committee_recommendations r JOIN committee_members m ON m.id = r.member_id
     WHERE r.session_id = ${sessionId} ORDER BY r.received_at`;
   // Denominator (issue #152, AC6): prefer the session's FROZEN roster
@@ -572,6 +639,10 @@ export async function aggregateSession(sessionId: string) {
   const activeMembers = rosterRows.length > 0
     ? rosterRows
     : await sql`SELECT id FROM committee_members WHERE status = 'active'`;
+  const frozenRoster = new Set(activeMembers.map((member: any) => member.id));
+  const takes = rosterRows.length > 0
+    ? takeRows.filter((take: any) => frozenRoster.has(take.member_id))
+    : takeRows;
   const submitted = new Set(takes.map((t: any) => t.member_id));
   const absent = activeMembers.map((m: any) => m.id).filter((id: string) => !submitted.has(id));
 
@@ -586,9 +657,6 @@ export async function aggregateSession(sessionId: string) {
 
   const sessionDate = typeof s.date === "string" ? s.date : new Date(s.date).toISOString().slice(0, 10);
   const regimeSummary = await buildRegimeSummary(sessionDate);
-  const composite = regimeSummary.composite;
-  const compPctInt = Math.round(regimeSummary.composite_percentile * 100);
-  const regimeLbl = String(regimeSummary.regime).replace(/_/g, "-");
 
   // Latest subject snapshot total (drives the session header figure).
   const snapRow = (await sql`
@@ -602,43 +670,33 @@ export async function aggregateSession(sessionId: string) {
   const subjectRow = (await sql`SELECT recommendation_type FROM committee_subjects WHERE id = ${s.subject_id}`)[0] as { recommendation_type?: string } | undefined;
   const recType = subjectRow?.recommendation_type === "bucket_weights" ? "bucket_weights" : "position_actions";
 
-  const stanceParts = Object.entries(byStance).map(([k, v]) => `${v} ${k}`);
-  const consensus = [
-    `Regime composite ${composite.toFixed(3)} sits at the ${compPctInt}th percentile — ${regimeLbl} by label.`,
-    `Committee holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the ${compPctInt}th does not license a tilt.`,
-    `Floor-first sequencing — clear the 5% Agent Tokens sleeve via rmUSDC before any structural trim.`,
-  ];
-  if (takes.length) consensus.push(`${takes.length}/${activeMembers.length} members submitted this session (${stanceParts.join(", ") || "no stances"}).`);
+  const authoredTakes = takes.filter((take: any) => typeof take.body === "string" && take.body.trim().length > 0);
+  const consensus = authoredTakes.map((take: any) => take.body as string);
 
   // Disagreements: synthesize from the stance spread. When at least two distinct
   // stances were submitted, contrast the most- and least-constructive members.
   // The ascending ladder is the canonical contract vocabulary (finding 027).
   const rank = (st: string) => { const i = (STANCES as readonly string[]).indexOf(st); return i < 0 ? 2 : i; };
-  const sortedTakes = takes.slice().sort((a: any, b: any) => rank(a.stance) - rank(b.stance));
+  const sortedTakes = authoredTakes.slice().sort((a: any, b: any) => rank(a.stance) - rank(b.stance));
   const disagreements: any[] = [];
   if (sortedTakes.length >= 2 && new Set(sortedTakes.map((t: any) => t.stance)).size >= 2) {
     const low = sortedTakes[0], high = sortedTakes[sortedTakes.length - 1];
     disagreements.push({
-      topic: `Weight of the on-chain panel in the ${s.subject_name ?? s.subject_id} read`,
+      topic: `Submitted views on ${s.subject_name ?? s.subject_id}`,
       positions: [
-        { member_id: high.member_id, view: `${high.stance} — reads the divergence as downstream of agent deployment; would fund the Agent Tokens sleeve now.` },
-        { member_id: low.member_id, view: `${low.stance} — conservative compositor reads nominal ${regimeLbl}, effective neutral; no tilt licensed.` },
+        { member_id: high.member_id, view: high.body },
+        { member_id: low.member_id, view: low.body },
       ],
-      what_settles: "On-chain panel crossing the 50th percentile for five consecutive sessions, or composite breaching 0.40.",
+      what_settles: "",
     });
   }
 
-  const rationale = `Committee holds 95/5/0/0 with composite at the ${compPctInt}th percentile (${regimeLbl}); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.`;
+  const rationale = authoredTakes.length ? authoredTakes.map((take: any) => take.body as string).join("\n\n") : undefined;
   const actions = recType === "position_actions" ? [
     { token: "USDC", action: "rotate", rationale: "Route the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor." },
     { token: "rmUSDC", action: "add", rationale: "Vault receipt is the Agent Tokens exposure — top up to the mandated 5% floor." },
   ] : undefined;
-  const weights = recType === "bucket_weights" ? [
-    { bucket: "conservative_defi_yield", weight: 0.95 },
-    { bucket: "agent_tokens", weight: 0.05 },
-    { bucket: "protocol_tokens", weight: 0.0 },
-    { bucket: "real_world_assets", weight: 0.0 },
-  ] : undefined;
+  const weights = recType === "bucket_weights" ? meanTakeWeights(takes) : undefined;
 
   const quorum = { active: activeMembers.length, submitted: takes.length, absent: absent.length, participation };
   const rec: Record<string, unknown> = {
@@ -647,21 +705,18 @@ export async function aggregateSession(sessionId: string) {
     meanConfidence,
     absent,
     type: recType,
-    rationale,
     consensus,
     disagreements,
   };
+  if (rationale) rec.rationale = rationale;
   if (actions) rec.actions = actions;
   if (weights) rec.weights = weights;
 
-  // Prose synthesis (2–4 sentences): composite + stance distribution + mandate.
-  const stanceSummary = stanceParts.length ? stanceParts.join(", ") : "no stances on record";
-  const synthesis =
-    `The committee reads composite ${composite.toFixed(3)} at the ${compPctInt}th percentile — ${regimeLbl} by label, with the panel spread the load-bearing signal rather than the headline level. ` +
-    `Across ${takes.length}/${activeMembers.length} submitted takes the stance distribution is ${stanceSummary}` +
-    (meanConfidence != null ? ` at ${(meanConfidence * 100).toFixed(0)}% mean confidence` : "") +
-    (absent.length ? `, with ${absent.length} absent` : "") + ". " +
-    `All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of ${s.subject_name ?? s.subject_id}.`;
+  // Never invent editorial prose: synthesis is composed only of the exact
+  // stored member-authored bodies, and is absent when every submitted body is empty.
+  const synthesis = authoredTakes.length
+    ? authoredTakes.map((take: any) => take.body as string).join("\n\n")
+    : null;
 
   await sql`UPDATE committee_sessions SET
       state = 'aggregated',

@@ -9,6 +9,19 @@ import {
 
 const sub = { memberId: "m1", date: "2026-06-30", subjectId: "woon", nonce: "n1", stance: "bullish", confidence: 0.8, body: "hi", memoUrl: "https://x/m" };
 
+const legacySubmission = {
+  memberId: "legacy-member",
+  date: "2026-07-20",
+  subjectId: "legacy-subject",
+  nonce: "legacy-nonce",
+  stance: "neutral",
+  confidence: 0.625,
+  body: "legacy signed body",
+  memoUrl: "https://example.test/memo",
+};
+const legacyPublicKeyB64 = "YmUwLbJYgrbWC5g6UJ+v4t8hVmCCPHeDhTYR5zdlxhA=";
+const legacySignatureB64 = "2w3ubE+a7vwW96xCB6SitBUoz9oWCPJW9COc4uPz2XvZR3szZeu+pTBW5mewJ21e7gaPOWDW3gIARL4YYRXCCg==";
+
 test("valid signature verifies; wrong key + tampered fields are rejected", async () => {
   const a = await generateKeyPair();
   const b = await generateKeyPair();
@@ -28,6 +41,32 @@ test("canonicalization is deterministic and key-order independent", () => {
   const a = canonicalizeSubmission(sub);
   const b = canonicalizeSubmission({ memoUrl: sub.memoUrl, body: sub.body, confidence: sub.confidence, stance: sub.stance, nonce: sub.nonce, subjectId: sub.subjectId, date: sub.date, memberId: sub.memberId } as any);
   expect(a).toBe(b);
+});
+
+test("weights-less canonical bytes and pre-recorded signatures remain backward compatible", async () => {
+  expect(canonicalizeSubmission(legacySubmission)).toBe(
+    '{"memberId":"legacy-member","date":"2026-07-20","subjectId":"legacy-subject","nonce":"legacy-nonce","stance":"neutral","confidence":0.625,"body":"legacy signed body","memoUrl":"https://example.test/memo"}',
+  );
+  expect(await verifySubmissionSignature(legacySubmission, legacySignatureB64, legacyPublicKeyB64)).toBe(true);
+});
+
+test("weighted submissions sign the appended weights and reject tampering", async () => {
+  const identity = await generateKeyPair();
+  const weighted = {
+    ...sub,
+    weights: [
+      { bucket: "conservative_defi_yield", weight: 3 },
+      { bucket: "agent_tokens", weight: 1 },
+    ],
+  };
+  const canonical = canonicalizeSubmission(weighted);
+  expect(canonical.endsWith('"weights":[{"bucket":"conservative_defi_yield","weight":3},{"bucket":"agent_tokens","weight":1}]}')).toBe(true);
+  const signature = await signMessage(canonical, identity.privateKey);
+  expect(await verifySubmissionSignature(weighted, signature, identity.publicKeyB64)).toBe(true);
+  expect(await verifySubmissionSignature({
+    ...weighted,
+    weights: [{ bucket: "conservative_defi_yield", weight: 2 }, { bucket: "agent_tokens", weight: 2 }],
+  }, signature, identity.publicKeyB64)).toBe(false);
 });
 
 test("claim challenges use a separate versioned canonical signing domain", () => {
