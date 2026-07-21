@@ -17,6 +17,7 @@ import {
   readJsonObject,
   requiredString,
 } from "../validation.ts";
+import { COMMITTEE_ROUTE_EXTENSIONS } from "./committee/extensions.ts";
 
 // bearer()/secretEq()/isPrivileged()/hasAnalyticsProviderRole() live in
 // api/auth.ts (issue #106) so the /api/analytics boundary reuses the exact same
@@ -251,6 +252,14 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     if (!sub) return { status: 400, body: { error: "invalid submission" } };
     const res = await ic.submitRecommendation(token, sub);
     return { status: res.status, body: res };
+  }
+
+  // Pre-registered, concern-owned extension points keep the onboarding routes
+  // (#205) and public receipt routes (#207) in disjoint modules. Both handlers
+  // are no-ops until their owning issues implement the documented contracts.
+  for (const handleExtension of COMMITTEE_ROUTE_EXTENSIONS) {
+    const result = await handleExtension(req, url);
+    if (result) return result;
   }
 
   return null;

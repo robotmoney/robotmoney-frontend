@@ -27,6 +27,22 @@ export async function verifySubmissionSignature(
   }
 }
 
+export interface StoredSubmissionSignature {
+  submission: Parameters<typeof canonicalizeSubmission>[0];
+  signatureB64: string;
+  publicKeyB64: string;
+}
+
+/**
+ * Read-time verification seam for public receipts (issue #207).
+ * Callers must build `submission` from the persisted payload and must not trust
+ * the stored `verified` flag. The public receipt contract is documented in
+ * frontend/public/views/docs/investment-committee/api-reference.html.
+ */
+export async function verifyStoredSubmissionSignature(stored: StoredSubmissionSignature): Promise<boolean> {
+  return verifySubmissionSignature(stored.submission, stored.signatureB64, stored.publicKeyB64);
+}
+
 // Helpers for seeding/tests/agents (key generation + signing). In production a
 // member generates and holds their own private key; these exist so the demo
 // harness and member agents can create identities.
