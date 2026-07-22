@@ -1,6 +1,7 @@
 // Central environment configuration. The only required input is DATABASE_URL.
 // RM_ENV selects behavior hints (ephemeral | demo | prod) but the connection
 // itself is always driven by DATABASE_URL so the same code runs everywhere.
+import parser from "cron-parser";
 
 function required(name: string): string {
   const v = process.env[name];
@@ -341,6 +342,74 @@ export function assertNoVaultAddressCollision(
       throw new Error(`tracked asset ${t.symbol} is the rmUSDC vault share (${t.address}) — never track vault shares here`);
     }
   }
+}
+
+// --- Committee session-lifecycle cron cadence (issue #208) -------------------
+// The five committee.* job_schedules rows (open_session/publish_brief/
+// close_window/aggregate/publish) ship seed-time DISABLED by default so a
+// fresh CI/e2e/demo database never auto-enqueues real committee lifecycle jobs
+// alongside the demo's own explicit enqueue-job admin path.
+// COMMITTEE_SCHEDULES_ENABLED is the single switch that turns the WHOLE
+// managed sequence on for a deployment: production sets it explicitly (daily
+// 06:00-08:00 UTC — see the per-kind CRON defaults below); staging may set the
+// same flag with accelerated COMMITTEE_*_CRON overrides; repo demo/e2e never
+// sets it (docker-compose.demo.yml pins it off, matching the DEMO_MODE
+// pattern). Resolved once at seed-time (backend/src/db/seed.ts) — job_schedules
+// rows are the persisted source of truth thereafter; the scheduler
+// (worker/scheduler.ts) owns next_run_at/last_enqueued_at bookkeeping.
+export interface CommitteeScheduleConfig {
+  kind: string;
+  cron: string;
+  enabled: boolean;
+  payload: Record<string, unknown>;
+  timezone: string;
+}
+
+// Fail-closed cron validation (review-operations finding on issue #208): every
+// job_schedules row is ticked by ONE shared scheduler (worker/scheduler.ts
+// tickScheduler) that evaluates ALL due rows inside a SINGLE transaction/loop —
+// an unparseable cron on any one row throws mid-loop and rolls back the whole
+// tick, silently stalling every OTHER schedule too (vault sampling, wallet
+// balances, buybacks, projects pipelines, analytics), repeatedly, every tick,
+// until fixed. Before this env-configurability landed, the five committee.*
+// crons were fixed literals that could never be wrong; now an operator typo
+// in COMMITTEE_*_CRON is user-reachable. Validate at config-resolution time
+// (seed-time) so a bad value fails the `bun run migrate` deploy step loudly,
+// instead of degrading the shared scheduler at runtime.
+function assertValidCron(envVarName: string, cron: string): void {
+  try {
+    parser.parseExpression(cron);
+  } catch (e) {
+    throw new Error(`invalid ${envVarName} "${cron}": ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+export function resolveCommitteeSchedules(
+  env: Record<string, string | undefined> = process.env,
+): CommitteeScheduleConfig[] {
+  const enabled = env.COMMITTEE_SCHEDULES_ENABLED === "1" || env.COMMITTEE_SCHEDULES_ENABLED === "true";
+  const windowMinutesRaw = Number(env.COMMITTEE_WINDOW_MINUTES ?? "");
+  const windowMinutes = Number.isFinite(windowMinutesRaw) && windowMinutesRaw > 0 ? windowMinutesRaw : 60;
+  const timezone = "UTC";
+  const cronVars: Record<string, string> = {
+    COMMITTEE_OPEN_SESSION_CRON: env.COMMITTEE_OPEN_SESSION_CRON || "0 6 * * *",
+    COMMITTEE_PUBLISH_BRIEF_CRON: env.COMMITTEE_PUBLISH_BRIEF_CRON || "0 7 * * *",
+    COMMITTEE_CLOSE_WINDOW_CRON: env.COMMITTEE_CLOSE_WINDOW_CRON || "0 8 * * *",
+    COMMITTEE_AGGREGATE_CRON: env.COMMITTEE_AGGREGATE_CRON || "0 9 * * *",
+    COMMITTEE_PUBLISH_CRON: env.COMMITTEE_PUBLISH_CRON || "0 10 * * *",
+  };
+  for (const [name, cron] of Object.entries(cronVars)) assertValidCron(name, cron);
+  return [
+    { kind: "committee.open_session", cron: cronVars.COMMITTEE_OPEN_SESSION_CRON, enabled, payload: {}, timezone },
+    // windowMinutes rides on the publish_brief job's payload — publishBrief()
+    // reads it to compute window_closes_at, so COMMITTEE_WINDOW_MINUTES is the
+    // single knob that keeps the publish_brief -> close_window cron gap
+    // (default 07:00 -> 08:00 = 60 minutes) coherent with the actual window.
+    { kind: "committee.publish_brief", cron: cronVars.COMMITTEE_PUBLISH_BRIEF_CRON, enabled, payload: { windowMinutes }, timezone },
+    { kind: "committee.close_window", cron: cronVars.COMMITTEE_CLOSE_WINDOW_CRON, enabled, payload: {}, timezone },
+    { kind: "committee.aggregate", cron: cronVars.COMMITTEE_AGGREGATE_CRON, enabled, payload: {}, timezone },
+    { kind: "committee.publish", cron: cronVars.COMMITTEE_PUBLISH_CRON, enabled, payload: {}, timezone },
+  ];
 }
 
 // Fail-closed: default to "prod" when RM_ENV is unset, and REFUSE to start on an

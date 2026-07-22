@@ -103,6 +103,12 @@ export const ROUTES = {
       sessionPublish: "/api/committee/admin/sessions/:id/publish", // POST — versioned guarded transition
 
       audit: "/api/committee/admin/audit", // GET ?actor=&action=&since=&until=&limit= — redacted audit trail
+
+      // Agent health (issue #208, scout #214): missed-window absences and
+      // rejected submission signatures, otherwise visible only in an agent's
+      // own stdout. Raw event history + per-type counts; no automatic
+      // dead-agent threshold.
+      agentHealth: "/api/committee/admin/agent-health", // GET ?sessionId=&memberId=&eventType=&limit=
     },
   },
 

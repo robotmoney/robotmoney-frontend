@@ -349,3 +349,37 @@ test("aggregation omits invented prose and weights when no eligible body or vali
   expect(recommendation.stances).toEqual({ neutral: 1 });
   expect(detail?.session.synthesis).toBeNull();
 });
+
+test("restart-safety (issue #208): re-opening the same session is idempotent (one row); a duplicate member take is 409 with exactly one recommendation row", async () => {
+  // This file's earlier tests accumulate active members toward
+  // COMMITTEE_ROSTER_CAP without deactivating them (see the file header
+  // comment) — reset so this test's one admission is never a spurious 409.
+  await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
+  const subj = rid("restart");
+  await ic.ensureSubject(subj, "Restart Subject");
+  const date = "2026-07-08";
+
+  // A worker restart (or an at-most-once cron retry) may call openSession twice
+  // for the same (date, subject_id) — this must never create a second session row.
+  const first = await ic.openSession(date, subj);
+  const second = await ic.openSession(date, subj);
+  expect(second.id).toBe(first.id);
+  const sessionRows = await sql`SELECT id FROM committee_sessions WHERE date = ${date} AND subject_id = ${subj}`;
+  expect(sessionRows.length).toBe(1);
+
+  await ic.publishBrief(first.id, 60);
+  const m = await activeMember();
+  const sub = { memberId: m.id, date, subjectId: subj, nonce: rid("n"), stance: "neutral", confidence: 0.5, body: "one take per member" };
+  const sign = async (nonce: string) => {
+    const s = { ...sub, nonce };
+    return { ...s, signature: await signMessage(canonicalizeSubmission(s), m.privateKey) };
+  };
+  const ok = await ic.submitRecommendation(m.token, await sign(rid("n")));
+  expect(ok.status).toBe(201);
+  // Same member, same session, a FRESH nonce (a naive retry) → still 409 (the
+  // one-take-per-member-per-session unique constraint, not just nonce reuse).
+  const dup = await ic.submitRecommendation(m.token, await sign(rid("n")));
+  expect(dup.status).toBe(409);
+  const recRows = await sql`SELECT id FROM committee_recommendations WHERE session_id = ${first.id} AND member_id = ${m.id}`;
+  expect(recRows.length).toBe(1);
+});

@@ -11,6 +11,7 @@ import { sql, closeDb, jsonValue } from "./client.ts";
 import { seedDemoProjects } from "../projects/demo-seed.ts";
 import { walletHistorySeedRows } from "../chain/wallet-history-seed.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
+import { resolveCommitteeSchedules } from "../config.ts";
 
 interface SeedSchedule {
   kind: string;
@@ -62,14 +63,12 @@ const SCHEDULES: SeedSchedule[] = [
   // NEW WETH->ROBOTMONEY buyback swaps into buyback_swaps (keyed on tx_hash). No-op
   // under a non-live source; degrade-safe on RPC failure. Handler: handlers/buybacks.ts.
   { kind: "buybacks.refresh", cron: "15 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
-  // Committee lifecycle — disabled by default; the demo enqueues these explicitly
-  // via the admin enqueue-job endpoint, exercising the real worker claim loop +
-  // handler path. Enable manually or change to a real cron for auto-scheduling.
-  { kind: "committee.open_session", cron: "0 6 * * *", payload: {}, timezone: "UTC", enabled: false },
-  { kind: "committee.publish_brief", cron: "0 7 * * *", payload: {}, timezone: "UTC", enabled: false },
-  { kind: "committee.close_window", cron: "0 8 * * *", payload: {}, timezone: "UTC", enabled: false },
-  { kind: "committee.aggregate", cron: "0 9 * * *", payload: {}, timezone: "UTC", enabled: false },
-  { kind: "committee.publish", cron: "0 10 * * *", payload: {}, timezone: "UTC", enabled: false },
+  // Committee lifecycle rows are seeded SEPARATELY below (seedCommitteeSchedules)
+  // — issue #208 made their enabled/cron/window environment-configurable via
+  // resolveCommitteeSchedules(), and (unlike every other row here) their
+  // enabled/cron ARE overwritten on every seed run so a changed
+  // COMMITTEE_*_CRON / COMMITTEE_SCHEDULES_ENABLED is actually applied to an
+  // existing deployment, not just a fresh database.
   // Projects "Agentic Economy Ecosystem" pipelines (issue #87). Ordered so a
   // day's chain is coherent: discover identity → refresh live metrics → snapshot
   // today → roll revenue up → recompute coverage. Daily cadence (not the fast
@@ -131,6 +130,33 @@ const SLOW_DEMO_SAMPLER_SCHEDULES: SeedSchedule[] = [
 // baseline for later test files sharing the same ephemeral Postgres, instead
 // of every truncating file needing to know the full seed() cost (e.g. the
 // wallet_balance_samples backfill loop).
+// Committee lifecycle schedule rows (issue #208): a DELIBERATE exception to
+// the "never touch enabled/cron on an existing row" rule below. Their
+// enabled/cron/window are environment-configuration (resolveCommitteeSchedules,
+// backend/src/config.ts), not operator-toggled state — an operator changing
+// COMMITTEE_OPEN_SESSION_CRON (or flipping COMMITTEE_SCHEDULES_ENABLED) and
+// re-running the migrate/seed step must see that value actually applied to the
+// existing deployment, so this is an explicit UPDATE-by-kind (not the
+// (kind, cron) natural key the general loop above uses — the cron itself is
+// exactly what may change here, so conflicting on it would leave a stale
+// duplicate row under the old cron instead of updating in place).
+export async function seedCommitteeSchedules(): Promise<void> {
+  for (const s of resolveCommitteeSchedules()) {
+    const updated = await sql`
+      UPDATE job_schedules
+         SET cron = ${s.cron}, enabled = ${s.enabled}, payload = ${sql.json(jsonValue(s.payload))}, timezone = ${s.timezone}
+       WHERE kind = ${s.kind}
+       RETURNING id`;
+    if (updated.length === 0) {
+      await sql`
+        INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
+        VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled})
+      `;
+    }
+  }
+  console.log("seeded committee.* job_schedules (5 definition(s), env-configured, applied to existing rows)");
+}
+
 export async function seedJobSchedules(): Promise<void> {
   const schedules = process.env.DEMO_MODE
     ? [...SCHEDULES, ...FAST_DEMO_SCHEDULES, ...SLOW_DEMO_SAMPLER_SCHEDULES]
@@ -146,6 +172,7 @@ export async function seedJobSchedules(): Promise<void> {
     `;
   }
   console.log(`seeded job_schedules (${schedules.length} definition(s), idempotent)`);
+  await seedCommitteeSchedules();
 
   // DEMO_MODE also disables the per-minute wallet-sampler baseline: inserting
   // the hourly (kind, cron) row above only makes it COEXIST with "* * * * *" —
