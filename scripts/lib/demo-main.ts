@@ -560,6 +560,12 @@ async function run(cmd: string[], cwd: string, env: Record<string, string>, labe
   if (code !== 0) throw new Error(`${label} failed (exit ${code})`);
 }
 
+async function expectRunFailure(cmd: string[], cwd: string, env: Record<string, string>, label: string): Promise<void> {
+  const proc = Bun.spawn(cmd, { cwd, env, stdout: outFd, stderr: errFd });
+  const code = await proc.exited;
+  if (code === 0) throw new Error(`${label} unexpectedly exited 0`);
+}
+
 // --- Research polling (no backend change) ---------------------------------
 // The worker's scheduler drives regime.classify (even min, analytics lane) +
 // research.refresh (odd min, research lane) via the fast demo schedules. We
@@ -1048,6 +1054,45 @@ async function main(): Promise<void> {
     // cross-role log annotations truthful ("gate open", as before the flip).
     await run(["bun", "run", "src/e2e.ts"], join(repoRoot, "mcp"),
       { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp`, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "committee session");
+
+    // Issue #209: exercise the repo-native single-member starter over BOTH
+    // transports against this required per-PR live stack. Its --e2e mode only
+    // provisions isolated member credentials + an open session; the actual
+    // poll → brief → author → memo → canonicalize → sign → submit → verified
+    // readback path is the same exported implementation operators run.
+    console.log("[demo] running starter committee agent (REST + MCP OAuth)…");
+    const starterEnv = {
+      ...process.env,
+      BACKEND_URL: backendUrl,
+      MCP_URL: `${mcpUrl}/mcp`,
+      ADMIN_TOKEN: adminPassword,
+    } as Record<string, string>;
+    const { BACKEND_URL: _missingBackend, ...withoutBackendUrl } = starterEnv;
+    await expectRunFailure(
+      ["bun", "run", "scripts/starter-committee-agent.ts", "--transport=rest", "--e2e"],
+      repoRoot,
+      withoutBackendUrl,
+      "starter committee agent missing BACKEND_URL guard",
+    );
+    const { ADMIN_TOKEN: _missingAdmin, ...withoutAdminToken } = starterEnv;
+    await expectRunFailure(
+      ["bun", "run", "scripts/starter-committee-agent.ts", "--transport=rest", "--e2e"],
+      repoRoot,
+      withoutAdminToken,
+      "starter committee agent missing ADMIN_TOKEN guard",
+    );
+    await run(
+      ["bun", "run", "scripts/starter-committee-agent.ts", "--transport=rest", "--e2e"],
+      repoRoot,
+      starterEnv,
+      "starter committee agent REST live-stack exercise",
+    );
+    await run(
+      ["bun", "run", "scripts/starter-committee-agent.ts", "--transport=mcp", "--e2e"],
+      repoRoot,
+      starterEnv,
+      "starter committee agent MCP live-stack exercise",
+    );
 
     console.log("[demo] running frontend checks…");
     await run(["bun", "run", "scripts/demo-frontend-check.ts"], repoRoot,
