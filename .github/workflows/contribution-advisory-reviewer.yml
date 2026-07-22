@@ -1,28 +1,101 @@
-# Disabled-trigger seam for issue #197's keyless OpenCode contribution reviewer.
-# The eventual reviewer is intentionally absent: this manual-only no-op exposes
-# its PR-number input and least-privilege permissions without invoking a model or
-# posting to GitHub. Issue #197 will add the heavy scheduled/manual execution.
+# Keyless advisory review of contribution-governance judgment rules (#197).
+# Heavy and sweep-only by design: it never runs as a PR check or required gate.
 name: contribution-advisory-reviewer
 env:
-  CI_CLASS: ignore
+  CI_CLASS: heavy
+  OPENCODE_VERSION: "1.18.1"
+  OPENCODE_LINUX_X64_SHA256: "9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b994816acf192159511"
 
 on:
+  schedule:
+    - cron: "19 5 * * *"
   workflow_dispatch:
     inputs:
       pr_number:
-        description: "Pull request number to review after issue #197 is implemented"
+        description: "Ready-for-review pull request number"
         required: true
         type: string
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
-  reviewer-stub:
+  advisory-review:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Report disabled reviewer seam
-        env:
-          PR_NUMBER: ${{ inputs.pr_number }}
+      # Only trusted default-branch automation is executed. The reviewed head is
+      # fetched later as an API diff and is never checked out.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Install checksum-pinned keyless OpenCode CLI
         run: |
-          echo "::notice::Contribution advisory reviewer for PR #${PR_NUMBER} is a disabled stub pending issue #197."
+          curl -fsSLo "$RUNNER_TEMP/opencode.tar.gz" \
+            "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz"
+          echo "${OPENCODE_LINUX_X64_SHA256}  $RUNNER_TEMP/opencode.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/opencode.tar.gz" -C "$RUNNER_TEMP" opencode
+          chmod +x "$RUNNER_TEMP/opencode"
+          "$RUNNER_TEMP/opencode" --version
+      - name: Review eligible pull requests and upsert advisory comments
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL_PR_NUMBER: ${{ inputs.pr_number }}
+          OPENCODE_BIN: ${{ runner.temp }}/opencode
+          OPENCODE_TIMEOUT_MS: "120000"
+        run: |
+          set -euo pipefail
+          marker='<!-- robotmoney-contribution-advisory-reviewer -->'
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ ! "${MANUAL_PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+              echo "::error::pr_number must be a positive integer"
+              exit 1
+            fi
+            pr_numbers="${MANUAL_PR_NUMBER}"
+          else
+            pr_numbers="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls?state=open&per_page=100" \
+              --jq '.[] | select(.draft == false) | .number')"
+          fi
+
+          for pr_number in ${pr_numbers}; do
+            metadata="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}")"
+            state="$(jq -r '.state' <<<"${metadata}")"
+            draft="$(jq -r '.draft' <<<"${metadata}")"
+            head_sha="$(jq -r '.head.sha' <<<"${metadata}")"
+            if [[ "${state}" != "open" || "${draft}" != "false" ]]; then
+              echo "::error::PR #${pr_number} is not open and ready for review"
+              exit 1
+            fi
+
+            existing="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${pr_number}/comments?per_page=100" \
+              --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${marker}\"))) | [.id, .body] | @base64" | sed -n '1p')"
+            if [[ "${GITHUB_EVENT_NAME}" == "schedule" && -n "${existing}" ]]; then
+              existing_body="$(base64 -d <<<"${existing}" | jq -r '.[1]')"
+              if grep -Fq "<!-- reviewed-head: ${head_sha} -->" <<<"${existing_body}"; then
+                echo "PR #${pr_number} already reviewed at ${head_sha}; skipping"
+                continue
+              fi
+            fi
+
+            diff_file="$RUNNER_TEMP/contribution-review-${pr_number}.diff"
+            gh api -H "Accept: application/vnd.github.diff" \
+              "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" >"${diff_file}"
+            result="$(bun scripts/contribution-advisory-reviewer.ts --diff-file "${diff_file}")"
+            body="$(printf '%s\n\n%s\n%s\n' "${result}" "${marker}" "<!-- reviewed-head: ${head_sha} -->")"
+
+            if [[ -n "${existing}" ]]; then
+              comment_id="$(base64 -d <<<"${existing}" | jq -r '.[0]')"
+              jq -n --arg body "${body}" '{body: $body}' | \
+                gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" --input - >/dev/null
+            else
+              jq -n --arg body "${body}" '{body: $body}' | \
+                gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${pr_number}/comments" --input - >/dev/null
+            fi
+            echo "Updated contribution-governance advisory for PR #${pr_number} at ${head_sha}"
+          done
