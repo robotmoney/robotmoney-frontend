@@ -101,6 +101,20 @@ services:
       # than serve fixture data as production. See .env.example.
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       COMMITTEE_NOTIFICATION_EMAIL_FROM: ${COMMITTEE_NOTIFICATION_EMAIL_FROM:-committee-demo@robotmoney.invalid}
+      # Committee session-lifecycle cron cadence (issue #208). Read at
+      # `bun run migrate` time (seed() -> resolveCommitteeSchedules) — this is
+      # the SINGLE-BOX/prod compose file, so it explicitly enables the daily
+      # 06:00-08:00 UTC sequence by default; docker-compose.demo.yml pins
+      # COMMITTEE_SCHEDULES_ENABLED off (repo demo/e2e never auto-runs the
+      # committee on its own). Staging overrides any of these per-kind crons
+      # (or COMMITTEE_WINDOW_MINUTES) to an accelerated cadence via its own env.
+      COMMITTEE_SCHEDULES_ENABLED: ${COMMITTEE_SCHEDULES_ENABLED:-1}
+      COMMITTEE_OPEN_SESSION_CRON: ${COMMITTEE_OPEN_SESSION_CRON:-0 6 * * *}
+      COMMITTEE_PUBLISH_BRIEF_CRON: ${COMMITTEE_PUBLISH_BRIEF_CRON:-0 7 * * *}
+      COMMITTEE_CLOSE_WINDOW_CRON: ${COMMITTEE_CLOSE_WINDOW_CRON:-0 8 * * *}
+      COMMITTEE_AGGREGATE_CRON: ${COMMITTEE_AGGREGATE_CRON:-0 9 * * *}
+      COMMITTEE_PUBLISH_CRON: ${COMMITTEE_PUBLISH_CRON:-0 10 * * *}
+      COMMITTEE_WINDOW_MINUTES: ${COMMITTEE_WINDOW_MINUTES:-60}
       # Serve the static frontend from this same process — no Caddy/nginx.
       STATIC_DIR: /srv/frontend
     ports:

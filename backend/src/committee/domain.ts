@@ -209,7 +209,17 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   const pub = await publicKeyFor(memberId);
   if (!pub) return { ok: false, status: 403, error: "no registered key for member" };
   const verified = await verifySubmissionSignature(sub, sub.signature, pub);
-  if (!verified) return { ok: false, status: 400, error: "signature verification failed" };
+  if (!verified) {
+    // Agent-health surface (issue #208, scout #214): a rejected/tampered
+    // signature was previously visible only in the submitting agent's own
+    // stdout. Record it on the durable, queryable event log — AFTER the
+    // session and member are already resolved above — with a bounded,
+    // redacted detail (never the raw signature/public key/payload).
+    await recordAgentHealthEvent("rejected_signature", session.id, memberId, {
+      reason: "signature verification failed",
+    });
+    return { ok: false, status: 400, error: "signature verification failed" };
+  }
 
   try {
     // Close the TOCTOU gap: re-check the window inside the same statement by
@@ -674,9 +684,90 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
   return { sessionId, state: "collecting", windowClosesAt };
 }
 
+// ── Agent health (issue #208, scout #214) ───────────────────────────────────
+// Append-only, redacted event log for two things that were previously visible
+// only in an agent's own stdout: a roster member missing its expected
+// submission window, and a rejected/tampered submission signature. `detail`
+// must stay bounded and redacted — never the raw signature/public key/payload.
+async function recordAgentHealthEvent(
+  eventType: "absent" | "rejected_signature",
+  sessionId: string | null,
+  memberId: string | null,
+  detail: Record<string, unknown>,
+  tx: DbHandle = sql,
+): Promise<void> {
+  await tx`
+    INSERT INTO committee_agent_health_events (event_type, session_id, member_id, detail)
+    VALUES (${eventType}, ${sessionId}, ${memberId}, ${tx.json(detail as any)})
+    ON CONFLICT (session_id, member_id) WHERE event_type = 'absent' DO NOTHING`;
+}
+
+export interface AgentHealthFilter {
+  sessionId?: string;
+  memberId?: string;
+  eventType?: "absent" | "rejected_signature";
+  limit?: number;
+}
+
+// Admin-only projection (GET /api/committee/admin/agent-health): raw event
+// history plus per-type counts, with NO automatic dead-agent threshold — an
+// operator reads the history and decides, nothing here pages/dead-letters an
+// agent on its own.
+export async function getAgentHealthEvents(filter: AgentHealthFilter = {}) {
+  const limit = filter.limit && filter.limit > 0 ? Math.min(filter.limit, 500) : 100;
+  const conds = [];
+  if (filter.sessionId) conds.push(sql`session_id = ${filter.sessionId}`);
+  if (filter.memberId) conds.push(sql`member_id = ${filter.memberId}`);
+  if (filter.eventType) conds.push(sql`event_type = ${filter.eventType}`);
+  const where = conds.length ? sql`WHERE ${conds.reduce((a, b) => sql`${a} AND ${b}`)}` : sql``;
+  const rows = await sql`
+    SELECT id, event_type, session_id, member_id, detail, created_at
+    FROM committee_agent_health_events ${where}
+    ORDER BY created_at DESC LIMIT ${limit}`;
+  const countRows = await sql<{ event_type: string; n: number }[]>`
+    SELECT event_type, count(*)::int AS n FROM committee_agent_health_events ${where} GROUP BY event_type`;
+  return {
+    events: rows.map((r: any) => ({
+      id: Number(r.id),
+      eventType: r.event_type,
+      sessionId: r.session_id,
+      memberId: r.member_id,
+      detail: r.detail,
+      createdAt: new Date(r.created_at).toISOString(),
+    })),
+    counts: Object.fromEntries(countRows.map((c) => [c.event_type, c.n])),
+  };
+}
+
 export async function closeWindow(sessionId: string) {
-  await sql`UPDATE committee_sessions SET state = 'window_closed' WHERE id = ${sessionId} AND state = 'collecting'`;
-  return { sessionId, state: "window_closed" };
+  return await sql.begin(async (tx) => {
+    const upd = await tx`
+      UPDATE committee_sessions SET state = 'window_closed'
+      WHERE id = ${sessionId} AND state = 'collecting' RETURNING id`;
+    if (upd.length > 0) {
+      // Materialize absence events ONLY on a REAL collecting->window_closed
+      // transition (a re-close of an already-closed session is a no-op, and
+      // the unique partial index above makes this safe even if a retried job
+      // races another). Only sessions with a FROZEN expected roster
+      // (committee_session_members — the admin-created path, issue #150) have
+      // an authoritative absence denominator; the legacy/demo openSession path
+      // (no roster rows) is unaffected, matching submitRecommendation/
+      // aggregateSession's existing roster-optional convention.
+      const roster = await tx<{ member_id: string }[]>`
+        SELECT member_id FROM committee_session_members
+        WHERE session_id = ${sessionId} AND status != 'excused'`;
+      if (roster.length > 0) {
+        const submitted = await tx<{ member_id: string }[]>`
+          SELECT DISTINCT member_id FROM committee_recommendations WHERE session_id = ${sessionId}`;
+        const submittedSet = new Set(submitted.map((r) => r.member_id));
+        for (const { member_id: memberId } of roster) {
+          if (submittedSet.has(memberId)) continue;
+          await recordAgentHealthEvent("absent", sessionId, memberId, { reason: "missed submission window" }, tx);
+        }
+      }
+    }
+    return { sessionId, state: "window_closed" };
+  });
 }
 
 // Build the reference-shaped regime_summary object from the trailing regime

@@ -692,10 +692,31 @@ scheduled → brief_published → collecting → window_closed → aggregated �
   sessions); open the submission window.
 - *window:* members submit via the MCP `submit_recommendation` tool or the REST
   `submit` sibling — both calling the same **domain handler**, not the worker.
-- `committee.close_window` (cron at deadline) — stop accepting submissions.
+- `committee.close_window` (cron at deadline) — stop accepting submissions. For a
+  session with a frozen expected roster (§9.4.1), this also materializes one durable
+  `absent` agent-health event per non-excused member who never submitted.
 - `committee.aggregate` — deterministic rollup + optional editorial synthesis **over
   the takes actually posted**; absences recorded as absent. **No host-authored takes.**
 - `committee.publish` — mark the session visible via API + frontend.
+
+The five `committee.*` cron rows are **environment-configurable** (issue #208):
+`COMMITTEE_SCHEDULES_ENABLED` (default `false`) is the single switch for the whole
+sequence, plus a `COMMITTEE_*_CRON` variable per kind and `COMMITTEE_WINDOW_MINUTES`
+for the submission-window length. Production explicitly enables the daily
+06:00–08:00 UTC sequence; staging may accelerate the cadence; repo demo/e2e stays
+disabled (the demo drives lifecycle jobs itself via the admin enqueue-job endpoint,
+unaffected). Re-running the migrate/seed step applies a changed value to the
+existing `job_schedules` rows, not just a fresh database.
+
+#### 9.4.1 Agent health
+
+A roster member missing its expected submission window, and a rejected/tampered
+submission signature, were previously visible only in an agent's own stdout.
+Both are now recorded on a durable, append-only `committee_agent_health_events`
+table (bounded, redacted `detail` — never a raw signature/public key/payload) and
+exposed admin-only via `GET /api/committee/admin/agent-health` (raw event history
++ per-type counts). There is no automatic dead-agent threshold — an operator reads
+the history and decides.
 
 ### 9.5 Surfaces — one core, two transports
 

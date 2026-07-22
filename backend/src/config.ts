@@ -343,6 +343,46 @@ export function assertNoVaultAddressCollision(
   }
 }
 
+// --- Committee session-lifecycle cron cadence (issue #208) -------------------
+// The five committee.* job_schedules rows (open_session/publish_brief/
+// close_window/aggregate/publish) ship seed-time DISABLED by default so a
+// fresh CI/e2e/demo database never auto-enqueues real committee lifecycle jobs
+// alongside the demo's own explicit enqueue-job admin path.
+// COMMITTEE_SCHEDULES_ENABLED is the single switch that turns the WHOLE
+// managed sequence on for a deployment: production sets it explicitly (daily
+// 06:00-08:00 UTC — see the per-kind CRON defaults below); staging may set the
+// same flag with accelerated COMMITTEE_*_CRON overrides; repo demo/e2e never
+// sets it (docker-compose.demo.yml pins it off, matching the DEMO_MODE
+// pattern). Resolved once at seed-time (backend/src/db/seed.ts) — job_schedules
+// rows are the persisted source of truth thereafter; the scheduler
+// (worker/scheduler.ts) owns next_run_at/last_enqueued_at bookkeeping.
+export interface CommitteeScheduleConfig {
+  kind: string;
+  cron: string;
+  enabled: boolean;
+  payload: Record<string, unknown>;
+  timezone: string;
+}
+export function resolveCommitteeSchedules(
+  env: Record<string, string | undefined> = process.env,
+): CommitteeScheduleConfig[] {
+  const enabled = env.COMMITTEE_SCHEDULES_ENABLED === "1" || env.COMMITTEE_SCHEDULES_ENABLED === "true";
+  const windowMinutesRaw = Number(env.COMMITTEE_WINDOW_MINUTES ?? "");
+  const windowMinutes = Number.isFinite(windowMinutesRaw) && windowMinutesRaw > 0 ? windowMinutesRaw : 60;
+  const timezone = "UTC";
+  return [
+    { kind: "committee.open_session", cron: env.COMMITTEE_OPEN_SESSION_CRON || "0 6 * * *", enabled, payload: {}, timezone },
+    // windowMinutes rides on the publish_brief job's payload — publishBrief()
+    // reads it to compute window_closes_at, so COMMITTEE_WINDOW_MINUTES is the
+    // single knob that keeps the publish_brief -> close_window cron gap
+    // (default 07:00 -> 08:00 = 60 minutes) coherent with the actual window.
+    { kind: "committee.publish_brief", cron: env.COMMITTEE_PUBLISH_BRIEF_CRON || "0 7 * * *", enabled, payload: { windowMinutes }, timezone },
+    { kind: "committee.close_window", cron: env.COMMITTEE_CLOSE_WINDOW_CRON || "0 8 * * *", enabled, payload: {}, timezone },
+    { kind: "committee.aggregate", cron: env.COMMITTEE_AGGREGATE_CRON || "0 9 * * *", enabled, payload: {}, timezone },
+    { kind: "committee.publish", cron: env.COMMITTEE_PUBLISH_CRON || "0 10 * * *", enabled, payload: {}, timezone },
+  ];
+}
+
 // Fail-closed: default to "prod" when RM_ENV is unset, and REFUSE to start on an
 // unrecognized value (so a typo like "production" can never silently open the
 // privileged surface). The unauthenticated convenience path is opt-in: it is

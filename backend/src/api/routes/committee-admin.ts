@@ -6,6 +6,7 @@
 // that guard BEFORE parsing the request body or touching the database, so an
 // unauthenticated caller never causes SQL work (issue #152 AC7).
 import * as admin from "../../committee/admin.ts";
+import { getAgentHealthEvents } from "../../committee/domain.ts";
 import { config as globalConfig } from "../../config.ts";
 import { isPrivileged } from "../auth.ts";
 import {
@@ -28,7 +29,8 @@ function ownsPath(p: string): boolean {
     rest === "members" || rest.startsWith("members/") ||
     rest === "applications" ||
     rest === "sessions" || rest.startsWith("sessions/") ||
-    rest === "audit"
+    rest === "audit" ||
+    rest === "agent-health"
   );
 }
 
@@ -166,6 +168,24 @@ export async function handleCommitteeAdmin(
           limit: limitRaw ? Number(limitRaw) : undefined,
         }),
       },
+    };
+  }
+
+  // ── Agent health (issue #208) ────────────────────────────────────────────
+  if (segs[0] === "agent-health" && m === "GET") {
+    const limitRaw = url.searchParams.get("limit");
+    const eventTypeRaw = url.searchParams.get("eventType") ?? undefined;
+    if (eventTypeRaw !== undefined && eventTypeRaw !== "absent" && eventTypeRaw !== "rejected_signature") {
+      return { status: 400, body: { error: "eventType must be absent|rejected_signature" } };
+    }
+    return {
+      status: 200,
+      body: await getAgentHealthEvents({
+        sessionId: url.searchParams.get("sessionId") ?? undefined,
+        memberId: url.searchParams.get("memberId") ?? undefined,
+        eventType: eventTypeRaw,
+        limit: limitRaw ? Number(limitRaw) : undefined,
+      }),
     };
   }
 
