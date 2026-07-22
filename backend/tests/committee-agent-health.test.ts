@@ -5,6 +5,8 @@
 // log (committee_agent_health_events) and exposed admin-only via
 // GET /api/committee/admin/agent-health.
 import { test, expect } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import * as ic from "../src/committee/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
@@ -129,4 +131,28 @@ test("a wrong-key/tampered submission is rejected 400 and recorded to the durabl
 test("rejects an invalid eventType query parameter (400, no query executed)", async () => {
   const result = await getAgentHealth("?eventType=bogus");
   expect(result?.status).toBe(400);
+});
+
+test("0020 migration is idempotent when executed repeatedly against real Postgres", async () => {
+  const ddl = await readFile(join(process.cwd(), "migrations/0020_committee_agent_health.sql"), "utf8");
+  await sql.unsafe(ddl);
+  await sql.unsafe(ddl);
+  const tables = await sql<{ table_name: string }[]>`
+    SELECT table_name FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'committee_agent_health_events'`;
+  expect(tables.map((row) => row.table_name)).toEqual(["committee_agent_health_events"]);
+
+  const indexes = await sql<{ indexname: string }[]>`
+    SELECT indexname FROM pg_indexes
+    WHERE schemaname = 'public' AND tablename = 'committee_agent_health_events'
+    ORDER BY indexname`;
+  expect(indexes.map((row) => row.indexname)).toEqual(
+    [
+      "committee_agent_health_events_absent_once_idx",
+      "committee_agent_health_events_member_idx",
+      "committee_agent_health_events_pkey",
+      "committee_agent_health_events_session_idx",
+      "committee_agent_health_events_type_idx",
+    ].sort(),
+  );
 });
