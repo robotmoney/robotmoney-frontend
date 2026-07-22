@@ -26,6 +26,9 @@ export function deploymentCommitteeEmailTransport(
   const token = env.COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_TOKEN;
   return {
     async send(message) {
+      // Hard timeout so a hanging transport endpoint can't stall the single-process,
+      // sequential committee worker lane indefinitely (matches the fetch-timeout
+      // convention used by chain/token-prices.ts and analytics/extract/http.ts).
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {
@@ -33,6 +36,7 @@ export function deploymentCommitteeEmailTransport(
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(message),
+        signal: AbortSignal.timeout(8000),
       });
       if (!response.ok) {
         throw new Error(`committee notification transport returned HTTP ${response.status}`);
