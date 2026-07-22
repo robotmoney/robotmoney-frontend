@@ -5,8 +5,8 @@ import { classifyRegime, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES, STANCE
 import { config } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
-import { verifySubmissionSignature } from "../lib/signing.ts";
-import { toBrief, toMember, toMemo, toSession, toSnapshot, toSubject, toTake } from "./projections.ts";
+import { fingerprintPublicKey, verifySubmissionSignature } from "../lib/signing.ts";
+import { toBrief, toMember, toMemo, toSession, toSnapshot, toSubject, toVerifiedTake } from "./projections.ts";
 
 // ── Identity ──────────────────────────────────────────────────────────────
 export async function memberIdForToken(token: string): Promise<string | null> {
@@ -104,16 +104,58 @@ export async function getOpenSession() {
 export async function getSession(
   date: string,
   subjectId: string,
-): Promise<{ session: ReturnType<typeof toSession>; takes: ReturnType<typeof toTake>[] } | null> {
+): Promise<{ session: ReturnType<typeof toSession>; takes: Awaited<ReturnType<typeof toVerifiedTake>>[] } | null> {
   const s = (await sql`SELECT * FROM committee_sessions WHERE date = ${date} AND subject_id = ${subjectId}`)[0];
   if (!s) return null;
   const takes = await sql`
     SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
-           r.memo_url, r.payload, r.verified, r.received_at
+           r.memo_url, r.payload, r.signature, r.received_at,
+           (SELECT k.public_key FROM committee_member_keys k
+            WHERE k.member_id = r.member_id AND k.active
+            ORDER BY k.created_at DESC LIMIT 1) AS public_key
     FROM committee_recommendations r
     JOIN committee_members m ON m.id = r.member_id
     WHERE r.session_id = ${s.id} ORDER BY r.received_at`;
-  return { session: toSession(s), takes: takes.map(toTake) };
+  return { session: toSession(s), takes: await Promise.all(takes.map(toVerifiedTake)) };
+}
+
+function hostedMemoId(memoUrl: string | null): number | null {
+  if (!memoUrl) return null;
+  try {
+    const pathname = memoUrl.startsWith("/") ? memoUrl : new URL(memoUrl).pathname;
+    const prefix = ROUTES.committee.memo.replace(":id", "");
+    const rawId = pathname.startsWith(prefix) ? pathname.slice(prefix.length) : "";
+    return /^\d+$/.test(rawId) ? Number(rawId) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getTakeReceipt(id: string) {
+  const row = (await sql`
+    SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+           r.memo_url, r.payload, r.signature, r.received_at,
+           (SELECT k.public_key FROM committee_member_keys k
+            WHERE k.member_id = r.member_id AND k.active
+            ORDER BY k.created_at DESC LIMIT 1) AS public_key
+    FROM committee_recommendations r
+    JOIN committee_members m ON m.id = r.member_id
+    WHERE r.id = ${id} LIMIT 1`)[0];
+  if (!row) return null;
+
+  const take = await toVerifiedTake(row);
+  const memoId = hostedMemoId(take.memoUrl ?? null);
+  return {
+    take,
+    memo: memoId == null ? null : await getMemo(memoId),
+    signer: {
+      id: row.member_id,
+      name: row.member_name,
+      publicKeyFingerprint: typeof row.public_key === "string"
+        ? await fingerprintPublicKey(row.public_key)
+        : null,
+    },
+  };
 }
 
 export async function getBrief(date: string, subjectId: string) {

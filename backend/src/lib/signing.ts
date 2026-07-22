@@ -43,6 +43,16 @@ export async function verifyStoredSubmissionSignature(stored: StoredSubmissionSi
   return verifySubmissionSignature(stored.submission, stored.signatureB64, stored.publicKeyB64);
 }
 
+/** Public, non-reversible identifier for a registered Ed25519 key. */
+export async function fingerprintPublicKey(publicKeyB64: string): Promise<string | null> {
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", b64ToBytes(publicKeyB64));
+    return `sha256:${Buffer.from(digest).toString("hex")}`;
+  } catch {
+    return null;
+  }
+}
+
 // Helpers for seeding/tests/agents (key generation + signing). In production a
 // member generates and holds their own private key; these exist so the demo
 // harness and member agents can create identities.

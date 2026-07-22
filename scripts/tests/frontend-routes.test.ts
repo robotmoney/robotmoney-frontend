@@ -66,6 +66,7 @@ describe("frontend route resolution", () => {
   test("resolves dynamic committee routes to reusable fragments", () => {
     expect(viewFor("/committee/members/athena")).toBe("/views/committee/member.html");
     expect(viewFor("/committee/members/woon")).toBe("/views/committee/member.html");
+    expect(viewFor("/committee/takes/4e9991de-0501-44f5-b21d-254acecd15a8")).toBe("/views/committee/take.html");
     expect(viewFor("/committee/2026-07-01/woon")).toBe("/views/committee/session.html");
     expect(viewFor("/committee/2026-06-25/woon")).toBe("/views/committee/session.html");
   });

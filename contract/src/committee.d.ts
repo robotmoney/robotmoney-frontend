@@ -85,6 +85,28 @@ export interface CommitteeTake {
   generatedAt?: string;
 }
 
+export interface CommitteeMemo {
+  id: string | number;
+  memberId: string;
+  sessionId: string;
+  title: string;
+  body: string;
+  createdAt: string | null;
+}
+
+export interface CommitteeTakeSigner {
+  id: string;
+  name: string;
+  publicKeyFingerprint: string | null;
+}
+
+/** Public receipt; verification is recomputed by the server on every read. */
+export interface CommitteeTakeReceipt {
+  take: CommitteeTake;
+  memo: CommitteeMemo | null;
+  signer: CommitteeTakeSigner;
+}
+
 // One point of the trailing regime history embedded in a session's
 // regime_summary. Inner keys are the snake_case WIRE/DB dialect (the archive
 // JSON shape) — the camelCase DTO seam stops at the session's top-level keys.

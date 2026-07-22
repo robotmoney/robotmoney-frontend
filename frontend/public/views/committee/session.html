@@ -196,8 +196,16 @@
                     <i :style="`background:${stanceColor(t.stance)}`"></i>
                     <span x-text="`${t.stance} · ${fmtPct(t.confidence)}`"></span>
                   </span>
+                  <span
+                    class="cv__verified"
+                    :class="{ 'cv__verified--negative': !t.verified }"
+                    data-verified-badge
+                    :data-take-id="t.id"
+                    x-text="t.verified ? '✓ verified' : '✕ not verified'"
+                  ></span>
                 </header>
                 <div class="cv__take-body" x-html="linkified(t.body || '')"></div>
+                <a class="cv__memo-link" x-show="source === 'api'" :href="takeHref(t)" data-take-permalink>Verification receipt →</a>
                 <a class="cv__memo-link" x-show="t.memoUrl" :href="t.memoUrl" target="_blank" rel="noopener noreferrer">Read memo ↗</a>
               </article>
             </template>

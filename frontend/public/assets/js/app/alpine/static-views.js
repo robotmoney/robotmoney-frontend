@@ -223,6 +223,9 @@ const helpers = {
   fallbackMandate(member) {
     return `Evaluate each subject through the ${member?.lens || "committee"} lens and submit a signed stance with confidence and rationale.`;
   },
+  takeHref(take) {
+    return path(ROUTES.committee.takePermalink, { id: take?.id });
+  },
   escapeHtml(text) {
     return String(text ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
   },
@@ -247,6 +250,33 @@ const helpers = {
 };
 
 export function registerStaticViews(Alpine) {
+  Alpine.data("committeeTakeReceipt", () => ({
+    ...helpers,
+    loading: true,
+    error: null,
+    take: null,
+    memo: null,
+    signer: null,
+    async init() {
+      const match = location.pathname.match(/^\/committee\/takes\/([^/]+)\/?$/);
+      if (!match) {
+        this.error = "Take not found";
+        this.loading = false;
+        return;
+      }
+      try {
+        const receipt = await api.get(path(ROUTES.committee.take, { id: decodeURIComponent(match[1]) }));
+        this.take = camelTake(receipt.take);
+        this.memo = receipt.memo;
+        this.signer = receipt.signer;
+      } catch (e) {
+        this.error = e.message || "Take not found";
+      } finally {
+        this.loading = false;
+      }
+    },
+  }));
+
   Alpine.data("memberProfile", () => ({
     ...helpers,
     loading: true,

@@ -48,19 +48,29 @@
         <p class="cv__empty" x-show="recentTakes().length === 0">No sessions yet.</p>
         <div class="cv__session-list cv__session-list--compact">
           <template x-for="row in recentTakes().slice(0, 20)" :key="`${row.session.date}-${row.session.subjectId}`">
-            <a class="cv__session-card" :href="`/committee/${row.session.date}/${row.session.subjectId}`">
+            <article class="cv__session-card">
               <div class="cv__session-top">
                 <div class="cv__session-titleline">
                   <span class="cv__date" x-text="formatDate(row.session.date, 'short')"></span>
-                  <span class="cv__session-title" x-text="row.session.subjectName"></span>
+                  <a class="cv__session-title" :href="`/committee/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
                 </div>
-                <span class="cv__stance-badge" :style="stanceStyle(row.take.stance)">
-                  <i :style="`background:${stanceColor(row.take.stance)}`"></i>
-                  <span x-text="`${row.take.stance} · ${fmtPct(row.take.confidence)}`"></span>
-                </span>
+                <div class="cv__receipt-status">
+                  <span class="cv__stance-badge" :style="stanceStyle(row.take.stance)">
+                    <i :style="`background:${stanceColor(row.take.stance)}`"></i>
+                    <span x-text="`${row.take.stance} · ${fmtPct(row.take.confidence)}`"></span>
+                  </span>
+                  <span
+                    class="cv__verified"
+                    :class="{ 'cv__verified--negative': !row.take.verified }"
+                    data-verified-badge
+                    :data-take-id="row.take.id"
+                    x-text="row.take.verified ? '✓ verified' : '✕ not verified'"
+                  ></span>
+                </div>
               </div>
               <p class="cv__session-copy" x-text="row.take.body || row.session.synthesis"></p>
-            </a>
+              <a class="cv__memo-link" :href="takeHref(row.take)" data-take-permalink>Verification receipt →</a>
+            </article>
           </template>
         </div>
       </div>

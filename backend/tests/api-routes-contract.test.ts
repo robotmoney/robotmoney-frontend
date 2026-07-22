@@ -74,12 +74,16 @@ test("every /api/ path registered in backend/src/api appears in contract ROUTES"
   ).toEqual([]);
 });
 
-// The generic /api/ 404 fallback prefix is fine by definition, but assert the
-// contract side too: every contract route must live under /api/ (or be the
-// health probe) so the flattened list stays comparable to what the backend
-// scan extracts.
-test("every contract ROUTES template is /health or under /api/", () => {
+// The generic /api/ 404 fallback prefix is fine by definition. Contract routes
+// otherwise stay API-only except for explicitly rendered client permalinks;
+// keeping the latter in a narrow allowlist prevents an accidental non-API
+// string from weakening the backend comparison above.
+test("every contract ROUTES template is API-owned or an explicit rendered permalink", () => {
+  const renderedPermalinks = new Set([ROUTES.committee.takePermalink]);
   for (const r of flattenRoutes(ROUTES)) {
-    expect(r === "/health" || r.startsWith("/api/"), `unexpected contract route shape: ${r}`).toBe(true);
+    expect(
+      r === "/health" || r.startsWith("/api/") || renderedPermalinks.has(r),
+      `unexpected contract route shape: ${r}`,
+    ).toBe(true);
   }
 });
