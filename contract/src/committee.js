@@ -17,7 +17,7 @@ export const STANCES = /** @type {const} */ (["bearish", "cautious", "neutral", 
 // bounded size instead of growing without bound. Pinned by
 // backend/tests/committee-roster-cap.test.ts (always via this constant, never a
 // literal).
-export const COMMITTEE_ROSTER_CAP = 10;
+export const COMMITTEE_ROSTER_CAP = 15;
 
 // Demo no-show rule (issue #122): absence emerges from a RULE (a curated set of
 // habitual no-shows), not a baked boolean — the contrarian member (draco) models

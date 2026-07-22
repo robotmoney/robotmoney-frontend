@@ -86,11 +86,20 @@ export async function runStarterAgent(cfg: StarterConfig, log: (message: string)
 }
 
 async function main() {
+  // Prefer RM_MEMBER_TOKEN_FILE: an inline RM_MEMBER_TOKEN lands in shell
+  // history in plaintext (and in any screen recording). The claim page
+  // downloads the token as a file precisely so the command carries no secret.
+  let memberToken = process.env.RM_MEMBER_TOKEN || "";
+  if (!memberToken && process.env.RM_MEMBER_TOKEN_FILE) {
+    memberToken = (await readFile(
+      process.env.RM_MEMBER_TOKEN_FILE.replace(/^~(?=\/)/, process.env.HOME || "~"), "utf8",
+    )).trim();
+  }
   const cfg = {
     apiBaseUrl: process.env.RM_API_BASE_URL || "https://api.robot.money",
     memberId: process.env.RM_MEMBER_ID || "",
-    memberToken: process.env.RM_MEMBER_TOKEN || "",
-    identityFile: process.env.RM_IDENTITY_FILE || "",
+    memberToken,
+    identityFile: (process.env.RM_IDENTITY_FILE || "").replace(/^~(?=\/)/, process.env.HOME || "~"),
   };
   for (const [key, value] of Object.entries(cfg)) if (!value) throw new Error(`missing ${key}`);
   console.log(JSON.stringify(await runStarterAgent(cfg), null, 2));

@@ -10,6 +10,7 @@
 // the PUBLIC ROUTES.committee.sessions list instead (issue #152's admin
 // surface only exposes session CREATE + per-session roster/lifecycle).
 import { api, ROUTES, path } from "../../../lib/api.js";
+import { COMMITTEE_ROSTER_CAP } from "../../../contract/index.js";
 import { adminAuthState, fmtUtc, fmtLocal } from "./shared.js";
 
 const TOPIC_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
@@ -93,6 +94,9 @@ export function registerAdminCommitteeOverview(Alpine) {
   Alpine.data("adminCommitteeOverview", () => ({
     ...adminAuthState(),
     tab: "topics", // topics | members | sessions
+    rosterCap: COMMITTEE_ROSTER_CAP,
+    seatsFilled() { return this.members.filter((m) => m.status === "active").length; },
+    seatsOpen() { return Math.max(0, this.rosterCap - this.seatsFilled()); },
     loading: false,
     error: null,
     topics: [],

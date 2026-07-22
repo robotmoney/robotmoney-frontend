@@ -144,6 +144,10 @@
 
     <!-- ── Members ────────────────────────────────────────────────────── -->
     <section x-show="tab === 'members'" x-cloak>
+      <p class="adm-dim" data-testid="roster-seats">
+        Roster: <b x-text="seatsFilled()"></b>/<span x-text="rosterCap"></span> seats filled ·
+        <b x-text="seatsOpen()"></b> open<span x-show="seatsOpen() === 0"> — activation will be refused until a seat frees</span>
+      </p>
       <div class="adm-toolbar">
         <div class="adm-tabs adm-tabs--sub">
           <button type="button" class="adm-tab" :class="memberFilter === 'applied' && 'adm-tab--active'" @click="memberFilter = 'applied'" data-testid="member-filter-applied">Applied</button>

@@ -88,7 +88,9 @@ export function registerAdminCommitteeMember(Alpine) {
       if (!this.confirm) return;
       const { action, publicKey, reason } = this.confirm;
       const trimmedReason = String(reason || "").trim();
-      if (trimmedReason.length < 10 || trimmedReason.length > 500) {
+      // Approval needs no justification — the application is the reason. The
+      // destructive/negative actions keep a required operator note.
+      if (action !== "activate" && (trimmedReason.length < 10 || trimmedReason.length > 500)) {
         this.confirmError = "Reason must be 10–500 characters.";
         return;
       }
@@ -113,7 +115,7 @@ export function registerAdminCommitteeMember(Alpine) {
         }
         // `reason` is kept for local operator-audit context (harmless extra
         // field — the backend does not read or persist it for these routes).
-        body.reason = trimmedReason;
+        if (trimmedReason) body.reason = trimmedReason;
         const res = await api.adminPost(route, this._token(), body);
         this.confirm = null;
         // Reactivation/rotation may return a one-time admin-managed token. A
@@ -125,7 +127,16 @@ export function registerAdminCommitteeMember(Alpine) {
         await this.load();
       } catch (e) {
         if (e.status === 403) return this._handle403();
-        if (e.status === 409) { this.confirmError = "This member changed since you loaded it (stale version) — reload and try again."; return; }
+        if (e.status === 409) {
+          // Surface the server's actual conflict (roster full, not pending, …)
+          // instead of assuming version staleness — 409 has several meanings.
+          const m = String(e.message || "").match(/^API \d+: (.*)$/s);
+          let serverError = null;
+          if (m) { try { serverError = JSON.parse(m[1]).error || null; } catch { /* not JSON */ } }
+          this.confirmError = serverError
+            || "This member changed since you loaded it (stale version) — reload and try again.";
+          return;
+        }
         this.confirmError = e.message;
       } finally {
         this.submitting = false;
