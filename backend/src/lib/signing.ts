@@ -101,7 +101,7 @@ export async function verifyStoredSubmissionSignature(stored: StoredSubmissionSi
 /** Public, non-reversible identifier for a registered Ed25519 key. */
 export async function fingerprintPublicKey(publicKeyB64: string): Promise<string | null> {
   try {
-    const digest = await crypto.subtle.digest("SHA-256", b64ToBytes(publicKeyB64));
+    const digest = await crypto.subtle.digest("SHA-256", canonicalBase64ToBytes(publicKeyB64, 32));
     return `sha256:${Buffer.from(digest).toString("hex")}`;
   } catch {
     return null;

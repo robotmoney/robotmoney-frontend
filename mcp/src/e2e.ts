@@ -224,10 +224,16 @@ export async function onboardMember(
   const { publicKeyB64, privateKey } = await generateKeyPair();
   emit("keypair");
 
-  // 2. Public apply (no auth) — recorded as 'applied'.
+  // 2. Public apply (no auth) — recorded as 'applied'. `contact` is required
+  //    (server-enforced, issue #205) so activation can notify the applicant;
+  //    demo/e2e members use the same `<memberId>@example.test` convention as
+  //    the backend fixtures (never a real address).
   const applyRes = await fetch(`${BACKEND}${ROUTES.committee.apply}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ memberId: spec.memberId, name: spec.name, lens: spec.lens, publicKey: publicKeyB64 }),
+    body: JSON.stringify({
+      memberId: spec.memberId, name: spec.name, lens: spec.lens, publicKey: publicKeyB64,
+      contact: `${spec.memberId}@example.test`,
+    }),
   }).then((r) => r.json());
   if (applyRes.status !== 201) { emit("apply", false); throw new Error(`apply failed: ${JSON.stringify(applyRes)}`); }
   emit("apply");
@@ -453,10 +459,12 @@ async function main() {
   const eosDate = today;
   const { publicKeyB64: eosPub, privateKey: eosPriv } = await generateKeyPair();
 
-  // 4a. Public apply (no auth required) — member is recorded as 'applied'
+  // 4a. Public apply (no auth required) — member is recorded as 'applied'.
+  //     `contact` is required (server-enforced, issue #205); same
+  //     `<memberId>@example.test` convention as the backend fixtures.
   const applyRes = await fetch(`${BACKEND}${ROUTES.committee.apply}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ memberId: "eos", name: "Eos", lens: "newcomer", publicKey: eosPub }),
+    body: JSON.stringify({ memberId: "eos", name: "Eos", lens: "newcomer", publicKey: eosPub, contact: "eos@example.test" }),
   }).then(responseJson);
   console.log(`\n  onboard eos: apply → status=${applyRes.status} memberStatus=${applyRes.memberStatus}`);
   if (applyRes.status !== 201) throw new Error(`apply failed: ${JSON.stringify(applyRes)}`);
