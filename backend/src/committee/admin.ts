@@ -221,12 +221,19 @@ export async function reviewApplicationAdmin(
   actor: Actor = ADMIN_ACTOR,
 ): Promise<AdminResult> {
   if (decision === "approve") {
-    // Reuse the SAME activation transaction the public path uses (activates
-    // the pending key, mints a token, flips status active) — never duplicate
-    // that credential-issuance logic here.
+    // Reuse the SAME activation transaction the public path uses. Approval
+    // activates the pending key, queues the email, and flips status active;
+    // bearer plaintext is minted only by the member's first signed claim.
     const res = await activateMember(memberId);
     if (!res.ok) return res as AdminResult;
-    return { ok: true, status: 200, memberId, memberStatus: "active", token: (res as any).token };
+    return {
+      ok: true,
+      status: 200,
+      memberId,
+      memberStatus: "active",
+      claimRequired: true,
+      notificationQueued: res.notificationQueued,
+    };
   }
   return sql.begin(async (tx) => {
     const row = (await tx`SELECT id, status FROM committee_members WHERE id = ${memberId} FOR UPDATE`)[0];

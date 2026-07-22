@@ -5,6 +5,7 @@ import { canonicalizeSubmission, ROUTES } from "@robotmoney/contract";
 import * as ic from "../../committee/domain.ts";
 import { handleCommitteeAdmin } from "./committee-admin.ts";
 import { isPlausibleKey } from "../../lib/keys.ts";
+import { isValidEd25519PublicKey } from "../../lib/signing.ts";
 import { resolveAnalyticsSource, runAnalytics } from "../../analytics/index.ts";
 import { directAnalyticsPersistence } from "../../analytics/store/direct.ts";
 import { bearer, hasAnalyticsProviderRole, isPrivileged } from "../auth.ts";
@@ -121,7 +122,15 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   if (m === "POST" && p === C.apply) {
     const b = parseApply(await readJsonObject(req));
     if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
-    if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
+    if (!b.contact || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.contact)) {
+      return { status: 400, body: { error: "valid contact email required for activation notification" } };
+    }
+    if (!await isValidEd25519PublicKey(b.publicKey)) {
+      return {
+        status: 400,
+        body: { error: "publicKey must be canonical base64 for a 32-byte raw Ed25519 public key" },
+      };
+    }
     const res = await ic.applyMember(b);
     return { status: res.status, body: res };
   }

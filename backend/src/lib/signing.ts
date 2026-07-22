@@ -2,12 +2,22 @@
 // canonical payload (from @robotmoney/contract) in their own environment; the
 // server only ever verifies — it never holds a private key. Web Crypto Ed25519
 // (supported by Bun). Keys/signatures are exchanged as base64 of raw bytes.
-import { canonicalizeSubmission } from "@robotmoney/contract";
+import { canonicalizeClaimChallenge, canonicalizeSubmission } from "@robotmoney/contract";
 
 const ALG = { name: "Ed25519" } as const;
 
-function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
-  return Uint8Array.from(Buffer.from(b64, "base64"));
+function canonicalBase64ToBytes(b64: string, expectedBytes: number): Uint8Array<ArrayBuffer> {
+  if (typeof b64 !== "string" || b64.length === 0 || b64 !== b64.trim() || b64.length % 4 !== 0) {
+    throw new Error("invalid base64");
+  }
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(b64)) {
+    throw new Error("invalid base64");
+  }
+  const decoded = Buffer.from(b64, "base64");
+  if (decoded.length !== expectedBytes || decoded.toString("base64") !== b64) {
+    throw new Error("invalid encoded length");
+  }
+  return Uint8Array.from(decoded);
 }
 function bytesToB64(bytes: ArrayBuffer | Uint8Array): string {
   return Buffer.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)).toString("base64");
@@ -19,9 +29,54 @@ export async function verifySubmissionSignature(
   publicKeyB64: string,
 ): Promise<boolean> {
   try {
-    const pub = await crypto.subtle.importKey("raw", b64ToBytes(publicKeyB64), ALG, false, ["verify"]);
+    const pub = await importEd25519PublicKey(publicKeyB64);
     const msg = new TextEncoder().encode(canonicalizeSubmission(submission));
-    return await crypto.subtle.verify(ALG, pub, b64ToBytes(signatureB64), msg);
+    return await crypto.subtle.verify(ALG, pub, canonicalBase64ToBytes(signatureB64, 64), msg);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Import the exact public-key representation accepted by committee signature
+ * verification: canonical base64 containing one 32-byte raw Ed25519 key.
+ * Apply-time validation and every verification path share this function so a
+ * key cannot be accepted during onboarding and rejected later at duty time.
+ */
+export async function importEd25519PublicKey(publicKeyB64: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    "raw",
+    canonicalBase64ToBytes(publicKeyB64, 32),
+    ALG,
+    false,
+    ["verify"],
+  );
+}
+
+export async function isValidEd25519PublicKey(publicKeyB64: string): Promise<boolean> {
+  try {
+    await importEd25519PublicKey(publicKeyB64);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface ClaimChallenge {
+  memberId: string;
+  challenge: string;
+  expiresAt: string;
+}
+
+export async function verifyClaimChallengeSignature(
+  challenge: ClaimChallenge,
+  signatureB64: string,
+  publicKeyB64: string,
+): Promise<boolean> {
+  try {
+    const pub = await importEd25519PublicKey(publicKeyB64);
+    const msg = new TextEncoder().encode(canonicalizeClaimChallenge(challenge));
+    return await crypto.subtle.verify(ALG, pub, canonicalBase64ToBytes(signatureB64, 64), msg);
   } catch {
     return false;
   }
@@ -46,7 +101,7 @@ export async function verifyStoredSubmissionSignature(stored: StoredSubmissionSi
 /** Public, non-reversible identifier for a registered Ed25519 key. */
 export async function fingerprintPublicKey(publicKeyB64: string): Promise<string | null> {
   try {
-    const digest = await crypto.subtle.digest("SHA-256", b64ToBytes(publicKeyB64));
+    const digest = await crypto.subtle.digest("SHA-256", canonicalBase64ToBytes(publicKeyB64, 32));
     return `sha256:${Buffer.from(digest).toString("hex")}`;
   } catch {
     return null;

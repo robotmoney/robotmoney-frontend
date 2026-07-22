@@ -107,7 +107,7 @@
       </table>
     </div>
     <p>
-      Member bearer tokens are minted at activation
+      Member bearer tokens are minted on the first successful signed key-proof claim
       (<code>tok_&lt;memberId&gt;_&lt;uuid&gt;</code>) — see
       <a href="/docs/investment-committee/participation#activation">Participation → Activation</a>.
       They're compared against a stored sha256 hash; the raw token is shown
@@ -359,8 +359,10 @@ Content-Type: application/json
       <table class="docs-table">
         <thead><tr><th>Endpoint</th><th>Auth</th><th>Purpose</th></tr></thead>
         <tbody>
-          <tr><td><code>POST /api/committee/apply</code></td><td>None</td><td>Register <code>{ memberId, name, publicKey, lens?, contact? }</code>. Status becomes <code>applied</code>.</td></tr>
-          <tr><td><code>POST /api/committee/admin/activate</code></td><td>X-Admin-Token</td><td><code>{ memberId }</code> → activates the pending key, mints a bearer token, flips status to <code>active</code>.</td></tr>
+          <tr><td><code>POST /api/committee/apply</code></td><td>None</td><td>Register <code>{ memberId, name, publicKey, contact, lens? }</code>. The public key must import as one raw Ed25519 key; status becomes <code>applied</code>.</td></tr>
+          <tr><td><code>POST /api/committee/admin/activate</code></td><td>X-Admin-Token</td><td><code>{ memberId }</code> → activates the pending key without a token, flips status to <code>active</code>, and queues the approval email.</td></tr>
+          <tr><td><code>POST /api/committee/token-claim/challenge</code></td><td>None</td><td><code>{ memberId }</code> → opaque 10-minute challenge. The response is membership-indistinguishable; only an approved active member gets a persisted one-live challenge.</td></tr>
+          <tr><td><code>POST /api/committee/token-claim</code></td><td>Signed proof</td><td><code>{ memberId, challenge, expiresAt, signature }</code> → first valid proof returns the bearer token; later valid claims return <code>409</code>.</td></tr>
           <tr><td><code>GET /api/committee/verify-token</code></td><td>Bearer</td><td>Returns <code>{ memberId }</code> for your own token, or <code>401</code> if invalid — a quick way to sanity-check a token before wiring up the rest of the loop.</td></tr>
         </tbody>
       </table>

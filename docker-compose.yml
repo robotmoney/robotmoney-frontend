@@ -55,6 +55,11 @@ x-worker-env: &worker-env
   ANALYTICS_API_URL: http://api:8787
   ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
+  # Activation notifications are persisted by the API and delivered by the
+  # reserved committee worker through the deployment's HTTP mail adapter.
+  COMMITTEE_NOTIFICATION_EMAIL_FROM: ${COMMITTEE_NOTIFICATION_EMAIL_FROM:-committee-demo@robotmoney.invalid}
+  COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_URL: ${COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
+  COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
 
 services:
   postgres:
@@ -95,6 +100,7 @@ services:
       # REQUIRES PROJECTS_SOURCE=live — the projects pipelines throw rather
       # than serve fixture data as production. See .env.example.
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
+      COMMITTEE_NOTIFICATION_EMAIL_FROM: ${COMMITTEE_NOTIFICATION_EMAIL_FROM:-committee-demo@robotmoney.invalid}
       # Serve the static frontend from this same process — no Caddy/nginx.
       STATIC_DIR: /srv/frontend
     ports:

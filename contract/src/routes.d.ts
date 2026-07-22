@@ -33,6 +33,8 @@ export const ROUTES: {
     memo: string;
     verifyToken: string;
     apply: string;
+    claimChallenge: string;
+    claimToken: string;
     register: string;
     regime: string;
     submit: string;

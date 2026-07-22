@@ -375,6 +375,12 @@ export const config = {
   // it is required (every env); if unset, the role is allowed only outside prod
   // (demo/ephemeral convenience), mirroring adminToken.
   analyticsToken: process.env.ANALYTICS_TOKEN || null,
+  // Committee activation email uses a durable outbox + committee worker job.
+  // The sender is persisted with the message; the deployment transport is an
+  // HTTP email adapter invoked only by that worker (tests inject a fake).
+  committeeNotificationEmailFrom: process.env.COMMITTEE_NOTIFICATION_EMAIL_FROM || null,
+  committeeNotificationEmailTransportUrl: process.env.COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_URL || null,
+  committeeNotificationEmailTransportToken: process.env.COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_TOKEN || null,
   // NOTE: the analytics pipeline (analytics/index.ts runAnalytics) selects its
   // data source SOLELY via `ANALYTICS_SOURCE` (unset|live → real fetchers,
   // hermetic → seeded/offline) — see analytics/index.ts::resolveAnalyticsSource.
@@ -413,4 +419,3 @@ export const config = {
   propWallets: resolvePropWallets(),
   buyback: resolveBuybackConfig(),
 };
-

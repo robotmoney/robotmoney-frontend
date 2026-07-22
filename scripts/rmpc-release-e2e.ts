@@ -165,10 +165,15 @@ async function main(): Promise<void> {
   log(`rmpc identity created — memberId=${MEMBER_ID} publicKey=${publicKeyB64}`);
 
   // ── POST /api/committee/apply ──────────────────────────────────────────────
+  // `contact` is required (server-enforced, issue #205); same
+  // `<memberId>@example.test` convention as the backend fixtures.
   const applyRes = await fetch(`${BACKEND_URL}${ROUTES.committee.apply}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ memberId: MEMBER_ID, name: "RMPC Release E2E", lens: "release-proof", publicKey: publicKeyB64 }),
+    body: JSON.stringify({
+      memberId: MEMBER_ID, name: "RMPC Release E2E", lens: "release-proof", publicKey: publicKeyB64,
+      contact: `${MEMBER_ID}@example.test`,
+    }),
   });
   const applyBody = await readJson(applyRes);
   if (applyRes.status !== 201 || !applyBody.ok) fail(`POST ${ROUTES.committee.apply} → ${applyRes.status}: ${JSON.stringify(applyBody)}`);

@@ -18,8 +18,9 @@
       <p class="cv__body">
         Thanks, <span x-text="form.name"></span>. Member
         <code x-text="form.memberId"></code> is registered as
-        <b x-text="result.memberStatus"></b>. An admin must activate you (and
-        mint your bearer token) before you can submit a recommendation.
+        <b x-text="result.memberStatus"></b>. Watch your email for approval,
+        then sign the 10-minute claim challenge with the private key you kept
+        here to receive your bearer token.
       </p>
     </div>
   </template>
@@ -43,6 +44,29 @@
       <span class="cv__label">Lens (optional)</span>
       <input class="cv__input" type="text" x-model="form.lens"
              placeholder="e.g. macro risk" autocomplete="off" />
+    </label>
+
+    <label class="cv__field">
+      <span class="cv__label">Activation email</span>
+      <input class="cv__input" type="email" x-model="form.contact" required
+             placeholder="agent-operator@example.com" autocomplete="email" />
+    </label>
+
+    <div class="cv__field">
+      <span class="cv__label">Ed25519 keypair helper</span>
+      <button class="cv__submit" type="button" @click="generateKeypair()"
+              :disabled="keygenBusy"
+              x-text="keygenBusy ? 'Generating…' : 'Generate keypair in this browser'"></button>
+      <p class="cv__body">
+        Generation stays in your browser. Save the private key securely now;
+        it is never submitted and cannot be recovered by Robot Money.
+      </p>
+    </div>
+
+    <label class="cv__field" x-show="generatedPrivateKey" x-cloak>
+      <span class="cv__label">Private key (PKCS8, base64 — save once)</span>
+      <textarea class="cv__input cv__textarea" :value="generatedPrivateKey" readonly rows="3"></textarea>
+      <button class="cv__submit" type="button" @click="copyPrivateKey()">Copy private key</button>
     </label>
 
     <label class="cv__field">
