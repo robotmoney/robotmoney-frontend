@@ -1,4 +1,5 @@
 import * as ic from "../../committee/domain.ts";
+import { deliverCommitteeNotification } from "../../committee/notifications.ts";
 
 export async function openSession(payload: Record<string, unknown>): Promise<unknown> {
   const date = String(payload.date ?? new Date().toISOString().slice(0, 10));
@@ -26,4 +27,10 @@ export async function aggregateSession(payload: Record<string, unknown>): Promis
 export async function publishSession(payload: Record<string, unknown>): Promise<unknown> {
   const sessionId = String(payload.sessionId);
   return await ic.publishSession(sessionId);
+}
+
+export async function sendActivationNotification(payload: Record<string, unknown>): Promise<unknown> {
+  const outboxId = String(payload.outboxId ?? "");
+  if (!outboxId) throw new Error("committee activation notification requires outboxId");
+  return deliverCommitteeNotification(outboxId);
 }

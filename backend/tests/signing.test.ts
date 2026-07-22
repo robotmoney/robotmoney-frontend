@@ -2,6 +2,7 @@ import { test, expect } from "bun:test";
 import { canonicalizeClaimChallenge, canonicalizeSubmission } from "@robotmoney/contract";
 import {
   generateKeyPair,
+  isValidEd25519PublicKey,
   signMessage,
   verifyStoredSubmissionSignature,
   verifySubmissionSignature,
@@ -29,6 +30,15 @@ test("valid signature verifies; wrong key + tampered fields are rejected", async
   expect(await verifySubmissionSignature(sub, sig, a.publicKeyB64)).toBe(true);
   expect(await verifySubmissionSignature(sub, sig, b.publicKeyB64)).toBe(false);
   expect(await verifySubmissionSignature({ ...sub, stance: "bearish" }, sig, a.publicKeyB64)).toBe(false);
+});
+
+test("raw Ed25519 public-key validation shares the canonical import path", async () => {
+  const valid = await generateKeyPair();
+  expect(await isValidEd25519PublicKey(valid.publicKeyB64)).toBe(true);
+  expect(await isValidEd25519PublicKey(valid.publicKeyB64.slice(0, -4))).toBe(false);
+  expect(await isValidEd25519PublicKey("not-base64!!!")).toBe(false);
+  expect(await isValidEd25519PublicKey(Buffer.alloc(31, 7).toString("base64"))).toBe(false);
+  expect(await isValidEd25519PublicKey(Buffer.alloc(33, 7).toString("base64"))).toBe(false);
 });
 
 test("memoUrl is covered by the signature (tampering it invalidates)", async () => {

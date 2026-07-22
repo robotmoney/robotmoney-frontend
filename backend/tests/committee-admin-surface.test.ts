@@ -147,7 +147,8 @@ test("members: application review approve/reject", async () => {
 
   const approve = await admin.reviewApplicationAdmin(memberId, "approve");
   expect(approve.status).toBe(200);
-  expect(typeof (approve as any).token).toBe("string");
+  expect(approve).not.toHaveProperty("token");
+  expect((approve as any).claimRequired).toBe(true);
 
   const memberId2 = rid("mrej");
   const { publicKeyB64: pk2 } = await generateKeyPair();

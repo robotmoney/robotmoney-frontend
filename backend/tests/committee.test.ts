@@ -31,13 +31,35 @@ test("apply is create-only (existing memberId rejected)", async () => {
   expect((await ic.applyMember({ memberId: id, name: "A2", publicKey: publicKeyB64 })).status).toBe(409);
 });
 
-test("apply → activate mints a usable token; re-activate finds no pending key", async () => {
+test("POST /api/committee/apply rejects malformed Ed25519 keys and accepts a generated raw key", async () => {
+  const callApply = async (body: Record<string, unknown>) => {
+    const req = new Request("http://test/api/committee/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return handleCommittee(req, new URL(req.url));
+  };
+  const base = { name: "Route Applicant", contact: "route-applicant@example.test" };
+  const bad = await callApply({ ...base, memberId: rid("route_bad"), publicKey: Buffer.alloc(31, 1).toString("base64") });
+  expect(bad?.status).toBe(400);
+  expect((bad?.body as { error: string }).error).toBe(
+    "publicKey must be canonical base64 for a 32-byte raw Ed25519 public key",
+  );
+
+  const { publicKeyB64 } = await generateKeyPair();
+  const good = await callApply({ ...base, memberId: rid("route_good"), publicKey: publicKeyB64 });
+  expect(good?.status).toBe(201);
+});
+
+test("apply → activate approves without minting; re-activate finds no pending key", async () => {
   const id = rid("b");
   const { publicKeyB64 } = await generateKeyPair();
   await ic.applyMember({ memberId: id, name: "B", publicKey: publicKeyB64 });
   const act = await ic.activateMember(id);
   expect(act.status).toBe(200);
-  expect(await ic.memberIdForToken(act.token!)).toBe(id);
+  expect(act).not.toHaveProperty("token");
+  expect((act as any).claimRequired).toBe(true);
   expect((await ic.activateMember(id)).status).toBe(409);
 });
 

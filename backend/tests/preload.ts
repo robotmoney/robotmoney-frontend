@@ -18,6 +18,7 @@ const name = `rmtest_pg_${crypto.randomUUID().slice(0, 8)}`;
 // Must be set BEFORE any module reads config.databaseUrl / creates the pool.
 process.env.DATABASE_URL = `postgres://robotmoney:robotmoney@localhost:${port}/robotmoney`;
 process.env.RM_ENV = "ephemeral";
+process.env.COMMITTEE_NOTIFICATION_EMAIL_FROM = "committee-test@robotmoney.invalid";
 
 const up = Bun.spawnSync([
   "docker", "run", "-d", "--rm", "--name", name,

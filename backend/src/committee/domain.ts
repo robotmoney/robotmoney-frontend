@@ -5,7 +5,12 @@ import { classifyRegime, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES, STANCE
 import { config } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
-import { fingerprintPublicKey, verifySubmissionSignature } from "../lib/signing.ts";
+import {
+  fingerprintPublicKey,
+  verifyClaimChallengeSignature,
+  verifySubmissionSignature,
+} from "../lib/signing.ts";
+import { enqueueActivationNotification } from "./notifications.ts";
 import { toBrief, toMember, toMemo, toSession, toSnapshot, toSubject, toVerifiedTake } from "./projections.ts";
 
 // ── Identity ──────────────────────────────────────────────────────────────
@@ -233,8 +238,9 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
 // ── Onboarding: apply (public) → activate (admin) ───────────────────────────
 // The real path. A prospective member submits its PUBLIC key with `apply`; the
 // member stays status='applied' and the key is registered INACTIVE (no token,
-// cannot submit). An admin then `activate`s the member, which flips it active,
-// activates the key, and mints a bearer token. RM never holds private keys.
+// cannot submit). An admin then `activate`s the member and its key. Bearer
+// plaintext is minted only after the member proves possession of the private
+// key through the challenge flow below. RM never holds private keys.
 export interface ApplyInput { memberId: string; name: string; lens?: string; publicKey: string; contact?: string }
 
 export async function applyMember(input: ApplyInput) {
@@ -262,26 +268,151 @@ export async function applyMember(input: ApplyInput) {
   return { ok: true, status: 201, memberStatus: "applied" as const };
 }
 
-// Admin-only. Transactional: locks the member + its pending key, activates that
-// exact key, binds an unguessable bearer (only its hash stored), and only then
-// flips the member active — so a concurrent /apply cannot strand activation.
+// Admin-only. Transactional: locks the member + its pending key, preserves the
+// roster-cap admission transaction, activates that exact key WITHOUT a bearer,
+// approves the application, and enqueues the persisted activation email. The
+// first successful key-proof claim below is the only public path that installs
+// a token hash.
 export async function activateMember(memberId: string) {
   return await sql.begin(async (tx) => {
-    const existing = (await tx`SELECT id FROM committee_members WHERE id = ${memberId} FOR UPDATE`)[0] as { id: string } | undefined;
+    const existing = (await tx`
+      SELECT id, contact_email FROM committee_members WHERE id = ${memberId} FOR UPDATE`)[0] as
+      | { id: string; contact_email: string | null }
+      | undefined;
     if (!existing) return { ok: false, status: 404, error: "no such applicant" };
     const key = (await tx`SELECT id FROM committee_member_keys WHERE member_id = ${memberId} AND active = false ORDER BY created_at DESC LIMIT 1 FOR UPDATE`)[0] as { id: number } | undefined;
     if (!key) return { ok: false, status: 409, error: "no pending key; member must apply first" };
-    const token = `tok_${memberId}_${crypto.randomUUID()}`;
     // Capacity gate: an 'applied' member is not yet active, so no exemption —
     // this admission must fit under COMMITTEE_ROSTER_CAP or it's refused.
     const cap = await assertRosterCapacity(tx);
     if (!cap.ok) return cap;
-    const upd = await tx`UPDATE committee_member_keys SET active = true, token_hash = ${hashKey(token)} WHERE id = ${key.id} AND active = false RETURNING id`;
+    const upd = await tx`
+      UPDATE committee_member_keys SET active = true, token_hash = NULL
+      WHERE id = ${key.id} AND active = false RETURNING id`;
     if (upd.length === 0) return { ok: false, status: 409, error: "activation raced; retry" };
-    await tx`UPDATE committee_members SET status = 'active', activated_at = now() WHERE id = ${memberId}`;
+    await tx`
+      UPDATE committee_members
+      SET status = 'active', activated_at = now(), version = version + 1, updated_at = now()
+      WHERE id = ${memberId}`;
     await tx`UPDATE committee_applications SET status = 'approved', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
     await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'activate_member', ${tx.json({ memberId })})`;
-    return { ok: true, status: 200, memberId, token };
+    const notificationOutboxId = existing.contact_email
+      ? await enqueueActivationNotification(tx, memberId, existing.contact_email)
+      : null;
+    return {
+      ok: true,
+      status: 200,
+      memberId,
+      claimRequired: true,
+      notificationQueued: notificationOutboxId !== null,
+    };
+  });
+}
+
+const CLAIM_CHALLENGE_TTL_MS = 10 * 60 * 1000;
+
+export interface TokenClaimChallenge {
+  memberId: string;
+  challenge: string;
+  expiresAt: string;
+}
+
+/**
+ * Always returns the same opaque shape. Only an approved active member with an
+ * active key gets the challenge persisted; unknown/pending ids receive a
+ * throwaway challenge, so issuance does not disclose membership state.
+ */
+export async function issueTokenClaimChallenge(memberId: string): Promise<TokenClaimChallenge> {
+  const challenge = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+  const expiresAt = new Date(Date.now() + CLAIM_CHALLENGE_TTL_MS);
+  await sql.begin(async (tx) => {
+    // Serialize issue/claim for this opaque id. This closes the race where an
+    // issuer could observe token_hash=NULL, wait behind a successful claim,
+    // then replace its consumed row using the stale observation.
+    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${memberId}, 205))`;
+    const eligible = await tx`
+      SELECT k.id
+      FROM committee_members m
+      JOIN committee_member_keys k ON k.id = (
+        SELECT newest.id FROM committee_member_keys newest
+        WHERE newest.member_id = m.id AND newest.active = true
+        ORDER BY newest.created_at DESC, newest.id DESC LIMIT 1
+      )
+      WHERE m.id = ${memberId} AND m.status = 'active' AND k.token_hash IS NULL`;
+    if (eligible.length === 0) return;
+    await tx`
+      INSERT INTO committee_claim_challenges (member_id, challenge, issued_at, expires_at, consumed_at)
+      VALUES (${memberId}, ${challenge}, now(), ${expiresAt}, NULL)
+      ON CONFLICT (member_id) DO UPDATE SET
+        challenge = EXCLUDED.challenge,
+        issued_at = EXCLUDED.issued_at,
+        expires_at = EXCLUDED.expires_at,
+        consumed_at = NULL`;
+  });
+  return { memberId, challenge, expiresAt: expiresAt.toISOString() };
+}
+
+export interface TokenClaimInput extends TokenClaimChallenge {
+  signature: string;
+}
+
+/**
+ * Consume a valid signed challenge and install the first token hash atomically.
+ * Wrong/expired/unknown proofs are indistinguishable 400s. A valid proof after
+ * the first successful claim is the documented 409 and never rotates a token.
+ */
+export async function claimMemberToken(input: TokenClaimInput) {
+  return sql.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${input.memberId}, 205))`;
+    const row = (await tx<{
+      challenge: string;
+      expires_at: Date;
+      consumed_at: Date | null;
+      key_id: number;
+      public_key: string;
+      token_hash: string | null;
+    }[]>`
+      SELECT c.challenge, c.expires_at, c.consumed_at,
+             k.id AS key_id, k.public_key, k.token_hash
+      FROM committee_claim_challenges c
+      JOIN committee_members m ON m.id = c.member_id AND m.status = 'active'
+      JOIN committee_member_keys k ON k.id = (
+        SELECT newest.id FROM committee_member_keys newest
+        WHERE newest.member_id = c.member_id AND newest.active = true
+        ORDER BY newest.created_at DESC, newest.id DESC LIMIT 1
+      )
+      WHERE c.member_id = ${input.memberId}
+      FOR UPDATE OF c, k`)[0];
+    const invalid = { ok: false, status: 400, error: "invalid or expired token-claim proof" };
+    if (!row) return invalid;
+    const expiresAt = new Date(row.expires_at).toISOString();
+    if (
+      row.challenge !== input.challenge ||
+      expiresAt !== input.expiresAt ||
+      new Date(row.expires_at).getTime() <= Date.now()
+    ) return invalid;
+
+    const proof = { memberId: input.memberId, challenge: row.challenge, expiresAt };
+    if (!await verifyClaimChallengeSignature(proof, input.signature, row.public_key)) return invalid;
+    if (row.token_hash || row.consumed_at) {
+      return { ok: false, status: 409, error: "bearer token already claimed; ask an administrator to rotate it if lost" };
+    }
+
+    const token = `tok_${input.memberId}_${crypto.randomUUID()}`;
+    const installed = await tx`
+      UPDATE committee_member_keys SET token_hash = ${hashKey(token)}
+      WHERE id = ${row.key_id} AND active = true AND token_hash IS NULL
+      RETURNING id`;
+    if (installed.length === 0) {
+      return { ok: false, status: 409, error: "bearer token already claimed; ask an administrator to rotate it if lost" };
+    }
+    await tx`
+      UPDATE committee_claim_challenges SET consumed_at = now()
+      WHERE member_id = ${input.memberId} AND challenge = ${row.challenge} AND consumed_at IS NULL`;
+    await tx`
+      INSERT INTO audit_log (actor, action, scope)
+      VALUES (${input.memberId}, 'claim_member_token', ${tx.json({ memberId: input.memberId })})`;
+    return { ok: true, status: 200, memberId: input.memberId, token };
   });
 }
 
