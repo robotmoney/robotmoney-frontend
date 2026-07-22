@@ -4,7 +4,7 @@
 // stdout. Both are now recorded on a durable, queryable, append-only event
 // log (committee_agent_health_events) and exposed admin-only via
 // GET /api/committee/admin/agent-health.
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as ic from "../src/committee/domain.ts";
@@ -15,10 +15,27 @@ import { handleCommitteeAdmin } from "../src/api/routes/committee-admin.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
+// All committee test files share ONE ephemeral Postgres (tests/preload.ts).
+// COMMITTEE_ROSTER_CAP is hard-enforced on every transition-to-active, so a
+// roster left full by an earlier-running file (in whatever order bun
+// discovers test files — this is NOT guaranteed to match local runs) would
+// make this file's registerMember() calls 409 instead of admitting. Start
+// from a clean roster, matching the same convention committee.test.ts /
+// committee-claim.test.ts / committee-roster-cap.test.ts / committee-admin-
+// surface.test.ts already use.
+beforeAll(async () => {
+  await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
+});
+
 async function activeMember() {
   const id = rid("m");
   const { publicKeyB64, privateKey } = await generateKeyPair();
   const r = await ic.registerMember({ memberId: id, name: id, publicKey: publicKeyB64 });
+  // Fail LOUD, not silent: a roster-cap 409 here (r.token undefined) must
+  // never quietly flow into a committee_session_members insert for a
+  // memberId that was never actually created (a confusing downstream FK
+  // violation instead of a clear assertion failure at the actual cause).
+  if (!r.token) throw new Error(`activeMember() setup failed for ${id}: ${JSON.stringify(r)}`);
   return { id, token: r.token, privateKey };
 }
 
