@@ -79,6 +79,20 @@ test("resolveCommitteeSchedules: an invalid/non-positive COMMITTEE_WINDOW_MINUTE
   expect(resolveCommitteeSchedules({ COMMITTEE_WINDOW_MINUTES: "not-a-number" })[1]!.payload).toEqual({ windowMinutes: 60 });
 });
 
+test("resolveCommitteeSchedules: fails closed on a malformed COMMITTEE_*_CRON instead of silently persisting it", () => {
+  // tickScheduler evaluates every due job_schedules row inside ONE transaction
+  // (worker/scheduler.ts) — an unparseable cron on any row throws mid-loop and
+  // stalls EVERY schedule that tick (vault/wallet/buybacks/projects/analytics
+  // too), not just committee's. Catching a typo here, at config-resolution
+  // (deploy) time, is what prevents that shared-scheduler-wide degradation.
+  expect(() => resolveCommitteeSchedules({ COMMITTEE_OPEN_SESSION_CRON: "not a cron" })).toThrow(
+    /invalid COMMITTEE_OPEN_SESSION_CRON/,
+  );
+  expect(() => resolveCommitteeSchedules({ COMMITTEE_CLOSE_WINDOW_CRON: "99 99 * * *" })).toThrow(
+    /invalid COMMITTEE_CLOSE_WINDOW_CRON/,
+  );
+});
+
 test("seedCommitteeSchedules: applied to an EXISTING row — a changed cron/enabled is actually updated, not left as a stale duplicate", async () => {
   delete process.env.COMMITTEE_SCHEDULES_ENABLED;
   await seedCommitteeSchedules();
