@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { canonicalizeSubmission } from "@robotmoney/contract";
+import type { CommitteeBrief } from "@robotmoney/contract";
 import {
   canonicalizeDraftForTransport,
   deterministicAuthorTake,
@@ -52,11 +53,11 @@ describe("starter committee agent canonical signing", () => {
       subjectId: "starter-agent",
       subjectName: "Starter Agent Exercise",
     } as StarterSession;
-    const brief = {
+    const brief: CommitteeBrief = {
       id: "11",
       date: session.date,
       subjectId: session.subjectId,
-      body: { prompt: "operator-owned" },
+      body: null,
       createdAt: "2026-07-21T00:00:00.000Z",
     };
     const first = await deterministicAuthorTake({ session, brief });
