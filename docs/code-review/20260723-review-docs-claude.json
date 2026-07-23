@@ -1,0 +1,678 @@
+{
+  "schema_version": 1,
+  "review": "review-docs",
+  "repository": "git@github.com:robotmoney/robotmoney-frontend.git",
+  "branch": "adhoc/20260721-190555-docs-cleanup",
+  "commit": "6e5cfb49d87c5c00086433c97dec7153781de805",
+  "reviewed_at": "2026-07-23",
+  "scope": [
+    "documentation corpus: docs/**, CONTRIBUTING.md, README.md, frontend/public/views/docs/**, doc back-links across backend/frontend/contract/scripts/CI, Plan issue #15"
+  ],
+  "verdict": "Consolidation was content-lossless but mechanical: no normative text was dropped from the five folded specs, yet section-numbering collisions poison 25+ §-references across backend/frontend/scripts/decisions, the canonical doc contradicts itself in at least four places (session states, committee crons, hermetic mode, admin baseline), and dated evidence records were retro-edited.",
+  "findings": [
+    {
+      "id": "review-docs-001",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "info",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "CONTRIBUTING.md:99 (placement map says technical docs live at docs/*.md kebab-case)",
+        "scripts/lint-docs.sh:26-27 (kebab-case check globs docs/*.md only)",
+        "docs/runbooks/deployment.md and docs/archive/index.md (exist outside the stated glob)"
+      ],
+      "impact": "Placement guidance and the filename lint silently exclude the newly introduced docs/runbooks/ and docs/archive/ subdirectories.",
+      "recommendation": "State docs/**/*.md in CONTRIBUTING.md's placement map and widen the lint-docs.sh glob to match.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-002",
+      "review": "review-docs",
+      "classification": "STALE_COMMENT",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/migrations/0017_admin_surface.sql:1 (cites docs/architecture.md §5; first-match §5 at docs/architecture.md:210 is Backend; intended ## 5. Database migration at docs/architecture.md:2209)",
+        "backend/migrations/0017_admin_surface.sql:146 (six legal session states per §2; first-match §2 at docs/architecture.md:49 is The buildless principle; intended docs/architecture.md:1890-1892)",
+        "backend/migrations/0018_research_telemetry.sql:11 (§5.2 collides: docs/architecture.md:2230 admin telemetry vs docs/architecture.md:2814 preview-spec Responsibility)",
+        "backend/src/admin/overview.ts:17-18 (§3 quote actually lives at docs/architecture.md:1923-1924 inside the pasted admin baseline, not §3 Repository layout at docs/architecture.md:67)",
+        "backend/src/admin/audit.ts:2 (§5.4/§6.3 exist only in the pasted plan numbering)",
+        "backend/src/admin/audit.ts:51-53 (redaction quote actually at docs/architecture.md:2206-2207 under US-A3, not §6.2/§8.1)",
+        "backend/src/chain/wallet-sleeves.ts:78 and backend/src/chain/wallet-valuation.ts:54-55 (§3 was contract-live-data.md §3; intended docs/architecture.md:1173)",
+        "backend/src/committee/admin.ts:334 (§6.3) and backend/src/committee/admin.ts:507 (§4 US-C4; primary §4 is Frontend)",
+        "backend/tests/committee-admin-surface.test.ts:52-53 and backend/tests/admin-surface-migration.test.ts:3 (same stale plan numbering)"
+      ],
+      "impact": "Backend module, migration, and test back-links carry old plan/spec section numbers that now first-match resolve to unrelated topics 1000+ lines away in the concatenated architecture.md, so the comments actively misdirect maintainers.",
+      "recommendation": "After renumbering architecture.md, update every cited § to a unique number or GitHub heading anchor; where a comment quotes doc text, point at the exact section containing the quote.",
+      "owner": "code",
+      "related_findings": ["review-docs-001"]
+    },
+    {
+      "id": "review-docs-003",
+      "review": "review-docs",
+      "classification": "GAP_IMPL",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:3066",
+      "evidence": [
+        "backend/src/api/index.ts:80-84 (/health returns HTTP 200 {status:'ok'} even when db='down')",
+        "mcp/src/server.ts:214 (MCP health returns ok without probing the backend)",
+        "scripts/lib/demo-main.ts:280-296 (readiness polls those /health URLs, so any 200 certifies)"
+      ],
+      "impact": "Cloudflare and demo readiness can certify API or MCP while required dependencies are down, defeating the documented shared health contract.",
+      "recommendation": "Make /health report a non-ok status (or non-200) on required dependency loss, have MCP probe the API, and execute negative dependency tests in CI.",
+      "owner": "code",
+      "related_findings": ["review-docs-015"]
+    },
+    {
+      "id": "review-docs-004",
+      "review": "review-docs",
+      "classification": "GAP_IMPL",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:2033",
+      "evidence": [
+        "backend/src/api/routes/admin.ts:575-577 (rerun route accepts any non-empty reason up to 500 chars)",
+        "backend/src/api/routes/admin.ts:118-122 (shared validateReason requiring 10..500 chars is not called)",
+        "backend/src/api/routes/admin.ts:583-584 (full reason text stored in the worker-visible job payload)",
+        "docs/architecture.md:2033-2050 (documented reason validation and minimization boundary unchanged)"
+      ],
+      "impact": "Short non-actionable reasons pass validation and human audit text propagates into worker-visible payload state, contrary to the documented minimization boundary.",
+      "recommendation": "Enforce the shared 10-to-500 reason validator on rerun and carry only an audit request id in the job payload, or revise the canonical requirement with explicit rationale.",
+      "owner": "code",
+      "related_findings": ["review-docs-012"]
+    },
+    {
+      "id": "review-docs-005",
+      "review": "review-docs",
+      "classification": "GAP_IMPL",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:2572",
+      "evidence": [
+        "backend/src/committee/domain.ts:639-640 (openSession ON CONFLICT DO UPDATE SET state='scheduled' rewinds existing sessions)",
+        "backend/src/committee/domain.ts:645-687 (publishBrief has no state/roster/active-subject guard; reads unbounded latest regime and exact-date signals)",
+        "backend/src/committee/domain.ts:742-770 (closeWindow guards the UPDATE but still returns state window_closed on a zero-row update at 769)",
+        "backend/src/committee/domain.ts:925-929 and backend/src/committee/domain.ts:899-905 (aggregate reads latest snapshot with no at-or-before bound; buildRegimeSummary ignores endDate)",
+        "backend/src/committee/admin.ts:573-575 (reopen only flips state; no new close time, no job cancel/recreate)",
+        "docs/architecture.md:2572-2577 (spec: reopen atomically sets new close time, cancels pending jobs, creates suffixed jobs)"
+      ],
+      "impact": "Worker and demo lifecycle calls can rewind existing sessions, report zero-row transitions as success, read future data, or perform an incomplete reopen that does not replace deadlines and jobs, all contrary to the canonical spec.",
+      "recommendation": "Resolve whether the documented domain corrections remain requirements; if so implement them in the shared domain path with adversarial state/timestamp/reopen tests, otherwise remove them from canonical docs and Plan.",
+      "owner": "code",
+      "related_findings": ["review-docs-014"]
+    },
+    {
+      "id": "review-docs-006",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:228",
+      "evidence": [
+        "backend/src/db/worker-client.ts:20 (WORKER_DATABASE_URL || config.databaseUrl silent fallback)",
+        "docker-compose.yml:40-48 (rm_worker role described as optional)",
+        "docs/runbooks/deployment.md:144-160 (secrets list omits WORKER_DATABASE_URL)",
+        "docs/architecture.md:228, docs/architecture.md:260, docs/architecture.md:462 (rm_worker presented as the enforced boundary)"
+      ],
+      "impact": "A deployment can satisfy the docs while workers run on the unrestricted DATABASE_URL, so the database permission boundary presented as an invariant is optional at runtime and invisible in the runbook.",
+      "recommendation": "Decide whether rm_worker is mandatory outside ephemeral environments; either fail boot without WORKER_DATABASE_URL and document provisioning, or describe it honestly as optional hardening.",
+      "owner": "security",
+      "related_findings": ["review-docs-005"]
+    },
+    {
+      "id": "review-docs-007",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "contract/src/dashboards.d.ts:44",
+      "evidence": [
+        "contract/src/dashboards.d.ts:44-48 (AllocationFramework = {asof, vaultContract, buckets})",
+        "backend/src/chain/allocation-framework.ts:27-33 (shipped shape = {strategy, buckets, asOf, source, managed})",
+        "contract/src/dashboards.d.ts (zero Buyback/TokenMetrics/WalletSleeves DTOs; grep confirmed)",
+        "scripts/sync-contract.ts:8-10 (sync copies only routes.js, so .d.ts drift is unchecked)"
+      ],
+      "impact": "The declared cross-boundary dashboard DTOs disagree with shipped wire shapes and omit three endpoints, while no executed check compares those types to implementation.",
+      "recommendation": "Make contract/src/dashboards.d.ts own every shipped dashboard response and provenance union, consume those types in backend and tests, and add an executed DTO-conformance check.",
+      "owner": "code",
+      "related_findings": ["review-docs-002"]
+    },
+    {
+      "id": "review-docs-008",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "docs/architecture.md:7, docs/architecture.md:35, docs/architecture.md:90, docs/architecture.md:177, docs/architecture.md:206, docs/architecture.md:223, docs/architecture.md:556, docs/architecture.md:592, docs/architecture.md:825, docs/architecture.md:2874, docs/architecture.md:3233 (anchor-less links from architecture.md to itself)",
+        "docs/architecture.md:367 (See docs/architecture.md for the full target contract — self-reference)",
+        "docs/architecture.md:2874 (companion to architecture.md — inside architecture.md)",
+        "docs/decisions.md:188, docs/decisions.md:267-268, docs/decisions.md:392 (formerly distinct links to topology/demo-spec/preview/live-data docs all became bare architecture.md links with no anchor)"
+      ],
+      "impact": "Circular see-X pointers created by the link repoint no longer direct the reader anywhere; the specific absorbed section each formerly targeted is lost.",
+      "recommendation": "Convert each self-link to an intra-doc anchor to the specific absorbed section, or delete it where the target is the surrounding text.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-009",
+      "review": "review-docs",
+      "classification": "GAP_IMPL",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:200",
+      "evidence": [
+        "docs/architecture.md:200-201 (a CI drift gate blocks a PR)",
+        "CONTRIBUTING.md:42-43 (a CI drift gate will block a PR)",
+        "docs/decisions.md:253 (a CI drift gate blocks a PR)",
+        "docs/architecture.md:2743-2744 and docs/architecture.md:2821 (same doc: specified here and not yet wired; 5.3 The drift gate (to be wired))",
+        "scripts/tests/goldens-header.test.ts:2-7 (honesty test: no such gate exists)",
+        ".github/workflows/ (zero goldens references; grep confirmed)"
+      ],
+      "impact": "Contributors are told a safety gate protects goldens correctness when nothing enforces it, actively inviting stale goldens — the exact failure goldens-header.test.ts warns about.",
+      "recommendation": "Change §4, CONTRIBUTING.md, and D14 to specified-only/future tense matching the preview-spec section, or wire the gate.",
+      "owner": "architecture",
+      "related_findings": ["review-docs-004"]
+    },
+    {
+      "id": "review-docs-010",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:275",
+      "evidence": [
+        "docs/architecture.md:275-281 (committee_takes and committee_submissions listed as live tables)",
+        "docs/architecture.md:795-800 (reconciliation and signature verification presented as pending Phase 5 work)",
+        "backend/migrations/0006_committee_reconcile.sql:7-8 (DROP TABLE committee_takes/committee_submissions)",
+        "docs/architecture.md:1932-1934 (same doc: canonical takes live in committee_recommendations)"
+      ],
+      "impact": "The data-model section names tables that do not exist at this commit and contradicts the doc's own admin-surface baseline.",
+      "recommendation": "Update §6's table list to the 0004/0006 schema (committee_recommendations, committee_member_keys, audit_log) and convert §9.8's reconciliation items to completed statements.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-011",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:1617",
+      "evidence": [
+        "docs/architecture.md:387-389 (hermeticDataSource called used by CI and the demo default)",
+        ".env.example:105-106 (unset/live labelled the demo opt-in; hermetic labelled CI + the demo default)",
+        "docs/architecture.md:1499 (FetcherProvider / seededProvider acceptable for hermetic runs — component removed)",
+        "docs/architecture.md:1617-1623 and docs/architecture.md:1675-1684 (same doc: there is no hermetic/offline demo mode; live is the only demo default)",
+        "scripts/lib/demo-env.ts:54 (analyticsSource = env.ANALYTICS_SOURCE || live)",
+        "backend/tests/no-dead-provider-chain.test.ts (guard confirming fetcher-provider removal)"
+      ],
+      "impact": "An operator or agent reading §7.1, the demo-spec lifecycle row, or .env.example concludes the demo is offline/hermetic; the required per-PR e2e gate actually hits live providers — wrong debugging model and wrong quota expectations.",
+      "recommendation": "Fix the §7.1 and .env.example lines to used-by-CI-backend-tests / explicit local-debug override, and replace the demo-spec row's provider language with ANALYTICS_SOURCE=live semantics.",
+      "owner": "architecture",
+      "related_findings": ["review-docs-010"]
+    },
+    {
+      "id": "review-docs-012",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:618",
+      "evidence": [
+        "docs/architecture.md:618, docs/architecture.md:687, docs/architecture.md:1377, docs/architecture.md:1493, docs/architecture.md:1591 (lifecycle chains containing brief_published)",
+        "docs/architecture.md:1889-1892 (same doc: persisted states are exactly scheduled, collecting, window_closed, aggregated, published, cancelled; there is no persisted brief_published state)",
+        "backend/migrations/0017_admin_surface.sql:147-150 (state check excludes brief_published)",
+        "backend/src/committee/domain.ts:683 (publishBrief sets state='collecting' directly; zero brief_published occurrences in backend/contract/frontend, grep confirmed)"
+      ],
+      "impact": "The canonical IC sections document a six-state machine including a state that never exists in the DB or API, so readers of §9/§9.4 design against a lifecycle the same document later forbids.",
+      "recommendation": "Rewrite the §9/§9.4/demo-spec lifecycle chains to the persisted states and note brief publication is the scheduled-to-collecting transition, not a state.",
+      "owner": "architecture",
+      "related_findings": ["review-docs-007"]
+    },
+    {
+      "id": "review-docs-013",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:702",
+      "evidence": [
+        "docs/architecture.md:702-709 (issue #208 contract: COMMITTEE_SCHEDULES_ENABLED, production enables the daily sequence)",
+        "docs/architecture.md:1902-1906 (absorbed admin spec: seeded recurring committee schedules remain disabled and must not be enabled by this UI)",
+        "docs/architecture.md:2066-2067 (cannot be enabled from the UI)",
+        "docs/architecture.md:1515-1516 (demo-spec §2: job schedules are seeded so a no-intervention run progresses — contradicts the opt-in default)",
+        "backend/src/config.ts:390-405 and backend/src/db/seed.ts:66-71 (issue #208 wiring; docker-compose.yml:111 defaults enabled, demo compose pins 0)",
+        "backend/src/db/seed.ts:28-32 (stale header: committee schedules are intentionally no-cron — contradicted by seed.ts:66-71 below it)"
+      ],
+      "impact": "Sections of the same canonical doc (plus a stale seed.ts header) give opposite answers to whether recurring committee scheduling is a product mechanism, so operators and agents cannot tell whether enabling the crons is supported, forbidden, or automatic.",
+      "recommendation": "Mark the admin-surface schedules-disabled bullets as superseded by issue #208 (or delete them and point at §9.4), amend demo-spec §2 to the seeded-disabled default, and rewrite the seed.ts header comment.",
+      "owner": "architecture",
+      "related_findings": ["review-docs-008"]
+    },
+    {
+      "id": "review-docs-014",
+      "review": "review-docs",
+      "classification": "GAP_DOC",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:721",
+      "evidence": [
+        "docs/architecture.md:731 (writes scoped: apply + apply/unlock — grep unlock across backend/src and contract/src returns 0 hits; phantom route)",
+        "contract/src/routes.js (shipped but undocumented in architecture.md: claimChallenge/claimToken token-claim flow from PR #226, public take verification receipts, REST memos, verify-token, open-session, signing-payload REST sibling)",
+        ".env.example:76-83 (COMMITTEE_NOTIFICATION_EMAIL_FROM/_TRANSPORT_URL/_TOKEN absent from architecture.md and the deployment checklist)",
+        "scripts/starter-committee-agent.ts (starter agent from PR #223 has no canonical-doc mention)",
+        "frontend/public/views/docs/investment-committee/api-reference.html (documents token-claim correctly — frontend docs are ahead of the canonical doc)"
+      ],
+      "impact": "The canonical REST surface list is incomplete and names a route that does not exist; onboarding and notification env vars are invisible to a prod deployer following the runbook checklist.",
+      "recommendation": "Regenerate §9.5's read/write route list from contract/src/routes.js, document the #226 self-serve claim flow and notification env in §9 and the deployment checklist, and delete apply/unlock.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-015",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "docs/architecture.md:1 and docs/architecture.md:1007 (two top-level # Architecture H1s; 1007 is the pasted contract-live-data doc)",
+        "docs/architecture.md:1008 (stray literal + diff character on its own line)",
+        "docs/architecture.md:13, docs/architecture.md:1064, docs/architecture.md:1488, docs/architecture.md:1858, docs/architecture.md:2746, docs/architecture.md:2921 (six independent ## 1. restarts)",
+        "docs/architecture.md:1621 (demo-spec §7 says vault-economics slice (§10 below); the intended §10 is above and the nearest §10 below is Demo output)",
+        "docs/architecture.md:1633 vs docs/architecture.md:1671 (§7b ordered before §7a)",
+        "docs/architecture.md:3238-3239 (documentation map claims the folded specs live under their dedicated sections below — the map is at the end of the file)"
+      ],
+      "impact": "Every bare §N reference into architecture.md is ambiguous (§2 x6, §3 x5, §5 x5, §7 x5, §9 x4 and colliding subsections), anchors and outlines are unreliable, and the visible merge artifact corrupts the heading hierarchy; this is the root cause of the stale back-link findings.",
+      "recommendation": "Delete lines 1007-1008, renumber the absorbed specs into the host hierarchy (or prefix their internal references with the section name), then re-run the back-link repoint emitting unique numbers or heading anchors.",
+      "owner": "architecture",
+      "related_findings": ["review-docs-003"]
+    },
+    {
+      "id": "review-docs-016",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "low",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:1245",
+      "evidence": [
+        "docs/architecture.md:1245 (module named backend/src/chain/allocation.ts; shipped as backend/src/chain/allocation-framework.ts, as docs/decisions.md:384 correctly states)",
+        "docs/architecture.md:1312 (new migration 00XX_buyback_swaps.sql; shipped as backend/migrations/0015_buyback_swaps.sql)"
+      ],
+      "impact": "File and migration names in the absorbed live-data-contract section do not match the tree.",
+      "recommendation": "Update the module/migration names and convert the implementer checklist to a description of the shipped state.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-017",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "low",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "docs/architecture.md:1554 (GET /api/committee/sessions/:id; shipped route is /api/committee/sessions/:date/:subject per contract/src/routes.js)",
+        "docs/architecture.md:706 and .env.example:92 (06:00-08:00 UTC sequence; backend/src/config.ts:395-399 defaults span 06:00-10:00)",
+        "docs/archive/allocation-data-root-causes.md:4 (hostname typo robotmonet.net in preserved evidence)"
+      ],
+      "impact": "Minor factual slips: a wrong route spelling in the demo spec, an understated cron window, and a hostname typo that could mislead someone copying the URL.",
+      "recommendation": "Fix the session route spelling, say 06:00-10:00 sequence (window 07:00-08:00), and annotate the archive typo inline in brackets if touched at all.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-018",
+      "review": "review-docs",
+      "classification": "GAP_DOC",
+      "severity": "low",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "git log -1 6e5cfb4 (commit message claims demo-plan.md was folded into docs/architecture.md)",
+        "git show c42c47a:docs/demo-plan.md (282 lines, 11 phases; none of its content exists in architecture.md, docs/archive/, or recyclebin/ — grep confirmed)",
+        "docs/architecture.md:1781 (the former demo-plan.md §10 link was retargeted to this specification's §10, silently changing the referent from demo-plan's Phase-10 fidelity rationale)",
+        "docs/archive/index.md:1-8 (no record of the drop)"
+      ],
+      "impact": "The commit message misstates provenance, one in-text citation now points at different content, and a future auditor cannot tell an intentional drop from a loss.",
+      "recommendation": "Record the intentional drop (archive the file or add a dated line to docs/archive/index.md with the rationale), or correct the provenance in PR #235's description.",
+      "owner": "architecture",
+      "related_findings": ["review-docs-003"]
+    },
+    {
+      "id": "review-docs-019",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:1911",
+      "evidence": [
+        "docs/architecture.md:1911-1913 (names alpine/views/admin-jobs.js as the current baseline; file no longer exists — replaced by frontend/public/assets/js/app/alpine/views/admin-surface.js and views/admin/*)",
+        "docs/architecture.md:2211 (add one forward migration 0017_admin_surface.sql — it exists at backend/migrations/0017_admin_surface.sql)",
+        "docs/architecture.md:2232-2252 (analytics_runs must be created — backend/migrations/0018_research_telemetry.sql:10 shipped)",
+        "docs/architecture.md:1914-1916 (admin routes called read-only) vs backend/src/api/routes/admin.ts:187-483 (overview, POST retry, research mutations implemented)",
+        "docs/architecture.md:368-370 (issue #155 routes pending until that lands) vs backend/src/api/routes/admin.ts:2 (landed)",
+        "docs/architecture.md:343 and docs/architecture.md:353 (SELECTs only / all four are PRIVILEGED) vs the shipped route inventory at docs/architecture.md:2440-2470",
+        "docs/architecture.md:2627-2628 (replace adminJobsView — already done per frontend/public/views/admin.html:6,21)"
+      ],
+      "impact": "A large canonical section describes a pre-implementation baseline and to-do plan that contradicts both the current tree and the same doc's §7 admin-dashboard description, making architecture.md self-inconsistent about what exists.",
+      "recommendation": "Rewrite the admin-surface section's baseline/delivery-order parts into present-tense description and update §7's four-route, SELECTs-only, and until-that-lands claims.",
+      "owner": "architecture",
+      "related_findings": ["review-docs-013"]
+    },
+    {
+      "id": "review-docs-020",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:2404",
+      "evidence": [
+        "docs/architecture.md:2404-2408 (spec telemetry write path = 4 endpoints POST/PATCH/PUT /api/analytics/runs*) vs contract/src/routes.js analytics.telemetry (single POST /api/analytics/telemetry, issue #151)",
+        "docs/architecture.md:2449 (GET /api/admin/research/series/:indicator) vs backend/src/api/routes/admin.ts:508 (/api/admin/research/raw-series/:indicator)",
+        "docs/architecture.md:2450 (GET /api/admin/research/signals/:key/:date) vs backend/src/api/routes/admin.ts:530 (signals/:key?from=&to=)",
+        "docs/architecture.md:2452 (POST /api/admin/research/runs) vs backend/src/api/routes/admin.ts:557 (POST /api/admin/research/rerun)",
+        "docs/architecture.md:2453-2470 (/api/admin/committee/* route table with PATCH resources and queued envelopes) vs contract/src/routes.js:67-73 and backend/src/api/routes/committee-admin.ts:20-38 (/api/committee/admin/* POST-dispatch, synchronous)",
+        "backend/migrations/0017_admin_surface.sql:29-96 (analytics_runs/analytics_stage_runs/analytics_artifacts created but zero references in backend/src; shipped telemetry uses research_pipeline_* from 0018 via backend/src/analytics/store/telemetry-store.ts)"
+      ],
+      "impact": "Anyone building an admin client or reviewing authz from the canonical route tables gets 404s and a wrong schema model; three dead tables sit in every deployed database.",
+      "recommendation": "Rewrite the admin-surface route/DTO tables to as-built routes or mark them historical and point at contract/src/routes.js and contract/src/admin.d.ts as canonical; drop or migrate away the unused analytics_* tables from 0017.",
+      "owner": "architecture",
+      "related_findings": ["review-docs-013"]
+    },
+    {
+      "id": "review-docs-021",
+      "review": "review-docs",
+      "classification": "UNRESOLVED_DECISION",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:2561",
+      "evidence": [
+        "docs/architecture.md:2561-2562 (enqueued operations return {jobId, auditRequestId, existing} with status 202)",
+        "backend/src/api/routes/committee-admin.ts:38 and backend/src/api/routes/committee-admin.ts:70-182 (shipped handlers are synchronous 200/201)",
+        "contract/src/admin.d.ts:406 (contract unchanged on this point)",
+        "docs/decisions.md (ends at D18; no ratifying ADR either way)"
+      ],
+      "impact": "Architecture, shipped code, UI, and contract disagree on lifecycle latency, queue observability, retry behavior, and response envelopes, and no decision record resolves which is intended.",
+      "recommendation": "Formally ratify synchronous 200/201 transitions or queued 202 actions in decisions.md and the Plan, then delete the rejected specification text.",
+      "owner": "decision",
+      "related_findings": ["review-docs-011"]
+    },
+    {
+      "id": "review-docs-022",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "low",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:3223",
+      "evidence": [
+        "docs/architecture.md:3223-3227 (opens with This directory contains... inside a document)",
+        "docs/architecture.md:3238-3239 (says specifications are incorporated under their dedicated sections below although everything is above it)",
+        "docs/architecture.md:3233 (first bullet links Architecture to itself)"
+      ],
+      "impact": "The appended documentation map keeps its old docs-index framing, confusing the document's role and direction.",
+      "recommendation": "Move the map to the top of architecture.md (or docs/README.md) and fix the below/this-directory wording and self-link.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-023",
+      "review": "review-docs",
+      "classification": "GAP_DOC",
+      "severity": "low",
+      "confidence": "high",
+      "requirement": "docs/archive/index.md:1",
+      "evidence": [
+        "docs/archive/index.md:1-8 (policy only; lists zero entries)",
+        "docs/archive/allocation-data-root-causes.md:1-4 (carries its 2026-07-16 investigation date but its rename provenance from docs/tmp-allocation-data-root-causes.md is recorded nowhere)"
+      ],
+      "impact": "The index cannot answer what is here and where it came from, which is its stated purpose; archived evidence is undiscoverable from the index that exists to catalogue it.",
+      "recommendation": "Add a MANIFEST-style entry table (file, original path, date moved, reason, one-line finding) to docs/archive/index.md.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-024",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "docs/decisions.md:425 (architecture.md §3.1 — was topology.md §3.1; first-match §3.1 is the demo-spec MCP server at docs/architecture.md:1520; intended docs/architecture.md:2974)",
+        "docs/decisions.md:427 (architecture.md §9 — first-match §9 at docs/architecture.md:596 is Investment Committee; intended docs/architecture.md:3066)",
+        "docs/decisions.md:446 (refines D13 (architecture.md §3/§3.1) — intended the topology subdomain map at docs/architecture.md:2958/2974, not Repository layout at docs/architecture.md:67)",
+        "docs/runbooks/deployment.md:98 (loose (architecture.md §3.1) — ambiguous; contrast docs/runbooks/deployment.md:61 which correctly uses the explicit heading anchor)"
+      ],
+      "impact": "The ADR record — meant to be durable — now cites wrong-topic sections of the canonical doc; readers following D18's pointers land on unrelated sections.",
+      "recommendation": "Replace the D18 and deployment.md §-references with explicit heading anchors, as deployment.md:61 already does.",
+      "owner": "decision",
+      "related_findings": ["review-docs-001"]
+    },
+    {
+      "id": "review-docs-025",
+      "review": "review-docs",
+      "classification": "GAP_IMPL",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/runbooks/deployment.md:15",
+      "evidence": [
+        "docs/runbooks/deployment.md:17-28 (GitOps pipeline: CI is the only actor that mutates infrastructure; branch-to-staging / tag-to-production deploys)",
+        ".github/workflows/ (eight workflows, all CI/nightly; no deploy/GitOps/release workflow)",
+        "scripts/gitops-credentials.ts:1278 (warns no deploy/GitOps/release workflow exists; credentials are not consumed yet)",
+        "backend/src/api/index.ts and mcp/src/server.ts (no TLS/cert options for the documented Origin CA design)"
+      ],
+      "impact": "The runbook reads as an active operating procedure but the pipeline half is aspirational; only the credential-provisioning half is real, and the accepted D13/D18 topology is not reproducible from repository-owned automation.",
+      "recommendation": "Add a status line to deployment.md §1 stating the deploy workflow is not yet implemented (credentials tooling is), or label D13/D18 target state and file the workflow work.",
+      "owner": "operations",
+      "related_findings": ["review-docs-016"]
+    },
+    {
+      "id": "review-docs-026",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/runbooks/deployment.md:150",
+      "evidence": [
+        "docs/runbooks/deployment.md:150 and docs/runbooks/deployment.md:219 (require ANTHROPIC_API_KEY, FRED_API_KEY, RPC_URL per ARCHITECTURE §8)",
+        "docs/architecture.md:583 (Secrets (Anthropic/FRED/RPC) live in the droplet env)",
+        "backend/src/config.ts:462 (the only RPC env the backend reads is BASE_RPC_URL; grep for RPC_URL/ANTHROPIC consumers elsewhere returns 0 hits; extract/fred.ts is keyless)",
+        ".github/workflows/e2e.yml:122 and .github/workflows/committee-opencode-nightly.yml:19 (keyless design; no ANTHROPIC_API_KEY anywhere)",
+        "docs/runbooks/credential-doctor.md:5 and docs/runbooks/credential-doctor.md:74-92 (claims to implement deployment.md's inventory but manages ADMIN_TOKEN/ANALYTICS_TOKEN, which deployment.md omits, and not ANTHROPIC/RPC_URL/PROJECTS_SOURCE, which deployment.md requires)",
+        "scripts/gitops-credentials.ts:151, scripts/gitops-credentials.ts:157, scripts/gitops-credentials.ts:222 (doctor scope: ADMIN_TOKEN/ANALYTICS_TOKEN/FRED_API_KEY only)"
+      ],
+      "impact": "A prod deploy following the runbook sets a private RPC as RPC_URL while the backend silently keeps hammering public mainnet.base.org (the per-IP 429 class this repo has fought), provisions keys nothing reads, and following the checklist via the doctor leaves required items unprovisioned.",
+      "recommendation": "Replace RPC_URL with BASE_RPC_URL and drop or footnote ANTHROPIC_API_KEY/FRED_API_KEY as reserved-not-consumed in deployment.md §5/§7 and architecture.md §8; reconcile the doctor and runbook inventories in one tested operator table.",
+      "owner": "operations",
+      "related_findings": ["review-docs-006"]
+    },
+    {
+      "id": "review-docs-027",
+      "review": "review-docs",
+      "classification": "STALE_COMMENT",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "frontend/public/assets/js/app/alpine/views/admin-surface.js:18 (docs/architecture.md US-Q2/US-A3), bare US-Q2 labels at frontend/public/assets/js/app/alpine/views/admin-surface.js:66 and frontend/public/assets/js/app/alpine/views/admin-surface.js:266",
+        "frontend/test/browser/admin-surface.spec.ts:5 ((docs/architecture.md US-Q2/US-A3))",
+        "grep US-Q2 docs/ returns zero hits; git show 6e5cfb4~1:docs/plan-admin-surface.md contains only US-Q1 — the phantom predates the consolidation and was carried through unverified",
+        "docs/architecture.md:2065-2066 and docs/architecture.md:2447 (the cited behavior is actually specified in US-Q1's acceptance and the PATCH /api/admin/schedules/:id route row)"
+      ],
+      "impact": "Readers searching architecture.md for US-Q2 find nothing and cannot verify the acceptance criteria the tests claim to cover.",
+      "recommendation": "Replace US-Q2 with US-Q1 (schedule toggle acceptance) in all four locations, or add a US-Q2 heading.",
+      "owner": "code",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-028",
+      "review": "review-docs",
+      "classification": "STALE_COMMENT",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "frontend/public/views/admin.html:3 (§7 — was plan-admin-surface.md §7; first-match §7 at docs/architecture.md:290 is Task queue & workers; intended docs/architecture.md:2606)",
+        "frontend/public/assets/js/app/alpine/views/admin-surface.js:3 (same §7 mismatch)",
+        "frontend/public/assets/js/app/contract/routes.js:159 and contract/src/routes.js:159 (§6.3 and §7.1 — first-match §7.1 at docs/architecture.md:372 is Analytics suite; intended Routing and structure at docs/architecture.md:2608; synced copies, fix both)",
+        "frontend/public/assets/js/app/alpine/views/admin/committee-member.js:3, committee-overview.js:3, committee-session.js:4, committee-subject.js:3 (§4 US-Cx — first-match §4 at docs/architecture.md:112 is Frontend; intended docs/architecture.md:1941)",
+        "frontend/public/views/docs/investment-committee/participation.html:534 (§3.1 — was topology.md §3.1; first-match is the demo-spec MCP server at docs/architecture.md:1520; intended docs/architecture.md:2974)"
+      ],
+      "impact": "Frontend and contract back-links misdirect the same way as the backend set; routes.js §7.1 is the worst case because a plausible-looking wrong section (the analytics pipeline) exists at first match.",
+      "recommendation": "Update the citations to unique numbers or heading anchors after renumbering; fix both synced copies of routes.js.",
+      "owner": "code",
+      "related_findings": ["review-docs-001"]
+    },
+    {
+      "id": "review-docs-029",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:673",
+      "evidence": [
+        "frontend/public/views/docs/investment-committee/how-it-works.html:59 and frontend/public/views/docs/investment-committee/how-it-works.html:113 (fixed daily cadence anchored to 23:30 UTC) vs backend/src/config.ts:395-399 (committee crons default 06:00-10:00 UTC, seed-time disabled)",
+        "frontend/public/views/docs/investment-committee/how-it-works.html:91 (briefs at public/data/committee/briefs/today/<member>.json — no today/ directory exists)",
+        "frontend/public/views/docs/investment-committee/how-it-works.html:107-110 (five consecutive misses auto-deactivates a member) vs docs/architecture.md:718-719 (there is no automatic dead-agent threshold)",
+        "frontend/public/views/docs/investment-committee/how-it-works.html:115-118 (session generator reads the submitted take from disk) vs docs/architecture.md §6/§9.4 (Postgres committee_recommendations; GET /api/committee/brief)",
+        "frontend/public/views/docs/investment-committee/how-it-works.html:148 (references nonexistent scripts/committee/select-subject.js)"
+      ],
+      "impact": "Prospective committee members — the page's audience — are told wrong cadence, wrong data locations, and a wrong deactivation policy; participation.html and api-reference.html on the same sidebar are accurate, so the public docs surface contradicts itself.",
+      "recommendation": "Rewrite how-it-works.html against §9.4/§9.4.1 or clearly mark the legacy sections as the pre-port archive design, and extend the route/behavior consistency test to this page.",
+      "owner": "code",
+      "related_findings": ["review-docs-017"]
+    },
+    {
+      "id": "review-docs-030",
+      "review": "review-docs",
+      "classification": "TEST_CLAIM_MISMATCH",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:772",
+      "evidence": [
+        "docs/architecture.md:772-775 (claims E2E asserts no-show renders absent, out-of-window POSTs rejected, cross-role writes denied)",
+        "mcp/src/e2e.ts:413 (only console.logs the published absent set; no throw)",
+        "mcp/src/e2e.ts:559-577 (steps 5c member-to-regime write and 5d member-to-admin close log status without asserting — insecure mode, gate open; only 5a unknown-token 401 and 5b token/member mismatch 403 throw)",
+        "mcp/src/e2e.ts (no post-close submission attempt; grep confirmed)"
+      ],
+      "impact": "Architecture overstates E2E execution for no-show publication, out-of-window rejection, and cross-role denial, leaving named safety regressions able to stay green.",
+      "recommendation": "Add explicit assertions for the published no-show set, a post-close submission, and both cross-role denials, or narrow the doc claim to what is asserted.",
+      "owner": "tests",
+      "related_findings": ["review-docs-009"]
+    },
+    {
+      "id": "review-docs-031",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "recyclebin/MANIFEST.md:22-25 (the 2026-07-10 pre-move verification list now reads docs/architecture.md four times; git diff c42c47a..HEAD shows the originals were docs/topology.md, docs/deployment.md, docs/demo-spec.md, docs/preview-server-spec.md)",
+        "recyclebin/MANIFEST.md:10-12 (2026-07-10 reasons retro-edited to cite docs/architecture.md, which was not the target at that date)",
+        "docs/code-review/20260714-review-maintainability-claude.json (finding 022 evidence rewritten to docs/architecture.md:1, destroying the kebab-case point; finding 033 requirement rewritten to docs/architecture.md:5, originally docs/preview-server-spec.md:5)"
+      ],
+      "impact": "Review artifacts and the recyclebin manifest are supposed to be immutable dated evidence; retro-editing them falsifies history, breaks reconciliation of past findings, and makes the manifest's own verification claim nonsensical.",
+      "recommendation": "Revert the edits inside recyclebin/MANIFEST.md and docs/code-review/*.json; if a pointer note is needed, append a dated addendum instead of editing recorded evidence.",
+      "owner": "architecture",
+      "related_findings": ["review-maintainability-022", "review-maintainability-033"]
+    },
+    {
+      "id": "review-docs-032",
+      "review": "review-docs",
+      "classification": "TEST_COVERAGE_MISSING",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "scripts/check-docs-analytics.sh (asserts only that ANALYTICS_SOURCE is mentioned; exited 0 with the stale demo-default lines of review-docs-011 present)",
+        "bun test scripts/tests (163 pass / 0 fail / 527 expect() / 27 files — the doc-guard tier executes, but every guard covers claims that happen to be correct)",
+        "no guard binds: architecture.md lifecycle-state strings (review-docs-012), .env.example/architecture hermetic-default lines (review-docs-011), deployment.md app-secret names vs consumed env vars (review-docs-026), architecture.md admin route tables vs contract/src/routes.js (review-docs-020), how-it-works.html mechanics (review-docs-029 — committee-docs test scans only participation + api-reference), demo-spec MCP tool table vs mcp/src/server.ts registrations"
+      ],
+      "impact": "Every doc claim found drifted in this review sits outside the executing doc-guard suite, so the claims that drifted during or before this consolidation would all merge green.",
+      "recommendation": "Extend the existing guard pattern: assert the persisted-state list against a constant exported by backend/src/committee/domain.ts; add how-it-works.html and the §9.5/admin route mentions to the committee-docs test; grep-assert deployment.md secret names against consumed process.env keys; compare the demo-spec MCP tool table to mcp/src/server.ts registrations.",
+      "owner": "tests",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-033",
+      "review": "review-docs",
+      "classification": "STALE_COMMENT",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "scripts/tests/goldens-header.test.ts:4 (drift gate SPECIFIED in docs/architecture.md §5 — was preview-server-spec.md §5; first-match §5 is Backend; intended docs/architecture.md:2803 with the gate at docs/architecture.md:2821)",
+        "scripts/tests/goldens-header.test.ts:26 (test title still says the gate is specified in the preview-server spec while the pinned assertion string was updated to docs/architecture.md)",
+        "scripts/tests/frontend-routes.test.ts:75 (docs/architecture.md §7.1's route list — first-match §7.1 is Analytics suite at docs/architecture.md:372; intended Routing and structure at docs/architecture.md:2608)"
+      ],
+      "impact": "Scripts/tests back-links misdirect the same way as the backend and frontend sets; the executable assertions themselves still pass.",
+      "recommendation": "Update the two § citations and the test title wording.",
+      "owner": "code",
+      "related_findings": ["review-docs-001"]
+    },
+    {
+      "id": "review-docs-034",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "low",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "https://github.com/robotmoney/robotmoney-frontend/issues/15 (body path census: docs/preview-server-spec.md x7, docs/plan-admin-surface.md x5, docs/deployment.md x2, docs/topology.md x1, docs/demo-spec.md x1, docs/tmp-allocation-data-root-causes.md x1 — all deleted or moved)",
+        "issue #15 also references docs/prd.md x8, docs/site-split.md, docs/design-critique.md, docs/brand-rollout.md — absent from the tree entirely",
+        "docs/ tree at 6e5cfb4 contains only architecture.md, decisions.md, runbooks/, archive/, code-review/"
+      ],
+      "impact": "Future Plan-driven workers get expected_touchpoints pointing at nonexistent files and cannot resolve the promised product authority; mostly historical metadata of closed items.",
+      "recommendation": "On the next replan/plan-sync, rewrite live Plan entries' doc paths to docs/architecture.md sections and docs/runbooks/*; decide whether a PRD is required or stop referencing docs/prd.md; leave closed-item history as-is.",
+      "owner": "product",
+      "related_findings": ["review-docs-018"]
+    }
+  ],
+  "clean_areas": [
+    "Consolidation fidelity: all five folded specs are verbatim carries (topology, plan-admin-surface, demo-spec, contract-live-data, preview-server-spec); diffs show only H1-to-H2 demotion, whitespace, separators, and link retargets — no normative content lost.",
+    "Deleted-path residue: zero references to the seven deleted docs or old runbook paths anywhere in tracked sources outside point-in-time code-review artifacts; all inbound runbook links updated and docs/runbooks internal links resolve.",
+    "All relative file links in the canonical docs resolve, including anchored links (D15/D16/D17 slugs, deployment.md environment anchor, architecture.md MCP anchor, participation.html#mcp).",
+    "D1-D18 all exist in decisions.md with a consistent supersession chain (D11-to-D13, D8 refined by D13, D15/D16/D17 vs D1, D18 refines D13).",
+    "Hostname/subdomain/port map consistent across topology section, D13/D18, deployment.md, README, credential-doctor.md, docker-compose.yml, and backend config; MCP endpoints guarded by an executed passing test.",
+    "Cron/schedule values agree docs-to-code for the five analytics jobs; env vars named in docs exist in code; removal claims (demo-rpc-guard, DEMO_HERMETIC, fetcher-provider, base-rpc-stub) verified true.",
+    "Migration references check out (0001-0018, 0020); EDGAR seed pair exists; section table attributions in §6/§10/§11 accurate.",
+    "Demo-spec MCP tool table exactly matches mcp/src/server.ts registrations, including the honest actual_vs_target_weights not-implemented row; OAuth 2.1 client_credentials + discovery implemented.",
+    "participation.html and api-reference.html route literals (including token-claim) match contract/src/routes.js, with executed route-literal consistency coverage.",
+    "COMMITTEE_ROSTER_CAP enforced with advisory-lock race safety; COMMITTEE_SCHEDULES_ENABLED contract implemented and applied on re-seed; DEMO_MODE behavior verified end-to-end.",
+    "Executable doc guards green post-consolidation: bun test scripts/tests = 163 pass / 0 fail across 27 files; check-docs-analytics.sh and lint-docs.sh exit 0.",
+    "recyclebin/MANIFEST.md's seven entries match recyclebin/docs/ contents exactly; the archived allocation investigation is byte-identical with its investigation date preserved; no archived document is cited as live/normative."
+  ],
+  "unresolved_decisions": [
+    "Are admin committee lifecycle actions intentionally synchronous 200/201 or required to be queued and return 202?",
+    "Is D13/D18 deployed current state, accepted target state, or external infrastructure whose automation lives elsewhere?",
+    "Is WORKER_DATABASE_URL mandatory outside ephemeral environments?",
+    "Does the repository need a separate PRD, or should the Plan stop requiring one?",
+    "Which goldens oracle is accepted: live-cluster shape comparison or offline contract conformance?"
+  ],
+  "limitations": [
+    "Anchor-slug verification done by GitHub slugification rules manually, not a renderer.",
+    "Runtime behavior (production cron enablement, Cloudflare 8443, DO/Cloudflare console facts) and live infrastructure unverifiable from the repo; branch protection not independently inspected.",
+    "backend/tests, mcp tests, and Playwright browser suites not executed by the reviewers (they run in the required integration job); live e2e gate and nightly sweeps not run.",
+    "External claims (MCP Registry listing, Cloudflare port list, rmpc releases URL) not verified.",
+    "GitHub inspection limited to Plan issue #15, issue #206, and the open-issue/PR lists; merged history sampled, not exhaustively replayed.",
+    "The prior 2026-07-21 review covered a dirty snapshot on base c42c47a; dispositions compare each finding's claims against HEAD 6e5cfb4 evidence rather than byte-diffing that snapshot.",
+    "docs/code-review/20260714-review-maintainability-claude.json skimmed for doc-related findings only; non-doc findings not reconciled.",
+    "Line numbers cite pinned commit 6e5cfb4."
+  ],
+  "unreviewed_surfaces": [
+    "public documentation outside the Investment Committee pages",
+    "deep frontend copy outside implicated views",
+    "public-symbol comments outside implicated modules",
+    "generated API documentation, if any, outside contract/src",
+    "docs/archive/ content beyond provenance checks; brand-assets; recyclebin content beyond manifest reconciliation",
+    "specialist security, economics, reliability, and maintainability concerns not directly implicated by documentation claims"
+  ]
+}
