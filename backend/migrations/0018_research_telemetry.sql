@@ -8,7 +8,7 @@
 -- own migration 0017 with a broader admin-surface schema (queue scope/cancel
 -- metadata, committee versioning, audit_log extension, etc), including its
 -- own placeholder `analytics_runs`/`analytics_stage_runs`/`analytics_artifacts`
--- tables (docs/plan-admin-surface.md §5.2) that #150 explicitly left
+-- tables (docs/architecture.md §5.2) that #150 explicitly left
 -- unimplemented ("Out of scope: Analytics telemetry endpoint implementation
 -- and worker instrumentation" — issue #150). This migration renumbers to 0018
 -- during rebase (mechanical) AND uses distinct `research_pipeline_*` table

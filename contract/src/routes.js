@@ -136,7 +136,7 @@ export const ROUTES = {
     auth: "/api/admin/auth", // POST — verify the admin password → { ok: true }
     // GET — health cards + alert feed (queue counts, last success/failure by
     // kind, stale research signals, next enabled schedules). See
-    // docs/plan-admin-surface.md US-A2. Route shape fixed here so the #157
+    // docs/architecture.md US-A2. Route shape fixed here so the #157
     // frontend and the #155 backend converge on the same path on rebase.
     overview: "/api/admin/overview",
     jobs: "/api/admin/jobs", // GET ?limit=&cursor=&kind=&status=&scopeType=&scopeId=&createdFrom=&createdTo= — task-queue jobs + schedules + status summary
@@ -146,7 +146,7 @@ export const ROUTES = {
     schedule: "/api/admin/schedules/:id", // PATCH — toggle enabled on an analytics job_schedules row (issue #155)
     audit: "/api/admin/audit", // GET ?actor=&action=&targetType=&targetId=&from=&to=&limit=&cursor= — redacted, filtered audit_log feed (issue #155)
     // Research pipeline telemetry admin surface (issue #151, consumed by the
-    // #157 operator UI per docs/plan-admin-surface.md US-R1..US-R4).
+    // #157 operator UI per docs/architecture.md US-R1..US-R4).
     // X-Admin-Token. Shape fixed by the #151 backend; frontend converges here.
     researchRuns: "/api/admin/research/runs", // GET ?kind=&status=&limit= — run list
     researchRun: "/api/admin/research/runs/:id", // GET — run detail: stage timeline, warnings, artifacts, freshness
@@ -156,7 +156,7 @@ export const ROUTES = {
   },
 
   // Committee operations surface (issue #159 UI over issue #152/PR #169's
-  // already-shipped backend; docs/plan-admin-surface.md §6.3 and §7.1). This
+  // already-shipped backend; docs/architecture.md §6.3 and §7.1). This
   // is the SAME table `committee.admin.*` above (backend/src/api/routes/
   // committee-admin.ts) — there is deliberately no second `admin.committee.*`
   // route table for this feature, so the frontend and backend can never drift

@@ -1,4 +1,4 @@
-// GET /api/admin/overview projection (issue #155, docs/plan-admin-surface.md
+// GET /api/admin/overview projection (issue #155, docs/architecture.md
 // US-A2). Composes queue counts, production-kind (regime.classify /
 // research.refresh) run health, regime + research staleness, enabled
 // analytics schedules, the next queued committee event, and an explicit
@@ -9,12 +9,12 @@ import { sql } from "../db/client.ts";
 import { computeRegimeStaleness, type RegimeStaleness } from "../analytics/report/regime-projection.ts";
 
 // Research signals are considered stale after this many UTC calendar days
-// without a new row — named per docs/plan-admin-surface.md US-A2 ("Use a
+// without a new row — named per docs/architecture.md US-A2 ("Use a
 // named constant RESEARCH_STALE_DAYS = 2 in the admin projection").
 export const RESEARCH_STALE_DAYS = 2;
 
 // The two scheduled production job kinds this projection reports on by name
-// (docs/plan-admin-surface.md §3: "The production jobs are regime.classify at
+// (docs/architecture.md §3: "The production jobs are regime.classify at
 // 22:30 UTC and research.refresh at 23:00 UTC").
 export const PRODUCTION_KINDS = ["regime.classify", "research.refresh"] as const;
 export type ProductionKind = (typeof PRODUCTION_KINDS)[number];

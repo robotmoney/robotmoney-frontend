@@ -1,6 +1,6 @@
 // Admin dashboard over the Postgres task queue (research/analytics pipeline)
 // plus the overview/retry/schedule-toggle/audit surface added by issue #155
-// (docs/plan-admin-surface.md). `jobs`, `job_schedules`, and `job_runs` are
+// (docs/architecture.md). `jobs`, `job_schedules`, and `job_runs` are
 // migration 0003's tables — `job_runs.output` (jsonb) + `error` (text) ARE the
 // per-run logs; `jobs.scope_type/scope_id/requested_by/audit_request_id` and
 // the extended `audit_log` columns are migration 0017's additions.

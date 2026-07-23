@@ -2,7 +2,7 @@
 
 How changes ship to **staging** and **production**, and the exact credentials to
 generate from **Cloudflare** and **DigitalOcean** so CI can deploy. Companion to
-[topology.md](./topology.md) (the map — decision D13) and ARCHITECTURE §8 (what
+[architecture.md](../architecture.md) (the map — decision D13) and ARCHITECTURE §8 (what
 this repo ships). Assumes **GitHub Actions** as the CI; the credential inventory is
 CI-agnostic, only the storage mechanism (GitHub Environment secrets) is specific.
 
@@ -58,7 +58,7 @@ separate subdomains, droplet, Space, Postgres, and firewall. Store secrets as
 The MCP host (`mcp.`) is co-located on the **same droplet** as `committee.`
 (both are this repo's surface) but runs as its own container on its own
 Cloudflare-proxied port — see
-[topology.md §3.1](./topology.md#31-mcp-hostname-and-port-d18) for why it
+[architecture.md §3.1](../architecture.md#31-mcp-hostname-and-port-d18) for why it
 needs a distinct port (`8443`, a Cloudflare-supported proxied-HTTPS port)
 instead of a path under `committee.`.
 
@@ -95,7 +95,7 @@ The `committee.`/`mcp.`/`app.` droplets are Cloudflare-proxied, so each serves a
 origin pulls; generated once in the dashboard or via API). Install the cert + key
 on the droplet (injected at deploy as **`CF_ORIGIN_CERT`** / **`CF_ORIGIN_KEY`**).
 This is config, not running software. `mcp.` shares the `committee.` droplet
-(topology.md §3.1), so a single Origin CA cert covering both hostnames (or two
+(architecture.md §3.1), so a single Origin CA cert covering both hostnames (or two
 certs installed side by side) is sufficient — no separate droplet-provisioning
 step.
 

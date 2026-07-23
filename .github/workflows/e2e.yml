@@ -95,7 +95,7 @@ jobs:
       # landed). scripts/demo-frontend-check.ts's own loud-failure path is itself
       # self-tested by scripts/tests/demo-frontend-check.test.ts (run in the required
       # `integration` job), which proves it exits non-zero when a core surface marker
-      # is stripped and 0 against correct content. See docs/demo-spec.md §"Demo
+      # is stripped and 0 against correct content. See docs/architecture.md §"Demo
       # readiness gate". The job id below stays `e2e` so branch protection's existing
       # required-status-check mapping is unaffected.
       - name: Full-stack demo (demo readiness gate)

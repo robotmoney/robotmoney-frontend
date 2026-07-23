@@ -1,6 +1,6 @@
 // Alpine factory for /admin/committee: topics/members/sessions overview,
 // topic create, member manual-add (one-time credential reveal), and session
-// scheduling. Issue #159 — see docs/plan-admin-surface.md §4 US-C1/US-C2/US-C3.
+// scheduling. Issue #159 — see docs/architecture.md §4 US-C1/US-C2/US-C3.
 //
 // Reconciled to the REAL backend (issue #152/PR #169, backend/src/api/routes/
 // committee-admin.ts) per PR #172 review: routes live at

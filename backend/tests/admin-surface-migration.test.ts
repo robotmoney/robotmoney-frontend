@@ -1,6 +1,6 @@
 // Migration 0017 (admin surface: queue scope metadata, analytics telemetry
 // tables + worker-role revokes, committee versioning/session roster+event
-// backfill, audit_log extension — issue #150, docs/plan-admin-surface.md §5).
+// backfill, audit_log extension — issue #150, docs/architecture.md §5).
 //
 // This file provisions its OWN ephemeral Postgres, deliberately separate from
 // the shared suite database that tests/preload.ts migrates through 0017

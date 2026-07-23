@@ -72,7 +72,7 @@ describe("frontend route resolution", () => {
   });
 
   // Admin committee operations surface (issue #159) — every nested path in
-  // docs/plan-admin-surface.md §7.1's route list resolves to a shipped
+  // docs/architecture.md §7.1's route list resolves to a shipped
   // fragment, including :id detail pages.
   test("resolves admin committee operations routes", () => {
     expect(viewFor("/admin")).toBe("/views/admin.html");

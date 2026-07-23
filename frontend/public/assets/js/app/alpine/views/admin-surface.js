@@ -1,6 +1,6 @@
 // Alpine factory for the admin operator surface (/admin and its subpaths).
 // Supersedes the old single-table adminJobsView (issue #157;
-// docs/plan-admin-surface.md §7). One shell fragment serves every /admin/*
+// docs/architecture.md §7). One shell fragment serves every /admin/*
 // path (frontend/public/assets/js/app/routes.js maps the whole subtree to
 // this view); this component reads location.pathname at init to decide which
 // section to render and keeps navigating with history.pushState so deep links
@@ -15,7 +15,7 @@
 // section state so nothing sensitive lingers in memory.
 //
 // Queue schedule toggles and the redacted audit log (issue #155,
-// docs/plan-admin-surface.md US-Q2/US-A3) are additive on top of the #157
+// docs/architecture.md US-Q2/US-A3) are additive on top of the #157
 // shell: schedule enable/disable lives inside the existing Queue section, and
 // audit gets its own top-level nav section.
 import { api, ROUTES, path } from "../../lib/api.js";
@@ -242,7 +242,7 @@ export function registerAdminSurfaceView(Alpine) {
     closeJob() { this.selectedJob = null; },
 
     // Retry is available only for a dead job; it clones into a new pending job
-    // and never mutates the dead row (docs/plan-admin-surface.md US-Q1).
+    // and never mutates the dead row (docs/architecture.md US-Q1).
     canRetry(job) { return job?.status === "dead"; },
     async retryJob(id) {
       this.retryResult = null;

@@ -1,5 +1,5 @@
 // Admin overview/queue/retry/schedule-toggle/audit surface (issue #155,
-// docs/plan-admin-surface.md). Runs against the ephemeral Postgres the preload
+// docs/architecture.md). Runs against the ephemeral Postgres the preload
 // provisions (real DB, never mocked) — if Postgres is absent the preload
 // THROWS, so this suite fails red rather than skipping.
 //

@@ -1,6 +1,6 @@
 // MCP connection-endpoint documentation guard (issue #189). mcp/src/server.ts
-// is real and already correctly parameterizes MCP_PORT, but docs/topology.md
-// and docs/deployment.md never published a concrete staging/production
+// is real and already correctly parameterizes MCP_PORT, but docs/architecture.md
+// and docs/runbooks/deployment.md never published a concrete staging/production
 // hostname for it the way they do for committee.staging.robotmoney.net /
 // committee.robotmoney.net, so participation.html had to leave an "ask your
 // operator" placeholder instead of a real URL. D18 (docs/decisions.md)
@@ -26,18 +26,18 @@ const STAGING_URL = `https://${STAGING_HOST}:${PORT}/mcp`;
 const PROD_URL = `https://${PROD_HOST}:${PORT}/mcp`;
 
 describe("MCP connection endpoint is documented consistently (D18)", () => {
-  test("docs/topology.md documents the mcp. staging and production hostnames", () => {
-    const doc = read("docs/topology.md");
+  test("docs/architecture.md documents the mcp. staging and production hostnames", () => {
+    const doc = read("docs/architecture.md");
     expect(doc).toContain(STAGING_HOST);
     expect(doc).toContain(PROD_HOST);
   });
 
-  test("docs/topology.md documents the Cloudflare-proxied port (8443)", () => {
-    expect(read("docs/topology.md")).toContain(PORT);
+  test("docs/architecture.md documents the Cloudflare-proxied port (8443)", () => {
+    expect(read("docs/architecture.md")).toContain(PORT);
   });
 
-  test("docs/deployment.md's environments table lists a distinct MCP host for staging and production", () => {
-    const doc = read("docs/deployment.md");
+  test("docs/runbooks/deployment.md's environments table lists a distinct MCP host for staging and production", () => {
+    const doc = read("docs/runbooks/deployment.md");
     expect(doc).toContain(`${STAGING_HOST}:${PORT}`);
     expect(doc).toContain(`${PROD_HOST}:${PORT}`);
   });

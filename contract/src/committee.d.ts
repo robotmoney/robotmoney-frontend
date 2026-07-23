@@ -266,7 +266,7 @@ export interface CommitteeSubmission {
 /**
  * Durable committee-agent health event shape reserved for issue #208.
  * This scout adds no storage or route behavior. The eventual admin projection
- * follows docs/plan-admin-surface.md: bounded details, no secrets, append-only
+ * follows docs/architecture.md: bounded details, no secrets, append-only
  * auditability.
  */
 export interface CommitteeAgentHealthEvent {

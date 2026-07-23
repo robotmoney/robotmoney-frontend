@@ -49,7 +49,7 @@ async function signedSubmission(m: { id: string; privateKey: CryptoKey }, date: 
 }
 
 // Valid, correctly-ordered briefOpensAt < windowClosesAt < publishAt for a
-// given UTC calendar date, matching docs/plan-admin-surface.md §6.3's
+// given UTC calendar date, matching docs/architecture.md §6.3's
 // SessionCreateRequest shape.
 function sessionTimes(date: string) {
   return {

@@ -1,4 +1,4 @@
--- Admin surface data and audit foundation (issue #150; docs/plan-admin-surface.md §5).
+-- Admin surface data and audit foundation (issue #150; docs/architecture.md §5).
 --
 -- Durable, queryable foundations for scoped queue work, analytics execution
 -- telemetry, committee roster/lifecycle history, and safe append-only admin
@@ -143,7 +143,7 @@ ALTER TABLE committee_applications DROP CONSTRAINT IF EXISTS committee_applicati
 ALTER TABLE committee_applications ADD CONSTRAINT committee_applications_status_check
   CHECK (status IN ('pending', 'approved', 'rejected'));
 
--- Six legal session states (docs/plan-admin-surface.md §2); no persisted
+-- Six legal session states (docs/architecture.md §2); no persisted
 -- 'brief_published'. Defensively fold any unexpected legacy value to
 -- 'scheduled' before enforcing.
 UPDATE committee_sessions SET state = 'scheduled'

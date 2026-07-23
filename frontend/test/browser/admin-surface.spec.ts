@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
 
 // Covers the schedule-toggle and audit-log controls added by issue #155
-// (docs/plan-admin-surface.md US-Q2/US-A3) on top of the #157 sectioned admin
+// (docs/architecture.md US-Q2/US-A3) on top of the #157 sectioned admin
 // shell (adminSurfaceView / alpine/views/admin-surface.js). Overview-alert
 // rendering, dead-job retry, and login/polling/403 behavior are already
 // covered by admin-view.spec.ts — this file only exercises the NEW routes:

@@ -72,7 +72,7 @@ Preview mode trades data realism for zero setup:
   scheduled recomputes, committee sessions), run the full stack:
 
   ```bash
-  bun run demo         # see docs/demo-spec.md — much better data simulations
+  bun run demo         # see docs/architecture.md — much better data simulations
   bun run demo:status
   bun run demo:down
   ```
@@ -208,10 +208,11 @@ owner-review mechanism guarding them; the grant list **is** the guard.
 
 ## Where things are documented
 
+- Documentation map and canonical-vs-supporting ownership: [`docs/architecture.md`](docs/architecture.md)
 - Preview mode (wrapper, goldens, drift gate, hosted Cloudflare Pages): [`docs/architecture.md`](docs/architecture.md) §4
 - Overall architecture: [`docs/architecture.md`](docs/architecture.md)
-- Full-stack demo: [`docs/demo-spec.md`](docs/demo-spec.md)
+- Full-stack demo: [`docs/architecture.md`](docs/architecture.md)
 - Design decisions (D14: why preview mode replaced the "frozen" bundle; D19/D20: hosted preview URLs via Cloudflare Git integration): [`docs/decisions.md`](docs/decisions.md)
-- Live-data endpoint contract (buybacks / token metrics / sleeves / framework DTOs + provenance rules): [`docs/contract-live-data.md`](docs/contract-live-data.md)
-- Infra/domain map (D13): [`docs/topology.md`](docs/topology.md)
-- Deployment & credentials (GitOps): [`docs/deployment.md`](docs/deployment.md)
+- Live-data endpoint contract (buybacks / token metrics / sleeves / framework DTOs + provenance rules): [`docs/architecture.md`](docs/architecture.md)
+- Infra/domain map (D13): [`docs/architecture.md`](docs/architecture.md)
+- Deployment & credentials (GitOps): [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)
