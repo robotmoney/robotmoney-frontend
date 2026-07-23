@@ -289,12 +289,28 @@ export function registerStaticViews(Alpine) {
         this.member = await loadArchiveMember(memberId).catch(() => null);
         if (!this.member) this.member = await api.get(path(ROUTES.committee.member, { id: memberId })).then(camelMember);
         const sessionData = await api.get(ROUTES.committee.sessions);
-        const baseSessions = (sessionData.sessions || []).filter((s) => s.state === "published");
-        const details = await Promise.all(baseSessions.slice(0, 20).map(async (s) => {
+        // Prioritise in-progress sessions by STATE, not date position: a
+        // member's just-submitted take lives in a collecting session, and the
+        // list is date-ordered — a manually-opened window can sit deep in the
+        // list, so a naive slice would drop it and the page would read "No
+        // sessions yet" right after a verified submit. Always include every
+        // in-progress session + the most recent published for the track record.
+        const all = sessionData.sessions || [];
+        const inProgress = all.filter((s) => ["collecting", "window_closed", "aggregated"].includes(s.state));
+        const published = all.filter((s) => s.state === "published").slice(0, 20);
+        const details = await Promise.all([...inProgress, ...published].map(async (s) => {
           try {
             const detail = await api.get(path(ROUTES.committee.session, { date: s.date, subject: s.subjectId }));
             return { ...s, takes: detail.takes || [] };
           } catch (_) {
+            // Fall back to the shipped static archive for pre-2026-07-01 sessions
+            // so their takes stay visible during offline / static rendering.
+            if (archivePreferred(s.date)) {
+              try {
+                const archive = await loadArchiveSession(s.date, s.subjectId);
+                return { ...s, takes: archive.takes || [] };
+              } catch (_) { /* fall through to empty */ }
+            }
             return { ...s, takes: [] };
           }
         }));
@@ -305,15 +321,29 @@ export function registerStaticViews(Alpine) {
         this.loading = false;
       }
     },
-    recentTakes() {
+    takePhase(state) {
+      if (state === "collecting") return "live";
+      if (state === "window_closed" || state === "aggregated") return "closing";
+      return "published";
+    },
+    phaseLabel(phase) {
+      return phase === "live" ? "Collecting · window open"
+        : phase === "closing" ? "Closed · awaiting publish"
+        : "Published";
+    },
+    allTakes() {
       if (!this.member) return [];
       return this.sessions
         .map((session) => {
           const take = (session.takes || []).find((t) => t.memberId === this.member.id);
-          return take ? { session, take } : null;
+          return take ? { session, take, phase: this.takePhase(session.state) } : null;
         })
         .filter(Boolean);
     },
+    // Takes in sessions that haven't published yet — the current, live activity.
+    inProgressTakes() { return this.allTakes().filter((r) => r.phase !== "published"); },
+    // The published track record (what "Recent takes" has always meant).
+    recentTakes() { return this.allTakes().filter((r) => r.phase === "published"); },
   }));
 
   Alpine.data("icSessionDetail", () => ({

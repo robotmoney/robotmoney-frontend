@@ -42,10 +42,55 @@
           </dl>
         </section>
 
+        <!-- In progress: takes in sessions that haven't published yet. Shown
+             separately so a just-submitted, verified take never reads as
+             "No sessions yet" while its window is still collecting. -->
+        <template x-if="inProgressTakes().length">
+          <div class="mp-inflight">
+            <div class="cv__sessions-head">
+              <p class="cv__panel-label"><span x-text="inProgressTakes().length > 1 ? 'These sessions' : 'This session'"></span> <span class="mp-live-dot" aria-hidden="true"></span></p>
+            </div>
+            <div class="cv__session-list cv__session-list--compact">
+              <template x-for="row in inProgressTakes()" :key="`ip-${row.session.date}-${row.session.subjectId}`">
+                <article class="cv__session-card mp-card--live">
+                  <div class="cv__session-top">
+                    <div class="cv__session-titleline">
+                      <span class="cv__date" x-text="formatDate(row.session.date, 'short')"></span>
+                      <a class="cv__session-title" :href="`/committee/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
+                      <span class="mp-phase" x-text="phaseLabel(row.phase)"></span>
+                    </div>
+                    <div class="cv__receipt-status">
+                      <span class="cv__stance-badge" :style="stanceStyle(row.take.stance)">
+                        <i :style="`background:${stanceColor(row.take.stance)}`"></i>
+                        <span x-text="`${row.take.stance} · ${fmtPct(row.take.confidence)}`"></span>
+                      </span>
+                      <span class="cv__verified" :class="{ 'cv__verified--negative': !row.take.verified }"
+                            data-verified-badge
+                            :data-take-id="row.take.id"
+                            x-text="row.take.verified ? '✓ verified' : '✕ not verified'"></span>
+                    </div>
+                  </div>
+                  <p class="cv__session-copy" x-text="row.take.body || ''"></p>
+                  <a class="cv__memo-link" :href="takeHref(row.take)" data-take-permalink>Verification receipt →</a>
+                  <p class="mp-note" x-text="row.phase === 'live'
+                    ? 'Take is in and signature-verified. The window is still collecting; it joins the track record below when the session publishes.'
+                    : 'The window has closed; this take publishes to the track record once the session is aggregated.'"></p>
+                </article>
+              </template>
+            </div>
+          </div>
+        </template>
+
         <div class="cv__sessions-head">
-          <p class="cv__panel-label">Recent takes (<span x-text="recentTakes().length"></span>)</p>
+          <p class="cv__panel-label">Track record (<span x-text="recentTakes().length"></span>)</p>
         </div>
-        <p class="cv__empty" x-show="recentTakes().length === 0">No sessions yet.</p>
+        <p class="cv__empty" x-show="recentTakes().length === 0 && inProgressTakes().length === 0">
+          No takes yet. This member hasn't submitted to a session.
+        </p>
+        <p class="cv__empty" x-show="recentTakes().length === 0 && inProgressTakes().length > 0"
+           x-text="inProgressTakes().length > 1
+             ? 'No published sessions yet. The takes above are the first, and land here once their sessions publish.'
+             : 'No published sessions yet. The take above is the first, and lands here once its session publishes.'"></p>
         <div class="cv__session-list cv__session-list--compact">
           <template x-for="row in recentTakes().slice(0, 20)" :key="`${row.session.date}-${row.session.subjectId}`">
             <article class="cv__session-card">
@@ -76,4 +121,18 @@
       </div>
     </template>
   </div>
+
+  <style>
+    /* In-progress take block: a top seam marks "current" (no left/right accent
+       rail), a pulsing point signals the window is still open, a mono pill
+       states the exact phase. Opacity-only animation, no glow. */
+    .mp-inflight { margin-bottom: 22px; }
+    .mp-card--live { border-top: 1px solid #00E5FF; }
+    .mp-live-dot { display: inline-block; width: 8px; height: 8px; background: #FF7A29;
+                   margin-left: 6px; vertical-align: middle; animation: mp-pulse 2.2s ease-in-out infinite; }
+    @keyframes mp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+    .mp-phase { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10px;
+                letter-spacing: .14em; text-transform: uppercase; color: #FF7A29; margin-left: 10px; }
+    .mp-note { font-size: 12.5px; color: var(--color-muted, #7E889E); margin-top: 8px; }
+  </style>
 </section>
