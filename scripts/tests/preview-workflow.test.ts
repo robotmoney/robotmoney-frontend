@@ -115,7 +115,7 @@ describe("preview-workflow", () => {
     if (existsSync(decisionsPath)) {
       const content = readFileSync(decisionsPath, "utf-8");
       // Should mention the revisit of D14 and D13
-      expect(content).toContain("D14") || expect(content).toContain("D13");
+      expect(content.includes("D14") || content.includes("D13")).toBe(true);
     }
   });
 
