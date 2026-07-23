@@ -15,11 +15,13 @@ bun install          # once
 bun run preview      # serves the live SPA; open the URL it prints
 ```
 
-- `bun run preview` serves the **live** `frontend/public` (edits show on refresh)
-  and **mocks every `/api/*` route** from committed goldens
-  (`goldens/api-goldens.json`). No backend needed.
-- It binds a **random free port** each run (printed on start), so several previews
-  can run at once without colliding. Pin one with `PORT=8080 bun run preview`.
+- `bun run preview` composes the preview deployment directory (frontend/public +
+  wrapper + goldens) and serves it on a **random free port** (printed on start)
+  via a static file server.
+- The wrapper (`preview/preview.html`) runs the live SPA inside an iframe and
+  intercepts `/api/*` calls client-side, answering them from committed goldens
+  (`goldens/api-goldens.json`). No backend needed. The experience is identical
+  to the hosted branch preview (push to `preview/**` to see your branch live).
 
 **Agent note:** to let a contributor view the site, start `bun run preview` and
 give them the printed URL. It runs in the foreground — keep it running while they
@@ -37,7 +39,7 @@ review; stop it with Ctrl-C.
 
 ## Keep the goldens correct (your responsibility)
 
-Goldens are mock API responses the preview server replays. **Correct goldens are
+Goldens are mock API responses the preview wrapper replays. **Correct goldens are
 the responsibility of the change author** — there is no nightly job that fixes
 them for you, and a CI **drift gate** will block a PR whose goldens no longer
 match the code.
@@ -205,10 +207,10 @@ owner-review mechanism guarding them; the grant list **is** the guard.
 
 ## Where things are documented
 
-- Preview server + goldens design & the drift gate: [`docs/preview-server-spec.md`](docs/preview-server-spec.md)
-- Overall architecture (preview mode is §4): [`docs/architecture.md`](docs/architecture.md)
+- Preview mode (wrapper, goldens, drift gate, hosted Cloudflare Pages): [`docs/architecture.md`](docs/architecture.md) §4
+- Overall architecture: [`docs/architecture.md`](docs/architecture.md)
 - Full-stack demo: [`docs/demo-spec.md`](docs/demo-spec.md)
-- Design decisions (incl. why preview mode replaced the "frozen" bundle): [`docs/decisions.md`](docs/decisions.md)
+- Design decisions (D14: why preview mode replaced the "frozen" bundle; D19: hosted preview URLs): [`docs/decisions.md`](docs/decisions.md)
 - Live-data endpoint contract (buybacks / token metrics / sleeves / framework DTOs + provenance rules): [`docs/contract-live-data.md`](docs/contract-live-data.md)
 - Infra/domain map (D13): [`docs/topology.md`](docs/topology.md)
 - Deployment & credentials (GitOps): [`docs/deployment.md`](docs/deployment.md)

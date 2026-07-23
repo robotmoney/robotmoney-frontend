@@ -1,0 +1,75 @@
+name: preview-pages
+
+on:
+  push:
+    branches:
+      - preview/**
+
+# Shared environment: secrets and defaults across jobs
+env:
+  CI_CLASS: preview-deploy
+  BUN_VERSION: latest
+
+jobs:
+  # Hermetic smoke test: runs without Cloudflare credentials, against the
+  # composed static directory. Proves the wrapper works end-to-end.
+  smoke:
+    runs-on: ubuntu-latest
+    name: "smoke: preview wrapper + goldens (hermetic)"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Compose preview deploy directory
+        run: bun scripts/compose-preview-deploy.ts
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run preview smoke test
+        run: bunx playwright test frontend/test/browser/preview-smoke.spec.ts
+
+  # Cloudflare Pages deploy job: requires CLOUDFLARE_API_TOKEN secret.
+  # Only runs if smoke tests pass.
+  pages-deploy:
+    runs-on: ubuntu-latest
+    needs: smoke
+    name: "deploy: Cloudflare Pages preview branch"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Compose preview deploy directory
+        run: bun scripts/compose-preview-deploy.ts
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install wrangler
+        run: npm install -g wrangler
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Extract branch name from ref (e.g., refs/heads/preview/foo -> foo)
+          BRANCH_NAME="${GITHUB_REF#refs/heads/preview/}"
+          wrangler pages deploy .preview-deploy --project-name=robotmoney-preview --branch="${BRANCH_NAME}"

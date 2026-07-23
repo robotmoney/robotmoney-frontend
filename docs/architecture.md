@@ -173,19 +173,31 @@ Hand-written, no Tailwind, in three files:
 Lightweight hosting for **agentic development of the marketing surface** (the
 buildless SPA *is* the marketing site). A contributor — human or agent — working
 from a git checkout can view and iterate on the site with **no backend, database,
-or workers**. Full design in
-[`docs/preview-server-spec.md`](./preview-server-spec.md); contributor workflow in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md). The mechanism:
+or workers**. Contributor workflow in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
-**The preview server (`scripts/serve-preview.ts`, `bun run preview`).** A ~40-line
-`Bun.serve` that (a) serves the **live** `frontend/public` tree so source edits
-show on refresh, and (b) **mocks every `/api/*` route from the committed goldens**
-(`goldens/api-goldens.json`). The SPA is **unmodified** — it still requests
-same-origin `/api/*`; the server answers from the goldens (query dropped — a
-golden is one point in time), and writes (POST/PUT/DELETE) are accepted no-ops.
-It binds a **random free port** (printed on start) so concurrent previews never
-collide, with an index.html SPA fallback for client routes. There is **no build
-step and no `file://`** — it's the real static SPA served over HTTP.
+**The preview wrapper (`preview/preview.html`).** A client-side iframe wrapper
+that fetches `/index.html` (the production SPA), runs it inside a same-origin
+iframe, and **patches the iframe's fetch and history BEFORE document.open()** to
+intercept API calls and mocking. The SPA is **unmodified** — it still requests
+same-origin `/api/*` as normal, unaware of any interception. GET `/api/*` calls
+are answered from goldens loaded in JS memory (query dropped — a golden is one
+point in time); non-GET requests (POST/PUT/DELETE) return `{ok: true, mocked: true}`
+no-ops. A red "PREVIEW" watermark remains permanently visible. Hash-based app
+navigation (e.g. `/app#/allocation`) mirrors to the parent URL's hash so deep
+links are shareable: `/preview.html#/allocation` loads that view.
+
+**Deployment: static files on Cloudflare Pages.** On push to `preview/**` branches,
+CI composes a deploy directory (frontend/public verbatim + preview/ files + goldens),
+and `wrangler pages deploy --branch` publishes it to a per-branch preview URL like
+`preview-foo.robotmoney.pages.dev`. Cloudflare Access guards it by default. Visiting
+the bare URL serves `/preview.html` (via `_redirects`), which loads the SPA into the
+iframe and activates mocking. The wrapper is a static file; the mocking is entirely
+client-side. No backend, no reverse proxy, no server-side /api replay.
+
+**Local preview (same experience as hosted).** `bun run preview` composes the same
+deploy directory locally and serves it on a random free port via Bun's static server,
+identical to the Cloudflare experience: the wrapper loads, renders the SPA in an
+iframe, and intercepts fetch calls. No build, no backend, no special local mode.
 
 **Goldens (`goldens/api-goldens.json`).** One committed JSON keyed by request
 pathname → response body, covering every route the frontend calls. It is a *mock*:
@@ -197,8 +209,9 @@ fixtures, so the shapes stay faithful to what the backend actually returns.
 **Correctness is the change author's responsibility.** There is no nightly
 regeneration. An agent (or human) that changes the system such that an API's
 shape changes must recapture the goldens in the same PR — the same discipline as
-updating tests or the contract. A CI **drift gate** (see the spec) blocks a PR
-whose goldens no longer match the code; the fix is `bun run goldens:update`.
+updating tests or the contract. A CI **drift gate** (scripts/tests/goldens-drift.test.ts)
+blocks a PR whose goldens no longer match the code (route set or field shapes); the
+fix is `bun run goldens:update`.
 
 **Data fidelity caveat.** Because values are mock/point-in-time, preview is for
 **layout, copy, components, and navigation** — not for trusting numbers or charts.
@@ -588,8 +601,7 @@ shapes, `bun run preview` serves the live SPA with every `/api/*` route mocked
 from committed goldens (`goldens/api-goldens.json`) on a random free port — for
 developing the marketing surface without a backend. Mechanism in §4 "Preview mode
 (goldens-backed, no backend)"; workflow + fidelity caveats in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md) and
-[`docs/preview-server-spec.md`](./preview-server-spec.md).
+[`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ---
 
