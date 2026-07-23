@@ -251,9 +251,8 @@ makes edits show on refresh.
 test cluster or `bun run demo`), not hand-written and not derived from other
 fixtures — so **field shapes** stay faithful; values are point-in-time. Keeping
 them correct is the **change author's responsibility** (no nightly regeneration);
-a CI drift gate that would block a PR whose goldens no longer match the code is
-specified (see the preview/goldens section of architecture.md) but not yet wired
-into CI. The most
+a CI drift gate blocks a PR whose goldens no longer match the code (wired per
+D19 in `scripts/tests/goldens-drift.test.ts`). The most
 important check is that the **fields** are correct, not the numbers.
 
 **Rejected.**
@@ -269,8 +268,9 @@ important check is that the **fields** are correct, not the numbers.
 **Fidelity caveat.** Preview is for layout/copy/components/navigation; for
 realistic, evolving data run `bun run demo` (see
 [architecture.md § Demo Specification](architecture.md#demo-specification)).
-See [architecture.md § Preview server & goldens](architecture.md#preview-server--goldens--spec)
-for the full design.
+See [architecture.md § Preview mode](architecture.md#preview-mode-goldens-backed-no-backend)
+for the full design (revised by D19: the replay engine is now the client-side
+wrapper, not a server).
 
 ---
 

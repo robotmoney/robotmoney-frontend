@@ -42,9 +42,9 @@ review; stop it with Ctrl-C.
 
 Goldens are mock API responses the preview wrapper replays. **Correct goldens are
 the responsibility of the change author** — there is no nightly job that fixes
-them for you. A CI **drift gate** that would block a PR whose goldens no longer
-match the code is specified (see the preview/goldens section of
-`docs/architecture.md`) but not yet wired into CI.
+them for you, and a CI **drift gate** (`scripts/tests/goldens-drift.test.ts`)
+will block a PR whose goldens no longer match the code (see the preview/goldens
+section of `docs/architecture.md`).
 
 Goldens must be **captured from a real running system** — never hand-edited,
 never derived from other fixtures — so their **field shapes** match what the
