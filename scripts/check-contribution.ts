@@ -1,4 +1,4 @@
-// Contribution governance gate — an author-aware, per-operation file guard.
+// Contribution governance gate — an actor-aware, per-operation file guard.
 //
 // What it enforces:
 //   1. create/edit/delete gate: every mutation in this PR's diff is classified
@@ -10,11 +10,24 @@
 //   2. pm-state: for ALL authors, roadmap/checklist markdown task-list items must
 //      not be committed into docs (they belong in the GitHub Plan issue).
 //
+// PR_AUTHOR is the actor who triggered THIS run (github.actor — whoever pushed
+// the commits being checked), not github.event.pull_request.user.login (the PR's
+// original opener, fixed for the PR's lifetime). A lower-privileged contributor
+// may open a PR that a maintainer then pushes a fix onto; the check must
+// authorize that maintainer's own push against the maintainer's own grants, not
+// silently inherit the opener's. Each push re-runs this gate under its own
+// pusher's identity.
+//
 // The permission model is the single source of truth in
 // .github/file-permissions.json — a deny-by-default dictionary mapping each
 // GitHub login to permitted path globs per operation (create/edit/delete, with
-// an `all` shorthand and a `*` baseline unioned into every author). This gate
-// is DIFF-SCOPED (only files changed in this PR's range are examined) and
+// an `all` shorthand and a `*` baseline unioned into every author). The policy
+// is always read from the merge-base (the base branch's committed version),
+// NEVER from the PR's own HEAD — otherwise a PR could edit this file to grant
+// itself extra permissions and have that self-grant apply to its own diff in
+// the same run. Changing grants is itself gated: it can only take effect once
+// merged, checked against the pre-existing (unmodified) policy. This gate is
+// DIFF-SCOPED (only files changed in this PR's range are examined) and
 // AUTHOR-AWARE (behavior depends on PR_AUTHOR's grants). It is a deterministic,
 // non-network CI check.
 //
@@ -177,16 +190,12 @@ function main(): void {
   const mergeBase = mergeBaseResult.out.trim();
 
   // Permission dictionary — the single source of truth. Read it as it exists at
-  // HEAD (the PR tip, where the file is committed in CI); if absent there, fall
-  // back to the merge base, then to an empty policy. Using git (not node:fs)
+  // the merge-base (the base branch's already-committed version), NEVER at HEAD:
+  // a PR's own edits to this file must not apply to that same PR's diff, or a
+  // PR could grant itself permissions it doesn't have. Using git (not node:fs)
   // keeps this to a single non-JSON import and makes the read diff-scoped.
-  const policyAtHead = tryGit(["show", "HEAD:.github/file-permissions.json"], repoRoot);
   const policyAtBase = tryGit(["show", `${mergeBase}:.github/file-permissions.json`], repoRoot);
-  const policyText = policyAtHead.ok
-    ? policyAtHead.out
-    : policyAtBase.ok
-      ? policyAtBase.out
-      : "{}";
+  const policyText = policyAtBase.ok ? policyAtBase.out : "{}";
   const policy = parsePolicy(policyText);
 
   const violations: string[] = [];
