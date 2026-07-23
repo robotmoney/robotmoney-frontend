@@ -6,7 +6,7 @@
 // fulfilled from node_modules, and both API surfaces are stubbed:
 //   - GET /api/dashboards/vault-economics → the COMMITTED GOLDEN
 //     (goldens/api-goldens.json), the single source of truth per
-//     docs/preview-server-spec.md;
+//     docs/architecture.md's preview section;
 //   - GET /api/dashboards/wallet-balances → an inline stub payload (there is no
 //     live prop-wallet capture — the addresses are owner data).
 //

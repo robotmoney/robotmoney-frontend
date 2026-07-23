@@ -13,7 +13,7 @@
     "test:opencode-tools": "bun scripts/opencode-committee-tools-test.ts",
     "test:browser": "playwright test",
     "typecheck": "tsc --noEmit",
-    "preview": "bun scripts/serve-preview.ts",
+    "preview": "bun scripts/compose-preview-deploy.ts --serve",
     "goldens:update": "bun scripts/update-goldens.ts",
     "demo": "bun scripts/demo.ts",
     "demo:down": "bun scripts/demo-down.ts",

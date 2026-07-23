@@ -462,3 +462,88 @@ a docs-only, config-value decision.
   Edit`) not otherwise needed anywhere in this repo's deployment; a
   Cloudflare-supported alternate port achieves the same "one droplet, two
   proxied listeners" outcome with zero new vendor surface.
+
+---
+
+## D19 — Hosted preview URLs on Cloudflare Pages (revises D14 and D13)
+
+**Decision.** Ship a **hosted, per-branch preview URL** on Cloudflare Pages
+(via `wrangler pages deploy --branch`) for every push to `preview/**` branches.
+Retire the `scripts/serve-preview.ts` server and `docs/preview-server-spec.md`
+specification. Replace server-side `/api` mocking with a **client-side iframe
+wrapper** (`preview/preview.html`) that runs the production SPA inside an
+iframe and intercepts `fetch` calls to serve goldens from a static JSON file
+loaded in JS memory. The wrapper is pure static files; the mocking is entirely
+client-side.
+
+**Motivation.** D14 introduced goldens-backed preview with `bun run preview`,
+a ~40-line Bun server that mocks `/api/*` responses. This works locally, but
+has no hosted deployment path — marketing and external reviewers cannot access
+a branch preview without cloning and running locally. A hosted, shareable URL
+(e.g., `preview-foo.robotmoney.pages.dev`) requires either a persistent server
+or static hosting. Static hosting + client-side mocking is simpler: it removes
+the server entirely, eliminates a class of bugs (server crashes, mismatches
+between local server and built artifact), and makes the preview experience
+identical everywhere — local or hosted, same wrapper, same goldens.
+
+**Relationship to D14.** D14 rejected baked frozen-single-file bundles and
+server-side mocking in favor of live SPA + server replay. This decision
+preserves that — the SPA is still live (zero preview-mode switches in
+production code) — but shifts the server from `scripts/serve-preview.ts`
+to the static wrapper. The goldens contract is unchanged; the wrapper is the
+new replay engine. D14's language "a CI drift gate blocks a PR" is now
+enforced in `scripts/tests/goldens-drift.test.ts`. The spec at D14's
+conclusion (preview-server-spec.md) is retired; preview mode is now described
+in `docs/architecture.md` alongside D14's mechanism.
+
+**Relationship to D13.** D13 established that production surfaces live on DO
+with Cloudflare for DNS + observability only — no compute, no routing
+software. D13 explicitly rejected Cloudflare Pages and Workers. This decision
+uses Cloudflare **Pages only** (not Workers, not compute), purely as a **CDN
+for static files** composed on each CI run (frontend/public + preview/ +
+goldens). The Cloudflare scope **remains DNS + observability** for the
+production surfaces; Pages hosts only ephemeral, branch-scoped preview URLs,
+not any production surface. No Workers, no routing software, no new compute
+platform. Preview is fundamentally outside the D13 topology (it is not a
+production surface). The DNS record (`preview-*.robotmoney.pages.dev`) is
+Cloudflare's, not ours; we own none of that subdomain. D13's properties
+(all production compute on DO, no Cloudflare code) are intact.
+
+**Changes made.**
+- New `preview/` directory: `preview.html` (iframe wrapper), `_redirects`
+  (`/ → /preview.html` rewrite), `_headers` (X-Robots-Tag: noindex),
+  `404.html` (frame-escape handler).
+- New `scripts/compose-preview-deploy.ts`: composes the deploy directory
+  (frontend/public + preview/ + goldens/api-goldens.json); serves it locally
+  with `--serve`.
+- New `.github/workflows/preview-pages.yml`: smoke test job (hermetic
+  Playwright test, no CF credentials) + Pages deploy job on `preview/**`
+  push.
+- Retired `scripts/serve-preview.ts` (superseded by static wrapper).
+- Retired `docs/preview-server-spec.md` (preview contract folded into
+  architecture.md).
+- Updated `package.json` `preview` script: `bun scripts/compose-preview-deploy.ts --serve`.
+- Updated `scripts/update-goldens.ts` header: names wrapper as consumer,
+  references `docs/architecture.md` as contract home, names
+  `scripts/tests/goldens-drift.test.ts` as the wired gate.
+- Updated `docs/architecture.md` preview section: describes wrapper, static
+  hosting, client-side interception, hosted Cloudflare Pages story,
+  repurposed `bun preview`.
+
+**Alternatives rejected.**
+- **Cloudflare Workers** — would require maintaining runtime code on a second
+  vendor; rejected to keep all production compute on DO (D13). Branch previews
+  have no such constraint; Pages is purely CDN.
+- **Keep `scripts/serve-preview.ts` for local, deploy separately for hosted** —
+  means maintaining two implementations and explaining when to use which;
+  wrapper approach gives identical experience everywhere with one codebase.
+- **Persistent DO droplet for preview** — adds cost/ops for an ephemeral
+  feature; static hosting is cheaper and simpler.
+- **Hand-rolled `/api` replay in the wrapper vs. client-side fetch intercept**
+  — fetch intercept is the native browser pattern, requires zero server, and
+  survives into the SPA's own fetch calls without needing the wrapper to
+  understand the app's structure.
+
+**Fidelity caveat.** Unchanged from D14: preview is for layout/copy/components
+/navigation; values are mock/point-in-time. Run `bun run demo` for realistic
+data (see [demo-spec.md](./demo-spec.md)).

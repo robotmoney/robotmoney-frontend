@@ -3,19 +3,23 @@
 //
 //   BACKEND_URL=http://127.0.0.1:48787 bun run goldens:update
 //
-// Goldens are mock API responses the preview server replays. Their VALUES may be
-// point-in-time, but their FIELD SHAPES must match the real system — so they are
-// captured from a running backend with real analytics, NOT hand-written and NOT
-// generated from other fixtures. Goldens freshness is ENTIRELY the responsibility
-// of the agent making the system change: a CI drift gate is specified in
-// docs/preview-server-spec.md but NOT yet wired into CI, so nothing blocks a PR
-// whose goldens have drifted from the code — rerun this capture whenever a
-// change alters an API shape.
+// Goldens are mock API responses the client-side preview wrapper replays inside
+// an iframe. Their VALUES may be point-in-time, but their FIELD SHAPES must
+// match the real system — so they are captured from a running backend with real
+// analytics, NOT hand-written and NOT generated from other fixtures.
 //
-// It walks every route the frontend requests (the same route plan the preview
-// server keys on), fetches each from BACKEND_URL, and rewrites the single
-// goldens file with stable key order. Any route that fails fails the capture
-// loudly — a golden must never silently go missing.
+// Goldens freshness is ENTIRELY the responsibility of the agent making the
+// system change. A CI drift gate is wired into scripts/tests/goldens-drift.test.ts,
+// which blocks a PR if goldens have drifted from the code (route set or field
+// shapes no longer match). Rerun this capture whenever a change alters an API
+// shape, and the test will enforce the update before merge.
+//
+// For full details on the preview contract, goldens layout, and the drift gate,
+// see docs/architecture.md's preview section.
+//
+// It walks every route the frontend requests, fetches each from BACKEND_URL,
+// and rewrites the single goldens file with stable key order. Any route that
+// fails fails the capture loudly — a golden must never silently go missing.
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
