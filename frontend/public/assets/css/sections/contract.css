@@ -44,14 +44,16 @@
   font-size: 1.875rem; /* text-3xl */
   line-height: 1.25; /* leading-tight */
   letter-spacing: -0.025em; /* tracking-tight */
+  text-transform: uppercase;
   font-weight: 400;
 }
 @media (min-width: 768px) {
   .contract__heading { font-size: 2.25rem; } /* md:text-4xl */
 }
 .contract__heading-serif {
-  font-family: var(--font-serif);
-  font-style: italic;
+  font-family: var(--font-display);
+  font-style: normal;
+  font-weight: 700;
 }
 .contract__heading-bold {
   font-weight: 700;

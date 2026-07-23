@@ -4,7 +4,6 @@
 /* <footer className="relative border-t border-[var(--color-border)]"> */
 .footer {
   position: relative;
-  border-top: 1px solid var(--color-border);
 }
 
 /* each block: <div className="border-t border-[var(--color-border)]"> */
@@ -49,17 +48,20 @@
 
 /* <span className="font-mono text-sm tracking-wider"> */
 .footer__wordmark {
-  font-family: var(--font-mono);
-  font-size: 0.875rem;     /* text-sm */
-  letter-spacing: 0.05em;  /* tracking-wider */
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 /* <p className="text-xs text-[var(--color-text-dim)] leading-relaxed"> */
 .footer__about {
   margin: 0;
-  font-size: 0.75rem;      /* text-xs */
-  line-height: 1.625;      /* leading-relaxed */
-  color: var(--color-text-dim);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  max-width: 42ch;
 }
 
 /* inline accent links inside the about copy */

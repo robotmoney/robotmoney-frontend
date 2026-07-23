@@ -94,9 +94,10 @@
   margin-bottom: 1.5rem;          /* mb-6 */
 }
 .architecture__title {
-  font-family: var(--font-serif);
-  font-style: italic;
-  font-weight: 400;
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  font-weight: 700;
   font-size: 2.25rem;             /* text-4xl */
   line-height: 1.05;
   margin: 0 0 1.5rem;             /* mb-6 */
@@ -141,7 +142,7 @@
   height: 0.5rem;
   border-radius: 9999px;
 }
-.architecture__dot--blue { background: var(--color-blue); }
+.architecture__dot--blue { background: var(--color-accent); }
 .architecture__depositors-label {
   font-family: var(--font-mono);
   font-size: 0.875rem;            /* text-sm */
@@ -168,7 +169,7 @@
 }
 .architecture__arrow-line--tall {
   height: 2.5rem;                 /* h-10 */
-  background: color-mix(in srgb, var(--color-purple) 40%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
 .architecture__arrow-label {
   font-family: var(--font-mono);
@@ -183,7 +184,7 @@
   border-top: 6px solid color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
 .architecture__arrow-head--purple {
-  border-top-color: color-mix(in srgb, var(--color-purple) 40%, transparent);
+  border-top-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
 
 /* ── Vault block ── */
