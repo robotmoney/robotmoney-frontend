@@ -1,8 +1,10 @@
 /* Data-driven view styles: regime + committee. Reuses the design tokens. */
 .rv, .cv { padding: 9rem 1.5rem 6rem; }
 /* eyebrow, loading and error are promoted to components.css (.rm-eyebrow /
-   .rm-loading / .rm-error, grouped with .rv__*/.cv__* — single source). */
-.rv__title, .cv__title { font-size: 2.5rem; letter-spacing: -0.02em; margin: 0.5rem 0; }
+   .rm-loading / .rm-error, grouped with the rv and cv titles, single source). */
+.rv__title, .cv__title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; font-size: 2.5rem; letter-spacing: -0.01em; line-height: 1.05; margin: 0.5rem 0; }
+@media (min-width: 768px) { .rv__title, .cv__title { font-size: 3.25rem; } }
+@media (min-width: 1024px) { .rv__title, .cv__title { font-size: 3.75rem; } }
 .rv__sub, .cv__sub { color: var(--color-text-muted); font-family: var(--font-sans); font-size: 0.85rem; }
 
 /* regime pills (shared: summary meta + panel headers) */
