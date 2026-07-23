@@ -204,6 +204,45 @@ export interface CommitteeSession {
   takes?: CommitteeTake[];
 }
 
+// Light index row served by GET /api/committee/sessions (default, unless
+// ?full=1) — issue #243. Deliberately omits regimeSummary, synthesis, and
+// subjectSnapshotTotalValueUsd (the large fields responsible for the
+// ~8.3MB unpaginated payload); everything else a session list consumer
+// needs (id, state, timestamps, the committeeRecommendation rollup) stays.
+export interface CommitteeSessionListItem {
+  id: string;
+  date: string;
+  subjectId: string;
+  subjectName: string | null;
+  state: CommitteeSession["state"];
+  windowClosesAt: string | null;
+  publishedAt: string | null;
+  committeeRecommendation: CommitteeRecommendation | null;
+  socialDraftId: string | null;
+  generatedAt: string;
+}
+
+export interface CommitteeSessionListResponse {
+  sessions: (CommitteeSessionListItem | CommitteeSession)[];
+  /** Opaque cursor for the next page; null once exhausted (always null for ?full=1). */
+  nextCursor: string | null;
+}
+
+// GET /api/committee/members/:id/takes response row (issue #243) — a single
+// member's take in one session, collapsing the list+N-detail-fetch pattern
+// the member profile page used into one round trip.
+export interface CommitteeMemberTakeRow {
+  sessionDate: string;
+  subjectId: string;
+  subjectName: string | null;
+  sessionState: CommitteeSession["state"];
+  take: CommitteeTake;
+}
+
+export interface CommitteeMemberTakesResponse {
+  takes: CommitteeMemberTakeRow[];
+}
+
 export interface CommitteeBrief {
   id: string;
   date: string;

@@ -20,7 +20,13 @@ test("public committee take shows an exact verified badge on the session view, m
   page,
   request,
 }) => {
-  const sessionsResponse = await request.get("/api/committee/sessions");
+  // ?state=published (issue #243): the default list response is now a light,
+  // paginated (20-most-recent, ANY state) projection — on a long-running demo
+  // stack the newest 20 sessions across every state could easily contain fewer
+  // than 2 published ones, even though plenty of published history exists.
+  // Ask the server to filter to `published` directly instead of relying on
+  // client-side filtering of an unfiltered top-20 page.
+  const sessionsResponse = await request.get("/api/committee/sessions?state=published&limit=50");
   expect(sessionsResponse.ok(), "committee sessions API must be available").toBe(true);
   const sessions = (await sessionsResponse.json()).sessions ?? [];
 
@@ -29,6 +35,7 @@ test("public committee take shows an exact verified badge on the session view, m
     // Match the member-profile view's own eligibility filter (recentTakes() only
     // considers `state === "published"` sessions) so the take we assert on the
     // session view is guaranteed to also surface on the member view below.
+    // (state === "published" is now also enforced server-side above.)
     (candidate: any) => String(candidate.date) >= "2026-07-01" && candidate.state === "published",
   )) {
     const detailResponse = await request.get(

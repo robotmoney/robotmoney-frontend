@@ -11,7 +11,18 @@ import {
   verifySubmissionSignature,
 } from "../lib/signing.ts";
 import { enqueueActivationNotification } from "./notifications.ts";
-import { toBrief, toMember, toMemo, toSession, toSnapshot, toSubject, toVerifiedTake } from "./projections.ts";
+import {
+  day,
+  instant,
+  toBrief,
+  toMember,
+  toMemo,
+  toSession,
+  toSessionListItem,
+  toSnapshot,
+  toSubject,
+  toVerifiedTake,
+} from "./projections.ts";
 
 // ── Identity ──────────────────────────────────────────────────────────────
 export async function memberIdForToken(token: string): Promise<string | null> {
@@ -94,9 +105,127 @@ export async function getSubjectSnapshots(id: string) {
   return rows.map(toSnapshot);
 }
 
-export async function listSessions() {
-  const rows = await sql`SELECT * FROM committee_sessions ORDER BY date DESC, generated_at DESC`;
-  return rows.map(toSession);
+// ── Sessions list: paginated + light-projected by default (issue #243) ──────
+// The public directory page and the member-profile N+1 both used to pull
+// EVERY session with its full payload (regimeSummary/synthesis/etc — measured
+// at ~8.3MB on staging). Default response is now a light index row (see
+// projections.toSessionListItem) plus an opaque nextCursor; ?full=1 keeps the
+// pre-#243 unpaginated/unprojected shape reachable for callers (the admin
+// sessions views) that still need every field.
+const SESSIONS_LIST_DEFAULT_LIMIT = 20;
+const SESSIONS_LIST_MAX_LIMIT = 100;
+
+interface SessionsCursor { d: string; g: string; i: string }
+
+// Opaque only in the sense that callers must treat it as a token — it's a
+// base64url-encoded JSON tuple of (date, generatedAt, id), the exact tiebreak
+// columns the query orders and filters by, so decoding never has to guess at
+// a numeric offset that would drift as new sessions are inserted.
+function encodeSessionsCursor(row: Record<string, any>): string {
+  const cursor: SessionsCursor = { d: day(row.date), g: instant(row.generated_at) ?? "", i: String(row.id) };
+  return Buffer.from(JSON.stringify(cursor)).toString("base64url");
+}
+// Throws on a non-empty-but-malformed cursor (mirrors admin/cursor.ts's
+// decodeCursor) — a foreign/corrupted opaque token is a 400 from the route
+// handler, never a silent "start from the top" that would mask client bugs.
+function decodeSessionsCursor(cursor?: string | null): SessionsCursor | null {
+  if (cursor == null || cursor === "") return null;
+  let obj: unknown;
+  try {
+    obj = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("malformed cursor");
+  }
+  if (
+    obj && typeof obj === "object" &&
+    typeof (obj as SessionsCursor).d === "string" &&
+    typeof (obj as SessionsCursor).g === "string" &&
+    typeof (obj as SessionsCursor).i === "string"
+  ) {
+    return obj as SessionsCursor;
+  }
+  throw new Error("malformed cursor");
+}
+
+// Explicit-but-invalid limit is a 400 (thrown), not a silent clamp; an
+// absent/empty param falls back to the default. Mirrors api/routes/admin.ts's
+// parseLimit convention for the same reason (issue #155 AC).
+function parseSessionsLimit(raw?: number): number {
+  if (raw == null) return SESSIONS_LIST_DEFAULT_LIMIT;
+  if (!Number.isFinite(raw) || !Number.isInteger(raw) || raw < 1 || raw > SESSIONS_LIST_MAX_LIMIT) {
+    throw new Error(`limit must be an integer between 1 and ${SESSIONS_LIST_MAX_LIMIT}`);
+  }
+  return raw;
+}
+
+export interface ListSessionsOptions {
+  state?: string;
+  limit?: number;
+  cursor?: string | null;
+  /** Reproduce the pre-#243 unpaginated, unprojected (every field, no state
+   * filter applied unless also passed) response — the escape hatch the issue
+   * asks to keep reachable for existing full-history consumers. */
+  full?: boolean;
+}
+
+export async function listSessions(opts: ListSessionsOptions = {}) {
+  if (opts.full) {
+    const rows = await sql`SELECT * FROM committee_sessions ORDER BY date DESC, generated_at DESC, id DESC`;
+    return { sessions: rows.map(toSession), nextCursor: null as string | null };
+  }
+
+  const limit = parseSessionsLimit(opts.limit);
+  const conds = [];
+  if (opts.state) conds.push(sql`state = ${opts.state}`);
+  const cur = decodeSessionsCursor(opts.cursor);
+  if (cur) conds.push(sql`(date, generated_at, id) < (${cur.d}::date, ${cur.g}::timestamptz, ${cur.i}::uuid)`);
+  const where = conds.length ? sql`WHERE ${conds.reduce((a, b) => sql`${a} AND ${b}`)}` : sql``;
+
+  // Fetch one extra row to detect "is there a next page" without a second
+  // COUNT query; the (date, generated_at, id) triple is both the ORDER BY and
+  // the cursor's row-comparison predicate, so pages are stable even as new
+  // sessions are inserted between requests.
+  const rows = await sql`
+    SELECT * FROM committee_sessions ${where}
+    ORDER BY date DESC, generated_at DESC, id DESC
+    LIMIT ${limit + 1}`;
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  return {
+    sessions: page.map(toSessionListItem),
+    nextCursor: hasMore ? encodeSessionsCursor(page[page.length - 1]) : (null as string | null),
+  };
+}
+
+// ── Member takes (issue #243B) ──────────────────────────────────────────────
+// Collapses the member-profile page's "1 full session list + up to ~21 full
+// session detail fetches" into one request: this member's own take in each of
+// their most recent sessions (any state — collecting/window_closed/aggregated
+// included, not just published, so the "this session" in-progress block keeps
+// working), newest first.
+export async function getMemberTakes(memberId: string, limit?: number) {
+  const cappedLimit = parseSessionsLimit(limit);
+  const rows = await sql`
+    SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+           r.memo_url, r.payload, r.signature, r.received_at,
+           s.date AS session_date, s.subject_id, s.subject_name, s.state AS session_state,
+           (SELECT k.public_key FROM committee_member_keys k
+            WHERE k.member_id = r.member_id AND k.active
+            ORDER BY k.created_at DESC LIMIT 1) AS public_key
+    FROM committee_recommendations r
+    JOIN committee_sessions s ON s.id = r.session_id
+    JOIN committee_members m ON m.id = r.member_id
+    WHERE r.member_id = ${memberId}
+    ORDER BY s.date DESC, s.generated_at DESC
+    LIMIT ${cappedLimit}`;
+  const takes = await Promise.all(rows.map(async (row) => ({
+    sessionDate: day(row.session_date),
+    subjectId: row.subject_id,
+    subjectName: row.subject_name ?? null,
+    sessionState: row.session_state,
+    take: await toVerifiedTake(row),
+  })));
+  return { takes };
 }
 
 export async function getOpenSession() {

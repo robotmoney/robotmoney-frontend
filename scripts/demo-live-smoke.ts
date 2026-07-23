@@ -173,7 +173,14 @@ async function getJson(url: string): Promise<Record<string, unknown> | null> {
 
 export async function collectFailures(backend: string): Promise<string[]> {
   const [sessions, regime, wallet, vault, ...research] = await Promise.all([
-    getJson(`${backend}${ROUTES.committee.sessions}`),
+    // ?state=published (issue #243): the default list response is now a
+    // light, paginated (20-most-recent, ANY state) projection — on a
+    // long-running demo stack the newest 20 sessions across every state could
+    // contain fewer than LIVE_SMOKE_MIN_PUBLISHED_SESSIONS published ones even
+    // though plenty of published history exists. Ask the server to filter to
+    // `published` directly instead of relying on evaluateSessions' client-side
+    // filter of an unfiltered top-20 page.
+    getJson(`${backend}${ROUTES.committee.sessions}?state=published&limit=50`),
     getJson(`${backend}${ROUTES.dashboards.regimeSnapshots}?range=1`),
     getJson(`${backend}${ROUTES.dashboards.walletBalances}`),
     getJson(`${backend}${ROUTES.dashboards.vaultEconomics}`),

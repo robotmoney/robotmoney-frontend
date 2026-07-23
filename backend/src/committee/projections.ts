@@ -2,6 +2,7 @@ import type {
   CommitteeBrief,
   CommitteeMember,
   CommitteeSession,
+  CommitteeSessionListItem,
   CommitteeSubject,
   CommitteeTake,
   SubjectSnapshot,
@@ -10,9 +11,13 @@ import { verifyStoredSubmissionSignature } from "../lib/signing.ts";
 
 type Row = Record<string, any>;
 
-const day = (value: unknown): string =>
+// Exported so the session-list pagination cursor (domain.ts, issue #243) can
+// serialize the same date/instant it just read off a committee_sessions row —
+// keeping the cursor's notion of "date"/"timestamp" identical to the
+// projection's, rather than a second ad-hoc parser drifting from this one.
+export const day = (value: unknown): string =>
   typeof value === "string" ? value.slice(0, 10) : new Date(value as any).toISOString().slice(0, 10);
-const instant = (value: unknown): string | null =>
+export const instant = (value: unknown): string | null =>
   value == null ? null : value instanceof Date ? value.toISOString() : new Date(value as string).toISOString();
 
 export function toMember(row: Row): CommitteeMember {
@@ -66,6 +71,26 @@ export function toSession(row: Row): CommitteeSession {
       ? null
       : Number(row.subject_snapshot_total_value_usd),
     synthesis: row.synthesis ?? null,
+    committeeRecommendation: row.committee_recommendation ?? null,
+    socialDraftId: row.social_draft_id ?? null,
+    generatedAt: instant(row.generated_at) ?? "",
+  };
+}
+
+// Light index-row projection for the default (unpaginated-no-more) GET
+// /api/committee/sessions response (issue #243). Deliberately drops
+// regimeSummary/synthesis/subjectSnapshotTotalValueUsd — the large fields
+// behind the ~8.3MB unprojected payload — keeping everything else a list
+// consumer (directory page, admin overview) already reads off a session row.
+export function toSessionListItem(row: Row): CommitteeSessionListItem {
+  return {
+    id: row.id,
+    date: day(row.date),
+    subjectId: row.subject_id,
+    subjectName: row.subject_name ?? null,
+    state: row.state,
+    windowClosesAt: instant(row.window_closes_at),
+    publishedAt: instant(row.published_at),
     committeeRecommendation: row.committee_recommendation ?? null,
     socialDraftId: row.social_draft_id ?? null,
     generatedAt: instant(row.generated_at) ?? "",

@@ -487,7 +487,8 @@ async function mockCommitteeApi(
   });
   // No admin session-list route exists — the overview's Sessions tab and the
   // session detail page both read the PUBLIC list/detail routes instead.
-  await page.route(/\/api\/committee\/sessions$/, (route) => route.fulfill(jsonReply({ sessions: [session] })));
+  // (?.*)? tolerates the ?full=1 committee-session.js now sends (issue #243).
+  await page.route(/\/api\/committee\/sessions(\?.*)?$/, (route) => route.fulfill(jsonReply({ sessions: [session] })));
   await page.route(/\/api\/committee\/sessions\/2026-07-20\/woon-vault$/, (route) =>
     route.fulfill(jsonReply({ session, takes })));
   await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/roster$/, (route) => route.fulfill(jsonReply({ roster: rosterRows })));
@@ -543,7 +544,8 @@ test("committee admin: a mocked 403 logs out and shows session-expired", async (
   await page.route("**/api/admin/auth", (route) => route.fulfill(jsonReply({ ok: true })));
   await page.route(/\/api\/committee\/admin\/subjects$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
   await page.route(/\/api\/committee\/admin\/members$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
-  await page.route(/\/api\/committee\/sessions$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
+  // (?.*)? tolerates the ?full=1 committee-overview.js now sends (issue #243).
+  await page.route(/\/api\/committee\/sessions(\?.*)?$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
 
   await signIn(page, "/admin/committee");
   await expect(page.getByText("Session expired — sign in again.")).toBeVisible();

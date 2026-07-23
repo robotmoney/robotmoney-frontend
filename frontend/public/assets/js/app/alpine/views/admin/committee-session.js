@@ -10,12 +10,16 @@
 // The admin API has NO single-session GET, NO admin session list, and NO
 // linked-jobs-by-session or per-transition event feed — this page composes
 // its view from three real sources instead of one invented DTO:
-//   1. ROUTES.committee.sessions (public list) — id/date/subjectId/state/
-//      windowClosesAt/publishedAt, and — once aggregated — the persisted
-//      `committeeRecommendation` rollup + `synthesis` prose (committee/
-//      domain.ts aggregateSession() writes both columns; toSession() reads
-//      them back, so a normal reload picks up post-aggregate data — no need
-//      to rely on the one-shot POST response).
+//   1. ROUTES.committee.sessions?full=1 (public list; issue #243 — the
+//      default response is now a light, paginated projection that drops
+//      `synthesis`, so this admin detail view, which needs synthesis and must
+//      be able to find ANY session by id regardless of recency, asks for the
+//      pre-#243 unpaginated/unprojected shape explicitly) — id/date/
+//      subjectId/state/windowClosesAt/publishedAt, and — once aggregated —
+//      the persisted `committeeRecommendation` rollup + `synthesis` prose
+//      (committee/domain.ts aggregateSession() writes both columns;
+//      toSession() reads them back, so a normal reload picks up post-
+//      aggregate data — no need to rely on the one-shot POST response).
 //   2. ROUTES.committee.admin.sessionRoster (admin GET) — the frozen
 //      expected/excused roster (committee_session_members).
 //   3. ROUTES.committee.session (public, by date+subject) — each member's
@@ -102,7 +106,7 @@ export function registerAdminCommitteeSession(Alpine) {
       this.loading = true;
       this.error = null;
       try {
-        const listRes = await api.adminGet(ROUTES.committee.sessions, this._token());
+        const listRes = await api.adminGet(ROUTES.committee.sessions, this._token(), { full: "1" });
         if (!Array.isArray(listRes.sessions)) throw new Error("committee sessions response missing 'sessions' array");
         const summary = listRes.sessions.find((s) => s.id === this.sessionId);
         if (!summary) throw new Error(`session '${this.sessionId}' not found`);

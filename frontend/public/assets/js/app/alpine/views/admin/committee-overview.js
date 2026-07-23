@@ -132,8 +132,11 @@ export function registerAdminCommitteeOverview(Alpine) {
           api.adminGet(ROUTES.committee.admin.subjects, this._token()),
           api.adminGet(ROUTES.committee.admin.members, this._token()),
           // No admin session-list route exists — the public list is the only
-          // place `state`/date/subject are ever enumerable together.
-          api.adminGet(ROUTES.committee.sessions, this._token()),
+          // place `state`/date/subject are ever enumerable together. ?full=1
+          // (issue #243) keeps this admin view on the pre-#243 unpaginated/
+          // unprojected response — the public route's default is now a light,
+          // paginated projection.
+          api.adminGet(ROUTES.committee.sessions, this._token(), { full: "1" }),
         ]);
         // Defensive shape validation (PR #172 review): a response missing its
         // expected array key is a contract mismatch, not an empty list — treat
