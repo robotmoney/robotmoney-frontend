@@ -557,7 +557,6 @@ Cloudflare's, not ours; we own none of that subdomain. D13's properties
 
 **Fidelity caveat.** Unchanged from D14: preview is for layout/copy/components
 /navigation; values are mock/point-in-time. Run `bun run demo` for realistic
-<<<<<<< HEAD
 data (see
 [architecture.md § Demo Specification](architecture.md#demo-specification)).
 

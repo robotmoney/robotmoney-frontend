@@ -201,29 +201,29 @@ keys are backed up outside the repository under
 Do this **once per environment** (staging, then production):
 
 **Cloudflare** (DNS + observability)
-- [ ] Scoped API token (DNS + Health Checks + Analytics + Logpush) → `CF_API_TOKEN`
-- [ ] `CF_ACCOUNT_ID`, `CF_ZONE_ID`
-- [ ] Origin CA cert + key for the proxied app subdomains → `CF_ORIGIN_CERT` / `CF_ORIGIN_KEY`
-- [ ] `mcp.<env.>robotmoney.net` DNS record (proxied, port `8443`) provisioned
+- Scoped API token (DNS + Health Checks + Analytics + Logpush) → `CF_API_TOKEN`
+- `CF_ACCOUNT_ID`, `CF_ZONE_ID`
+- Origin CA cert + key for the proxied app subdomains → `CF_ORIGIN_CERT` / `CF_ORIGIN_KEY`
+- `mcp.<env.>robotmoney.net` DNS record (proxied, port `8443`) provisioned
       and covered by the Origin CA cert (D18; manual one-time operator action
       per the GitOps convention above — not automated by CI)
 
 **DigitalOcean** (compute + storage)
-- [ ] Scoped API token → `DO_API_TOKEN`
-- [ ] Spaces key/secret → `DO_SPACES_KEY` / `DO_SPACES_SECRET` (+ bucket, region, CDN endpoint)
-- [ ] Marketing CDN **custom-domain cert** provisioned (via `DO_API_TOKEN`)
-- [ ] `DATABASE_URL` (+ `DO_DB_CA_CERT`)
-- [ ] SSH deploy key → `SSH_PRIVATE_KEY` (and/or a registry read token)
-- [ ] Cloud Firewall allowing Cloudflare IP ranges (via `DO_API_TOKEN`)
+- Scoped API token → `DO_API_TOKEN`
+- Spaces key/secret → `DO_SPACES_KEY` / `DO_SPACES_SECRET` (+ bucket, region, CDN endpoint)
+- Marketing CDN **custom-domain cert** provisioned (via `DO_API_TOKEN`)
+- `DATABASE_URL` (+ `DO_DB_CA_CERT`)
+- SSH deploy key → `SSH_PRIVATE_KEY` (and/or a registry read token)
+- Cloud Firewall allowing Cloudflare IP ranges (via `DO_API_TOKEN`)
 
 **Application**
-- [ ] `FRED_API_KEY`, `BASE_RPC_URL` (`ANTHROPIC_API_KEY` is reserved — not
+- `FRED_API_KEY`, `BASE_RPC_URL` (`ANTHROPIC_API_KEY` is reserved — not
       currently consumed by any code)
-- [ ] `PROJECTS_SOURCE=live` in the prod droplet env (§5 — the projects
+- `PROJECTS_SOURCE=live` in the prod droplet env (§5 — the projects
       pipelines fail closed without it)
 
 **GitHub**
-- [ ] Create `staging` + `production` **Environments**; load the above as
+- Create `staging` + `production` **Environments**; load the above as
       Environment secrets; require reviewers on `production`.
-- [ ] Confirm vendor git-integrations are **OFF** (no App Platform auto-deploy, no
+- Confirm vendor git-integrations are **OFF** (no App Platform auto-deploy, no
       Cloudflare git integration).
