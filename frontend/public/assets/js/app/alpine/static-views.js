@@ -303,6 +303,14 @@ export function registerStaticViews(Alpine) {
             const detail = await api.get(path(ROUTES.committee.session, { date: s.date, subject: s.subjectId }));
             return { ...s, takes: detail.takes || [] };
           } catch (_) {
+            // Fall back to the shipped static archive for pre-2026-07-01 sessions
+            // so their takes stay visible during offline / static rendering.
+            if (archivePreferred(s.date)) {
+              try {
+                const archive = await loadArchiveSession(s.date, s.subjectId);
+                return { ...s, takes: archive.takes || [] };
+              } catch (_) { /* fall through to empty */ }
+            }
             return { ...s, takes: [] };
           }
         }));
