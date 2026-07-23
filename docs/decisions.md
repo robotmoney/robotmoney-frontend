@@ -185,7 +185,8 @@ static server are unnecessary. Fewer dependencies, one runtime.
 
 **Decision.** For **production**, deploy `robotmoney.net` with a clean separation
 of concerns across both **tiers** and **vendors**, with **no routing software
-anywhere**. The full map is [architecture.md](architecture.md):
+anywhere**. The full map is
+[architecture.md § Network topology](architecture.md#network-topology--dns-origins--vendors):
 
 - **Cloudflare — DNS + observability only.** Authoritative DNS, proxied TLS/DDoS,
   and monitoring (Health Checks, analytics, Logpush). Configuration, not code — no
@@ -250,7 +251,9 @@ makes edits show on refresh.
 test cluster or `bun run demo`), not hand-written and not derived from other
 fixtures — so **field shapes** stay faithful; values are point-in-time. Keeping
 them correct is the **change author's responsibility** (no nightly regeneration);
-a CI drift gate blocks a PR whose goldens no longer match the code. The most
+a CI drift gate that would block a PR whose goldens no longer match the code is
+specified (see the preview/goldens section of architecture.md) but not yet wired
+into CI. The most
 important check is that the **fields** are correct, not the numbers.
 
 **Rejected.**
@@ -264,8 +267,10 @@ important check is that the **fields** are correct, not the numbers.
   gate.
 
 **Fidelity caveat.** Preview is for layout/copy/components/navigation; for
-realistic, evolving data run `bun run demo` (see [architecture.md](architecture.md)).
-See [architecture.md](architecture.md) for the full design.
+realistic, evolving data run `bun run demo` (see
+[architecture.md § Demo Specification](architecture.md#demo-specification)).
+See [architecture.md § Preview server & goldens](architecture.md#preview-server--goldens--spec)
+for the full design.
 
 ---
 
@@ -389,7 +394,8 @@ placeholder-form env override still flips an adapter back to
 `configured: false`), and `base-rpc-client.ts` becomes the **single RPC
 transport** for every chain read. The shared endpoint contract the feeds were
 built against (DTOs, provenance fields, degrade rules) is
-[architecture.md](architecture.md); the frontend binds via
+[architecture.md § Live-data contract](architecture.md#live-data-contract--4-new-dashboard-endpoints);
+the frontend binds via
 boot-registered factories in `alpine/views.js` (e.g. `buybackSummary`).
 
 **Why.** Same motivation as D15/D16, applied to the leftovers: a baked literal
@@ -422,9 +428,12 @@ fixed constant — both flagged in #112 for a later pass.
 **Decision.** Give the IC MCP server (`mcp/src/server.ts`) its own hostname
 instead of leaving it undocumented (issue #189): `mcp.staging.robotmoney.net`
 (staging) / `mcp.robotmoney.net` (production), Cloudflare-proxied like
-`committee.`/`app.` (architecture.md §3.1). It is deployed to the **same DO
+`committee.`/`app.`
+([architecture.md topology §3.1](architecture.md#31-mcp-hostname-and-port-d18)).
+It is deployed to the **same DO
 droplet** as `committee.` (it is this repo's surface, and the `/health`
-contract already couples IC health to MCP reachability — architecture.md §9), but
+contract already couples IC health to MCP reachability —
+[architecture.md topology §9](architecture.md#9-seamless-without-a-single-origin-and-observability)), but
 runs as its **own container** (`mcp` service in `docker-compose.yml`) on its
 **own port**, so it cannot share `committee.`'s proxied port `443`. It uses
 Cloudflare's alternate proxied-HTTPS port **`8443`** (one of Cloudflare's
@@ -443,7 +452,9 @@ rejects). Reusing a Cloudflare-supported alternate port keeps the "no
 Worker, no reverse proxy, no new vendor permission" property intact instead
 of reaching for Cloudflare Origin Rules or a second droplet.
 
-**Relationship.** Refines D13 (architecture.md §3/§3.1): the surface table gains a
+**Relationship.** Refines D13 (architecture.md topology
+[§3](architecture.md#3-the-surfaces--subdomain-map)/[§3.1](architecture.md#31-mcp-hostname-and-port-d18)):
+the surface table gains a
 fourth row; the "no reverse proxy" and "no routing software" properties are
 unchanged. No code change — `mcp/src/server.ts` and `docker-compose.yml`
 were already correctly parameterized (`MCP_PORT`, own service block); this is

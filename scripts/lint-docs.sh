@@ -6,8 +6,10 @@
 # is the sole exception that MUST run on docs-only PRs — this script is that
 # check. It stays intentionally lightweight (no prose linter dependency):
 #
-#   1. every docs/*.md filename is kebab-case (repo convention, decided
-#      2026-07-10 after SCREAMING_SNAKE/Caps-Dash drift).
+#   1. every docs/**/*.md filename (docs/, docs/runbooks/, docs/archive/ —
+#      excluding docs/code-review/ point-in-time artifacts) is kebab-case
+#      (repo convention, decided 2026-07-10 after SCREAMING_SNAKE/Caps-Dash
+#      drift).
 #   2. no tracked *.md file contains an unresolved git conflict marker.
 #   3. no tracked docs/*.md file is empty.
 #   4. the IC committee docs (issue #187) never regress to the legacy
@@ -21,8 +23,10 @@ cd "$ROOT"
 fail=0
 err() { echo "FAIL: $*" >&2; fail=1; }
 
-# 1. kebab-case filenames under docs/
-for f in docs/*.md; do
+# 1. kebab-case filenames under docs/ (including docs/runbooks/ and
+#    docs/archive/; docs/code-review/ is excluded — its files are dated
+#    point-in-time review artifacts)
+for f in docs/*.md docs/runbooks/*.md docs/archive/*.md; do
   [ -e "$f" ] || continue
   base="$(basename "$f")"
   if ! [[ "$base" =~ ^[a-z0-9]+(-[a-z0-9]+)*\.md$ ]]; then
@@ -39,7 +43,7 @@ if [ -n "$conflict_files" ]; then
 fi
 
 # 3. no empty docs/*.md files
-for f in docs/*.md; do
+for f in docs/*.md docs/runbooks/*.md docs/archive/*.md; do
   [ -e "$f" ] || continue
   if [ ! -s "$f" ]; then
     err "$f is empty"

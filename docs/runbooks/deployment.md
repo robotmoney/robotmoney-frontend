@@ -95,7 +95,7 @@ The `committee.`/`mcp.`/`app.` droplets are Cloudflare-proxied, so each serves a
 origin pulls; generated once in the dashboard or via API). Install the cert + key
 on the droplet (injected at deploy as **`CF_ORIGIN_CERT`** / **`CF_ORIGIN_KEY`**).
 This is config, not running software. `mcp.` shares the `committee.` droplet
-(architecture.md §3.1), so a single Origin CA cert covering both hostnames (or two
+([architecture.md §3.1](../architecture.md#31-mcp-hostname-and-port-d18)), so a single Origin CA cert covering both hostnames (or two
 certs installed side by side) is sufficient — no separate droplet-provisioning
 step.
 
@@ -147,7 +147,8 @@ These live in the **droplet env**, injected by CI at deploy — never in the
 frontend, never committed (`.env` stays gitignored):
 
 - **`DATABASE_URL`** (§4.3)
-- **`ANTHROPIC_API_KEY`**, **`FRED_API_KEY`**, **`RPC_URL`** — per ARCHITECTURE §8.
+- **`FRED_API_KEY`**, **`BASE_RPC_URL`** — per ARCHITECTURE §8.
+  **`ANTHROPIC_API_KEY`** is reserved — not currently consumed by any code.
 - **`PROJECTS_SOURCE=live`** — not a secret, but **required in prod**: the
   `/projects` directory pipelines fail closed
   (`backend/src/projects/access/select.ts` throws
@@ -216,7 +217,8 @@ Do this **once per environment** (staging, then production):
 - [ ] Cloud Firewall allowing Cloudflare IP ranges (via `DO_API_TOKEN`)
 
 **Application**
-- [ ] `ANTHROPIC_API_KEY`, `FRED_API_KEY`, `RPC_URL`
+- [ ] `FRED_API_KEY`, `BASE_RPC_URL` (`ANTHROPIC_API_KEY` is reserved — not
+      currently consumed by any code)
 - [ ] `PROJECTS_SOURCE=live` in the prod droplet env (§5 — the projects
       pipelines fail closed without it)
 

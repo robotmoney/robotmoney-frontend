@@ -42,8 +42,9 @@ review; stop it with Ctrl-C.
 
 Goldens are mock API responses the preview wrapper replays. **Correct goldens are
 the responsibility of the change author** — there is no nightly job that fixes
-them for you, and a CI **drift gate** will block a PR whose goldens no longer
-match the code.
+them for you. A CI **drift gate** that would block a PR whose goldens no longer
+match the code is specified (see the preview/goldens section of
+`docs/architecture.md`) but not yet wired into CI.
 
 Goldens must be **captured from a real running system** — never hand-edited,
 never derived from other fixtures — so their **field shapes** match what the
@@ -99,7 +100,7 @@ mechanism** — the dictionary is the only authorization surface.
 | Shared HTTP contract | `contract/` — re-vendor with `bun run sync-contract`, never hand-edit |
 | Committee MCP server | `mcp/` |
 | Tooling & CI scripts | `scripts/` — tests in `scripts/tests/` |
-| Technical docs about this repo | `docs/*.md` — kebab-case |
+| Technical docs about this repo | `docs/**/*.md` (kebab-case) |
 | Workflows | `.github/workflows/` |
 | Root | config only — new root files/dirs are a review flag |
 

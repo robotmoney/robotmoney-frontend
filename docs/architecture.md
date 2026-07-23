@@ -4,7 +4,8 @@ Robot Money frontend + analytics backend. A clean rewrite of robotmoney.net that
 drops React/Next.js in favor of a **buildless, browser-native** stack, with a
 small HTTP API and a Postgres-backed task queue, self-hosted on DigitalOcean — a
 single `docker-compose` box for CI/demo, and a tiered topology (DO compute+storage,
-Cloudflare for DNS+observability) in production (see [architecture.md](architecture.md)).
+Cloudflare for DNS+observability) in production (see the
+[network topology section](#network-topology--dns-origins--vendors)).
 
 For the *why* behind each choice, see [decisions.md](./decisions.md).
 
@@ -32,7 +33,8 @@ For the *why* behind each choice, see [decisions.md](./decisions.md).
 - **No build step.** No bundler, transpiler, or compiler — the browser does all
   the work at runtime; only evergreen browsers are supported.
 - **Consolidate backends onto one Postgres** (Docker for CI/demo; a DO Managed
-  Postgres HA cluster in production — see [architecture.md](architecture.md)).
+  Postgres HA cluster in production — see the topology's
+  [data tier section](#7-data-tier--postgres-ha-cluster-do)).
 - **Rebuild the data pipeline** as a custom Postgres-backed task queue (replacing
   the old GitHub Actions cron + Node scripts).
 - **Clean frontend/backend separation** — one repo now, designed to split into
@@ -86,8 +88,8 @@ robotmoney-frontend/
   `frontend/public/assets/js/app/lib/api.js`, using the API origin from
   `window.RM_CONFIG.API_BASE_URL` (set by `frontend/public/config.js`). `""` means
   same origin — the default, since the `api` co-serves this surface's SPA assets at
-  its subdomain root (in production, `committee.robotmoney.net`; see
-  [architecture.md](architecture.md)).
+  its subdomain root (in production, `committee.robotmoney.net`; see the
+  topology's [subdomain map](#3-the-surfaces--subdomain-map)).
 - The database schema and migrations live in `backend/`; the frontend knows only
   the DTOs in `contract`.
 
@@ -278,7 +280,7 @@ tests or the contract).
 **Data fidelity caveat.** Because values are mock/point-in-time, preview is for
 **layout, copy, components, and navigation** — not for trusting numbers or charts.
 For realistic, evolving data (real analytics + simulations) run the full stack
-with `bun run demo` (see [`architecture.md`](architecture.md)).
+with `bun run demo` (see the [Demo Specification](#demo-specification)).
 
 ---
 
@@ -294,8 +296,8 @@ TypeScript sources directly).
   serves `frontend/public` via `Bun.file`, with an `index.html` fallback for SPA
   deep links — so the SPA and its API are **same-origin** (no CORS) with no
   reverse proxy. In production this surface is its own subdomain
-  (`committee.robotmoney.net`), Cloudflare-proxied for TLS (see
-  [architecture.md](architecture.md)); CORS headers remain for an optional split-origin
+  (`committee.robotmoney.net`), Cloudflare-proxied for TLS (see the
+  topology's [subdomain map](#3-the-surfaces--subdomain-map)); CORS headers remain for an optional split-origin
   setup.
 - `src/worker/` — the always-on task-queue worker (see §7).
 - `src/db/` — connection pools (`client.ts` for the API/migrations;
@@ -439,7 +441,8 @@ rerun/dead-job retry — issue #157) against the `admin.overview`,
 `admin.researchRuns`, `admin.researchRun`, and `admin.jobRetry` routes declared
 in `contract/src/routes.js`. Every `/admin/*` path resolves to this one shell
 fragment (`frontend/public/assets/js/app/routes.js`); the component reads
-`location.pathname` to pick a section. See `docs/architecture.md` for the
+`location.pathname` to pick a section. See the
+[Admin Surface specification](#admin-surface-research-and-investment-committee) for the
 full target contract — the backend routes those sections call are delivered by
 issue #155 and exercised here only through Playwright's mocked API fixtures
 until that lands.
@@ -461,7 +464,9 @@ into six independently testable stages — **access → extract → transform �
   the orchestrator degrades to the persisted-real floor via `mergeSeries` (never to
   seeded data). `hermetic-source.ts` is the deterministic, offline
   **`hermeticDataSource`** (seeded walks from `provider.ts`'s `seededProvider`) used by
-  CI and the demo default. **`ANALYTICS_SOURCE`**, resolved by
+  the CI backend unit tests and available as an explicit local-debug override — never
+  a demo default (the demo default is `live`; see §7a of the Demo Specification).
+  **`ANALYTICS_SOURCE`**, resolved by
   **`resolveAnalyticsSource()`** in `backend/src/analytics/index.ts`, is the SINGLE
   authoritative selector: unset/`live` → `liveDataSource`, `hermetic` →
   `hermeticDataSource`, any other value refused loudly (fail-closed). The legacy
@@ -628,7 +633,7 @@ write a tool + register it + add a job schedule + a route; nothing else changes.
 ## 8. Deployment
 
 Two shapes, one codebase. The canonical map of DNS, origins, tiers, and vendors is
-[architecture.md](architecture.md) (decision D13); the GitOps pipeline and the Cloudflare
+the [network topology section](#network-topology--dns-origins--vendors) (decision D13); the GitOps pipeline and the Cloudflare
 / DO credentials CI needs are in [deployment.md](./runbooks/deployment.md). This section
 covers what *this repo* ships.
 
@@ -654,7 +659,8 @@ credentials in [deployment.md](./runbooks/deployment.md)):
   apex/`www`, not by this `api`.
 - **Config**: the only required env var is `DATABASE_URL`. The frontend's only
   input is `API_BASE_URL` in `config.js` (`""` = same origin on its subdomain).
-  Secrets (Anthropic/FRED/RPC) live in the droplet env, not in the frontend.
+  Secrets (e.g. `BASE_RPC_URL`) live in the droplet env, not in the frontend;
+  Anthropic/FRED API keys are reserved — not currently consumed by any code.
 - **TLS** is provided by Cloudflare's proxy (the droplet serves a Cloudflare Origin
   CA cert).
 
@@ -689,8 +695,8 @@ above, each with an analytical lens — macro risk, on-chain flows, momentum,
 contrarian); it reviews many **subjects** (the portfolios/wallets under review,
 e.g. `woon`/Woon Treasury, `mav`/Mav Holdings); and it runs many **sessions** —
 one per `(date, subject)` pair — each advancing through the lifecycle
-`scheduled → brief_published → collecting → window_closed → aggregated → published`
-(§9.4). Each member posts at most one signed **recommendation** (a "take") per
+`scheduled → collecting → window_closed → aggregated → published` (plus the
+terminal `cancelled`; §9.4). Each member posts at most one signed **recommendation** (a "take") per
 session; a non-submitting member is recorded **absent**, never fabricated. The
 plurals (members / subjects / sessions / takes) are the moving parts — they are
 **not** multiple committees.
@@ -758,8 +764,11 @@ The **task queue (§7) is the orchestrator** — there is no GitHub-Actions cron
 session lifecycle is a chain of idempotent job kinds:
 
 ```
-scheduled → brief_published → collecting → window_closed → aggregated → published
+scheduled → collecting → window_closed → aggregated → published   (+ cancelled)
 ```
+
+(Brief publication is the `scheduled → collecting` transition, not a persisted
+state; `cancelled` is the terminal escape hatch.)
 
 - `committee.open_session` (cron) — pick the rotation subject, create the session.
 - `committee.publish_brief` — assemble the brief (regime + subject snapshot + recent
@@ -777,7 +786,7 @@ The five `committee.*` cron rows are **environment-configurable** (issue #208):
 `COMMITTEE_SCHEDULES_ENABLED` (default `false`) is the single switch for the whole
 sequence, plus a `COMMITTEE_*_CRON` variable per kind and `COMMITTEE_WINDOW_MINUTES`
 for the submission-window length. Production explicitly enables the daily
-06:00–08:00 UTC sequence; staging may accelerate the cadence; repo demo/e2e stays
+06:00–10:00 UTC sequence; staging may accelerate the cadence; repo demo/e2e stays
 disabled (the demo drives lifecycle jobs itself via the admin enqueue-job endpoint,
 unaffected). Re-running the migrate/seed step applies a changed value to the
 existing `job_schedules` rows, not just a fresh database.
@@ -895,8 +904,8 @@ cron `15 */6 * * *`, persisted via migration `0015_buyback_swaps.sql`), token
 metrics (`/token-metrics`), per-wallet sleeves (`/wallet-sleeves`), and the
 `allocation_framework` read are all live endpoints now — nothing of the
 original out-of-scope line remains static. The shared endpoint contract (DTOs,
-provenance fields, degrade rules) those feeds were built against is
-[architecture.md](architecture.md).
+provenance fields, degrade rules) those feeds were built against is the
+[live-data contract section](#live-data-contract--4-new-dashboard-endpoints).
 
 - **`backend/src/chain/base-rpc-client.ts`** — a minimal JSON-RPC client and,
   since D17, the **single RPC transport** for every chain read in the repo: no
@@ -1078,8 +1087,7 @@ from this repo's own tables and pipelines instead of Supabase.
   The scheduled `projects.discover` upsert deliberately excludes
   `overview_short`/`overview_long` from its `ON CONFLICT DO UPDATE` set, so a
   re-run never clobbers admin-authored text.
-# Architecture
-+
+
 ---
 
 ## Live-data contract — 4 new dashboard endpoints
@@ -1316,7 +1324,7 @@ interface WalletSleeves {
 ## 4. Allocation framework — `GET /api/dashboards/allocation`
 
 - **Method**: GET (no query params).
-- **Module/function**: `backend/src/chain/allocation.ts` (or a `db/` reader) →
+- **Module/function**: `backend/src/chain/allocation-framework.ts` (or a `db/` reader) →
   `getAllocationFramework()`. This is **admin/committee-managed** data (no chain
   read, no AI enrichment — see the "projects overviews admin-managed" policy):
   it reads the single-row `allocation_framework` table.
@@ -1383,7 +1391,7 @@ interface AllocationFramework {
 
 ## Migration + goldens checklist for implementers
 
-- **New migration** `backend/migrations/00XX_buyback_swaps.sql`:
+- **New migration** `backend/migrations/0015_buyback_swaps.sql`:
   `buyback_swaps(id bigserial pk, block_number bigint, tx_hash text UNIQUE,
   log_index int, occurred_on date, weth_spent numeric, value_usd numeric,
   robotmoney_received numeric, provenance text NOT NULL DEFAULT 'live',
@@ -1448,7 +1456,7 @@ flowchart TB
 
     subgraph Session["📋 Committee Session (per subject, ~2min cadence)"]
         direction LR
-        S1["scheduled"] --> S2["brief_published"] --> S3["collecting"] --> S4["window_closed"] --> S5["aggregated"] --> S6["published"]
+        S1["scheduled"] --> S2["collecting"] --> S3["window_closed"] --> S4["aggregated"] --> S5["published"]
     end
 
     subgraph Onboarding["📝 Onboarding Gates"]
@@ -1564,7 +1572,7 @@ standing demo.
 Every stage of the session state machine must be exercised with the real domain code:
 
 ```
-scheduled → brief_published → collecting → window_closed → aggregated → published
+scheduled → collecting → window_closed → aggregated → published   (+ cancelled)
 ```
 
 | Stage | What the demo must exercise |
@@ -1588,6 +1596,10 @@ Transitions must go through the **worker job pipeline**, not direct domain calls
 - Jobs are claimed and executed through the real `FOR UPDATE SKIP LOCKED` claim loop.
 - Job schedules are seeded so a no-intervention run would also progress through the
   lifecycle (even if the demo also triggers them explicitly for determinism).
+  *(As shipped: the `committee.*` schedule rows are seeded disabled by default —
+  `COMMITTEE_SCHEDULES_ENABLED`, issue #208 / PR #229 — and the demo pins them
+  disabled, driving the lifecycle transitions explicitly via the admin
+  enqueue-job endpoint.)*
 
 ## 3. Surfaces
 
@@ -1625,7 +1637,7 @@ The REST sibling routes must be demonstrated exercising the same domain code:
 - `POST /api/committee/submit`
 - `POST /api/committee/regime` (role-gated analytics write)
 - `GET /api/committee/members`
-- `GET /api/committee/sessions` / `GET /api/committee/sessions/:id`
+- `GET /api/committee/sessions` / `GET /api/committee/sessions/:date/:subject`
 - `GET /api/committee/brief?date=&subject=`
 - `GET /api/dashboards/regime-snapshots`
 - `GET /api/dashboards/research-signals/:key`
@@ -1662,7 +1674,7 @@ demo also runs):
 | No fabricated takes | Absent members are absent in the published aggregate; their count matches registered members minus submitters. |
 | Signature verification | A tampered payload (mutation of stance, confidence, memoUrl, nonce) invalidates the submission. |
 | Nonce uniqueness | Replay of the same nonce is rejected. |
-| Window enforcement | Submissions before brief_published or after window_closed are rejected. |
+| Window enforcement | Submissions before the window opens (the brief-publication `scheduled → collecting` transition) or after `window_closed` are rejected. |
 | Cross-role denial | Member cannot write regime; analytics provider cannot submit; neither can close/aggregate/publish. |
 | TOCTOU safety | Concurrent submissions for the same session from different members both succeed (different nonces, different members). |
 | No plaintext secrets | Access keys are stored as sha256 hashes; private keys are never transmitted. |
@@ -1976,7 +1988,9 @@ These decisions are not open implementation questions:
 - The seeded recurring committee schedules remain disabled. Product committee
   scheduling uses one-off queue jobs scoped to a specific session. Empty-payload
   recurring rows cannot identify a subject or session and must not be enabled by
-  this UI.
+  this UI. *(Superseded by issue #208 / PR #229: schedules are
+  environment-configurable via `COMMITTEE_SCHEDULES_ENABLED` — see §9.4 of the
+  main document.)*
 
 ## 3. Current product baseline
 
@@ -2138,7 +2152,9 @@ Acceptance:
 - Schedule editing is limited to enabled/disabled for existing analytics
   schedules. Cron, timezone, kind, and payload are read-only in this phase.
 - The five disabled recurring `committee.*` rows are labelled “legacy/demo —
-  not product scheduling” and cannot be enabled from the UI.
+  not product scheduling” and cannot be enabled from the UI. *(Superseded by
+  issue #208 / PR #229: schedules are environment-configurable via
+  `COMMITTEE_SCHEDULES_ENABLED` — see §9.4 of the main document.)*
 
 ### US-C1 — Create and edit a committee topic
 
@@ -2945,7 +2961,7 @@ seamless site, organized by a clean **separation of concerns** — both across
 infrastructure tiers and across **two vendors**. This document is cross-cutting:
 it spans the **marketing** site, **this repo** (Investment Committee + analytics),
 and the **on-chain dapp** (`robotmoney-core`). It is a companion to
-[architecture.md](./architecture.md) (this frontend's internals) and
+the rest of this document (this frontend's internals) and
 [decisions.md](./decisions.md); the production topology here is decision **D13**,
 which supersedes the single-box parts of D8/D11 (see [§10](#10-relationship-to-existing-decisions)).
 **D18** refines D13's surface list with a fourth subdomain, `mcp.` (§3.1).
@@ -3296,21 +3312,21 @@ flowchart TB
 
 ## Documentation map
 
-This directory contains the repository's durable technical documentation. The
-GitHub Plan issue is the canonical execution queue; do not add mutable
-roadmaps, task checklists, or phase ordering to this directory.
+The `docs/` directory holds the repository's durable technical documentation.
+The GitHub Plan issue is the canonical execution queue; do not add mutable
+roadmaps, task checklists, or phase ordering to `docs/`.
 
 ## Canonical documents
 
 These documents describe current product and system commitments:
 
-- [Architecture](./architecture.md) — system boundaries, runtime components,
+- Architecture (this document) — system boundaries, runtime components,
   data flows, and deployment shape.
 - [Decisions](./decisions.md) — accepted architecture decision records (ADRs).
 - [Deployment](./runbooks/deployment.md) — GitOps environments, credentials, and
   operational setup.
 - The preview-server, demo, live-data, admin-surface, and topology specifications
-  are incorporated in this document under their dedicated sections below.
+  are incorporated in this document under their dedicated sections above.
 - [Credential doctor](./runbooks/credential-doctor.md)
 
 ## Reviews and investigations
