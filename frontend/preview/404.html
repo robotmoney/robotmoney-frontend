@@ -7,9 +7,9 @@
 <body>
   <script>
     // If the iframe navigated here (e.g., via a direct URL or frame escape),
-    // redirect back to preview.html with the attempted path as a hash.
+    // redirect back to the wrapper (served at /) with the attempted path as a hash.
     const path = window.location.pathname;
-    window.location.href = `/preview.html#${path}`;
+    window.location.href = `/#${path}`;
   </script>
 </body>
 </html>

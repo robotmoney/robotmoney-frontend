@@ -170,34 +170,81 @@ Hand-written, no Tailwind, in three files:
 
 ### Preview mode (goldens-backed, no backend)
 
+> This section is the **canonical, complete spec** of the preview feature
+> (decisions [D14](./decisions.md#d14--preview-mode-goldens-backed-over-the-baked-frozen-single-file),
+> [D19](./decisions.md#d19--hosted-preview-urls-on-cloudflare-pages-revises-d14-and-d13),
+> [D20](./decisions.md#d20--no-bake-preview-hosting-via-cloudflare-git-integration-revises-d19);
+> the former `preview-server-spec.md` is retired).
+
 Lightweight hosting for **agentic development of the marketing surface** (the
 buildless SPA *is* the marketing site). A contributor — human or agent — working
 from a git checkout can view and iterate on the site with **no backend, database,
 or workers**. Contributor workflow in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
-**The preview wrapper (`preview/preview.html`).** A client-side iframe wrapper
+**Layout.** Three pinned locations:
+
+- `frontend/preview/` — the preview wrapper `index.html` plus the Cloudflare
+  static-hosting files `_redirects` (one line: `/ /preview/index.html 200`),
+  `_headers` (`X-Robots-Tag: noindex` for `/*`), and `404.html` (frame-escape
+  handler: redirects a missing path back to `/#<path>`). Deliberately a
+  **sibling** of `frontend/public/`, so production never serves any of it.
+- `frontend/public/` — the production SPA, byte-for-byte untouched by preview.
+- `goldens/api-goldens.json` — the goldens. Pinned at `goldens/` because it is a
+  **shared test fixture**: `frontend/test/browser/allocation-view.spec.ts`,
+  `tokenomics-fees.spec.ts`, and the provenance note in
+  `frontend/public/views/regime/indicators.html` all reference it there.
+
+**The wrapper (`frontend/preview/index.html`).** A client-side iframe wrapper
 that fetches `/index.html` (the production SPA), runs it inside a same-origin
-iframe, and **patches the iframe's fetch and history BEFORE document.open()** to
-intercept API calls and mocking. The SPA is **unmodified** — it still requests
-same-origin `/api/*` as normal, unaware of any interception. GET `/api/*` calls
-are answered from goldens loaded in JS memory (query dropped — a golden is one
-point in time); non-GET requests (POST/PUT/DELETE) return `{ok: true, mocked: true}`
-no-ops. A red "PREVIEW" watermark remains permanently visible. Hash-based app
-navigation (e.g. `/app#/allocation`) mirrors to the parent URL's hash so deep
-links are shareable: `/preview.html#/allocation` loads that view.
+iframe, and **patches the iframe's fetch and history BEFORE document.open()** so
+the interception is in place when the SPA's HTML runs. The SPA is **unmodified**
+— it still requests same-origin `/api/*` as normal, unaware of any interception.
+GET `/api/*` calls are answered from goldens fetched from
+`/goldens/api-goldens.json` into JS memory (query string dropped — a golden is
+one point in time; an un-goldened route 404s); non-GET requests
+(POST/PUT/DELETE) return `{ok: true, mocked: true}` no-ops. A red "PREVIEW"
+watermark remains permanently visible. SPA navigation
+(`history.pushState`/`replaceState`) mirrors to the parent URL's hash so deep
+links are shareable: `/#/allocation` loads that view. The mocking is entirely
+client-side — no backend, no reverse proxy, no server-side `/api` replay.
 
-**Deployment: static files on Cloudflare Pages.** On push to `preview/**` branches,
-CI composes a deploy directory (frontend/public verbatim + preview/ files + goldens),
-and `wrangler pages deploy --branch` publishes it to a per-branch preview URL like
-`preview-foo.robotmoney.pages.dev`. Cloudflare Access guards it by default. Visiting
-the bare URL serves `/preview.html` (via `_redirects`), which loads the SPA into the
-iframe and activates mocking. The wrapper is a static file; the mocking is entirely
-client-side. No backend, no reverse proxy, no server-side /api replay.
+**URL space contract** — identical locally and hosted:
 
-**Local preview (same experience as hosted).** `bun run preview` composes the same
-deploy directory locally and serves it on a random free port via Bun's static server,
-identical to the Cloudflare experience: the wrapper loads, renders the SPA in an
-iframe, and intercepts fetch calls. No build, no backend, no special local mode.
+| Path | Serves |
+| --- | --- |
+| `/` | the wrapper (`frontend/preview/index.html`) |
+| `/index.html`, `/assets/*`, everything else | the SPA (`frontend/public/*`) at the root, so its absolute asset paths work natively — no rewrite rules |
+| `/goldens/api-goldens.json` | the goldens |
+| `/preview/index.html` | the wrapper (direct path) |
+| miss (incl. direct `/api/*`) | 404 via `404.html`, which bounces back to `/#<path>` |
+
+**Local: `bun run preview`** (`scripts/preview-server.ts`). A minimal in-place
+`Bun.serve` static server exposing the URL space above straight from the working
+tree — **no copying, no build step**: edit a file under `frontend/public/` and
+refresh. Random free port (printed on start; `PORT=<n>` to pin).
+
+**Hosted: Cloudflare Pages Git integration.** There is **no deploy automation in
+the repo** — no workflow, no wrangler, no GitHub secrets. The Cloudflare Pages
+project is connected to the GitHub repo in the Cloudflare dashboard; on push to a
+`preview/*` branch, Cloudflare checks out the branch and runs the
+dashboard-configured build command `bash scripts/cloudflare-statics.sh` — a
+~10-line transparent shell script (run only by Cloudflare's build, and locally
+for verification; nothing in the repo invokes it) that assembles `_site`
+(gitignored): `frontend/public/*` at the root, the wrapper at
+`/preview/index.html`, goldens at `/goldens/api-goldens.json`, and
+`_redirects`/`_headers`/`404.html` at the root. Cloudflare publishes `_site` to
+a per-branch URL like `preview-foo.robotmoney-preview.pages.dev`. Dashboard
+settings:
+
+| Setting | Value |
+| --- | --- |
+| Project | `robotmoney-preview` |
+| Root directory | *(empty — repo root)* |
+| Build command | `bash scripts/cloudflare-statics.sh` |
+| Build output directory | `_site` |
+| Production branch | `main`, with **automatic production deploys disabled** |
+| Preview deployments | custom branches: `preview/*` only |
+| GitHub secrets | none required |
 
 **Goldens (`goldens/api-goldens.json`).** One committed JSON keyed by request
 pathname → response body, covering every route the frontend calls. It is a *mock*:
@@ -206,12 +253,27 @@ real running system** (a deployed test cluster or a local `bun run demo` stack)
 via `bun run goldens:update` — never hand-authored and never derived from other
 fixtures, so the shapes stay faithful to what the backend actually returns.
 
-**Correctness is the change author's responsibility.** There is no nightly
-regeneration. An agent (or human) that changes the system such that an API's
-shape changes must recapture the goldens in the same PR — the same discipline as
-updating tests or the contract. A CI **drift gate** (scripts/tests/goldens-drift.test.ts)
-blocks a PR whose goldens no longer match the code (route set or field shapes); the
-fix is `bun run goldens:update`.
+**Enforcement: every-PR CI, author-owned currency.** Keeping the preview current
+is the **PR author's responsibility** — there is no nightly regeneration and no
+deploy-side check. Two gates run in the normal PR suite:
+
+- **Preview smoke** — `frontend/test/browser/preview-smoke.spec.ts` spawns the
+  real `bun run preview` server and asserts the wrapper renders the SPA,
+  goldens-backed GET mocking, non-GET no-ops, the 404 behavior, and hash deep
+  links. It runs in the regular Playwright suite (`bun run test:browser`),
+  executed by the **`e2e` workflow's `e2e` job** (demo readiness gate) on every
+  ready PR.
+- **Goldens drift gate** — `scripts/tests/goldens-drift.test.ts` blocks a PR
+  whose goldens no longer match the code (route set or field shapes). It runs in
+  `bun test scripts/tests` in the **`integration` workflow's
+  `backend-integration` job** ("Check root scripts" step), which also runs
+  `scripts/tests/cloudflare-statics.test.ts` (asserts the assemble script lands
+  the key files in `_site`).
+
+An agent (or human) whose change alters an API route or shape must recapture in
+the same PR — the fix for a red gate is `bun run goldens:update` against a
+running backend, committed alongside the change (same discipline as updating
+tests or the contract).
 
 **Data fidelity caveat.** Because values are mock/point-in-time, preview is for
 **layout, copy, components, and navigation** — not for trusting numbers or charts.

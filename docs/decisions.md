@@ -547,3 +547,53 @@ Cloudflare's, not ours; we own none of that subdomain. D13's properties
 **Fidelity caveat.** Unchanged from D14: preview is for layout/copy/components
 /navigation; values are mock/point-in-time. Run `bun run demo` for realistic
 data (see [demo-spec.md](./demo-spec.md)).
+
+---
+
+## D20 — No-bake preview hosting via Cloudflare Git integration (revises D19)
+
+**Decision.** Remove the repo-side preview deploy machinery D19 introduced: the
+TypeScript composer (`scripts/compose-preview-deploy.ts`), the
+`preview-pages.yml` GitHub Actions workflow, and their tests. Hosting is owned
+by **Cloudflare Pages Git integration**, configured in the Cloudflare dashboard
+(no GitHub secrets, no wrangler, no deploy code in the repo): on push to
+`preview/*` branches, Cloudflare checks out the branch and runs
+`bash scripts/cloudflare-statics.sh` — a ~10-line transparent shell script that
+assembles the deploy dir `_site` (frontend/public at the root, the wrapper at
+`/preview/index.html`, goldens at `/goldens/api-goldens.json`, plus
+`_redirects`/`_headers`/`404.html`). The wrapper moves from `preview/` to
+`frontend/preview/` (a sibling of `frontend/public/`, so production never
+serves it), renamed `preview.html` → `index.html`. Goldens stay pinned at
+`goldens/api-goldens.json` — they are a shared test fixture
+(`allocation-view.spec.ts`, `tokenomics-fees.spec.ts`, and the
+`views/regime/indicators.html` provenance reference them there). Locally,
+`bun run preview` is a minimal in-place `Bun.serve` static server
+(`scripts/preview-server.ts`) exposing the same URL space with no copying —
+edits show on refresh.
+
+**Why.** D19's shape violated the project's no-bake / author-owned-correctness
+principles (D14): a TS composer with byte-identity tests, a deploy workflow,
+and a CI-composed artifact are exactly the kind of machinery D14 removed. The
+SPA sits at the deploy root, so its absolute asset paths (`/assets/...`) work
+natively — no wildcard rewrite rules; `_redirects` is one line
+(`/ → /preview/index.html`). Keeping the preview current remains the **PR
+author's responsibility**, enforced by the every-PR CI checks (the preview
+smoke spec in the required e2e Playwright run and the goldens drift gate in the
+required root `bun test`) — never by automation, mirroring D14's rejection of
+nightly regeneration. A red check means: run `bun run goldens:update` in the
+same PR.
+
+**Rejected.**
+- **Uploading the whole repo tree with root-level `_redirects` wildcards** —
+  exposes the entire repo on the CDN and scatters Cloudflare-specific files at
+  the repo root; the tiny assemble script keeps the deploy surface explicit.
+- **Moving the wrapper into `frontend/public/`** — production would serve it.
+- **Runtime fetch of files from raw.githubusercontent.com** — the repo is
+  private; and it would reintroduce a runtime dependency on a second host.
+- **Keeping the D19 composer + GH Actions deploy** — repo-side deploy
+  automation, secrets, and byte-identity tests for what is a `cp -r`; the
+  dashboard-configured Git integration does the same with zero repo machinery.
+
+**Fidelity caveat.** Unchanged from D14/D19: preview is for
+layout/copy/components/navigation; values are mock/point-in-time. Run
+`bun run demo` for realistic data (see [demo-spec.md](./demo-spec.md)).
