@@ -318,3 +318,18 @@
 @media (min-width: 768px) {
   .rm-cards, .rv__cards { grid-template-columns: repeat(4, 1fr); }
 }
+
+/* ── Unified page-hero anchor ─────────────────────────────────────────────
+   Every top-level nav page opens with a full-bleed hero band. These rules pin
+   the title block to the same offset from the viewport top on ALL of them, so
+   the headline lands in the exact same place as you navigate. Each hero's own
+   inline stylesheet still owns its size/genart; this only fixes the anchor.
+   !important is used deliberately: the per-page inline <style> is injected
+   after this shared sheet and would otherwise win the cascade. */
+.a2-hero, .cv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head {
+  align-items: flex-start !important;
+}
+.a2-hero__inner, .cv__hero-inner, .rv__hero-inner, .tok__hero-inner,
+.md-hero__inner, .cl__hero-inner, .sk__head-inner {
+  padding-top: 8rem !important;
+}
