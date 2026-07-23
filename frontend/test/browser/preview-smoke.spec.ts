@@ -18,7 +18,11 @@ import { existsSync } from "node:fs";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const DEPLOY_DIR = join(repoRoot, ".preview-deploy");
 
-test.describe("preview wrapper smoke test", () => {
+// Skip this test suite if the preview deploy directory doesn't exist
+// (it won't exist in the regular e2e job; it's only composed for preview-pages workflow)
+const skipPreviewTests = !existsSync(DEPLOY_DIR);
+
+test.describe.skipIf(skipPreviewTests, "preview wrapper smoke test", () => {
   let server: any;
   let baseUrl: string;
 
