@@ -20,9 +20,7 @@ const DEPLOY_DIR = join(repoRoot, ".preview-deploy");
 
 // Skip this test suite if the preview deploy directory doesn't exist
 // (it won't exist in the regular e2e job; it's only composed for preview-pages workflow)
-const skipPreviewTests = !existsSync(DEPLOY_DIR);
-
-test.describe.skipIf(skipPreviewTests, "preview wrapper smoke test", () => {
+test.describe.skip(!existsSync(DEPLOY_DIR), "preview wrapper smoke test", () => {
   let server: any;
   let baseUrl: string;
 
