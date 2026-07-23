@@ -2,7 +2,7 @@
 
 How changes ship to **staging** and **production**, and the exact credentials to
 generate from **Cloudflare** and **DigitalOcean** so CI can deploy. Companion to
-[topology.md](./topology.md) (the map — decision D13) and ARCHITECTURE §8 (what
+[architecture.md](../architecture.md) (the map — decision D13) and ARCHITECTURE §8 (what
 this repo ships). Assumes **GitHub Actions** as the CI; the credential inventory is
 CI-agnostic, only the storage mechanism (GitHub Environment secrets) is specific.
 
@@ -58,7 +58,7 @@ separate subdomains, droplet, Space, Postgres, and firewall. Store secrets as
 The MCP host (`mcp.`) is co-located on the **same droplet** as `committee.`
 (both are this repo's surface) but runs as its own container on its own
 Cloudflare-proxied port — see
-[topology.md §3.1](./topology.md#31-mcp-hostname-and-port-d18) for why it
+[architecture.md §3.1](../architecture.md#31-mcp-hostname-and-port-d18) for why it
 needs a distinct port (`8443`, a Cloudflare-supported proxied-HTTPS port)
 instead of a path under `committee.`.
 
@@ -95,7 +95,7 @@ The `committee.`/`mcp.`/`app.` droplets are Cloudflare-proxied, so each serves a
 origin pulls; generated once in the dashboard or via API). Install the cert + key
 on the droplet (injected at deploy as **`CF_ORIGIN_CERT`** / **`CF_ORIGIN_KEY`**).
 This is config, not running software. `mcp.` shares the `committee.` droplet
-(topology.md §3.1), so a single Origin CA cert covering both hostnames (or two
+([architecture.md §3.1](../architecture.md#31-mcp-hostname-and-port-d18)), so a single Origin CA cert covering both hostnames (or two
 certs installed side by side) is sufficient — no separate droplet-provisioning
 step.
 
@@ -147,7 +147,8 @@ These live in the **droplet env**, injected by CI at deploy — never in the
 frontend, never committed (`.env` stays gitignored):
 
 - **`DATABASE_URL`** (§4.3)
-- **`ANTHROPIC_API_KEY`**, **`FRED_API_KEY`**, **`RPC_URL`** — per ARCHITECTURE §8.
+- **`FRED_API_KEY`**, **`BASE_RPC_URL`** — per ARCHITECTURE §8.
+  **`ANTHROPIC_API_KEY`** is reserved — not currently consumed by any code.
 - **`PROJECTS_SOURCE=live`** — not a secret, but **required in prod**: the
   `/projects` directory pipelines fail closed
   (`backend/src/projects/access/select.ts` throws
@@ -200,28 +201,29 @@ keys are backed up outside the repository under
 Do this **once per environment** (staging, then production):
 
 **Cloudflare** (DNS + observability)
-- [ ] Scoped API token (DNS + Health Checks + Analytics + Logpush) → `CF_API_TOKEN`
-- [ ] `CF_ACCOUNT_ID`, `CF_ZONE_ID`
-- [ ] Origin CA cert + key for the proxied app subdomains → `CF_ORIGIN_CERT` / `CF_ORIGIN_KEY`
-- [ ] `mcp.<env.>robotmoney.net` DNS record (proxied, port `8443`) provisioned
+- Scoped API token (DNS + Health Checks + Analytics + Logpush) → `CF_API_TOKEN`
+- `CF_ACCOUNT_ID`, `CF_ZONE_ID`
+- Origin CA cert + key for the proxied app subdomains → `CF_ORIGIN_CERT` / `CF_ORIGIN_KEY`
+- `mcp.<env.>robotmoney.net` DNS record (proxied, port `8443`) provisioned
       and covered by the Origin CA cert (D18; manual one-time operator action
       per the GitOps convention above — not automated by CI)
 
 **DigitalOcean** (compute + storage)
-- [ ] Scoped API token → `DO_API_TOKEN`
-- [ ] Spaces key/secret → `DO_SPACES_KEY` / `DO_SPACES_SECRET` (+ bucket, region, CDN endpoint)
-- [ ] Marketing CDN **custom-domain cert** provisioned (via `DO_API_TOKEN`)
-- [ ] `DATABASE_URL` (+ `DO_DB_CA_CERT`)
-- [ ] SSH deploy key → `SSH_PRIVATE_KEY` (and/or a registry read token)
-- [ ] Cloud Firewall allowing Cloudflare IP ranges (via `DO_API_TOKEN`)
+- Scoped API token → `DO_API_TOKEN`
+- Spaces key/secret → `DO_SPACES_KEY` / `DO_SPACES_SECRET` (+ bucket, region, CDN endpoint)
+- Marketing CDN **custom-domain cert** provisioned (via `DO_API_TOKEN`)
+- `DATABASE_URL` (+ `DO_DB_CA_CERT`)
+- SSH deploy key → `SSH_PRIVATE_KEY` (and/or a registry read token)
+- Cloud Firewall allowing Cloudflare IP ranges (via `DO_API_TOKEN`)
 
 **Application**
-- [ ] `ANTHROPIC_API_KEY`, `FRED_API_KEY`, `RPC_URL`
-- [ ] `PROJECTS_SOURCE=live` in the prod droplet env (§5 — the projects
+- `FRED_API_KEY`, `BASE_RPC_URL` (`ANTHROPIC_API_KEY` is reserved — not
+      currently consumed by any code)
+- `PROJECTS_SOURCE=live` in the prod droplet env (§5 — the projects
       pipelines fail closed without it)
 
 **GitHub**
-- [ ] Create `staging` + `production` **Environments**; load the above as
+- Create `staging` + `production` **Environments**; load the above as
       Environment secrets; require reviewers on `production`.
-- [ ] Confirm vendor git-integrations are **OFF** (no App Platform auto-deploy, no
+- Confirm vendor git-integrations are **OFF** (no App Platform auto-deploy, no
       Cloudflare git integration).

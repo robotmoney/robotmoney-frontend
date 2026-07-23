@@ -1,6 +1,6 @@
 // Self-test for the "demo readiness" gate (issue #58). scripts/demo-frontend-check.ts
 // is the core-surface-missing detector that the required `e2e` workflow runs against
-// the LIVE demo boot (see .github/workflows/e2e.yml and docs/demo-spec.md, which name
+// the LIVE demo boot (see .github/workflows/e2e.yml and docs/architecture.md, which name
 // this the "demo readiness" gate; issue #147 removed DEMO_HERMETIC and the hermetic
 // path entirely, so there is only one supported demo mode left). Nothing else proves
 // the guard's loud-failure path actually fires when a core surface breaks — a change

@@ -5,7 +5,7 @@
 // documented NOWHERE an operator looks, so a prod deployment following the
 // shipped compose/env files crash-looped on an undiscoverable env var. This
 // test pins the fix: every operator surface (.env.example, both compose files,
-// docs/deployment.md) must keep mentioning PROJECTS_SOURCE, so the
+// docs/runbooks/deployment.md) must keep mentioning PROJECTS_SOURCE, so the
 // documentation can never silently regress. It also pins the .env.example
 // adapter-block honesty fix: PR #112 made the REAL deployed Base adapter
 // addresses the config defaults (backend/src/config.ts resolveVaultAdapters),
@@ -25,7 +25,7 @@ const OPERATOR_SURFACES = [
   ".env.example",
   "docker-compose.yml",
   "docker-compose.demo.yml",
-  "docs/deployment.md",
+  "docs/runbooks/deployment.md",
 ] as const;
 
 describe("PROJECTS_SOURCE is documented on every operator surface", () => {
@@ -40,8 +40,8 @@ describe("PROJECTS_SOURCE is documented on every operator surface", () => {
     expect(read(".env.example")).toContain("PROJECTS_SOURCE=live");
   });
 
-  test("docs/deployment.md documents the prod fail-closed contract (PROJECTS_SOURCE=live)", () => {
-    expect(read("docs/deployment.md")).toContain("PROJECTS_SOURCE=live");
+  test("docs/runbooks/deployment.md documents the prod fail-closed contract (PROJECTS_SOURCE=live)", () => {
+    expect(read("docs/runbooks/deployment.md")).toContain("PROJECTS_SOURCE=live");
   });
 
   test("both compose files pass PROJECTS_SOURCE through to the containers", () => {

@@ -1,6 +1,6 @@
 // Alpine factory for /admin/committee/members/:id — member detail, activation/
 // deactivation/reactivation/key-rotation/rejection with confirm+reason, and a
-// one-time credential reveal. Issue #159 — docs/plan-admin-surface.md §4 US-C2.
+// one-time credential reveal. Issue #159 — docs/architecture.md §4 US-C2.
 //
 // Reconciled to the REAL backend (issue #152/PR #169) per PR #172 review:
 // - No GET .../members/:id — this page fetches the admin members LIST and

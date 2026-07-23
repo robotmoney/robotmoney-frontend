@@ -110,7 +110,7 @@ const researchKeys = ["channel-divergence", "late-cycle-signals"];
 // ARGUMENT, never an env var (hard user preference, 2026-07-21: no per-property
 // env config) — the resolved value is recorded in demo-state.json instead.
 //
-// Reuse constraints (also documented in docs/demo-spec.md): same postgres major
+// Reuse constraints (also documented in docs/architecture.md): same postgres major
 // (17) and the same baked-in demo credentials; migrate + seed are idempotent
 // (backend/src/db/seed.ts uses ON CONFLICT DO NOTHING), so re-booting on old data
 // converges rather than duplicating rows.

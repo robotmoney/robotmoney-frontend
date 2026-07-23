@@ -1,6 +1,6 @@
 // Alpine factory for /admin/committee/subjects/:id — topic detail, edit (with
 // optimistic-lock version conflicts), and deactivation. Issue #159 —
-// docs/plan-admin-surface.md §4 US-C1.
+// docs/architecture.md §4 US-C1.
 //
 // Reconciled to the REAL backend (issue #152/PR #169) per PR #172 review: the
 // backend has no GET .../subjects/:id at all (committee-admin.ts's `subjects`

@@ -1,6 +1,6 @@
 // Alpine factory for the admin operator surface (/admin and its subpaths).
 // Supersedes the old single-table adminJobsView (issue #157;
-// docs/plan-admin-surface.md §7). One shell fragment serves every /admin/*
+// docs/architecture.md §7). One shell fragment serves every /admin/*
 // path (frontend/public/assets/js/app/routes.js maps the whole subtree to
 // this view); this component reads location.pathname at init to decide which
 // section to render and keeps navigating with history.pushState so deep links
@@ -15,7 +15,7 @@
 // section state so nothing sensitive lingers in memory.
 //
 // Queue schedule toggles and the redacted audit log (issue #155,
-// docs/plan-admin-surface.md US-Q2/US-A3) are additive on top of the #157
+// docs/architecture.md US-Q1 schedule-toggle acceptance / US-A3) are additive on top of the #157
 // shell: schedule enable/disable lives inside the existing Queue section, and
 // audit gets its own top-level nav section.
 import { api, ROUTES, path } from "../../lib/api.js";
@@ -63,7 +63,7 @@ export function registerAdminSurfaceView(Alpine) {
     queueError: null,
     retryResult: null,
     retryError: null,
-    schedulePending: null, // schedule id currently being toggled (US-Q2)
+    schedulePending: null, // schedule id currently being toggled (US-Q1 schedule-toggle acceptance)
 
     // ── audit (US-A3) ────────────────────────────────────────────────────
     auditItems: [],
@@ -242,7 +242,7 @@ export function registerAdminSurfaceView(Alpine) {
     closeJob() { this.selectedJob = null; },
 
     // Retry is available only for a dead job; it clones into a new pending job
-    // and never mutates the dead row (docs/plan-admin-surface.md US-Q1).
+    // and never mutates the dead row (docs/architecture.md US-Q1).
     canRetry(job) { return job?.status === "dead"; },
     async retryJob(id) {
       this.retryResult = null;
@@ -263,7 +263,7 @@ export function registerAdminSurfaceView(Alpine) {
     },
 
     // PATCH /api/admin/schedules/:id — toggle ONLY `enabled` on an analytics
-    // schedule (US-Q2). Cron/timezone/kind/payload are read-only; the
+    // schedule (US-Q1 schedule-toggle acceptance). Cron/timezone/kind/payload are read-only; the
     // committee.* demo rows are protected server-side (409) and never offered
     // a toggle control here.
     isCommitteeSchedule(schedule) { return String(schedule?.kind || "").startsWith("committee."); },

@@ -5,7 +5,7 @@
 // `bun run demo` resumes from where it left off.
 //
 // This matches the running demo's own Ctrl-C / SIGTERM behavior — both now keep
-// data (see scripts/lib/demo-main.ts onSignal()/cleanup() and docs/demo-spec.md
+// data (see scripts/lib/demo-main.ts onSignal()/cleanup() and docs/architecture.md
 // §(c)). Deleting demo data is a SEPARATE, explicit act: `bun run demo:clean`
 // (scripts/demo-clean.ts) removes the label-namespaced demo volumes; it never
 // touches a `--pg-data` host directory.

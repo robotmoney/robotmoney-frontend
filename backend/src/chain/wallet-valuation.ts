@@ -52,7 +52,7 @@ export type Provenance = "live" | "stub" | "stale" | "seed";
 
 // Price-reader seam for allocation live-data reliability (scout #175).
 // Canonical behavior: docs/architecture.md §10.1 and
-// docs/contract-live-data.md §3. The production reader below still performs
+// docs/architecture.md §3. The production reader below still performs
 // exactly the existing provider call. The discriminated result lets #173 add a
 // bounded wallet_balance_samples reader without making a persisted quote look
 // live or coupling its freshness policy to the sleeve projection.

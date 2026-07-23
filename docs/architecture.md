@@ -4,7 +4,8 @@ Robot Money frontend + analytics backend. A clean rewrite of robotmoney.net that
 drops React/Next.js in favor of a **buildless, browser-native** stack, with a
 small HTTP API and a Postgres-backed task queue, self-hosted on DigitalOcean — a
 single `docker-compose` box for CI/demo, and a tiered topology (DO compute+storage,
-Cloudflare for DNS+observability) in production (see [topology.md](./topology.md)).
+Cloudflare for DNS+observability) in production (see the
+[network topology section](#network-topology--dns-origins--vendors)).
 
 For the *why* behind each choice, see [decisions.md](./decisions.md).
 
@@ -32,7 +33,8 @@ For the *why* behind each choice, see [decisions.md](./decisions.md).
 - **No build step.** No bundler, transpiler, or compiler — the browser does all
   the work at runtime; only evergreen browsers are supported.
 - **Consolidate backends onto one Postgres** (Docker for CI/demo; a DO Managed
-  Postgres HA cluster in production — see [topology.md](./topology.md)).
+  Postgres HA cluster in production — see the topology's
+  [data tier section](#7-data-tier--postgres-ha-cluster-do)).
 - **Rebuild the data pipeline** as a custom Postgres-backed task queue (replacing
   the old GitHub Actions cron + Node scripts).
 - **Clean frontend/backend separation** — one repo now, designed to split into
@@ -86,8 +88,8 @@ robotmoney-frontend/
   `frontend/public/assets/js/app/lib/api.js`, using the API origin from
   `window.RM_CONFIG.API_BASE_URL` (set by `frontend/public/config.js`). `""` means
   same origin — the default, since the `api` co-serves this surface's SPA assets at
-  its subdomain root (in production, `committee.robotmoney.net`; see
-  [topology.md](./topology.md)).
+  its subdomain root (in production, `committee.robotmoney.net`; see the
+  topology's [subdomain map](#3-the-surfaces--subdomain-map)).
 - The database schema and migrations live in `backend/`; the frontend knows only
   the DTOs in `contract`.
 
@@ -278,7 +280,7 @@ tests or the contract).
 **Data fidelity caveat.** Because values are mock/point-in-time, preview is for
 **layout, copy, components, and navigation** — not for trusting numbers or charts.
 For realistic, evolving data (real analytics + simulations) run the full stack
-with `bun run demo` (see [`demo-spec.md`](./demo-spec.md)).
+with `bun run demo` (see the [Demo Specification](#demo-specification)).
 
 ---
 
@@ -294,8 +296,8 @@ TypeScript sources directly).
   serves `frontend/public` via `Bun.file`, with an `index.html` fallback for SPA
   deep links — so the SPA and its API are **same-origin** (no CORS) with no
   reverse proxy. In production this surface is its own subdomain
-  (`committee.robotmoney.net`), Cloudflare-proxied for TLS (see
-  [topology.md](./topology.md)); CORS headers remain for an optional split-origin
+  (`committee.robotmoney.net`), Cloudflare-proxied for TLS (see the
+  topology's [subdomain map](#3-the-surfaces--subdomain-map)); CORS headers remain for an optional split-origin
   setup.
 - `src/worker/` — the always-on task-queue worker (see §7).
 - `src/db/` — connection pools (`client.ts` for the API/migrations;
@@ -439,7 +441,8 @@ rerun/dead-job retry — issue #157) against the `admin.overview`,
 `admin.researchRuns`, `admin.researchRun`, and `admin.jobRetry` routes declared
 in `contract/src/routes.js`. Every `/admin/*` path resolves to this one shell
 fragment (`frontend/public/assets/js/app/routes.js`); the component reads
-`location.pathname` to pick a section. See `docs/plan-admin-surface.md` for the
+`location.pathname` to pick a section. See the
+[Admin Surface specification](#admin-surface-research-and-investment-committee) for the
 full target contract — the backend routes those sections call are delivered by
 issue #155 and exercised here only through Playwright's mocked API fixtures
 until that lands.
@@ -461,7 +464,9 @@ into six independently testable stages — **access → extract → transform �
   the orchestrator degrades to the persisted-real floor via `mergeSeries` (never to
   seeded data). `hermetic-source.ts` is the deterministic, offline
   **`hermeticDataSource`** (seeded walks from `provider.ts`'s `seededProvider`) used by
-  CI and the demo default. **`ANALYTICS_SOURCE`**, resolved by
+  the CI backend unit tests and available as an explicit local-debug override — never
+  a demo default (the demo default is `live`; see §7a of the Demo Specification).
+  **`ANALYTICS_SOURCE`**, resolved by
   **`resolveAnalyticsSource()`** in `backend/src/analytics/index.ts`, is the SINGLE
   authoritative selector: unset/`live` → `liveDataSource`, `hermetic` →
   `hermeticDataSource`, any other value refused loudly (fail-closed). The legacy
@@ -628,8 +633,8 @@ write a tool + register it + add a job schedule + a route; nothing else changes.
 ## 8. Deployment
 
 Two shapes, one codebase. The canonical map of DNS, origins, tiers, and vendors is
-[topology.md](./topology.md) (decision D13); the GitOps pipeline and the Cloudflare
-/ DO credentials CI needs are in [deployment.md](./deployment.md). This section
+the [network topology section](#network-topology--dns-origins--vendors) (decision D13); the GitOps pipeline and the Cloudflare
+/ DO credentials CI needs are in [deployment.md](./runbooks/deployment.md). This section
 covers what *this repo* ships.
 
 **CI & demo — single box**, `docker-compose.yml`:
@@ -642,7 +647,7 @@ covers what *this repo* ships.
   - *demo*: named `pgdata` volume persists across restarts.
 
 **Production — tiered on DigitalOcean, Cloudflare for DNS+observability** (D13;
-credentials in [deployment.md](./deployment.md)):
+credentials in [deployment.md](./runbooks/deployment.md)):
 
 - **API tier** — `api` + the worker lanes on a DO droplet at its own subdomain
   (`committee.robotmoney.net`); the `api` co-serves this surface's SPA assets at the
@@ -654,15 +659,19 @@ credentials in [deployment.md](./deployment.md)):
   apex/`www`, not by this `api`.
 - **Config**: the only required env var is `DATABASE_URL`. The frontend's only
   input is `API_BASE_URL` in `config.js` (`""` = same origin on its subdomain).
-  Secrets (Anthropic/FRED/RPC) live in the droplet env, not in the frontend.
+  Secrets (e.g. `BASE_RPC_URL`) live in the droplet env, not in the frontend;
+  Anthropic/FRED API keys are reserved — not currently consumed by any code.
 - **TLS** is provided by Cloudflare's proxy (the droplet serves a Cloudflare Origin
   CA cert).
 
-**Preview mode — no-backend hosting for development.** Independent of both hosted
-shapes, `bun run preview` serves the live SPA with every `/api/*` route mocked
-from committed goldens (`goldens/api-goldens.json`) on a random free port — for
-developing the marketing surface without a backend. Mechanism in §4 "Preview mode
-(goldens-backed, no backend)"; workflow + fidelity caveats in
+**Preview mode — no-backend static hosting for development.** Independent of both
+hosted shapes, preview is pure static files (D19): pushes to `preview/**`
+branches deploy a per-branch URL on Cloudflare Pages, and `bun run preview`
+serves the same composed deploy directory locally on a random free port. In both
+cases the client-side wrapper (`preview/preview.html`) runs the live SPA in an
+iframe and answers every `/api/*` call from committed goldens
+(`goldens/api-goldens.json`) — no backend, no server-side mocking. Mechanism in
+§4 "Preview mode (goldens-backed, no backend)"; workflow + fidelity caveats in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ---
@@ -689,8 +698,8 @@ above, each with an analytical lens — macro risk, on-chain flows, momentum,
 contrarian); it reviews many **subjects** (the portfolios/wallets under review,
 e.g. `woon`/Woon Treasury, `mav`/Mav Holdings); and it runs many **sessions** —
 one per `(date, subject)` pair — each advancing through the lifecycle
-`scheduled → brief_published → collecting → window_closed → aggregated → published`
-(§9.4). Each member posts at most one signed **recommendation** (a "take") per
+`scheduled → collecting → window_closed → aggregated → published` (plus the
+terminal `cancelled`; §9.4). Each member posts at most one signed **recommendation** (a "take") per
 session; a non-submitting member is recorded **absent**, never fabricated. The
 plurals (members / subjects / sessions / takes) are the moving parts — they are
 **not** multiple committees.
@@ -758,8 +767,11 @@ The **task queue (§7) is the orchestrator** — there is no GitHub-Actions cron
 session lifecycle is a chain of idempotent job kinds:
 
 ```
-scheduled → brief_published → collecting → window_closed → aggregated → published
+scheduled → collecting → window_closed → aggregated → published   (+ cancelled)
 ```
+
+(Brief publication is the `scheduled → collecting` transition, not a persisted
+state; `cancelled` is the terminal escape hatch.)
 
 - `committee.open_session` (cron) — pick the rotation subject, create the session.
 - `committee.publish_brief` — assemble the brief (regime + subject snapshot + recent
@@ -777,7 +789,7 @@ The five `committee.*` cron rows are **environment-configurable** (issue #208):
 `COMMITTEE_SCHEDULES_ENABLED` (default `false`) is the single switch for the whole
 sequence, plus a `COMMITTEE_*_CRON` variable per kind and `COMMITTEE_WINDOW_MINUTES`
 for the submission-window length. Production explicitly enables the daily
-06:00–08:00 UTC sequence; staging may accelerate the cadence; repo demo/e2e stays
+06:00–10:00 UTC sequence; staging may accelerate the cadence; repo demo/e2e stays
 disabled (the demo drives lifecycle jobs itself via the admin enqueue-job endpoint,
 unaffected). Re-running the migrate/seed step applies a changed value to the
 existing `job_schedules` rows, not just a fresh database.
@@ -895,8 +907,8 @@ cron `15 */6 * * *`, persisted via migration `0015_buyback_swaps.sql`), token
 metrics (`/token-metrics`), per-wallet sleeves (`/wallet-sleeves`), and the
 `allocation_framework` read are all live endpoints now — nothing of the
 original out-of-scope line remains static. The shared endpoint contract (DTOs,
-provenance fields, degrade rules) those feeds were built against is
-[contract-live-data.md](./contract-live-data.md).
+provenance fields, degrade rules) those feeds were built against is the
+[live-data contract section](#live-data-contract--4-new-dashboard-endpoints).
 
 - **`backend/src/chain/base-rpc-client.ts`** — a minimal JSON-RPC client and,
   since D17, the **single RPC transport** for every chain read in the repo: no
@@ -1078,3 +1090,2126 @@ from this repo's own tables and pipelines instead of Supabase.
   The scheduled `projects.discover` upsert deliberately excludes
   `overview_short`/`overview_long` from its `ON CONFLICT DO UPDATE` set, so a
   re-run never clobbers admin-authored text.
+
+---
+
+## Live-data contract — 4 new dashboard endpoints
+
+Foundation contract for removing the last baked-in data from `/allocation`
+(buyback table, token metrics, per-wallet sleeves, strategy/bucket target
+weights). The parallel implementation workers build against **this** document so
+the DTOs, provenance fields, modules, tables, and preview goldens are consistent
+with the existing live dashboards (`vault-economics`, `wallet-balances`).
+
+Everything here follows the **issue #50 honesty contract** already enforced by
+`chain/vault-economics.ts` + `chain/wallet-balances.ts`:
+
+- Every DTO carries provenance: `source` (`"live" | "stub"`) and either
+  `stale: boolean` or a per-row `provenance` (`"live" | "stub" | "stale" |
+  "seed"`), mirroring the existing dashboards.
+- A value is **never fabricated**. A failed live read degrades to the
+  last-persisted (`stale`) or seeded (`seed`) value with an explicit label, or
+  to `null` — never a live-looking `$0`.
+- Unconfigured / placeholder addresses (`config.isPlaceholderAddress`) are
+  **never** `eth_call`ed.
+- Resolvers (`resolveBaseRpcSource`, `resolvePriceSource`, …) are read **per
+  request**, not at module load, so tests can flip env per case and provenance
+  always tracks the current source.
+
+Shared conventions (identical to `wallet-balances`):
+- `asOf`: ISO-8601 timestamp of the read (`new Date(now).toISOString()`).
+- `source`: `resolveBaseRpcSource()` result — always `"live"` in prod/demo
+  (issue #147 removed the hermetic CI/demo layer); `"stub"` is still a valid
+  value backend unit tests set directly via `BASE_RPC_SOURCE=stub`.
+- Short-TTL in-process cache (`CACHE_TTL_MS = 30_000`) + a
+  `_reset<Name>CacheForTests()` export, matching the existing modules.
+- Handlers are thin adapters in `backend/src/api/routes/dashboards.ts` that just
+  call the chain/db module (no query or DTO logic in the handler).
+
+## Config the implementers consume (already shipped by this worker in `config.ts`)
+
+| Getter | Returns | Real default (Base) |
+|---|---|---|
+| `resolveRobotmoneyToken(env)` | `string` | `0x65021a79aeef22b17cdc1b768f5e79a8618beba3` |
+| `resolveWeth(env)` | `{ address, poolId }` | `0x4200…0006` |
+| `resolvePropWallets(env)` | `string[]` (primary first) | `0xfbc2…c9d6`, `0x422c…8eee`, `0x8d0c…9442` |
+| `resolveBuybackConfig(env)` | `{ primaryWallet, robotmoneyToken, wethToken, source }` | primary = `0xfbc2…c9d6` |
+| `resolveTrackedAssets(env)` | `TrackedAsset[]` | ZYFAI-SS1 `0xc125…976d`, GIZA-SS1 `0x8e5c…8795` |
+| `resolveVaultAdapters(env)` | `VaultAdapterConfig[]` (`configured:true` for real addr) | Morpho `0xa6ed…17e9`, Aave `0x2186…0bea`, Compound `0x8247…2652` |
+| `isPlaceholderAddress(a)` | `boolean` | true for `0x1111…`/`0x7777…` etc. |
+| `config.robotmoney`, `config.weth`, `config.propWallets`, `config.buyback` | load-time snapshots | — |
+
+RPC client (shipped this worker): `chain/base-rpc-client.ts` now exports
+`ethGetLogs(params, opts): Promise<EthLog[]>` (JSON-RPC `eth_getLogs`) with the
+same throw-on-failure discipline as `ethCall` / `ethGetBalance`, plus the
+existing `callBalanceOf` / `callTotalSupply` / `callConvertToAssets`.
+
+---
+
+## 1. Token buybacks — `GET /api/dashboards/buybacks`
+
+- **Method**: GET (no query params).
+- **Module/function**: `backend/src/chain/buyback-logs.ts` → `getBuybacks()`.
+- **Source of truth**: robotmoney-site `wallet.ts::fetchBuybackTransactions` —
+  Basescan/`eth_getLogs` of ROBOTMONEY `Transfer` events **into** the primary
+  prop wallet (`config.buyback.primaryWallet`). WETH-spent / USD legs join the
+  swap input. `config.buyback.source` drives live-vs-stub.
+- **Postgres**: NEW table `buyback_swaps` (see migration note below) — the
+  durable store. Live path reads `eth_getLogs`; on RPC failure degrade to the
+  persisted rows marked `stale`; the historical 10-row set (all 2026-03-23,
+  total `1.149114 WETH` / `$2,504.31` / `178.82M ROBOTMONEY`, real BaseScan tx
+  hashes) is the `seed` provenance backfill (replaces `allocation.html:383-403`).
+
+**DTO**
+```ts
+interface BuybackRow {
+  date: string;              // ISO calendar day, e.g. "2026-03-23"
+  txHash: string;            // 0x… Base tx hash (links to basescan.org/tx/…)
+  wethSpent: number;         // WETH amount, 18dp normalized (e.g. 0.116534)
+  valueUsd: number;          // USD value of the WETH spent (e.g. 253.97)
+  robotmoneyReceived: number;// ROBOTMONEY tokens received (raw count, e.g. 18450000)
+  provenance: "live" | "stub" | "stale" | "seed";
+}
+interface Buybacks {
+  asOf: string;              // ISO timestamp
+  source: "live" | "stub";
+  stale: boolean;            // true if ANY row degraded to persisted/seed
+  rows: BuybackRow[];        // newest-first
+  totals: {
+    wethSpent: number;       // 1.149114
+    valueUsd: number;        // 2504.31
+    robotmoneyReceived: number; // 178820000
+  };
+}
+```
+
+**Preview golden** (`goldens/api-goldens.json` → `routes["/api/dashboards/buybacks"]`):
+```json
+{
+  "asOf": "2026-07-09T12:04:40.696Z",
+  "source": "stub",
+  "stale": false,
+  "rows": [
+    { "date": "2026-03-23", "txHash": "0xa19a086682db8ff57a94e8f594bb542c8e4ba1d8f79bf7ad48717be0587ffa37", "wethSpent": 0.116534, "valueUsd": 253.97, "robotmoneyReceived": 18450000, "provenance": "seed" },
+    { "date": "2026-03-23", "txHash": "0x9ce840624ce3742bca40f6b672587dfa1ad85ac40476ecb7cb71938a170319bc", "wethSpent": 0.11591,  "valueUsd": 252.61, "robotmoneyReceived": 17810000, "provenance": "seed" },
+    { "date": "2026-03-23", "txHash": "0x8dc090ca0ec59882d541dffd52adbe64adbdba4166dd63a230722d2ea0b29266", "wethSpent": 0.11591,  "valueUsd": 252.61, "robotmoneyReceived": 17770000, "provenance": "seed" },
+    { "date": "2026-03-23", "txHash": "0x1e09868aa284f8a969f7a85a11758e896b786f5f78daf8b503274b2828209361", "wethSpent": 0.114375, "valueUsd": 249.26, "robotmoneyReceived": 18170000, "provenance": "seed" },
+    { "date": "2026-03-23", "txHash": "0x79594aaa2a4b39bdcbc19ba9f39834963d0f00599b4437e17a517503f996450f", "wethSpent": 0.114375, "valueUsd": 249.26, "robotmoneyReceived": 18140000, "provenance": "seed" },
+    { "date": "2026-03-23", "txHash": "0x9364ec11ec2543438b2c1efaee79aad6ecc2ef42606ca9efa9f8378ac4837eac", "wethSpent": 0.115006, "valueUsd": 250.64, "robotmoneyReceived": 18200000, "provenance": "seed" },
+    { "date": "2026-03-23", "txHash": "0xd63e11167880ef5ca9d7dfeb2e361b355e93aa01317ccb9ab5bdf5918168eb74", "wethSpent": 0.114251, "valueUsd": 248.99, "robotmoneyReceived": 18040000, "provenance": "seed" },
+    { "date": "2026-03-23", "txHash": "0xe6d8138395fb5815157cf1197570dd26c10f4fd3c3792e08fa9f38956811ec33", "wethSpent": 0.114251, "valueUsd": 248.99, "robotmoneyReceived": 17460000, "provenance": "seed" },
+    { "date": "2026-03-23", "txHash": "0x81cf52a3f723c48a65c67999b5b4417a67b67687125aec29ba255246a6eba39f", "wethSpent": 0.114251, "valueUsd": 248.99, "robotmoneyReceived": 17430000, "provenance": "seed" },
+    { "date": "2026-03-23", "txHash": "0x3c9718e37624c0de8b5e295b3e8a9cf5dc98dcd0d08cbad395551c2ce6f8eab9", "wethSpent": 0.114251, "valueUsd": 248.99, "robotmoneyReceived": 17370000, "provenance": "seed" }
+  ],
+  "totals": { "wethSpent": 1.149114, "valueUsd": 2504.31, "robotmoneyReceived": 178820000 }
+}
+```
+
+---
+
+## 2. Token metrics — `GET /api/dashboards/token-metrics`
+
+- **Method**: GET (no query params).
+- **Module/function**: `backend/src/chain/token-metrics.ts` → `getTokenMetrics()`.
+- **Source of truth**: `config.robotmoney` — `totalSupply` via
+  `callTotalSupply` (18dp), `priceUsd` via `fetchAssetPriceUsd` (GeckoTerminal,
+  `resolvePriceSource()`), `marketCapUsd = totalSupply * priceUsd`. `feeSplit`
+  is a fixed Clanker-pool config constant (Protocol 57 / Bankr 40 / Clanker 3);
+  it is `managed`/static, not a chain read — label its `source` accordingly but
+  keep it in the DTO so the frontend stops baking it.
+- **Postgres**: none required for the live read; may reuse
+  `vault_share_price_history`-style persistence if a `stale` fallback is added
+  (optional — otherwise degrade price/supply legs to `null`).
+- **Degrade**: a failed supply or price leg → that field `null` +
+  `stale: true`; never a fabricated price.
+
+**DTO**
+```ts
+interface TokenMetrics {
+  robotmoney: {
+    priceUsd: number | null;     // e.g. 0.00000451
+    totalSupply: number | null;  // token count, 18dp normalized (e.g. 5.5e10)
+    marketCapUsd: number | null; // priceUsd * totalSupply
+  };
+  feeSplit: { label: string; pct: number }[]; // fixed Clanker pool config
+  asOf: string;
+  source: "live" | "stub";
+  stale: boolean;
+}
+```
+
+**Preview golden** (`routes["/api/dashboards/token-metrics"]`):
+```json
+{
+  "robotmoney": { "priceUsd": 0.00000451, "totalSupply": 55000000000, "marketCapUsd": 248050 },
+  "feeSplit": [
+    { "label": "Protocol", "pct": 57 },
+    { "label": "Bankr", "pct": 40 },
+    { "label": "Clanker", "pct": 3 }
+  ],
+  "asOf": "2026-07-09T12:04:40.696Z",
+  "source": "stub",
+  "stale": false
+}
+```
+
+---
+
+## 3. Wallet sleeves — `GET /api/dashboards/wallet-sleeves`
+
+- **Method**: GET (no query params).
+- **Module/function**: `backend/src/chain/wallet-sleeves.ts` → `getWalletSleeves()`.
+- **Source of truth**: per-prop-wallet on-chain reads (`config.propWallets`).
+  This is the **per-wallet breakdown** the aggregate `wallet-balances` endpoint
+  does NOT provide: `wallet_balance_samples` has **no wallet dimension**
+  (`UNIQUE (sample_date, symbol)` only), so wallet-sleeves MUST do fresh
+  per-wallet `callBalanceOf` / `ethGetBalance` reads — it cannot be derived from
+  that table. Names/types come from the prop-wallet metadata:
+  - `0xfbc2…c9d6` — "Bankr" / primary
+  - `0x422c…8eee` — "Stablecoin Strategy 1" (delegated ZyfAI, ZYFAI-SS1)
+  - `0x8d0c…9442` — "Stablecoin Strategy 2" (delegated Giza, GIZA-SS1)
+- **Reuse**: value each holding with the same `resolveTrackedAssets` valuation
+  kinds + `fetchAssetPriceUsd` as `wallet-balances.ts::valueAsset`, but keyed
+  per wallet (do **not** `sumOverWallets`). Per-holding provenance mirrors #50.
+- **Postgres**: none authoritative (no per-wallet table). Optional per-wallet
+  degrade store is out of scope; a failed leg → holding value `null` +
+  provenance `"stale"`.
+
+**DTO**
+```ts
+interface SleeveHolding {
+  symbol: string;
+  amount: number | null;
+  priceUsd: number | null;
+  valueUsd: number | null;
+  provenance: "live" | "stub" | "stale" | "seed";
+}
+interface WalletSleeve {
+  name: string;      // "Bankr" | "Stablecoin Strategy 1" | …
+  address: string;   // 0x… (lowercased)
+  type: string;      // "primary" | "strategy"
+  totalUsd: number;  // sum of holdings[].valueUsd (nulls as 0)
+  holdings: SleeveHolding[];
+}
+interface WalletSleeves {
+  wallets: WalletSleeve[];
+  asOf: string;
+  source: "live" | "stub";
+}
+```
+
+**Preview golden** (`routes["/api/dashboards/wallet-sleeves"]`):
+```json
+{
+  "wallets": [
+    { "name": "Bankr", "address": "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6", "type": "primary", "totalUsd": 38331,
+      "holdings": [
+        { "symbol": "USDC", "amount": 9037.405, "priceUsd": 0.9983, "valueUsd": 9022, "provenance": "stub" },
+        { "symbol": "ROBOTMONEY", "amount": 6499610000, "priceUsd": 0.00000451, "valueUsd": 29300, "provenance": "stub" },
+        { "symbol": "BNKR", "amount": 25081.3083, "priceUsd": 0.000377, "valueUsd": 9, "provenance": "stub" }
+      ] },
+    { "name": "Stablecoin Strategy 1", "address": "0x422c906083ca40b7e055b811d517f03bbbef8eee", "type": "strategy", "totalUsd": 9022,
+      "holdings": [
+        { "symbol": "ZYFAI-SS1", "amount": 9037.405, "priceUsd": 0.9983, "valueUsd": 9022, "provenance": "stub" }
+      ] },
+    { "name": "Stablecoin Strategy 2", "address": "0x8d0c331e45beca4184b758f3049f8897aabb9442", "type": "strategy", "totalUsd": 8965,
+      "holdings": [
+        { "symbol": "GIZA-SS1", "amount": 8980.0, "priceUsd": 0.9983, "valueUsd": 8965, "provenance": "stub" }
+      ] }
+  ],
+  "asOf": "2026-07-09T12:04:40.696Z",
+  "source": "stub"
+}
+```
+
+---
+
+## 4. Allocation framework — `GET /api/dashboards/allocation`
+
+- **Method**: GET (no query params).
+- **Module/function**: `backend/src/chain/allocation-framework.ts` (or a `db/` reader) →
+  `getAllocationFramework()`. This is **admin/committee-managed** data (no chain
+  read, no AI enrichment — see the "projects overviews admin-managed" policy):
+  it reads the single-row `allocation_framework` table.
+- **Source of truth**: `robotmoney-site/data/committee/allocation.json`
+  (`buckets[].target_weight` + `items[].target_weight`, `vault_contract
+  0x4f83…49dd`) seeded into `allocation_framework`. Replaces the baked bucket
+  percentages in `allocation.html` (95% Conservative DeFi Yield / 5% Agent
+  Tokens / 0% Protocol / 0% RWA and the per-item legend weights).
+- **Postgres**: EXISTING table `allocation_framework`
+  (`id=1, asof date, vault_contract text, buckets jsonb`) — currently unused,
+  now the authoritative store. `strategy[]` (top-level pie) and `buckets[]`
+  (2×2 cards) both project out of the `buckets` jsonb.
+- **Provenance**: `managed: true` (admin-authored, not a live read); `source`
+  reflects whether the row is present (`"live"` = DB row) vs a seed default.
+  There is no `stale` chain concept here — the data is intentionally static
+  until an admin rewrites it.
+
+**DTO**
+```ts
+interface AllocationStrategy { label: string; targetPct: number }
+interface AllocationItem     { label: string; targetPct: number }
+interface AllocationBucket   { key: string; label: string; items: AllocationItem[] }
+interface AllocationFramework {
+  strategy: AllocationStrategy[]; // top-level pie (bucket target weights)
+  buckets: AllocationBucket[];    // 2x2 detail cards
+  asOf: string;                   // allocation_framework.asof (ISO day) or read time
+  source: "live" | "stub";
+  managed: true;                  // admin/committee-authored, never chain-derived
+}
+```
+
+**Preview golden** (`routes["/api/dashboards/allocation"]`):
+```json
+{
+  "strategy": [
+    { "label": "Conservative DeFi Yield", "targetPct": 95 },
+    { "label": "Agent Tokens", "targetPct": 5 },
+    { "label": "Protocol Tokens", "targetPct": 0 },
+    { "label": "Real World Assets", "targetPct": 0 }
+  ],
+  "buckets": [
+    { "key": "defi-yield", "label": "Conservative DeFi Yield", "items": [
+      { "label": "Aave", "targetPct": 40 },
+      { "label": "Morpho", "targetPct": 35 },
+      { "label": "Compound", "targetPct": 25 }
+    ] },
+    { "key": "agent-tokens", "label": "Agent Tokens", "items": [
+      { "label": "Juno", "targetPct": 100 }
+    ] },
+    { "key": "protocol-tokens", "label": "Protocol Tokens", "items": [] },
+    { "key": "rwa", "label": "Real World Assets", "items": [] }
+  ],
+  "asOf": "2026-07-09",
+  "source": "stub",
+  "managed": true
+}
+```
+> The bucket-item weights above are the shape/example only. The implementer
+> seeds the exact `target_weight` values from
+> `robotmoney-site/data/committee/allocation.json`; do not invent weights the
+> committee data does not carry.
+
+---
+
+## Migration + goldens checklist for implementers
+
+- **New migration** `backend/migrations/0015_buyback_swaps.sql`:
+  `buyback_swaps(id bigserial pk, block_number bigint, tx_hash text UNIQUE,
+  log_index int, occurred_on date, weth_spent numeric, value_usd numeric,
+  robotmoney_received numeric, provenance text NOT NULL DEFAULT 'live',
+  ingested_at timestamptz DEFAULT now())`. Natural key `tx_hash` (or
+  `(tx_hash, log_index)`) so a re-run never duplicates a swap — same
+  upsert-on-natural-key convention as `0012`/`0014`. Seed the 10 historical rows
+  `ON CONFLICT DO NOTHING` with `provenance='seed'`.
+- **Seed** `allocation_framework` (id=1) from
+  `robotmoney-site/data/committee/allocation.json` in `backend/src/db/seed.ts`.
+- **Goldens**: every new route MUST have a `routes[...]` entry in
+  `goldens/api-goldens.json` (preview 404s otherwise). Use the examples above as
+  the shape; regenerate real values with `bun run goldens:update` against a
+  running backend.
+- **Frontend**: register the 4 new `ROUTES.dashboards.*` (already added:
+  `buybacks`, `tokenMetrics`, `walletSleeves`, `allocation`) into the allocation
+  view + Alpine so the baked tables in `frontend/public/views/allocation.html`
+  are replaced by fetches.
+
+---
+
+## Demo Specification
+
+What `bun run demo` must demonstrate to exercise the full Investment Committee lifecycle —
+a single command that provisions everything, runs the session lifecycle end-to-end, and
+keeps the stack live as a **standing demo** (see §0). Ctrl-C / SIGTERM tears the stack
+down **but keeps the postgres data** (see §0(c)); a startup failure leaves it up for
+inspection; `bun run demo:down` tears down an already-running (e.g. backgrounded) demo,
+also keeping its data. `bun run demo -- --pg-data <host-dir>` bind-mounts postgres to a
+host directory so a reboot resumes from it; `bun run demo:clean` is the only command that
+deletes demo data volumes.
+
+> **One committee, not many.** Everything below exercises the *single* Investment
+> Committee. The harness drives it through **two sessions** (session 1 = today's
+> subject; session 2 = a different subject the next day, referencing session 1's
+> outcome), with N **members** submitting signed takes and one deliberate no-show
+> (recorded absent). These plurals — members / subjects / sessions / takes — are the
+> moving parts of the one committee, **not** separate committees.
+
+```mermaid
+flowchart TB
+    subgraph Scheduler["⏱ Worker Scheduler"]
+        SC["tickScheduler() every 30s<br/>reads job_schedules<br/>FOR UPDATE SKIP LOCKED"]
+        SC -->|even minute| R["regime.classify<br/>→ regime snapshot<br/>(analytics lane)"]
+        SC -->|odd minute| A["research.refresh<br/>→ research signals<br/>(research lane)"]
+        R -->|"poll DB (TUI)"| TP
+        A -->|"poll DB (TUI)"| TP
+    end
+
+    subgraph Core["👥 Core Members (seated at start)"]
+        M1["Athena<br/>lens: macro risk"]
+        M2["Boreas<br/>lens: on-chain flows"]
+        M3["Cygnus<br/>lens: momentum"]
+        M4["Draco — ABSENT"]
+    end
+
+    subgraph Prospects["🧑‍🚀 Prospective Members (join progressively)"]
+        N1["Helios → ~1min"]
+        N2["Selene → ~6min"]
+        N3["Rhea → ~11min"]
+        NX["… every 5min"]
+    end
+
+    subgraph Session["📋 Committee Session (per subject, ~2min cadence)"]
+        direction LR
+        S1["scheduled"] --> S2["collecting"] --> S3["window_closed"] --> S4["aggregated"] --> S5["published"]
+    end
+
+    subgraph Onboarding["📝 Onboarding Gates"]
+        direction LR
+        O1["keypair"] --> O2["apply"] --> O3["review"] --> O4["activate"] --> O5["connect"]
+    end
+
+    subgraph TUI["🖥 TUI Panels"]
+        TP["Research Queue"]
+        TP2["Committee Status"]
+        TP3["Onboarding Strip"]
+    end
+
+    Core -->|"sign → submit"| S3
+    Prospects -->|walk through| Onboarding
+    O5 -->|"admitted → joins roster"| S3
+    Scheduler -.->|visible in| TP
+    Session -.->|visible in| TP2
+    Onboarding -.->|visible in| TP3
+
+    style Scheduler fill:#1e3a5f33,stroke:#1e3a5f,stroke-width:2px
+    style Core fill:#3b076433,stroke:#7c3aed,stroke-width:2px
+    style Prospects fill:#3b076433,stroke:#a855f7,stroke-width:2px,stroke-dasharray:5 5
+    style Session fill:#1e1b4b33,stroke:#4338ca,stroke-width:2px
+    style Onboarding fill:#064e3b33,stroke:#059669,stroke-width:2px
+    style TUI fill:#78350f33,stroke:#d97706,stroke-width:2px
+```
+
+---
+
+## 0. Standing demo mode (`bun run demo`, local)
+
+Locally, `bun run demo` is a **long-lived standing demo**, not a one-shot. It runs in
+three phases and stays up until you stop it (Ctrl-C / SIGTERM):
+
+**(a) Bring-up.** Build images → start Postgres → migrate (seeds `job_schedules`) →
+start api + worker + mcp → wait for `/health` on api and mcp. Once healthy it writes a
+run state file at `.agents/demo-state.json` (compose project name + this run's random
+ports + compose env + the postgres data location, so teardown/status can find the run)
+and prints the READY route table.
+
+**Postgres data location.** By default each run uses a fresh anonymous named volume
+`<project>_pgdata`, labeled `robotmoney.demo=1` (so `demo:clean` can find it). Passing
+`bun run demo -- --pg-data <host-dir>` instead bind-mounts postgres's data directory to
+`<host-dir>` (created if absent), so the SAME value on a later boot resumes the SAME
+data — this is a CLI **argument**, never an env var, and is recorded in the state file.
+Reuse constraints: the same postgres major (17) and the same baked-in demo credentials;
+migrate + seed are idempotent (`backend/src/db/seed.ts` uses `ON CONFLICT DO NOTHING`),
+so re-booting on old data converges rather than duplicating rows. (Bind mounts were
+verified working on the Linux CI host — postgres:17-alpine chowns the bind dir to its own
+container user and inits/resumes cleanly — so the named-volume fallback was not needed.)
+
+**(b) Staggered scheduled actions (~2 min cadence).** The demo continuously produces
+fresh activity, driven two ways (hybrid):
+
+- **Regime + research** — driven by the worker's own scheduler. In demo mode
+  (`DEMO_MODE=1` — the single demo-stack flag, pinned on every demo container by
+  `docker-compose.demo.yml` and passed to the migrate/seed one-shot; it replaced
+  the old `DEMO_FAST_SCHEDULES`) the seed appends fast
+  demo-cadence rows to `job_schedules` in addition to the default daily 22:30 UTC rows:
+  `regime.classify` on `*/2 * * * *` (regime only, analytics lane) and
+  `research.refresh` on `1-59/2 * * * *` (both research signals only, research
+  lane — issue #107 split the retired combined `analytics.run` kind). The
+  one-minute cron offset staggers them so they fire at different times.
+  `DEMO_MODE` also SLOWS the wallet sampler: it seeds an hourly
+  `wallet.sample_balances` row (`3 * * * *`, staggered off the hourly vault
+  sample) and disables the per-minute baseline — the standing demo and the
+  self-hosted CI runner share one host IP, and per-minute GeckoTerminal/Base-RPC
+  sampling exhausts the per-IP quotas (hourly token prices are an accepted demo
+  tradeoff; the seed's cold-start enqueue still lands a live sample at boot).
+- **Committee opinions** — driven by a loop inside `scripts/demo.ts`, because a
+  committee session needs live MCP agents to sign + submit takes. After a one-time
+  reset + setup, it runs one full session (open → brief → collect → agents →
+  close → aggregate → publish) roughly every 120 s (recursive `setTimeout`, offset
+  from the analytics ticks), rotating (date, subject) so sessions accumulate. It does
+  **not** reset between ticks. It reuses the `runSession` runner exported from
+  `mcp/src/e2e.ts` (whose entry-point `main()` is guarded so importing it does not
+  trigger the reset-heavy standalone flow).
+
+One immediate tick of each runs at startup so the site has data on first load; the
+one-shot frontend check (`scripts/demo-frontend-check.ts`) also runs once,
+non-fatally.
+
+**(c) Teardown — keeps data by default.** The stack stays up until you stop it. **Ctrl-C
+/ SIGTERM tears it down** (`docker compose down`, **no `-v`**), printing the log-file path
+first (the log persists for post-mortem). Containers + network are removed but the
+**postgres data volume (or `--pg-data` host dir) is KEPT**, so a later `bun run demo`
+resumes from it. The state file is **kept too** — the data it points to survives, so the
+pointer must survive; it is overwritten by the next boot and only cleared when
+`demo:clean` deletes the volume it names. A **startup failure** is the exception: it dumps
+diagnostics and leaves the containers up for inspection. For a demo that is already
+running (e.g. started in the background, or its process was killed with SIGKILL):
+
+- `bun run demo:down` — `docker compose down` (no `-v`) for the recorded run; keeps the
+  data volume/dir and the state file.
+- `bun run demo:status` — `docker compose ps` for the recorded run (also prints the log
+  path and the postgres data location). A stopped-but-preserved demo shows no running
+  containers while the state file still points at the kept data.
+- `bun run demo:clean` — the **only** command that deletes demo data. It removes every
+  volume labeled `robotmoney.demo=1` (with `--project <name>` it scopes to one run),
+  listing what it removed and **loudly skipping** any in-use volume (a demo still running
+  on it). It **never** touches a `--pg-data` host directory (those are not docker volumes).
+
+CI (`process.env.CI`) runs the checks once and then tears down; because keep-by-default
+would leak a volume on the **shared self-hosted runner**, the CI path additionally
+reclaims **its own run's** volume (scoped by the `robotmoney.demo.project` label) on both
+success and failure, and `.github/workflows/e2e.yml` has an `if: always()` backstop for a
+killed/timed-out boot — so CI leaves zero volumes behind while never touching a co-tenant
+standing demo.
+
+## 1. Lifecycle stages
+
+Every stage of the session state machine must be exercised with the real domain code:
+
+```
+scheduled → collecting → window_closed → aggregated → published   (+ cancelled)
+```
+
+| Stage | What the demo must exercise |
+|---|---|
+| **Research pipeline** | At least one research signal tool runs (channel-divergence, late-cycle, or future tool) and its output lands in `research_signals`. The brief that members read must include research signal data alongside regime. |
+| **Regime classification** | A regime snapshot is written and readable. If the live provider (`FetcherProvider`) is unavailable, the seeded provider (`seededProvider`) is acceptable for hermetic runs — but the write path (same tables, same domain logic) must match production. |
+| **Open session** | A new session is created with `scheduled` state, assigned a subject from the rotation. |
+| **Publish brief** | Brief is assembled from regime + research signals + subject snapshot + recent session history. Window opens with a `window_closes_at` deadline. |
+| **Collecting (submission window)** | Multiple autonomous agents connect via MCP, read regime/brief, sign payloads, and submit. At least one agent no-shows (recorded absent, not fabricated). Out-of-window submissions are rejected. Cross-role writes are denied. |
+| **Close window** | Window transitions to `window_closed`. Submissions after this point are rejected. |
+| **Aggregate** | Deterministic rollup: stance counts, mean confidence, absence list, synthesis string. No host-authored takes. |
+| **Publish** | Session is marked publicly visible. |
+
+## 2. Worker orchestration
+
+Transitions must go through the **worker job pipeline**, not direct domain calls:
+
+- Each lifecycle transition is a job kind (`committee.open_session`,
+  `committee.publish_brief`, `committee.close_window`, `committee.aggregate`,
+  `committee.publish`) enqueued via the scheduler or explicitly for the demo.
+- Jobs are claimed and executed through the real `FOR UPDATE SKIP LOCKED` claim loop.
+- Job schedules are seeded so a no-intervention run would also progress through the
+  lifecycle (even if the demo also triggers them explicitly for determinism).
+  *(As shipped: the `committee.*` schedule rows are seeded disabled by default —
+  `COMMITTEE_SCHEDULES_ENABLED`, issue #208 / PR #229 — and the demo pins them
+  disabled, driving the lifecycle transitions explicitly via the admin
+  enqueue-job endpoint.)*
+
+## 3. Surfaces
+
+### 3.1 MCP server
+
+All MCP tools listed in the architecture must be demonstrated:
+
+| Tool | Status in demo |
+|---|---|
+| `get_regime` | ✅ Current |
+| `get_open_session` | ✅ Current |
+| `list_sessions` | ✅ Current |
+| `get_session` | ✅ Current |
+| `get_brief` | ✅ Current |
+| `get_signing_payload` | ✅ Current |
+| `submit_recommendation` | ✅ Current |
+| `get_subject_snapshot` | ✅ Current |
+| `post_memo` | ✅ Current |
+| `classify_regime` (optional analysis) | ✅ Current |
+| `actual_vs_target_weights` (optional analysis) | ❌ Not implemented |
+| `concentration_metrics` (optional analysis) | ✅ Current |
+
+The MCP transport must use **Streamable HTTP with OAuth 2.1** (bearer tokens are a
+dev-mode fallback only; the OAuth flow must be exercised in the demo).
+
+### 3.2 REST API
+
+The REST sibling routes must be demonstrated exercising the same domain code:
+
+- `POST /api/committee/admin/open`
+- `POST /api/committee/admin/brief`
+- `POST /api/committee/admin/close`
+- `POST /api/committee/admin/aggregate`
+- `POST /api/committee/admin/publish`
+- `POST /api/committee/submit`
+- `POST /api/committee/regime` (role-gated analytics write)
+- `GET /api/committee/members`
+- `GET /api/committee/sessions` / `GET /api/committee/sessions/:date/:subject`
+- `GET /api/committee/brief?date=&subject=`
+- `GET /api/dashboards/regime-snapshots`
+- `GET /api/dashboards/research-signals/:key`
+
+### 3.3 Frontend
+
+At least one headless assertion must verify that the published session renders
+correctly in the SPA:
+
+- Signed takes display with verification badges (green check / red mismatch).
+- Absent members are listed as absent.
+- Regime chart and research signal views render.
+- The `/committee` view shows the published session.
+- `memoUrl` values (if any) render as outbound links.
+
+## 4. Actors and roles
+
+Every actor role must be exercised and cross-role write denial asserted:
+
+| Actor | What the demo must do |
+|---|---|
+| **Committee member** (× N agents) | Connect via MCP, read regime/brief, sign with own ed25519 key, submit recommendation. One agent deliberately no-shows. Members must NOT be able to write regime data or mutate sessions. |
+| **RM analytics provider** | Write a regime snapshot (and optionally research signals) under a scoped credential. Must NOT be able to submit recommendations or mutate sessions. |
+| **Protocol host (worker)** | Drive lifecycle transitions through the job queue. Must NOT generate member takes. |
+| **Public reader** | Anonymous reads: published sessions, regime, research signals, member list. Must NOT write anything. |
+
+## 5. Security invariants
+
+Each invariant must be asserted (either via E2E assertions or hermetic tests that the
+demo also runs):
+
+| Invariant | Assertion |
+|---|---|
+| No fabricated takes | Absent members are absent in the published aggregate; their count matches registered members minus submitters. |
+| Signature verification | A tampered payload (mutation of stance, confidence, memoUrl, nonce) invalidates the submission. |
+| Nonce uniqueness | Replay of the same nonce is rejected. |
+| Window enforcement | Submissions before the window opens (the brief-publication `scheduled → collecting` transition) or after `window_closed` are rejected. |
+| Cross-role denial | Member cannot write regime; analytics provider cannot submit; neither can close/aggregate/publish. |
+| TOCTOU safety | Concurrent submissions for the same session from different members both succeed (different nonces, different members). |
+| No plaintext secrets | Access keys are stored as sha256 hashes; private keys are never transmitted. |
+| memoUrl covered by signature | Tampering with memoUrl after submission invalidates the signature (`backend/tests/signing.test.ts` already covers this — the demo must also exercise it). |
+
+## 6. Agent autonomy
+
+Each agent must:
+
+1. Generate its own ed25519 keypair (client-side).
+2. Register via the member onboarding flow.
+3. Connect to MCP with its own OAuth session (or bearer token in dev mode).
+4. Read regime + brief + research signals via MCP tools (autonomously — no hardcoded
+   stance based on agent identity).
+5. Decide a stance using a deterministic but non-trivial policy (weighted composite of
+   regime signals + per-agent bias).
+6. Fetch the canonical signing payload via `get_signing_payload`.
+7. Sign with its own private key.
+8. Submit via `submit_recommendation`.
+9. Optionally publish a memo via `post_memo` (or via `memoUrl` in the submission).
+
+RM never holds the private key at any point.
+
+## 7. Hermeticity and cleanup
+
+- **Production parity, always (issues #50, #147).** `bun run demo` — local or CI,
+  including the required per-PR `e2e` gate — runs the **live** data path
+  end-to-end: the real keyless analytics pipeline (FRED/Yahoo/DeFiLlama/EDGAR/…)
+  and a real Base mainnet JSON-RPC read for the `/allocation` vault-economics
+  slice (§10 below). There is no hermetic/offline demo mode: issue #147 removed
+  `DEMO_HERMETIC`, the in-compose `base-rpc-stub` fixture service, and
+  `scripts/demo-rpc-guard.ts` entirely (decision: issue #163 — every PR's merge
+  gate now depends on live external providers). A required credential or
+  provider that is unavailable must fail the boot loudly (non-zero exit,
+  actionable message naming the missing dependency) — never a silent fallback
+  to a fixture or stub.
+- The resolver (`scripts/lib/demo-env.ts::resolveDemoEnv`, re-exported by
+  `scripts/demo.ts`) is the single source of truth for the live data path;
+  `docker-compose.demo.yml` mirrors its defaults so the two layers can never
+  disagree (asserted by `scripts/tests/demo-compose-config.test.ts`).
+
+### 7b. Demo readiness gate
+
+The **demo readiness gate** is the LIVE boot-and-check step block in the required
+`e2e` workflow (`.github/workflows/e2e.yml`, step "Full-stack demo (demo
+readiness gate)"; job id `e2e`, unchanged so branch protection's required-status-check
+mapping stays intact). On every PR targeting main it boots the full LIVE demo stack
+and runs the loud-failure guards that keep broken demos off main:
+
+- `scripts/demo-frontend-check.ts` — the **core-surface-missing detector**: fetches
+  each route fragment from the live backend and exits non-zero if a core surface marker
+  (e.g. `x-data="committeeView()"`) is absent. Its wallet-balances provenance
+  assertion (issue #134) always expects `live` (`stale`/`seed` are allowed
+  degrades, loudly logged) now that there is only one supported demo mode.
+- `test:browser` (Playwright, `spa.spec.ts`) — drives the rendered SPA.
+- `scripts/demo-live-smoke.ts` (issue #128) — asserts the LIVE steady state:
+  ≥2 published committee sessions (the #101 starvation guard), a fresh regime
+  snapshot, wallet + vault-economics provenance `live` (only the documented
+  #120 ZYFAI/GIZA degrades tolerated, loud-logged), and both research signals
+  landed. This is the SAME script + assertions the nightly
+  `demo-live-smoke-nightly.yml` sweep runs — reused as-is, not re-authored, so
+  the required gate and the nightly sweep can never drift apart.
+
+The core-surface detector's own loud-failure path is **self-tested**, not assumed:
+`scripts/tests/demo-frontend-check.test.ts` (run in the required `integration` job via
+`bun run test`) spawns the real `scripts/demo-frontend-check.ts` against an in-process
+stub backend and proves both directions — it exits non-zero when the
+`x-data="committeeView()"` marker is stripped from the served `/views/committee.html`,
+and exits 0 against the correct, unmodified content — so a change that silently weakened
+the detector's assertions is caught. The `demo-live-smoke.ts` assertions are likewise
+self-tested by `scripts/tests/demo-live-smoke.test.ts`.
+
+Because every PR's required gate now depends on live external providers (public
+Base mainnet RPC, FRED/Coin Metrics/GeckoTerminal/Yahoo/EDGAR), this job runs
+slower and is occasionally flakier against those upstreams than the retired
+hermetic boot was — an accepted, deliberate consequence of issue #147/#163. A
+genuinely-unreachable external provider after real retries is a legitimate
+external blocker to file, not a bug in the workflow.
+
+### 7a. Tuning the live path
+
+The live path (the only path) can still be tuned via env before `bun run demo`.
+
+- **`ANALYTICS_SOURCE`** — the single, authoritative source knob honored by the
+  orchestrator (`analytics/index.ts::resolveAnalyticsSource`, called by api + worker):
+  - unset / `live` → real keyless fetchers (the only value the demo default
+    selects),
+  - `hermetic` → the deterministic offline seeded source backend unit tests
+    depend on directly (`backend/src/analytics/access/hermetic-source.ts`);
+    still a valid explicit override for local debugging, but no demo default
+    ever selects it,
+  - any other value is **refused loudly** (fail-closed — a typo never silently hits
+    the network).
+  The legacy `PROVIDER` / `config.analyticsProvider` knob is **deprecated** for source
+  selection and no longer influences the live/demo path; do not use it to opt in.
+- **`ANALYTICS_FLOOR_SEED`** — one-time cold-DB raw floor seed: load a vendored real
+  `raw_indicator_history` floor once so a fresh live boot doesn't re-fetch years of
+  history (esp. ~200 SEC-EDGAR requests; live EDGAR fetches are themselves
+  bounded since #103 — per-request timeouts, a cheap preflight probe, and a hard
+  ~90s aggregate sweep ceiling in `analytics/extract/edgar.ts` — so a slow SEC
+  upstream can't pin the run) before the first classify. Idempotent
+  (append-only — existing DB rows win on overlap; no-op once warm). Defaults to `1`
+  on every demo boot (`scripts/lib/demo-env.ts`); set `0` explicitly to disable it.
+  `FLOOR_SEED_PATH` overrides the seed file (must be readable inside the container).
+- On-disk fetch cache — no TTL knob anymore (the old `FETCH_CACHE_TTL_MS` env
+  was removed): the TTL is mode-selected in
+  `backend/src/analytics/extract/fetch-cache.ts` — 1 hour under `DEMO_MODE`
+  (per-IP quota protection; the demo host also runs the self-hosted CI runner),
+  off everywhere else. Optional `FETCH_CACHE_DIR` still overrides the cache
+  directory (a path is genuinely environmental; the TTL is not).
+- **`BASE_RPC_URL`** — the vault-economics eth_call endpoint (§10). Unset →
+  backend `config.ts` falls through to its production default
+  (`https://mainnet.base.org`); set explicitly to point at a private RPC.
+
+The live path preserves the honesty model: empty fetch → persisted real floor; a
+no-history indicator is excluded + logged (never synthetic).
+- Random ports (Postgres, API, MCP) + unique compose project name: concurrent runs do
+  not collide. The run identity (project + ports + compose env) is written to
+  `.agents/demo-state.json` so the explicit teardown command can find it.
+- **Teardown on exit (local).** Ctrl-C / SIGTERM tears the stack down
+  (`docker compose down`, **no `-v`** — containers + network removed, postgres data
+  **kept**, state file **kept**) and prints the log-file path first. A **startup failure**
+  is the exception — it leaves the stack RUNNING so it can be inspected. `bun run
+  demo:down` tears down an already-running demo the same way (keeps data); `bun run
+  demo:status` shows the containers, the log path, and the postgres data location; `bun
+  run demo:clean` is the only command that deletes demo data volumes (by
+  `robotmoney.demo=1` label; loud skip on in-use; never a `--pg-data` host dir).
+- **CI reclaims its own volume:** when `process.env.CI` is set the demo runs its checks
+  once, tears down (`docker compose down`, no `-v`), then deletes **only its own run's**
+  volume (scoped by the `robotmoney.demo.project` label) so the shared self-hosted runner
+  leaks nothing while a co-tenant standing demo is untouched.
+- A missing Docker dependency (Postgres image, build failure) must fail the run
+  loudly, never silently skip.
+
+## 8. Agent memo workflow (`memoUrl` + `post_memo`)
+
+The demo must demonstrate the full agent memo lifecycle:
+
+1. At least one agent publishes a long-form memo at a member-hosted URL (or a
+   simulated URL within the demo).
+2. The `memoUrl` is included in the submission payload and covered by the signature.
+3. The `post_memo` MCP tool (or equivalent) writes the memo to the member's own
+   storage and returns the URL.
+4. The published session frontend renders the `memoUrl` as a link.
+5. Tampering with the `memoUrl` after submission invalidates the signature (asserted
+   in `signing.test.ts`).
+
+## 9. Multi-session awareness
+
+The demo should demonstrate at least two sessions (or the concept of rotation):
+
+- Session N completes the full lifecycle.
+- The brief for session N+1 references the outcome of session N.
+- The session list view (`list_sessions`) shows both.
+
+## 10. Demo output
+
+### 10.1 TUI (default, interactive terminal)
+
+In an interactive terminal the demo takes over the screen with a zero-dependency ANSI
+TUI (`scripts/lib/tui.ts`) that repaints ~4×/s. Raw logs are **suppressed** on screen;
+the TUI shows only distilled state. Layout:
+
+- **Services** — the run's URLs (Site / Regime / Committee / Research per key / MCP /
+  Admin), on `127.0.0.1:<random port>`. The **Admin** entry is the `/admin`
+  task-queue jobs dashboard (#117); its password (`ADMIN_TOKEN`) is a fresh
+  random value generated per run and rendered **only** here, on the pane's
+  `Admin pass` line — never logged, never written to `demo-state.json`
+  (`scripts/lib/demo-main.ts`).
+- **Startup** — per-container status (postgres, api, worker, mcp) plus migrate and the
+  `/health` checks, each shown pending / in-progress (spinner) / healthy / failed. After
+  bring-up the icons are kept live by polling the **real docker container state**
+  (`docker compose ps` every ~3 s), so a post-startup crash / restart-loop / `unhealthy`
+  Docker healthcheck turns the icon red (with a detail like `exited 1` / `restarting` /
+  `unhealthy`). The pane header shows a refresh spinner while a check is in flight.
+- **Onboarding** (full-width strip) — each prospective member's join checklist:
+  `keypair → apply → review → activate → connect → session → memo → admitted`, each
+  pending / spinner / ✓ / ✗. Steps 1–5 are driven by the real join flow
+  (`onboardMember`); `session`/`memo`/`admitted` flip when the member is observed
+  submitting a signed take + posting a memo in a live session. Admitted members **retain
+  their checklist** in the pane (most recent shown, with a `(+N earlier admitted)` note),
+  and an `upcoming → Name in m:ss …` line **counts down** to the next scheduled
+  admissions. See §11.
+- **Activity** (largest region) — Research plus **one pane per committee subject**, laid
+  out as responsive columns (side by side when they fit, stacking when the terminal is
+  narrow):
+  - **Research** — recent `regime.classify` / `research.refresh` runs, advancing
+    queued → running → done as the worker's queue transitions are observed, annotated
+    with what landed (e.g. `regime → risk_on 0.76`). Fidelity is queue-level (see
+    [this specification's §10](#10-demo-output)), not fabricated sub-steps. The header shows a live **countdown** to
+    the next scheduled regime/research run (from `job_schedules.next_run_at`, using the
+    DB clock).
+  - **One pane per subject** (woon, mav, …) — each subject runs on its **own schedule**
+    (independent interval + stagger offset, serialized execution) and gets its own pane
+    showing its session lifecycle state, each member's real stage (connect → fetch →
+    thinking → reporting → waiting; no-shows absent), and a per-subject **countdown** to
+    its next session (`running…` while in progress).
+- **Log footer** — the last few distilled events plus: `Ctrl-C / SIGTERM tears down the
+  stack (containers + network; postgres data kept)`.
+
+Full verbose output from every process (api, worker, mcp, migrations, the committee
+driver, and the orchestrator's own narration) is written to
+`.agents/demo-<project>.log` (path shown in the TUI header, recorded in the state file,
+and shown by `bun run demo:status`). On Ctrl-C / SIGTERM the terminal is restored first,
+the log path is printed, the stack is torn down (data kept), and a resume/reclaim hint is
+printed. A startup failure instead restores the terminal and leaves the containers up for
+inspection (with the log path).
+
+### 10.2 Plain fallback (non-TTY, CI, `--no-tui` / `NO_TUI=1`)
+
+When stdout is not a TTY, in CI, or when the TUI is disabled, the demo keeps the plain
+line-logging behavior: once healthy it prints a READY route table, then logs each
+scheduled action as it fires.
+
+```
+── Robot Money demo ── READY ────────────────────────────
+  Site:       http://127.0.0.1:<api>/
+  Regime:     http://127.0.0.1:<api>/regime
+  Committee:  http://127.0.0.1:<api>/committee
+  Research:   http://127.0.0.1:<api>/research/<key>
+  MCP:        http://127.0.0.1:<mcp>/health
+  Admin:      http://127.0.0.1:<api>/admin  (password shown in the interactive TUI only)
+
+  State file: .agents/demo-state.json
+  Log file:   .agents/demo-<project>.log
+  PG data:    volume <project>_pgdata (fresh-per-run; kept on teardown)
+  Demo actions run on a ~2-min staggered cadence.
+  Ctrl-C / SIGTERM tears down the stack (containers + network; postgres data kept).
+  Reclaim stopped demos' data volumes with: bun run demo:clean
+```
+
+## 11. New-member onboarding (growing committee)
+
+The standing demo periodically admits a **brand-new committee member** through the real
+join path, proving the public apply → admin activate → MCP OAuth flow and demonstrating a
+committee that **grows over time**:
+
+1. **keypair** — the prospect generates its own ed25519 keypair (RM never sees the private
+   key).
+2. **apply** — `POST /api/committee/apply` (public, no auth) → status `applied`.
+3. **review** — a short simulated admin-review delay.
+4. **activate** — `POST /api/committee/admin/activate` → mints the member's bearer token →
+   `active`.
+5. **connect** — exchanges the token for an MCP OAuth 2.1 `client_credentials` access
+   token.
+6. **session / memo / admitted** — the new member is added to the shared roster
+   (`onboardedCreds` + `MEMBERS`) so it participates in the next session for whichever
+   subject runs next, submitting a signed take and posting a memo; these steps flip to
+   done via the same session progress callback that drives the subject panes.
+
+Driven by `onboardMember()` in `mcp/src/e2e.ts` (additive; the standalone `main()` is
+unchanged) and an onboarding loop in `scripts/demo.ts`. The first admission fires ~1 min
+after start (so it's visible early); thereafter a **new character joins every ~5 minutes,
+indefinitely** (a curated name pool, then generated names so the demo never runs dry), so
+the committee keeps growing for as long as the demo runs. Each admission is rendered live
+in the Onboarding strip (§10.1), which keeps every admitted member's completed checklist
+visible and shows a live countdown to the upcoming admissions.
+
+---
+
+## Admin Surface: Research and Investment Committee
+
+Status: implementation specification
+Audience: engineering agents implementing the next admin phase
+Route: `/admin` and `/admin/*` (not linked from public navigation)
+
+## 1. Outcome
+
+Build one authenticated operator surface that lets a Robot Money administrator:
+
+1. diagnose every run of the research pipeline from source access through the
+   public report;
+2. inspect and safely rerun queue work;
+3. create and manage Investment Committee topics;
+4. add, activate, deactivate, and review committee members;
+5. schedule a committee session and observe its lifecycle;
+6. inspect the exact roster, brief inputs, signed member recommendations,
+   absences, aggregate, and publication for a session; and
+7. see an immutable audit trail for every admin mutation.
+
+An implementation is complete only when an admin can perform these workflows
+without SQL access, shell access, or manual calls to the existing committee
+admin dispatcher.
+
+## 2. Decisions fixed by this specification
+
+These decisions are not open implementation questions:
+
+- Keep the existing `ADMIN_TOKEN` and `X-Admin-Token` authentication model.
+  Role-based admin accounts are out of scope for this phase.
+- Keep the buildless Alpine frontend and the frontend-to-backend HTTP boundary.
+- Keep the Postgres queue as the executor. Admin requests enqueue lifecycle and
+  research work; the browser never runs domain operations itself.
+- Preserve accepted committee recommendations as append-only signed records.
+  Admins cannot edit or delete them.
+- “Remove member” means deactivate. No committee member is hard-deleted.
+- “Topic” is the UI term; `committee_subjects` remains the database and API
+  domain term.
+- The persisted committee states are exactly `scheduled`, `collecting`,
+  `window_closed`, `aggregated`, `published`, and the new terminal state
+  `cancelled`. There is no persisted `brief_published` state in the product.
+- A committee session snapshots its expected roster when it is created.
+  Later global member changes do not rewrite that roster or historical quorum.
+- Research recovery reruns a complete tool. Individual stages are not retried
+  because the current stages share in-memory data and are not independently
+  executable.
+- Analytics natural-key rows remain current-value projections and may be
+  upserted by a rerun. The new run/stage records preserve who ran what, the
+  before/after checksums, warnings, and outcome; this phase does not introduce
+  versioned copies of every raw time-series row.
+- The seeded recurring committee schedules remain disabled. Product committee
+  scheduling uses one-off queue jobs scoped to a specific session. Empty-payload
+  recurring rows cannot identify a subject or session and must not be enabled by
+  this UI. *(Superseded by issue #208 / PR #229: schedules are
+  environment-configurable via `COMMITTEE_SCHEDULES_ENABLED` — see §9.4 of the
+  main document.)*
+
+## 3. Current product baseline
+
+The implementation must extend, not replace, these pieces:
+
+- `frontend/public/views/admin.html` and
+  `frontend/public/assets/js/app/alpine/views/admin-jobs.js` provide the current
+  password gate, five-second polling, schedules, queue jobs, runs, and JSON logs.
+- `backend/src/api/routes/admin.ts` exposes `POST /api/admin/auth`,
+  `GET /api/admin/jobs`, `GET /api/admin/jobs/:id`, and
+  `GET /api/admin/runs`. These routes are read-only and fail closed before SQL.
+- `jobs`, `job_schedules`, and `job_runs` are defined by migration `0003`.
+  `jobs.status` currently allows `pending`, `running`, `succeeded`, `failed`, and
+  `dead`; normal retry handling leaves the job `pending` and records `failed` or
+  `degraded` on `job_runs`.
+- Analytics runs through `runAnalytics()` and the stages described in
+  `docs/architecture.md`: `access → extract → transform → analyze → store →
+  report`. The production jobs are `regime.classify` at 22:30 UTC and
+  `research.refresh` at 23:00 UTC.
+- The analytics worker must persist through the authenticated
+  `/api/analytics/*` boundary. Migration `0016` denies its database role writes
+  to analytics tables. New analytics telemetry writes must respect the same
+  boundary.
+- The current committee domain supports public reads, applications, activation,
+  signed submissions, memos, subject creation, and the five-state lifecycle.
+  Several lifecycle functions currently lack state guards; this plan adds them.
+- Canonical accepted takes live in `committee_recommendations`, one per
+  `(session_id, member_id)`, with replay protection on `(member_id, nonce)`.
+  Invalid signatures are rejected before insert and are not retained. The admin
+  UI therefore shows accepted submissions only; rejected submission-attempt
+  forensics are out of scope.
+- Public committee DTOs intentionally omit secrets and admin metadata. Admin DTOs
+  must be new types rather than widening public responses with contact or key
+  information.
+
+## 4. User stories and required behavior
+
+### US-A1 — Sign in and retain a tab session
+
+As an admin, I can enter the admin password once and use all admin sections in
+that browser tab.
+
+Acceptance:
+
+- The existing `rm_admin_token` `sessionStorage` key is retained.
+- Every admin request sends `X-Admin-Token`.
+- Any 403 clears the stored token, stops polling, clears sensitive state, and
+  returns to the login form with “Session expired — sign in again.”
+- The token never appears in a URL, log, audit row, or rendered JSON payload.
+
+### US-A2 — See operational health
+
+As an admin, I can see current failures, stale research, active committee work,
+and the next scheduled events on one page.
+
+Acceptance:
+
+- Overview cards show queue counts, last success/failure by production kind,
+  stale analytics outputs, the next enabled analytics schedules, and the next
+  committee session event.
+- Alerts distinguish `not_run`, `running`, `degraded`, `failed`, `dead`,
+  `stale`, and `healthy`.
+- A “running too long” alert means `jobs.status = 'running'` and
+  `locked_at < now() - JOB_VISIBILITY_TIMEOUT`; it does not guess from average
+  duration.
+- Regime staleness uses the existing regime projection’s staleness block.
+- Each research signal is stale when its latest `research_signals.date` is more
+  than two UTC calendar days behind the API server date. Use a named constant
+  `RESEARCH_STALE_DAYS = 2` in the admin projection.
+
+### US-R1 — List and filter research runs
+
+As an admin, I can find a run by job kind, tool, as-of date, status, or job id.
+
+Acceptance:
+
+- One `regime.classify` attempt creates one analytics run with the `regime` tool.
+- One scheduled `research.refresh` attempt creates one analytics run containing
+  `channel-divergence` and `late-cycle-signals` tool traces.
+- A manual single-tool research rerun creates a `research.refresh` run containing
+  only the requested research tool.
+- The list shows run id, job id, attempt, source mode, as-of date, tools,
+  current stage, status, warning count, start, finish, and duration.
+
+### US-R2 — Inspect every research stage
+
+As an admin, I can open a research run and understand what happened at every
+stage without reading arbitrary console logs.
+
+Acceptance:
+
+| Stage | Required recorded detail |
+|---|---|
+| `access` | `ANALYTICS_SOURCE` result (`live` or `hermetic`), requested tool inputs, persisted-floor row counts, floor-seed result, and cache configuration; never headers or tokens |
+| `extract` | source and indicator/input keys, request outcome, timeout/error summary, fetched point counts, first/last date, and persisted-floor fallback use |
+| `transform` | tool, date range, alignment mode, raw/aligned/transformed counts, missing/forward-filled/zero-filled counts, and bounded preview |
+| `analyze` | tool, dependency list, methodology/version, output summary, insufficient-history warnings, and output checksum |
+| `store` | authenticated API operation, target table, natural keys/counts, inserted-or-updated result, before/after checksum, and transaction outcome |
+| `report` | public route checked, returned as-of date, payload checksum, staleness result, and whether it matches the stored output |
+
+Stage states are `pending`, `running`, `succeeded`, `warning`, `failed`, and
+`skipped`. A stage with zero rows is never silently shown as succeeded: it is
+either `warning` with fallback detail or `failed` when no usable data exists.
+
+The detail page links back to the queue job and exposes redacted `job_runs`
+output/error. It displays at most 250 preview points per artifact. Complete
+persisted raw history is fetched on demand by indicator/date range; it is not
+copied into telemetry JSON.
+
+### US-R3 — Navigate research datapoints
+
+As an admin, I can move from a source indicator to stored data and the public
+report it affects.
+
+Acceptance:
+
+- `regime` shows all registry indicators, their source, transform, latest raw
+  date/value, transformed value, signed percentile, panel weight, and raw
+  history range from `raw_indicator_history`.
+- `channel-divergence` and `late-cycle-signals` expose the persisted payload for
+  the selected `(signal_key, date)` and its bounded source/transform previews.
+- A raw-series request accepts an indicator, start date, end date, and limit;
+  it cannot execute arbitrary SQL or request an unregistered table.
+- Links open the corresponding public `/regime` or `/research/:key` page in a
+  separate tab.
+
+### US-R4 — Rerun research safely
+
+As an admin, I can rerun a failed, degraded, or stale research tool for an
+explicit as-of date.
+
+Acceptance:
+
+- The form requires `kind`, `asof`, and a reason of 10–500 characters.
+- `regime.classify` only permits tool `regime`.
+- `research.refresh` permits either both research tools or exactly one of
+  `channel-divergence` and `late-cycle-signals`.
+- The API inserts a new pending job with a unique manual dedupe key and returns
+  202 with the job id. It never resets or mutates the original job.
+- The queue payload records only `asof`, optional `toolId`, and an internal
+  audit request id. The human reason is stored in audit data, not copied into
+  worker logs.
+- A rerun may upsert existing natural keys. The store stage records before and
+  after checksums so the admin can see whether the canonical output changed.
+
+### US-Q1 — Inspect and retry queue work
+
+As an admin, I can filter queue jobs and create a safe retry of dead work.
+
+Acceptance:
+
+- Existing queue screens remain available under `/admin/queue`.
+- Filters cover kind, job status, run status, scope type/id, and created range.
+- Job detail includes payload, dedupe key, worker lock, attempts, every run, and
+  any linked analytics run or committee session.
+- “Retry” is available only for a `dead` job. It clones kind/payload/priority into
+  a new pending job, gives it a unique manual dedupe key, and audits the source
+  and new job ids. It never changes the dead row.
+- Schedule editing is limited to enabled/disabled for existing analytics
+  schedules. Cron, timezone, kind, and payload are read-only in this phase.
+- The five disabled recurring `committee.*` rows are labelled “legacy/demo —
+  not product scheduling” and cannot be enabled from the UI. *(Superseded by
+  issue #208 / PR #229: schedules are environment-configurable via
+  `COMMITTEE_SCHEDULES_ENABLED` — see §9.4 of the main document.)*
+
+### US-C1 — Create and edit a committee topic
+
+As a committee manager, I can add a topic and make it eligible for future
+sessions.
+
+Acceptance:
+
+- Create and edit support every durable `committee_subjects` field.
+- New topic ids match `^[a-z0-9][a-z0-9-]{1,63}$` and are immutable after create.
+- Required fields are id, name, operator, thesis, source type, and
+  recommendation type.
+- Source type is `rpc`, `manual`, `vault_tvl`, or `framework`.
+- Recommendation type is `position_actions` or `bucket_weights`.
+- Wallet and NFT entries have `address`, `chain`, and optional `label` strings.
+  `framework` requires an empty wallet array; `rpc` requires at least one wallet.
+- `linkedMemberId`, when present, must reference an existing member.
+- Deactivation sets `status = 'inactive'`. It prevents new sessions but leaves
+  old sessions, briefs, snapshots, and recommendations unchanged.
+- Edits require the current `version`; a stale version returns 409.
+
+### US-C2 — Review and manage committee members
+
+As a committee manager, I can review applications and manually manage the
+roster without destroying history.
+
+Acceptance:
+
+- Roster filters are `applied`, `active`, and `inactive`.
+- Member detail includes profile fields, contact email, application status,
+  timestamps, active-key metadata, participation history, and audit events.
+  It never returns `token_hash` or any bearer token already issued.
+- Activating an applicant uses the existing pending public key, marks the
+  application approved, and returns a new bearer token exactly once. The UI
+  presents a copy-and-dismiss panel and cannot retrieve the token later.
+- Manual add requires member id, name, public key, and optional profile/contact
+  fields. It creates an active member, one active key, and returns a bearer token
+  exactly once.
+- Deactivate changes the member to `inactive` and deactivates all member keys in
+  the same transaction. Existing recommendations and roster snapshots remain.
+- Reactivate requires a new public key. It inserts a new active key, keeps old
+  keys inactive, returns a new bearer token once, and sets status active.
+- Key rotation for an active member likewise requires a new public key and
+  atomically revokes old keys before issuing a new token.
+- Rejecting an application sets its application status to `rejected`, sets the
+  member inactive, and leaves its key inactive.
+- `COMMITTEE_ROSTER_CAP` is HARD-ENFORCED on every transition-to-active. The
+  production admin API (manual add, activate/approve, reactivate — and the demo
+  `registerMember` shortcut) refuses an admission that would exceed the cap with
+  a 409, race-safely (a transaction-scoped advisory lock serializes admissions
+  so two concurrent activations cannot both slip past the last free seat).
+- All writes require the current member `version`; stale writes return 409.
+
+### US-C3 — Schedule and observe a committee session
+
+As a committee manager, I can select a topic and schedule its collection and
+publication times.
+
+Acceptance:
+
+- The create form requires an active topic, session date, brief-open timestamp,
+  window-close timestamp, publish timestamp, and reason.
+- Times are ISO 8601 instants. Validation is
+  `briefOpensAt < windowClosesAt < publishAt` and session date equals the UTC date
+  of `briefOpensAt`.
+- `(date, subject_id)` remains unique.
+- Creation inserts the session in `scheduled`, snapshots all currently active
+  members into `committee_session_members`, and enqueues four one-off jobs:
+  `publish_brief` at brief open, `close_window` at window close, `aggregate` one
+  second after close, and `publish` at publish time.
+- Each job has `scope_type = 'committee_session'`, `scope_id = session UUID`, and
+  dedupe key `committee:<session-id>:<action>`. Repeated creation or enqueue does
+  not duplicate jobs.
+- Session detail presents the timeline in UTC and browser-local time, linked job
+  states, countdown, expected roster, response count, and next legal action.
+- Members activated after creation are not automatically added. Before the
+  session reaches `collecting`, an admin may explicitly add or excuse a roster
+  member. Once collecting starts, the roster is immutable.
+
+### US-C4 — Operate guarded committee transitions
+
+As a committee manager, I can run or recover a session lifecycle without
+creating impossible state.
+
+The transition matrix is authoritative:
+
+| From | Action | To | Conditions |
+|---|---|---|---|
+| `scheduled` | publish brief | `collecting` | topic active; expected roster non-empty; brief is upserted; absolute close time is in the future |
+| `scheduled` | cancel | `cancelled` | reason required; pending scoped lifecycle jobs become cancelled |
+| `collecting` | close window | `window_closed` | normal schedule or manual early close with reason |
+| `window_closed` | reopen | `collecting` | exceptional reason and new future close time required; aggregate/publish jobs are rescheduled |
+| `window_closed` | aggregate | `aggregated` | roster snapshot exists; aggregate only accepted verified recommendations |
+| `aggregated` | publish | `published` | aggregate and synthesis are present |
+
+All other transitions return 409. Repeating an action already reflected in state
+returns 200 with `{ idempotent: true }` only when the target state and associated
+artifact already exist; it must not rewrite timestamps or enqueue duplicate jobs.
+`published` and `cancelled` are terminal in this phase.
+
+Manual actions enqueue the same worker kind used by scheduled actions and return
+202 with a job id. `cancel` and `reopen` add `committee.cancel` and
+`committee.reopen_window` worker kinds so every transition remains observable in
+the committee lane.
+
+### US-C5 — Inspect member datapoints and aggregation
+
+As a committee manager, I can inspect what every expected member supplied and
+how the aggregate was derived.
+
+Acceptance:
+
+- The roster matrix derives one row per `committee_session_members` row and
+  reports `expected`, `excused`, `submitted`, or `absent`.
+- `submitted` includes recommendation id, stance, confidence, received time,
+  verification state, body, memo URL, nonce, signature, and canonical payload.
+  Signature and payload are admin-only and rendered in a collapsed disclosure.
+- The UI can filter and sort by roster state, stance, confidence, received time,
+  and member.
+- The aggregate denominator comes from non-excused session roster rows, never
+  the current global active-member query.
+- The aggregate view shows stance counts, mean confidence, expected/submitted/
+  absent counts, consensus, disagreements, actions or weights, and the source
+  recommendation ids used.
+- No admin endpoint can update `committee_recommendations`.
+
+### US-A3 — Inspect audit history
+
+As an admin, I can determine who or what changed operational state and why.
+
+Acceptance:
+
+- Every admin mutation records actor `admin`, action, target, reason, request id,
+  before summary, after summary, outcome, timestamp, and related job/session ids.
+- Existing public/member events remain visible (`public:apply` and member
+  submission events).
+- Audit rows are append-only through the application. No delete/update endpoint
+  exists.
+- Secrets, token hashes, bearer tokens, signatures, full recommendation bodies,
+  and request headers are excluded from audit JSON.
+
+## 5. Database migration
+
+Add one forward migration, `backend/migrations/0017_admin_surface.sql`. It must be
+idempotent in the same style as existing migrations and preserve all current
+rows.
+
+### 5.1 Queue extensions
+
+Add to `jobs`:
+
+```sql
+scope_type     text,
+scope_id       text,
+requested_by   text,
+audit_request_id uuid
+```
+
+Add index `(scope_type, scope_id, id DESC)`. Replace the jobs status check so it
+also allows `cancelled`. Do not remove the currently allowed `failed` value even
+though normal retries use `pending`; existing deployments may contain it.
+
+### 5.2 Research telemetry
+
+Create `analytics_runs`:
+
+```text
+id uuid primary key default gen_random_uuid()
+job_id bigint references jobs(id) on delete set null
+job_kind text not null
+attempt int not null
+asof date not null
+source_mode text not null check (live, hermetic)
+tools jsonb not null                         -- JSON array of allowed tool ids
+status text not null check (running, succeeded, warning, failed)
+current_stage text
+code_version text not null default 'unknown'
+warning_count int not null default 0
+warnings jsonb not null default []
+error text
+started_at timestamptz not null default now()
+finished_at timestamptz
+created_by text not null                     -- scheduler or admin
+audit_request_id uuid
+```
+
+Index `(started_at DESC)`, `(job_id, attempt)`, and `(asof DESC, job_kind)`.
+There is no uniqueness constraint on job/attempt because telemetry failure and a
+subsequent retry must not block a new trace; list projection selects the latest
+trace and flags duplicates.
+
+Create `analytics_stage_runs`:
+
+```text
+id bigserial primary key
+analytics_run_id uuid references analytics_runs(id) on delete cascade
+tool_id text not null
+stage text not null check (access, extract, transform, analyze, store, report)
+sequence smallint not null
+status text not null check (pending, running, succeeded, warning, failed, skipped)
+started_at timestamptz
+finished_at timestamptz
+summary jsonb not null default {}
+error text
+unique (analytics_run_id, tool_id, stage)
+```
+
+Create `analytics_artifacts`:
+
+```text
+id bigserial primary key
+analytics_run_id uuid references analytics_runs(id) on delete cascade
+stage_run_id bigint references analytics_stage_runs(id) on delete cascade
+tool_id text not null
+kind text not null
+artifact_key text not null
+checksum text
+row_count int
+first_date date
+last_date date
+preview jsonb                            -- maximum 250 points/items
+storage_ref jsonb not null default {}    -- allowlisted table/key/date reference
+created_at timestamptz not null default now()
+```
+
+Index `(analytics_run_id, tool_id)` and `(artifact_key, created_at DESC)`.
+Telemetry tables are analytics-owned: migration `0017` must explicitly revoke
+worker `INSERT/UPDATE/DELETE` on them. Worker telemetry is written through new
+analytics-provider endpoints, never the worker SQL connection.
+
+### 5.3 Committee integrity and scheduling
+
+Add `version int NOT NULL DEFAULT 1` and `updated_at timestamptz NOT NULL DEFAULT
+now()` to `committee_members`, `committee_subjects`, and `committee_sessions`.
+
+Add to `committee_sessions`:
+
+```text
+brief_opens_at timestamptz
+publish_at timestamptz
+cancelled_at timestamptz
+```
+
+Keep existing `window_closes_at` and `published_at`. Add a state check allowing
+the six states in section 2. Validate existing values before validating the
+constraint. Add foreign keys from sessions/recommendations/snapshots/briefs to
+subjects only after a migration query proves there are no orphan subject ids;
+otherwise insert placeholder inactive subjects for the orphan ids first.
+
+Create `committee_session_members`:
+
+```text
+session_id uuid references committee_sessions(id) on delete cascade
+member_id text references committee_members(id)
+member_name text not null
+member_lens text
+status text not null default 'expected' check (expected, excused)
+included_at timestamptz not null default now()
+excused_at timestamptz
+reason text
+primary key (session_id, member_id)
+```
+
+Backfill existing sessions from the historical evidence available:
+
+- insert every member that submitted to the session as `expected` using current
+  name/lens snapshots;
+- for sessions with `committee_recommendation.quorum.active`, add currently
+  active members until the recorded active count is reached, ordered by member
+  id; and
+- if the exact historical roster cannot be reconstructed, retain the row set and
+  add an audit event `backfill_session_roster` with `scope.approximate = true`.
+
+Create `committee_session_events`:
+
+```text
+id bigserial primary key
+session_id uuid references committee_sessions(id) on delete cascade
+from_state text
+to_state text not null
+action text not null
+actor text not null
+reason text
+job_id bigint references jobs(id) on delete set null
+at timestamptz not null default now()
+```
+
+Index `(session_id, at)`. Backfill one `backfill` event per existing session using
+its current state and `generated_at`.
+
+Add checks for member status (`applied`, `active`, `inactive`), subject status
+(`active`, `inactive`), and application status (`pending`, `approved`,
+`rejected`). Normalize unknown existing values to `inactive`/`rejected` before
+validating.
+
+### 5.4 Audit extension
+
+Extend existing `audit_log` without removing `scope`:
+
+```text
+request_id uuid default gen_random_uuid()
+target_type text
+target_id text
+reason text
+before_state jsonb
+after_state jsonb
+outcome text not null default 'succeeded'
+job_id bigint references jobs(id) on delete set null
+session_id uuid references committee_sessions(id) on delete set null
+```
+
+Index `(at DESC)`, `(target_type, target_id, at DESC)`, and `request_id`.
+
+## 6. Backend implementation
+
+### 6.1 Boundaries and module placement
+
+- Keep `handleAdmin` as the single `/api/admin/*` dispatcher, but split SQL and
+  domain logic into `backend/src/admin/` projections/services so the route does
+  not become a monolith.
+- Add admin DTOs to `contract/src/admin.d.ts` and routes to
+  `contract/src/routes.js`/`routes.d.ts`. Run `scripts/sync-contract.ts` so the
+  browser contract copy stays generated from the canonical contract.
+- Add committee mutations to `backend/src/committee/domain.ts` or focused
+  modules under `backend/src/committee/`; both REST and workers call the same
+  functions.
+- Add an optional analytics trace observer to `runAnalytics`. The compute path
+  must remain usable with a no-op observer in tests and non-worker callers.
+- Change `JobHandler` to `(payload, context)`, where context is
+  `{ jobId, kind, attempt, workerId }`, and pass it from `processOneJob`. Existing
+  non-admin handlers may ignore the second argument.
+
+### 6.2 Analytics telemetry write path
+
+Add analytics-provider-only endpoints alongside existing ingestion routes:
+
+- `POST /api/analytics/runs` — begin a trace;
+- `PATCH /api/analytics/runs/:id` — finish/update run status;
+- `PUT /api/analytics/runs/:id/stages/:tool/:stage` — idempotently start or
+  finish one stage;
+- `POST /api/analytics/runs/:id/artifacts` — add bounded artifact metadata.
+
+They use `ANALYTICS_TOKEN`, validate complete payloads before transactions, and
+redact/reject forbidden keys matching `token`, `authorization`, `header`,
+`cookie`, `secret`, or `password` case-insensitively. Preview payloads larger
+than 256 KiB or more than 250 entries return 400.
+
+Telemetry is best-effort with respect to analytics computation: inability to
+begin or update telemetry does not prevent canonical analytics persistence. The
+handler must include `telemetryWarning` in `job_runs.output`; the admin overview
+then flags “completed without trace.” Canonical data failures still fail the job.
+
+Instrument actual code boundaries:
+
+- source selection/floor loading in `analytics/index.ts` emits `access`;
+- per-source fetch outcomes in `analytics/extract/sources.ts` and data-source
+  adapters emit `extract` summaries;
+- alignment and `applyTransform` emit `transform` summaries;
+- each pure tool computation emits `analyze`;
+- each `AnalyticsPersistence` call emits `store`; and
+- after store, the worker fetches the relevant public dashboard route and emits
+  `report` verification.
+
+### 6.3 Admin read/write API
+
+All routes below require `X-Admin-Token`. Validate auth before parsing bodies or
+querying SQL. List routes accept `limit` default 50/max 200 and opaque cursor;
+responses are `{ items, nextCursor }`. Invalid input is 400, unauthenticated is
+403 (matching current admin behavior), missing is 404, stale version/illegal
+state is 409, accepted queue work is 202, and successful synchronous mutation is
+200 or 201.
+
+| Method and route | Purpose |
+|---|---|
+| `GET /api/admin/overview` | health cards and alert feed |
+| `GET /api/admin/jobs` | extend existing list with filters and scope fields |
+| `GET /api/admin/jobs/:id` | extend existing detail with domain links |
+| `POST /api/admin/jobs/:id/retry` | clone a dead job |
+| `GET /api/admin/runs` | retain queue-run feed and add filters |
+| `PATCH /api/admin/schedules/:id` | toggle an analytics schedule only |
+| `GET /api/admin/research/runs` | analytics-run list |
+| `GET /api/admin/research/runs/:id` | stages, artifacts, linked queue runs |
+| `GET /api/admin/research/series/:indicator` | allowlisted raw history range |
+| `GET /api/admin/research/signals/:key/:date` | stored signal payload |
+| `POST /api/admin/research/runs` | enqueue manual rerun |
+| `GET /api/admin/committee/overview` | session/member/topic summary |
+| `GET/POST /api/admin/committee/subjects` | list/create topics |
+| `GET/PATCH /api/admin/committee/subjects/:id` | topic detail/edit |
+| `POST /api/admin/committee/subjects/:id/deactivate` | deactivate topic |
+| `GET /api/admin/committee/members` | all statuses/applications |
+| `GET /api/admin/committee/members/:id` | private admin member projection |
+| `POST /api/admin/committee/members` | manual active member add |
+| `PATCH /api/admin/committee/members/:id` | profile fields only |
+| `POST /api/admin/committee/members/:id/activate` | activate applicant |
+| `POST /api/admin/committee/members/:id/deactivate` | deactivate and revoke keys |
+| `POST /api/admin/committee/members/:id/reactivate` | new key/token and activate |
+| `POST /api/admin/committee/members/:id/rotate-key` | rotate active key/token |
+| `POST /api/admin/committee/members/:id/reject` | reject application |
+| `GET/POST /api/admin/committee/sessions` | list/create scheduled session |
+| `GET /api/admin/committee/sessions/:id` | complete operational session DTO |
+| `PATCH /api/admin/committee/sessions/:id/roster` | add/excuse before collecting |
+| `POST /api/admin/committee/sessions/:id/actions/:action` | enqueue transition |
+| `GET /api/admin/audit` | filtered append-only audit list |
+
+Mutation request and response shapes are fixed as follows. Unknown fields are
+rejected with 400 rather than ignored.
+
+```ts
+type AdminReason = string; // trimmed, 10..500 characters
+
+type ResearchRerunRequest = {
+  kind: "regime.classify" | "research.refresh";
+  asof: string; // YYYY-MM-DD
+  toolId?: "channel-divergence" | "late-cycle-signals"; // research only
+  reason: AdminReason;
+};
+
+type TopicWriteRequest = {
+  version?: number; // absent on create, required on edit/deactivate
+  id?: string; // required on create, forbidden on edit
+  name: string;
+  status?: "active" | "inactive"; // create defaults active
+  operator: string;
+  homepage?: string | null;
+  xHandle?: string | null;
+  thesisBlurb: string;
+  wallets: Array<{ address: string; chain: string; label?: string }>;
+  nftContracts: Array<{ address: string; chain: string; label?: string }>;
+  source: { type: "rpc" | "manual" | "vault_tvl" | "framework" };
+  recommendationType: "position_actions" | "bucket_weights";
+  linkedMemberId?: string | null;
+  structuralNotes: string[];
+  lastReviewed?: string | null; // YYYY-MM-DD
+  reason: AdminReason;
+};
+
+type MemberProfileWrite = {
+  version: number; // profile edit only
+  name: string;
+  tagline?: string | null;
+  lens?: string | null;
+  mandate?: string | null;
+  biases?: unknown;
+  voiceMd?: string | null;
+  mode?: string | null;
+  operator?: string | null;
+  avatar?: unknown;
+  contactEmail?: string | null;
+  reason: AdminReason;
+};
+
+type ManualMemberCreateRequest = Omit<MemberProfileWrite, "version"> & {
+  memberId: string;
+  publicKey: string;
+};
+
+type MemberStatusRequest = {
+  version: number;
+  publicKey?: string; // required for reactivate and rotate-key; forbidden otherwise
+  reason: AdminReason;
+};
+
+type SessionCreateRequest = {
+  subjectId: string;
+  date: string; // YYYY-MM-DD
+  briefOpensAt: string; // ISO instant
+  windowClosesAt: string; // ISO instant
+  publishAt: string; // ISO instant
+  reason: AdminReason;
+};
+
+type RosterPatchRequest = {
+  version: number;
+  operation: "add" | "excuse" | "restore";
+  memberId: string;
+  reason: AdminReason;
+};
+
+type SessionActionRequest = {
+  version: number;
+  reason?: AdminReason; // required for cancel, early close, reopen, manual retry
+  windowClosesAt?: string; // required for reopen
+};
+
+type TopicDeactivateRequest = { version: number; reason: AdminReason };
+type DeadJobRetryRequest = { reason: AdminReason };
+type ScheduleToggleRequest = { enabled: boolean; reason: AdminReason };
+```
+
+Create responses are `{ item, auditRequestId }` with status 201. Synchronous
+updates are `{ item, auditRequestId }`. A response that reveals a newly issued
+member credential additionally contains `credential: { token }`; that property
+is produced only by create/activate/reactivate/rotate and is never persisted in
+an API response table. Enqueued operations return
+`{ jobId, auditRequestId, existing: boolean }` with status 202. A 409 response is
+`{ error, code: "stale_version" | "invalid_transition" | "duplicate", current? }`.
+
+For a manual lifecycle action, first locate the scoped job with the canonical
+dedupe key. If it is pending, atomically move `run_after` to `now()` and return
+that job with `existing: true`. If it is running, return it unchanged with
+`existing: true`. If it is terminal or absent, enqueue a recovery job with
+dedupe key `committee:<session-id>:<action>:manual:<audit-request-id>`. This is
+how “run now” coexists with the four jobs created at scheduling time.
+
+Reopen atomically changes the session to `collecting`, sets the new close time,
+marks any pending canonical aggregate/publish jobs `cancelled`, and creates new
+close/aggregate/publish jobs suffixed with the reopen event id. Cancel atomically
+changes the session to `cancelled` and marks all pending scoped jobs cancelled.
+Neither operation touches running or terminal queue rows.
+
+The generic existing `/api/committee/admin/:action` endpoints remain for demo
+compatibility but the new browser must not call them. Mark `reset` and
+`subject_fixtures` dev/demo-only and return 403 for them when `RM_ENV=prod`.
+
+### 6.4 Required domain corrections
+
+Before wiring UI controls, correct these current behaviors:
+
+- `openSession` must not reset an existing non-scheduled session to `scheduled`.
+  On conflict return the existing row idempotently only when it is already
+  scheduled; otherwise return 409.
+- `publishBrief` must require `scheduled`, a real active subject, a non-empty
+  roster snapshot, and an absolute future close timestamp.
+- Brief regime data and research signals must be the latest rows at or before the
+  session date; do not require an exact signal date and do not read future data.
+- `closeWindow` must detect a zero-row guarded update and return 409 instead of
+  reporting a transition that did not occur.
+- `aggregateSession` must require `window_closed`, read expected members from
+  `committee_session_members`, and use the latest subject snapshot at or before
+  the session date.
+- `publishSession` must require `aggregated` and non-null recommendation and
+  synthesis.
+- `submitRecommendation` must require an `expected` roster row for the member.
+- `registerMember` and `resetSessions` remain demo helpers and are not used for
+  production admin workflows.
+- Every transition writes `committee_session_events` and `audit_log` in the same
+  transaction as the state update.
+
+## 7. Frontend implementation
+
+### 7.1 Routing and structure
+
+Use one admin shell for:
+
+- `/admin`
+- `/admin/research`
+- `/admin/research/runs/:id`
+- `/admin/queue`
+- `/admin/committee`
+- `/admin/committee/subjects/:id`
+- `/admin/committee/members/:id`
+- `/admin/committee/sessions/:id`
+- `/admin/audit`
+
+Update `frontend/public/assets/js/app/routes.js` so every `/admin` subpath maps to
+`/views/admin.html`; otherwise the current catch-all will request nonexistent
+view fragments. The shell reads `location.pathname`, uses `history.pushState`,
+and listens for `popstate`. It remains absent from public navigation.
+
+Replace `adminJobsView` with one `adminSurfaceView` Alpine factory and move
+section-specific fetch/state helpers into modules under
+`alpine/views/admin/`. Register the factory at boot in `alpine/views.js`; inline
+scripts in the injected HTML fragment will not execute.
+
+### 7.2 Common UI behavior
+
+- Persistent left/top admin navigation, page title, last-refreshed timestamp,
+  refresh, pause polling, and sign out.
+- Poll overview/active records every five seconds only while `document.hidden`
+  is false. Lists and historical detail do not continuously poll.
+- Preserve list filters in query parameters and record selection in the path.
+- Every empty, loading, error, stale, and unauthorized state has visible text.
+- Show UTC first for committee schedules, with browser-local time secondary.
+- Render JSON in collapsed, copyable `<pre>` blocks. Never inject payload HTML.
+- Mutation buttons disable while pending. Success links to the created job or
+  record; errors remain beside the form.
+- Confirmation dialogs name the target, explain historical impact, and require
+  the reason before enabling destructive/exceptional actions.
+- Token reveal is a one-time modal with copy and acknowledgement. Clearing or
+  navigating away destroys the plaintext value from Alpine state.
+
+## 8. Verification
+
+### 8.1 Backend/database tests
+
+Add tests proving:
+
+- every new admin route rejects a missing/wrong token before SQL;
+- telemetry endpoints reject admin/member credentials and accept only the
+  analytics-provider bearer;
+- worker-role SQL writes to all three telemetry tables are denied;
+- migration backfills existing sessions and does not orphan historical data;
+- topic validation, uniqueness, optimistic concurrency, and deactivation;
+- member activate/manual-add/deactivate/reactivate/rotate/reject transactions,
+  including one-time token behavior and key revocation;
+- session creation snapshots the roster and creates exactly four deduped jobs;
+- each legal state transition, every illegal transition, idempotent repeats,
+  cancel, and reopen;
+- member changes after session creation do not alter historical quorum;
+- submissions from members outside the session roster are rejected;
+- aggregation uses the roster snapshot and at-or-before data only;
+- analytics run/stage/artifact recording, redaction, preview limits, and missing
+  telemetry warning behavior;
+- dead-job retry clones rather than mutates; and
+- schedule PATCH cannot modify cron/kind/payload or enable committee demo rows.
+
+### 8.2 Browser tests
+
+Expand `frontend/test/browser/admin-view.spec.ts` into focused cases for:
+
+- login, persisted tab session, 403 logout, navigation, and browser back/forward;
+- overview alerts and polling pause;
+- research list filters, stage timeline, artifact preview, raw-series navigation,
+  and rerun confirmation;
+- queue filters, job detail, dead-job retry, and schedule toggle;
+- topic create/edit/deactivate validation;
+- member application activation, manual add, one-time token modal,
+  deactivation, and participation history;
+- session create, UTC/local schedule, roster snapshot, transition controls,
+  invalid-action disabled states, and linked jobs;
+- recommendation matrix, signature/payload disclosure, aggregate derivation,
+  and absences; and
+- audit filters and redaction.
+
+Use mocked API fixtures for browser rendering and backend integration tests for
+domain correctness. Do not place real admin, analytics, or member credentials in
+fixtures or snapshots.
+
+### 8.3 Required repository checks
+
+Run at minimum:
+
+```text
+bun run test
+(cd backend && bun run test)
+bunx playwright test frontend/test/browser/admin-view.spec.ts
+bun run check-contract
+bun run typecheck
+```
+
+Also run the repository’s analytics boundary, worker-role, committee lifecycle,
+and frontend route guard tests touched by these changes.
+
+## 9. Delivery order
+
+Implement in this order so every phase leaves a usable product:
+
+1. migration `0017`, constraints, roster/session-event backfill, and audit helper;
+2. guarded committee domain transitions and roster-based aggregation;
+3. admin DTOs/routes and queue scope/retry/schedule services;
+4. analytics telemetry tables, authenticated write client, observer, and stage
+   instrumentation;
+5. admin shell, routing, overview, queue, and research read-only views;
+6. topic, member, roster, scheduling, and lifecycle mutation UI;
+7. audit UI, all browser tests, integration tests, and documentation updates.
+
+The first production deployment must run the migration before API or worker code
+that writes the new columns/tables. API can be deployed next, workers after the
+analytics telemetry endpoints exist, and the frontend last.
+
+## 10. Definition of done
+
+The phase is done when all user stories in section 4 pass, no existing public
+committee/research route regresses, production admin and telemetry routes fail
+closed, a research job can be traced through all six stages, and a committee
+manager can create a topic, manage members, schedule a roster-snapshotted
+session, inspect every accepted member datapoint, operate guarded lifecycle
+transitions, and explain every mutation from the audit log.
+
+---
+
+## Network topology — DNS, origins & vendors
+
+How `robotmoney.net` presents several independent product surfaces as one
+seamless site, organized by a clean **separation of concerns** — both across
+infrastructure tiers and across **two vendors**. This document is cross-cutting:
+it spans the **marketing** site, **this repo** (Investment Committee + analytics),
+and the **on-chain dapp** (`robotmoney-core`). It is a companion to
+the rest of this document (this frontend's internals) and
+[decisions.md](./decisions.md); the production topology here is decision **D13**,
+which supersedes the single-box parts of D8/D11 (see [§10](#10-relationship-to-existing-decisions)).
+**D18** refines D13's surface list with a fourth subdomain, `mcp.` (§3.1).
+
+```mermaid
+flowchart LR
+    subgraph Users["Users"]
+        Visitors["Web Visitors"]
+        Members["Committee Members<br/>(MCP-capable agents)"]
+    end
+
+    subgraph Frontend["Frontend"]
+        Static["Static Assets<br/>HTML + Alpine.js + CSS<br/>p5.js + Chart.js"]
+        API["API Server<br/>Bun.serve — routes, auth,<br/>committee domain"]
+        MCP["MCP Server<br/>Streamable HTTP + OAuth 2.1"]
+    end
+
+    subgraph Backend["Backend"]
+        Worker["Task Queue<br/>& Analytics Pipeline"]
+        DB["Data<br/>Postgres"]
+    end
+
+    subgraph External["External Data Sources"]
+        direction LR
+        Sources1["DefiLlama"]
+        Sources2["CoinMetrics"]
+        Sources3["Yahoo Finance"]
+        Sources4["FRED"]
+    end
+
+    Visitors -->|browser| Static
+    Static -->|HTTP JSON| API
+    Members -->|Streamable HTTP| MCP
+    MCP -->|HTTP| API
+    API <--> DB
+    Worker <--> DB
+    Worker -.->|fetch raw series| External
+
+    style Users fill:#7c3aed1a,stroke:#7c3aed,stroke-width:2px
+    style Frontend fill:#2563eb1a,stroke:#2563eb,stroke-width:2px
+    style Backend fill:#0596691a,stroke:#059669,stroke-width:2px
+    style External fill:#dc26261a,stroke:#dc2626,stroke-width:2px
+```
+
+---
+
+## 1. Principle — two separations of concern
+
+**By tier.** Three surfaces with different lifecycles and infra, deployed
+independently:
+
+- **Static tier** — asset delivery. No runtime dependency on anything else; serves
+  even when the API and data tiers are down (**fail-open**).
+- **API tier** — request/response compute. Stateless services.
+- **Data tier** — durable state. One high-availability database.
+
+**By vendor.** Each vendor owns one job, and **no routing software runs anywhere**:
+
+- **Cloudflare — DNS + observability.** Authoritative DNS, proxied TLS/DDoS, and
+  monitoring (Health Checks, analytics, Logpush). This is *configuration, not code*
+  — no Worker, no reverse proxy.
+- **DigitalOcean — compute + storage.** Droplets, Spaces (+CDN), and Managed
+  Postgres.
+
+Because Cloudflare runs no routing code and DigitalOcean has no managed
+path-router, surfaces are addressed by **subdomain** (host-based routing via plain
+DNS), not by path prefix. The seamless look is carried by the **shared design
+layer** (ARCHITECTURE §4), not by a shared origin.
+
+---
+
+## 2. The vendor split
+
+| Vendor | Owns | Form |
+|--------|------|------|
+| **Cloudflare** | DNS, TLS, DDoS, **observability** (Health Checks, analytics, Logpush) | Configuration only — **no software** |
+| **DigitalOcean** | **Compute** (Droplets), **storage** (Spaces + CDN), **data** (Managed Postgres HA) | The running system |
+
+**Rule of thumb: Cloudflare resolves and watches; DigitalOcean runs and stores.**
+All deployable software lives on DigitalOcean.
+
+---
+
+## 3. The surfaces — subdomain map
+
+Each surface is its own hostname, resolved by a plain DNS record:
+
+| Hostname | Surface | Tier → home | Source |
+|----------|---------|-------------|--------|
+| `robotmoney.net`, `www.` | Marketing | Static → **DO Spaces CDN** | marketing UI (this repo, D1) |
+| `committee.robotmoney.net` | IC + analytics | API → **DO droplet** (Bun) + Data → **Postgres HA** | `robotmoney-frontend` (this repo) |
+| `mcp.robotmoney.net` | IC MCP server (member-facing agents) | API → **DO droplet**, port `8443` (co-located with the `committee.` droplet; own container/port, see §3.1) | `robotmoney-frontend` (this repo, `mcp/`) |
+| `app.robotmoney.net` | Dapp | API → **DO droplet** (`rmpc` + gateway) | `robotmoney-core` |
+
+Each app is served at **its own root**, so there is **no path-prefix and no
+base-path handling** — the SPA history router (D4) and import maps (D2) work
+unmodified. The SPA and its API are **same-origin** on the same subdomain (no CORS
+within a surface).
+
+### 3.1 MCP hostname and port (D18)
+
+The MCP server (`mcp/src/server.ts`) is a fourth, independently-addressed
+surface, not a path under `committee.`: it runs as its own container
+(`mcp` in `docker-compose.yml`), so it gets its own subdomain per the §3
+convention rather than a reverse-proxied path (D13's "no reverse proxy"
+rule would otherwise be violated). It is deployed to the **same droplet**
+as `committee.` (both are this repo's `robotmoney-frontend` surface, and
+the `/health` contract already couples IC health to MCP reachability —
+§9), so it cannot also claim port `443`/`8787` — those are already the
+`committee.` API's Cloudflare-proxied port. Instead `mcp.` is a **proxied**
+(orange-cloud) record like `committee.`/`app.`, on Cloudflare's alternate
+proxied-HTTPS port **`8443`** (one of Cloudflare's fixed list of ports it
+will forward proxied traffic to on any plan — no Origin Rule, no
+reverse proxy, no new vendor permission): `MCP_PORT=8443` in the prod/staging
+droplet env is all that's required, since `mcp/src/server.ts` already reads
+`MCP_PORT` directly into `Bun.serve({ port })`. The droplet's Cloud Firewall
+(§4) allows this port from Cloudflare's IP ranges the same way it already
+allows `443` for `committee.`.
+
+Full endpoint: `https://mcp.staging.robotmoney.net:8443/mcp` (staging),
+`https://mcp.robotmoney.net:8443/mcp` (production) — see
+[deployment.md §2](./runbooks/deployment.md#2-environments--staging--production-isolated)
+for the environment table and
+[participation.html](../frontend/public/views/docs/investment-committee/participation.html#mcp)
+for the member-facing connection instructions.
+
+---
+
+## 4. DNS & TLS — how each hostname resolves
+
+- **Marketing** (`robotmoney.net` via CNAME-flattening, and `www`) → a **DNS-only**
+  (grey-cloud) CNAME to the **DO Spaces CDN endpoint**. This is the CDN's native
+  host-based usage: DO delivers, caches, and terminates TLS with its **custom-domain
+  certificate**. Cloudflare does *not* sit in the data path here, so there is **no
+  double-CDN** (§7).
+- **App subdomains** (`committee.`, `app.`) → **proxied** (orange-cloud) records to
+  the droplet. Cloudflare presents its edge certificate to users and provides
+  TLS/DDoS plus traffic analytics; the droplet serves a **Cloudflare Origin CA
+  certificate** to the proxy. The droplet's **DO Cloud Firewall** allows ingress
+  only from Cloudflare's IP ranges.
+- **(Optional hardening)** a **Cloudflare Tunnel** can replace the proxied-DNS +
+  firewall approach for *zero* public ingress, at the cost of running the
+  `cloudflared` connector on the droplet. Default is proxied DNS + firewall (no
+  connector to run).
+
+---
+
+## 5. Static tier — marketing (DO Spaces CDN)
+
+The static marketing assets (the marketing UI preserved per D1) are uploaded to a
+**DigitalOcean Space with its CDN enabled**, served on the apex/`www` hostname.
+The tier has **no runtime dependency on the API or data tiers** — it is pure static
+— so when a droplet or Postgres is unavailable, marketing **still serves
+(fail-open)**. Any dynamic data a marketing page wants is fetched client-side and
+must **degrade gracefully**; the page never hard-depends on the API.
+
+---
+
+## 6. API tier — services on DO droplets
+
+Request/response services run on **DigitalOcean Droplets**, one surface per
+subdomain:
+
+- **`committee.`** — this repo's Bun `api` + `worker`; the `api` co-serves this
+  surface's SPA assets (`STATIC_DIR`) same-origin at the subdomain root.
+- **`app.`** — the `rmpc` daemon + on-chain gateway (`robotmoney-core`).
+
+Ingress is Cloudflare-proxied DNS locked to Cloudflare IPs by a DO Cloud Firewall
+(§4). Droplets are used because Cloudflare has no always-on instance and the `rmpc`
+daemon must stay synced to chain head — a scale-to-zero model is wrong for it.
+
+---
+
+## 7. Data tier — Postgres HA cluster (DO)
+
+Durable state is a **DigitalOcean Managed Postgres high-availability cluster**:
+primary + standby with automated failover, daily backups, and point-in-time
+recovery. Only the API tier connects, via `DATABASE_URL`. This refines D8's
+production mode (one Postgres) to a managed HA cluster; the single-box Dockerized
+Postgres remains the CI and demo mode (D8).
+
+---
+
+## 8. No double-CDN
+
+Marketing's CDN is **DO Spaces CDN**, reached **DNS-only** (§4), so Cloudflare adds
+no second cache in front of it — one cache, one invalidation path (purge is a DO
+operation). The proxied app subdomains are dynamic; Cloudflare passes them through.
+
+---
+
+## 9. Seamless without a single origin, and observability
+
+**Seamless look** does not require one origin — it comes from the shared design
+layer (`tokens.css` + shared nav/footer chrome; ARCHITECTURE §4), identical on
+every subdomain. Shared login/session works by setting cookies on
+`.robotmoney.net`. Cross-surface API calls (rare — each surface mostly calls its
+own same-host API) use CORS.
+
+**Observability** is Cloudflare's second job, complemented by DO:
+
+- **Cloudflare** — **Health Checks** probe each surface's `/health`; traffic +
+  security **analytics** and **Logpush** per hostname.
+- **DigitalOcean** — droplet **Monitoring/alerts**, **Uptime** checks, and Managed
+  Postgres metrics (replication lag, failover, connections).
+- **`/health` JSON contract** (the keystone) — every surface returns the same shape
+  and checks its own deps: marketing trivially `200`; IC = Postgres + MCP; dapp =
+  `rmpc` alive + gateway + RPC reachable + chain-head lag below threshold.
+- **Fail-open** keeps a single failed tier from cascading; the static marketing
+  tier in particular stays up independently.
+
+---
+
+## 10. Relationship to existing decisions
+
+- **D13 (vendor-split tiered topology)** — **surface list refined by D18:** MCP
+  (`mcp.`) is documented as a fourth subdomain-routed surface, co-located on the
+  `committee.` droplet on its own Cloudflare-proxied port (§3.1).
+- **D11 (single box, no reverse proxy)** — **superseded for production by D13.**
+  Production splits across subdomains on DO with Cloudflare for DNS+observability;
+  there is still **no reverse proxy** (host-based DNS routing, not a proxy). The
+  single-box `docker-compose` remains the **CI and demo** deployment.
+- **D8 (one Postgres in Docker)** — **prod mode refined by D13:** production is a
+  **DO Managed Postgres HA cluster**; ephemeral (CI) and demo modes unchanged.
+- **D10 (split-ready repos)** — reinforced: each surface is already an independent
+  host, so a repo split stays mechanical.
+- **D4 (SPA history router)** — works **unmodified at the subdomain root**; the
+  earlier path-prefix/base-path concern is gone.
+- **D2 (buildless)** — import maps resolve at the root, no base-path rewriting.
+
+---
+
+## 11. Task queue topology
+
+The Postgres-backed task queue replaces the old GitHub Actions cron. Three
+concurrent loops run inside the `worker` process:
+
+```mermaid
+flowchart TB
+    subgraph Scheduler["Scheduler<br/>runs every 30s"]
+        SC["Reads job_schedules<br/>FOR UPDATE SKIP LOCKED"]
+        SC -->|"INSERT job per missed slot<br/>ON CONFLICT (dedupe_key)"| Jobs
+    end
+
+    subgraph Jobs["Jobs (Postgres)"]
+        direction LR
+        Pending["pending"]
+        Running["running"]
+        Done["succeeded / failed / dead"]
+    end
+
+    subgraph DrainLoop["Drain Loop<br/>polls every 2s"]
+        DC["Claims 1 pending job<br/>FOR UPDATE SKIP LOCKED"]
+        DC -->|dispatch by kind| Handler["Registered Handler"]
+        Handler -->|success| Succeed["→ succeeded"]
+        Handler -->|failure| Retry["→ failed → pending<br/>(exponential backoff)"]
+        Handler -->|exhausted| Kill["→ dead"]
+    end
+
+    subgraph Reaper["Reaper<br/>runs every 60s"]
+        RP["Reclaims jobs stuck<br/>in 'running' > 5 min"]
+        RP -->|"attempts < max"| Pending
+        RP -->|"attempts ≥ max"| Done
+    end
+
+    subgraph Handlers["Registered Handlers"]
+        H1["regime.classify daily 22:30 UTC<br/>research.refresh daily 23:00 UTC<br/>(distinct kinds, own lanes)"]
+        H2["committee.*<br/>session lifecycle<br/>(open → brief → close →<br/>aggregate → publish)"]
+    end
+
+    Pending -->|"claimed"| Running
+    Running -->|"handled"| Done
+
+    DrainLoop --> Handlers
+    Succeed --> Done
+    Retry --> Pending
+    Kill --> Done
+
+    style Scheduler fill:#1e3a5f33,stroke:#1e3a5f,stroke-width:2px
+    style Jobs fill:#064e3b33,stroke:#059669,stroke-width:2px
+    style DrainLoop fill:#3b076433,stroke:#7c3aed,stroke-width:2px
+    style Reaper fill:#78350f33,stroke:#d97706,stroke-width:2px
+    style Handlers fill:#1e1b4b33,stroke:#4338ca,stroke-width:2px
+```
+
+## 12. Analytics pipeline — research & report jobs
+
+The analytics suite runs as two scheduled jobs with distinct kinds and lanes
+(issue #107): `regime.classify` (daily 22:30 UTC, analytics lane) and
+`research.refresh` (daily 23:00 UTC, research lane).
+It drives three compute pipelines through a shared 6-stage access → extract →
+transform → analyze → store → report flow:
+
+```mermaid
+flowchart TB
+    subgraph Sources["Data Sources"]
+        FRED["FRED — macro indicators"]
+        Yahoo["Yahoo Finance — prices, indices"]
+        DefiLlama["DefiLlama — TVL, stablecoins"]
+        Other["Other — blockchain.com,<br/>Coinmetrics, EDGAR, Shiller"]
+    end
+
+    subgraph Extract["Extract"]
+        E1["26 registry indicators<br/>for regime classifier"]
+        E2["Research inputs:<br/>BTC, QQQ, SPY, RSP, TOP7,<br/>M&A, margin, confidence"]
+    end
+
+    subgraph Transform["Transform"]
+        T["buildDateAxis → alignDailyForwardFill<br/>→ applyTransform → mergeSeries"]
+    end
+
+    subgraph Analyze["Analyze"]
+        R["Regime Classifier<br/>per-indicator percentile →<br/>inverse-correlation weighted<br/>→ composite regime label"]
+        C["Channel Divergence<br/>BTC beta + BTC/QQQ ratio +<br/>stablecoin flow → channel gauge"]
+        L["Late-Cycle Signals<br/>concentration + M&A +<br/>margin debt + confidence<br/>→ cycle saturation gauge"]
+    end
+
+    subgraph Store["Store"]
+        S1["raw_indicator_history"]
+        S2["regime_snapshots<br/>+ regime_indicators"]
+        S3["research_signals"]
+    end
+
+    subgraph Report["Report → API"]
+        P1["GET /api/dashboards/<br/>regime-snapshots"]
+        P2["GET /api/dashboards/<br/>research-signals/:key"]
+    end
+
+    Sources --> Extract
+    Extract --> Transform
+    Transform --> Analyze
+    R --> S1
+    R --> S2
+    C --> S3
+    L --> S3
+    S2 --> P1
+    S3 --> P2
+
+    style Sources fill:#5a2d0c33,stroke:#dd6b20,stroke-width:2px
+    style Extract fill:#1e3a5f33,stroke:#1e3a5f,stroke-width:2px
+    style Transform fill:#1e3a5f33,stroke:#1e3a5f,stroke-width:2px
+    style Analyze fill:#3b076433,stroke:#7c3aed,stroke-width:2px
+    style Store fill:#064e3b33,stroke:#059669,stroke-width:2px
+    style Report fill:#064e3b33,stroke:#059669,stroke-width:2px
+```
+
+---
+
+## Documentation map
+
+The `docs/` directory holds the repository's durable technical documentation.
+The GitHub Plan issue is the canonical execution queue; do not add mutable
+roadmaps, task checklists, or phase ordering to `docs/`.
+
+## Canonical documents
+
+These documents describe current product and system commitments:
+
+- Architecture (this document) — system boundaries, runtime components,
+  data flows, and deployment shape.
+- [Decisions](./decisions.md) — accepted architecture decision records (ADRs).
+- [Deployment](./runbooks/deployment.md) — GitOps environments, credentials, and
+  operational setup.
+- The demo, live-data, admin-surface, and topology specifications are
+  incorporated in this document under their dedicated sections above. (The
+  former preview-server spec was retired by decision D19 — preview mode is
+  now described in §4 "Preview mode (goldens-backed, no backend)".)
+- [Credential doctor](./runbooks/credential-doctor.md)
+
+## Reviews and investigations
+
+Point-in-time review artifacts live under [`code-review/`](./code-review/).
+Resolved debugging notes live under [`archive/`](./archive/), with their
+original dates and findings preserved. Archived material is evidence, not a
+statement of current behavior; update the canonical document when a finding
+changes a system commitment.

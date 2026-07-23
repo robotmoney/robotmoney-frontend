@@ -23,3 +23,12 @@ against `README.md`, `CONTRIBUTING.md`, `docs/architecture.md`,
 `docs/topology.md`, `docs/deployment.md`, `docs/demo-spec.md`, and
 `docs/preview-server-spec.md`. No legitimate links were found in any of
 those canonical documents, so all 7 items were moved as planned.
+
+## Addendum 2026-07-23
+
+The docs cited above by their original paths — `docs/topology.md`,
+`docs/deployment.md`, `docs/demo-spec.md`, and `docs/preview-server-spec.md` —
+were consolidated into `docs/architecture.md` (or moved to `docs/runbooks/`)
+on 2026-07-21 (PR #235). The entries and pre-move verification above record
+the pre-consolidation paths as verified at their original 2026-07-10 dates and
+are intentionally left unedited.

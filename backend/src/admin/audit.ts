@@ -1,5 +1,5 @@
 // Shared audit_log writer + redactor for the admin surface (issue #155,
-// docs/plan-admin-surface.md §5.4/§6.3/US-A3). Every admin mutation this issue
+// docs/architecture.md §5.4/§6.3/US-A3). Every admin mutation this issue
 // owns (dead-job retry, schedule toggle) writes exactly one row here in the
 // same transaction as its state change, and GET /api/admin/audit reads it back
 // through `redactDeep` so no credential material ever reaches the response.
@@ -48,7 +48,7 @@ export async function recordAudit(db: DbHandle, input: RecordAuditInput): Promis
 }
 
 // Keys that must never leave the admin surface, matched case-insensitively
-// anywhere in a nested audit payload (docs/plan-admin-surface.md §6.2/§8.1:
+// anywhere in a nested audit payload (docs/architecture.md §6.2/§8.1:
 // "Secrets, token hashes, bearer tokens, signatures, ... and request headers
 // are excluded from audit JSON"). A key match redacts the whole subtree so a
 // nested `{ credential: { token: "..." } }` cannot smuggle a value out under

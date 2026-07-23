@@ -75,7 +75,7 @@ export interface WalletSleeves {
 // always fresh. Tests can still supply amount and price readers independently;
 // a persisted quote is explicitly discriminated by WalletPriceReader and must
 // carry stale/seed provenance rather than being relabelled live. See
-// docs/architecture.md §10.1 and docs/contract-live-data.md §3.
+// docs/architecture.md §10.1 and docs/architecture.md §3.
 export interface WalletSleeveReaders {
   readChainAmounts(reads: KeyedAssetRead[], logLabel: string): Promise<Map<string, ChainAmount>>;
   priceReader: WalletPriceReader;

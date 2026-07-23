@@ -1,7 +1,7 @@
 // Alpine factory for /admin/committee/sessions/:id — UTC-first timeline,
 // roster matrix (expected/excused/submitted/absent), read-only accepted
 // recommendation detail, aggregate display, and guarded lifecycle transition
-// controls. Issue #159 — docs/plan-admin-surface.md §4 US-C3/US-C4/US-C5.
+// controls. Issue #159 — docs/architecture.md §4 US-C3/US-C4/US-C5.
 // Nothing here can edit or delete an accepted recommendation — the roster
 // mutations only add/excuse/restore expected members, and only before the
 // session leaves `scheduled`/`collecting`.

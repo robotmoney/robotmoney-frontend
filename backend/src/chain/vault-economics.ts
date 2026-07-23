@@ -93,7 +93,7 @@ export interface VaultSampleReader {
 // and a failed core reader degrades only the core legs (via the persisted
 // sample, without discarding adapter data the adapter reader still returned).
 // The public DTO shape is unchanged. Canonical behavior: docs/architecture.md
-// §10 and docs/contract-live-data.md honesty rules.
+// §10 and docs/architecture.md honesty rules.
 export interface VaultEconomicsReaders {
   core: VaultCoreReader;
   adapters: VaultAdapterReader;

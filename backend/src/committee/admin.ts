@@ -331,7 +331,7 @@ export async function rotateMemberKeyAdmin(
 }
 
 // ── Sessions: creation with a frozen roster snapshot ────────────────────────
-// Field/validation shape matches docs/plan-admin-surface.md §6.3
+// Field/validation shape matches docs/architecture.md §6.3
 // SessionCreateRequest: three explicit ISO instants, ordering
 // briefOpensAt < windowClosesAt < publishAt, and `date` must equal the UTC
 // date of briefOpensAt.
@@ -504,7 +504,7 @@ export async function rosterRestoreAdmin(sessionId: string, memberId: string, ac
 // published, with `cancelled` reachable from any non-terminal state and
 // `window_closed` reopenable back to `collecting`. published/cancelled are
 // terminal — no further transition is ever legal. Action names and the legal
-// matrix match docs/plan-admin-surface.md §4 US-C4 exactly.
+// matrix match docs/architecture.md §4 US-C4 exactly.
 const TERMINAL = new Set(["published", "cancelled"]);
 const TRANSITIONS: Record<string, readonly string[]> = {
   scheduled: ["collecting", "cancelled"],

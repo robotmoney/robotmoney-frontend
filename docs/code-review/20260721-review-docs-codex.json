@@ -1,0 +1,423 @@
+{
+  "schema_version": 1,
+  "review": "review-docs",
+  "repository": "git@github.com:robotmoney/robotmoney-frontend.git",
+  "branch": "adhoc/20260721-190555-docs-cleanup",
+  "commit": "c42c47a526b618ed08a26db406c059df9f1646be",
+  "reviewed_at": "2026-07-21",
+  "scope": [
+    "dirty uncommitted snapshot with pre-artifact git diff HEAD --binary SHA-256 96af0c4611dd596aca70b291698f11d56d1f3923a9772194f0626b2c4a132045",
+    "canonical architecture, accepted decisions, runbooks, GitHub Plan and relevant open issues",
+    "public Investment Committee documentation, route and DTO contracts, implementation, migrations, configuration, source back-links, tests and CI",
+    "excludes PRD alignment because no PRD exists, live infrastructure observation, and independent branch-protection inspection"
+  ],
+  "verdict": "The implementation has sound core boundaries, but the 3,227-line concatenated architecture and adjacent public, operational, Plan, contract, and test claims contradict current behavior and are unsafe as an agent-development guide.",
+  "findings": [
+    {
+      "id": "review-docs-001",
+      "review": "review-docs",
+      "classification": "STALE_HEADER",
+      "severity": "low",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        ".github/workflows/e2e.yml:98",
+        "backend/migrations/0017_admin_surface.sql:1",
+        "backend/src/admin/overview.ts:1",
+        "backend/src/admin/overview.ts:17",
+        "frontend/public/assets/js/app/alpine/views/admin/committee-subject.js:1"
+      ],
+      "impact": "Module and workflow back-links point to a deleted document or ambiguous numeric sections in the concatenated architecture, so agents cannot reliably trace behavior to canonical intent.",
+      "recommendation": "Create stable named anchors in the concise architecture and update implicated module-level back-links in one mechanical pass; link detailed contracts to contract files or tests.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-002",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "contract/src/dashboards.d.ts:43",
+      "evidence": [
+        "contract/src/dashboards.d.ts:43",
+        "contract/src/dashboards.d.ts:54",
+        "contract/src/dashboards.d.ts:77",
+        "backend/src/chain/allocation-framework.ts:27",
+        "backend/src/chain/vault-economics.ts:16",
+        "backend/src/chain/buyback-logs.ts:32",
+        "backend/src/chain/token-metrics.ts:43",
+        "backend/src/chain/wallet-sleeves.ts:47",
+        "frontend/test/browser/allocation-view.spec.ts:31",
+        "scripts/sync-contract.ts:8"
+      ],
+      "impact": "The declared cross-boundary dashboard DTOs disagree with shipped wire shapes and omit three endpoints, while type checking and check-contract do not compare those types to implementation.",
+      "recommendation": "Make contract/src/dashboards.d.ts own every shipped dashboard response and provenance union, consume those types in backend and tests, and add an executed DTO-conformance check.",
+      "owner": "code",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-003",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:3202",
+      "evidence": [
+        "docs/architecture.md:1",
+        "docs/architecture.md:986",
+        "docs/architecture.md:1289",
+        "docs/architecture.md:1312",
+        "docs/architecture.md:1831",
+        "docs/architecture.md:2690",
+        "docs/architecture.md:2718",
+        "docs/architecture.md:2846",
+        "docs/architecture.md:3202"
+      ],
+      "impact": "Architecture is a concatenation of current state, copied specifications, plans, acceptance criteria and a second document, so headings are ambiguous and agents cannot distinguish durable guardrails from delivery history.",
+      "recommendation": "Replace it with a concise current-state guide covering guardrails, boundaries, components, trust and data flows, environments, an agent change map and links to canonical detail.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-004",
+      "review": "review-docs",
+      "classification": "TEST_CI_SURFACE_MISSING",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:197",
+      "evidence": [
+        "docs/architecture.md:197",
+        "CONTRIBUTING.md:38",
+        "docs/architecture.md:2800",
+        "scripts/update-goldens.ts:6",
+        "scripts/tests/goldens-header.test.ts:1",
+        ".github/workflows/integration.yml:60"
+      ],
+      "impact": "Docs promise a blocking golden-shape check, but preview and browser tests can replay a stale fixture and pass because no workflow executes a code-versus-golden shape assertion.",
+      "recommendation": "Implement the documented nonzero contract/field-shape CI gate or remove every blocking-gate claim and state that recapture is unaudited author responsibility.",
+      "owner": "tests",
+      "related_findings": [
+        "review-maintainability-033"
+      ]
+    },
+    {
+      "id": "review-docs-005",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:259",
+      "evidence": [
+        "docs/architecture.md:253",
+        "docs/architecture.md:448",
+        "backend/src/db/worker-client.ts:8",
+        "backend/src/db/worker-client.ts:20",
+        "docker-compose.yml:37",
+        "backend/migrations/0016_worker_role.sql:10",
+        "docs/runbooks/deployment.md:144"
+      ],
+      "impact": "A deployment can satisfy its docs while workers use the unrestricted DATABASE_URL, so the database permission boundary presented as an invariant is optional at runtime.",
+      "recommendation": "Decide whether rm_worker is mandatory outside ephemeral environments; either fail boot and document provisioning or describe it honestly as optional hardening.",
+      "owner": "security",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-006",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:580",
+      "evidence": [
+        "docs/architecture.md:569",
+        "backend/src/analytics/api-client.ts:34",
+        "backend/src/projects/access/select.ts:13",
+        "docker-compose.yml:37",
+        "docs/runbooks/deployment.md:144",
+        "docs/runbooks/deployment.md:218"
+      ],
+      "impact": "The stated production environment inventory omits fail-closed credentials and names an obsolete RPC variable, so a by-the-book deployment can fail boot or leave required surfaces unusable.",
+      "recommendation": "Create one tested operator inventory for every production variable, consumer, default, secret status and fail-closed behavior; link architecture to it rather than duplicating values.",
+      "owner": "operations",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-007",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:617",
+      "evidence": [
+        "docs/architecture.md:617",
+        "docs/architecture.md:683",
+        "docs/architecture.md:1354",
+        "docs/architecture.md:1869",
+        "contract/src/committee.d.ts:169",
+        "backend/src/committee/domain.ts:461"
+      ],
+      "impact": "Canonical sections define incompatible persisted lifecycle state machines, so state changes and tests derived from one section cannot agree with the database or the other section.",
+      "recommendation": "Document only the six persisted states and describe brief publication as the scheduled-to-collecting transition or action.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-008",
+      "review": "review-docs",
+      "classification": "GAP_IMPL",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:683",
+      "evidence": [
+        "docs/architecture.md:683",
+        "docs/architecture.md:1486",
+        "backend/src/db/seed.ts:23",
+        "backend/src/db/seed.ts:65",
+        "https://github.com/robotmoney/robotmoney-frontend/issues/208"
+      ],
+      "impact": "A non-demo installation does not autonomously open or advance committee sessions, although architecture presents the queue cron chain as the operating model.",
+      "recommendation": "Until issue #208 lands, document committee scheduling as disabled and demo-driven; afterward document only the resolved environment contract and orchestration invariant.",
+      "owner": "code",
+      "related_findings": [
+        "#208"
+      ]
+    },
+    {
+      "id": "review-docs-009",
+      "review": "review-docs",
+      "classification": "TEST_CLAIM_MISMATCH",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:746",
+      "evidence": [
+        "docs/architecture.md:746",
+        "mcp/src/e2e.ts:318",
+        "mcp/src/e2e.ts:354",
+        "mcp/src/e2e.ts:366",
+        "mcp/src/e2e.ts:495",
+        "mcp/src/e2e.ts:506"
+      ],
+      "impact": "Architecture overstates E2E execution for no-show publication, out-of-window rejection and cross-role denial, leaving named safety regressions able to remain green.",
+      "recommendation": "Add explicit assertions for the published no-show set, a post-close submission, member-to-analytics denial and member-to-admin denial, or narrow the claim.",
+      "owner": "tests",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-010",
+      "review": "review-docs",
+      "classification": "INCONSISTENT",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:1477",
+      "evidence": [
+        "docs/architecture.md:1469",
+        "docs/architecture.md:1594",
+        "scripts/lib/demo-env.ts:1",
+        ".github/workflows/e2e.yml:86"
+      ],
+      "impact": "Agents cannot tell whether a deterministic offline demo is supported or whether every demo and per-PR E2E is required to use live external providers.",
+      "recommendation": "State that demo and e2e defaults are live and ANALYTICS_SOURCE=hermetic is a local debugging or backend-test override, not a supported demo mode.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-011",
+      "review": "review-docs",
+      "classification": "UNRESOLVED_DECISION",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:1861",
+      "evidence": [
+        "docs/architecture.md:1855",
+        "docs/architecture.md:2142",
+        "backend/src/api/routes/committee-admin.ts:35",
+        "backend/src/api/routes/committee-admin.ts:125",
+        "contract/src/admin.d.ts:406",
+        "https://github.com/robotmoney/robotmoney-frontend/issues/15"
+      ],
+      "impact": "Architecture, shipped code, UI and contract disagree on lifecycle latency, queue observability, retry behavior and response envelopes.",
+      "recommendation": "Formally ratify synchronous 200/201 transitions or queued 202 actions in decisions and Plan, then delete the rejected specification.",
+      "owner": "decision",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-012",
+      "review": "review-docs",
+      "classification": "GAP_IMPL",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:2018",
+      "evidence": [
+        "docs/architecture.md:2011",
+        "backend/src/api/routes/admin.ts:550",
+        "backend/src/api/routes/admin.ts:575",
+        "backend/src/api/routes/admin.ts:583",
+        "backend/tests/api/admin-research.test.ts:169",
+        "backend/tests/api/admin-research.test.ts:185"
+      ],
+      "impact": "Short non-actionable reasons pass validation and human audit text is propagated to worker-visible payload state contrary to the documented minimization boundary.",
+      "recommendation": "Enforce the shared 10-to-500 reason validator and carry only an audit request id in the job payload, or revise the canonical requirement with explicit rationale.",
+      "owner": "code",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-013",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:2419",
+      "evidence": [
+        "docs/architecture.md:2410",
+        "contract/src/routes.js:76",
+        "contract/src/routes.js:125",
+        "contract/src/admin.d.ts:208",
+        "contract/src/admin.d.ts:297",
+        "contract/src/admin.d.ts:406",
+        "backend/src/api/routes/committee-admin.ts:20"
+      ],
+      "impact": "An agent implementing or calling the admin API from architecture will use nonexistent paths, methods, fields and queued response envelopes.",
+      "recommendation": "Delete endpoint and DTO catalogs from architecture; treat contract/src/routes.js and contract/src/admin.d.ts as canonical and retain only boundary and ownership summaries.",
+      "owner": "architecture",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-014",
+      "review": "review-docs",
+      "classification": "GAP_IMPL",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:2551",
+      "evidence": [
+        "docs/architecture.md:2551",
+        "docs/architecture.md:2561",
+        "backend/src/committee/domain.ts:451",
+        "backend/src/committee/domain.ts:461",
+        "backend/src/committee/domain.ts:477",
+        "backend/src/committee/domain.ts:593",
+        "backend/src/committee/admin.ts:495",
+        "backend/src/committee/admin.ts:566",
+        "backend/tests/committee-admin-surface.test.ts:286"
+      ],
+      "impact": "Worker and demo lifecycle calls can rewind existing sessions, report zero-row transitions as success, read future data, or perform an incomplete reopen that does not replace deadlines and jobs.",
+      "recommendation": "Resolve whether the listed domain corrections remain requirements; if so, implement them in the shared worker/admin domain path with adversarial state, timestamp and reopen tests, otherwise remove them from canonical docs and Plan.",
+      "owner": "code",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-015",
+      "review": "review-docs",
+      "classification": "GAP_IMPL",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:3059",
+      "evidence": [
+        "docs/architecture.md:3053",
+        "backend/src/api/index.ts:79",
+        "mcp/src/server.ts:206",
+        "scripts/lib/demo-main.ts:1006"
+      ],
+      "impact": "Cloudflare and demo readiness can certify API or MCP while required dependencies are unavailable, defeating the documented shared health contract.",
+      "recommendation": "Define a shared health DTO, make readiness fail on required dependency loss, have MCP probe API, and execute negative dependency tests in CI.",
+      "owner": "code",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-016",
+      "review": "review-docs",
+      "classification": "GAP_IMPL",
+      "severity": "high",
+      "confidence": "medium",
+      "requirement": "docs/decisions.md:184",
+      "evidence": [
+        "docs/decisions.md:184",
+        "docs/decisions.md:420",
+        "docs/runbooks/deployment.md:15",
+        "docs/runbooks/deployment.md:91",
+        "backend/src/api/index.ts:48",
+        "mcp/src/server.ts:206",
+        "docker-compose.yml:76",
+        "scripts/gitops-credentials.ts:1270"
+      ],
+      "impact": "The accepted production topology is not reproducible from repository-owned automation, and the no-proxy design contains no server that presents the documented Origin CA certificate.",
+      "recommendation": "Implement and test deployment and TLS or label D13 and D18 as target state and rewrite the runbook as a design checklist rather than an active GitOps procedure.",
+      "owner": "operations",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-017",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "frontend/public/views/docs/investment-committee/how-it-works.html:57",
+      "evidence": [
+        "frontend/public/views/docs/investment-committee/how-it-works.html:57",
+        "frontend/public/views/docs/investment-committee/how-it-works.html:70",
+        "frontend/public/views/docs/investment-committee/how-it-works.html:105",
+        "frontend/public/views/docs/investment-committee/how-it-works.html:145",
+        "frontend/public/views/docs/investment-committee/how-it-works.html:301",
+        "frontend/public/views/docs/investment-committee/how-it-works.html:319",
+        "frontend/public/views/docs/investment-committee/participation.html:284",
+        "frontend/public/views/docs/investment-committee/participation.html:374",
+        "docs/architecture.md:603",
+        "backend/src/db/seed.ts:65"
+      ],
+      "impact": "A prominently linked public guide directs prospective agent developers to nonexistent timing, files and scripts and describes host-generated content forbidden by the current protocol.",
+      "recommendation": "Rewrite the page from the dynamic API and worker model or mark the static data explicitly historical, and add a route and behavior consistency test.",
+      "owner": "product",
+      "related_findings": []
+    },
+    {
+      "id": "review-docs-018",
+      "review": "review-docs",
+      "classification": "STALE",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "https://github.com/robotmoney/robotmoney-frontend/issues/15",
+        "https://github.com/robotmoney/robotmoney-frontend/issues/206",
+        "docs/architecture.md:3202",
+        "docs/prd.md (absent at the reviewed snapshot)",
+        "docs/plan-admin-surface.md (deleted in the reviewed snapshot)",
+        "docs/demo-spec.md (deleted in the reviewed snapshot)"
+      ],
+      "impact": "Superfield workers cannot resolve promised product authority and may follow deleted canonical documents or assume copied architecture plan text replaced them without an explicit decision.",
+      "recommendation": "Update Plan and issue canonical-doc metadata to surviving authorities; create a PRD if it has a distinct owner, otherwise stop requiring and referencing docs/prd.md.",
+      "owner": "product",
+      "related_findings": []
+    }
+  ],
+  "clean_areas": [
+    "Accepted decisions D1-D18 retain useful rationale and supersession history.",
+    "Frontend, backend and MCP cross the HTTP boundary through contract/src/routes.js, whose vendored runtime copy has a drift check.",
+    "Analytics token exclusivity, source-level updater isolation and rm_worker write denial have substantive tests.",
+    "Queue lanes and leases, forward-only migrations, roster snapshots, recommendation signatures and auth-before-SQL have executed coverage.",
+    "participation.html and api-reference.html agree on dynamic session discovery and signing routes and have route-literal consistency coverage.",
+    "Committed HEAD CI executed nonzero root, backend, MCP and Playwright test counts with loud Postgres provisioning and guarded live nightly suites."
+  ],
+  "unresolved_decisions": [
+    "Are admin committee lifecycle actions intentionally synchronous 200/201 or required to be queued and return 202?",
+    "Is D13/D18 deployed current state, accepted target state, or external infrastructure whose automation lives elsewhere?",
+    "Is WORKER_DATABASE_URL mandatory outside ephemeral environments?",
+    "Does the repository need a separate PRD, or should the Plan stop requiring one?",
+    "Which goldens oracle is accepted: live-cluster shape comparison or offline contract conformance?"
+  ],
+  "limitations": [
+    "The review covers a dirty uncommitted snapshot identified by the recorded pre-artifact diff hash; the review artifacts themselves are outside that hash.",
+    "No PRD exists, so product-to-architecture traceability could not be established.",
+    "Full local backend tests were not rerun because Postgres was unavailable to the review worker; cited GitHub runs validate committed HEAD c42c47a, not dirty changes.",
+    "Branch-protection required contexts were not independently inspected.",
+    "Production and staging vendor infrastructure was not observed; deployment findings are limited to repository-owned evidence.",
+    "GitHub Plan and relevant issues were inspected, but merged issue and PR history was sampled rather than exhaustively replayed."
+  ],
+  "unreviewed_surfaces": [
+    "public documentation outside the Investment Committee",
+    "deep frontend copy outside implicated views",
+    "public-symbol comments outside implicated modules",
+    "generated API documentation, if any, outside contract/src",
+    "specialist security, economics, reliability and maintainability concerns not directly implicated by documentation claims"
+  ]
+}

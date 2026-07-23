@@ -42,8 +42,9 @@ review; stop it with Ctrl-C.
 
 Goldens are mock API responses the preview wrapper replays. **Correct goldens are
 the responsibility of the change author** — there is no nightly job that fixes
-them for you, and a CI **drift gate** will block a PR whose goldens no longer
-match the code.
+them for you, and a CI **drift gate** (`scripts/tests/goldens-drift.test.ts`)
+will block a PR whose goldens no longer match the code (see the preview/goldens
+section of `docs/architecture.md`).
 
 Goldens must be **captured from a real running system** — never hand-edited,
 never derived from other fixtures — so their **field shapes** match what the
@@ -72,7 +73,7 @@ Preview mode trades data realism for zero setup:
   scheduled recomputes, committee sessions), run the full stack:
 
   ```bash
-  bun run demo         # see docs/demo-spec.md — much better data simulations
+  bun run demo         # see docs/architecture.md — much better data simulations
   bun run demo:status
   bun run demo:down
   ```
@@ -99,7 +100,7 @@ mechanism** — the dictionary is the only authorization surface.
 | Shared HTTP contract | `contract/` — re-vendor with `bun run sync-contract`, never hand-edit |
 | Committee MCP server | `mcp/` |
 | Tooling & CI scripts | `scripts/` — tests in `scripts/tests/` |
-| Technical docs about this repo | `docs/*.md` — kebab-case |
+| Technical docs about this repo | `docs/**/*.md` (kebab-case) |
 | Workflows | `.github/workflows/` |
 | Root | config only — new root files/dirs are a review flag |
 
@@ -208,10 +209,11 @@ owner-review mechanism guarding them; the grant list **is** the guard.
 
 ## Where things are documented
 
+- Documentation map and canonical-vs-supporting ownership: [`docs/architecture.md`](docs/architecture.md)
 - Preview mode (wrapper, goldens, drift gate, hosted Cloudflare Pages): [`docs/architecture.md`](docs/architecture.md) §4
 - Overall architecture: [`docs/architecture.md`](docs/architecture.md)
-- Full-stack demo: [`docs/demo-spec.md`](docs/demo-spec.md)
+- Full-stack demo: [`docs/architecture.md`](docs/architecture.md)
 - Design decisions (D14: why preview mode replaced the "frozen" bundle; D19/D20: hosted preview URLs via Cloudflare Git integration): [`docs/decisions.md`](docs/decisions.md)
-- Live-data endpoint contract (buybacks / token metrics / sleeves / framework DTOs + provenance rules): [`docs/contract-live-data.md`](docs/contract-live-data.md)
-- Infra/domain map (D13): [`docs/topology.md`](docs/topology.md)
-- Deployment & credentials (GitOps): [`docs/deployment.md`](docs/deployment.md)
+- Live-data endpoint contract (buybacks / token metrics / sleeves / framework DTOs + provenance rules): [`docs/architecture.md`](docs/architecture.md)
+- Infra/domain map (D13): [`docs/architecture.md`](docs/architecture.md)
+- Deployment & credentials (GitOps): [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)

@@ -1,4 +1,4 @@
-// Admin surface DTOs (issue #155, docs/plan-admin-surface.md). Scoped to the
+// Admin surface DTOs (issue #155, docs/architecture.md). Scoped to the
 // overview projection, queue job/run/retry, schedule-toggle, and audit
 // endpoints this issue owns. New endpoints use camelCase bodies; the
 // pre-existing GET /api/admin/jobs|jobs/:id|runs keep their original
@@ -161,7 +161,7 @@ export interface AdminAuditResponse {
 
 // Admin surface DTOs for the committee operations UI (issue #159).
 //
-// Scope: the committee-facing slice of docs/plan-admin-surface.md §6.3 — topics
+// Scope: the committee-facing slice of docs/architecture.md §6.3 — topics
 // (committee_subjects), members, sessions/roster/lifecycle, and the audit feed.
 // Research-run and queue-job admin DTOs are declared above (issue #155) — the
 // existing `/api/admin/{auth,jobs,jobs/:id,runs,audit}` routes are that

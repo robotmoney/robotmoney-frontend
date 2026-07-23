@@ -24,11 +24,15 @@ interface SeedSchedule {
 // Keep this list small and harmless. Each kind MUST have a handler registered in
 // backend/src/worker/handlers/index.ts and be idempotent on natural keys.
 //
-// Committee schedules are intentionally no-cron (never auto-enqueued by the
-// scheduler). The demo script enqueues lifecycle jobs explicitly via the
-// admin enqueue-job endpoint, which lets the demo control the pace while still
-// exercising the real worker claim loop + handler path. Scheduled cron
-// triggering (e.g. daily open_session) is a future addition.
+// Committee lifecycle schedules are NOT in this list — they are seeded by
+// seedCommitteeSchedules() below, which is environment-configurable (issue
+// #208): COMMITTEE_SCHEDULES_ENABLED (disabled by default) switches the whole
+// committee.* cron sequence on/off, COMMITTEE_*_CRON / COMMITTEE_WINDOW_MINUTES
+// tune it, and changed values are applied to EXISTING job_schedules rows on
+// every seed run. The demo pins COMMITTEE_SCHEDULES_ENABLED=0 and instead
+// enqueues lifecycle jobs explicitly via the admin enqueue-job endpoint, which
+// lets it control the pace while still exercising the real worker claim loop +
+// handler path.
 const SCHEDULES: SeedSchedule[] = [
   // Daily 22:30 UTC: regime-only classification. After the US equity close
   // (21:00 UTC) + FRED's daily refresh, mirroring the original scripts/regime
