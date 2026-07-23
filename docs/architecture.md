@@ -664,11 +664,14 @@ credentials in [deployment.md](./runbooks/deployment.md)):
 - **TLS** is provided by Cloudflare's proxy (the droplet serves a Cloudflare Origin
   CA cert).
 
-**Preview mode — no-backend hosting for development.** Independent of both hosted
-shapes, `bun run preview` serves the live SPA with every `/api/*` route mocked
-from committed goldens (`goldens/api-goldens.json`) on a random free port — for
-developing the marketing surface without a backend. Mechanism in §4 "Preview mode
-(goldens-backed, no backend)"; workflow + fidelity caveats in
+**Preview mode — no-backend static hosting for development.** Independent of both
+hosted shapes, preview is pure static files (D19): pushes to `preview/**`
+branches deploy a per-branch URL on Cloudflare Pages, and `bun run preview`
+serves the same composed deploy directory locally on a random free port. In both
+cases the client-side wrapper (`preview/preview.html`) runs the live SPA in an
+iframe and answers every `/api/*` call from committed goldens
+(`goldens/api-goldens.json`) — no backend, no server-side mocking. Mechanism in
+§4 "Preview mode (goldens-backed, no backend)"; workflow + fidelity caveats in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ---
@@ -3197,8 +3200,10 @@ These documents describe current product and system commitments:
 - [Decisions](./decisions.md) — accepted architecture decision records (ADRs).
 - [Deployment](./runbooks/deployment.md) — GitOps environments, credentials, and
   operational setup.
-- The preview-server, demo, live-data, admin-surface, and topology specifications
-  are incorporated in this document under their dedicated sections above.
+- The demo, live-data, admin-surface, and topology specifications are
+  incorporated in this document under their dedicated sections above. (The
+  former preview-server spec was retired by decision D19 — preview mode is
+  now described in §4 "Preview mode (goldens-backed, no backend)".)
 - [Credential doctor](./runbooks/credential-doctor.md)
 
 ## Reviews and investigations
