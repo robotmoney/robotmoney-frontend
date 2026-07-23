@@ -1,2 +1,0 @@
-# Serve preview.html for the root path so deep-links are rewritten to #/<path>
-/ /preview.html 200

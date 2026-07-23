@@ -15,13 +15,14 @@ bun install          # once
 bun run preview      # serves the live SPA; open the URL it prints
 ```
 
-- `bun run preview` composes the preview deployment directory (frontend/public +
-  wrapper + goldens) and serves it on a **random free port** (printed on start)
-  via a static file server.
-- The wrapper (`preview/preview.html`) runs the live SPA inside an iframe and
-  intercepts `/api/*` calls client-side, answering them from committed goldens
-  (`goldens/api-goldens.json`). No backend needed. The experience is identical
-  to the hosted branch preview (push to `preview/**` to see your branch live).
+- `bun run preview` serves the working tree **in place** on a **random free
+  port** (printed on start) — no copying, no build: edit a file and refresh.
+- The wrapper (`frontend/preview/index.html`) runs the live SPA inside an iframe
+  and intercepts `/api/*` calls client-side, answering them from committed
+  goldens (`goldens/api-goldens.json`). No backend needed. The experience is
+  identical to the hosted branch preview (push to a `preview/*` branch —
+  Cloudflare Pages' Git integration builds and hosts it; see the preview
+  section of [`docs/architecture.md`](docs/architecture.md)).
 
 **Agent note:** to let a contributor view the site, start `bun run preview` and
 give them the printed URL. It runs in the foreground — keep it running while they
@@ -210,7 +211,7 @@ owner-review mechanism guarding them; the grant list **is** the guard.
 - Preview mode (wrapper, goldens, drift gate, hosted Cloudflare Pages): [`docs/architecture.md`](docs/architecture.md) §4
 - Overall architecture: [`docs/architecture.md`](docs/architecture.md)
 - Full-stack demo: [`docs/demo-spec.md`](docs/demo-spec.md)
-- Design decisions (D14: why preview mode replaced the "frozen" bundle; D19: hosted preview URLs): [`docs/decisions.md`](docs/decisions.md)
+- Design decisions (D14: why preview mode replaced the "frozen" bundle; D19/D20: hosted preview URLs via Cloudflare Git integration): [`docs/decisions.md`](docs/decisions.md)
 - Live-data endpoint contract (buybacks / token metrics / sleeves / framework DTOs + provenance rules): [`docs/contract-live-data.md`](docs/contract-live-data.md)
 - Infra/domain map (D13): [`docs/topology.md`](docs/topology.md)
 - Deployment & credentials (GitOps): [`docs/deployment.md`](docs/deployment.md)

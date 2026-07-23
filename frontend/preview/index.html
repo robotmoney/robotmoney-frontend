@@ -51,7 +51,7 @@
     (async () => {
       let goldens = { routes: {} };
       try {
-        const response = await fetch("/api-goldens.json");
+        const response = await fetch("/goldens/api-goldens.json");
         if (response.ok) {
           goldens = await response.json();
         }
