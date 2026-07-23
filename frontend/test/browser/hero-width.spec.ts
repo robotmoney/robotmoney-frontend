@@ -64,7 +64,7 @@ const routes: Array<{
   titleSelector: string;
   contentMaxWidth: number;
 }> = [
-  { path: "/tokenomics", heroSelector: ".tok__hero", titleSelector: ".tok__h1", contentMaxWidth: 1100 },
+  { path: "/tokenomics", heroSelector: ".tok__hero", titleSelector: ".tok__h1", contentMaxWidth: 1280 },
   { path: "/blog", heroSelector: ".blog-idx__hero", titleSelector: ".blog-idx__title", contentMaxWidth: 1000 },
   { path: "/faq", heroSelector: ".faq__hero", titleSelector: ".faq__title", contentMaxWidth: 840 },
 ];
