@@ -20,6 +20,7 @@ export const ROUTES: {
   committee: {
     members: string;
     member: string;
+    memberTakes: string;
     subject: string;
     subjectSnapshots: string;
     sessions: string;

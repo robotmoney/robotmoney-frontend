@@ -383,3 +383,199 @@ test("restart-safety (issue #208): re-opening the same session is idempotent (on
   const recRows = await sql`SELECT id FROM committee_recommendations WHERE session_id = ${first.id} AND member_id = ${m.id}`;
   expect(recRows.length).toBe(1);
 });
+
+// ── Issue #243: paginate /api/committee/sessions + drop the member-profile N+1 ─
+
+// Walks every page of GET /api/committee/sessions for the given query,
+// following nextCursor until it's null, and returns the union (id -> row).
+// Also asserts the core paging invariants along the way: every page obeys the
+// requested limit, and no id is EVER repeated across pages (a cursor bug would
+// either loop forever — caught by the iteration cap — or skip/duplicate rows).
+async function walkSessionsPages(
+  query: Record<string, string>,
+  limit: number,
+  maxPages = 200,
+): Promise<Map<string, any>> {
+  const byId = new Map<string, any>();
+  let cursor: string | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    const qs = new URLSearchParams({ ...query, limit: String(limit), ...(cursor ? { cursor } : {}) });
+    const req = new Request(`http://test/api/committee/sessions?${qs}`);
+    const res = await handleCommittee(req, new URL(req.url));
+    expect(res?.status).toBe(200);
+    const body = res!.body as { sessions: any[]; nextCursor: string | null };
+    expect(body.sessions.length).toBeLessThanOrEqual(limit);
+    for (const s of body.sessions) {
+      expect(byId.has(s.id)).toBe(false); // no duplicate across pages
+      byId.set(s.id, s);
+    }
+    if (!body.nextCursor) return byId;
+    cursor = body.nextCursor;
+  }
+  throw new Error(`walkSessionsPages: exceeded ${maxPages} pages — cursor likely never terminates`);
+}
+
+test("GET /api/committee/sessions default: light-projected + cursor-paginated (no big fields, no dupes/gaps across pages)", async () => {
+  const n = 5;
+  const created: { id: string; date: string; subjectId: string }[] = [];
+  for (let i = 0; i < n; i++) {
+    const subj = rid(`pagsubj${i}`);
+    const date = `2031-01-${String(10 + i).padStart(2, "0")}`;
+    await ic.ensureSubject(subj, `Pagination Subject ${i}`);
+    const row = await ic.openSession(date, subj); // leaves state = 'scheduled'
+    created.push({ id: row.id, date, subjectId: subj });
+  }
+
+  // The `scheduled` bucket is shared with other test files against the one
+  // ephemeral Postgres, so page counts/totals can't be asserted exactly — the
+  // invariant that DOES hold regardless of what else is in that bucket: a
+  // small-limit multi-page traversal (limit=2) must collect the EXACT same
+  // row set as one big-limit traversal (limit=100), proving the cursor
+  // neither drops nor duplicates rows as it walks.
+  const smallLimitPages = await walkSessionsPages({ state: "scheduled" }, 2);
+  const bigLimitPages = await walkSessionsPages({ state: "scheduled" }, 100);
+  expect([...smallLimitPages.keys()].sort()).toEqual([...bigLimitPages.keys()].sort());
+
+  for (const c of created) {
+    expect(smallLimitPages.has(c.id)).toBe(true);
+    const s = smallLimitPages.get(c.id);
+    expect(s.state).toBe("scheduled");
+    // Light projection: the big fields are absent entirely (not just null).
+    expect("regimeSummary" in s).toBe(false);
+    expect("synthesis" in s).toBe(false);
+    expect("subjectSnapshotTotalValueUsd" in s).toBe(false);
+    // Everything a list consumer (committee.js / committee-overview.js) reads is kept.
+    expect(s.id).toBe(c.id);
+    expect(s.date).toBe(c.date);
+    expect(s.subjectId).toBe(c.subjectId);
+    expect("committeeRecommendation" in s).toBe(true);
+    expect(typeof s.generatedAt).toBe("string");
+  }
+});
+
+test("GET /api/committee/sessions?full=1 reproduces the pre-#243 unpaginated/unprojected shape; the light default omits its big fields", async () => {
+  const subj = rid("fullproj");
+  const date = "2031-02-01";
+  await ic.ensureSubject(subj, "Full Projection Subject");
+  const session = await ic.openSession(date, subj);
+  await ic.publishBrief(session.id, 60);
+  const m = await activeMember();
+  const sub = {
+    memberId: m.id, date, subjectId: subj, nonce: rid("n"), stance: "bullish", confidence: 0.6,
+    body: "x".repeat(80),
+  };
+  const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
+  expect((await ic.submitRecommendation(m.token, { ...sub, signature })).status).toBe(201);
+  await ic.closeWindow(session.id);
+  await ic.aggregateSession(session.id);
+  await ic.publishSession(session.id);
+
+  const fullReq = new Request("http://test/api/committee/sessions?full=1");
+  const fullRes = await handleCommittee(fullReq, new URL(fullReq.url));
+  expect(fullRes?.status).toBe(200);
+  const fullBody = fullRes!.body as { sessions: any[]; nextCursor: string | null };
+  expect(fullBody.nextCursor).toBeNull(); // full=1 is never paginated
+  const fullItem = fullBody.sessions.find((s: any) => s.id === session.id);
+  expect(fullItem).toBeTruthy();
+  expect(fullItem.regimeSummary).toBeTruthy();
+  expect(typeof fullItem.synthesis).toBe("string");
+  expect(fullItem.synthesis.length).toBeGreaterThan(0);
+
+  // The light default (paged through until this session's id is found or the
+  // cursor is exhausted) carries the same id/state/committeeRecommendation but
+  // no regimeSummary/synthesis key at all.
+  let lightItem: any = null;
+  let cursor: string | undefined;
+  for (let page = 0; page < 50 && !lightItem; page++) {
+    const qs = new URLSearchParams({ state: "published", limit: "100", ...(cursor ? { cursor } : {}) });
+    const req = new Request(`http://test/api/committee/sessions?${qs}`);
+    const res = await handleCommittee(req, new URL(req.url));
+    const body = res!.body as { sessions: any[]; nextCursor: string | null };
+    lightItem = body.sessions.find((s: any) => s.id === session.id) ?? null;
+    if (!body.nextCursor) break;
+    cursor = body.nextCursor;
+  }
+  expect(lightItem).toBeTruthy();
+  expect(lightItem.state).toBe("published");
+  expect("regimeSummary" in lightItem).toBe(false);
+  expect("synthesis" in lightItem).toBe(false);
+  expect(lightItem.committeeRecommendation).toBeTruthy();
+});
+
+test("GET /api/committee/sessions: malformed cursor and out-of-range limit are 400s (never a 500 or a silent fallback)", async () => {
+  const badCursor = Buffer.from("not json", "utf8").toString("base64url");
+  const cases = [
+    `http://test/api/committee/sessions?cursor=${badCursor}`,
+    "http://test/api/committee/sessions?limit=0",
+    "http://test/api/committee/sessions?limit=101",
+    "http://test/api/committee/sessions?limit=abc",
+  ];
+  for (const url of cases) {
+    const req = new Request(url);
+    const res = await handleCommittee(req, new URL(req.url));
+    expect(res?.status).toBe(400);
+    expect((res!.body as { error?: string }).error).toBeTruthy();
+  }
+});
+
+test("GET /api/committee/members/:id/takes (#243B): collapses list+N-detail into one call — newest first, in-progress states included, doesn't collide with the plain member-detail route", async () => {
+  const subjOlder = rid("takesA");
+  const subjNewer = rid("takesB");
+  const dateOlder = "2031-03-01";
+  const dateNewer = "2031-03-02";
+  await ic.ensureSubject(subjOlder, "Takes Subject A");
+  await ic.ensureSubject(subjNewer, "Takes Subject B");
+  const m = await activeMember();
+
+  const submitOnce = async (date: string, subjectId: string, stance: string) => {
+    const session = await ic.openSession(date, subjectId);
+    await ic.publishBrief(session.id, 60);
+    const sub = { memberId: m.id, date, subjectId, nonce: rid("n"), stance, confidence: 0.5, body: "y".repeat(80) };
+    const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
+    expect((await ic.submitRecommendation(m.token, { ...sub, signature })).status).toBe(201);
+    return session;
+  };
+
+  // Older session goes all the way to published; newer stays "collecting"
+  // (in-progress) — the member-takes endpoint must surface BOTH.
+  const olderSession = await submitOnce(dateOlder, subjOlder, "bearish");
+  await ic.closeWindow(olderSession.id);
+  await ic.aggregateSession(olderSession.id);
+  await ic.publishSession(olderSession.id);
+  await submitOnce(dateNewer, subjNewer, "bullish"); // left in "collecting"
+
+  // Route disambiguation: the plain member-detail route must still resolve —
+  // /members/:id/takes must never be swallowed by /members/:id's `.startsWith`.
+  const memberReq = new Request(`http://test${routePath(ROUTES.committee.member, { id: m.id })}`);
+  const memberRes = await handleCommittee(memberReq, new URL(memberReq.url));
+  expect(memberRes?.status).toBe(200);
+  expect((memberRes!.body as { id: string }).id).toBe(m.id);
+
+  const takesReq = new Request(`http://test${routePath(ROUTES.committee.memberTakes, { id: m.id })}?limit=10`);
+  const takesRes = await handleCommittee(takesReq, new URL(takesReq.url));
+  expect(takesRes?.status).toBe(200);
+  const body = takesRes!.body as { takes: any[] };
+  const mine = body.takes.filter((t) => [subjOlder, subjNewer].includes(t.subjectId));
+  expect(mine.length).toBe(2);
+
+  // Newest session first.
+  expect(mine[0].subjectId).toBe(subjNewer);
+  expect(mine[0].sessionDate).toBe(dateNewer);
+  expect(mine[0].sessionState).toBe("collecting"); // in-progress, included
+  expect(mine[0].take.stance).toBe("bullish");
+  expect(mine[0].take.verified).toBe(true);
+  expect(mine[0].take.memberId).toBe(m.id);
+
+  expect(mine[1].subjectId).toBe(subjOlder);
+  expect(mine[1].sessionDate).toBe(dateOlder);
+  expect(mine[1].sessionState).toBe("published");
+  expect(mine[1].take.stance).toBe("bearish");
+  expect(mine[1].take.verified).toBe(true);
+});
+
+test("GET /api/committee/members/:id/takes: an unknown/never-submitted member gets an empty list, not an error", async () => {
+  const req = new Request(`http://test${routePath(ROUTES.committee.memberTakes, { id: rid("ghost") })}`);
+  const res = await handleCommittee(req, new URL(req.url));
+  expect(res?.status).toBe(200);
+  expect((res!.body as { takes: any[] }).takes).toEqual([]);
+});

@@ -35,6 +35,7 @@ function templateRe(template: string, paramRe: Record<string, string> = {}): Reg
 }
 const RE_SUBJECT_SNAPSHOTS = templateRe(C.subjectSnapshots); // /api/committee/subjects/:id/snapshots
 const RE_SUBJECT = templateRe(C.subject); // /api/committee/subjects/:id
+const RE_MEMBER_TAKES = templateRe(C.memberTakes); // /api/committee/members/:id/takes — checked before the plain member-detail route below, same reason as RE_SUBJECT_SNAPSHOTS vs RE_SUBJECT
 const RE_SESSION = templateRe(C.session); // /api/committee/sessions/:date/:subject
 const RE_MEMO = templateRe(C.memo, { id: "\\d+" }); // /api/committee/memos/:id (numeric only, as before)
 const ADMIN_PREFIX = C.admin.action.replace(":action", ""); // /api/committee/admin/
@@ -45,6 +46,18 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   const m = req.method;
 
   if (m === "GET" && p === C.members) return { status: 200, body: { members: await ic.getMembers() } };
+  // Checked BEFORE the single-segment member-detail route below — a bare
+  // `.startsWith` there would otherwise swallow `/members/:id/takes` too (its
+  // `.split("/").pop()` would read "takes" as the member id).
+  if (m === "GET" && RE_MEMBER_TAKES.test(p)) {
+    const id = decodeURIComponent(p.split("/")[4] ?? "");
+    const limitRaw = url.searchParams.get("limit");
+    try {
+      return { status: 200, body: await ic.getMemberTakes(id, limitRaw ? Number(limitRaw) : undefined) };
+    } catch (e) {
+      return { status: 400, body: { error: e instanceof Error ? e.message : "invalid request" } };
+    }
+  }
   if (m === "GET" && p.startsWith(`${C.members}/`))
     return { status: 200, body: await ic.getMember(decodeURIComponent(p.split("/").pop()!)) };
   if (m === "GET" && RE_SUBJECT_SNAPSHOTS.test(p)) {
@@ -55,7 +68,20 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     const id = decodeURIComponent(p.split("/")[4] ?? "");
     return { status: 200, body: await ic.getSubject(id) };
   }
-  if (m === "GET" && p === C.sessions) return { status: 200, body: { sessions: await ic.listSessions() } };
+  if (m === "GET" && p === C.sessions) {
+    const state = url.searchParams.get("state") ?? undefined;
+    const full = url.searchParams.get("full") === "1";
+    const limitRaw = url.searchParams.get("limit");
+    const cursor = url.searchParams.get("cursor") ?? undefined;
+    try {
+      return {
+        status: 200,
+        body: await ic.listSessions({ state, full, limit: limitRaw ? Number(limitRaw) : undefined, cursor }),
+      };
+    } catch (e) {
+      return { status: 400, body: { error: e instanceof Error ? e.message : "invalid request" } };
+    }
+  }
   if (m === "GET" && p === C.openSession) return { status: 200, body: await ic.getOpenSession() };
   if (m === "GET" && RE_SESSION.test(p)) {
     const [, , , , date, subject] = p.split("/");

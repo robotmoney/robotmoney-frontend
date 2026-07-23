@@ -42,9 +42,14 @@ export const ROUTES = {
   committee: {
     members: "/api/committee/members", // GET
     member: "/api/committee/members/:id", // GET
+    memberTakes: "/api/committee/members/:id/takes", // GET ?limit= — this member's takes across sessions (issue #243), newest first, in-progress included
     subject: "/api/committee/subjects/:id", // GET
     subjectSnapshots: "/api/committee/subjects/:id/snapshots", // GET
-    sessions: "/api/committee/sessions", // GET
+    // GET ?state=&limit=&cursor= — light index rows (no regimeSummary/synthesis/
+    // subjectSnapshotTotalValueUsd) + an opaque nextCursor (null when exhausted).
+    // ?full=1 reproduces the pre-#243 unpaginated/unprojected response for
+    // callers (e.g. the admin sessions views) that still need every field.
+    sessions: "/api/committee/sessions",
     session: "/api/committee/sessions/:date/:subject", // GET
     take: "/api/committee/takes/:id", // GET — public read-time-verified receipt
     takePermalink: "/committee/takes/:id", // rendered public verification receipt
