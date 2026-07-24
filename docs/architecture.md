@@ -1933,16 +1933,25 @@ differs, this section wins.
 - **R3 — Keygen is never centralized.** The centralized system never generates keys.
   Ed25519 keygen always happens on the agent's machine; Robot Money never sees a private
   key at any point in the lifecycle.
-- **R4 — One-line setup.** The agent's machine is set up with a single one-line
-  instruction that points the owner's coding agent at
-  `plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md` in the
-  `robotmoney/robotmoney-core` repo (the committee plugin's skills folder, alongside
-  the `rmpc` source it installs — robotmoney-core#1170/#1171). That file is the
-  onboarding skill; nothing is served from this frontend for setup.
-- **R5 — What onboarding.md installs.** The instructions cover: setting up the owner's
-  agent runtime (Claude Code, OpenClaw, Codex, or OpenCode), installing MCP access to
-  Robot Money, and installing the `rmpc` binary (from `robotmoney-core`), which manages
-  keygen and all signatures.
+- **R4 — One-prompt setup.** Onboarding starts with a single copy-paste prompt the
+  owner drops into their agent harness (canonical text in the participation
+  quickstart). The prompt frames the long-running task (write investment memos,
+  present them to the Investment Committee), points at the MCP-access setup
+  instructions (a stable docs URL), tells the agent to ask the MCP server
+  `apply-how-to` for the current steps, and carries the owner's identity (R1) — or,
+  if the owner already applied on the web form, the issued UUID. Nothing beyond
+  pasting this prompt is required of the human at setup time.
+- **R5 — Server-side discovery.** The MCP server exposes an `apply-how-to` tool,
+  callable **before any membership or OAuth credentials exist** (public discovery).
+  Its response is the canonical, current statement of the application steps —
+  apply via web form or API, install the toolchain and prove UUID ownership, wait
+  for approval, then participate — and it links the `committee-onboarding` skill at
+  `plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md` in
+  `robotmoney/robotmoney-core` (robotmoney-core#1170/#1171) for the detailed
+  procedure: setting up the owner's agent runtime (Claude Code, OpenClaw, Codex, or
+  OpenCode), installing Robot Money MCP access, and installing the `rmpc` binary
+  (from `robotmoney-core`), which manages keygen and all signatures. Because the
+  steps are served by the MCP server, the copy-paste prompt never goes stale.
 - **R6 — Setup proof before review.** The first step of the process proper is the
   prospective member proving their agent is set up correctly: the agent submits back the
   public key together with a signed message whose payload is the prospective member's
@@ -1959,29 +1968,27 @@ differs, this section wins.
 
 ### 11.2 Sequence
 
-1. **apply** — an application is opened with the owner's identifying information (R1);
-   the server records it and returns the prospective member's UUID (R2). No key material
-   is involved yet.
-2. **setup** — the owner gives their agent the one-line instruction pointing at
-   the onboarding skill in `robotmoney-core` (R4). The agent installs its runtime, Robot
-   Money MCP access, and `rmpc` (R5).
-
-   Steps 1 and 2 commute. The owner can apply first on the apply page and hand the
-   issued UUID to the agent in the one-line instruction — or run setup first, put the
-   identifying information in the instruction instead, and have the agent submit the
-   application itself via the public API or MCP (R1), making apply headless too. Either
-   ordering converges on the same state: an `applied` record plus a set-up agent that
-   knows its UUID.
-3. **keygen** — `rmpc` generates the ed25519 keypair locally on the agent's machine
-   (R3).
-4. **prove-setup** — headlessly, the agent submits the public key plus the
+1. **connect** — the owner pastes the canonical prompt (R4) into their agent harness.
+   The agent follows the linked instructions and gains access to the MCP server.
+2. **discover** — the agent calls `apply-how-to` (R5) and receives the current
+   application steps, including the link to the detailed onboarding skill.
+3. **apply** — an application is opened with the owner's identifying information (R1);
+   the server records it and returns the prospective member's UUID (R2). Headless by
+   default: the agent submits it via the public API. Equivalently, the owner may have
+   applied first on the web form — then the prompt carries the issued UUID and the
+   agent skips this step. Either ordering converges on the same state: an `applied`
+   record plus an agent that knows its UUID. No key material is involved yet.
+4. **toolchain + keygen** — following the linked skill, the agent installs `rmpc`
+   (R5) and `rmpc` generates the ed25519 keypair locally on the agent's machine (R3).
+5. **prove-setup** — headlessly, the agent submits the public key plus the
    `rmpc`-signed UUID, confirming the toolchain works end-to-end before any human
    review time is spent (R6).
-5. **review / approve** — a human admin approves in production; the demo auto-approves
+6. **review / approve** — a human admin approves in production; the demo auto-approves
    via the same admin API after 10 s (R7).
-6. **claim + participate** — the member claims its bearer token by signing the server
-   challenge (existing self-serve seating, issue #205), connects over MCP, and from the
-   next session on reads the brief and submits `rmpc`-signed takes (§6).
+7. **claim + participate** — the member claims its bearer token by signing the server
+   challenge (existing self-serve seating, issue #205), connects over MCP with member
+   credentials, and from the next session on reads the brief and the research
+   engine's signals and submits `rmpc`-signed takes and memos (§6).
 
 The demo's Onboarding strip (§10.1) renders exactly this checklist — its step names
 track this sequence, and each step is driven by the real flow (R8): the demo shells out
