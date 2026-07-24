@@ -52,6 +52,13 @@ export function viewFor(pathname) {
   if (/^\/committee\/takes\/[^/]+\/?$/.test(pathname)) {
     return `${VIEW_DIR}/committee/take.html`;
   }
+  // Application status page (docs/architecture.md §11 R2) — checked before the generic
+  // catch-all below so /committee/apply/<id> doesn't 404 by resolving to a
+  // nonexistent per-id fragment. /committee/apply (no id) still falls through
+  // to the catch-all → committee/apply.html, the application form itself.
+  if (/^\/committee\/apply\/[^/]+\/?$/.test(pathname)) {
+    return `${VIEW_DIR}/committee/apply-status.html`;
+  }
   if (/^\/committee\/\d{4}-\d{2}-\d{2}\/[^/]+\/?$/.test(pathname)) {
     return `${VIEW_DIR}/committee/session.html`;
   }

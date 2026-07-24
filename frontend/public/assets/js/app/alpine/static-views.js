@@ -277,6 +277,64 @@ export function registerStaticViews(Alpine) {
     },
   }));
 
+  // Public application-status poller (docs/architecture.md §11 R2), the page
+  // the runbook promises at <host>/committee/apply/<member-id>. Polls the
+  // public, redacted status route until a terminal state (claimed/rejected)
+  // or the component unmounts — Alpine's destroy() lifecycle hook (fired on
+  // both route navigation via rm:before-view-change→destroyTree and a raw
+  // page unload) always clears the timer, so leaving the page never leaves a
+  // poll loop running against a stale id.
+  Alpine.data("committeeApplyStatus", () => ({
+    ...helpers,
+    STEPS: ["applied", "approved", "claimed"],
+    id: null,
+    loading: true,
+    error: null,
+    status: null,
+    pollTimer: null,
+    async init() {
+      const match = location.pathname.match(/^\/committee\/apply\/([^/]+)\/?$/);
+      if (!match) {
+        this.error = "Application not found";
+        this.loading = false;
+        return;
+      }
+      this.id = decodeURIComponent(match[1]);
+      await this.refresh();
+      this.pollTimer = setInterval(() => this.refresh(), 4000);
+    },
+    destroy() {
+      if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+    },
+    async refresh() {
+      try {
+        this.status = await api.get(path(ROUTES.committee.applyStatus, { id: this.id }));
+        this.error = null;
+        if (["claimed", "rejected"].includes(this.status.state) && this.pollTimer) {
+          clearInterval(this.pollTimer);
+          this.pollTimer = null;
+        }
+      } catch (e) {
+        this.error = e.status === 404 ? "No application found for this id." : (e.message || "Could not load application status.");
+        if (e.status === 404 && this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+      } finally {
+        this.loading = false;
+      }
+    },
+    // applied → approved → claimed, per docs/architecture.md §11.2. rejected
+    // is a terminal off-ramp: "applied" still reads done (it happened), the
+    // remaining steps read neither done nor pending — they're moot, not "next".
+    stepState(step) {
+      const order = ["applied", "approved", "claimed"];
+      const idx = order.indexOf(step);
+      if (!this.status || idx === -1) return "pending";
+      if (this.status.state === "rejected") return step === "applied" ? "done" : "moot";
+      const cur = order.indexOf(this.status.state);
+      if (cur === -1) return "pending";
+      return idx <= cur ? "done" : "pending";
+    },
+  }));
+
   Alpine.data("memberProfile", () => ({
     ...helpers,
     loading: true,
