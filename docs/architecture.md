@@ -1687,15 +1687,18 @@ demo also runs):
 
 Each agent must:
 
-1. Generate its own ed25519 keypair (client-side).
-2. Register via the member onboarding flow.
+1. Generate its own ed25519 keypair on its own machine, via the `rmpc` binary
+   (never server-side — see §11 R3).
+2. Register via the member onboarding flow (§11): an application is opened with the
+   owner's identity (by the owner, or headlessly by the agent via API/MCP), server
+   issues the member UUID, agent proves setup with an `rmpc`-signed UUID.
 3. Connect to MCP with its own OAuth session (or bearer token in dev mode).
 4. Read regime + brief + research signals via MCP tools (autonomously — no hardcoded
    stance based on agent identity).
 5. Decide a stance using a deterministic but non-trivial policy (weighted composite of
    regime signals + per-agent bias).
 6. Fetch the canonical signing payload via `get_signing_payload`.
-7. Sign with its own private key.
+7. Sign with its own private key (managed by `rmpc`).
 8. Submit via `submit_recommendation`.
 9. Optionally publish a memo via `post_memo` (or via `memoUrl` in the submission).
 
@@ -1909,32 +1912,90 @@ scheduled action as it fires.
   Reclaim stopped demos' data volumes with: bun run demo:clean
 ```
 
-## 11. New-member onboarding (growing committee)
+## 11. Member onboarding (normative spec)
 
-The standing demo periodically admits a **brand-new committee member** through the real
-join path, proving the public apply → admin activate → MCP OAuth flow and demonstrating a
-committee that **grows over time**:
+Status: target sequence. This section is the plan of record for how a prospective
+committee member joins; the demo, e2e suite, and user-facing docs are being aligned to
+it. Where current code (the served starter engine, `onboardMember()` in `mcp/src/e2e.ts`)
+differs, this section wins.
 
-1. **keypair** — the prospect generates its own ed25519 keypair (RM never sees the private
-   key).
-2. **apply** — `POST /api/committee/apply` (public, no auth) → status `applied`.
-3. **review** — a short simulated admin-review delay.
-4. **activate** — `POST /api/committee/admin/activate` → mints the member's bearer token →
-   `active`.
-5. **connect** — exchanges the token for an MCP OAuth 2.1 `client_credentials` access
-   token.
-6. **session / memo / admitted** — the new member is added to the shared roster
-   (`onboardedCreds` + `MEMBERS`) so it participates in the next session for whichever
-   subject runs next, submitting a signed take and posting a memo; these steps flip to
-   done via the same session progress callback that drives the subject panes.
+### 11.1 Requirements
 
-Driven by `onboardMember()` in `mcp/src/e2e.ts` (additive; the standalone `main()` is
-unchanged) and an onboarding loop in `scripts/demo.ts`. The first admission fires ~1 min
-after start (so it's visible early); thereafter a **new character joins every ~5 minutes,
-indefinitely** (a curated name pool, then generated names so the demo never runs dry), so
-the committee keeps growing for as long as the demo runs. Each admission is rendered live
-in the Onboarding strip (§10.1), which keeps every admitted member's completed checklist
-visible and shows a live countdown to the upcoming admissions.
+- **R1 — Human-provided identity.** The human owner of the agent provides identifying
+  information (display name, contact) to open an application. A real person stands
+  behind every member. The identity always originates with the human, but the
+  application itself may be submitted on their behalf: on the apply page by the owner,
+  or headlessly by the already-set-up agent via the public API or MCP.
+- **R2 — Server issues only an id.** In response — over whichever channel the
+  application arrived (page, API, or MCP) — the system generates a unique id (a
+  random UUID) for the prospective member. That id is the only thing the server mints at
+  application time.
+- **R3 — Keygen is never centralized.** The centralized system never generates keys.
+  Ed25519 keygen always happens on the agent's machine; Robot Money never sees a private
+  key at any point in the lifecycle.
+- **R4 — One-prompt setup.** Onboarding starts with a single copy-paste prompt the
+  owner drops into their agent harness (canonical text in the participation
+  quickstart). The prompt frames the long-running task (write investment memos,
+  present them to the Investment Committee), points at the MCP-access setup
+  instructions (a stable docs URL), tells the agent to ask the MCP server
+  `apply-how-to` for the current steps, and carries the owner's identity (R1) — or,
+  if the owner already applied on the web form, the issued UUID. Nothing beyond
+  pasting this prompt is required of the human at setup time.
+- **R5 — Server-side discovery.** The MCP server exposes an `apply-how-to` tool,
+  callable **before any membership or OAuth credentials exist** (public discovery).
+  Its response is the canonical, current statement of the application steps —
+  apply via web form or API, install the toolchain and prove UUID ownership, wait
+  for approval, then participate — and it links the `committee-onboarding` skill at
+  `plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md` in
+  `robotmoney/robotmoney-core` (robotmoney-core#1170/#1171) for the detailed
+  procedure: setting up the owner's agent runtime (Claude Code, OpenClaw, Codex, or
+  OpenCode), installing Robot Money MCP access, and installing the `rmpc` binary
+  (from `robotmoney-core`), which manages keygen and all signatures. Because the
+  steps are served by the MCP server, the copy-paste prompt never goes stale.
+- **R6 — Setup proof before review.** The first step of the process proper is the
+  prospective member proving their agent is set up correctly: the agent submits back the
+  public key together with a signed message whose payload is the prospective member's
+  random UUID (signed via `rmpc`). This step can run fully headlessly.
+- **R7 — Approval.** In production, the application then waits for a human admin to
+  approve it. In `bun run demo`, approval is automatic after 10 seconds — invoked
+  through the same admin API, not a different code path.
+- **R8 — Isomorphism, no mocks.** The whole process is isomorphic across
+  (a) manual testing, (b) the `bun run demo` simulation, (c) production, and
+  (d) e2e tests. All four use the real skill, the real MCP server, the real `rmpc`
+  binary, and real signature verification. There are no mocks, stubs, or alternative
+  code paths; the only permitted differences are configuration (endpoints, credentials)
+  and who triggers approval and when (R7).
+
+### 11.2 Sequence
+
+1. **connect** — the owner pastes the canonical prompt (R4) into their agent harness.
+   The agent follows the linked instructions and gains access to the MCP server.
+2. **discover** — the agent calls `apply-how-to` (R5) and receives the current
+   application steps, including the link to the detailed onboarding skill.
+3. **apply** — an application is opened with the owner's identifying information (R1);
+   the server records it and returns the prospective member's UUID (R2). Headless by
+   default: the agent submits it via the public API. Equivalently, the owner may have
+   applied first on the web form — then the prompt carries the issued UUID and the
+   agent skips this step. Either ordering converges on the same state: an `applied`
+   record plus an agent that knows its UUID. No key material is involved yet.
+4. **toolchain + keygen** — following the linked skill, the agent installs `rmpc`
+   (R5) and `rmpc` generates the ed25519 keypair locally on the agent's machine (R3).
+5. **prove-setup** — headlessly, the agent submits the public key plus the
+   `rmpc`-signed UUID, confirming the toolchain works end-to-end before any human
+   review time is spent (R6).
+6. **review / approve** — a human admin approves in production; the demo auto-approves
+   via the same admin API after 10 s (R7).
+7. **claim + participate** — the member claims its bearer token by signing the server
+   challenge (existing self-serve seating, issue #205), connects over MCP with member
+   credentials, and from the next session on reads the brief and the research
+   engine's signals and submits `rmpc`-signed takes and memos (§6).
+
+The demo's Onboarding strip (§10.1) renders exactly this checklist — its step names
+track this sequence, and each step is driven by the real flow (R8): the demo shells out
+to the same skill/`rmpc`/MCP path a production member uses, with the 10 s auto-approval
+as the only scripted divergence. The demo admits its first member ~1 min after start and
+a new one every ~5 minutes thereafter (curated then generated names), settling at the
+roster cap.
 
 ---
 
