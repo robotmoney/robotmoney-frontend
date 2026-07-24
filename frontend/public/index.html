@@ -3,11 +3,80 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <!-- Primary meta. This is the STATIC baseline (home) served to crawlers and
+         link-unfurlers that do not run JS; once JS runs, the client router
+         rewrites <title>/description/canonical/OG per route via
+         assets/js/app/seo.js. Baking per-route content for no-JS crawlers is the
+         deploy-time prerender step, tracked separately. -->
     <title>Robot Money — Autonomous Treasury for the Agent Economy</title>
-    <meta name="description" content="A managed vault on Base that accepts USDC deposits from autonomous agents and allocates across three diversified strategies. One integration, not twenty." />
-    <meta property="og:title" content="Robot Money" />
-    <meta property="og:description" content="An autonomous treasury for the agent economy. One USDC deposit. Three diversified strategies. Withdraw at NAV anytime." />
+    <meta name="description" content="Robot Money is an autonomous USDC treasury on Base. One deposit spreads across multi-protocol DeFi yield and agent tokens; withdraw at NAV anytime." />
+    <link rel="canonical" href="https://robotmoney.net/" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+    <meta name="theme-color" content="#06080c" />
+    <meta name="author" content="Robot Money" />
+    <meta name="keywords" content="autonomous treasury, agent economy, USDC vault, DeFi yield, Base, AI agents, MCP skill, onchain, $ROBOTMONEY" />
+
+    <!-- Open Graph -->
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Robot Money" />
+    <meta property="og:title" content="Robot Money — Autonomous Treasury for the Agent Economy" />
+    <meta property="og:description" content="One USDC deposit, actively managed across multi-protocol DeFi yield and a curated agent-token basket. Withdraw at NAV anytime — and any AI agent can do it autonomously via the MCP skill." />
+    <meta property="og:url" content="https://robotmoney.net/" />
+    <meta property="og:image" content="https://robotmoney.net/assets/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Robot Money — an autonomous treasury for the agent economy" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@RobotMoneyAgent" />
+    <meta name="twitter:title" content="Robot Money — Autonomous Treasury for the Agent Economy" />
+    <meta name="twitter:description" content="One USDC deposit, actively managed across multi-protocol DeFi yield and a curated agent-token basket. Withdraw at NAV anytime." />
+    <meta name="twitter:image" content="https://robotmoney.net/assets/og-image.png" />
+
+    <!-- Icons / PWA -->
+    <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/assets/icon-512.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- Structured data (Organization + WebSite + the agent Skill) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Organization",
+          "@id": "https://robotmoney.net/#org",
+          "name": "Robot Money",
+          "url": "https://robotmoney.net",
+          "logo": "https://robotmoney.net/assets/icon-512.png",
+          "description": "An autonomous treasury for the agent economy — a managed USDC yield vault on Base.",
+          "sameAs": [
+            "https://x.com/RobotMoneyAgent",
+            "https://t.me/+aFxo8CRpkI80YmM0",
+            "https://github.com/robotmoney"
+          ]
+        },
+        {
+          "@type": "WebSite",
+          "@id": "https://robotmoney.net/#website",
+          "name": "Robot Money",
+          "url": "https://robotmoney.net",
+          "publisher": { "@id": "https://robotmoney.net/#org" }
+        },
+        {
+          "@type": "SoftwareApplication",
+          "name": "Robot Money Skill",
+          "applicationCategory": "FinanceApplication",
+          "operatingSystem": "Any MCP-compatible agent runtime",
+          "url": "https://robotmoney.net/skills",
+          "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+          "description": "An MCP skill that lets any AI agent deposit into and withdraw from the Robot Money USDC yield vault on Base, at NAV, with no human in the loop."
+        }
+      ]
+    }
+    </script>
 
     <!-- Shared design system — load order matters: tokens, then design-system,
          then components. No @import; each file linked individually. -->

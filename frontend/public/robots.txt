@@ -1,0 +1,24 @@
+# Robot Money — https://robotmoney.net
+# Autonomous treasury for the agent economy.
+
+User-agent: *
+Allow: /
+# Operator dashboards are not for indexing.
+Disallow: /admin
+Disallow: /admin/
+
+# AI / LLM crawlers are welcome — the site content is public and meant to be cited.
+User-agent: GPTBot
+Allow: /
+User-agent: OAI-SearchBot
+Allow: /
+User-agent: ClaudeBot
+Allow: /
+User-agent: anthropic-ai
+Allow: /
+User-agent: PerplexityBot
+Allow: /
+User-agent: Google-Extended
+Allow: /
+
+Sitemap: https://robotmoney.net/sitemap.xml
