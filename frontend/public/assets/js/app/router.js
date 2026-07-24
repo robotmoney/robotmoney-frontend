@@ -7,6 +7,7 @@
 // back to the home view so internal links never 404 during early development.
 
 import { NOT_FOUND_VIEW, viewFor } from "./routes.js";
+import { applyRouteMeta } from "./seo.js";
 
 const viewEl = () => document.getElementById("view");
 
@@ -58,6 +59,9 @@ async function render(pathname) {
   host.innerHTML = html;
   window.scrollTo(0, 0);
   syncNav(pathname);
+  // Rewrite <title>/description/canonical/OG per route so each view is distinct
+  // to JS-rendering crawlers (Googlebot) and to history/bookmarks.
+  applyRouteMeta(pathname);
 }
 
 // Intercept same-origin, plain left-clicks on anchors and route them in-app.
