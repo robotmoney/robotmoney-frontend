@@ -322,6 +322,17 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(modelConfig.model, mcpUrlInternal), null, 2));
     const prompt = buildAgentPrompt(identity);
 
+    // A deterministic, explicit container name — NOT left to `docker compose
+    // run`'s auto-generated one — so cleanup can target the real container
+    // directly. This matters because `containerProc.kill()` below only
+    // signals the local `docker` CLI process; `docker compose run` is a
+    // client of the Docker daemon, and the CONTAINER it starts is NOT a
+    // child process of that CLI. Killing the CLI does not reliably stop the
+    // container (a well-known Docker gotcha, confirmed live: a "timed out"
+    // eval's container kept running and reasoning for 10+ minutes after the
+    // harness gave up on it and a RETRY launched a second container
+    // concurrently with the still-running first one).
+    const containerName = `${opts.composeProject}-member-agent-eval-${identity.runId}`;
     log(`launching member-agent container for ${identity.contact} (model=${modelConfig.model}${modelConfig.apiKeyEnv ? "" : ", keyless"})`);
     const containerProc = Bun.spawn(
       [
@@ -330,6 +341,8 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
         "run",
         "--rm",
         "--no-deps",
+        "--name",
+        containerName,
         "-v",
         `${opencodeConfigPath}:/home/agent/opencode.json:ro`,
         // Only pass a key when the resolved model actually needs one — the
@@ -401,10 +414,22 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     const admitted = onActiveRoster;
     const timedOut = !admitted && Date.now() >= deadline;
 
+    // Kill BOTH the local CLI process AND the actual container by its
+    // deterministic name — killing only containerProc leaves the real
+    // container running under the Docker daemon (see the name comment
+    // above). `docker rm -f` is a superset of `docker kill`: it stops AND
+    // removes, so this is also the cleanup `--rm` would otherwise handle on
+    // a normal exit. Best-effort — an already-exited container/process is
+    // not an error here.
     try {
       containerProc.kill();
     } catch {
       /* already exited */
+    }
+    try {
+      Bun.spawnSync(["docker", "rm", "-f", containerName], { stdout: "ignore", stderr: "ignore" });
+    } catch {
+      /* already removed */
     }
     const [stdout, stderr, containerExitCode] = await Promise.all([stdoutPromise, stderrPromise, containerProc.exited]);
 
