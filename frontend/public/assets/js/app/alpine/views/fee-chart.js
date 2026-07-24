@@ -13,7 +13,7 @@ export function registerFeeChart(Alpine) {
   // Protocol). Colours are presentation-only, keyed by the split label; the
   // percentages themselves are never fabricated — a failed fetch degrades to
   // "—" and an undrawn pie rather than a baked default.
-  const FEE_COLOR = { Protocol: SERIES.emerald, Bankr: SERIES.amber, Clanker: PALETTE.purple };
+  const FEE_COLOR = { Protocol: SERIES.emerald, Bankr: SERIES.amber, Clanker: SERIES.slate };
   Alpine.data("feeChart", () => ({
     _chart: null,
     metrics: null,

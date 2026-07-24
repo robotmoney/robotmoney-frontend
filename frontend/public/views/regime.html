@@ -25,9 +25,9 @@
          run, so a stale latest date means the job isn't refreshing in this deployment
          and the charts are frozen. Surfaced instead of served silently. -->
     <div class="rv__stale" x-show="isStale()" x-cloak role="alert"
-         style="display:flex;gap:.6rem;align-items:flex-start;margin:0 0 1.25rem;padding:.85rem 1rem;border:1px solid rgba(245,158,11,.5);border-radius:10px;background:rgba(245,158,11,.1);color:#fbbf24;font-size:.9rem;line-height:1.45">
+         style="display:flex;gap:.6rem;align-items:flex-start;margin:0 0 1.25rem;padding:.85rem 1rem;border:1px solid rgba(232,166,64,.5);border-radius:2px;background:rgba(232,166,64,.1);color:#e8a640;font-size:.9rem;line-height:1.45">
       <span aria-hidden="true" style="flex:0 0 auto;font-size:1rem;line-height:1.3">⚠</span>
-      <span><strong style="color:#fbbf24">Regime data may be stale.</strong> <span x-text="staleMessage()"></span></span>
+      <span><strong style="color:#e8a640">Regime data may be stale.</strong> <span x-text="staleMessage()"></span></span>
     </div>
 
     <template x-if="latest">
@@ -82,7 +82,7 @@
                 <button type="button" class="rv__chip" :style="chipStyle(visible.spx, '#5fb3a1')" @click="toggle('spx')">S&amp;P 500</button>
               </template>
               <template x-if="hasEth()">
-                <button type="button" class="rv__chip" :style="chipStyle(visible.eth, '#a374e0')" @click="toggle('eth')">ETH</button>
+                <button type="button" class="rv__chip" :style="chipStyle(visible.eth, '#7e889e')" @click="toggle('eth')">ETH</button>
               </template>
             </div>
           </div>

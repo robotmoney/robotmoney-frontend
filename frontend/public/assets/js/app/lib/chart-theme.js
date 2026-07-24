@@ -20,21 +20,22 @@ export const PALETTE = {
   accentDim: "#00b8d4",
   warm: "#e8a640",
   warn: "#ff6644",
-  blue: "#4488ff",
-  purple: "#8b5cf6",
 };
 
-// Extended series colours used by strategy/asset/wallet charts. Not design
-// tokens (they have no CSS var), but centralised here so every chart draws
-// from one place. Values are the exact hex previously hardcoded inline.
+// Extended series colours for the categorical/multi-series charts (strategy,
+// asset, wallet, regime overlays). Not design tokens (no CSS var), but drawn
+// from the Beam/Pool/Beacon brand set — cyan / teal / green / sand / beacon /
+// slate — so charts stay on-covenant while series remain distinguishable. The
+// old Tailwind rainbow (blue #4488ff, purple #8b5cf6/#a374e0, red #ff6b6b,
+// amber #f59e0b, #ffcf80) is retired.
 export const SERIES = {
   teal: "#5fb3a1", // on-chain bucket / SP500 price overlay
-  violet: "#a374e0", // equity-factor bucket / ETH overlay / hodl baselines
-  red: "#ff6b6b", // macro-inverted strategy
-  mint: "#9cffd2", // conservative strategy
-  amberLight: "#ffcf80", // aggressive strategy
+  slate: "#7e889e", // equity-factor bucket / ETH overlay / hodl baselines (neutral secondary)
+  beacon: "#ff7a29", // macro-inverted strategy (negative)
+  mint: "#9cffd2", // conservative strategy (light green)
+  sand: "#e8a640", // aggressive strategy (warm)
   emerald: "#10b981", // stable / protocol wallet + stable fee slice
-  amber: "#f59e0b", // bankr fee slice
+  amber: "#e8a640", // bankr fee slice (warm, off Tailwind)
 };
 
 // Shared axis typography (regime uses JetBrains Mono 10 everywhere).

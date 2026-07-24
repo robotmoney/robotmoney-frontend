@@ -42,7 +42,7 @@ export function registerResearchView(Alpine) {
           type: "line",
           data: {
             labels: pts.map((p) => p.date),
-            datasets: [{ data: pts.map((p) => p.value), borderColor: PALETTE.blue, borderWidth: 1.5, pointRadius: 0, tension: 0.25, fill: false }],
+            datasets: [{ data: pts.map((p) => p.value), borderColor: PALETTE.accent, borderWidth: 1.5, pointRadius: 0, tension: 0.25, fill: false }],
           },
           options: {
             responsive: true, maintainAspectRatio: false, animation: false,
@@ -62,7 +62,7 @@ export function registerResearchView(Alpine) {
         data: {
           labels: pts.map((p) => p.date),
           datasets: [{ label: this.payload.series.label, data: pts.map((p) => p.value),
-            borderColor: PALETTE.blue, backgroundColor: rgba(PALETTE.blue, 0.12), fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2 }],
+            borderColor: PALETTE.accent, backgroundColor: rgba(PALETTE.accent, 0.12), fill: true, tension: 0.25, pointRadius: 0, borderWidth: 2 }],
         },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,

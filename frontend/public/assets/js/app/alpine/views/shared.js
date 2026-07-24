@@ -48,13 +48,13 @@ export const STRATEGY_STYLE = {
   composite: { label: "Composite", color: PALETTE.accent },
   macro: { label: "Macro", color: PALETTE.warm },
   onchain: { label: "On-chain", color: SERIES.teal },
-  factor: { label: "Equity factor", color: SERIES.violet },
-  macro_inverted: { label: "Macro inv.", color: SERIES.red },
+  factor: { label: "Equity factor", color: SERIES.slate },
+  macro_inverted: { label: "Macro inv.", color: SERIES.beacon },
   conservative: { label: "Conservative", color: SERIES.mint },
-  aggressive: { label: "Aggressive", color: SERIES.amberLight },
-  eth_hodl: { label: "ETH HODL", color: SERIES.violet, baseline: true },
-  sp500_hodl: { label: "SP500 HODL", color: SERIES.violet, baseline: true },
-  blend_hodl: { label: "50/50 HODL", color: SERIES.violet, baseline: true },
+  aggressive: { label: "Aggressive", color: SERIES.sand },
+  eth_hodl: { label: "ETH HODL", color: SERIES.slate, baseline: true },
+  sp500_hodl: { label: "SP500 HODL", color: SERIES.slate, baseline: true },
+  blend_hodl: { label: "50/50 HODL", color: SERIES.slate, baseline: true },
   stables_only: { label: "Stables", color: PALETTE.textMuted, baseline: true },
 };
 export const BASELINE_KEYS = new Set(["eth_hodl", "sp500_hodl", "blend_hodl", "stables_only"]);
@@ -108,7 +108,7 @@ export const BACKTESTS = [
     ],
   },
 ];
-export const ASSET_COLOR = { cash: PALETTE.textMuted, eth: SERIES.violet, sp500: SERIES.teal };
+export const ASSET_COLOR = { cash: PALETTE.textMuted, eth: SERIES.slate, sp500: SERIES.teal };
 export const ASSET_LABEL = { cash: "cash", eth: "ETH", sp500: "SP500" };
 
 // Correlation ("Predictive power & alignment") table columns + row order.

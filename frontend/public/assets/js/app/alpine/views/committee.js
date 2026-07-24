@@ -60,7 +60,10 @@ export function registerCommitteeView(Alpine) {
     },
     regimeLabel(r) { return r ? String(r).replace(/_/g, "-") : "—"; },
     stanceColor(s) {
-      return ({ bullish: "#10b981", constructive: "#84cc16", neutral: "#94a3b8", cautious: "#f59e0b", bearish: "#ef4444" }[s] || "#94a3b8");
+      // Sentiment on the Beam/Pool/Beacon covenant (mirrors STANCE_COLORS in
+      // static-views.js): green mass for conviction, slate neutral, sand → beacon
+      // for the negative/attention end.
+      return ({ bullish: "#10b981", constructive: "#34d399", neutral: "#7e889e", cautious: "#e8a640", bearish: "#ff7a29" }[s] || "#7e889e");
     },
     formatDate(value, style = "short") {
       const date = String(value || "").includes("T") ? new Date(value) : new Date(`${value}T00:00:00Z`);

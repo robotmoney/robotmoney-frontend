@@ -224,12 +224,12 @@ export function registerRegimeView(Alpine) {
         line("On-chain", this.history.map((h) => this._idx(h, "onchain")), PALETTE.warm),
       ];
       const hasFactor = this.history.some((h) => this._idx(h, "factor") != null);
-      if (hasFactor) ds.push(line("Equity factor", this.history.map((h) => this._idx(h, "factor")), SERIES.violet));
+      if (hasFactor) ds.push(line("Equity factor", this.history.map((h) => this._idx(h, "factor")), SERIES.slate));
       const extras = this.latest?.extras || {};
       const showSpx = this.visible.spx && (extras.spx || []).length > 0;
       const showEth = this.visible.eth && (extras.eth || []).length > 0;
       if (showSpx) ds.push(line("S&P 500", alignToDates(extras.spx, labels), SERIES.teal, { axis: "yPrice" }));
-      if (showEth) ds.push(line("ETH", alignToDates(extras.eth, labels), SERIES.violet, { axis: "yPrice" }));
+      if (showEth) ds.push(line("ETH", alignToDates(extras.eth, labels), SERIES.slate, { axis: "yPrice" }));
       const chart = new window.Chart(canvas, {
         type: "line",
         data: { labels, datasets: ds },

@@ -6,12 +6,16 @@
 // worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
 
+// Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
+// green mass (bullish deepest → constructive lighter), neutral as slate, and
+// the negative end as sand → beacon (attention/loss). Retires the old
+// lime/red/amber Tailwind trio.
 const STANCE_COLORS = {
   bullish: "#10b981",
-  constructive: "#84cc16",
-  neutral: "#94a3b8",
-  cautious: "#f59e0b",
-  bearish: "#ef4444",
+  constructive: "#34d399",
+  neutral: "#7e889e",
+  cautious: "#e8a640",
+  bearish: "#ff7a29",
 };
 
 const ARCHIVE_LAST_DATE = "2026-06-25";
@@ -173,7 +177,7 @@ const helpers = {
     return String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((s) => s[0]?.toUpperCase()).join("") || "IC";
   },
   stanceColor(stance) {
-    return STANCE_COLORS[stance] || "#94a3b8";
+    return STANCE_COLORS[stance] || "#7e889e";
   },
   stanceStyle(stance) {
     const c = this.stanceColor(stance);
@@ -449,7 +453,7 @@ export function registerStaticViews(Alpine) {
       return (this.snapshot?.positions || []).map((p) => ({ ...p, share: total > 0 ? p.value_usd / total : 0 }));
     },
     donutStyle(p, i) {
-      const colors = ["#22d3ee", "#a78bfa", "#34d399", "#f59e0b", "#f472b6", "#60a5fa", "#94a3b8"];
+      const colors = ["#00e5ff", "#5fb3a1", "#10b981", "#e8a640", "#ff7a29", "#7e889e", "#6ee7b7"];
       return `--c:${colors[i % colors.length]};--p:${this.clampPct((p.share || 0) * 100)};`;
     },
     humanize(id) {
