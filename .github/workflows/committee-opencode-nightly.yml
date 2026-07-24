@@ -26,6 +26,17 @@
 #
 # CI taxonomy class: heavy (scheduled real external-model drift check). Heavy
 # suites are sweep-only: NO `pull_request` trigger — schedule + on-demand only.
+#
+# Stage 7 addition (docs/plans/onboarding-ic-workflow.md, §11 R8): the second
+# job below, `onboarding-real-inference-sweep`, is NOT a duplicate of the
+# required PR gate's (.github/workflows/e2e.yml) real-inference onboarding
+# admission — real inference is no longer nightly-exclusive (that's the whole
+# point of the §11 R8 rework: onboarding-as-eval only means something with a
+# real model doing the reasoning, on every PR that touches this surface). This
+# job is additive: it runs a WIDER sweep (more identities, more model variety)
+# than the PR gate can afford to spend on every push, using an
+# ANTHROPIC_API_KEY secret — unlike this file's original keyless
+# committee-take-authoring job above, which stays exactly as keyless as ever.
 name: committee-opencode-nightly
 env:
   CI_CLASS: heavy
@@ -50,3 +61,71 @@ jobs:
       - name: External OpenCode CLI uses committee MCP tools
         run: bun run test:opencode-tools
         timeout-minutes: 40
+
+  # Broader/deeper real-inference onboarding sweep (§11 R8, Stage 7). Reuses
+  # the EXACT demo stack boot the required `e2e` PR gate uses
+  # (scripts/demo.ts → scripts/lib/demo-main.ts, same pattern as
+  # rmpc-release-e2e-nightly.yml's "boot once, drive the extra check off the
+  # same boot" — no parallel stack stood up here) but sweeps
+  # ONBOARDING_SWEEP_MODELS × ONBOARDING_SWEEP_IDENTITIES_PER_MODEL admissions
+  # instead of the PR gate's single one. A run here has full repo-secret
+  # access (scheduled/workflow_dispatch triggers are never fork PRs), so no
+  # trust-context gating is needed — unlike e2e.yml, which must gate this
+  # exact eval behind a same-repo/trusted-context check.
+  onboarding-real-inference-sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install root browser tooling
+        run: bun install --frozen-lockfile
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+      - name: Install MCP deps
+        working-directory: mcp
+        run: bun install --frozen-lockfile
+      - name: Install backend deps (for the host-side EDGAR seed bootstrap step)
+        working-directory: backend
+        run: bun install --frozen-lockfile
+      # Cache the pinned rmpc release binary by tag — same rationale as e2e.yml.
+      - name: Resolve pinned rmpc release version (cache key)
+        id: rmpc-version
+        run: |
+          VERSION=$(bun -e 'import("./scripts/lib/rmpc-fetch.ts").then((m) => console.log(m.RMPC_VERSION))')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Cache rmpc release binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.rmpc-cache
+          key: rmpc-${{ steps.rmpc-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+      # Boot demo stack + a WIDER real-inference onboarding sweep than the PR
+      # gate runs, against that SAME booted stack (RMPC_RELEASE_E2E-style
+      # additive reuse — see scripts/lib/demo-main.ts's ONBOARDING_REAL_EVAL
+      # block). Fails loudly (non-zero exit, no skip) if the model key isn't
+      # usable, the rmpc binary can't be fetched/verified, or any swept
+      # admission doesn't reach the active roster.
+      - name: Boot demo stack + real-inference onboarding sweep
+        run: bun run scripts/demo.ts
+        env:
+          CI: "true"
+          DEMO_PROJECT: rmdemo_ci_onboarding_${{ github.run_id }}_${{ github.run_attempt }}
+          RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
+          ONBOARDING_REAL_EVAL: "1"
+          OPENCODE_MODEL: ${{ vars.ONBOARDING_EVAL_MODEL || 'anthropic/claude-haiku-4-5' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Wider than the PR gate's implicit single model / single identity:
+          # two models, two fresh identities each = 4 real admissions/night.
+          ONBOARDING_SWEEP_MODELS: "anthropic/claude-haiku-4-5:anthropic/claude-sonnet-5"
+          ONBOARDING_SWEEP_IDENTITIES_PER_MODEL: "2"
+        timeout-minutes: 55
+      - name: Reclaim this run's demo volume (no leaks on the shared runner)
+        if: always()
+        run: bun run scripts/demo-clean.ts --project "$DEMO_PROJECT"
+        env:
+          DEMO_PROJECT: rmdemo_ci_onboarding_${{ github.run_id }}_${{ github.run_attempt }}

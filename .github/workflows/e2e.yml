@@ -24,6 +24,25 @@
 # already runs the same LIVE boot on a schedule (independent of PR cadence) so
 # an external-provider outage is caught even on a quiet day; adding a second
 # nightly sweep of the identical assertions would be pure duplication.
+#
+# Stage 7 addition (docs/plans/onboarding-ic-workflow.md, §11 R8): this job now
+# also runs the REAL-INFERENCE onboarding eval — one vanilla OpenCode
+# member-agent container navigating our own onboarding docs end to end via a
+# real model call — not a hermetic/inference-off substitute. An inference-off
+# infra-rails check (scripts/tests/onboarding-eval-infra.test.ts) runs first as
+# a cheap fail-fast supplement, before any model tokens are spent. Two
+# operational risks this wiring accounts for, not ignores:
+#   (a) This self-hosted runner shares its IP with the standing rmdemo_* demo
+#       stack, which has caused 429 rate-limit flake on other live-call gates
+#       before. scripts/lib/onboarding-eval.ts's runOnboardingEvalWithRetry
+#       retries ONLY a detected 429/overload signal (never a genuine
+#       navigation failure) with backoff — see that function's doc comment.
+#   (b) GitHub Actions never exposes repo secrets (the model API key) to
+#       workflow runs triggered by fork PRs. The "Decide onboarding
+#       real-inference eval gate" step below detects this and falls back to
+#       the infra-rails check ONLY for those runs — loudly, via the job
+#       summary, never a silent skip. Same-repo PRs and pushes to main get the
+#       full real-inference eval.
 name: e2e
 env:
   CI_CLASS: system-correctness
@@ -41,6 +60,12 @@ jobs:
     # skip while the PR is still a draft.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: [self-hosted, robotmoney-self-hosted]
+    env:
+      # Read by scripts/lib/rmpc-fetch.ts's fetchRmpc() — shared by the
+      # infra-rails test below and the real-inference eval inside "Full-stack
+      # demo", so both hit the same cached binary instead of each fetching
+      # their own copy.
+      RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -83,6 +108,65 @@ jobs:
       - name: Install backend deps (for the host-side EDGAR seed bootstrap step)
         working-directory: backend
         run: bun install --frozen-lockfile
+
+      # === Onboarding eval (Stage 7, §11 R8) ===
+      - name: Resolve pinned rmpc release version (cache key)
+        id: rmpc-version
+        run: |
+          VERSION=$(bun -e 'import("./scripts/lib/rmpc-fetch.ts").then((m) => console.log(m.RMPC_VERSION))')
+          echo "resolved rmpc version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      # Cache the pinned rmpc release binary by tag (Stage 3's
+      # scripts/lib/rmpc-fetch.ts): avoids re-downloading a GitHub Releases
+      # asset on every PR run for a binary that only changes when RMPC_VERSION
+      # is bumped. Both consumers below (the infra-rails test and the
+      # real-inference eval inside "Full-stack demo") read RMPC_CACHE_DIR
+      # (job-level env above), so both land in — and reuse — this same cache.
+      - name: Cache rmpc release binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.rmpc-cache
+          key: rmpc-${{ steps.rmpc-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+      # Fail-fast, inference-off SUPPLEMENT (Stage 5's test, wired into CI here
+      # per Stage 7) — never a substitute for the real-inference eval below.
+      # Proves every rail the real eval rides on without spending a model
+      # token: the member-agent image builds and starts, anonymous MCP
+      # discovery (apply-how-to) answers over the compose network, and a
+      # signed apply built with the real rmpc release binary lands end-to-end
+      # through MCP `apply`. Runs for EVERY PR (including forks — nothing here
+      # needs a secret) before the expensive live demo boot, so a broken rail
+      # fails in minutes, not tens of minutes.
+      - name: Onboarding eval infra rails (inference-off, fail-fast)
+        run: bun test scripts/tests/onboarding-eval-infra.test.ts
+        timeout-minutes: 15
+      # Same-repo/trusted-context PR runs (and pushes to main) with the model
+      # key secret configured get the full real-inference onboarding eval;
+      # fork PRs never see repo secrets (GitHub Actions default — there is no
+      # way around this at the workflow level) and fall back to the
+      # infra-rails check above only. This decision — and which branch was
+      # taken and why — is written LOUDLY to the job summary; it is never a
+      # silent skip.
+      - name: Decide onboarding real-inference eval gate
+        id: onboarding-gate
+        env:
+          TRUSTED_CONTEXT: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          HAS_MODEL_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          if [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_MODEL_KEY" = "true" ]; then
+            echo "run_real_eval=1" >> "$GITHUB_OUTPUT"
+            MSG="§11 R8 real-inference onboarding eval: RUNNING (same-repo/trusted context, ANTHROPIC_API_KEY configured) as part of the Full-stack demo step below."
+          else
+            echo "run_real_eval=" >> "$GITHUB_OUTPUT"
+            if [ "$TRUSTED_CONTEXT" != "true" ]; then
+              REASON="this is a fork-PR run — GitHub Actions never exposes repo secrets to workflow runs triggered by fork PRs"
+            else
+              REASON="the ANTHROPIC_API_KEY repository secret is not configured"
+            fi
+            MSG="§11 R8 real-inference onboarding eval: SKIPPED ($REASON). Falling back to the inference-off infra-rails check above ONLY — that is NOT a full pass of §11 R8, only proof of its rails. See docs/plans/onboarding-ic-workflow.md Stage 7."
+          fi
+          echo "$MSG"
+          echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
+
       # === Demo readiness gate ===
       # This boot-and-check step block IS the "demo readiness" gate. It boots the
       # full LIVE demo stack (issue #147: no hermetic mode exists anymore — every
@@ -131,11 +215,30 @@ jobs:
           # job to run longer and be occasionally flakier against live upstreams
           # than the retired hermetic boot was — an accepted, deliberate
           # consequence of issue #147/#163, not a bug in this workflow.
-        timeout-minutes: 40
+          #
+          # Stage 7 (§11 R8) — a DELIBERATE, SCOPED exception to the "no secret
+          # here" rule two paragraphs up: that rule is about the keyless
+          # committee-TAKE-authoring path (mcp/src/inference.ts /
+          # COMMITTEE_REAL_INFERENCE), which stays keyless and is completely
+          # unaffected by this. ANTHROPIC_API_KEY below is injected ONLY into
+          # the short-lived member-agent container scripts/lib/onboarding-eval.ts
+          # launches (never into the api/worker/mcp services), and only on the
+          # "Decide onboarding real-inference eval gate" step's say-so — for a
+          # fork PR or a repo with no key configured, all three vars below
+          # resolve to empty strings and demo-main.ts's ONBOARDING_REAL_EVAL
+          # branch is then a pure no-op (see that file's comment).
+          ONBOARDING_REAL_EVAL: ${{ steps.onboarding-gate.outputs.run_real_eval }}
+          OPENCODE_MODEL: ${{ steps.onboarding-gate.outputs.run_real_eval == '1' && (vars.ONBOARDING_EVAL_MODEL || 'anthropic/claude-haiku-4-5') || '' }}
+          ANTHROPIC_API_KEY: ${{ steps.onboarding-gate.outputs.run_real_eval == '1' && secrets.ANTHROPIC_API_KEY || '' }}
+        # 40 min for the pre-existing checks + headroom for the onboarding eval
+        # (default 8-minute timeout per admission attempt, up to 2 attempts with
+        # runOnboardingEvalWithRetry's 45s backoff — only retries a detected
+        # 429/overload signal, see the file-level comment above).
+        timeout-minutes: 58
       # Volume-leak backstop (issue: demo persistent volumes). The demo boot above
       # reclaims its own volume on both success and failure (demo-main.ts
       # cleanCiVolume). This always() step is the belt-and-suspenders case: if the
-      # boot step is KILLED (e.g. the 40-min timeout) it never reaches its own
+      # boot step is KILLED (e.g. the timeout above) it never reaches its own
       # teardown, so reclaim here too. Scoped to THIS run's project label — it
       # deletes only rmdemo_ci_<run>_<attempt>_pgdata, never the standing demo that
       # shares this self-hosted runner. Never touches --pg-data host dirs (CI does
