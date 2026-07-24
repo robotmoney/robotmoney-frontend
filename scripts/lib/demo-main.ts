@@ -8,6 +8,7 @@ import { resolveDemoEnv } from "./demo-env.ts";
 import { listDemoVolumes, makeDockerRunner, removeDemoVolumes } from "./demo-volumes.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
 import { COMMITTEE_INTERVAL_MS, COMMITTEE_STAGGER_MS } from "./demo-schedule.ts";
+import { resolveModelConfig, runOnboardingEval, type OnboardingIdentity, type OnboardingEvalResult } from "./onboarding-eval.ts";
 import { COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -311,10 +312,18 @@ function setStep(name: string, status: StepStatus): void {
   const s = state.steps.find((x) => x.name === name);
   if (s) s.status = status;
 }
-// The prospective-member join checklist, in order. keypair→connect are driven by
-// onboardMember(); session/memo/admitted flip when the new member is seen taking +
-// posting a memo in a live session (via committeeProgress).
-const ONBOARD_STEPS = ["keypair", "apply", "review", "activate", "connect", "session", "memo", "admitted"];
+// The prospective-member join checklist, in order — tracks docs/architecture.md
+// §11.2 exactly. connect→claim are driven by the real-inference eval harness's
+// observed step-state record (scripts/lib/onboarding-eval.ts): a vanilla
+// OpenCode agent container works these out for itself from the canonical
+// prompt with real inference, no scripting (§11 R8). session/memo/admitted
+// flip when the newly-admitted member is separately observed submitting a
+// signed take + posting a memo in a live committee session (via
+// committeeProgress) — the SAME mechanism that already drives these three for
+// the long-standing hardcoded roster, since the eval's observe-only design has
+// no visibility into ongoing session participation (see onboarding-eval.ts's
+// module doc comment).
+const ONBOARD_STEPS = ["connect", "discover", "toolchain", "apply", "approve", "claim", "session", "memo", "admitted"];
 // Begin (or resume) a member's join checklist. The member is appended to the persistent
 // onboarded list so its status checks stay in the pane after admission, and it is dropped
 // from the upcoming queue now that its turn has arrived.
@@ -963,6 +972,18 @@ function committeeProgress(subjectId: string): SessionProgress {
 
 // --- Orchestration --------------------------------------------------------
 async function main(): Promise<void> {
+  // §11 R8: real inference is the demo's onboarding mode, never an optional
+  // extra behind a flag — there is no hermetic/scripted onboarding fallback,
+  // so a missing model key must fail LOUDLY here, before the demo spends
+  // minutes standing up the stack, rather than have onboardingDriver() throw
+  // quietly in the background later. CI's own invocation of this file exits
+  // (via the `if (process.env.CI)` branch below) before ever reaching
+  // onboardingDriver() — it runs a different, non-onboarding check suite — so
+  // this check applies only to a LOCAL standing demo.
+  if (!process.env.CI) {
+    resolveModelConfig(process.env);
+  }
+
   if (tuiActive) {
     tui = createTui({ render });
     tui.start();
@@ -1231,8 +1252,14 @@ async function main(): Promise<void> {
     };
   }
 
-  // Credentials for members onboarded at runtime (apply→activate). Passed to every
-  // runSession so newly-admitted members participate (signing with their own key).
+  // Credentials for members onboarded at runtime, passed to every runSession so a
+  // member with a KNOWN key signs its own takes. §11 R3 means this process never
+  // holds a real-eval-onboarded member's private key, so this map now stays
+  // empty in practice — runAgent's existing "no credentials" self-enroll path
+  // (a fresh demo-only simulation key via the privileged register shortcut)
+  // covers ongoing session participation for every onboarded member instead.
+  // Kept as a live parameter (not deleted) so a future credential-preserving
+  // design can populate it without touching runSession's signature.
   const onboardedCreds = new Map<string, ExistingCredentials>();
 
   async function committeeDriver(): Promise<void> {
@@ -1266,28 +1293,44 @@ async function main(): Promise<void> {
   }
   void committeeDriver();
 
-  // ── Periodic new-member onboarding ───────────────────────────────────────
-  // Walk a brand-new prospect through the real join gates (keypair → apply →
-  // review → activate → OAuth connect), then add it to the shared roster
-  // (e2e.MEMBERS + onboardedCreds) so it participates in — and GROWS — the
-  // committee. session/memo/admitted complete when committeeProgress sees the
-  // newcomer take + post a memo. The first admission fires early so it's visible;
-  // thereafter a NEW character joins every ONBOARD_INTERVAL, indefinitely (curated
-  // names first, then generated ones so the demo never runs dry).
+  // ── Periodic new-member onboarding (§11 R8: real-inference eval) ─────────
+  // Every admission launches ONE vanilla OpenCode member-agent container
+  // (scripts/lib/onboarding-eval.ts) and hands it the canonical copy-paste
+  // prompt with a generated identity — no scripting beyond that: the agent
+  // discovers the MCP server, installs `rmpc`, generates its own keypair,
+  // signs and submits the application, and claims its token entirely through
+  // its own real inference. This driver only OBSERVES (poll the public status
+  // API + the admin roster) and performs the one scripted action §11 R7
+  // explicitly allows to differ between demo and production: auto-approving
+  // after 10s via the same admin API a human uses.
+  //
+  // The eval harness never hands this process the member's private key (§11
+  // R3 — Robot Money never sees one), so a freshly-onboarded member is added
+  // to e2e.MEMBERS WITHOUT credentials, exactly like the pre-existing
+  // "already-active member reused across a resumed demo" path — runAgent
+  // self-enrolls it (a fresh, demo-only simulation key, privileged register
+  // shortcut) for ongoing SESSION PARTICIPATION only, never for the
+  // onboarding admission itself, which already completed for real above.
+  //
+  // A failed/timed-out admission is a genuine red eval result (§11 R8) — the
+  // strip renders it failed, the container transcript is logged, and nothing
+  // retries the member's steps.
   const NEWCOMER_NAMES = [
     "Helios", "Selene", "Rhea", "Nyx", "Eos", "Theia", "Hyperion", "Phoebe",
     "Coeus", "Crius", "Iapetus", "Metis", "Tethys", "Themis", "Mnemosyne",
   ];
   const NEWCOMER_LENSES = ["liquidity", "volatility", "credit", "tail risk", "sentiment", "flows", "macro", "positioning"];
   const FIRST_ONBOARD_MS = 60_000;     // first admission ~1 min in (after the base committee shows)
-  const ONBOARD_INTERVAL_MS = 300_000; // then a new character every 5 min
-  // Deterministic name/lens/bias for the n-th admission — shared by the driver and the
-  // upcoming-queue preview so the TUI shows exactly who joins next.
-  function plannedNewcomer(n: number): { memberId: string; name: string; lens: string; bias: number } {
+  const ONBOARD_INTERVAL_MS = 300_000; // then a new admission starts every 5 min (real eval duration is additive)
+  // Deterministic identity/lens/bias for the n-th admission — shared by the driver and the
+  // upcoming-queue preview so the TUI shows exactly who joins next. `identity.runId` is a
+  // LOCAL slug only (this driver's bookkeeping key + the container's --title); the real
+  // memberId (§11 R2) is server-minted and only known once the harness observes it.
+  function plannedNewcomer(n: number): { identity: OnboardingIdentity; lens: string; bias: number } {
     const name = NEWCOMER_NAMES[n] ?? `Astra ${n + 1}`;
+    const runId = name.toLowerCase().replace(/\s+/g, "-");
     return {
-      memberId: name.toLowerCase().replace(/\s+/g, "-"),
-      name,
+      identity: { runId, name, contact: `${runId}@example.test` },
       lens: NEWCOMER_LENSES[n % NEWCOMER_LENSES.length],
       bias: ((n % 5) - 2) * 0.05, // spread -0.10 … +0.10
     };
@@ -1299,15 +1342,10 @@ async function main(): Promise<void> {
       // Preview the next few admissions (this one + its successors) with countdowns.
       state.upcoming = [0, 1, 2].map((k) => {
         const p = plannedNewcomer(n + k);
-        return { memberId: p.memberId, name: p.name, at: dueAt + k * ONBOARD_INTERVAL_MS };
+        return { memberId: p.identity.runId, name: p.identity.name, at: dueAt + k * ONBOARD_INTERVAL_MS };
       });
       await sleep(delay);
-      const { memberId, name, lens, bias } = plannedNewcomer(n);
-      // Idempotent: never re-onboard a member already on the roster (dedupe).
-      if (e2e.MEMBERS.some((m: { memberId: string }) => m.memberId === memberId)) {
-        log(`onboarding ${memberId} skipped — already on the roster`);
-        continue;
-      }
+      const { identity, lens, bias } = plannedNewcomer(n);
       // Roster cap: once the active committee reaches the contract's
       // COMMITTEE_ROSTER_CAP, stop
       // admitting so the demo settles at a realistic, bounded size instead of
@@ -1315,21 +1353,66 @@ async function main(): Promise<void> {
       const active = await e2e.activeMemberCount();
       if (active >= COMMITTEE_ROSTER_CAP) {
         state.upcoming = [];
-        log(`roster full (${active}/${COMMITTEE_ROSTER_CAP}) — onboarding paused`);
+        log(`onboarding ${identity.name} skipped — roster full (${active}/${COMMITTEE_ROSTER_CAP})`);
         continue;
       }
-      startOnboarding(memberId, name); // append to the persistent pane + drop from upcoming
+      startOnboarding(identity.runId, identity.name); // append to the persistent pane + drop from upcoming
+      setOnboardStep(identity.runId, "connect", "running"); // container is about to launch
       try {
-        const { member, creds } = await e2e.onboardMember({ memberId, name, lens, bias }, {
-          reviewMs: 6000,
-          onStage: (stage: string, ok: boolean) => setOnboardStep(memberId, stage, ok ? "done" : "failed"),
+        const result: OnboardingEvalResult = await runOnboardingEval({
+          repoRoot,
+          composeProject: project,
+          composeFiles: composeFilesRun.split(":"),
+          backendUrl,
+          adminToken: adminPassword,
+          identity,
+          onEvent: (msg) => log(`onboarding-eval[${identity.runId}]: ${msg}`),
         });
-        if (creds) onboardedCreds.set(memberId, creds); // null ⇒ reused member; runAgent self-enrolls
-        e2e.MEMBERS.push(member); // grow the roster → joins subsequent sessions
-        setOnboardStep(memberId, "session", "running");
-        log(`onboarded ${memberId} (#${n + 1}) — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
+
+        // Rekey the pane entry to the server-minted memberId (§11 R2) as soon as
+        // it's known, so committeeProgress's later ev.memberId lookups match.
+        const ob = state.onboarded.find((o) => o.memberId === identity.runId);
+        if (ob && result.memberId) ob.memberId = result.memberId;
+        const entryId = result.memberId ?? identity.runId;
+
+        // The strip renders straight from the harness's OBSERVED step-state
+        // record — no fabricated sub-steps. Drop the harness's own trailing
+        // "session" entry (it means "reached the active roster", which this
+        // driver already tracks via `admitted` below); the strip's OWN
+        // session/memo/admitted tail tracks real committee participation.
+        for (const s of result.steps) {
+          if (s.step === "session") continue;
+          setOnboardStep(entryId, s.step, s.status === "done" ? "done" : "pending");
+        }
+
+        if (!result.admitted) {
+          // Mark the FIRST not-yet-done step in the pane's own (full 9-step)
+          // checklist as failed — not just among the harness's first 6: a
+          // member that reaches "claim" but never lands on the active roster
+          // (e.g. the auto-approve call itself failing) would otherwise render
+          // all-green with nothing visibly red.
+          const stalledOb = state.onboarded.find((o) => o.memberId === entryId);
+          const stalledAt = stalledOb?.steps.find((s) => s.status !== "done");
+          if (stalledAt) setOnboardStep(entryId, stalledAt.key, "failed");
+          log(
+            `onboarding ${identity.name} (#${n + 1}) FAILED — ` +
+              `${result.timedOut ? "timed out" : `container exited (code ${result.containerExitCode})`} ` +
+              "before reaching the active roster; this is a real eval result, not retried",
+          );
+          if (result.transcript) log(`onboarding ${identity.name} container transcript:\n${result.transcript}`);
+          continue;
+        }
+
+        // Admitted for real (§11 R6 verified, R2 id minted). This driver never
+        // held the member's private key (R3), so it joins e2e.MEMBERS WITHOUT
+        // creds — the same "reused member" path runAgent already self-enrolls
+        // (demo-only participation simulation, not onboarding) for ongoing
+        // session participation.
+        e2e.MEMBERS.push({ memberId: result.memberId!, name: identity.name, lens, bias, present: true });
+        setOnboardStep(entryId, "session", "running");
+        log(`onboarded ${identity.name} (#${n + 1}) memberId=${result.memberId} — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
       } catch (err) {
-        log(`onboarding ${memberId} failed (stack still running): ${err instanceof Error ? err.message : err}`);
+        log(`onboarding ${identity.name} eval threw (stack still running): ${err instanceof Error ? err.message : err}`);
       }
     }
   }

@@ -1464,7 +1464,7 @@ flowchart TB
 
     subgraph Onboarding["📝 Onboarding Gates"]
         direction LR
-        O1["keypair"] --> O2["apply"] --> O3["review"] --> O4["activate"] --> O5["connect"]
+        O1["connect"] --> O2["discover"] --> O3["toolchain"] --> O4["apply"] --> O5["approve"] --> O6["claim"]
     end
 
     subgraph TUI["🖥 TUI Panels"]
@@ -1475,7 +1475,7 @@ flowchart TB
 
     Core -->|"sign → submit"| S3
     Prospects -->|walk through| Onboarding
-    O5 -->|"admitted → joins roster"| S3
+    O6 -->|"admitted → joins roster"| S3
     Scheduler -.->|visible in| TP
     Session -.->|visible in| TP2
     Onboarding -.->|visible in| TP3
@@ -1858,13 +1858,22 @@ the TUI shows only distilled state. Layout:
   Docker healthcheck turns the icon red (with a detail like `exited 1` / `restarting` /
   `unhealthy`). The pane header shows a refresh spinner while a check is in flight.
 - **Onboarding** (full-width strip) — each prospective member's join checklist:
-  `keypair → apply → review → activate → connect → session → memo → admitted`, each
-  pending / spinner / ✓ / ✗. Steps 1–5 are driven by the real join flow
-  (`onboardMember`); `session`/`memo`/`admitted` flip when the member is observed
-  submitting a signed take + posting a memo in a live session. Admitted members **retain
-  their checklist** in the pane (most recent shown, with a `(+N earlier admitted)` note),
-  and an `upcoming → Name in m:ss …` line **counts down** to the next scheduled
-  admissions. See §11.
+  `connect → discover → toolchain → apply → approve → claim → session → memo →
+  admitted`, each pending / spinner / ✓ / ✗ — tracking §11.2 exactly. Steps 1–6
+  (`connect`…`claim`) render straight from the real-inference eval harness's
+  observed step-state record (`scripts/lib/onboarding-eval.ts`): each admission
+  launches a vanilla OpenCode member-agent container and hands it the canonical
+  copy-paste prompt with a generated identity, and the agent works out MCP
+  discovery, `rmpc` install, keygen, and the signed application entirely on its
+  own via real inference — the demo only observes the public application-status
+  API and the admin roster (§11 R8). `session`/`memo`/`admitted` flip the same
+  way as before: when the newly-admitted member is separately observed
+  submitting a signed take + posting a memo in a live committee session. A
+  failed or timed-out admission renders red and its container transcript is
+  logged — a real eval result, never retried. Admitted members **retain their
+  checklist** in the pane (most recent shown, with a `(+N earlier admitted)`
+  note), and an `upcoming → Name in m:ss …` line **counts down** to the next
+  scheduled admissions. See §11.
 - **Activity** (largest region) — Research plus **one pane per committee subject**, laid
   out as responsive columns (side by side when they fit, stacking when the terminal is
   narrow):
@@ -1916,9 +1925,10 @@ scheduled action as it fires.
 ## 11. Member onboarding (normative spec)
 
 Status: target sequence. This section is the plan of record for how a prospective
-committee member joins; the demo, e2e suite, and user-facing docs are being aligned to
-it. Where current code (the served starter engine, `onboardMember()` in `mcp/src/e2e.ts`)
-differs, this section wins.
+committee member joins; the demo (§10.1), e2e suite, and user-facing docs are aligned to
+it (`scripts/lib/onboarding-eval.ts` drives the demo and e2e admission path;
+`scripts/rmpc-release-e2e.ts` is the no-inference proof of the same signed-apply chain).
+Where any other code differs, this section wins.
 
 ### 11.1 Requirements
 

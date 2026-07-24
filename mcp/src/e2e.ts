@@ -5,10 +5,10 @@
 // handler → domain) so the demo exercises the real FOR UPDATE SKIP LOCKED claim
 // loop. Multi-session: the second session's brief references the first session's
 // outcome, demonstrating rotation awareness.
-import { canonicalizeClaimChallenge, demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
+import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { runAgent, enroll, textOf } from "./agent.ts";
 import type { ExistingCredentials, AgentStage } from "./agent.ts";
-import { generateKeyPair, sign } from "./crypto.ts";
+import { generateKeyPair } from "./crypto.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
@@ -171,52 +171,6 @@ export async function admin(action: string, body: unknown = {}) {
   return responseJson(r);
 }
 
-// Self-serve token claim (issue #205): admin activate no longer hands out a
-// bearer token directly — it flips applied→active and returns
-// `claimRequired: true`. The member proves it holds the private key matching
-// its registered public key by signing a server-issued one-time challenge,
-// then exchanges that signature for the sole bearer token. Mirrors
-// backend/src/committee/domain.ts's issueTokenClaimChallenge/claimMemberToken
-// and the canonical signing domain in @robotmoney/contract's
-// canonicalizeClaimChallenge (kept in sync with backend/src/lib/signing.ts's
-// verifyClaimChallengeSignature).
-async function claimToken(memberId: string, privateKey: CryptoKey): Promise<string> {
-  const challenge = await fetch(`${BACKEND}${ROUTES.committee.claimChallenge}`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ memberId }),
-  }).then(responseJson) as { memberId: string; challenge: string; expiresAt: string };
-  if (!challenge.challenge || !challenge.expiresAt) {
-    throw new Error(`claim-challenge failed for ${memberId}: ${JSON.stringify(challenge)}`);
-  }
-  const signature = await sign(
-    canonicalizeClaimChallenge({ memberId, challenge: challenge.challenge, expiresAt: challenge.expiresAt }),
-    privateKey,
-  );
-  const claimed = await fetch(`${BACKEND}${ROUTES.committee.claimToken}`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ memberId, challenge: challenge.challenge, expiresAt: challenge.expiresAt, signature }),
-  }).then(responseJson) as { ok?: boolean; status?: number; token?: string; error?: string };
-  if (claimed.status !== 200 || !claimed.token) {
-    throw new Error(`claim-token failed for ${memberId}: ${JSON.stringify(claimed)}`);
-  }
-  return claimed.token;
-}
-
-// Prospective-member onboarding (public apply → admin review/activate → MCP OAuth
-// connect). Additive + optional: used by the standing demo to periodically admit a
-// NEW committee member and grow the roster. Emits one onStage(stage, ok) per gate so
-// a UI can render the join checklist. Returns the roster entry + credentials the
-// caller hands to runSession (via its existingCredentials map) so the new member
-// participates — signing client-side with its OWN key — in subsequent sessions.
-export type OnboardStage = "keypair" | "apply" | "review" | "activate" | "connect";
-export interface OnboardSpec { memberId: string; name: string; lens: string; bias?: number; }
-export interface OnboardResult {
-  member: { memberId: string; name: string; lens: string; bias: number; present: true };
-  // null when an already-active member is REUSED (idempotent path): its private
-  // key can't be recovered, so runAgent self-enrolls it for the next session.
-  creds: ExistingCredentials | null;
-}
-
 // Active committee roster size, read from the backend — the gate the standing
 // demo checks against COMMITTEE_ROSTER_CAP before admitting a newcomer.
 export async function activeMemberCount(): Promise<number> {
@@ -226,83 +180,22 @@ export async function activeMemberCount(): Promise<number> {
   return Array.isArray(r.members) ? r.members.length : 0;
 }
 
-async function activeMemberIds(): Promise<Set<string>> {
-  const r = await fetch(`${BACKEND}${ROUTES.committee.members}`)
-    .then(responseJson)
-    .catch(() => ({ members: [] as { id: string }[] })) as { members?: { id: string }[] };
-  return new Set((r.members ?? []).map((m) => m.id));
-}
-
-export async function onboardMember(
-  spec: OnboardSpec,
-  opts?: { reviewMs?: number; onStage?: (stage: OnboardStage, ok: boolean) => void },
-): Promise<OnboardResult> {
-  const emit = (s: OnboardStage, ok = true) => opts?.onStage?.(s, ok);
-
-  // 0. Idempotent: a member already on the active roster (e.g. carried over from
-  //    a prior demo run) is REUSED, never re-applied — the real apply path is
-  //    create-only and a duplicate id would 409. We can't recover its private
-  //    key here, so return without creds; runAgent self-enrolls it next session.
-  if ((await activeMemberIds()).has(spec.memberId)) {
-    (["keypair", "apply", "review", "activate", "connect"] as OnboardStage[]).forEach((s) => emit(s));
-    return {
-      member: { memberId: spec.memberId, name: spec.name, lens: spec.lens, bias: spec.bias ?? 0, present: true },
-      creds: null,
-    };
-  }
-
-  // 1. The member generates its OWN ed25519 keypair (RM never sees the private key).
-  const { publicKeyB64, privateKey } = await generateKeyPair();
-  emit("keypair");
-
-  // 2. Public apply (no auth) — recorded as 'applied'. `contact` is required
-  //    (server-enforced, issue #205) so activation can notify the applicant;
-  //    demo/e2e members use the same `<memberId>@example.test` convention as
-  //    the backend fixtures (never a real address).
-  const applyRes = await fetch(`${BACKEND}${ROUTES.committee.apply}`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      memberId: spec.memberId, name: spec.name, lens: spec.lens, publicKey: publicKeyB64,
-      contact: `${spec.memberId}@example.test`,
-    }),
-  }).then((r) => r.json());
-  if (applyRes.status !== 201) { emit("apply", false); throw new Error(`apply failed: ${JSON.stringify(applyRes)}`); }
-  emit("apply");
-
-  // 3. Admin review — simulated approval delay before activation.
-  await sleep(opts?.reviewMs ?? 4000);
-  emit("review");
-
-  // 4. Admin activates — flips applied→active. Self-serve seating (issue #205)
-  //    no longer mints a bearer token here: the response is `claimRequired: true`
-  //    and the member must separately prove key ownership below.
-  const activateRes = await fetch(`${BACKEND}${ROUTES.committee.admin.activate}`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
-    body: JSON.stringify({ memberId: spec.memberId }),
-  }).then((r) => r.json());
-  if (activateRes.status !== 200) { emit("activate", false); throw new Error(`activate failed: ${JSON.stringify(activateRes)}`); }
-  emit("activate");
-
-  // 4b. Claim the bearer token: sign the server-issued challenge with the SAME
-  //     key the member applied with, proving key ownership before receiving a
-  //     token — the whole point of self-serve seating (issue #205).
-  const claimedToken = await claimToken(spec.memberId, privateKey);
-
-  // 5. Connect: exchange the bearer token for an MCP OAuth 2.1 access token
-  //    (client_credentials) — proves the member can authenticate to the MCP server.
-  const MCP_BASE = (process.env.MCP_URL ?? "http://localhost:8788/mcp").replace(/\/mcp\/?$/, "");
-  const tok = await fetch(`${MCP_BASE}/mcp/oauth/token`, {
-    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "client_credentials", client_id: spec.memberId, client_secret: claimedToken }),
-  }).then((r) => r.json());
-  if (!tok.access_token) { emit("connect", false); throw new Error(`oauth connect failed for ${spec.memberId}`); }
-  emit("connect");
-
-  return {
-    member: { memberId: spec.memberId, name: spec.name, lens: spec.lens, bias: spec.bias ?? 0, present: true },
-    creds: { token: claimedToken, privateKey },
-  };
-}
+// NOTE (docs/architecture.md §11, Stage 6 of docs/plans/onboarding-ic-workflow.md):
+// this file used to also export `onboardMember()` — a scripted, JS-keygen
+// public-apply→admin-activate→claim→OAuth-connect driver used by the standing
+// demo's onboarding pane. §11 R3/R6 now require the applicant's agent to
+// generate its own key and sign the canonical application payload itself
+// (`rmpc`, not this file's `generateKeyPair`/`sign`), and the public apply
+// route now REJECTS an unsigned body outright (backend/src/api/validation.ts
+// parseApply requires `signature`) — the old onboardMember() body would 400 on
+// its very first call today. The real onboarding path now lives in
+// scripts/lib/onboarding-eval.ts (a real-inference agent container, observed
+// only) and is driven by scripts/lib/demo-main.ts's onboardingDriver(); the
+// no-inference proof of the same signed-apply chain lives in
+// scripts/rmpc-release-e2e.ts. JS keygen (`./crypto.ts`) survives in this file
+// only for `enroll()`/`runAgent()`'s demo-only SESSION-PARTICIPATION simulation
+// (never applying on a member's behalf) and in crypto unit tests — never on an
+// onboarding code path.
 
 // Exported (in addition to standalone-main use) so scripts/rmpc-release-e2e.ts
 // (issue #104) can drive the SAME proven job-queue session lifecycle this file's
@@ -491,40 +384,26 @@ async function main() {
   // Session 1: today's subject
   const s1 = await runSession(today, SUBJECTS[0], 1);
 
-  // ── New agent onboarded from scratch ─────────────────────────────────────
-  // Demonstrates the public apply → admin activate → MCP OAuth → submit flow.
-  // The agent (eos) will participate in session 2 alongside existing members.
-  const eosDate = today;
+  // ── New member added mid-run ──────────────────────────────────────────────
+  // Demonstrates a member added AFTER session 1, participating in session 2
+  // alongside the original roster (cross-session rotation awareness). This is
+  // deliberately the PRIVILEGED register shortcut, not the real §11 public
+  // apply→approve→claim onboarding flow: that flow requires an `rmpc`-signed
+  // application from the applicant's own agent (R3/R6) — the real-inference
+  // eval harness (scripts/lib/onboarding-eval.ts, driven by
+  // scripts/lib/demo-main.ts) and the no-inference proof
+  // (scripts/rmpc-release-e2e.ts) exercise that path; this standalone e2e
+  // script only needs a NEW member to seed session 2, the same non-onboarding
+  // use `enroll()`/the cross-role-test registration below already make of it.
   const { publicKeyB64: eosPub, privateKey: eosPriv } = await generateKeyPair();
-
-  // 4a. Public apply (no auth required) — member is recorded as 'applied'.
-  //     `contact` is required (server-enforced, issue #205); same
-  //     `<memberId>@example.test` convention as the backend fixtures.
-  const applyRes = await fetch(`${BACKEND}${ROUTES.committee.apply}`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ memberId: "eos", name: "Eos", lens: "newcomer", publicKey: eosPub, contact: "eos@example.test" }),
-  }).then(responseJson);
-  console.log(`\n  onboard eos: apply → status=${applyRes.status} memberStatus=${applyRes.memberStatus}`);
-  if (applyRes.status !== 201) throw new Error(`apply failed: ${JSON.stringify(applyRes)}`);
-
-  // 4b. Admin activates — flips applied→active. Self-serve seating (issue #205)
-  //     no longer mints a bearer token here; the member proves key ownership
-  //     via a signed challenge below to obtain the sole token.
-  const activateRes = await fetch(`${BACKEND}${ROUTES.committee.admin.activate}`, {
+  const eosReg = await fetch(`${BACKEND}${ROUTES.committee.register}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
-    body: JSON.stringify({ memberId: "eos" }),
-  }).then(responseJson);
-  console.log(`  onboard eos: activate → status=${activateRes.status} claimRequired=${activateRes.claimRequired ? "✓" : "✗"}`);
-  if (activateRes.status !== 200) throw new Error(`activate failed: ${JSON.stringify(activateRes)}`);
+    body: JSON.stringify({ memberId: "eos", name: "Eos", lens: "newcomer", publicKey: eosPub }),
+  }).then(responseJson) as { token?: string };
+  console.log(`\n  new member eos: register → token=${eosReg.token ? "✓" : "✗"}`);
+  if (!eosReg.token) throw new Error(`register failed for eos: ${JSON.stringify(eosReg)}`);
 
-  // 4b-ii. Claim the bearer token by signing the server-issued challenge with
-  //        the SAME key eos applied with — proves key ownership before eos
-  //        receives a token.
-  const eosToken = await claimToken("eos", eosPriv);
-  console.log(`  onboard eos: claim → token=${eosToken ? "✓" : "✗"}`);
-
-  // 4c. Eos is now a full committee member. Add to the roster for session 2.
-  const eosCreds: ExistingCredentials = { token: eosToken, privateKey: eosPriv };
+  const eosCreds: ExistingCredentials = { token: eosReg.token, privateKey: eosPriv };
   const existingCreds = new Map<string, ExistingCredentials>([["eos", eosCreds]]);
   MEMBERS.push({ memberId: "eos", name: "Eos", lens: "newcomer", bias: 0.05, present: true });
 
@@ -575,8 +454,8 @@ async function main() {
   console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
   // Session 2: next day, different subject (demonstrates rotation + cross-session
-  // awareness). Eos (onboarded via public apply→activate) participates alongside
-  // the original members, proving the from-scratch onboarding flow.
+  // awareness). Eos (registered mid-run above) participates alongside the
+  // original members.
   const s2 = await runSession(tomorrow, SUBJECTS[1], 2, s1.pub.session.synthesis, existingCreds);
 
   // Verify list_sessions returns both sessions
