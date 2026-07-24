@@ -1,4 +1,4 @@
-<!-- Public, server-verified committee take receipt (issue #207). -->
+<!-- Public, server-verified swarm take receipt (issue #207). -->
 <section class="cv cv--detail" x-data="committeeTakeReceipt()" data-committee-take-receipt>
   <div class="cv__body cv__body--narrow">
     <a href="/committee" class="cv__back">← /committee</a>
@@ -9,7 +9,7 @@
     <template x-if="!loading && take">
       <article class="cv__take cv__take--ported">
         <header class="cv__detail-head">
-          <p class="cv__eyebrow">committee take · verification receipt</p>
+          <p class="cv__eyebrow">swarm take · verification receipt</p>
           <h1 class="cv__detail-title" x-text="signer?.name || take.memberName"></h1>
           <div class="cv__receipt-status">
             <span class="cv__stance-badge" :style="stanceStyle(take.stance)">

@@ -170,7 +170,7 @@ function pickSnapshotFor(snapshots, date) {
 
 const helpers = {
   initials(name = "") {
-    return String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((s) => s[0]?.toUpperCase()).join("") || "IC";
+    return String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((s) => s[0]?.toUpperCase()).join("") || "SW";
   },
   stanceColor(stance) {
     return STANCE_COLORS[stance] || "#94a3b8";

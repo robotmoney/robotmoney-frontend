@@ -51,7 +51,7 @@ export function registerCommitteeView(Alpine) {
       return m.lens ? [m.lens] : [];
     },
     initials(name = "") {
-      return String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((s) => s[0]?.toUpperCase()).join("") || "IC";
+      return String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((s) => s[0]?.toUpperCase()).join("") || "SW";
     },
     stanceEntries(s) { return Object.entries(s.committeeRecommendation?.stances || {}); },
     quorumText(s) {

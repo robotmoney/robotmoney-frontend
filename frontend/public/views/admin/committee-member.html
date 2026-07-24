@@ -53,7 +53,7 @@
         <div x-show="confirm" x-cloak class="adm-modal" data-testid="member-action-confirm">
           <div class="adm-modal__panel">
             <h3>Confirm <span x-text="confirm?.action"></span> for <span x-text="member.name"></span></h3>
-            <p class="adm-dim">This changes committee membership state; existing recommendations and roster snapshots are never rewritten.</p>
+            <p class="adm-dim">This changes swarm membership state; existing recommendations and roster snapshots are never rewritten.</p>
             <label class="adm-field" x-show="confirm?.action === 'rotate-key'">
               <span>New public key (optional — omit to rotate the credential against the existing on-file key)</span>
               <input type="text" x-model="confirm.publicKey" class="adm-input" data-testid="member-action-public-key" />

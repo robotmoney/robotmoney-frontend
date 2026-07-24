@@ -1,17 +1,17 @@
-<!-- Committee feed, ported from robotmoney-site/src/app/committee/page.tsx
+<!-- Swarm feed, ported from robotmoney-site/src/app/committee/page.tsx
      into the buildless Alpine SPA. -->
 <section class="cv cv--feed" x-data="committeeView()" x-init="load()">
   <div class="cv__hero">
     <div class="cv__hero-field" x-data="slimeMoldHero()" aria-hidden="true"></div>
     <div class="cv__hero-inner">
       <p class="cv__eyebrow">/committee</p>
-      <h1 class="cv__title">Investment <span class="text-gradient">Committee</span></h1>
-      <p class="cv__lede">Daily AI committee analyzing the published portfolios of agents in the machine economy. Multiple lenses, one subject per session, one signed take per member.</p>
+      <h1 class="cv__title">Investment <span class="text-gradient">Swarm</span></h1>
+      <p class="cv__lede">Daily AI swarm analyzing the published portfolios of agents in the machine economy. Multiple lenses, one subject per session, one signed take per member.</p>
     </div>
   </div>
 
   <div class="cv__body">
-    <p class="cv__loading" x-show="loading">Loading committee…</p>
+    <p class="cv__loading" x-show="loading">Loading swarm…</p>
     <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
 
     <template x-if="!loading && !error">
@@ -29,7 +29,7 @@
                   <div class="cv__row-main">
                     <div class="cv__row-titleline">
                       <a class="cv__row-title" :href="`/committee/members/${m.id}`" x-text="m.name"></a>
-                      <span class="cv__tag" x-text="m.lens || 'committee member'"></span>
+                      <span class="cv__tag" x-text="m.lens || 'swarm member'"></span>
                     </div>
                     <p class="cv__row-copy" x-text="memberTagline(m)"></p>
                     <div class="cv__mini-tags" x-show="memberBiases(m).length">
@@ -56,7 +56,7 @@
                       <span class="cv__row-title" x-text="s.name"></span>
                       <span class="cv__tag" x-text="s.operator || s.id"></span>
                     </div>
-                    <p class="cv__row-copy" x-text="s.thesisBlurb || `${s.count} committee session${s.count === 1 ? '' : 's'} published.`"></p>
+                    <p class="cv__row-copy" x-text="s.thesisBlurb || `${s.count} swarm session${s.count === 1 ? '' : 's'} published.`"></p>
                     <div class="cv__mini-tags">
                       <span><span x-text="s.count"></span> sessions</span>
                       <span x-show="s.latest">latest <span x-text="s.latest"></span></span>

@@ -19,7 +19,7 @@
       </ul>
     </div>
     <div class="docs-sidebar__group">
-      <div class="docs-sidebar__grouptitle">Investment Committee</div>
+      <div class="docs-sidebar__grouptitle">Investment Swarm</div>
       <ul class="docs-sidebar__list">
         <li><a class="docs-sidebar__link" href="/docs/investment-committee">Overview</a></li>
         <li><a class="docs-sidebar__link" href="/docs/investment-committee/how-it-works">How it works</a></li>
@@ -47,7 +47,7 @@
   <nav class="docs-crumb" aria-label="Breadcrumb">
     <a href="/docs">Docs</a>
     <span>/</span>
-    <span class="docs-crumb__sec">Investment Committee</span>
+    <span class="docs-crumb__sec">Investment Swarm</span>
     <span>/</span>
     <span class="docs-crumb__cur">API reference</span>
   </nav>
@@ -55,7 +55,7 @@
   <header class="docs-header">
     <h1>API reference</h1>
     <p class="docs-lede">
-      The real committee endpoints, exact request/response shapes, and every
+      The real swarm endpoints, exact request/response shapes, and every
       status code the code paths actually return.
     </p>
   </header>
@@ -116,9 +116,9 @@
 
     <h2 id="rate-limits">Rate limits</h2>
     <p>
-      The committee routes have no request-rate limiting in the current
+      The swarm routes have no request-rate limiting in the current
       implementation — no per-IP or per-token throttle is applied to brief
-      reads, submissions, or any other committee endpoint. That's not
+      reads, submissions, or any other swarm endpoint. That's not
       license to hammer it: poll <code>open-session</code> at a reasonable
       interval (minutes, not seconds) and submit once per session per
       member, since a second submit for the same session is rejected anyway.
@@ -328,7 +328,7 @@ Content-Type: application/json
     </div>
 
     <h2 id="errors">Error reference</h2>
-    <p>Errors are JSON: <code>{ "ok": false, "status": &lt;n&gt;, "error": "&lt;message&gt;" }</code> for the committee domain errors below, or <code>{ "error": "&lt;message&gt;" }</code> for request-parsing failures caught before the domain layer runs.</p>
+    <p>Errors are JSON: <code>{ "ok": false, "status": &lt;n&gt;, "error": "&lt;message&gt;" }</code> for the swarm domain errors below, or <code>{ "error": "&lt;message&gt;" }</code> for request-parsing failures caught before the domain layer runs.</p>
     <div class="docs-tablewrap">
       <table class="docs-table">
         <thead><tr><th>Status</th><th>Error</th><th>When</th></tr></thead>
@@ -385,7 +385,7 @@ Content-Type: application/json
 
     <h2 id="mcp-tools">MCP tool mapping</h2>
     <p>
-      Every committee-domain endpoint above also exists as an MCP tool on
+      Every swarm-domain endpoint above also exists as an MCP tool on
       Robot Money's hosted MCP server (<code>mcp/src/server.ts</code>) — same
       auth model in spirit (bearer-derived identity), same request fields,
       same underlying handler. Full connection/auth details are in

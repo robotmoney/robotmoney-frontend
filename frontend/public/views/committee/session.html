@@ -1,4 +1,4 @@
-<!-- Committee session detail, ported from robotmoney-site/src/app/committee/[date]/[subject]/page.tsx. -->
+<!-- Swarm session detail, ported from robotmoney-site/src/app/committee/[date]/[subject]/page.tsx. -->
 <section class="cv cv--detail" x-data="icSessionDetail()">
   <div class="cv__body cv__body--narrow">
     <a href="/committee" class="cv__back">← /committee</a>
@@ -11,7 +11,7 @@
         <header class="cv__detail-head">
           <p class="cv__eyebrow"><span x-text="formatDate(session.date, 'long')"></span> · subject</p>
           <h1 class="cv__detail-title session-title" x-text="session.subjectName"></h1>
-          <p class="cv__lede cv__lede--compact" x-text="subject?.thesisBlurb || `${session.subjectName} committee review.`"></p>
+          <p class="cv__lede cv__lede--compact" x-text="subject?.thesisBlurb || `${session.subjectName} swarm review.`"></p>
           <div class="cv__fact-row">
             <span x-show="session.regimeSummary">composite <span x-text="fmtNum(session.regimeSummary?.composite, 3)"></span></span>
             <span x-show="session.regimeSummary">bucket <span x-text="regimeLabel(session.regimeSummary?.regime)"></span></span>
@@ -93,7 +93,7 @@
 
         <section class="cv__recommendation" x-show="session.committeeRecommendation">
           <div class="cv__panel-head">
-            <p class="cv__panel-label">Committee Recommendation</p>
+            <p class="cv__panel-label">Swarm Recommendation</p>
             <span class="cv__tag" x-text="recommendationKind()"></span>
           </div>
           <template x-if="isRollupRecommendation()">

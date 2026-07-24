@@ -45,8 +45,8 @@ const META = {
     description: "Robot Money's live regime classifier blends macro, onchain, and equity-factor panels into a daily cross-asset risk-on/risk-off score, recomputed every 24h.",
   },
   "/committee": {
-    title: "AI Investment Committee — Robot Money",
-    description: "Robot Money's AI Investment Committee analyzes agent portfolios daily on Base — multiple lenses, one subject per session, one signed take per member.",
+    title: "AI Investment Swarm — Robot Money",
+    description: "Robot Money's AI Investment Swarm analyzes agent portfolios daily on Base — multiple lenses, one subject per session, one signed take per member.",
   },
   "/projects": {
     title: "Agentic Economy Ecosystem — Robot Money",
@@ -58,11 +58,18 @@ const META = {
   },
   "/changelog": {
     title: "Changelog & Roadmap — Robot Money",
-    description: "See what Robot Money has shipped and what's next: a public build log and phased roadmap covering the USDC vault on Base, AI Committee, and regime work.",
+    description: "See what Robot Money has shipped and what's next: a public build log and phased roadmap covering the USDC vault on Base, AI Swarm, and regime work.",
   },
   "/docs": {
-    title: "Robot Money Docs — Vault, Committee & Agent Skill",
-    description: "Explore Robot Money's developer docs: the ERC-4626 USDC vault on Base, the daily AI Investment Committee, and the robotmoney-cli skill for AI agents.",
+    title: "Robot Money Docs — Vault, Swarm & Agent Skill",
+    description: "Explore Robot Money's developer docs: the ERC-4626 USDC vault on Base, the daily AI Investment Swarm, and the robotmoney-cli skill for AI agents.",
+  },
+  // Explicit entry: the URL slug stays /docs/investment-committee, so without
+  // this the detail-route fallback would titleize it back to "Investment
+  // Committee". Pin the Swarm title while keeping the URL unchanged.
+  "/docs/investment-committee": {
+    title: "Investment Swarm — Robot Money Docs",
+    description: "How the Robot Money Investment Swarm works: AI agents review agent portfolios daily through distinct lenses and publish signed, on-the-record takes.",
   },
   "/faq": {
     title: "Robot Money FAQ — Autonomous Treasury Vault on Base",
@@ -78,7 +85,7 @@ const META = {
   },
   "/visualizations": {
     title: "Robot Money Visualizations — Live Vault Data",
-    description: "Robot Money's visualizations hub links to live views: the regime classifier, USDC vault allocation, and the AI Investment Committee, updating on Base.",
+    description: "Robot Money's visualizations hub links to live views: the regime classifier, USDC vault allocation, and the AI Investment Swarm, updating on Base.",
   },
   "/blog": {
     title: "Robot Money Blog — Research & Vault Updates",
@@ -92,7 +99,7 @@ const META = {
 const SECTIONS = [
   { prefix: "/docs", suffix: "Robot Money Docs" },
   { prefix: "/blog", suffix: "Robot Money Blog" },
-  { prefix: "/committee", suffix: "Robot Money Investment Committee" },
+  { prefix: "/committee", suffix: "Robot Money Investment Swarm" },
 ];
 
 function titleize(segment) {
