@@ -425,6 +425,10 @@ fixed constant — both flagged in #112 for a later pass.
 
 ## D18 — Publish the MCP server as a fourth subdomain-routed surface (refines D13)
 
+> **Superseded by D21** (retire the MCP server; REST API + a maintained skill
+> only). The `mcp.` subdomain and port `8443` provisioning below no longer
+> apply; decommissioning them is D21's follow-up implementation work.
+
 **Decision.** Give the IC MCP server (`mcp/src/server.ts`) its own hostname
 instead of leaving it undocumented (issue #189): `mcp.staging.robotmoney.net`
 (staging) / `mcp.robotmoney.net` (production), Cloudflare-proxied like
@@ -610,3 +614,114 @@ same PR.
 layout/copy/components/navigation; values are mock/point-in-time. Run
 `bun run demo` for realistic data (see
 [architecture.md § Demo Specification](architecture.md#demo-specification)).
+
+---
+
+## D21 — Retire the MCP server; REST API + a maintained skill only (supersedes D18)
+
+**Decision.** Abandon the hosted MCP transport (`mcp/`) as a member-facing
+surface. Committee members participate over **REST/JSON only**
+(`ROUTES.committee`, already the "REST sibling" of every MCP tool — see
+[architecture.md §9.5](architecture.md#95-surfaces--one-core-one-transport)).
+Everywhere the architecture previously described "MCP or REST" as parallel
+transports, REST is now the only one. The new flow has three steps, each
+already backed by something this project maintains or already ships:
+
+1. The copy-paste prompt (R4) tells the owner's agent to install the
+   **`committee-onboarding` skill** from `robotmoney-core`
+   (robotmoney-core#1170/#1171) into its own harness. The skill — not a
+   server-side tool call — is now the discovery mechanism: because it is
+   maintained centrally and reinstalled/referenced fresh each time, its
+   content can be updated without the static copy-paste prompt going stale,
+   the same property the retired MCP `apply-how-to` tool provided. No new
+   discovery endpoint is needed.
+2. The skill instructs installing and configuring the **`rmpc` client**
+   (keygen, canonical-payload signing) — unchanged from today.
+3. The skill walks the agent through applying over the **existing REST API**
+   (`ROUTES.committee.apply`, already implemented; `signingPayload` for the
+   bytes to sign) using the `rmpc`-produced signature — no MCP `apply` tool,
+   no new backend route.
+
+This retires D18 (the `mcp.` subdomain, port `8443`, the fourth surface in
+the topology's subdomain map) outright rather than refining it — there is no
+narrower scope of D18 left standing once the surface it provisioned is gone.
+The `mcp/` package, its Dockerfile/compose service, CI jobs
+(`demo-live-smoke-nightly.yml`, `committee-opencode-nightly.yml`,
+`e2e.yml`'s MCP steps, `rmpc-release-e2e-nightly.yml`'s OAuth flow), and the
+`mcp.<domain>` DNS/firewall provisioning are **not removed by this decision
+alone** — this entry is the architecture/docs change; the code and
+infrastructure retirement is follow-up implementation work, tracked as its
+own issue so it gets its own review and CI verification rather than riding
+along with a docs commit.
+
+**Why.** MCP has no customer: no committee member has connected over it, and
+the only consumers of the MCP surface in this repo are our own demo/e2e
+drivers exercising it end-to-end — the "member" was always our own harness.
+Meanwhile the REST sibling has existed for every MCP tool since §9.5 was
+written ("two transports" over one domain layer), so nothing about member
+capability is lost — an agent that can make an HTTP call (every agent
+framework can) can already do everything the MCP tools did. Maintaining a
+second transport — its own OAuth 2.1 authorization-server implementation,
+Streamable HTTP session handling, subdomain, port, and CI matrix — has been
+pure carrying cost against a surface nobody outside this repo uses, and nothing
+in the agent-tooling ecosystem this project tracks suggests that changes: the
+"agents need a bespoke protocol to call an API" premise MCP was built on
+hasn't materialized as the differentiator it was expected to be, and an API
+service plus a maintained skill (already how this project ships the
+`rmpc`/keygen procedure) covers the same ground with far less to run and
+secure.
+
+**Relationship.**
+- **Supersedes D18** in full: the `mcp.` subdomain row leaves the surface map
+  ([architecture.md §3](architecture.md#3-the-surfaces--subdomain-map)); §3.1
+  is retired.
+- **Revises architecture.md §9** (IC feature architecture): §9.1 drops the
+  `mcp/` layer row and repo-layout entry; §9.2's actor identity mechanism is
+  access-key hash only (the "OAuth 2.1 (MCP surface)" branch is gone); §9.3's
+  transport/identity check is access-key hash only; §9.4's submission channel
+  is the REST `submit` endpoint only; §9.5/§9.5.1 collapse from "one core, two
+  transports" to one core, one transport, with the member-side signing
+  property preserved (`rmpc` signs locally; the server only verifies —
+  unchanged).
+- **Revises architecture.md §11** (member onboarding, normative spec): R4/R5's
+  discovery step becomes "install the `committee-onboarding` skill" instead
+  of "call the MCP `apply-how-to` tool" — the skill itself, not a live server
+  call, is now the up-to-date-by-construction source of the procedure; R6's
+  "submission over MCP additionally proves reachability" clause is dropped
+  (REST submission already proves API reachability, which is all that's
+  needed); R8's eval still onboards a vanilla agent with real inference, now
+  proving the skill + `rmpc` + REST path instead of the skill + MCP path. The
+  onboarding *sequence* (connect → discover → toolchain+keygen → apply
+  (signed) → review/approve → claim+participate) is unchanged in shape — only
+  "connect"/"discover" collapse into a single "install the skill" step and
+  every remaining step rides on REST instead of MCP.
+- **Revises architecture.md §5** (Authentication & authorization): "two
+  identity mechanisms by surface" (OAuth 2.1 for MCP, access-key hash for
+  REST) collapses to the single access-key-hash mechanism; the "OAuth
+  `client_credentials`" credential-exchange line is corrected to the actual
+  mechanism members already use — the signed key-proof challenge
+  (`token-claim/challenge` → `token-claim`, issue #205) — which this decision
+  makes the *only* credential-exchange path rather than a REST alternative to
+  an OAuth one.
+- **`robotmoney-core#1170/#1171`** (the `committee-onboarding` skill): scope
+  changes from "teach MCP setup, signed apply, and the skill" to "teach the
+  REST-only flow" — a same-size authoring change (a transport swap in the
+  skill's instructions), not new scope.
+
+**Alternatives rejected.**
+- **Keep MCP as an optional/secondary transport, REST primary.** Rejected:
+  running two transports for one consumer set with zero MCP-only capability
+  is carrying cost for no capability delta — every reason to keep it (dual
+  auth server, dual CI matrix, dual demo path) is a cost, not a benefit, once
+  nothing requires it.
+- **Wait and see — leave MCP deployed but stop building on it.** Rejected: an
+  undeprecated surface with a live subdomain, port, and OAuth server invites
+  new work to target it by default (as the onboarding-ic-workflow plan was
+  about to do in Phase 3) and keeps paying the CI/ops cost with no offsetting
+  signal that waiting produces a different answer.
+- **Retire the code in the same change as this decision.** Rejected for scope
+  control: this entry and the architecture.md/spec edits are reviewable as a
+  docs-only change; deleting `mcp/`, its Dockerfile/compose service, and four
+  CI workflows is real code surface that deserves its own PR, its own CI run,
+  and independent review rather than being bundled sight-unseen into a
+  documentation commit.

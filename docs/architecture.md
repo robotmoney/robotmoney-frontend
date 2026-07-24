@@ -76,7 +76,6 @@ robotmoney-frontend/
   contract/    # the ONLY thing shared across the boundary: route paths + DTO types
   frontend/    # buildless SPA (static files): shell, views, Alpine, CSS, assets
   backend/     # Bun API (Bun.serve) + Postgres task queue/workers + SQL migrations (owns the DB)
-  mcp/         # (IC, Phase 5) RM-hosted member-facing MCP server — Bun; see §9.5
   docs/        # this documentation
 ```
 
@@ -315,18 +314,19 @@ Four distinctions, kept deliberately separate:
 - **Transport/identity vs authorship.** *Identity* answers "who is calling";
   *authorship* answers "whose data this is." They are independent checks — an
   authenticated caller still must prove a write is genuinely theirs.
-- **Two identity mechanisms by surface.** The member-facing **hosted MCP server**
-  uses **OAuth 2.1** (Streamable HTTP). The **REST API** (browser/dashboards, plus
-  the sibling submit/onboarding endpoints) uses the sha256 **access-key** hash
+- **One identity mechanism.** The **REST API** (browser/dashboards, plus the
+  submit/onboarding endpoints — the only transport since D21 retired the MCP
+  surface's OAuth 2.1 authorization server) uses the sha256 **access-key** hash
   (`keys.ts`). Public reads need neither.
 - **Authorship = member signature.** Recommendations carry a signature the member
   produces **on their own side**; the backend only **verifies** it against the
   member's registered public key. RM never holds member private keys. (This is the
   on-chain seam: later only the signature is anchored.)
 - **Credential exchange and membership are separate.** Active members exchange
-  their member ID and bearer credential through OAuth `client_credentials`.
-  Committee membership starts with `apply` (metadata + public key), followed by
-  an administrator-controlled `applied → active` transition.
+  their member ID and bearer credential by signing a server-issued key-proof
+  challenge (`token-claim/challenge` → `token-claim`, issue #205). Committee
+  membership starts with `apply` (metadata + public key), followed by an
+  administrator-controlled `applied → active` transition.
 - **Scoped roles.** Every write is authorized to a role: members write only their
   own recommendations, the analytics provider only analytics data (the regime
   recompute + the typed `/api/analytics/*` ingestion routes, `ANALYTICS_TOKEN`
@@ -522,8 +522,8 @@ into six independently testable stages — **access → extract → transform �
   (`contract/src/dashboards.d.ts`) type those payloads. The HTTP route
   `api/routes/dashboards.ts` stays a thin adapter — for this slice it only
   parses/clamps `range` and calls these (the same file now fronts ~8 dashboard
-  endpoints, incl. the live chain feeds of §10). MCP and the frontend stay
-  consumers across the HTTP boundary.
+  endpoints, incl. the live chain feeds of §10). The frontend stays a consumer
+  across the HTTP boundary.
 
 **Persistence boundary (issue #106).** The orchestrator
 (`analytics/index.ts::runAnalytics`) never writes SQL: every analytics-table
@@ -680,8 +680,8 @@ iframe and answers every `/api/*` call from committed goldens
 
 > Status: design reference for the IC feature (built in Phase 5). It reuses the
 > shared infrastructure above — the boundary (§3), the buildless frontend (§4), the
-> Bun server (§5), Postgres (§6), and the task queue (§7) — and adds a member-facing
-> MCP surface and a signed-submission protocol.
+> Bun server (§5), Postgres (§6), and the task queue (§7) — and adds a
+> signed-submission protocol over the REST API.
 
 The IC's value is the **structured, signed, attributable recommendation record** —
 not the reasoning. Committee members are **autonomous third parties** who run their
@@ -706,24 +706,25 @@ plurals (members / subjects / sessions / takes) are the moving parts — they ar
 
 ### 9.1 Where the IC lives
 
-It spans the layers but only through the contract (§3). One addition to the repo
-layout: an **`mcp/`** service — RM's hosted, member-facing MCP server (§9.5).
+It spans the layers but only through the contract (§3).
 
 | Layer | IC responsibility |
 |---|---|
 | `contract/` | `ROUTES.committee` + `committee.d.ts` DTOs — the only thing crossing boundaries. |
 | `backend/` | API routes (`src/api/routes/committee.ts`), committee Postgres tables, and the worker handlers that own the session lifecycle (§9.4). Owns the DB. |
 | `frontend/` | Read-only committee views (members/subjects/sessions/apply) reaching the API via `app/lib/api.js`. |
-| `mcp/` | The **member transport** (§9.5): an RM-hosted, tool-agnostic MCP server (Streamable HTTP + OAuth 2.1). Members participate from any MCP-capable agent — nothing to install. |
 
-All four depend only on `contract`; `frontend/` and `mcp/` reach `backend/` solely
-over HTTP. Like `api`/`worker`, the MCP server is a Bun service.
+All three depend only on `contract`; `frontend/` reaches `backend/` solely over
+HTTP. A member's agent participates the same way — plain HTTP calls to the REST
+API, following the `committee-onboarding` skill (§11 R4/R5) rather than
+connecting to any RM-hosted service; nothing RM-hosted to install (D21 retired
+the earlier MCP-server surface).
 
 ### 9.2 Actors & trust model
 
 | Actor | Identity | Scoped writes | Reads |
 |---|---|---|---|
-| **Committee member** | OAuth 2.1 (MCP surface) or access-key hash (REST sibling) for identity; **signing key** for authorship | their **own signed recommendations** (scoped to `member_id`) | briefs, regime, published sessions |
+| **Committee member** | access-key hash for identity; **signing key** for authorship | their **own signed recommendations** (scoped to `member_id`) | briefs, regime, published sessions |
 | **RM analytics provider** | service credential / role | **regime snapshots** (+ RM-run subject snapshots) | — |
 | **Protocol host** (the worker) | the worker process | sessions, briefs, lifecycle state, aggregation | all |
 | **Public reader** | anonymous | nothing | published sessions, regime, memo links |
@@ -742,9 +743,8 @@ recommendation shape) is the canonical machine-readable commitment; long-form pr
 can live at a member-hosted `memoUrl` the report links out to.
 
 **Signature envelope** — two independent checks on every submission:
-- **Transport/identity** (*who is calling*): OAuth 2.1 on the MCP surface, or the
-  access-key hash (`backend/src/lib/keys.ts`, sha256, never plaintext) on the REST
-  sibling.
+- **Transport/identity** (*who is calling*): the access-key hash
+  (`backend/src/lib/keys.ts`, sha256, never plaintext).
 - **Authorship** (*whose take this is*): the `signature` over the canonical payload,
   produced member-side and verified against the member's registered public key. **RM
   never holds the private key.**
@@ -776,8 +776,8 @@ state; `cancelled` is the terminal escape hatch.)
 - `committee.open_session` (cron) — pick the rotation subject, create the session.
 - `committee.publish_brief` — assemble the brief (regime + subject snapshot + recent
   sessions); open the submission window.
-- *window:* members submit via the MCP `submit_recommendation` tool or the REST
-  `submit` sibling — both calling the same **domain handler**, not the worker.
+- *window:* members submit via the REST `submit` endpoint, calling the same
+  **domain handler**, not the worker.
 - `committee.close_window` (cron at deadline) — stop accepting submissions. For a
   session with a frozen expected roster (§9.4.1), this also materializes one durable
   `absent` agent-health event per non-excused member who never submitted.
@@ -804,41 +804,43 @@ exposed admin-only via `GET /api/committee/admin/agent-health` (raw event histor
 + per-type counts). There is no automatic dead-agent threshold — an operator reads
 the history and decides.
 
-### 9.5 Surfaces — one core, two transports
+### 9.5 Surfaces — one core, one transport
 
 The backend is a **domain/service layer** (plain Bun/TS functions over Postgres:
 `getRegime()`, `getBrief()`, `getSession()`, `verifyAndStoreSubmission()`,
 `aggregateSession()`, …) where window enforcement, signature verification, and
-authz live **once**. Two thin transports share it:
+authz live **once**. **REST/JSON** (`Bun.serve`, paths in `ROUTES.committee`) is
+the only transport — the website's transport and every member's transport (D21
+retired the MCP transport that previously shared this layer). Reads public
+(`members`, `subjects/:id`, `sessions`, `brief`); writes scoped (`apply` +
+`apply/unlock`, `submit`, and a role-gated analytics `regime` write).
 
-- **REST/JSON** (`Bun.serve`, paths in `ROUTES.committee`) — the website transport
-  and the fallback for non-MCP clients/tests. Reads public
-  (`members`, `subjects/:id`, `sessions`, `brief`); writes scoped (`apply` +
-  `apply/unlock`, `submit`, and a role-gated analytics `regime` write).
-- **MCP** (§9.5.1) — the member-first transport; its tools wrap the same domain
-  functions (over the REST API).
+#### 9.5.1 Member surface — skill-taught, REST-only
 
-#### 9.5.1 Member surface — MCP-first
+A member's agent has nothing RM-hosted to connect to: it calls the REST API
+directly. The **`committee-onboarding` skill** — installed into the agent's own
+harness from `robotmoney-core` (robotmoney-core#1170/#1171; §11 R4/R5) — is the
+procedure a member's owner follows, and is itself the discovery mechanism (its
+content is maintained centrally, so it stays current without any live
+server-side lookup). It teaches installing and configuring the `rmpc` client
+(keygen, canonical-payload signing) and then walks the agent through the REST
+calls (`ROUTES.committee.apply`, `signingPayload`, `submit`, `memos`).
+**Signing stays member-side**: `rmpc` signs the canonical payload in the
+member's own environment and the request carries the `signature`, which the
+server only **verifies**. `ROUTES.committee.signingPayload` returns the exact
+canonical bytes to sign.
 
-A member's default surface is RM's **hosted MCP server** (`mcp/`) over **Streamable
-HTTP** with **OAuth 2.1** — no local/stdio package, members connect by URL (listed
-in the MCP Registry). Because RM hosts it, **signing stays member-side**: OAuth
-proves *which member*; the member signs the canonical payload in their own
-environment and passes the `signature` in, which the server only **verifies**.
-`get_signing_payload` returns the exact canonical bytes to sign.
+Endpoints exercised: **read** (`openSession`, `sessions`, `session`, `brief`,
+`memberTakes`, `subjectSnapshots`); **write** (`signingPayload`, `submit` with
+the member signature, `memos`). Participation is tool-agnostic and RM imposes
+no model/framework/data source — the skill is documentation plus the `rmpc`
+binary, not a service RM operates.
 
-Tools: **read** (`get_open_session`, `list_sessions`, `get_session`, `get_brief`,
-`get_regime`, `get_subject_snapshot`); **analysis** (optional RM helpers —
-`classify_regime`, `actual_vs_target_weights`, `concentration_metrics` — usage
-recorded as provenance; members may bring their own); **write**
-(`get_signing_payload`, `submit_recommendation` with the member signature,
-`post_memo`). Participation is tool-agnostic and RM imposes no model/framework/data
-source.
-
-> Decision flag: member-side signing preserves the on-chain seam (§9.3) under a
-> hosted-only server, at the cost of a member signing step. A simpler v0 could rely
-> on OAuth identity alone and defer per-payload signatures, but that weakens the
-> "signature anchors on-chain later" property. Default: keep member signing.
+> Decision flag: member-side signing preserves the on-chain seam (§9.3) with a
+> plain REST endpoint, at the cost of a member signing step. A simpler v0 could
+> rely on the access-key hash alone and defer per-payload signatures, but that
+> weakens the "signature anchors on-chain later" property. Default: keep member
+> signing.
 
 ### 9.6 RM analytics provider (the data utility)
 
@@ -853,10 +855,10 @@ separated; this actor can later be a third party with no change.
 ### 9.7 Testing & demo
 
 **No mocks of the submit path; no host-authored takes.** E2E runs the real
-single-box stack (Postgres + API + worker + the hosted MCP server + the
-analytics-provider client + N member agents, each OAuth'd as a distinct member and
-signing with its own key) and asserts: regime write lands and reads back; member
-signatures verify; a no-show renders **absent**, not fabricated; out-of-window POSTs
+single-box stack (Postgres + API + worker + the analytics-provider client + N
+member agents, each identified by its own access-key hash and signing with its
+own key) and asserts: regime write lands and reads back; member signatures
+verify; a no-show renders **absent**, not fabricated; out-of-window POSTs
 are rejected; cross-role writes are denied; a published session renders the *real*
 takes. The demo is the same harness at scale. Hermetic: a missing dependency fails
 the run rather than silently skipping. Real-LLM member takes are a separate
@@ -866,7 +868,9 @@ templated take for a keyless opencode-zen call that is **time-bounded**
 (`OPENCODE_TIMEOUT_MS`, default 120s — a hung inference kills the subprocess
 instead of freezing the session), and member runs are settled rather than
 `Promise.all`'d, so a per-member inference/session failure renders that member
-**absent** instead of failing the whole session (#122, `mcp/src/e2e.ts`).
+**absent** instead of failing the whole session (#122; the e2e harness — formerly
+`mcp/src/e2e.ts` — is relocated out of the retired `mcp/` package as part of
+D21's follow-up code retirement).
 
 ### 9.8 Phase-5 build order & reconciliation
 
@@ -874,7 +878,7 @@ Build order: (1) committee migration (§9.4 tables + key registry); (2) finalize
 `CommitteeSubmission`/`CommitteeTake` DTOs; (3) API `committee.ts` (reads, `apply`,
 `submit` with access-key + signature verification + window enforcement);
 (4) orchestration handlers + `job_schedules` rows; (5) role-gated analytics regime
-write; (6) hosted MCP server + E2E harness; (7) frontend pages; (8) stubbed
+write; (6) E2E harness (REST-only, D21); (7) frontend pages; (8) stubbed
 on-chain anchor adapter. Steps 1–6 are the irreducible core.
 
 Reconciliation with the current scaffolding (the migration written in §6 reflects an
@@ -1433,6 +1437,15 @@ deletes demo data volumes.
 > (recorded absent). These plurals — members / subjects / sessions / takes — are the
 > moving parts of the one committee, **not** separate committees.
 
+> **D21 migration note.** MCP is retired (see [decisions.md
+> D21](./decisions.md)); the normative sections below (§1, §§3–6, §11) already
+> describe the target REST-only demo. The runtime/TUI mechanics elsewhere in
+> this spec (docker-compose bring-up in §0, tuning notes in §7a, TUI panels in
+> §10) still name the `mcp` compose service, its `/health` check, and
+> `mcp/src/e2e.ts::runSession` as currently shipped — that code moves to a
+> REST-only equivalent as D21's follow-up implementation work, not as part of
+> this docs change.
+
 ```mermaid
 flowchart TB
     subgraph Scheduler["⏱ Worker Scheduler"]
@@ -1584,7 +1597,7 @@ scheduled → collecting → window_closed → aggregated → published   (+ can
 | **Regime classification** | A regime snapshot is written and readable. If the live provider (`FetcherProvider`) is unavailable, the seeded provider (`seededProvider`) is acceptable for hermetic runs — but the write path (same tables, same domain logic) must match production. |
 | **Open session** | A new session is created with `scheduled` state, assigned a subject from the rotation. |
 | **Publish brief** | Brief is assembled from regime + research signals + subject snapshot + recent session history. Window opens with a `window_closes_at` deadline. |
-| **Collecting (submission window)** | Multiple autonomous agents connect via MCP, read regime/brief, sign payloads, and submit. At least one agent no-shows (recorded absent, not fabricated). Out-of-window submissions are rejected. Cross-role writes are denied. |
+| **Collecting (submission window)** | Multiple autonomous agents call the REST API, read regime/brief, sign payloads, and submit. At least one agent no-shows (recorded absent, not fabricated). Out-of-window submissions are rejected. Cross-role writes are denied. |
 | **Close window** | Window transitions to `window_closed`. Submissions after this point are rejected. |
 | **Aggregate** | Deterministic rollup: stance counts, mean confidence, absence list, synthesis string. No host-authored takes. |
 | **Publish** | Session is marked publicly visible. |
@@ -1606,31 +1619,10 @@ Transitions must go through the **worker job pipeline**, not direct domain calls
 
 ## 3. Surfaces
 
-### 3.1 MCP server
+### 3.1 REST API
 
-All MCP tools listed in the architecture must be demonstrated:
-
-| Tool | Status in demo |
-|---|---|
-| `get_regime` | ✅ Current |
-| `get_open_session` | ✅ Current |
-| `list_sessions` | ✅ Current |
-| `get_session` | ✅ Current |
-| `get_brief` | ✅ Current |
-| `get_signing_payload` | ✅ Current |
-| `submit_recommendation` | ✅ Current |
-| `get_subject_snapshot` | ✅ Current |
-| `post_memo` | ✅ Current |
-| `classify_regime` (optional analysis) | ✅ Current |
-| `actual_vs_target_weights` (optional analysis) | ❌ Not implemented |
-| `concentration_metrics` (optional analysis) | ✅ Current |
-
-The MCP transport must use **Streamable HTTP with OAuth 2.1** (bearer tokens are a
-dev-mode fallback only; the OAuth flow must be exercised in the demo).
-
-### 3.2 REST API
-
-The REST sibling routes must be demonstrated exercising the same domain code:
+REST is the only transport (D21 retired the MCP server); the routes below
+must be demonstrated exercising the same domain code:
 
 - `POST /api/committee/admin/open`
 - `POST /api/committee/admin/brief`
@@ -1645,7 +1637,7 @@ The REST sibling routes must be demonstrated exercising the same domain code:
 - `GET /api/dashboards/regime-snapshots`
 - `GET /api/dashboards/research-signals/:key`
 
-### 3.3 Frontend
+### 3.2 Frontend
 
 At least one headless assertion must verify that the published session renders
 correctly in the SPA:
@@ -1662,7 +1654,7 @@ Every actor role must be exercised and cross-role write denial asserted:
 
 | Actor | What the demo must do |
 |---|---|
-| **Committee member** (× N agents) | Connect via MCP, read regime/brief, sign with own ed25519 key, submit recommendation. One agent deliberately no-shows. Members must NOT be able to write regime data or mutate sessions. |
+| **Committee member** (× N agents) | Call the REST API, read regime/brief, sign with own ed25519 key, submit recommendation. One agent deliberately no-shows. Members must NOT be able to write regime data or mutate sessions. |
 | **RM analytics provider** | Write a regime snapshot (and optionally research signals) under a scoped credential. Must NOT be able to submit recommendations or mutate sessions. |
 | **Protocol host (worker)** | Drive lifecycle transitions through the job queue. Must NOT generate member takes. |
 | **Public reader** | Anonymous reads: published sessions, regime, research signals, member list. Must NOT write anything. |
@@ -1689,19 +1681,21 @@ Each agent must:
 
 1. Generate its own ed25519 keypair on its own machine, via the `rmpc` binary
    (never server-side — see §11 R3).
-2. Register via the member onboarding flow (§11): after MCP access, `rmpc` install,
-   and local keygen, the agent submits a signed application (username, contact,
-   public key, `rmpc` signature) via MCP or the API; the server verifies it and
-   issues the member UUID.
-3. Connect to MCP with its own OAuth session (or bearer token in dev mode).
-4. Read regime + brief + research signals via MCP tools (autonomously — no hardcoded
-   stance based on agent identity).
+2. Register via the member onboarding flow (§11): after installing the
+   `committee-onboarding` skill and `rmpc`, and local keygen, the agent submits
+   a signed application (username, contact, public key, `rmpc` signature) via
+   the REST API; the server verifies it and issues the member UUID.
+3. Identify itself to the REST API with its access-key hash (or bearer token
+   in dev mode).
+4. Read regime + brief + research signals via the REST API (autonomously — no
+   hardcoded stance based on agent identity).
 5. Decide a stance using a deterministic but non-trivial policy (weighted composite of
    regime signals + per-agent bias).
-6. Fetch the canonical signing payload via `get_signing_payload`.
+6. Fetch the canonical signing payload via `ROUTES.committee.signingPayload`.
 7. Sign with its own private key (managed by `rmpc`).
-8. Submit via `submit_recommendation`.
-9. Optionally publish a memo via `post_memo` (or via `memoUrl` in the submission).
+8. Submit via `ROUTES.committee.submit`.
+9. Optionally publish a memo via `ROUTES.committee.memos` (or via `memoUrl` in the
+   submission).
 
 RM never holds the private key at any point.
 
@@ -1823,8 +1817,8 @@ The demo must demonstrate the full agent memo lifecycle:
 1. At least one agent publishes a long-form memo at a member-hosted URL (or a
    simulated URL within the demo).
 2. The `memoUrl` is included in the submission payload and covered by the signature.
-3. The `post_memo` MCP tool (or equivalent) writes the memo to the member's own
-   storage and returns the URL.
+3. `ROUTES.committee.memos` writes the memo to the member's own storage and
+   returns the URL.
 4. The published session frontend renders the `memoUrl` as a link.
 5. Tampering with the `memoUrl` after submission invalidates the signature (asserted
    in `signing.test.ts`).
@@ -1863,8 +1857,8 @@ the TUI shows only distilled state. Layout:
   (`connect`…`claim`) render straight from the real-inference eval harness's
   observed step-state record (`scripts/lib/onboarding-eval.ts`): each admission
   launches a vanilla OpenCode member-agent container and hands it the canonical
-  copy-paste prompt with a generated identity, and the agent works out MCP
-  discovery, `rmpc` install, keygen, and the signed application entirely on its
+  copy-paste prompt with a generated identity, and the agent works out skill
+  install, `rmpc` install, keygen, and the signed application entirely on its
   own via real inference — the demo only observes the public application-status
   API and the admin roster (§11 R8). `session`/`memo`/`admitted` flip the same
   way as before: when the newly-admitted member is separately observed
@@ -1935,10 +1929,10 @@ Where any other code differs, this section wins.
 - **R1 — Human-provided identity.** The human owner of the agent provides identifying
   information (a username/display name, contact) for the application. A real person
   stands behind every member. The identity always originates with the human, but the
-  application itself is submitted by the already-set-up agent — via MCP or the public
+  application itself is submitted by the already-set-up agent — via the public
   API — or on the web form using the same agent-produced signed payload.
 - **R2 — Server issues only an id.** When an application completes — over whichever
-  channel it arrived (MCP, API, or web form) — the system generates a unique id (a
+  channel it arrived (API or web form) — the system generates a unique id (a
   random UUID) for the prospective member, returns it, and exposes it on the public
   application-status page. That id is the only thing the server mints at application
   time; everything else in the application (identity, public key, signature) comes
@@ -1949,37 +1943,40 @@ Where any other code differs, this section wins.
 - **R4 — One-prompt setup.** Onboarding starts with a single copy-paste prompt the
   owner drops into their agent harness (canonical text in the participation
   quickstart). The prompt frames the long-running task (write investment memos,
-  present them to the Investment Committee), points at the MCP-access setup
-  instructions (a stable docs URL), tells the agent to ask the MCP server
-  `apply-how-to` for the current steps, and carries the owner's identity (R1).
-  Nothing beyond pasting this prompt is required of the human at setup time.
-- **R5 — Server-side discovery.** The MCP server exposes an `apply-how-to` tool,
-  callable **before any membership or OAuth credentials exist** (public discovery).
-  Its response is the canonical, current statement of the application steps —
-  set up the toolchain, generate keys, submit the signed application, wait for
-  approval, then participate — and it links the `committee-onboarding` skill at
+  present them to the Investment Committee), tells the agent to install the
+  **`committee-onboarding` skill** into its own harness (a stable docs URL), and
+  carries the owner's identity (R1). Nothing beyond pasting this prompt is
+  required of the human at setup time.
+- **R5 — Skill-based discovery.** The **`committee-onboarding` skill** at
   `plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md` in
-  `robotmoney/robotmoney-core` (robotmoney-core#1170/#1171) for the detailed
-  procedure: setting up the owner's agent runtime (Claude Code, OpenClaw, Codex, or
-  OpenCode), installing Robot Money MCP access, and installing the `rmpc` binary
-  (from `robotmoney-core`), which manages keygen and all signatures. Because the
-  steps are served by the MCP server, the copy-paste prompt never goes stale.
+  `robotmoney/robotmoney-core` (robotmoney-core#1170/#1171) is itself the
+  canonical, current statement of the application steps — set up `rmpc`,
+  generate keys, submit the signed application over the REST API, wait for
+  approval, then participate — **and** the detailed procedure: setting up the
+  owner's agent runtime (Claude Code, OpenClaw, Codex, or OpenCode) and
+  installing the `rmpc` binary (from `robotmoney-core`), which manages keygen
+  and all signatures. There is no separate discovery tool or endpoint call —
+  the skill is maintained centrally in `robotmoney-core` and is fetched fresh
+  on each install, so the copy-paste prompt never goes stale even though it
+  only ever names the skill, not the steps themselves. (D21 retired the
+  MCP-server `apply-how-to` tool that previously served this role; the skill
+  now carries that property on its own.)
 - **R6 — Setup-gated apply.** An application **cannot complete** unless the owner's
   agent demonstrably works: the application carries the member's username, contact,
   and public key together with an `rmpc` signature over the canonical application
   payload, and the server verifies that signature against the submitted key before
-  recording anything. Submission over MCP additionally proves the agent can reach
-  and use the MCP server. Setup — MCP access, `rmpc` install, keygen — therefore
-  happens **before** apply, apply runs fully headlessly, and the review queue only
-  ever contains applications whose toolchain is already proven; no separate
-  setup-proof step exists.
+  recording anything. Setup — `rmpc` install, keygen — therefore happens
+  **before** apply, apply runs fully headlessly over the REST API
+  (`ROUTES.committee.apply`), and the review queue only ever contains
+  applications whose toolchain is already proven; no separate setup-proof step
+  exists.
 - **R7 — Approval.** In production, the application then waits for a human admin to
   approve it. In `bun run demo`, approval is automatic after 10 seconds — invoked
   through the same admin API, not a different code path.
 - **R8 — Isomorphism, no mocks: onboarding is an eval.** The whole process is
   isomorphic across (a) manual testing, (b) the `bun run demo` simulation,
-  (c) production, and (d) e2e tests. All four use the real skill, the real MCP
-  server, the real `rmpc` binary, and real signature verification. In the demo and
+  (c) production, and (d) e2e tests. All four use the real skill, the real
+  `rmpc` binary, the real REST API, and real signature verification. In the demo and
   e2e, the member's side is not a script: each new member is a **vanilla OpenCode
   agent container** handed the same canonical copy-paste prompt (R4) a human would
   paste, doing **real inference** — onboarding doubles as a continuous eval of
@@ -1990,32 +1987,31 @@ Where any other code differs, this section wins.
 ### 11.2 Sequence
 
 1. **connect** — the owner pastes the canonical prompt (R4) into their agent harness.
-   The agent follows the linked instructions and gains access to the MCP server.
-2. **discover** — the agent calls `apply-how-to` (R5) and receives the current
-   application steps, including the link to the detailed onboarding skill.
-3. **toolchain + keygen** — following the linked skill, the agent installs `rmpc`
+2. **discover** — following the prompt, the agent installs the `committee-onboarding`
+   skill (R5) into its own harness, which supplies the current, detailed application
+   steps.
+3. **toolchain + keygen** — following the skill, the agent installs `rmpc`
    (R5) and `rmpc` generates the ed25519 keypair locally on the agent's machine (R3).
 4. **apply (signed)** — headlessly, the agent submits the application: the owner's
    username and contact (R1) plus the public key and an `rmpc` signature over the
-   canonical application payload (R6). Preferred channel is the MCP apply tool
-   (which simultaneously proves MCP reachability); the public API accepts the same
-   payload, and the web form accepts the same agent-produced signed payload. The
-   server verifies the signature against the submitted key, records the
-   application, and mints and returns the member's UUID (R2), which the status
+   canonical application payload (R6), over the REST API
+   (`ROUTES.committee.apply`); the web form accepts the same agent-produced signed
+   payload. The server verifies the signature against the submitted key, records
+   the application, and mints and returns the member's UUID (R2), which the status
    page tracks from then on. An unsigned or badly-signed submission never
    completes — so no human review time is ever spent on a broken toolchain.
 5. **review / approve** — a human admin approves in production; the demo auto-approves
    via the same admin API after 10 s (R7).
 6. **claim + participate** — the member claims its bearer token by signing the server
-   challenge (existing self-serve seating, issue #205), connects over MCP with member
-   credentials, and from the next session on reads the brief and the research
-   engine's signals and submits `rmpc`-signed takes and memos (§6).
+   challenge (existing self-serve seating, issue #205), and from the next session on
+   reads the brief and the research engine's signals over the REST API and submits
+   `rmpc`-signed takes and memos (§6).
 
 The demo's Onboarding strip (§10.1) renders exactly this checklist — its step names
 track this sequence, and each step is driven by the real flow (R8): for every
 admission the demo launches a vanilla OpenCode agent container, pastes the canonical
 prompt with a generated identity, and the agent onboards **itself** with real
-inference — MCP discovery, `rmpc` install, keygen, signed apply, claim,
+inference — skill install, `rmpc` install, keygen, signed apply, claim,
 participation. The demo only observes, deriving the strip's step states from the
 public application-status API, with the 10 s auto-approval as the only scripted
 divergence. A member that fails to onboard is a red eval result — evidence the
@@ -2926,19 +2922,19 @@ and the **on-chain dapp** (`robotmoney-core`). It is a companion to
 the rest of this document (this frontend's internals) and
 [decisions.md](./decisions.md); the production topology here is decision **D13**,
 which supersedes the single-box parts of D8/D11 (see [§10](#10-relationship-to-existing-decisions)).
-**D18** refines D13's surface list with a fourth subdomain, `mcp.` (§3.1).
+**D21** retires D18's fourth subdomain, `mcp.` — REST is the only surface
+members use (see [§10](#10-relationship-to-existing-decisions)).
 
 ```mermaid
 flowchart LR
     subgraph Users["Users"]
         Visitors["Web Visitors"]
-        Members["Committee Members<br/>(MCP-capable agents)"]
+        Members["Committee Members<br/>(REST API clients via the<br/>committee-onboarding skill)"]
     end
 
     subgraph Frontend["Frontend"]
         Static["Static Assets<br/>HTML + Alpine.js + CSS<br/>p5.js + Chart.js"]
         API["API Server<br/>Bun.serve — routes, auth,<br/>committee domain"]
-        MCP["MCP Server<br/>Streamable HTTP + OAuth 2.1"]
     end
 
     subgraph Backend["Backend"]
@@ -2956,8 +2952,7 @@ flowchart LR
 
     Visitors -->|browser| Static
     Static -->|HTTP JSON| API
-    Members -->|Streamable HTTP| MCP
-    MCP -->|HTTP| API
+    Members -->|HTTP JSON| API
     API <--> DB
     Worker <--> DB
     Worker -.->|fetch raw series| External
@@ -3014,8 +3009,7 @@ Each surface is its own hostname, resolved by a plain DNS record:
 | Hostname | Surface | Tier → home | Source |
 |----------|---------|-------------|--------|
 | `robotmoney.net`, `www.` | Marketing | Static → **DO Spaces CDN** | marketing UI (this repo, D1) |
-| `committee.robotmoney.net` | IC + analytics | API → **DO droplet** (Bun) + Data → **Postgres HA** | `robotmoney-frontend` (this repo) |
-| `mcp.robotmoney.net` | IC MCP server (member-facing agents) | API → **DO droplet**, port `8443` (co-located with the `committee.` droplet; own container/port, see §3.1) | `robotmoney-frontend` (this repo, `mcp/`) |
+| `committee.robotmoney.net` | IC + analytics (REST — the only member surface, D21) | API → **DO droplet** (Bun) + Data → **Postgres HA** | `robotmoney-frontend` (this repo) |
 | `app.robotmoney.net` | Dapp | API → **DO droplet** (`rmpc` + gateway) | `robotmoney-core` |
 
 Each app is served at **its own root**, so there is **no path-prefix and no
@@ -3023,32 +3017,12 @@ base-path handling** — the SPA history router (D4) and import maps (D2) work
 unmodified. The SPA and its API are **same-origin** on the same subdomain (no CORS
 within a surface).
 
-### 3.1 MCP hostname and port (D18)
-
-The MCP server (`mcp/src/server.ts`) is a fourth, independently-addressed
-surface, not a path under `committee.`: it runs as its own container
-(`mcp` in `docker-compose.yml`), so it gets its own subdomain per the §3
-convention rather than a reverse-proxied path (D13's "no reverse proxy"
-rule would otherwise be violated). It is deployed to the **same droplet**
-as `committee.` (both are this repo's `robotmoney-frontend` surface, and
-the `/health` contract already couples IC health to MCP reachability —
-§9), so it cannot also claim port `443`/`8787` — those are already the
-`committee.` API's Cloudflare-proxied port. Instead `mcp.` is a **proxied**
-(orange-cloud) record like `committee.`/`app.`, on Cloudflare's alternate
-proxied-HTTPS port **`8443`** (one of Cloudflare's fixed list of ports it
-will forward proxied traffic to on any plan — no Origin Rule, no
-reverse proxy, no new vendor permission): `MCP_PORT=8443` in the prod/staging
-droplet env is all that's required, since `mcp/src/server.ts` already reads
-`MCP_PORT` directly into `Bun.serve({ port })`. The droplet's Cloud Firewall
-(§4) allows this port from Cloudflare's IP ranges the same way it already
-allows `443` for `committee.`.
-
-Full endpoint: `https://mcp.staging.robotmoney.net:8443/mcp` (staging),
-`https://mcp.robotmoney.net:8443/mcp` (production) — see
-[deployment.md §2](./runbooks/deployment.md#2-environments--staging--production-isolated)
-for the environment table and
-[participation.html](../frontend/public/views/docs/investment-committee/participation.html#mcp)
-for the member-facing connection instructions.
+> **D21.** The MCP server previously had its own subdomain and port here
+> (`mcp.`, port `8443` — D18). D21 retired the MCP transport; members now use
+> `committee.`'s REST API like every other client, so the fourth subdomain and
+> its §3.1 provisioning (Cloudflare alternate port, `MCP_PORT`, firewall rule)
+> no longer apply. Actually decommissioning the DNS record, firewall rule, and
+> `mcp` container is tracked as D21's follow-up implementation work.
 
 ---
 
@@ -3130,7 +3104,7 @@ own same-host API) use CORS.
 - **DigitalOcean** — droplet **Monitoring/alerts**, **Uptime** checks, and Managed
   Postgres metrics (replication lag, failover, connections).
 - **`/health` JSON contract** (the keystone) — every surface returns the same shape
-  and checks its own deps: marketing trivially `200`; IC = Postgres + MCP; dapp =
+  and checks its own deps: marketing trivially `200`; IC = Postgres; dapp =
   `rmpc` alive + gateway + RPC reachable + chain-head lag below threshold.
 - **Fail-open** keeps a single failed tier from cascading; the static marketing
   tier in particular stays up independently.
@@ -3139,9 +3113,11 @@ own same-host API) use CORS.
 
 ## 10. Relationship to existing decisions
 
-- **D13 (vendor-split tiered topology)** — **surface list refined by D18:** MCP
-  (`mcp.`) is documented as a fourth subdomain-routed surface, co-located on the
-  `committee.` droplet on its own Cloudflare-proxied port (§3.1).
+- **D13 (vendor-split tiered topology)** — **surface list refined by D18, then
+  D18 superseded by D21:** MCP (`mcp.`) was documented as a fourth
+  subdomain-routed surface (D18); D21 retired the MCP transport entirely, so
+  the surface map is back to three subdomains — `committee.` serves REST to
+  every client, member and browser alike.
 - **D11 (single box, no reverse proxy)** — **superseded for production by D13.**
   Production splits across subdomains on DO with Cloudflare for DNS+observability;
   there is still **no reverse proxy** (host-based DNS routing, not a proxy). The
