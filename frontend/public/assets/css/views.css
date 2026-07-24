@@ -160,6 +160,9 @@
 .cv__member { font-weight: 700; }
 .cv__conf { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 .cv__verified { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-accent); }
+.cv__verified--negative { color: var(--color-warn); }
+.cv__receipt-status { display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap; }
+.cv__fingerprint { overflow-wrap: anywhere; }
 .stance { font-family: var(--font-mono); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em; padding: 0.2rem 0.6rem; border-radius: var(--radius); }
 .stance--bullish { color: var(--color-accent); background: rgba(0,229,255,0.1); }
 .stance--constructive { color: var(--color-green); background: rgba(16,185,129,0.1); }
