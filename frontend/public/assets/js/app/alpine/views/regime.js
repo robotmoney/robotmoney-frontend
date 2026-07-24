@@ -267,7 +267,7 @@ export function registerRegimeView(Alpine) {
           const s = strategies[sk];
           const style = STRATEGY_STYLE[sk];
           if (!s || !style || !Array.isArray(s.equity_curve) || !s.equity_curve.length) continue;
-          ds.push({ label: style.label, data: alignToDates(s.equity_curve, labels), borderColor: style.color, borderWidth: style.baseline ? 1 : 1.5, borderDash: style.baseline ? [4, 3] : undefined, pointRadius: 0, tension: 0.2, fill: false, spanGaps: true });
+          ds.push({ label: style.label, data: alignToDates(s.equity_curve, labels), borderColor: style.color, borderWidth: style.baseline ? 1 : 1.5, borderDash: style.baseline ? (style.dash || [4, 3]) : undefined, pointRadius: 0, tension: 0.2, fill: false, spanGaps: true });
         }
         if (!ds.length) continue;
         const chart = new window.Chart(canvas, {

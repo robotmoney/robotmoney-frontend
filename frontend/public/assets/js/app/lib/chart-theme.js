@@ -38,6 +38,25 @@ export const SERIES = {
   amber: "#e8a640", // bankr fee slice (warm, off Tailwind)
 };
 
+// Ordered categorical palette for "tell-apart" figures — pie/donut slices and
+// any discrete series where each entry is a DISTINCT ENTITY (asset, protocol,
+// bucket, wallet), not a magnitude. Slices here are separated by HUE, never by
+// lightness: a green luminance ramp (green → light-green) reads as one
+// indistinct blob the moment the slices are categories rather than one
+// quantity's intensity — that mistake is what this palette exists to prevent.
+// Green leads (Pool = value, the dominant brand hue, so the largest allocation
+// still reads as money), then the set steps through maximally-contrasting hues.
+// Consumers slice from the front by index; a pie with N slices uses the first N.
+export const CATEGORICAL = [
+  SERIES.emerald, // #10b981 green  — value anchor (Pool)
+  PALETTE.accent, // #00e5ff cyan   — Beam
+  SERIES.sand,    // #e8a640 sand
+  SERIES.slate,   // #7e889e slate
+  SERIES.beacon,  // #ff7a29 beacon
+  SERIES.teal,    // #5fb3a1 teal
+  SERIES.mint,    // #9cffd2 mint   — 7th (light), rare
+];
+
 // Shared axis typography (regime uses JetBrains Mono 10 everywhere).
 export const MONO_FONT = { family: "JetBrains Mono", size: 10 };
 // Regime grid-line colour: --color-border at 40% alpha.

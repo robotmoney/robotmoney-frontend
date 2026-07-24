@@ -1,7 +1,7 @@
 // Alpine factory for the /allocation view. Moved verbatim from the
 // monolithic views.js (finding 025).
 import { api, ROUTES } from "../../lib/api.js";
-import { PALETTE } from "../../lib/chart-theme.js";
+import { PALETTE, CATEGORICAL } from "../../lib/chart-theme.js";
 import { assetDot } from "./shared.js";
 
 export function registerAllocationView(Alpine) {
@@ -26,17 +26,14 @@ export function registerAllocationView(Alpine) {
   // the /allocation pies+tables and the wallet-performance charts never drift.
   // The aggregate wallet-balances holdings carry their own `color`, but every
   // figure here derives from the symbol instead so the palette stays on-covenant.
-  // Strategy-pie slice colours (4 buckets) + per-bucket mini-pie palettes, in
-  // committee/allocation.json bucket order (defi-yield / agent / protocol / rwa).
-  // Every bucket is money → a green luminance ramp; slices stay distinguishable
-  // by lightness rather than by hue (the old blue/amber/purple ramps are retired).
-  const STRATEGY_COLORS = ["#10b981", "#34d399", "#6ee7b7", "#0b7c5d"];
-  const BUCKET_PALETTES = [
-    ["#047857", "#059669", "#10b981", "#34d399", "#6ee7b7"],
-    ["#065f46", "#047857", "#059669", "#10b981", "#34d399", "#6ee7b7", "#a7f3d0"],
-    ["#047857", "#059669", "#10b981", "#34d399"],
-    ["#0b7c5d", "#10b981", "#34d399"],
-  ];
+  //
+  // Every allocation/vault pie is CATEGORICAL — each slice is a distinct asset,
+  // protocol or bucket the reader must tell apart — so slices are coloured by
+  // HUE from the shared CATEGORICAL palette, NOT by a green luminance ramp. A
+  // ramp collapses to one indistinct green blob when the slices are categories
+  // (luminance ramps are only for a single quantity's magnitude). Each pie
+  // starts fresh at CATEGORICAL[0] (green = value anchor) and steps through
+  // cyan / sand / slate / beacon / teal / mint for maximum adjacent contrast.
 
   // The hero's "Total AUM" mirrors the original site's semantics
   // (robotmoney-site src/app/allocation/page.tsx: totalValue + vaultTotalValue)
@@ -246,17 +243,16 @@ export function registerAllocationView(Alpine) {
         this._pie("strategy",
           strat.map((s) => s.label),
           strat.map((s) => Number(s.targetPct) || 0),
-          strat.map((_, i) => STRATEGY_COLORS[i % STRATEGY_COLORS.length]), true);
+          strat.map((_, i) => CATEGORICAL[i % CATEGORICAL.length]), true);
       }
       const buckets = this.allocationFw?.buckets || [];
       ["mini1", "mini2", "mini3", "mini4"].forEach((ref, i) => {
         const items = buckets[i]?.items || [];
         if (!items.length) return;
-        const palette = BUCKET_PALETTES[i] || STRATEGY_COLORS;
         this._pie(ref,
           items.map((it) => it.label),
           items.map((it) => Number(it.targetPct) || 0),
-          items.map((_, j) => palette[j % palette.length]), false);
+          items.map((_, j) => CATEGORICAL[j % CATEGORICAL.length]), false);
       });
       // Vault pie — three adapter slices from the live vault-economics fetch
       // (issue #40). Before the fetch resolves, or when it degrades to
@@ -266,7 +262,9 @@ export function registerAllocationView(Alpine) {
       const hasLiveBalances = adapters.length === 3 && adapters.some((a) => a.balanceUsd != null && a.balanceUsd > 0);
       const vaultLabels = adapters.length === 3 ? adapters.map((a) => a.name.toUpperCase()) : ["MORPHO", "AAVE", "COMPOUND"];
       const vaultValues = hasLiveBalances ? adapters.map((a) => Math.max(0, Number(a.balanceUsd) || 0)) : [1, 1, 1];
-      this._pie("vault", vaultLabels, vaultValues, ["#10b981", "#10b981", "#10b981"], true);
+      // Three distinct adapters (Morpho / Aave / Compound) — a categorical pie,
+      // so three distinct hues, not three identical greens.
+      this._pie("vault", vaultLabels, vaultValues, CATEGORICAL.slice(0, 3), true);
       // Wallet pie — live USD value per asset from wallet-balances holdings[].
       // Slice colour is derived locally from the symbol (assetDot) rather than
       // the DTO's `color`, so the pie stays on the Beam/Pool/Beacon covenant
