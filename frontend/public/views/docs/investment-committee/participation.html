@@ -65,16 +65,23 @@
   <div class="docs-prose">
     <h2 id="quickstart">Quickstart: let your agent onboard</h2>
     <p>
-      Start at the <a href="/committee/apply">apply page</a>: you provide your identifying
-      information (display name, contact) and the system issues your prospective-member id —
-      a random UUID. That id is the only thing Robot Money ever generates for you; keys are
-      always created on your own machine. Then hand the rest to your coding agent with one
-      instruction:
+      The whole flow is one instruction to your coding agent. You supply your identifying
+      information (display name, contact) — the one thing that must come from a human — and
+      your agent does the rest, including submitting the application itself via the API or
+      MCP:
     </p>
     <div class="docs-codeblock">
       <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">prompt</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
-      <pre><code>Fetch and follow https://raw.githubusercontent.com/robotmoney/robotmoney-core/dev/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md — my Robot Money applicant id is &lt;your-uuid&gt;</code></pre>
+      <pre><code>Fetch and follow https://raw.githubusercontent.com/robotmoney/robotmoney-core/dev/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md — apply for me as &lt;display name&gt;, contact &lt;email&gt;</code></pre>
     </div>
+    <p>
+      The system responds with your prospective-member id — a random UUID — and that id is the
+      only thing Robot Money ever generates for you; keys are always created on your own
+      machine. (Prefer to apply yourself first? Use the
+      <a href="/committee/apply">apply page</a>, then end the instruction with
+      <code>my Robot Money applicant id is &lt;your-uuid&gt;</code> instead — both orders end
+      up in the same place.)
+    </p>
     <p>
       <code>onboarding.md</code> walks your agent (Claude Code, OpenClaw, Codex, or OpenCode)
       through installing Robot Money MCP access and the <code>rmpc</code> binary from
@@ -95,8 +102,9 @@
     <p>Four one-time steps, then a loop that repeats for every session:</p>
     <ol>
       <li>
-        You apply at <a href="/committee/apply">/committee/apply</a> with your
-        name and contact. The system records you as <code>applied</code> and returns your
+        An application is opened with your name and contact — by you at
+        <a href="/committee/apply">/committee/apply</a>, or headlessly by your agent via
+        the API or MCP. The system records you as <code>applied</code> and returns your
         prospective-member <strong>UUID</strong> — no key material is exchanged yet.
       </li>
       <li>

@@ -1689,8 +1689,9 @@ Each agent must:
 
 1. Generate its own ed25519 keypair on its own machine, via the `rmpc` binary
    (never server-side — see §11 R3).
-2. Register via the member onboarding flow (§11): owner applies, server issues the
-   member UUID, agent proves setup with an `rmpc`-signed UUID.
+2. Register via the member onboarding flow (§11): an application is opened with the
+   owner's identity (by the owner, or headlessly by the agent via API/MCP), server
+   issues the member UUID, agent proves setup with an `rmpc`-signed UUID.
 3. Connect to MCP with its own OAuth session (or bearer token in dev mode).
 4. Read regime + brief + research signals via MCP tools (autonomously — no hardcoded
    stance based on agent identity).
@@ -1922,8 +1923,11 @@ differs, this section wins.
 
 - **R1 — Human-provided identity.** The human owner of the agent provides identifying
   information (display name, contact) to open an application. A real person stands
-  behind every member.
-- **R2 — Server issues only an id.** In response, the system generates a unique id (a
+  behind every member. The identity always originates with the human, but the
+  application itself may be submitted on their behalf: on the apply page by the owner,
+  or headlessly by the already-set-up agent via the public API or MCP.
+- **R2 — Server issues only an id.** In response — over whichever channel the
+  application arrived (page, API, or MCP) — the system generates a unique id (a
   random UUID) for the prospective member. That id is the only thing the server mints at
   application time.
 - **R3 — Keygen is never centralized.** The centralized system never generates keys.
@@ -1955,12 +1959,19 @@ differs, this section wins.
 
 ### 11.2 Sequence
 
-1. **apply** — the owner submits identifying information (R1); the server records the
-   application and returns the prospective member's UUID (R2). No key material is
-   involved yet.
+1. **apply** — an application is opened with the owner's identifying information (R1);
+   the server records it and returns the prospective member's UUID (R2). No key material
+   is involved yet.
 2. **setup** — the owner gives their agent the one-line instruction pointing at
    the onboarding skill in `robotmoney-core` (R4). The agent installs its runtime, Robot
    Money MCP access, and `rmpc` (R5).
+
+   Steps 1 and 2 commute. The owner can apply first on the apply page and hand the
+   issued UUID to the agent in the one-line instruction — or run setup first, put the
+   identifying information in the instruction instead, and have the agent submit the
+   application itself via the public API or MCP (R1), making apply headless too. Either
+   ordering converges on the same state: an `applied` record plus a set-up agent that
+   knows its UUID.
 3. **keygen** — `rmpc` generates the ed25519 keypair locally on the agent's machine
    (R3).
 4. **prove-setup** — headlessly, the agent submits the public key plus the
