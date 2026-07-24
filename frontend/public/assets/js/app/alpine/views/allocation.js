@@ -2,6 +2,7 @@
 // monolithic views.js (finding 025).
 import { api, ROUTES } from "../../lib/api.js";
 import { PALETTE } from "../../lib/chart-theme.js";
+import { assetDot } from "./shared.js";
 
 export function registerAllocationView(Alpine) {
   // ── Asset Allocation ───────────────────────────────────────────────────────
@@ -21,18 +22,10 @@ export function registerAllocationView(Alpine) {
   // wallet) render % datalabels via a small inline plugin; the four MINI bucket
   // pies render none.
 
-  // Asset dot colour by symbol (presentation-only, mirrors the original design
-  // system). Used for the sleeve tables, whose per-holding DTO carries no colour
-  // (the aggregate wallet-balances holdings do — those use `holding.color`).
-  // Beam/Pool/Beacon: holdings are money, so stables read as the green mass and
-  // the volatile/reference assets get a distinct brand hue (cyan / sand / slate)
-  // rather than the old Tailwind blue/amber/purple.
-  const ASSET_DOT = {
-    USDC: "#10b981", "ZYFAI-SS1": "#10b981", "GIZA-SS1": "#10b981",
-    ROBOTMONEY: "#00e5ff", BNKR: "#00e5ff",
-    WETH: "#e8a640", ETH: "#e8a640", SP500: "#7e889e",
-  };
-  const assetDot = (sym) => ASSET_DOT[sym] || "#7e889e";
+  // Asset dot colour by symbol (presentation-only), imported from shared.js so
+  // the /allocation pies+tables and the wallet-performance charts never drift.
+  // The aggregate wallet-balances holdings carry their own `color`, but every
+  // figure here derives from the symbol instead so the palette stays on-covenant.
   // Strategy-pie slice colours (4 buckets) + per-bucket mini-pie palettes, in
   // committee/allocation.json bucket order (defi-yield / agent / protocol / rwa).
   // Every bucket is money → a green luminance ramp; slices stay distinguishable

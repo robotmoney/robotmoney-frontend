@@ -2,6 +2,7 @@
 // verbatim from the monolithic views.js (finding 025).
 import { api, ROUTES } from "../../lib/api.js";
 import { PALETTE, MONO_FONT, rgba, monoAxis } from "../../lib/chart-theme.js";
+import { assetDot } from "./shared.js";
 
 export function registerWalletPerfView(Alpine) {
   // ── Wallet performance (allocation2) ──────────────────────────────────────
@@ -43,9 +44,9 @@ export function registerWalletPerfView(Alpine) {
         const history = data.history || [];
         this.labels = history.map((pt) => this._fmtDay(pt.date));
         this.totalAum = history.map((pt) => pt.totalUsd);
-        this.columns = holdings.map((h) => ({ sym: h.symbol, color: h.color }));
+        this.columns = holdings.map((h) => ({ sym: h.symbol, color: assetDot(h.symbol) }));
         this.assets = holdings.map((h) => ({
-          label: h.symbol, color: h.color,
+          label: h.symbol, color: assetDot(h.symbol),
           aum: history.map((pt) => (pt.byAsset[h.symbol] ?? 0)),
         }));
         this.rows = history.map((pt) => ({

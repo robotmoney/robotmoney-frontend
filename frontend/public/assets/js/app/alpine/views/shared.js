@@ -51,7 +51,7 @@ export const STRATEGY_STYLE = {
   factor: { label: "Equity factor", color: SERIES.slate },
   macro_inverted: { label: "Macro inv.", color: SERIES.beacon },
   conservative: { label: "Conservative", color: SERIES.mint },
-  aggressive: { label: "Aggressive", color: SERIES.sand },
+  aggressive: { label: "Aggressive", color: SERIES.emerald },
   eth_hodl: { label: "ETH HODL", color: SERIES.slate, baseline: true },
   sp500_hodl: { label: "SP500 HODL", color: SERIES.slate, baseline: true },
   blend_hodl: { label: "50/50 HODL", color: SERIES.slate, baseline: true },
@@ -110,6 +110,17 @@ export const BACKTESTS = [
 ];
 export const ASSET_COLOR = { cash: PALETTE.textMuted, eth: SERIES.slate, sp500: SERIES.teal };
 export const ASSET_LABEL = { cash: "cash", eth: "ETH", sp500: "SP500" };
+
+// Wallet-holdings dot colour by symbol — shared by the /allocation pies+tables
+// and the wallet-performance charts so the same asset never renders two colours.
+// Beam/Pool/Beacon: stables = the green mass; volatile/reference assets take a
+// distinct brand hue (cyan / sand / slate), never the DTO's own `color`.
+export const ASSET_DOT = {
+  USDC: "#10b981", "ZYFAI-SS1": "#10b981", "GIZA-SS1": "#10b981",
+  ROBOTMONEY: "#00e5ff", BNKR: "#00e5ff",
+  WETH: "#e8a640", ETH: "#e8a640", SP500: "#7e889e",
+};
+export const assetDot = (sym) => ASSET_DOT[sym] || "#7e889e";
 
 // Correlation ("Predictive power & alignment") table columns + row order.
 export const FWD_COLS = [
