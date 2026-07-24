@@ -31,6 +31,13 @@ async function activeMember() {
   const id = rid("m");
   const { publicKeyB64, privateKey } = await generateKeyPair();
   const r = await ic.registerMember({ memberId: id, name: id, publicKey: publicKeyB64 });
+  // registerMember returns {ok:false, status, error} (not a token) when the
+  // roster cap is hit — fail loudly here instead of returning a bogus member
+  // whose id was never actually inserted (a caller then hits a confusing FK
+  // violation far away from the real cause).
+  if (!("token" in r) || !r.token) {
+    throw new Error(`activeMember(): registerMember failed for ${id}: ${JSON.stringify(r)}`);
+  }
   return { id, token: r.token, privateKey };
 }
 
@@ -366,6 +373,10 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
 });
 
 test("aggregation omits invented prose and weights when no eligible body or valid weighted take exists", async () => {
+  // Reset first: this file's earlier tests accumulate active members toward
+  // COMMITTEE_ROSTER_CAP without deactivating them (see the file header
+  // comment), and this test's single activeMember() call must never 409.
+  await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
   const subjectId = rid("empty");
   const date = "2026-07-07";
   await ic.ensureSubject(subjectId, "Empty Body Subject");
