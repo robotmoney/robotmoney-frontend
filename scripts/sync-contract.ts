@@ -5,23 +5,36 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const src = join(root, "contract/src/routes.js");
+const srcDir = join(root, "contract/src");
 const destDir = join(root, "frontend/public/assets/js/app/contract");
-const dest = join(destDir, "routes.js");
+
+// Every contract runtime module the no-build frontend needs vendored
+// verbatim. Each entry must be import-free (no node_modules dependencies) —
+// it's served to the browser as-is, the same discipline `routes.js` already
+// follows. `committee-application.js` carries ONBOARDING_PROMPT (§11 R4) so
+// the /committee/apply page and the MCP apply-how-to tool can never drift
+// onto two different copies of the same prompt.
+const FILES = ["routes.js", "committee-application.js"];
 
 if (process.argv.includes("--check")) {
-  const [source, vendored] = await Promise.all([
-    readFile(src, "utf8"),
-    readFile(dest, "utf8").catch(() => ""),
-  ]);
-  if (source !== vendored) {
-    console.error("vendored frontend contract is stale; run `bun run sync-contract`");
-    process.exit(1);
+  let stale = false;
+  for (const name of FILES) {
+    const [source, vendored] = await Promise.all([
+      readFile(join(srcDir, name), "utf8"),
+      readFile(join(destDir, name), "utf8").catch(() => ""),
+    ]);
+    if (source !== vendored) {
+      console.error(`vendored frontend contract is stale: ${name}; run \`bun run sync-contract\``);
+      stale = true;
+    }
   }
+  if (stale) process.exit(1);
   console.log("vendored frontend contract is current");
   process.exit(0);
 }
 
 await mkdir(destDir, { recursive: true });
-await cp(src, dest);
-console.log(`synced contract runtime -> ${dest}`);
+for (const name of FILES) {
+  await cp(join(srcDir, name), join(destDir, name));
+}
+console.log(`synced contract runtime -> ${destDir} (${FILES.join(", ")})`);
