@@ -14,9 +14,19 @@ import * as admin from "../src/committee/admin.ts";
 import * as ic from "../src/committee/domain.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeSubmission } from "@robotmoney/contract";
+import { canonicalizeApplication, canonicalizeSubmission } from "@robotmoney/contract";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
+
+// §11 R6 — sign the canonical application payload the way an rmpc-equipped
+// agent would; the server mints the memberId (never the caller).
+async function signedApply(name: string) {
+  const { publicKeyB64, privateKey } = await generateKeyPair();
+  const application = { name, contact: `${rid("apply")}@example.test`, publicKey: publicKeyB64 };
+  const signature = await signMessage(canonicalizeApplication(application), privateKey);
+  const applied = await ic.applyMember({ ...application, signature });
+  return { memberId: (applied as { memberId: string }).memberId, applied };
+}
 
 // All committee test files share ONE ephemeral Postgres (tests/preload.ts). With
 // COMMITTEE_ROSTER_CAP now hard-enforced on every transition-to-active, a roster
@@ -141,18 +151,16 @@ test("members: manual add mints a one-time credential; deactivate revokes keys; 
 });
 
 test("members: application review approve/reject", async () => {
-  const memberId = rid("mapp");
-  const { publicKeyB64 } = await generateKeyPair();
-  await ic.applyMember({ memberId, name: "Applicant", publicKey: publicKeyB64 });
+  const { memberId, applied } = await signedApply("Applicant");
+  expect(applied.status).toBe(201);
 
   const approve = await admin.reviewApplicationAdmin(memberId, "approve");
   expect(approve.status).toBe(200);
   expect(approve).not.toHaveProperty("token");
   expect((approve as any).claimRequired).toBe(true);
 
-  const memberId2 = rid("mrej");
-  const { publicKeyB64: pk2 } = await generateKeyPair();
-  await ic.applyMember({ memberId: memberId2, name: "Applicant2", publicKey: pk2 });
+  const { memberId: memberId2, applied: applied2 } = await signedApply("Applicant2");
+  expect(applied2.status).toBe(201);
   const reject = await admin.reviewApplicationAdmin(memberId2, "reject");
   expect(reject.status).toBe(200);
   // committee_members.status has no 'rejected' value (CHECK constraint from

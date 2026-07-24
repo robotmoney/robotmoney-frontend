@@ -12,6 +12,7 @@ import { bearer, hasAnalyticsProviderRole, isPrivileged } from "../auth.ts";
 import { jsonValue, sql } from "../../db/client.ts";
 import {
   parseApply,
+  parseManualMember,
   parsePositiveNumber,
   parseSigningDraft,
   parseSubmission,
@@ -141,14 +142,18 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   // Role definitions + the fail-closed rule live in api/auth.ts (issue #106).
   const privileged = () => isPrivileged(req);
 
-  // PUBLIC onboarding: a prospective member submits its public key. The member
-  // is recorded as 'applied' (NOT active) with an INACTIVE key — it cannot
-  // submit until an admin activates it. Re-applying refreshes the pending
-  // record but NEVER overwrites an already-active member's key (that's admin).
+  // PUBLIC onboarding (§11 R1-R6, setup-gated apply): a prospective member
+  // submits {name, contact, lens?, publicKey, signature} — an rmpc signature
+  // over the canonical application payload, verified against the submitted
+  // key before anything is recorded. The server — never the client — mints
+  // the member id and returns it. The member is recorded as 'applied' (NOT
+  // active) with an INACTIVE key — it cannot submit until an admin activates
+  // it. Re-applying with the SAME key refreshes the pending record; it can
+  // NEVER overwrite an already-admitted member's key (that's admin).
   if (m === "POST" && p === C.apply) {
     const b = parseApply(await readJsonObject(req));
-    if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
-    if (!b.contact || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.contact)) {
+    if (!b) return { status: 400, body: { error: "valid name, contact, publicKey, and signature required" } };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.contact)) {
       return { status: 400, body: { error: "valid contact email required for activation notification" } };
     }
     if (!await isValidEd25519PublicKey(b.publicKey)) {
@@ -180,7 +185,7 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   // harness. Privileged because it can rotate/replace an existing member's key.
   if (m === "POST" && p === C.register) {
     if (!privileged()) return { status: 403, body: { error: "onboarding requires admin authorization" } };
-    const b = parseApply(await readJsonObject(req));
+    const b = parseManualMember(await readJsonObject(req));
     if (!b) return { status: 400, body: { error: "valid memberId, name, and publicKey required" } };
     if (!isPlausibleKey(b.publicKey)) return { status: 400, body: { error: "implausible publicKey" } };
     // registerMember now enforces COMMITTEE_ROSTER_CAP; a refused over-cap

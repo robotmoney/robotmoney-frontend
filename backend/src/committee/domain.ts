@@ -7,6 +7,7 @@ import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import {
   fingerprintPublicKey,
+  verifyApplicationSignature,
   verifyClaimChallengeSignature,
   verifySubmissionSignature,
 } from "../lib/signing.ts";
@@ -374,37 +375,118 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   }
 }
 
-// ── Onboarding: apply (public) → activate (admin) ───────────────────────────
-// The real path. A prospective member submits its PUBLIC key with `apply`; the
+// ── Onboarding: apply (public, signed) → activate (admin) ───────────────────
+// The real path (docs/architecture.md §11 R1-R6). A prospective member submits
+// its PUBLIC key with `apply`, together with an rmpc signature over the
+// canonical application payload (@robotmoney/contract). The server verifies
+// that signature against the submitted key BEFORE recording anything — an
+// invalid/mismatched/wrong-bytes signature writes NOTHING. On success the
 // member stays status='applied' and the key is registered INACTIVE (no token,
-// cannot submit). An admin then `activate`s the member and its key. Bearer
-// plaintext is minted only after the member proves possession of the private
-// key through the challenge flow below. RM never holds private keys.
-export interface ApplyInput { memberId: string; name: string; lens?: string; publicKey: string; contact?: string }
+// cannot submit); the server — never the client — mints the member id
+// (crypto.randomUUID()) and returns it (R2). An admin then `activate`s the
+// member and its key. Bearer plaintext is minted only after the member proves
+// possession of the private key through the challenge flow below. RM never
+// holds private keys.
+export interface ApplyInput { name: string; lens?: string; publicKey: string; contact: string; signature: string }
 
 export async function applyMember(input: ApplyInput) {
-  // CREATE-ONLY: a memberId is first-come. If it already exists (in ANY state),
-  // refuse — re-apply and key rotation are privileged admin operations. This
-  // prevents an unauthenticated caller from overwriting a pending applicant's
-  // key/identity (which the admin would then activate).
-  const existing = (await sql`SELECT id FROM committee_members WHERE id = ${input.memberId}`)[0] as { id: string } | undefined;
-  if (existing) return { ok: false, status: 409, error: "memberId already registered; re-apply or key rotation requires admin" };
-
-  try {
-    await sql.begin(async (tx) => {
-      await tx`INSERT INTO committee_members (id, status, name, lens, contact_email, applied_at)
-               VALUES (${input.memberId}, 'applied', ${input.name}, ${input.lens ?? null}, ${input.contact ?? null}, now())`;
-      await tx`INSERT INTO committee_member_keys (member_id, public_key, active) VALUES (${input.memberId}, ${input.publicKey}, false)`;
-      await tx`INSERT INTO committee_applications (member_id, payload, status) VALUES (${input.memberId}, ${tx.json(input as any)}, 'pending')`;
-      // actor is the request source, NOT the self-asserted body identity.
-      await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('public:apply', 'apply', ${tx.json({ memberId: input.memberId })})`;
-    });
-  } catch (e: any) {
-    if (String(e?.message ?? e).includes("duplicate") || e?.code === "23505")
-      return { ok: false, status: 409, error: "memberId already registered" };
-    throw e;
+  // Verify BEFORE opening a transaction: setup-gated apply (R6) means an
+  // unsigned/badly-signed submission never touches storage, not even a
+  // rolled-back write.
+  const application = { name: input.name, contact: input.contact, lens: input.lens, publicKey: input.publicKey };
+  if (!await verifyApplicationSignature(application, input.signature, input.publicKey)) {
+    return { ok: false, status: 400, error: "invalid signature over the canonical application payload" };
   }
-  return { ok: true, status: 201, memberStatus: "applied" as const };
+
+  return await sql.begin(async (tx) => {
+    // Re-apply-by-key semantics (pinned decision, since the id is no longer
+    // client-supplied so it can't be the re-apply key): lock the newest key
+    // row (if any) sharing this exact public key.
+    //   - a PENDING application under that key is REFRESHED in place (same
+    //     member id, updated name/contact/lens/payload, application re-opened
+    //     as 'pending' if it had been reviewed) — the owner resubmitting after
+    //     a typo or a stale prompt shouldn't fork a second identity;
+    //   - an ACTIVE (or otherwise already-admitted) member's key can NEVER be
+    //     overwritten by an unauthenticated apply — that stays an admin
+    //     operation (key rotation), so this returns 409.
+    const existingKey = (await tx<{ member_id: string; status: string }[]>`
+      SELECT k.member_id, m.status
+      FROM committee_member_keys k
+      JOIN committee_members m ON m.id = k.member_id
+      WHERE k.public_key = ${input.publicKey}
+      ORDER BY k.created_at DESC LIMIT 1
+      FOR UPDATE OF m`)[0];
+
+    if (existingKey && existingKey.status !== "applied") {
+      return { ok: false, status: 409, error: "publicKey already belongs to an admitted member; re-apply is an admin operation" };
+    }
+
+    if (existingKey) {
+      const memberId = existingKey.member_id;
+      await tx`
+        UPDATE committee_members
+        SET name = ${input.name}, lens = ${input.lens ?? null}, contact_email = ${input.contact}, applied_at = now()
+        WHERE id = ${memberId}`;
+      await tx`
+        UPDATE committee_applications
+        SET payload = ${tx.json(input as any)}, status = 'pending', reviewed_at = NULL
+        WHERE member_id = ${memberId}`;
+      await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('public:apply', 'apply_refresh', ${tx.json({ memberId })})`;
+      return { ok: true, status: 201, memberId, memberStatus: "applied" as const };
+    }
+
+    const memberId = crypto.randomUUID();
+    await tx`INSERT INTO committee_members (id, status, name, lens, contact_email, applied_at)
+             VALUES (${memberId}, 'applied', ${input.name}, ${input.lens ?? null}, ${input.contact}, now())`;
+    await tx`INSERT INTO committee_member_keys (member_id, public_key, active) VALUES (${memberId}, ${input.publicKey}, false)`;
+    await tx`INSERT INTO committee_applications (member_id, payload, status) VALUES (${memberId}, ${tx.json(input as any)}, 'pending')`;
+    // actor is the request source, NOT the self-asserted body identity.
+    await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('public:apply', 'apply', ${tx.json({ memberId })})`;
+    return { ok: true, status: 201, memberId, memberStatus: "applied" as const };
+  });
+}
+
+// Public, redacted application-status projection (§11 R2, applyStatus route).
+// Deliberately excludes name/contact/publicKey — only the derived lifecycle
+// state and timestamps are exposed. An unknown id and a never-issued id are
+// indistinguishable: both return null, which the route folds to a plain 404.
+export type ApplicationState = "applied" | "approved" | "claimed" | "rejected" | "inactive";
+export interface ApplicationStatus {
+  id: string;
+  state: ApplicationState;
+  appliedAt: string | null;
+  reviewedAt: string | null;
+  claimedAt: string | null;
+}
+
+export async function getApplicationStatus(memberId: string): Promise<ApplicationStatus | null> {
+  const member = (await sql<{ status: string; applied_at: Date | null }[]>`
+    SELECT status, applied_at FROM committee_members WHERE id = ${memberId}`)[0];
+  if (!member) return null;
+
+  const application = (await sql<{ status: string; reviewed_at: Date | null }[]>`
+    SELECT status, reviewed_at FROM committee_applications
+    WHERE member_id = ${memberId} ORDER BY created_at DESC LIMIT 1`)[0];
+  const key = (await sql<{ token_hash: string | null }[]>`
+    SELECT token_hash FROM committee_member_keys
+    WHERE member_id = ${memberId} AND active = true
+    ORDER BY created_at DESC LIMIT 1`)[0];
+  const challenge = (await sql<{ consumed_at: Date | null }[]>`
+    SELECT consumed_at FROM committee_claim_challenges WHERE member_id = ${memberId}`)[0];
+
+  let state: ApplicationState;
+  if (application?.status === "rejected") state = "rejected";
+  else if (member.status === "applied") state = "applied";
+  else if (member.status === "active") state = key?.token_hash ? "claimed" : "approved";
+  else state = "inactive";
+
+  return {
+    id: memberId,
+    state,
+    appliedAt: member.applied_at ? new Date(member.applied_at).toISOString() : null,
+    reviewedAt: application?.reviewed_at ? new Date(application.reviewed_at).toISOString() : null,
+    claimedAt: key?.token_hash && challenge?.consumed_at ? new Date(challenge.consumed_at).toISOString() : null,
+  };
 }
 
 // Admin-only. Transactional: locks the member + its pending key, preserves the

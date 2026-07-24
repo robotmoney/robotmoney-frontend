@@ -2,7 +2,7 @@
 // canonical payload (from @robotmoney/contract) in their own environment; the
 // server only ever verifies — it never holds a private key. Web Crypto Ed25519
 // (supported by Bun). Keys/signatures are exchanged as base64 of raw bytes.
-import { canonicalizeClaimChallenge, canonicalizeSubmission } from "@robotmoney/contract";
+import { canonicalizeApplication, canonicalizeClaimChallenge, canonicalizeSubmission } from "@robotmoney/contract";
 
 const ALG = { name: "Ed25519" } as const;
 
@@ -57,6 +57,28 @@ export async function isValidEd25519PublicKey(publicKeyB64: string): Promise<boo
   try {
     await importEd25519PublicKey(publicKeyB64);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * §11 R6 — setup-gated apply. Verifies the applicant's rmpc signature over the
+ * canonical committee-application payload (@robotmoney/contract) against the
+ * submitted key BEFORE the server records anything. Same idiom as
+ * verifySubmissionSignature/verifyClaimChallengeSignature: import the exact
+ * key encoding accepted everywhere else, canonicalize, verify — no bespoke
+ * crypto here.
+ */
+export async function verifyApplicationSignature(
+  application: Parameters<typeof canonicalizeApplication>[0],
+  signatureB64: string,
+  publicKeyB64: string,
+): Promise<boolean> {
+  try {
+    const pub = await importEd25519PublicKey(publicKeyB64);
+    const msg = new TextEncoder().encode(canonicalizeApplication(application));
+    return await crypto.subtle.verify(ALG, pub, canonicalBase64ToBytes(signatureB64, 64), msg);
   } catch {
     return false;
   }

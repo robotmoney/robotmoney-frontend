@@ -50,18 +50,27 @@ function optionalWeights(body: JsonObject): { bucket: string; weight: number }[]
   return total > 0 && Number.isFinite(total) ? weights : null;
 }
 
+// §11 R2/R6 — the public onboarding shape carries NO client-supplied id: the
+// server mints the member UUID at apply time. It DOES carry the rmpc
+// signature over the canonical application payload (@robotmoney/contract);
+// route-layer verification (backend/src/api/routes/committee.ts) rejects an
+// unsigned/malformed request before ic.applyMember ever runs. `contact` is
+// required here (non-empty, matching the canonical payload's required field —
+// see contract/src/committee-application.js) — the route additionally checks
+// email FORMAT on top of this non-empty check.
 export function parseApply(body: JsonObject | null): ApplyInput | null {
   if (!body) return null;
-  const memberId = requiredString(body, "memberId", 100);
   const name = requiredString(body, "name", 200);
+  const contact = requiredString(body, "contact", 320);
   const publicKey = requiredString(body, "publicKey", 1000);
-  if (!memberId || !name || !publicKey) return null;
+  const signature = requiredString(body, "signature", 2000);
+  if (!name || !contact || !publicKey || !signature) return null;
   return {
-    memberId,
     name,
+    contact,
     publicKey,
+    signature,
     lens: optionalString(body, "lens", 500),
-    contact: optionalString(body, "contact", 320),
   };
 }
 
