@@ -15,13 +15,16 @@
 # guard, since running it is the entire point on a docs-only diff.
 #
 # This doc-correctness job now ALSO runs scripts/check-contribution.ts on pull
-# requests: an author-aware, deny-by-default file gate. Every create/edit/delete
+# requests: an actor-aware, deny-by-default file gate. Every create/edit/delete
 # in the PR diff is checked against .github/file-permissions.json, which maps
-# each GitHub login to permitted path globs per operation; an author with no
-# matching glob for the operation on the path is blocked. The same script also
-# runs a docs task-list PM-state check (roadmap/checklist checkboxes belong in
-# the GitHub Plan issue, not committed docs). It carries no paths-ignore so it
-# still runs on docs-only PRs.
+# each GitHub login to permitted path globs per operation; an actor with no
+# matching glob for the operation on the path is blocked. PR_AUTHOR is
+# github.actor (whoever pushed the commits this run is checking), not the PR's
+# original opener — a maintainer can push a fix onto a lower-privileged
+# contributor's PR and have that push checked against the maintainer's own
+# grants. The same script also runs a docs task-list PM-state check
+# (roadmap/checklist checkboxes belong in the GitHub Plan issue, not committed
+# docs). It carries no paths-ignore so it still runs on docs-only PRs.
 name: docs-lint
 env:
   CI_CLASS: doc-correctness
@@ -48,7 +51,7 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: origin/${{ github.base_ref }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR: ${{ github.actor }}
         run: |
           git fetch --no-tags origin "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           bun scripts/check-contribution.ts

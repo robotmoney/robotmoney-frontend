@@ -163,8 +163,10 @@ operation an explicit, reviewable grant keeps that surface deliberate.
 
 An autonomous agent (or a human) can follow this checklist deterministically:
 
-1. **Determine the PR author login** — the GitHub identity the commits will be
-   attributed to (this is what the gate reads as `PR_AUTHOR`).
+1. **Determine the pushing actor's login** — the GitHub identity performing
+   *this* push (this is what the gate reads as `PR_AUTHOR`: `github.actor`, not
+   the PR's original opener). If a maintainer pushes a fix onto someone else's
+   PR, that push is checked against the maintainer's own grants.
 2. **Confirm that login has an entry** in `.github/file-permissions.json` (or is
    covered by a non-empty `"*"` baseline). If it has neither, it is **fully
    blocked — it cannot even edit** — and an admin must add it first.
@@ -193,11 +195,17 @@ owner-review mechanism guarding them; the grant list **is** the guard.
 
 - `scripts/check-contribution.ts` runs in the `docs-lint` job on every PR. It is
   **diff-scoped** (only the paths changed in this PR's range are examined),
-  **author-aware** (it reads `PR_AUTHOR`), and **deny-by-default**: it classifies
-  each changed path as a create/edit/delete and blocks any operation the author
-  is not granted in `.github/file-permissions.json`. It also flags roadmap
-  task-lists added under `docs/`. Run it locally with
-  `bun run check:contribution`.
+  **actor-aware** (it reads `PR_AUTHOR` = `github.actor`, the identity that
+  pushed the commits this run is checking — not the PR's original opener), and
+  **deny-by-default**: it classifies each changed path as a create/edit/delete
+  and blocks any operation the actor is not granted in
+  `.github/file-permissions.json`. It also flags roadmap task-lists added
+  under `docs/`. Run it locally with `bun run check:contribution`.
+- The dictionary itself is always read from the **merge-base** (the base
+  branch's already-committed version), never from the PR's own `HEAD` — a PR
+  editing `.github/file-permissions.json` to grant itself more access cannot
+  make that self-grant apply to its own diff. The edit is checked against the
+  pre-existing policy like anything else, and only takes effect once merged.
 - **Enforcement reality on this repo:** the gate is only a **CI check**. On this
   private/free plan there is **no branch protection**, so a human clicking
   *Merge* on GitHub can bypass a red check. The real enforcement is that merges
