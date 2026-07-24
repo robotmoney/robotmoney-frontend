@@ -183,7 +183,7 @@ test("admin-live: committee subjects/members lists load the real 'subjects'/'mem
   );
 
   await page.goto("/admin/committee");
-  await expect(page.getByRole("heading", { name: "Committee Operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Swarm Operations" })).toBeVisible();
 
   const [subjectsRes, membersRes] = await Promise.all([subjectsResponsePromise, membersResponsePromise]);
   expect(subjectsRes.ok()).toBe(true);

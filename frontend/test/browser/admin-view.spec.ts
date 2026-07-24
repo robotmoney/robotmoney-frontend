@@ -210,7 +210,7 @@ test("admin view: overview alerts, tiles, and next-schedule table render from mo
   // Nav reaches the committee operations surface (issue #159); Audit is an
   // in-shell section here (issue #155), not a separate route — see
   // admin-surface.spec.ts for its dedicated coverage.
-  await expect(page.locator(".adm-nav__link", { hasText: "Committee" })).toHaveAttribute("href", "/admin/committee");
+  await expect(page.locator(".adm-nav__link", { hasText: "Swarm" })).toHaveAttribute("href", "/admin/committee");
   await expect(page.getByRole("button", { name: "Audit", exact: true })).toBeVisible();
 });
 
@@ -519,7 +519,7 @@ test("committee admin: direct navigation and back/forward across nested routes",
   await mockCommitteeApi(page);
 
   await signIn(page, "/admin/committee");
-  await expect(page.getByRole("heading", { name: "Committee Operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Swarm Operations" })).toBeVisible();
 
   await page.getByRole("cell", { name: "Woon Vault" }).click();
   await expect(page).toHaveURL(/\/admin\/committee\/subjects\/woon-vault$/);
@@ -527,7 +527,7 @@ test("committee admin: direct navigation and back/forward across nested routes",
 
   await page.goBack();
   await expect(page).toHaveURL(/\/admin\/committee$/);
-  await expect(page.getByRole("heading", { name: "Committee Operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Swarm Operations" })).toBeVisible();
 
   await page.goForward();
   await expect(page).toHaveURL(/\/admin\/committee\/subjects\/woon-vault$/);
