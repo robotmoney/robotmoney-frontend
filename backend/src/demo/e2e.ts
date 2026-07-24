@@ -19,7 +19,7 @@ import { directAnalyticsPersistence } from "../analytics/store/direct.ts";
 
 // Backend base URL. BACKEND_URL is the canonical variable every other driver
 // honors (scripts/demo-frontend-check.ts, scripts/rmpc-release-e2e.ts,
-// mcp/src/e2e.ts, mcp/src/agent.ts) — this file historically read a one-off
+// scripts/lib/committee/session.ts) — this file historically read a one-off
 // API_BASE name, so `export BACKEND_URL=…` silently failed to repoint it.
 // API_BASE is DEPRECATED and accepted only as a one-release fallback for any
 // existing invocation; set BACKEND_URL instead. Exported + env-injectable so
@@ -34,7 +34,7 @@ const today = new Date().toISOString().slice(0, 10);
 const SUBJECT = { id: "woon", name: "Woon Treasury" };
 
 // Attendance (the demo no-show rule) and the deterministic stance ladder both
-// come from the shared contract (contract/src/committee.js) — the mcp demo e2e
+// come from the shared contract (contract/src/committee.js) — the committee session e2e
 // consumes the SAME rule/ladder, so the two drivers can no longer drift
 // (finding 008 retired the comment-enforced mirrors). The roster outcome stays
 // fixed (draco absent; athena/boreas/cygnus present).
@@ -116,7 +116,7 @@ async function main() {
 }
 
 // Only run the full demo flow when this file is the entry point (e.g.
-// `bun run src/demo/e2e.ts`). Guarded (same pattern as mcp/src/e2e.ts) so unit
+// `bun run src/demo/e2e.ts`). Guarded (same pattern as scripts/lib/committee/session.ts) so unit
 // tests can `import { resolveBackendBase }` WITHOUT triggering a live-DB demo
 // run. Entry-point behaviour is unchanged.
 if (import.meta.url === `file://${process.argv[1]}`) {

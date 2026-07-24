@@ -2,13 +2,13 @@
 // RELEASED rmpc binary — never built from source here (issue #104). This is
 // the no-inference proof: no model, no OpenCode container — a script drives
 // every step a real member agent's TOOLING must be able to do, using the
-// SAME rmpc release binary and the SAME public API/MCP surface a real agent
-// would use. robotmoney-core unit/integration tests prove rmpc's own
-// crypto/CLI behavior in isolation; scripts/tests/rmpc-canonical-apply.test.ts
-// proves the JS canonical serializer and rmpc's signing are byte-exact
-// against Stage 0's golden fixtures; THIS script is the only thing that
-// proves a released binary drives the full chain against a LIVE
-// robotmoney-frontend backend+MCP stack:
+// SAME rmpc release binary and the SAME public REST API a real agent would use
+// (D21 — the MCP transport is retired; see docs/decisions.md D21).
+// robotmoney-core unit/integration tests prove rmpc's own crypto/CLI behavior
+// in isolation; scripts/tests/rmpc-canonical-apply.test.ts proves the JS
+// canonical serializer and rmpc's signing are byte-exact against Stage 0's
+// golden fixtures; THIS script is the only thing that proves a released binary
+// drives the full chain against a LIVE robotmoney-frontend backend stack:
 //   rmpc committee-identity create/show-public-key
 //   → signed POST /api/committee/apply (server mints the memberId, §11 R2/R6)
 //   → GET /api/committee/apply/:id (applied)
@@ -17,27 +17,25 @@
 //   → GET /api/committee/apply/:id (approved)
 //   → POST token-claim/challenge → rmpc-signed POST token-claim (claim, §6/#205)
 //   → GET /api/committee/apply/:id (claimed)
-//   → MCP OAuth client_credentials → get_signing_payload → rmpc sign →
-//     submit_recommendation
+//   → canonicalizeSubmission → rmpc sign → POST /api/committee/submit
 // then reads the result back and independently re-verifies the signature.
 //
 // Run standalone against a locally booted `bun run demo` stack:
-//   BACKEND_URL=http://127.0.0.1:<web-port> MCP_URL=http://127.0.0.1:<mcp-port>/mcp \
-//     bun run scripts/rmpc-release-e2e.ts
-// (same BACKEND_URL/MCP_URL convention as mcp/src/e2e.ts — defaults to the
-// standard demo ports when unset.) In CI, scripts/lib/demo-main.ts runs this
-// script against the SAME stack it just booted when RMPC_RELEASE_E2E=1 is set
-// (see .github/workflows/rmpc-release-e2e-nightly.yml) — no parallel stack.
+//   BACKEND_URL=http://127.0.0.1:<web-port> bun run scripts/rmpc-release-e2e.ts
+// (same BACKEND_URL convention as scripts/lib/committee/session.ts — defaults
+// to the standard demo port when unset.) In CI, scripts/lib/demo-main.ts runs
+// this script against the SAME stack it just booted when RMPC_RELEASE_E2E=1 is
+// set (see .github/workflows/rmpc-release-e2e-nightly.yml) — no parallel stack.
 //
 // Loud-skip-never (test-coverage-policy): every step below either gets a 2xx/ok
 // response or calls fail()/throws, which exits the process non-zero. Nothing
 // here silently skips a missing binary, a failed download, or a failed check.
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { canonicalizeApplication, canonicalizeClaimChallenge, path as routePath, ROUTES } from "@robotmoney/contract";
+import { join } from "node:path";
+import { canonicalizeApplication, canonicalizeClaimChallenge, canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { fetchRmpc, runRmpcJson, RMPC_VERSION, resolveRmpcAsset, missingCommitteeIdentitySubcommands } from "./lib/rmpc-fetch.ts";
+import { admin, enqueueLifecycleJob, waitForSessionState } from "./lib/committee/session.ts";
 
 // Re-exported so scripts/tests/rmpc-release-e2e.test.ts (this script's own
 // unit tests) can keep importing the pure asset/subcommand helpers from
@@ -45,11 +43,7 @@ import { fetchRmpc, runRmpcJson, RMPC_VERSION, resolveRmpcAsset, missingCommitte
 // shared with scripts/tests/rmpc-canonical-apply.test.ts.
 export { resolveRmpcAsset, missingCommitteeIdentitySubcommands };
 
-const scriptDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(scriptDir, "..");
-
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8787";
-const MCP_URL = process.env.MCP_URL ?? "http://localhost:8788/mcp";
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 const adminHeaders: Record<string, string> = ADMIN_TOKEN ? { "X-Admin-Token": ADMIN_TOKEN } : {};
 
@@ -173,26 +167,27 @@ async function main(): Promise<void> {
   }
   log(`applyStatus reflects applied → approved → claimed for ${memberId}, no contact/publicKey echoed`);
 
-  // ── Open a distinctly-namespaced session (reuses mcp/src/e2e.ts's proven
-  // job-queue lifecycle — the same path the required e2e + nightly committee
-  // sessions drive — instead of a second, unproven direct-admin lifecycle) ────
-  process.env.BACKEND_URL = BACKEND_URL; // e2e.ts reads BACKEND from env at module load
-  const e2e = await import(join(repoRoot, "mcp", "src", "e2e.ts"));
-  await e2e.admin("subject", { id: SUBJECT_ID, name: "RMPC Release E2E Subject" });
+  // ── Open a distinctly-namespaced session (reuses the committee session
+  // driver's proven job-queue lifecycle — the same path the required e2e +
+  // nightly committee sessions drive — instead of a second, unproven
+  // direct-admin lifecycle) ──────────────────────────────────────────────────
+  // admin()/waitForSessionState() read BACKEND_URL from env at module load;
+  // this script is invoked with BACKEND_URL already set (demo-main.ts or the
+  // operator), so the import at the top of this file resolves the right base.
+  await admin("subject", { id: SUBJECT_ID, name: "RMPC Release E2E Subject" });
   // Idempotent, matches runSession()'s own pre-session regime seed — makes this
   // script self-sufficient even if run before any other regime seed exists.
-  await e2e.admin("regime", { asof: TODAY });
+  await admin("regime", { asof: TODAY });
 
-  await e2e.enqueueLifecycleJob("open_session", { date: TODAY, subjectId: SUBJECT_ID });
-  const scheduled = await e2e.waitForSessionState(TODAY, SUBJECT_ID, "scheduled");
+  await enqueueLifecycleJob("open_session", { date: TODAY, subjectId: SUBJECT_ID });
+  const scheduled = await waitForSessionState(TODAY, SUBJECT_ID, "scheduled");
   const sessionId = scheduled.session.id;
 
-  await e2e.enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes: 30 });
-  await e2e.waitForSessionState(TODAY, SUBJECT_ID, "collecting");
+  await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes: 30 });
+  await waitForSessionState(TODAY, SUBJECT_ID, "collecting");
   log(`session ${sessionId} open for ${TODAY}/${SUBJECT_ID}`);
 
-  // ── MCP OAuth client_credentials + get_signing_payload + rmpc sign + submit ─
-  const { submitViaMcp } = await import(join(repoRoot, "mcp", "src", "rmpc-client.ts"));
+  // ── canonicalizeSubmission (contract) + rmpc sign + POST submit (REST) ─────
   const draft = {
     memberId,
     date: TODAY,
@@ -202,14 +197,22 @@ async function main(): Promise<void> {
     confidence: 0.5,
     body: "Released rmpc binary end-to-end proof (issue #104, docs/architecture.md §11).",
   };
-  const { canonical, signature } = await submitViaMcp({
-    mcpUrl: MCP_URL,
-    memberId,
-    memberToken,
-    draft,
-    sign: async (payload: string) => signCanonical(payload, "recommendation"),
+  // The canonical bytes come from the shared @robotmoney/contract serializer —
+  // the same bytes the backend verifier reconstructs and the retired MCP
+  // get_signing_payload tool used to return. rmpc signs them; the signature is
+  // independently re-verified below.
+  const canonical = canonicalizeSubmission(draft);
+  const signature = signCanonical(canonical, "recommendation");
+  const submitRes = await fetch(`${BACKEND_URL}${ROUTES.committee.submit}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${memberToken}` },
+    body: JSON.stringify({ ...draft, signature }),
   });
-  log(`submit_recommendation accepted for ${memberId}`);
+  const submitBody = await readJson(submitRes);
+  if (submitRes.status !== 200 || submitBody.verified !== true) {
+    fail(`POST ${ROUTES.committee.submit} → ${submitRes.status}: ${JSON.stringify(submitBody)}`);
+  }
+  log(`submit accepted + server-verified for ${memberId}`);
 
   // ── Independent readback + signature re-verification ───────────────────────
   const sessionPath = routePath(ROUTES.committee.session, { date: TODAY, subject: SUBJECT_ID });

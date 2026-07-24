@@ -3,11 +3,12 @@
 // Stage 5 of docs/plans/onboarding-ic-workflow.md). This is a rails check, NOT
 // a substitute for the real-inference eval: it proves every piece the eval
 // rides on works — the member-agent image builds and starts, it can reach the
-// Stage-2 anonymous MCP discovery surface over the compose network, and a
-// signed apply built with Stage 3's real `rmpc` release binary (driven
-// DIRECTLY by this test, never by an agent) lands end-to-end through the MCP
-// `apply` tool — all without spending a single model token. Wiring this as an
-// early fail-fast step ahead of the real-inference eval in CI is Stage 7's job
+// committee REST API over the compose network, and a signed apply built with
+// the real `rmpc` release binary (driven DIRECTLY by this test, never by an
+// agent) lands end-to-end through POST /api/committee/apply — all without
+// spending a single model token. (D21: the MCP transport is retired; the agent
+// and this rails check use the REST API.) Wiring this as an early fail-fast
+// step ahead of the real-inference eval in CI is Stage 7's job
 // (.github/workflows/e2e.yml), not this file's.
 //
 // Loud-skip-never (test-coverage-policy): Docker, network egress to GitHub
@@ -25,12 +26,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
-  APPLY_HOW_TO_STEPS,
   canonicalizeApplication,
-  COMMITTEE_ONBOARDING_SKILL_URL,
   path as routePath,
   ROUTES,
 } from "@robotmoney/contract";
@@ -107,10 +104,12 @@ describe("onboarding-eval pure helpers", () => {
     expect(cfg).toEqual({ model: "anthropic/claude-x", apiKeyEnv: "ANTHROPIC_API_KEY", apiKey: "secret" });
   });
 
-  test("buildAgentOpencodeConfig carries ONLY generic MCP connectivity — no onboarding-specific knowledge", () => {
-    const cfg = buildAgentOpencodeConfig("anthropic/claude-x", "http://mcp:8788/mcp") as any;
-    expect(cfg.mcp.robotmoney.url).toBe("http://mcp:8788/mcp");
-    expect(JSON.stringify(cfg)).not.toMatch(/rmpc|apply|committee/i);
+  test("buildAgentOpencodeConfig carries NO onboarding-specific knowledge and no Robot Money connectivity (D21 — REST via bash, no MCP client)", () => {
+    const cfg = buildAgentOpencodeConfig("anthropic/claude-x") as any;
+    expect(cfg.model).toBe("anthropic/claude-x");
+    expect(cfg.permission).toEqual({ "*": "deny", bash: "allow" });
+    expect(cfg.mcp).toBeUndefined();
+    expect(JSON.stringify(cfg)).not.toMatch(/rmpc|apply|committee|robotmoney/i);
   });
 
   test("deriveSteps: no member observed yet ⇒ every step pending", () => {
@@ -166,7 +165,7 @@ describe("runOnboardingEvalWithRetry", () => {
     expect(looksRateLimited("anthropic rate_limit_error: slow down")).toBe(true);
     expect(looksRateLimited("upstream returned 529 overloaded_error")).toBe(true);
     expect(looksRateLimited(undefined)).toBe(false);
-    expect(looksRateLimited("agent could not find the apply-how-to tool")).toBe(false);
+    expect(looksRateLimited("agent could not install the committee-onboarding skill")).toBe(false);
   });
 
   test("admitted on the first attempt — never retries", async () => {
@@ -198,7 +197,7 @@ describe("runOnboardingEvalWithRetry", () => {
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
-        return fakeResult({ transcript: "agent never called apply-how-to" });
+        return fakeResult({ transcript: "agent never submitted a signed application" });
       },
     });
     expect(result.admitted).toBe(false);
@@ -316,10 +315,8 @@ const project = `rm_onboarding_infra_${crypto.randomUUID().slice(0, 8)}`;
 const composeFiles = ["docker-compose.yml", "docker-compose.demo.yml"];
 const adminToken = crypto.randomUUID();
 let apiPort = 0;
-let mcpPort = 0;
 let pgPort = 0;
 let backendUrl = "";
-let mcpUrl = "";
 let composeEnv: Record<string, string> = {};
 
 function compose(args: string[]) {
@@ -365,27 +362,23 @@ async function bringUpInfra(): Promise<void> {
   }
 
   apiPort = await freePort();
-  mcpPort = await freePort();
   pgPort = await freePort();
   backendUrl = `http://127.0.0.1:${apiPort}`;
-  // /mcp/apply — the anonymous discovery surface's own path, not bare /mcp
-  // (which is member-only and 401s with no bearer; see mcp/src/server.ts).
-  mcpUrl = `http://127.0.0.1:${mcpPort}/mcp/apply`;
   composeEnv = {
     COMPOSE_PROJECT_NAME: project,
     DEMO_PROJECT: project,
     DATABASE_URL: "postgres://robotmoney:robotmoney@postgres:5432/robotmoney",
     ADMIN_TOKEN: adminToken,
     WEB_PORT: String(apiPort),
-    MCP_PORT: String(mcpPort),
     POSTGRES_PORT: String(pgPort),
   };
 
-  // Minimal stack: postgres (api/mcp's dependency) + api + mcp. No worker
-  // lanes — applying/activating a committee membership is pure Postgres CRUD
-  // + crypto verification, never touches the job queue, so booting the worker
-  // images would only slow this "fast, cheap" check down for nothing.
-  const up = compose(["up", "-d", "postgres", "api", "mcp"]);
+  // Minimal stack: postgres (api's dependency) + api. No worker lanes —
+  // applying/activating a committee membership is pure Postgres CRUD + crypto
+  // verification, never touches the job queue, so booting the worker images
+  // would only slow this "fast, cheap" check down for nothing. (D21: no mcp
+  // service — the committee surface is the api's REST API.)
+  const up = compose(["up", "-d", "postgres", "api"]);
   if (up.exitCode !== 0) throw new Error(`docker compose up failed (exit ${up.exitCode}): ${up.stderr}`);
 
   const migrate = compose(["run", "--rm", "--no-deps", "api", "bun", "run", "src/db/migrate.ts"]);
@@ -393,7 +386,6 @@ async function bringUpInfra(): Promise<void> {
 
   await waitForOk(`${backendUrl}${ROUTES.health}`, 60_000);
   await waitForOk(`${backendUrl}${ROUTES.committee.members}`, 30_000);
-  await waitForOk(`${mcpUrl.replace(/\/mcp\/apply$/, "")}/health`, 30_000);
 
   // Build (never run yet — that's the inference-off "container starts" test
   // below) the member-agent image now so its cost is paid once in beforeAll,
@@ -428,9 +420,9 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
   );
 
   test(
-    "member-agent reaches the mcp service's /health from INSIDE the compose network",
+    "member-agent reaches the api service's /health from INSIDE the compose network",
     () => {
-      const r = compose(["run", "--rm", "--no-deps", "--entrypoint", "curl", "member-agent", "-fsS", "http://mcp:8788/health"]);
+      const r = compose(["run", "--rm", "--no-deps", "--entrypoint", "curl", "member-agent", "-fsS", "http://api:8787/health"]);
       expect(r.exitCode).toBe(0);
       expect(JSON.parse(r.stdout)).toMatchObject({ status: "ok" });
     },
@@ -438,34 +430,12 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
   );
 
   test(
-    "anonymous MCP discovery (apply-how-to) matches the Stage-0 contract constants",
-    async () => {
-      const client = new Client({ name: "onboarding-eval-infra-test", version: "0.1.0" });
-      const transport = new StreamableHTTPClientTransport(new URL(mcpUrl));
-      await client.connect(transport);
-      try {
-        const { tools } = await client.listTools();
-        expect(tools.map((t) => t.name).sort()).toEqual(["apply", "apply-how-to"]);
-
-        const result = await client.callTool({ name: "apply-how-to", arguments: {} });
-        const body = JSON.parse((result.content as any[])[0].text);
-        expect(body.steps).toEqual(APPLY_HOW_TO_STEPS);
-        expect(body.routes.apply).toBe(ROUTES.committee.apply);
-        expect(body.routes.applyStatus).toBe(ROUTES.committee.applyStatus);
-        expect(body.skillUrl).toBe(COMMITTEE_ONBOARDING_SKILL_URL);
-      } finally {
-        await client.close();
-      }
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  test(
-    "a signed apply built with the REAL rmpc release binary lands end-to-end through the MCP apply tool",
+    "a signed apply built with the REAL rmpc release binary lands end-to-end through POST /api/committee/apply",
     async () => {
       // Driven directly by this test — never by an agent — exactly like
       // scripts/rmpc-release-e2e.ts / scripts/tests/rmpc-canonical-apply.test.ts.
       // No JS keygen fallback anywhere in this path (test-coverage policy #4).
+      // (D21: over the REST API, not the retired MCP apply tool.)
       const rmpcPath = await fetchRmpc();
       const workDir = mkdtempSync(join(tmpdir(), "onboarding-eval-infra-"));
       try {
@@ -485,21 +455,17 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         expect(signed.ok).toBe(true);
         expect(signed.public_key).toBe(publicKeyB64);
 
-        const client = new Client({ name: "onboarding-eval-infra-test-apply", version: "0.1.0" });
-        const transport = new StreamableHTTPClientTransport(new URL(mcpUrl));
-        await client.connect(transport);
-        let memberId: string;
-        try {
-          const result = await client.callTool({ name: "apply", arguments: { ...application, signature: signed.signature } });
-          const body = JSON.parse((result.content as any[])[0].text);
-          expect(body.ok).toBe(true);
-          expect(body.status).toBe(201);
-          expect(body.memberStatus).toBe("applied");
-          expect(body.memberId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
-          memberId = body.memberId;
-        } finally {
-          await client.close();
-        }
+        const applyRes = await fetch(`${backendUrl}${ROUTES.committee.apply}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...application, signature: signed.signature }),
+        });
+        expect(applyRes.status).toBe(201);
+        const body = await applyRes.json();
+        expect(body.ok).toBe(true);
+        expect(body.memberStatus).toBe("applied");
+        expect(body.memberId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+        const memberId: string = body.memberId;
 
         const statusPath = routePath(ROUTES.committee.applyStatus, { id: memberId });
         const statusRes = await fetch(`${backendUrl}${statusPath}`);

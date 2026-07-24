@@ -70,12 +70,9 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
-      - name: Install MCP deps
-        working-directory: mcp
-        run: bun install --frozen-lockfile
 
       # Reuses the EXACT demo stack boot (scripts/demo.ts → scripts/lib/demo-main.ts):
-      # postgres + api + worker lanes + mcp via docker compose, migrations (fast
+      # postgres + api + worker lanes via docker compose, migrations (fast
       # demo schedules seeded so LIVE analytics/research fire during the run), the
       # committee driver (publishes 2 sessions through the real worker queue), the
       # frontend + browser checks, and scripts/demo-live-smoke.ts's LIVE

@@ -5,7 +5,7 @@
 //      on the pgdata volume, and a `--pg-data`-style bind override merges by target
 //      path to REPLACE the named-volume mount (so no named volume is used in bind mode).
 //
-//   2. An EXECUTED proof that boots ONLY postgres (never the api/worker/mcp, so NO
+//   2. An EXECUTED proof that boots ONLY postgres (never the api/worker, so NO
 //      external providers / API quota are touched — respects the demo's quota rule):
 //      `down` (no -v) KEEPS the labeled volume, a re-`up` RESUMES the same data, and
 //      `demo:clean`'s real label-scoped removal then deletes exactly that volume.
@@ -144,7 +144,7 @@ describe("teardown keeps the volume; resume converges; demo:clean reclaims it (e
       const env = composeEnv({ POSTGRES_PORT: String(await freePort()) });
       const run = makeDockerRunner(env);
 
-      // Boot postgres only (no api/worker/mcp → no external providers touched).
+      // Boot postgres only (no api/worker → no external providers touched).
       expect(compose(["up", "-d", "postgres"], env).code).toBe(0);
       waitPgReady(env);
 

@@ -53,7 +53,7 @@ async function allocatePort(fixed: number | undefined, preferred: number | undef
 }
 
 // --- Pinned (fixed) ports -------------------------------------------------
-// A host operator can PIN a host port via env (WEB_PORT / MCP_PORT / POSTGRES_PORT)
+// A host operator can PIN a host port via env (WEB_PORT / POSTGRES_PORT)
 // instead of taking a random free one — useful when the host's root cloudflared
 // config routes the robotmoney.net origin to a STABLE demo port. Returns undefined
 // when unset/empty (→ a random free port is drawn instead). Only one demo can hold a
@@ -69,25 +69,26 @@ function parsePort(name: string): number | undefined {
 }
 
 // --- Run config -----------------------------------------------------------
-// Host ports for api, mcp AND postgres. The api/mcp ports prefer the stable
-// cloudflared-facing defaults (48787/48788 — the same defaults docker-compose
-// falls back to, and what the host tunnel routes robotmonet.net to) so a standing
-// demo is reachable over the tunnel without extra config; if a default is already
-// taken (another demo up), that port falls back to a random free one.
+// Host ports for api AND postgres. The api port prefers the stable
+// cloudflared-facing default (48787 — the same default docker-compose falls
+// back to, and what the host tunnel routes robotmonet.net to) so a standing
+// demo is reachable over the tunnel without extra config; if the default is
+// already taken (another demo up), it falls back to a random free one.
+// (D21 retired the member-facing MCP server — there is no longer an `mcp`
+// container or host port; members reach the committee REST API on the api
+// port.)
 //
 // Postgres has NO preferred default: a dev box often already has postgres on
-// :5432, and nothing external routes to the demo's pg (api/worker/mcp reach it
-// over the compose network by service name), so its host port is always random.
+// :5432, and nothing external routes to the demo's pg (api/worker reach it over
+// the compose network by service name), so its host port is always random.
 //
-// Any of the three can still be PINNED via env (WEB_PORT/MCP_PORT/POSTGRES_PORT),
-// which is honored as-is. Every returned socket is held open until all three are
-// chosen, then closed together, so no two draws collide.
+// Both can still be PINNED via env (WEB_PORT/POSTGRES_PORT), which is honored
+// as-is. Every returned socket is held open until both are chosen, then closed
+// together, so no two draws collide.
 const fixedApiPort = parsePort("WEB_PORT");
-const fixedMcpPort = parsePort("MCP_PORT");
 const fixedPgPort = parsePort("POSTGRES_PORT");
 const heldPorts: Held[] = [];
 const apiPort = await allocatePort(fixedApiPort, 48787, heldPorts);
-const mcpPort = await allocatePort(fixedMcpPort, 48788, heldPorts);
 const pgPort = await allocatePort(fixedPgPort, undefined, heldPorts);
 await Promise.all(heldPorts.map((s) => new Promise<void>((r) => s.close(() => r()))));
 // Pin the compose project name when DEMO_PROJECT is set (re-runs reuse/tear down the
@@ -103,7 +104,6 @@ const databaseUrl = `postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAM
 // fetch resolves "localhost" to ::1 first — so a localhost health check times
 // out in CI even though the service is up. 127.0.0.1 forces the IPv4 path.
 const backendUrl = `http://127.0.0.1:${apiPort}`;
-const mcpUrl = `http://127.0.0.1:${mcpPort}`;
 // Base compose files (what demo:down/demo:status rebuild from — they stop/inspect
 // by project and never need the pg-data bind overlay). composeFilesRun MAY append
 // a generated bind overlay below; that fuller value drives the up/run calls here.
@@ -159,9 +159,10 @@ if (pgDataDir) {
 // Admin dashboard password (/admin — the task-queue jobs dashboard, guarded by
 // ADMIN_TOKEN). A FRESH random secret every launch, set on the environment HERE —
 // before dockerEnv/compose interpolation and before any child process or the
-// dynamically-imported mcp/src/e2e.ts reads it — so the api container and every
-// internal admin caller (mcp e2e admin(), onboarding activate, rmpc-release-e2e)
-// authenticate with the SAME value. It is printed ONLY to the interactive TUI
+// dynamically-imported committee session driver reads it — so the api container
+// and every internal admin caller (the session driver's admin(), onboarding
+// activate, rmpc-release-e2e) authenticate with the SAME value. It is printed
+// ONLY to the interactive TUI
 // (see render()): never passed to log(), never serialized by writeStateFile()
 // (demo-state.json), and never printed in the plain non-TUI READY block.
 const adminPassword = crypto.randomUUID().replace(/-/g, "").slice(0, 20);
@@ -199,7 +200,6 @@ const dockerEnv: Record<string, string> = {
   // printed anywhere.
   ANALYTICS_TOKEN: analyticsToken,
   WEB_PORT: String(apiPort),
-  MCP_PORT: String(mcpPort),
   POSTGRES_PORT: String(pgPort),
   POSTGRES_USER: DB_USER,
   POSTGRES_PASSWORD: DB_PASSWORD,
@@ -234,11 +234,11 @@ type Phase = "pending" | "building" | "starting" | "healthy" | "failed";
 type StepStatus = "pending" | "running" | "done" | "failed";
 interface ResearchEntry { id: number; kind: string; state: "queued" | "running" | "done"; asof?: string; at?: string; note: string; }
 interface MemberState { stage: "connect" | "fetch" | "thinking" | "reporting" | "waiting" | "done" | "absent"; stance?: string; confidence?: number; }
-// Local structural mirrors of the mcp types (e2e.ts SessionProgress / agent.ts
-// ExistingCredentials). We deliberately do NOT `import type` them across the package
-// boundary: demo.ts loads e2e via a dynamic import() (untyped), and a static type
-// import from ../mcp/src drags the MCP SDK into the ROOT tsc program (no mcp deps) →
-// TS2307 under `bun run typecheck`. Local aliases keep our annotations decoupled.
+// Local structural mirrors of the committee session driver's types
+// (scripts/lib/committee/session.ts SessionProgress / agent.ts
+// ExistingCredentials). The driver is loaded via a dynamic import() (untyped)
+// so the driver's module-load reads BACKEND_URL AFTER it is set below; these
+// local aliases keep our annotations decoupled from that dynamic boundary.
 type SessionProgress = (ev:
   | { type: "session"; state: string; sessionId?: number; subject: string; date?: string }
   | { type: "member"; memberId: string; stage: MemberState["stage"]; stance?: string; confidence?: number }
@@ -284,7 +284,6 @@ const state: DemoState = {
     // the password is rendered on its own line in the TUI Services pane, never
     // stored in state.services.
     { name: "Admin", url: `${backendUrl}/admin` },
-    { name: "MCP", url: `${mcpUrl}/health` },
   ],
   containers: [
     { name: "postgres", phase: "pending" },
@@ -295,12 +294,10 @@ const state: DemoState = {
     { name: "worker-committee", phase: "pending" },
     { name: "worker-analytics", phase: "pending" },
     { name: "worker-research", phase: "pending" },
-    { name: "mcp", phase: "pending" },
   ],
   steps: [
     { name: "migrate", status: "pending" },
     { name: "api /health", status: "pending" },
-    { name: "mcp /health", status: "pending" },
     { name: "edgar seed", status: "pending" },
   ],
   research: [],
@@ -384,7 +381,6 @@ const fx = (isFixed: boolean) => (isFixed ? " (fixed)" : "");
 log(
   `project=${project}${fx(Boolean(process.env.DEMO_PROJECT?.trim()))}  ` +
     `api=:${apiPort}${fx(fixedApiPort !== undefined)}  ` +
-    `mcp=:${mcpPort}${fx(fixedMcpPort !== undefined)}  ` +
     `pg=:${pgPort}${fx(fixedPgPort !== undefined)}`,
 );
 log(
@@ -480,7 +476,6 @@ function writeStateFile(): void {
   const state = {
     project,
     apiPort,
-    mcpPort,
     pgPort,
     composeFiles: composeFilesBase,
     databaseUrl,
@@ -697,7 +692,7 @@ function startResearchPolling(): void {
 // endpoints) so a crash / restart-loop / unhealthy Docker healthcheck surfaces in
 // the Startup pane. Polls `docker compose ps` and maps each service's State+Health
 // to a pane phase: ✓ healthy · ✗ errored · spinner while starting/checking. Only
-// postgres declares a Docker healthcheck; for api/worker/mcp the signal is process
+// postgres declares a Docker healthcheck; for api/worker the signal is process
 // state (running vs exited/restarting) — i.e. the "absence of errors". Fully
 // defensive: any failure is logged and skipped, never crashing the TUI.
 interface PsEntry { Service?: string; Name?: string; State?: string; Health?: string; ExitCode?: number; }
@@ -1045,19 +1040,15 @@ async function main(): Promise<void> {
   setStep("migrate", "done");
 
   const WORKER_LANES = ["worker-committee", "worker-analytics", "worker-research"];
-  log("starting api, worker lanes (committee/analytics/research), mcp…");
-  for (const n of ["api", ...WORKER_LANES, "mcp"]) setContainer(n, "starting");
+  log("starting api, worker lanes (committee/analytics/research)…");
+  for (const n of ["api", ...WORKER_LANES]) setContainer(n, "starting");
   await runCompose(["up", "-d"], "start services");
   for (const n of WORKER_LANES) setContainer(n, "healthy", "running"); // no /health endpoint — up ⇒ running
   setStep("api /health", "running");
   await waitForHttp(`${backendUrl}/health`);
   setContainer("api", "healthy");
   setStep("api /health", "done");
-  setStep("mcp /health", "running");
-  await waitForHttp(`${mcpUrl}/health`);
-  setContainer("mcp", "healthy");
-  setStep("mcp /health", "done");
-  log("api + mcp healthy");
+  log("api healthy");
 
   // EDGAR/MNA seed bootstrap (issue #108) — AFTER migrations + API readiness,
   // BEFORE the research schedule may fire. Loads the committed seed artifact
@@ -1083,23 +1074,23 @@ async function main(): Promise<void> {
     console.log("\n[demo] running committee session…");
     // RM_ALLOW_INSECURE=1: docker-compose.demo.yml runs the api container with
     // this flag, so the backend's regime-write/admin gates ARE open here. The
-    // host-run mcp e2e driver is secure-by-default (mcp/src/e2e.ts
-    // regimeWriteInsecure — opt-IN, mirroring backend config.ts allowInsecure),
-    // so tell it explicitly that this stack is insecure, keeping its 5c/5d
-    // cross-role log annotations truthful ("gate open", as before the flip).
-    await run(["bun", "run", "src/e2e.ts"], join(repoRoot, "mcp"),
-      { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp`, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "committee session");
+    // host-run REST session driver is secure-by-default
+    // (scripts/lib/committee/session.ts regimeWriteInsecure — opt-IN, mirroring
+    // backend config.ts allowInsecure), so tell it explicitly that this stack
+    // is insecure, keeping its 5c/5d cross-role log annotations truthful ("gate
+    // open").
+    await run(["bun", "run", "scripts/lib/committee/session.ts"], repoRoot,
+      { ...process.env, BACKEND_URL: backendUrl, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "committee session");
 
-    // Issue #209: exercise the repo-native single-member starter over BOTH
-    // transports against this required per-PR live stack. Its --e2e mode only
-    // provisions isolated member credentials + an open session; the actual
-    // poll → brief → author → memo → canonicalize → sign → submit → verified
-    // readback path is the same exported implementation operators run.
-    console.log("[demo] running starter committee agent (REST + MCP OAuth)…");
+    // Issue #209: exercise the repo-native single-member starter against this
+    // required per-PR live stack. Its --e2e mode only provisions isolated
+    // member credentials + an open session; the actual poll → brief → author →
+    // memo → canonicalize → sign → submit → verified readback path is the same
+    // exported implementation operators run. (D21: REST is the only transport.)
+    console.log("[demo] running starter committee agent (REST)…");
     const starterEnv = {
       ...process.env,
       BACKEND_URL: backendUrl,
-      MCP_URL: `${mcpUrl}/mcp`,
       ADMIN_TOKEN: adminPassword,
     } as Record<string, string>;
     const { BACKEND_URL: _missingBackend, ...withoutBackendUrl } = starterEnv;
@@ -1121,12 +1112,6 @@ async function main(): Promise<void> {
       repoRoot,
       starterEnv,
       "starter committee agent REST live-stack exercise",
-    );
-    await run(
-      ["bun", "run", "scripts/starter-committee-agent.ts", "--transport=mcp", "--e2e"],
-      repoRoot,
-      starterEnv,
-      "starter committee agent MCP live-stack exercise",
     );
 
     console.log("[demo] running frontend checks…");
@@ -1153,7 +1138,7 @@ async function main(): Promise<void> {
     if (process.env.RMPC_RELEASE_E2E === "1") {
       console.log("\n[demo] running rmpc release e2e driver…");
       await run(["bun", "run", "scripts/rmpc-release-e2e.ts"], repoRoot,
-        { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp` } as Record<string, string>, "rmpc release e2e");
+        { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "rmpc release e2e");
     }
 
     // Additive, env-gated (Stage 7, §11 R8, docs/plans/onboarding-ic-workflow.md):
@@ -1255,7 +1240,6 @@ async function main(): Promise<void> {
     for (const k of researchKeys) console.log(`  Research:   ${backendUrl}/research/${k}`);
     // URL only — the admin password is shown in the interactive TUI, never here.
     console.log(`  Admin:      ${backendUrl}/admin  (password shown in the interactive TUI only)`);
-    console.log(`  MCP:        ${mcpUrl}/health`);
     console.log(`  State file: ${stateFile}`);
     console.log(`  Log file:   ${logFile}`);
     console.log(`  PG data:    ${pgDataDir ? `--pg-data ${pgDataDir} (bind; resumable)` : `volume ${project}_pgdata (fresh-per-run; kept on teardown)`}`);
@@ -1265,7 +1249,7 @@ async function main(): Promise<void> {
     console.log("  Reclaim stopped demos' data volumes with: bun run demo:clean");
     console.log("");
   }
-  log(`READY — Site ${backendUrl}/  ·  MCP ${mcpUrl}/health  ·  state ${stateFile}`);
+  log(`READY — Site ${backendUrl}/  ·  state ${stateFile}`);
 
   // Research pane: begin polling the worker's real job queue (TUI mode only).
   if (tuiActive) startResearchPolling();
@@ -1284,15 +1268,15 @@ async function main(): Promise<void> {
   // fast demo schedules seeded above — regime on even minutes, research on odd, so
   // those two action types are already staggered from each other (see seed.ts).
   //
-  // The committee session needs live MCP agents to submit takes, so it is driven
-  // by a loop HERE. It fires immediately (data on first load) then every ~2 min.
+  // The committee session drives live agents to submit takes over REST, so it
+  // runs from a loop HERE. It fires immediately (data on first load) then every
+  // ~2 min.
   //
-  // e2e.ts's env (BACKEND/MCP url) is captured at module load, so set it BEFORE
+  // The session driver captures BACKEND_URL at module load, so set it BEFORE
   // the dynamic import. main()'s reset-heavy flow is guarded by import.meta.url,
   // so importing here does NOT reset — we reset ONCE below and then accumulate.
   process.env.BACKEND_URL = backendUrl;
-  process.env.MCP_URL = `${mcpUrl}/mcp`;
-  const e2e = await import(join(repoRoot, "mcp", "src", "e2e.ts"));
+  const e2e = await import(join(repoRoot, "scripts", "lib", "committee", "session.ts"));
 
   // One-time setup: reset once (clears any prior demo history) + seed regime.
   await e2e.admin("reset");
@@ -1388,9 +1372,9 @@ async function main(): Promise<void> {
   // Every admission launches ONE vanilla OpenCode member-agent container
   // (scripts/lib/onboarding-eval.ts) and hands it the canonical copy-paste
   // prompt with a generated identity — no scripting beyond that: the agent
-  // discovers the MCP server, installs `rmpc`, generates its own keypair,
-  // signs and submits the application, and claims its token entirely through
-  // its own real inference. This driver only OBSERVES (poll the public status
+  // installs the committee-onboarding skill + `rmpc`, generates its own
+  // keypair, signs and submits the application over REST, and claims its token
+  // entirely through its own real inference. This driver only OBSERVES (poll the public status
   // API + the admin roster) and performs the one scripted action §11 R7
   // explicitly allows to differ between demo and production: auto-approving
   // after 10s via the same admin API a human uses.

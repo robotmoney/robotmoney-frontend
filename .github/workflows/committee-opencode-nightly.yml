@@ -1,42 +1,42 @@
 # Nightly REAL committee-member inference check (issue #77).
 #
 # WHY THIS SUITE EXISTS
-# The required per-PR `e2e` drives committee tools with our in-process demo
-# agents. That proves the protocol, but not that an external agent harness can
-# discover and use those tools. This nightly runs the pinned `opencode run` CLI
-# with Robot Money configured as a remote MCP server. The real model must call
-# get_regime, get_brief, and post_memo and carry MCP-only fixture values between
-# those calls. It never substitutes our OpenCode SDK or runAgent implementation.
+# Real-inference onboarding — a vanilla OpenCode agent navigating our own docs
+# end to end with a live model — needs a daily sweep wider than the required
+# per-PR `e2e` gate can afford (more identities, more model variety).
 #
-# WHY NIGHTLY ONLY (NOT EVERY PR)
-# The free OpenCode Zen tier is keyless but slower and more variable than a paid
-# model (a call can take minutes and occasionally returns nothing). Running it on
-# every PR would make the required gate flaky. Nightly gives a daily signal on
-# model/CLI/MCP drift without blocking development.
+# D21 (docs/decisions.md): this suite previously also carried a
+# `committee-real-inference` job that ran an external `opencode run` CLI against
+# a REMOTE MCP server, asserting the model could discover and call the committee
+# MCP tools (get_regime/get_brief/post_memo). D21 retired the MCP transport and
+# deleted that harness (scripts/opencode-committee-tools-test.ts, mcp/), so the
+# job is removed here — it tested a surface that no longer exists.
 #
-# NO SECRET
-# `opencode/big-pickle` is a free, no-credential OpenCode Zen model. There is no
-# ANTHROPIC_API_KEY (or any secret) anywhere in this path — that is the whole
-# point of the keyless design (closes the #92 no-secret blocker).
+# COVERAGE GAP (honest): with that job gone, NO CI job currently exercises the
+# real-model committee-take authoring path (COMMITTEE_REAL_INFERENCE=1,
+# scripts/lib/committee/inference.ts) — every committee take in CI, including in
+# the demo boot below, takes the deterministic stanceFor()/buildMemo() template
+# path. Re-establishing that coverage — a job that sets COMMITTEE_REAL_INFERENCE=1
+# and loud-fails on the deterministic fallback, and/or drives an external
+# real-inference agent through the REST participation chain — is follow-up work,
+# not part of the retirement. What IS covered nightly below is real-inference
+# ONBOARDING (ONBOARDING_REAL_EVAL), a different surface.
 #
-# GOTCHAS
-# - The standalone OpenCode binary is pinned and checksum-verified in the test
-#   image. Keep the pin at >= 1.18.x: 1.16.2 required a `git init /app`
-#   workaround for headless runs in a non-Git directory (removed by #131).
+# NO SECRET (keyless default)
+# `opencode/big-pickle` is a free, no-credential OpenCode Zen model. The sweep
+# job below opts into a paid model via ANTHROPIC_API_KEY for reliability.
 #
 # CI taxonomy class: heavy (scheduled real external-model drift check). Heavy
 # suites are sweep-only: NO `pull_request` trigger — schedule + on-demand only.
 #
-# Stage 7 addition (docs/plans/onboarding-ic-workflow.md, §11 R8): the second
-# job below, `onboarding-real-inference-sweep`, is NOT a duplicate of the
+# The job below, `onboarding-real-inference-sweep`, is NOT a duplicate of the
 # required PR gate's (.github/workflows/e2e.yml) real-inference onboarding
 # admission — real inference is no longer nightly-exclusive (that's the whole
 # point of the §11 R8 rework: onboarding-as-eval only means something with a
 # real model doing the reasoning, on every PR that touches this surface). This
 # job is additive: it runs a WIDER sweep (more identities, more model variety)
 # than the PR gate can afford to spend on every push, using an
-# ANTHROPIC_API_KEY secret — unlike this file's original keyless
-# committee-take-authoring job above, which stays exactly as keyless as ever.
+# ANTHROPIC_API_KEY secret.
 name: committee-opencode-nightly
 env:
   CI_CLASS: heavy
@@ -46,22 +46,6 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  committee-real-inference:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.5"
-
-      - name: Install root tooling
-        run: bun install --frozen-lockfile
-
-      - name: External OpenCode CLI uses committee MCP tools
-        run: bun run test:opencode-tools
-        timeout-minutes: 40
-
   # Broader/deeper real-inference onboarding sweep (§11 R8, Stage 7). Reuses
   # the EXACT demo stack boot the required `e2e` PR gate uses
   # (scripts/demo.ts → scripts/lib/demo-main.ts, same pattern as
@@ -87,9 +71,6 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
-      - name: Install MCP deps
-        working-directory: mcp
-        run: bun install --frozen-lockfile
       - name: Install backend deps (for the host-side EDGAR seed bootstrap step)
         working-directory: backend
         run: bun install --frozen-lockfile

@@ -81,10 +81,6 @@ services:
 
   worker-research: *demo-worker
 
-  mcp:
-    labels:
-      robotmoney.demo.project: ${DEMO_PROJECT}
-
   # Onboarding eval (docs/architecture.md §11 R8, Stage 5): a vanilla OpenCode
   # agent container, no Robot Money tooling preinstalled (see
   # scripts/lib/member-agent/Dockerfile). This is a TEMPLATE, not a standing
@@ -95,17 +91,18 @@ services:
   # `docker compose up` / `bun run demo` boot never builds or runs it for
   # nothing.
   #
-  # Egress this service needs: the `mcp` service (compose network, discovery +
-  # signed apply), GitHub Releases (github.com + objects.githubusercontent.com,
-  # for the `rmpc` binary the agent installs itself), and OpenCode Zen (the
-  # real model API). Real inference is the NORMAL case (§11 R8) and needs NO
-  # secret by default: scripts/lib/onboarding-eval.ts's resolveModelConfig()
-  # defaults to the SAME free, no-credential `opencode/big-pickle` tier
-  # mcp/src/inference.ts already uses for real committee takes — genuinely
-  # real inference, not a template. An operator MAY opt into a paid model
-  # (OPENCODE_MODEL + a matching key below) for speed/reliability; an
-  # explicit opt-in with no matching key fails loudly rather than silently
-  # falling back to a different model.
+  # Egress this service needs: the `api` service (compose network — the
+  # committee REST API the agent applies against; D21 retired the MCP server),
+  # GitHub Releases (github.com + objects.githubusercontent.com, for the `rmpc`
+  # binary and the committee-onboarding skill the agent installs itself), and
+  # OpenCode Zen (the real model API). Real inference is the NORMAL case (§11 R8)
+  # and needs NO secret by default: scripts/lib/onboarding-eval.ts's
+  # resolveModelConfig() defaults to the SAME free, no-credential
+  # `opencode/big-pickle` tier scripts/lib/committee/inference.ts already uses
+  # for real committee takes — genuinely real inference, not a template. An
+  # operator MAY opt into a paid model (OPENCODE_MODEL + a matching key below)
+  # for speed/reliability; an explicit opt-in with no matching key fails loudly
+  # rather than silently falling back to a different model.
   member-agent:
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
@@ -122,7 +119,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENCODE_MODEL: ${OPENCODE_MODEL:-}
     depends_on:
-      - mcp
+      - api
     restart: "no"
 
 # Namespace the postgres data volume so `bun run demo:clean` (scripts/demo-clean.ts)

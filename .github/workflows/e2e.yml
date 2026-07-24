@@ -1,5 +1,5 @@
 # End-to-end tier of the test pyramid: stands up the full stack (api + worker +
-# mcp + postgres via docker compose) and drives the demo lifecycle end to end
+# postgres via docker compose) and drives the demo lifecycle end to end
 # against LIVE external providers (issue #147: DEMO_HERMETIC and the stubbed
 # demo path were removed entirely — this required gate now boots the SAME
 # production-parity LIVE data path `bun run demo` always resolves, and every
@@ -33,7 +33,7 @@
 # a cheap fail-fast supplement, before any model tokens are spent. It runs
 # UNCONDITIONALLY for every PR, including forks: scripts/lib/onboarding-eval.ts
 # defaults to the same free, no-credential OpenCode Zen tier
-# (`opencode/big-pickle`) mcp/src/inference.ts already uses for real committee
+# (`opencode/big-pickle`) scripts/lib/committee/inference.ts already uses for real committee
 # takes, so there is no secret to be missing — see that file's own doc
 # comment for why keyless is genuinely real inference, not a degraded
 # fallback. Two things this wiring accounts for, not ignores:
@@ -97,15 +97,10 @@ jobs:
         # passwordless sudo and no TTY); the binary itself installs into the
         # runner user's cache with no elevation.
         run: bunx playwright install chromium
-      - name: Install deps
-        working-directory: mcp
-        run: bun install --frozen-lockfile
-      - name: Typecheck MCP
-        working-directory: mcp
-        run: bun run typecheck
-      - name: Test MCP
-        working-directory: mcp
-        run: bun test
+      # D21 retired the mcp/ package — no separate MCP install/typecheck/test
+      # steps. The committee surface is the api's REST API; the committee
+      # session driver (scripts/lib/committee/session.ts) is covered by the
+      # root typecheck + the "Full-stack demo" step below.
       # Needed BEFORE "Full-stack demo" (issue #108): scripts/lib/demo-main.ts
       # now spawns backend/scripts/edgar-seed-bootstrap.ts as a host-side
       # subprocess (cwd: backend/) after API health, which needs backend's own
@@ -137,11 +132,12 @@ jobs:
       # Fail-fast, inference-off SUPPLEMENT (Stage 5's test, wired into CI here
       # per Stage 7) — never a substitute for the real-inference eval below.
       # Proves every rail the real eval rides on without spending a model
-      # token: the member-agent image builds and starts, anonymous MCP
-      # discovery (apply-how-to) answers over the compose network, and a
-      # signed apply built with the real rmpc release binary lands end-to-end
-      # through MCP `apply`. Runs for EVERY PR (including forks — nothing here
-      # needs a secret) before the expensive live demo boot, so a broken rail
+      # token: the member-agent image builds and starts, it reaches the
+      # committee REST API over the compose network, and a signed apply built
+      # with the real rmpc release binary lands end-to-end through POST
+      # /api/committee/apply (D21 — the MCP transport is retired). Runs for
+      # EVERY PR (including forks — nothing here needs a secret) before the
+      # expensive live demo boot, so a broken rail
       # fails in minutes, not tens of minutes.
       - name: Onboarding eval infra rails (inference-off, fail-fast)
         run: bun test scripts/tests/onboarding-eval-infra.test.ts
@@ -205,11 +201,14 @@ jobs:
           DEMO_PROJECT: rmdemo_ci_${{ github.run_id }}_${{ github.run_attempt }}
           # This required e2e boots the LIVE data path (issue #147 — DEMO_HERMETIC
           # removed): committee takes use the deterministic stanceFor() +
-          # buildMemo() template path (mcp/src/agent.ts, memo.ts) — no live model,
-          # NO secret. The REAL keyless opencode-zen authoring path
-          # (mcp/src/inference.ts) is gated behind COMMITTEE_REAL_INFERENCE=1 and
-          # exercised in the nightly committee-opencode workflow, which loudly
-          # asserts every member's take was really model-authored. Do NOT wire
+          # buildMemo() template path (scripts/lib/committee/agent.ts, memo.ts) — no live model,
+          # NO secret. The REAL keyless opencode-zen committee-take authoring path
+          # (scripts/lib/committee/inference.ts, gated behind
+          # COMMITTEE_REAL_INFERENCE=1) is NOT currently exercised by any CI job
+          # after D21 removed the external-agent MCP-tools harness that used to
+          # drive it — see committee-opencode-nightly.yml's header; re-adding a
+          # job that sets COMMITTEE_REAL_INFERENCE=1 and loud-fails on the
+          # deterministic fallback is tracked follow-up. Do NOT wire
           # ANTHROPIC_API_KEY (or any secret) here — the keyless design removed
           # that dependency (closes the #92 no-secret blocker).
           #
@@ -229,7 +228,7 @@ jobs:
           # path above stays keyless. OPENCODE_MODEL/ANTHROPIC_API_KEY below
           # are the OPTIONAL paid-model opt-in: injected ONLY into the
           # short-lived member-agent container scripts/lib/onboarding-eval.ts
-          # launches (never into the api/worker/mcp services), and only when
+          # launches (never into the api/worker services), and only when
           # the "Configure onboarding real-inference eval" step resolved a
           # trusted-context opt-in — otherwise both resolve to empty and
           # onboarding-eval.ts's resolveModelConfig() falls through to

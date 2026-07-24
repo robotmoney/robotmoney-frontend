@@ -9,11 +9,11 @@
  */
 import { canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import type { CommitteeBrief, CommitteeSession, CommitteeTake } from "@robotmoney/contract";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-export type StarterTransport = "rest" | "mcp";
+// D21 retired the MCP transport (docs/decisions.md D21); REST is the only
+// transport. The type is kept (single-valued) so the exported signing helpers
+// and their unit tests keep a stable shape.
+export type StarterTransport = "rest";
 
 export interface StarterSession extends Omit<CommitteeSession, "id"> {
   id: string | number;
@@ -49,7 +49,6 @@ export interface StarterCredentials {
 export interface StarterOptions extends StarterCredentials {
   transport: StarterTransport;
   backendUrl: string;
-  mcpUrl?: string;
   authorTake?: AuthorTake;
 }
 
@@ -71,9 +70,9 @@ export const deterministicAuthorTake: AuthorTake = ({ session, brief }) => ({
 });
 
 /**
- * Both adapters deliberately enter the same repo-owned canonicalization path.
- * The MCP adapter also compares these bytes with get_signing_payload before it
- * signs, making contract/server drift a loud failure.
+ * The submission enters the repo-owned canonicalization path (the same bytes
+ * the backend verifier reconstructs). Retained as a named helper so its unit
+ * test can pin the contract serializer directly.
  */
 export function canonicalizeDraftForTransport(
   _transport: StarterTransport,
@@ -127,19 +126,6 @@ async function restJson<T>(
   init?: RequestInit,
 ): Promise<T> {
   return responseJson<T>(await fetch(`${backendUrl}${route}`, init), operation);
-}
-
-function mcpText<T>(result: unknown): T {
-  if (typeof result !== "object" || result === null) {
-    throw new Error("MCP tool returned an invalid result");
-  }
-  const content = (result as { content?: unknown }).content;
-  if (!Array.isArray(content) || typeof content[0] !== "object" || content[0] === null) {
-    throw new Error("MCP tool returned no text content");
-  }
-  const text = (content[0] as { text?: unknown }).text;
-  if (typeof text !== "string") throw new Error("MCP tool returned non-text content");
-  return JSON.parse(text) as T;
 }
 
 function assertAuthoredTake(take: AuthoredTake): void {
@@ -224,85 +210,12 @@ async function runRest(options: StarterOptions): Promise<StarterResult> {
   return { transport: "rest", draft, canonical, signature, take: verifiedTake(readback, options.memberId) };
 }
 
-async function runMcp(options: StarterOptions): Promise<StarterResult> {
-  if (!options.mcpUrl) throw new Error("MCP_URL is required for --transport=mcp");
-  const client = new Client({ name: `starter-${options.memberId}`, version: "0.1.0" });
-  const authProvider = new ClientCredentialsProvider({
-    clientId: options.memberId,
-    clientSecret: options.memberToken,
-  });
-  const transport = new StreamableHTTPClientTransport(new URL(options.mcpUrl), { authProvider });
-  await client.connect(transport);
-  try {
-    const session = mcpText<StarterSession | null>(
-      await client.callTool({ name: "get_open_session", arguments: {} }),
-    );
-    if (!session) throw new Error("no committee session is currently collecting");
-    const brief = mcpText<CommitteeBrief | null>(
-      await client.callTool({
-        name: "get_brief",
-        arguments: { date: session.date, subject: session.subjectId },
-      }),
-    );
-    if (!brief) throw new Error(`no brief exists for ${session.date}/${session.subjectId}`);
-
-    const authored = await (options.authorTake ?? deterministicAuthorTake)({ session, brief });
-    assertAuthoredTake(authored);
-    const memo = mcpText<{ ok?: boolean; url?: string; error?: string }>(
-      await client.callTool({
-        name: "post_memo",
-        arguments: {
-          sessionId: String(session.id),
-          title: `Starter take for ${session.subjectId}`,
-          body: authored.body,
-        },
-      }),
-    );
-    if (!memo.ok || !memo.url) throw new Error(`post committee memo was rejected: ${memo.error ?? "missing URL"}`);
-
-    const draft: SubmissionDraft = {
-      memberId: options.memberId,
-      date: session.date,
-      subjectId: session.subjectId,
-      nonce: crypto.randomUUID(),
-      ...authored,
-      memoUrl: memo.url,
-    };
-    const { canonical, signature } = await signDraft("mcp", draft, options.privateKey);
-    const signingPayload = mcpText<{ canonical?: string }>(
-      await client.callTool({ name: "get_signing_payload", arguments: { ...draft } }),
-    );
-    if (signingPayload.canonical !== canonical) {
-      throw new Error("MCP get_signing_payload bytes differ from @robotmoney/contract canonicalizeSubmission");
-    }
-    const submitted = mcpText<{ ok?: boolean; verified?: boolean; error?: string }>(
-      await client.callTool({
-        name: "submit_recommendation",
-        arguments: { ...draft, signature },
-      }),
-    );
-    if (!submitted.ok || submitted.verified !== true) {
-      throw new Error(`MCP recommendation was not verified: ${submitted.error ?? JSON.stringify(submitted)}`);
-    }
-    const readback = mcpText<{ takes?: CommitteeTake[] }>(
-      await client.callTool({
-        name: "get_session",
-        arguments: { date: session.date, subject: session.subjectId },
-      }),
-    );
-    return { transport: "mcp", draft, canonical, signature, take: verifiedTake(readback, options.memberId) };
-  } finally {
-    await client.close();
-  }
-}
-
 export async function runStarterCommitteeAgent(options: StarterOptions): Promise<StarterResult> {
   const normalized: StarterOptions = {
     ...options,
     backendUrl: normalizedBaseUrl(options.backendUrl, "BACKEND_URL"),
-    mcpUrl: options.mcpUrl ? normalizedBaseUrl(options.mcpUrl, "MCP_URL") : undefined,
   };
-  return normalized.transport === "rest" ? runRest(normalized) : runMcp(normalized);
+  return runRest(normalized);
 }
 
 async function importPrivateKey(rawJwk: string): Promise<CryptoKey> {
@@ -325,10 +238,13 @@ function parseTransport(argv: string[]): StarterTransport {
   const inline = argv.find((arg) => arg.startsWith("--transport="))?.split("=", 2)[1];
   const index = argv.indexOf("--transport");
   const value = inline ?? (index >= 0 ? argv[index + 1] : undefined);
-  if (value !== "rest" && value !== "mcp") {
-    throw new Error("pass --transport=rest or --transport=mcp");
+  // REST is the only transport (D21). A bare invocation (no flag) defaults to
+  // it; --transport=rest stays accepted; anything else is rejected loudly so a
+  // stale --transport=mcp invocation fails fast instead of silently.
+  if (value !== undefined && value !== "rest") {
+    throw new Error("only --transport=rest is supported (the MCP transport was retired, D21)");
   }
-  return value;
+  return "rest";
 }
 
 async function adminJson<T>(backendUrl: string, adminToken: string, action: string, body: unknown): Promise<T> {
@@ -410,7 +326,6 @@ async function main(): Promise<void> {
     ...credentials,
     transport,
     backendUrl,
-    mcpUrl: transport === "mcp" ? requiredEnv("MCP_URL") : process.env.MCP_URL,
   });
   console.log(
     `starter committee agent (${result.transport}) submitted take ${result.take.id} ` +

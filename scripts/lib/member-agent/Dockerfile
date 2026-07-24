@@ -1,21 +1,21 @@
 # Vanilla member-agent image for the docs/architecture.md §11 onboarding eval
 # (Stage 5). NO Robot Money tooling is baked in here: no `rmpc` binary, no
-# @robotmoney/contract or mcp/ source, no pre-registered MCP server, no
-# onboarding knowledge of any kind. Only a generic OpenCode agent CLI plus the
-# bare shell tools (curl/tar/git/jq) any of those would need to install `rmpc`
-# and talk HTTP for itself — exactly what a real prospective member's own
-# machine would have BEFORE following our docs. Everything Robot-Money-specific
-# — installing rmpc, generating keys, building + signing the canonical
-# application payload, submitting it — is something the agent inside the
+# @robotmoney/contract source, no onboarding knowledge of any kind. Only a
+# generic OpenCode agent CLI plus the bare shell tools (curl/tar/git/jq) any of
+# those would need to install `rmpc` and talk HTTP for itself — exactly what a
+# real prospective member's own machine would have BEFORE following our docs.
+# Everything Robot-Money-specific — installing the committee-onboarding skill,
+# installing rmpc, generating keys, building + signing the canonical application
+# payload, submitting it over the REST API — is something the agent inside the
 # container must work out at runtime from the injected canonical prompt
 # (contract's ONBOARDING_PROMPT, injected verbatim by
-# scripts/lib/onboarding-eval.ts) plus the MCP `apply-how-to` tool and the
-# linked skill. A failure to figure any of this out is a valid (red) eval
-# result about our instructions, not a bug in this image.
+# scripts/lib/onboarding-eval.ts) plus the committee-onboarding skill it
+# installs (D21 — the MCP transport is retired; the agent uses plain HTTP). A
+# failure to figure any of this out is a valid (red) eval result about our
+# instructions, not a bug in this image.
 #
-# Pinned opencode release + checksum matches
-# mcp/tests/opencode-tools/Dockerfile's own "agent" stage (already verified
-# there) so both images trust the exact same real, released binary.
+# Pinned opencode release + checksum, independently verified against the
+# upstream release asset.
 ARG OPENCODE_VERSION=1.18.1
 ARG OPENCODE_LINUX_X64_SHA256=9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b994816acf192159511
 

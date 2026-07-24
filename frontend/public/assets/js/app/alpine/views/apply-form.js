@@ -8,11 +8,10 @@
 // applicant's own agent (rmpc) BEFORE this page is ever used — Robot Money
 // never generates a key and never sees a private key. This page has exactly
 // two jobs: (a) render the canonical copy-paste prompt (ONBOARDING_PROMPT,
-// @robotmoney/contract — the SAME constant the MCP `apply-how-to` tool
-// serves, so this page can never drift onto its own copy) with a copy
-// button, and (b) accept the agent-produced signed application payload
-// (whatever the agent's apply tool call would have sent) and POST it to the
-// unchanged apply API verbatim — for owners who prefer submitting by hand.
+// @robotmoney/contract — the SAME constant the docs render, so this page can
+// never drift onto its own copy) with a copy button, and (b) accept the
+// agent-produced signed application payload and POST it to the apply API
+// verbatim — for owners who prefer submitting by hand (D21: REST-only).
 import { api, ROUTES } from "../../lib/api.js";
 import { ONBOARDING_PROMPT } from "../../contract/index.js";
 

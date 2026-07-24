@@ -10,7 +10,6 @@ a Bun server, and a Postgres-backed task queue.
 contract/   shared HTTP contract (route paths + DTO types)
 frontend/   buildless static SPA (frontend/public)
 backend/    Bun server (API + static) + Postgres queue/workers + migrations
-mcp/        member-facing MCP server (Investment Committee)
 ```
 
 ## Prerequisites
@@ -67,14 +66,13 @@ bun run sync-contract
 
 ## Demo — run the full stack
 
-Use the demo when you need the real backend, Postgres, worker, MCP server, and
-Investment Committee cycle. Make sure Bun and Docker are installed first.
+Use the demo when you need the real backend, Postgres, worker, and Investment
+Committee cycle. Make sure Bun and Docker are installed first.
 
 ```bash
 bun install
 export DEMO_PROJECT=rmdemo
 export WEB_PORT=48787
-export MCP_PORT=48788
 bun run demo         # provisions the stack and stays up
 ```
 
@@ -89,54 +87,52 @@ bun run demo:down
 
 ### Attach a prospective agent
 
-Give the external agent the fixed API and MCP URLs from the running demo:
+Give the external agent the fixed API URL from the running demo:
 
 ```text
 API: http://127.0.0.1:48787
-MCP: http://127.0.0.1:48788/mcp
 ```
 
-Use this prompt for a prospective agent such as Claude:
+Use this prompt for a prospective agent such as Claude (REST-only — the MCP
+transport was retired, see [`docs/decisions.md`](./docs/decisions.md) D21):
 
 ```text
 You are a prospective Robot Money Investment Committee member.
 
 - API base URL: http://127.0.0.1:48787
-- MCP server URL: http://127.0.0.1:48788/mcp
 
-Install `rmpc` from robotmoney-core
-(https://github.com/robotmoney/robotmoney-core/releases) and use it for committee
-identity and signing. Do not hand-roll crypto, use a generic wallet, or use ad
-hoc Node/Bun signing. If your `rmpc` does not expose MCP committee
-identity/signing commands, stop and report that `rmpc` must be upgraded.
+Install the `committee-onboarding` skill from robotmoney-core
+(https://github.com/robotmoney/robotmoney-core) into your agent harness — it
+walks you through installing `rmpc` (the committee identity/signing client) and
+applying over the REST API. Do not hand-roll crypto, use a generic wallet, or
+use ad hoc Node/Bun signing.
 
 Create/load your `rmpc` committee identity, export its base64 public key, and
-POST an application to <API_URL>/api/committee/apply with memberId, name, lens,
-and publicKey. If you have ADMIN_TOKEN, activate via
-POST <API_URL>/api/committee/admin/activate with X-Admin-Token; otherwise stop
-and ask the host for activation and your member bearer token.
-
-Connect to the MCP server with OAuth client_credentials where client_id is your
-memberId and client_secret is your member bearer token. Wait for an open session,
-read the regime/brief/subject data, post a memo, call get_signing_payload, sign
-the canonical payload with `rmpc`, submit with submit_recommendation, then report
-the session, stance, confidence, and memo URL.
+POST a signed application to <API_URL>/api/committee/apply with name, contact,
+lens, publicKey, and an `rmpc` signature over the canonical application payload.
+If you have ADMIN_TOKEN, activate via POST <API_URL>/api/committee/admin/activate
+with X-Admin-Token; otherwise stop and ask the host for activation. Claim your
+bearer token by signing the token-claim challenge with `rmpc`. Then, each
+session: wait for an open session, read the regime/brief/subject data over REST,
+post a memo, canonicalize + `rmpc`-sign the submission, POST it to
+<API_URL>/api/committee/submit with your bearer token, then report the session,
+stance, confidence, and memo URL.
 ```
 
 The built-in demo agents and the built-in onboarding loop keep running at the same
 time. A separately prompted agent proves that a non-demo member can join through
-the public apply → activation → MCP OAuth → `rmpc`-signed submission path.
+the public apply → activation → claim → `rmpc`-signed REST submission path.
 
 ### Fixed ports (stable cloudflared origin)
 
-By default the standing demo picks three **random free** host ports. Set any of
-`WEB_PORT` / `MCP_PORT` / `POSTGRES_PORT` to **pin** that host port instead — useful
+By default the standing demo picks **random free** host ports. Set
+`WEB_PORT` / `POSTGRES_PORT` to **pin** that host port instead — useful
 when the host's root `cloudflared` config routes the `robotmoney.net` origin to a
 stable demo port. Add `DEMO_PROJECT` to pin the compose project name so re-runs
 reuse / tear down the same containers:
 
 ```bash
-DEMO_PROJECT=rmdemo WEB_PORT=48787 MCP_PORT=48788 bun run demo
+DEMO_PROJECT=rmdemo WEB_PORT=48787 bun run demo
 ```
 
 - Each var can be pinned independently; any unset one still gets a random free port.

@@ -4,15 +4,15 @@
 // scripts/lib/member-agent/Dockerfile) per admission, injects the canonical
 // copy-paste prompt (contract's ONBOARDING_PROMPT) with a generated identity,
 // then OBSERVES ONLY: this module never applies, signs, claims, or connects on
-// the member's behalf. Everything from "install rmpc" onward is the
+// the member's behalf. Everything from "install the skill" onward is the
 // containerized agent's own real inference, working out §11.2 from the prompt
-// + the MCP `apply-how-to` tool + the linked skill — exactly what a real
-// prospective member's own agent would have to do.
+// + the installed committee-onboarding skill — exactly what a real prospective
+// member's own agent would have to do (D21: over the committee REST API).
 //
 // Real inference is the DEFAULT mode here, never an optional extra — and it
 // requires NO secret to run. This module defaults to the SAME free,
 // no-credential OpenCode Zen model (`opencode/big-pickle`) that
-// mcp/src/inference.ts already uses for real committee takes
+// scripts/lib/committee/inference.ts already uses for real committee takes
 // (docker-compose.demo.yml's member-agent comment has the same reference).
 // That is genuinely real inference — a real model call against a free
 // provider tier, not a template or a mock — which is exactly why it's the
@@ -42,36 +42,30 @@
 // intentional limit of the observe-only design, not a bug — documented here
 // rather than faked with invented per-step signals.
 //
-// ── Local-network substitution for the unprovisioned staging `mcp.` subdomain
+// ── Local-network substitution for the unprovisioned staging committee host
 // ONBOARDING_PROMPT is injected with its <display name>/<email> placeholders
 // filled in (exactly as the prompt's own text says a human would do by hand
-// before pasting — docs/plans/onboarding-ic-workflow.md's standing decision:
-// "the eval uses the local demo MCP container ... instead" of the
-// unprovisioned staging subdomain, robotmoney/robotmoney-core#1170 being the
-// out-of-scope skill-side half). Nothing else about the prompt text is
-// changed. Because the prompt's doc link is a production URL this ephemeral
-// demo stack cannot serve, the container's opencode.json (generated per run,
-// mounted read-only, never baked into the image) is pre-wired with network
-// access to this run's own `mcp` service — the ONE piece of information a
-// real applicant's own agent would already have by the time it starts
-// reasoning about the rest of the flow (a human, per the real docs, would
-// have already pointed their agent's MCP client at mcp.robotmoney.net before
-// the agent starts reasoning). Discovering WHAT to do with that access —
-// calling apply-how-to, installing rmpc, generating keys, signing, submitting,
-// waiting, claiming — is still 100% the agent's own real inference; the
-// config carries no onboarding-specific knowledge at all.
+// before pasting). Nothing else about the prompt text is changed. Because the
+// prompt's doc link is a production URL this ephemeral demo stack cannot serve,
+// the injected prompt carries a harness note with the committee REST API base
+// URL reachable over this run's compose network — the ONE piece of information
+// a real applicant's own agent would already have (a human, per the real docs,
+// would apply against committee.robotmoney.net). Discovering WHAT to do —
+// installing the committee-onboarding skill, installing rmpc, generating keys,
+// signing, submitting the signed apply over REST, waiting, claiming — is still
+// 100% the agent's own real inference; nothing carries onboarding-specific
+// knowledge (D21: the MCP transport is retired; the agent uses plain HTTP).
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ONBOARDING_PROMPT, path as routePath, ROUTES } from "@robotmoney/contract";
 
 export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.demo.yml"];
-// /mcp/apply, not /mcp: anonymous discovery (apply-how-to, apply) lives on its
-// own path — see the comment on this in mcp/src/server.ts. This eval never
-// goes past apply (it stops before claim+participate), so the pre-wired
-// config only ever needs the anonymous surface; pointing it at bare /mcp
-// would 401 on connect (no bearer), since /mcp is member-only.
-export const DEFAULT_MCP_URL_INTERNAL = "http://mcp:8788/mcp/apply";
+// The committee REST API the member-agent container reaches over the compose
+// network — the `api` service on its internal port. D21 retired the `mcp`
+// service; the agent applies over this REST surface (POST /api/committee/apply)
+// directly, following the committee-onboarding skill.
+export const DEFAULT_API_URL_INTERNAL = "http://api:8787";
 // Live-verified via a real GitHub Actions e2e run: a vanilla agent doing
 // genuine reasoning (fetching docs, downloading rmpc, generating a key, and
 // — when the linked skill's payload description wasn't quite enough —
@@ -115,27 +109,30 @@ export function fillPromptIdentity(prompt: string, identity: OnboardingIdentity)
   return prompt.replace("<display name>", identity.name).replace("<email>", identity.contact);
 }
 
-const DEMO_NETWORK_NOTE =
-  "\n\n---\n" +
-  "Demo harness note (environment info, not part of your task): your MCP " +
-  "client is already configured with network access to the Robot Money MCP " +
-  "server for this run. This substitutes for the staging `mcp.` subdomain, " +
-  "which is not provisioned on this local demo network — everything else " +
-  "above is unchanged.";
+function demoNetworkNote(apiBaseUrl: string): string {
+  return (
+    "\n\n---\n" +
+    "Demo harness note (environment info, not part of your task): the Robot " +
+    `Money committee REST API for this run is reachable at ${apiBaseUrl} over ` +
+    "this local demo network. Apply against that base URL instead of the " +
+    "production host in the docs (which this ephemeral demo stack does not " +
+    "serve) — everything else above is unchanged."
+  );
+}
 
 // The exact text injected into the container — ONBOARDING_PROMPT with its
 // identity placeholders filled, plus the harness's local-network note (kept
 // clearly delimited and separate, per the module doc comment above).
-export function buildAgentPrompt(identity: OnboardingIdentity): string {
-  return `${fillPromptIdentity(ONBOARDING_PROMPT, identity)}${DEMO_NETWORK_NOTE}`;
+export function buildAgentPrompt(identity: OnboardingIdentity, apiBaseUrl: string = DEFAULT_API_URL_INTERNAL): string {
+  return `${fillPromptIdentity(ONBOARDING_PROMPT, identity)}${demoNetworkNote(apiBaseUrl)}`;
 }
 
 // ── Model configuration (real inference is the default, not opt-in — and it
 //    needs no secret: the default model is the same free, no-credential
-//    OpenCode Zen tier mcp/src/inference.ts already uses) ───────────────────
+//    OpenCode Zen tier scripts/lib/committee/inference.ts already uses) ───────────────────
 export const MODEL_API_KEY_ENV_CANDIDATES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] as const;
 
-// Free, no-credential OpenCode Zen model (mirrors mcp/src/inference.ts's
+// Free, no-credential OpenCode Zen model (mirrors scripts/lib/committee/inference.ts's
 // DEFAULT_INFERENCE_MODEL exactly — same pin, same rationale: real inference,
 // no secret required). Pinned for determinism; override via OPENCODE_MODEL.
 export const DEFAULT_INFERENCE_MODEL = "opencode/big-pickle";
@@ -173,17 +170,16 @@ export function resolveModelConfig(env: Record<string, string | undefined> = pro
 }
 
 // opencode.json written per-run, mounted read-only into the container (never
-// baked into the image). Carries only generic MCP connectivity — no
-// onboarding-specific knowledge (see module doc comment).
-export function buildAgentOpencodeConfig(model: string, mcpUrl: string): Record<string, unknown> {
+// baked into the image). Carries NO onboarding-specific knowledge and no
+// Robot Money connectivity config — the agent reaches the committee REST API
+// with plain HTTP (bash), using the base URL carried in the prompt's harness
+// note (D21: the MCP transport is retired, so there is no MCP client to wire).
+export function buildAgentOpencodeConfig(model: string): Record<string, unknown> {
   return {
     $schema: "https://opencode.ai/config.json",
     model,
     autoupdate: false,
-    permission: { "*": "deny", bash: "allow", "robotmoney_*": "allow" },
-    mcp: {
-      robotmoney: { type: "remote", url: mcpUrl, enabled: true },
-    },
+    permission: { "*": "deny", bash: "allow" },
   };
 }
 
@@ -285,7 +281,7 @@ export interface RunOnboardingEvalOptions {
   composeProject: string; // the ALREADY-RUNNING demo stack's compose project name
   composeFiles?: string[];
   backendUrl: string; // host-published backend URL for THIS harness's own polling
-  mcpUrlInternal?: string; // what the CONTAINER reaches over the compose network
+  apiUrlInternal?: string; // the committee REST API base the CONTAINER reaches over the compose network
   adminToken: string;
   env?: Record<string, string | undefined>; // resolveModelConfig source; default process.env
   timeoutMs?: number;
@@ -317,7 +313,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
   const env = opts.env ?? process.env;
   const modelConfig = resolveModelConfig(env); // throws loudly — no fallback (see doc comment)
   const identity = opts.identity ?? generateIdentity();
-  const mcpUrlInternal = opts.mcpUrlInternal ?? DEFAULT_MCP_URL_INTERNAL;
+  const apiUrlInternal = opts.apiUrlInternal ?? DEFAULT_API_URL_INTERNAL;
   const composeFiles = opts.composeFiles ?? DEFAULT_COMPOSE_FILES;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
@@ -327,8 +323,8 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
   const workDir = mkdtempSync(join(tmpdir(), "onboarding-eval-"));
   const opencodeConfigPath = join(workDir, "opencode.json");
   try {
-    writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(modelConfig.model, mcpUrlInternal), null, 2));
-    const prompt = buildAgentPrompt(identity);
+    writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(modelConfig.model), null, 2));
+    const prompt = buildAgentPrompt(identity, apiUrlInternal);
 
     // A deterministic, explicit container name — NOT left to `docker compose
     // run`'s auto-generated one — so cleanup can target the real container

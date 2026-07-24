@@ -7,10 +7,9 @@
 //
 // docs/decisions.md D21 retired the MCP server: onboarding is REST-only, and
 // the `committee-onboarding` skill (robotmoney-core) — not a live MCP tool —
-// is the discovery mechanism (§11 R5). `mcp/`'s `apply-how-to`/`apply` tools
-// still import ONBOARDING_PROMPT/APPLY_HOW_TO_STEPS below as of this commit
-// only because `mcp/`'s own retirement is separate follow-up work (tracked
-// issue); this file's content already reflects the REST-only target.
+// is the discovery mechanism (§11 R5). The onboarding prompt / step-list
+// constants below are consumed by the frontend apply page, the docs, and the
+// demo onboarding-eval harness (scripts/lib/onboarding-eval.ts).
 //
 // Field set per docs/architecture.md §11 R6: {name, contact, lens?, publicKey}.
 // `lens` is genuinely optional (not every applicant states one), so — unlike
@@ -60,11 +59,9 @@ export const COMMITTEE_ONBOARDING_SKILL_URL =
 // The canonical, current statement of application steps (§11.2 R5). Under
 // D21 there is no live tool serving this — the skill itself (linked above)
 // is the discovery mechanism — but this remains the single source docs/tests
-// snapshot against instead of hand-copying prose, and (until mcp/'s own
-// retirement, tracked separately) is still what mcp/src/server.ts's
-// `apply-how-to` tool returns verbatim. `step` is a stable machine-readable
-// slug (matches the §11.2 sequence names); `summary` is the human-readable
-// instruction.
+// snapshot against instead of hand-copying prose. `step` is a stable
+// machine-readable slug (matches the §11.2 sequence names); `summary` is the
+// human-readable instruction.
 export const APPLY_HOW_TO_STEPS = [
   {
     step: "toolchain",

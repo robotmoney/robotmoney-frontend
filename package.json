@@ -2,15 +2,14 @@
   "name": "robotmoney-frontend-monorepo",
   "version": "0.1.0",
   "private": true,
-  "description": "Single-folder home for the split-ready frontend/ + backend/ + contract/ (+ mcp/).",
+  "description": "Single-folder home for the split-ready frontend/ + backend/ + contract/.",
   "scripts": {
-    "postinstall": "bun install --cwd backend && bun install --cwd mcp",
+    "postinstall": "bun install --cwd backend",
     "sync-contract": "bun scripts/sync-contract.ts",
     "check-contract": "bun scripts/sync-contract.ts --check",
     "check-docs": "bash scripts/check-docs-analytics.sh",
     "check:contribution": "bun scripts/check-contribution.ts",
     "test": "bun test scripts/tests",
-    "test:opencode-tools": "bun scripts/opencode-committee-tools-test.ts",
     "test:browser": "playwright test",
     "typecheck": "tsc --noEmit",
     "preview": "bun scripts/preview-server.ts",
@@ -23,7 +22,6 @@
     "credentials:check": "bun scripts/gitops-credentials.ts --check"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
     "libsodium-wrappers": "^0.8.4"
   },
   "devDependencies": {

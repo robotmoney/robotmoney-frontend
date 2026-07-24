@@ -1,17 +1,19 @@
-// MCP-path end-to-end demo. Drives one or more full committee sessions where N
-// independent agents participate THROUGH the MCP server (each its own key + token
-// + MCP session). One member per session is a deliberate no-show. The session
+// REST-path end-to-end committee demo (D21 — the MCP transport is retired; see
+// docs/decisions.md D21). Drives one or more full committee sessions where N
+// independent agents participate over the committee REST API (each its own key
+// + token). One member per session is a deliberate no-show. The session
 // lifecycle is driven through the worker job queue (admin enqueue-job → worker
 // handler → domain) so the demo exercises the real FOR UPDATE SKIP LOCKED claim
 // loop. Multi-session: the second session's brief references the first session's
 // outcome, demonstrating rotation awareness.
+//
+// This module replaces the retired mcp/src/e2e.ts. The lifecycle was always
+// driven over the REST admin API; only the per-member participation (./agent.ts)
+// and the standalone main()'s former MCP-OAuth assertions changed.
 import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
-import { runAgent, enroll, textOf } from "./agent.ts";
+import { runAgent, enroll } from "./agent.ts";
 import type { ExistingCredentials, AgentStage } from "./agent.ts";
 import { generateKeyPair } from "./crypto.ts";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -21,13 +23,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // MUST mirror backend/src/config.ts allowInsecure's opt-IN polarity: insecure
 // ONLY on an explicit RM_ALLOW_INSECURE === "1", and never when ANALYTICS_TOKEN
 // is set (a configured analytics credential closes the regime-write gate in
-// every env). SECURE BY DEFAULT — unset means "enforced". This used to be
-// opt-OUT (`!== "0"`), the opposite polarity of the backend's flag, which is
-// exactly how a fail-open idiom gets copied into new code; the demo harness
-// (scripts/lib/demo-main.ts) now passes RM_ALLOW_INSECURE=1 explicitly to this
+// every env). SECURE BY DEFAULT — unset means "enforced". The demo harness
+// (scripts/lib/demo-main.ts) passes RM_ALLOW_INSECURE=1 explicitly to this
 // host-run driver, matching the api container docker-compose.demo.yml runs.
 // Exported + env-injectable so the polarity is unit-testable hermetically
-// (tests/e2e-insecure.test.ts).
+// (scripts/tests/committee-session-insecure.test.ts).
 export function regimeWriteInsecure(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
@@ -85,7 +85,7 @@ const VALID_STANCES = new Set<string>(STANCES);
 const REAL_INFERENCE = process.env.COMMITTEE_REAL_INFERENCE === "1";
 
 // Post-publish structural assertions over every PRESENT member's authored take.
-// Throws on any failure so the standalone `bun run src/e2e.ts` entrypoint exits
+// Throws on any failure so the standalone `bun run session.ts` entrypoint exits
 // non-zero (main() catches and process.exit(1)) — this is the required-CI signal
 // that each take was authored by a real inference call, not a template.
 function assertAuthoredTakes(tag: string, takes: any[]) {
@@ -179,23 +179,6 @@ export async function activeMemberCount(): Promise<number> {
     .catch(() => ({ members: [] as { id: string }[] })) as { members?: { id: string }[] };
   return Array.isArray(r.members) ? r.members.length : 0;
 }
-
-// NOTE (docs/architecture.md §11, Stage 6 of docs/plans/onboarding-ic-workflow.md):
-// this file used to also export `onboardMember()` — a scripted, JS-keygen
-// public-apply→admin-activate→claim→OAuth-connect driver used by the standing
-// demo's onboarding pane. §11 R3/R6 now require the applicant's agent to
-// generate its own key and sign the canonical application payload itself
-// (`rmpc`, not this file's `generateKeyPair`/`sign`), and the public apply
-// route now REJECTS an unsigned body outright (backend/src/api/validation.ts
-// parseApply requires `signature`) — the old onboardMember() body would 400 on
-// its very first call today. The real onboarding path now lives in
-// scripts/lib/onboarding-eval.ts (a real-inference agent container, observed
-// only) and is driven by scripts/lib/demo-main.ts's onboardingDriver(); the
-// no-inference proof of the same signed-apply chain lives in
-// scripts/rmpc-release-e2e.ts. JS keygen (`./crypto.ts`) survives in this file
-// only for `enroll()`/`runAgent()`'s demo-only SESSION-PARTICIPATION simulation
-// (never applying on a member's behalf) and in crypto unit tests — never on an
-// onboarding code path.
 
 // Exported (in addition to standalone-main use) so scripts/rmpc-release-e2e.ts
 // (issue #104) can drive the SAME proven job-queue session lifecycle this file's
@@ -332,54 +315,12 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
 async function main() {
   const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(Date.now() + 86400_000).toISOString().slice(0, 10);
-  console.log(`\n=== Committee MCP E2E (${today} → ${tomorrow}) ===`);
+  console.log(`\n=== Committee REST E2E (${today} → ${tomorrow}) ===`);
 
   // Setup (direct admin calls — not lifecycle state machine)
   await admin("reset");
   await admin("regime", { asof: today });
   await admin("subject", SUBJECTS[0]);
-
-  // ── OAuth 2.1 assertions ──────────────────────────────────────────────
-  const MCP_BASE = (process.env.MCP_URL ?? "http://localhost:8788/mcp").replace(/\/mcp\/?$/, "");
-  // 1. Metadata endpoint
-  const metaRes = await fetch(`${MCP_BASE}/.well-known/oauth-authorization-server`);
-  const meta = metaRes.ok ? await responseJson(metaRes) : {};
-  console.log(`  OAuth metadata: token_endpoint=${meta.token_endpoint ? "✓" : "✗"}`);
-
-  // 2. Register a member and exchange credentials for an OAuth access token
-  const oauthMember = { memberId: "oauth-test", name: "OAuth Test", lens: "oauth-demo" };
-  const oauthReg = await fetch(`${BACKEND}${ROUTES.committee.register}`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
-    body: JSON.stringify({ ...oauthMember, publicKey: (await generateKeyPair()).publicKeyB64 }),
-  }).then(responseJson);
-  const oauthToken = await fetch(`${MCP_BASE}/mcp/oauth/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: oauthMember.memberId,
-      client_secret: oauthReg.token,
-    }),
-  }).then(responseJson);
-  console.log(`  OAuth token exchange: access_token=${oauthToken.access_token ? "✓" : "✗"} expires_in=${oauthToken.expires_in}`);
-
-  // 3. Invalid credentials are rejected
-  const badToken = await fetch(`${MCP_BASE}/mcp/oauth/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "client_credentials", client_id: "nonexistent", client_secret: "bad" }),
-  });
-  console.log(`  OAuth invalid credentials: ${badToken.status === 401 ? "✓ rejected" : "✗ allowed"}`);
-
-  // 4. Revoke the access token
-  if (oauthToken.access_token) {
-    const revokeRes = await fetch(`${MCP_BASE}/mcp/oauth/revoke`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ token: oauthToken.access_token }),
-    });
-    console.log(`  OAuth token revocation: ${revokeRes.ok ? "✓" : "✗"}`);
-  }
 
   // Session 1: today's subject
   const s1 = await runSession(today, SUBJECTS[0], 1);
@@ -456,7 +397,7 @@ async function main() {
   // Session 2: next day, different subject (demonstrates rotation + cross-session
   // awareness). Eos (registered mid-run above) participates alongside the
   // original members.
-  const s2 = await runSession(tomorrow, SUBJECTS[1], 2, s1.pub.session.synthesis, existingCreds);
+  await runSession(tomorrow, SUBJECTS[1], 2, s1.pub.session.synthesis, existingCreds);
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${BACKEND}${ROUTES.committee.sessions}`).then((r) => r.json());
@@ -465,8 +406,8 @@ async function main() {
   console.log("\n=== done ===\n");
 }
 
-// Only run the full E2E flow (reset + OAuth assertions + 2 sessions) when this
-// file is the entry point (e.g. CI's `bun run src/e2e.ts`). Guarded so the
+// Only run the full E2E flow (reset + 2 sessions + cross-role checks) when this
+// file is the entry point (e.g. CI's `bun run session.ts`). Guarded so the
 // standing demo can `import { runSession, admin, SUBJECTS }` WITHOUT triggering
 // a reset that would wipe accumulating demo history. main()'s behaviour as an
 // entry point is unchanged.
