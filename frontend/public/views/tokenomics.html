@@ -16,27 +16,26 @@
     <header class="tok__hero">
       <div class="tok__hero-art" x-data="tokHero()"></div>
       <div class="tok__hero-inner">
-        <span class="tok__eyebrow">01 / $ROBOTMONEY</span>
         <h1 class="tok__h1">
           Token <span class="tok__grad">Economics</span>
         </h1>
         <p class="tok__lede">
           $ROBOTMONEY directs vault allocation. Fair launch via Bankr on Base, 0% premine.
         </p>
-
-        <div class="tok__hero-actions">
-          <div class="tok__contract">
-            <span class="tok__contract-label">Contract</span>
-            <code class="tok__contract-addr">0x65021a79AeEF...8618bEbA3</code>
-            <button type="button" class="tok__copy" data-copy="0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" data-copied-text="Copied!"><span data-copy-label>Copy</span></button>
-          </div>
-          <div class="tok__hero-links">
-            <a class="tok__btn tok__btn--solid" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
-            <a class="tok__btn tok__btn--ghost" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">BaseScan</a>
-          </div>
-        </div>
       </div>
     </header>
+
+    <div class="tok__hero-actions">
+      <div class="tok__contract">
+        <span class="tok__contract-label">Contract</span>
+        <code class="tok__contract-addr">0x65021a79AeEF...8618bEbA3</code>
+        <button type="button" class="tok__copy" data-copy="0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" data-copied-text="Copied!"><span data-copy-label>Copy</span></button>
+      </div>
+      <div class="tok__hero-links">
+        <a class="tok__btn tok__btn--solid" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
+        <a class="tok__btn tok__btn--ghost" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">BaseScan</a>
+      </div>
+    </div>
 
     <!-- 02 / Utility -->
     <div class="tok__section" id="what-it-does">
@@ -412,41 +411,40 @@
 .tok {
   background: var(--color-void);
   color: var(--color-text);
-  padding: 8rem 1.5rem 5rem;
+  padding: 0 1.5rem 5rem;
   font-family: var(--font-sans);
 }
 .tok__container {
-  max-width: 1100px;
+  max-width: 80rem;
   margin: 0 auto;
 }
 
-/* Hero — full-bleed (breaks out of the 1100px .tok__container band) */
+/* Hero — full-bleed (breaks out of the 1280px .tok__container band) */
 .tok__hero {
   position: relative;
   width: 100vw;
   margin-left: calc(50% - 50vw);
   margin-right: calc(50% - 50vw);
   overflow: hidden;
-  min-height: 380px;
+  min-height: 52vh;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  align-items: center;
   border-bottom: 1px solid var(--color-border);
-  padding-bottom: 3rem;
+  background: var(--color-void);
   margin-bottom: 3rem;
 }
 .tok__hero-art { position: absolute; inset: 0; z-index: 0; }
 .tok__hero > *:not(.tok__hero-art) { position: relative; z-index: 1; }
 /* Inner wrapper re-applies the page's content max-width so hero text/CTA
-   stays aligned with the 1100px .tok__container band while the art is
+   stays aligned with the 1280px .tok__container band while the art is
    full-bleed. */
 .tok__hero-inner {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: calc(1100px + 3rem);
+  max-width: 80rem;
   margin-inline: auto;
-  padding-inline: 1.5rem;
+  padding: 2.5rem 1.5rem;
 }
 .tok__hero::after {
   content: "";
@@ -467,21 +465,21 @@
   margin-bottom: 0.75rem;
 }
 .tok__h1 {
-  font-family: var(--font-serif);
-  font-style: italic;
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
   font-size: 2.75rem;
   line-height: 1.05;
   margin: 0 0 1rem;
 }
 .tok__grad {
-  font-family: var(--font-sans);
+  font-family: var(--font-display);
   font-style: normal;
   font-weight: 700;
-  background: linear-gradient(90deg, var(--color-accent), var(--color-blue));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: var(--color-accent);
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
 }
 .tok__lede {
   font-size: 1.05rem;
@@ -573,15 +571,19 @@
   margin: 1.5rem 0;
 }
 .tok__h2 {
-  font-family: var(--font-serif);
-  font-style: italic;
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
   font-size: 2rem;
   line-height: 1.05;
   margin: 0 0 1rem;
 }
 .tok__h3 {
-  font-family: var(--font-serif);
-  font-style: italic;
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
   font-size: 1.5rem;
   line-height: 1.05;
   margin: 2rem 0 0.75rem;
@@ -941,7 +943,7 @@
   .tok__hero-links { flex: 0 0 auto; }
 }
 @media (min-width: 768px) {
-  .tok { padding: 8rem 2rem 5rem; }
+  .tok { padding: 0 2rem 5rem; }
   .tok__h1 { font-size: 3.5rem; }
   .tok__h2 { font-size: 2.5rem; }
   .tok__section--deep { padding: 3rem 2rem; }
@@ -951,7 +953,7 @@
   .tok__gov-flow { flex-direction: row; justify-content: center; }
 }
 @media (min-width: 1024px) {
-  .tok { padding: 10rem 2rem 6rem; }
+  .tok { padding: 0 2rem 6rem; }
   .tok__h1 { font-size: 4rem; }
   .tok__grid--4 { grid-template-columns: repeat(4, 1fr); }
 }

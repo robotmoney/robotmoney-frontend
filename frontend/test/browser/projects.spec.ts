@@ -80,8 +80,8 @@ test("routes to /projects and renders the directory table with a2 tokens", async
   await navigate(page, "/projects");
 
   // Header + a2 gradient token.
-  await expect(page.locator(".pj-title")).toContainText("Agentic Economy");
-  await expect(page.locator(".pj-title .a2-grad")).toBeVisible();
+  await expect(page.locator(".a2-hero__title")).toContainText("Agentic Economy");
+  await expect(page.locator(".a2-hero__title .a2-grad")).toBeVisible();
 
   // Data present → the "No projects yet." empty state must not be shown (issue #87).
   await expect(page.locator(".pj-status", { hasText: "No projects yet" })).toBeHidden();

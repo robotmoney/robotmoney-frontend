@@ -39,8 +39,10 @@
   margin-bottom: 1.5rem;          /* mb-6 */
 }
 .governance__title {
-  font-family: var(--font-serif);
-  font-style: italic;
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  font-weight: 700;
   font-size: 2.25rem;             /* text-4xl */
   line-height: 1.05;              /* leading-[1.05] */
   margin: 0 0 2rem;               /* mb-8 */
@@ -74,8 +76,8 @@
   border: 1px solid transparent;
 }
 .governance__icon--accent { border-color: rgba(0, 229, 255, 0.3); }   /* accent/30 */
-.governance__icon--blue   { border-color: rgba(68, 136, 255, 0.3); }  /* blue/30 */
-.governance__icon--purple { border-color: rgba(139, 92, 246, 0.3); }  /* purple/30 */
+.governance__icon--blue   { border-color: rgba(0, 229, 255, 0.3); }  /* accent/30 (was blue) */
+.governance__icon--purple { border-color: rgba(0, 229, 255, 0.3); }  /* accent/30 (was purple) */
 
 .governance__icon-letter {
   font-family: var(--font-mono);
@@ -83,8 +85,8 @@
   font-weight: 700;
 }
 .governance__icon-letter--accent { color: var(--color-accent); }
-.governance__icon-letter--blue   { color: var(--color-blue); }
-.governance__icon-letter--purple { color: var(--color-purple); }
+.governance__icon-letter--blue   { color: var(--color-accent); }
+.governance__icon-letter--purple { color: var(--color-accent); }
 
 .governance__card-title {
   font-size: 1.25rem;             /* text-xl */
@@ -133,8 +135,10 @@
 }
 .governance__filter-lede {
   font-size: 1.5rem;              /* text-2xl */
-  font-family: var(--font-serif);
-  font-style: italic;
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  font-weight: 700;
   line-height: 1.375;             /* leading-snug */
   margin: 0;
 }

@@ -8,11 +8,13 @@
   <!-- Hero (p5 Flow Field via changelogHero() factory) -->
   <header class="cl__hero">
     <div class="cl__hero-art" x-data="changelogHero()"></div>
-    <h1 class="cl__h1">Project <span class="cl__grad">Development</span></h1>
-    <p class="cl__lede">
-      Roadmap, milestones, and a running log of everything shipped.
-      Building in public — subject to change as we learn.
-    </p>
+    <div class="cl__hero-inner">
+      <h1 class="cl__h1">Project <span class="cl__grad">Development</span></h1>
+      <p class="cl__lede">
+        Roadmap, milestones, and a running log of everything shipped.
+        Building in public, subject to change as we learn.
+      </p>
+    </div>
   </header>
 
   <div class="cl__grid">
@@ -448,7 +450,7 @@
 <style>
 .cl {
   min-height: 100vh;
-  padding: 8rem 1.5rem 5rem;
+  padding: 0 1.5rem 5rem;
   background: var(--color-void);
   color: var(--color-text);
   font-family: var(--font-sans);
@@ -457,16 +459,21 @@
 .cl__hero {
   position: relative;
   overflow: hidden;
-  min-height: 300px;
+  min-height: 52vh;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  margin-bottom: 3rem;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  max-width: 720px;
-  margin: 0 auto 4rem;
-  padding: 2.5rem 1.5rem;
-  text-align: center;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-void);
 }
 .cl__hero-art { position: absolute; inset: 0; z-index: 0; }
+.cl__hero-inner {
+  position: relative; z-index: 2;
+  width: 100%; max-width: 80rem; margin-inline: auto; padding: 2.5rem 1.5rem;
+}
 .cl__hero .cl__h1,
 .cl__hero .cl__lede { position: relative; z-index: 1; }
 .cl__hero::after {
@@ -477,33 +484,33 @@
 }
 
 .cl__h1 {
-  font-family: var(--font-serif);
-  font-style: italic;
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
   font-size: 2.5rem;
   line-height: 1.05;
   margin: 0 0 1.25rem;
 }
 
 .cl__grad {
-  font-family: var(--font-sans);
+  font-family: var(--font-display);
   font-style: normal;
   font-weight: 700;
-  background: linear-gradient(90deg, var(--color-accent), var(--color-blue));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: var(--color-accent);
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
 }
 
 .cl__lede {
   color: var(--color-text-muted);
-  max-width: 540px;
-  margin: 0 auto;
+  max-width: 42rem;
+  margin: 1rem 0 0;
   line-height: 1.6;
 }
 
 .cl__grid {
-  max-width: 1200px;
+  max-width: 80rem;
   margin: 0 auto;
   display: grid;
   grid-template-columns: 1fr;
@@ -511,8 +518,10 @@
 }
 
 .cl__h2 {
-  font-family: var(--font-serif);
-  font-style: italic;
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
   font-size: 1.75rem;
   margin: 0 0 2rem;
 }
@@ -709,7 +718,7 @@
 
 @media (min-width: 1024px) {
   .cl {
-    padding: 10rem 2rem 6rem;
+    padding: 0 2rem 6rem;
   }
   .cl__h1 { font-size: 3.5rem; }
   .cl__h2 { font-size: 2rem; }

@@ -5,7 +5,7 @@
 
 <section class="sk container">
   <header class="sk__head">
-    <span class="sk__eyebrow">Robot Money Skill</span>
+    <div class="sk__head-inner">
     <h1 class="sk__title">
       Agent <span class="sk__title-accent">Skill</span> docs
     </h1>
@@ -15,15 +15,16 @@
       agent runtime and the full deposit &rarr; yield + basket &rarr; withdraw loop
       runs with no human in the loop.
     </p>
-
-    <div class="sk__install">
-      <span class="sk__install-label">install</span>
-      <code class="sk__install-cmd">npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli</code>
     </div>
-    <p class="sk__install-note">
-      Works with Claude Code, Cursor, Codex, and any MCP-compatible agent runtime.
-    </p>
   </header>
+
+  <div class="sk__install">
+    <span class="sk__install-label">install</span>
+    <code class="sk__install-cmd">npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli</code>
+  </div>
+  <p class="sk__install-note">
+    Works with Claude Code, Cursor, Codex, and any MCP-compatible agent runtime.
+  </p>
 
   <!-- Primary doc cards -->
   <div class="sk__grid">
@@ -122,15 +123,27 @@
 
 <style>
 .sk {
-  max-width: 1000px;
+  max-width: 80rem;
   margin: 0 auto;
-  padding: 8rem 1.5rem 5rem;
+  padding: 0 1.5rem 5rem;
   color: var(--color-text);
   font-family: var(--font-sans);
 }
 
-/* Header */
-.sk__head { margin-bottom: 3.5rem; }
+/* Header — full-bleed headline band, matching the other nav pages */
+.sk__head {
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  min-height: 52vh;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-void);
+  margin-bottom: 3rem;
+}
+.sk__head-inner { width: 100%; max-width: 80rem; margin-inline: auto; padding: 2.5rem 1.5rem; }
 
 .sk__eyebrow {
   display: inline-block;
@@ -143,23 +156,22 @@
 }
 
 .sk__title {
-  font-family: var(--font-serif);
-  font-style: italic;
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
   font-size: 2.75rem;
   line-height: 1.05;
-  letter-spacing: -0.02em;
   margin: 0 0 1.25rem;
 }
 
 .sk__title-accent {
-  font-family: var(--font-sans);
+  font-family: var(--font-display);
   font-style: normal;
   font-weight: 700;
-  background: linear-gradient(90deg, var(--color-accent), var(--color-blue));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: var(--color-accent);
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
 }
 
 .sk__lede {
@@ -276,8 +288,10 @@
 .sk__section { margin-bottom: 4rem; }
 
 .sk__section-title {
-  font-family: var(--font-serif);
-  font-style: italic;
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
   font-size: 1.75rem;
   margin: 0 0 1.75rem;
 }
@@ -365,6 +379,6 @@
 }
 
 @media (min-width: 1024px) {
-  .sk { padding: 9rem 2rem 6rem; }
+  .sk { padding: 0 2rem 6rem; }
 }
 </style>

@@ -9,15 +9,17 @@
 
 <section class="a2 container" x-data="projectsView()" x-init="load()">
 
-  <!-- Header -->
-  <header class="a2-section__head pj-head">
-    <span class="a2-eyebrow">Analytics</span>
-    <h1 class="pj-title">Agentic Economy <span class="a2-grad">Ecosystem</span></h1>
-    <p class="a2-section__lede">
-      Zero Human Companies, onchain AI agents, and other AI-native economics
-      experiments. Every metric maps to a concrete row in the backend and a
-      specific ingestion pipeline.
-    </p>
+  <!-- Header — full-bleed hero, matching /performance + /allocation -->
+  <header class="a2-hero">
+    <div class="a2-hero__viz" x-data="meshHero()" aria-hidden="true"></div>
+    <div class="a2-hero__inner">
+      <h1 class="a2-hero__title">Agentic Economy <span class="a2-grad">Ecosystem</span></h1>
+      <p class="a2-hero__lede">
+        Zero Human Companies, onchain AI agents, and other AI-native economics
+        experiments. Every metric maps to a concrete row in the backend and a
+        specific ingestion pipeline.
+      </p>
+    </div>
   </header>
 
   <!-- States -->
@@ -193,7 +195,7 @@
 /* ── a2 base tokens (this fragment carries its own copy; the router-injected view
       does not load /performance's inline styles) ─────────────────────────────── */
 .a2 {
-  max-width: 1400px;
+  max-width: 80rem;
   margin: 0 auto;
   padding: 2.5rem 1.5rem 5rem;
   color: var(--color-text);
@@ -208,12 +210,12 @@
   margin-bottom: 1rem;
 }
 .a2-grad {
-  background: linear-gradient(90deg, var(--color-accent), var(--color-blue));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: var(--color-text);
   font-style: normal;
+  font-family: var(--font-display);
   font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
 }
 .a2-section__head { margin-bottom: 2rem; }
 .a2-section__lede {
@@ -225,13 +227,54 @@
 }
 .a2-dim { color: var(--color-text-dim); }
 
-.pj-head { max-width: 1400px; }
-.pj-title {
-  font-family: var(--font-serif);
-  font-style: italic;
-  font-size: 2.25rem;
+/* Hero — full-bleed (breaks out of the 1400px .a2 content band), matching
+   /performance + /allocation so every a2 page opens the same way. */
+.a2-hero {
+  position: relative;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  min-height: 52vh;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-void);
+  margin-bottom: 3rem;
+}
+.a2-hero__viz { position: absolute; inset: 0; z-index: 0; }
+.a2-hero__viz::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, var(--color-void), transparent 60%);
+}
+.a2-hero__viz canvas { display: block; width: 100%; height: 100%; }
+.a2-hero__inner {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 80rem;
+  margin-inline: auto;
+  padding: 2.5rem 1.5rem;
+}
+.a2-hero__title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: 2.5rem;
   line-height: 1.05;
-  margin: 0.25rem 0 0;
+  margin: 0 0 1rem;
+}
+.a2-hero__lede {
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  line-height: 1.6;
+  margin: 0;
+  max-width: 42rem;
 }
 .pj-status {
   font-family: var(--font-mono);
@@ -374,6 +417,10 @@
 
 @media (min-width: 768px) {
   .a2 { padding: 3rem 2rem 5rem; }
-  .pj-title { font-size: 2.75rem; }
+  .a2-hero__inner { padding: 2.5rem 2rem; }
+  .a2-hero__title { font-size: 3.25rem; }
+}
+@media (min-width: 1024px) {
+  .a2-hero__title { font-size: 3.75rem; }
 }
 </style>

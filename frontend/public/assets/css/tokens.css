@@ -1,11 +1,13 @@
-/* Design tokens — ported verbatim from the original src/app/globals.css.
-   ROBOT MONEY design system: brutalist-luxe meets terminal aesthetic. */
+/* Design tokens — the foundation every other stylesheet references.
+   ROBOT MONEY design system: the Beam/Pool/Beacon covenant.
+   Beam (cyan) = a LINE only; Pool (green) = value masses; Beacon (orange) = a POINT for loss/attention. */
 
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 :root {
   /* fonts (were Tailwind @theme vars) */
   --font-sans: 'Space Grotesk', system-ui, sans-serif;
+  --font-display: "Helvetica Neue Condensed", "Arial Narrow", "Avenir Next Condensed", 'Space Grotesk', system-ui, sans-serif;
   --font-serif: 'Instrument Serif', Georgia, serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 
@@ -24,8 +26,17 @@
   --color-accent-glow: rgba(0, 229, 255, 0.12);
   --color-warm: #e8a640;
   --color-warn: #ff6644;
+  --color-green: #10b981;
+  --color-green-deep: #0b7c5d;
+  --color-beacon: #ff7a29;
+  /* Retired hues — RETAINED only until the Step 3 inline-<style> sweep removes their
+     remaining uses in view files. Do not reference in any new rule. */
   --color-blue: #4488ff;
   --color-purple: #8b5cf6;
+
+  /* corner ceiling */
+  --radius: 2px;
+  --radius-pill: 2px;
 
   /* easing */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
