@@ -8,7 +8,13 @@ import { resolveDemoEnv } from "./demo-env.ts";
 import { listDemoVolumes, makeDockerRunner, removeDemoVolumes } from "./demo-volumes.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
 import { COMMITTEE_INTERVAL_MS, COMMITTEE_STAGGER_MS } from "./demo-schedule.ts";
-import { resolveModelConfig, runOnboardingEval, type OnboardingIdentity, type OnboardingEvalResult } from "./onboarding-eval.ts";
+import {
+  resolveModelConfig,
+  runOnboardingEval,
+  runOnboardingEvalWithRetry,
+  type OnboardingIdentity,
+  type OnboardingEvalResult,
+} from "./onboarding-eval.ts";
 import { COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -979,8 +985,13 @@ async function main(): Promise<void> {
   // quietly in the background later. CI's own invocation of this file exits
   // (via the `if (process.env.CI)` branch below) before ever reaching
   // onboardingDriver() — it runs a different, non-onboarding check suite — so
-  // this check applies only to a LOCAL standing demo.
-  if (!process.env.CI) {
+  // this check applies to a LOCAL standing demo unconditionally, and to a CI
+  // run only when it opted into the real-inference onboarding eval (Stage 7,
+  // ONBOARDING_REAL_EVAL=1 — see the CI branch below): fail before spending
+  // minutes standing up the stack, not ~20 minutes later at the eval step
+  // itself. A CI run that did NOT opt in (fork PRs; the infra-only fallback)
+  // never reaches this branch, so it stays a true no-op there.
+  if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
     resolveModelConfig(process.env);
   }
 
@@ -1140,6 +1151,76 @@ async function main(): Promise<void> {
       console.log("\n[demo] running rmpc release e2e driver…");
       await run(["bun", "run", "scripts/rmpc-release-e2e.ts"], repoRoot,
         { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp` } as Record<string, string>, "rmpc release e2e");
+    }
+
+    // Additive, env-gated (Stage 7, §11 R8, docs/plans/onboarding-ic-workflow.md):
+    // the REAL-INFERENCE onboarding admission sweep reuses this EXACT
+    // already-booted stack instead of standing up a parallel one — same
+    // pattern as RMPC_RELEASE_E2E above. Only runs when ONBOARDING_REAL_EVAL=1,
+    // which .github/workflows/e2e.yml sets ONLY for same-repo/trusted-context
+    // PR runs where the model-key secret is actually present (GitHub Actions
+    // never exposes repo secrets to fork-PR workflow runs) — fork PRs and any
+    // run without ONBOARDING_REAL_EVAL set are a zero-behaviour-change no-op
+    // here, relying on Stage 5's separate inference-off infra-rails test
+    // (scripts/tests/onboarding-eval-infra.test.ts) as their fail-fast
+    // substitute. A failed/timed-out admission THROWS (via `run`'s pattern —
+    // no silent pass): the whole point of putting real inference in the PR
+    // gate is that a vanilla agent failing to navigate our own onboarding
+    // instructions is a real regression signal, not a shrug. Rate-limit flake
+    // from the shared self-hosted runner's IP is mitigated by
+    // runOnboardingEvalWithRetry's own retry/backoff (scripts/lib/onboarding-eval.ts) —
+    // that wrapper retries ONLY a detected 429/overload signal, never a
+    // genuine navigation failure.
+    //
+    // Sweep width (nightly-only knobs, both optional, both no-ops for the PR
+    // gate which never sets them): ONBOARDING_SWEEP_MODELS is a ":"-separated
+    // list of OPENCODE_MODEL values to try (default: just the single
+    // OPENCODE_MODEL already resolved above); ONBOARDING_SWEEP_IDENTITIES_PER_MODEL
+    // is how many fresh admissions to run per model (default 1). The PR gate's
+    // e2e.yml never sets either, so it stays exactly one admission on one
+    // model — this block is a strict superset of that behaviour, not a
+    // different code path (§11 R8: one real flow, config-only differences).
+    if (process.env.ONBOARDING_REAL_EVAL === "1") {
+      const sweepModels = (process.env.ONBOARDING_SWEEP_MODELS?.trim() || process.env.OPENCODE_MODEL || "")
+        .split(":")
+        .map((m) => m.trim())
+        .filter(Boolean);
+      if (sweepModels.length === 0) throw new Error("ONBOARDING_REAL_EVAL=1 but no model is configured (OPENCODE_MODEL / ONBOARDING_SWEEP_MODELS)");
+      const identitiesPerModel = Math.max(1, Number.parseInt(process.env.ONBOARDING_SWEEP_IDENTITIES_PER_MODEL ?? "1", 10) || 1);
+      const totalAdmissions = sweepModels.length * identitiesPerModel;
+      console.log(
+        `\n[demo] running REAL-INFERENCE onboarding eval sweep (§11 R8): ${totalAdmissions} admission(s) across ` +
+          `${sweepModels.length} model(s) [${sweepModels.join(", ")}], ${identitiesPerModel} identit${identitiesPerModel === 1 ? "y" : "ies"} each…`,
+      );
+      const sweepResults: Array<{ model: string; result: OnboardingEvalResult }> = [];
+      for (const model of sweepModels) {
+        for (let i = 0; i < identitiesPerModel; i++) {
+          const result = await runOnboardingEvalWithRetry({
+            repoRoot,
+            composeProject: project,
+            composeFiles: composeFilesRun.split(":"),
+            backendUrl,
+            adminToken: adminPassword,
+            env: { ...process.env, OPENCODE_MODEL: model },
+            onEvent: (msg) => console.log(`[demo] onboarding-real-eval[${model}]: ${msg}`),
+          });
+          sweepResults.push({ model, result });
+        }
+      }
+      const failed = sweepResults.filter((r) => !r.result.admitted);
+      for (const f of failed) if (f.result.transcript) console.log(`[demo] onboarding real-eval (${f.model}, ${f.result.identity.runId}) container transcript:\n${f.result.transcript}`);
+      if (failed.length > 0) {
+        throw new Error(
+          `real-inference onboarding eval: ${failed.length}/${sweepResults.length} admission(s) did not reach the active roster (§11 R8) — ` +
+            failed
+              .map(
+                (f) =>
+                  `${f.model}/${f.result.identity.runId}: ${f.result.timedOut ? "timed out" : `container exited (code ${f.result.containerExitCode})`}`,
+              )
+              .join("; "),
+        );
+      }
+      console.log(`[demo] real-inference onboarding eval: ${sweepResults.length}/${sweepResults.length} admission(s) admitted (§11 R8) ✓`);
     }
 
     console.log("\n[demo] CI mode — all checks passed, tearing down…");

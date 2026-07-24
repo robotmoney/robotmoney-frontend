@@ -41,8 +41,11 @@ import {
   deriveSteps,
   fillPromptIdentity,
   generateIdentity,
+  looksRateLimited,
   ONBOARDING_STEPS,
+  type OnboardingEvalResult,
   resolveModelConfig,
+  runOnboardingEvalWithRetry,
 } from "../lib/onboarding-eval.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -124,6 +127,122 @@ describe("onboarding-eval pure helpers", () => {
   test("deriveSteps: on the active roster ⇒ every step done (admitted)", () => {
     const steps = deriveSteps({ memberId: "m1", applyState: "claimed", onActiveRoster: true });
     expect(steps.every((s) => s.status === "done")).toBe(true);
+  });
+});
+
+// ── Retry/backoff decision logic (no Docker, no model call — Stage 7, §11 R8)
+// Exercises runOnboardingEvalWithRetry's OWN control flow via its injectable
+// runOnce seam. The real admission path (runOnboardingEval itself) is proven
+// separately by the Docker-backed block below and by the live CI run — this
+// suite is deliberately narrow: it is testing the retry DECISION, not
+// re-proving the eval.
+describe("runOnboardingEvalWithRetry", () => {
+  function fakeResult(overrides: Partial<OnboardingEvalResult> = {}): OnboardingEvalResult {
+    return {
+      identity: generateIdentity("fake"),
+      memberId: null,
+      steps: [],
+      admitted: false,
+      timedOut: false,
+      containerExitCode: 1,
+      ...overrides,
+    };
+  }
+
+  test("looksRateLimited matches known provider rate-limit/overload signals", () => {
+    expect(looksRateLimited("Error: 429 Too Many Requests")).toBe(true);
+    expect(looksRateLimited("anthropic rate_limit_error: slow down")).toBe(true);
+    expect(looksRateLimited("upstream returned 529 overloaded_error")).toBe(true);
+    expect(looksRateLimited(undefined)).toBe(false);
+    expect(looksRateLimited("agent could not find the apply-how-to tool")).toBe(false);
+  });
+
+  test("admitted on the first attempt — never retries", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        return fakeResult({ admitted: true });
+      },
+    });
+    expect(result.admitted).toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  test("a real (non-rate-limited) failure is returned as-is — no retry", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        return fakeResult({ transcript: "agent never called apply-how-to" });
+      },
+    });
+    expect(result.admitted).toBe(false);
+    expect(calls).toBe(1); // no retry — this is a real eval result
+  });
+
+  test("a rate-limited failure IS retried, and a subsequent success is returned", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        if (calls === 1) return fakeResult({ transcript: "429 rate_limit_error from provider" });
+        return fakeResult({ admitted: true });
+      },
+    });
+    expect(result.admitted).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  test("exhausts maxAttempts and returns the last (still rate-limited) failure — never retries forever", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      maxAttempts: 3,
+      backoffMsSchedule: [0, 0],
+      runOnce: async () => {
+        calls++;
+        return fakeResult({ transcript: "529 overloaded_error" });
+      },
+    });
+    expect(result.admitted).toBe(false);
+    expect(calls).toBe(3);
+  });
+
+  test("retries use a FRESH identity each attempt (never re-apply the same contact)", async () => {
+    const identities: string[] = [];
+    await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      backoffMsSchedule: [0],
+      identity: generateIdentity("first-attempt"),
+      runOnce: async (opts) => {
+        identities.push(opts.identity!.contact);
+        return fakeResult({ transcript: "429" });
+      },
+    });
+    expect(identities.length).toBe(2);
+    expect(new Set(identities).size).toBe(2); // no reused contact across attempts
   });
 });
 

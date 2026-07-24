@@ -401,3 +401,57 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     rmSync(workDir, { recursive: true, force: true });
   }
 }
+
+// ── CI retry/backoff wrapper (Stage 7, §11 R8) ──────────────────────────────
+// The self-hosted CI runner shares its IP with the standing rmdemo_* demo
+// stack, which has caused 429 rate-limit flake on other live-model-call gates
+// before. A transient 429/overload from the model provider never let the
+// agent reason at all, so it is not a real eval result — the PR gate retries
+// ONLY when a failed attempt's own transcript shows a rate-limit signal, with
+// backoff between attempts. Any other failure (the agent genuinely couldn't
+// navigate onboarding, a container crash, a timeout with no rate-limit
+// signal) IS a real result and is never retried — same "no retry of member
+// steps" policy scripts/lib/demo-main.ts's own onboardingDriver() follows for
+// the standing demo; this wrapper only softens the ONE known-flaky failure
+// mode for the CI gate, it does not relax the eval itself.
+const RATE_LIMIT_PATTERNS = [/\b429\b/, /rate[ _-]?limit/i, /overloaded_error/i, /rate_limit_error/i, /\b529\b/];
+
+export function looksRateLimited(transcript: string | undefined): boolean {
+  if (!transcript) return false;
+  return RATE_LIMIT_PATTERNS.some((re) => re.test(transcript));
+}
+
+export interface RunOnboardingEvalWithRetryOptions extends RunOnboardingEvalOptions {
+  maxAttempts?: number; // default 2 (1 retry)
+  backoffMsSchedule?: number[]; // delay BEFORE each retry attempt (index 0 = before attempt 2)
+  // Injectable for testing the retry/backoff DECISION LOGIC without Docker or
+  // a model call — defaults to the real runOnboardingEval. Never mock this in
+  // a test that is supposed to prove the real eval path works; that coverage
+  // lives in scripts/tests/onboarding-eval-infra.test.ts's Docker-backed
+  // block instead (test-coverage-policy #4: don't mock the subject under
+  // test).
+  runOnce?: (opts: RunOnboardingEvalOptions) => Promise<OnboardingEvalResult>;
+}
+
+export const DEFAULT_RETRY_BACKOFF_MS = [45_000];
+
+export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetryOptions): Promise<OnboardingEvalResult> {
+  const maxAttempts = opts.maxAttempts ?? 2;
+  const backoff = opts.backoffMsSchedule ?? DEFAULT_RETRY_BACKOFF_MS;
+  const runOnce = opts.runOnce ?? runOnboardingEval;
+  const log = opts.onEvent ?? (() => {});
+  let last: OnboardingEvalResult | undefined;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Fresh identity per attempt — reusing one across retries would re-apply
+    // with an already-used contact and confuse the "which member row is
+    // this" lookup the harness relies on to observe progress.
+    const identity = attempt === 1 && opts.identity ? opts.identity : generateIdentity(`ci-retry-${attempt}-${crypto.randomUUID().slice(0, 6)}`);
+    last = await runOnce({ ...opts, identity });
+    if (last.admitted) return last;
+    if (attempt === maxAttempts || !looksRateLimited(last.transcript)) return last;
+    const delayMs = backoff[Math.min(attempt - 1, backoff.length - 1)];
+    log(`onboarding eval attempt ${attempt}/${maxAttempts} looked rate-limited — retrying in ${delayMs}ms (shared-runner 429 mitigation, §11 R8)`);
+    await Bun.sleep(delayMs);
+  }
+  return last!;
+}
