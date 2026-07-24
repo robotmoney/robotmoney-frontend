@@ -129,15 +129,21 @@ Per the test-coverage invariants (loud-skip only, executed-in-CI assertions):
 - `integration.yml`: Phases 1–3 test rewrites/additions run here (backend +
   MCP + scripts tests).
 - `e2e.yml` (PR gate) currently runs the demo hermetically with inference off.
-  Real-inference onboarding on every PR is expensive and flaky (note: the
-  self-hosted runner shares its IP with the standing `rmdemo_*` stack — live
-  quota flake is a known issue). **Decision needed**: (recommended) keep the PR
-  e2e gate asserting eval *infrastructure* — containers start, anonymous MCP
-  discovery answers, a signed apply built with the real `rmpc` binary lands, all
-  loudly failing if `rmpc` or the MCP server is unavailable — and run the full
-  vanilla-OpenCode real-inference eval on the nightly
-  (`committee-opencode-nightly.yml`), which already holds model keys. The
-  alternative (real inference in every PR run) needs a quota/flake budget call.
+  **Decided: the PR gate runs the real-inference onboarding eval**, not just
+  eval infrastructure — most of what this workflow tests is whether a vanilla
+  agent can navigate our installation from our instructions alone, which is
+  meaningless without a real model doing the reasoning. Keep the
+  infrastructure-only check (containers start, anonymous MCP discovery answers,
+  a signed apply built with the real `rmpc` binary lands) as a fast fail-fast
+  step that runs *before* the real-inference eval in the same job, not as a
+  substitute for it. The known flake risk (self-hosted runner shares its IP
+  with the standing `rmdemo_*` stack — live quota flake) is handled with
+  retry/backoff around the model call, not by dropping inference from the gate.
+  Fork PRs don't get the model-key secret (GitHub Actions default) — they run
+  the infra-only check and say so loudly; same-repo PRs get the full eval.
+  `committee-opencode-nightly.yml` keeps its own real-inference assertions and
+  runs a broader/deeper sweep than the PR gate, not the *only* place inference
+  happens.
 - `rmpc-release-e2e-nightly.yml` / `scripts/rmpc-release-e2e.ts`: currently
   drives the pre-#205 `apply → activate` chain with client-supplied id; converge
   it onto the eval harness (or retire it into the nightly eval) so there is one
