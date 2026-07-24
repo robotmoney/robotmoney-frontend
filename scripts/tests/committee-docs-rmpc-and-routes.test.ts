@@ -13,8 +13,8 @@
 //   3. (§11 R4) participation.html's and runbook.html's copy-paste prompt
 //      blocks must be byte-for-byte the SAME string as ONBOARDING_PROMPT
 //      (@robotmoney/contract) — not a hand-copy that can silently drift from
-//      what the MCP `apply-how-to` tool and the /committee/apply page render
-//      — and must name apply-how-to and the signed-application step.
+//      what the /committee/apply page renders — and must name the
+//      committee-onboarding skill and the signed-application step.
 //   4. (§11 R2) the public application-status route
 //      (ROUTES.committee.applyStatus) must be documented somewhere in the
 //      committee docs, not just implemented.
@@ -103,8 +103,6 @@ describe("participation.html links the runnable starter committee agent", () => 
     const section = extractSection(read(PARTICIPATION), "starter-agent-quickstart");
     expect(section).toContain("scripts/starter-committee-agent.ts");
     expect(section).toContain("--transport=rest");
-    expect(section).toContain("--transport=mcp");
-    expect(section).toContain("client_credentials");
   });
 });
 
@@ -139,20 +137,21 @@ describe("documented /api/committee/... paths match contract/src/routes.js", () 
   }
 });
 
-// docs/architecture.md §11 R4: the copy-paste prompt is served by the MCP
-// `apply-how-to` tool (mcp/src/server.ts imports ONBOARDING_PROMPT straight
-// from the contract) so it never goes stale. These two docs pages hand-embed
-// the SAME text for readers who never leave the browser — pinning them to the
-// literal constant (not just "looks similar") is what actually catches a
-// silent copy/paste drift like a placeholder getting renamed in only one
-// place (caught while writing this: runbook.html had "<desk name>" where the
-// constant and participation.html both say "<display name>").
+// docs/architecture.md §11 R4/R5: the copy-paste prompt tells the agent to
+// install the committee-onboarding skill (robotmoney-core) — the skill
+// itself, not a live tool call, is the discovery mechanism (D21 retired the
+// MCP server). These two docs pages hand-embed the SAME text for readers who
+// never leave the browser — pinning them to the literal constant (not just
+// "looks similar") is what actually catches a silent copy/paste drift like a
+// placeholder getting renamed in only one place (caught while writing this:
+// runbook.html had "<desk name>" where the constant and participation.html
+// both say "<display name>").
 describe("participation.html and runbook.html render ONBOARDING_PROMPT verbatim", () => {
   // Canary against a vacuous pass — the constant itself must be non-empty and
   // must actually carry the placeholders a reader fills in.
-  test("ONBOARDING_PROMPT is non-empty and names the apply-how-to tool", () => {
+  test("ONBOARDING_PROMPT is non-empty and names the committee-onboarding skill", () => {
     expect(ONBOARDING_PROMPT.length).toBeGreaterThan(0);
-    expect(ONBOARDING_PROMPT).toContain("apply-how-to");
+    expect(ONBOARDING_PROMPT).toContain("committee-onboarding");
     expect(ONBOARDING_PROMPT).toContain("<display name>");
   });
 
@@ -164,9 +163,9 @@ describe("participation.html and runbook.html render ONBOARDING_PROMPT verbatim"
       expect(extractCodeBlock(read(rel), sectionId)).toBe(ONBOARDING_PROMPT);
     });
 
-    test(`${label} names apply-how-to and the signed-application step outside the prompt too`, () => {
+    test(`${label} names the committee-onboarding skill and the signed-application step outside the prompt too`, () => {
       const html = read(rel);
-      expect(html).toContain("apply-how-to");
+      expect(html).toContain("committee-onboarding");
       expect(html.toLowerCase()).toContain("signed application");
     });
   }
@@ -174,7 +173,7 @@ describe("participation.html and runbook.html render ONBOARDING_PROMPT verbatim"
 
 // docs/architecture.md §11 R2: the public application-status route must be
 // documented, not just implemented — this is what a human reading the docs
-// (rather than the MCP apply-how-to response) discovers the status page from.
+// discovers the status page from.
 describe("the public application-status route is documented", () => {
   const applyStatusPath = ROUTES.committee.applyStatus;
 

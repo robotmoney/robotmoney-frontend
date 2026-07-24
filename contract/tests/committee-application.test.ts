@@ -1,8 +1,8 @@
 // Stage 0 (docs/plans/onboarding-ic-workflow.md Phase 1 / docs/architecture.md
 // §11 R6) — canonical committee-application serialization + the shared
 // onboarding prompt/step-list constants. This is the foundation every later
-// stage (backend verify, MCP apply-how-to/apply, rmpc Rust signer, frontend
-// apply page, docs) imports, so it is pinned here first.
+// stage (backend verify, rmpc Rust signer, frontend apply page, docs) imports,
+// so it is pinned here first.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -172,8 +172,8 @@ describe("ONBOARDING_PROMPT — canonical copy-paste prompt (R4)", () => {
     expect(ONBOARDING_PROMPT).toContain("<email>");
   });
 
-  test("points the agent at MCP discovery instead of embedding steps itself (R4 — never goes stale)", () => {
-    expect(ONBOARDING_PROMPT).toContain("apply-how-to");
+  test("points the agent at installing the committee-onboarding skill instead of embedding steps itself (R5 — never goes stale)", () => {
+    expect(ONBOARDING_PROMPT).toContain("committee-onboarding");
     expect(ONBOARDING_PROMPT).toContain("rmpc");
   });
 });

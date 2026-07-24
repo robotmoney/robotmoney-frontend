@@ -79,7 +79,7 @@ describe("onboarding-eval pure helpers", () => {
     const prompt = buildAgentPrompt(identity);
     expect(prompt).toContain(identity.name);
     expect(prompt).toContain(identity.contact);
-    expect(prompt).toContain("apply-how-to"); // canonical prompt content survives untouched
+    expect(prompt).toContain("committee-onboarding"); // canonical prompt content survives untouched
     expect(prompt).toContain("Demo harness note"); // clearly delimited, not blended into the canonical text
   });
 
