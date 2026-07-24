@@ -1,5 +1,5 @@
-// Committee docs consistency guard (issue #190), pattern from
-// scripts/tests/projects-source-docs.test.ts. Two checks:
+// Committee docs consistency guard (issue #190, extended for docs/architecture.md
+// §11). Checks:
 //
 //   1. participation.html's "Generate your ed25519 identity" section
 //      (#generate-identity) must promote the rmpc CLI (robotmoney-core) —
@@ -10,18 +10,27 @@
 //      committee route table — the issue's own AC3, re-run against the
 //      edited files so the docs can never silently drift from the real route
 //      contract.
+//   3. (§11 R4) participation.html's and runbook.html's copy-paste prompt
+//      blocks must be byte-for-byte the SAME string as ONBOARDING_PROMPT
+//      (@robotmoney/contract) — not a hand-copy that can silently drift from
+//      what the MCP `apply-how-to` tool and the /committee/apply page render
+//      — and must name apply-how-to and the signed-application step.
+//   4. (§11 R2) the public application-status route
+//      (ROUTES.committee.applyStatus) must be documented somewhere in the
+//      committee docs, not just implemented.
 //
 // Runs in the required integration.yml root job via `bun test scripts/tests`.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROUTES } from "@robotmoney/contract";
+import { ONBOARDING_PROMPT, ROUTES } from "@robotmoney/contract";
 
 const repoRoot = join(import.meta.dir, "../..");
 const read = (rel: string) => readFileSync(join(repoRoot, rel), "utf8");
 
 const PARTICIPATION = "frontend/public/views/docs/investment-committee/participation.html";
 const API_REFERENCE = "frontend/public/views/docs/investment-committee/api-reference.html";
+const RUNBOOK = "frontend/public/views/docs/investment-committee/runbook.html";
 
 function decodeEntities(html: string): string {
   return html.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
@@ -33,6 +42,21 @@ function extractSection(html: string, id: string): string {
   if (start === -1) throw new Error(`section id="${id}" not found`);
   const nextH2 = html.indexOf("<h2", html.indexOf(">", start) + 1);
   return html.slice(start, nextH2 === -1 ? undefined : nextH2);
+}
+
+// Pull the FIRST <pre><code>...</code></pre> block inside section `id`,
+// entity-decoded — this is the literal text a reader's clipboard gets from
+// the docs page's Copy button (main.js's data-copy-code handler copies this
+// same <pre>'s textContent).
+function extractCodeBlock(html: string, sectionId: string): string {
+  const section = extractSection(html, sectionId);
+  const openTag = "<pre><code>";
+  const start = section.indexOf(openTag);
+  if (start === -1) throw new Error(`no <pre><code> block found in section id="${sectionId}"`);
+  const contentStart = start + openTag.length;
+  const end = section.indexOf("</code></pre>", contentStart);
+  if (end === -1) throw new Error(`unterminated <pre><code> block in section id="${sectionId}"`);
+  return decodeEntities(section.slice(contentStart, end));
 }
 
 // Extract every /api/committee/... path literal a doc reader would copy,
@@ -113,4 +137,60 @@ describe("documented /api/committee/... paths match contract/src/routes.js", () 
       ).toEqual([]);
     });
   }
+});
+
+// docs/architecture.md §11 R4: the copy-paste prompt is served by the MCP
+// `apply-how-to` tool (mcp/src/server.ts imports ONBOARDING_PROMPT straight
+// from the contract) so it never goes stale. These two docs pages hand-embed
+// the SAME text for readers who never leave the browser — pinning them to the
+// literal constant (not just "looks similar") is what actually catches a
+// silent copy/paste drift like a placeholder getting renamed in only one
+// place (caught while writing this: runbook.html had "<desk name>" where the
+// constant and participation.html both say "<display name>").
+describe("participation.html and runbook.html render ONBOARDING_PROMPT verbatim", () => {
+  // Canary against a vacuous pass — the constant itself must be non-empty and
+  // must actually carry the placeholders a reader fills in.
+  test("ONBOARDING_PROMPT is non-empty and names the apply-how-to tool", () => {
+    expect(ONBOARDING_PROMPT.length).toBeGreaterThan(0);
+    expect(ONBOARDING_PROMPT).toContain("apply-how-to");
+    expect(ONBOARDING_PROMPT).toContain("<display name>");
+  });
+
+  for (const [label, rel, sectionId] of [
+    ["participation.html", PARTICIPATION, "quickstart"],
+    ["runbook.html", RUNBOOK, "onboard"],
+  ] as const) {
+    test(`${label}'s copy-paste prompt is byte-for-byte ONBOARDING_PROMPT`, () => {
+      expect(extractCodeBlock(read(rel), sectionId)).toBe(ONBOARDING_PROMPT);
+    });
+
+    test(`${label} names apply-how-to and the signed-application step outside the prompt too`, () => {
+      const html = read(rel);
+      expect(html).toContain("apply-how-to");
+      expect(html.toLowerCase()).toContain("signed application");
+    });
+  }
+});
+
+// docs/architecture.md §11 R2: the public application-status route must be
+// documented, not just implemented — this is what a human reading the docs
+// (rather than the MCP apply-how-to response) discovers the status page from.
+describe("the public application-status route is documented", () => {
+  const applyStatusPath = ROUTES.committee.applyStatus;
+
+  test("contract defines ROUTES.committee.applyStatus", () => {
+    expect(applyStatusPath).toBe("/api/committee/apply/:id");
+  });
+
+  test("api-reference.html documents GET /api/committee/apply/:id", () => {
+    const docPaths = extractDocPaths(read(API_REFERENCE)).map(normalize);
+    expect(docPaths).toContain(normalize(applyStatusPath));
+  });
+
+  test("participation.html points readers at the status route and the rendered status page", () => {
+    const html = read(PARTICIPATION);
+    const docPaths = extractDocPaths(html).map(normalize);
+    expect(docPaths).toContain(normalize(applyStatusPath));
+    expect(html).toContain("/committee/apply/&lt;memberId&gt;");
+  });
 });

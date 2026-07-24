@@ -71,6 +71,20 @@ describe("frontend route resolution", () => {
     expect(viewFor("/committee/2026-06-25/woon")).toBe("/views/committee/session.html");
   });
 
+  // Public application-status page (docs/architecture.md §11 R2) — a
+  // dedicated fragment for /committee/apply/<id>, distinct from the plain
+  // /committee/apply application form the id-less path still resolves to via
+  // the generic catch-all below.
+  test("resolves the application-status route to its own fragment, distinct from the apply form", () => {
+    expect(viewFor("/committee/apply/4e9991de-0501-44f5-b21d-254acecd15a8")).toBe(
+      "/views/committee/apply-status.html",
+    );
+    expect(viewFor("/committee/apply/4e9991de-0501-44f5-b21d-254acecd15a8/")).toBe(
+      "/views/committee/apply-status.html",
+    );
+    expect(viewFor("/committee/apply")).toBe("/views/committee/apply.html");
+  });
+
   // Admin committee operations surface (issue #159) — every nested path in
   // docs/architecture.md §7.1's route list resolves to a shipped
   // fragment, including :id detail pages.
@@ -84,13 +98,15 @@ describe("frontend route resolution", () => {
     );
   });
 
-  test("every admin route fragment referenced by the router exists on disk", async () => {
+  test("every admin/committee route fragment referenced by the router exists on disk", async () => {
     const paths = [
       "/admin",
       "/admin/committee",
       "/admin/committee/subjects/woon-vault",
       "/admin/committee/members/athena",
       "/admin/committee/sessions/9f2c1e0a-aaaa-bbbb-cccc-000000000001",
+      "/committee/apply",
+      "/committee/apply/4e9991de-0501-44f5-b21d-254acecd15a8",
     ];
     for (const p of paths) {
       const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));
