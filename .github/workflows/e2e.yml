@@ -238,10 +238,13 @@ jobs:
           OPENCODE_MODEL: ${{ steps.onboarding-gate.outputs.use_paid_model == '1' && (vars.ONBOARDING_EVAL_MODEL || 'anthropic/claude-haiku-4-5') || '' }}
           ANTHROPIC_API_KEY: ${{ steps.onboarding-gate.outputs.use_paid_model == '1' && secrets.ANTHROPIC_API_KEY || '' }}
         # 40 min for the pre-existing checks + headroom for the onboarding eval
-        # (default 8-minute timeout per admission attempt, up to 2 attempts with
-        # runOnboardingEvalWithRetry's 45s backoff — only retries a detected
-        # 429/overload signal, see the file-level comment above).
-        timeout-minutes: 58
+        # (default 20-minute timeout per admission attempt — live-verified as
+        # realistic for a free-tier agent doing genuine exploration, see
+        # onboarding-eval.ts's DEFAULT_TIMEOUT_MS comment — up to 2 attempts
+        # with runOnboardingEvalWithRetry's 45s backoff, only retried on a
+        # detected 429/overload signal or a keyless-tier timeout, see the
+        # file-level comment above).
+        timeout-minutes: 85
       # Volume-leak backstop (issue: demo persistent volumes). The demo boot above
       # reclaims its own volume on both success and failure (demo-main.ts
       # cleanCiVolume). This always() step is the belt-and-suspenders case: if the

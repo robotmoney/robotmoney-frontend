@@ -72,7 +72,15 @@ export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.demo
 // config only ever needs the anonymous surface; pointing it at bare /mcp
 // would 401 on connect (no bearer), since /mcp is member-only.
 export const DEFAULT_MCP_URL_INTERNAL = "http://mcp:8788/mcp/apply";
-export const DEFAULT_TIMEOUT_MS = 8 * 60_000;
+// Live-verified via a real GitHub Actions e2e run: a vanilla agent doing
+// genuine reasoning (fetching docs, downloading rmpc, generating a key, and
+// — when the linked skill's payload description wasn't quite enough —
+// cloning the whole robotmoney-core repo to find the canonical serializer)
+// was still productively working past 11 minutes, nowhere near stuck. The
+// original 8-minute bound was arbitrary and too short for how much real
+// work a prompt-only agent legitimately needs on the free/slower keyless
+// tier; 20 minutes gives it realistic room without being unbounded.
+export const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 export const DEFAULT_POLL_INTERVAL_MS = 3_000;
 export const DEFAULT_AUTO_APPROVE_DELAY_MS = 10_000; // §11 R7
 
