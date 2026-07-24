@@ -218,12 +218,27 @@ export interface OnboardResult {
 }
 
 // Active committee roster size, read from the backend — the gate the standing
-// demo checks against COMMITTEE_ROSTER_CAP before admitting a newcomer.
-export async function activeMemberCount(): Promise<number> {
-  const r = await fetch(`${BACKEND}${ROUTES.committee.members}`)
+// demo checks against COMMITTEE_ROSTER_CAP before admitting a newcomer. A read
+// failure (network blip, backend momentarily busy) must NEVER be treated as
+// "roster is empty" — that silently waves admission through regardless of the
+// TRUE count, which is exactly what let the demo's onboarding driver keep
+// admitting past its intended bound. Fail CONSERVATIVELY instead: report
+// Infinity (always "full"), loudly logged, so a transient read problem pauses
+// onboarding rather than silently bypassing the cap check.
+// backendUrl override is for tests only (mcp/tests/e2e-active-member-count.test.ts)
+// — it sidesteps the process-wide `process.env.BACKEND_URL` that e2e.ts's own
+// module-level BACKEND constant captures once at import time, which is unsafe
+// to mutate from a test file when other test files in the same run also touch
+// it. Real callers never pass this; they always get the real BACKEND.
+export async function activeMemberCount(backendUrl: string = BACKEND): Promise<number> {
+  const r = await fetch(`${backendUrl}${ROUTES.committee.members}`)
     .then(responseJson)
-    .catch(() => ({ members: [] as { id: string }[] })) as { members?: { id: string }[] };
-  return Array.isArray(r.members) ? r.members.length : 0;
+    .catch((err) => {
+      console.error(`[e2e] activeMemberCount: GET ${ROUTES.committee.members} failed — assuming roster is FULL, not empty: ${err instanceof Error ? err.message : err}`);
+      return null;
+    }) as { members?: { id: string }[] } | null;
+  if (r === null) return Number.POSITIVE_INFINITY;
+  return Array.isArray(r.members) ? r.members.length : Number.POSITIVE_INFINITY;
 }
 
 async function activeMemberIds(): Promise<Set<string>> {

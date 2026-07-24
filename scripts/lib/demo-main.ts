@@ -8,6 +8,7 @@ import { resolveDemoEnv } from "./demo-env.ts";
 import { listDemoVolumes, makeDockerRunner, removeDemoVolumes } from "./demo-volumes.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
 import { COMMITTEE_INTERVAL_MS, COMMITTEE_STAGGER_MS } from "./demo-schedule.ts";
+import { NEWCOMER_NAMES, plannedNewcomer } from "./demo-newcomers.ts";
 import { COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -1271,47 +1272,42 @@ async function main(): Promise<void> {
   // review → activate → OAuth connect), then add it to the shared roster
   // (e2e.MEMBERS + onboardedCreds) so it participates in — and GROWS — the
   // committee. session/memo/admitted complete when committeeProgress sees the
-  // newcomer take + post a memo. The first admission fires early so it's visible;
-  // thereafter a NEW character joins every ONBOARD_INTERVAL, indefinitely (curated
-  // names first, then generated ones so the demo never runs dry).
-  const NEWCOMER_NAMES = [
-    "Helios", "Selene", "Rhea", "Nyx", "Eos", "Theia", "Hyperion", "Phoebe",
-    "Coeus", "Crius", "Iapetus", "Metis", "Tethys", "Themis", "Mnemosyne",
-  ];
-  const NEWCOMER_LENSES = ["liquidity", "volatility", "credit", "tail risk", "sentiment", "flows", "macro", "positioning"];
+  // newcomer take + post a memo. The first admission fires early so it's
+  // visible; thereafter a new character joins every ONBOARD_INTERVAL. FIXED,
+  // FINITE roster (NEWCOMER_NAMES, module scope above): exactly 5 named
+  // newcomers, never more — no generated fallback names, and the driver loop
+  // terminates once they're all attempted (or already on the roster) rather
+  // than running forever.
   const FIRST_ONBOARD_MS = 60_000;     // first admission ~1 min in (after the base committee shows)
   const ONBOARD_INTERVAL_MS = 300_000; // then a new character every 5 min
-  // Deterministic name/lens/bias for the n-th admission — shared by the driver and the
-  // upcoming-queue preview so the TUI shows exactly who joins next.
-  function plannedNewcomer(n: number): { memberId: string; name: string; lens: string; bias: number } {
-    const name = NEWCOMER_NAMES[n] ?? `Astra ${n + 1}`;
-    return {
-      memberId: name.toLowerCase().replace(/\s+/g, "-"),
-      name,
-      lens: NEWCOMER_LENSES[n % NEWCOMER_LENSES.length],
-      bias: ((n % 5) - 2) * 0.05, // spread -0.10 … +0.10
-    };
-  }
   async function onboardingDriver(): Promise<void> {
-    for (let n = 0; ; n++) {
+    for (let n = 0; n < NEWCOMER_NAMES.length; n++) {
       const delay = n === 0 ? FIRST_ONBOARD_MS : ONBOARD_INTERVAL_MS;
       const dueAt = Date.now() + delay;
-      // Preview the next few admissions (this one + its successors) with countdowns.
-      state.upcoming = [0, 1, 2].map((k) => {
+      // Preview the next few admissions (this one + its successors, if any are
+      // left in the fixed list) with countdowns.
+      const upcoming: UpcomingMember[] = [];
+      for (const k of [0, 1, 2]) {
         const p = plannedNewcomer(n + k);
-        return { memberId: p.memberId, name: p.name, at: dueAt + k * ONBOARD_INTERVAL_MS };
-      });
+        if (p) upcoming.push({ memberId: p.memberId, name: p.name, at: dueAt + k * ONBOARD_INTERVAL_MS });
+      }
+      state.upcoming = upcoming;
       await sleep(delay);
-      const { memberId, name, lens, bias } = plannedNewcomer(n);
+      const planned = plannedNewcomer(n);
+      if (!planned) break; // exhausted the fixed 5-name list — stop, no generated fallback
+      const { memberId, name, lens, bias } = planned;
       // Idempotent: never re-onboard a member already on the roster (dedupe).
       if (e2e.MEMBERS.some((m: { memberId: string }) => m.memberId === memberId)) {
         log(`onboarding ${memberId} skipped — already on the roster`);
         continue;
       }
       // Roster cap: once the active committee reaches the contract's
-      // COMMITTEE_ROSTER_CAP, stop
-      // admitting so the demo settles at a realistic, bounded size instead of
-      // growing without bound. Keep polling — if a seat frees, admission resumes.
+      // COMMITTEE_ROSTER_CAP, stop admitting — the same finite-5-name bound
+      // above already stops the demo from growing forever, but this stays as
+      // defense in depth for a shared/reused roster. activeMemberCount() now
+      // fails CONSERVATIVELY (assume full, never assume empty) on a read
+      // error, so a transient fetch problem pauses admission instead of
+      // silently waving one through.
       const active = await e2e.activeMemberCount();
       if (active >= COMMITTEE_ROSTER_CAP) {
         state.upcoming = [];
@@ -1327,11 +1323,13 @@ async function main(): Promise<void> {
         if (creds) onboardedCreds.set(memberId, creds); // null ⇒ reused member; runAgent self-enrolls
         e2e.MEMBERS.push(member); // grow the roster → joins subsequent sessions
         setOnboardStep(memberId, "session", "running");
-        log(`onboarded ${memberId} (#${n + 1}) — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
+        log(`onboarded ${memberId} (#${n + 1}/${NEWCOMER_NAMES.length}) — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
       } catch (err) {
         log(`onboarding ${memberId} failed (stack still running): ${err instanceof Error ? err.message : err}`);
       }
     }
+    state.upcoming = [];
+    log(`onboarding complete — all ${NEWCOMER_NAMES.length} named newcomers attempted, no more will join`);
   }
   void onboardingDriver();
 
