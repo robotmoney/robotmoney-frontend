@@ -1,14 +1,21 @@
-<!-- Committee membership application — the real onboarding entry point. A
-     prospective member submits its public key here; the record is created as
-     'applied' (pending) and cannot submit until an admin activates it. Injected
-     into #view by the router (/committee/apply → this file). -->
+<!-- Committee membership application — the real onboarding entry point
+     (docs/architecture.md §11). Setup — MCP access, the rmpc client, ed25519
+     keygen — happens on the applicant's own agent BEFORE this page is ever
+     used; Robot Money never generates or sees a private key (§11 R3). This
+     page renders the canonical copy-paste prompt (same constant the MCP
+     `apply-how-to` tool serves — §11 R4/R5) and accepts the agent-produced
+     signed application payload, posting it unmodified to the signed apply
+     API (§11 R6). Injected into #view by the router (/committee/apply → this
+     file). See also /committee/apply/:id, the status page every application
+     is tracked from after submitting here. -->
 <section class="cv container" x-data="applyForm()">
   <header class="cv__head">
     <span class="cv__eyebrow">Investment Committee</span>
     <h1 class="cv__title">Apply to <span class="text-gradient">Join</span></h1>
     <p class="cv__sub">
-      Submit your member id and ed25519 public key. You will be recorded as
-      <b>applied</b> — an admin activates you before you can submit.
+      A real person stands behind every member, but the application itself is
+      submitted by your already-set-up agent. Nothing here asks for a private
+      key — keygen and signing happen on your own machine.
     </p>
   </header>
 
@@ -16,66 +23,51 @@
     <div class="cv__aggregate cv__applied" x-cloak>
       <div class="cv__agg-metric">applied<small>pending activation</small></div>
       <p class="cv__body">
-        Thanks, <span x-text="form.name"></span>. Member
-        <code x-text="form.memberId"></code> is registered as
-        <b x-text="result.memberStatus"></b>. Watch your email for approval,
-        then sign the 10-minute claim challenge with the private key you kept
-        here to receive your bearer token.
+        Member <code x-text="result.memberId"></code> is recorded as
+        <b x-text="result.memberStatus"></b>. Track it live at
+        <a :href="`/committee/apply/${result.memberId}`" x-text="`/committee/apply/${result.memberId}`"></a>
+        — it updates through approval and claim on its own.
       </p>
     </div>
   </template>
 
-  <form class="cv__form" x-show="!result" @submit.prevent="submit()" x-cloak>
-    <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
-
-    <label class="cv__field">
-      <span class="cv__label">Member id</span>
-      <input class="cv__input" type="text" x-model="form.memberId" required
-             placeholder="e.g. athena" autocomplete="off" />
-    </label>
-
-    <label class="cv__field">
-      <span class="cv__label">Display name</span>
-      <input class="cv__input" type="text" x-model="form.name" required
-             placeholder="e.g. Athena" autocomplete="off" />
-    </label>
-
-    <label class="cv__field">
-      <span class="cv__label">Lens (optional)</span>
-      <input class="cv__input" type="text" x-model="form.lens"
-             placeholder="e.g. macro risk" autocomplete="off" />
-    </label>
-
-    <label class="cv__field">
-      <span class="cv__label">Activation email</span>
-      <input class="cv__input" type="email" x-model="form.contact" required
-             placeholder="agent-operator@example.com" autocomplete="email" />
-    </label>
-
-    <div class="cv__field">
-      <span class="cv__label">Ed25519 keypair helper</span>
-      <button class="cv__submit" type="button" @click="generateKeypair()"
-              :disabled="keygenBusy"
-              x-text="keygenBusy ? 'Generating…' : 'Generate keypair in this browser'"></button>
+  <div x-show="!result" x-cloak>
+    <section class="cv__field">
+      <span class="cv__label">1. Copy this prompt into your agent</span>
       <p class="cv__body">
-        Generation stays in your browser. Save the private key securely now;
-        it is never submitted and cannot be recovered by Robot Money.
+        Fill in your display name and contact email, then paste it into your
+        agent's harness (Claude Code, OpenClaw, Codex, OpenCode, ...). It
+        discovers everything else — including installing <code>rmpc</code>
+        and generating its keypair — from the MCP server's
+        <code>apply-how-to</code> tool, and submits the signed application
+        for you headlessly.
       </p>
-    </div>
+      <textarea class="cv__input cv__textarea" readonly rows="6" x-text="prompt"></textarea>
+      <button class="cv__submit" type="button" :data-copy="prompt" data-copied-text="Copied!">
+        <span data-copy-label>Copy prompt</span>
+      </button>
+    </section>
 
-    <label class="cv__field" x-show="generatedPrivateKey" x-cloak>
-      <span class="cv__label">Private key (PKCS8, base64 — save once)</span>
-      <textarea class="cv__input cv__textarea" :value="generatedPrivateKey" readonly rows="3"></textarea>
-      <button class="cv__submit" type="button" @click="copyPrivateKey()">Copy private key</button>
-    </label>
+    <form class="cv__form" @submit.prevent="submit()">
+      <span class="cv__label">2. Or paste the signed application yourself</span>
+      <p class="cv__body">
+        If your agent already produced the signed payload (e.g. via
+        <code>rmpc committee-identity sign</code>) and you'd rather submit it
+        by hand than let the agent call the MCP <code>apply</code> tool
+        itself, paste the exact JSON object here — it's sent to the API
+        unmodified.
+      </p>
+      <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
 
-    <label class="cv__field">
-      <span class="cv__label">Public key (ed25519, base64)</span>
-      <textarea class="cv__input cv__textarea" x-model="form.publicKey" required
-                rows="3" placeholder="base64 raw public key" autocomplete="off"></textarea>
-    </label>
+      <label class="cv__field">
+        <span class="cv__label">Signed application payload (JSON)</span>
+        <textarea class="cv__input cv__textarea" x-model="pasteText" required rows="6"
+                  placeholder='{"name":"...","contact":"...","lens":"...","publicKey":"...","signature":"..."}'
+                  autocomplete="off"></textarea>
+      </label>
 
-    <button class="cv__submit" type="submit" :disabled="submitting"
-            x-text="submitting ? 'Submitting…' : 'Apply'"></button>
-  </form>
+      <button class="cv__submit" type="submit" :disabled="submitting"
+              x-text="submitting ? 'Submitting…' : 'Apply'"></button>
+    </form>
+  </div>
 </section>

@@ -1,51 +1,43 @@
-// @ts-nocheck — buildless Alpine factory; behavior is executed by the root
-// committee-apply-keygen test rather than duplicated in a typed wrapper.
+// @ts-nocheck — buildless Alpine factory; behavior is exercised by
+// scripts/tests/frontend-routes.test.ts (router mapping) and
+// scripts/tests/committee-docs-rmpc-and-routes.test.ts (the prompt this page
+// renders is pinned byte-for-byte to the same contract constant those tests
+// check the docs against).
 // Alpine factory for the committee application form (/committee/apply).
-// Moved verbatim from the monolithic views.js (finding 025).
+// docs/architecture.md §11 R3/R6: keygen and signing happen on the
+// applicant's own agent (rmpc) BEFORE this page is ever used — Robot Money
+// never generates a key and never sees a private key. This page has exactly
+// two jobs: (a) render the canonical copy-paste prompt (ONBOARDING_PROMPT,
+// @robotmoney/contract — the SAME constant the MCP `apply-how-to` tool
+// serves, so this page can never drift onto its own copy) with a copy
+// button, and (b) accept the agent-produced signed application payload
+// (whatever the agent's apply tool call would have sent) and POST it to the
+// unchanged apply API verbatim — for owners who prefer submitting by hand.
 import { api, ROUTES } from "../../lib/api.js";
+import { ONBOARDING_PROMPT } from "../../contract/index.js";
 
 export function registerApplyForm(Alpine) {
-  // ── Committee application (apply → pending activation) ─────────────────────
-  // The real onboarding entry point. POSTs the prospective member's public key
-  // to /api/committee/apply; the member is recorded 'applied' and an admin must
-  // activate it before it can submit. No token is minted here.
   Alpine.data("applyForm", () => ({
-    form: { memberId: "", name: "", lens: "", contact: "", publicKey: "" },
+    prompt: ONBOARDING_PROMPT,
+    pasteText: "",
     submitting: false,
-    keygenBusy: false,
-    generatedPrivateKey: "",
     error: null,
     result: null,
-    _toBase64(buffer) {
-      return btoa(String.fromCharCode(...new Uint8Array(buffer)));
-    },
-    async generateKeypair() {
-      this.error = null;
-      this.keygenBusy = true;
-      try {
-        const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
-        this.form.publicKey = this._toBase64(await crypto.subtle.exportKey("raw", pair.publicKey));
-        this.generatedPrivateKey = this._toBase64(await crypto.subtle.exportKey("pkcs8", pair.privateKey));
-      } catch (error) {
-        this.error = `Could not generate an Ed25519 keypair in this browser: ${error.message}`;
-      } finally {
-        this.keygenBusy = false;
-      }
-    },
-    async copyPrivateKey() {
-      await navigator.clipboard.writeText(this.generatedPrivateKey);
-    },
     async submit() {
       this.error = null;
+      let body;
+      try {
+        body = JSON.parse(this.pasteText);
+      } catch (_e) {
+        this.error = "That isn't valid JSON — paste the exact signed application payload your agent produced.";
+        return;
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        this.error = "Paste a single JSON object: { name, contact, lens?, publicKey, signature }.";
+        return;
+      }
       this.submitting = true;
       try {
-        const body = {
-          memberId: this.form.memberId.trim(),
-          name: this.form.name.trim(),
-          lens: this.form.lens.trim() || undefined,
-          contact: this.form.contact.trim(),
-          publicKey: this.form.publicKey.trim(),
-        };
         this.result = await api.post(ROUTES.committee.apply, body);
       } catch (e) {
         this.error = e.message;
