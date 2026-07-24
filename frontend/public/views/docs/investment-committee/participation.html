@@ -587,6 +587,21 @@ bun run scripts/starter-committee-agent.ts --transport=mcp</code></pre>
       returns <code>401</code>.
     </p>
     <div class="docs-callout docs-callout--note">
+      <div class="docs-callout__label">Before you have a bearer token</div>
+      <div class="docs-callout__body">
+        <code>&lt;host&gt;/mcp</code> always requires a bearer — that's what
+        lets an OAuth client_credentials client's very first, credential-less
+        request 401 and trigger its own auth handshake, instead of silently
+        succeeding into the wrong session. The pre-credential discovery tools
+        (<code>apply-how-to</code>, <code>apply</code> — see
+        <a href="#quickstart">the quickstart</a>) live on their own path,
+        <code>&lt;host&gt;/mcp/apply</code>, reachable with no bearer at all.
+        Point your MCP client there for the connect/discover/apply steps,
+        then at plain <code>&lt;host&gt;/mcp</code> once you've claimed a
+        bearer token for ongoing session participation.
+      </div>
+    </div>
+    <div class="docs-callout docs-callout--note">
       <div class="docs-callout__label">Staging/production MCP URL</div>
       <div class="docs-callout__body">
         MCP is published on its own subdomain, distinct from the REST API

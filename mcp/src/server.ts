@@ -370,47 +370,28 @@ export const httpServer = Bun.serve({
       return jsonResponse({});
     }
 
-    // ── MCP protocol endpoint ──────────────────────────────────────────
-    if (url.pathname !== "/mcp") return new Response("Not found", { status: 404 });
-
-    const sid = req.headers.get("mcp-session-id");
-    if (sid && transports.has(sid)) {
-      const binding = sessionBinding.get(sid);
-      if (binding?.isAnonymous) {
-        // Anonymous discovery sessions carry no bearer to re-validate — that's
-        // the point (§11 R5, pre-credential access). Their McpServer instance
-        // only ever has apply-how-to/apply registered, so the exposed surface
-        // stays bounded regardless of what's presented here. Capacity for
-        // these sessions is tracked in the separate anonymousSessions pool
-        // (see MAX_ANONYMOUS_SESSIONS), not MAX_SESSIONS.
+    // ── Anonymous MCP discovery endpoint (§11 R5) ───────────────────────
+    // Deliberately a SEPARATE path from /mcp, not a no-bearer branch of it.
+    // /mcp is also used by real member agents connecting via OAuth 2.1
+    // client_credentials (ClientCredentialsProvider) — that flow's SDK client
+    // sends its FIRST request with NO Authorization header by design (it has
+    // no cached token yet) and only performs the token exchange after
+    // receiving a 401, per the standard OAuth 2.1 resource-server contract.
+    // If /mcp itself ever answered a bearer-less request with 200 instead of
+    // 401, that 401-triggers-auth signal would never fire: the client would
+    // silently "succeed" into the anonymous 2-tool surface and never
+    // authenticate at all — this exact bug shipped once (see git history) and
+    // broke every OAuth-based member session. Keeping discovery on its own
+    // path makes the two cases unambiguous instead of trying to infer intent
+    // from an identical bearer-less request.
+    if (url.pathname === "/mcp/apply") {
+      const sid = req.headers.get("mcp-session-id");
+      if (sid && transports.has(sid)) {
+        // Every session reachable via this path is anonymous by construction
+        // (see the initialize branch below) — no bearer to re-validate.
         lastSeen.set(sid, Date.now());
         return transports.get(sid)!.handleRequest(req);
       }
-      // Re-validate the bearer on EVERY request to a bound session.
-      const presented = bearerOf(req) ?? "";
-      if (tokenHash(presented) !== binding?.tokenHash)
-        return unauthorized("bearer token does not match the session it was bound to");
-      const identity = await resolveBearer(presented);
-      if (!identity || identity.memberId !== binding?.memberId)
-        return unauthorized("bearer token is expired or revoked");
-      lastSeen.set(sid, Date.now());
-      return transports.get(sid)!.handleRequest(req);
-    }
-
-    // New session (initialize). A bearer is required for the member toolset,
-    // but its ABSENCE is no longer a rejection: it now gets exactly the
-    // anonymous pre-credential discovery surface (§11 R5) — apply-how-to and
-    // apply, nothing else. Every member tool (buildServer) still requires a
-    // real, resolved bearer, unchanged below.
-    //
-    // Capacity is checked against SEPARATE pools: an anonymous flood can never
-    // consume authenticated capacity (transports.size - anonymousSessions.size
-    // is the true authenticated count), and anonymous sessions have their own
-    // much smaller cap. This is deliberate — see the anonymousSessions comment
-    // above for why unbounded shared capacity here would be a full DoS.
-    const rawToken = bearerOf(req);
-
-    if (!rawToken) {
       if (anonymousSessions.size >= MAX_ANONYMOUS_SESSIONS)
         return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32002, message: "server at anonymous session capacity" }, id: null }),
           { status: 429, headers: { "Content-Type": "application/json" } });
@@ -430,6 +411,29 @@ export const httpServer = Bun.serve({
       return t.handleRequest(req);
     }
 
+    // ── Member MCP protocol endpoint ────────────────────────────────────
+    // Unconditionally requires a real bearer, exactly as before the anonymous
+    // surface existed — see the comment above for why this must never change.
+    if (url.pathname !== "/mcp") return new Response("Not found", { status: 404 });
+
+    const sid = req.headers.get("mcp-session-id");
+    if (sid && transports.has(sid)) {
+      const binding = sessionBinding.get(sid);
+      // Re-validate the bearer on EVERY request to a bound session.
+      const presented = bearerOf(req) ?? "";
+      if (tokenHash(presented) !== binding?.tokenHash)
+        return unauthorized("bearer token does not match the session it was bound to");
+      const identity = await resolveBearer(presented);
+      if (!identity || identity.memberId !== binding?.memberId)
+        return unauthorized("bearer token is expired or revoked");
+      lastSeen.set(sid, Date.now());
+      return transports.get(sid)!.handleRequest(req);
+    }
+
+    // New session (initialize). Require a real bearer — no anonymous sessions
+    // on this path (anonymous discovery lives at /mcp/apply, above).
+    const rawToken = bearerOf(req);
+    if (!rawToken) return unauthorized("a bearer token is required to start an MCP session");
     if (transports.size - anonymousSessions.size >= MAX_SESSIONS)
       return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32002, message: "server at session capacity" }, id: null }),
         { status: 429, headers: { "Content-Type": "application/json" } });

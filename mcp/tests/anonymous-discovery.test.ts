@@ -16,6 +16,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
 import {
   APPLY_HOW_TO_STEPS,
   canonicalizeApplication,
@@ -30,6 +31,14 @@ import { generateKeyPair, sign } from "../src/crypto.ts";
 // can observe an OS-assigned port afterwards.
 const MCP_TEST_PORT = 18799;
 const MCP_URL = `http://localhost:${MCP_TEST_PORT}/mcp`;
+// Anonymous discovery lives on its OWN path, not a no-bearer branch of /mcp —
+// see the comment on this in src/server.ts for why: an OAuth
+// client_credentials client's first request has no bearer by design (it has
+// no cached token yet) and relies on /mcp answering 401 to trigger its
+// auth-then-retry flow. If /mcp itself served anonymous discovery, that
+// signal would never fire and real member sessions would silently never
+// authenticate — this exact regression shipped once.
+const MCP_ANONYMOUS_URL = `http://localhost:${MCP_TEST_PORT}/mcp/apply`;
 const VALID_MEMBER_TOKEN = "capacity-test-member-token";
 
 // ── Fixture backend: only what `apply`/`verify-token` need ──────────────────
@@ -100,7 +109,9 @@ afterAll(() => {
 });
 
 async function connect(bearer: string | null): Promise<Client> {
-  const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), {
+  // A null bearer means "connect to anonymous discovery" — its own endpoint,
+  // never a headers-based signal on /mcp (see MCP_ANONYMOUS_URL above).
+  const transport = new StreamableHTTPClientTransport(new URL(bearer ? MCP_URL : MCP_ANONYMOUS_URL), {
     requestInit: bearer ? { headers: { Authorization: `Bearer ${bearer}` } } : {},
   });
   const client = new Client({ name: "test-client", version: "0.0.0" });
@@ -190,6 +201,42 @@ describe("anonymous MCP session (no bearer at init)", () => {
   });
 });
 
+describe("real OAuth client_credentials clients still authenticate onto the MEMBER surface (regression pin)", () => {
+  // This is the exact scenario that broke once: a fresh ClientCredentialsProvider
+  // has NO cached token, so its first request to /mcp carries no Authorization
+  // header at all — identical, from the server's point of view, to a genuinely
+  // anonymous discovery request. The SDK relies entirely on /mcp answering 401
+  // to that bearer-less first request to trigger its auth-then-retry flow
+  // (see StreamableHTTPClientTransport's _authThenStart()). If /mcp ever
+  // answers 200 instead (e.g. by trying to serve anonymous discovery from the
+  // same path/branch), this flow silently "succeeds" onto the anonymous
+  // 2-tool surface and the OAuth exchange never happens — every real member
+  // agent (mcp/src/agent.ts's runAgent(), used for every committee-session
+  // take) then fails calling any member tool. Use the REAL SDK class here —
+  // not a hand-set bearer header — so this test actually exercises the
+  // negotiation, not just the end state.
+  test("a fresh ClientCredentialsProvider client lands on the full member toolset, not anonymous discovery", async () => {
+    const authProvider = new ClientCredentialsProvider({
+      clientId: "capacity-test-member",
+      clientSecret: VALID_MEMBER_TOKEN,
+    });
+    const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), { authProvider });
+    const client = new Client({ name: "oauth-regression-test", version: "0.0.0" });
+    await client.connect(transport);
+
+    const { tools } = await client.listTools();
+    const names = tools.map((t) => t.name).sort();
+    // The member toolset (11 tools), never apply-how-to/apply — if this ever
+    // lists ["apply", "apply-how-to"] instead, the OAuth handshake silently
+    // failed to fire and the client is on the anonymous session.
+    expect(names).toContain("get_regime");
+    expect(names).not.toContain("apply-how-to");
+    expect(names).not.toContain("apply");
+
+    await client.close();
+  });
+});
+
 describe("anonymous sessions cannot exhaust authenticated capacity (§11 R5 DoS boundary)", () => {
   test("flooding the anonymous pool to its cap is refused, but an AUTHENTICATED session still connects and works", async () => {
     // Bounded above by MAX_ANONYMOUS_SESSIONS (50 in src/server.ts) plus a
@@ -225,5 +272,22 @@ describe("anonymous sessions cannot exhaust authenticated capacity (§11 R5 DoS 
 describe("authenticated-but-not-yet-OAuth'd session still refuses (existing behavior, unweakened)", () => {
   test("a bearer that fails to resolve (unknown/legacy-invalid token) gets 401, not the anonymous OR member surface", async () => {
     await expect(connect("not-a-real-token")).rejects.toThrow();
+  });
+
+  test("NO bearer at all on /mcp itself still gets 401 — /mcp never silently serves anonymous discovery", async () => {
+    // The regression pin at the source-code level: this is what an OAuth
+    // client_credentials client's very first request looks like (no
+    // Authorization header, POST to /mcp). It must 401, not 200 — a 200 here
+    // means real member sessions silently stop authenticating (see the
+    // "real OAuth client_credentials clients" describe block above for why).
+    const res = await fetch(MCP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "no-bearer-probe", version: "0.0.0" } },
+      }),
+    });
+    expect(res.status).toBe(401);
   });
 });

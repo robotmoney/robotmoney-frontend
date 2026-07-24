@@ -58,7 +58,12 @@ import { join } from "node:path";
 import { ONBOARDING_PROMPT, path as routePath, ROUTES } from "@robotmoney/contract";
 
 export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.demo.yml"];
-export const DEFAULT_MCP_URL_INTERNAL = "http://mcp:8788/mcp";
+// /mcp/apply, not /mcp: anonymous discovery (apply-how-to, apply) lives on its
+// own path — see the comment on this in mcp/src/server.ts. This eval never
+// goes past apply (it stops before claim+participate), so the pre-wired
+// config only ever needs the anonymous surface; pointing it at bare /mcp
+// would 401 on connect (no bearer), since /mcp is member-only.
+export const DEFAULT_MCP_URL_INTERNAL = "http://mcp:8788/mcp/apply";
 export const DEFAULT_TIMEOUT_MS = 8 * 60_000;
 export const DEFAULT_POLL_INTERVAL_MS = 3_000;
 export const DEFAULT_AUTO_APPROVE_DELAY_MS = 10_000; // §11 R7

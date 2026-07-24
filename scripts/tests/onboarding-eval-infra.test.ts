@@ -314,7 +314,9 @@ async function bringUpInfra(): Promise<void> {
   mcpPort = await freePort();
   pgPort = await freePort();
   backendUrl = `http://127.0.0.1:${apiPort}`;
-  mcpUrl = `http://127.0.0.1:${mcpPort}/mcp`;
+  // /mcp/apply — the anonymous discovery surface's own path, not bare /mcp
+  // (which is member-only and 401s with no bearer; see mcp/src/server.ts).
+  mcpUrl = `http://127.0.0.1:${mcpPort}/mcp/apply`;
   composeEnv = {
     COMPOSE_PROJECT_NAME: project,
     DEMO_PROJECT: project,
@@ -337,7 +339,7 @@ async function bringUpInfra(): Promise<void> {
 
   await waitForOk(`${backendUrl}${ROUTES.health}`, 60_000);
   await waitForOk(`${backendUrl}${ROUTES.committee.members}`, 30_000);
-  await waitForOk(`${mcpUrl.replace(/\/mcp$/, "")}/health`, 30_000);
+  await waitForOk(`${mcpUrl.replace(/\/mcp\/apply$/, "")}/health`, 30_000);
 
   // Build (never run yet — that's the inference-off "container starts" test
   // below) the member-agent image now so its cost is paid once in beforeAll,
