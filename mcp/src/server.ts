@@ -15,7 +15,15 @@ import { createHash } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
-import { canonicalizeSubmission, classifyRegime, path as routePath, ROUTES } from "@robotmoney/contract";
+import {
+  APPLY_HOW_TO_STEPS,
+  canonicalizeApplication,
+  canonicalizeSubmission,
+  classifyRegime,
+  COMMITTEE_ONBOARDING_SKILL_URL,
+  path as routePath,
+  ROUTES,
+} from "@robotmoney/contract";
 import { TokenStore } from "./token-store.ts";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
@@ -123,6 +131,49 @@ function buildServer(memberId: string, memberToken: string) {
   return server;
 }
 
+// The canonical application field set, read off `canonicalizeApplication`
+// itself (@robotmoney/contract) rather than hand-typed here — if Stage 0 ever
+// changes the field set this recomputes automatically instead of silently
+// drifting out of sync with what the backend actually verifies.
+const APPLICATION_FIELDS = Object.keys(
+  JSON.parse(canonicalizeApplication({ name: "", contact: "", lens: "", publicKey: "" })),
+);
+
+// Anonymous, pre-credential discovery surface (docs/architecture.md §11 R5/R6).
+// Built fresh per anonymous session; registers EXACTLY two tools — no member
+// tool (buildServer, above) is ever reachable without a real bearer.
+function buildAnonymousServer() {
+  const server = new McpServer({ name: "robotmoney-committee-anonymous", version: "0.1.0" });
+
+  server.registerTool("apply-how-to",
+    { description: "Discovery tool, callable with no credentials: the current steps to apply to the Investment Committee (§11.2).", inputSchema: {} },
+    async () => j({
+      steps: APPLY_HOW_TO_STEPS,
+      payload: {
+        fields: [...APPLICATION_FIELDS, "signature"],
+        description:
+          "Canonical application payload (name, contact, optional lens, publicKey) signed with an rmpc ed25519 " +
+          "signature over canonicalizeApplication(...); POST { ...payload fields, signature } to the apply route.",
+      },
+      routes: { apply: ROUTES.committee.apply, applyStatus: ROUTES.committee.applyStatus },
+      skillUrl: COMMITTEE_ONBOARDING_SKILL_URL,
+    }));
+
+  server.registerTool("apply",
+    { description: "Submit the signed committee application (name, contact, optional lens, publicKey, and an rmpc signature over the canonical application payload). Preferred over the raw API — this also proves MCP reachability.",
+      inputSchema: { name: z.string(), contact: z.string(), lens: z.string().optional(), publicKey: z.string(), signature: z.string() } },
+    async (input) => {
+      const res = await fetch(`${BACKEND}${ROUTES.committee.apply}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      return j(await res.json());
+    });
+
+  return server;
+}
+
 const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
 const lastSeen = new Map<string, number>(); // session id → last activity (idle sweep)
 const MAX_SESSIONS = 500; // cap concurrent sessions (DoS bound)
@@ -130,7 +181,10 @@ const IDLE_MS = 10 * 60_000; // evict sessions idle longer than this
 
 // Periodically close idle sessions so the maps + McpServer instances can't grow
 // unboundedly when authenticated clients abandon sessions without closing them.
-setInterval(() => {
+// Exported so hermetic tests that import this module can clearInterval() it on
+// teardown instead of leaving a live timer (and open listen socket, see
+// `httpServer` below) pinning the test process open.
+export const idleSweepInterval = setInterval(() => {
   tokenStore.sweep();
   const cutoff = Date.now() - IDLE_MS;
   for (const [id, ts] of lastSeen) {
@@ -142,11 +196,15 @@ setInterval(() => {
 
 // Per-session binding: maps session-id → { memberId, memberToken, tokenHash }.
 // TokenHash is the SHA-256 of the presented bearer (OAuth access token or legacy
-// token), checked on every follow-up request to the same session.
+// token), checked on every follow-up request to the same session. Anonymous
+// discovery sessions (§11 R5, no bearer at init) set isAnonymous instead —
+// there is no bearer to pin, and the session's McpServer only ever exposes
+// apply-how-to/apply regardless.
 interface SessionBinding {
   memberId: string;
   memberToken: string;
   tokenHash: string;
+  isAnonymous?: boolean;
 }
 const sessionBinding = new Map<string, SessionBinding>();
 
@@ -204,7 +262,10 @@ async function resolveBearer(token: string): Promise<{ memberId: string; memberT
   }
 }
 
-Bun.serve({
+// Exported (alongside idleSweepInterval) so hermetic tests can .stop(true) the
+// listener on teardown; the standalone entrypoint (`bun run src/server.ts`)
+// behaves identically since the export is additive.
+export const httpServer = Bun.serve({
   port: PORT,
   idleTimeout: Number(process.env.MCP_IDLE_TIMEOUT_SECONDS ?? 10),
   async fetch(req) {
@@ -298,23 +359,51 @@ Bun.serve({
 
     const sid = req.headers.get("mcp-session-id");
     if (sid && transports.has(sid)) {
+      const binding = sessionBinding.get(sid);
+      if (binding?.isAnonymous) {
+        // Anonymous discovery sessions carry no bearer to re-validate — that's
+        // the point (§11 R5, pre-credential access). Their McpServer instance
+        // only ever has apply-how-to/apply registered, so the exposed surface
+        // stays bounded regardless of what's presented here.
+        lastSeen.set(sid, Date.now());
+        return transports.get(sid)!.handleRequest(req);
+      }
       // Re-validate the bearer on EVERY request to a bound session.
       const presented = bearerOf(req) ?? "";
-      if (tokenHash(presented) !== sessionBinding.get(sid)?.tokenHash)
+      if (tokenHash(presented) !== binding?.tokenHash)
         return unauthorized("bearer token does not match the session it was bound to");
       const identity = await resolveBearer(presented);
-      if (!identity || identity.memberId !== sessionBinding.get(sid)?.memberId)
+      if (!identity || identity.memberId !== binding?.memberId)
         return unauthorized("bearer token is expired or revoked");
       lastSeen.set(sid, Date.now());
       return transports.get(sid)!.handleRequest(req);
     }
 
-    // New session (initialize). Require a real bearer — no anonymous sessions.
+    // New session (initialize). A bearer is required for the member toolset,
+    // but its ABSENCE is no longer a rejection: it now gets exactly the
+    // anonymous pre-credential discovery surface (§11 R5) — apply-how-to and
+    // apply, nothing else. Every member tool (buildServer) still requires a
+    // real, resolved bearer, unchanged below.
     const rawToken = bearerOf(req);
-    if (!rawToken) return unauthorized("a bearer token is required to start an MCP session");
     if (transports.size >= MAX_SESSIONS)
       return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32002, message: "server at session capacity" }, id: null }),
         { status: 429, headers: { "Content-Type": "application/json" } });
+
+    if (!rawToken) {
+      const t = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: () => crypto.randomUUID(),
+        enableJsonResponse: true,
+        onsessioninitialized: (id) => {
+          transports.set(id, t);
+          sessionBinding.set(id, { memberId: "", memberToken: "", tokenHash: tokenHash(null), isAnonymous: true });
+          lastSeen.set(id, Date.now());
+        },
+        onsessionclosed: (id) => { transports.delete(id); sessionBinding.delete(id); lastSeen.delete(id); },
+      });
+      const server = buildAnonymousServer();
+      await server.connect(t);
+      return t.handleRequest(req);
+    }
 
     // Resolve the bearer token to { memberId, memberToken }.
     const resolved = await resolveBearer(rawToken);
