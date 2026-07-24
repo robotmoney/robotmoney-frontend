@@ -30,6 +30,7 @@ import { generateKeyPair, sign } from "../src/crypto.ts";
 // can observe an OS-assigned port afterwards.
 const MCP_TEST_PORT = 18799;
 const MCP_URL = `http://localhost:${MCP_TEST_PORT}/mcp`;
+const VALID_MEMBER_TOKEN = "capacity-test-member-token";
 
 // ── Fixture backend: only what `apply`/`verify-token` need ──────────────────
 // Real signature verification (crypto.subtle), matching backend/src/lib/
@@ -73,9 +74,12 @@ beforeAll(async () => {
         return Response.json({ ok: true, status: 201, memberId: crypto.randomUUID(), memberStatus: "applied" }, { status: 201 });
       }
       if (url.pathname === ROUTES.committee.verifyToken) {
-        // No token this file presents is ever registered against this fixture —
-        // every bearer other than a real OAuth access token must fail to
-        // resolve, so the "authenticated-but-not-yet-OAuth'd" pin below holds.
+        // Exactly one legacy bearer resolves, for the capacity-isolation test
+        // below, which needs a real authenticated session to open. Every other
+        // bearer fails to resolve, so the "authenticated-but-not-yet-OAuth'd"
+        // pin further down still holds.
+        const presented = (req.headers.get("Authorization") ?? "").replace(/^Bearer /, "");
+        if (presented === VALID_MEMBER_TOKEN) return Response.json({ memberId: "capacity-test-member" });
         return Response.json({ error: "invalid token" }, { status: 401 });
       }
       return Response.json({ error: `unhandled fixture route: ${req.method} ${url.pathname}` }, { status: 404 });
@@ -184,6 +188,38 @@ describe("anonymous MCP session (no bearer at init)", () => {
     expect(body.ok).toBe(false);
     expect(body.error).toMatch(/invalid signature/i);
   });
+});
+
+describe("anonymous sessions cannot exhaust authenticated capacity (§11 R5 DoS boundary)", () => {
+  test("flooding the anonymous pool to its cap is refused, but an AUTHENTICATED session still connects and works", async () => {
+    // Bounded above by MAX_ANONYMOUS_SESSIONS (50 in src/server.ts) plus a
+    // small margin for any anonymous sessions earlier tests in this file left
+    // open — opened ONE AT A TIME until the pool-full error is actually
+    // observed, so this doesn't assume a clean starting point or a specific
+    // prior-test cleanup discipline; it just proves the cap is real.
+    const clients: Client[] = [];
+    let capacityErrorSeen = false;
+    for (let i = 0; i < 60 && !capacityErrorSeen; i++) {
+      try {
+        clients.push(await connect(null));
+      } catch (err) {
+        expect(String(err)).toMatch(/anonymous session capacity/i);
+        capacityErrorSeen = true;
+      }
+    }
+    expect(capacityErrorSeen).toBe(true);
+
+    // The actual property under test: real members are never affected by an
+    // anonymous flood. An authenticated connection must still succeed and its
+    // member tools must still work, proving the two capacity pools are
+    // genuinely separate (not sharing MAX_SESSIONS).
+    const memberClient = await connect(VALID_MEMBER_TOKEN);
+    const { tools } = await memberClient.listTools();
+    expect(tools.map((t) => t.name)).toContain("get_regime");
+
+    for (const c of clients) await c.close();
+    await memberClient.close();
+  }, 20_000);
 });
 
 describe("authenticated-but-not-yet-OAuth'd session still refuses (existing behavior, unweakened)", () => {

@@ -176,21 +176,37 @@ function buildAnonymousServer() {
 
 const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
 const lastSeen = new Map<string, number>(); // session id → last activity (idle sweep)
-const MAX_SESSIONS = 500; // cap concurrent sessions (DoS bound)
-const IDLE_MS = 10 * 60_000; // evict sessions idle longer than this
+const MAX_SESSIONS = 500; // cap concurrent AUTHENTICATED sessions (DoS bound)
+const IDLE_MS = 10 * 60_000; // evict authenticated sessions idle longer than this
+
+// Anonymous discovery sessions (§11 R5, no bearer at init) get their OWN small
+// reserved capacity pool and a much shorter idle window — never the shared
+// authenticated one. apply-how-to/apply is a single quick request/response
+// exchange, not a long-lived interactive session, so there is no legitimate
+// reason for an anonymous session to sit open for minutes. Without this
+// separation, an unauthenticated client could script bare POST /mcp calls to
+// fill the ENTIRE session pool and lock out real applicants and members alike
+// (a full, sustainable DoS on the auth boundary this surface introduces) —
+// with the reservation, the worst an anonymous flood can do is deny OTHER
+// anonymous callers, and only for up to ANONYMOUS_IDLE_MS before eviction.
+const anonymousSessions = new Set<string>();
+const MAX_ANONYMOUS_SESSIONS = 50;
+const ANONYMOUS_IDLE_MS = 60_000;
 
 // Periodically close idle sessions so the maps + McpServer instances can't grow
-// unboundedly when authenticated clients abandon sessions without closing them.
+// unboundedly when clients abandon sessions without closing them. Anonymous
+// sessions are swept on their own, much shorter, idle window.
 // Exported so hermetic tests that import this module can clearInterval() it on
 // teardown instead of leaving a live timer (and open listen socket, see
 // `httpServer` below) pinning the test process open.
 export const idleSweepInterval = setInterval(() => {
   tokenStore.sweep();
-  const cutoff = Date.now() - IDLE_MS;
+  const now = Date.now();
   for (const [id, ts] of lastSeen) {
-    if (ts >= cutoff) continue;
+    const idleLimit = anonymousSessions.has(id) ? ANONYMOUS_IDLE_MS : IDLE_MS;
+    if (now - ts < idleLimit) continue;
     try { (transports.get(id) as any)?.close?.(); } catch { /* ignore */ }
-    transports.delete(id); sessionBinding.delete(id); lastSeen.delete(id);
+    transports.delete(id); sessionBinding.delete(id); lastSeen.delete(id); anonymousSessions.delete(id);
   }
 }, 60_000);
 
@@ -364,7 +380,9 @@ export const httpServer = Bun.serve({
         // Anonymous discovery sessions carry no bearer to re-validate — that's
         // the point (§11 R5, pre-credential access). Their McpServer instance
         // only ever has apply-how-to/apply registered, so the exposed surface
-        // stays bounded regardless of what's presented here.
+        // stays bounded regardless of what's presented here. Capacity for
+        // these sessions is tracked in the separate anonymousSessions pool
+        // (see MAX_ANONYMOUS_SESSIONS), not MAX_SESSIONS.
         lastSeen.set(sid, Date.now());
         return transports.get(sid)!.handleRequest(req);
       }
@@ -384,12 +402,18 @@ export const httpServer = Bun.serve({
     // anonymous pre-credential discovery surface (§11 R5) — apply-how-to and
     // apply, nothing else. Every member tool (buildServer) still requires a
     // real, resolved bearer, unchanged below.
+    //
+    // Capacity is checked against SEPARATE pools: an anonymous flood can never
+    // consume authenticated capacity (transports.size - anonymousSessions.size
+    // is the true authenticated count), and anonymous sessions have their own
+    // much smaller cap. This is deliberate — see the anonymousSessions comment
+    // above for why unbounded shared capacity here would be a full DoS.
     const rawToken = bearerOf(req);
-    if (transports.size >= MAX_SESSIONS)
-      return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32002, message: "server at session capacity" }, id: null }),
-        { status: 429, headers: { "Content-Type": "application/json" } });
 
     if (!rawToken) {
+      if (anonymousSessions.size >= MAX_ANONYMOUS_SESSIONS)
+        return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32002, message: "server at anonymous session capacity" }, id: null }),
+          { status: 429, headers: { "Content-Type": "application/json" } });
       const t = new WebStandardStreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
         enableJsonResponse: true,
@@ -397,13 +421,18 @@ export const httpServer = Bun.serve({
           transports.set(id, t);
           sessionBinding.set(id, { memberId: "", memberToken: "", tokenHash: tokenHash(null), isAnonymous: true });
           lastSeen.set(id, Date.now());
+          anonymousSessions.add(id);
         },
-        onsessionclosed: (id) => { transports.delete(id); sessionBinding.delete(id); lastSeen.delete(id); },
+        onsessionclosed: (id) => { transports.delete(id); sessionBinding.delete(id); lastSeen.delete(id); anonymousSessions.delete(id); },
       });
       const server = buildAnonymousServer();
       await server.connect(t);
       return t.handleRequest(req);
     }
+
+    if (transports.size - anonymousSessions.size >= MAX_SESSIONS)
+      return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32002, message: "server at session capacity" }, id: null }),
+        { status: 429, headers: { "Content-Type": "application/json" } });
 
     // Resolve the bearer token to { memberId, memberToken }.
     const resolved = await resolveBearer(rawToken);
