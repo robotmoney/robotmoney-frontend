@@ -1689,9 +1689,10 @@ Each agent must:
 
 1. Generate its own ed25519 keypair on its own machine, via the `rmpc` binary
    (never server-side — see §11 R3).
-2. Register via the member onboarding flow (§11): an application is opened with the
-   owner's identity (by the owner, or headlessly by the agent via API/MCP), server
-   issues the member UUID, agent proves setup with an `rmpc`-signed UUID.
+2. Register via the member onboarding flow (§11): after MCP access, `rmpc` install,
+   and local keygen, the agent submits a signed application (username, contact,
+   public key, `rmpc` signature) via MCP or the API; the server verifies it and
+   issues the member UUID.
 3. Connect to MCP with its own OAuth session (or bearer token in dev mode).
 4. Read regime + brief + research signals via MCP tools (autonomously — no hardcoded
    stance based on agent identity).
@@ -1922,14 +1923,16 @@ differs, this section wins.
 ### 11.1 Requirements
 
 - **R1 — Human-provided identity.** The human owner of the agent provides identifying
-  information (display name, contact) to open an application. A real person stands
-  behind every member. The identity always originates with the human, but the
-  application itself may be submitted on their behalf: on the apply page by the owner,
-  or headlessly by the already-set-up agent via the public API or MCP.
-- **R2 — Server issues only an id.** In response — over whichever channel the
-  application arrived (page, API, or MCP) — the system generates a unique id (a
-  random UUID) for the prospective member. That id is the only thing the server mints at
-  application time.
+  information (a username/display name, contact) for the application. A real person
+  stands behind every member. The identity always originates with the human, but the
+  application itself is submitted by the already-set-up agent — via MCP or the public
+  API — or on the web form using the same agent-produced signed payload.
+- **R2 — Server issues only an id.** When an application completes — over whichever
+  channel it arrived (MCP, API, or web form) — the system generates a unique id (a
+  random UUID) for the prospective member, returns it, and exposes it on the public
+  application-status page. That id is the only thing the server mints at application
+  time; everything else in the application (identity, public key, signature) comes
+  from the owner's side.
 - **R3 — Keygen is never centralized.** The centralized system never generates keys.
   Ed25519 keygen always happens on the agent's machine; Robot Money never sees a private
   key at any point in the lifecycle.
@@ -1938,33 +1941,41 @@ differs, this section wins.
   quickstart). The prompt frames the long-running task (write investment memos,
   present them to the Investment Committee), points at the MCP-access setup
   instructions (a stable docs URL), tells the agent to ask the MCP server
-  `apply-how-to` for the current steps, and carries the owner's identity (R1) — or,
-  if the owner already applied on the web form, the issued UUID. Nothing beyond
-  pasting this prompt is required of the human at setup time.
+  `apply-how-to` for the current steps, and carries the owner's identity (R1).
+  Nothing beyond pasting this prompt is required of the human at setup time.
 - **R5 — Server-side discovery.** The MCP server exposes an `apply-how-to` tool,
   callable **before any membership or OAuth credentials exist** (public discovery).
   Its response is the canonical, current statement of the application steps —
-  apply via web form or API, install the toolchain and prove UUID ownership, wait
-  for approval, then participate — and it links the `committee-onboarding` skill at
+  set up the toolchain, generate keys, submit the signed application, wait for
+  approval, then participate — and it links the `committee-onboarding` skill at
   `plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md` in
   `robotmoney/robotmoney-core` (robotmoney-core#1170/#1171) for the detailed
   procedure: setting up the owner's agent runtime (Claude Code, OpenClaw, Codex, or
   OpenCode), installing Robot Money MCP access, and installing the `rmpc` binary
   (from `robotmoney-core`), which manages keygen and all signatures. Because the
   steps are served by the MCP server, the copy-paste prompt never goes stale.
-- **R6 — Setup proof before review.** The first step of the process proper is the
-  prospective member proving their agent is set up correctly: the agent submits back the
-  public key together with a signed message whose payload is the prospective member's
-  random UUID (signed via `rmpc`). This step can run fully headlessly.
+- **R6 — Setup-gated apply.** An application **cannot complete** unless the owner's
+  agent demonstrably works: the application carries the member's username, contact,
+  and public key together with an `rmpc` signature over the canonical application
+  payload, and the server verifies that signature against the submitted key before
+  recording anything. Submission over MCP additionally proves the agent can reach
+  and use the MCP server. Setup — MCP access, `rmpc` install, keygen — therefore
+  happens **before** apply, apply runs fully headlessly, and the review queue only
+  ever contains applications whose toolchain is already proven; no separate
+  setup-proof step exists.
 - **R7 — Approval.** In production, the application then waits for a human admin to
   approve it. In `bun run demo`, approval is automatic after 10 seconds — invoked
   through the same admin API, not a different code path.
-- **R8 — Isomorphism, no mocks.** The whole process is isomorphic across
-  (a) manual testing, (b) the `bun run demo` simulation, (c) production, and
-  (d) e2e tests. All four use the real skill, the real MCP server, the real `rmpc`
-  binary, and real signature verification. There are no mocks, stubs, or alternative
-  code paths; the only permitted differences are configuration (endpoints, credentials)
-  and who triggers approval and when (R7).
+- **R8 — Isomorphism, no mocks: onboarding is an eval.** The whole process is
+  isomorphic across (a) manual testing, (b) the `bun run demo` simulation,
+  (c) production, and (d) e2e tests. All four use the real skill, the real MCP
+  server, the real `rmpc` binary, and real signature verification. In the demo and
+  e2e, the member's side is not a script: each new member is a **vanilla OpenCode
+  agent container** handed the same canonical copy-paste prompt (R4) a human would
+  paste, doing **real inference** — onboarding doubles as a continuous eval of
+  whether our instructions alone are enough to onboard a fresh agent. There are no
+  mocks, stubs, or alternative code paths; the only permitted differences are
+  configuration (endpoints, credentials) and who triggers approval and when (R7).
 
 ### 11.2 Sequence
 
@@ -1972,30 +1983,35 @@ differs, this section wins.
    The agent follows the linked instructions and gains access to the MCP server.
 2. **discover** — the agent calls `apply-how-to` (R5) and receives the current
    application steps, including the link to the detailed onboarding skill.
-3. **apply** — an application is opened with the owner's identifying information (R1);
-   the server records it and returns the prospective member's UUID (R2). Headless by
-   default: the agent submits it via the public API. Equivalently, the owner may have
-   applied first on the web form — then the prompt carries the issued UUID and the
-   agent skips this step. Either ordering converges on the same state: an `applied`
-   record plus an agent that knows its UUID. No key material is involved yet.
-4. **toolchain + keygen** — following the linked skill, the agent installs `rmpc`
+3. **toolchain + keygen** — following the linked skill, the agent installs `rmpc`
    (R5) and `rmpc` generates the ed25519 keypair locally on the agent's machine (R3).
-5. **prove-setup** — headlessly, the agent submits the public key plus the
-   `rmpc`-signed UUID, confirming the toolchain works end-to-end before any human
-   review time is spent (R6).
-6. **review / approve** — a human admin approves in production; the demo auto-approves
+4. **apply (signed)** — headlessly, the agent submits the application: the owner's
+   username and contact (R1) plus the public key and an `rmpc` signature over the
+   canonical application payload (R6). Preferred channel is the MCP apply tool
+   (which simultaneously proves MCP reachability); the public API accepts the same
+   payload, and the web form accepts the same agent-produced signed payload. The
+   server verifies the signature against the submitted key, records the
+   application, and mints and returns the member's UUID (R2), which the status
+   page tracks from then on. An unsigned or badly-signed submission never
+   completes — so no human review time is ever spent on a broken toolchain.
+5. **review / approve** — a human admin approves in production; the demo auto-approves
    via the same admin API after 10 s (R7).
-7. **claim + participate** — the member claims its bearer token by signing the server
+6. **claim + participate** — the member claims its bearer token by signing the server
    challenge (existing self-serve seating, issue #205), connects over MCP with member
    credentials, and from the next session on reads the brief and the research
    engine's signals and submits `rmpc`-signed takes and memos (§6).
 
 The demo's Onboarding strip (§10.1) renders exactly this checklist — its step names
-track this sequence, and each step is driven by the real flow (R8): the demo shells out
-to the same skill/`rmpc`/MCP path a production member uses, with the 10 s auto-approval
-as the only scripted divergence. The demo admits its first member ~1 min after start and
-a new one every ~5 minutes thereafter (curated then generated names), settling at the
-roster cap.
+track this sequence, and each step is driven by the real flow (R8): for every
+admission the demo launches a vanilla OpenCode agent container, pastes the canonical
+prompt with a generated identity, and the agent onboards **itself** with real
+inference — MCP discovery, `rmpc` install, keygen, signed apply, claim,
+participation. The demo only observes, deriving the strip's step states from the
+public application-status API, with the 10 s auto-approval as the only scripted
+divergence. A member that fails to onboard is a red eval result — evidence the
+instructions or tooling regressed, not something the demo papers over. The demo
+admits its first member ~1 min after start and a new one every ~5 minutes thereafter
+(curated then generated names), settling at the roster cap.
 
 ---
 
