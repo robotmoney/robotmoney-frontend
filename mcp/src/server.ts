@@ -180,18 +180,25 @@ const MAX_SESSIONS = 500; // cap concurrent AUTHENTICATED sessions (DoS bound)
 const IDLE_MS = 10 * 60_000; // evict authenticated sessions idle longer than this
 
 // Anonymous discovery sessions (§11 R5, no bearer at init) get their OWN small
-// reserved capacity pool and a much shorter idle window — never the shared
-// authenticated one. apply-how-to/apply is a single quick request/response
-// exchange, not a long-lived interactive session, so there is no legitimate
-// reason for an anonymous session to sit open for minutes. Without this
-// separation, an unauthenticated client could script bare POST /mcp calls to
-// fill the ENTIRE session pool and lock out real applicants and members alike
-// (a full, sustainable DoS on the auth boundary this surface introduces) —
-// with the reservation, the worst an anonymous flood can do is deny OTHER
-// anonymous callers, and only for up to ANONYMOUS_IDLE_MS before eviction.
+// reserved capacity pool — never the shared authenticated one. Without this
+// separation, an unauthenticated client could script bare POST /mcp/apply
+// calls to fill the ENTIRE session pool and lock out real applicants and
+// members alike (a full, sustainable DoS on the auth boundary this surface
+// introduces); with the reservation, the worst an anonymous flood can do is
+// deny OTHER anonymous callers. That capacity pool — not a short idle
+// timeout — is the PRIMARY defense here: a real onboarding agent needs the
+// SAME session alive across the whole discover → install rmpc → keygen →
+// apply arc, and that is genuinely minutes long, not seconds. (An earlier
+// 60s idle window was proven wrong by a live-CI onboarding eval transcript:
+// a real member-agent's apply-how-to and apply calls landed 331s apart —
+// well past 60s — evicting the session mid-flow and breaking the follow-up
+// apply call with a protocol-level "Server not initialized" error, since the
+// client's mcp-session-id no longer matched any live session.) The idle
+// window here matches the authenticated one so a genuinely abandoned session
+// still gets reclaimed, just not one that's mid-onboarding.
 const anonymousSessions = new Set<string>();
 const MAX_ANONYMOUS_SESSIONS = 50;
-const ANONYMOUS_IDLE_MS = 60_000;
+const ANONYMOUS_IDLE_MS = IDLE_MS;
 
 // Periodically close idle sessions so the maps + McpServer instances can't grow
 // unboundedly when clients abandon sessions without closing them. Anonymous
