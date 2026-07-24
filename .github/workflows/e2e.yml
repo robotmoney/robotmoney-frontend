@@ -30,19 +30,26 @@
 # member-agent container navigating our own onboarding docs end to end via a
 # real model call — not a hermetic/inference-off substitute. An inference-off
 # infra-rails check (scripts/tests/onboarding-eval-infra.test.ts) runs first as
-# a cheap fail-fast supplement, before any model tokens are spent. Two
-# operational risks this wiring accounts for, not ignores:
+# a cheap fail-fast supplement, before any model tokens are spent. It runs
+# UNCONDITIONALLY for every PR, including forks: scripts/lib/onboarding-eval.ts
+# defaults to the same free, no-credential OpenCode Zen tier
+# (`opencode/big-pickle`) mcp/src/inference.ts already uses for real committee
+# takes, so there is no secret to be missing — see that file's own doc
+# comment for why keyless is genuinely real inference, not a degraded
+# fallback. Two things this wiring accounts for, not ignores:
 #   (a) This self-hosted runner shares its IP with the standing rmdemo_* demo
 #       stack, which has caused 429 rate-limit flake on other live-call gates
-#       before. scripts/lib/onboarding-eval.ts's runOnboardingEvalWithRetry
-#       retries ONLY a detected 429/overload signal (never a genuine
-#       navigation failure) with backoff — see that function's doc comment.
-#   (b) GitHub Actions never exposes repo secrets (the model API key) to
-#       workflow runs triggered by fork PRs. The "Decide onboarding
-#       real-inference eval gate" step below detects this and falls back to
-#       the infra-rails check ONLY for those runs — loudly, via the job
-#       summary, never a silent skip. Same-repo PRs and pushes to main get the
-#       full real-inference eval.
+#       before, and the free tier is documented as slower/more variable than a
+#       paid one. scripts/lib/onboarding-eval.ts's runOnboardingEvalWithRetry
+#       retries a detected 429/overload signal, and — only while the keyless
+#       default is in use — a bare timeout too (never a genuine navigation
+#       failure either way) with backoff — see that function's doc comment.
+#   (b) An operator MAY opt into a faster/more reliable PAID model via the
+#       `ONBOARDING_EVAL_MODEL` repo variable + the `ANTHROPIC_API_KEY` repo
+#       secret. That opt-in only ever applies in a trusted context (same-repo
+#       PRs, pushes to main) — GitHub Actions never exposes repo secrets to
+#       fork-PR runs, so a fork run simply gets the keyless default like every
+#       other run, never a fallback to something lesser.
 name: e2e
 env:
   CI_CLASS: system-correctness
@@ -139,30 +146,30 @@ jobs:
       - name: Onboarding eval infra rails (inference-off, fail-fast)
         run: bun test scripts/tests/onboarding-eval-infra.test.ts
         timeout-minutes: 15
-      # Same-repo/trusted-context PR runs (and pushes to main) with the model
-      # key secret configured get the full real-inference onboarding eval;
-      # fork PRs never see repo secrets (GitHub Actions default — there is no
-      # way around this at the workflow level) and fall back to the
-      # infra-rails check above only. This decision — and which branch was
-      # taken and why — is written LOUDLY to the job summary; it is never a
-      # silent skip.
-      - name: Decide onboarding real-inference eval gate
+      # The real-inference eval ALWAYS runs (below, as part of the Full-stack
+      # demo step) — it needs no secret, so there is nothing to gate on for
+      # every run including forks. This step only resolves whether an
+      # operator has opted a TRUSTED-context run into a paid model; a fork PR
+      # or a repo with no opt-in configured simply uses the keyless default,
+      # which is a full §11 R8 pass, not a degraded fallback. Written LOUDLY
+      # to the job summary either way.
+      - name: Configure onboarding real-inference eval
         id: onboarding-gate
         env:
           TRUSTED_CONTEXT: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-          HAS_MODEL_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_MODEL_OPT_IN: ${{ vars.ONBOARDING_EVAL_MODEL != '' && secrets.ANTHROPIC_API_KEY != '' }}
         run: |
-          if [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_MODEL_KEY" = "true" ]; then
-            echo "run_real_eval=1" >> "$GITHUB_OUTPUT"
-            MSG="§11 R8 real-inference onboarding eval: RUNNING (same-repo/trusted context, ANTHROPIC_API_KEY configured) as part of the Full-stack demo step below."
+          if [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_MODEL_OPT_IN" = "true" ]; then
+            echo "use_paid_model=1" >> "$GITHUB_OUTPUT"
+            MSG="§11 R8 real-inference onboarding eval: RUNNING with the paid-model opt-in (same-repo/trusted context, ONBOARDING_EVAL_MODEL + ANTHROPIC_API_KEY configured) as part of the Full-stack demo step below."
           else
-            echo "run_real_eval=" >> "$GITHUB_OUTPUT"
+            echo "use_paid_model=" >> "$GITHUB_OUTPUT"
             if [ "$TRUSTED_CONTEXT" != "true" ]; then
               REASON="this is a fork-PR run — GitHub Actions never exposes repo secrets to workflow runs triggered by fork PRs"
             else
-              REASON="the ANTHROPIC_API_KEY repository secret is not configured"
+              REASON="no ONBOARDING_EVAL_MODEL + ANTHROPIC_API_KEY opt-in is configured"
             fi
-            MSG="§11 R8 real-inference onboarding eval: SKIPPED ($REASON). Falling back to the inference-off infra-rails check above ONLY — that is NOT a full pass of §11 R8, only proof of its rails. See docs/plans/onboarding-ic-workflow.md Stage 7."
+            MSG="§11 R8 real-inference onboarding eval: RUNNING on the default free keyless tier ($REASON, so the paid-model opt-in doesn't apply here — the eval itself still runs in full)."
           fi
           echo "$MSG"
           echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
@@ -216,20 +223,20 @@ jobs:
           # than the retired hermetic boot was — an accepted, deliberate
           # consequence of issue #147/#163, not a bug in this workflow.
           #
-          # Stage 7 (§11 R8) — a DELIBERATE, SCOPED exception to the "no secret
-          # here" rule two paragraphs up: that rule is about the keyless
-          # committee-TAKE-authoring path (mcp/src/inference.ts /
-          # COMMITTEE_REAL_INFERENCE), which stays keyless and is completely
-          # unaffected by this. ANTHROPIC_API_KEY below is injected ONLY into
-          # the short-lived member-agent container scripts/lib/onboarding-eval.ts
-          # launches (never into the api/worker/mcp services), and only on the
-          # "Decide onboarding real-inference eval gate" step's say-so — for a
-          # fork PR or a repo with no key configured, all three vars below
-          # resolve to empty strings and demo-main.ts's ONBOARDING_REAL_EVAL
-          # branch is then a pure no-op (see that file's comment).
-          ONBOARDING_REAL_EVAL: ${{ steps.onboarding-gate.outputs.run_real_eval }}
-          OPENCODE_MODEL: ${{ steps.onboarding-gate.outputs.run_real_eval == '1' && (vars.ONBOARDING_EVAL_MODEL || 'anthropic/claude-haiku-4-5') || '' }}
-          ANTHROPIC_API_KEY: ${{ steps.onboarding-gate.outputs.run_real_eval == '1' && secrets.ANTHROPIC_API_KEY || '' }}
+          # Stage 7 (§11 R8): the onboarding eval ALWAYS runs (ONBOARDING_REAL_EVAL
+          # is unconditionally "1" — see demo-main.ts) using the default free
+          # keyless tier, exactly like this file's committee-TAKE-authoring
+          # path above stays keyless. OPENCODE_MODEL/ANTHROPIC_API_KEY below
+          # are the OPTIONAL paid-model opt-in: injected ONLY into the
+          # short-lived member-agent container scripts/lib/onboarding-eval.ts
+          # launches (never into the api/worker/mcp services), and only when
+          # the "Configure onboarding real-inference eval" step resolved a
+          # trusted-context opt-in — otherwise both resolve to empty and
+          # onboarding-eval.ts's resolveModelConfig() falls through to
+          # opencode/big-pickle on its own.
+          ONBOARDING_REAL_EVAL: "1"
+          OPENCODE_MODEL: ${{ steps.onboarding-gate.outputs.use_paid_model == '1' && (vars.ONBOARDING_EVAL_MODEL || 'anthropic/claude-haiku-4-5') || '' }}
+          ANTHROPIC_API_KEY: ${{ steps.onboarding-gate.outputs.use_paid_model == '1' && secrets.ANTHROPIC_API_KEY || '' }}
         # 40 min for the pre-existing checks + headroom for the onboarding eval
         # (default 8-minute timeout per admission attempt, up to 2 attempts with
         # runOnboardingEvalWithRetry's 45s backoff — only retries a detected

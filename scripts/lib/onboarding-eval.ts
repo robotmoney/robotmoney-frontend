@@ -9,12 +9,20 @@
 // + the MCP `apply-how-to` tool + the linked skill — exactly what a real
 // prospective member's own agent would have to do.
 //
-// Real inference is the DEFAULT mode here, never an optional extra: a missing
-// model configuration is a loud, immediate configuration-error throw
-// (resolveModelConfig), not a silent fallback to a keyless/scripted path (see
-// docker-compose.demo.yml's member-agent comment for the contrast with the
-// deliberately keyless `opencode/big-pickle` tier mcp/src/inference.ts uses
-// elsewhere).
+// Real inference is the DEFAULT mode here, never an optional extra — and it
+// requires NO secret to run. This module defaults to the SAME free,
+// no-credential OpenCode Zen model (`opencode/big-pickle`) that
+// mcp/src/inference.ts already uses for real committee takes
+// (docker-compose.demo.yml's member-agent comment has the same reference).
+// That is genuinely real inference — a real model call against a free
+// provider tier, not a template or a mock — which is exactly why it's the
+// right default for a REQUIRED per-PR gate: no operator has to configure a
+// secret before this eval can run for real. An operator MAY opt into a paid
+// model (faster, more reliable, useful for the nightly's wider sweep) by
+// setting OPENCODE_MODEL to a non-default id plus the matching provider key;
+// resolveModelConfig() throws loudly if that explicit request can't actually
+// be honored — it never silently substitutes a different model behind the
+// operator's back.
 //
 // ── Observe-only design, and its known coarseness ───────────────────────────
 // The only two things this harness watches from OUTSIDE the container are:
@@ -114,34 +122,43 @@ export function buildAgentPrompt(identity: OnboardingIdentity): string {
   return `${fillPromptIdentity(ONBOARDING_PROMPT, identity)}${DEMO_NETWORK_NOTE}`;
 }
 
-// ── Model configuration (real inference is the default, not opt-in) ─────────
+// ── Model configuration (real inference is the default, not opt-in — and it
+//    needs no secret: the default model is the same free, no-credential
+//    OpenCode Zen tier mcp/src/inference.ts already uses) ───────────────────
 export const MODEL_API_KEY_ENV_CANDIDATES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] as const;
+
+// Free, no-credential OpenCode Zen model (mirrors mcp/src/inference.ts's
+// DEFAULT_INFERENCE_MODEL exactly — same pin, same rationale: real inference,
+// no secret required). Pinned for determinism; override via OPENCODE_MODEL.
+export const DEFAULT_INFERENCE_MODEL = "opencode/big-pickle";
 
 export interface ModelConfig {
   model: string;
-  apiKeyEnv: (typeof MODEL_API_KEY_ENV_CANDIDATES)[number];
-  apiKey: string;
+  apiKeyEnv: (typeof MODEL_API_KEY_ENV_CANDIDATES)[number] | null;
+  apiKey: string | null;
 }
 
-// THROWS (never falls back to a keyless/scripted path) when OPENCODE_MODEL or
-// a recognized provider key is absent — a missing model configuration is a
-// configuration error the harness surfaces loudly (docs/architecture.md §11
-// R8), never a trigger to quietly downgrade the eval.
+// Resolves to the free keyless default UNLESS an operator explicitly opts
+// into a different model via OPENCODE_MODEL — in which case a matching
+// provider key is required and its absence THROWS loudly (never falls back
+// to a different model than the one explicitly requested; never falls back
+// to a scripted/templated path either way — see the module doc comment).
 export function resolveModelConfig(env: Record<string, string | undefined> = process.env): ModelConfig {
-  const model = env.OPENCODE_MODEL?.trim();
-  if (!model) {
-    throw new Error(
-      "OPENCODE_MODEL is not set — the onboarding eval's real-inference default requires a model to be " +
-        "configured (docs/architecture.md §11 R8: real inference is the normal case, not an opt-in extra). " +
-        "Refusing to fall back to a keyless/scripted path.",
-    );
+  const model = env.OPENCODE_MODEL?.trim() || DEFAULT_INFERENCE_MODEL;
+
+  if (model === DEFAULT_INFERENCE_MODEL) {
+    // No key needed or passed through — even if one happens to be set in the
+    // environment for an unrelated reason, the keyless default never uses it.
+    return { model, apiKeyEnv: null, apiKey: null };
   }
+
   const apiKeyEnv = MODEL_API_KEY_ENV_CANDIDATES.find((name) => env[name]?.trim());
   if (!apiKeyEnv) {
     throw new Error(
-      `no model API key is configured (checked ${MODEL_API_KEY_ENV_CANDIDATES.join(", ")}) — the onboarding ` +
-        "eval's real-inference default requires one (docs/architecture.md §11 R8). This is a configuration " +
-        "error to fix, not a signal to silently degrade to a keyless model.",
+      `OPENCODE_MODEL=${model} was explicitly requested but no provider key is configured ` +
+        `(checked ${MODEL_API_KEY_ENV_CANDIDATES.join(", ")}). Refusing to silently fall back to a ` +
+        `different model — either configure the matching key, or unset OPENCODE_MODEL to use the ` +
+        `default free keyless tier (${DEFAULT_INFERENCE_MODEL}).`,
     );
   }
   return { model, apiKeyEnv, apiKey: env[apiKeyEnv]!.trim() };
@@ -305,7 +322,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(modelConfig.model, mcpUrlInternal), null, 2));
     const prompt = buildAgentPrompt(identity);
 
-    log(`launching member-agent container for ${identity.contact} (model=${modelConfig.model})`);
+    log(`launching member-agent container for ${identity.contact} (model=${modelConfig.model}${modelConfig.apiKeyEnv ? "" : ", keyless"})`);
     const containerProc = Bun.spawn(
       [
         "docker",
@@ -315,8 +332,9 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
         "--no-deps",
         "-v",
         `${opencodeConfigPath}:/home/agent/opencode.json:ro`,
-        "-e",
-        `${modelConfig.apiKeyEnv}=${modelConfig.apiKey}`,
+        // Only pass a key when the resolved model actually needs one — the
+        // default free tier is genuinely keyless (no -e flag at all).
+        ...(modelConfig.apiKeyEnv ? ["-e", `${modelConfig.apiKeyEnv}=${modelConfig.apiKey}`] : []),
         "member-agent",
         "run",
         "--model",
@@ -408,17 +426,24 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 }
 
 // ── CI retry/backoff wrapper (Stage 7, §11 R8) ──────────────────────────────
-// The self-hosted CI runner shares its IP with the standing rmdemo_* demo
-// stack, which has caused 429 rate-limit flake on other live-model-call gates
-// before. A transient 429/overload from the model provider never let the
-// agent reason at all, so it is not a real eval result — the PR gate retries
-// ONLY when a failed attempt's own transcript shows a rate-limit signal, with
-// backoff between attempts. Any other failure (the agent genuinely couldn't
-// navigate onboarding, a container crash, a timeout with no rate-limit
-// signal) IS a real result and is never retried — same "no retry of member
-// steps" policy scripts/lib/demo-main.ts's own onboardingDriver() follows for
-// the standing demo; this wrapper only softens the ONE known-flaky failure
-// mode for the CI gate, it does not relax the eval itself.
+// Two known-flaky, non-eval failure modes get ONE retry with backoff; any
+// OTHER failure (the agent genuinely couldn't navigate onboarding, a
+// container crash) IS a real result and is never retried — same "no retry of
+// member steps" policy scripts/lib/demo-main.ts's own onboardingDriver()
+// follows for the standing demo. This wrapper only softens known provider/
+// infra flake, it does not relax the eval itself:
+//   1. A rate-limit/overload signal in the transcript — the self-hosted CI
+//      runner shares its IP with the standing rmdemo_* demo stack, which has
+//      caused 429 flake on other live-model-call gates before. A transient
+//      429/overload never let the agent reason at all, so it's not a real
+//      result. Checked regardless of which model is configured.
+//   2. A bare timeout — but ONLY when the default free, no-credential
+//      OpenCode Zen tier is in use. Per committee-opencode-nightly.yml's own
+//      documented experience with this exact model tier, "a call can take
+//      minutes and occasionally returns nothing" — a timeout there is far
+//      more likely to be provider slowness than a genuinely stuck agent. An
+//      operator-configured paid model is fast/reliable enough that a timeout
+//      keeps meaning what it always meant (a real, non-retried result).
 const RATE_LIMIT_PATTERNS = [/\b429\b/, /rate[ _-]?limit/i, /overloaded_error/i, /rate_limit_error/i, /\b529\b/];
 
 export function looksRateLimited(transcript: string | undefined): boolean {
@@ -445,6 +470,7 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
   const backoff = opts.backoffMsSchedule ?? DEFAULT_RETRY_BACKOFF_MS;
   const runOnce = opts.runOnce ?? runOnboardingEval;
   const log = opts.onEvent ?? (() => {});
+  const usingKeylessDefault = resolveModelConfig(opts.env ?? process.env).model === DEFAULT_INFERENCE_MODEL;
   let last: OnboardingEvalResult | undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Fresh identity per attempt — reusing one across retries would re-apply
@@ -453,9 +479,11 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
     const identity = attempt === 1 && opts.identity ? opts.identity : generateIdentity(`ci-retry-${attempt}-${crypto.randomUUID().slice(0, 6)}`);
     last = await runOnce({ ...opts, identity });
     if (last.admitted) return last;
-    if (attempt === maxAttempts || !looksRateLimited(last.transcript)) return last;
+    const worthRetrying = looksRateLimited(last.transcript) || (usingKeylessDefault && last.timedOut);
+    if (attempt === maxAttempts || !worthRetrying) return last;
     const delayMs = backoff[Math.min(attempt - 1, backoff.length - 1)];
-    log(`onboarding eval attempt ${attempt}/${maxAttempts} looked rate-limited — retrying in ${delayMs}ms (shared-runner 429 mitigation, §11 R8)`);
+    const reason = looksRateLimited(last.transcript) ? "looked rate-limited" : "timed out on the free keyless tier";
+    log(`onboarding eval attempt ${attempt}/${maxAttempts} ${reason} — retrying in ${delayMs}ms (§11 R8)`);
     await Bun.sleep(delayMs);
   }
   return last!;

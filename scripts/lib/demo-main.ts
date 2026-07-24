@@ -979,18 +979,21 @@ function committeeProgress(subjectId: string): SessionProgress {
 // --- Orchestration --------------------------------------------------------
 async function main(): Promise<void> {
   // §11 R8: real inference is the demo's onboarding mode, never an optional
-  // extra behind a flag — there is no hermetic/scripted onboarding fallback,
-  // so a missing model key must fail LOUDLY here, before the demo spends
-  // minutes standing up the stack, rather than have onboardingDriver() throw
-  // quietly in the background later. CI's own invocation of this file exits
-  // (via the `if (process.env.CI)` branch below) before ever reaching
+  // extra behind a flag — there is no hermetic/scripted onboarding fallback.
+  // resolveModelConfig() defaults to the free keyless tier (so this
+  // ordinarily just succeeds with zero configuration, for both a local demo
+  // and CI), but an operator's EXPLICIT, incomplete paid-model opt-in
+  // (OPENCODE_MODEL set to a non-default model with no matching key) must
+  // still fail LOUDLY here, before the demo spends minutes standing up the
+  // stack, rather than have onboardingDriver() throw quietly in the
+  // background later. CI's own invocation of this file exits (via the
+  // `if (process.env.CI)` branch below) before ever reaching
   // onboardingDriver() — it runs a different, non-onboarding check suite — so
   // this check applies to a LOCAL standing demo unconditionally, and to a CI
-  // run only when it opted into the real-inference onboarding eval (Stage 7,
-  // ONBOARDING_REAL_EVAL=1 — see the CI branch below): fail before spending
-  // minutes standing up the stack, not ~20 minutes later at the eval step
-  // itself. A CI run that did NOT opt in (fork PRs; the infra-only fallback)
-  // never reaches this branch, so it stays a true no-op there.
+  // run only when it's running the real-inference onboarding eval (Stage 7,
+  // ONBOARDING_REAL_EVAL=1, unconditionally set by e2e.yml — see the CI
+  // branch below): fail before spending minutes standing up the stack, not
+  // ~20 minutes later at the eval step itself.
   if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
     resolveModelConfig(process.env);
   }
@@ -1157,35 +1160,42 @@ async function main(): Promise<void> {
     // the REAL-INFERENCE onboarding admission sweep reuses this EXACT
     // already-booted stack instead of standing up a parallel one — same
     // pattern as RMPC_RELEASE_E2E above. Only runs when ONBOARDING_REAL_EVAL=1,
-    // which .github/workflows/e2e.yml sets ONLY for same-repo/trusted-context
-    // PR runs where the model-key secret is actually present (GitHub Actions
-    // never exposes repo secrets to fork-PR workflow runs) — fork PRs and any
-    // run without ONBOARDING_REAL_EVAL set are a zero-behaviour-change no-op
-    // here, relying on Stage 5's separate inference-off infra-rails test
-    // (scripts/tests/onboarding-eval-infra.test.ts) as their fail-fast
+    // which .github/workflows/e2e.yml now sets UNCONDITIONALLY for every run
+    // (including forks) — the default model is the free, no-credential
+    // OpenCode Zen tier (see resolveModelConfig() in onboarding-eval.ts), so
+    // there is no secret to be missing and nothing to gate on. A run without
+    // ONBOARDING_REAL_EVAL set at all (e.g. a plain local `bun run demo`, or
+    // any invocation predating this env var) stays a zero-behaviour-change
+    // no-op, relying on Stage 5's separate inference-off infra-rails test
+    // (scripts/tests/onboarding-eval-infra.test.ts) as its fail-fast
     // substitute. A failed/timed-out admission THROWS (via `run`'s pattern —
     // no silent pass): the whole point of putting real inference in the PR
     // gate is that a vanilla agent failing to navigate our own onboarding
-    // instructions is a real regression signal, not a shrug. Rate-limit flake
-    // from the shared self-hosted runner's IP is mitigated by
-    // runOnboardingEvalWithRetry's own retry/backoff (scripts/lib/onboarding-eval.ts) —
-    // that wrapper retries ONLY a detected 429/overload signal, never a
+    // instructions is a real regression signal, not a shrug. Provider/infra
+    // flake (rate-limit signals, and — on the keyless default — bare
+    // timeouts too) is mitigated by runOnboardingEvalWithRetry's own
+    // retry/backoff (scripts/lib/onboarding-eval.ts); it never retries a
     // genuine navigation failure.
     //
     // Sweep width (nightly-only knobs, both optional, both no-ops for the PR
     // gate which never sets them): ONBOARDING_SWEEP_MODELS is a ":"-separated
-    // list of OPENCODE_MODEL values to try (default: just the single
-    // OPENCODE_MODEL already resolved above); ONBOARDING_SWEEP_IDENTITIES_PER_MODEL
-    // is how many fresh admissions to run per model (default 1). The PR gate's
+    // list of OPENCODE_MODEL values to try (default: the single model
+    // resolveModelConfig() resolves — the keyless default unless an operator
+    // opted into a paid one); ONBOARDING_SWEEP_IDENTITIES_PER_MODEL is how
+    // many fresh admissions to run per model (default 1). The PR gate's
     // e2e.yml never sets either, so it stays exactly one admission on one
     // model — this block is a strict superset of that behaviour, not a
     // different code path (§11 R8: one real flow, config-only differences).
     if (process.env.ONBOARDING_REAL_EVAL === "1") {
-      const sweepModels = (process.env.ONBOARDING_SWEEP_MODELS?.trim() || process.env.OPENCODE_MODEL || "")
+      // No model configured (OPENCODE_MODEL/ONBOARDING_SWEEP_MODELS unset) is
+      // NOT an error anymore — it means "use the default free keyless tier",
+      // exactly like resolveModelConfig() resolves it for a single admission.
+      // Reuse that same resolution here so the sweep's default and a plain
+      // admission's default can never drift apart.
+      const sweepModels = (process.env.ONBOARDING_SWEEP_MODELS?.trim() || process.env.OPENCODE_MODEL || resolveModelConfig().model)
         .split(":")
         .map((m) => m.trim())
         .filter(Boolean);
-      if (sweepModels.length === 0) throw new Error("ONBOARDING_REAL_EVAL=1 but no model is configured (OPENCODE_MODEL / ONBOARDING_SWEEP_MODELS)");
       const identitiesPerModel = Math.max(1, Number.parseInt(process.env.ONBOARDING_SWEEP_IDENTITIES_PER_MODEL ?? "1", 10) || 1);
       const totalAdmissions = sweepModels.length * identitiesPerModel;
       console.log(

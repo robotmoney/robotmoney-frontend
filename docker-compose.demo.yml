@@ -97,11 +97,15 @@ services:
   #
   # Egress this service needs: the `mcp` service (compose network, discovery +
   # signed apply), GitHub Releases (github.com + objects.githubusercontent.com,
-  # for the `rmpc` binary the agent installs itself), and the configured real
-  # model API. Real inference is the NORMAL case (§11 R8) — a missing model key
-  # is a configuration error the harness fails loudly on, never a silent
-  # downgrade to a keyless/scripted path (contrast with the deliberately
-  # keyless `opencode/big-pickle` tier mcp/src/inference.ts uses elsewhere).
+  # for the `rmpc` binary the agent installs itself), and OpenCode Zen (the
+  # real model API). Real inference is the NORMAL case (§11 R8) and needs NO
+  # secret by default: scripts/lib/onboarding-eval.ts's resolveModelConfig()
+  # defaults to the SAME free, no-credential `opencode/big-pickle` tier
+  # mcp/src/inference.ts already uses for real committee takes — genuinely
+  # real inference, not a template. An operator MAY opt into a paid model
+  # (OPENCODE_MODEL + a matching key below) for speed/reliability; an
+  # explicit opt-in with no matching key fails loudly rather than silently
+  # falling back to a different model.
   member-agent:
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
@@ -110,11 +114,10 @@ services:
       dockerfile: scripts/lib/member-agent/Dockerfile
     profiles: ["member-agent"] # never started by `docker compose up` alone
     environment:
-      # Provider API key(s) for the real model call. Never baked into the
-      # image — always injected at `docker compose run` time by
-      # scripts/lib/onboarding-eval.ts, which resolves exactly which of these
-      # is present (and fails loudly if none is) rather than silently picking
-      # a free/keyless model.
+      # Optional: a paid-provider opt-in. Never baked into the image — always
+      # injected at `docker compose run` time by scripts/lib/onboarding-eval.ts,
+      # which only sets these when OPENCODE_MODEL requests a non-default
+      # model; the default free tier passes neither.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENCODE_MODEL: ${OPENCODE_MODEL:-}

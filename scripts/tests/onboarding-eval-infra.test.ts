@@ -38,6 +38,7 @@ import { fetchRmpc, runRmpcJson } from "../lib/rmpc-fetch.ts";
 import {
   buildAgentOpencodeConfig,
   buildAgentPrompt,
+  DEFAULT_INFERENCE_MODEL,
   deriveSteps,
   fillPromptIdentity,
   generateIdentity,
@@ -82,15 +83,26 @@ describe("onboarding-eval pure helpers", () => {
     expect(prompt).toContain("Demo harness note"); // clearly delimited, not blended into the canonical text
   });
 
-  test("resolveModelConfig throws loudly (never falls back) when OPENCODE_MODEL is unset", () => {
-    expect(() => resolveModelConfig({})).toThrow(/OPENCODE_MODEL/);
+  test("resolveModelConfig defaults to the free keyless tier when OPENCODE_MODEL is unset — genuinely real inference, no secret needed", () => {
+    const cfg = resolveModelConfig({});
+    expect(cfg.model).toBe(DEFAULT_INFERENCE_MODEL);
+    expect(cfg.apiKeyEnv).toBeNull();
+    expect(cfg.apiKey).toBeNull();
   });
 
-  test("resolveModelConfig throws loudly when no known provider key is present", () => {
-    expect(() => resolveModelConfig({ OPENCODE_MODEL: "anthropic/claude-x" })).toThrow(/model API key/);
+  test("resolveModelConfig ignores an incidentally-present key when using the keyless default", () => {
+    // A key being SET for some unrelated reason must never get pulled into a
+    // keyless run — the default model genuinely needs (and gets) no key.
+    const cfg = resolveModelConfig({ ANTHROPIC_API_KEY: "unrelated-secret" });
+    expect(cfg.model).toBe(DEFAULT_INFERENCE_MODEL);
+    expect(cfg.apiKeyEnv).toBeNull();
   });
 
-  test("resolveModelConfig resolves the configured model + whichever provider key is present", () => {
+  test("resolveModelConfig throws loudly (never silently substitutes a different model) when an explicit non-default OPENCODE_MODEL has no matching key", () => {
+    expect(() => resolveModelConfig({ OPENCODE_MODEL: "anthropic/claude-x" })).toThrow(/model API key|provider key/);
+  });
+
+  test("resolveModelConfig resolves an explicitly-requested paid model + whichever provider key is present", () => {
     const cfg = resolveModelConfig({ OPENCODE_MODEL: "anthropic/claude-x", ANTHROPIC_API_KEY: "secret" });
     expect(cfg).toEqual({ model: "anthropic/claude-x", apiKeyEnv: "ANTHROPIC_API_KEY", apiKey: "secret" });
   });
@@ -164,6 +176,7 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
+      env: {},
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -181,6 +194,7 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
+      env: {},
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -198,6 +212,7 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
+      env: {},
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -216,6 +231,7 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
+      env: {},
       maxAttempts: 3,
       backoffMsSchedule: [0, 0],
       runOnce: async () => {
@@ -234,6 +250,7 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
+      env: {},
       backoffMsSchedule: [0],
       identity: generateIdentity("first-attempt"),
       runOnce: async (opts) => {
@@ -243,6 +260,43 @@ describe("runOnboardingEvalWithRetry", () => {
     });
     expect(identities.length).toBe(2);
     expect(new Set(identities).size).toBe(2); // no reused contact across attempts
+  });
+
+  test("a bare timeout (no rate-limit signal) IS retried on the keyless default — the free tier is documented as slow/variable", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: {}, // no OPENCODE_MODEL → resolves to the keyless default
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        if (calls === 1) return fakeResult({ timedOut: true, transcript: "" });
+        return fakeResult({ admitted: true });
+      },
+    });
+    expect(result.admitted).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  test("a bare timeout is NOT retried when an explicit paid model is configured — that stays a real result", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: { OPENCODE_MODEL: "anthropic/claude-x", ANTHROPIC_API_KEY: "secret" },
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        return fakeResult({ timedOut: true, transcript: "" });
+      },
+    });
+    expect(result.admitted).toBe(false);
+    expect(calls).toBe(1); // no retry — a timeout on a paid model is a real result
   });
 });
 
