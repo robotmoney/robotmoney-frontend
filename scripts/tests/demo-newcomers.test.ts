@@ -3,7 +3,7 @@
 // demo-main.ts's main() (untestable without a full demo boot) and fell back
 // to a generated `Astra ${n+1}` name forever once its curated list ran out,
 // which — combined with a separate silent-fallback bug in the roster-cap
-// pre-check (see mcp/tests/e2e-active-member-count.test.ts) — let the demo
+// pre-check (see scripts/tests/e2e-active-member-count.test.ts) — let the demo
 // keep admitting new named agents indefinitely instead of settling at a
 // bounded size.
 //

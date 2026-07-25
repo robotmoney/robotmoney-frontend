@@ -16,7 +16,9 @@ const stateFile = join(repoRoot, ".agents", "demo-state.json");
 interface DemoState {
   project: string;
   apiPort: number;
-  mcpPort: number;
+  // Optional: D21 retired the mcp container; state files written since then omit
+  // it, but an older standing demo's state file may still carry it.
+  mcpPort?: number;
   pgPort?: number;
   composeFiles: string;
   databaseUrl: string;
@@ -45,16 +47,14 @@ const dockerEnv: Record<string, string> = {
   DEMO_PROJECT: s.project,
   DATABASE_URL: s.databaseUrl,
   WEB_PORT: String(s.apiPort),
-  MCP_PORT: String(s.mcpPort),
   POSTGRES_PORT: String(s.pgPort ?? 5432),
   POSTGRES_USER: s.dbUser,
   POSTGRES_PASSWORD: s.dbPassword,
   POSTGRES_DB: s.dbName,
 } as Record<string, string>;
 
-console.log(`[demo:status] project=${s.project}  api=:${s.apiPort}  mcp=:${s.mcpPort}  (created ${s.createdAt})`);
+console.log(`[demo:status] project=${s.project}  api=:${s.apiPort}  (created ${s.createdAt})`);
 console.log(`[demo:status]   Site:      http://127.0.0.1:${s.apiPort}/`);
-console.log(`[demo:status]   MCP:       http://127.0.0.1:${s.mcpPort}/health`);
 console.log(`[demo:status]   state file: ${stateFile}`);
 if (s.logFile) console.log(`[demo:status]   log file:   ${s.logFile}`);
 if (s.pgDataDir) {

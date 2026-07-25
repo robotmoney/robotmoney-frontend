@@ -1,4 +1,4 @@
-// Hermetic tests for src/e2e.ts's activeMemberCount() — the demo onboarding
+// Hermetic tests for scripts/lib/committee/session.ts's activeMemberCount() — the demo onboarding
 // driver's roster-cap pre-check (scripts/lib/demo-main.ts). Previously a
 // failed GET /api/committee/members silently resolved to `{ members: [] }`,
 // so activeMemberCount() returned 0 on ANY transient read error — the cap
@@ -11,12 +11,12 @@
 // a mutable flag, not a mocked `fetch`) — activeMemberCount()'s own logic is
 // exercised for real, not the fixture's. Uses activeMemberCount()'s test-only
 // backendUrl override rather than process.env.BACKEND_URL: that env var is
-// process-wide and e2e.ts's own BACKEND constant captures it once at import
+// process-wide and session.ts's own BACKEND constant captures it once at import
 // time, which is unsafe to mutate when other test files in the same run also
 // touch it (a real cross-file race was observed before this change).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
-import { activeMemberCount } from "../src/e2e.ts";
+import { activeMemberCount } from "../lib/committee/session.ts";
 
 let fixtureBackend: ReturnType<typeof Bun.serve>;
 let fixtureMode: "ok" | "error" | "malformed" = "ok";

@@ -8,7 +8,14 @@ import { resolveDemoEnv } from "./demo-env.ts";
 import { listDemoVolumes, makeDockerRunner, removeDemoVolumes } from "./demo-volumes.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
 import { COMMITTEE_INTERVAL_MS, COMMITTEE_STAGGER_MS } from "./demo-schedule.ts";
-import { NEWCOMER_NAMES, plannedNewcomer } from "./demo-newcomers.ts";
+import {
+  resolveModelConfig,
+  runOnboardingEval,
+  runOnboardingEvalWithRetry,
+  type OnboardingIdentity,
+  type OnboardingEvalResult,
+} from "./onboarding-eval.ts";
+import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./demo-newcomers.ts";
 import { COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -47,7 +54,7 @@ async function allocatePort(fixed: number | undefined, preferred: number | undef
 }
 
 // --- Pinned (fixed) ports -------------------------------------------------
-// A host operator can PIN a host port via env (WEB_PORT / MCP_PORT / POSTGRES_PORT)
+// A host operator can PIN a host port via env (WEB_PORT / POSTGRES_PORT)
 // instead of taking a random free one — useful when the host's root cloudflared
 // config routes the robotmoney.net origin to a STABLE demo port. Returns undefined
 // when unset/empty (→ a random free port is drawn instead). Only one demo can hold a
@@ -63,25 +70,26 @@ function parsePort(name: string): number | undefined {
 }
 
 // --- Run config -----------------------------------------------------------
-// Host ports for api, mcp AND postgres. The api/mcp ports prefer the stable
-// cloudflared-facing defaults (48787/48788 — the same defaults docker-compose
-// falls back to, and what the host tunnel routes robotmonet.net to) so a standing
-// demo is reachable over the tunnel without extra config; if a default is already
-// taken (another demo up), that port falls back to a random free one.
+// Host ports for api AND postgres. The api port prefers the stable
+// cloudflared-facing default (48787 — the same default docker-compose falls
+// back to, and what the host tunnel routes robotmonet.net to) so a standing
+// demo is reachable over the tunnel without extra config; if the default is
+// already taken (another demo up), it falls back to a random free one.
+// (D21 retired the member-facing MCP server — there is no longer an `mcp`
+// container or host port; members reach the committee REST API on the api
+// port.)
 //
 // Postgres has NO preferred default: a dev box often already has postgres on
-// :5432, and nothing external routes to the demo's pg (api/worker/mcp reach it
-// over the compose network by service name), so its host port is always random.
+// :5432, and nothing external routes to the demo's pg (api/worker reach it over
+// the compose network by service name), so its host port is always random.
 //
-// Any of the three can still be PINNED via env (WEB_PORT/MCP_PORT/POSTGRES_PORT),
-// which is honored as-is. Every returned socket is held open until all three are
-// chosen, then closed together, so no two draws collide.
+// Both can still be PINNED via env (WEB_PORT/POSTGRES_PORT), which is honored
+// as-is. Every returned socket is held open until both are chosen, then closed
+// together, so no two draws collide.
 const fixedApiPort = parsePort("WEB_PORT");
-const fixedMcpPort = parsePort("MCP_PORT");
 const fixedPgPort = parsePort("POSTGRES_PORT");
 const heldPorts: Held[] = [];
 const apiPort = await allocatePort(fixedApiPort, 48787, heldPorts);
-const mcpPort = await allocatePort(fixedMcpPort, 48788, heldPorts);
 const pgPort = await allocatePort(fixedPgPort, undefined, heldPorts);
 await Promise.all(heldPorts.map((s) => new Promise<void>((r) => s.close(() => r()))));
 // Pin the compose project name when DEMO_PROJECT is set (re-runs reuse/tear down the
@@ -97,7 +105,6 @@ const databaseUrl = `postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAM
 // fetch resolves "localhost" to ::1 first — so a localhost health check times
 // out in CI even though the service is up. 127.0.0.1 forces the IPv4 path.
 const backendUrl = `http://127.0.0.1:${apiPort}`;
-const mcpUrl = `http://127.0.0.1:${mcpPort}`;
 // Base compose files (what demo:down/demo:status rebuild from — they stop/inspect
 // by project and never need the pg-data bind overlay). composeFilesRun MAY append
 // a generated bind overlay below; that fuller value drives the up/run calls here.
@@ -153,9 +160,10 @@ if (pgDataDir) {
 // Admin dashboard password (/admin — the task-queue jobs dashboard, guarded by
 // ADMIN_TOKEN). A FRESH random secret every launch, set on the environment HERE —
 // before dockerEnv/compose interpolation and before any child process or the
-// dynamically-imported mcp/src/e2e.ts reads it — so the api container and every
-// internal admin caller (mcp e2e admin(), onboarding activate, rmpc-release-e2e)
-// authenticate with the SAME value. It is printed ONLY to the interactive TUI
+// dynamically-imported committee session driver reads it — so the api container
+// and every internal admin caller (the session driver's admin(), onboarding
+// activate, rmpc-release-e2e) authenticate with the SAME value. It is printed
+// ONLY to the interactive TUI
 // (see render()): never passed to log(), never serialized by writeStateFile()
 // (demo-state.json), and never printed in the plain non-TUI READY block.
 const adminPassword = crypto.randomUUID().replace(/-/g, "").slice(0, 20);
@@ -193,7 +201,6 @@ const dockerEnv: Record<string, string> = {
   // printed anywhere.
   ANALYTICS_TOKEN: analyticsToken,
   WEB_PORT: String(apiPort),
-  MCP_PORT: String(mcpPort),
   POSTGRES_PORT: String(pgPort),
   POSTGRES_USER: DB_USER,
   POSTGRES_PASSWORD: DB_PASSWORD,
@@ -228,11 +235,11 @@ type Phase = "pending" | "building" | "starting" | "healthy" | "failed";
 type StepStatus = "pending" | "running" | "done" | "failed";
 interface ResearchEntry { id: number; kind: string; state: "queued" | "running" | "done"; asof?: string; at?: string; note: string; }
 interface MemberState { stage: "connect" | "fetch" | "thinking" | "reporting" | "waiting" | "done" | "absent"; stance?: string; confidence?: number; }
-// Local structural mirrors of the mcp types (e2e.ts SessionProgress / agent.ts
-// ExistingCredentials). We deliberately do NOT `import type` them across the package
-// boundary: demo.ts loads e2e via a dynamic import() (untyped), and a static type
-// import from ../mcp/src drags the MCP SDK into the ROOT tsc program (no mcp deps) →
-// TS2307 under `bun run typecheck`. Local aliases keep our annotations decoupled.
+// Local structural mirrors of the committee session driver's types
+// (scripts/lib/committee/session.ts SessionProgress / agent.ts
+// ExistingCredentials). The driver is loaded via a dynamic import() (untyped)
+// so the driver's module-load reads BACKEND_URL AFTER it is set below; these
+// local aliases keep our annotations decoupled from that dynamic boundary.
 type SessionProgress = (ev:
   | { type: "session"; state: string; sessionId?: number; subject: string; date?: string }
   | { type: "member"; memberId: string; stage: MemberState["stage"]; stance?: string; confidence?: number }
@@ -278,7 +285,6 @@ const state: DemoState = {
     // the password is rendered on its own line in the TUI Services pane, never
     // stored in state.services.
     { name: "Admin", url: `${backendUrl}/admin` },
-    { name: "MCP", url: `${mcpUrl}/health` },
   ],
   containers: [
     { name: "postgres", phase: "pending" },
@@ -289,12 +295,10 @@ const state: DemoState = {
     { name: "worker-committee", phase: "pending" },
     { name: "worker-analytics", phase: "pending" },
     { name: "worker-research", phase: "pending" },
-    { name: "mcp", phase: "pending" },
   ],
   steps: [
     { name: "migrate", status: "pending" },
     { name: "api /health", status: "pending" },
-    { name: "mcp /health", status: "pending" },
     { name: "edgar seed", status: "pending" },
   ],
   research: [],
@@ -312,10 +316,18 @@ function setStep(name: string, status: StepStatus): void {
   const s = state.steps.find((x) => x.name === name);
   if (s) s.status = status;
 }
-// The prospective-member join checklist, in order. keypair→connect are driven by
-// onboardMember(); session/memo/admitted flip when the new member is seen taking +
-// posting a memo in a live session (via committeeProgress).
-const ONBOARD_STEPS = ["keypair", "apply", "review", "activate", "connect", "session", "memo", "admitted"];
+// The prospective-member join checklist, in order — tracks docs/architecture.md
+// §11.2 exactly. connect→claim are driven by the real-inference eval harness's
+// observed step-state record (scripts/lib/onboarding-eval.ts): a vanilla
+// OpenCode agent container works these out for itself from the canonical
+// prompt with real inference, no scripting (§11 R8). session/memo/admitted
+// flip when the newly-admitted member is separately observed submitting a
+// signed take + posting a memo in a live committee session (via
+// committeeProgress) — the SAME mechanism that already drives these three for
+// the long-standing hardcoded roster, since the eval's observe-only design has
+// no visibility into ongoing session participation (see onboarding-eval.ts's
+// module doc comment).
+const ONBOARD_STEPS = ["connect", "discover", "toolchain", "apply", "approve", "claim", "session", "memo", "admitted"];
 // Begin (or resume) a member's join checklist. The member is appended to the persistent
 // onboarded list so its status checks stay in the pane after admission, and it is dropped
 // from the upcoming queue now that its turn has arrived.
@@ -370,7 +382,6 @@ const fx = (isFixed: boolean) => (isFixed ? " (fixed)" : "");
 log(
   `project=${project}${fx(Boolean(process.env.DEMO_PROJECT?.trim()))}  ` +
     `api=:${apiPort}${fx(fixedApiPort !== undefined)}  ` +
-    `mcp=:${mcpPort}${fx(fixedMcpPort !== undefined)}  ` +
     `pg=:${pgPort}${fx(fixedPgPort !== undefined)}`,
 );
 log(
@@ -466,7 +477,6 @@ function writeStateFile(): void {
   const state = {
     project,
     apiPort,
-    mcpPort,
     pgPort,
     composeFiles: composeFilesBase,
     databaseUrl,
@@ -683,7 +693,7 @@ function startResearchPolling(): void {
 // endpoints) so a crash / restart-loop / unhealthy Docker healthcheck surfaces in
 // the Startup pane. Polls `docker compose ps` and maps each service's State+Health
 // to a pane phase: ✓ healthy · ✗ errored · spinner while starting/checking. Only
-// postgres declares a Docker healthcheck; for api/worker/mcp the signal is process
+// postgres declares a Docker healthcheck; for api/worker the signal is process
 // state (running vs exited/restarting) — i.e. the "absence of errors". Fully
 // defensive: any failure is logged and skipped, never crashing the TUI.
 interface PsEntry { Service?: string; Name?: string; State?: string; Health?: string; ExitCode?: number; }
@@ -964,6 +974,26 @@ function committeeProgress(subjectId: string): SessionProgress {
 
 // --- Orchestration --------------------------------------------------------
 async function main(): Promise<void> {
+  // §11 R8: real inference is the demo's onboarding mode, never an optional
+  // extra behind a flag — there is no hermetic/scripted onboarding fallback.
+  // resolveModelConfig() defaults to the free keyless tier (so this
+  // ordinarily just succeeds with zero configuration, for both a local demo
+  // and CI), but an operator's EXPLICIT, incomplete paid-model opt-in
+  // (OPENCODE_MODEL set to a non-default model with no matching key) must
+  // still fail LOUDLY here, before the demo spends minutes standing up the
+  // stack, rather than have onboardingDriver() throw quietly in the
+  // background later. CI's own invocation of this file exits (via the
+  // `if (process.env.CI)` branch below) before ever reaching
+  // onboardingDriver() — it runs a different, non-onboarding check suite — so
+  // this check applies to a LOCAL standing demo unconditionally, and to a CI
+  // run only when it's running the real-inference onboarding eval (Stage 7,
+  // ONBOARDING_REAL_EVAL=1, unconditionally set by e2e.yml — see the CI
+  // branch below): fail before spending minutes standing up the stack, not
+  // ~20 minutes later at the eval step itself.
+  if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
+    resolveModelConfig(process.env);
+  }
+
   if (tuiActive) {
     tui = createTui({ render });
     tui.start();
@@ -1011,19 +1041,15 @@ async function main(): Promise<void> {
   setStep("migrate", "done");
 
   const WORKER_LANES = ["worker-committee", "worker-analytics", "worker-research"];
-  log("starting api, worker lanes (committee/analytics/research), mcp…");
-  for (const n of ["api", ...WORKER_LANES, "mcp"]) setContainer(n, "starting");
+  log("starting api, worker lanes (committee/analytics/research)…");
+  for (const n of ["api", ...WORKER_LANES]) setContainer(n, "starting");
   await runCompose(["up", "-d"], "start services");
   for (const n of WORKER_LANES) setContainer(n, "healthy", "running"); // no /health endpoint — up ⇒ running
   setStep("api /health", "running");
   await waitForHttp(`${backendUrl}/health`);
   setContainer("api", "healthy");
   setStep("api /health", "done");
-  setStep("mcp /health", "running");
-  await waitForHttp(`${mcpUrl}/health`);
-  setContainer("mcp", "healthy");
-  setStep("mcp /health", "done");
-  log("api + mcp healthy");
+  log("api healthy");
 
   // EDGAR/MNA seed bootstrap (issue #108) — AFTER migrations + API readiness,
   // BEFORE the research schedule may fire. Loads the committed seed artifact
@@ -1049,23 +1075,23 @@ async function main(): Promise<void> {
     console.log("\n[demo] running committee session…");
     // RM_ALLOW_INSECURE=1: docker-compose.demo.yml runs the api container with
     // this flag, so the backend's regime-write/admin gates ARE open here. The
-    // host-run mcp e2e driver is secure-by-default (mcp/src/e2e.ts
-    // regimeWriteInsecure — opt-IN, mirroring backend config.ts allowInsecure),
-    // so tell it explicitly that this stack is insecure, keeping its 5c/5d
-    // cross-role log annotations truthful ("gate open", as before the flip).
-    await run(["bun", "run", "src/e2e.ts"], join(repoRoot, "mcp"),
-      { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp`, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "committee session");
+    // host-run REST session driver is secure-by-default
+    // (scripts/lib/committee/session.ts regimeWriteInsecure — opt-IN, mirroring
+    // backend config.ts allowInsecure), so tell it explicitly that this stack
+    // is insecure, keeping its 5c/5d cross-role log annotations truthful ("gate
+    // open").
+    await run(["bun", "run", "scripts/lib/committee/session.ts"], repoRoot,
+      { ...process.env, BACKEND_URL: backendUrl, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "committee session");
 
-    // Issue #209: exercise the repo-native single-member starter over BOTH
-    // transports against this required per-PR live stack. Its --e2e mode only
-    // provisions isolated member credentials + an open session; the actual
-    // poll → brief → author → memo → canonicalize → sign → submit → verified
-    // readback path is the same exported implementation operators run.
-    console.log("[demo] running starter committee agent (REST + MCP OAuth)…");
+    // Issue #209: exercise the repo-native single-member starter against this
+    // required per-PR live stack. Its --e2e mode only provisions isolated
+    // member credentials + an open session; the actual poll → brief → author →
+    // memo → canonicalize → sign → submit → verified readback path is the same
+    // exported implementation operators run. (D21: REST is the only transport.)
+    console.log("[demo] running starter committee agent (REST)…");
     const starterEnv = {
       ...process.env,
       BACKEND_URL: backendUrl,
-      MCP_URL: `${mcpUrl}/mcp`,
       ADMIN_TOKEN: adminPassword,
     } as Record<string, string>;
     const { BACKEND_URL: _missingBackend, ...withoutBackendUrl } = starterEnv;
@@ -1087,12 +1113,6 @@ async function main(): Promise<void> {
       repoRoot,
       starterEnv,
       "starter committee agent REST live-stack exercise",
-    );
-    await run(
-      ["bun", "run", "scripts/starter-committee-agent.ts", "--transport=mcp", "--e2e"],
-      repoRoot,
-      starterEnv,
-      "starter committee agent MCP live-stack exercise",
     );
 
     console.log("[demo] running frontend checks…");
@@ -1119,7 +1139,84 @@ async function main(): Promise<void> {
     if (process.env.RMPC_RELEASE_E2E === "1") {
       console.log("\n[demo] running rmpc release e2e driver…");
       await run(["bun", "run", "scripts/rmpc-release-e2e.ts"], repoRoot,
-        { ...process.env, BACKEND_URL: backendUrl, MCP_URL: `${mcpUrl}/mcp` } as Record<string, string>, "rmpc release e2e");
+        { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "rmpc release e2e");
+    }
+
+    // Additive, env-gated (Stage 7, §11 R8, docs/plans/onboarding-ic-workflow.md):
+    // the REAL-INFERENCE onboarding admission sweep reuses this EXACT
+    // already-booted stack instead of standing up a parallel one — same
+    // pattern as RMPC_RELEASE_E2E above. Only runs when ONBOARDING_REAL_EVAL=1,
+    // which .github/workflows/e2e.yml now sets UNCONDITIONALLY for every run
+    // (including forks) — the default model is the free, no-credential
+    // OpenCode Zen tier (see resolveModelConfig() in onboarding-eval.ts), so
+    // there is no secret to be missing and nothing to gate on. A run without
+    // ONBOARDING_REAL_EVAL set at all (e.g. a plain local `bun run demo`, or
+    // any invocation predating this env var) stays a zero-behaviour-change
+    // no-op, relying on Stage 5's separate inference-off infra-rails test
+    // (scripts/tests/onboarding-eval-infra.test.ts) as its fail-fast
+    // substitute. A failed/timed-out admission THROWS (via `run`'s pattern —
+    // no silent pass): the whole point of putting real inference in the PR
+    // gate is that a vanilla agent failing to navigate our own onboarding
+    // instructions is a real regression signal, not a shrug. Provider/infra
+    // flake (rate-limit signals, and — on the keyless default — bare
+    // timeouts too) is mitigated by runOnboardingEvalWithRetry's own
+    // retry/backoff (scripts/lib/onboarding-eval.ts); it never retries a
+    // genuine navigation failure.
+    //
+    // Sweep width (nightly-only knobs, both optional, both no-ops for the PR
+    // gate which never sets them): ONBOARDING_SWEEP_MODELS is a ":"-separated
+    // list of OPENCODE_MODEL values to try (default: the single model
+    // resolveModelConfig() resolves — the keyless default unless an operator
+    // opted into a paid one); ONBOARDING_SWEEP_IDENTITIES_PER_MODEL is how
+    // many fresh admissions to run per model (default 1). The PR gate's
+    // e2e.yml never sets either, so it stays exactly one admission on one
+    // model — this block is a strict superset of that behaviour, not a
+    // different code path (§11 R8: one real flow, config-only differences).
+    if (process.env.ONBOARDING_REAL_EVAL === "1") {
+      // No model configured (OPENCODE_MODEL/ONBOARDING_SWEEP_MODELS unset) is
+      // NOT an error anymore — it means "use the default free keyless tier",
+      // exactly like resolveModelConfig() resolves it for a single admission.
+      // Reuse that same resolution here so the sweep's default and a plain
+      // admission's default can never drift apart.
+      const sweepModels = (process.env.ONBOARDING_SWEEP_MODELS?.trim() || process.env.OPENCODE_MODEL || resolveModelConfig().model)
+        .split(":")
+        .map((m) => m.trim())
+        .filter(Boolean);
+      const identitiesPerModel = Math.max(1, Number.parseInt(process.env.ONBOARDING_SWEEP_IDENTITIES_PER_MODEL ?? "1", 10) || 1);
+      const totalAdmissions = sweepModels.length * identitiesPerModel;
+      console.log(
+        `\n[demo] running REAL-INFERENCE onboarding eval sweep (§11 R8): ${totalAdmissions} admission(s) across ` +
+          `${sweepModels.length} model(s) [${sweepModels.join(", ")}], ${identitiesPerModel} identit${identitiesPerModel === 1 ? "y" : "ies"} each…`,
+      );
+      const sweepResults: Array<{ model: string; result: OnboardingEvalResult }> = [];
+      for (const model of sweepModels) {
+        for (let i = 0; i < identitiesPerModel; i++) {
+          const result = await runOnboardingEvalWithRetry({
+            repoRoot,
+            composeProject: project,
+            composeFiles: composeFilesRun.split(":"),
+            backendUrl,
+            adminToken: adminPassword,
+            env: { ...process.env, OPENCODE_MODEL: model },
+            onEvent: (msg) => console.log(`[demo] onboarding-real-eval[${model}]: ${msg}`),
+          });
+          sweepResults.push({ model, result });
+        }
+      }
+      const failed = sweepResults.filter((r) => !r.result.admitted);
+      for (const f of failed) if (f.result.transcript) console.log(`[demo] onboarding real-eval (${f.model}, ${f.result.identity.runId}) container transcript:\n${f.result.transcript}`);
+      if (failed.length > 0) {
+        throw new Error(
+          `real-inference onboarding eval: ${failed.length}/${sweepResults.length} admission(s) did not reach the active roster (§11 R8) — ` +
+            failed
+              .map(
+                (f) =>
+                  `${f.model}/${f.result.identity.runId}: ${f.result.timedOut ? "timed out" : `container exited (code ${f.result.containerExitCode})`}`,
+              )
+              .join("; "),
+        );
+      }
+      console.log(`[demo] real-inference onboarding eval: ${sweepResults.length}/${sweepResults.length} admission(s) admitted (§11 R8) ✓`);
     }
 
     console.log("\n[demo] CI mode — all checks passed, tearing down…");
@@ -1144,7 +1241,6 @@ async function main(): Promise<void> {
     for (const k of researchKeys) console.log(`  Research:   ${backendUrl}/research/${k}`);
     // URL only — the admin password is shown in the interactive TUI, never here.
     console.log(`  Admin:      ${backendUrl}/admin  (password shown in the interactive TUI only)`);
-    console.log(`  MCP:        ${mcpUrl}/health`);
     console.log(`  State file: ${stateFile}`);
     console.log(`  Log file:   ${logFile}`);
     console.log(`  PG data:    ${pgDataDir ? `--pg-data ${pgDataDir} (bind; resumable)` : `volume ${project}_pgdata (fresh-per-run; kept on teardown)`}`);
@@ -1154,7 +1250,7 @@ async function main(): Promise<void> {
     console.log("  Reclaim stopped demos' data volumes with: bun run demo:clean");
     console.log("");
   }
-  log(`READY — Site ${backendUrl}/  ·  MCP ${mcpUrl}/health  ·  state ${stateFile}`);
+  log(`READY — Site ${backendUrl}/  ·  state ${stateFile}`);
 
   // Research pane: begin polling the worker's real job queue (TUI mode only).
   if (tuiActive) startResearchPolling();
@@ -1173,15 +1269,15 @@ async function main(): Promise<void> {
   // fast demo schedules seeded above — regime on even minutes, research on odd, so
   // those two action types are already staggered from each other (see seed.ts).
   //
-  // The committee session needs live MCP agents to submit takes, so it is driven
-  // by a loop HERE. It fires immediately (data on first load) then every ~2 min.
+  // The committee session drives live agents to submit takes over REST, so it
+  // runs from a loop HERE. It fires immediately (data on first load) then every
+  // ~2 min.
   //
-  // e2e.ts's env (BACKEND/MCP url) is captured at module load, so set it BEFORE
+  // The session driver captures BACKEND_URL at module load, so set it BEFORE
   // the dynamic import. main()'s reset-heavy flow is guarded by import.meta.url,
   // so importing here does NOT reset — we reset ONCE below and then accumulate.
   process.env.BACKEND_URL = backendUrl;
-  process.env.MCP_URL = `${mcpUrl}/mcp`;
-  const e2e = await import(join(repoRoot, "mcp", "src", "e2e.ts"));
+  const e2e = await import(join(repoRoot, "scripts", "lib", "committee", "session.ts"));
 
   // One-time setup: reset once (clears any prior demo history) + seed regime.
   await e2e.admin("reset");
@@ -1232,8 +1328,14 @@ async function main(): Promise<void> {
     };
   }
 
-  // Credentials for members onboarded at runtime (apply→activate). Passed to every
-  // runSession so newly-admitted members participate (signing with their own key).
+  // Credentials for members onboarded at runtime, passed to every runSession so a
+  // member with a KNOWN key signs its own takes. §11 R3 means this process never
+  // holds a real-eval-onboarded member's private key, so this map now stays
+  // empty in practice — runAgent's existing "no credentials" self-enroll path
+  // (a fresh demo-only simulation key via the privileged register shortcut)
+  // covers ongoing session participation for every onboarded member instead.
+  // Kept as a live parameter (not deleted) so a future credential-preserving
+  // design can populate it without touching runSession's signature.
   const onboardedCreds = new Map<string, ExistingCredentials>();
 
   async function committeeDriver(): Promise<void> {
@@ -1267,19 +1369,51 @@ async function main(): Promise<void> {
   }
   void committeeDriver();
 
-  // ── Periodic new-member onboarding ───────────────────────────────────────
-  // Walk a brand-new prospect through the real join gates (keypair → apply →
-  // review → activate → OAuth connect), then add it to the shared roster
-  // (e2e.MEMBERS + onboardedCreds) so it participates in — and GROWS — the
-  // committee. session/memo/admitted complete when committeeProgress sees the
-  // newcomer take + post a memo. The first admission fires early so it's
-  // visible; thereafter a new character joins every ONBOARD_INTERVAL. FIXED,
-  // FINITE roster (NEWCOMER_NAMES, module scope above): exactly 5 named
-  // newcomers, never more — no generated fallback names, and the driver loop
-  // terminates once they're all attempted (or already on the roster) rather
-  // than running forever.
+  // ── Periodic new-member onboarding (§11 R8: real-inference eval) ─────────
+  // Every admission launches ONE vanilla OpenCode member-agent container
+  // (scripts/lib/onboarding-eval.ts) and hands it the canonical copy-paste
+  // prompt with a generated identity — no scripting beyond that: the agent
+  // installs the committee-onboarding skill + `rmpc`, generates its own
+  // keypair, signs and submits the application over REST, and claims its token
+  // entirely through its own real inference. This driver only OBSERVES (poll the public status
+  // API + the admin roster) and performs the one scripted action §11 R7
+  // explicitly allows to differ between demo and production: auto-approving
+  // after 10s via the same admin API a human uses.
+  //
+  // The eval harness never hands this process the member's private key (§11
+  // R3 — Robot Money never sees one), so a freshly-onboarded member is added
+  // to e2e.MEMBERS WITHOUT credentials, exactly like the pre-existing
+  // "already-active member reused across a resumed demo" path — runAgent
+  // self-enrolls it (a fresh, demo-only simulation key, privileged register
+  // shortcut) for ongoing SESSION PARTICIPATION only, never for the
+  // onboarding admission itself, which already completed for real above.
+  //
+  // A failed/timed-out admission is a genuine red eval result (§11 R8) — the
+  // strip renders it failed, the container transcript is logged, and nothing
+  // retries the member's steps.
+  //
+  // FIXED, FINITE roster (scripts/lib/demo-newcomers.ts — the single, tested
+  // source): the demo admits exactly the named newcomers listed there, in
+  // order, and never more — no generated fallback name once the list is
+  // exhausted, and the driver loop terminates once they're all attempted
+  // rather than running forever.
   const FIRST_ONBOARD_MS = 60_000;     // first admission ~1 min in (after the base committee shows)
-  const ONBOARD_INTERVAL_MS = 300_000; // then a new character every 5 min
+  const ONBOARD_INTERVAL_MS = 300_000; // then a new admission starts every 5 min (real eval duration is additive)
+  // Adapt the shared finite-roster planner (demo-newcomers.ts) to the
+  // real-inference driver's identity shape. `identity.runId` is a LOCAL slug
+  // only (this driver's bookkeeping key + the container's --title); the real
+  // memberId (§11 R2) is server-minted and only known once the harness observes
+  // it. Returns null once the fixed list is exhausted — the driver stops, never
+  // a generated fallback.
+  function plannedNewcomer(n: number): { identity: OnboardingIdentity; lens: string; bias: number } | null {
+    const p = plannedNewcomerBase(n);
+    if (!p) return null;
+    return {
+      identity: { runId: p.memberId, name: p.name, contact: `${p.memberId}@example.test` },
+      lens: p.lens,
+      bias: p.bias,
+    };
+  }
   async function onboardingDriver(): Promise<void> {
     for (let n = 0; n < NEWCOMER_NAMES.length; n++) {
       const delay = n === 0 ? FIRST_ONBOARD_MS : ONBOARD_INTERVAL_MS;
@@ -1289,20 +1423,15 @@ async function main(): Promise<void> {
       const upcoming: UpcomingMember[] = [];
       for (const k of [0, 1, 2]) {
         const p = plannedNewcomer(n + k);
-        if (p) upcoming.push({ memberId: p.memberId, name: p.name, at: dueAt + k * ONBOARD_INTERVAL_MS });
+        if (p) upcoming.push({ memberId: p.identity.runId, name: p.identity.name, at: dueAt + k * ONBOARD_INTERVAL_MS });
       }
       state.upcoming = upcoming;
       await sleep(delay);
       const planned = plannedNewcomer(n);
-      if (!planned) break; // exhausted the fixed 5-name list — stop, no generated fallback
-      const { memberId, name, lens, bias } = planned;
-      // Idempotent: never re-onboard a member already on the roster (dedupe).
-      if (e2e.MEMBERS.some((m: { memberId: string }) => m.memberId === memberId)) {
-        log(`onboarding ${memberId} skipped — already on the roster`);
-        continue;
-      }
+      if (!planned) break; // exhausted the fixed roster — stop, no generated fallback
+      const { identity, lens, bias } = planned;
       // Roster cap: once the active committee reaches the contract's
-      // COMMITTEE_ROSTER_CAP, stop admitting — the same finite-5-name bound
+      // COMMITTEE_ROSTER_CAP, stop admitting — the same finite-roster bound
       // above already stops the demo from growing forever, but this stays as
       // defense in depth for a shared/reused roster. activeMemberCount() now
       // fails CONSERVATIVELY (assume full, never assume empty) on a read
@@ -1311,21 +1440,66 @@ async function main(): Promise<void> {
       const active = await e2e.activeMemberCount();
       if (active >= COMMITTEE_ROSTER_CAP) {
         state.upcoming = [];
-        log(`roster full (${active}/${COMMITTEE_ROSTER_CAP}) — onboarding paused`);
+        log(`onboarding ${identity.name} skipped — roster full (${active}/${COMMITTEE_ROSTER_CAP})`);
         continue;
       }
-      startOnboarding(memberId, name); // append to the persistent pane + drop from upcoming
+      startOnboarding(identity.runId, identity.name); // append to the persistent pane + drop from upcoming
+      setOnboardStep(identity.runId, "connect", "running"); // container is about to launch
       try {
-        const { member, creds } = await e2e.onboardMember({ memberId, name, lens, bias }, {
-          reviewMs: 6000,
-          onStage: (stage: string, ok: boolean) => setOnboardStep(memberId, stage, ok ? "done" : "failed"),
+        const result: OnboardingEvalResult = await runOnboardingEval({
+          repoRoot,
+          composeProject: project,
+          composeFiles: composeFilesRun.split(":"),
+          backendUrl,
+          adminToken: adminPassword,
+          identity,
+          onEvent: (msg) => log(`onboarding-eval[${identity.runId}]: ${msg}`),
         });
-        if (creds) onboardedCreds.set(memberId, creds); // null ⇒ reused member; runAgent self-enrolls
-        e2e.MEMBERS.push(member); // grow the roster → joins subsequent sessions
-        setOnboardStep(memberId, "session", "running");
-        log(`onboarded ${memberId} (#${n + 1}/${NEWCOMER_NAMES.length}) — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
+
+        // Rekey the pane entry to the server-minted memberId (§11 R2) as soon as
+        // it's known, so committeeProgress's later ev.memberId lookups match.
+        const ob = state.onboarded.find((o) => o.memberId === identity.runId);
+        if (ob && result.memberId) ob.memberId = result.memberId;
+        const entryId = result.memberId ?? identity.runId;
+
+        // The strip renders straight from the harness's OBSERVED step-state
+        // record — no fabricated sub-steps. Drop the harness's own trailing
+        // "session" entry (it means "reached the active roster", which this
+        // driver already tracks via `admitted` below); the strip's OWN
+        // session/memo/admitted tail tracks real committee participation.
+        for (const s of result.steps) {
+          if (s.step === "session") continue;
+          setOnboardStep(entryId, s.step, s.status === "done" ? "done" : "pending");
+        }
+
+        if (!result.admitted) {
+          // Mark the FIRST not-yet-done step in the pane's own (full 9-step)
+          // checklist as failed — not just among the harness's first 6: a
+          // member that reaches "claim" but never lands on the active roster
+          // (e.g. the auto-approve call itself failing) would otherwise render
+          // all-green with nothing visibly red.
+          const stalledOb = state.onboarded.find((o) => o.memberId === entryId);
+          const stalledAt = stalledOb?.steps.find((s) => s.status !== "done");
+          if (stalledAt) setOnboardStep(entryId, stalledAt.key, "failed");
+          log(
+            `onboarding ${identity.name} (#${n + 1}) FAILED — ` +
+              `${result.timedOut ? "timed out" : `container exited (code ${result.containerExitCode})`} ` +
+              "before reaching the active roster; this is a real eval result, not retried",
+          );
+          if (result.transcript) log(`onboarding ${identity.name} container transcript:\n${result.transcript}`);
+          continue;
+        }
+
+        // Admitted for real (§11 R6 verified, R2 id minted). This driver never
+        // held the member's private key (R3), so it joins e2e.MEMBERS WITHOUT
+        // creds — the same "reused member" path runAgent already self-enrolls
+        // (demo-only participation simulation, not onboarding) for ongoing
+        // session participation.
+        e2e.MEMBERS.push({ memberId: result.memberId!, name: identity.name, lens, bias, present: true });
+        setOnboardStep(entryId, "session", "running");
+        log(`onboarded ${identity.name} (#${n + 1}/${NEWCOMER_NAMES.length}) memberId=${result.memberId} — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
       } catch (err) {
-        log(`onboarding ${memberId} failed (stack still running): ${err instanceof Error ? err.message : err}`);
+        log(`onboarding ${identity.name} eval threw (stack still running): ${err instanceof Error ? err.message : err}`);
       }
     }
     state.upcoming = [];

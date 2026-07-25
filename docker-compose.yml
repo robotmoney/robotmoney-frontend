@@ -144,19 +144,8 @@ services:
       <<: *worker-env
       WORKER_LANE: research
 
-  # Member-facing MCP server (committee). Talks to the API by service name.
-  mcp:
-    build:
-      context: .
-      dockerfile: mcp/Dockerfile
-    environment:
-      BACKEND_URL: http://api:8787
-      MCP_PORT: "8788"
-    ports:
-      - "${MCP_PORT:-48788}:8788"
-    depends_on:
-      - api
-    restart: unless-stopped
+  # D21 retired the member-facing MCP server: committee members reach the
+  # committee REST API on the `api` service directly (docs/decisions.md D21).
 
 volumes:
   pgdata:

@@ -1,7 +1,7 @@
 // Hermetic unit tests for src/demo/e2e.ts resolveBackendBase (review finding
 // 014). The backend base URL was configured as API_BASE in that one driver and
 // BACKEND_URL in every other (scripts/demo-frontend-check.ts,
-// scripts/rmpc-release-e2e.ts, mcp/src/e2e.ts, mcp/src/agent.ts), so exporting
+// scripts/rmpc-release-e2e.ts, scripts/lib/committee/session.ts), so exporting
 // BACKEND_URL silently failed to repoint it. The resolver honors the canonical
 // BACKEND_URL first and keeps API_BASE only as a DEPRECATED one-release
 // fallback. Importing src/demo/e2e.ts is safe: its main() is entry-point

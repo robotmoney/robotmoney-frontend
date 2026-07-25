@@ -12,7 +12,8 @@ import { test, expect } from "bun:test";
 import * as ic from "../src/committee/domain.ts";
 import { COMMITTEE_ROSTER_CAP, countActiveMembers } from "../src/committee/domain.ts";
 import * as admin from "../src/committee/admin.ts";
-import { generateKeyPair } from "../src/lib/signing.ts";
+import { canonicalizeApplication } from "@robotmoney/contract";
+import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { sql } from "../src/db/client.ts";
 
 // Isolate: own the committee_members table so countActiveMembers() reflects only
@@ -21,13 +22,20 @@ async function resetRoster() {
   await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
 }
 
-// Onboard a member through the REAL public path (apply → activate). Returns the
-// activation result so the caller can assert on status/ok — NO cap pre-check.
-async function onboard(memberId: string) {
-  const { publicKeyB64 } = await generateKeyPair();
-  const applied = await ic.applyMember({ memberId, name: memberId, publicKey: publicKeyB64 });
+// Onboard a member through the REAL public path (apply → activate), signing
+// the canonical application payload the way an rmpc-equipped agent would. The
+// server mints the memberId (§11 R2) — the caller never supplies one. Returns
+// the activation result plus the identity (id/key/privateKey) so the caller
+// can assert on status/ok and reuse the SAME key for re-apply assertions —
+// NO cap pre-check.
+async function onboard(name: string) {
+  const { publicKeyB64, privateKey } = await generateKeyPair();
+  const application = { name, contact: `${name}@example.test`, publicKey: publicKeyB64 };
+  const signature = await signMessage(canonicalizeApplication(application), privateKey);
+  const applied = await ic.applyMember({ ...application, signature });
   expect(applied.status).toBe(201); // application is always allowed
-  return ic.activateMember(memberId);
+  const memberId = (applied as { memberId: string }).memberId;
+  return { memberId, publicKeyB64, privateKey, activation: await ic.activateMember(memberId) };
 }
 
 // Current optimistic-concurrency version of a member (needed by the admin
@@ -42,10 +50,12 @@ test("every transition-to-active path hard-blocks admissions past COMMITTEE_ROST
   await resetRoster();
 
   // ── Fill the roster to EXACTLY the cap through the real apply → activate gate ─
+  const capMembers: Awaited<ReturnType<typeof onboard>>[] = [];
   for (let i = 0; i < COMMITTEE_ROSTER_CAP; i++) {
-    const act = await onboard(`cap_${i}`);
-    expect(act.ok).toBe(true);
-    expect(act.status).toBe(200);
+    const m = await onboard(`cap_${i}`);
+    expect(m.activation.ok).toBe(true);
+    expect(m.activation.status).toBe(200);
+    capMembers.push(m);
   }
   expect(await countActiveMembers()).toBe(COMMITTEE_ROSTER_CAP);
   // getMembers() (the read the API/UI use) agrees with the count helper.
@@ -53,9 +63,9 @@ test("every transition-to-active path hard-blocks admissions past COMMITTEE_ROST
 
   // ── (CAP+1)th via activate: application allowed, activation REFUSED with 409 ─
   const extra = await onboard("cap_extra"); // applyMember returned 201 (asserted in helper)
-  expect(extra.ok).toBe(false);
-  expect(extra.status).toBe(409);
-  expect(String((extra as { error?: string }).error ?? "")).toContain("roster full");
+  expect(extra.activation.ok).toBe(false);
+  expect(extra.activation.status).toBe(409);
+  expect(String((extra.activation as { error?: string }).error ?? "")).toContain("roster full");
   expect(await countActiveMembers()).toBe(COMMITTEE_ROSTER_CAP); // unchanged
 
   // ── Admin manual add of a brand-new id is ALSO refused with 409 when full ──
@@ -68,17 +78,19 @@ test("every transition-to-active path hard-blocks admissions past COMMITTEE_ROST
   expect(addFull.status).toBe(409);
   expect(await countActiveMembers()).toBe(COMMITTEE_ROSTER_CAP);
 
-  // ── Idempotency: re-admitting an ALREADY-active id never inflates the roster ─
-  // Public apply is create-only (409); the privileged registerMember shortcut is
-  // exempt (same slot, ON CONFLICT DO UPDATE) so it succeeds WITHOUT a new seat.
-  const dupApply = await ic.applyMember({
-    memberId: "cap_0",
-    name: "cap_0",
-    publicKey: (await generateKeyPair()).publicKeyB64,
-  });
+  // ── Idempotency: re-admitting an ALREADY-active KEY never inflates the roster ─
+  // Public apply is now refresh-or-reject BY KEY (the id is server-minted, so
+  // it can no longer be the re-apply key): re-applying with the SAME key as an
+  // already-ACTIVE member is refused (409) — that stays an admin operation
+  // (key rotation). The privileged registerMember shortcut IS exempt (same
+  // slot, ON CONFLICT DO UPDATE) so it succeeds WITHOUT a new seat.
+  const first = capMembers[0];
+  const dupApplication = { name: "cap_0 impersonation", contact: "cap0-dup@example.test", publicKey: first.publicKeyB64 };
+  const dupSignature = await signMessage(canonicalizeApplication(dupApplication), first.privateKey);
+  const dupApply = await ic.applyMember({ ...dupApplication, signature: dupSignature });
   expect(dupApply.status).toBe(409);
   const reReg = await ic.registerMember({
-    memberId: "cap_0",
+    memberId: first.memberId,
     name: "cap_0",
     publicKey: (await generateKeyPair()).publicKeyB64,
   });
@@ -87,7 +99,7 @@ test("every transition-to-active path hard-blocks admissions past COMMITTEE_ROST
 
   // ── Reactivation respects the cap: a freed seat can be refilled, but the
   //    reactivation of a previously-deactivated member is refused once full. ──
-  const deact = await admin.deactivateMemberAdmin("cap_0", await memberVersion("cap_0"));
+  const deact = await admin.deactivateMemberAdmin(first.memberId, await memberVersion(first.memberId));
   expect(deact.ok).toBe(true);
   expect(await countActiveMembers()).toBe(COMMITTEE_ROSTER_CAP - 1);
 
@@ -101,7 +113,7 @@ test("every transition-to-active path hard-blocks admissions past COMMITTEE_ROST
   expect(await countActiveMembers()).toBe(COMMITTEE_ROSTER_CAP);
 
   // Now reactivating cap_0 would push past the cap → 409, count unchanged.
-  const react = await admin.reactivateMemberAdmin("cap_0", await memberVersion("cap_0"));
+  const react = await admin.reactivateMemberAdmin(first.memberId, await memberVersion(first.memberId));
   expect(react.ok).toBe(false);
   expect(react.status).toBe(409);
   expect(await countActiveMembers()).toBe(COMMITTEE_ROSTER_CAP);

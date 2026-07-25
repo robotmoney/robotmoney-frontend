@@ -2,6 +2,7 @@ export * from "./comments";
 export * from "./regime";
 export * from "./dashboards";
 export * from "./committee";
+export * from "./committee-application";
 export * from "./projects";
 export * from "./admin";
 export { ROUTES, path } from "./routes";

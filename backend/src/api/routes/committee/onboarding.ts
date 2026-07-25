@@ -3,13 +3,28 @@ import * as ic from "../../../committee/domain.ts";
 import { readJsonObject, requiredString } from "../../validation.ts";
 import type { CommitteeRouteExtension } from "./types.ts";
 
+// GET /api/committee/apply/:id — docs/architecture.md §11 R2. Public, redacted
+// application-status read: the id is the ONLY thing the server minted at apply
+// time, and this is where the applicant (or the status page polling on their
+// behalf) watches applied → approved → claimed. No contact/name/publicKey is
+// ever echoed back. An unknown id and one that was simply never issued are
+// indistinguishable 404s — ic.getApplicationStatus returns null for both.
+const APPLY_STATUS_PREFIX = `${ROUTES.committee.apply}/`;
+
 /**
- * Route boundary reserved for issue #205's challenge and key-proof claim flow.
- * It remains a no-op in the scout. Keep its eventual behavior aligned with
+ * Onboarding routes (issue #205's challenge/key-proof claim flow, plus the
+ * public apply-status read added alongside it). Keep behavior aligned with
  * frontend/public/views/docs/investment-committee/participation.html and
  * frontend/public/views/docs/investment-committee/api-reference.html.
  */
 export const handleCommitteeOnboardingRoutes: CommitteeRouteExtension = async (req, url) => {
+  if (req.method === "GET" && url.pathname.startsWith(APPLY_STATUS_PREFIX)) {
+    const id = decodeURIComponent(url.pathname.slice(APPLY_STATUS_PREFIX.length));
+    if (!id || id.includes("/")) return { status: 404, body: { error: "not found" } };
+    const status = await ic.getApplicationStatus(id);
+    return status ? { status: 200, body: status } : { status: 404, body: { error: "not found" } };
+  }
+
   if (req.method === "POST" && url.pathname === ROUTES.committee.claimChallenge) {
     const body = await readJsonObject(req);
     const memberId = body && requiredString(body, "memberId", 100);

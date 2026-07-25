@@ -1,7 +1,7 @@
 import { beforeEach, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { canonicalizeClaimChallenge, COMMITTEE_ROSTER_CAP, ROUTES } from "@robotmoney/contract";
+import { canonicalizeApplication, canonicalizeClaimChallenge, COMMITTEE_ROSTER_CAP, ROUTES } from "@robotmoney/contract";
 import { handleCommittee } from "../src/api/routes/committee.ts";
 import * as ic from "../src/committee/domain.ts";
 import {
@@ -23,19 +23,17 @@ async function post(path: string, body: Record<string, unknown>) {
 }
 
 async function applyAndActivate(prefix: string) {
-  const memberId = rid(prefix);
+  const label = rid(prefix);
   const keypair = await generateKeyPair();
-  const applied = await post(ROUTES.committee.apply, {
-    memberId,
-    name: `Applicant ${memberId}`,
-    contact: `${memberId}@example.test`,
-    publicKey: keypair.publicKeyB64,
-  });
+  const application = { name: `Applicant ${label}`, contact: `${label}@example.test`, publicKey: keypair.publicKeyB64 };
+  const signature = await signMessage(canonicalizeApplication(application), keypair.privateKey);
+  const applied = await post(ROUTES.committee.apply, { ...application, signature });
   expect(applied?.status).toBe(201);
+  const memberId = (applied!.body as { memberId: string }).memberId;
   const activated = await ic.activateMember(memberId);
   expect(activated.status).toBe(200);
   expect(activated).not.toHaveProperty("token");
-  return { memberId, ...keypair, activated };
+  return { memberId, contact: application.contact, ...keypair, activated };
 }
 
 async function challengeFor(memberId: string) {
@@ -69,7 +67,7 @@ test("activation persists an email outbox and the executed fake transport delive
   expect(delivered).toHaveLength(1);
   expect(delivered[0]).toMatchObject({
     from: "committee-test@robotmoney.invalid",
-    to: `${applicant.memberId}@example.test`,
+    to: applicant.contact,
   });
   expect(delivered[0].text).toContain(ROUTES.committee.claimChallenge);
   expect(delivered[0].text).toContain(ROUTES.committee.claimToken);
@@ -157,15 +155,12 @@ test("claim never bypasses the imported committee roster cap", async () => {
   }
   expect(await ic.countActiveMembers()).toBe(COMMITTEE_ROSTER_CAP);
 
-  const memberId = "claim_cap_extra";
   const keypair = await generateKeyPair();
-  const applied = await post(ROUTES.committee.apply, {
-    memberId,
-    name: "Over cap",
-    contact: "over-cap@example.test",
-    publicKey: keypair.publicKeyB64,
-  });
+  const application = { name: "Over cap", contact: "over-cap@example.test", publicKey: keypair.publicKeyB64 };
+  const signature = await signMessage(canonicalizeApplication(application), keypair.privateKey);
+  const applied = await post(ROUTES.committee.apply, { ...application, signature });
   expect(applied?.status).toBe(201);
+  const memberId = (applied!.body as { memberId: string }).memberId;
   expect((await ic.activateMember(memberId)).status).toBe(409);
   expect(await ic.countActiveMembers()).toBe(COMMITTEE_ROSTER_CAP);
 

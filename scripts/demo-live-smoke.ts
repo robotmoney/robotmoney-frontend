@@ -14,9 +14,9 @@
 // state:
 //
 //   (a) committee — >= LIVE_SMOKE_MIN_PUBLISHED_SESSIONS sessions reached state
-//       'published' (the #101 single-worker starvation guard). The mcp e2e
+//       'published' (the #101 single-worker starvation guard). The committee session e2e
 //       driver publishes two sessions through the REAL worker job queue
-//       (committee lane, per-state deadlines in mcp/src/e2e.ts), so a starved
+//       (committee lane, per-state deadlines in scripts/lib/committee/session.ts), so a starved
 //       lane already fails the driver; this re-asserts the published rows
 //       actually landed and are served.
 //   (b) regime — /api/dashboards/regime-snapshots reports staleness.stale ===

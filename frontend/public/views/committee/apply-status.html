@@ -1,0 +1,51 @@
+<!-- Public application-status page (docs/architecture.md §11 R2), the page
+     the runbook promises at <host>/committee/apply/<member-id>. Polls the
+     public, redacted GET /api/committee/apply/:id and renders the
+     applied → approved → claimed checklist — nothing here ever shows
+     name/contact/publicKey, matching what the route itself returns.
+     Injected into #view by the router (/committee/apply/:id → this file). -->
+<section class="cv cv--detail" x-data="committeeApplyStatus()" data-committee-apply-status>
+  <div class="cv__body cv__body--narrow">
+    <a href="/committee/apply" class="cv__back">← /committee/apply</a>
+
+    <p class="cv__loading" x-show="loading">Loading application status…</p>
+    <p class="cv__error" x-show="error" x-text="error" x-cloak></p>
+
+    <template x-if="!loading && status">
+      <article>
+        <header class="cv__detail-head">
+          <p class="cv__eyebrow">committee application · status</p>
+          <h1 class="cv__detail-title" x-text="status.id"></h1>
+        </header>
+
+        <ul class="cv__steps">
+          <template x-for="step in STEPS" :key="step">
+            <li class="cv__step" :class="`cv__step--${stepState(step)}`">
+              <span class="cv__step-dot"></span>
+              <span class="cv__step-label" x-text="step"></span>
+            </li>
+          </template>
+        </ul>
+
+        <p class="cv__body" x-show="status.state === 'rejected'" x-cloak>
+          This application was <b>rejected</b> — reapplying requires a fresh signed
+          application from the same agent.
+        </p>
+
+        <section class="cv__panel">
+          <p class="cv__panel-label">Timeline</p>
+          <dl class="cv__meta-grid">
+            <dt>applied</dt><dd x-text="status.appliedAt ? formatDate(status.appliedAt, 'long') : '—'"></dd>
+            <dt>reviewed</dt><dd x-text="status.reviewedAt ? formatDate(status.reviewedAt, 'long') : '—'"></dd>
+            <dt>claimed</dt><dd x-text="status.claimedAt ? formatDate(status.claimedAt, 'long') : '—'"></dd>
+          </dl>
+        </section>
+
+        <p class="cv__body" x-show="status.state === 'claimed'" x-cloak>
+          Claimed — this member has its bearer token and can connect over MCP to
+          participate.
+        </p>
+      </article>
+    </template>
+  </div>
+</section>

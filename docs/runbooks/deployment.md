@@ -48,19 +48,17 @@ separate subdomains, droplet, Space, Postgres, and firewall. Store secrets as
 | Resource | Staging | Production |
 |---|---|---|
 | Marketing host | `staging.robotmoney.net` | `robotmoney.net`, `www.` |
-| IC + analytics host | `committee.staging.robotmoney.net` | `committee.robotmoney.net` |
-| IC MCP host (D18) | `mcp.staging.robotmoney.net:8443` | `mcp.robotmoney.net:8443` |
+| IC + analytics host (REST — the only member surface, D21) | `committee.staging.robotmoney.net` | `committee.robotmoney.net` |
 | Dapp host | `app.staging.robotmoney.net` | `app.robotmoney.net` |
 | Droplets | staging droplets | production droplets |
 | Spaces (marketing) | `rm-marketing-staging` | `rm-marketing-prod` |
 | Postgres | single-node (cost) | **HA cluster** |
 
-The MCP host (`mcp.`) is co-located on the **same droplet** as `committee.`
-(both are this repo's surface) but runs as its own container on its own
-Cloudflare-proxied port — see
-[architecture.md §3.1](../architecture.md#31-mcp-hostname-and-port-d18) for why it
-needs a distinct port (`8443`, a Cloudflare-supported proxied-HTTPS port)
-instead of a path under `committee.`.
+D21 retired the MCP transport (formerly its own `mcp.` host on port `8443`,
+co-located on the `committee.` droplet — D18); members now use `committee.`'s
+REST API like every other client. Decommissioning the `mcp.` DNS record,
+firewall rule, and container is tracked as D21's follow-up implementation
+work.
 
 ---
 
@@ -90,14 +88,11 @@ Worker, and marketing is reached DNS-only so Cloudflare does not cache it.)
 
 ### 3.3 Origin CA certificate (for the proxied app subdomains)
 
-The `committee.`/`mcp.`/`app.` droplets are Cloudflare-proxied, so each serves a
+The `committee.`/`app.` droplets are Cloudflare-proxied, so each serves a
 **Cloudflare Origin CA certificate** (a long-lived cert Cloudflare issues for
 origin pulls; generated once in the dashboard or via API). Install the cert + key
 on the droplet (injected at deploy as **`CF_ORIGIN_CERT`** / **`CF_ORIGIN_KEY`**).
-This is config, not running software. `mcp.` shares the `committee.` droplet
-([architecture.md §3.1](../architecture.md#31-mcp-hostname-and-port-d18)), so a single Origin CA cert covering both hostnames (or two
-certs installed side by side) is sufficient — no separate droplet-provisioning
-step.
+This is config, not running software.
 
 ---
 
@@ -155,7 +150,7 @@ frontend, never committed (`.env` stays gitignored):
   `projects pipelines require PROJECTS_SOURCE=live in prod`) rather than serve
   the vendored fixture directory as production data. Leave unset in demo/dev
   (offline fixture source); the ephemeral CI env is always hermetic regardless.
-- Any committee signing / MCP secrets as applicable.
+- Any committee signing secrets as applicable.
 
 The frontend's only input is `API_BASE_URL` in `config.js` (`""` = same origin on
 its subdomain) — not a secret.
@@ -204,9 +199,9 @@ Do this **once per environment** (staging, then production):
 - Scoped API token (DNS + Health Checks + Analytics + Logpush) → `CF_API_TOKEN`
 - `CF_ACCOUNT_ID`, `CF_ZONE_ID`
 - Origin CA cert + key for the proxied app subdomains → `CF_ORIGIN_CERT` / `CF_ORIGIN_KEY`
-- `mcp.<env.>robotmoney.net` DNS record (proxied, port `8443`) provisioned
-      and covered by the Origin CA cert (D18; manual one-time operator action
-      per the GitOps convention above — not automated by CI)
+- ~~`mcp.<env.>robotmoney.net` DNS record~~ — D18's MCP subdomain is retired
+  (D21); do not provision it for new environments. An existing record from
+  before D21 is decommissioned as part of D21's follow-up implementation work.
 
 **DigitalOcean** (compute + storage)
 - Scoped API token → `DO_API_TOKEN`

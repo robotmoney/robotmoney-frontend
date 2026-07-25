@@ -1,11 +1,21 @@
 import { test, expect, beforeAll } from "bun:test";
 import * as ic from "../src/committee/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
+import { canonicalizeApplication, canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleCommittee } from "../src/api/routes/committee.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
+
+// §11 R6 — build a validly-signed apply payload the way an rmpc-equipped agent
+// would: generate a keypair, sign the canonical application payload with it.
+// The server mints the memberId; the caller never supplies one.
+async function signedApply(fields: { name: string; contact: string; lens?: string }) {
+  const { publicKeyB64, privateKey } = await generateKeyPair();
+  const application = { name: fields.name, contact: fields.contact, lens: fields.lens, publicKey: publicKeyB64 };
+  const signature = await signMessage(canonicalizeApplication(application), privateKey);
+  return { publicKeyB64, privateKey, signature, body: { ...fields, publicKey: publicKeyB64, signature } };
+}
 
 // All committee test files share ONE ephemeral Postgres (tests/preload.ts). Now
 // that COMMITTEE_ROSTER_CAP is hard-enforced on every transition-to-active, a
@@ -21,17 +31,43 @@ async function activeMember() {
   const id = rid("m");
   const { publicKeyB64, privateKey } = await generateKeyPair();
   const r = await ic.registerMember({ memberId: id, name: id, publicKey: publicKeyB64 });
+  // registerMember returns {ok:false, status, error} (not a token) when the
+  // roster cap is hit — fail loudly here instead of returning a bogus member
+  // whose id was never actually inserted (a caller then hits a confusing FK
+  // violation far away from the real cause).
+  if (!("token" in r) || !r.token) {
+    throw new Error(`activeMember(): registerMember failed for ${id}: ${JSON.stringify(r)}`);
+  }
   return { id, token: r.token, privateKey };
 }
 
-test("apply is create-only (existing memberId rejected)", async () => {
-  const id = rid("a");
-  const { publicKeyB64 } = await generateKeyPair();
-  expect((await ic.applyMember({ memberId: id, name: "A", publicKey: publicKeyB64 })).status).toBe(201);
-  expect((await ic.applyMember({ memberId: id, name: "A2", publicKey: publicKeyB64 })).status).toBe(409);
+test("signed apply mints a server-side UUID; re-applying with the SAME key refreshes the pending record", async () => {
+  const first = await signedApply({ name: "A", contact: `${rid("a")}@example.test` });
+  const applied1 = await ic.applyMember(first.body as any);
+  expect(applied1.status).toBe(201);
+  const memberId = (applied1 as any).memberId as string;
+  expect(memberId).toMatch(/^[0-9a-f-]{36}$/); // server-minted UUID, not client-supplied
+
+  // Same key, second apply (e.g. resubmitting after a stale prompt) refreshes
+  // the SAME pending application rather than forking a new identity. The
+  // resubmission must be re-signed — a signature is over the exact bytes
+  // submitted, so changing `name` without re-signing must NOT verify.
+  const renamedApplication = { name: "A renamed", contact: first.body.contact, publicKey: first.publicKeyB64 };
+  const renamedSignature = await signMessage(canonicalizeApplication(renamedApplication), first.privateKey);
+  const refreshed = await ic.applyMember({ ...renamedApplication, signature: renamedSignature } as any);
+  expect(refreshed.status).toBe(201);
+  expect((refreshed as any).memberId).toBe(memberId);
+  const row = (await sql`SELECT name FROM committee_members WHERE id = ${memberId}`)[0] as { name: string };
+  expect(row.name).toBe("A renamed");
+
+  // Once admitted, the SAME key can never re-apply and overwrite the active
+  // member (that's an admin operation — key rotation).
+  await ic.activateMember(memberId);
+  const afterActivate = await ic.applyMember(first.body as any);
+  expect(afterActivate.status).toBe(409);
 });
 
-test("POST /api/committee/apply rejects malformed Ed25519 keys and accepts a generated raw key", async () => {
+test("POST /api/committee/apply rejects malformed Ed25519 keys and an invalid signature; accepts a validly-signed application", async () => {
   const callApply = async (body: Record<string, unknown>) => {
     const req = new Request("http://test/api/committee/apply", {
       method: "POST",
@@ -41,21 +77,31 @@ test("POST /api/committee/apply rejects malformed Ed25519 keys and accepts a gen
     return handleCommittee(req, new URL(req.url));
   };
   const base = { name: "Route Applicant", contact: "route-applicant@example.test" };
-  const bad = await callApply({ ...base, memberId: rid("route_bad"), publicKey: Buffer.alloc(31, 1).toString("base64") });
+  const bad = await callApply({ ...base, publicKey: Buffer.alloc(31, 1).toString("base64"), signature: "sig" });
   expect(bad?.status).toBe(400);
   expect((bad?.body as { error: string }).error).toBe(
     "publicKey must be canonical base64 for a 32-byte raw Ed25519 public key",
   );
 
+  // A well-formed key with a signature over the WRONG bytes (or from the
+  // wrong key) is rejected — nothing is recorded.
   const { publicKeyB64 } = await generateKeyPair();
-  const good = await callApply({ ...base, memberId: rid("route_good"), publicKey: publicKeyB64 });
-  expect(good?.status).toBe(201);
+  const wrongBytesSig = await signMessage("not the canonical payload", (await generateKeyPair()).privateKey);
+  const badSig = await callApply({ ...base, publicKey: publicKeyB64, signature: wrongBytesSig });
+  expect(badSig?.status).toBe(400);
+  // Nothing recorded — no member/key row was ever created for this key.
+  expect(await sql`SELECT id FROM committee_member_keys WHERE public_key = ${publicKeyB64}`).toHaveLength(0);
+
+  const good = await signedApply({ name: "Route Applicant", contact: "route-applicant2@example.test" });
+  const goodRes = await callApply(good.body);
+  expect(goodRes?.status).toBe(201);
+  expect((goodRes?.body as { memberId: string }).memberId).toBeString();
 });
 
 test("apply → activate approves without minting; re-activate finds no pending key", async () => {
-  const id = rid("b");
-  const { publicKeyB64 } = await generateKeyPair();
-  await ic.applyMember({ memberId: id, name: "B", publicKey: publicKeyB64 });
+  const { body } = await signedApply({ name: "B", contact: `${rid("b")}@example.test` });
+  const applied = await ic.applyMember(body as any);
+  const id = (applied as any).memberId as string;
   const act = await ic.activateMember(id);
   expect(act.status).toBe(200);
   expect(act).not.toHaveProperty("token");
@@ -327,6 +373,10 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
 });
 
 test("aggregation omits invented prose and weights when no eligible body or valid weighted take exists", async () => {
+  // Reset first: this file's earlier tests accumulate active members toward
+  // COMMITTEE_ROSTER_CAP without deactivating them (see the file header
+  // comment), and this test's single activeMember() call must never 409.
+  await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
   const subjectId = rid("empty");
   const date = "2026-07-07";
   await ic.ensureSubject(subjectId, "Empty Body Subject");

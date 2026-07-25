@@ -5,12 +5,14 @@
 # WHY THIS SUITE EXISTS
 # README.md's "Attach a prospective agent" section documents: rmpc identity
 # create → show-public-key → POST /api/committee/apply → POST
-# /api/committee/admin/activate → MCP OAuth client_credentials → get_signing_payload
-# → rmpc committee-identity sign → submit_recommendation. robotmoney-core's own
-# suite proves rmpc's crypto/CLI behavior in isolation (unit/integration tests
-# against the source build); nothing there proves a RELEASED binary (downloaded
-# from GitHub Releases, never built from source here) actually completes this
-# flow against a live robotmoney-frontend backend+MCP stack. scripts/rmpc-release-e2e.ts
+# /api/committee/admin/activate → token-claim/challenge → rmpc-signed token-claim
+# → canonicalizeSubmission → rmpc committee-identity sign → POST
+# /api/committee/submit (D21 — REST only; the MCP OAuth/get_signing_payload/
+# submit_recommendation chain is retired). robotmoney-core's own suite proves
+# rmpc's crypto/CLI behavior in isolation (unit/integration tests against the
+# source build); nothing there proves a RELEASED binary (downloaded from GitHub
+# Releases, never built from source here) actually completes this flow against a
+# live robotmoney-frontend backend stack. scripts/rmpc-release-e2e.ts
 # is that proof: it downloads the pinned release asset for the runner platform,
 # fails loudly if the download 404s or the committee-identity subcommand is
 # missing, drives the real flow through a live job-queue-backed committee
@@ -26,8 +28,8 @@
 # NEVER SKIPS
 # scripts/rmpc-release-e2e.ts calls process.exit(1) (via its fail() helper) on a
 # failed download, a missing committee-identity subcommand, any non-2xx/non-ok
-# HTTP or MCP response, or a failed independent signature re-verification. This
-# job goes RED, never green-via-skip, on any of those.
+# HTTP response, or a failed independent signature re-verification. This job
+# goes RED, never green-via-skip, on any of those.
 #
 # NO SECRET
 # Public GitHub Releases assets download over plain HTTPS with no token. There is
@@ -57,12 +59,6 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
-      - name: Install MCP deps
-        working-directory: mcp
-        run: bun install --frozen-lockfile
-      - name: Typecheck MCP
-        working-directory: mcp
-        run: bun run typecheck
       # Needed by scripts/demo.ts's host-side EDGAR seed bootstrap step
       # (backend/scripts/edgar-seed-bootstrap.ts, issue #108) — see e2e.yml's
       # matching step for the full rationale.
@@ -71,7 +67,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       # Reuses the EXACT demo stack boot (scripts/demo.ts → scripts/lib/demo-main.ts):
-      # postgres + api + worker + mcp via docker compose, migrations, health checks,
+      # postgres + api + worker via docker compose, migrations, health checks,
       # then the existing required-tier checks (LIVE committee session, frontend
       # checks, browser checks, live steady-state smoke — issue #147 removed
       # DEMO_HERMETIC and the hermetic path entirely, so every boot is LIVE now) —

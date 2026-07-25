@@ -21,13 +21,9 @@ const draft: SubmissionDraft = {
 };
 
 describe("starter committee agent canonical signing", () => {
-  test("REST and MCP use byte-identical @robotmoney/contract canonicalization", () => {
+  test("REST submission uses @robotmoney/contract canonicalization (the only transport, D21)", () => {
     const expected = canonicalizeSubmission(draft);
     expect(canonicalizeDraftForTransport("rest", draft)).toBe(expected);
-    expect(canonicalizeDraftForTransport("mcp", draft)).toBe(expected);
-    expect(canonicalizeDraftForTransport("rest", draft)).toBe(
-      canonicalizeDraftForTransport("mcp", draft),
-    );
   });
 
   test("Web Crypto signature verifies independently and rejects a tampered field", async () => {
