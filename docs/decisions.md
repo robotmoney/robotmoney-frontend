@@ -725,3 +725,212 @@ secure.
   CI workflows is real code surface that deserves its own PR, its own CI run,
   and independent review rather than being bundled sight-unseen into a
   documentation commit.
+
+---
+
+## D22 — Evals run on a vanilla keyless OpenCode install; the onboarding eval is layered and shares the demo's stack
+
+**Decision.** Four rules, binding on every eval in this repo.
+
+1. **Keyless, always.** Every eval runs on a **vanilla, keyless OpenCode
+   installation**, pinned to the free OpenCode Zen tier (`opencode/big-pickle`).
+   No API key, no provider secret, no paid model, and **no "paid opt-in"
+   override** — not as a default, not as an operator escape hatch, not as a
+   nightly-only widening. The model is an **in-code constant**, never an
+   environment variable, so there is no configuration surface through which a
+   keyed model could be selected.
+2. **No inference-off mode on an eval path.** An eval always makes a real model
+   call. Inference-off *rails* checks are legitimate and valuable (they prove the
+   machinery an eval rides on), but they are not evals, must not be named as
+   such, and must never stand in for one. Concretely: no mock/injection seam on
+   the eval's own path, no scripted fallback that performs the agent's steps for
+   it, no conditional skip — a missing Docker daemon or missing network egress
+   **fails loudly** rather than passing by absence.
+3. **Layered, not monolithic.** The onboarding eval is a graded sequence, not one
+   pass/fail run, and it never boots the full demo cluster — only a `core` stack,
+   and only for the final layer.
+4. **Scored by sampling, not by a single run.** An eval measures a stochastic
+   system, so it takes K samples, classifies every outcome, and reports the rate.
+   A single sample is a coin flip reported as a verdict.
+
+Rules 3 and 4 are specified normatively in
+[architecture.md §11.3](architecture.md#113-onboarding-eval-normative) (E3, E4) —
+the layer table, the observation mechanism, the outcome classes, and the CI
+placement live there, not here.
+
+The eval shares the demo's components rather than paralleling them: one stack
+module with a `core`/`full` profile, one member-agent container primitive, one
+outcome classifier. The onboarding eval **is** the demo's onboarding path with
+the rest of the cluster not booted.
+
+**Why.**
+
+*Keyless.* An eval exists to measure whether a **vanilla** agent can navigate
+this product unaided. A keyed or paid model changes the subject under test — it
+measures a better model's tolerance for our instructions, not our instructions.
+It also makes the result unreproducible by anyone without the secret, and an eval
+that only CI can run is not a gate, it is a rumour. Keyless means any contributor
+runs the complete eval locally with zero setup. The free tier is genuinely real
+inference against a real provider, which is exactly why it is the right and only
+default (see `scripts/lib/onboarding-eval.ts`'s own rationale).
+
+*No inference-off mode.* The failure this eval exists to catch is invisible to
+every rails check. On 2026-07-25 a demo run recorded zero admissions because the
+member agent **refused** the canonical prompt as a suspicious request; the
+container exited cleanly in 15 seconds with all seven steps pending. Every
+inference-off rail — image builds, container reaches the api, `rmpc` signs a
+canonical payload that the server accepts — was green throughout, because the
+rails were all fine. Nobody rode them.
+
+*Layered.* The observe-only harness can only watch server-side state, so
+connect/discover/toolchain collapse into one unit and a failure yields no
+diagnostic beyond "it didn't apply". Layers localise: a green layer 3 with a red
+layer 4 says the toolchain and signature are correct and the problem is the
+prompt or the sequencing. Layer 3 in particular verifies the signature offline
+against `canonicalizeApplication`, catching canonicalization drift (key order,
+whitespace, `lens` omission) that would otherwise surface as an unexplained
+`400`.
+
+*Sampled.* The refusal measured on 2026-07-25 occurred in roughly 1 of 5 samples
+of the identical prompt. Gating on one sample would be red about that often and
+would read as flake, which is how a real signal gets ignored. Reporting the rate
+turns the refusal into the metric it should always have been: a rising refusal
+rate is a regression in prompt quality, and this is the only instrument that
+would show it.
+
+*Shared components.* The duplication is structural, not incidental.
+`scripts/lib/demo-main.ts` performs its setup at **module scope** — port
+allocation, admin-token generation (including a `process.env` write), compose-env
+construction, log-file opening — so importing anything from it boots a demo.
+`scripts/tests/onboarding-eval-infra.test.ts` therefore had no choice but to fork
+its own mini-stack (`bringUpInfra()`). Extracting a side-effect-free stack module
+removes that fork rather than adding a second one, and continues the split
+already begun by `demo-env.ts` and `demo-newcomers.ts`, both of which exist for
+exactly this reason.
+
+**Relationship.**
+- **Revises architecture.md §11 R8** (onboarding is an eval): R8's "vanilla
+  OpenCode agent container doing real inference" is unchanged in intent and is
+  now explicit that the install is **keyless**, that no API key may appear on an
+  eval path, and that no inference-off substitute exists. The layered structure,
+  scoring, and shared components are specified in the new **§11.3**.
+- **Retires the paid-model opt-ins.** `resolveModelConfig`'s non-default branch
+  (`OPENCODE_MODEL` + `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`), `e2e.yml`'s
+  `ONBOARDING_EVAL_MODEL` + `ANTHROPIC_API_KEY` trusted-context gate, and
+  `committee-opencode-nightly.yml`'s `ONBOARDING_SWEEP_MODELS` sweep over
+  `anthropic/claude-haiku-4-5` and `anthropic/claude-sonnet-5` all contradict
+  rule 1 and are removed, not preserved. The trusted-context gating in `e2e.yml`
+  disappears with them: with no secret to withhold, a fork PR and a same-repo PR
+  run the identical eval.
+- **Moves the sweep out of the demo.** `demo-main.ts`'s env-gated
+  `ONBOARDING_REAL_EVAL` block moves to the eval, where sampling belongs. The
+  demo goes back to being a demo; it keeps admitting members through the same
+  shared harness.
+- **Adds no workflow.** `committee-opencode-nightly.yml` is repointed at the eval
+  on a `core` stack. It gets smaller: no Chromium install, no backend deps for
+  the EDGAR seed bootstrap, no demo-volume reclaim, and no `env:` block. It stays
+  `CI_CLASS: heavy` (sweep-only — no `pull_request` trigger) on `ubuntu-latest`,
+  which matters because the self-hosted runner shares its IP with the standing
+  `rmdemo_*` stack and has a documented history of 429 flake on live-call gates.
+- **Does not revise D21.** The REST-only onboarding flow is unchanged; this
+  decision is about how that flow is evaluated.
+- **Implementation is follow-up work**, tracked as its own issue so the code
+  change gets its own review and CI run rather than riding along with a docs
+  commit — the same scope discipline D21 applied.
+
+**Alternatives rejected.**
+- **Keep a paid-model opt-in for the nightly's cross-model signal.** Rejected:
+  it reintroduces exactly the property rule 1 exists to prevent. The cross-model
+  question ("does a stronger model refuse less often?") is real but is a research
+  question about models, not a gate on our instructions — and answering it inside
+  the gate makes the gate's subject ambiguous. The keyless rate is the number
+  that means something about this product.
+- **One integrated run instead of layers, to keep it simple.** Rejected: it is
+  what exists today, and the 2026-07-25 investigation showed the cost — a red
+  result with no indication of whether the prompt, the skill, the toolchain, or
+  the canonicalization was at fault, recoverable only by reading a 500 KB
+  container transcript by hand.
+- **Gate the eval on every PR.** Rejected: ~8 minutes per layer-4 sample times K
+  samples, with hard Docker and network dependencies, against a stochastic
+  metric. Sweep-only (`heavy`) is the honest class. The per-PR signal remains the
+  inference-off rails plus the single real-inference admission the `e2e` job
+  already performs.
+- **A new dedicated eval workflow.** Rejected: `committee-opencode-nightly.yml`
+  already exists to run the real-inference onboarding sweep. A second workflow
+  would duplicate its schedule, class annotation, and rmpc cache to run a
+  strictly simpler job.
+
+---
+
+## D23 — Organize by CI cost class and domain; no big-bang reorg
+
+**Decision.** Two organizing rules, plus a deliberately narrow migration.
+
+1. **A directory is a selectable unit of CI cost.** CI selects by path, so any
+   subset CI needs to run without the rest gets its own directory: `tests/unit/`
+   (pure), `tests/integration/` (Docker or a local stack), `tests/live/` (real
+   external network), `evals/` (real inference — D22). A test's cost class is
+   legible from its path before anything is run.
+2. **Shared code is named for its domain, never for its consumer.** Code shared
+   between demo runtime and test/eval time lives in `stack/`, `agent/`,
+   `toolchain/` — not in a bucket named `lib/`. Harness code separates by role
+   (`bin/`, `demo/`, `checks/`, `ops/`) rather than by medium.
+
+Dependency direction is fixed and enforced: tests and evals may import runtime
+and shared code; **runtime must never import test or eval code**. The full target
+layout is [architecture.md §3](architecture.md#test-eval-and-tooling-layout).
+
+**Migration is incremental and bounded to three moves:** create `evals/`; land
+D22's extractions directly in `stack/` and `agent/` rather than as more flat
+files under `scripts/lib/`; split `scripts/tests/` by cost class. Nothing else
+moves.
+
+**Why.** The organizing failure is concrete and measurable: `scripts/tests/`
+holds **32 test files**, of which 4 require a Docker daemon
+(`demo-compose-config`, `demo-live-research`, `demo-volume-lifecycle`,
+`onboarding-eval-infra`) and 2 require network egress to GitHub Releases
+(`onboarding-eval-infra`, `rmpc-canonical-apply`) — and all 32 run on every PR
+under one `bun test scripts/tests` command, because there is no path by which CI
+could select a cheaper subset. That single bucket is why the onboarding eval
+(D22) had nowhere to live: any home inside `scripts/tests/` would have put an
+8-minute, Docker-plus-real-inference run into the per-PR path.
+
+`scripts/lib/` has the mirrored problem on the other axis: it holds demo
+*runtime* (`demo-main.ts`, `tui.ts`, `demo-schedule.ts`, `committee/`) beside
+shared harness code (`onboarding-eval.ts`, `rmpc-fetch.ts`, `demo-volumes.ts`)
+with nothing marking or enforcing the difference, so nothing stops a test-only
+helper being imported into runtime.
+
+Enforcement is by grep check, not convention — the repo already proves the
+pattern works: `backend/scripts/check-no-supabase.sh` makes D8 executable, and
+`check-no-ai-overview.sh` does the same for issue #93. Both are ~18 lines and
+run in milliseconds. An invariant that lives only in prose is an invariant that
+rots.
+
+**Relationship.**
+- **Serves D22**: `evals/` and the `stack/`/`agent/` extractions are where D22's
+  implementation lands. The no-mock-under-`evals/` rule (D22 E2) becomes a grep
+  check under rule 1's enforcement clause.
+- **Adopts `backend/tests/` as the reference implementation.** It already does
+  this — subdivided by surface, `preload.ts` provisioning that fails loudly
+  instead of skipping, `support/` separate from `fixtures/`, cost tagged in
+  filenames (`*-live.test.ts`). It needs no change; the other packages converge
+  toward it as they are touched.
+
+**Alternatives rejected.**
+- **Rename `scripts/` → `harness/` for a clean tree.** Rejected: it touches every
+  workflow, `package.json` target, and doc reference across the repo for a naming
+  improvement with no behavioural benefit. The role-based tree is what a
+  greenfield project of this kind should have; it is not worth a migration on a
+  working repo. New subdirectories get the right names as they are created.
+- **Keep one test bucket and select by filename convention alone
+  (`*-live.test.ts`).** Rejected as insufficient on its own: naming makes cost
+  *legible* but not *selectable* — `bun test <dir>` takes a path, not a glob over
+  test names, so the per-PR run would still pay for every Docker-backed file.
+  The naming convention is worth adopting as well, but underneath the split.
+- **Unify fixtures and test conventions across all four packages now.**
+  Rejected: `backend/tests/fixtures/`, `frontend/test/fixtures/`,
+  `contract/src/__fixtures__/`, and `scripts/tests/fixtures/` are each coherent
+  within their package, the cost of the divergence is a small lookup, and the
+  migration is broad and touches every import path. Not worth it absent another
+  reason to touch those files.
