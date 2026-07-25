@@ -1,5 +1,3 @@
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
 import { mkdirSync, writeFileSync, openSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +14,14 @@ import {
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./demo-newcomers.ts";
+import {
+  allocatePorts,
+  DEFAULT_STACK_DATABASE,
+  generateStackCredentials,
+  hostBackendUrl,
+  internalDatabaseUrl,
+  parsePort,
+} from "../stack/index.ts";
 import { COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -25,49 +31,6 @@ const repoRoot = join(scriptDir, "..", "..");
 const stateFile = join(repoRoot, ".agents", "demo-state.json");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-// --- Port allocation ------------------------------------------------------
-type Held = ReturnType<typeof createServer>;
-// Bind `port` (0 = a random free one) on 127.0.0.1; resolve the HELD server if
-// it bound, else null (port already in use). Callers keep every returned server
-// open until all ports are chosen so two allocations can't draw the same one.
-function tryBind(port: number): Promise<Held | null> {
-  return new Promise((resolve) => {
-    const s = createServer();
-    s.on("error", () => resolve(null));
-    s.listen(port, "127.0.0.1", () => resolve(s));
-  });
-}
-// Choose a host port. Precedence: an explicit env pin wins as-is; else the
-// cloudflared-facing `preferred` default if it's free (so a standing demo lands
-// on the port the host tunnel already routes to); else a random free port.
-async function allocatePort(fixed: number | undefined, preferred: number | undefined, held: Held[]): Promise<number> {
-  if (fixed !== undefined) return fixed;
-  if (preferred !== undefined) {
-    const s = await tryBind(preferred);
-    if (s) { held.push(s); return preferred; }
-  }
-  const s = await tryBind(0);
-  if (!s) throw new Error("could not bind a free host port");
-  held.push(s);
-  return (s.address() as AddressInfo).port;
-}
-
-// --- Pinned (fixed) ports -------------------------------------------------
-// A host operator can PIN a host port via env (WEB_PORT / POSTGRES_PORT)
-// instead of taking a random free one — useful when the host's root cloudflared
-// config routes the robotmoney.net origin to a STABLE demo port. Returns undefined
-// when unset/empty (→ a random free port is drawn instead). Only one demo can hold a
-// given fixed port at a time.
-function parsePort(name: string): number | undefined {
-  const raw = process.env[name];
-  if (raw === undefined || raw.trim() === "") return undefined;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 1 || n > 65535) {
-    throw new Error(`${name}=${raw} is not a valid TCP port (1-65535)`);
-  }
-  return n;
-}
 
 // --- Run config -----------------------------------------------------------
 // Host ports for api AND postgres. The api port prefers the stable
@@ -85,26 +48,29 @@ function parsePort(name: string): number | undefined {
 //
 // Both can still be PINNED via env (WEB_PORT/POSTGRES_PORT), which is honored
 // as-is. Every returned socket is held open until both are chosen, then closed
-// together, so no two draws collide.
-const fixedApiPort = parsePort("WEB_PORT");
-const fixedPgPort = parsePort("POSTGRES_PORT");
-const heldPorts: Held[] = [];
-const apiPort = await allocatePort(fixedApiPort, 48787, heldPorts);
-const pgPort = await allocatePort(fixedPgPort, undefined, heldPorts);
-await Promise.all(heldPorts.map((s) => new Promise<void>((r) => s.close(() => r()))));
+// together, so no two draws collide (scripts/stack/ports.ts owns that
+// property; the env reads for the pin knobs stay HERE, in the entrypoint,
+// which is the point of the split).
+const fixedApiPort = parsePort("WEB_PORT", process.env.WEB_PORT);
+const fixedPgPort = parsePort("POSTGRES_PORT", process.env.POSTGRES_PORT);
+const [apiPort, pgPort] = await allocatePorts([
+  { fixed: fixedApiPort, preferred: 48787 },
+  { fixed: fixedPgPort },
+]) as [number, number];
 // Pin the compose project name when DEMO_PROJECT is set (re-runs reuse/tear down the
 // same containers); otherwise a fresh random project per run. dockerEnv sets
 // DEMO_PROJECT=project either way, so the compose label stays consistent.
 const project = process.env.DEMO_PROJECT?.trim() || `rmdemo_${crypto.randomUUID().slice(0, 8)}`;
-const DB_USER = "robotmoney";
-const DB_PASSWORD = "robotmoney";
-const DB_NAME = "robotmoney";
-const databaseUrl = `postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}`;
-// Use 127.0.0.1, NOT localhost: Docker publishes the container ports on IPv4
-// (0.0.0.0) but GitHub Actions' daemon does not publish on IPv6, while Bun's
-// fetch resolves "localhost" to ::1 first — so a localhost health check times
-// out in CI even though the service is up. 127.0.0.1 forces the IPv4 path.
-const backendUrl = `http://127.0.0.1:${apiPort}`;
+// The baked-in demo database credentials and the two derived URLs now come
+// from the shared stack config (scripts/stack/config.ts), which carries the
+// "127.0.0.1, never localhost" rationale for backendUrl. DB_USER/DB_PASSWORD/
+// DB_NAME stay as local aliases for writeStateFile() and the psql polls.
+const database = DEFAULT_STACK_DATABASE;
+const DB_USER = database.user;
+const DB_PASSWORD = database.password;
+const DB_NAME = database.name;
+const databaseUrl = internalDatabaseUrl(database);
+const backendUrl = hostBackendUrl(apiPort);
 // Base compose files (what demo:down/demo:status rebuild from — they stop/inspect
 // by project and never need the pg-data bind overlay). composeFilesRun MAY append
 // a generated bind overlay below; that fuller value drives the up/run calls here.
@@ -166,7 +132,11 @@ if (pgDataDir) {
 // ONLY to the interactive TUI
 // (see render()): never passed to log(), never serialized by writeStateFile()
 // (demo-state.json), and never printed in the plain non-TUI READY block.
-const adminPassword = crypto.randomUUID().replace(/-/g, "").slice(0, 20);
+// Both secrets are generated by the shared stack config's
+// generateStackCredentials() (a FUNCTION, never executed on import) so the
+// demo and the eval mint them identically.
+const credentials = generateStackCredentials();
+const adminPassword = credentials.adminToken;
 process.env.ADMIN_TOKEN = adminPassword;
 
 // Analytics-provider bearer credential (issue #106). The worker's analytics
@@ -175,7 +145,7 @@ process.env.ADMIN_TOKEN = adminPassword;
 // random value per launch, set here (before compose interpolation) so both
 // containers agree. NEVER printed — not in logs, not in the TUI, not in
 // demo-state.json.
-const analyticsToken = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+const analyticsToken = credentials.analyticsToken;
 process.env.ANALYTICS_TOKEN = analyticsToken;
 
 // Data-path resolution (issue #147: DEMO_HERMETIC and the stubbed/offline path

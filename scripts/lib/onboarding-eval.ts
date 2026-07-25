@@ -55,12 +55,39 @@
 // signing, submitting the signed apply over REST, waiting, claiming — is still
 // 100% the agent's own real inference; nothing carries onboarding-specific
 // knowledge (D21: the MCP transport is retired; the agent uses plain HTTP).
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+//
+// ── Where the machinery lives now ───────────────────────────────────────────
+// The container mechanics (tmpdir + mounted opencode.json, deterministic
+// container name, `docker compose run` argv, pipe draining, guaranteed
+// removal) live in the SHARED primitive scripts/agent/member-agent.ts, and the
+// model configuration in scripts/agent/model-config.ts (D22 §11.3 E5, D23
+// rule 2). This file is the layer-4 OBSERVER that rides that primitive: it
+// supplies the prompt and the poll loop and never touches the container
+// itself. Every moved symbol is re-exported below, so this module's public API
+// is unchanged.
 import { ONBOARDING_PROMPT, path as routePath, ROUTES } from "@robotmoney/contract";
+import { DEFAULT_COMPOSE_FILES } from "../stack/config.ts";
+import { runMemberAgent } from "../agent/member-agent.ts";
+import { DEFAULT_INFERENCE_MODEL, resolveModelConfig } from "../agent/model-config.ts";
 
-export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.demo.yml"];
+// One definition of the compose file list and the compose argv prefix in the
+// repo (scripts/stack/config.ts); re-exported here so every existing importer
+// stays byte-compatible.
+export { composeArgs, DEFAULT_COMPOSE_FILES } from "../stack/config.ts";
+export {
+  buildMemberAgentArgv,
+  drain,
+  memberAgentContainerName,
+  runMemberAgent,
+} from "../agent/member-agent.ts";
+export {
+  buildAgentOpencodeConfig,
+  DEFAULT_INFERENCE_MODEL,
+  MODEL_API_KEY_ENV_CANDIDATES,
+  resolveModelConfig,
+} from "../agent/model-config.ts";
+export type { ModelConfig } from "../agent/model-config.ts";
+
 // The committee REST API the member-agent container reaches over the compose
 // network — the `api` service on its internal port. D21 retired the `mcp`
 // service; the agent applies over this REST surface (POST /api/committee/apply)
@@ -77,10 +104,6 @@ export const DEFAULT_API_URL_INTERNAL = "http://api:8787";
 export const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 export const DEFAULT_POLL_INTERVAL_MS = 3_000;
 export const DEFAULT_AUTO_APPROVE_DELAY_MS = 10_000; // §11 R7
-
-export function composeArgs(project: string, files: string[] = DEFAULT_COMPOSE_FILES): string[] {
-  return ["compose", "-p", project, ...files.flatMap((f) => ["-f", f])];
-}
 
 // ── Identity generation (R1/R4: the harness stands in for "the human owner") ─
 export interface OnboardingIdentity {
@@ -125,62 +148,6 @@ function demoNetworkNote(apiBaseUrl: string): string {
 // clearly delimited and separate, per the module doc comment above).
 export function buildAgentPrompt(identity: OnboardingIdentity, apiBaseUrl: string = DEFAULT_API_URL_INTERNAL): string {
   return `${fillPromptIdentity(ONBOARDING_PROMPT, identity)}${demoNetworkNote(apiBaseUrl)}`;
-}
-
-// ── Model configuration (real inference is the default, not opt-in — and it
-//    needs no secret: the default model is the same free, no-credential
-//    OpenCode Zen tier scripts/lib/committee/inference.ts already uses) ───────────────────
-export const MODEL_API_KEY_ENV_CANDIDATES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] as const;
-
-// Free, no-credential OpenCode Zen model (mirrors scripts/lib/committee/inference.ts's
-// DEFAULT_INFERENCE_MODEL exactly — same pin, same rationale: real inference,
-// no secret required). Pinned for determinism; override via OPENCODE_MODEL.
-export const DEFAULT_INFERENCE_MODEL = "opencode/big-pickle";
-
-export interface ModelConfig {
-  model: string;
-  apiKeyEnv: (typeof MODEL_API_KEY_ENV_CANDIDATES)[number] | null;
-  apiKey: string | null;
-}
-
-// Resolves to the free keyless default UNLESS an operator explicitly opts
-// into a different model via OPENCODE_MODEL — in which case a matching
-// provider key is required and its absence THROWS loudly (never falls back
-// to a different model than the one explicitly requested; never falls back
-// to a scripted/templated path either way — see the module doc comment).
-export function resolveModelConfig(env: Record<string, string | undefined> = process.env): ModelConfig {
-  const model = env.OPENCODE_MODEL?.trim() || DEFAULT_INFERENCE_MODEL;
-
-  if (model === DEFAULT_INFERENCE_MODEL) {
-    // No key needed or passed through — even if one happens to be set in the
-    // environment for an unrelated reason, the keyless default never uses it.
-    return { model, apiKeyEnv: null, apiKey: null };
-  }
-
-  const apiKeyEnv = MODEL_API_KEY_ENV_CANDIDATES.find((name) => env[name]?.trim());
-  if (!apiKeyEnv) {
-    throw new Error(
-      `OPENCODE_MODEL=${model} was explicitly requested but no provider key is configured ` +
-        `(checked ${MODEL_API_KEY_ENV_CANDIDATES.join(", ")}). Refusing to silently fall back to a ` +
-        `different model — either configure the matching key, or unset OPENCODE_MODEL to use the ` +
-        `default free keyless tier (${DEFAULT_INFERENCE_MODEL}).`,
-    );
-  }
-  return { model, apiKeyEnv, apiKey: env[apiKeyEnv]!.trim() };
-}
-
-// opencode.json written per-run, mounted read-only into the container (never
-// baked into the image). Carries NO onboarding-specific knowledge and no
-// Robot Money connectivity config — the agent reaches the committee REST API
-// with plain HTTP (bash), using the base URL carried in the prompt's harness
-// note (D21: the MCP transport is retired, so there is no MCP client to wire).
-export function buildAgentOpencodeConfig(model: string): Record<string, unknown> {
-  return {
-    $schema: "https://opencode.ai/config.json",
-    model,
-    autoupdate: false,
-    permission: { "*": "deny", bash: "allow" },
-  };
 }
 
 // ── Step-state derivation (pure; testable without Docker) ───────────────────
@@ -263,18 +230,6 @@ export function scheduleAutoApprove(
   }, delayMs);
 }
 
-async function drain(stream: ReadableStream<Uint8Array>): Promise<string> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let out = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    out += decoder.decode(value, { stream: true });
-  }
-  return out;
-}
-
 // ── Orchestration ────────────────────────────────────────────────────────────
 export interface RunOnboardingEvalOptions {
   repoRoot: string;
@@ -320,138 +275,88 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
   const autoApproveDelayMs = opts.autoApproveDelayMs ?? DEFAULT_AUTO_APPROVE_DELAY_MS;
   const log = opts.onEvent ?? (() => {});
 
-  const workDir = mkdtempSync(join(tmpdir(), "onboarding-eval-"));
-  const opencodeConfigPath = join(workDir, "opencode.json");
-  try {
-    writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(modelConfig.model), null, 2));
-    const prompt = buildAgentPrompt(identity, apiUrlInternal);
+  const prompt = buildAgentPrompt(identity, apiUrlInternal);
 
-    // A deterministic, explicit container name — NOT left to `docker compose
-    // run`'s auto-generated one — so cleanup can target the real container
-    // directly. This matters because `containerProc.kill()` below only
-    // signals the local `docker` CLI process; `docker compose run` is a
-    // client of the Docker daemon, and the CONTAINER it starts is NOT a
-    // child process of that CLI. Killing the CLI does not reliably stop the
-    // container (a well-known Docker gotcha, confirmed live: a "timed out"
-    // eval's container kept running and reasoning for 10+ minutes after the
-    // harness gave up on it and a RETRY launched a second container
-    // concurrently with the still-running first one).
-    const containerName = `${opts.composeProject}-member-agent-eval-${identity.runId}`;
-    log(`launching member-agent container for ${identity.contact} (model=${modelConfig.model}${modelConfig.apiKeyEnv ? "" : ", keyless"})`);
-    const containerProc = Bun.spawn(
-      [
-        "docker",
-        ...composeArgs(opts.composeProject, composeFiles),
-        "run",
-        "--rm",
-        "--no-deps",
-        "--name",
-        containerName,
-        "-v",
-        `${opencodeConfigPath}:/home/agent/opencode.json:ro`,
-        // Only pass a key when the resolved model actually needs one — the
-        // default free tier is genuinely keyless (no -e flag at all).
-        ...(modelConfig.apiKeyEnv ? ["-e", `${modelConfig.apiKeyEnv}=${modelConfig.apiKey}`] : []),
-        "member-agent",
-        "run",
-        "--model",
-        modelConfig.model,
-        "--format",
-        "json",
-        "--dangerously-skip-permissions",
-        "--title",
-        `onboarding-eval-${identity.runId}`,
-        "--dir",
-        "/home/agent",
-        prompt,
-      ],
-      { cwd: opts.repoRoot, stdout: "pipe", stderr: "pipe" },
-    );
-    // Actively drain both pipes for the whole run — an un-drained pipe can
-    // fill its OS buffer and deadlock the child once its own transcript
-    // exceeds a few tens of KB, which a real multi-tool-call session easily
-    // does.
-    const stdoutPromise = drain(containerProc.stdout as ReadableStream<Uint8Array>);
-    const stderrPromise = drain(containerProc.stderr as ReadableStream<Uint8Array>);
+  // Everything the container needs — the mounted opencode.json, the
+  // deterministic name, the `docker compose run` argv, both pipe drains, the
+  // kill + `docker rm -f`, the tmpdir removal — belongs to the shared
+  // primitive. What stays HERE is the observation: the poll loop below runs
+  // as the primitive's `observe` hook, so it owns all timing exactly as it did
+  // when it was inlined (deadline, post-exit grace, and the auto-approve
+  // watcher), and the primitive's own timeout is deliberately not used.
+  let memberId: string | null = null;
+  let applyState: ApplyState = null;
+  let onActiveRoster = false;
+  let admitted = false;
+  let timedOut = false;
 
-    const deadline = Date.now() + timeoutMs;
-    // Once the container itself has exited, cap how much longer we keep
-    // polling: the R7 auto-approve delay plus margin covers the ONE thing
-    // that can still land after the agent's own process ends (the harness's
-    // own scheduled activate call); nothing else can advance with no agent
-    // left to drive it.
-    const postExitGraceMs = autoApproveDelayMs + 20_000;
+  log(`launching member-agent container for ${identity.contact} (model=${modelConfig.model}${modelConfig.apiKeyEnv ? "" : ", keyless"})`);
+  const run = await runMemberAgent({
+    repoRoot: opts.repoRoot,
+    composeProject: opts.composeProject,
+    composeFiles,
+    modelConfig,
+    prompt,
+    runId: identity.runId,
+    title: `onboarding-eval-${identity.runId}`,
+    onEvent: log,
+    observe: async (handle) => {
+      const deadline = Date.now() + timeoutMs;
+      // Once the container itself has exited, cap how much longer we keep
+      // polling: the R7 auto-approve delay plus margin covers the ONE thing
+      // that can still land after the agent's own process ends (the harness's
+      // own scheduled activate call); nothing else can advance with no agent
+      // left to drive it.
+      const postExitGraceMs = autoApproveDelayMs + 20_000;
 
-    let memberId: string | null = null;
-    let applyState: ApplyState = null;
-    let onActiveRoster = false;
-    let approveScheduledForMemberId: string | null = null;
-    let containerExitedAt: number | null = null;
+      let approveScheduledForMemberId: string | null = null;
+      let containerExitedAt: number | null = null;
 
-    for (;;) {
-      if (containerProc.exitCode !== null && containerExitedAt === null) {
-        containerExitedAt = Date.now();
-        log(`member-agent container exited (code ${containerProc.exitCode})`);
-      }
-
-      if (!memberId) {
-        memberId = await findMemberIdByContact(opts.backendUrl, opts.adminToken, identity.contact).catch(() => null);
-        if (memberId) log(`observed server-minted memberId=${memberId} for ${identity.contact} (§11 R2)`);
-      }
-      if (memberId) {
-        applyState = await fetchApplyState(opts.backendUrl, memberId).catch(() => applyState);
-        if (applyState === "applied" && approveScheduledForMemberId !== memberId) {
-          approveScheduledForMemberId = memberId;
-          log(`application ${memberId} applied — auto-approving in ${autoApproveDelayMs}ms (§11 R7)`);
-          scheduleAutoApprove(opts.backendUrl, opts.adminToken, memberId, autoApproveDelayMs, log);
+      for (;;) {
+        if (handle.exitCode !== null && containerExitedAt === null) {
+          containerExitedAt = Date.now();
+          log(`member-agent container exited (code ${handle.exitCode})`);
         }
-        onActiveRoster = await isOnActiveRoster(opts.backendUrl, memberId).catch(() => onActiveRoster);
+
+        if (!memberId) {
+          memberId = await findMemberIdByContact(opts.backendUrl, opts.adminToken, identity.contact).catch(() => null);
+          if (memberId) log(`observed server-minted memberId=${memberId} for ${identity.contact} (§11 R2)`);
+        }
+        if (memberId) {
+          applyState = await fetchApplyState(opts.backendUrl, memberId).catch(() => applyState);
+          if (applyState === "applied" && approveScheduledForMemberId !== memberId) {
+            approveScheduledForMemberId = memberId;
+            log(`application ${memberId} applied — auto-approving in ${autoApproveDelayMs}ms (§11 R7)`);
+            scheduleAutoApprove(opts.backendUrl, opts.adminToken, memberId, autoApproveDelayMs, log);
+          }
+          onActiveRoster = await isOnActiveRoster(opts.backendUrl, memberId).catch(() => onActiveRoster);
+        }
+
+        if (onActiveRoster) break; // admitted
+        if (Date.now() >= deadline) break; // overall timeout
+        if (containerExitedAt !== null && Date.now() - containerExitedAt >= postExitGraceMs) break; // nothing left to advance it
+
+        await Bun.sleep(pollIntervalMs);
       }
 
-      if (onActiveRoster) break; // admitted
-      if (Date.now() >= deadline) break; // overall timeout
-      if (containerExitedAt !== null && Date.now() - containerExitedAt >= postExitGraceMs) break; // nothing left to advance it
+      // Computed BEFORE the primitive kills anything, exactly as before.
+      admitted = onActiveRoster;
+      timedOut = !admitted && Date.now() >= deadline;
+    },
+  });
 
-      await Bun.sleep(pollIntervalMs);
-    }
+  const steps = deriveSteps({ memberId, applyState, onActiveRoster });
+  log(`eval finished: admitted=${admitted} timedOut=${timedOut} steps=${JSON.stringify(steps)}`);
 
-    const admitted = onActiveRoster;
-    const timedOut = !admitted && Date.now() >= deadline;
-
-    // Kill BOTH the local CLI process AND the actual container by its
-    // deterministic name — killing only containerProc leaves the real
-    // container running under the Docker daemon (see the name comment
-    // above). `docker rm -f` is a superset of `docker kill`: it stops AND
-    // removes, so this is also the cleanup `--rm` would otherwise handle on
-    // a normal exit. Best-effort — an already-exited container/process is
-    // not an error here.
-    try {
-      containerProc.kill();
-    } catch {
-      /* already exited */
-    }
-    try {
-      Bun.spawnSync(["docker", "rm", "-f", containerName], { stdout: "ignore", stderr: "ignore" });
-    } catch {
-      /* already removed */
-    }
-    const [stdout, stderr, containerExitCode] = await Promise.all([stdoutPromise, stderrPromise, containerProc.exited]);
-
-    const steps = deriveSteps({ memberId, applyState, onActiveRoster });
-    log(`eval finished: admitted=${admitted} timedOut=${timedOut} steps=${JSON.stringify(steps)}`);
-
-    return {
-      identity,
-      memberId,
-      steps,
-      admitted,
-      timedOut,
-      containerExitCode,
-      ...(admitted ? {} : { transcript: `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}` }),
-    };
-  } finally {
-    rmSync(workDir, { recursive: true, force: true });
-  }
+  return {
+    identity,
+    memberId,
+    steps,
+    admitted,
+    timedOut,
+    containerExitCode: run.exitCode,
+    ...(admitted ? {} : { transcript: run.transcript }),
+  };
 }
 
 // ── CI retry/backoff wrapper (Stage 7, §11 R8) ──────────────────────────────

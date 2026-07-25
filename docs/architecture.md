@@ -2159,12 +2159,15 @@ than a vacuous green.
 **E5 — Shared components, not parallel ones.** The eval is the demo's onboarding
 path with fewer services booted. Three components are shared by construction:
 
-- **`scripts/lib/demo-stack.ts`** — one bring-up with a `core`/`full` profile,
+- **`scripts/stack/`** (entry `scripts/stack/index.ts`; the pure builders in
+  `config.ts`, port allocation in `ports.ts`, the thin impure shell in
+  `stack.ts`) — one bring-up with a `core`/`full` profile,
   free of module-scope side effects and of `process.env` reads or writes
   (compose's env map is built from an explicit config object and passed to that
   one child process). Consumed by the demo (`full`), the eval (`core`), and the
   rails check (`core`, replacing its forked `bringUpInfra()`).
-- **`runMemberAgent()`** — the member-agent container primitive (deterministic
+- **`runMemberAgent()`** (`scripts/agent/member-agent.ts`) — the member-agent
+  container primitive (deterministic
   name, compose-run argv, pipe draining, guaranteed removal), extracted from
   `runOnboardingEval` so layers 0-3 and layer 4 launch containers the same way.
 - **`classifyOutcome()`** — one definition, three consumers: the retry predicate

@@ -11,20 +11,25 @@
 // step ahead of the real-inference eval in CI is Stage 7's job
 // (.github/workflows/e2e.yml), not this file's.
 //
+// The bring-up is the SHARED scripts/stack module on its `core` profile
+// (postgres + api — docs/architecture.md §11.3 E5, docs/decisions.md D22):
+// this file used to carry a forked `bringUpInfra()` because demo-main.ts does
+// its setup at module scope and could not be imported. That fork is gone.
+//
 // Loud-skip-never (test-coverage-policy): Docker, network egress to GitHub
 // Releases (the `rmpc` binary, same as scripts/tests/rmpc-canonical-apply.test.ts),
 // and network egress to pull/build base images are all hard dependencies of
 // the describe block below — same policy as
-// scripts/tests/demo-compose-config.test.ts. A missing docker CLI throws in
-// beforeAll, which fails every test in the block loudly; nothing here quietly
-// skips.
+// scripts/tests/demo-compose-config.test.ts. A missing or unusable Docker
+// daemon THROWS out of `stack.up()`'s `assertDockerAvailable()` (which returns
+// void or throws — there is no boolean a caller could turn into a skip), which
+// fails every test in the block loudly; nothing here quietly skips.
 //
 // This file also carries fast, Docker-free unit tests for
 // scripts/lib/onboarding-eval.ts's pure helpers (identity/prompt building,
 // the model-config fail-loud contract, step-state derivation) so those stay
 // covered even in an environment where the Docker-backed block can't run.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createServer } from "node:net";
 import { join } from "node:path";
 import {
   canonicalizeApplication,
@@ -35,16 +40,26 @@ import { fetchRmpc, runRmpcJson } from "../lib/rmpc-fetch.ts";
 import {
   buildAgentOpencodeConfig,
   buildAgentPrompt,
+  buildMemberAgentArgv,
+  DEFAULT_COMPOSE_FILES,
   DEFAULT_INFERENCE_MODEL,
   deriveSteps,
   fillPromptIdentity,
   generateIdentity,
   looksRateLimited,
+  memberAgentContainerName,
   ONBOARDING_STEPS,
   type OnboardingEvalResult,
   resolveModelConfig,
   runOnboardingEvalWithRetry,
 } from "../lib/onboarding-eval.ts";
+import {
+  allocatePorts,
+  createStack,
+  DEFAULT_STACK_DATABASE,
+  generateStackCredentials,
+  type Stack,
+} from "../stack/index.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -138,6 +153,73 @@ describe("onboarding-eval pure helpers", () => {
   test("deriveSteps: on the active roster ⇒ every step done (admitted)", () => {
     const steps = deriveSteps({ memberId: "m1", applyState: "claimed", onActiveRoster: true });
     expect(steps.every((s) => s.status === "done")).toBe(true);
+  });
+});
+
+// ── GOLDEN member-agent argv (no Docker) ────────────────────────────────────
+// The executed proof that extracting the container mechanics into the shared
+// scripts/agent/member-agent.ts primitive did NOT change the command line the
+// required per-PR e2e gate spends 20 minutes riding. Any drift here is a
+// behaviour change to that gate, not a refactor.
+describe("member-agent container primitive", () => {
+  const base = {
+    composeProject: "rmdemo_abc",
+    containerName: "rmdemo_abc-member-agent-eval-run1",
+    opencodeConfigPath: "/tmp/wd/opencode.json",
+    title: "onboarding-eval-run1",
+    prompt: "PROMPT TEXT",
+  };
+
+  test("memberAgentContainerName is the exact <project>-member-agent-eval-<runId> format cleanup targets", () => {
+    expect(memberAgentContainerName("rmdemo_abc", "run1")).toBe("rmdemo_abc-member-agent-eval-run1");
+  });
+
+  test("keyless default: the argv is byte-for-byte what the eval has always spawned", () => {
+    expect(
+      buildMemberAgentArgv({ ...base, modelConfig: { model: DEFAULT_INFERENCE_MODEL, apiKeyEnv: null, apiKey: null } }),
+    ).toEqual([
+      "docker",
+      "compose", "-p", "rmdemo_abc",
+      "-f", "docker-compose.yml",
+      "-f", "docker-compose.demo.yml",
+      "run",
+      "--rm",
+      "--no-deps",
+      "--name", "rmdemo_abc-member-agent-eval-run1",
+      "-v", "/tmp/wd/opencode.json:/home/agent/opencode.json:ro",
+      "member-agent",
+      "run",
+      "--model", DEFAULT_INFERENCE_MODEL,
+      "--format", "json",
+      "--dangerously-skip-permissions",
+      "--title", "onboarding-eval-run1",
+      "--dir", "/home/agent",
+      "PROMPT TEXT",
+    ]);
+  });
+
+  test("a keyed model adds exactly one -e flag, in the same position, and nothing else", () => {
+    const keyless = buildMemberAgentArgv({ ...base, modelConfig: { model: "m", apiKeyEnv: null, apiKey: null } });
+    const keyed = buildMemberAgentArgv({
+      ...base,
+      modelConfig: { model: "m", apiKeyEnv: "ANTHROPIC_API_KEY", apiKey: "secret" },
+    });
+    const i = keyless.indexOf("member-agent");
+    expect(keyed.slice(0, i + 2)).toEqual([...keyless.slice(0, i), "-e", "ANTHROPIC_API_KEY=secret"]);
+    expect(keyed.slice(i + 2)).toEqual(keyless.slice(i));
+  });
+
+  test("keep:true omits --rm (so a stopped container survives inspection) and changes nothing else", () => {
+    const modelConfig = { model: "m", apiKeyEnv: null, apiKey: null } as const;
+    const normal = buildMemberAgentArgv({ ...base, modelConfig });
+    const kept = buildMemberAgentArgv({ ...base, modelConfig, keep: true });
+    expect(normal.filter((a) => a !== "--rm")).toEqual(kept);
+    expect(kept).not.toContain("--rm");
+  });
+
+  test("composeFiles default to the single shared DEFAULT_COMPOSE_FILES definition", () => {
+    const argv = buildMemberAgentArgv({ ...base, modelConfig: { model: "m", apiKeyEnv: null, apiKey: null } });
+    for (const f of DEFAULT_COMPOSE_FILES) expect(argv).toContain(f);
   });
 });
 
@@ -300,112 +382,85 @@ describe("runOnboardingEvalWithRetry", () => {
 });
 
 // ── Docker-backed rails check ────────────────────────────────────────────────
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const port = (srv.address() as { port: number }).port;
-      srv.close(() => resolve(port));
-    });
-  });
-}
-
-const project = `rm_onboarding_infra_${crypto.randomUUID().slice(0, 8)}`;
-const composeFiles = ["docker-compose.yml", "docker-compose.demo.yml"];
-const adminToken = crypto.randomUUID();
-let apiPort = 0;
-let pgPort = 0;
-let backendUrl = "";
-let composeEnv: Record<string, string> = {};
-
-function compose(args: string[]) {
-  const r = Bun.spawnSync(["docker", "compose", "-p", project, ...composeFiles.flatMap((f) => ["-f", f]), ...args], {
-    cwd: repoRoot,
-    env: { ...process.env, ...composeEnv } as Record<string, string>,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: r.exitCode ?? -1, stdout: new TextDecoder().decode(r.stdout), stderr: new TextDecoder().decode(r.stderr) };
-}
-
-async function waitForOk(url: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let lastErr: unknown;
-  while (Date.now() < deadline) {
-    try {
-      const r = await fetch(url);
-      if (r.ok) return;
-      lastErr = new Error(`${url} -> ${r.status}`);
-    } catch (e) {
-      lastErr = e;
-    }
-    await Bun.sleep(500);
-  }
-  throw new Error(`timed out waiting for ${url}: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
-}
-
 const SETUP_TIMEOUT_MS = 5 * 60_000;
 const TEST_TIMEOUT_MS = 2 * 60_000;
+
+// DECLARATION ONLY at module scope — no port bound, no secret generated, no
+// compose call — so the pure, Docker-free suites above still cost nothing to
+// load. All of it happens in the beforeAll below.
+let stack: Stack | null = null;
+
+// A stack pointed at a daemon that cannot exist. Constructing it is free
+// (createStack spawns nothing); only assertDockerAvailable() touches Docker.
+function unreachableDaemonStack(): Stack {
+  return createStack(
+    {
+      repoRoot,
+      project: "rm_onboarding_infra_unreachable",
+      profile: "core",
+      apiPort: 1,
+      pgPort: 2,
+      composeFiles: DEFAULT_COMPOSE_FILES,
+      database: DEFAULT_STACK_DATABASE,
+      credentials: generateStackCredentials(),
+    },
+    { hostEnv: { PATH: process.env.PATH, DOCKER_HOST: "tcp://127.0.0.1:1" } },
+  );
+}
 
 // beforeAll/afterAll are declared INSIDE the describe block below (not at
 // module scope) — bun:test applies module-scope lifecycle hooks to every
 // describe block in the file, which would otherwise force the pure,
 // Docker-free unit tests above through this full Docker bring-up too.
-async function bringUpInfra(): Promise<void> {
-  const dockerCheck = Bun.spawnSync(["docker", "version"], { stdout: "ignore", stderr: "pipe" });
-  if (dockerCheck.exitCode !== 0) {
-    throw new Error(
-      `docker is required for the onboarding-eval infra rails check and is not usable in this environment ` +
-        `(exit ${dockerCheck.exitCode}: ${new TextDecoder().decode(dockerCheck.stderr)})`,
-    );
-  }
-
-  apiPort = await freePort();
-  pgPort = await freePort();
-  backendUrl = `http://127.0.0.1:${apiPort}`;
-  composeEnv = {
-    COMPOSE_PROJECT_NAME: project,
-    DEMO_PROJECT: project,
-    DATABASE_URL: "postgres://robotmoney:robotmoney@postgres:5432/robotmoney",
-    ADMIN_TOKEN: adminToken,
-    WEB_PORT: String(apiPort),
-    POSTGRES_PORT: String(pgPort),
-  };
-
-  // Minimal stack: postgres (api's dependency) + api. No worker lanes —
-  // applying/activating a committee membership is pure Postgres CRUD + crypto
-  // verification, never touches the job queue, so booting the worker images
-  // would only slow this "fast, cheap" check down for nothing. (D21: no mcp
-  // service — the committee surface is the api's REST API.)
-  const up = compose(["up", "-d", "postgres", "api"]);
-  if (up.exitCode !== 0) throw new Error(`docker compose up failed (exit ${up.exitCode}): ${up.stderr}`);
-
-  const migrate = compose(["run", "--rm", "--no-deps", "api", "bun", "run", "src/db/migrate.ts"]);
-  if (migrate.exitCode !== 0) throw new Error(`migrations failed (exit ${migrate.exitCode}): ${migrate.stderr}\n${migrate.stdout}`);
-
-  await waitForOk(`${backendUrl}${ROUTES.health}`, 60_000);
-  await waitForOk(`${backendUrl}${ROUTES.committee.members}`, 30_000);
-
-  // Build (never run yet — that's the inference-off "container starts" test
-  // below) the member-agent image now so its cost is paid once in beforeAll,
-  // not inside a single test's own timeout budget.
-  const build = compose(["build", "member-agent"]);
-  if (build.exitCode !== 0) throw new Error(`member-agent image build failed (exit ${build.exitCode}): ${build.stderr}`);
-}
-
 describe("onboarding eval infra rails (Docker, no inference)", () => {
-  beforeAll(bringUpInfra, SETUP_TIMEOUT_MS);
+  beforeAll(async () => {
+    const [apiPort, pgPort] = await allocatePorts([{}, {}]);
+    // Minimal stack: the shared module's `core` profile — postgres (api's
+    // dependency) + api, and NOTHING else. No worker lanes: applying/
+    // activating a committee membership is pure Postgres CRUD + crypto
+    // verification, never touches the job queue, so booting the worker images
+    // would only slow this "fast, cheap" check down for nothing. (D21: no mcp
+    // service — the committee surface is the api's REST API.)
+    stack = createStack(
+      {
+        repoRoot,
+        project: `rm_onboarding_infra_${crypto.randomUUID().slice(0, 8)}`,
+        profile: "core",
+        apiPort: apiPort!,
+        pgPort: pgPort!,
+        composeFiles: DEFAULT_COMPOSE_FILES,
+        database: DEFAULT_STACK_DATABASE,
+        credentials: generateStackCredentials(),
+      },
+      { hostEnv: process.env, io: { stdout: "pipe", stderr: "pipe" } },
+    );
+    // Throws (never skips) when Docker is missing/unusable, when postgres
+    // never becomes ready, when migrations fail, or when /health never
+    // answers.
+    await stack.up();
+    await stack.waitForHttp(`${stack.backendUrl}${ROUTES.committee.members}`, 30_000);
+
+    // Build (never run yet — that's the inference-off "container starts" test
+    // below) the member-agent image now so its cost is paid once in beforeAll,
+    // not inside a single test's own timeout budget.
+    await stack.build(["member-agent"]);
+  }, SETUP_TIMEOUT_MS);
 
   afterAll(() => {
-    if (!project) return;
-    const r = compose(["down", "--volumes", "--remove-orphans"]);
+    if (!stack) return;
+    const r = stack.down({ removeVolumes: true, removeOrphans: true });
     if (r.exitCode !== 0) {
       // Never mask an earlier test failure by throwing here — but a failed
       // teardown leaves real docker resources behind, so it must be LOUD.
-      console.error(`[onboarding-eval-infra] teardown for project ${project} failed (exit ${r.exitCode}): ${r.stderr}`);
+      console.error(
+        `[onboarding-eval-infra] teardown for project ${stack.config.project} failed (exit ${r.exitCode}): ${r.stderr}`,
+      );
     }
   }, SETUP_TIMEOUT_MS);
+
+  test("assertDockerAvailable THROWS on an unusable daemon — it can never degrade into a skip", () => {
+    expect(() => unreachableDaemonStack().assertDockerAvailable()).toThrow(/docker is required/);
+  });
 
   test(
     "member-agent container starts — no Robot Money tooling, no model call needed",
@@ -413,7 +468,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
       // ENTRYPOINT is `opencode`; `--version` never touches a model or needs a
       // key, proving the image builds and the binary runs without spending any
       // inference budget.
-      const r = compose(["run", "--rm", "--no-deps", "member-agent", "--version"]);
+      const r = stack!.compose(["run", "--rm", "--no-deps", "member-agent", "--version"]);
       expect(r.exitCode).toBe(0);
     },
     TEST_TIMEOUT_MS,
@@ -422,7 +477,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
   test(
     "member-agent reaches the api service's /health from INSIDE the compose network",
     () => {
-      const r = compose(["run", "--rm", "--no-deps", "--entrypoint", "curl", "member-agent", "-fsS", "http://api:8787/health"]);
+      const r = stack!.compose(["run", "--rm", "--no-deps", "--entrypoint", "curl", "member-agent", "-fsS", "http://api:8787/health"]);
       expect(r.exitCode).toBe(0);
       expect(JSON.parse(r.stdout)).toMatchObject({ status: "ok" });
     },
@@ -455,7 +510,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         expect(signed.ok).toBe(true);
         expect(signed.public_key).toBe(publicKeyB64);
 
-        const applyRes = await fetch(`${backendUrl}${ROUTES.committee.apply}`, {
+        const applyRes = await fetch(`${stack!.backendUrl}${ROUTES.committee.apply}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...application, signature: signed.signature }),
@@ -468,7 +523,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         const memberId: string = body.memberId;
 
         const statusPath = routePath(ROUTES.committee.applyStatus, { id: memberId });
-        const statusRes = await fetch(`${backendUrl}${statusPath}`);
+        const statusRes = await fetch(`${stack!.backendUrl}${statusPath}`);
         expect(statusRes.status).toBe(200);
         const status = await statusRes.json();
         expect(status.state).toBe("applied");
