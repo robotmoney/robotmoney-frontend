@@ -68,6 +68,8 @@
 import { ONBOARDING_PROMPT, path as routePath, ROUTES } from "@robotmoney/contract";
 import { DEFAULT_COMPOSE_FILES } from "../stack/config.ts";
 import { runMemberAgent } from "../agent/member-agent.ts";
+import { classifyOutcome } from "../agent/classify-outcome.ts";
+import { finalAssistantText } from "../agent/transcript.ts";
 import { DEFAULT_INFERENCE_MODEL, resolveModelConfig } from "../agent/model-config.ts";
 
 // One definition of the compose file list and the compose argv prefix in the
@@ -87,6 +89,13 @@ export {
   resolveModelConfig,
 } from "../agent/model-config.ts";
 export type { ModelConfig } from "../agent/model-config.ts";
+// One outcome classifier for every member-agent run (§11.3 E4/E5) — the retry
+// predicate below, the demo's onboarding driver, and the layer-4 scorecard all
+// read the SAME definition. Re-exported so importers of this module keep
+// working unchanged.
+export { classifyOutcome, looksRateLimited, looksRefusal } from "../agent/classify-outcome.ts";
+export type { ClassifiableRun, OnboardingOutcome } from "../agent/classify-outcome.ts";
+export { assistantTextParts, extractAssistantText, finalAssistantText } from "../agent/transcript.ts";
 
 // The committee REST API the member-agent container reaches over the compose
 // network — the `api` service on its internal port. D21 retired the `mcp`
@@ -360,12 +369,11 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 }
 
 // ── CI retry/backoff wrapper (Stage 7, §11 R8) ──────────────────────────────
-// Two known-flaky, non-eval failure modes get ONE retry with backoff; any
+// Three known-flaky, NON-EVAL failure modes get ONE retry with backoff; any
 // OTHER failure (the agent genuinely couldn't navigate onboarding, a
-// container crash) IS a real result and is never retried — same "no retry of
-// member steps" policy scripts/lib/demo-main.ts's own onboardingDriver()
-// follows for the standing demo. This wrapper only softens known provider/
-// infra flake, it does not relax the eval itself:
+// container crash) IS a real result and is never retried. This wrapper only
+// softens outcomes in which the agent never actually ATTEMPTED onboarding, it
+// does not relax the eval itself:
 //   1. A rate-limit/overload signal in the transcript — the self-hosted CI
 //      runner shares its IP with the standing rmdemo_* demo stack, which has
 //      caused 429 flake on other live-model-call gates before. A transient
@@ -378,12 +386,20 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 //      more likely to be provider slowness than a genuinely stuck agent. An
 //      operator-configured paid model is fast/reliable enough that a timeout
 //      keeps meaning what it always meant (a real, non-retried result).
-const RATE_LIMIT_PATTERNS = [/\b429\b/, /rate[ _-]?limit/i, /overloaded_error/i, /rate_limit_error/i, /\b529\b/];
-
-export function looksRateLimited(transcript: string | undefined): boolean {
-  if (!transcript) return false;
-  return RATE_LIMIT_PATTERNS.some((re) => re.test(transcript));
-}
+//   3. A CLASSIFIED REFUSAL — the model declined the prompt outright, so the
+//      agent never ATTEMPTED onboarding at all. Identical reasoning to case 1
+//      (a 429 never let it reason either), so it is not a real navigation
+//      result. This is the fix for the 2026-07-25 demo run that admitted zero
+//      members: the agent refused, exited 0 in ~15s, nothing retried it, and
+//      the finite newcomer roster (scripts/lib/demo-newcomers.ts) permanently
+//      lost a seat. See scripts/agent/classify-outcome.ts for the
+//      three-conjunct evidence a refusal must show before it earns a retry.
+//
+// LOAD-BEARING BOUNDARY: this wrapper serves the DEMO's onboarding driver and
+// the single real-inference admission the e2e job performs. D22 §11.3 E4's
+// layer-4 SAMPLER must call the bare runOnboardingEval and classify each
+// sample itself — retrying refusals inside the sampler would erase the refusal
+// RATE, which is the metric the whole eval exists to report.
 
 export interface RunOnboardingEvalWithRetryOptions extends RunOnboardingEvalOptions {
   maxAttempts?: number; // default 2 (1 retry)
@@ -399,6 +415,21 @@ export interface RunOnboardingEvalWithRetryOptions extends RunOnboardingEvalOpti
 
 export const DEFAULT_RETRY_BACKOFF_MS = [45_000];
 
+// Identity for attempt N. Attempt 1 uses the caller's identity exactly as
+// before. Later attempts DERIVE from it instead of discarding it: the display
+// NAME is preserved (the demo's roster records the planned newcomer's name, and
+// a retry that admitted "Onboarding Eval ci-retry-2-…" instead would put a
+// different person on the committee than the one the demo announced), while the
+// runId and the contact local-part get an -rN suffix so no attempt ever re-uses
+// a contact — the key this harness matches the server-minted member row on.
+export function retryIdentity(base: OnboardingIdentity | undefined, attempt: number): OnboardingIdentity {
+  if (attempt === 1) return base ?? generateIdentity(`ci-retry-1-${crypto.randomUUID().slice(0, 6)}`);
+  if (!base) return generateIdentity(`ci-retry-${attempt}-${crypto.randomUUID().slice(0, 6)}`);
+  const at = base.contact.indexOf("@");
+  const contact = at === -1 ? `${base.contact}-r${attempt}` : `${base.contact.slice(0, at)}-r${attempt}${base.contact.slice(at)}`;
+  return { runId: `${base.runId}-r${attempt}`, name: base.name, contact };
+}
+
 export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetryOptions): Promise<OnboardingEvalResult> {
   const maxAttempts = opts.maxAttempts ?? 2;
   const backoff = opts.backoffMsSchedule ?? DEFAULT_RETRY_BACKOFF_MS;
@@ -407,16 +438,33 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
   const usingKeylessDefault = resolveModelConfig(opts.env ?? process.env).model === DEFAULT_INFERENCE_MODEL;
   let last: OnboardingEvalResult | undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    // Fresh identity per attempt — reusing one across retries would re-apply
+    // Fresh contact per attempt — reusing one across retries would re-apply
     // with an already-used contact and confuse the "which member row is
-    // this" lookup the harness relies on to observe progress.
-    const identity = attempt === 1 && opts.identity ? opts.identity : generateIdentity(`ci-retry-${attempt}-${crypto.randomUUID().slice(0, 6)}`);
+    // this" lookup the harness relies on to observe progress. The caller's
+    // display name survives (see retryIdentity).
+    const identity = retryIdentity(opts.identity, attempt);
     last = await runOnce({ ...opts, identity });
     if (last.admitted) return last;
-    const worthRetrying = looksRateLimited(last.transcript) || (usingKeylessDefault && last.timedOut);
+    // ONE classifier for the whole repo (§11.3 E5). `usingKeylessDefault` stays
+    // in the PREDICATE rather than the classifier so the classifier remains
+    // env-free (§11.3 E1); it collapses to always-true once D22 rule 1's
+    // keyless work deletes the paid branch.
+    const outcome = classifyOutcome(last);
+    const worthRetrying = outcome === "rate-limited" || outcome === "refused" || (usingKeylessDefault && outcome === "timed-out");
+    // Always logged, retried or not: a misclassification must be diagnosable
+    // from CI logs rather than invisible.
+    log(
+      `onboarding eval attempt ${attempt}/${maxAttempts} did not admit — classified ${outcome}; ` +
+        `agent's final message: ${JSON.stringify(finalAssistantText(last.transcript ?? "").slice(0, 200))}`,
+    );
     if (attempt === maxAttempts || !worthRetrying) return last;
     const delayMs = backoff[Math.min(attempt - 1, backoff.length - 1)];
-    const reason = looksRateLimited(last.transcript) ? "looked rate-limited" : "timed out on the free keyless tier";
+    const reason =
+      outcome === "rate-limited"
+        ? "looked rate-limited"
+        : outcome === "refused"
+          ? "was refused by the model (the agent never attempted onboarding)"
+          : "timed out on the free keyless tier";
     log(`onboarding eval attempt ${attempt}/${maxAttempts} ${reason} — retrying in ${delayMs}ms (§11 R8)`);
     await Bun.sleep(delayMs);
   }

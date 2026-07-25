@@ -7,8 +7,8 @@ import { listDemoVolumes, makeDockerRunner, removeDemoVolumes } from "./demo-vol
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
 import { COMMITTEE_INTERVAL_MS, COMMITTEE_STAGGER_MS } from "./demo-schedule.ts";
 import {
+  classifyOutcome,
   resolveModelConfig,
-  runOnboardingEval,
   runOnboardingEvalWithRetry,
   type OnboardingIdentity,
   type OnboardingEvalResult,
@@ -1127,11 +1127,13 @@ async function main(): Promise<void> {
     // substitute. A failed/timed-out admission THROWS (via `run`'s pattern —
     // no silent pass): the whole point of putting real inference in the PR
     // gate is that a vanilla agent failing to navigate our own onboarding
-    // instructions is a real regression signal, not a shrug. Provider/infra
-    // flake (rate-limit signals, and — on the keyless default — bare
-    // timeouts too) is mitigated by runOnboardingEvalWithRetry's own
-    // retry/backoff (scripts/lib/onboarding-eval.ts); it never retries a
-    // genuine navigation failure.
+    // instructions is a real regression signal, not a shrug. The three
+    // outcomes in which the agent never actually ATTEMPTED onboarding — a
+    // rate-limit/overload signal, a classified model REFUSAL, and (on the
+    // keyless default only) a bare timeout — are mitigated by
+    // runOnboardingEvalWithRetry's own retry/backoff
+    // (scripts/lib/onboarding-eval.ts); it never retries a genuine navigation
+    // failure.
     //
     // Sweep width (nightly-only knobs, both optional, both no-ops for the PR
     // gate which never sets them): ONBOARDING_SWEEP_MODELS is a ":"-separated
@@ -1358,9 +1360,16 @@ async function main(): Promise<void> {
   // shortcut) for ongoing SESSION PARTICIPATION only, never for the
   // onboarding admission itself, which already completed for real above.
   //
-  // A failed/timed-out admission is a genuine red eval result (§11 R8) — the
-  // strip renders it failed, the container transcript is logged, and nothing
-  // retries the member's steps.
+  // RETRY POLICY (classified, not blanket — scripts/agent/classify-outcome.ts):
+  // an attempt classified `refused` or `rate-limited` gets ONE retry with a
+  // DERIVED identity (same display name, fresh contact), because in both the
+  // agent never ATTEMPTED onboarding — the model declined the prompt, or the
+  // provider never let it reason at all. A `navigation-failure`, and a
+  // `timed-out` on a keyed model, remain genuine red eval results (§11 R8) and
+  // are still never retried: the strip renders them failed and the container
+  // transcript is logged. This matters HERE specifically because the roster
+  // below is finite — on 2026-07-25 one refusal (clean exit, ~15s, all steps
+  // pending) permanently forfeited a seat with nothing to retry it.
   //
   // FIXED, FINITE roster (scripts/lib/demo-newcomers.ts — the single, tested
   // source): the demo admits exactly the named newcomers listed there, in
@@ -1416,7 +1425,7 @@ async function main(): Promise<void> {
       startOnboarding(identity.runId, identity.name); // append to the persistent pane + drop from upcoming
       setOnboardStep(identity.runId, "connect", "running"); // container is about to launch
       try {
-        const result: OnboardingEvalResult = await runOnboardingEval({
+        const result: OnboardingEvalResult = await runOnboardingEvalWithRetry({
           repoRoot,
           composeProject: project,
           composeFiles: composeFilesRun.split(":"),
@@ -1451,11 +1460,21 @@ async function main(): Promise<void> {
           const stalledOb = state.onboarded.find((o) => o.memberId === entryId);
           const stalledAt = stalledOb?.steps.find((s) => s.status !== "done");
           if (stalledAt) setOnboardStep(entryId, stalledAt.key, "failed");
+          // Which KIND of failure this was is the whole point (§11.3 E4) — a
+          // refusal and a navigation failure look identical in the step strip
+          // but mean opposite things about our instructions. Attempts the
+          // wrapper already retried are exhausted by the time we get here.
+          const outcome = classifyOutcome(result);
+          const retryable = outcome === "refused" || outcome === "rate-limited" || outcome === "timed-out";
           log(
-            `onboarding ${identity.name} (#${n + 1}) FAILED — ` +
+            `onboarding ${identity.name} (#${n + 1}) FAILED (${outcome}) — ` +
               `${result.timedOut ? "timed out" : `container exited (code ${result.containerExitCode})`} ` +
-              "before reaching the active roster; this is a real eval result, not retried",
+              `before reaching the active roster; ` +
+              (retryable ? "retries exhausted" : "this is a real eval result, never retried"),
           );
+          if (result.identity.runId !== identity.runId) {
+            log(`onboarding ${identity.name} final attempt ran as runId=${result.identity.runId} (${result.identity.contact})`);
+          }
           if (result.transcript) log(`onboarding ${identity.name} container transcript:\n${result.transcript}`);
           continue;
         }

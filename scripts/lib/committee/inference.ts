@@ -23,6 +23,7 @@
 // `stanceFor()` + `buildMemo()` (see agent.ts / memo.ts) hermetic default.
 import { STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
+import { extractAssistantText } from "../../agent/transcript.ts";
 import type { RegimeContext } from "./memo.ts";
 
 export type { RegimeContext };
@@ -85,32 +86,12 @@ export function parseStanceFromBody(body: string): ParsedTake {
   return { stance: "neutral", confidence: 0.5, body: trimmed };
 }
 
-// Extract the final assistant message text from an `opencode run --format json`
-// NDJSON transcript. opencode 1.16.x emits one JSON object per line; a finalized
-// assistant text part is `{"type":"text","part":{"type":"text","text":"…"}}` (the
-// CLI only prints a `text` event once the part's `time.end` is set). We
-// concatenate every such part in stream order — that is the model's authored
-// prose. Non-text events (step_start / step_finish / tool_use / reasoning) and
-// unparseable lines are ignored. Returns "" when the transcript carries no
-// assistant text (empty/failed run) so the caller can throw loudly.
-export function extractAssistantText(transcript: string): string {
-  const parts: string[] = [];
-  for (const line of transcript.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    let ev: any;
-    try {
-      ev = JSON.parse(t);
-    } catch {
-      continue;
-    }
-    if (ev?.type === "text") {
-      const text = ev?.part?.text;
-      if (typeof text === "string" && text.trim()) parts.push(text);
-    }
-  }
-  return parts.join("\n").trim();
-}
+// The `opencode run --format json` NDJSON parser now lives in
+// scripts/agent/transcript.ts — one definition, shared with the member-agent
+// outcome classifier (scripts/agent/classify-outcome.ts), which reads the same
+// stream for the agent's FINAL message. Behaviour here is unchanged; re-exported
+// so this file's own call site below and any external importer are untouched.
+export { extractAssistantText };
 
 function dispositionLabel(bias: number): string {
   if (bias >= 0.1) return "leans constructive; you look for reasons the position works before you fault it";

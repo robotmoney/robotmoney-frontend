@@ -2166,14 +2166,28 @@ path with fewer services booted. Three components are shared by construction:
   (compose's env map is built from an explicit config object and passed to that
   one child process). Consumed by the demo (`full`), the eval (`core`), and the
   rails check (`core`, replacing its forked `bringUpInfra()`).
-- **`runMemberAgent()`** (`scripts/agent/member-agent.ts`) — the member-agent
-  container primitive (deterministic
+- **`runMemberAgent()`** (`scripts/agent/member-agent.ts`, alongside
+  `buildMemberAgentArgv`, `memberAgentContainerName`, and the
+  `containerFileExists`/`copyFromContainer` `docker cp` helpers) — the
+  member-agent container primitive (deterministic
   name, compose-run argv, pipe draining, guaranteed removal), extracted from
   `runOnboardingEval` so layers 0-3 and layer 4 launch containers the same way.
-- **`classifyOutcome()`** — one definition, three consumers: the retry predicate
-  in `runOnboardingEvalWithRetry`, the demo's onboarding driver, and the eval's
-  scorecard. A refusal is retryable under this classifier, which is why the demo
-  no longer forfeits a finite roster seat to one unlucky sample.
+  Its `keepUntilInspected` + `inspect` bracket is how layers 1-3 read the
+  **stopped** container's filesystem (E3) before removal.
+- **`classifyOutcome()`** (`scripts/agent/classify-outcome.ts`, over the shared
+  `opencode --format json` parser `scripts/agent/transcript.ts`) — one
+  definition, three consumers: the retry predicate in
+  `runOnboardingEvalWithRetry`, the demo's onboarding driver, and the eval's
+  scorecard. `refused` requires three independent conjuncts — structural (no
+  member row, clean exit, no timeout), positional (only the agent's FINAL
+  assistant message is examined), and lexical (a first-person declination act
+  **and** a safety rationale in that same message) — because a false `refused`
+  would retry away a genuine navigation failure. A refusal is retryable in
+  `runOnboardingEvalWithRetry`, which is why the demo no longer forfeits a finite
+  roster seat to one unlucky sample; that wrapper serves the demo and the single
+  e2e admission only, and the **layer-4 sampler calls the bare
+  `runOnboardingEval`**, so the reported refusal rate is never softened by
+  retries.
 
 **E6 — CI placement.** The eval is `CI_CLASS: heavy` — sweep-only, therefore no
 `pull_request` trigger — and runs in the existing

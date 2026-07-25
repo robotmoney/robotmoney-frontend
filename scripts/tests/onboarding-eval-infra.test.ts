@@ -51,6 +51,7 @@ import {
   ONBOARDING_STEPS,
   type OnboardingEvalResult,
   resolveModelConfig,
+  retryIdentity,
   runOnboardingEvalWithRetry,
 } from "../lib/onboarding-eval.ts";
 import {
@@ -60,7 +61,7 @@ import {
   generateStackCredentials,
   type Stack,
 } from "../stack/index.ts";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -360,6 +361,85 @@ describe("runOnboardingEvalWithRetry", () => {
     });
     expect(result.admitted).toBe(true);
     expect(calls).toBe(2);
+  });
+
+  // ── Refusal is retryable (the 2026-07-25 zero-admission demo run) ─────────
+  // The classifier itself is unit-tested exhaustively (positives AND five
+  // false-positive guards) in scripts/tests/member-agent-classify.test.ts;
+  // these three cases test only what THIS wrapper does with its verdict.
+  const refusalTranscript =
+    `--- stdout ---\n${readFileSync(join(import.meta.dir, "fixtures", "member-agent-refusal.ndjson"), "utf8")}\n--- stderr ---\n`;
+
+  test("a classified REFUSAL is retried — the agent never attempted onboarding, so it is not a real eval result", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: {},
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        // The observed shape: clean exit, no member row, no timeout.
+        if (calls === 1) return fakeResult({ containerExitCode: 0, transcript: refusalTranscript });
+        return fakeResult({ admitted: true });
+      },
+    });
+    expect(result.admitted).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  test("the SAME refusal text with a member row already minted is NOT retried — that is a real (navigation) result", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: {},
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        return fakeResult({ memberId: "m1", containerExitCode: 0, transcript: refusalTranscript });
+      },
+    });
+    expect(result.admitted).toBe(false);
+    expect(calls).toBe(1);
+  });
+
+  test("a retry PRESERVES the caller's display name and only derives a fresh runId/contact", async () => {
+    const planned = { runId: "ada", name: "Ada Lovelace", contact: "ada@example.test" };
+    const seen: Array<{ name: string; contact: string; runId: string }> = [];
+    await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: {},
+      backoffMsSchedule: [0],
+      identity: planned,
+      runOnce: async (o) => {
+        seen.push({ ...o.identity! });
+        return fakeResult({ containerExitCode: 0, transcript: refusalTranscript });
+      },
+    });
+    expect(seen.length).toBe(2);
+    // The demo announces the planned newcomer by NAME and records it in
+    // e2e.MEMBERS — a retry that admitted a generated name would put a
+    // different person on the committee than the one it announced.
+    expect(seen.map((s) => s.name)).toEqual(["Ada Lovelace", "Ada Lovelace"]);
+    expect(seen[0]).toEqual(planned);
+    expect(seen[1]!.runId).toBe("ada-r2");
+    expect(seen[1]!.contact).toBe("ada-r2@example.test");
+    expect(new Set(seen.map((s) => s.contact)).size).toBe(2); // never re-applies a used contact
+  });
+
+  test("retryIdentity falls back to a generated identity when the caller supplied none", () => {
+    const a = retryIdentity(undefined, 1);
+    const b = retryIdentity(undefined, 2);
+    expect(a.contact).not.toBe(b.contact);
+    expect(b.runId).toContain("ci-retry-2-");
   });
 
   test("a bare timeout is NOT retried when an explicit paid model is configured — that stays a real result", async () => {

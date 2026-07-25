@@ -41,9 +41,11 @@
 #       stack, which has caused 429 rate-limit flake on other live-call gates
 #       before, and the free tier is documented as slower/more variable than a
 #       paid one. scripts/lib/onboarding-eval.ts's runOnboardingEvalWithRetry
-#       retries a detected 429/overload signal, and — only while the keyless
-#       default is in use — a bare timeout too (never a genuine navigation
-#       failure either way) with backoff — see that function's doc comment.
+#       retries a detected 429/overload signal, a classified model REFUSAL
+#       (scripts/agent/classify-outcome.ts — the agent declined the prompt, so
+#       it never attempted onboarding), and — only while the keyless default is
+#       in use — a bare timeout too (never a genuine navigation failure in any
+#       of these cases) with backoff — see that function's doc comment.
 #   (b) An operator MAY opt into a faster/more reliable PAID model via the
 #       `ONBOARDING_EVAL_MODEL` repo variable + the `ANTHROPIC_API_KEY` repo
 #       secret. That opt-in only ever applies in a trusted context (same-repo
@@ -241,7 +243,8 @@ jobs:
         # realistic for a free-tier agent doing genuine exploration, see
         # onboarding-eval.ts's DEFAULT_TIMEOUT_MS comment — up to 2 attempts
         # with runOnboardingEvalWithRetry's 45s backoff, only retried on a
-        # detected 429/overload signal or a keyless-tier timeout, see the
+        # detected 429/overload signal, a classified model refusal, or a
+        # keyless-tier timeout — never on a genuine navigation failure, see the
         # file-level comment above).
         timeout-minutes: 85
       # Volume-leak backstop (issue: demo persistent volumes). The demo boot above

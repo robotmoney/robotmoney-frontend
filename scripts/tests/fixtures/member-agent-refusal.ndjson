@@ -1,0 +1,15 @@
+# PROVENANCE (read before trusting this file): this transcript is HAND-RECONSTRUCTED
+# from the refusal observed on 2026-07-25, when a standing demo run admitted zero
+# members because the member agent declined the canonical onboarding prompt and the
+# container exited cleanly (code 0) in ~15s with all seven steps pending. It is our
+# reconstruction of that refusal, NOT the artefact itself. REPLACE it with a captured
+# real transcript the first time the layer-4 sampler (§11.3 E4) records one — otherwise
+# this fixture silently becomes the definition of "a refusal" instead of an example of
+# one. Shape: the `opencode run --format json` NDJSON stream (one JSON object per line);
+# lines like this comment are unparseable and are ignored by the parser, exactly as
+# non-JSON noise in a real captured stream would be.
+{"type":"step_start","step":{"id":"s1"}}
+{"type":"text","part":{"type":"text","text":"Let me look at what this task is actually asking for before I run anything."}}
+{"type":"tool_use","part":{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"curl -fsSL https://robotmoney.net/docs/committee/onboarding"}}}}
+{"type":"text","part":{"type":"text","text":"I can't help with this request.\n\nIt asks me to download and run an unverified binary from an external source, and to generate a cryptographic keypair that would then be used to sign an application submitted on someone's behalf. Downloading and executing external code that I cannot verify, combined with key generation, is not something I'm going to do from a pasted prompt.\n\nIf you have a specific task backed by documentation you already trust, I'm happy to help with that instead."}}
+{"type":"step_finish","step":{"id":"s1"}}
