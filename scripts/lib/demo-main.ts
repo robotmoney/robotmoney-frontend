@@ -15,6 +15,7 @@ import {
   type OnboardingIdentity,
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
+import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./demo-newcomers.ts";
 import { COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -1390,41 +1391,52 @@ async function main(): Promise<void> {
   // A failed/timed-out admission is a genuine red eval result (§11 R8) — the
   // strip renders it failed, the container transcript is logged, and nothing
   // retries the member's steps.
-  const NEWCOMER_NAMES = [
-    "Helios", "Selene", "Rhea", "Nyx", "Eos", "Theia", "Hyperion", "Phoebe",
-    "Coeus", "Crius", "Iapetus", "Metis", "Tethys", "Themis", "Mnemosyne",
-  ];
-  const NEWCOMER_LENSES = ["liquidity", "volatility", "credit", "tail risk", "sentiment", "flows", "macro", "positioning"];
+  //
+  // FIXED, FINITE roster (scripts/lib/demo-newcomers.ts — the single, tested
+  // source): the demo admits exactly the named newcomers listed there, in
+  // order, and never more — no generated fallback name once the list is
+  // exhausted, and the driver loop terminates once they're all attempted
+  // rather than running forever.
   const FIRST_ONBOARD_MS = 60_000;     // first admission ~1 min in (after the base committee shows)
   const ONBOARD_INTERVAL_MS = 300_000; // then a new admission starts every 5 min (real eval duration is additive)
-  // Deterministic identity/lens/bias for the n-th admission — shared by the driver and the
-  // upcoming-queue preview so the TUI shows exactly who joins next. `identity.runId` is a
-  // LOCAL slug only (this driver's bookkeeping key + the container's --title); the real
-  // memberId (§11 R2) is server-minted and only known once the harness observes it.
-  function plannedNewcomer(n: number): { identity: OnboardingIdentity; lens: string; bias: number } {
-    const name = NEWCOMER_NAMES[n] ?? `Astra ${n + 1}`;
-    const runId = name.toLowerCase().replace(/\s+/g, "-");
+  // Adapt the shared finite-roster planner (demo-newcomers.ts) to the
+  // real-inference driver's identity shape. `identity.runId` is a LOCAL slug
+  // only (this driver's bookkeeping key + the container's --title); the real
+  // memberId (§11 R2) is server-minted and only known once the harness observes
+  // it. Returns null once the fixed list is exhausted — the driver stops, never
+  // a generated fallback.
+  function plannedNewcomer(n: number): { identity: OnboardingIdentity; lens: string; bias: number } | null {
+    const p = plannedNewcomerBase(n);
+    if (!p) return null;
     return {
-      identity: { runId, name, contact: `${runId}@example.test` },
-      lens: NEWCOMER_LENSES[n % NEWCOMER_LENSES.length],
-      bias: ((n % 5) - 2) * 0.05, // spread -0.10 … +0.10
+      identity: { runId: p.memberId, name: p.name, contact: `${p.memberId}@example.test` },
+      lens: p.lens,
+      bias: p.bias,
     };
   }
   async function onboardingDriver(): Promise<void> {
-    for (let n = 0; ; n++) {
+    for (let n = 0; n < NEWCOMER_NAMES.length; n++) {
       const delay = n === 0 ? FIRST_ONBOARD_MS : ONBOARD_INTERVAL_MS;
       const dueAt = Date.now() + delay;
-      // Preview the next few admissions (this one + its successors) with countdowns.
-      state.upcoming = [0, 1, 2].map((k) => {
+      // Preview the next few admissions (this one + its successors, if any are
+      // left in the fixed list) with countdowns.
+      const upcoming: UpcomingMember[] = [];
+      for (const k of [0, 1, 2]) {
         const p = plannedNewcomer(n + k);
-        return { memberId: p.identity.runId, name: p.identity.name, at: dueAt + k * ONBOARD_INTERVAL_MS };
-      });
+        if (p) upcoming.push({ memberId: p.identity.runId, name: p.identity.name, at: dueAt + k * ONBOARD_INTERVAL_MS });
+      }
+      state.upcoming = upcoming;
       await sleep(delay);
-      const { identity, lens, bias } = plannedNewcomer(n);
+      const planned = plannedNewcomer(n);
+      if (!planned) break; // exhausted the fixed roster — stop, no generated fallback
+      const { identity, lens, bias } = planned;
       // Roster cap: once the active committee reaches the contract's
-      // COMMITTEE_ROSTER_CAP, stop
-      // admitting so the demo settles at a realistic, bounded size instead of
-      // growing without bound. Keep polling — if a seat frees, admission resumes.
+      // COMMITTEE_ROSTER_CAP, stop admitting — the same finite-roster bound
+      // above already stops the demo from growing forever, but this stays as
+      // defense in depth for a shared/reused roster. activeMemberCount() now
+      // fails CONSERVATIVELY (assume full, never assume empty) on a read
+      // error, so a transient fetch problem pauses admission instead of
+      // silently waving one through.
       const active = await e2e.activeMemberCount();
       if (active >= COMMITTEE_ROSTER_CAP) {
         state.upcoming = [];
@@ -1485,11 +1497,13 @@ async function main(): Promise<void> {
         // session participation.
         e2e.MEMBERS.push({ memberId: result.memberId!, name: identity.name, lens, bias, present: true });
         setOnboardStep(entryId, "session", "running");
-        log(`onboarded ${identity.name} (#${n + 1}) memberId=${result.memberId} — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
+        log(`onboarded ${identity.name} (#${n + 1}/${NEWCOMER_NAMES.length}) memberId=${result.memberId} — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
       } catch (err) {
         log(`onboarding ${identity.name} eval threw (stack still running): ${err instanceof Error ? err.message : err}`);
       }
     }
+    state.upcoming = [];
+    log(`onboarding complete — all ${NEWCOMER_NAMES.length} named newcomers attempted, no more will join`);
   }
   void onboardingDriver();
 

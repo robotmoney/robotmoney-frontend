@@ -1,7 +1,8 @@
 // Alpine factory for the /allocation view. Moved verbatim from the
 // monolithic views.js (finding 025).
 import { api, ROUTES } from "../../lib/api.js";
-import { PALETTE } from "../../lib/chart-theme.js";
+import { PALETTE, CATEGORICAL } from "../../lib/chart-theme.js";
+import { assetDot } from "./shared.js";
 
 export function registerAllocationView(Alpine) {
   // ── Asset Allocation ───────────────────────────────────────────────────────
@@ -21,24 +22,18 @@ export function registerAllocationView(Alpine) {
   // wallet) render % datalabels via a small inline plugin; the four MINI bucket
   // pies render none.
 
-  // Asset dot colour by symbol (presentation-only, mirrors the original design
-  // system). Used for the sleeve tables, whose per-holding DTO carries no colour
-  // (the aggregate wallet-balances holdings do — those use `holding.color`).
-  const ASSET_DOT = {
-    USDC: "#10b981", "ZYFAI-SS1": "#10b981", "GIZA-SS1": "#10b981",
-    ROBOTMONEY: "#3b82f6", BNKR: "#3b82f6",
-    WETH: "#f59e0b", ETH: "#f59e0b", SP500: "#8b5cf6",
-  };
-  const assetDot = (sym) => ASSET_DOT[sym] || "#94a3b8";
-  // Strategy-pie slice colours (4 buckets) + per-bucket mini-pie palettes, in
-  // committee/allocation.json bucket order (defi-yield / agent / protocol / rwa).
-  const STRATEGY_COLORS = ["#10b981", "#3b82f6", "#f59e0b", "#a855f7"];
-  const BUCKET_PALETTES = [
-    ["#047857", "#059669", "#10b981", "#34d399", "#6ee7b7"],
-    ["#1e3a8a", "#1e40af", "#2563eb", "#3b82f6", "#60a5fa", "#93c5fd", "#bfdbfe"],
-    ["#b45309", "#d97706", "#f59e0b", "#fbbf24"],
-    ["#7c3aed", "#a855f7", "#c084fc"],
-  ];
+  // Asset dot colour by symbol (presentation-only), imported from shared.js so
+  // the /allocation pies+tables and the wallet-performance charts never drift.
+  // The aggregate wallet-balances holdings carry their own `color`, but every
+  // figure here derives from the symbol instead so the palette stays on-covenant.
+  //
+  // Every allocation/vault pie is CATEGORICAL — each slice is a distinct asset,
+  // protocol or bucket the reader must tell apart — so slices are coloured by
+  // HUE from the shared CATEGORICAL palette, NOT by a green luminance ramp. A
+  // ramp collapses to one indistinct green blob when the slices are categories
+  // (luminance ramps are only for a single quantity's magnitude). Each pie
+  // starts fresh at CATEGORICAL[0] (green = value anchor) and steps through
+  // cyan / sand / slate / beacon / teal / mint for maximum adjacent contrast.
 
   // The hero's "Total AUM" mirrors the original site's semantics
   // (robotmoney-site src/app/allocation/page.tsx: totalValue + vaultTotalValue)
@@ -248,17 +243,16 @@ export function registerAllocationView(Alpine) {
         this._pie("strategy",
           strat.map((s) => s.label),
           strat.map((s) => Number(s.targetPct) || 0),
-          strat.map((_, i) => STRATEGY_COLORS[i % STRATEGY_COLORS.length]), true);
+          strat.map((_, i) => CATEGORICAL[i % CATEGORICAL.length]), true);
       }
       const buckets = this.allocationFw?.buckets || [];
       ["mini1", "mini2", "mini3", "mini4"].forEach((ref, i) => {
         const items = buckets[i]?.items || [];
         if (!items.length) return;
-        const palette = BUCKET_PALETTES[i] || STRATEGY_COLORS;
         this._pie(ref,
           items.map((it) => it.label),
           items.map((it) => Number(it.targetPct) || 0),
-          items.map((_, j) => palette[j % palette.length]), false);
+          items.map((_, j) => CATEGORICAL[j % CATEGORICAL.length]), false);
       });
       // Vault pie — three adapter slices from the live vault-economics fetch
       // (issue #40). Before the fetch resolves, or when it degrades to
@@ -268,17 +262,21 @@ export function registerAllocationView(Alpine) {
       const hasLiveBalances = adapters.length === 3 && adapters.some((a) => a.balanceUsd != null && a.balanceUsd > 0);
       const vaultLabels = adapters.length === 3 ? adapters.map((a) => a.name.toUpperCase()) : ["MORPHO", "AAVE", "COMPOUND"];
       const vaultValues = hasLiveBalances ? adapters.map((a) => Math.max(0, Number(a.balanceUsd) || 0)) : [1, 1, 1];
-      this._pie("vault", vaultLabels, vaultValues, ["#10b981", "#10b981", "#10b981"], true);
-      // Wallet pie — live USD value per asset from wallet-balances holdings[]
-      // (colour-grouped via each holding's own `color`). Assets with no live
-      // value are dropped rather than drawn as a zero/fabricated slice; if the
-      // feed is missing the pie is not drawn at all (honest degrade).
+      // Three distinct adapters (Morpho / Aave / Compound) — a categorical pie,
+      // so three distinct hues, not three identical greens.
+      this._pie("vault", vaultLabels, vaultValues, CATEGORICAL.slice(0, 3), true);
+      // Wallet pie — live USD value per asset from wallet-balances holdings[].
+      // Slice colour is derived locally from the symbol (assetDot) rather than
+      // the DTO's `color`, so the pie stays on the Beam/Pool/Beacon covenant
+      // regardless of what the feed sends. Assets with no live value are dropped
+      // rather than drawn as a zero/fabricated slice; if the feed is missing the
+      // pie is not drawn at all (honest degrade).
       const holdings = (this.wallet?.holdings || []).filter((h) => (Number(h.valueUsd) || 0) > 0);
       if (holdings.length) {
         this._pie("wallet",
           holdings.map((h) => h.symbol),
           holdings.map((h) => Number(h.valueUsd) || 0),
-          holdings.map((h) => h.color || assetDot(h.symbol)), true);
+          holdings.map((h) => assetDot(h.symbol)), true);
       }
     },
     destroy() { this._charts.forEach((c) => c.destroy()); this._charts = []; },

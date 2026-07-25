@@ -224,12 +224,12 @@ export function registerRegimeView(Alpine) {
         line("On-chain", this.history.map((h) => this._idx(h, "onchain")), PALETTE.warm),
       ];
       const hasFactor = this.history.some((h) => this._idx(h, "factor") != null);
-      if (hasFactor) ds.push(line("Equity factor", this.history.map((h) => this._idx(h, "factor")), SERIES.violet));
+      if (hasFactor) ds.push(line("Equity factor", this.history.map((h) => this._idx(h, "factor")), SERIES.emerald));
       const extras = this.latest?.extras || {};
       const showSpx = this.visible.spx && (extras.spx || []).length > 0;
       const showEth = this.visible.eth && (extras.eth || []).length > 0;
       if (showSpx) ds.push(line("S&P 500", alignToDates(extras.spx, labels), SERIES.teal, { axis: "yPrice" }));
-      if (showEth) ds.push(line("ETH", alignToDates(extras.eth, labels), SERIES.violet, { axis: "yPrice" }));
+      if (showEth) ds.push(line("ETH", alignToDates(extras.eth, labels), SERIES.mint, { axis: "yPrice" }));
       const chart = new window.Chart(canvas, {
         type: "line",
         data: { labels, datasets: ds },
@@ -267,7 +267,7 @@ export function registerRegimeView(Alpine) {
           const s = strategies[sk];
           const style = STRATEGY_STYLE[sk];
           if (!s || !style || !Array.isArray(s.equity_curve) || !s.equity_curve.length) continue;
-          ds.push({ label: style.label, data: alignToDates(s.equity_curve, labels), borderColor: style.color, borderWidth: style.baseline ? 1 : 1.5, borderDash: style.baseline ? [4, 3] : undefined, pointRadius: 0, tension: 0.2, fill: false, spanGaps: true });
+          ds.push({ label: style.label, data: alignToDates(s.equity_curve, labels), borderColor: style.color, borderWidth: style.baseline ? 1 : 1.5, borderDash: style.baseline ? (style.dash || [4, 3]) : undefined, pointRadius: 0, tension: 0.2, fill: false, spanGaps: true });
         }
         if (!ds.length) continue;
         const chart = new window.Chart(canvas, {

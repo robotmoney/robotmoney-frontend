@@ -2,7 +2,7 @@
 // the old monolithic views.js (review-maintainability finding 025). Today
 // every export is consumed only by views/regime.js, but they are the shared
 // layer any other chart view should import from rather than re-declaring.
-import { PALETTE, SERIES, rgba } from "../../lib/chart-theme.js";
+import { PALETTE, SERIES, CATEGORICAL, rgba } from "../../lib/chart-theme.js";
 
 // ── Shared regime-dashboard chart helpers ───────────────────────────────────
 // Background regime bands painted behind the line datasets, matching the
@@ -48,14 +48,17 @@ export const STRATEGY_STYLE = {
   composite: { label: "Composite", color: PALETTE.accent },
   macro: { label: "Macro", color: PALETTE.warm },
   onchain: { label: "On-chain", color: SERIES.teal },
-  factor: { label: "Equity factor", color: SERIES.violet },
-  macro_inverted: { label: "Macro inv.", color: SERIES.red },
+  factor: { label: "Equity factor", color: SERIES.slate },
+  macro_inverted: { label: "Macro inv.", color: SERIES.beacon },
   conservative: { label: "Conservative", color: SERIES.mint },
-  aggressive: { label: "Aggressive", color: SERIES.amberLight },
-  eth_hodl: { label: "ETH HODL", color: SERIES.violet, baseline: true },
-  sp500_hodl: { label: "SP500 HODL", color: SERIES.violet, baseline: true },
-  blend_hodl: { label: "50/50 HODL", color: SERIES.violet, baseline: true },
-  stables_only: { label: "Stables", color: PALETTE.textMuted, baseline: true },
+  aggressive: { label: "Aggressive", color: SERIES.emerald },
+  // Baselines stay a muted slate family (they're reference context, not the
+  // strategies under study) but each takes a DISTINCT dash so two reference
+  // lines are never indistinguishable — the dash sample also shows in the legend.
+  eth_hodl: { label: "ETH HODL", color: SERIES.slate, baseline: true, dash: [6, 3] },
+  sp500_hodl: { label: "SP500 HODL", color: SERIES.slate, baseline: true, dash: [2, 3] },
+  blend_hodl: { label: "50/50 HODL", color: SERIES.slate, baseline: true, dash: [10, 3, 2, 3] },
+  stables_only: { label: "Stables", color: PALETTE.textMuted, baseline: true, dash: [1, 3] },
 };
 export const BASELINE_KEYS = new Set(["eth_hodl", "sp500_hodl", "blend_hodl", "stables_only"]);
 
@@ -108,8 +111,36 @@ export const BACKTESTS = [
     ],
   },
 ];
-export const ASSET_COLOR = { cash: PALETTE.textMuted, eth: SERIES.violet, sp500: SERIES.teal };
+// Strategy weight-pie slices (cash / ETH / SP500) — three categories, three
+// distinct hues (cash was previously the same slate as eth: an invisible split).
+export const ASSET_COLOR = { cash: SERIES.slate, eth: SERIES.sand, sp500: SERIES.teal };
 export const ASSET_LABEL = { cash: "cash", eth: "ETH", sp500: "SP500" };
+
+// Wallet-holdings dot colour by symbol — shared by the /allocation pies+tables
+// and the wallet-performance charts so a given asset is ONE colour everywhere
+// (pie slice == table dot == perf line). Every symbol takes a DISTINCT brand
+// hue: a holdings pie is categorical (each slice is a different asset the reader
+// must tell apart), so we never collapse a whole asset class onto one green —
+// that reads as an indistinguishable blob. Native tokens share the cyan family
+// (bright vs deep) so they stay visually related while remaining distinct.
+export const ASSET_DOT = {
+  USDC: "#10b981",        // green  — primary stable
+  "ZYFAI-SS1": "#5fb3a1", // teal   — strategy position
+  "GIZA-SS1": "#9cffd2",  // mint   — strategy position
+  ROBOTMONEY: "#00e5ff",  // cyan   — native
+  BNKR: "#0891b2",        // deep cyan — native (related to ROBOTMONEY, distinct)
+  WETH: "#e8a640",        // sand
+  ETH: "#ff7a29",         // beacon — distinct from WETH
+  SP500: "#7e889e",       // slate  — reference index
+};
+// Unmapped symbol: hash to a stable CATEGORICAL hue so a new asset still gets a
+// distinct colour rather than every unknown collapsing onto one grey.
+export const assetDot = (sym) => {
+  if (ASSET_DOT[sym]) return ASSET_DOT[sym];
+  let h = 0;
+  for (const ch of String(sym)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return CATEGORICAL[h % CATEGORICAL.length];
+};
 
 // Correlation ("Predictive power & alignment") table columns + row order.
 export const FWD_COLS = [
