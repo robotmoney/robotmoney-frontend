@@ -66,7 +66,7 @@
 import { ONBOARDING_PROMPT, path as routePath, ROUTES } from "@robotmoney/contract";
 import { DEFAULT_COMPOSE_FILES } from "../stack/config.ts";
 import { runMemberAgent } from "../agent/member-agent.ts";
-import { classifyOutcome } from "../agent/classify-outcome.ts";
+import { classifyOutcome, shouldRetry } from "../agent/classify-outcome.ts";
 import { finalAssistantText } from "../agent/transcript.ts";
 import { EVAL_MODEL } from "../agent/model-config.ts";
 
@@ -85,7 +85,7 @@ export { buildAgentOpencodeConfig, EVAL_MODEL } from "../agent/model-config.ts";
 // predicate below, the demo's onboarding driver, and the layer-4 scorecard all
 // read the SAME definition. Re-exported so importers of this module keep
 // working unchanged.
-export { classifyOutcome, looksRateLimited, looksRefusal } from "../agent/classify-outcome.ts";
+export { classifyOutcome, looksRateLimited, looksRefusal, shouldRetry } from "../agent/classify-outcome.ts";
 export type { ClassifiableRun, OnboardingOutcome } from "../agent/classify-outcome.ts";
 export { assistantTextParts, extractAssistantText, finalAssistantText } from "../agent/transcript.ts";
 
@@ -439,7 +439,9 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
     // the eval is keyless by construction, so the timed-out case is retryable
     // unconditionally — there is no model configuration that could change it.
     const outcome = classifyOutcome(last);
-    const worthRetrying = outcome === "rate-limited" || outcome === "refused" || outcome === "timed-out";
+    // ONE definition of the retry DECISION too, and a pure one: shouldRetry
+    // takes a classified outcome and nothing else (scripts/agent/classify-outcome.ts).
+    const worthRetrying = shouldRetry(outcome);
     // Always logged, retried or not: a misclassification must be diagnosable
     // from CI logs rather than invisible.
     log(

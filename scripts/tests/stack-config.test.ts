@@ -1,4 +1,5 @@
-// Pure unit tests for scripts/stack/config.ts — no Docker, no network.
+// Pure unit tests for scripts/stack/config.ts and scripts/stack/host-env.ts —
+// no Docker, no network.
 //
 // These execute the two properties the shared stack module exists to
 // guarantee (docs/decisions.md D22, docs/architecture.md §11.3 E1/E5):
@@ -15,6 +16,8 @@ import {
   CORE_SERVICES,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
+  DOCKER_CLIENT_ENV_ALLOWLIST,
+  dockerClientHostEnv,
   downArgs,
   generateStackCredentials,
   hostBackendUrl,
@@ -25,7 +28,7 @@ import {
   upArgs,
   WORKER_LANE_SERVICES,
   type StackConfig,
-} from "../stack/config.ts";
+} from "../stack/index.ts";
 
 function cfg(overrides: Partial<StackConfig> = {}): StackConfig {
   return {
@@ -176,5 +179,43 @@ describe("urls and credentials", () => {
     expect(a.adminToken).not.toBe(a.analyticsToken);
     expect(a.adminToken).not.toBe(b.adminToken);
     expect(a.analyticsToken).not.toBe(b.analyticsToken);
+  });
+});
+
+// ── scripts/stack/host-env.ts ───────────────────────────────────────────────
+// The ONE deliberate ambient-environment read on a stack path exists so the
+// keyless eval under evals/ (which may contain no environment read at all —
+// scripts/checks/check-eval-keyless.sh enforces that) can still find a Docker
+// daemon. These tests are what make "provably nothing else comes out of it"
+// true rather than merely claimed.
+describe("dockerClientHostEnv", () => {
+  const polluted = {
+    PATH: "/usr/bin",
+    DOCKER_HOST: "unix:///var/run/docker.sock",
+    HTTPS_PROXY: "http://proxy:3128",
+    ANTHROPIC_API_KEY: "leak",
+    OPENAI_API_KEY: "leak",
+    OPENCODE_MODEL: "paid/model",
+    ADMIN_TOKEN: "operator-leak",
+    SOME_RANDOM_HOST_VAR: "leak",
+  };
+
+  test("returns docker-client plumbing and NOTHING else (no key, no token, no model knob)", () => {
+    const env = dockerClientHostEnv(polluted);
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.DOCKER_HOST).toBe("unix:///var/run/docker.sock");
+    expect(env.HTTPS_PROXY).toBe("http://proxy:3128");
+    expect(JSON.stringify(env)).not.toContain("leak");
+    expect(JSON.stringify(env)).not.toContain("paid/model");
+  });
+
+  test("every key it can ever return is on the allowlist — there is no pass-through", () => {
+    for (const key of Object.keys(dockerClientHostEnv(polluted))) {
+      expect(([...DOCKER_CLIENT_ENV_ALLOWLIST] as string[])).toContain(key);
+    }
+  });
+
+  test("an absent variable is omitted, never emitted as an empty string", () => {
+    expect(dockerClientHostEnv({ PATH: "/usr/bin" })).toEqual({ PATH: "/usr/bin" });
   });
 });

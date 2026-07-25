@@ -157,6 +157,16 @@ checks/      one-shot CI checks where the exit code IS the verdict
 ops/         credential/deploy utilities
 ```
 
+The eval suite lives OUTSIDE the harness tree, in its own top-level cost class
+(L1), split by what each half has to boot:
+
+```
+evals/onboarding/
+  isolated/    layers 0-3 — NO server (runtime, skill install, rmpc toolchain, keygen+signing)
+  admission/   layer 4    — `core` stack only (postgres + api), sampled
+  support/     layer prompts, stopped-container probe, signature harvest, scorecard
+```
+
 **L3 — Dependency direction.** Tests and evals may import runtime and shared
 code; **runtime must never import test or eval code**; both may import shared.
 This is enforced by a grep check in the same shape as
@@ -2133,7 +2143,7 @@ agent can sequence the whole thing itself.
 | 0 | runtime | image, `opencode.json`, provider reachable | none | trivial task completes; distinguishes *dead* from *refused* |
 | 1 | skill install | the agent can find and install `committee-onboarding` | none | `SKILL.md` present on disk in the runtime's skill path |
 | 2 | toolchain | the agent can install `rmpc` for its own arch | none | binary on PATH; `--help` lists `committee-identity` |
-| 3 | keygen + signing | local ed25519 identity, byte-exact canonical payload | none | harness verifies the signature **offline** against `canonicalizeApplication` |
+| 3 | keygen + signing | local ed25519 identity, byte-exact canonical payload | none | signature harvested **passively** — from the drained run transcript and the stopped container's filesystem — then verified **offline** against `canonicalizeApplication` with the real backend `verifyApplicationSignature` |
 | 4 | admission | the full R4→R8 sequence, unaided | `core` | server-minted member reaches the active roster |
 
 Layers 0-3 need **no server**. Layer 4 needs a `core` stack only — postgres and
@@ -2142,7 +2152,9 @@ verification and never touches the job queue. The eval never boots the full demo
 cluster: no worker lanes, no EDGAR seed, no frontend checks, no session drivers.
 
 Layers 1-3 observe by inspecting the **stopped container's filesystem** before
-removal, never by instructing the agent to emit artifacts — adding harness
+removal (layer 3 additionally reads the **drained run transcript**, which is
+observation of the same already-finished run), never by instructing the agent to
+emit artifacts — adding harness
 instructions would edit the task under test. Layer 4 uses the canonical
 `ONBOARDING_PROMPT` verbatim (identity placeholders filled, plus the existing
 local-network note) and observes only server-side state, preserving the black-box
@@ -2162,9 +2174,13 @@ path with fewer services booted. Three components are shared by construction:
 - **`scripts/stack/`** (entry `scripts/stack/index.ts`; the pure builders in
   `config.ts`, port allocation in `ports.ts`, the thin impure shell in
   `stack.ts`) — one bring-up with a `core`/`full` profile,
-  free of module-scope side effects and of `process.env` reads or writes
+  free of module-scope side effects and of ambient-environment reads or writes
   (compose's env map is built from an explicit config object and passed to that
-  one child process). Consumed by the demo (`full`), the eval (`core`), and the
+  one child process). The single deliberate exception is `host-env.ts`, whose
+  one export returns ONLY allowlisted docker-client plumbing (`PATH`,
+  `DOCKER_HOST`, proxies) and provably no key, token, or model id — it exists so
+  the eval, which may contain no environment read at all, can still find a
+  daemon. Consumed by the demo (`full`), the eval (`core`), and the
   rails check (`core`, replacing its forked `bringUpInfra()`).
 - **`runMemberAgent()`** (`scripts/agent/member-agent.ts`, alongside
   `buildMemberAgentArgv`, `memberAgentContainerName`, and the

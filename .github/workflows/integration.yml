@@ -68,6 +68,13 @@ jobs:
         run: bash backend/scripts/check-no-supabase.sh
       - name: No AI/LLM overview enrichment in backend/src (issue #93)
         run: bash backend/scripts/check-no-ai-overview.sh
+      # D22 rules 1-2 / §11.3 E1-E2: evals/ must carry no provider key, no paid
+      # model, no environment read at all, no conditional skip, and no test
+      # double or injection seam. Milliseconds, no Docker — and executed (with
+      # negative controls) by scripts/tests/evals-guard.test.ts so the guard
+      # itself can never go vacuously green.
+      - name: Evals are keyless and have no inference-off mode (D22 E1/E2)
+        run: bash scripts/checks/check-eval-keyless.sh
       - name: Verify vendored contract
         run: bun run check-contract
       # contract/ has tests but, until this step existed, NO workflow ever ran

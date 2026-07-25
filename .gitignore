@@ -12,3 +12,8 @@ _site/
 
 # Standing local demo state (written by `bun run demo`, removed by `demo:down`).
 .agents/demo-state.json
+
+# Onboarding-eval output (written by `bun run eval:onboarding`; the nightly
+# uploads them as artifacts — they are run RESULTS, never repo content).
+.agents/onboarding-eval-scorecard.json
+.agents/onboarding-eval-transcripts/

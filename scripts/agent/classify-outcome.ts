@@ -112,3 +112,26 @@ export function classifyOutcome(run: ClassifiableRun): OnboardingOutcome {
   if (cleanNoProgressExit && looksRefusal(finalAssistantText(run.transcript ?? ""))) return "refused";
   return "navigation-failure";
 }
+
+/**
+ * The retry DECISION, as a pure function of a CLASSIFIED outcome — no callable,
+ * no options, no environment (§11.3 E1/E5). One definition, so the demo's
+ * wrapper (runOnboardingEvalWithRetry) and the eval's isolated layers cannot
+ * drift on what "worth retrying" means, and so the decision stays testable
+ * without an injection seam on any eval path.
+ *
+ * Retryable = the agent never ATTEMPTED the task: a provider 429/overload
+ * (`rate-limited`), a model declination (`refused` — it never reasoned about
+ * onboarding at all), or a bare `timed-out` (the keyless tier is the only tier
+ * this ever runs on, and a call there "can take minutes and occasionally
+ * returns nothing"). `navigation-failure` is the one outcome that is a REAL
+ * result: the agent tried and did not get there, and retrying it would soften
+ * the gate.
+ *
+ * NOTE for the layer-4 sampler: it deliberately does NOT consult this. A
+ * sampler that retried refusals would erase the refusal RATE, which is the
+ * metric the whole eval exists to report (§11.3 E4/E5).
+ */
+export function shouldRetry(outcome: OnboardingOutcome): boolean {
+  return outcome === "rate-limited" || outcome === "refused" || outcome === "timed-out";
+}
