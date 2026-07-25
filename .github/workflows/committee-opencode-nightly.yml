@@ -2,8 +2,8 @@
 #
 # WHY THIS SUITE EXISTS
 # Real-inference onboarding — a vanilla OpenCode agent navigating our own docs
-# end to end with a live model — needs a daily sweep wider than the required
-# per-PR `e2e` gate can afford (more identities, more model variety).
+# end to end with a live model — needs a daily sampled run wider than the
+# required per-PR `e2e` gate can afford (more identities per night).
 #
 # D21 (docs/decisions.md): this suite previously also carried a
 # `committee-real-inference` job that ran an external `opencode run` CLI against
@@ -22,21 +22,30 @@
 # not part of the retirement. What IS covered nightly below is real-inference
 # ONBOARDING (ONBOARDING_REAL_EVAL), a different surface.
 #
-# NO SECRET (keyless default)
-# `opencode/big-pickle` is a free, no-credential OpenCode Zen model. The sweep
-# job below opts into a paid model via ANTHROPIC_API_KEY for reliability.
+# NO SECRET, EVER (docs/decisions.md D22 rule 1, docs/architecture.md §11.3 E1)
+# `opencode/big-pickle` is a free, no-credential OpenCode Zen model, pinned by
+# an in-code constant in scripts/agent/model-config.ts. This job is keyless: it
+# reads no credential and passes none. The sweep-over-models rationale this
+# suite used to carry is RETIRED — "does a stronger model refuse less often?"
+# is a research question about models, not a gate on our instructions, and
+# answering it inside the gate made the gate's subject ambiguous. The keyless
+# admission rate is the number that means something about this product.
+#
+# Landing in the follow-up eval unit (docs/architecture.md §11.3): E4 sampling
+# (K samples, classified outcomes, admission RATE as the reported metric) and
+# the repoint of this job onto the layered eval running on a `core` stack.
 #
 # CI taxonomy class: heavy (scheduled real external-model drift check). Heavy
 # suites are sweep-only: NO `pull_request` trigger — schedule + on-demand only.
 #
-# The job below, `onboarding-real-inference-sweep`, is NOT a duplicate of the
-# required PR gate's (.github/workflows/e2e.yml) real-inference onboarding
-# admission — real inference is no longer nightly-exclusive (that's the whole
+# The job below, `onboarding-real-inference-sweep`, exists to run a WIDER
+# sampled eval than the required PR gate (.github/workflows/e2e.yml) can afford
+# on every push — real inference is not nightly-exclusive (that's the whole
 # point of the §11 R8 rework: onboarding-as-eval only means something with a
-# real model doing the reasoning, on every PR that touches this surface). This
-# job is additive: it runs a WIDER sweep (more identities, more model variety)
-# than the PR gate can afford to spend on every push, using an
-# ANTHROPIC_API_KEY secret.
+# real model doing the reasoning, on every PR that touches this surface).
+# INTERIM, stated plainly rather than left to look accidental: until the §11.3
+# E3/E4 eval lands, this job runs the SAME single keyless admission the `e2e`
+# gate runs. That is a knowing duplicate for one unit, not a hidden one.
 name: committee-opencode-nightly
 env:
   CI_CLASS: heavy
@@ -46,16 +55,15 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  # Broader/deeper real-inference onboarding sweep (§11 R8, Stage 7). Reuses
-  # the EXACT demo stack boot the required `e2e` PR gate uses
-  # (scripts/demo.ts → scripts/lib/demo-main.ts, same pattern as
-  # rmpc-release-e2e-nightly.yml's "boot once, drive the extra check off the
-  # same boot" — no parallel stack stood up here) but sweeps
-  # ONBOARDING_SWEEP_MODELS × ONBOARDING_SWEEP_IDENTITIES_PER_MODEL admissions
-  # instead of the PR gate's single one. A run here has full repo-secret
-  # access (scheduled/workflow_dispatch triggers are never fork PRs), so no
-  # trust-context gating is needed — unlike e2e.yml, which must gate this
-  # exact eval behind a same-repo/trusted-context check.
+  # Real-inference onboarding admission (§11 R8, Stage 7). Reuses the EXACT
+  # demo stack boot the required `e2e` PR gate uses (scripts/demo.ts →
+  # scripts/lib/demo-main.ts, same pattern as rmpc-release-e2e-nightly.yml's
+  # "boot once, drive the extra check off the same boot" — no parallel stack
+  # stood up here). No secret access is used or needed here, and e2e.yml no
+  # longer gates on trust context either: with nothing to withhold, every run
+  # of this eval is identical (D22 rule 1 / §11.3 E1). Until the sampling unit
+  # lands, this runs the same single keyless admission as `e2e` — an honest
+  # interim, not a hidden duplicate.
   onboarding-real-inference-sweep:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -85,25 +93,19 @@ jobs:
         with:
           path: ${{ github.workspace }}/.rmpc-cache
           key: rmpc-${{ steps.rmpc-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
-      # Boot demo stack + a WIDER real-inference onboarding sweep than the PR
-      # gate runs, against that SAME booted stack (RMPC_RELEASE_E2E-style
-      # additive reuse — see scripts/lib/demo-main.ts's ONBOARDING_REAL_EVAL
-      # block). Fails loudly (non-zero exit, no skip) if the model key isn't
-      # usable, the rmpc binary can't be fetched/verified, or any swept
-      # admission doesn't reach the active roster.
-      - name: Boot demo stack + real-inference onboarding sweep
+      # Boot demo stack + the real-inference onboarding admission, against that
+      # SAME booted stack (RMPC_RELEASE_E2E-style additive reuse — see
+      # scripts/lib/demo-main.ts's ONBOARDING_REAL_EVAL block). Keyless: the env
+      # below carries no model id and no credential, because none exists to
+      # carry. Fails loudly (non-zero exit, no skip) if the rmpc binary can't be
+      # fetched/verified or the admission doesn't reach the active roster.
+      - name: Boot demo stack + real-inference onboarding admission
         run: bun run scripts/demo.ts
         env:
           CI: "true"
           DEMO_PROJECT: rmdemo_ci_onboarding_${{ github.run_id }}_${{ github.run_attempt }}
           RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
           ONBOARDING_REAL_EVAL: "1"
-          OPENCODE_MODEL: ${{ vars.ONBOARDING_EVAL_MODEL || 'anthropic/claude-haiku-4-5' }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Wider than the PR gate's implicit single model / single identity:
-          # two models, two fresh identities each = 4 real admissions/night.
-          ONBOARDING_SWEEP_MODELS: "anthropic/claude-haiku-4-5:anthropic/claude-sonnet-5"
-          ONBOARDING_SWEEP_IDENTITIES_PER_MODEL: "2"
         timeout-minutes: 55
       - name: Reclaim this run's demo volume (no leaks on the shared runner)
         if: always()

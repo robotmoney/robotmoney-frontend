@@ -8,7 +8,6 @@ import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStalen
 import { COMMITTEE_INTERVAL_MS, COMMITTEE_STAGGER_MS } from "./demo-schedule.ts";
 import {
   classifyOutcome,
-  resolveModelConfig,
   runOnboardingEvalWithRetry,
   type OnboardingIdentity,
   type OnboardingEvalResult,
@@ -946,24 +945,10 @@ function committeeProgress(subjectId: string): SessionProgress {
 async function main(): Promise<void> {
   // §11 R8: real inference is the demo's onboarding mode, never an optional
   // extra behind a flag — there is no hermetic/scripted onboarding fallback.
-  // resolveModelConfig() defaults to the free keyless tier (so this
-  // ordinarily just succeeds with zero configuration, for both a local demo
-  // and CI), but an operator's EXPLICIT, incomplete paid-model opt-in
-  // (OPENCODE_MODEL set to a non-default model with no matching key) must
-  // still fail LOUDLY here, before the demo spends minutes standing up the
-  // stack, rather than have onboardingDriver() throw quietly in the
-  // background later. CI's own invocation of this file exits (via the
-  // `if (process.env.CI)` branch below) before ever reaching
-  // onboardingDriver() — it runs a different, non-onboarding check suite — so
-  // this check applies to a LOCAL standing demo unconditionally, and to a CI
-  // run only when it's running the real-inference onboarding eval (Stage 7,
-  // ONBOARDING_REAL_EVAL=1, unconditionally set by e2e.yml — see the CI
-  // branch below): fail before spending minutes standing up the stack, not
-  // ~20 minutes later at the eval step itself.
-  if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
-    resolveModelConfig(process.env);
-  }
-
+  // There is deliberately NO model/key pre-flight check here: the eval model is
+  // an in-code constant and nothing on that path reads the environment (D22
+  // rule 1 / §11.3 E1), so there is nothing an operator could misconfigure and
+  // therefore nothing to fail fast on before the stack comes up.
   if (tuiActive) {
     tui = createTui({ render });
     tui.start();
@@ -1113,82 +1098,51 @@ async function main(): Promise<void> {
     }
 
     // Additive, env-gated (Stage 7, §11 R8, docs/plans/onboarding-ic-workflow.md):
-    // the REAL-INFERENCE onboarding admission sweep reuses this EXACT
-    // already-booted stack instead of standing up a parallel one — same
-    // pattern as RMPC_RELEASE_E2E above. Only runs when ONBOARDING_REAL_EVAL=1,
-    // which .github/workflows/e2e.yml now sets UNCONDITIONALLY for every run
-    // (including forks) — the default model is the free, no-credential
-    // OpenCode Zen tier (see resolveModelConfig() in onboarding-eval.ts), so
-    // there is no secret to be missing and nothing to gate on. A run without
-    // ONBOARDING_REAL_EVAL set at all (e.g. a plain local `bun run demo`, or
-    // any invocation predating this env var) stays a zero-behaviour-change
-    // no-op, relying on Stage 5's separate inference-off infra-rails test
-    // (scripts/tests/onboarding-eval-infra.test.ts) as its fail-fast
-    // substitute. A failed/timed-out admission THROWS (via `run`'s pattern —
-    // no silent pass): the whole point of putting real inference in the PR
-    // gate is that a vanilla agent failing to navigate our own onboarding
-    // instructions is a real regression signal, not a shrug. The three
-    // outcomes in which the agent never actually ATTEMPTED onboarding — a
-    // rate-limit/overload signal, a classified model REFUSAL, and (on the
-    // keyless default only) a bare timeout — are mitigated by
+    // ONE real-inference onboarding admission against this EXACT already-booted
+    // stack instead of standing up a parallel one — same pattern as
+    // RMPC_RELEASE_E2E above. Only runs when ONBOARDING_REAL_EVAL=1, which
+    // .github/workflows/e2e.yml sets UNCONDITIONALLY for every run (including
+    // forks): the admission is keyless by construction (D22 rule 1 / §11.3 E1 —
+    // the model is an in-code constant), so there is no secret to be missing and
+    // nothing to gate on. A run without ONBOARDING_REAL_EVAL set at all (e.g. a
+    // plain local `bun run demo`, or any invocation predating this env var)
+    // stays a zero-behaviour-change no-op, relying on Stage 5's separate
+    // inference-off infra-rails test
+    // (scripts/tests/onboarding-eval-infra.test.ts) as its fail-fast substitute.
+    // A failed/timed-out admission THROWS (via `run`'s pattern — no silent
+    // pass): the whole point of putting real inference in the PR gate is that a
+    // vanilla agent failing to navigate our own onboarding instructions is a
+    // real regression signal, not a shrug. The three outcomes in which the agent
+    // never actually ATTEMPTED onboarding — a rate-limit/overload signal, a
+    // classified model REFUSAL, and a bare timeout — are mitigated by
     // runOnboardingEvalWithRetry's own retry/backoff
     // (scripts/lib/onboarding-eval.ts); it never retries a genuine navigation
     // failure.
     //
-    // Sweep width (nightly-only knobs, both optional, both no-ops for the PR
-    // gate which never sets them): ONBOARDING_SWEEP_MODELS is a ":"-separated
-    // list of OPENCODE_MODEL values to try (default: the single model
-    // resolveModelConfig() resolves — the keyless default unless an operator
-    // opted into a paid one); ONBOARDING_SWEEP_IDENTITIES_PER_MODEL is how
-    // many fresh admissions to run per model (default 1). The PR gate's
-    // e2e.yml never sets either, so it stays exactly one admission on one
-    // model — this block is a strict superset of that behaviour, not a
-    // different code path (§11 R8: one real flow, config-only differences).
+    // Per §11.3 E4 the SAMPLING of this call belongs to the eval, not to the
+    // demo: this block is slated to move to evals/ in the E3/E4 unit, while E6
+    // keeps a single real-inference admission on the e2e job's own demo boot —
+    // which is why it still lives here for now.
     if (process.env.ONBOARDING_REAL_EVAL === "1") {
-      // No model configured (OPENCODE_MODEL/ONBOARDING_SWEEP_MODELS unset) is
-      // NOT an error anymore — it means "use the default free keyless tier",
-      // exactly like resolveModelConfig() resolves it for a single admission.
-      // Reuse that same resolution here so the sweep's default and a plain
-      // admission's default can never drift apart.
-      const sweepModels = (process.env.ONBOARDING_SWEEP_MODELS?.trim() || process.env.OPENCODE_MODEL || resolveModelConfig().model)
-        .split(":")
-        .map((m) => m.trim())
-        .filter(Boolean);
-      const identitiesPerModel = Math.max(1, Number.parseInt(process.env.ONBOARDING_SWEEP_IDENTITIES_PER_MODEL ?? "1", 10) || 1);
-      const totalAdmissions = sweepModels.length * identitiesPerModel;
-      console.log(
-        `\n[demo] running REAL-INFERENCE onboarding eval sweep (§11 R8): ${totalAdmissions} admission(s) across ` +
-          `${sweepModels.length} model(s) [${sweepModels.join(", ")}], ${identitiesPerModel} identit${identitiesPerModel === 1 ? "y" : "ies"} each…`,
-      );
-      const sweepResults: Array<{ model: string; result: OnboardingEvalResult }> = [];
-      for (const model of sweepModels) {
-        for (let i = 0; i < identitiesPerModel; i++) {
-          const result = await runOnboardingEvalWithRetry({
-            repoRoot,
-            composeProject: project,
-            composeFiles: composeFilesRun.split(":"),
-            backendUrl,
-            adminToken: adminPassword,
-            env: { ...process.env, OPENCODE_MODEL: model },
-            onEvent: (msg) => console.log(`[demo] onboarding-real-eval[${model}]: ${msg}`),
-          });
-          sweepResults.push({ model, result });
+      console.log("\n[demo] running REAL-INFERENCE onboarding eval (§11 R8): 1 keyless admission…");
+      const result: OnboardingEvalResult = await runOnboardingEvalWithRetry({
+        repoRoot,
+        composeProject: project,
+        composeFiles: composeFilesRun.split(":"),
+        backendUrl,
+        adminToken: adminPassword,
+        onEvent: (msg) => console.log(`[demo] onboarding-real-eval: ${msg}`),
+      });
+      if (!result.admitted) {
+        if (result.transcript) {
+          console.log(`[demo] onboarding real-eval (${result.identity.runId}) container transcript:\n${result.transcript}`);
         }
-      }
-      const failed = sweepResults.filter((r) => !r.result.admitted);
-      for (const f of failed) if (f.result.transcript) console.log(`[demo] onboarding real-eval (${f.model}, ${f.result.identity.runId}) container transcript:\n${f.result.transcript}`);
-      if (failed.length > 0) {
         throw new Error(
-          `real-inference onboarding eval: ${failed.length}/${sweepResults.length} admission(s) did not reach the active roster (§11 R8) — ` +
-            failed
-              .map(
-                (f) =>
-                  `${f.model}/${f.result.identity.runId}: ${f.result.timedOut ? "timed out" : `container exited (code ${f.result.containerExitCode})`}`,
-              )
-              .join("; "),
+          `real-inference onboarding eval: the admission did not reach the active roster (§11 R8) — ` +
+            `${result.identity.runId}: ${result.timedOut ? "timed out" : `container exited (code ${result.containerExitCode})`}`,
         );
       }
-      console.log(`[demo] real-inference onboarding eval: ${sweepResults.length}/${sweepResults.length} admission(s) admitted (§11 R8) ✓`);
+      console.log("[demo] real-inference onboarding eval: 1/1 admission(s) admitted (§11 R8) ✓");
     }
 
     console.log("\n[demo] CI mode — all checks passed, tearing down…");

@@ -27,8 +27,10 @@
 //
 // This file also carries fast, Docker-free unit tests for
 // scripts/lib/onboarding-eval.ts's pure helpers (identity/prompt building,
-// the model-config fail-loud contract, step-state derivation) so those stay
-// covered even in an environment where the Docker-backed block can't run.
+// the keyless invariant (§11.3 E1): a constant model, no configuration surface
+// that could select another one, and no key in the container argv — plus
+// step-state derivation) so those stay covered even in an environment where
+// the Docker-backed block can't run.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
@@ -42,18 +44,18 @@ import {
   buildAgentPrompt,
   buildMemberAgentArgv,
   DEFAULT_COMPOSE_FILES,
-  DEFAULT_INFERENCE_MODEL,
   deriveSteps,
+  EVAL_MODEL,
   fillPromptIdentity,
   generateIdentity,
   looksRateLimited,
   memberAgentContainerName,
   ONBOARDING_STEPS,
   type OnboardingEvalResult,
-  resolveModelConfig,
   retryIdentity,
   runOnboardingEvalWithRetry,
 } from "../lib/onboarding-eval.ts";
+import * as evalMod from "../lib/onboarding-eval.ts";
 import {
   allocatePorts,
   createStack,
@@ -65,6 +67,46 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const repoRoot = join(import.meta.dir, "..", "..");
+
+// Temporarily set (and always restore) ambient env vars. Used ONLY by the
+// keyless-invariant tests, to prove that a paid model / provider key sitting in
+// the environment cannot influence the eval path at all — the whole point of
+// §11.3 E1 is that nothing on that path reads the environment.
+function withEnv<T>(vars: Record<string, string>, fn: () => T): T {
+  const saved = setEnv(vars);
+  try {
+    return fn();
+  } finally {
+    restoreEnv(saved);
+  }
+}
+
+// Async twin: the vars must stay set for the WHOLE awaited call, not just until
+// the promise is constructed.
+async function withEnvAsync<T>(vars: Record<string, string>, fn: () => Promise<T>): Promise<T> {
+  const saved = setEnv(vars);
+  try {
+    return await fn();
+  } finally {
+    restoreEnv(saved);
+  }
+}
+
+function setEnv(vars: Record<string, string>): Map<string, string | undefined> {
+  const saved = new Map<string, string | undefined>();
+  for (const [k, v] of Object.entries(vars)) {
+    saved.set(k, process.env[k]);
+    process.env[k] = v;
+  }
+  return saved;
+}
+
+function restoreEnv(saved: Map<string, string | undefined>): void {
+  for (const [k, v] of saved) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+}
 
 // ── Pure helper unit tests (no Docker) ──────────────────────────────────────
 describe("onboarding-eval pure helpers", () => {
@@ -96,33 +138,47 @@ describe("onboarding-eval pure helpers", () => {
     expect(prompt).toContain("Demo harness note"); // clearly delimited, not blended into the canonical text
   });
 
-  test("resolveModelConfig defaults to the free keyless tier when OPENCODE_MODEL is unset — genuinely real inference, no secret needed", () => {
-    const cfg = resolveModelConfig({});
-    expect(cfg.model).toBe(DEFAULT_INFERENCE_MODEL);
-    expect(cfg.apiKeyEnv).toBeNull();
-    expect(cfg.apiKey).toBeNull();
+  // ── The keyless invariant (D22 rule 1 / §11.3 E1) ─────────────────────────
+  // These three tests REPLACE (and invert) the four that used to assert
+  // resolveModelConfig resolved an operator's paid-model opt-in and threw on an
+  // incomplete one. The contract is no longer "mis-selecting a paid model
+  // fails loudly" — it is "a paid model cannot be selected at all".
+  test("the eval model is an in-code constant — no env can select a different one (D22 r1 / §11.3 E1)", () => {
+    expect(EVAL_MODEL).toBe("opencode/big-pickle");
+    // The configuration surface is GONE, not merely guarded: there is no
+    // resolver to call and no key-name list to consult.
+    expect("resolveModelConfig" in evalMod).toBe(false);
+    expect("MODEL_API_KEY_ENV_CANDIDATES" in evalMod).toBe(false);
+    withEnv({ ANTHROPIC_API_KEY: "secret", OPENAI_API_KEY: "secret", OPENCODE_MODEL: "anthropic/claude-x" }, () => {
+      // Even with a key AND an explicit model request in the ambient
+      // environment, the config written into the container is the constant.
+      expect((buildAgentOpencodeConfig() as any).model).toBe(EVAL_MODEL);
+    });
   });
 
-  test("resolveModelConfig ignores an incidentally-present key when using the keyless default", () => {
-    // A key being SET for some unrelated reason must never get pulled into a
-    // keyless run — the default model genuinely needs (and gets) no key.
-    const cfg = resolveModelConfig({ ANTHROPIC_API_KEY: "unrelated-secret" });
-    expect(cfg.model).toBe(DEFAULT_INFERENCE_MODEL);
-    expect(cfg.apiKeyEnv).toBeNull();
-  });
-
-  test("resolveModelConfig throws loudly (never silently substitutes a different model) when an explicit non-default OPENCODE_MODEL has no matching key", () => {
-    expect(() => resolveModelConfig({ OPENCODE_MODEL: "anthropic/claude-x" })).toThrow(/model API key|provider key/);
-  });
-
-  test("resolveModelConfig resolves an explicitly-requested paid model + whichever provider key is present", () => {
-    const cfg = resolveModelConfig({ OPENCODE_MODEL: "anthropic/claude-x", ANTHROPIC_API_KEY: "secret" });
-    expect(cfg).toEqual({ model: "anthropic/claude-x", apiKeyEnv: "ANTHROPIC_API_KEY", apiKey: "secret" });
+  test("the member-agent argv carries no provider key and no model override, whatever the ambient environment says", () => {
+    const argv = withEnv({ OPENCODE_MODEL: "anthropic/claude-x", ANTHROPIC_API_KEY: "secret" }, () =>
+      buildMemberAgentArgv({
+        composeProject: "rmdemo_abc",
+        containerName: "rmdemo_abc-member-agent-eval-run1",
+        opencodeConfigPath: "/tmp/wd/opencode.json",
+        title: "onboarding-eval-run1",
+        prompt: "PROMPT TEXT",
+      }),
+    );
+    expect(argv).not.toContain("-e");
+    const joined = argv.join(" ");
+    expect(joined).not.toContain("ANTHROPIC_API_KEY");
+    expect(joined).not.toContain("secret");
+    expect(joined).not.toContain("claude");
+    const i = argv.indexOf("--model");
+    expect(i).toBeGreaterThan(-1);
+    expect(argv[i + 1]).toBe(EVAL_MODEL);
   });
 
   test("buildAgentOpencodeConfig carries NO onboarding-specific knowledge and no Robot Money connectivity (D21 — REST via bash, no MCP client)", () => {
-    const cfg = buildAgentOpencodeConfig("anthropic/claude-x") as any;
-    expect(cfg.model).toBe("anthropic/claude-x");
+    const cfg = buildAgentOpencodeConfig() as any;
+    expect(cfg.model).toBe(EVAL_MODEL);
     expect(cfg.permission).toEqual({ "*": "deny", bash: "allow" });
     expect(cfg.mcp).toBeUndefined();
     expect(JSON.stringify(cfg)).not.toMatch(/rmpc|apply|committee|robotmoney/i);
@@ -175,10 +231,8 @@ describe("member-agent container primitive", () => {
     expect(memberAgentContainerName("rmdemo_abc", "run1")).toBe("rmdemo_abc-member-agent-eval-run1");
   });
 
-  test("keyless default: the argv is byte-for-byte what the eval has always spawned", () => {
-    expect(
-      buildMemberAgentArgv({ ...base, modelConfig: { model: DEFAULT_INFERENCE_MODEL, apiKeyEnv: null, apiKey: null } }),
-    ).toEqual([
+  test("keyless: the argv is byte-for-byte what the eval has always spawned", () => {
+    expect(buildMemberAgentArgv(base)).toEqual([
       "docker",
       "compose", "-p", "rmdemo_abc",
       "-f", "docker-compose.yml",
@@ -190,7 +244,7 @@ describe("member-agent container primitive", () => {
       "-v", "/tmp/wd/opencode.json:/home/agent/opencode.json:ro",
       "member-agent",
       "run",
-      "--model", DEFAULT_INFERENCE_MODEL,
+      "--model", EVAL_MODEL,
       "--format", "json",
       "--dangerously-skip-permissions",
       "--title", "onboarding-eval-run1",
@@ -199,27 +253,27 @@ describe("member-agent container primitive", () => {
     ]);
   });
 
-  test("a keyed model adds exactly one -e flag, in the same position, and nothing else", () => {
-    const keyless = buildMemberAgentArgv({ ...base, modelConfig: { model: "m", apiKeyEnv: null, apiKey: null } });
-    const keyed = buildMemberAgentArgv({
-      ...base,
-      modelConfig: { model: "m", apiKeyEnv: "ANTHROPIC_API_KEY", apiKey: "secret" },
-    });
-    const i = keyless.indexOf("member-agent");
-    expect(keyed.slice(0, i + 2)).toEqual([...keyless.slice(0, i), "-e", "ANTHROPIC_API_KEY=secret"]);
-    expect(keyed.slice(i + 2)).toEqual(keyless.slice(i));
+  // INVERTED (D22 rule 1 / §11.3 E1): this used to assert that a keyed model
+  // added exactly one `-e` flag. There is no keyed model now, and no argument
+  // through which one could be requested — so the assertion is that NO `-e`
+  // flag can ever appear, whatever `keep` is set to.
+  test("no argv shape can produce a -e flag — there is no key to inject", () => {
+    for (const keep of [false, true]) {
+      const argv = buildMemberAgentArgv({ ...base, keep });
+      expect(argv).not.toContain("-e");
+      expect(argv.join(" ")).not.toMatch(/_API_KEY/);
+    }
   });
 
   test("keep:true omits --rm (so a stopped container survives inspection) and changes nothing else", () => {
-    const modelConfig = { model: "m", apiKeyEnv: null, apiKey: null } as const;
-    const normal = buildMemberAgentArgv({ ...base, modelConfig });
-    const kept = buildMemberAgentArgv({ ...base, modelConfig, keep: true });
+    const normal = buildMemberAgentArgv(base);
+    const kept = buildMemberAgentArgv({ ...base, keep: true });
     expect(normal.filter((a) => a !== "--rm")).toEqual(kept);
     expect(kept).not.toContain("--rm");
   });
 
   test("composeFiles default to the single shared DEFAULT_COMPOSE_FILES definition", () => {
-    const argv = buildMemberAgentArgv({ ...base, modelConfig: { model: "m", apiKeyEnv: null, apiKey: null } });
+    const argv = buildMemberAgentArgv(base);
     for (const f of DEFAULT_COMPOSE_FILES) expect(argv).toContain(f);
   });
 });
@@ -258,7 +312,6 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -276,7 +329,6 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -294,7 +346,6 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -313,7 +364,6 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
       maxAttempts: 3,
       backoffMsSchedule: [0, 0],
       runOnce: async () => {
@@ -332,7 +382,6 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
       backoffMsSchedule: [0],
       identity: generateIdentity("first-attempt"),
       runOnce: async (opts) => {
@@ -344,14 +393,13 @@ describe("runOnboardingEvalWithRetry", () => {
     expect(new Set(identities).size).toBe(2); // no reused contact across attempts
   });
 
-  test("a bare timeout (no rate-limit signal) IS retried on the keyless default — the free tier is documented as slow/variable", async () => {
+  test("a bare timeout (no rate-limit signal) IS retried — the keyless free tier is documented as slow/variable", async () => {
     let calls = 0;
     const result = await runOnboardingEvalWithRetry({
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {}, // no OPENCODE_MODEL → resolves to the keyless default
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -377,7 +425,6 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -397,7 +444,6 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -416,7 +462,6 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
       backoffMsSchedule: [0],
       identity: planned,
       runOnce: async (o) => {
@@ -442,22 +487,29 @@ describe("runOnboardingEvalWithRetry", () => {
     expect(b.runId).toContain("ci-retry-2-");
   });
 
-  test("a bare timeout is NOT retried when an explicit paid model is configured — that stays a real result", async () => {
+  // INVERTED (D22 rule 1 / §11.3 E1): this used to assert that a bare timeout
+  // was NOT retried when an explicit paid model was configured. That premise no
+  // longer exists — there is no `env` option and no configurable model — so the
+  // replacement proves the opposite property: ambient paid-model/key env cannot
+  // change the retry semantics, because nothing on this path reads it.
+  test("a bare timeout is ALWAYS retried — there is no configuration under which it isn't", async () => {
     let calls = 0;
-    const result = await runOnboardingEvalWithRetry({
-      repoRoot: "/tmp",
-      composeProject: "p",
-      backendUrl: "http://x",
-      adminToken: "t",
-      env: { OPENCODE_MODEL: "anthropic/claude-x", ANTHROPIC_API_KEY: "secret" },
-      backoffMsSchedule: [0],
-      runOnce: async () => {
-        calls++;
-        return fakeResult({ timedOut: true, transcript: "" });
-      },
-    });
-    expect(result.admitted).toBe(false);
-    expect(calls).toBe(1); // no retry — a timeout on a paid model is a real result
+    const result = await withEnvAsync({ OPENCODE_MODEL: "anthropic/claude-x", ANTHROPIC_API_KEY: "secret" }, () =>
+      runOnboardingEvalWithRetry({
+        repoRoot: "/tmp",
+        composeProject: "p",
+        backendUrl: "http://x",
+        adminToken: "t",
+        backoffMsSchedule: [0],
+        runOnce: async () => {
+          calls++;
+          if (calls === 1) return fakeResult({ timedOut: true, transcript: "" });
+          return fakeResult({ admitted: true });
+        },
+      }),
+    );
+    expect(result.admitted).toBe(true);
+    expect(calls).toBe(2);
   });
 });
 

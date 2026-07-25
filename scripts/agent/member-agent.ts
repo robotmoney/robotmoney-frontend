@@ -8,11 +8,13 @@
 // scripts/lib/onboarding-eval.ts's runOnboardingEval so the eval's layers and
 // the demo's single admission launch containers the SAME way.
 //
-// Env-free by construction: it takes an already-resolved ModelConfig and never
-// reads the process environment, so extracting it adds no configuration surface
-// to an eval path (D22 §11.3 E1). It also has no inference-off affordance: the
-// `observe`/`inspect` hooks watch a real run, they can never stand in for one
-// (E2).
+// KEYLESS and env-free by construction (docs/decisions.md D22 rule 1,
+// docs/architecture.md §11.3 E1): the model is the in-code constant EVAL_MODEL,
+// this module reads no environment variable, and the argv it builds can never
+// carry a `-e` flag — there is no parameter, no branch, and no ambient value
+// through which a provider key or a different model could reach the container.
+// It also has no inference-off affordance: the `observe`/`inspect` hooks watch
+// a real run, they can never stand in for one (E2).
 //
 // Cleanup is BRACKETED, not a caller obligation: removal happens in the same
 // `finally` regardless of how the run ends, so a kept container cannot leak.
@@ -20,7 +22,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { composeArgs, DEFAULT_COMPOSE_FILES } from "../stack/config.ts";
-import { buildAgentOpencodeConfig, type ModelConfig } from "./model-config.ts";
+import { buildAgentOpencodeConfig, EVAL_MODEL } from "./model-config.ts";
 
 export async function drain(stream: ReadableStream<Uint8Array>): Promise<string> {
   const reader = stream.getReader();
@@ -52,7 +54,6 @@ export interface MemberAgentArgvOptions {
   composeFiles?: string[];
   containerName: string;
   opencodeConfigPath: string;
-  modelConfig: ModelConfig;
   title: string;
   prompt: string;
   // When true, `--rm` is omitted so the STOPPED container survives long enough
@@ -72,13 +73,12 @@ export function buildMemberAgentArgv(a: MemberAgentArgvOptions): string[] {
     a.containerName,
     "-v",
     `${a.opencodeConfigPath}:/home/agent/opencode.json:ro`,
-    // Only pass a key when the resolved model actually needs one — the
-    // default free tier is genuinely keyless (no -e flag at all).
-    ...(a.modelConfig.apiKeyEnv ? ["-e", `${a.modelConfig.apiKeyEnv}=${a.modelConfig.apiKey}`] : []),
+    // NO `-e` flag, ever: nothing is injected into this container's
+    // environment, because there is no key to inject (E1).
     "member-agent",
     "run",
     "--model",
-    a.modelConfig.model,
+    EVAL_MODEL,
     "--format",
     "json",
     "--dangerously-skip-permissions",
@@ -116,7 +116,6 @@ export interface MemberAgentOptions {
   repoRoot: string;
   composeProject: string;
   composeFiles?: string[];
-  modelConfig: ModelConfig;
   prompt: string;
   runId: string;
   title?: string;
@@ -153,7 +152,7 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
   const workDir = mkdtempSync(join(tmpdir(), "member-agent-"));
   const opencodeConfigPath = join(workDir, "opencode.json");
   try {
-    writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(opts.modelConfig.model), null, 2));
+    writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(), null, 2));
 
     const proc = Bun.spawn(
       buildMemberAgentArgv({
@@ -161,7 +160,6 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
         composeFiles: opts.composeFiles,
         containerName,
         opencodeConfigPath,
-        modelConfig: opts.modelConfig,
         title: opts.title ?? `member-agent-${opts.runId}`,
         prompt: opts.prompt,
         keep,

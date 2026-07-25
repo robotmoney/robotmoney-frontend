@@ -109,6 +109,22 @@ describe("docker compose config — demo data path resolution", () => {
       expect(serviceEnv(cfg, svc).BASE_RPC_URL ?? "").not.toContain("mainnet.base.org");
     }
   });
+
+  // INVERTED (docs/decisions.md D22 rule 1, docs/architecture.md §11.3 E1): the
+  // member-agent service used to DELIBERATELY forward two provider keys and a
+  // model override as an operator paid-model opt-in. It now forwards nothing,
+  // proven at the RESOLVED-config level (what compose would actually hand the
+  // container) rather than by a source grep. serviceEnv() throws when a service
+  // has no environment at all, so this asserts on cfg.services[...] directly.
+  test("member-agent forwards NO provider key or model override, even when all three are set in the calling env", () => {
+    const cfg = composeConfig({
+      ANTHROPIC_API_KEY: "leak-me",
+      OPENAI_API_KEY: "leak-me",
+      OPENCODE_MODEL: "anthropic/claude-x",
+    });
+    const env = cfg.services?.["member-agent"]?.environment;
+    expect(env === undefined || Object.keys(env).length === 0).toBe(true);
+  });
 });
 
 describe("DEMO_MODE — the single pinned demo-stack signal (per-IP quota protection)", () => {

@@ -9,20 +9,18 @@
 // + the installed committee-onboarding skill — exactly what a real prospective
 // member's own agent would have to do (D21: over the committee REST API).
 //
-// Real inference is the DEFAULT mode here, never an optional extra — and it
-// requires NO secret to run. This module defaults to the SAME free,
-// no-credential OpenCode Zen model (`opencode/big-pickle`) that
-// scripts/lib/committee/inference.ts already uses for real committee takes
-// (docker-compose.demo.yml's member-agent comment has the same reference).
-// That is genuinely real inference — a real model call against a free
-// provider tier, not a template or a mock — which is exactly why it's the
-// right default for a REQUIRED per-PR gate: no operator has to configure a
-// secret before this eval can run for real. An operator MAY opt into a paid
-// model (faster, more reliable, useful for the nightly's wider sweep) by
-// setting OPENCODE_MODEL to a non-default id plus the matching provider key;
-// resolveModelConfig() throws loudly if that explicit request can't actually
-// be honored — it never silently substitutes a different model behind the
-// operator's back.
+// KEYLESS, NO EXCEPTIONS (docs/decisions.md D22 rule 1, docs/architecture.md
+// §11.3 E1). Real inference is the only mode here, and it requires NO secret:
+// the model is the IN-CODE CONSTANT `EVAL_MODEL` (scripts/agent/model-config.ts)
+// — the same free, no-credential OpenCode Zen model
+// (`opencode/big-pickle`) scripts/lib/committee/inference.ts uses for real
+// committee takes. That is genuinely real inference — a real model call
+// against a real provider tier, not a template or a mock. There is no model
+// env read, no provider-key read, no `env` option, and no configuration
+// surface of any kind through which a keyed or paid model could
+// be selected: an eval measures whether a VANILLA agent can navigate this
+// product unaided, so a keyed model would change the subject under test and
+// make the result unreproducible by anyone without the secret.
 //
 // ── Observe-only design, and its known coarseness ───────────────────────────
 // The only two things this harness watches from OUTSIDE the container are:
@@ -70,7 +68,7 @@ import { DEFAULT_COMPOSE_FILES } from "../stack/config.ts";
 import { runMemberAgent } from "../agent/member-agent.ts";
 import { classifyOutcome } from "../agent/classify-outcome.ts";
 import { finalAssistantText } from "../agent/transcript.ts";
-import { DEFAULT_INFERENCE_MODEL, resolveModelConfig } from "../agent/model-config.ts";
+import { EVAL_MODEL } from "../agent/model-config.ts";
 
 // One definition of the compose file list and the compose argv prefix in the
 // repo (scripts/stack/config.ts); re-exported here so every existing importer
@@ -82,13 +80,7 @@ export {
   memberAgentContainerName,
   runMemberAgent,
 } from "../agent/member-agent.ts";
-export {
-  buildAgentOpencodeConfig,
-  DEFAULT_INFERENCE_MODEL,
-  MODEL_API_KEY_ENV_CANDIDATES,
-  resolveModelConfig,
-} from "../agent/model-config.ts";
-export type { ModelConfig } from "../agent/model-config.ts";
+export { buildAgentOpencodeConfig, EVAL_MODEL } from "../agent/model-config.ts";
 // One outcome classifier for every member-agent run (§11.3 E4/E5) — the retry
 // predicate below, the demo's onboarding driver, and the layer-4 scorecard all
 // read the SAME definition. Re-exported so importers of this module keep
@@ -247,7 +239,9 @@ export interface RunOnboardingEvalOptions {
   backendUrl: string; // host-published backend URL for THIS harness's own polling
   apiUrlInternal?: string; // the committee REST API base the CONTAINER reaches over the compose network
   adminToken: string;
-  env?: Record<string, string | undefined>; // resolveModelConfig source; default process.env
+  // NO `env` option, deliberately (§11.3 E1): the model is an in-code constant
+  // and nothing on this path reads the environment, so there is no
+  // configuration surface a caller could reach through.
   timeoutMs?: number;
   pollIntervalMs?: number;
   autoApproveDelayMs?: number;
@@ -274,8 +268,6 @@ export interface OnboardingEvalResult {
  * is the SAME admin action a human operator performs.
  */
 export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise<OnboardingEvalResult> {
-  const env = opts.env ?? process.env;
-  const modelConfig = resolveModelConfig(env); // throws loudly — no fallback (see doc comment)
   const identity = opts.identity ?? generateIdentity();
   const apiUrlInternal = opts.apiUrlInternal ?? DEFAULT_API_URL_INTERNAL;
   const composeFiles = opts.composeFiles ?? DEFAULT_COMPOSE_FILES;
@@ -299,12 +291,11 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
   let admitted = false;
   let timedOut = false;
 
-  log(`launching member-agent container for ${identity.contact} (model=${modelConfig.model}${modelConfig.apiKeyEnv ? "" : ", keyless"})`);
+  log(`launching member-agent container for ${identity.contact} (keyless, model=${EVAL_MODEL})`);
   const run = await runMemberAgent({
     repoRoot: opts.repoRoot,
     composeProject: opts.composeProject,
     composeFiles,
-    modelConfig,
     prompt,
     runId: identity.runId,
     title: `onboarding-eval-${identity.runId}`,
@@ -378,14 +369,14 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 //      runner shares its IP with the standing rmdemo_* demo stack, which has
 //      caused 429 flake on other live-model-call gates before. A transient
 //      429/overload never let the agent reason at all, so it's not a real
-//      result. Checked regardless of which model is configured.
-//   2. A bare timeout — but ONLY when the default free, no-credential
-//      OpenCode Zen tier is in use. Per committee-opencode-nightly.yml's own
-//      documented experience with this exact model tier, "a call can take
-//      minutes and occasionally returns nothing" — a timeout there is far
-//      more likely to be provider slowness than a genuinely stuck agent. An
-//      operator-configured paid model is fast/reliable enough that a timeout
-//      keeps meaning what it always meant (a real, non-retried result).
+//      result.
+//   2. A bare timeout. The eval is ALWAYS on the free, no-credential OpenCode
+//      Zen tier (§11.3 E1 — there is no other tier it could be on), and per
+//      committee-opencode-nightly.yml's own documented experience with this
+//      exact model tier, "a call can take minutes and occasionally returns
+//      nothing" — so a timeout here is far more likely to be provider slowness
+//      than a genuinely stuck agent. Retried unconditionally: there is no
+//      configuration under which it isn't.
 //   3. A CLASSIFIED REFUSAL — the model declined the prompt outright, so the
 //      agent never ATTEMPTED onboarding at all. Identical reasoning to case 1
 //      (a 429 never let it reason either), so it is not a real navigation
@@ -435,7 +426,6 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
   const backoff = opts.backoffMsSchedule ?? DEFAULT_RETRY_BACKOFF_MS;
   const runOnce = opts.runOnce ?? runOnboardingEval;
   const log = opts.onEvent ?? (() => {});
-  const usingKeylessDefault = resolveModelConfig(opts.env ?? process.env).model === DEFAULT_INFERENCE_MODEL;
   let last: OnboardingEvalResult | undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Fresh contact per attempt — reusing one across retries would re-apply
@@ -445,12 +435,11 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
     const identity = retryIdentity(opts.identity, attempt);
     last = await runOnce({ ...opts, identity });
     if (last.admitted) return last;
-    // ONE classifier for the whole repo (§11.3 E5). `usingKeylessDefault` stays
-    // in the PREDICATE rather than the classifier so the classifier remains
-    // env-free (§11.3 E1); it collapses to always-true once D22 rule 1's
-    // keyless work deletes the paid branch.
+    // ONE classifier for the whole repo (§11.3 E5), and an env-free predicate:
+    // the eval is keyless by construction, so the timed-out case is retryable
+    // unconditionally — there is no model configuration that could change it.
     const outcome = classifyOutcome(last);
-    const worthRetrying = outcome === "rate-limited" || outcome === "refused" || (usingKeylessDefault && outcome === "timed-out");
+    const worthRetrying = outcome === "rate-limited" || outcome === "refused" || outcome === "timed-out";
     // Always logged, retried or not: a misclassification must be diagnosable
     // from CI logs rather than invisible.
     log(
@@ -464,7 +453,7 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
         ? "looked rate-limited"
         : outcome === "refused"
           ? "was refused by the model (the agent never attempted onboarding)"
-          : "timed out on the free keyless tier";
+          : "timed out on the keyless tier";
     log(`onboarding eval attempt ${attempt}/${maxAttempts} ${reason} — retrying in ${delayMs}ms (§11 R8)`);
     await Bun.sleep(delayMs);
   }
