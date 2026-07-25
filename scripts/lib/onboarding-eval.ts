@@ -398,7 +398,7 @@ export interface RunOnboardingEvalWithRetryOptions extends RunOnboardingEvalOpti
   // Injectable for testing the retry/backoff DECISION LOGIC without Docker or
   // a model call — defaults to the real runOnboardingEval. Never mock this in
   // a test that is supposed to prove the real eval path works; that coverage
-  // lives in scripts/tests/onboarding-eval-infra.test.ts's Docker-backed
+  // lives in scripts/tests/integration/onboarding-eval-infra.test.ts's Docker-backed
   // block instead (test-coverage-policy #4: don't mock the subject under
   // test).
   runOnce?: (opts: RunOnboardingEvalOptions) => Promise<OnboardingEvalResult>;

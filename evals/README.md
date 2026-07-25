@@ -22,7 +22,7 @@ evals/onboarding/
 
 These are enforced, not merely stated: `scripts/checks/check-eval-keyless.sh`
 greps this tree on every PR (wired into `.github/workflows/integration.yml`),
-and `scripts/tests/evals-guard.test.ts` executes that script — including against
+and `scripts/tests/unit/evals-guard.test.ts` executes that script — including against
 a fixture that must make it fail, so the gate can never be vacuously green.
 
 **E1 — keyless, no exceptions.** No API key, provider secret, paid model, or
@@ -40,7 +40,7 @@ missing egress **throws**. Loud-skip-never — `0 tests collected` is red too
 
 Inference-**off** rails checks are legitimate and valuable, but they are not
 evals and never stand in for one. They live outside this directory
-(`scripts/tests/onboarding-eval-infra.test.ts`), where test doubles and
+(`scripts/tests/integration/onboarding-eval-infra.test.ts`), where test doubles and
 injection seams are allowed precisely *because* nothing there claims to be an
 eval.
 

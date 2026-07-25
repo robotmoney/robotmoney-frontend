@@ -2,7 +2,7 @@
 // docs/architecture.md §11 R3/R6 — "keygen is never centralized" / "setup-gated
 // apply"). Extracted from scripts/rmpc-release-e2e.ts so the SAME
 // download/verify path is used by both the live release-e2e driver and
-// scripts/tests/rmpc-canonical-apply.test.ts (the JS/Rust canonical-payload
+// scripts/tests/integration/rmpc-canonical-apply.test.ts (the JS/Rust canonical-payload
 // byte-exactness proof). NEVER falls back to anything — especially not JS
 // keygen, which would silently defeat the point of proving the real toolchain
 // works — if the binary can't be fetched, extracted, or run: every failure
@@ -19,7 +19,7 @@ export const RMPC_REPO = "robotmoney/robotmoney-core";
 // (implements robotmoney-core issue #1111/PR #1112; verified locally
 // 2026-07-10 against rmpc-v0.3.2-linux-amd64.tar.gz's --help before this
 // driver was written, and re-confirmed 2026-07-24 by
-// scripts/tests/rmpc-canonical-apply.test.ts, which additionally proves it
+// scripts/tests/integration/rmpc-canonical-apply.test.ts, which additionally proves it
 // signs the committee-application canonical payload byte-exactly). Bump this
 // (and re-run that test locally) when adopting a newer rmpc release — no
 // auto-discovery mechanism is needed for a once-in-a-while manual bump.

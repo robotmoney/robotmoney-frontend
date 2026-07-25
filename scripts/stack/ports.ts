@@ -4,7 +4,7 @@
 //
 // Moved verbatim out of scripts/lib/demo-main.ts, where it had to live at
 // module scope and therefore could not be reused; the rails check in
-// scripts/tests/onboarding-eval-infra.test.ts carried its own weaker fork
+// scripts/tests/integration/onboarding-eval-infra.test.ts carried its own weaker fork
 // (a `freePort()` that closed each socket before drawing the next, so two
 // draws could collide).
 import { createServer } from "node:net";

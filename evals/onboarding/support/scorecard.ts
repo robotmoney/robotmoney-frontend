@@ -3,7 +3,7 @@
 //
 // PURE and unit-testable without Docker, inference, or a network — the arithmetic
 // and every floor it enforces are covered by
-// scripts/tests/onboarding-eval-scorecard.test.ts on the per-PR path, so the
+// scripts/tests/unit/onboarding-eval-scorecard.test.ts on the per-PR path, so the
 // nightly sweep can never be the first place a scoring bug is discovered.
 //
 // ── Why the constants are in-code ───────────────────────────────────────────

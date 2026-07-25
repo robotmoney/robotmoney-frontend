@@ -129,7 +129,7 @@ export interface HarvestResult {
 }
 
 // The REAL production verifier, imported dynamically by absolute path exactly
-// as scripts/tests/rmpc-canonical-apply.test.ts does — the backend package is
+// as scripts/tests/integration/rmpc-canonical-apply.test.ts does — the backend package is
 // not on this package's module graph, and no crypto is reimplemented here.
 async function loadVerifier(repoRoot: string) {
   const mod = (await import(join(repoRoot, "backend", "src", "lib", "signing.ts"))) as {

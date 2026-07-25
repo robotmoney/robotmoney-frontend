@@ -11,7 +11,7 @@
 // This module supplies exactly that and provably nothing else: it filters
 // through `DOCKER_CLIENT_ENV_ALLOWLIST`, so a provider key, an admin token, or
 // a model-selection knob sitting in an operator's shell CANNOT come out of it
-// (asserted in scripts/tests/stack-config.test.ts against a deliberately
+// (asserted in scripts/tests/unit/stack-config.test.ts against a deliberately
 // polluted environment). That is what lets the keyless onboarding eval under
 // `evals/` bring up a stack while itself containing no environment read at all
 // — `scripts/checks/check-eval-keyless.sh` fails the build if `process.env`

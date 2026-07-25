@@ -27,7 +27,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // (scripts/lib/demo-main.ts) passes RM_ALLOW_INSECURE=1 explicitly to this
 // host-run driver, matching the api container docker-compose.demo.yml runs.
 // Exported + env-injectable so the polarity is unit-testable hermetically
-// (scripts/tests/committee-session-insecure.test.ts).
+// (scripts/tests/unit/committee-session-insecure.test.ts).
 export function regimeWriteInsecure(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
@@ -179,7 +179,7 @@ export async function admin(action: string, body: unknown = {}) {
 // admitting past its intended bound. Fail CONSERVATIVELY instead: report
 // Infinity (always "full"), loudly logged, so a transient read problem pauses
 // onboarding rather than silently bypassing the cap check.
-// backendUrl override is for tests only (scripts/tests/e2e-active-member-count.test.ts)
+// backendUrl override is for tests only (scripts/tests/unit/e2e-active-member-count.test.ts)
 // — it sidesteps the process-wide `process.env.BACKEND_URL` that e2e.ts's own
 // module-level BACKEND constant captures once at import time, which is unsafe
 // to mutate from a test file when other test files in the same run also touch

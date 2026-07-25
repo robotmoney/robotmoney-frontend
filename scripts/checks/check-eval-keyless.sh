@@ -3,7 +3,7 @@
 # Same shape as backend/scripts/check-no-supabase.sh: the exit code IS the
 # verdict. Runs per-PR in .github/workflows/integration.yml — milliseconds, no
 # Docker, no network — and is EXECUTED (not just present) by
-# scripts/tests/evals-guard.test.ts, which also proves it fails on a fixture
+# scripts/tests/unit/evals-guard.test.ts, which also proves it fails on a fixture
 # that violates each rule.
 #
 # Four properties, on the eval path only:

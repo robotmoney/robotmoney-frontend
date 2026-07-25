@@ -10,6 +10,8 @@
     "check-docs": "bash scripts/check-docs-analytics.sh",
     "check:contribution": "bun scripts/check-contribution.ts",
     "test": "bun test scripts/tests",
+    "test:unit": "bun test scripts/tests/unit",
+    "test:integration": "bun test scripts/tests/integration",
     "eval:onboarding": "bun test evals/onboarding",
     "eval:onboarding:isolated": "bun test evals/onboarding/isolated",
     "eval:onboarding:admission": "bun test evals/onboarding/admission",

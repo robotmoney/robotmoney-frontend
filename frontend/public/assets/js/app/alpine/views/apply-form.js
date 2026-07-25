@@ -1,6 +1,6 @@
 // @ts-nocheck — buildless Alpine factory; behavior is exercised by
-// scripts/tests/frontend-routes.test.ts (router mapping) and
-// scripts/tests/committee-docs-rmpc-and-routes.test.ts (the prompt this page
+// scripts/tests/unit/frontend-routes.test.ts (router mapping) and
+// scripts/tests/unit/committee-docs-rmpc-and-routes.test.ts (the prompt this page
 // renders is pinned byte-for-byte to the same contract constant those tests
 // check the docs against).
 // Alpine factory for the committee application form (/committee/apply).

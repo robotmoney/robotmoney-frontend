@@ -29,7 +29,7 @@
 # also runs the REAL-INFERENCE onboarding eval — one vanilla OpenCode
 # member-agent container navigating our own onboarding docs end to end via a
 # real model call — not a hermetic/inference-off substitute. An inference-off
-# infra-rails check (scripts/tests/onboarding-eval-infra.test.ts) runs first as
+# infra-rails check (scripts/tests/integration/onboarding-eval-infra.test.ts) runs first as
 # a cheap fail-fast supplement, before any model tokens are spent. It runs
 # UNCONDITIONALLY for every PR, including forks: the eval is pinned to the free,
 # no-credential OpenCode Zen tier (`opencode/big-pickle`) by an in-code constant
@@ -139,7 +139,7 @@ jobs:
       # expensive live demo boot, so a broken rail
       # fails in minutes, not tens of minutes.
       - name: Onboarding eval infra rails (inference-off, fail-fast)
-        run: bun test scripts/tests/onboarding-eval-infra.test.ts
+        run: bun test scripts/tests/integration/onboarding-eval-infra.test.ts
         timeout-minutes: 15
       # === Demo readiness gate ===
       # This boot-and-check step block IS the "demo readiness" gate. It boots the
@@ -151,7 +151,7 @@ jobs:
       # >=2 published committee sessions, fresh regime snapshot, live wallet/vault
       # provenance with only the documented #120 degrades, both research signals
       # landed). scripts/demo-frontend-check.ts's own loud-failure path is itself
-      # self-tested by scripts/tests/demo-frontend-check.test.ts (run in the required
+      # self-tested by scripts/tests/integration/demo-frontend-check.test.ts (run in the required
       # `integration` job), which proves it exits non-zero when a core surface marker
       # is stripped and 0 against correct content. See docs/architecture.md §"Demo
       # readiness gate". The job id below stays `e2e` so branch protection's existing

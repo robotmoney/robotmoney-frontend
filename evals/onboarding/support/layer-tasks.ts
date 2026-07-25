@@ -9,7 +9,7 @@
 // DELIBERATELY FREE OF HOW-TO. The whole point of a layer is to measure whether
 // the agent can DISCOVER the step, so no task below may name a `curl` recipe, a
 // releases URL, an install directory, an rmpc subcommand, or the apply
-// endpoint. scripts/tests/onboarding-layer-tasks.test.ts asserts exactly that
+// endpoint. scripts/tests/unit/onboarding-layer-tasks.test.ts asserts exactly that
 // on every PR — if you find yourself wanting to add a hint here, you are
 // deleting the measurement.
 //

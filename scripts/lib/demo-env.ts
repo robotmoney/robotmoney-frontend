@@ -23,7 +23,7 @@
 // general backend config knob unrelated to the removed DEMO_HERMETIC wiring.
 //
 // This module is imported by scripts/demo.ts (which re-exports it for the
-// unit tests in scripts/tests/demo-env.test.ts) and MUST stay side-effect free.
+// unit tests in scripts/tests/unit/demo-env.test.ts) and MUST stay side-effect free.
 
 export interface DemoEnvResolution {
   /**

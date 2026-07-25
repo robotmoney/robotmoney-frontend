@@ -1108,7 +1108,7 @@ async function main(): Promise<void> {
     // plain local `bun run demo`, or any invocation predating this env var)
     // stays a zero-behaviour-change no-op, relying on Stage 5's separate
     // inference-off infra-rails test
-    // (scripts/tests/onboarding-eval-infra.test.ts) as its fail-fast substitute.
+    // (scripts/tests/integration/onboarding-eval-infra.test.ts) as its fail-fast substitute.
     // A failed/timed-out admission THROWS (via `run`'s pattern — no silent
     // pass): the whole point of putting real inference in the PR gate is that a
     // vanilla agent failing to navigate our own onboarding instructions is a

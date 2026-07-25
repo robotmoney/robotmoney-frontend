@@ -24,7 +24,7 @@
 # Every layer makes a real model call. Missing Docker or missing egress THROWS;
 # nothing here skips. The inference-off RAILS check that proves the machinery
 # this eval rides on is a different thing entirely and stays on the per-PR path
-# (scripts/tests/onboarding-eval-infra.test.ts).
+# (scripts/tests/integration/onboarding-eval-infra.test.ts).
 #
 # A REFUSAL IS DATA, NOT FLAKE
 # On 2026-07-25 a demo run admitted zero members because the model REFUSED the

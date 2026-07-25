@@ -136,14 +136,39 @@ is subdivided by surface (`api/`, `db/`), provisions its dependency in
 `preload.ts` (which fails loudly rather than skipping), separates `support/` from
 `fixtures/`, and already tags cost in filenames (`*-live.test.ts`).
 
-Realized so far: `contract/tests/` is split into `unit/` and `live/`. The
-package's `test` script is pinned to `bun test tests/unit` (a bare `bun test`
-would sweep `live/` back onto the default path) and `test:live` runs
-`bun test tests/live`; the unit half runs in the required `integration`
-workflow, the live half only in `nightly-fetchers.yml`'s `contract-live-urls`
-job. Directory selection replaces the env-gate pattern
+**`live` means a real external SERVICE whose availability is the flake source** —
+FRED, the Base RPC, `raw.githubusercontent.com`. Fetching a **pinned, cached
+release artifact** (`scripts/lib/rmpc-fetch.ts`) is a build input, not a live
+dependency: the version is pinned in code and the download is cached, so it is
+classed `integration` and stays on the per-PR path. Without this distinction a
+literal reading of the table above would demote §11 R6's byte-exactness gate
+(`scripts/tests/integration/rmpc-canonical-apply.test.ts`) to nightly, which
+would be a real loss of coverage on the critical path.
+
+Realized so far — both packages with tests are split, and the split is about
+**selectability only**: no test moved off the per-PR path.
+
+- `contract/tests/` → `unit/` + `live/`. The package's `test` script is pinned to
+  `bun test tests/unit` (a bare `bun test` would sweep `live/` back onto the
+  default path) and `test:live` runs `bun test tests/live`; the unit half runs in
+  the required `integration` workflow, the live half only in
+  `nightly-fetchers.yml`'s `contract-live-urls` job.
+- `scripts/tests/` → `unit/` (30 files: nothing but the checkout) + `integration/`
+  (11 files: the docker CLI or daemon, GitHub Releases egress, a spawned
+  `jq`/`git`/Playwright binary, or backend's own `node_modules`), with
+  `fixtures/` kept at the `tests/` root as a sibling of both, mirroring
+  `backend/tests/`. `test:unit` and `test:integration` select one class each and
+  **the `integration` workflow runs both, as two separately named unconditional
+  steps** — so a red is attributable to a cost class, and dropping the expensive
+  half would have to be done in workflow config, in the open. `bun run test`
+  stays `bun test scripts/tests`, which recurses, so the local one-command
+  aggregate cannot silently lose a class either.
+
+Directory selection replaces the env-gate pattern
 (`RUN_LIVE_FETCHERS`/`EXPECT_LIVE`) rather than guarding it — there is no
-conditional skip to get wrong. `scripts/tests/` has not been split yet.
+conditional skip to get wrong. A selector pointed at a missing or emptied
+directory exits non-zero on Bun, so `0 tests collected` is red, not a vacuous
+green.
 
 Harness code (today `scripts/`) separates by role rather than by medium:
 
@@ -169,10 +194,28 @@ evals/onboarding/
 
 **L3 — Dependency direction.** Tests and evals may import runtime and shared
 code; **runtime must never import test or eval code**; both may import shared.
-This is enforced by a grep check in the same shape as
-`backend/scripts/check-no-supabase.sh` and `check-no-ai-overview.sh`, not by
-convention alone. A second grep asserts §11.3 E2 — that no mock, injection seam,
-or conditional skip appears under `evals/`.
+This is enforced by two grep checks in the same shape as
+`backend/scripts/check-no-supabase.sh` and `check-no-ai-overview.sh` — the exit
+code IS the verdict — not by convention alone. Both run per-PR in the required
+`integration` job, and both are *executed against a planted violation* by a unit
+test, so neither can go vacuously green:
+
+| Check | Asserts | Self-tested by |
+|---|---|---|
+| `scripts/checks/check-no-test-imports-in-runtime.sh` | no runtime/shared tree (`backend/src`, `contract/src`, `frontend/public/assets/js`, `scripts`) imports from a `tests/`, `__tests__/`, `__mocks__/`, or `evals/` path or a `*.test.ts`/`*.spec.ts` module | `scripts/tests/unit/runtime-import-guard.test.ts` |
+| `scripts/checks/check-eval-keyless.sh` | §11.3 E1–E2 — no key, paid model, or environment read at all, and no mock, injection seam, or conditional skip, under `evals/` | `scripts/tests/unit/evals-guard.test.ts` |
+
+Both refuse to pass by absence: a scan whose target tree has vanished is a hard
+failure, never a silently empty check.
+
+Path citations are gated too. `scripts/tests/unit/test-path-citations.test.ts`
+extracts every `scripts/tests/…`, `scripts/checks/…`, `contract/tests/…`,
+`backend/tests/…`, and `evals/onboarding/…` reference from docs, workflow YAML,
+and source comments and asserts the file exists — the split moved ~35 files and
+broke ~40 such citations with a green CI, which is exactly the failure mode a
+reader (or an onboarding agent) cannot detect on their own.
+`docs/code-review/**` is excluded: those are dated artifacts describing the tree
+as it was.
 
 **Migration is incremental, not a big-bang reorg.** New directories are created
 as the work that needs them lands (D22's extractions land directly in `stack/`
@@ -336,11 +379,12 @@ deploy-side check. Two gates run in the normal PR suite:
   links. It runs in the regular Playwright suite (`bun run test:browser`),
   executed by the **`e2e` workflow's `e2e` job** (demo readiness gate) on every
   ready PR.
-- **Goldens drift gate** — `scripts/tests/goldens-drift.test.ts` blocks a PR
+- **Goldens drift gate** — `scripts/tests/unit/goldens-drift.test.ts` blocks a PR
   whose goldens no longer match the code (route set or field shapes). It runs in
-  `bun test scripts/tests` in the **`integration` workflow's
-  `backend-integration` job** ("Check root scripts" step), which also runs
-  `scripts/tests/cloudflare-statics.test.ts` (asserts the assemble script lands
+  `bun run test:unit` in the **`integration` workflow's
+  `backend-integration` job** ("Check root scripts (typecheck + unit tests)"
+  step), which also runs
+  `scripts/tests/unit/cloudflare-statics.test.ts` (asserts the assemble script lands
   the key files in `_site`).
 
 An agent (or human) whose change alters an API route or shape must recapture in
@@ -1796,7 +1840,7 @@ RM never holds the private key at any point.
 - The resolver (`scripts/lib/demo-env.ts::resolveDemoEnv`, re-exported by
   `scripts/demo.ts`) is the single source of truth for the live data path;
   `docker-compose.demo.yml` mirrors its defaults so the two layers can never
-  disagree (asserted by `scripts/tests/demo-compose-config.test.ts`).
+  disagree (asserted by `scripts/tests/integration/demo-compose-config.test.ts`).
 
 ### 7b. Demo readiness gate
 
@@ -1821,13 +1865,13 @@ and runs the loud-failure guards that keep broken demos off main:
   the required gate and the nightly sweep can never drift apart.
 
 The core-surface detector's own loud-failure path is **self-tested**, not assumed:
-`scripts/tests/demo-frontend-check.test.ts` (run in the required `integration` job via
-`bun run test`) spawns the real `scripts/demo-frontend-check.ts` against an in-process
+`scripts/tests/integration/demo-frontend-check.test.ts` (run in the required `integration` job via
+`bun run test:integration`) spawns the real `scripts/demo-frontend-check.ts` against an in-process
 stub backend and proves both directions — it exits non-zero when the
 `x-data="committeeView()"` marker is stripped from the served `/views/committee.html`,
 and exits 0 against the correct, unmodified content — so a change that silently weakened
 the detector's assertions is caught. The `demo-live-smoke.ts` assertions are likewise
-self-tested by `scripts/tests/demo-live-smoke.test.ts`.
+self-tested by `scripts/tests/integration/demo-live-smoke.test.ts`.
 
 Because every PR's required gate now depends on live external providers (public
 Base mainnet RPC, FRED/Coin Metrics/GeckoTerminal/Yahoo/EDGAR), this job runs
@@ -2130,7 +2174,7 @@ eval.
 mock, no injection seam on the eval's own path, no scripted fallback that performs
 the agent's steps for it, and no conditional skip: a missing Docker daemon or
 missing egress **throws**, failing the eval loudly. Inference-off *rails* checks
-(`scripts/tests/onboarding-eval-infra.test.ts`) remain valuable and remain
+(`scripts/tests/integration/onboarding-eval-infra.test.ts`) remain valuable and remain
 separate — they prove the machinery an eval rides on, and they are never a
 substitute for one.
 
@@ -3068,13 +3112,20 @@ fixtures or snapshots.
 Run at minimum:
 
 ```text
-bun run test
+bun run test                      # scripts/tests/ — recurses into unit/ AND integration/
 (cd contract && bun run test)
 (cd backend && bun run test)
 bunx playwright test frontend/test/browser/admin-view.spec.ts
 bun run check-contract
 bun run typecheck
+bash scripts/checks/check-eval-keyless.sh
+bash scripts/checks/check-no-test-imports-in-runtime.sh
 ```
+
+`bun run test:unit` / `bun run test:integration` select one cost class each (§3
+L1) — useful while iterating, but the aggregate above is what "at minimum"
+means: skipping the integration class locally only defers its failure to CI,
+which runs both.
 
 Also run the repository’s analytics boundary, worker-role, committee lifecycle,
 and frontend route guard tests touched by these changes.

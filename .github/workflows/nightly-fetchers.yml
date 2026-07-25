@@ -65,7 +65,7 @@ jobs:
       # load when EXPECT_LIVE=1 but its RUN_LIVE_FETCHERS gate resolves off, so a
       # gate-name drift between this workflow and the test files fails the
       # nightly loudly instead of turning every live test into a silent
-      # all-skips green. scripts/tests/nightly-fetchers-guard.test.ts (required
+      # all-skips green. scripts/tests/unit/nightly-fetchers-guard.test.ts (required
       # integration root job) asserts this pairing stays present here and in the
       # test files.
       - name: Live fetcher drift test (real keyless endpoints)

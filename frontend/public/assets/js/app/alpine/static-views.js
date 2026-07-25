@@ -130,7 +130,7 @@ function normalizeSnapshot(raw) {
 
 // The archive loaders below are the PRODUCTION static-archive path (sessions
 // dated before 2026-07-01 render from /data/committee/*.json). They are
-// exported so scripts/tests/frontend-routes.test.ts can execute the exact
+// exported so scripts/tests/unit/frontend-routes.test.ts can execute the exact
 // loaders the browser runs against the shipped archive files (review 026:
 // the previous test covered a dead duplicate normalizer instead).
 export async function loadArchiveSession(date, subject) {

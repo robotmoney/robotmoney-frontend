@@ -252,7 +252,7 @@ test cluster or `bun run demo`), not hand-written and not derived from other
 fixtures — so **field shapes** stay faithful; values are point-in-time. Keeping
 them correct is the **change author's responsibility** (no nightly regeneration);
 a CI drift gate blocks a PR whose goldens no longer match the code (wired per
-D19 in `scripts/tests/goldens-drift.test.ts`). The most
+D19 in `scripts/tests/unit/goldens-drift.test.ts`). The most
 important check is that the **fields** are correct, not the numbers.
 
 **Rejected.**
@@ -507,7 +507,7 @@ preserves that — the SPA is still live (zero preview-mode switches in
 production code) — but shifts the server from `scripts/serve-preview.ts`
 to the static wrapper. The goldens contract is unchanged; the wrapper is the
 new replay engine. D14's language "a CI drift gate blocks a PR" is now
-enforced in `scripts/tests/goldens-drift.test.ts`. The spec at D14's
+enforced in `scripts/tests/unit/goldens-drift.test.ts`. The spec at D14's
 conclusion (preview-server-spec.md) is retired; preview mode is now described
 in `docs/architecture.md` alongside D14's mechanism.
 
@@ -540,7 +540,7 @@ Cloudflare's, not ours; we own none of that subdomain. D13's properties
 - Updated `package.json` `preview` script: `bun scripts/compose-preview-deploy.ts --serve`.
 - Updated `scripts/update-goldens.ts` header: names wrapper as consumer,
   references `docs/architecture.md` as contract home, names
-  `scripts/tests/goldens-drift.test.ts` as the wired gate.
+  `scripts/tests/unit/goldens-drift.test.ts` as the wired gate.
 - Updated `docs/architecture.md` preview section: describes wrapper, static
   hosting, client-side interception, hosted Cloudflare Pages story,
   repurposed `bun preview`.
@@ -802,7 +802,7 @@ would show it.
 `scripts/lib/demo-main.ts` performs its setup at **module scope** — port
 allocation, admin-token generation (including a `process.env` write), compose-env
 construction, log-file opening — so importing anything from it boots a demo.
-`scripts/tests/onboarding-eval-infra.test.ts` therefore had no choice but to fork
+`scripts/tests/integration/onboarding-eval-infra.test.ts` therefore had no choice but to fork
 its own mini-stack (`bringUpInfra()`). Extracting a side-effect-free stack module
 removes that fork rather than adding a second one, and continues the split
 already begun by `demo-env.ts` and `demo-newcomers.ts`, both of which exist for

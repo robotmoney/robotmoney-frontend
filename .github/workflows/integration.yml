@@ -37,7 +37,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
-      # scripts/tests/admin-live-guard.test.ts spawns `bun run test:browser --
+      # scripts/tests/integration/admin-live-guard.test.ts spawns `bun run test:browser --
       # --list`, which shells out to Playwright's CLI/transform — that runs on
       # Node.js (its bin is `#!/usr/bin/env node`), which `setup-bun` does not
       # provide. On a self-hosted runner without a system node, Playwright's
@@ -49,16 +49,26 @@ jobs:
           node-version: "20"
       - name: Install root tooling
         run: bun install --frozen-lockfile
-      # Installed BEFORE "Check root scripts" (issue #108): scripts/tests/
-      # demo-edgar-bootstrap.test.ts spawns backend/scripts/edgar-seed-bootstrap.ts
-      # as a host-side subprocess (cwd: backend/), which needs backend's own
-      # node_modules (@robotmoney/contract) resolvable — the same reason the
-      # rest of this job's backend steps need it, just moved earlier.
+      # Installed BEFORE the root-script steps (issue #108):
+      # scripts/tests/integration/demo-edgar-bootstrap.test.ts spawns
+      # backend/scripts/edgar-seed-bootstrap.ts as a host-side subprocess
+      # (cwd: backend/), which needs backend's own node_modules
+      # (@robotmoney/contract) resolvable — the same reason the rest of this
+      # job's backend steps need it, just moved earlier.
       - name: Install deps
         working-directory: backend
         run: bun install --frozen-lockfile
-      - name: Check root scripts
-        run: bun run typecheck && bun run test
+      # D23 L1: scripts/tests/ is split by cost class, and the split buys
+      # SELECTABILITY, not a smaller per-PR suite — both classes still run on
+      # every non-draft PR, as two separate unconditional steps (no `if:`, no
+      # continue-on-error) so a red is attributable to its cost class.
+      # `bun run test:unit` needs nothing but the checkout; `test:integration`
+      # needs the docker CLI/daemon and GitHub Releases egress. `bun run test`
+      # (the recursive aggregate) stays the local one-command target.
+      - name: Check root scripts (typecheck + unit tests)
+        run: bun run typecheck && bun run test:unit
+      - name: Root integration tests (docker CLI/daemon + GitHub Releases egress)
+        run: bun run test:integration
       - name: Check docs/analytics consistency
         run: bash scripts/check-docs-analytics.sh
       - name: Typecheck backend
@@ -71,10 +81,16 @@ jobs:
       # D22 rules 1-2 / §11.3 E1-E2: evals/ must carry no provider key, no paid
       # model, no environment read at all, no conditional skip, and no test
       # double or injection seam. Milliseconds, no Docker — and executed (with
-      # negative controls) by scripts/tests/evals-guard.test.ts so the guard
+      # negative controls) by scripts/tests/unit/evals-guard.test.ts so the guard
       # itself can never go vacuously green.
       - name: Evals are keyless and have no inference-off mode (D22 E1/E2)
         run: bash scripts/checks/check-eval-keyless.sh
+      # D23 / §3 L3, the dependency-direction half: tests and evals may import
+      # runtime and shared code, but runtime must never import test or eval
+      # code. Milliseconds, no Docker — and executed with a planted violation by
+      # scripts/tests/unit/runtime-import-guard.test.ts.
+      - name: Runtime never imports test or eval code (D23 §3 L3)
+        run: bash scripts/checks/check-no-test-imports-in-runtime.sh
       - name: Verify vendored contract
         run: bun run check-contract
       # contract/ has tests but, until this step existed, NO workflow ever ran
