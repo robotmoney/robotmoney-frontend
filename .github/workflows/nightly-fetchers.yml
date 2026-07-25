@@ -20,6 +20,22 @@
 # unreachable endpoint or malformed response. Per-PR coverage is fully offline
 # (tests/api/wallet-balances.test.ts, mocked fetch).
 #
+# Also runs the contract package's LIVE published-URL reachability suite
+# (contract/tests/live/, job `contract-live-urls`): a real fetch of
+# COMMITTEE_ONBOARDING_SKILL_URL asserting HTTP 200 plus the skill's own
+# front-matter markers. That constant is the D21 onboarding flow's single
+# discovery mechanism, and a 404 on it is silent — the member agent just never
+# finds the skill — so it needs a real request somewhere. It belongs HERE rather
+# than on the per-PR path for the same reason as everything above: a transient
+# GitHub hiccup must not flake an unrelated PR. Per-PR coverage is the offline
+# regression pin in contract/tests/unit/committee-application.test.ts, run by
+# the required `integration` job.
+#
+# This workflow is therefore the repo's nightly LIVE external-dependency sweep:
+# live data fetchers AND published-artifact URLs. A separate live.yml was
+# rejected — it would duplicate this schedule, class annotation, and checkout to
+# run one 2-second job.
+#
 # CI taxonomy class: heavy (scheduled live external-endpoint drift test). Heavy
 # suites are sweep-only: they must have NO `pull_request` trigger at all, and run
 # only on a schedule and/or push to the default branch. This workflow already
@@ -79,4 +95,21 @@ jobs:
         env:
           RUN_LIVE_FETCHERS: "1"
           EXPECT_LIVE: "1"
+        timeout-minutes: 5
+
+  # Published-artifact URL reachability. No `bun install`: contract/ has zero
+  # dependencies and its tests import by relative path. No env gate and no skip —
+  # `bun test tests/live` fails loudly on a 404, a DNS failure, or blocked
+  # egress, and exits 1 if the directory ever empties out (bun 1.3.x treats
+  # "no tests collected" as an error), so this job can never pass by absence.
+  contract-live-urls:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Published skill URL reachability (live)
+        working-directory: contract
+        run: bun run test:live
         timeout-minutes: 5

@@ -11,10 +11,10 @@ import {
   COMMITTEE_ONBOARDING_SKILL_URL,
   ONBOARDING_PROMPT,
   canonicalizeApplication,
-} from "../src/committee-application.js";
-import { path, ROUTES } from "../src/routes.js";
+} from "../../src/committee-application.js";
+import { path, ROUTES } from "../../src/routes.js";
 
-const FIXTURES_PATH = join(import.meta.dir, "../src/__fixtures__/committee-application.json");
+const FIXTURES_PATH = join(import.meta.dir, "../../src/__fixtures__/committee-application.json");
 
 type GoldenVector = {
   name: string;
@@ -203,6 +203,19 @@ describe("COMMITTEE_ONBOARDING_SKILL_URL", () => {
     expect(COMMITTEE_ONBOARDING_SKILL_URL.startsWith("https://")).toBe(true);
     expect(COMMITTEE_ONBOARDING_SKILL_URL).toContain("committee-onboarding");
     expect(COMMITTEE_ONBOARDING_SKILL_URL.endsWith("SKILL.md")).toBe(true);
+  });
+
+  // Regression pin, offline: robotmoney-core's default branch is `dev`, so
+  // raw.githubusercontent.com serves this path at `/dev/` (200) and 404s the
+  // `/main/` form. A 404 here is invisible to the agent that follows the URL —
+  // it simply never discovers the skill — so the branch segment is pinned.
+  // The limit of this assertion, stated plainly: it proves the STRING, not that
+  // the file is reachable. Reachability is proved only by the live test at
+  // contract/tests/live/committee-onboarding-skill-url-live.test.ts, which is
+  // deliberately outside this (per-PR, network-free) directory.
+  test("points at robotmoney-core's `dev` default branch, not the 404ing `main`", () => {
+    expect(COMMITTEE_ONBOARDING_SKILL_URL).toContain("/robotmoney-core/dev/");
+    expect(COMMITTEE_ONBOARDING_SKILL_URL).not.toContain("/robotmoney-core/main/");
   });
 });
 

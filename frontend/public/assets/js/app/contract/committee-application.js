@@ -48,13 +48,20 @@ export const ONBOARDING_PROMPT =
   "(c) wait to be accepted; " +
   "(d) once accepted, read the financial data from the research engine each session and write your recommendations.";
 
-// Tracked: robotmoney/robotmoney-core issue to rewrite SKILL.md for D21
-// (REST-only, skill-install-first) — filed alongside this commit. This is
-// the placeholder the plan calls for so the onboarding prompt, the demo, and
-// docs all point at ONE constant instead of duplicating the URL, and
-// swapping it later is a one-line change here.
+// The ONE place the published committee-onboarding skill is named, so the
+// onboarding prompt, the demo, and the docs point at a single constant instead
+// of duplicating the URL.
+//
+// The branch segment is `dev`, NOT `main`: robotmoney-core's default branch is
+// `dev`, so raw.githubusercontent.com serves this file at `/dev/` (HTTP 200)
+// and returns HTTP 404 for the `/main/` form. That 404 fails silently from an
+// agent's point of view — it simply never discovers the skill — so reachability
+// is asserted for real (status 200 plus the skill's own front-matter markers)
+// by contract/tests/live/committee-onboarding-skill-url-live.test.ts, which
+// runs nightly, off the per-PR path. The offline regression pin on this branch
+// segment lives in contract/tests/unit/committee-application.test.ts.
 export const COMMITTEE_ONBOARDING_SKILL_URL =
-  "https://raw.githubusercontent.com/robotmoney/robotmoney-core/main/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md";
+  "https://raw.githubusercontent.com/robotmoney/robotmoney-core/dev/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md";
 
 // The canonical, current statement of application steps (§11.2 R5). Under
 // D21 there is no live tool serving this — the skill itself (linked above)

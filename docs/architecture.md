@@ -136,6 +136,15 @@ is subdivided by surface (`api/`, `db/`), provisions its dependency in
 `preload.ts` (which fails loudly rather than skipping), separates `support/` from
 `fixtures/`, and already tags cost in filenames (`*-live.test.ts`).
 
+Realized so far: `contract/tests/` is split into `unit/` and `live/`. The
+package's `test` script is pinned to `bun test tests/unit` (a bare `bun test`
+would sweep `live/` back onto the default path) and `test:live` runs
+`bun test tests/live`; the unit half runs in the required `integration`
+workflow, the live half only in `nightly-fetchers.yml`'s `contract-live-urls`
+job. Directory selection replaces the env-gate pattern
+(`RUN_LIVE_FETCHERS`/`EXPECT_LIVE`) rather than guarding it — there is no
+conditional skip to get wrong. `scripts/tests/` has not been split yet.
+
 Harness code (today `scripts/`) separates by role rather than by medium:
 
 ```
@@ -3027,6 +3036,7 @@ Run at minimum:
 
 ```text
 bun run test
+(cd contract && bun run test)
 (cd backend && bun run test)
 bunx playwright test frontend/test/browser/admin-view.spec.ts
 bun run check-contract

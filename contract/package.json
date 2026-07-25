@@ -14,7 +14,8 @@
   },
   "files": ["src"],
   "scripts": {
-    "test": "bun test"
+    "test": "bun test tests/unit",
+    "test:live": "bun test tests/live"
   },
   "license": "MIT"
 }
