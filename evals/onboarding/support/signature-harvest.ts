@@ -44,8 +44,23 @@ import { extractMatching, fileSize, walk } from "./probe.ts";
 
 // base64 of exactly 32 raw bytes / exactly 64 raw bytes, not glued to
 // surrounding base64 text (so a longer blob can't yield a spurious prefix).
-const B64_PUBLIC_KEY = /(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])/g;
-const B64_SIGNATURE = /(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{86}==(?![A-Za-z0-9+/=])/g;
+//
+// The two boundaries are deliberately ASYMMETRIC, and the difference is
+// load-bearing:
+//   - LOOKAHEAD excludes `=` as well as base64 chars. A trailing `=` means the
+//     real token is longer than what matched, so a 44-char prefix of a padded
+//     blob must not be harvested.
+//   - LOOKBEHIND excludes base64 chars ONLY. `=` is terminal padding in base64,
+//     so a preceding `=` marks the END of some other token — it is a boundary,
+//     not a continuation. Excluding it here made the harvest blind to the whole
+//     `key=value` family (`publicKey=…`, `PUBKEY=…`, `--public-key=…`,
+//     `signature=…`), which is exactly the shape a bash-only agent emits: the
+//     member-agent's opencode permissions are `{"*": "deny", bash: "allow"}`, so
+//     its transcript is shell output, not JSON. That false negative is
+//     indistinguishable from "the agent never signed" — the worst failure this
+//     file can have, because it reports a harness miss as a product result.
+const B64_PUBLIC_KEY = /(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])/g;
+const B64_SIGNATURE = /(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{86}==(?![A-Za-z0-9+/=])/g;
 
 // Where rmpc's keystore plausibly lands. Broad ON PURPOSE: rmpc's default path
 // and whatever `--path` an agent chooses are both outside our control, so this
