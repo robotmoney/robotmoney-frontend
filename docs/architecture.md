@@ -2204,6 +2204,25 @@ instructions would edit the task under test. Layer 4 uses the canonical
 local-network note) and observes only server-side state, preserving the black-box
 property where it matters most.
 
+**The harness note (layers 1-3) is environment information, never how-to.**
+Layers 1-2 slice the canonical prompt *before* the sentence carrying the
+applicant's identity, and observed live on 2026-07-26 that removal changed what
+layer 1 measured: the agent neither failed nor refused — it found the skill,
+understood the job, and stopped to ask its owner "what display name and contact
+email should I use?". That is the *correct* move under the skill's own Step 0
+("if the owner's identity is missing or ambiguous, ask for it — never invent or
+guess"), but in a container with nobody to answer it turned a skill-install
+measurement into "does the agent ask a sensible question?". `harnessNote()`
+(`evals/onboarding/support/layer-tasks.ts`) restores exactly the two facts the
+slice dropped — who the owner is, and that no one is available to reply — as a
+clearly delimited block appended after the task, in the same category as layer
+4's local-network note. The boundary is enforceable and enforced: the note names
+no install command, directory, URL, `rmpc` subcommand, or endpoint, and
+`scripts/tests/unit/onboarding-layer-tasks.test.ts` re-runs every answer-leak
+assertion against the **noted** tasks, so it cannot become a hint. Restoring
+information the slice removed is legitimate; supplying information the agent is
+being measured on discovering is not.
+
 **E4 — Scored by sampling.** Layer 4 runs K samples with a fresh identity and
 container each. Every outcome is classified — `admitted`, `refused`,
 `rate-limited`, `timed-out`, `navigation-failure` — and the **admission rate is
@@ -2261,13 +2280,56 @@ path with fewer services booted. Three components are shared by construction:
   `runOnboardingEval`**, so the reported refusal rate is never softened by
   retries.
 
-**E6 — CI placement.** The eval is `CI_CLASS: heavy` — sweep-only, therefore no
-`pull_request` trigger — and runs in the existing
+**E6 — CI placement and cost.** The eval is `CI_CLASS: heavy` — sweep-only,
+therefore no `pull_request` trigger — and runs in the existing
 `committee-opencode-nightly.yml` on `ubuntu-latest` (the self-hosted runner
 shares its IP with the standing `rmdemo_*` stack and has a documented history of
 429 flake on live-call gates). No new workflow is added. The per-PR signal stays
 what it is today: the inference-off rails, plus the single real-inference
 admission the `e2e` job performs off its own demo boot.
+
+Every timeout is **derived from one cost model**
+(`evals/onboarding/support/budget.ts`), never written as a literal in a layer
+file or a workflow, and `scripts/tests/unit/onboarding-eval-budget.test.ts` pins
+the two against each other on the per-PR path. Measured on 2026-07-25/26 (the
+"~2-5 minutes per layer" estimate was only ever true of layer 0):
+
+| Job | Expected | Worst case | Why they differ |
+|---|---|---|---|
+| isolated (layers 0-3) | ~45 min | **181 min** | a heavy layer attempt runs ~8-12 min; `MAX_ATTEMPTS = 2` doubles each layer when the free tier 429s |
+| admission (layer 4) | ~110 min | **122 min** | `SAMPLE_COUNT` × 20 min, sequential and never retried, plus stack bring-up |
+
+The ordering is normative:
+
+> **in-test timeout < step `timeout-minutes` < job `timeout-minutes`**
+
+The in-test bound must fire first because it is the only one that produces a
+diagnosis. A GitHub step timeout is a SIGKILL of the runner step: it takes the
+outcome classification, `explainLayerFailure()`'s output, the agent's final
+message, and — for the sweep — the scorecard that `afterAll` writes for the
+`if: always()` upload to collect. A truncated nightly cannot even report that it
+was rate-limited, which is the one outcome meaning the eval measured nothing.
+This matters most on a rate-limited night, when the run is both longest and
+least conclusive.
+
+**E7 — A refusal is a product defect to be answered, not a green to be
+engineered.** When a layer reports `refused`, the eval has measured the shipped
+prompt and the only legitimate lever is the **canonical `ONBOARDING_PROMPT`
+itself**. Softening a layer task is forbidden: layers 1-3 are verbatim slices,
+`canonicalFragment()` throws on paraphrase, and the answer-leak assertions
+forbid how-to. The prompt may be revised only by adding bounds that are **true
+and independently checkable** — never by reassuring an agent past a real risk.
+This is a live requirement, not a hypothetical: vanilla agents refused the
+shipped prompt in two separate runs, objecting to an install from a repository
+they could not vouch for, to key generation, and to submission to an unknown
+endpoint. Those objections were fair, and they cost real admissions rather than
+merely eval greens. The prompt now answers each with a checkable claim — the
+committee and its members' track records are public; the private key never
+leaves the applicant's machine and Robot Money receives only the public half
+(R3 — the server can only verify); a committee signature attests **authorship**
+of a written recommendation and authorizes no transaction. An agent that still
+declines after reading true bounds is making a legitimate call, and the eval
+must report it as such.
 
 ---
 
