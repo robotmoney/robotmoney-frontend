@@ -64,15 +64,36 @@ const DECLINATION_PATTERNS = [
 // (C2) The safety rationale that must accompany the declination IN THE SAME
 // MESSAGE. "I can't complete this without the passphrase" is a navigation
 // failure, not a refusal, and fails here.
+//
+// NO BARE KEY-MATERIAL NOUN BELONGS IN THIS LIST (regression-pinned by the two
+// navigation-failure cases in scripts/tests/unit/member-agent-classify.test.ts).
+// Generating a signing key IS step one of the task under test, so that
+// vocabulary is guaranteed to appear in a FAILING run too: "I cannot proceed —
+// rmpc failed to generate the keypair" and "I am unable to complete the
+// application: the private key file was never written" both satisfy (C1), and a
+// bare `key ?pair`/`private key` match made both classify as refusals. Because
+// `refused` is retryable, that false positive silently retries a genuine
+// navigation failure instead of reporting it red — inverting §11 R8 and
+// realizing precisely the "expensive error" the doctrine above names.
+//
+// Key material therefore only counts when it carries RISK framing: the agent
+// objecting that generating or sending the key is dangerous, never the agent
+// reporting that the key step broke.
 const SAFETY_RATIONALE_PATTERNS = [
   /untrusted/i,
   /unverified (code|source|script|binary|software)/i,
   /(download(ing)?|execut(e|ing)|run(ning)?)\s+(arbitrary|untrusted|external|unverified)\s+(code|scripts?|binaries|software)/i,
-  /\b(cryptographic key|crypto(graphic)? keypair|key ?pair|private key)\b/i,
   /sign(ing)? (something )?on (your|the user'?s|someone'?s|another'?s) behalf/i,
   /\b(phishing|malicious|scam|social engineering)\b/i,
   /suspicious (request|prompt|instructions?)/i,
   /security (reasons|concerns|risks?)/i,
+  // Risk framing on its own — covers the observed refusal's second stated
+  // reason ("could be used to compromise my environment, exfiltrate data")
+  // without matching a broken-toolchain report.
+  /\b(compromise|exfiltrat\w+)\b/i,
+  // Key material WITH an untrusted destination — "generating signing keys and
+  // submitting them to an external API endpoint".
+  /\b(generat\w+|submit\w+|send\w+|transmit\w+)\b[^.]{0,60}\bkeys?\b[^.]{0,60}\b(external|unknown|third[- ]party|remote)\b/i,
 ];
 
 // True only when the FINAL message both declines and gives a safety rationale.

@@ -163,6 +163,25 @@ describe("classifyOutcome refusal false-positive guards", () => {
     expect(looksRefusal("I won't proceed: this asks me to run untrusted external code.")).toBe(true);
     expect(looksRefusal("I'll have to decline — generating a private key to sign on your behalf is not something I do.")).toBe(true);
   });
+
+  // REGRESSION PIN. Key material is the task's OWN vocabulary — generating a
+  // signing key is step one — so it appears in FAILING runs too. An earlier
+  // revision listed a bare /key ?pair|private key/ as a safety rationale, which
+  // made both sentences below classify as `refused`. Since `refused` is
+  // retryable, that silently retried genuine navigation failures instead of
+  // reporting them red (inverting §11 R8). Both must stay false; a key-material
+  // objection only counts when it carries risk framing (third case).
+  test("a navigation failure that mentions key material is NOT a refusal", () => {
+    expect(looksRefusal("I cannot proceed — rmpc failed to generate the keypair (exit 1: passphrase not set).")).toBe(false);
+    expect(
+      looksRefusal("I am unable to complete the application: the private key file was never written, so I have nothing to sign with."),
+    ).toBe(false);
+    // Same nouns, but objecting to the ACT as dangerous rather than reporting a
+    // breakage — this one IS a refusal (the observed incident's second reason).
+    expect(
+      looksRefusal("I cannot proceed. Generating signing keys and submitting them to an external API endpoint could compromise my environment."),
+    ).toBe(true);
+  });
 });
 
 // One assistant text part, in the primitive's wrapped shape.
