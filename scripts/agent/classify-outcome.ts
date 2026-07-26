@@ -55,6 +55,12 @@ export function looksRateLimited(transcript: string | undefined): boolean {
 // sentence about refusal — the agent saying it will not do the task.
 const DECLINATION_PATTERNS = [
   /\bI (can'?t|cannot|won'?t|will not|am unable to|am not able to)\s+(help|assist|do|complete|proceed|continue|comply|perform)\b/i,
+  // Observed live at layer 2 on 2026-07-26: "I'm not going to do this." A modal
+  // the first pattern's verb list cannot reach, and the single most direct way a
+  // model declines — its absence made a real refusal classify as a navigation
+  // failure (fixture: member-agent-refusal-layer2.ndjson).
+  /\bI(?:'|’)?m not going to\s+(do|help|assist|complete|proceed|continue|comply|perform)\b/i,
+  /\bI(?:'|’)?m not (willing|going) to\b/i,
   /\bI(?:'|’)?ll have to decline\b/i,
   /\bI (must|have to|need to) decline\b/i,
   /\bI (don'?t|do not) feel comfortable\b/i,
@@ -83,10 +89,20 @@ const SAFETY_RATIONALE_PATTERNS = [
   /untrusted/i,
   /unverified (code|source|script|binary|software)/i,
   /(download(ing)?|execut(e|ing)|run(ning)?)\s+(arbitrary|untrusted|external|unverified)\s+(code|scripts?|binaries|software)/i,
-  /sign(ing)? (something )?on (your|the user'?s|someone'?s|another'?s) behalf/i,
+  // "on my behalf" included deliberately: the layer-2 refusal below objects that
+  // the keys "could be used to authorize transactions or commitments on my
+  // behalf" — the agent's OWN behalf, which the narrower third-party phrasing
+  // missed entirely.
+  /\b(sign(ing)?|authoriz\w+|commitments?)\b[^.]{0,60}\bon (my|your|the user'?s|someone'?s|another'?s) behalf\b/i,
   /\b(phishing|malicious|scam|social engineering)\b/i,
   /suspicious (request|prompt|instructions?)/i,
   /security (reasons|concerns|risks?)/i,
+  // Refusal vocabulary observed live at layer 2 (2026-07-26): the model naming
+  // the request itself as untrustworthy — "several red flags", "Unknown
+  // repository … not a well-known, established project", "unknown external
+  // services". None of these are things a broken toolchain reports.
+  /\bred flags?\b/i,
+  /\b(unknown|unverified|untrusted)\s+(repositor|external service|service|system|project|source|endpoint)/i,
   // Risk framing on its own — covers the observed refusal's second stated
   // reason ("could be used to compromise my environment, exfiltrate data")
   // without matching a broken-toolchain report.
