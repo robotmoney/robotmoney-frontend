@@ -46,9 +46,52 @@ export type OnboardingOutcome = "admitted" | "refused" | "rate-limited" | "timed
 
 const RATE_LIMIT_PATTERNS = [/\b429\b/, /rate[ _-]?limit/i, /overloaded_error/i, /rate_limit_error/i, /\b529\b/];
 
+/**
+ * Does this TEXT carry a provider rate-limit/overload signal? A pure pattern
+ * match with no notion of where the text came from; `rateLimitDominates` is
+ * what decides whether a match should outrank every other classification.
+ */
 export function looksRateLimited(transcript: string | undefined): boolean {
   if (!transcript) return false;
   return RATE_LIMIT_PATTERNS.some((re) => re.test(transcript));
+}
+
+// ── Why a bare pattern match is NOT enough (observed live, 2026-07-26) ───────
+// `rate-limited` sits at priority 2 and means something very strong: the
+// provider refused to serve the run, so THE RUN NEVER HAPPENED and it says
+// nothing about the product. It is also retryable, and callers are told to back
+// off for hours rather than read anything into it. That makes a false positive
+// here the most expensive misclassification in this file — it erases a real
+// result and reports it as weather.
+//
+// The transcript being scanned is
+// `--- stdout ---\n<NDJSON>\n--- stderr ---\n<…>`, and that NDJSON carries the
+// output of EVERY tool call the agent made. A layer-3 run on 2026-07-26 cloned
+// robotmoney-core, read 3704 files, installed rmpc, generated an ed25519 key,
+// signed a payload, and closed with a detailed status summary — and was
+// classified `rate-limited`, because somewhere in all that tool output a
+// `\b429\b`/`rate limit` substring appeared. Twenty minutes of real agent work
+// were reported as provider flake, and the genuine finding underneath (the
+// signature did not verify against the canonical bytes) stayed hidden.
+//
+// The fix is the STRUCTURAL conjunct this file already applies to `refused`:
+// evidence about what the agent DID, not merely which words appeared somewhere
+// in its tool output. A run the provider actually throttled cannot have authored
+// a closing verdict about work it completed, so a substantive final message
+// vetoes the classification — exactly as priority 1 already vetoes it for
+// `admitted` ("never reclassified, even if a 429 appears somewhere
+// mid-transcript"). The same hazard applied to every outcome below priority 1;
+// it was only ever guarded at the top.
+//
+// Deliberately schema-light: it reuses `finalAssistantText`, the parser the
+// refusal path already depends on, and assumes nothing about where opencode
+// prints a provider error. If the provider really did throttle the run, the
+// agent has no closing verdict to author and the match still stands.
+export function rateLimitDominates(transcript: string | undefined): boolean {
+  if (!looksRateLimited(transcript)) return false;
+  const final = finalAssistantText(transcript ?? "");
+  if (final === "") return true; // no verdict at all — the dead run a real 429 produces
+  return looksRateLimited(final); // or the agent's own closing words report the throttling
 }
 
 // (C1) A first-person declination ACT. Not a mention of declining, not a policy
@@ -133,6 +176,10 @@ export interface ClassifiableRun {
  *  1. admitted            — an admitted run is never reclassified, even if a
  *                           429 appears somewhere mid-transcript.
  *  2. rate-limited        — provider flake dominates: the run never happened.
+ *                           Requires the STRUCTURAL conjunct in
+ *                           `rateLimitDominates` — a pattern match anywhere in
+ *                           the transcript is not enough, because tool output
+ *                           echoes whatever the agent read.
  *  3. timed-out           — the agent was still going when the deadline
  *                           elapsed, so a refusal-shaped phrase early in a
  *                           20-minute transcript must not outrank it.
@@ -143,7 +190,7 @@ export interface ClassifiableRun {
  */
 export function classifyOutcome(run: ClassifiableRun): OnboardingOutcome {
   if (run.admitted) return "admitted";
-  if (looksRateLimited(run.transcript)) return "rate-limited";
+  if (rateLimitDominates(run.transcript)) return "rate-limited";
   if (run.timedOut) return "timed-out";
   const cleanNoProgressExit = run.memberId === null && run.containerExitCode === 0;
   if (cleanNoProgressExit && looksRefusal(finalAssistantText(run.transcript ?? ""))) return "refused";

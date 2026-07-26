@@ -16,7 +16,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assistantTextParts, extractAssistantText, finalAssistantText } from "../../agent/transcript.ts";
-import { classifyOutcome, type ClassifiableRun, looksRefusal } from "../../agent/classify-outcome.ts";
+import { classifyOutcome, type ClassifiableRun, looksRateLimited, looksRefusal, rateLimitDominates, shouldRetry } from "../../agent/classify-outcome.ts";
 import { classifyOutcome as classifyOutcomeReExported } from "../../lib/onboarding-eval.ts";
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "..", "fixtures", name), "utf8");
@@ -24,6 +24,7 @@ const fixture = (name: string): string => readFileSync(join(import.meta.dir, "..
 const REFUSAL = fixture("member-agent-refusal.ndjson");
 const NAVIGATION_FAILURE = fixture("member-agent-navigation-failure.ndjson");
 const MEMO_MENTIONS_REFUSE = fixture("member-agent-memo-mentions-refuse.ndjson");
+const RATE_LIMIT_IN_TOOL_OUTPUT = fixture("member-agent-rate-limit-in-tool-output.ndjson");
 
 // The shape runMemberAgent's transcript actually takes (banners around the two
 // drained pipes) — the classifier must read fixtures through it, not around it.
@@ -87,6 +88,74 @@ describe("classifyOutcome precedence", () => {
     expect(classifyOutcome(cleanNoProgressRun({ transcript: "Error: 429 Too Many Requests" }))).toBe("rate-limited");
     expect(classifyOutcome(cleanNoProgressRun({ timedOut: true, transcript: "upstream 529 overloaded_error" }))).toBe("rate-limited");
     expect(classifyOutcome(cleanNoProgressRun({ containerExitCode: 1, transcript: "anthropic rate_limit_error" }))).toBe("rate-limited");
+  });
+
+  // ── The tool-output false positive (observed live, 2026-07-26) ────────────
+  // `rate-limited` is priority 2, retryable, and documented as meaning "the run
+  // never happened" — callers are told to back off for hours and read nothing
+  // into it. So a false positive here is the most expensive misclassification
+  // in this file: it erases a real result and reports it as weather.
+  //
+  // The transcript scanned includes the output of EVERY tool call, and the agent
+  // under test routinely clones robotmoney-core and reads thousands of files. A
+  // `\b429\b` or `rate limit` substring in any of them used to outrank
+  // everything below it.
+  describe("a rate-limit substring in TOOL OUTPUT is not a rate-limited run", () => {
+    const run = cleanNoProgressRun({ transcript: wrapped(RATE_LIMIT_IN_TOOL_OUTPUT) });
+
+    test("the fixture really does carry the trigger — otherwise this whole block is vacuous", () => {
+      // The old classifier's exact check, still true: the substring IS present.
+      expect(looksRateLimited(run.transcript)).toBe(true);
+      // …but nowhere in the agent's own closing verdict.
+      expect(looksRateLimited(finalAssistantText(run.transcript!))).toBe(false);
+      expect(finalAssistantText(run.transcript!)).toContain("Generated Ed25519 signing key");
+    });
+
+    test("it classifies as navigation-failure — the agent plainly DID reason and work", () => {
+      expect(classifyOutcome(run)).toBe("navigation-failure");
+    });
+
+    test("and is therefore NEVER retried — the real result is reported, not spent as flake", () => {
+      // This is the whole point: 20 minutes of real work were previously burned
+      // twice and reported as provider flake.
+      expect(shouldRetry(classifyOutcome(run))).toBe(false);
+    });
+
+    test("a refusal whose tool output mentions a rate limit is still a REFUSAL", () => {
+      // The same latent bug on a different outcome: `refused` sits below
+      // `rate-limited`, so tool-output noise used to mask it too.
+      const refusalWithNoise = cleanNoProgressRun({
+        transcript: wrapped(REFUSAL.replace("{\"type\":\"step_start\"", '{"type":"tool_use","part":{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"grep -rn 429 ."},"output":"http.rs:429: rate limit"}}}\n{"type":"step_start"')),
+      });
+      expect(looksRateLimited(refusalWithNoise.transcript)).toBe(true);
+      expect(classifyOutcome(refusalWithNoise)).toBe("refused");
+    });
+  });
+
+  describe("rateLimitDominates keeps every TRUE positive", () => {
+    test("a dead run with a provider 429 is still rate-limited", () => {
+      expect(rateLimitDominates("--- stdout ---\n\n--- stderr ---\nError: 429 Too Many Requests")).toBe(true);
+      expect(classifyOutcome(cleanNoProgressRun({ transcript: "Error: 429 Too Many Requests" }))).toBe("rate-limited");
+    });
+
+    test("the agent's OWN closing message reporting throttling is rate-limited", () => {
+      const said = wrapped('{"type":"text","part":{"type":"text","text":"I stopped: the provider returned 429 rate_limit_error repeatedly."}}');
+      expect(rateLimitDominates(said)).toBe(true);
+      expect(classifyOutcome(cleanNoProgressRun({ transcript: said }))).toBe("rate-limited");
+    });
+
+    test("no rate-limit signal anywhere is never rate-limited", () => {
+      expect(rateLimitDominates(wrapped(NAVIGATION_FAILURE))).toBe(false);
+      expect(rateLimitDominates(undefined)).toBe(false);
+      expect(rateLimitDominates("")).toBe(false);
+    });
+
+    test("looksRateLimited itself is unchanged — it is still the pure pattern match", () => {
+      for (const t of ["Error: 429 Too Many Requests", "rate_limit_error", "529 overloaded_error", "rate-limit"]) {
+        expect(looksRateLimited(t)).toBe(true);
+      }
+      expect(looksRateLimited("all good")).toBe(false);
+    });
   });
 
   test("a bare timeout is timed-out — and outranks a refusal-shaped transcript (the agent was still running)", () => {
