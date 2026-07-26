@@ -32,11 +32,11 @@ function runCheck(targetRoot?: string): { exitCode: number; output: string } {
   return { exitCode: r.exitCode ?? -1, output: `${dec.decode(r.stdout)}${dec.decode(r.stderr)}` };
 }
 
-// A minimal RUNTIME tree the check can scan: <root>/scripts/<file>.
-function fixtureTree(fileName: string, contents: string): string {
+// A minimal RUNTIME tree the check can scan: <root>/<dir>/<file>.
+function fixtureTree(fileName: string, contents: string, dir = "scripts"): string {
   const root = mkdtempSync(join(tmpdir(), "runtime-import-guard-"));
-  mkdirSync(join(root, "scripts"), { recursive: true });
-  writeFileSync(join(root, "scripts", fileName), contents);
+  mkdirSync(join(root, dir), { recursive: true });
+  writeFileSync(join(root, dir, fileName), contents);
   return root;
 }
 
@@ -73,6 +73,34 @@ describe("check-no-test-imports-in-runtime.sh", () => {
         // The message must name the RULE, not just the file, or the next person
         // to hit it has to reverse-engineer the intent from a grep dump.
         expect(r.output).toContain("runtime code must never import test or eval code");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // ── EVERY scan root, not just the first ───────────────────────────────────
+  // The cases above all plant into scripts/, so dropping any OTHER entry from
+  // the guard's `roots=()` array would leave this suite green while that tree
+  // went unscanned forever. One planted violation per declared root closes it.
+  const SCAN_ROOTS = ["backend/src", "contract/src", "frontend/public/assets/js", "scripts"];
+
+  test("the guard declares exactly the roots this suite proves — a new root must arrive with its own control", () => {
+    const declared = readFileSync(CHECK, "utf8")
+      .split("\n")
+      .filter((l) => /^\s*"[^"]+"\s*$/.test(l))
+      .map((l) => l.trim().replace(/"/g, ""));
+    expect(declared.sort()).toEqual([...SCAN_ROOTS].sort());
+  });
+
+  for (const rel of SCAN_ROOTS) {
+    test(`FAILS on a violation planted in ${rel}/ — that root is really scanned`, () => {
+      const root = fixtureTree("planted.ts", 'import { x } from "./thing.test.ts";\n', rel);
+      try {
+        const r = runCheck(root);
+        expect(r.exitCode).not.toBe(0);
+        expect(r.output).toContain("runtime code must never import test or eval code");
+        expect(r.output).toContain(join(rel, "planted.ts"));
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

@@ -70,6 +70,26 @@ describe("check-eval-keyless.sh", () => {
     });
   }
 
+  // ── The SECOND scan root ──────────────────────────────────────────────────
+  // Rule 1 scans scripts/agent/ as well as evals/, but every fixture above
+  // plants only into evals/ — so dropping scripts/agent/ from the scan would
+  // leave this suite green while the member-agent primitive went unchecked for
+  // provider keys. This plants there instead, with a CLEAN evals/ alongside so
+  // the failure can only come from the agent tree.
+  test("FAILS on a provider key in scripts/agent/ — rule 1's second root is really scanned", () => {
+    const root = fixtureTree("clean.ts", "export const LAYER = 'layer0';\n");
+    try {
+      mkdirSync(join(root, "scripts", "agent"), { recursive: true });
+      writeFileSync(join(root, "scripts", "agent", "planted.ts"), 'const k = "ANTHROPIC_API_KEY";\n');
+      const r = runCheck(root);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.output).toContain("check-eval-keyless: FAILED");
+      expect(r.output).toContain(join("scripts", "agent", "planted.ts"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("FAILS on a tree with no evals/ at all — a guard over zero paths is a green that means nothing", () => {
     const empty = mkdtempSync(join(tmpdir(), "evals-guard-empty-"));
     try {
