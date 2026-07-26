@@ -1,14 +1,12 @@
 // The ONE compose bring-up — docs/decisions.md D22 "shared components",
 // docs/architecture.md §11.3 E5.
 //
-// Consumed TODAY by the onboarding eval and the inference-off rails check (both
-// `core`; the rails check's forked bringUpInfra() was deleted in its favour).
-// The demo (`full` profile) is NOT yet migrated onto it — scripts/lib/demo-main.ts
-// still runs its own bring-up — so `full` has no runtime caller and is covered
-// only by scripts/tests/unit/stack-config.test.ts. The StackHooks event surface
-// below exists precisely so that migration can map onto the demo's TUI panes
-// without this module importing a renderer; finishing it is follow-up work, and
-// until it lands the demo/eval duplication is half-removed, not removed.
+// Consumed by all three: the demo (`full` profile, scripts/lib/demo-main.ts),
+// the onboarding eval (`core`), and the inference-off rails check (`core`, whose
+// forked bringUpInfra() was deleted in its favour). There is no second bring-up
+// left in the repo — demo-main.ts's runCompose/waitForPostgres/waitForHttp are
+// gone, not parallel. The StackHooks event surface below is how the demo drives
+// its TUI panes without this module importing a renderer.
 //
 // A thin IMPURE shell over scripts/stack/config.ts's pure builders. Nothing
 // runs on import: `createStack()` only computes an env map and some argv, it

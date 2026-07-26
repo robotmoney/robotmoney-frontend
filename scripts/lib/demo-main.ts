@@ -15,11 +15,14 @@ import {
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./demo-newcomers.ts";
 import {
   allocatePorts,
+  createStack,
   DEFAULT_STACK_DATABASE,
   generateStackCredentials,
   hostBackendUrl,
   internalDatabaseUrl,
   parsePort,
+  type StackConfig,
+  type StackEvent,
 } from "../stack/index.ts";
 import { COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 
@@ -152,6 +155,49 @@ process.env.ANALYTICS_TOKEN = analyticsToken;
 // Base mainnet RPC + live analytics + floor seed).
 const demoEnv = resolveDemoEnv(process.env);
 
+// Compose interpolation values the DEMO honours from the operator's own
+// environment, passed to the shared stack explicitly via `extraComposeEnv`.
+//
+// Why an allowlist and not `...process.env`: scripts/stack deliberately does not
+// inherit the ambient environment (§11.3 E1 — that is what keeps a provider key
+// out of an eval's containers). But the DEMO is an operator tool, not an eval,
+// and these knobs are documented and load-bearing for it: exporting
+// COMMITTEE_WINDOW_MINUTES=5 or a custom BASE_RPC_URL before `bun run demo`
+// works today, and silently ignoring it after the bring-up moved onto the shared
+// module would be a behaviour regression that is miserable to debug. Every name
+// here is interpolated by docker-compose.yml / docker-compose.demo.yml and each
+// already carries a `:-default` there, so an unset value behaves exactly as
+// before. Values buildComposeEnv() owns (ports, credentials, DATABASE_URL,
+// POSTGRES_*, DEMO_PROJECT) are deliberately NOT listed: the stack config is
+// their single source and an exported value must never shadow it.
+const DEMO_COMPOSE_PASSTHROUGH = [
+  "BASE_RPC_URL",
+  "COMMITTEE_AGGREGATE_CRON",
+  "COMMITTEE_CLOSE_WINDOW_CRON",
+  "COMMITTEE_NOTIFICATION_EMAIL_FROM",
+  "COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_TOKEN",
+  "COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_URL",
+  "COMMITTEE_OPEN_SESSION_CRON",
+  "COMMITTEE_PUBLISH_BRIEF_CRON",
+  "COMMITTEE_PUBLISH_CRON",
+  "COMMITTEE_SCHEDULES_ENABLED",
+  "COMMITTEE_WINDOW_MINUTES",
+  "FETCH_CACHE_DIR",
+  "FLOOR_SEED_PATH",
+  "PROJECTS_SOURCE",
+  "RM_ENV",
+  "WORKER_DATABASE_URL",
+] as const;
+
+function demoPassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of DEMO_COMPOSE_PASSTHROUGH) {
+    const v = env[k];
+    if (v !== undefined && v !== "") out[k] = v;
+  }
+  return out;
+}
+
 // Env shared by every `docker compose` call — pins the project, selects the
 // demo override, resolves the data path, and sets random host ports + credentials.
 const dockerEnv: Record<string, string> = {
@@ -175,6 +221,22 @@ const dockerEnv: Record<string, string> = {
   POSTGRES_PASSWORD: DB_PASSWORD,
   POSTGRES_DB: DB_NAME,
 } as Record<string, string>;
+
+// The demo's own StackConfig (§11.3 E5 / D23 L2). PURE — buildStackConfig-style
+// data only; nothing spawns until main() calls `stack.up()`. This is what makes
+// the `full` profile a real runtime consumer of the shared bring-up rather than
+// a test-only branch: the demo boot below IS scripts/stack's boot.
+const demoStackConfig: StackConfig = {
+  repoRoot,
+  project,
+  profile: "full", // core (postgres+api) + the three worker lanes
+  apiPort,
+  pgPort,
+  composeFiles: composeFilesRun.split(":"),
+  database,
+  credentials,
+  extraComposeEnv: { ...demoEnv.composeEnv, ...demoPassthroughEnv(process.env) },
+};
 
 // --- TUI + logging gating -------------------------------------------------
 // The TUI activates ONLY for an interactive local run. CI and piped/non-TTY runs
@@ -372,16 +434,6 @@ function dockerCompose(args: string[], check = true): Bun.SyncSubprocess {
   return r;
 }
 
-async function runCompose(args: string[], label: string): Promise<void> {
-  const proc = Bun.spawn(["docker", "compose", ...args], {
-    cwd: repoRoot,
-    env: dockerEnv,
-    stdout: outFd,
-    stderr: errFd,
-  });
-  const code = await proc.exited;
-  if (code !== 0) throw new Error(`${label} failed (exit ${code})`);
-}
 
 // On a startup failure, the containers are about to be torn down (CI) or left up
 // (local) — capture their state and logs FIRST so the real cause is visible. In
@@ -507,32 +559,7 @@ process.on("SIGINT", onSignal);
 process.on("SIGTERM", onSignal);
 
 // --- Readiness helpers ----------------------------------------------------
-async function waitForPostgres(timeoutMs = 60_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const r = Bun.spawnSync(
-      ["docker", "compose", "exec", "-T", "postgres", "pg_isready", "-U", DB_USER, "-d", DB_NAME],
-      // Health poll fires every second — keep it quiet on the console (as before);
-      // route to the log fd in TUI mode.
-      { cwd: repoRoot, env: dockerEnv, stdout: outFd === "inherit" ? "ignore" : outFd, stderr: outFd === "inherit" ? "ignore" : outFd },
-    );
-    if (r.exitCode === 0) return;
-    await sleep(1000);
-  }
-  throw new Error("postgres did not become ready in time");
-}
 
-async function waitForHttp(url: string, timeoutMs = 30_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const r = await fetch(url);
-      if (r.ok) return;
-    } catch { /* not up yet */ }
-    await sleep(500);
-  }
-  throw new Error(`timed out waiting for ${url}`);
-}
 
 async function run(cmd: string[], cwd: string, env: Record<string, string>, label: string): Promise<void> {
   const proc = Bun.spawn(cmd, { cwd, env, stdout: outFd, stderr: errFd });
@@ -955,20 +982,66 @@ async function main(): Promise<void> {
     patchConsole(); // capture stray console.* (incl. imported e2e.ts) into the log file
   }
 
-  log("building compose images…");
-  for (const c of state.containers) setContainer(c.name, "building");
-  await runCompose(["build"], "compose build");
-  for (const c of state.containers) setContainer(c.name, "pending");
+  // ── The bring-up IS scripts/stack's bring-up (§11.3 E5) ──────────────────
+  // build → postgres+wait → migrate → services → /health, in one shared
+  // implementation with the onboarding eval and the inference-off rails check.
+  // The demo contributes only what is genuinely demo-specific: the `full`
+  // profile, its migrate flags, and the TUI rendering below.
+  //
+  // StackHooks is how the TUI is driven WITHOUT scripts/stack importing a
+  // renderer: each lifecycle event maps onto the panes exactly as the
+  // hand-rolled sequence did, so the visible boot is unchanged.
+  const WORKER_LANES = ["worker-committee", "worker-analytics", "worker-research"];
+  const onStackEvent = (e: StackEvent): void => {
+    if (e.phase === "log") return void log(e.message);
+    const { phase, status } = e;
+    if (phase === "build") {
+      if (status === "start") {
+        log("building compose images…");
+        for (const c of state.containers) setContainer(c.name, "building");
+      } else {
+        for (const c of state.containers) setContainer(c.name, "pending");
+      }
+    } else if (phase === "postgres") {
+      if (status === "start") {
+        log("starting postgres…");
+        setContainer("postgres", "starting");
+      } else {
+        setContainer("postgres", "healthy");
+        log("postgres healthy");
+      }
+    } else if (phase === "migrate") {
+      if (status === "start") {
+        log("running migrations…");
+        setStep("migrate", "running");
+      } else {
+        setStep("migrate", "done");
+      }
+    } else if (phase === "services") {
+      if (status === "start") {
+        log("starting api, worker lanes (committee/analytics/research)…");
+        for (const n of ["api", ...WORKER_LANES]) setContainer(n, "starting");
+      } else {
+        // No /health endpoint on a lane — `up` ⇒ running (unchanged semantics).
+        for (const n of WORKER_LANES) setContainer(n, "healthy", "running");
+        setStep("api /health", "running");
+      }
+    } else if (phase === "health" && status === "done") {
+      setContainer("api", "healthy");
+      setStep("api /health", "done");
+      log("api healthy");
+    }
+  };
 
-  log("starting postgres…");
-  setContainer("postgres", "starting");
-  await runCompose(["up", "-d", "postgres"], "start postgres");
-  await waitForPostgres();
-  setContainer("postgres", "healthy");
-  log("postgres healthy");
+  const stack = createStack(demoStackConfig, {
+    // The demo is an operator tool, so its documented compose knobs still
+    // apply — they arrive as demoStackConfig.extraComposeEnv (see
+    // DEMO_COMPOSE_PASSTHROUGH), never as an ambient inherit.
+    hostEnv: process.env,
+    io: { stdout: outFd, stderr: errFd },
+    hooks: { onEvent: onStackEvent },
+  });
 
-  log("running migrations…");
-  setStep("migrate", "running");
   // DEMO_MODE — the single "this stack is the demo" flag (it replaced the
   // retired per-property fast-schedules flag). docker-compose.demo.yml pins it on
   // every demo container (and `compose run` applies that service env to this
@@ -986,25 +1059,12 @@ async function main(): Promise<void> {
   //     token prices are an accepted demo tradeoff). The seed's cold-start
   //     enqueue still lands a live sample at boot, so the live-smoke gate's
   //     "live within the deadline" contract is unaffected.
-  const demoModeEnv = ["-e", "DEMO_MODE=1"];
-  // Demo (local AND CI): populate the projects directory so /api/projects returns
-  // a full "Agentic Economy Ecosystem" table. Demo-only — prod/regular-CI seeds run
-  // `migrate` without this flag, so their seed stays byte-for-byte unchanged (empty
-  // projects tables). Idempotent, so re-running the demo never duplicates rows.
-  const demoSeedProjectsEnv = ["-e", "DEMO_SEED_PROJECTS=1"];
-  await runCompose(["run", "--rm", "-T", ...demoModeEnv, ...demoSeedProjectsEnv, "api", "bun", "run", "src/db/migrate.ts"], "migrations");
-  setStep("migrate", "done");
-
-  const WORKER_LANES = ["worker-committee", "worker-analytics", "worker-research"];
-  log("starting api, worker lanes (committee/analytics/research)…");
-  for (const n of ["api", ...WORKER_LANES]) setContainer(n, "starting");
-  await runCompose(["up", "-d"], "start services");
-  for (const n of WORKER_LANES) setContainer(n, "healthy", "running"); // no /health endpoint — up ⇒ running
-  setStep("api /health", "running");
-  await waitForHttp(`${backendUrl}/health`);
-  setContainer("api", "healthy");
-  setStep("api /health", "done");
-  log("api healthy");
+  // DEMO_SEED_PROJECTS — demo (local AND CI): populate the projects directory so
+  // /api/projects returns a full "Agentic Economy Ecosystem" table. Demo-only —
+  // prod/regular-CI seeds run `migrate` without this flag, so their seed stays
+  // byte-for-byte unchanged (empty projects tables). Idempotent, so re-running
+  // the demo never duplicates rows.
+  await stack.up({ migrateEnv: { DEMO_MODE: "1", DEMO_SEED_PROJECTS: "1" } });
 
   // EDGAR/MNA seed bootstrap (issue #108) — AFTER migrations + API readiness,
   // BEFORE the research schedule may fire. Loads the committed seed artifact

@@ -2224,16 +2224,20 @@ path with fewer services booted. Three components are shared by construction:
   one export returns ONLY allowlisted docker-client plumbing (`PATH`,
   `DOCKER_HOST`, proxies) and provably no key, token, or model id — it exists so
   the eval, which may contain no environment read at all, can still find a
-  daemon. Consumed today by the eval and the rails check (both `core` — the
-  rails check's forked `bringUpInfra()` is deleted in its favour). The demo's own
-  bring-up is **not yet migrated**, so the `full` profile currently has no
-  runtime caller and is exercised only by unit tests; completing that migration
-  (the demo's boot is interleaved with TUI step state, a `--pg-data` overlay, and
-  ~15 other `dockerCompose` call sites) is tracked follow-up work. Until it
-  lands, the demo and the eval still stand their stacks up separately — the
-  duplication this component exists to remove is half-removed. Saying so here is
-  deliberate: §9.7 records what happens when a doc claims a property the code
-  does not have.
+  daemon. Consumed by all three: the demo (`full`), the eval (`core`), and the
+  rails check (`core`, whose forked `bringUpInfra()` is deleted in its favour).
+  The demo's `StackHooks` mapping is what keeps the TUI out of this module — each
+  lifecycle event drives the panes the hand-rolled sequence used to drive
+  directly, so the visible boot is unchanged and `runCompose`/`waitForPostgres`/
+  `waitForHttp` are deleted from `demo-main.ts` rather than left as a parallel
+  path. One demo-specific carve-out is deliberate: `DEMO_COMPOSE_PASSTHROUGH`
+  forwards the demo's documented compose knobs (`COMMITTEE_*_CRON`,
+  `BASE_RPC_URL`, `RM_ENV`, …) from the operator's environment through
+  `extraComposeEnv`. The demo is an operator tool, not an eval — E1's no-ambient-
+  read rule protects the eval path, and silently dropping an exported
+  `COMMITTEE_WINDOW_MINUTES` would be a regression. Values the stack config owns
+  (ports, credentials, `DATABASE_URL`, `POSTGRES_*`) are excluded from that list
+  so an exported value can never shadow them.
 - **`runMemberAgent()`** (`scripts/agent/member-agent.ts`, alongside
   `buildMemberAgentArgv`, `memberAgentContainerName`, and the
   `containerFileExists`/`copyFromContainer` `docker cp` helpers) — the
