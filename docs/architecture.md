@@ -2224,8 +2224,16 @@ path with fewer services booted. Three components are shared by construction:
   one export returns ONLY allowlisted docker-client plumbing (`PATH`,
   `DOCKER_HOST`, proxies) and provably no key, token, or model id — it exists so
   the eval, which may contain no environment read at all, can still find a
-  daemon. Consumed by the demo (`full`), the eval (`core`), and the
-  rails check (`core`, replacing its forked `bringUpInfra()`).
+  daemon. Consumed today by the eval and the rails check (both `core` — the
+  rails check's forked `bringUpInfra()` is deleted in its favour). The demo's own
+  bring-up is **not yet migrated**, so the `full` profile currently has no
+  runtime caller and is exercised only by unit tests; completing that migration
+  (the demo's boot is interleaved with TUI step state, a `--pg-data` overlay, and
+  ~15 other `dockerCompose` call sites) is tracked follow-up work. Until it
+  lands, the demo and the eval still stand their stacks up separately — the
+  duplication this component exists to remove is half-removed. Saying so here is
+  deliberate: §9.7 records what happens when a doc claims a property the code
+  does not have.
 - **`runMemberAgent()`** (`scripts/agent/member-agent.ts`, alongside
   `buildMemberAgentArgv`, `memberAgentContainerName`, and the
   `containerFileExists`/`copyFromContainer` `docker cp` helpers) — the
