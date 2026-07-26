@@ -83,10 +83,23 @@ export const HARVEST_FILE_PATTERNS = [
 ];
 
 const MAX_SCANNED_FILE_BYTES = 2 * 1024 * 1024;
-// Verification is O(keys × signatures) real ed25519 verifies; a transcript full
-// of base64 noise must not turn that into minutes. A genuine run produces one
-// key and one signature — a cap this high can only bite on noise.
-const MAX_CANDIDATES = 25;
+// Verification is O(keys × signatures) real ed25519 verifies, so there has to be
+// SOME bound. The old bound was 25 per dimension, justified as "a genuine run
+// produces one key and one signature — a cap this high can only bite on noise."
+// Observation falsified that: a real layer-3 run on 2026-07-26 yielded 3
+// candidate keys and 34 candidate SIGNATURES (an agent that clones
+// robotmoney-core drags in a lot of base64-shaped text), so 9 signatures were
+// silently never tested. If the agent's real signature had been among them, the
+// harness would have reported "nothing verified" — a harness miss dressed as a
+// canonicalization-drift result.
+//
+// The bound was also far more expensive than it looked worth: a FAILED verify
+// measured at 0.009 ms here, so the old cap bought ~0.0 s and cost coverage.
+// 500 per dimension is a 2.2 s worst case against layers that run for minutes.
+// Truncation is additionally reported (see `truncatedCandidates`) — a cap that
+// silently discards evidence is exactly the false green this eval exists to
+// prevent.
+const MAX_CANDIDATES = 500;
 
 export interface Candidates {
   publicKeys: string[];
@@ -135,6 +148,10 @@ export interface HarvestDiagnostics {
   // PayloadOnDiskEvidence: the whole point is that a trailing newline is
   // visible here rather than trimmed away.
   payloadOnDisk?: PayloadOnDiskEvidence;
+  // Set ONLY when the candidate cap actually discarded something. Absence means
+  // every observed pair really was verified — so "nothing verified" can be read
+  // as a result rather than a possible truncation artifact.
+  truncatedCandidates?: { publicKeys: number; signatures: number };
 }
 
 // How the agent's own payload file compares to the canonical bytes.
@@ -246,6 +263,12 @@ export async function harvestSignedApplication(opts: HarvestOptions): Promise<Ha
     }),
   };
 
+  const droppedKeys = Math.max(0, candidates.publicKeys.length - MAX_CANDIDATES);
+  const droppedSignatures = Math.max(0, candidates.signatures.length - MAX_CANDIDATES);
+  if (droppedKeys > 0 || droppedSignatures > 0) {
+    diagnostics.truncatedCandidates = { publicKeys: droppedKeys, signatures: droppedSignatures };
+  }
+
   const verify = await loadVerifier(opts.repoRoot);
   // Every canonical rendering the agent could legitimately have signed, one per
   // candidate key — the comparison set for the on-disk payload evidence below.
@@ -296,6 +319,18 @@ export function findApplicationPayloadOnDisk(
   return null;
 }
 
+// A cap that discarded evidence must SAY SO: without this line, a truncated
+// search and an exhaustive one produce the same "nothing verified" text, and the
+// reader cannot tell a result from an artifact.
+export function explainTruncation(t: HarvestDiagnostics["truncatedCandidates"]): string {
+  if (!t) return "";
+  return (
+    `\nWARNING — THE SEARCH WAS TRUNCATED: ${t.publicKeys} public key(s) and ${t.signatures} signature(s) ` +
+    "exceeded the candidate cap and were NEVER TESTED, so this failure may be an artifact of the cap rather " +
+    "than a real drift. Raise MAX_CANDIDATES in evals/onboarding/support/signature-harvest.ts."
+  );
+}
+
 // The on-disk payload half of the drift diagnosis. Silent when the agent left
 // nothing behind — there is no evidence to report and a "none" line would be
 // noise.
@@ -338,6 +373,7 @@ export function explainHarvestFailure(d: HarvestDiagnostics): string {
     // Without the expected shape this red is undiagnosable from a CI log: the
     // reader can see that nothing matched but not what the target was.
     (d.canonicalShapeExpected ? `\nThe harness verified against exactly: ${d.canonicalShapeExpected}` : "") +
-    explainPayloadOnDisk(d.payloadOnDisk)
+    explainPayloadOnDisk(d.payloadOnDisk) +
+    explainTruncation(d.truncatedCandidates)
   );
 }

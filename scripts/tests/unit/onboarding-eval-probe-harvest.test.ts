@@ -30,6 +30,7 @@ import {
   classifyPayloadOnDisk,
   explainHarvestFailure,
   explainPayloadOnDisk,
+  explainTruncation,
   findApplicationPayloadOnDisk,
   harvestSignedApplication,
   HARVEST_FILE_PATTERNS,
@@ -419,6 +420,51 @@ describe("explainHarvestFailure", () => {
 
   test("a signature with no key still reads as 'found but unverified', not 'nothing anywhere'", () => {
     expect(explainHarvestFailure(diagnostics({ candidateSignatures: 1 }))).toContain("FOUND BUT NOTHING VERIFIED");
+  });
+});
+
+// ── No silent caps ──────────────────────────────────────────────────────────
+// The candidate cap was 25 per dimension, justified as unable to bite on a
+// genuine run. A real layer-3 run on 2026-07-26 produced 34 candidate
+// SIGNATURES, so 9 went untested with no indication in the output — and if the
+// agent's real signature had been among them, the harness would have reported a
+// canonicalization drift that never happened.
+describe("explainTruncation", () => {
+  test("a truncated search says so, names the counts, and says what to change", () => {
+    const msg = explainTruncation({ publicKeys: 0, signatures: 9 });
+    expect(msg).toContain("TRUNCATED");
+    expect(msg).toContain("9 signature(s)");
+    expect(msg).toContain("NEVER TESTED");
+    expect(msg).toContain("MAX_CANDIDATES");
+  });
+
+  test("an exhaustive search renders nothing — silence means every pair was tested", () => {
+    expect(explainTruncation(undefined)).toBe("");
+  });
+});
+
+describe("the candidate cap is above what a real run produces", () => {
+  test("a run with the observed 3 keys / 34 signatures is NOT truncated", async () => {
+    const real = await realSignedApplication({ name: "Ada Lovelace", contact: "ada@example.test" });
+    const hostDir = tmpDir("harvest-cap-");
+    try {
+      // 34 signature-shaped tokens, the real one LAST — the position the old
+      // cap of 25 would have discarded.
+      const noise = Array.from({ length: 33 }, (_, i) => `${String.fromCharCode(65 + (i % 26)).repeat(86)}==`);
+      const result = await harvestSignedApplication({
+        repoRoot,
+        transcript: [real.publicKeyB64, ...noise, real.signatureB64].join("\n"),
+        hostDir,
+        application: { name: "Ada Lovelace", contact: "ada@example.test" },
+      });
+      expect(result.diagnostics.candidateSignatures).toBeGreaterThan(25);
+      expect(result.diagnostics.truncatedCandidates).toBeUndefined();
+      // …and the real pair is still found despite sitting past the old cap.
+      expect(result.verified).not.toBeNull();
+      expect(result.verified!.signature).toBe(real.signatureB64);
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true });
+    }
   });
 });
 
