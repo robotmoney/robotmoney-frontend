@@ -27,7 +27,9 @@ import { join } from "node:path";
 import { canonicalizeApplication } from "@robotmoney/contract";
 import { fileSize, findByName, findMatching, toContainerPath, walk } from "../../../evals/onboarding/support/probe.ts";
 import {
+  classifyPayloadOnDisk,
   explainHarvestFailure,
+  explainPayloadOnDisk,
   findApplicationPayloadOnDisk,
   harvestSignedApplication,
   HARVEST_FILE_PATTERNS,
@@ -302,6 +304,78 @@ describe("findApplicationPayloadOnDisk", () => {
 
   test("an empty content map is null, not a throw", () => {
     expect(findApplicationPayloadOnDisk(new Map(), canonical, "c@example.test")).toBeNull();
+  });
+});
+
+// ── The trailing-newline defect (the hardest drift to see) ──────────────────
+// `rmpc committee-identity sign --payload-file F` signs F's bytes EXACTLY and
+// canonicalizes nothing, so `echo "$payload" > F` appends one \n and the
+// signature can never verify — while every rendering of F still looks correct.
+// findApplicationPayloadOnDisk() TRIMS, so it reported such a file as
+// byte-identical to canonical: the drift reporter erased the very byte that
+// caused the drift. classifyPayloadOnDisk compares without trimming.
+describe("classifyPayloadOnDisk", () => {
+  const canonical = '{"name":"Ada","contact":"ada@example.test","publicKey":"K"}';
+  const contact = "ada@example.test";
+
+  test("byte-exact is reported as byte-exact", () => {
+    const e = classifyPayloadOnDisk(new Map([["/x/a.json", canonical]]), [canonical], contact);
+    expect(e.match).toBe("byte-exact");
+  });
+
+  test("a single trailing newline is its OWN verdict, not byte-exact", () => {
+    const e = classifyPayloadOnDisk(new Map([["/x/a.json", `${canonical}\n`]]), [canonical], contact);
+    expect(e.match).toBe("trailing-whitespace-only");
+    // The newline must be VISIBLE in the reported bytes — escaped, not trimmed.
+    expect(e.bytes).toContain("\\n");
+  });
+
+  test("leading/trailing spaces and CRLF land in the same verdict", () => {
+    for (const raw of [`${canonical}\r\n`, `  ${canonical}  `, `\n${canonical}\n`]) {
+      expect(classifyPayloadOnDisk(new Map([["/x/a.json", raw]]), [canonical], contact).match).toBe(
+        "trailing-whitespace-only",
+      );
+    }
+  });
+
+  test("a genuinely different shape is not confused with whitespace", () => {
+    const drifted = '{"contact":"ada@example.test","name":"Ada","publicKey":"K"}';
+    const e = classifyPayloadOnDisk(new Map([["/x/a.json", drifted]]), [canonical], contact);
+    expect(e.match).toBe("shaped-but-different");
+  });
+
+  test("no payload file at all is `none`, with no bytes to report", () => {
+    const e = classifyPayloadOnDisk(new Map([["/x/notes.txt", "hello"]]), [canonical], contact);
+    expect(e).toEqual({ match: "none", bytes: null });
+  });
+
+  test("byte-exact wins over a whitespace-only sibling, whatever the iteration order", () => {
+    const contents = new Map([["/x/bad.json", `${canonical}\n`], ["/x/good.json", canonical]]);
+    expect(classifyPayloadOnDisk(contents, [canonical], contact).match).toBe("byte-exact");
+  });
+
+  test("it compares against EVERY candidate key's canonical rendering", () => {
+    const other = '{"name":"Ada","contact":"ada@example.test","publicKey":"OTHER"}';
+    const e = classifyPayloadOnDisk(new Map([["/x/a.json", other]]), [canonical, other], contact);
+    expect(e.match).toBe("byte-exact");
+  });
+});
+
+describe("explainPayloadOnDisk", () => {
+  test("the whitespace verdict names the cause AND the fix — a diagnosis, not a complaint", () => {
+    const msg = explainPayloadOnDisk({ match: "trailing-whitespace-only", bytes: '"{...}\\n"' });
+    expect(msg).toContain("EXCEPT FOR SURROUNDING WHITESPACE");
+    expect(msg).toContain("--payload-file");
+    expect(msg).toContain("printf");
+  });
+
+  test("byte-exact steers the reader AWAY from the payload", () => {
+    expect(explainPayloadOnDisk({ match: "byte-exact", bytes: '"{...}"' })).toContain("not in the payload");
+  });
+
+  test("`none` and undefined render nothing — no empty section in the failure text", () => {
+    expect(explainPayloadOnDisk({ match: "none", bytes: null })).toBe("");
+    expect(explainPayloadOnDisk(undefined)).toBe("");
   });
 });
 

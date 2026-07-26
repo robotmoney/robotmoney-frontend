@@ -131,6 +131,62 @@ export interface HarvestDiagnostics {
   // what the agent SHOULD have signed instead of only that nothing matched —
   // without it, "nothing verified" is undiagnosable from a CI log.
   canonicalShapeExpected?: string;
+  // What the agent actually left on disk, compared BYTE-WISE. See
+  // PayloadOnDiskEvidence: the whole point is that a trailing newline is
+  // visible here rather than trimmed away.
+  payloadOnDisk?: PayloadOnDiskEvidence;
+}
+
+// How the agent's own payload file compares to the canonical bytes.
+//
+// `trailing-whitespace-only` is called out separately because it is the single
+// most likely way a shell-driven agent fails this layer and the hardest to see:
+// `rmpc committee-identity sign --payload-file F` signs the bytes of F EXACTLY
+// and canonicalizes nothing, so `echo "$payload" > F` appends one \n and the
+// signature can never verify — while every human-readable rendering of F still
+// looks perfectly correct. `printf '%s'` (or writing without a trailing
+// newline) is the fix.
+export type PayloadDiskMatch = "none" | "byte-exact" | "trailing-whitespace-only" | "shaped-but-different";
+
+export interface PayloadOnDiskEvidence {
+  match: PayloadDiskMatch;
+  // JSON-escaped so invisible bytes (\n, \r, trailing spaces) are legible in a
+  // CI log; truncated, because an agent can leave a very large file behind.
+  bytes: string | null;
+}
+
+const MAX_REPORTED_PAYLOAD_CHARS = 400;
+
+function escapeForLog(text: string): string {
+  const escaped = JSON.stringify(text);
+  return escaped.length > MAX_REPORTED_PAYLOAD_CHARS ? `${escaped.slice(0, MAX_REPORTED_PAYLOAD_CHARS)}…` : escaped;
+}
+
+/**
+ * Compare every file the agent left behind against the canonical bytes for each
+ * candidate public key, WITHOUT trimming — the trim is precisely what hides the
+ * defect. Best match wins.
+ */
+export function classifyPayloadOnDisk(
+  contents: Map<string, string>,
+  canonicalCandidates: string[],
+  contact: string,
+): PayloadOnDiskEvidence {
+  const exact = new Set(canonicalCandidates);
+  let whitespaceOnly: string | null = null;
+  let shaped: string | null = null;
+
+  for (const text of contents.values()) {
+    if (exact.has(text)) return { match: "byte-exact", bytes: escapeForLog(text) };
+    if (whitespaceOnly === null && exact.has(text.trim())) whitespaceOnly = text;
+    if (shaped === null) {
+      const t = text.trim();
+      if (t.startsWith("{") && t.includes(contact) && t.includes("publicKey")) shaped = text;
+    }
+  }
+  if (whitespaceOnly !== null) return { match: "trailing-whitespace-only", bytes: escapeForLog(whitespaceOnly) };
+  if (shaped !== null) return { match: "shaped-but-different", bytes: escapeForLog(shaped) };
+  return { match: "none", bytes: null };
 }
 
 export interface HarvestedApplication {
@@ -191,9 +247,13 @@ export async function harvestSignedApplication(opts: HarvestOptions): Promise<Ha
   };
 
   const verify = await loadVerifier(opts.repoRoot);
+  // Every canonical rendering the agent could legitimately have signed, one per
+  // candidate key — the comparison set for the on-disk payload evidence below.
+  const canonicalCandidates: string[] = [];
   for (const publicKey of candidates.publicKeys.slice(0, MAX_CANDIDATES)) {
     const application = { name: opts.application.name, contact: opts.application.contact, publicKey };
     const canonical = canonicalizeApplication(application);
+    canonicalCandidates.push(canonical);
     for (const signature of candidates.signatures.slice(0, MAX_CANDIDATES)) {
       if (await verify(application, signature, publicKey)) {
         return {
@@ -208,6 +268,10 @@ export async function harvestSignedApplication(opts: HarvestOptions): Promise<Ha
       }
     }
   }
+  // Nothing verified. Attach what the agent actually wrote, compared byte-wise —
+  // this is the evidence that separates "signed the right bytes plus a newline"
+  // from "signed a different payload shape", and it is invisible without it.
+  diagnostics.payloadOnDisk = classifyPayloadOnDisk(contents, canonicalCandidates, opts.application.contact);
   return { verified: null, diagnostics };
 }
 
@@ -232,6 +296,30 @@ export function findApplicationPayloadOnDisk(
   return null;
 }
 
+// The on-disk payload half of the drift diagnosis. Silent when the agent left
+// nothing behind — there is no evidence to report and a "none" line would be
+// noise.
+export function explainPayloadOnDisk(e: PayloadOnDiskEvidence | undefined): string {
+  if (!e || e.match === "none") return "";
+  if (e.match === "trailing-whitespace-only") {
+    return (
+      `\nTHE AGENT'S PAYLOAD FILE IS CANONICAL EXCEPT FOR SURROUNDING WHITESPACE: ${e.bytes}\n` +
+      "That is the entire defect. `rmpc committee-identity sign --payload-file F` signs the bytes of F " +
+      "EXACTLY and canonicalizes nothing, so a single trailing newline — what `echo \"$payload\" > F` " +
+      "writes — makes the signature unverifiable while the file still LOOKS right. Writing the payload " +
+      "without a trailing newline (`printf '%s'`) is the fix."
+    );
+  }
+  if (e.match === "byte-exact") {
+    return (
+      `\nThe agent's payload file IS byte-exact: ${e.bytes}\n` +
+      "So the drift is not in the payload — the signature was made over something else, or with a key " +
+      "whose public half was never observed."
+    );
+  }
+  return `\nThe agent's payload file differs in SHAPE, not just whitespace: ${e.bytes}`;
+}
+
 // The message layer 3 fails with. Its whole job is to separate the two very
 // different reds this observation can produce.
 export function explainHarvestFailure(d: HarvestDiagnostics): string {
@@ -249,6 +337,7 @@ export function explainHarvestFailure(d: HarvestDiagnostics): string {
     "order, whitespace, a `lens` field) or the harness observed a signature from some other operation." +
     // Without the expected shape this red is undiagnosable from a CI log: the
     // reader can see that nothing matched but not what the target was.
-    (d.canonicalShapeExpected ? `\nThe harness verified against exactly: ${d.canonicalShapeExpected}` : "")
+    (d.canonicalShapeExpected ? `\nThe harness verified against exactly: ${d.canonicalShapeExpected}` : "") +
+    explainPayloadOnDisk(d.payloadOnDisk)
   );
 }
