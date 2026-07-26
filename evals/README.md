@@ -56,10 +56,26 @@ reports the **admission rate**. A refusal is data, not flake.
 
 ## Cost, stated plainly
 
-| Target | Cost |
-|---|---|
-| `bun run eval:onboarding:isolated` | 4 real runs, ~25 min budget each |
-| `bun run eval:onboarding:admission` | `SAMPLE_COUNT` sequential runs, 20 min budget each |
+Every number here is derived in `evals/onboarding/support/budget.ts` and pinned
+against the nightly workflow by
+`scripts/tests/unit/onboarding-eval-budget.test.ts`. Change the model, not the
+literals.
+
+| Target | Expected | Worst case (every retry taken) |
+|---|---|---|
+| `bun run eval:onboarding:isolated` | ~45 min — 4 real runs, layers 1-3 at ~8-12 min each | **181 min** — each heavy layer retries once at its 25-min cap |
+| `bun run eval:onboarding:admission` | ~110 min — `SAMPLE_COUNT` sequential samples | **122 min** — 5 × 20 min plus stack bring-up and image build |
+
+The isolated suite is cheap in *expectation* and expensive only when the free
+tier is rate-limiting: a 429 is retried once per layer (`MAX_ATTEMPTS = 2`),
+which is what doubles the bound. That is also the night the run must not be
+truncated — a killed job cannot report that it was rate-limited, and
+`rate-limited` is the one outcome meaning the eval measured nothing at all.
+
+CI timeouts are ordered `in-test < step < job`, so the harness always diagnoses
+a stuck run before the runner kills it. A GitHub step timeout is a SIGKILL: it
+takes the outcome classification, the agent's final message, and the scorecard
+with it.
 
 Do not put a fast check in here, and do not put anything from here on a
 `pull_request` trigger.

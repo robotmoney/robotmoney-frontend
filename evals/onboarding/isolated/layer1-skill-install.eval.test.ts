@@ -22,12 +22,12 @@ import { join } from "node:path";
 import type { Stack } from "../../../scripts/stack/index.ts";
 import { buildMemberAgentImage, evalProject, imageOnlyStack, repoRoot, tearDown } from "../support/eval-stack.ts";
 import { explainLayerFailure, ISOLATED_LAYER_TIMEOUT_MS, runIsolatedLayer, type IsolatedLayerResult } from "../support/layer-run.ts";
+import { ISOLATED_SETUP_TIMEOUT_MS as SETUP_TIMEOUT_MS } from "../support/budget.ts";
 import { buildLayer1Task } from "../support/layer-tasks.ts";
 import { generateIdentity } from "../../../scripts/lib/onboarding-eval.ts";
 import { findByName, listContainerFiles, toContainerPath, tryCopyOut } from "../support/probe.ts";
 
 const LAYER = "layer1";
-const SETUP_TIMEOUT_MS = 45 * 60_000;
 
 // The content markers that make a SKILL.md THE committee-onboarding skill
 // rather than some other skill the agent happened to have.

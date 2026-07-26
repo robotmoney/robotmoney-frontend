@@ -46,11 +46,37 @@
 # the standing rmdemo_* stack and has a documented history of 429 flake on
 # live-call gates.
 #
-# TWO JOBS, matching the two cost directories (§3 L1). The isolated layers are
-# cheap and give sharp per-step diagnostics; the sampled admission sweep is the
-# expensive one. Splitting them means a 150-minute sweep can never swallow the
-# layer diagnostics' wall clock, and a red layer 2 is visible without waiting
-# for layer 4. No new workflow is added (§11.3 E6).
+# TWO JOBS, matching the two cost directories (§3 L1). The isolated layers give
+# sharp per-step diagnostics; the sampled admission sweep measures the product.
+# Splitting them means the sweep can never swallow the layer diagnostics' wall
+# clock, and a red layer 2 is visible without waiting for layer 4. No new
+# workflow is added (§11.3 E6).
+#
+# TIMEOUTS ARE DERIVED, NOT GUESSED (evals/onboarding/support/budget.ts)
+# Every number below comes from that cost model and is pinned against this file
+# by scripts/tests/unit/onboarding-eval-budget.test.ts, which fails if the two
+# drift apart. The invariant it enforces:
+#
+#     in-test timeout  <  step timeout-minutes  <  job timeout-minutes
+#
+# The in-test timeout must fire FIRST. A GitHub step kill is a SIGKILL: no
+# `timed-out` classification, no explainLayerFailure() output, no final
+# assistant message, and — for the sweep — no scorecard, because `if: always()`
+# cannot upload a file the dying process never finished writing. Both jobs
+# previously violated this: the isolated job let its layers run to 160 minutes
+# while killing the step at 80, and the sweep's in-test and step timeouts were
+# both exactly 150, racing each other.
+#
+# REAL COST, measured (2026-07-25/26), replacing the "~2-5 minutes per layer"
+# estimate that was never true of anything but layer 0:
+#   - a heavy layer attempt (1-3) runs ~8-12 min on the free keyless tier;
+#     three attempts across two layers burned 31 min in one observed run
+#   - isolated job, expected (no retries):        ~45 min
+#   - isolated job, every heavy layer retried:    181 min  <- what CI must budget
+#   - admission sweep, 5 sequential samples:      122 min
+# The isolated job is therefore cheap in EXPECTATION and expensive only when the
+# provider is rate-limiting — which is exactly the night it must not be
+# truncated, since a truncated run cannot even report that it was rate-limited.
 name: committee-opencode-nightly
 env:
   CI_CLASS: heavy
@@ -63,7 +89,8 @@ jobs:
   # Layers 0-3 — no server, no stack: the member-agent image and the agent only.
   onboarding-eval-isolated:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # budget.ts ISOLATED_JOB_BUDGET.jobTimeoutMinutes (worst case 181 + 20 margin)
+    timeout-minutes: 201
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -73,7 +100,10 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Layers 0-3 (runtime, skill install, rmpc toolchain, keygen + signing)
         run: bun run eval:onboarding:isolated
-        timeout-minutes: 80
+        # budget.ts ISOLATED_JOB_BUDGET.stepTimeoutMinutes (worst case 181 + 10
+        # margin). Must stay ABOVE the layers' own beforeAll timeouts so a stuck
+        # layer is classified by the harness, not SIGKILLed by the runner.
+        timeout-minutes: 191
       - name: Reclaim any eval containers/networks/volumes left behind
         if: always()
         run: |
@@ -84,7 +114,8 @@ jobs:
   # Layer 4 — the sampled admission sweep, on a `core` stack.
   onboarding-real-inference-sweep:
     runs-on: ubuntu-latest
-    timeout-minutes: 160
+    # budget.ts ADMISSION_JOB_BUDGET.jobTimeoutMinutes (worst case 122 + 20 margin)
+    timeout-minutes: 142
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -94,7 +125,10 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Layer 4 — sampled admission (K samples, scored by admission rate)
         run: bun run eval:onboarding:admission
-        timeout-minutes: 150
+        # budget.ts ADMISSION_JOB_BUDGET.stepTimeoutMinutes (worst case 122 + 10
+        # margin). Strictly ABOVE SWEEP_TIMEOUT_MS so the sweep's own timeout
+        # fires first and afterAll still writes the scorecard this job uploads.
+        timeout-minutes: 132
       - name: Upload the scorecard (always — a failed sweep still reports its rate)
         if: always()
         uses: actions/upload-artifact@v4

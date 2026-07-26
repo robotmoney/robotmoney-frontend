@@ -27,12 +27,11 @@ import { join } from "node:path";
 import type { Stack } from "../../../scripts/stack/index.ts";
 import { buildMemberAgentImage, evalProject, imageOnlyStack, repoRoot, tearDown } from "../support/eval-stack.ts";
 import { explainLayerFailure, runIsolatedLayer, type IsolatedLayerResult } from "../support/layer-run.ts";
+import { LAYER0_RUN_TIMEOUT_MS as RUN_TIMEOUT_MS, LAYER0_SETUP_TIMEOUT_MS as SETUP_TIMEOUT_MS } from "../support/budget.ts";
 import { EVAL_PROBE_CONTENT, EVAL_PROBE_PATH, LAYER0_TASK } from "../support/layer-tasks.ts";
 import { tryCopyOut } from "../support/probe.ts";
 
 const LAYER = "layer0";
-const RUN_TIMEOUT_MS = 5 * 60_000;
-const SETUP_TIMEOUT_MS = 25 * 60_000;
 
 let stack: Stack | null = null;
 let hostDir = "";

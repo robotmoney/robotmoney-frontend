@@ -43,6 +43,7 @@ import {
 } from "../../../scripts/lib/onboarding-eval.ts";
 import type { Stack } from "../../../scripts/stack/index.ts";
 import { evalProject, repoRoot, startCoreStack, tearDown } from "../support/eval-stack.ts";
+import { SWEEP_TIMEOUT_MS } from "../support/budget.ts";
 import {
   assertScorecard,
   formatScorecard,
@@ -58,7 +59,6 @@ import {
 
 const LAYER = "layer4";
 // SAMPLE_COUNT × the per-sample budget, plus stack bring-up and image build.
-const SWEEP_TIMEOUT_MS = 150 * 60_000;
 const TRANSCRIPT_DIR = ".agents/onboarding-eval-transcripts";
 
 let stack: Stack | null = null;

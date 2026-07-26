@@ -33,6 +33,7 @@ import { generateIdentity, type OnboardingIdentity } from "../../../scripts/lib/
 import type { Stack } from "../../../scripts/stack/index.ts";
 import { buildMemberAgentImage, evalProject, imageOnlyStack, repoRoot, tearDown } from "../support/eval-stack.ts";
 import { explainLayerFailure, ISOLATED_LAYER_TIMEOUT_MS, runIsolatedLayer, type IsolatedLayerResult } from "../support/layer-run.ts";
+import { ISOLATED_SETUP_TIMEOUT_MS as SETUP_TIMEOUT_MS } from "../support/budget.ts";
 import { buildLayer3TaskWithNote } from "../support/layer-tasks.ts";
 import { findMatching, listContainerFiles } from "../support/probe.ts";
 import {
@@ -44,7 +45,6 @@ import {
 } from "../support/signature-harvest.ts";
 
 const LAYER = "layer3";
-const SETUP_TIMEOUT_MS = 45 * 60_000;
 
 // Captured inside the `inspect` bracket (the stopped container still exists).
 interface CapturedContainer {

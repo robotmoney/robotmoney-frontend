@@ -22,12 +22,12 @@ import { missingCommitteeIdentitySubcommands } from "../../../scripts/lib/rmpc-f
 import type { Stack } from "../../../scripts/stack/index.ts";
 import { buildMemberAgentImage, evalProject, imageOnlyStack, repoRoot, tearDown } from "../support/eval-stack.ts";
 import { explainLayerFailure, ISOLATED_LAYER_TIMEOUT_MS, runIsolatedLayer, type IsolatedLayerResult } from "../support/layer-run.ts";
+import { ISOLATED_SETUP_TIMEOUT_MS as SETUP_TIMEOUT_MS } from "../support/budget.ts";
 import { buildLayer2Task } from "../support/layer-tasks.ts";
 import { generateIdentity } from "../../../scripts/lib/onboarding-eval.ts";
 import { findByName, listContainerFiles, runExtractedBinary, toContainerPath, tryCopyOut } from "../support/probe.ts";
 
 const LAYER = "layer2";
-const SETUP_TIMEOUT_MS = 45 * 60_000;
 
 // The image's OWN contract for where an executable may live, read from the
 // Dockerfile rather than hard-coded: a SET of directories, so moving the
