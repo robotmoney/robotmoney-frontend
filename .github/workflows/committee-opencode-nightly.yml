@@ -69,14 +69,20 @@
 #
 # REAL COST, measured (2026-07-25/26), replacing the "~2-5 minutes per layer"
 # estimate that was never true of anything but layer 0:
-#   - a heavy layer attempt (1-3) runs ~8-12 min on the free keyless tier;
-#     three attempts across two layers burned 31 min in one observed run
-#   - isolated job, expected (no retries):        ~45 min
-#   - isolated job, every heavy layer retried:    181 min  <- what CI must budget
-#   - admission sweep, 5 sequential samples:      122 min
-# The isolated job is therefore cheap in EXPECTATION and expensive only when the
-# provider is rate-limiting — which is exactly the night it must not be
-# truncated, since a truncated run cannot even report that it was rate-limited.
+#   - healthy tier, layers complete in 0.1-4.3 min:  ~20 min for the whole job
+#   - MEASURED on 2026-07-26:                        59.5 min, 3 of 4 layers
+#     running to their full cap
+#   - isolated job, every heavy layer retried:      181 min  <- what CI budgets
+#   - admission sweep, 5 sequential samples:        122 min (never yet executed)
+#
+# Budget for the capped case, not the happy one. THE FREE TIER DEGRADES BY
+# HANGING, NOT BY RETURNING 429: across that 59-minute run there was not one
+# rate-limit string, yet the provider progressively stopped answering — the four
+# layers took 4.3, 25.0, 25.0 and 5.0 min in that order. So `rate-limited` rarely
+# fires here and `timed-out` is the real throttle signal, and because isolated
+# layers retry only `rate-limited`, a throttled run is reported rather than
+# retried. That is the night this job must not be truncated: a killed run cannot
+# report why it was slow.
 name: committee-opencode-nightly
 env:
   CI_CLASS: heavy

@@ -2184,11 +2184,23 @@ agent can sequence the whole thing itself.
 
 | # | Layer | Proves | Stack | Observed by |
 |---|---|---|---|---|
-| 0 | runtime | image, `opencode.json`, provider reachable | none | trivial task completes; distinguishes *dead* from *refused* |
+| 0 | runtime | image, `opencode.json`, provider reachable | none | trivial task completes; distinguishes *dead* from *refused*, and **gates the run** (below) |
 | 1 | skill install | the agent can find and install `committee-onboarding` | none | `SKILL.md` present on disk in the runtime's skill path |
 | 2 | toolchain | the agent can install `rmpc` for its own arch | none | binary on PATH; `--help` lists `committee-identity` |
 | 3 | keygen + signing | local ed25519 identity, byte-exact canonical payload | none | signature harvested **passively** — from the drained run transcript and the stopped container's filesystem — then verified **offline** against `canonicalizeApplication` with the real backend `verifyApplicationSignature` |
 | 4 | admission | the full R4→R8 sequence, unaided | `core` | server-minted member reaches the active roster |
+
+**Layer 0 GATES the run.** Its task is to write two characters to a file; nothing
+about Robot Money appears in it, so it cannot be refused on the merits and cannot
+fail for any product reason. A red layer 0 therefore means the runtime or the
+provider is not serving, and **the other layers' results in that run are not
+measurements**. Observed 2026-07-26: layer 0 returned `admitted` in 6 seconds,
+and 80 minutes later — same commit, same image — timed out at 5 minutes with an
+**empty transcript**, while layers 1 and 2 ran to their full 25-minute caps in
+between. A layer 2 timeout sitting under a red layer 0 says nothing about whether
+an agent can install `rmpc`; it says the tier stopped answering. Read layer 0
+first, re-run later rather than concluding, and do not spend the admission sweep
+at all until it is green.
 
 Layers 0-3 need **no server**. Layer 4 needs a `core` stack only — postgres and
 the api — because apply/approve/claim is Postgres CRUD plus signature
@@ -2294,10 +2306,19 @@ file or a workflow, and `scripts/tests/unit/onboarding-eval-budget.test.ts` pins
 the two against each other on the per-PR path. Measured on 2026-07-25/26 (the
 "~2-5 minutes per layer" estimate was only ever true of layer 0):
 
-| Job | Expected | Worst case | Why they differ |
+| Job | Healthy tier | Measured 2026-07-26 | Worst case |
 |---|---|---|---|
-| isolated (layers 0-3) | ~45 min | **181 min** | a heavy layer attempt runs ~8-12 min; `MAX_ATTEMPTS = 2` doubles each layer when the free tier 429s |
-| admission (layer 4) | ~110 min | **122 min** | `SAMPLE_COUNT` × 20 min, sequential and never retried, plus stack bring-up |
+| isolated (layers 0-3) | ~20 min | **59.5 min** (3 of 4 layers hit their cap) | **181 min** (`MAX_ATTEMPTS = 2` on each heavy layer) |
+| admission (layer 4) | — never yet executed | — | **122 min** (`SAMPLE_COUNT` × 20 min, sequential, never retried, plus bring-up) |
+
+**The free tier degrades by HANGING, not by returning 429.** Across a 59-minute
+observed run there was not one rate-limit string, yet the provider progressively
+stopped answering: the same four layers took 4.3, 25.0, 25.0, and 5.0 minutes, in
+that order, three of them hitting their cap. `rate-limited` therefore rarely
+fires on this tier and **`timed-out` is the real throttle signal**. Isolated
+layers retry only `rate-limited` (retrying a 25-minute timeout would double an
+already expensive layer), so a throttled run is reported rather than retried —
+which is why the CI budget must cover the capped case rather than the happy one.
 
 The ordering is normative:
 

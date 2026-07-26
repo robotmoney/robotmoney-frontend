@@ -61,16 +61,38 @@ against the nightly workflow by
 `scripts/tests/unit/onboarding-eval-budget.test.ts`. Change the model, not the
 literals.
 
-| Target | Expected | Worst case (every retry taken) |
-|---|---|---|
-| `bun run eval:onboarding:isolated` | ~45 min — 4 real runs, layers 1-3 at ~8-12 min each | **181 min** — each heavy layer retries once at its 25-min cap |
-| `bun run eval:onboarding:admission` | ~110 min — `SAMPLE_COUNT` sequential samples | **122 min** — 5 × 20 min plus stack bring-up and image build |
+| Target | Healthy tier | Measured 2026-07-26 | Worst case |
+|---|---|---|---|
+| `bun run eval:onboarding:isolated` | ~20 min — layers complete in 0.1-4.3 min | **59.5 min** — 3 of 4 layers ran to their full cap | **181 min** — each heavy layer retries once at its 25-min cap |
+| `bun run eval:onboarding:admission` | — never yet executed | — | **122 min** — 5 × 20 min plus stack bring-up and image build |
 
-The isolated suite is cheap in *expectation* and expensive only when the free
-tier is rate-limiting: a 429 is retried once per layer (`MAX_ATTEMPTS = 2`),
-which is what doubles the bound. That is also the night the run must not be
-truncated — a killed job cannot report that it was rate-limited, and
-`rate-limited` is the one outcome meaning the eval measured nothing at all.
+Do not plan around the healthy column. In one observed run the same four layers
+took 4.3, 25.0, 25.0, and 5.0 minutes — three of them hitting their cap — because
+**the free tier degrades by HANGING, not by returning 429**. There was not one
+rate-limit string in the entire 59-minute log; the provider simply stopped
+answering. Layer 0, whose task is to write two characters to a file, went from
+`admitted` in 6 seconds to a 5-minute timeout with an **empty transcript** over
+the course of that single run.
+
+Two consequences worth knowing before reading any result:
+
+- `rate-limited` will rarely fire on this tier. **`timed-out` is the real
+  throttle signal here**, and `runIsolatedLayer` deliberately retries only
+  `rate-limited` (retrying a 25-minute timeout would double an already expensive
+  layer), so a throttled run is reported rather than retried.
+- **A red layer 0 invalidates the run.** See below.
+
+## Layer 0 is the canary, not just the first layer
+
+Layer 0 asks the agent to write two characters to a file. Nothing about Robot
+Money appears in it, so it cannot be refused on the merits and it cannot fail for
+any product reason. When layer 0 is red, the runtime or the provider is not
+serving — and the other layers' results in that run are **not measurements**. A
+layer 2 timeout sitting under a red layer 0 says nothing about whether an agent
+can install `rmpc`; it says the tier stopped answering.
+
+Read layer 0 first. If it is red, re-run later rather than drawing conclusions,
+and do not spend the admission sweep at all.
 
 CI timeouts are ordered `in-test < step < job`, so the harness always diagnoses
 a stuck run before the runner kills it. A GitHub step timeout is a SIGKILL: it
