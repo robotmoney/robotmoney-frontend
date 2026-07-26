@@ -155,7 +155,12 @@ test("scripts/lib/demo-main.ts runs edgar-seed-bootstrap.ts AFTER API health and
   const src = readFileSync(join(repoRoot, "scripts", "lib", "demo-main.ts"), "utf8");
   expect(src).toContain("edgar-seed-bootstrap.ts");
 
-  const apiHealthIdx = src.indexOf('await waitForHttp(`${backendUrl}/health`)');
+  // The bring-up moved into scripts/stack (§11.3 E5): `stack.up()` is now the
+  // step that ends with waitForHttp(`${backendUrl}/health`) internally, so it is
+  // the correct "API is healthy" anchor. The ORDERING guarantee this test exists
+  // for is unchanged — EDGAR seeding must follow API health and precede any
+  // post-boot check — only the expression marking the boundary moved.
+  const apiHealthIdx = src.indexOf("await stack.up(");
   const bootstrapIdx = src.indexOf("edgar-seed-bootstrap.ts");
   const ciBranchIdx = src.indexOf("if (process.env.CI) {");
 

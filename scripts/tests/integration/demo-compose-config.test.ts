@@ -163,7 +163,17 @@ describe("DEMO_MODE — the single pinned demo-stack signal (per-IP quota protec
     // DEMO_FAST_SCHEDULES / DEMO_SLOW_SAMPLERS names are fully gone from the
     // demo wiring + seed, so a stale reference can't silently gate anything.
     const demoMain = await Bun.file(join(repoRoot, "scripts/lib/demo-main.ts")).text();
-    expect(demoMain).toContain('"-e", "DEMO_MODE=1"');
+    // The demo's bring-up now runs through scripts/stack (§11.3 E5), so this flag
+    // is passed as `migrateEnv` DATA instead of hand-built `-e` argv. Both ends of
+    // that seam are pinned, so the guarantee this test exists for — the flag really
+    // reaches the migrate/seed one-shot — keeps its teeth: demo-main declares it,
+    // and the shared stack turns migrateEnv into `-e KEY=VALUE` on the `compose
+    // run` that executes the migration.
+    expect(demoMain).toMatch(/migrateEnv:\s*\{[^}]*DEMO_MODE:\s*"1"/);
+    const stackSrc = await Bun.file(join(repoRoot, "scripts/stack/stack.ts")).text();
+    expect(stackSrc).toContain("migrateEnv");
+    const stackConfigSrc = await Bun.file(join(repoRoot, "scripts/stack/config.ts")).text();
+    expect(`${stackSrc}${stackConfigSrc}`).toMatch(/"-e"/);
     const seed = await Bun.file(join(repoRoot, "backend/src/db/seed.ts")).text();
     expect(seed).toContain("process.env.DEMO_MODE");
     for (const retired of ["DEMO_FAST_SCHEDULES", "DEMO_SLOW_SAMPLERS"]) {
