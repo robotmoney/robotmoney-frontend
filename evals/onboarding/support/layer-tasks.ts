@@ -79,3 +79,47 @@ export const LAYER3_TASK_TEMPLATE = `${LAYER1_TASK} In short: (a) ${STEP_A_FULL}
 export function buildLayer3Task(identity: OnboardingIdentity): string {
   return fillPromptIdentity(LAYER3_TASK_TEMPLATE, identity);
 }
+
+// ── Harness note: non-interactive container + the owner's identity ──────────
+// ENVIRONMENT INFO, never how-to — the same category as layer 4's local-network
+// note (scripts/lib/onboarding-eval.ts's demoNetworkNote), kept clearly
+// delimited and appended after the task rather than blended into it.
+//
+// Why it is REQUIRED for layers 1-2. Observed live on 2026-07-26, layer 1: the
+// agent neither failed nor refused — it found the skill, understood the job, and
+// then STOPPED to ask its owner two questions ("What display name and contact
+// email should I use? Which host should I apply to?"). That is the correct move
+// under the skill's own Step 0 ("if the owner's identity is missing or ambiguous,
+// ask for it — never invent or guess"), and layers 1-2 slice the canonical prompt
+// BEFORE the sentence carrying the identity, so the agent was asked to act on
+// information the slice had removed. In a container with no owner to answer, the
+// layer measured "does it ask a sensible question?" rather than "can it install
+// the skill". This note restores exactly the two facts the slice dropped — who
+// the owner is, and that nobody is there to reply — and nothing else.
+//
+// It names no install command, directory, URL, subcommand, or endpoint;
+// scripts/tests/unit/onboarding-layer-tasks.test.ts re-runs the answer-leak
+// assertions against the NOTED tasks to keep it that way.
+export function harnessNote(identity: OnboardingIdentity): string {
+  return (
+    "\n\n---\n" +
+    "Harness note (environment, not part of your task): you are running " +
+    "non-interactively inside a container. No owner is available to answer " +
+    "questions, so do not wait for confirmation — carry out the task, and if some " +
+    "part of it is genuinely impossible, say so plainly and stop. The owner's " +
+    `identity for this run is: display name ${identity.name}, contact ${identity.contact}.`
+  );
+}
+
+// Layers 1 and 2 are pure canonical slices, so their identity arrives via the
+// note. Layer 3's task already carries the identity inside canonical step (b),
+// but it takes the same note for the non-interactive half.
+export function buildLayer1Task(identity: OnboardingIdentity): string {
+  return `${LAYER1_TASK}${harnessNote(identity)}`;
+}
+export function buildLayer2Task(identity: OnboardingIdentity): string {
+  return `${LAYER2_TASK}${harnessNote(identity)}`;
+}
+export function buildLayer3TaskWithNote(identity: OnboardingIdentity): string {
+  return `${buildLayer3Task(identity)}${harnessNote(identity)}`;
+}

@@ -33,7 +33,7 @@ import { generateIdentity, type OnboardingIdentity } from "../../../scripts/lib/
 import type { Stack } from "../../../scripts/stack/index.ts";
 import { buildMemberAgentImage, evalProject, imageOnlyStack, repoRoot, tearDown } from "../support/eval-stack.ts";
 import { explainLayerFailure, ISOLATED_LAYER_TIMEOUT_MS, runIsolatedLayer, type IsolatedLayerResult } from "../support/layer-run.ts";
-import { buildLayer3Task } from "../support/layer-tasks.ts";
+import { buildLayer3TaskWithNote } from "../support/layer-tasks.ts";
 import { findMatching, listContainerFiles } from "../support/probe.ts";
 import {
   explainHarvestFailure,
@@ -74,7 +74,7 @@ describe("onboarding eval — layer 3: keygen + signing", () => {
       layer: LAYER,
       repoRoot,
       composeProject: stack.config.project,
-      prompt: buildLayer3Task(identity),
+      prompt: buildLayer3TaskWithNote(identity),
       timeoutMs: ISOLATED_LAYER_TIMEOUT_MS,
       observe: (containerName) => ({
         keystorePaths: findMatching(containerName, KEYSTORE_PATH_PATTERN, listContainerFiles(containerName)),

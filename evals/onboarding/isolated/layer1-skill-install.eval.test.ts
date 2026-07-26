@@ -22,7 +22,8 @@ import { join } from "node:path";
 import type { Stack } from "../../../scripts/stack/index.ts";
 import { buildMemberAgentImage, evalProject, imageOnlyStack, repoRoot, tearDown } from "../support/eval-stack.ts";
 import { explainLayerFailure, ISOLATED_LAYER_TIMEOUT_MS, runIsolatedLayer, type IsolatedLayerResult } from "../support/layer-run.ts";
-import { LAYER1_TASK } from "../support/layer-tasks.ts";
+import { buildLayer1Task } from "../support/layer-tasks.ts";
+import { generateIdentity } from "../../../scripts/lib/onboarding-eval.ts";
 import { findByName, listContainerFiles, toContainerPath, tryCopyOut } from "../support/probe.ts";
 
 const LAYER = "layer1";
@@ -51,7 +52,7 @@ describe("onboarding eval — layer 1: skill install", () => {
       layer: LAYER,
       repoRoot,
       composeProject: stack.config.project,
-      prompt: LAYER1_TASK,
+      prompt: buildLayer1Task(generateIdentity()),
       timeoutMs: ISOLATED_LAYER_TIMEOUT_MS,
       observe: (containerName) => {
         const listing = listContainerFiles(containerName);

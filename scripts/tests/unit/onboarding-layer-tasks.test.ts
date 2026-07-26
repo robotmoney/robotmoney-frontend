@@ -12,7 +12,11 @@
 import { describe, expect, test } from "bun:test";
 import { ONBOARDING_PROMPT } from "@robotmoney/contract";
 import {
+  buildLayer1Task,
+  buildLayer2Task,
   buildLayer3Task,
+  buildLayer3TaskWithNote,
+  harnessNote,
   EVAL_PROBE_CONTENT,
   EVAL_PROBE_PATH,
   LAYER0_TASK,
@@ -51,6 +55,46 @@ describe("layer tasks leak no how-to", () => {
     expect(LAYER0_TASK).not.toMatch(/robot ?money|committee|rmpc|investment|memo/i);
     expect(LAYER0_TASK).toContain(EVAL_PROBE_PATH);
     expect(LAYER0_TASK).toContain(EVAL_PROBE_CONTENT);
+  });
+});
+
+// The harness note (identity + "nobody is here to answer you") is ENVIRONMENT
+// info, and it is the one place a how-to hint could be smuggled into a layer
+// without touching the canonical slices above. So every answer-leak assertion is
+// re-run against the NOTED tasks, and the note is pinned to the two facts it
+// exists to restore — nothing more.
+describe("the harness note restores identity/non-interactivity without leaking how-to", () => {
+  const identity = generateIdentity("note-check");
+  const NOTED: Array<[string, string]> = [
+    ["buildLayer1Task", buildLayer1Task(identity)],
+    ["buildLayer2Task", buildLayer2Task(identity)],
+    ["buildLayer3TaskWithNote", buildLayer3TaskWithNote(identity)],
+  ];
+
+  for (const [name, task] of NOTED) {
+    for (const [what, re] of ANSWER_LEAKS) {
+      test(`${name} does not contain ${what}`, () => {
+        expect(task).not.toMatch(re);
+      });
+    }
+    test(`${name} carries the owner identity the slice dropped`, () => {
+      expect(task).toContain(identity.name);
+      expect(task).toContain(identity.contact);
+    });
+    test(`${name} keeps the note clearly delimited from the task`, () => {
+      expect(task).toContain("Harness note (environment, not part of your task)");
+      expect(task.indexOf("Harness note")).toBeGreaterThan(0);
+    });
+  }
+
+  test("the note tells the agent not to wait for an owner who cannot answer", () => {
+    expect(harnessNote(identity)).toMatch(/non-interactively/i);
+    expect(harnessNote(identity)).toMatch(/do not wait for confirmation/i);
+  });
+
+  test("the note never becomes the task — layer 1/2 still open with the canonical slice", () => {
+    expect(buildLayer1Task(identity).startsWith(LAYER1_TASK)).toBe(true);
+    expect(buildLayer2Task(identity).startsWith(LAYER2_TASK)).toBe(true);
   });
 });
 

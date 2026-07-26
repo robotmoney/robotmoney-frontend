@@ -22,7 +22,8 @@ import { missingCommitteeIdentitySubcommands } from "../../../scripts/lib/rmpc-f
 import type { Stack } from "../../../scripts/stack/index.ts";
 import { buildMemberAgentImage, evalProject, imageOnlyStack, repoRoot, tearDown } from "../support/eval-stack.ts";
 import { explainLayerFailure, ISOLATED_LAYER_TIMEOUT_MS, runIsolatedLayer, type IsolatedLayerResult } from "../support/layer-run.ts";
-import { LAYER2_TASK } from "../support/layer-tasks.ts";
+import { buildLayer2Task } from "../support/layer-tasks.ts";
+import { generateIdentity } from "../../../scripts/lib/onboarding-eval.ts";
 import { findByName, listContainerFiles, runExtractedBinary, toContainerPath, tryCopyOut } from "../support/probe.ts";
 
 const LAYER = "layer2";
@@ -66,7 +67,7 @@ describe("onboarding eval — layer 2: rmpc toolchain", () => {
       layer: LAYER,
       repoRoot,
       composeProject: stack.config.project,
-      prompt: LAYER2_TASK,
+      prompt: buildLayer2Task(generateIdentity()),
       timeoutMs: ISOLATED_LAYER_TIMEOUT_MS,
       observe: (containerName) => {
         const listing = listContainerFiles(containerName);
