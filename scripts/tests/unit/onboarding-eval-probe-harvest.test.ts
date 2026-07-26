@@ -326,6 +326,17 @@ describe("explainHarvestFailure", () => {
     expect(msg).toContain("canonicalization drift");
   });
 
+  test("the expected canonical shape is echoed, so a drift red is diagnosable from a CI log", () => {
+    const shape = '{"name":"Ada","contact":"ada@example.test","publicKey":"<key>"}';
+    const msg = explainHarvestFailure(diagnostics({ candidatePublicKeys: 1, candidateSignatures: 1, canonicalShapeExpected: shape }));
+    expect(msg).toContain("The harness verified against exactly:");
+    expect(msg).toContain(shape);
+  });
+
+  test("the shape line is omitted entirely when it is not known — no empty dangling label", () => {
+    expect(explainHarvestFailure(diagnostics({ candidatePublicKeys: 1 }))).not.toContain("verified against exactly");
+  });
+
   test("the two messages never collide — separating them is this function's whole job", () => {
     const none = explainHarvestFailure(diagnostics());
     const some = explainHarvestFailure(diagnostics({ candidatePublicKeys: 1, candidateSignatures: 1 }));
@@ -454,6 +465,22 @@ describe("harvestSignedApplication", () => {
       expect(result.verified!.publicKey).toBe(real.publicKeyB64);
       expect(result.verified!.signature).toBe(real.signatureB64);
       expect(result.diagnostics.candidatePublicKeys).toBe(2);
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  test("diagnostics carry the canonical shape for THIS applicant, with the key elided", async () => {
+    const hostDir = tmpDir("harvest-shape-");
+    try {
+      const result = await harvestSignedApplication({ repoRoot, transcript: "", hostDir, application });
+      const shape = result.diagnostics.canonicalShapeExpected!;
+      expect(shape).toContain(application.name);
+      expect(shape).toContain(application.contact);
+      // Field ORDER is the whole point of a canonicalization check, so the
+      // reported shape must be the contract's own ordering, not a re-spelling.
+      expect(shape.indexOf('"name"')).toBeLessThan(shape.indexOf('"contact"'));
+      expect(shape.indexOf('"contact"')).toBeLessThan(shape.indexOf('"publicKey"'));
     } finally {
       rmSync(hostDir, { recursive: true, force: true });
     }

@@ -126,6 +126,11 @@ export interface HarvestDiagnostics {
   candidateSignatures: number;
   filesScanned: number;
   sources: string[];
+  // The canonical bytes the harness verified against, with the applicant's own
+  // publicKey elided (it differs per candidate). Reported so a drift red says
+  // what the agent SHOULD have signed instead of only that nothing matched —
+  // without it, "nothing verified" is undiagnosable from a CI log.
+  canonicalShapeExpected?: string;
 }
 
 export interface HarvestedApplication {
@@ -178,6 +183,11 @@ export async function harvestSignedApplication(opts: HarvestOptions): Promise<Ha
     candidateSignatures: candidates.signatures.length,
     filesScanned: contents.size,
     sources,
+    canonicalShapeExpected: canonicalizeApplication({
+      name: opts.application.name,
+      contact: opts.application.contact,
+      publicKey: "<the applicant's own base64 public key>",
+    }),
   };
 
   const verify = await loadVerifier(opts.repoRoot);
@@ -236,6 +246,9 @@ export function explainHarvestFailure(d: HarvestDiagnostics): string {
     `SIGNATURE MATERIAL FOUND BUT NOTHING VERIFIED: ${d.candidatePublicKeys} candidate public key(s) and ` +
     `${d.candidateSignatures} candidate signature(s) were observed, and no pair verifies over the contract's ` +
     "canonicalizeApplication bytes. Either the agent signed a DIFFERENT payload (canonicalization drift — key " +
-    "order, whitespace, a `lens` field) or the harness observed a signature from some other operation."
+    "order, whitespace, a `lens` field) or the harness observed a signature from some other operation." +
+    // Without the expected shape this red is undiagnosable from a CI log: the
+    // reader can see that nothing matched but not what the target was.
+    (d.canonicalShapeExpected ? `\nThe harness verified against exactly: ${d.canonicalShapeExpected}` : "")
   );
 }
