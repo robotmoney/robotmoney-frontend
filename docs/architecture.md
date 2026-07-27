@@ -108,6 +108,59 @@ On the eventual split, `contract/` is published (private npm registry / GitHub
 Packages) or vendored via git submodule; both repos pin a version. Bumping the
 contract is the explicit, reviewable coupling point.
 
+### Test, eval, and tooling layout
+
+Status: target layout (D23). Two rules govern where things go.
+
+**L1 — A directory is a selectable unit of CI cost.** CI selects by path
+(`bun test <dir>`, `paths-ignore`, workflow globs), so any subset CI needs to run
+*without* the rest must have its own directory. A test that needs Docker, a real
+network, or a real model call never shares a directory with a pure unit test.
+
+**L2 — Shared code is named for its domain, never for its consumer.** `stack/`,
+`agent/`, `toolchain/` state what belongs in them; `lib/`, `utils/`, `helpers/`
+invite anything. Code shared between the demo runtime and test/eval time lives in
+a domain directory, not in a bucket named after who imports it.
+
+Per-package test layout, by cost class:
+
+| Path | Class | Needs | Runs |
+|---|---|---|---|
+| `<pkg>/tests/unit/` | unit | nothing | every PR (the default `bun test` target) |
+| `<pkg>/tests/integration/` | integration | Docker, a local stack | PR ready-for-review |
+| `<pkg>/tests/live/` | live | real external network | nightly |
+| `evals/` | eval | Docker + network + **real inference** | nightly, sweep-only |
+
+`backend/tests/` is the reference implementation of this and needs no change: it
+is subdivided by surface (`api/`, `db/`), provisions its dependency in
+`preload.ts` (which fails loudly rather than skipping), separates `support/` from
+`fixtures/`, and already tags cost in filenames (`*-live.test.ts`).
+
+Harness code (today `scripts/`) separates by role rather than by medium:
+
+```
+bin/         executable entrypoints — the `bun run` targets
+demo/        demo RUNTIME (the long-lived process): main, tui, schedule, committee/
+stack/       SHARED compose lifecycle: profiles (core | full), ports, volumes
+agent/       SHARED member-agent primitives: Dockerfile, run, config, classify
+toolchain/   SHARED external-binary fetchers (rmpc)
+checks/      one-shot CI checks where the exit code IS the verdict
+ops/         credential/deploy utilities
+```
+
+**L3 — Dependency direction.** Tests and evals may import runtime and shared
+code; **runtime must never import test or eval code**; both may import shared.
+This is enforced by a grep check in the same shape as
+`backend/scripts/check-no-supabase.sh` and `check-no-ai-overview.sh`, not by
+convention alone. A second grep asserts §11.3 E2 — that no mock, injection seam,
+or conditional skip appears under `evals/`.
+
+**Migration is incremental, not a big-bang reorg.** New directories are created
+as the work that needs them lands (D22's extractions land directly in `stack/`
+and `agent/`); the cost-class split of `scripts/tests/` is a mechanical file move
+with no logic change; renaming `scripts/` itself is explicitly **not** planned
+(D23).
+
 ---
 
 ## 4. Frontend
@@ -862,15 +915,24 @@ verify; a no-show renders **absent**, not fabricated; out-of-window POSTs
 are rejected; cross-role writes are denied; a published session renders the *real*
 takes. The demo is the same harness at scale. Hermetic: a missing dependency fails
 the run rather than silently skipping. Real-LLM member takes are a separate
-opt-in: `COMMITTEE_REAL_INFERENCE=1` (exercised by the nightly
-`.github/workflows/committee-opencode-nightly.yml`, never per-PR) swaps the
-templated take for a keyless opencode-zen call that is **time-bounded**
+opt-in: `COMMITTEE_REAL_INFERENCE=1` swaps the templated take for a keyless
+opencode-zen call that is **time-bounded**
 (`OPENCODE_TIMEOUT_MS`, default 120s — a hung inference kills the subprocess
 instead of freezing the session), and member runs are settled rather than
 `Promise.all`'d, so a per-member inference/session failure renders that member
 **absent** instead of failing the whole session (#122; the e2e harness — formerly
 `mcp/src/e2e.ts` — is relocated out of the retired `mcp/` package as part of
 D21's follow-up code retirement).
+
+**Known coverage gap (stated, not papered over).** No CI job currently exercises
+the real-model committee-take authoring path: every committee take in CI —
+including in the demo boot — takes the deterministic `stanceFor()`/`buildMemo()`
+template path. D21 retired the job that previously covered a version of this (it
+drove the now-deleted MCP tools), and re-establishing the coverage — a job that
+sets `COMMITTEE_REAL_INFERENCE=1` and loud-fails on the deterministic fallback —
+is tracked follow-up work. What *is* covered nightly is real-inference
+**onboarding** (§11.3), a different surface; the two must not be conflated when
+reading the CI signal.
 
 ### 9.8 Phase-5 build order & reconciliation
 
@@ -1983,6 +2045,11 @@ Where any other code differs, this section wins.
   whether our instructions alone are enough to onboard a fresh agent. There are no
   mocks, stubs, or alternative code paths; the only permitted differences are
   configuration (endpoints, credentials) and who triggers approval and when (R7).
+  The container is a **vanilla, keyless OpenCode install** (D22): no API key, no
+  provider secret, no paid model, and no opt-in override may appear anywhere on an
+  eval path, and there is **no inference-off mode** — an eval always makes a real
+  model call, and a missing prerequisite fails loudly rather than passing by
+  absence. The eval's structure, scoring, and shared components are §11.3.
 
 ### 11.2 Sequence
 
@@ -2016,8 +2083,93 @@ participation. The demo only observes, deriving the strip's step states from the
 public application-status API, with the 10 s auto-approval as the only scripted
 divergence. A member that fails to onboard is a red eval result — evidence the
 instructions or tooling regressed, not something the demo papers over. The demo
-admits its first member ~1 min after start and a new one every ~5 minutes thereafter
-(curated then generated names), settling at the roster cap.
+admits its first member ~1 min after start and attempts the next ~5 minutes after
+the previous admission finishes (real eval duration is additive, so a 20-minute
+timeout pushes the next attempt out by that much). The newcomer roster is
+**fixed and finite** — the five names in `scripts/lib/demo-newcomers.ts`, in
+order, with no generated fallback once the list is exhausted (#260). The driver
+then stops; the roster cap (`COMMITTEE_ROSTER_CAP`) is defence in depth and is
+never reached by the standing demo. A failed admission is not retried and is not
+replaced, so the demo can finish with fewer than five newcomers seated — that is
+the eval result, reported rather than hidden.
+
+### 11.3 Onboarding eval (normative)
+
+Status: target design (D22). R8 makes onboarding an eval; this section specifies
+what that eval is, how it is scored, and which components it shares with
+`bun run demo`. Where any other code differs, this section wins.
+
+**E1 — Keyless, no exceptions.** Every layer runs a **vanilla, keyless OpenCode
+install** pinned to the free OpenCode Zen tier (`opencode/big-pickle`). The model
+id is an in-code constant. No API key, provider secret, paid model, or opt-in
+override may be readable from, or passed to, any eval path — there is deliberately
+no configuration surface through which a keyed model could be selected. A
+contributor with a fresh checkout, Docker, and network egress can run the entire
+eval.
+
+**E2 — No inference-off mode.** Every layer makes a real model call. There is no
+mock, no injection seam on the eval's own path, no scripted fallback that performs
+the agent's steps for it, and no conditional skip: a missing Docker daemon or
+missing egress **throws**, failing the eval loudly. Inference-off *rails* checks
+(`scripts/tests/onboarding-eval-infra.test.ts`) remain valuable and remain
+separate — they prove the machinery an eval rides on, and they are never a
+substitute for one.
+
+**E3 — Layers.** The eval is graded, not monolithic. Layers 0-3 run isolated
+(fast, parallel, sharp diagnostics); layer 4 is the integrated run that proves the
+agent can sequence the whole thing itself.
+
+| # | Layer | Proves | Stack | Observed by |
+|---|---|---|---|---|
+| 0 | runtime | image, `opencode.json`, provider reachable | none | trivial task completes; distinguishes *dead* from *refused* |
+| 1 | skill install | the agent can find and install `committee-onboarding` | none | `SKILL.md` present on disk in the runtime's skill path |
+| 2 | toolchain | the agent can install `rmpc` for its own arch | none | binary on PATH; `--help` lists `committee-identity` |
+| 3 | keygen + signing | local ed25519 identity, byte-exact canonical payload | none | harness verifies the signature **offline** against `canonicalizeApplication` |
+| 4 | admission | the full R4→R8 sequence, unaided | `core` | server-minted member reaches the active roster |
+
+Layers 0-3 need **no server**. Layer 4 needs a `core` stack only — postgres and
+the api — because apply/approve/claim is Postgres CRUD plus signature
+verification and never touches the job queue. The eval never boots the full demo
+cluster: no worker lanes, no EDGAR seed, no frontend checks, no session drivers.
+
+Layers 1-3 observe by inspecting the **stopped container's filesystem** before
+removal, never by instructing the agent to emit artifacts — adding harness
+instructions would edit the task under test. Layer 4 uses the canonical
+`ONBOARDING_PROMPT` verbatim (identity placeholders filled, plus the existing
+local-network note) and observes only server-side state, preserving the black-box
+property where it matters most.
+
+**E4 — Scored by sampling.** Layer 4 runs K samples with a fresh identity and
+container each. Every outcome is classified — `admitted`, `refused`,
+`rate-limited`, `timed-out`, `navigation-failure` — and the **admission rate is
+the reported metric**. A refusal is data, not flake: a rising refusal rate is a
+regression in prompt quality, and this is the only instrument that surfaces it.
+The scorecard asserts K samples actually ran, so a zero-sample run is red rather
+than a vacuous green.
+
+**E5 — Shared components, not parallel ones.** The eval is the demo's onboarding
+path with fewer services booted. Three components are shared by construction:
+
+- **`scripts/lib/demo-stack.ts`** — one bring-up with a `core`/`full` profile,
+  free of module-scope side effects and of `process.env` reads or writes
+  (compose's env map is built from an explicit config object and passed to that
+  one child process). Consumed by the demo (`full`), the eval (`core`), and the
+  rails check (`core`, replacing its forked `bringUpInfra()`).
+- **`runMemberAgent()`** — the member-agent container primitive (deterministic
+  name, compose-run argv, pipe draining, guaranteed removal), extracted from
+  `runOnboardingEval` so layers 0-3 and layer 4 launch containers the same way.
+- **`classifyOutcome()`** — one definition, three consumers: the retry predicate
+  in `runOnboardingEvalWithRetry`, the demo's onboarding driver, and the eval's
+  scorecard. A refusal is retryable under this classifier, which is why the demo
+  no longer forfeits a finite roster seat to one unlucky sample.
+
+**E6 — CI placement.** The eval is `CI_CLASS: heavy` — sweep-only, therefore no
+`pull_request` trigger — and runs in the existing
+`committee-opencode-nightly.yml` on `ubuntu-latest` (the self-hosted runner
+shares its IP with the standing `rmdemo_*` stack and has a documented history of
+429 flake on live-call gates). No new workflow is added. The per-PR signal stays
+what it is today: the inference-off rails, plus the single real-inference
+admission the `e2e` job performs off its own demo boot.
 
 ---
 

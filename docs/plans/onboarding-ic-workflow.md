@@ -107,8 +107,9 @@ container to depend on:
   preinstalled) added to `docker-compose.demo.yml`, one instance per admission,
   with egress to the demo **API** container, the `robotmoney-core` release
   assets (`rmpc` download **and** the `committee-onboarding` skill), and the
-  model API. Real inference — reuse the model-key plumbing from the existing
-  `committee-opencode-nightly.yml` path (`COMMITTEE_REAL_INFERENCE`).
+  model API. Real inference on a **vanilla keyless OpenCode install** — no API
+  key, no paid model, no opt-in override anywhere on the eval path (D22); the
+  model id is an in-code constant, not an environment variable.
 - **Harness**: for each scheduled admission, `onboardingDriver()`
   (`scripts/lib/demo-main.ts:1295+`) generates an identity, starts the
   container, and injects the canonical copy-paste prompt verbatim (same text as
@@ -150,11 +151,11 @@ Per the test-coverage invariants (loud-skip only, executed-in-CI assertions):
   eval in the same job, not as a substitute for it. The known flake risk
   (self-hosted runner shares its IP with the standing `rmdemo_*` stack — live
   quota flake) is handled with retry/backoff around the model call, not by
-  dropping inference from the gate. Fork PRs don't get the model-key secret
-  (GitHub Actions default) — they run the infra-only check and say so loudly;
-  same-repo PRs get the full eval. `committee-opencode-nightly.yml` keeps its
-  own real-inference assertions and runs a broader/deeper sweep than the PR
-  gate, not the *only* place inference happens.
+  dropping inference from the gate. Because the eval is keyless (D22) there is
+  no secret to withhold and therefore **no fork/same-repo distinction**: every
+  PR, forked or not, runs the identical eval. `committee-opencode-nightly.yml`
+  is repointed at the layered eval (§11.3) on a `core` stack — sampling and
+  layer diagnostics live there; the PR gate keeps the single admission.
 - `rmpc-release-e2e-nightly.yml` / `scripts/rmpc-release-e2e.ts`: currently
   drives the pre-#205 `apply → activate` chain with client-supplied id over
   MCP's OAuth `client_credentials` flow — that flow no longer exists (D21);
