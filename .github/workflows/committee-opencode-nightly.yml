@@ -142,7 +142,7 @@ jobs:
           name: onboarding-eval-scorecard
           path: |
             .agents/onboarding-eval-scorecard.json
-            .agents/onboarding-eval-transcripts/
+            .agents/onboarding-eval-run-logs/
           if-no-files-found: warn
       - name: Reclaim any eval containers/networks/volumes left behind
         if: always()

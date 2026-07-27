@@ -32,6 +32,7 @@ import {
   generateIdentity,
   looksRateLimited,
   memberAgentContainerName,
+  memberAgentSpawnEnv,
   ONBOARDING_STEPS,
   type OnboardingEvalResult,
   retryIdentity,
@@ -153,9 +154,22 @@ describe("onboarding-eval pure helpers", () => {
   test("buildAgentOpencodeConfig carries NO onboarding-specific knowledge and no Robot Money connectivity (D21 — REST via bash, no MCP client)", () => {
     const cfg = buildAgentOpencodeConfig() as any;
     expect(cfg.model).toBe(EVAL_MODEL);
-    expect(cfg.permission).toEqual({ "*": "deny", bash: "allow" });
+    expect(cfg.permission).toEqual({ "*": "deny", bash: "allow", external_directory: "allow" });
     expect(cfg.mcp).toBeUndefined();
     expect(JSON.stringify(cfg)).not.toMatch(/rmpc|apply|committee|robotmoney/i);
+  });
+
+  // REGRESSION PIN for the 2026-07-27 layer-4 sweep. opencode's own defaults
+  // set `external_directory: { "*": "ask", … }`, and the
+  // `--dangerously-skip-permissions` the harness already passes does NOT lift
+  // it — that run passed the flag and was rejected anyway, citing that rule.
+  // In a non-interactive `opencode run` an "ask" has nobody to ask,
+  // so it becomes a REJECTION — and an agent that discovered the
+  // committee-onboarding skill by cloning the repo into /tmp could list the
+  // directory but never read one byte of SKILL.md. That is the harness
+  // depressing the admission rate, not the product being hard to navigate.
+  test("the container agent is not stopped from reading files outside its own working directory", () => {
+    expect((buildAgentOpencodeConfig() as any).permission.external_directory).toBe("allow");
   });
 
   test("deriveSteps: no member observed yet ⇒ every step pending", () => {
@@ -250,6 +264,31 @@ describe("member-agent container primitive", () => {
     const argv = buildMemberAgentArgv(base);
     for (const f of DEFAULT_COMPOSE_FILES) expect(argv).toContain(f);
   });
+
+  // ── The compose child's environment (2026-07-27) ──────────────────────────
+  // `docker compose run` re-resolves the WHOLE project, and docker-compose.demo.yml
+  // labels the pgdata volume with ${DEMO_PROJECT}. A child without it hashes a
+  // different volume definition than `stack.up()` recorded, and compose then
+  // asks — interactively — whether to recreate the live database. Reproduced on
+  // this repo's own compose files with compose 2.40.3; with a terminal on stdin
+  // the invocation never returns.
+  describe("memberAgentSpawnEnv", () => {
+    test("always carries DEMO_PROJECT, and it is exactly the compose project name", () => {
+      expect(memberAgentSpawnEnv("rmeval_layer4_abc", {}).DEMO_PROJECT).toBe("rmeval_layer4_abc");
+    });
+
+    test("a host value can never shadow it — the compose model must match the project it runs against", () => {
+      const env = memberAgentSpawnEnv("rmeval_layer4_abc", { DEMO_PROJECT: "rmdemo_someone_elses_stack" });
+      expect(env.DEMO_PROJECT).toBe("rmeval_layer4_abc");
+    });
+
+    test("docker-client plumbing from the host survives (a child that cannot find the daemon runs nothing)", () => {
+      const env = memberAgentSpawnEnv("p", { PATH: "/usr/bin", DOCKER_HOST: "unix:///var/run/docker.sock", GONE: undefined });
+      expect(env.PATH).toBe("/usr/bin");
+      expect(env.DOCKER_HOST).toBe("unix:///var/run/docker.sock");
+      expect("GONE" in env).toBe(false);
+    });
+  });
 });
 
 // ── Retry/backoff decision logic (no Docker, no model call — Stage 7, §11 R8)
@@ -267,6 +306,7 @@ describe("runOnboardingEvalWithRetry", () => {
       admitted: false,
       timedOut: false,
       containerExitCode: 1,
+      containerLaunched: true,
       ...overrides,
     };
   }

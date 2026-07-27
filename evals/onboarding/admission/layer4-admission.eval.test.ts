@@ -35,7 +35,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { classifyOutcome } from "../../../scripts/agent/classify-outcome.ts";
+import { explainOutcome, formatOutcomeEvidence } from "../../../scripts/agent/classify-outcome.ts";
 import {
   DEFAULT_TIMEOUT_MS,
   generateIdentity,
@@ -46,9 +46,11 @@ import { evalProject, repoRoot, startCoreStack, tearDown } from "../support/eval
 import { SWEEP_TIMEOUT_MS } from "../support/budget.ts";
 import {
   assertScorecard,
+  formatRunLog,
   formatScorecard,
   MIN_ADMISSION_RATE,
   MIN_SCORED_SAMPLES,
+  RUN_LOG_RELATIVE_DIR,
   SAMPLE_COUNT,
   SCORECARD_RELATIVE_PATH,
   scoreSamples,
@@ -58,22 +60,25 @@ import {
 } from "../support/scorecard.ts";
 
 const LAYER = "layer4";
-// SAMPLE_COUNT × the per-sample budget, plus stack bring-up and image build.
-const TRANSCRIPT_DIR = ".agents/onboarding-eval-transcripts";
 
 let stack: Stack | null = null;
 let scorecard: Scorecard = scoreSamples([]);
 
-// A failed sample's transcript is the only artifact that explains WHY, so it is
-// kept next to the scorecard the nightly uploads. An admitted sample carries no
-// transcript by design (runOnboardingEval only returns one when it did not
-// admit).
-function saveTranscript(runId: string, transcript: string | undefined): string | null {
-  if (!transcript) return null;
-  const dir = join(repoRoot, TRANSCRIPT_DIR);
+// EVERY sample's run log is kept next to the scorecard the nightly uploads —
+// admitted ones included. Keeping only the failures made a sweep's own healthy
+// run unavailable as a reference exactly when four broken ones needed
+// comparing against it.
+//
+// The file is NOT a bare transcript and no longer pretends to be: formatRunLog
+// stamps it with what the bytes actually are (one compose process's stdout +
+// stderr, with the agent's NDJSON inside the stdout half) and with the counts
+// that say whether the agent produced anything at all.
+function saveRunLog(sample: Sample, body: string | undefined): string | null {
+  if (body === undefined) return null;
+  const dir = join(repoRoot, RUN_LOG_RELATIVE_DIR);
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${runId}.txt`);
-  writeFileSync(path, transcript);
+  const path = join(dir, `${sample.runId}.log`);
+  writeFileSync(path, formatRunLog(sample, body));
   return path;
 }
 
@@ -98,16 +103,27 @@ describe("onboarding eval — layer 4: sampled admission (core stack)", () => {
         timeoutMs: DEFAULT_TIMEOUT_MS,
         onEvent: (msg) => console.log(`[${LAYER}][${i}/${SAMPLE_COUNT}] ${msg}`),
       });
-      const outcome = classifyOutcome(result);
-      samples.push({
+      const explained = explainOutcome(result);
+      const sample: Sample = {
         runId: identity.runId,
-        outcome,
+        outcome: explained.outcome,
         memberId: result.memberId,
         steps: result.steps.filter((s) => s.status === "done").length,
         durationMs: Date.now() - startedAt,
-        transcriptPath: saveTranscript(identity.runId, result.transcript),
-      });
-      console.log(`[${LAYER}] sample ${i}/${SAMPLE_COUNT} → ${outcome}`);
+        runLogPath: null,
+        branch: explained.branch,
+        eventLines: explained.liveness.eventLines,
+        textParts: explained.liveness.textParts,
+        toolEvents: explained.liveness.toolEvents,
+        containerExitCode: result.containerExitCode,
+        containerLaunched: result.containerLaunched,
+        harnessFault: explained.harnessFault,
+      };
+      sample.runLogPath = saveRunLog(sample, result.transcript);
+      samples.push(sample);
+      console.log(
+        `[${LAYER}] sample ${i}/${SAMPLE_COUNT} → ${explained.outcome} — ${formatOutcomeEvidence(explained)}`,
+      );
       scorecard = scoreSamples(samples);
     }
   }, SWEEP_TIMEOUT_MS);
@@ -125,7 +141,25 @@ describe("onboarding eval — layer 4: sampled admission (core stack)", () => {
     expect(scorecard.samples.length).toBe(SAMPLE_COUNT);
   });
 
-  test(`at least ${MIN_SCORED_SAMPLES} samples were scorable (rate-limited samples measured nothing)`, () => {
+  // FIRST among the assertions on purpose. When the harness broke, every other
+  // number below is about the harness rather than the product, and reading them
+  // as a product result is precisely how the 2026-07-27 sweep reported a stale
+  // container configuration as an admission rate of 0.20.
+  test("no sample failed inside the HARNESS (our breakage is never a product outcome)", () => {
+    const broken = scorecard.samples.filter((s) => s.harnessFault !== null);
+    if (broken.length > 0) {
+      throw new Error(
+        `${broken.length} of ${scorecard.samples.length} samples were stopped by the HARNESS, not by the product. ` +
+          `Their outcome is 'harness-error': they are excluded from the admission-rate denominator (they measured ` +
+          `nothing) AND they fail this sweep, so nothing is hidden by that exclusion.\n` +
+          broken.map((s) => `  - ${s.runId} [${s.harnessFault?.kind}]: ${s.harnessFault?.detail}`).join("\n") +
+          `\n\n${formatScorecard(scorecard)}`,
+      );
+    }
+    expect(scorecard.counts["harness-error"]).toBe(0);
+  });
+
+  test(`at least ${MIN_SCORED_SAMPLES} samples were scorable (rate-limited and harness-broken samples measured nothing)`, () => {
     expect(scorecard.scored).toBeGreaterThanOrEqual(MIN_SCORED_SAMPLES);
   });
 

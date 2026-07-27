@@ -106,10 +106,18 @@ export function createStack(
   const services = servicesFor(cfg.profile);
   const prefix = composeArgs(cfg.project, cfg.composeFiles);
 
+  // NON-INTERACTIVE, ALWAYS. `docker compose` has questions it will ask on a
+  // terminal — the volume-recreate confirmation most of all, which blocks
+  // forever waiting for an answer and DELETES a live database if it gets a
+  // "yes". Nothing on this path has an operator behind it, so stdin is closed
+  // on every compose child and a question can only ever be declined at once.
+  // (compose 2.40.3 exposes no `--yes`/`--non-interactive` flag for `run`;
+  // closing stdin IS the supported mechanism.)
   function compose(args: string[], io: StackIo = defaultIo): ComposeResult {
     const r = Bun.spawnSync(["docker", ...prefix, ...args], {
       cwd: cfg.repoRoot,
       env: spawnEnv,
+      stdin: "ignore",
       stdout: (io.stdout ?? "pipe") as "pipe",
       stderr: (io.stderr ?? "pipe") as "pipe",
     });
@@ -120,6 +128,7 @@ export function createStack(
     const proc = Bun.spawn(["docker", ...prefix, ...args], {
       cwd: cfg.repoRoot,
       env: spawnEnv,
+      stdin: "ignore",
       stdout: (io.stdout ?? "pipe") as "pipe",
       stderr: (io.stderr ?? "pipe") as "pipe",
     });
@@ -132,6 +141,7 @@ export function createStack(
     const r = Bun.spawnSync(["docker", "version"], {
       cwd: cfg.repoRoot,
       env: spawnEnv,
+      stdin: "ignore",
       stdout: "ignore",
       stderr: "pipe",
     });

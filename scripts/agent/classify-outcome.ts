@@ -42,7 +42,106 @@
 // rather than invisible.
 import { assistantTextParts, finalAssistantText } from "./transcript.ts";
 
-export type OnboardingOutcome = "admitted" | "refused" | "rate-limited" | "timed-out" | "navigation-failure";
+export type OnboardingOutcome =
+  | "admitted"
+  | "refused"
+  | "rate-limited"
+  | "timed-out"
+  | "navigation-failure"
+  | "harness-error";
+
+// ── `harness-error`: OUR failure, never the product's (added 2026-07-27) ─────
+// The layer-4 sweep of 2026-07-27 reported an admission rate of 0.20 with four
+// samples classified `timed-out`. One of those four had in fact been stopped by
+// the HARNESS: the agent cloned robotmoney-core, walked to
+// plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md, and every
+// attempt to READ a file in that clone was rejected by a permission rule the
+// harness's own generated opencode.json leaves in place. A run the harness
+// prevented from doing the task says nothing about whether the task is
+// navigable, and `timed-out` put it straight into the admission-rate
+// denominator as though the product had failed.
+//
+// This outcome exists so that failure is LOUD instead of laundered. It is
+// excluded from the scored denominator (it measured nothing), and the layer-4
+// scorecard fails the whole sweep whenever even one sample carries it
+// (evals/onboarding/support/scorecard.ts) — so it can only ever make a sweep
+// REDDER. It is never retried: retrying a broken harness burns twenty minutes
+// and hides the defect.
+//
+// Every trigger below is POSITIVE, first-party evidence. None of them can be
+// produced by an agent that is merely failing.
+
+/**
+ * Verbatim prefix of the error opencode returns when a tool call is rejected by
+ * a configured permission rule. Verified against the pinned opencode build the
+ * member-agent image installs (1.18.1, scripts/lib/member-agent/Dockerfile) and
+ * observed live in the 2026-07-27 layer-4 sweep. It appears only in a tool
+ * call's `error` field; a healthy run — the harness passes
+ * `--dangerously-skip-permissions` precisely to have no permission gate at all
+ * — cannot contain it.
+ */
+export const HARNESS_PERMISSION_REJECTION = "The user has specified a rule which prevents you from using this specific tool call";
+
+/**
+ * Verbatim fragment of `docker compose`'s INTERACTIVE volume-recreate question.
+ * It means the compose model the harness resolved for this invocation differs
+ * from the one that created the project's volumes — a harness-side compose
+ * environment defect (see scripts/agent/member-agent.ts's memberAgentSpawnEnv).
+ * Answering "yes" destroys the running stack's database; with a terminal on
+ * stdin the question blocks forever.
+ */
+export const COMPOSE_VOLUME_RECREATE_PROMPT = "exists but doesn't match configuration in compose file";
+
+export type HarnessFaultKind =
+  | "agent-blocked-by-harness-permissions"
+  | "compose-volume-config-mismatch"
+  | "container-never-launched";
+
+export interface HarnessFault {
+  kind: HarnessFaultKind;
+  detail: string;
+}
+
+/**
+ * The harness fault this run carries, or null. PURE, and deliberately narrow:
+ * each branch needs first-party evidence that the HARNESS stopped the run, and
+ * "the agent produced nothing" on its own is NOT such evidence — a dead
+ * provider produces exactly that shape, and calling it a harness error would
+ * hide a real outage behind our own name.
+ */
+export function harnessFaultOf(run: ClassifiableRun): HarnessFault | null {
+  const t = run.transcript ?? "";
+  // ORDER IS PRESENTATION ONLY — every branch below is equally fatal and
+  // produces the same `harness-error`. The agent-blocking fault is reported
+  // first because it is the one that explains what the AGENT did; the compose
+  // fault tends to be uniform across a whole sweep and would otherwise mask it.
+  if (t.includes(HARNESS_PERMISSION_REJECTION)) {
+    return {
+      kind: "agent-blocked-by-harness-permissions",
+      detail:
+        "the container agent had at least one tool call REJECTED by a permission rule in the harness's own generated " +
+        "opencode.json (scripts/agent/model-config.ts) — the harness, not the product, stopped this run",
+    };
+  }
+  if (t.includes(COMPOSE_VOLUME_RECREATE_PROMPT)) {
+    return {
+      kind: "compose-volume-config-mismatch",
+      detail:
+        "docker compose asked, interactively, whether to recreate a project volume whose recorded configuration " +
+        "does not match the model this invocation resolved — the harness's compose environment is wrong for this project",
+    };
+  }
+  // BOTH conjuncts required: the container was positively observed not to
+  // exist, AND the stream carries no agent event at all. Either alone is
+  // ambiguous; together they are only reachable when nothing ever ran.
+  if (run.containerLaunched === false && livenessOf(run.transcript).eventLines === 0) {
+    return {
+      kind: "container-never-launched",
+      detail: "the member-agent container was never observed to exist and the run produced no agent event at all",
+    };
+  }
+  return null;
+}
 
 const RATE_LIMIT_PATTERNS = [/\b429\b/, /rate[ _-]?limit/i, /overloaded_error/i, /rate_limit_error/i, /\b529\b/];
 
@@ -167,6 +266,10 @@ export interface ClassifiableRun {
   memberId: string | null;
   containerExitCode: number | null;
   transcript?: string;
+  // Positive launch evidence from scripts/agent/member-agent.ts. `undefined`
+  // (an older caller, or a watcher that could not tell) is NOT evidence and
+  // never classifies anything.
+  containerLaunched?: boolean | null;
 }
 
 /**
@@ -174,17 +277,26 @@ export interface ClassifiableRun {
  * run (§11.3 E4's outcome classes).
  *
  *  1. admitted            — an admitted run is never reclassified, even if a
- *                           429 appears somewhere mid-transcript.
- *  2. rate-limited        — provider flake dominates: the run never happened.
+ *                           429 appears somewhere mid-transcript. A run that
+ *                           reached the roster DESPITE a harness fault is still
+ *                           a real admission.
+ *  2. harness-error       — first-party evidence that the HARNESS stopped the
+ *                           run (harnessFaultOf). Above every failure rung on
+ *                           purpose: whatever else the run looks like, it is
+ *                           not a measurement of the product. It is loud, never
+ *                           retried, and excluded from the scored denominator —
+ *                           and the layer-4 scorecard fails outright when one
+ *                           appears, so this can only ever make a sweep redder.
+ *  3. rate-limited        — provider flake dominates: the run never happened.
  *                           Requires the STRUCTURAL conjunct in
  *                           `rateLimitDominates` — a pattern match anywhere in
  *                           the transcript is not enough, because tool output
  *                           echoes whatever the agent read.
- *  3. timed-out           — the agent was still going when the deadline
+ *  4. timed-out           — the agent was still going when the deadline
  *                           elapsed, so a refusal-shaped phrase early in a
  *                           20-minute transcript must not outrank it.
- *  4. refused             — the three-conjunct evidence above.
- *  5. navigation-failure  — everything else: the agent genuinely tried and did
+ *  5. refused             — the three-conjunct evidence above.
+ *  6. navigation-failure  — everything else: the agent genuinely tried and did
  *                           not get there. The one outcome that is a real,
  *                           never-retried red result.
  */
@@ -216,6 +328,7 @@ export function classifyOutcome(run: ClassifiableRun): OnboardingOutcome {
 // behaviour are byte-for-byte the ones above.
 export type OutcomeBranch =
   | "admitted"
+  | "harness-fault"
   | "rate-limit-in-final-verdict"
   | "rate-limit-no-final-verdict"
   | "wall-clock-deadline"
@@ -227,6 +340,7 @@ export type OutcomeBranch =
 // for and pinned by scripts/tests/unit/member-agent-classify.test.ts.
 export const OUTCOME_BRANCH_REASONS: Record<OutcomeBranch, string> = {
   admitted: "the run's own success predicate held",
+  "harness-fault": "the harness itself stopped this run — it measured nothing about the product",
   "rate-limit-in-final-verdict": "rate-limit signal in the agent's own closing verdict",
   "rate-limit-no-final-verdict": "whole-transcript rate-limit signal, no finalized text part",
   "wall-clock-deadline": "wall-clock deadline reached",
@@ -237,6 +351,7 @@ export const OUTCOME_BRANCH_REASONS: Record<OutcomeBranch, string> = {
 
 const BRANCH_OUTCOME: Record<OutcomeBranch, OnboardingOutcome> = {
   admitted: "admitted",
+  "harness-fault": "harness-error",
   "rate-limit-in-final-verdict": "rate-limited",
   "rate-limit-no-final-verdict": "rate-limited",
   "wall-clock-deadline": "timed-out",
@@ -247,6 +362,7 @@ const BRANCH_OUTCOME: Record<OutcomeBranch, OnboardingOutcome> = {
 
 function decideBranch(run: ClassifiableRun): OutcomeBranch {
   if (run.admitted) return "admitted";
+  if (harnessFaultOf(run) !== null) return "harness-fault";
   if (rateLimitDominates(run.transcript)) {
     // `rateLimitDominates` is true for exactly two reasons; this re-derives
     // which one without changing the predicate.
@@ -282,6 +398,14 @@ export interface TranscriptLiveness {
   finalTextEmpty: boolean;
   /** Raw transcript size, including both drained pipes. 0 for a dead run. */
   transcriptChars: number;
+  /**
+   * NDJSON event lines of ANY kind (`step_start`, `tool_use`, `text`, …). The
+   * one number that separates "the agent never spoke at all" from "the agent
+   * worked and then stopped" — and the 2026-07-27 sweep had no instrument for
+   * it: three samples burned 20 minutes each with ZERO event lines and were
+   * reported identically to a sample that had done 12 tool calls first.
+   */
+  eventLines: number;
 }
 
 export function livenessOf(transcript: string | undefined): TranscriptLiveness {
@@ -289,6 +413,7 @@ export function livenessOf(transcript: string | undefined): TranscriptLiveness {
   const parts = assistantTextParts(t);
   const final = parts.at(-1)?.trim() ?? "";
   let toolEvents = 0;
+  let eventLines = 0;
   for (const line of t.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -298,6 +423,7 @@ export function livenessOf(transcript: string | undefined): TranscriptLiveness {
     } catch {
       continue;
     }
+    if (typeof ev?.type === "string") eventLines++;
     if (ev?.type === "tool_use" || ev?.part?.type === "tool") toolEvents++;
   }
   return {
@@ -306,6 +432,7 @@ export function livenessOf(transcript: string | undefined): TranscriptLiveness {
     finalTextChars: final.length,
     finalTextEmpty: final === "",
     transcriptChars: t.length,
+    eventLines,
   };
 }
 
@@ -314,6 +441,8 @@ export interface OutcomeExplanation {
   branch: OutcomeBranch;
   reason: string;
   liveness: TranscriptLiveness;
+  /** The harness fault that decided a `harness-error`, or null. */
+  harnessFault: HarnessFault | null;
 }
 
 /**
@@ -333,6 +462,7 @@ export function explainOutcome(run: ClassifiableRun): OutcomeExplanation {
     branch,
     reason: OUTCOME_BRANCH_REASONS[branch],
     liveness: livenessOf(run.transcript),
+    harnessFault: harnessFaultOf(run),
   };
 }
 
@@ -341,8 +471,9 @@ export function formatOutcomeEvidence(x: OutcomeExplanation): string {
   const l = x.liveness;
   return (
     `decided by: ${x.branch} — ${x.reason}; ` +
-    `liveness: ${l.textParts} text part(s), ${l.toolEvents} tool event(s), ` +
-    `final text ${l.finalTextEmpty ? "EMPTY" : `${l.finalTextChars} chars`}, transcript ${l.transcriptChars} chars`
+    `liveness: ${l.eventLines} agent event line(s), ${l.textParts} text part(s), ${l.toolEvents} tool event(s), ` +
+    `final text ${l.finalTextEmpty ? "EMPTY" : `${l.finalTextChars} chars`}, transcript ${l.transcriptChars} chars` +
+    `${x.harnessFault ? `; HARNESS FAULT [${x.harnessFault.kind}]: ${x.harnessFault.detail}` : ""}`
   );
 }
 
@@ -360,6 +491,10 @@ export function formatOutcomeEvidence(x: OutcomeExplanation): string {
  * returns nothing"). `navigation-failure` is the one outcome that is a REAL
  * result: the agent tried and did not get there, and retrying it would soften
  * the gate.
+ *
+ * `harness-error` is NOT retryable, deliberately. The harness is broken in the
+ * same way on the next attempt, so a retry costs another twenty minutes and
+ * turns one loud diagnosis into two quiet ones.
  *
  * NOTE for the layer-4 sampler: it deliberately does NOT consult this. A
  * sampler that retried refusals would erase the refusal RATE, which is the

@@ -27,11 +27,45 @@ export const EVAL_MODEL = "opencode/big-pickle";
 //
 // Takes no model parameter BY DESIGN: a parameter would be the last remaining
 // way a caller could inject a model id into the container's config (E1).
+//
+// ── Why `external_directory` is spelled out (2026-07-27) ────────────────────
+// opencode's own default permission set contains
+// `external_directory: { "*": "ask", <its tool-output dir>: "allow",
+// /tmp/opencode/*: "allow" }` — confirmed with `opencode debug agent build`
+// inside the pinned image. `--dangerously-skip-permissions` (the flag
+// scripts/agent/member-agent.ts already passes; a hidden alias of `--auto` in
+// the pinned binary) does NOT lift it: the 2026-07-27 layer-4 run passed that
+// flag and opencode still rejected the calls, citing that exact rule. In a
+// non-interactive `opencode run` an "ask" has nobody to ask, so it resolves to
+// a REJECTION rather than a wait — the rejections came back in under a second
+// each, which is also why they are not what burned the run's wall clock.
+//
+// The effect, observed live in the 2026-07-27 layer-4 sweep: an agent that
+// discovers the committee-onboarding skill by cloning robotmoney-core into
+// /tmp — a route this harness's own notes record as previously working — can
+// `ls` its way to SKILL.md and then cannot read one byte of it. `cat`, `head`
+// and friends are intercepted by opencode's shell tool, which asks for
+// `external_directory` on the target path; `ls` and `git clone` are not, which
+// is why the transcript shows some commands succeeding and others rejected.
+// Everything outside `--dir /home/agent` is "external", so the agent was
+// structurally unable to read the very document the eval measures it for.
+//
+// This line restores the intent the harness ALREADY declares by passing
+// --dangerously-skip-permissions: inside a throwaway, network-isolated,
+// single-use container there is no permission gate. Verified against the
+// pinned opencode 1.18.1 with `opencode debug agent build`: adding it appends
+// `external_directory * → allow` AFTER the default `external_directory * →
+// ask`, and later rules win (the same mechanism by which the `* → deny` below
+// overrides opencode's own default `* → allow`). Nothing else in the resolved
+// rule set changes.
+//
+// It carries no onboarding knowledge: it names no path, host, repository, or
+// step — only that this container does not stop to ask permission.
 export function buildAgentOpencodeConfig(): Record<string, unknown> {
   return {
     $schema: "https://opencode.ai/config.json",
     model: EVAL_MODEL,
     autoupdate: false,
-    permission: { "*": "deny", bash: "allow" },
+    permission: { "*": "deny", bash: "allow", external_directory: "allow" },
   };
 }

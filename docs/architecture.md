@@ -2263,11 +2263,27 @@ being measured on discovering is not.
 
 **E4 — Scored by sampling.** Layer 4 runs K samples with a fresh identity and
 container each. Every outcome is classified — `admitted`, `refused`,
-`rate-limited`, `timed-out`, `navigation-failure` — and the **admission rate is
-the reported metric**. A refusal is data, not flake: a rising refusal rate is a
-regression in prompt quality, and this is the only instrument that surfaces it.
-The scorecard asserts K samples actually ran, so a zero-sample run is red rather
-than a vacuous green.
+`rate-limited`, `timed-out`, `navigation-failure`, `harness-error` — and the
+**admission rate is the reported metric**. A refusal is data, not flake: a
+rising refusal rate is a regression in prompt quality, and this is the only
+instrument that surfaces it. The scorecard asserts K samples actually ran, so a
+zero-sample run is red rather than a vacuous green.
+
+`harness-error` exists because the first real sweep (2026-07-27) reported an
+admission rate of 0.20 from samples the **harness** had stopped: an agent whose
+tool calls were rejected by the harness's own generated `opencode.json`, and
+`docker compose` output showing an interactive volume-recreate question the
+harness's compose environment should never have provoked. A sample the harness
+prevented from attempting onboarding is not a measurement of onboarding, so it
+is excluded from the admission-rate denominator alongside `rate-limited` — and,
+because an exclusion must never be a way to make a red vanish, **any**
+`harness-error` fails the whole sweep outright with its fault kind and detail.
+An all-`harness-error` sweep is therefore red twice over (the hard failure, and
+zero scorable samples) and can never be a vacuous green. It is never retried:
+the harness is broken the same way on the next attempt. Each sample additionally
+records how many agent event lines its container produced, which is what
+distinguishes "the container emitted nothing at all" from "the agent worked and
+then stalled" — a distinction no field of the first sweep's scorecard could make.
 
 **E5 — Shared components, not parallel ones.** The eval is the demo's onboarding
 path with fewer services booted. Three components are shared by construction:

@@ -14,15 +14,27 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertScorecard,
+  formatRunLog,
   formatScorecard,
   MIN_ADMISSION_RATE,
   MIN_SCORED_SAMPLES,
   OUTCOMES,
+  RUN_LOG_RELATIVE_DIR,
   SAMPLE_COUNT,
   scoreSamples,
   type Sample,
 } from "../../../evals/onboarding/support/scorecard.ts";
-import { classifyOutcome, shouldRetry, type OnboardingOutcome } from "../../agent/classify-outcome.ts";
+import {
+  classifyOutcome,
+  COMPOSE_VOLUME_RECREATE_PROMPT,
+  explainOutcome,
+  HARNESS_PERMISSION_REJECTION,
+  harnessFaultOf,
+  livenessOf,
+  shouldRetry,
+  type ClassifiableRun,
+  type OnboardingOutcome,
+} from "../../agent/classify-outcome.ts";
 
 function sample(outcome: OnboardingOutcome, i = 0): Sample {
   return {
@@ -31,7 +43,17 @@ function sample(outcome: OnboardingOutcome, i = 0): Sample {
     memberId: outcome === "admitted" ? `member-${i}` : null,
     steps: outcome === "admitted" ? 7 : 0,
     durationMs: 60_000,
-    transcriptPath: null,
+    runLogPath: null,
+    branch: outcome === "admitted" ? "admitted" : "wall-clock-deadline",
+    eventLines: outcome === "admitted" ? 40 : 0,
+    textParts: outcome === "admitted" ? 3 : 0,
+    toolEvents: outcome === "admitted" ? 12 : 0,
+    containerExitCode: 0,
+    containerLaunched: true,
+    harnessFault:
+      outcome === "harness-error"
+        ? { kind: "container-never-launched", detail: "the member-agent container was never observed to exist" }
+        : null,
   };
 }
 
@@ -158,6 +180,137 @@ describe("classifyOutcome, as the sampler uses it", () => {
 
   test("a bare failure is a navigation-failure — the one outcome that is a real red", () => {
     expect(classifyOutcome({ ...base, containerExitCode: 1, transcript: "" })).toBe("navigation-failure");
+  });
+});
+
+// ── A harness failure is never a product outcome (2026-07-27) ───────────────
+// The 2026-07-27 layer-4 sweep reported "admission rate 0.20" from a run in
+// which the harness itself stopped the agent. These cases pin the two halves of
+// the fix that must hold together: the broken samples leave the denominator
+// (so the rate stops lying), AND their presence fails the sweep outright (so
+// leaving the denominator can never be a way to turn a red green).
+describe("harness failures are classified as harness-error, not as a product outcome", () => {
+  const timedOutRun = (overrides: Partial<ClassifiableRun> = {}): ClassifiableRun => ({
+    admitted: false,
+    timedOut: true,
+    memberId: null,
+    containerExitCode: null,
+    ...overrides,
+  });
+
+  test("a container that never launched and produced no agent event is harness-error, NOT timed-out", () => {
+    const run = timedOutRun({ containerLaunched: false, transcript: "--- stdout ---\n\n--- stderr ---\n" });
+    expect(classifyOutcome(run)).toBe("harness-error");
+    expect(harnessFaultOf(run)?.kind).toBe("container-never-launched");
+    expect(explainOutcome(run).branch).toBe("harness-fault");
+  });
+
+  test("a tool call our own opencode config rejected is harness-error, whatever else the run looked like", () => {
+    const transcript = `--- stdout ---\n{"type":"tool_use","part":{"type":"tool","tool":"bash","state":{"status":"error","error":"${HARNESS_PERMISSION_REJECTION} …"}}}\n--- stderr ---\n`;
+    expect(classifyOutcome(timedOutRun({ transcript }))).toBe("harness-error");
+    expect(harnessFaultOf(timedOutRun({ transcript }))?.kind).toBe("agent-blocked-by-harness-permissions");
+  });
+
+  test("compose's interactive volume-recreate question in the run's output is harness-error", () => {
+    const transcript = `--- stdout ---\nVolume "rmeval_layer4_x_pgdata" ${COMPOSE_VOLUME_RECREATE_PROMPT}. Recreate (data will be lost)?\n--- stderr ---\n`;
+    expect(classifyOutcome(timedOutRun({ transcript }))).toBe("harness-error");
+    expect(harnessFaultOf(timedOutRun({ transcript }))?.kind).toBe("compose-volume-config-mismatch");
+  });
+
+  test("NO FALSE REDS: a dead-quiet run whose container DID launch stays timed-out — a stalled provider is not our bug", () => {
+    const run = timedOutRun({ containerLaunched: true, transcript: "--- stdout ---\n\n--- stderr ---\n" });
+    expect(harnessFaultOf(run)).toBeNull();
+    expect(classifyOutcome(run)).toBe("timed-out");
+  });
+
+  test("NO FALSE REDS: unknown launch evidence is not evidence — an older/unsure caller changes no classification", () => {
+    expect(classifyOutcome(timedOutRun({ containerLaunched: null }))).toBe("timed-out");
+    expect(classifyOutcome(timedOutRun())).toBe("timed-out");
+  });
+
+  test("an admission is never reclassified, even if the harness rejected a tool call along the way", () => {
+    const transcript = `--- stdout ---\n{"type":"tool_use","part":{"state":{"status":"error","error":"${HARNESS_PERMISSION_REJECTION}"}}}\n--- stderr ---\n`;
+    expect(classifyOutcome({ ...timedOutRun({ transcript }), admitted: true })).toBe("admitted");
+  });
+
+  test("harness-error is never retried — a broken harness breaks the same way twice", () => {
+    expect(shouldRetry("harness-error")).toBe(false);
+  });
+
+  test("harness-error samples leave the denominator, so the reported rate is about the samples that MEASURED something", () => {
+    const sc = scoreSamples(samples("admitted", "admitted", "refused", "harness-error", "harness-error"));
+    expect(sc.scored).toBe(3);
+    expect(sc.admissionRate).toBeCloseTo(2 / 3, 10);
+  });
+
+  test("...and leaving the denominator can NEVER make a sweep green: one harness error fails it outright", () => {
+    // Five samples, four admitted, one harness error — an admission rate of
+    // 1.00 on everything that was actually measured. Still RED.
+    const sc = scoreSamples(samples("admitted", "admitted", "admitted", "admitted", "harness-error"));
+    expect(sc.admissionRate).toBe(1);
+    expect(sc.scored).toBeGreaterThanOrEqual(MIN_SCORED_SAMPLES);
+    expect(() => assertScorecard(sc)).toThrow(/failed inside the HARNESS/);
+  });
+
+  test("an ALL-harness-error sweep is RED, twice over, and never a vacuous green", () => {
+    const sc = scoreSamples(samples(...Array<OnboardingOutcome>(SAMPLE_COUNT).fill("harness-error")));
+    expect(sc.scored).toBe(0);
+    expect(sc.admissionRate).toBe(0);
+    let message = "";
+    try {
+      assertScorecard(sc);
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    expect(message).toMatch(/failed inside the HARNESS/);
+    expect(message).toMatch(/scorable/);
+  });
+
+  test("the failure message carries the fault kind and detail, so the red is diagnosable from CI alone", () => {
+    let message = "";
+    try {
+      assertScorecard(scoreSamples(samples("admitted", "admitted", "admitted", "admitted", "harness-error")));
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    expect(message).toContain("container-never-launched");
+    expect(message).toContain("never observed to exist");
+  });
+
+  test("a healthy sweep is untouched by any of this", () => {
+    const sc = scoreSamples(samples("admitted", "admitted", "admitted", "admitted", "refused"));
+    expect(sc.counts["harness-error"]).toBe(0);
+    expect(() => assertScorecard(sc)).not.toThrow();
+  });
+});
+
+// ── The saved artifact says what it holds (2026-07-27) ──────────────────────
+describe("run-log artifact honesty", () => {
+  test("the artifact directory is no longer called 'transcripts' — the files were never transcripts", () => {
+    expect(RUN_LOG_RELATIVE_DIR).toBe(".agents/onboarding-eval-run-logs");
+    expect(RUN_LOG_RELATIVE_DIR).not.toContain("transcript");
+  });
+
+  test("the header states what the bytes are, and reports whether the agent produced anything at all", () => {
+    const s = sample("timed-out");
+    const text = formatRunLog(s, "--- stdout ---\n\n--- stderr ---\ncompose noise\n");
+    expect(text).toContain("combined stdout and stderr");
+    expect(text).toContain("docker compose");
+    expect(text).toContain("0 event line(s)");
+    // The sentence that would have saved the 2026-07-27 investigation an hour.
+    expect(text).toContain("there is no fuller transcript kept anywhere else");
+    expect(text).toEndWith("--- stdout ---\n\n--- stderr ---\ncompose noise\n");
+  });
+
+  test("a harness fault is stamped at the TOP of the artifact, not buried in the body", () => {
+    const text = formatRunLog(sample("harness-error"), "body");
+    expect(text.split("\n").slice(0, 8).join("\n")).toContain("HARNESS FAULT [container-never-launched]");
+  });
+
+  test("livenessOf counts every NDJSON event line, which is what separates a silent run from a busy one", () => {
+    const busy = '{"type":"step_start"}\n{"type":"tool_use","part":{"type":"tool"}}\n{"type":"step_finish"}';
+    expect(livenessOf(`--- stdout ---\n${busy}\n--- stderr ---\n`).eventLines).toBe(3);
+    expect(livenessOf("--- stdout ---\n\n--- stderr ---\ncompose noise\n").eventLines).toBe(0);
   });
 });
 

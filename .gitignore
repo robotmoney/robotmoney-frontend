@@ -16,4 +16,7 @@ _site/
 # Onboarding-eval output (written by `bun run eval:onboarding`; the nightly
 # uploads them as artifacts — they are run RESULTS, never repo content).
 .agents/onboarding-eval-scorecard.json
+.agents/onboarding-eval-run-logs/
+# Pre-2026-07-27 name for the run logs. They were never transcripts; kept
+# ignored so an old working copy does not start committing them.
 .agents/onboarding-eval-transcripts/

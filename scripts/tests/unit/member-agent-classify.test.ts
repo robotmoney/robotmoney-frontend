@@ -437,6 +437,7 @@ describe("explainOutcome names the deciding branch", () => {
   test("each branch's reason phrase is pinned verbatim", () => {
     expect(OUTCOME_BRANCH_REASONS).toEqual({
       admitted: "the run's own success predicate held",
+      "harness-fault": "the harness itself stopped this run — it measured nothing about the product",
       "rate-limit-in-final-verdict": "rate-limit signal in the agent's own closing verdict",
       "rate-limit-no-final-verdict": "whole-transcript rate-limit signal, no finalized text part",
       "wall-clock-deadline": "wall-clock deadline reached",

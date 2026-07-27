@@ -90,6 +90,70 @@ export function buildMemberAgentArgv(a: MemberAgentArgvOptions): string[] {
   ];
 }
 
+// ── The compose child's environment and stdio (both LOAD-BEARING) ───────────
+//
+// ENVIRONMENT. `docker compose run` re-resolves the WHOLE compose model, not
+// just the service named on the command line, and `ensureProjectVolumes` then
+// compares every project volume against the `com.docker.compose.config-hash`
+// label recorded when that volume was created. docker-compose.demo.yml's
+// pgdata volume carries `robotmoney.demo.project: ${DEMO_PROJECT}`, so a child
+// that does not carry DEMO_PROJECT hashes a volume definition whose label is
+// the empty string — a DIFFERENT hash from the one `stack.up()` recorded, which
+// makes compose print
+//
+//   Volume "<project>_pgdata" exists but doesn't match configuration in
+//   compose file. Recreate (data will be lost)?
+//
+// and wait for an answer. Reproduced end-to-end on this repo's own compose
+// files with compose 2.40.3; with a PTY on stdin the invocation BLOCKS
+// indefinitely, and "yes" would delete the running stack's postgres data
+// mid-run. DEMO_PROJECT is by definition the compose project name
+// (scripts/stack/config.ts's buildComposeEnv sets `DEMO_PROJECT: cfg.project`),
+// so it is DERIVED here rather than plumbed — a caller cannot forget it.
+//
+// STDIN. Every compose invocation on this path runs with stdin closed
+// (`/dev/null`), so a confirmation prompt can only ever be declined
+// immediately. A harness question that waits forever is how a 20-minute
+// per-sample budget gets burned by the harness and then reported as a product
+// timeout; there is no compose flag that answers this particular prompt
+// non-interactively (`docker compose run --help`, 2.40.3, has no `--yes`), so
+// closing stdin IS the mechanism.
+export function memberAgentSpawnEnv(
+  composeProject: string,
+  hostEnv: Record<string, string | undefined>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(hostEnv)) if (v !== undefined) out[k] = v;
+  out.DEMO_PROJECT = composeProject;
+  return out;
+}
+
+// Does the named container exist right now (running, exited, or created)?
+// `docker inspect` is a read-only daemon query; it is the POSITIVE evidence
+// that the container the compose CLI was asked for actually came into being.
+export function containerExists(containerName: string, env?: Record<string, string>): boolean {
+  const r = Bun.spawnSync(["docker", "inspect", "--type", "container", containerName], {
+    ...(env ? { env } : {}),
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  return r.exitCode === 0;
+}
+
+// How long the launch watcher below keeps looking for the container before it
+// gives up and reports "unknown". Generous: a cold `docker compose run` on a
+// loaded host can take tens of seconds to create the container.
+export const CONTAINER_LAUNCH_WATCH_MS = 120_000;
+// Tight on purpose: `--rm` removes the container as soon as it exits, so the
+// only window in which a container that DID launch could be missed is one that
+// lived for less than one poll interval. An opencode container takes seconds
+// to boot, and a container that died faster than this carried no agent either
+// way. The classifier additionally requires an EMPTY event stream before it
+// will call a run "never launched" (scripts/agent/classify-outcome.ts), so a
+// single missed poll cannot on its own manufacture a harness error.
+const CONTAINER_LAUNCH_POLL_MS = 250;
+
 // `docker cp`, NOT `docker exec`: exec cannot run on a STOPPED container, and
 // inspecting a stopped container's filesystem is exactly how eval layers 1-3
 // observe without editing the task under test (§11.3 E3).
@@ -137,6 +201,12 @@ export interface MemberAgentResult {
   transcript: string;
   timedOut: boolean;
   durationMs: number;
+  // Was the container ever OBSERVED to exist (`docker inspect` succeeded at
+  // least once)? `false` means the compose CLI was asked for a container that
+  // never came into being — a harness failure, not a result about the agent.
+  // `null` means the watcher could not tell (it timed out looking), which is
+  // deliberately NOT treated as evidence of anything.
+  containerLaunched: boolean | null;
 }
 
 // Only consulted on the no-observer path; the onboarding eval passes an
@@ -154,6 +224,7 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
   try {
     writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(), null, 2));
 
+    const spawnEnv = memberAgentSpawnEnv(opts.composeProject, process.env);
     const proc = Bun.spawn(
       buildMemberAgentArgv({
         composeProject: opts.composeProject,
@@ -164,7 +235,9 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
         prompt: opts.prompt,
         keep,
       }),
-      { cwd: opts.repoRoot, stdout: "pipe", stderr: "pipe" },
+      // `stdin: "ignore"` and the derived DEMO_PROJECT are both load-bearing —
+      // see memberAgentSpawnEnv's comment. Do not "tidy" either away.
+      { cwd: opts.repoRoot, env: spawnEnv, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
     );
     // Actively drain both pipes for the whole run — an un-drained pipe can
     // fill its OS buffer and deadlock the child once its own transcript
@@ -172,6 +245,33 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
     // does. Started BEFORE any await, and never moved after one.
     const stdoutPromise = drain(proc.stdout as ReadableStream<Uint8Array>);
     const stderrPromise = drain(proc.stderr as ReadableStream<Uint8Array>);
+
+    // POSITIVE evidence that the container came into being, gathered while the
+    // run is still in flight. Without it, "the compose CLI never started
+    // anything" and "the agent started and produced nothing" are the same
+    // observation — and the second is a real (if bleak) result about the run
+    // while the first is a harness failure that must never enter a product
+    // metric. Stops the moment the container is seen, so it costs a handful of
+    // `docker inspect` calls on a healthy run and nothing thereafter.
+    let containerLaunched: boolean | null = null;
+    const launchWatcher = (async () => {
+      const deadline = Date.now() + CONTAINER_LAUNCH_WATCH_MS;
+      for (;;) {
+        if (containerExists(containerName, spawnEnv)) {
+          containerLaunched = true;
+          return;
+        }
+        if (proc.exitCode !== null) {
+          // The CLI is gone and the container was never seen. One last look
+          // (it may have started and been removed between polls) and then a
+          // verdict.
+          containerLaunched = containerExists(containerName, spawnEnv);
+          return;
+        }
+        if (Date.now() >= deadline) return; // stays null: "could not tell"
+        await Bun.sleep(CONTAINER_LAUNCH_POLL_MS);
+      }
+    })();
 
     let timedOut = false;
     if (opts.observe) {
@@ -219,6 +319,7 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
     // Closing the container's pipes is what lets the drains finish; awaiting
     // them first would hang. Do not "tidy" this.
     const [stdout, stderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, proc.exited]);
+    await launchWatcher; // resolves as soon as the CLI is gone; never outlives the run
 
     return {
       containerName,
@@ -228,6 +329,7 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
       transcript: `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
       timedOut,
       durationMs: Date.now() - startedAt,
+      containerLaunched,
     };
   } finally {
     rmSync(workDir, { recursive: true, force: true });

@@ -76,8 +76,10 @@ import { EVAL_MODEL } from "../agent/model-config.ts";
 export { composeArgs, DEFAULT_COMPOSE_FILES } from "../stack/config.ts";
 export {
   buildMemberAgentArgv,
+  containerExists,
   drain,
   memberAgentContainerName,
+  memberAgentSpawnEnv,
   runMemberAgent,
 } from "../agent/member-agent.ts";
 export { buildAgentOpencodeConfig, EVAL_MODEL } from "../agent/model-config.ts";
@@ -256,7 +258,20 @@ export interface OnboardingEvalResult {
   admitted: boolean;
   timedOut: boolean;
   containerExitCode: number | null;
-  transcript?: string; // only populated when the eval did NOT admit the member
+  // Was the container ever observed to exist? See MemberAgentResult.
+  containerLaunched: boolean | null;
+  // ALWAYS populated, including for an admitted run (changed 2026-07-27).
+  // Withholding it from successes made the successful and the failed runs of
+  // one sweep incomparable: when four samples produced nothing, there was no
+  // healthy run from the SAME sweep to diff them against, and the first hours
+  // of the investigation went into re-deriving what a good run even looks like.
+  //
+  // NOT a "transcript" in the narrow sense, and the artifact writer says so:
+  // this is the whole combined stdout+stderr of the `docker compose run`
+  // process. The agent's own NDJSON is the stdout portion — and when the
+  // container never starts, there is no agent output anywhere, because this
+  // stream is the only place the agent ever writes.
+  transcript?: string;
 }
 
 /**
@@ -355,7 +370,8 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     admitted,
     timedOut,
     containerExitCode: run.exitCode,
-    ...(admitted ? {} : { transcript: run.transcript }),
+    containerLaunched: run.containerLaunched,
+    transcript: run.transcript,
   };
 }
 

@@ -26,6 +26,7 @@ import {
   explainOutcome,
   formatOutcomeEvidence,
   shouldRetry,
+  type HarnessFault,
   type OnboardingOutcome,
   type OutcomeBranch,
   type TranscriptLiveness,
@@ -72,6 +73,11 @@ export interface IsolatedLayerResult<O> {
   branch: OutcomeBranch;
   reason: string;
   liveness: TranscriptLiveness;
+  // Non-null when the HARNESS stopped this run (a rejected-by-our-own-config
+  // tool call, an interactive compose question, a container that never came
+  // into being). Reported ahead of everything else, because none of the other
+  // fields mean anything about the product when it is set.
+  harnessFault: HarnessFault | null;
   observation: O | null;
   observationError: string | null;
   run: MemberAgentResult;
@@ -130,6 +136,7 @@ export async function runIsolatedLayer<C, O = C>(opts: IsolatedLayerOptions<C, O
       memberId: null,
       containerExitCode: run.exitCode,
       transcript: run.transcript,
+      containerLaunched: run.containerLaunched,
     });
     const outcome = explained.outcome;
 
@@ -139,6 +146,7 @@ export async function runIsolatedLayer<C, O = C>(opts: IsolatedLayerOptions<C, O
       branch: explained.branch,
       reason: explained.reason,
       liveness: explained.liveness,
+      harnessFault: explained.harnessFault,
       observation,
       observationError,
       run,
@@ -172,13 +180,21 @@ export async function runIsolatedLayer<C, O = C>(opts: IsolatedLayerOptions<C, O
 export function explainLayerFailure<O>(r: IsolatedLayerResult<O>, whatWasExpected: string): string {
   return [
     `layer ${r.layer} did not pass: classified ${r.outcome} after ${r.attempts} attempt(s).`,
+    ...(r.harnessFault
+      ? [
+          `HARNESS FAULT [${r.harnessFault.kind}]: ${r.harnessFault.detail}. ` +
+            `This layer measured NOTHING about the product — fix the harness before reading anything else below.`,
+        ]
+      : []),
     `deciding branch: ${r.branch} — ${r.reason}`,
-    `agent liveness: ${r.liveness.textParts} text part(s), ${r.liveness.toolEvents} tool event(s), ` +
+    `agent liveness: ${r.liveness.eventLines} agent event line(s), ${r.liveness.textParts} text part(s), ` +
+      `${r.liveness.toolEvents} tool event(s), ` +
       `final text ${r.liveness.finalTextEmpty ? "EMPTY" : `${r.liveness.finalTextChars} chars`}, ` +
       `transcript ${r.liveness.transcriptChars} chars`,
     `expected: ${whatWasExpected}`,
     r.observationError ? `harness observation error: ${r.observationError}` : `observation: ${JSON.stringify(r.observation)}`,
-    `container exit ${r.run.exitCode}, timedOut=${r.run.timedOut}, ${(r.run.durationMs / 60_000).toFixed(1)} min`,
+    `container exit ${r.run.exitCode}, launched=${r.run.containerLaunched === null ? "unknown" : r.run.containerLaunched}, ` +
+      `timedOut=${r.run.timedOut}, ${(r.run.durationMs / 60_000).toFixed(1)} min`,
     `agent's final message: ${JSON.stringify(r.finalMessage.slice(0, 600))}`,
   ].join("\n");
 }

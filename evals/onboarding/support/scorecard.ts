@@ -12,7 +12,7 @@
 // goes red, and this module is on an eval path where there is deliberately no
 // configuration surface at all.
 export type { OnboardingOutcome as EvalOutcome } from "../../../scripts/agent/classify-outcome.ts";
-import type { OnboardingOutcome } from "../../../scripts/agent/classify-outcome.ts";
+import type { HarnessFault, OnboardingOutcome, OutcomeBranch } from "../../../scripts/agent/classify-outcome.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -37,13 +37,38 @@ export const MIN_ADMISSION_RATE = 0.6;
 
 export const SCORECARD_RELATIVE_PATH = ".agents/onboarding-eval-scorecard.json";
 
+// Renamed from ".agents/onboarding-eval-transcripts/" on 2026-07-27. These
+// files were never transcripts: each is the combined stdout+stderr of one
+// `docker compose run member-agent` process. The agent's NDJSON is part of the
+// stdout half — the rest is the compose CLI's own chatter, and on the
+// 2026-07-27 sweep three of the four saved files contained NOTHING BUT compose
+// chatter. Reading a file labelled "transcript" and finding compose output in
+// it sent the first pass of that investigation looking for a provider outage.
+export const RUN_LOG_RELATIVE_DIR = ".agents/onboarding-eval-run-logs";
+
 export interface Sample {
   runId: string;
   outcome: OnboardingOutcome;
   memberId: string | null;
   steps: number;
   durationMs: number;
-  transcriptPath: string | null;
+  // Path of the saved run log. Written for EVERY sample, admitted ones
+  // included: without a healthy run from the same sweep there is nothing to
+  // diff a broken one against.
+  runLogPath: string | null;
+  // The rung of the classifier that produced `outcome`, and the agent-liveness
+  // counts around it. `eventLines: 0` is the single most useful number on a
+  // failed sample — it says the container produced no agent output AT ALL,
+  // which no previous field could distinguish from an agent that worked for
+  // twelve tool calls and then stalled.
+  branch: OutcomeBranch;
+  eventLines: number;
+  textParts: number;
+  toolEvents: number;
+  containerExitCode: number | null;
+  containerLaunched: boolean | null;
+  // Non-null exactly when `outcome === "harness-error"`.
+  harnessFault: HarnessFault | null;
 }
 
 export type OutcomeCounts = Record<OnboardingOutcome, number>;
@@ -56,7 +81,14 @@ export interface Scorecard {
   admissionRate: number;
 }
 
-export const OUTCOMES: OnboardingOutcome[] = ["admitted", "refused", "rate-limited", "timed-out", "navigation-failure"];
+export const OUTCOMES: OnboardingOutcome[] = [
+  "admitted",
+  "refused",
+  "rate-limited",
+  "timed-out",
+  "navigation-failure",
+  "harness-error",
+];
 
 export function scoreSamples(samples: Sample[]): Scorecard {
   const counts = Object.fromEntries(OUTCOMES.map((o) => [o, 0])) as OutcomeCounts;
@@ -67,7 +99,13 @@ export function scoreSamples(samples: Sample[]): Scorecard {
   // the retry predicate uses. `refused` is KEPT in it: a refusal is the metric
   // this eval exists to report, and moving it out of the denominator would
   // erase exactly the failure D22 was written about.
-  const scored = samples.length - counts["rate-limited"];
+  //
+  // `harness-error` is excluded for the same reason as `rate-limited` and with
+  // a much stronger guarantee attached: assertScorecard below fails the sweep
+  // OUTRIGHT whenever one appears. Excluding it therefore cannot launder a red
+  // into a green — it can only stop OUR breakage from being reported as the
+  // product's admission rate, on a run that is already failing.
+  const scored = samples.length - counts["rate-limited"] - counts["harness-error"];
   const admissionRate = scored > 0 ? counts.admitted / scored : 0;
   return { samples, counts, scored, admissionRate };
 }
@@ -81,13 +119,45 @@ export function formatScorecard(sc: Scorecard): string {
     "|--------------------|-------|",
     ...OUTCOMES.map((o) => `| ${o.padEnd(18)} | ${String(sc.counts[o]).padStart(5)} |`),
     "",
-    ...sc.samples.map(
-      (s) =>
-        `  ${s.runId}: ${s.outcome} (steps ${s.steps}, ${(s.durationMs / 60_000).toFixed(1)} min` +
-        `${s.memberId ? `, member ${s.memberId}` : ""}${s.transcriptPath ? `, transcript ${s.transcriptPath}` : ""})`,
-    ),
+    ...sc.samples.flatMap((s) => [
+      `  ${s.runId}: ${s.outcome} (steps ${s.steps}, ${(s.durationMs / 60_000).toFixed(1)} min, ` +
+        `${s.eventLines} agent event line(s), ${s.toolEvents} tool event(s), exit ${s.containerExitCode}, ` +
+        `launched ${s.containerLaunched === null ? "unknown" : s.containerLaunched}, decided by ${s.branch}` +
+        `${s.memberId ? `, member ${s.memberId}` : ""}${s.runLogPath ? `, run log ${s.runLogPath}` : ""})`,
+      ...(s.harnessFault ? [`      HARNESS FAULT [${s.harnessFault.kind}]: ${s.harnessFault.detail}`] : []),
+    ]),
   ];
   return lines.join("\n");
+}
+
+// ── The run-log artifact, labelled honestly (2026-07-27) ────────────────────
+// The old code called this file "the failed sample's TRANSCRIPT … the only
+// artifact that explains WHY". It is not a transcript: it is the combined
+// stdout+stderr of one `docker compose run member-agent` process, and the agent
+// contributes only the NDJSON on the stdout half. When the container never
+// starts, or starts and the model never answers, there is no agent transcript
+// ANYWHERE — this stream is the only place the agent ever writes — and the file
+// legitimately holds compose output and nothing else. Saying so in the file is
+// the difference between a five-minute diagnosis and an hour spent hunting a
+// provider outage that was not there.
+export function formatRunLog(sample: Sample, body: string): string {
+  return [
+    `# member-agent run log — ${sample.runId}`,
+    `# outcome: ${sample.outcome} (decided by ${sample.branch})`,
+    `# duration: ${(sample.durationMs / 60_000).toFixed(1)} min   observed onboarding steps: ${sample.steps}/7`,
+    `# container: exit ${sample.containerExitCode}, launched ${sample.containerLaunched === null ? "unknown" : sample.containerLaunched}`,
+    `# agent output on this stream: ${sample.eventLines} event line(s), ${sample.textParts} text part(s), ${sample.toolEvents} tool event(s)`,
+    ...(sample.harnessFault ? [`# HARNESS FAULT [${sample.harnessFault.kind}]: ${sample.harnessFault.detail}`] : []),
+    "#",
+    "# WHAT THIS FILE IS: the combined stdout and stderr of the `docker compose",
+    "# run member-agent` process for this sample. The agent's own transcript is",
+    "# the NDJSON in the stdout section; everything else on these two streams",
+    "# belongs to the compose CLI. If the NDJSON is absent, the agent produced",
+    "# no output at all — there is no fuller transcript kept anywhere else,",
+    "# because this stream is the only place the container agent ever writes.",
+    "",
+    body,
+  ].join("\n");
 }
 
 // Throws with the FULL formatted report — the counts are the only thing that
@@ -100,10 +170,28 @@ export function assertScorecard(sc: Scorecard): void {
     // A zero-sample run is RED, never a vacuous green (§11.3 E4).
     failures.push(`expected ${SAMPLE_COUNT} samples, got ${sc.samples.length}`);
   }
+  // UNCONDITIONAL, and first. A harness error is OUR bug, and the one thing
+  // that must never happen is for it to be quietly dropped from the metric and
+  // otherwise ignored — that is the exact shape of the defect this check was
+  // written for. Excluding it from the denominator keeps the reported rate
+  // honest; failing here keeps the SWEEP honest. An all-harness-error sweep
+  // trips this AND the scorable floor (scored is 0), so it is red twice over
+  // and can never be a vacuous green.
+  if (sc.counts["harness-error"] > 0) {
+    const faults = sc.samples
+      .filter((s) => s.harnessFault !== null)
+      .map((s) => `${s.runId} [${s.harnessFault?.kind}]: ${s.harnessFault?.detail}`);
+    failures.push(
+      `${sc.counts["harness-error"]} of ${sc.samples.length} samples failed inside the HARNESS, not the product — ` +
+        `this sweep did not measure onboarding and its admission rate means nothing until the harness is fixed:\n` +
+        faults.map((f) => `    - ${f}`).join("\n"),
+    );
+  }
   if (sc.scored < MIN_SCORED_SAMPLES) {
     failures.push(
       `only ${sc.scored} of ${sc.samples.length} samples were scorable (min ${MIN_SCORED_SAMPLES}) — ` +
-        `${sc.counts["rate-limited"]} were rate-limited, so this sweep measured too little to mean anything`,
+        `${sc.counts["rate-limited"]} were rate-limited and ${sc.counts["harness-error"]} failed inside the harness, ` +
+        `so this sweep measured too little to mean anything`,
     );
   }
   if (sc.admissionRate < MIN_ADMISSION_RATE) {
