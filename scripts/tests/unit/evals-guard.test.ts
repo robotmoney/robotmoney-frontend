@@ -13,7 +13,7 @@
 // evals/onboarding, and tsconfig must include evals/**/*.ts (without which the
 // whole suite is invisible to `bun run typecheck`).
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -90,6 +90,41 @@ describe("check-eval-keyless.sh", () => {
     }
   });
 
+  // ── EVERY scan root, not just the two this suite happens to know ──────────
+  // The two tests above are the only planted-violation controls that exist, and
+  // each covers exactly one declared root. A THIRD root added to the script
+  // would arrive with no control at all — scanned in name, unproven in fact —
+  // and every test here would stay green. Pinning the declaration to a literal
+  // makes that addition RED until its own control lands beside it.
+  const EVAL_SCAN_ROOTS = ["evals", "scripts/agent"];
+
+  // Read out of the script's OWN declarations (`<name>_dir="$target_root/<rel>"`),
+  // with trailing comments stripped first: a line ending `# also scanned` must
+  // not slip a root past this, or the meta-assertion only catches removals.
+  function declaredScanRoots(scriptText: string): string[] {
+    return scriptText
+      .split("\n")
+      .map((l) => l.replace(/#.*$/, "").trim())
+      .map((l) => /^[A-Za-z_][A-Za-z0-9_]*_dir="\$target_root\/([^"]+)"$/.exec(l))
+      .filter((m): m is RegExpExecArray => m !== null)
+      .map((m) => m[1]);
+  }
+
+  test("the guard declares exactly the roots this suite proves — a new root must arrive with its own control", () => {
+    expect(declaredScanRoots(readFileSync(CHECK, "utf8")).sort()).toEqual([...EVAL_SCAN_ROOTS].sort());
+  });
+
+  test("the root extractor sees an ADDED root, comment or not — otherwise it only catches removals", () => {
+    const src = readFileSync(CHECK, "utf8");
+    const tampered = src.replace(
+      'agent_dir="$target_root/scripts/agent"',
+      'agent_dir="$target_root/scripts/agent"\nlib_dir="$target_root/scripts/lib" # also scanned',
+    );
+    expect(tampered).not.toBe(src); // the anchor still exists; a rename must not silently no-op
+    expect(declaredScanRoots(tampered)).toContain("scripts/lib");
+    expect(declaredScanRoots(tampered).sort()).not.toEqual([...EVAL_SCAN_ROOTS].sort());
+  });
+
   test("FAILS on a tree with no evals/ at all — a guard over zero paths is a green that means nothing", () => {
     const empty = mkdtempSync(join(tmpdir(), "evals-guard-empty-"));
     try {
@@ -149,5 +184,116 @@ describe("eval wiring keeps evals/ off the per-PR path (§3 L1)", () => {
       stderr: "ignore",
     });
     expect(r.exitCode).not.toBe(0);
+  });
+});
+
+// ── the TRIGGER half of "off the per-PR path" ───────────────────────────────
+// Everything above reads package.json, tsconfig.json, and the filesystem. None
+// of it reads .github/workflows/, so the one edit that actually puts real model
+// inference (up to ~181 min of paid tokens) on every PR — a `pull_request:`
+// trigger on committee-opencode-nightly.yml, or `bun run eval:onboarding` wired
+// into e2e.yml — would land with every guard in this file still green. That is
+// defect 6's class exactly: a guard that proves one thing and is assumed to
+// prove another. This closes it (§11.3 E1, D22 rule 2).
+describe("real-inference evals stay OFF the per-PR trigger", () => {
+  const wfDir = join(repoRoot, ".github", "workflows");
+
+  // Matched against PARSED `run` scalars, never raw file text: integration.yml
+  // names evals/ in a comment and runs `bash scripts/checks/check-eval-keyless.sh`,
+  // and e2e.yml runs scripts/tests/integration/onboarding-eval-infra.test.ts —
+  // all three are legitimate per-PR work, and a false RED on any of them is as
+  // much an instrument lie as a false green.
+  const EVAL_RUN_PATTERNS = [
+    // `bun test evals`, `evals/onboarding/...`, `./evals/...` — the directory
+    // itself. The `-`/word guards keep it off `evals-guard.test.ts`.
+    /(?<![\w-])evals(?![\w-])/,
+    // every package.json eval target: eval:onboarding{,:isolated,:admission}.
+    /eval:onboarding/,
+  ];
+
+  interface WorkflowStep {
+    run?: string;
+  }
+  interface WorkflowJob {
+    steps?: WorkflowStep[];
+  }
+  interface Workflow {
+    on?: unknown;
+    true?: unknown;
+    jobs?: Record<string, WorkflowJob>;
+  }
+
+  function triggerNames(wf: Workflow): string[] {
+    // YAML 1.1 folds the bare key `on` to boolean true; Bun.YAML keeps it a
+    // string. Accept both, so this can never quietly observe zero triggers and
+    // wave every workflow through.
+    const on = wf.on ?? wf.true;
+    if (typeof on === "string") return [on];
+    if (Array.isArray(on)) return on.map(String);
+    if (on && typeof on === "object") return Object.keys(on as object);
+    return [];
+  }
+
+  /** The `run:` commands that would execute an eval on a pull_request event. */
+  function evalRunsUnderPullRequest(yamlText: string): string[] {
+    const wf = Bun.YAML.parse(yamlText) as Workflow;
+    if (!triggerNames(wf).includes("pull_request")) return [];
+    const offenders: string[] = [];
+    for (const job of Object.values(wf.jobs ?? {})) {
+      for (const step of job.steps ?? []) {
+        const run = step.run;
+        if (typeof run === "string" && EVAL_RUN_PATTERNS.some((p) => p.test(run))) offenders.push(run.trim());
+      }
+    }
+    return offenders;
+  }
+
+  const workflows = readdirSync(wfDir)
+    .filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"))
+    .map((f) => [f, readFileSync(join(wfDir, f), "utf8")] as const);
+
+  test("no workflow runs an eval on a pull_request trigger", () => {
+    const offenders = workflows.flatMap(([name, text]) => evalRunsUnderPullRequest(text).map((run) => `${name}: ${run}`));
+    expect(offenders).toEqual([]);
+  });
+
+  test("the scan is not vacuous — workflows exist, and some really are PR-triggered", () => {
+    expect(workflows.length).toBeGreaterThan(0);
+    const prTriggered = workflows.filter(([, text]) => triggerNames(Bun.YAML.parse(text) as Workflow).includes("pull_request"));
+    expect(prTriggered.length).toBeGreaterThan(0);
+  });
+
+  // ── negative controls: the assertion above must be able to FAIL ───────────
+  test("FIRES when the nightly eval workflow gains a pull_request trigger", () => {
+    const nightly = readFileSync(join(wfDir, "committee-opencode-nightly.yml"), "utf8");
+    expect(evalRunsUnderPullRequest(nightly)).toEqual([]); // schedule-only today: its eval steps are legitimate
+    const withPr = nightly.replace(/^on:\n/m, "on:\n  pull_request: {}\n");
+    expect(withPr).not.toBe(nightly);
+    expect(evalRunsUnderPullRequest(withPr)).toEqual(["bun run eval:onboarding:isolated", "bun run eval:onboarding:admission"]);
+  });
+
+  test("FIRES when an eval target is wired into the per-PR e2e workflow", () => {
+    const e2e = readFileSync(join(wfDir, "e2e.yml"), "utf8").replace("bun run scripts/demo.ts", "bun run eval:onboarding");
+    expect(evalRunsUnderPullRequest(e2e)).toEqual(["bun run eval:onboarding"]);
+  });
+
+  test("FIRES on a bare `bun test evals` path, not just the named package targets", () => {
+    const planted = "on:\n  pull_request: {}\njobs:\n  j:\n    steps:\n      - run: bun test evals/onboarding/isolated\n";
+    expect(evalRunsUnderPullRequest(planted)).toEqual(["bun test evals/onboarding/isolated"]);
+  });
+
+  // ── false-RED controls: it must NOT fire on the legitimate per-PR work ────
+  test("does NOT fire on integration.yml — evals/ in a COMMENT and the keyless guard are per-PR work", () => {
+    const integration = readFileSync(join(wfDir, "integration.yml"), "utf8");
+    // Both traps are really present, so this control cannot go stale unnoticed:
+    expect(integration).toContain("evals/"); // ...in a comment — raw-text matching would have cried wolf here
+    expect(integration).toContain("bash scripts/checks/check-eval-keyless.sh"); // a `run` that merely names "eval"
+    expect(evalRunsUnderPullRequest(integration)).toEqual([]);
+  });
+
+  test("does NOT fire on the per-PR eval INFRA test — inference-off rails belong on every PR", () => {
+    const planted =
+      "on:\n  pull_request: {}\njobs:\n  j:\n    steps:\n      - run: bun test scripts/tests/integration/onboarding-eval-infra.test.ts\n      - run: bun test scripts/tests/unit/evals-guard.test.ts\n";
+    expect(evalRunsUnderPullRequest(planted)).toEqual([]);
   });
 });

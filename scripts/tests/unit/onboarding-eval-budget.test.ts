@@ -33,6 +33,7 @@ import { join } from "node:path";
 import {
   ADMISSION_JOB_BUDGET,
   ADMISSION_JOB_WORST_CASE_MS,
+  IMAGE_BUILD_BUDGET_MS,
   ISOLATED_JOB_BUDGET,
   ISOLATED_JOB_WORST_CASE_MS,
   ISOLATED_SETUP_TIMEOUT_MS,
@@ -42,6 +43,11 @@ import {
   toMinutes,
 } from "../../../evals/onboarding/support/budget.ts";
 import { ISOLATED_LAYER_TIMEOUT_MS, MAX_ATTEMPTS, RATE_LIMIT_BACKOFF_MS } from "../../../evals/onboarding/support/layer-run.ts";
+// Pure builders, side-effect free by their own module contract (scripts/stack/
+// config.ts:1-20), so importing them cannot start a container. These are the
+// ACTUAL argv the eval's image build and teardown run, which is what makes the
+// layer-cache assumption below checkable rather than merely asserted in prose.
+import { buildArgs, downArgs } from "../../../scripts/stack/config.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const WORKFLOW = join(repoRoot, ".github", "workflows", "committee-opencode-nightly.yml");
@@ -115,6 +121,10 @@ describe("committee-opencode-nightly.yml honours the cost model", () => {
       runContains: "eval:onboarding:isolated",
       budget: ISOLATED_JOB_BUDGET,
       // The largest in-test bound inside this job: any single layer's beforeAll.
+      // Deliberately Math.max and NOT the sum — the four caps add to 211 min
+      // against a 191-min step. That is not a defect; see "the aggregate fits
+      // the step only because builds 2-4 hit the layer cache" below, which is
+      // the test that fails if the reasoning ever stops holding.
       inTestMs: Math.max(LAYER0_SETUP_TIMEOUT_MS, ISOLATED_SETUP_TIMEOUT_MS),
     },
     {
@@ -147,6 +157,75 @@ describe("committee-opencode-nightly.yml honours the cost model", () => {
       });
     });
   }
+
+  // ── The one assumption the isolated job's budget rests on ─────────────────
+  // READ THIS BEFORE "FIXING" THE 211-vs-191 GAP.
+  //
+  // The four per-layer in-test caps sum to 211 minutes while the step is killed
+  // at 191. That looks like an inversion — the exact bug this whole file exists
+  // to catch — and it is not one, because the sum double-counts the image build.
+  // IMAGE_BUILD_BUDGET_MS is charged to EVERY isolated layer (bun does not
+  // guarantee file order, so any layer may be the one that runs first and pays
+  // for the cold build) but is really paid ONCE per job: builds 2-4 hit the
+  // Docker layer cache.
+  //
+  // If a future change ever makes builds 2-4 cold — adding `--no-cache`/`--pull`
+  // to the build, or pruning images in tearDown — these assertions are where you
+  // land. THE CORRECT RESPONSE IS TO RESTORE THE BUILD CACHING, NOT to widen the
+  // step to 221. Widening is possible only two ways, and both are worse:
+  //   - a >211-min step budget bills 30 min/night of runner time for builds that
+  //     never happen; or
+  //   - per-layer bounds cut below one full retry cycle (50.75 min), which is
+  //     literally the defect this PR fixed — a beforeAll that cannot contain its
+  //     own retry, so a doubly-rate-limited layer dies mid-attempt and reports a
+  //     `timed-out` that is really a budget bug.
+  describe("the aggregate fits the step ONLY because builds 2-4 hit the layer cache", () => {
+    const sumOfCaps = LAYER0_SETUP_TIMEOUT_MS + 3 * ISOLATED_SETUP_TIMEOUT_MS;
+    const coldBuildsChargedFourTimes = 3 * IMAGE_BUILD_BUDGET_MS;
+
+    test("the sum of the per-layer caps really does exceed the step — the gap is real", () => {
+      // Pin the premise, so this group can never go vacuously green by the caps
+      // quietly shrinking under the step and making the rest of it moot.
+      expect(toMinutes(sumOfCaps)).toBeGreaterThan(ISOLATED_JOB_BUDGET.stepTimeoutMinutes);
+    });
+
+    test("and the entire gap is the image build, charged 4× but paid 1×", () => {
+      // Equality, not `toBeLessThan`: the difference between the sum of the caps
+      // and the job's worst case is EXACTLY three image builds and nothing else.
+      // An inequality would tolerate some other unaccounted 30 minutes hiding in
+      // the model; this cannot.
+      expect(sumOfCaps - coldBuildsChargedFourTimes).toBe(ISOLATED_JOB_WORST_CASE_MS);
+      expect(toMinutes(sumOfCaps - coldBuildsChargedFourTimes)).toBeLessThan(
+        ISOLATED_JOB_BUDGET.stepTimeoutMinutes,
+      );
+    });
+
+    test("the build is cache-eligible — no --no-cache and no --pull", () => {
+      // buildMemberAgentImage -> stack.build(["member-agent"]) -> buildArgs().
+      expect(buildArgs(["member-agent"])).toEqual(["build", "member-agent"]);
+      expect(buildArgs(["member-agent"])).not.toContain("--no-cache");
+      expect(buildArgs(["member-agent"])).not.toContain("--pull");
+    });
+
+    test("teardown removes containers and volumes but never IMAGES", () => {
+      // `docker compose down --rmi` (any value) would delete the built image
+      // between layers and make every later build cold. tearDown() asks for
+      // removeVolumes + removeOrphans only, and downArgs cannot emit --rmi.
+      const args = downArgs({ removeVolumes: true, removeOrphans: true });
+      expect(args).toEqual(["down", "--volumes", "--remove-orphans"]);
+      for (const a of args) expect(a).not.toStartWith("--rmi");
+    });
+
+    test("the eval's stack helper adds no image-destroying step of its own", () => {
+      // buildArgs/downArgs are what the helper CALLS; this catches a raw
+      // `docker` escape hatch added beside them in the eval support module.
+      const src = readFileSync(join(repoRoot, "evals/onboarding/support/eval-stack.ts"), "utf8");
+      expect(src.length).toBeGreaterThan(500); // not vacuous — the file was really read
+      for (const forbidden of ["--no-cache", "--pull", "--rmi", "image prune", "system prune", "docker rmi"]) {
+        expect(src).not.toContain(forbidden);
+      }
+    });
+  });
 
   test("both jobs declare an explicit job-level timeout — an unbounded eval job is a runaway bill", () => {
     for (const name of Object.keys(workflow.jobs)) {

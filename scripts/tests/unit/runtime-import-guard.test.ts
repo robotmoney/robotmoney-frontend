@@ -85,12 +85,39 @@ describe("check-no-test-imports-in-runtime.sh", () => {
   // went unscanned forever. One planted violation per declared root closes it.
   const SCAN_ROOTS = ["backend/src", "contract/src", "frontend/public/assets/js", "scripts"];
 
-  test("the guard declares exactly the roots this suite proves — a new root must arrive with its own control", () => {
-    const declared = readFileSync(CHECK, "utf8")
+  // Read out of the guard's OWN `roots=()` declaration rather than by scanning
+  // the file for bare quoted lines: the older shape (`/^\s*"[^"]+"\s*$/`) caught
+  // a REMOVED root but was bypassed by an ADDED one carrying a trailing comment
+  // — `"newroot/src" # added later` failed the `\s*$` anchor, so the extracted
+  // set came back unchanged and a root with no planted-violation control sailed
+  // through. Comments are stripped first, and an entry that does not parse
+  // THROWS rather than being quietly dropped.
+  function declaredRoots(scriptText: string): string[] {
+    const block = /^roots=\(\n([\s\S]*?)^\)/m.exec(scriptText);
+    if (!block) throw new Error("check-no-test-imports-in-runtime.sh no longer declares a roots=() array");
+    return block[1]
       .split("\n")
-      .filter((l) => /^\s*"[^"]+"\s*$/.test(l))
-      .map((l) => l.trim().replace(/"/g, ""));
-    expect(declared.sort()).toEqual([...SCAN_ROOTS].sort());
+      .map((l) => l.replace(/#.*$/, "").trim())
+      .filter((l) => l.length > 0)
+      .map((l) => {
+        const m = /^"([^"]+)"$/.exec(l);
+        if (!m) throw new Error(`unparsed entry in roots=(): ${l}`);
+        return m[1];
+      });
+  }
+
+  test("the guard declares exactly the roots this suite proves — a new root must arrive with its own control", () => {
+    expect(declaredRoots(readFileSync(CHECK, "utf8")).sort()).toEqual([...SCAN_ROOTS].sort());
+  });
+
+  test("an ADDED root is caught even behind a trailing comment — the removal case was never the whole risk", () => {
+    const src = readFileSync(CHECK, "utf8");
+    const tampered = src.replace('  "scripts"\n', '  "scripts"\n  "newroot/src" # added later\n');
+    expect(tampered).not.toBe(src); // the anchor still exists; a reshuffle must not silently no-op
+    expect(declaredRoots(tampered)).toContain("newroot/src");
+    expect(declaredRoots(tampered).sort()).not.toEqual([...SCAN_ROOTS].sort());
+    // ...and an entry in a shape this test cannot verify is loud, not ignored.
+    expect(() => declaredRoots(src.replace('  "scripts"\n', '  "scripts"\n  $EXTRA_ROOT\n'))).toThrow(/unparsed entry/);
   });
 
   for (const rel of SCAN_ROOTS) {

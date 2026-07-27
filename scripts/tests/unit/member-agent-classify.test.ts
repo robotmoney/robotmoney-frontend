@@ -130,6 +130,50 @@ describe("classifyOutcome precedence", () => {
       expect(looksRateLimited(refusalWithNoise.transcript)).toBe(true);
       expect(classifyOutcome(refusalWithNoise)).toBe("refused");
     });
+
+    // ── DOCUMENTED RESIDUAL, deliberately pinned — NOT an endorsement ────────
+    // The structural conjunct above only bites on runs that authored a closing
+    // verdict. `rateLimitDominates` still has an unconditional escape hatch —
+    // `if (final === "") return true` (classify-outcome.ts:93) — which falls
+    // back to a WHOLE-TRANSCRIPT scan whenever no finalized assistant text part
+    // exists, and it is still ranked ABOVE the `run.timedOut` check
+    // (classify-outcome.ts:193-194). So the very same tool-output noise still
+    // wins on a run that was killed at the deadline before it wrote any text.
+    // That is the expensive direction: `rate-limited` is the ONLY retried
+    // outcome (evals/onboarding/support/layer-run.ts) and layer 4 drops it from
+    // the scorecard DENOMINATOR (evals/onboarding/support/scorecard.ts), so a
+    // false one INFLATES the admission rate.
+    //
+    // This test pins the CURRENT behaviour so the residual is visible in the
+    // suite and any change to it has to be deliberate. The obvious fix — moving
+    // `run.timedOut` above `rateLimitDominates` — is HARSHER, not softer (so
+    // §11.3 E7 does not forbid it), but it also removes the retry from a run
+    // that really was throttled and then killed at the deadline. That tradeoff
+    // is DEFERRED pending live-campaign data on whether this shape fires in the
+    // wild; if it does, flip the order in the source and flip this expectation
+    // to "timed-out".
+    test("KNOWN RESIDUAL (pinned, deferred): a killed run with NO text part is still rate-limited on tool-output noise alone", () => {
+      const toolOutputOnly = wrapped(
+        JSON.stringify({
+          type: "tool_use",
+          part: {
+            type: "tool",
+            tool: "bash",
+            state: { status: "completed", input: { command: "grep -rn 429 ." }, output: "http.rs:429: rate limit exceeded" },
+          },
+        }),
+      );
+      // The premise of the residual: a trigger substring, and no verdict at all
+      // for the structural conjunct to veto with.
+      expect(finalAssistantText(toolOutputOnly)).toBe("");
+      expect(looksRateLimited(toolOutputOnly)).toBe(true);
+      expect(rateLimitDominates(toolOutputOnly)).toBe(true);
+
+      // Killed at the deadline (SIGKILL → 137) — priority 2 outranks priority 3,
+      // so this reads as provider weather rather than the timeout it was.
+      const killedAtDeadline = cleanNoProgressRun({ timedOut: true, containerExitCode: 137, transcript: toolOutputOnly });
+      expect(classifyOutcome(killedAtDeadline)).toBe("rate-limited");
+    });
   });
 
   describe("rateLimitDominates keeps every TRUE positive", () => {

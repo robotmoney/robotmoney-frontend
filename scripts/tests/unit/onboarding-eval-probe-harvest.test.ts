@@ -671,4 +671,56 @@ describe("harvestSignedApplication", () => {
       rmSync(hostDir, { recursive: true, force: true });
     }
   });
+
+  // ── The trailing-newline defect, END TO END through the real pipeline ──────
+  // classifyPayloadOnDisk and explainPayloadOnDisk each had direct unit
+  // coverage, but the two lines that WIRE them into harvestSignedApplication /
+  // explainHarvestFailure had none: no test read `result.diagnostics
+  // .payloadOnDisk`, and the local `diagnostics()` helper above never sets the
+  // field, so deleting either wiring line left the whole suite green while the
+  // eval silently lost the one diagnosis that explains core#1188. This case
+  // exercises the real path — harvest a run whose on-disk payload is canonical
+  // plus exactly one `\n`, nothing verifies, and the failure text must name the
+  // whitespace verdict AND show the offending byte.
+  test("a payload written with `echo` (canonical + one \\n) is diagnosed as whitespace drift by the REAL pipeline", async () => {
+    // A genuine key, and a genuine signature over DIFFERENT bytes, so nothing
+    // verifies and execution reaches the payload-on-disk classification.
+    const { publicKeyB64, signatureB64, canonical } = await realSignedApplication(application, {
+      name: application.name,
+      contact: application.contact,
+      lens: "macro",
+    });
+    const hostDir = tmpDir("harvest-trailing-newline-");
+    try {
+      mkdirSync(join(hostDir, "home", "agent"), { recursive: true });
+      // Exactly what `echo "$payload" > application.json` leaves behind.
+      writeFileSync(join(hostDir, "home", "agent", "application.json"), `${canonical}\n`);
+      const result = await harvestSignedApplication({
+        repoRoot,
+        transcript: `signature=${signatureB64}`,
+        hostDir,
+        application,
+      });
+
+      expect(result.verified).toBeNull();
+      // The key was harvested out of the payload file itself, so the canonical
+      // comparison set is non-empty and the classification is meaningful.
+      expect(result.diagnostics.candidatePublicKeys).toBe(1);
+      expect(result.diagnostics.candidateSignatures).toBe(1);
+      expect(result.diagnostics.payloadOnDisk).toBeDefined();
+      expect(result.diagnostics.payloadOnDisk!.match).toBe("trailing-whitespace-only");
+      expect(result.diagnostics.payloadOnDisk!.bytes).toContain(publicKeyB64);
+
+      // …and the wiring into the failure MESSAGE, which is what a CI reader
+      // actually sees. The escaped rendering must carry the literal two-char
+      // \n sequence — the byte that caused the drift, un-trimmed.
+      const msg = explainHarvestFailure(result.diagnostics);
+      expect(msg).toContain("SIGNATURE MATERIAL FOUND BUT NOTHING VERIFIED");
+      expect(msg).toContain("THE AGENT'S PAYLOAD FILE IS CANONICAL EXCEPT FOR SURROUNDING WHITESPACE");
+      expect(msg).toContain("printf");
+      expect(msg).toContain("\\n");
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true });
+    }
+  });
 });
