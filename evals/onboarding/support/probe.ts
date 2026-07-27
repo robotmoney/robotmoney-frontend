@@ -20,6 +20,7 @@
 // exactly what layers 1-3 assert on.
 import { chmodSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { basename, join, relative } from "node:path";
+import { composeChildEnv } from "../../../scripts/agent/member-agent.ts";
 import { composeArgs, DEFAULT_COMPOSE_FILES } from "../../../scripts/stack/config.ts";
 
 export interface CommandResult {
@@ -32,8 +33,19 @@ function decode(buf: unknown): string {
   return buf instanceof Uint8Array ? new TextDecoder().decode(buf) : "";
 }
 
-function run(argv: string[], cwd?: string): CommandResult {
-  const r = Bun.spawnSync(argv, { ...(cwd ? { cwd } : {}), stdout: "pipe", stderr: "pipe" });
+// `stdin: "ignore"` is LOAD-BEARING on every one of these, not tidiness. A
+// compose child that can reach a terminal will ask
+// `Recreate (data will be lost)?` and then wait forever; on 2026-07-27 that
+// shape cost four 20-minute samples reported as product timeouts. With stdin
+// closed the question gets EOF and the call fails loudly instead of hanging.
+function run(argv: string[], cwd?: string, env?: Record<string, string>): CommandResult {
+  const r = Bun.spawnSync(argv, {
+    ...(cwd ? { cwd } : {}),
+    ...(env ? { env } : {}),
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   return { exitCode: r.exitCode ?? -1, stdout: decode(r.stdout), stderr: decode(r.stderr) };
 }
 
@@ -203,5 +215,11 @@ export function runExtractedBinary(opts: RunExtractedBinaryOptions): CommandResu
       ...opts.argv,
     ],
     opts.repoRoot,
+    // Same derived DEMO_PROJECT the member-agent spawn uses. `docker compose
+    // run` re-resolves the WHOLE compose model and hashes every project volume,
+    // so a child without it hashes the pgdata label as "" and compose asks to
+    // recreate a volume THIS project just created. Layer 2 runs this immediately
+    // after the agent's own run, in the same project — exactly the mismatch.
+    composeChildEnv(opts.composeProject),
   );
 }

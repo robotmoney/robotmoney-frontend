@@ -117,7 +117,15 @@ describe("onboarding eval — layer 4: sampled admission (core stack)", () => {
         toolEvents: explained.liveness.toolEvents,
         containerExitCode: result.containerExitCode,
         containerLaunched: result.containerLaunched,
-        harnessFault: explained.harnessFault,
+        // ONLY when the fault actually decided the outcome. explainOutcome
+        // computes harnessFaultOf() unconditionally, so an ADMITTED run whose
+        // transcript merely quotes a trigger string carries a non-null fault —
+        // and the gate below would then fail a perfect 5/5 sweep. That is a
+        // false red, which is as much an instrument lie as a false green.
+        // It is also the invariant Sample declares: non-null exactly when the
+        // outcome is harness-error. A run that reached the roster DESPITE a
+        // fault is still a real admission (classify-outcome.ts's own doctrine).
+        harnessFault: explained.outcome === "harness-error" ? explained.harnessFault : null,
       };
       sample.runLogPath = saveRunLog(sample, result.transcript);
       samples.push(sample);
@@ -146,7 +154,10 @@ describe("onboarding eval — layer 4: sampled admission (core stack)", () => {
   // as a product result is precisely how the 2026-07-27 sweep reported a stale
   // container configuration as an admission rate of 0.20.
   test("no sample failed inside the HARNESS (our breakage is never a product outcome)", () => {
-    const broken = scorecard.samples.filter((s) => s.harnessFault !== null);
+    // Keyed on OUTCOME, the same quantity assertScorecard uses. Keying on
+    // harnessFault !== null instead let the two gates disagree about the same
+    // scorecard.
+    const broken = scorecard.samples.filter((s) => s.outcome === "harness-error");
     if (broken.length > 0) {
       throw new Error(
         `${broken.length} of ${scorecard.samples.length} samples were stopped by the HARNESS, not by the product. ` +

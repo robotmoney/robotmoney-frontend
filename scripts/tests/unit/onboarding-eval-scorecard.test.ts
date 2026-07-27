@@ -326,3 +326,65 @@ describe("shouldRetry (pure predicate over a classified outcome)", () => {
     expect(shouldRetry("admitted")).toBe(false);
   });
 });
+
+// ── the false red that harness-error could produce ──────────────────────────
+// explainOutcome computes harnessFaultOf() unconditionally, independent of the
+// branch it chose. So an ADMITTED run whose transcript merely QUOTES a trigger
+// string — an agent that cat'd a log, or hit one genuine permission rejection
+// early and recovered — comes back as { outcome: "admitted", harnessFault: {…} }.
+// If the sweep's gate keys on `harnessFault !== null` rather than on the
+// outcome, a perfect 5/5 sweep at rate 1.00 fails. A false red is as much an
+// instrument lie as a false green, and this one would fire on the single most
+// valuable run there is: a successful one.
+describe("an admitted run is never re-labelled a harness failure", () => {
+  test("explainOutcome keeps admitted, but STILL reports a fault — the hazard the consumer must guard", () => {
+    const explained = explainOutcome({
+      admitted: true,
+      memberId: "member-1",
+      containerExitCode: 0,
+      containerLaunched: true,
+      timedOut: false,
+      transcript: `some tool output containing: ${HARNESS_PERMISSION_REJECTION} — and the run carried on`,
+    } as ClassifiableRun);
+
+    // The outcome is right …
+    expect(explained.outcome).toBe("admitted");
+    // … and this is the trap: harnessFaultOf() runs regardless of the branch,
+    // so the fault is non-null on a perfectly good admission. Any consumer that
+    // treats `harnessFault !== null` as "this sample broke" will fail a healthy
+    // sweep. layer4-admission.eval.test.ts therefore records the fault only when
+    // it decided the outcome. This assertion exists so that if explainOutcome is
+    // ever changed to null the fault itself, whoever does it finds this note and
+    // can simplify the consumer instead of leaving a stale guard behind.
+    expect(explained.harnessFault).not.toBeNull();
+
+    // The guard the sampler applies, exercised directly.
+    const recorded = explained.outcome === "harness-error" ? explained.harnessFault : null;
+    expect(recorded).toBeNull();
+  });
+
+  test("a sweep of admissions stays green even when one carries a quoted trigger string", () => {
+    // Mirrors what the layer-4 sampler now records: the fault is kept ONLY when
+    // it decided the outcome, so scoring and the sweep gate agree.
+    const all = samples(...(Array(SAMPLE_COUNT).fill("admitted") as OnboardingOutcome[]));
+    all[0] = { ...all[0], harnessFault: null };
+    const sc = scoreSamples(all);
+    expect(sc.admissionRate).toBe(1);
+    expect(sc.counts["harness-error"]).toBe(0);
+    expect(sc.samples.filter((s) => s.outcome === "harness-error")).toHaveLength(0);
+    expect(() => assertScorecard(sc)).not.toThrow();
+  });
+
+  test("a real harness-error still fails the sweep unconditionally, even at a passing rate", () => {
+    const mixed = samples(
+      ...(["admitted", "admitted", "admitted", "admitted", "harness-error"] as OnboardingOutcome[]),
+    );
+    const sc = scoreSamples(mixed);
+    // The rate reads 1.00 because the broken sample measured nothing and left
+    // the denominator — and the sweep must STILL be red, or that exclusion
+    // would be a place to hide.
+    expect(sc.admissionRate).toBe(1);
+    expect(sc.counts["harness-error"]).toBe(1);
+    expect(() => assertScorecard(sc)).toThrow(/HARNESS/);
+  });
+});

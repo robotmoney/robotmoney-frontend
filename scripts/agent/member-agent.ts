@@ -118,6 +118,16 @@ export function buildMemberAgentArgv(a: MemberAgentArgvOptions): string[] {
 // timeout; there is no compose flag that answers this particular prompt
 // non-interactively (`docker compose run --help`, 2.40.3, has no `--yes`), so
 // closing stdin IS the mechanism.
+// The ambient-environment wrapper, kept HERE rather than at the call sites.
+// evals/ may not read process.env at all (§11.3 E1, enforced by
+// scripts/checks/check-eval-keyless.sh), so an eval-side compose child cannot
+// derive its own env — it calls this. Every compose child in the eval path must
+// use it, or it re-opens the volume-hash mismatch memberAgentSpawnEnv exists to
+// close.
+export function composeChildEnv(composeProject: string): Record<string, string> {
+  return memberAgentSpawnEnv(composeProject, process.env);
+}
+
 export function memberAgentSpawnEnv(
   composeProject: string,
   hostEnv: Record<string, string | undefined>,
