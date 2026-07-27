@@ -2162,6 +2162,18 @@ Status: target design (D22). R8 makes onboarding an eval; this section specifies
 what that eval is, how it is scored, and which components it shares with
 `bun run demo`. Where any other code differs, this section wins.
 
+**Goal.** This eval exists because nothing else in CI measures the product's
+capability. Every other gate proves that code the team wrote runs; the
+product's actual user is an unaided outside AI agent, and its product surface
+is onboarding itself (§11.1). The only honest measurement of that is a real
+one — real agent, real inference, real skill, real `rmpc`, real REST, real
+signature verification — and this harness is the SDLC's instrument for taking
+it. The harness's job is to report the truth about whether onboarding works,
+never to reach green: a red backed by a true product or provider result is a
+valid outcome, and a green the harness cannot back is worse than no eval at
+all. E1–E7 below forbid, one by one, the seams through which a harness could
+manufacture a pass instead of taking a measurement.
+
 **E1 — Keyless, no exceptions.** Every layer runs a **vanilla, keyless OpenCode
 install** pinned to the free OpenCode Zen tier (`opencode/big-pickle`). The model
 id is an in-code constant. No API key, provider secret, paid model, or opt-in

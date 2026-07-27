@@ -4,6 +4,21 @@ Status: normative (docs/decisions.md **D22**, docs/architecture.md **§11.3**,
 and the directory rule **L1** in architecture.md's "Test, eval, and tooling
 layout").
 
+## Why this directory exists
+
+Until D22 this repo had **no real eval at all**. Every CI gate proved that code
+we wrote runs — unit, integration, the demo readiness checks — never that the
+product works for its actual user. That user is an unaided outside AI agent,
+and the product surface *is* onboarding itself (architecture §11.1 R8). This
+harness is the SDLC's only measurement of that capability: real agent, real
+inference, real skill, real `rmpc`, real REST, real signature verification —
+nothing stands in for the real call. Its entire value is the
+trustworthiness of its verdicts — a red
+that reflects a true product or provider result is a valid output; a green it
+cannot back is worse than no eval, because it restores the false confidence the
+eval was built to remove. Every rule below exists to keep that measurement
+honest, not to keep it green.
+
 A directory is a selectable unit of CI cost (L1). Everything under `evals/`
 needs **Docker + network egress + REAL model inference**, so it runs
 **nightly / sweep-only** and is **never** on the per-PR path. The root
