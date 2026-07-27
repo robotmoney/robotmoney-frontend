@@ -2162,13 +2162,20 @@ Status: target design (D22). R8 makes onboarding an eval; this section specifies
 what that eval is, how it is scored, and which components it shares with
 `bun run demo`. Where any other code differs, this section wins.
 
-**Goal.** This eval exists because nothing else in CI measures the product's
-capability. Every other gate proves that code the team wrote runs; the
+**Goal.** Almost every other gate proves that code the team wrote runs; the
 product's actual user is an unaided outside AI agent, and its product surface
 is onboarding itself (§11.1). The only honest measurement of that is a real
 one — real agent, real inference, real skill, real `rmpc`, real REST, real
-signature verification — and this harness is the SDLC's instrument for taking
-it. The harness's job is to report the truth about whether onboarding works,
+signature verification. CI already takes one such measurement and has since
+before this eval existed: the `e2e` job performs a **single, retried**
+admission off its own demo boot (`ONBOARDING_REAL_EVAL: "1"`, unconditional —
+see E6). That is a smoke signal — one sample, retried on refusal or
+rate-limit, reported as pass/fail — and it is deliberately not a rate. This
+harness is the only instrument that measures onboarding as a **refusal/success
+rate over `SAMPLE_COUNT` unretried samples with per-outcome classification**,
+and the only one that **localises a failure to a layer** (E3) rather than
+returning one opaque red for the whole sequence. The harness's job is to
+report the truth about whether onboarding works,
 never to reach green: a red backed by a true product or provider result is a
 valid outcome, and a green the harness cannot back is worse than no eval at
 all. E1–E7 below forbid, one by one, the seams through which a harness could
@@ -2190,15 +2197,22 @@ missing egress **throws**, failing the eval loudly. Inference-off *rails* checks
 separate — they prove the machinery an eval rides on, and they are never a
 substitute for one.
 
-**E3 — Layers.** The eval is graded, not monolithic. Layers 0-3 run isolated
-(fast, parallel, sharp diagnostics); layer 4 is the integrated run that proves the
-agent can sequence the whole thing itself.
+**E3 — Layers.** The eval is graded, not monolithic. Layers 0-3 run isolated —
+one file per layer, each independently runnable, each with a sharp diagnostic —
+but they run **sequentially**, not in parallel: `eval:onboarding:isolated` is a
+single `bun test` process over the four files, and `support/budget.ts` **sums**
+the per-layer budgets into `ISOLATED_JOB_WORST_CASE_MS` rather than taking a
+max. Making them concurrent is a cost-model change (and a Docker-daemon
+contention question), never a one-line runner flag; a max() over a sequential
+run is exactly the arithmetic that produced the SIGKILL-at-80-minutes defect
+this budget file was written to remove. Layer 4 is the integrated run that
+proves the agent can sequence the whole thing itself.
 
 | # | Layer | Proves | Stack | Observed by |
 |---|---|---|---|---|
 | 0 | runtime | image, `opencode.json`, provider reachable | none | trivial task completes; distinguishes *dead* from *refused*, and **gates the run** (below) |
-| 1 | skill install | the agent can find and install `committee-onboarding` | none | `SKILL.md` present on disk in the runtime's skill path |
-| 2 | toolchain | the agent can install `rmpc` for its own arch | none | binary on PATH; `--help` lists `committee-identity` |
+| 1 | skill install | the agent can find and install `committee-onboarding` | none | a `SKILL.md` **anywhere** in the stopped container whose *content* names `committee-onboarding` and `rmpc`; the install path is deliberately **not** pinned — opencode's on-disk skill layout is not a published contract, so pinning it would turn an upstream layout change into a false red |
+| 2 | toolchain | the agent can install `rmpc` for its own arch | none | an `rmpc` binary in one of the image's declared PATH dirs, extracted and executed: `rmpc committee-identity --help` must exit 0 and list `create`, `show-public-key`, and `sign` |
 | 3 | keygen + signing | local ed25519 identity, byte-exact canonical payload | none | signature harvested **passively** — from the drained run transcript and the stopped container's filesystem — then verified **offline** against `canonicalizeApplication` with the real backend `verifyApplicationSignature` |
 | 4 | admission | the full R4→R8 sequence, unaided | `core` | server-minted member reaches the active roster |
 
