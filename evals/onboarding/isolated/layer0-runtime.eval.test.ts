@@ -39,6 +39,12 @@ let result: IsolatedLayerResult<string | null>;
 
 describe("onboarding eval — layer 0: runtime", () => {
   beforeAll(async () => {
+    // Run identity, printed BEFORE anything that can throw, so a bring-up
+    // failure or a timeout still leaves the reader something to correlate the
+    // log with. This layer is deliberately Robot-Money-free and therefore
+    // generates NO onboarding identity — the equivalent context here is what
+    // the probe asks for.
+    console.log(`[${LAYER}] probe ${EVAL_PROBE_PATH} — expected contents ${JSON.stringify(EVAL_PROBE_CONTENT)} (no onboarding identity at this layer)`);
     hostDir = mkdtempSync(join(tmpdir(), "rmeval-layer0-"));
     stack = await imageOnlyStack(evalProject(LAYER));
     await buildMemberAgentImage(stack);

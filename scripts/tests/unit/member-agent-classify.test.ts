@@ -16,7 +16,17 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assistantTextParts, extractAssistantText, finalAssistantText } from "../../agent/transcript.ts";
-import { classifyOutcome, type ClassifiableRun, looksRateLimited, looksRefusal, rateLimitDominates, shouldRetry } from "../../agent/classify-outcome.ts";
+import {
+  classifyOutcome,
+  type ClassifiableRun,
+  explainOutcome,
+  livenessOf,
+  looksRateLimited,
+  looksRefusal,
+  OUTCOME_BRANCH_REASONS,
+  rateLimitDominates,
+  shouldRetry,
+} from "../../agent/classify-outcome.ts";
 import { classifyOutcome as classifyOutcomeReExported } from "../../lib/onboarding-eval.ts";
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "..", "fixtures", name), "utf8");
@@ -327,3 +337,198 @@ describe("classifyOutcome refusal false-positive guards", () => {
 function textTranscript(text: string): string {
   return wrapped(JSON.stringify({ type: "text", part: { type: "text", text } }));
 }
+
+// One completed bash tool event whose OUTPUT carries a rate-limit substring —
+// the exact shape of the residual pinned above, reused by the branch table.
+const TOOL_OUTPUT_ONLY = wrapped(
+  JSON.stringify({
+    type: "tool_use",
+    part: {
+      type: "tool",
+      tool: "bash",
+      state: { status: "completed", input: { command: "grep -rn 429 ." }, output: "http.rs:429: rate limit exceeded" },
+    },
+  }),
+);
+
+// ── WHICH BRANCH DECIDED IT (instrumentation, added 2026-07-27) ─────────────
+// Two live questions cannot be answered from any log we currently keep, and
+// both gate a deferred decision:
+//
+//   (1) does `rateLimitDominates`'s whole-transcript fallback — the residual
+//       pinned above — EVER fire in the wild? It is ranked above the timeout
+//       check, `rate-limited` is the only retried outcome, and layer 4 drops it
+//       from the scorecard denominator, so a false one inflates the admission
+//       rate. A campaign log that says only "rate-limited" cannot tell us.
+//   (2) when a run is `timed-out`, was the agent still ALIVE (authoring text,
+//       calling tools) or was the provider hung? The classifier decides that
+//       rung on a wall-clock boolean alone and asks nothing else.
+//
+// `explainOutcome` answers both by NAMING the rung and counting the agent's
+// activity. It changes no classification: every case below asserts the branch
+// AND that the outcome is exactly what `classifyOutcome` already returned.
+describe("explainOutcome names the deciding branch", () => {
+  const BRANCH_CASES: Array<{ what: string; run: ClassifiableRun; branch: keyof typeof OUTCOME_BRANCH_REASONS; outcome: string }> = [
+    {
+      what: "an admitted run, whatever else the transcript says",
+      run: { admitted: true, timedOut: true, memberId: "m1", containerExitCode: 1, transcript: wrapped(REFUSAL, "429 rate_limit_error") },
+      branch: "admitted",
+      outcome: "admitted",
+    },
+    {
+      what: "the agent's OWN closing words report the throttling",
+      run: cleanNoProgressRun({
+        transcript: wrapped('{"type":"text","part":{"type":"text","text":"I stopped: the provider returned 429 rate_limit_error repeatedly."}}'),
+      }),
+      branch: "rate-limit-in-final-verdict",
+      outcome: "rate-limited",
+    },
+    {
+      what: "a killed run with tool-output noise and NO verdict — question (1) made visible",
+      run: cleanNoProgressRun({ timedOut: true, containerExitCode: 137, transcript: TOOL_OUTPUT_ONLY }),
+      branch: "rate-limit-no-final-verdict",
+      outcome: "rate-limited",
+    },
+    {
+      what: "a bare timeout — question (2)'s rung, decided by the clock alone",
+      run: cleanNoProgressRun({ timedOut: true, transcript: wrapped(REFUSAL) }),
+      branch: "wall-clock-deadline",
+      outcome: "timed-out",
+    },
+    {
+      what: "the observed 2026-07-25 refusal",
+      run: cleanNoProgressRun({ transcript: wrapped(REFUSAL) }),
+      branch: "refusal-on-clean-no-progress-exit",
+      outcome: "refused",
+    },
+    {
+      what: "a clean exit whose closing verdict is a blocked-but-willing report",
+      run: cleanNoProgressRun({ transcript: wrapped(NAVIGATION_FAILURE) }),
+      branch: "clean-no-progress-exit-without-refusal",
+      outcome: "navigation-failure",
+    },
+    {
+      what: "a crashed run — the structural conjunct's other half",
+      run: cleanNoProgressRun({ containerExitCode: 1, transcript: wrapped(NAVIGATION_FAILURE) }),
+      branch: "no-clean-no-progress-exit",
+      outcome: "navigation-failure",
+    },
+    {
+      what: "a member row that never reached admission",
+      run: cleanNoProgressRun({ memberId: "m1", transcript: wrapped(REFUSAL) }),
+      branch: "no-clean-no-progress-exit",
+      outcome: "navigation-failure",
+    },
+  ];
+
+  for (const c of BRANCH_CASES) {
+    test(`${c.branch}: ${c.what}`, () => {
+      const x = explainOutcome(c.run);
+      expect(x.branch).toBe(c.branch);
+      expect(x.reason).toBe(OUTCOME_BRANCH_REASONS[c.branch]);
+      expect(x.outcome).toBe(c.outcome as any);
+      // The whole point of the addition: it explains, it does not decide.
+      expect(x.outcome).toBe(classifyOutcome(c.run));
+    });
+  }
+
+  // The reason strings are what a human greps a 181-minute campaign's logs for,
+  // so they are pinned verbatim, not merely "some non-empty string".
+  test("each branch's reason phrase is pinned verbatim", () => {
+    expect(OUTCOME_BRANCH_REASONS).toEqual({
+      admitted: "the run's own success predicate held",
+      "rate-limit-in-final-verdict": "rate-limit signal in the agent's own closing verdict",
+      "rate-limit-no-final-verdict": "whole-transcript rate-limit signal, no finalized text part",
+      "wall-clock-deadline": "wall-clock deadline reached",
+      "refusal-on-clean-no-progress-exit": "clean exit, no member row, and the closing verdict declines with a safety rationale",
+      "clean-no-progress-exit-without-refusal": "clean exit, no member row, but the closing verdict is not a refusal",
+      "no-clean-no-progress-exit":
+        "not a clean no-progress exit (non-zero/unknown container exit, or a member row without admission)",
+    });
+  });
+
+  // NO OUTCOME MAY MOVE. Every run shape the suite above already classifies is
+  // re-asserted through both entry points: this addition is instrumentation, and
+  // a changed classification here would be a silent behaviour change on a path
+  // that decides retries and the layer-4 denominator.
+  test("every existing fixture classifies exactly as before, through both entry points", () => {
+    const UNCHANGED: Array<[ClassifiableRun, string]> = [
+      [{ admitted: true, timedOut: false, memberId: "m1", containerExitCode: 0 }, "admitted"],
+      [cleanNoProgressRun({ transcript: "Error: 429 Too Many Requests" }), "rate-limited"],
+      [cleanNoProgressRun({ timedOut: true, transcript: "upstream 529 overloaded_error" }), "rate-limited"],
+      [cleanNoProgressRun({ containerExitCode: 1, transcript: "anthropic rate_limit_error" }), "rate-limited"],
+      [cleanNoProgressRun({ timedOut: true, containerExitCode: 137, transcript: TOOL_OUTPUT_ONLY }), "rate-limited"],
+      [cleanNoProgressRun({ timedOut: true, containerExitCode: null, transcript: "" }), "timed-out"],
+      [cleanNoProgressRun({ timedOut: true, transcript: wrapped(REFUSAL) }), "timed-out"],
+      [cleanNoProgressRun({ transcript: wrapped(REFUSAL) }), "refused"],
+      [cleanNoProgressRun({ transcript: wrapped(NAVIGATION_FAILURE) }), "navigation-failure"],
+      [cleanNoProgressRun({ containerExitCode: 1, transcript: wrapped(NAVIGATION_FAILURE) }), "navigation-failure"],
+      [cleanNoProgressRun({ transcript: wrapped(MEMO_MENTIONS_REFUSE) }), "navigation-failure"],
+      [cleanNoProgressRun({ transcript: wrapped(RATE_LIMIT_IN_TOOL_OUTPUT) }), "navigation-failure"],
+      [cleanNoProgressRun({ memberId: "m1", transcript: wrapped(REFUSAL) }), "navigation-failure"],
+      [cleanNoProgressRun({ containerExitCode: 137, transcript: wrapped(REFUSAL) }), "navigation-failure"],
+      [cleanNoProgressRun({ containerExitCode: null, transcript: wrapped(REFUSAL) }), "navigation-failure"],
+      [cleanNoProgressRun({ transcript: undefined }), "navigation-failure"],
+      [cleanNoProgressRun({ transcript: wrapped("") }), "navigation-failure"],
+    ];
+    for (const [run, expected] of UNCHANGED) {
+      expect(classifyOutcome(run)).toBe(expected as any);
+      expect(explainOutcome(run).outcome).toBe(expected as any);
+      expect(shouldRetry(explainOutcome(run).outcome)).toBe(shouldRetry(classifyOutcome(run)));
+    }
+  });
+});
+
+// Liveness is the cheap evidence that separates "hung provider" from "agent
+// still working" AFTER a run is already over. No timestamps: the shared parser
+// reads none and no recorded transcript carries one, so counts and sizes are
+// all that can be claimed honestly.
+describe("livenessOf counts the agent's activity", () => {
+  test("a working run: text parts and tool events, both non-zero, with a substantial verdict", () => {
+    const l = livenessOf(wrapped(RATE_LIMIT_IN_TOOL_OUTPUT));
+    expect(l.textParts).toBe(2);
+    expect(l.toolEvents).toBe(2);
+    expect(l.finalTextEmpty).toBe(false);
+    expect(l.finalTextChars).toBe(finalAssistantText(wrapped(RATE_LIMIT_IN_TOOL_OUTPUT)).length);
+    expect(l.finalTextChars).toBeGreaterThan(200);
+  });
+
+  test("the refusal fixture: it authored a verdict too — a refusal is a LIVE agent", () => {
+    const l = livenessOf(wrapped(REFUSAL));
+    expect(l.textParts).toBe(2);
+    expect(l.toolEvents).toBe(1);
+    expect(l.finalTextEmpty).toBe(false);
+  });
+
+  test("a killed run with only tool output: zero text parts, and the empty-final flag that arms the whole-transcript scan", () => {
+    const l = livenessOf(TOOL_OUTPUT_ONLY);
+    expect(l.textParts).toBe(0);
+    expect(l.toolEvents).toBe(1);
+    expect(l.finalTextEmpty).toBe(true);
+    expect(l.finalTextChars).toBe(0);
+    // This is exactly the pairing that makes question (1) decidable in a log:
+    // the branch says the fallback fired, the counts say the agent was busy.
+    expect(explainOutcome(cleanNoProgressRun({ timedOut: true, containerExitCode: 137, transcript: TOOL_OUTPUT_ONLY })).branch).toBe(
+      "rate-limit-no-final-verdict",
+    );
+  });
+
+  test("a dead run: everything zero, and nothing throws on an absent transcript", () => {
+    for (const t of [undefined, "", "   ", "not json at all\n{oops"]) {
+      const l = livenessOf(t);
+      expect(l.textParts).toBe(0);
+      expect(l.toolEvents).toBe(0);
+      expect(l.finalTextEmpty).toBe(true);
+      expect(l.finalTextChars).toBe(0);
+    }
+    expect(livenessOf(undefined).transcriptChars).toBe(0);
+    expect(livenessOf(wrapped(REFUSAL)).transcriptChars).toBe(wrapped(REFUSAL).length);
+  });
+
+  test("text-part count agrees with the shared parser — one definition, not a second one", () => {
+    for (const t of [wrapped(REFUSAL), wrapped(NAVIGATION_FAILURE), wrapped(MEMO_MENTIONS_REFUSE), TOOL_OUTPUT_ONLY, ""]) {
+      expect(livenessOf(t).textParts).toBe(assistantTextParts(t).length);
+      expect(livenessOf(t).finalTextEmpty).toBe(finalAssistantText(t) === "");
+    }
+  });
+});

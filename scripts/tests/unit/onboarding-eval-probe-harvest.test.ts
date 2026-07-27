@@ -25,13 +25,22 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalizeApplication } from "@robotmoney/contract";
-import { fileSize, findByName, findMatching, toContainerPath, walk } from "../../../evals/onboarding/support/probe.ts";
+import {
+  fileSize,
+  findByName,
+  findMatching,
+  isMissingMemberOnlyTarFailure,
+  toContainerPath,
+  walk,
+} from "../../../evals/onboarding/support/probe.ts";
 import {
   classifyPayloadOnDisk,
   explainHarvestFailure,
   explainPayloadOnDisk,
   explainTruncation,
+  explainUnscannedFiles,
   findApplicationPayloadOnDisk,
+  joinWrappedLines,
   harvestSignedApplication,
   HARVEST_FILE_PATTERNS,
   KEYSTORE_PATH_PATTERN,
@@ -133,6 +142,65 @@ describe("probe.walk / fileSize", () => {
   });
 });
 
+// ── probe.isMissingMemberOnlyTarFailure ─────────────────────────────────────
+// extractMatching tolerates SOME non-zero tar exits. It used to tolerate GNU
+// tar's generic trailer ("Exiting with failure status due to previous errors")
+// on its own — but tar prints that after ANY error, so a permission or disk
+// failure was swallowed and walk() returned whatever had been partially
+// extracted. That cannot manufacture a green (the harvest still scans the
+// transcript and hostDir), but it turns a harness failure into a red
+// mis-attributed to the agent, which is the whole reason layer 3 separates its
+// two failure messages. The stderr below is the real GNU tar wording.
+describe("probe.isMissingMemberOnlyTarFailure", () => {
+  const TRAILER = "tar: Exiting with failure status due to previous errors";
+
+  test("a wildcard that matched no member IS tolerated — 'the agent produced no such file' is an observation", () => {
+    const stderr = [
+      "tar: home/agent/*.sig: Not found in archive",
+      "tar: home/agent/*.payload: Not found in archive",
+      TRAILER,
+      "",
+    ].join("\n");
+    expect(isMissingMemberOnlyTarFailure(stderr)).toBe(true);
+  });
+
+  test("a PERMISSION error is NOT tolerated, even though tar prints the same trailer after it", () => {
+    const stderr = [
+      "tar: home/agent/.config/opencode/auth.json: Cannot open: Permission denied",
+      TRAILER,
+      "",
+    ].join("\n");
+    expect(isMissingMemberOnlyTarFailure(stderr)).toBe(false);
+  });
+
+  test("the generic trailer ALONE is not evidence of anything — this is the defect", () => {
+    expect(isMissingMemberOnlyTarFailure(`${TRAILER}\n`)).toBe(false);
+  });
+
+  test("a write/disk failure is not tolerated", () => {
+    const stderr = ["tar: home/agent/big.log: Cannot write: No space left on device", TRAILER, ""].join("\n");
+    expect(isMissingMemberOnlyTarFailure(stderr)).toBe(false);
+  });
+
+  test("a real error alongside a missing member is not laundered by the missing member", () => {
+    const stderr = [
+      "tar: home/agent/*.sig: Not found in archive",
+      "tar: home/agent/notes.txt: Cannot open: Permission denied",
+      TRAILER,
+      "",
+    ].join("\n");
+    expect(isMissingMemberOnlyTarFailure(stderr)).toBe(false);
+  });
+
+  test("a docker-side failure upstream of the pipe is not tolerated", () => {
+    expect(isMissingMemberOnlyTarFailure("Error response from daemon: No such container: rm-member-x\n")).toBe(false);
+  });
+
+  test("empty stderr with a non-zero exit is not tolerated — an unexplained failure must throw", () => {
+    expect(isMissingMemberOnlyTarFailure("")).toBe(false);
+  });
+});
+
 // ── signature-harvest.ts: candidate scanning ────────────────────────────────
 describe("scanBase64Candidates", () => {
   const KEY = "A".repeat(43) + "="; // 44 chars → 32 raw bytes
@@ -187,6 +255,59 @@ describe("scanBase64Candidates", () => {
 
   test("finds a signature preceded by '=' — the same blind spot on the 88-char token", () => {
     expect(scanBase64Candidates(`signature=${SIG}`).signatures).toEqual([SIG]);
+  });
+
+  // ── REGRESSION: LINE-WRAPPED encoder output (fixed 2026-07-27) ────────────
+  // Verified against the shipped regexes before the fix: an 88-char signature
+  // with a newline at column 76 (GNU `base64`'s default) or 64 (`openssl
+  // base64`) matched ZERO times. HARVEST_FILE_PATTERNS lists home/agent/*.sig
+  // and home/agent/*.b64 — encoder output is an in-scope sink — so this is the
+  // `key=value` false negative all over again: a real signature observed and
+  // reported as "NO SIGNATURE MATERIAL ANYWHERE".
+  function wrapAt(s: string, cols: number): string {
+    const lines: string[] = [];
+    for (let i = 0; i < s.length; i += cols) lines.push(s.slice(i, i + cols));
+    return lines.join("\n");
+  }
+
+  test("finds a signature wrapped at 76 columns — `base64 sig.bin > sig.b64` output", () => {
+    const wrapped = wrapAt(SIG, 76);
+    expect(wrapped).toContain("\n"); // the input really is wrapped
+    expect(scanBase64Candidates(wrapped).signatures).toEqual([SIG]);
+  });
+
+  test("finds a signature wrapped at 64 columns — `openssl base64` output", () => {
+    expect(scanBase64Candidates(wrapAt(SIG, 64)).signatures).toEqual([SIG]);
+  });
+
+  test("finds a key whose wrap point falls mid-token because a prefix pushed it over", () => {
+    expect(scanBase64Candidates(wrapAt(`publicKey=${KEY}`, 40)).publicKeys).toEqual([KEY]);
+  });
+
+  test("an indented continuation line is re-joined too (a pretty-printed wrap)", () => {
+    expect(scanBase64Candidates(`signature: ${SIG.slice(0, 76)}\n    ${SIG.slice(76)}`).signatures).toEqual([SIG]);
+  });
+
+  test("CRLF wrapping is re-joined as well", () => {
+    expect(scanBase64Candidates(`${SIG.slice(0, 76)}\r\n${SIG.slice(76)}`).signatures).toEqual([SIG]);
+  });
+
+  test("re-joining ADDS candidates and never loses one the raw text carried", () => {
+    // Joined, these two adjacent tokens glue into one 132-char run that matches
+    // neither pattern — the raw pass is why both are still reported. This is
+    // why the scan is raw ∪ re-joined and not re-joined alone.
+    const c = scanBase64Candidates(`${KEY}\n${SIG}`);
+    expect(c.publicKeys).toEqual([KEY]);
+    expect(c.signatures).toEqual([SIG]);
+  });
+
+  test("joinWrappedLines drops the newline AND the indentation that follows it", () => {
+    expect(joinWrappedLines("ab\n  cd\r\n\tef")).toBe("abcdef");
+  });
+
+  test("a REAL wrapped signature is recognised", async () => {
+    const { signatureB64 } = await realSignedApplication({ name: "N", contact: "c@example.test" });
+    expect(scanBase64Candidates(wrapAt(signatureB64, 76)).signatures).toContain(signatureB64);
   });
 
   test("'=' is a token BOUNDARY: a padded blob followed by a real key yields the key", () => {
@@ -420,6 +541,62 @@ describe("explainHarvestFailure", () => {
 
   test("a signature with no key still reads as 'found but unverified', not 'nothing anywhere'", () => {
     expect(explainHarvestFailure(diagnostics({ candidateSignatures: 1 }))).toContain("FOUND BUT NOTHING VERIFIED");
+  });
+
+  // ── The zero-candidate branch used to THROW AWAY evidence already computed ──
+  // It returned before the payload comparison, the canonical-shape clause, and
+  // the harness-artifact warnings, so the run with the LEAST to go on was also
+  // the one told the least. Both branches must now carry the same diagnosis.
+  test("the zero-candidate red carries the payload evidence, the shape, and the warnings", () => {
+    const shape = '{"name":"Ada","contact":"ada@example.test","publicKey":"<key>"}';
+    const msg = explainHarvestFailure(
+      diagnostics({
+        canonicalShapeExpected: shape,
+        payloadOnDisk: { match: "trailing-whitespace-only", bytes: '"{...}\\n"' },
+        unscannedFiles: { oversized: 1, unreadable: 0 },
+      }),
+    );
+    expect(msg).toContain("NO SIGNATURE MATERIAL ANYWHERE");
+    expect(msg).toContain("EXCEPT FOR SURROUNDING WHITESPACE");
+    expect(msg).toContain(shape);
+    expect(msg).toContain("DID NOT READ EVERY FILE");
+  });
+
+  test("both branches warn when the walk did not read every file", () => {
+    const unscannedFiles = { oversized: 2, unreadable: 1 };
+    expect(explainHarvestFailure(diagnostics({ unscannedFiles }))).toContain("DID NOT READ EVERY FILE");
+    expect(
+      explainHarvestFailure(diagnostics({ candidatePublicKeys: 1, candidateSignatures: 1, unscannedFiles })),
+    ).toContain("DID NOT READ EVERY FILE");
+  });
+
+  test("a clean, exhaustive search adds no warning to either branch", () => {
+    expect(explainHarvestFailure(diagnostics())).not.toContain("WARNING");
+    expect(explainHarvestFailure(diagnostics({ candidatePublicKeys: 1, candidateSignatures: 1 }))).not.toContain(
+      "WARNING",
+    );
+  });
+});
+
+// ── No silent DISCARDS either ───────────────────────────────────────────────
+// `filesScanned` counts only the files actually READ. A run whose key and
+// signature existed solely inside an oversized or unreadable file therefore
+// produced "the agent most likely never generated a key or never signed" — a
+// harness miss dressed as a product result, and the exact false-evidence shape
+// signature-harvest.ts's own cap doctrine says must never happen silently.
+describe("explainUnscannedFiles", () => {
+  test("files the walk never read are reported, counted by reason, as a possible HARNESS artifact", () => {
+    const msg = explainUnscannedFiles({ oversized: 2, unreadable: 1 });
+    expect(msg).toContain("DID NOT READ EVERY FILE");
+    expect(msg).toContain("2 file(s)");
+    expect(msg).toContain("1 file(s)");
+    expect(msg).toContain("artifact of the harness");
+    expect(msg).toContain("MAX_SCANNED_FILE_BYTES");
+  });
+
+  test("a fully-read walk renders nothing — silence means the search really was exhaustive", () => {
+    expect(explainUnscannedFiles(undefined)).toBe("");
+    expect(explainUnscannedFiles({ oversized: 0, unreadable: 0 })).toBe("");
   });
 });
 
@@ -719,6 +896,92 @@ describe("harvestSignedApplication", () => {
       expect(msg).toContain("THE AGENT'S PAYLOAD FILE IS CANONICAL EXCEPT FOR SURROUNDING WHITESPACE");
       expect(msg).toContain("printf");
       expect(msg).toContain("\\n");
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  // ── The wrapped-signature sink, END TO END ────────────────────────────────
+  // `rmpc ... sign > sig.bin && base64 sig.bin > sig.b64` is an ordinary way for
+  // a bash-only agent to produce the token, and home/agent/*.b64 is a pattern
+  // the harvest explicitly extracts. Before joinWrappedLines this run harvested
+  // ZERO signatures and reported "NO SIGNATURE MATERIAL ANYWHERE".
+  test("a signature the agent left as 76-column WRAPPED base64 still verifies", async () => {
+    const { publicKeyB64, signatureB64, canonical } = await realSignedApplication(application);
+    const hostDir = tmpDir("harvest-wrapped-");
+    try {
+      mkdirSync(join(hostDir, "home", "agent"), { recursive: true });
+      writeFileSync(
+        join(hostDir, "home", "agent", "sig.b64"),
+        `${signatureB64.slice(0, 76)}\n${signatureB64.slice(76)}\n`,
+      );
+      writeFileSync(join(hostDir, "home", "agent", "application.json"), canonical);
+      const result = await harvestSignedApplication({ repoRoot, transcript: "", hostDir, application });
+      expect(result.verified).not.toBeNull();
+      expect(result.verified!.publicKey).toBe(publicKeyB64);
+      expect(result.verified!.signature).toBe(signatureB64);
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  // ── The harvest must not blame the agent for files it never opened ─────────
+  test("an oversized file is COUNTED, and the failure text says the search was incomplete", async () => {
+    const { publicKeyB64, signatureB64 } = await realSignedApplication(application);
+    const hostDir = tmpDir("harvest-big-counted-");
+    try {
+      // The only copy of the material sits inside a >2 MiB file, so the harvest
+      // finds nothing — and must SAY that it did not read everything.
+      writeFileSync(join(hostDir, "huge.log"), `${"x".repeat(2 * 1024 * 1024 + 1)}\n${publicKeyB64}\n${signatureB64}`);
+      const result = await harvestSignedApplication({ repoRoot, transcript: "", hostDir, application });
+      expect(result.verified).toBeNull();
+      expect(result.diagnostics.filesScanned).toBe(0);
+      expect(result.diagnostics.unscannedFiles).toEqual({ oversized: 1, unreadable: 0 });
+      const msg = explainHarvestFailure(result.diagnostics);
+      expect(msg).toContain("NO SIGNATURE MATERIAL ANYWHERE");
+      expect(msg).toContain("DID NOT READ EVERY FILE");
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a walk that read every file leaves NO unscanned record — absence is the exhaustiveness claim", async () => {
+    const hostDir = tmpDir("harvest-complete-");
+    try {
+      writeFileSync(join(hostDir, "notes.txt"), "I thought about generating a key");
+      const result = await harvestSignedApplication({ repoRoot, transcript: "", hostDir, application });
+      expect(result.diagnostics.filesScanned).toBe(1);
+      expect(result.diagnostics.unscannedFiles).toBeUndefined();
+      expect(explainHarvestFailure(result.diagnostics)).not.toContain("DID NOT READ EVERY FILE");
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  // ── B2, through the REAL pipeline ─────────────────────────────────────────
+  // Zero base64 candidates, but the agent DID leave a payload-shaped file. The
+  // classification is computed either way; the zero-candidate branch used to
+  // return before rendering it, so the reader saw only "the agent most likely
+  // never generated a key" and none of the evidence that contradicts it.
+  test("a run with NO candidates still reports the payload file the agent left behind", async () => {
+    const hostDir = tmpDir("harvest-zero-payload-");
+    try {
+      mkdirSync(join(hostDir, "home", "agent"), { recursive: true });
+      // Payload-shaped, but the publicKey field is a placeholder rather than a
+      // real 44-char token — so nothing is harvested and the zero branch runs.
+      writeFileSync(
+        join(hostDir, "home", "agent", "application.json"),
+        `{"name":"${application.name}","contact":"${application.contact}","publicKey":"PUT-KEY-HERE"}\n`,
+      );
+      const result = await harvestSignedApplication({ repoRoot, transcript: "", hostDir, application });
+      expect(result.verified).toBeNull();
+      expect(result.diagnostics.candidatePublicKeys).toBe(0);
+      expect(result.diagnostics.candidateSignatures).toBe(0);
+      expect(result.diagnostics.payloadOnDisk!.match).toBe("shaped-but-different");
+      const msg = explainHarvestFailure(result.diagnostics);
+      expect(msg).toContain("NO SIGNATURE MATERIAL ANYWHERE");
+      expect(msg).toContain("differs in SHAPE");
+      expect(msg).toContain(result.diagnostics.canonicalShapeExpected!);
     } finally {
       rmSync(hostDir, { recursive: true, force: true });
     }

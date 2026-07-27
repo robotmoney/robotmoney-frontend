@@ -40,7 +40,7 @@
 // nothing here. Every classification is logged with an excerpt of the final
 // message by its callers, so a misclassification is diagnosable from CI logs
 // rather than invisible.
-import { finalAssistantText } from "./transcript.ts";
+import { assistantTextParts, finalAssistantText } from "./transcript.ts";
 
 export type OnboardingOutcome = "admitted" | "refused" | "rate-limited" | "timed-out" | "navigation-failure";
 
@@ -189,12 +189,161 @@ export interface ClassifiableRun {
  *                           never-retried red result.
  */
 export function classifyOutcome(run: ClassifiableRun): OnboardingOutcome {
+  return BRANCH_OUTCOME[decideBranch(run)];
+}
+
+// ── Which BRANCH decided it (instrumentation only, added 2026-07-27) ─────────
+// The classification above is a first-match-wins ladder, and two of its rungs
+// are the subject of open, deliberately-deferred design questions that no
+// existing log can answer:
+//
+//   (1) `rateLimitDominates` falls back to a WHOLE-TRANSCRIPT scan whenever the
+//       run finalized no assistant text part at all, and that fallback outranks
+//       the `run.timedOut` check. Since `rate-limited` is the only retried
+//       outcome for an isolated layer and layer 4 drops it from the scorecard
+//       DENOMINATOR, a false one INFLATES the admission rate. Whether this shape
+//       fires in the wild is unknown — the two rate-limit branches below are
+//       reported separately precisely so a campaign log answers it.
+//   (2) `timed-out` is decided by a wall-clock boolean alone; the classifier
+//       never asks whether the agent was still alive when the deadline hit. A
+//       hung provider and an agent still authoring coherent text are, to this
+//       ladder, the same thing. `livenessOf` below is the cheapest evidence that
+//       separates them after the fact.
+//
+// NOTHING HERE CHANGES A CLASSIFICATION. `decideBranch` IS the ladder — the
+// outcome is now read off a branch instead of returned inline, so the decision
+// and its explanation cannot drift apart. Precedence, predicates and retry
+// behaviour are byte-for-byte the ones above.
+export type OutcomeBranch =
+  | "admitted"
+  | "rate-limit-in-final-verdict"
+  | "rate-limit-no-final-verdict"
+  | "wall-clock-deadline"
+  | "refusal-on-clean-no-progress-exit"
+  | "clean-no-progress-exit-without-refusal"
+  | "no-clean-no-progress-exit";
+
+// One human-readable phrase per branch, stable enough to grep a campaign's logs
+// for and pinned by scripts/tests/unit/member-agent-classify.test.ts.
+export const OUTCOME_BRANCH_REASONS: Record<OutcomeBranch, string> = {
+  admitted: "the run's own success predicate held",
+  "rate-limit-in-final-verdict": "rate-limit signal in the agent's own closing verdict",
+  "rate-limit-no-final-verdict": "whole-transcript rate-limit signal, no finalized text part",
+  "wall-clock-deadline": "wall-clock deadline reached",
+  "refusal-on-clean-no-progress-exit": "clean exit, no member row, and the closing verdict declines with a safety rationale",
+  "clean-no-progress-exit-without-refusal": "clean exit, no member row, but the closing verdict is not a refusal",
+  "no-clean-no-progress-exit": "not a clean no-progress exit (non-zero/unknown container exit, or a member row without admission)",
+};
+
+const BRANCH_OUTCOME: Record<OutcomeBranch, OnboardingOutcome> = {
+  admitted: "admitted",
+  "rate-limit-in-final-verdict": "rate-limited",
+  "rate-limit-no-final-verdict": "rate-limited",
+  "wall-clock-deadline": "timed-out",
+  "refusal-on-clean-no-progress-exit": "refused",
+  "clean-no-progress-exit-without-refusal": "navigation-failure",
+  "no-clean-no-progress-exit": "navigation-failure",
+};
+
+function decideBranch(run: ClassifiableRun): OutcomeBranch {
   if (run.admitted) return "admitted";
-  if (rateLimitDominates(run.transcript)) return "rate-limited";
-  if (run.timedOut) return "timed-out";
+  if (rateLimitDominates(run.transcript)) {
+    // `rateLimitDominates` is true for exactly two reasons; this re-derives
+    // which one without changing the predicate.
+    return finalAssistantText(run.transcript ?? "") === "" ? "rate-limit-no-final-verdict" : "rate-limit-in-final-verdict";
+  }
+  if (run.timedOut) return "wall-clock-deadline";
   const cleanNoProgressExit = run.memberId === null && run.containerExitCode === 0;
-  if (cleanNoProgressExit && looksRefusal(finalAssistantText(run.transcript ?? ""))) return "refused";
-  return "navigation-failure";
+  if (!cleanNoProgressExit) return "no-clean-no-progress-exit";
+  return looksRefusal(finalAssistantText(run.transcript ?? ""))
+    ? "refusal-on-clean-no-progress-exit"
+    : "clean-no-progress-exit-without-refusal";
+}
+
+/**
+ * Cheap evidence that the agent was ALIVE, counted off the same NDJSON stream
+ * the classifier reads. Deliberately schema-light and limited to what
+ * scripts/agent/transcript.ts documents opencode 1.16.x as emitting: finalized
+ * `text` parts, and tool events (`{"type":"tool_use","part":{"type":"tool",…}}`).
+ *
+ * NO TIMESTAMPS. The shared parser reads none, and no recorded transcript in
+ * scripts/tests/fixtures carries a time field on any event, so "how long since
+ * the agent last spoke" is NOT derivable here and is not guessed at. Counts and
+ * sizes are all that can be stated honestly.
+ */
+export interface TranscriptLiveness {
+  /** Finalized assistant text parts (the agent authored prose this many times). */
+  textParts: number;
+  /** Tool events in the stream (the agent did something this many times). */
+  toolEvents: number;
+  /** Characters in the FINAL text part — 0 when there is no verdict at all. */
+  finalTextChars: number;
+  /** No finalized text part: the shape that arms the whole-transcript scan. */
+  finalTextEmpty: boolean;
+  /** Raw transcript size, including both drained pipes. 0 for a dead run. */
+  transcriptChars: number;
+}
+
+export function livenessOf(transcript: string | undefined): TranscriptLiveness {
+  const t = transcript ?? "";
+  const parts = assistantTextParts(t);
+  const final = parts.at(-1)?.trim() ?? "";
+  let toolEvents = 0;
+  for (const line of t.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let ev: any;
+    try {
+      ev = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (ev?.type === "tool_use" || ev?.part?.type === "tool") toolEvents++;
+  }
+  return {
+    textParts: parts.length,
+    toolEvents,
+    finalTextChars: final.length,
+    finalTextEmpty: final === "",
+    transcriptChars: t.length,
+  };
+}
+
+export interface OutcomeExplanation {
+  outcome: OnboardingOutcome;
+  branch: OutcomeBranch;
+  reason: string;
+  liveness: TranscriptLiveness;
+}
+
+/**
+ * `classifyOutcome` plus the branch that decided it and the liveness evidence
+ * around it. Additive: `classifyOutcome` is unchanged for every caller, and
+ * `explainOutcome(run).outcome === classifyOutcome(run)` holds by construction
+ * (both read the same `decideBranch`).
+ *
+ * For the HUMAN reading a campaign log (§11.3 E3 — observation, never
+ * instruction): nothing here is shown to any agent and nothing is written into
+ * any container.
+ */
+export function explainOutcome(run: ClassifiableRun): OutcomeExplanation {
+  const branch = decideBranch(run);
+  return {
+    outcome: BRANCH_OUTCOME[branch],
+    branch,
+    reason: OUTCOME_BRANCH_REASONS[branch],
+    liveness: livenessOf(run.transcript),
+  };
+}
+
+/** One-line rendering of an explanation for a log. */
+export function formatOutcomeEvidence(x: OutcomeExplanation): string {
+  const l = x.liveness;
+  return (
+    `decided by: ${x.branch} — ${x.reason}; ` +
+    `liveness: ${l.textParts} text part(s), ${l.toolEvents} tool event(s), ` +
+    `final text ${l.finalTextEmpty ? "EMPTY" : `${l.finalTextChars} chars`}, transcript ${l.transcriptChars} chars`
+  );
 }
 
 /**

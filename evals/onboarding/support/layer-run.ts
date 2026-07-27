@@ -22,7 +22,14 @@
 // nothing. A REFUSAL, by contrast, is the diagnostic an isolated layer exists
 // to produce — retrying it here would erase the very signal that made D22
 // necessary.
-import { classifyOutcome, shouldRetry, type OnboardingOutcome } from "../../../scripts/agent/classify-outcome.ts";
+import {
+  explainOutcome,
+  formatOutcomeEvidence,
+  shouldRetry,
+  type OnboardingOutcome,
+  type OutcomeBranch,
+  type TranscriptLiveness,
+} from "../../../scripts/agent/classify-outcome.ts";
 import { runMemberAgent, type MemberAgentResult } from "../../../scripts/agent/member-agent.ts";
 import { finalAssistantText } from "../../../scripts/agent/transcript.ts";
 import { DEFAULT_COMPOSE_FILES } from "../../../scripts/stack/config.ts";
@@ -56,6 +63,15 @@ export interface IsolatedLayerOptions<C, O = C> {
 export interface IsolatedLayerResult<O> {
   layer: string;
   outcome: OnboardingOutcome;
+  // WHICH rung of the classifier's ladder produced `outcome`, and the cheap
+  // agent-liveness counts around it. Diagnostics for the human reading an
+  // isolated layer's log — a `rate-limited` decided by the whole-transcript
+  // fallback on a run with 40 tool events and no closing verdict is a very
+  // different animal from one the agent itself reported, and until now the two
+  // were indistinguishable in every log we keep.
+  branch: OutcomeBranch;
+  reason: string;
+  liveness: TranscriptLiveness;
   observation: O | null;
   observationError: string | null;
   run: MemberAgentResult;
@@ -105,17 +121,24 @@ export async function runIsolatedLayer<C, O = C>(opts: IsolatedLayerOptions<C, O
     // The layer's own definition of success is what `admitted` means here, so
     // the SHARED classifier can tell a dead run, a 429, a timeout and a refusal
     // apart for an isolated layer exactly as it does for layer 4 (§11.3 E5).
-    const outcome = classifyOutcome({
+    // `explainOutcome` is `classifyOutcome` plus the deciding branch — same
+    // ladder, same precedence, same outcome for every input; it only says which
+    // rung fired so the campaign's logs carry evidence instead of a verdict.
+    const explained = explainOutcome({
       admitted: observation !== null && opts.ok(observation),
       timedOut: run.timedOut,
       memberId: null,
       containerExitCode: run.exitCode,
       transcript: run.transcript,
     });
+    const outcome = explained.outcome;
 
     last = {
       layer: opts.layer,
       outcome,
+      branch: explained.branch,
+      reason: explained.reason,
+      liveness: explained.liveness,
       observation,
       observationError,
       run,
@@ -124,7 +147,8 @@ export async function runIsolatedLayer<C, O = C>(opts: IsolatedLayerOptions<C, O
     };
     console.log(
       `[${opts.layer}] attempt ${attempt}/${MAX_ATTEMPTS}: ${outcome} ` +
-        `(exit ${run.exitCode}, ${(run.durationMs / 60_000).toFixed(1)} min)` +
+        `(exit ${run.exitCode}, timedOut=${run.timedOut}, ${(run.durationMs / 60_000).toFixed(1)} min) — ` +
+        formatOutcomeEvidence(explained) +
         `${observationError ? ` — observation error: ${observationError}` : ""}`,
     );
 
@@ -132,7 +156,10 @@ export async function runIsolatedLayer<C, O = C>(opts: IsolatedLayerOptions<C, O
     // `rate-limited` case (see the header).
     const retryable = outcome === "rate-limited" && shouldRetry(outcome);
     if (!retryable || attempt === MAX_ATTEMPTS) return last;
-    console.log(`[${opts.layer}] rate-limited — retrying once in ${RATE_LIMIT_BACKOFF_MS}ms`);
+    // Which rung produced the retryable verdict is the point: a retry decided by
+    // the whole-transcript fallback on a run that was busy right up to the
+    // deadline is the shape nobody has yet seen in the wild.
+    console.log(`[${opts.layer}] rate-limited (${explained.branch}) — retrying once in ${RATE_LIMIT_BACKOFF_MS}ms`);
     await Bun.sleep(RATE_LIMIT_BACKOFF_MS);
   }
   return last!;
@@ -145,6 +172,10 @@ export async function runIsolatedLayer<C, O = C>(opts: IsolatedLayerOptions<C, O
 export function explainLayerFailure<O>(r: IsolatedLayerResult<O>, whatWasExpected: string): string {
   return [
     `layer ${r.layer} did not pass: classified ${r.outcome} after ${r.attempts} attempt(s).`,
+    `deciding branch: ${r.branch} — ${r.reason}`,
+    `agent liveness: ${r.liveness.textParts} text part(s), ${r.liveness.toolEvents} tool event(s), ` +
+      `final text ${r.liveness.finalTextEmpty ? "EMPTY" : `${r.liveness.finalTextChars} chars`}, ` +
+      `transcript ${r.liveness.transcriptChars} chars`,
     `expected: ${whatWasExpected}`,
     r.observationError ? `harness observation error: ${r.observationError}` : `observation: ${JSON.stringify(r.observation)}`,
     `container exit ${r.run.exitCode}, timedOut=${r.run.timedOut}, ${(r.run.durationMs / 60_000).toFixed(1)} min`,

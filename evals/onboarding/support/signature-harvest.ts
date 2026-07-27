@@ -106,11 +106,39 @@ export interface Candidates {
   signatures: string[];
 }
 
-export function scanBase64Candidates(text: string): Candidates {
+function scanExactly(text: string): Candidates {
   return {
     publicKeys: [...new Set(text.match(B64_PUBLIC_KEY) ?? [])],
     signatures: [...new Set(text.match(B64_SIGNATURE) ?? [])],
   };
+}
+
+// Re-join a base64 token that an ENCODER wrapped across lines: drop each newline
+// together with the indentation that follows it.
+//
+// Why this is not hypothetical. `base64` (GNU coreutils) wraps at 76 columns by
+// default and `openssl base64` at 64, and HARVEST_FILE_PATTERNS deliberately
+// lists `home/agent/*.sig` and `home/agent/*.b64` — encoder output is an
+// IN-SCOPE sink. An 88-char signature with a newline at column 76 matches
+// B64_SIGNATURE zero times, and a key that lands mid-line can wrap too. That is
+// the same false-negative class as the `key=value` blind spot above: the harness
+// observes a perfectly good signature and reports "NO SIGNATURE MATERIAL
+// ANYWHERE", a harness miss dressed as a product result.
+export function joinWrappedLines(text: string): string {
+  return text.replace(/\r?\n[ \t]*/g, "");
+}
+
+// The re-joined copy is scanned IN ADDITION to the raw text, never instead of
+// it: joining lines also GLUES two adjacent unrelated tokens together, and the
+// raw pass is what still finds those. Merging two candidate sets can only ADD
+// candidates — it can never manufacture a pass, because a pair is admitted only
+// by a real ed25519 verification against the contract's canonical bytes. The
+// worst it can do is spend candidate budget, which the cap bounds and
+// `truncatedCandidates` reports.
+export function scanBase64Candidates(text: string): Candidates {
+  const raw = scanExactly(text);
+  const joined = joinWrappedLines(text);
+  return joined === text ? raw : merge(raw, scanExactly(joined));
 }
 
 function merge(a: Candidates, b: Candidates): Candidates {
@@ -152,6 +180,22 @@ export interface HarvestDiagnostics {
   // every observed pair really was verified — so "nothing verified" can be read
   // as a result rather than a possible truncation artifact.
   truncatedCandidates?: { publicKeys: number; signatures: number };
+  // Set ONLY when the walk stepped over a file WITHOUT reading it. Same doctrine
+  // as `truncatedCandidates`: a cap that silently discards evidence is exactly
+  // the false green this eval exists to prevent, and `filesScanned` counts only
+  // the files actually read — so without this record a run whose key and
+  // signature lived solely inside a 3 MiB log reports "the agent most likely
+  // never generated a key", which is a harness miss reported as a product
+  // result. Optional so that absence means "every file present was read".
+  unscannedFiles?: UnscannedFiles;
+}
+
+// Files the walk did NOT read, by reason. Counted separately because they mean
+// different things: `oversized` is our own byte cap biting, `unreadable` is the
+// host refusing (permissions, a vanished path, a device node).
+export interface UnscannedFiles {
+  oversized: number;
+  unreadable: number;
 }
 
 // How the agent's own payload file compares to the canonical bytes.
@@ -238,13 +282,21 @@ export async function harvestSignedApplication(opts: HarvestOptions): Promise<Ha
   let candidates = scanBase64Candidates(opts.transcript);
 
   const contents = new Map<string, string>();
+  // Every file the walk steps over is COUNTED, because the alternative is a
+  // silent discard that later reads as "the agent never signed" (see
+  // `unscannedFiles`).
+  const unscanned: UnscannedFiles = { oversized: 0, unreadable: 0 };
   for (const abs of walk(opts.hostDir)) {
-    if (fileSize(abs) > MAX_SCANNED_FILE_BYTES) continue;
+    if (fileSize(abs) > MAX_SCANNED_FILE_BYTES) {
+      unscanned.oversized += 1;
+      continue;
+    }
     let text: string;
     try {
       text = readFileSync(abs, "utf8");
     } catch {
-      continue; // a binary/unreadable member is simply not a signature source
+      unscanned.unreadable += 1;
+      continue; // the host would not hand us the bytes; that is an observation, not a result
     }
     contents.set(abs, text);
     candidates = merge(candidates, scanBase64Candidates(text));
@@ -262,6 +314,8 @@ export async function harvestSignedApplication(opts: HarvestOptions): Promise<Ha
       publicKey: "<the applicant's own base64 public key>",
     }),
   };
+
+  if (unscanned.oversized > 0 || unscanned.unreadable > 0) diagnostics.unscannedFiles = unscanned;
 
   const droppedKeys = Math.max(0, candidates.publicKeys.length - MAX_CANDIDATES);
   const droppedSignatures = Math.max(0, candidates.signatures.length - MAX_CANDIDATES);
@@ -331,6 +385,19 @@ export function explainTruncation(t: HarvestDiagnostics["truncatedCandidates"]):
   );
 }
 
+// The same doctrine as explainTruncation, one layer earlier: a file the walk
+// never READ cannot be evidence against the agent. Silent when every file
+// present was read, so silence means the search really was exhaustive.
+export function explainUnscannedFiles(u: HarvestDiagnostics["unscannedFiles"]): string {
+  if (!u || (u.oversized === 0 && u.unreadable === 0)) return "";
+  return (
+    `\nWARNING — THE SCAN DID NOT READ EVERY FILE: ${u.oversized} file(s) exceeded the ` +
+    `${MAX_SCANNED_FILE_BYTES}-byte per-file cap and ${u.unreadable} file(s) could not be read, so their ` +
+    "contents were NEVER SEARCHED and this failure may be an artifact of the harness rather than a result. " +
+    "Raise MAX_SCANNED_FILE_BYTES in evals/onboarding/support/signature-harvest.ts."
+  );
+}
+
 // The on-disk payload half of the drift diagnosis. Silent when the agent left
 // nothing behind — there is no evidence to report and a "none" line would be
 // noise.
@@ -355,6 +422,23 @@ export function explainPayloadOnDisk(e: PayloadOnDiskEvidence | undefined): stri
   return `\nThe agent's payload file differs in SHAPE, not just whitespace: ${e.bytes}`;
 }
 
+// Everything BOTH reds need. Neither branch may keep evidence to itself: the
+// zero-candidate branch used to return before the payload comparison, so a
+// `trailing-whitespace-only` verdict already computed by
+// harvestSignedApplication was silently thrown away whenever no base64
+// candidate had been harvested — the flagship diagnosis, lost in exactly the
+// case where the reader has the least to go on.
+function explainSharedEvidence(d: HarvestDiagnostics): string {
+  return (
+    // Without the expected shape this red is undiagnosable from a CI log: the
+    // reader can see that nothing matched but not what the target was.
+    (d.canonicalShapeExpected ? `\nThe harness verified against exactly: ${d.canonicalShapeExpected}` : "") +
+    explainPayloadOnDisk(d.payloadOnDisk) +
+    explainUnscannedFiles(d.unscannedFiles) +
+    explainTruncation(d.truncatedCandidates)
+  );
+}
+
 // The message layer 3 fails with. Its whole job is to separate the two very
 // different reds this observation can produce.
 export function explainHarvestFailure(d: HarvestDiagnostics): string {
@@ -362,7 +446,8 @@ export function explainHarvestFailure(d: HarvestDiagnostics): string {
     return (
       "NO SIGNATURE MATERIAL ANYWHERE: neither the run transcript nor the stopped container's filesystem " +
       "contained an ed25519-shaped key or signature. The agent most likely never generated a key or never signed " +
-      `(searched: ${d.sources.join(", ")}).`
+      `(searched: ${d.sources.join(", ")}).` +
+      explainSharedEvidence(d)
     );
   }
   return (
@@ -370,10 +455,6 @@ export function explainHarvestFailure(d: HarvestDiagnostics): string {
     `${d.candidateSignatures} candidate signature(s) were observed, and no pair verifies over the contract's ` +
     "canonicalizeApplication bytes. Either the agent signed a DIFFERENT payload (canonicalization drift — key " +
     "order, whitespace, a `lens` field) or the harness observed a signature from some other operation." +
-    // Without the expected shape this red is undiagnosable from a CI log: the
-    // reader can see that nothing matched but not what the target was.
-    (d.canonicalShapeExpected ? `\nThe harness verified against exactly: ${d.canonicalShapeExpected}` : "") +
-    explainPayloadOnDisk(d.payloadOnDisk) +
-    explainTruncation(d.truncatedCandidates)
+    explainSharedEvidence(d)
   );
 }

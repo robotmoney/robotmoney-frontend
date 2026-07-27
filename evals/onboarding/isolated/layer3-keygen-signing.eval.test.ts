@@ -65,8 +65,15 @@ let result: IsolatedLayerResult<SigningObservation>;
 
 describe("onboarding eval — layer 3: keygen + signing", () => {
   beforeAll(async () => {
-    hostDir = mkdtempSync(join(tmpdir(), "rmeval-layer3-"));
     identity = generateIdentity();
+    // Printed BEFORE anything that can throw. A red layer 3 is diagnosed by
+    // replaying the exact canonical bytes for THIS run, and two paths lose the
+    // identity entirely otherwise: the zero-candidate harvest branch returns
+    // before `canonicalShapeExpected` renders it, and a bring-up throw or a
+    // timeout produces no harvest and no message at all. Never a private key.
+    console.log(`[${LAYER}] run ${identity.runId} — ${identity.name} <${identity.contact}>`);
+
+    hostDir = mkdtempSync(join(tmpdir(), "rmeval-layer3-"));
     stack = await imageOnlyStack(evalProject(LAYER));
     await buildMemberAgentImage(stack);
 

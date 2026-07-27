@@ -98,11 +98,44 @@ export function toContainerPath(tarMemberPath: string): string {
   return tarMemberPath.startsWith("/") ? tarMemberPath : `/${tarMemberPath}`;
 }
 
+// ── Classifying a non-zero tar exit ─────────────────────────────────────────
+// GNU tar's exit code alone says only "something failed". Two very different
+// stderr shapes arrive here:
+//
+//   tar: home/agent/*.sig: Not found in archive
+//     A wildcard matched no member. That is a LEGITIMATE OBSERVATION ("the agent
+//     produced no such file"), which is exactly what layers 1-3 assert on, so it
+//     is tolerated.
+//
+//   tar: Exiting with failure status due to previous errors
+//     GNU tar's GENERIC trailer. It is printed after ANY error — including
+//     `Cannot open: Permission denied` and `Cannot write: No space left on
+//     device` — so on its own it is evidence of nothing. Tolerating it alone
+//     (which this predicate used to do) swallowed a genuine extraction failure
+//     and let walk() return a PARTIAL tree, degrading a real red into a
+//     mis-attributed one: layer 3 would blame the agent for a signature the
+//     harness had simply failed to extract.
+//
+// So the trailer is tolerated only when the missing-member EVIDENCE is also
+// present, and never when stderr carries a shape that cannot mean "no such
+// member". Pure string classification: it runs nothing and decides nothing
+// about inference.
+const TAR_MISSING_MEMBER = /: Not found in archive/;
+const TAR_HARD_ERROR =
+  /Cannot (open|write|stat|mkdir|change|utime|link|symlink|extract|connect)|Permission denied|No space left|Read-only file system|Unexpected EOF|Error response from daemon|No such container/;
+
+export function isMissingMemberOnlyTarFailure(stderr: string): boolean {
+  if (TAR_HARD_ERROR.test(stderr)) return false;
+  return TAR_MISSING_MEMBER.test(stderr);
+}
+
 // ── Bulk extraction (one pass, pattern-scoped) ──────────────────────────────
 // Used only where the path is unknown AND the file must be READ (the layer-3
-// signature harvest). GNU tar exits non-zero when a wildcard matched nothing;
-// that is a legitimate observation ("the agent produced no such file"), not a
-// harness failure, so it is tolerated — every OTHER failure throws.
+// signature harvest). A non-zero exit is tolerated only under
+// isMissingMemberOnlyTarFailure — every OTHER failure throws — and even a
+// tolerated one is WARNED about, because "extraction was not clean" is
+// something the campaign log must carry rather than a fact only this function
+// ever knew.
 export function extractMatching(containerName: string, patterns: string[], hostDir: string): string[] {
   if (patterns.length === 0) return [];
   mkdirSync(hostDir, { recursive: true });
@@ -112,9 +145,15 @@ export function extractMatching(containerName: string, patterns: string[], hostD
     "-c",
     `set -o pipefail; docker export ${shellQuote(containerName)} | tar -x -C ${shellQuote(hostDir)} --wildcards --no-anchored ${quoted}`,
   ]);
-  const notFoundOnly = /Not found in archive|Exiting with failure status due to previous errors/.test(r.stderr);
-  if (r.exitCode !== 0 && !notFoundOnly) {
-    throw new Error(`docker export ${containerName} | tar -x failed (exit ${r.exitCode}): ${r.stderr.slice(0, 2000)}`);
+  if (r.exitCode !== 0) {
+    if (!isMissingMemberOnlyTarFailure(r.stderr)) {
+      throw new Error(`docker export ${containerName} | tar -x failed (exit ${r.exitCode}): ${r.stderr.slice(0, 2000)}`);
+    }
+    console.warn(
+      `[probe] tar exited ${r.exitCode} extracting from ${containerName}, tolerated as "the archive contains no ` +
+        `such member". Extraction was NOT clean; anything it did not write is invisible to the harvest. ` +
+        `stderr: ${r.stderr.slice(0, 2000)}`,
+    );
   }
   return walk(hostDir).map((p) => relative(hostDir, p));
 }

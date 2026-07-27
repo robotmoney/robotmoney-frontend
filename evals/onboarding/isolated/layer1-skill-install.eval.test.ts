@@ -44,6 +44,13 @@ let result: IsolatedLayerResult<SkillObservation>;
 
 describe("onboarding eval — layer 1: skill install", () => {
   beforeAll(async () => {
+    // Printed BEFORE anything that can throw (bring-up, the run itself, an
+    // assertion), so a red run's generated identity is always recoverable from
+    // the log — including when the failure produces no observation at all.
+    // Never a private key: name, contact and run id only.
+    const identity = generateIdentity();
+    console.log(`[${LAYER}] run ${identity.runId} — ${identity.name} <${identity.contact}>`);
+
     hostDir = mkdtempSync(join(tmpdir(), "rmeval-layer1-"));
     stack = await imageOnlyStack(evalProject(LAYER));
     await buildMemberAgentImage(stack);
@@ -52,7 +59,7 @@ describe("onboarding eval — layer 1: skill install", () => {
       layer: LAYER,
       repoRoot,
       composeProject: stack.config.project,
-      prompt: buildLayer1Task(generateIdentity()),
+      prompt: buildLayer1Task(identity),
       timeoutMs: ISOLATED_LAYER_TIMEOUT_MS,
       observe: (containerName) => {
         const listing = listContainerFiles(containerName);
