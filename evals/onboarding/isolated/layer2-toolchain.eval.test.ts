@@ -57,10 +57,19 @@ interface ToolchainObservation {
   // The binary `committee-identity --help` was actually run against, wherever it
   // was found; null when nothing could be copied out and executed.
   executedBinary: string | null;
-  // null on all three below-the-line fields' behalf: NOT CHECKED, never "failed".
+  // ── VERDICT EVIDENCE — the ON-PATH binary and nothing else ────────────────
+  // These three decide `ok:`, so they may ONLY ever carry the on-PATH binary's
+  // result. An earlier version of this loop overwrote them with whichever
+  // candidate first exited 0, which meant a BROKEN on-PATH rmpc plus a working
+  // copy in /tmp passed the layer — a false green assembled from two different
+  // programs. null means NOT CHECKED, never "failed".
   helpExitCode: number | null;
   helpOutput: string;
   missingSubcommands: string[] | null;
+  // ── DIAGNOSTIC EVIDENCE — every other rmpc found, for the human only ──────
+  // Never consulted by `ok:`. This is what lets a red say "the binary you put
+  // in /tmp works fine; the one on PATH does not" without that fact voting.
+  otherProbes: { path: string; exitCode: number; missingSubcommands: string[] }[];
 }
 
 // How many distinct rmpc-named paths are worth executing. An agent that
@@ -85,9 +94,16 @@ function describeToolchainEvidence(obs: ToolchainObservation | null | undefined)
     );
   } else {
     lines.push(
-      `executed \`committee-identity --help\` against ${obs.executedBinary}: exit ${obs.helpExitCode}`,
+      `executed \`committee-identity --help\` against the ON-PATH binary ${obs.executedBinary}: exit ${obs.helpExitCode}`,
       `subcommands absent from that --help output: ${obs.missingSubcommands === null ? "NOT CHECKED" : JSON.stringify(obs.missingSubcommands)}`,
       `--help output:\n${obs.helpOutput.slice(0, 2000)}`,
+    );
+  }
+  // Diagnostics only — stated as such, so nobody reads them as the verdict.
+  for (const p of obs.otherProbes) {
+    lines.push(
+      `also present, NOT counted toward the verdict — ${p.path}: \`committee-identity --help\` exit ${p.exitCode}, ` +
+        `subcommands absent: ${JSON.stringify(p.missingSubcommands)}`,
     );
   }
   return lines.join("\n");
@@ -128,36 +144,57 @@ describe("onboarding eval — layer 2: rmpc toolchain", () => {
           helpExitCode: null,
           helpOutput: "",
           missingSubcommands: null,
+          otherProbes: [],
         };
 
-        // Execute whatever rmpc exists, WHEREVER it was found — on PATH first,
-        // then the rest. An off-PATH binary still gets run so the log can say
-        // what it really does; the previous early return left the "missing"
-        // list at its default and made the harness report a negative about a
-        // program it had never executed.
-        const candidates = [...(onPath === null ? [] : [onPath]), ...rmpcPaths.filter((p) => p !== onPath)].slice(
-          0,
-          MAX_PROBE_CANDIDATES,
-        );
-        for (const candidate of candidates) {
-          const copied = tryCopyOut(containerName, toContainerPath(candidate), join(hostDir, "bin", encodeURIComponent(candidate)));
-          if (copied === null) continue;
+        // Probe a binary once. Copy-out is per-candidate so basenames cannot
+        // collide; a candidate that cannot be copied out is simply not probed.
+        const probe = (candidate: string) => {
+          const copied = tryCopyOut(
+            containerName,
+            toContainerPath(candidate),
+            join(hostDir, "bin", encodeURIComponent(candidate)),
+          );
+          if (copied === null) return null;
           const r = runExtractedBinary({
             repoRoot,
             composeProject: stack!.config.project,
             hostBinaryPath: copied,
             argv: ["committee-identity", "--help"],
           });
-          obs.executedBinary = toContainerPath(candidate);
-          obs.helpExitCode = r.exitCode;
-          obs.helpOutput = `${r.stdout}\n${r.stderr}`;
-          obs.missingSubcommands = missingCommitteeIdentitySubcommands(obs.helpOutput);
-          if (r.exitCode === 0) break;
+          const output = `${r.stdout}\n${r.stderr}`;
+          return { exitCode: r.exitCode, output, missing: missingCommitteeIdentitySubcommands(output) };
+        };
+
+        // THE VERDICT COMES FROM THE ON-PATH BINARY, AND ONLY FROM IT.
+        if (onPath !== null) {
+          const r = probe(onPath);
+          if (r !== null) {
+            obs.executedBinary = toContainerPath(onPath);
+            obs.helpExitCode = r.exitCode;
+            obs.helpOutput = r.output;
+            obs.missingSubcommands = r.missing;
+          }
+        }
+
+        // Everything else is executed purely so the human can read what it does.
+        // These never touch the verdict fields — an rmpc the agent left in /tmp
+        // must never stand in for a broken one on PATH.
+        for (const candidate of rmpcPaths.filter((p) => p !== onPath).slice(0, MAX_PROBE_CANDIDATES)) {
+          const r = probe(candidate);
+          if (r === null) continue;
+          obs.otherProbes.push({
+            path: toContainerPath(candidate),
+            exitCode: r.exitCode,
+            missingSubcommands: r.missing,
+          });
         }
         return obs;
       },
-      // UNCHANGED VERDICT. Still: on a declared PATH dir, AND `--help` exit 0,
-      // AND no subcommand absent. The added `!== null` is what the explicit
+      // UNCHANGED VERDICT, and now made of ONE binary's evidence. Still: on a
+      // declared PATH dir, AND `--help` exit 0, AND no subcommand absent — all
+      // three from the on-PATH binary alone (obs.otherProbes never votes).
+      // The added `!== null` is what the explicit
       // unchecked state costs in types — before, an unexecuted probe carried a
       // three-element list, so this clause was false there too.
       //
