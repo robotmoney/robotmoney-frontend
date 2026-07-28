@@ -42,16 +42,19 @@ import {
   deriveSteps,
   fillPromptIdentity,
   generateIdentity,
+  KEYSTORE_PASSPHRASE_ENV,
   looksRateLimited,
   type MemberAgentModel,
   memberAgentContainerName,
   memberAgentSpawnEnv,
   ONBOARDING_STEPS,
   type OnboardingEvalResult,
+  redactSecrets,
   resolveModelConfig,
   retryIdentity,
   runOnboardingEvalWithRetry,
 } from "../../lib/onboarding-eval.ts";
+import { ONBOARDING_PROMPT } from "@robotmoney/contract";
 import { isKeylessModel, MODEL_FAMILIES, resolveAgentModel } from "../../lib/model-registry.ts";
 
 // ── Pure helper unit tests (no Docker) ──────────────────────────────────────
@@ -82,6 +85,58 @@ describe("onboarding-eval pure helpers", () => {
     expect(prompt).toContain(identity.contact);
     expect(prompt).toContain("committee-onboarding"); // canonical prompt content survives untouched
     expect(prompt).toContain("Demo harness note"); // clearly delimited, not blended into the canonical text
+  });
+
+  test("buildAgentPrompt tells the agent its owner is absent and their secrets are already exported", () => {
+    // The published committee-onboarding skill instructs the agent to ask its
+    // human owner to export the keystore passphrase and to WAIT for them ("Tell
+    // me once it's set"). A headless container has no owner to answer, so
+    // WITHOUT this the correct behaviour IS to stop — which is exactly what CI
+    // run 30395466780 recorded: exit 0, every onboarding step still pending.
+    // This is the harness playing the owner, the same role it already plays by
+    // filling in the display name and contact (§11 R1/R4, §11.3 E7).
+    const prompt = buildAgentPrompt(generateIdentity("fixed-run"));
+    expect(prompt).toMatch(/not at the keyboard/i);
+    expect(prompt).toMatch(/already exported into this environment every secret/i);
+  });
+
+  test("buildAgentPrompt's harness note names no tool, endpoint, payload or onboarding step", () => {
+    // The note is environment info. The moment it starts describing WHAT to do,
+    // the eval stops measuring our published instructions and starts measuring
+    // the harness's own crib sheet (§11 R8 — observe only). In particular it
+    // must NOT name the env var the passphrase arrives in: finding it is part
+    // of what the skill is being measured on.
+    const identity = generateIdentity("fixed-run");
+    const note = buildAgentPrompt(identity).slice(fillPromptIdentity(ONBOARDING_PROMPT, identity).length);
+    expect(note.length).toBeGreaterThan(0);
+    for (const leak of ["rmpc", "ed25519", "sign", "keygen", "canonical", "/api/", "POST", "public key", "bearer", KEYSTORE_PASSPHRASE_ENV])
+      expect(note.toLowerCase()).not.toContain(leak.toLowerCase());
+  });
+
+  // ── Transcript redaction ──────────────────────────────────────────────────
+  // A failed run's transcript is printed WHOLE into CI logs and the demo
+  // console. The container is handed its secrets by `-e`, and a curious agent
+  // runs `env` — observed verbatim in a local run.
+  test("redactSecrets scrubs every injected secret from a transcript, and leaves the evidence intact", () => {
+    const key = "sk-2hGebKV9SH8Od7psxwGyoim40wu6Tq6eSIDQJIK2";
+    const passphrase = "3e4bab64-5469-457f-9e79-25bdf5537430";
+    const transcript = `AGENT=1\nOPENCODE_API_KEY=${key}\n${KEYSTORE_PASSPHRASE_ENV}=${passphrase}\ncurl -H "auth: ${key}"`;
+    const out = redactSecrets(transcript, [
+      [key, "<OPENCODE_API_KEY redacted>"],
+      [passphrase, `<${KEYSTORE_PASSPHRASE_ENV} redacted>`],
+    ]);
+    expect(out).not.toContain(key);
+    expect(out).not.toContain(passphrase);
+    expect(out).toContain("<OPENCODE_API_KEY redacted>");
+    expect(out).toContain("AGENT=1"); // the surrounding evidence survives
+    expect(out.split("<OPENCODE_API_KEY redacted>")).toHaveLength(3); // EVERY occurrence
+  });
+
+  test("redactSecrets never mass-replaces an absent, empty or trivially short secret", () => {
+    // A keyless run has apiKey === null; a naive replace of "" would shred the
+    // whole transcript into placeholders.
+    const t = "a transcript with no secrets in it";
+    expect(redactSecrets(t, [[null, "<x>"], [undefined, "<x>"], ["", "<x>"], ["a", "<x>"]])).toBe(t);
   });
 
   test("resolveModelConfig defaults to the funded registry default when AGENT_MODEL is unset", () => {
@@ -144,18 +199,32 @@ describe("onboarding-eval pure helpers", () => {
     expect((buildAgentOpencodeConfig("opencode/another") as any).model).toBe("opencode/another");
   });
 
-  // REGRESSION PIN for the 2026-07-27 layer-4 sweep. opencode's own defaults
-  // set `external_directory: { "*": "ask", … }`, and the
-  // `--dangerously-skip-permissions` the harness already passes does NOT lift
-  // it — that run passed the flag and was rejected anyway, citing that rule. In
-  // a non-interactive `opencode run` an "ask" has nobody to ask, so it becomes
-  // a REJECTION, and an agent that discovered the committee-onboarding skill by
-  // cloning the repo into /tmp could list the directory but never read one byte
-  // of SKILL.md. That is the harness depressing the admission rate, not the
-  // product being hard to navigate.
-  test("the container agent is not stopped from reading files outside its own working directory", () => {
+  // REGRESSION PIN for the 2026-07-27 layer-4 sweep and CI run 30395466780.
+  //
+  // The permission set was `{"*": "deny", bash: "allow", external_directory:
+  // "allow"}`. opencode merges config rules with its built-ins LAST-MATCH-WINS,
+  // so the blanket deny also overrode the built-in allowances: the agent lost
+  // `read`/`write`/`edit`/`webfetch` outright and a plain `cat` of a file it had
+  // just cloned was refused with "The user has specified a rule which prevents
+  // you from using this specific tool call". It burned minutes rediscovering
+  // `grep -n "."` as a `cat` substitute and never reached the API.
+  //
+  // The `external_directory` line was the previous, narrower attempt at the same
+  // diagnosis (opencode's defaults carry `external_directory: {"*": "ask", …}`,
+  // and in a non-interactive `opencode run` an "ask" has nobody to ask, so it
+  // resolves to a REJECTION — an agent that cloned the committee-onboarding
+  // skill into /tmp could `ls` its way to SKILL.md and never read a byte). That
+  // property is preserved by the general form asserted here: nothing is denied
+  // and nothing stops to ask.
+  //
+  // §11 R8: the container is a VANILLA install and the eval measures our
+  // INSTRUCTIONS. A harness that denies the agent its own tools measures the
+  // harness.
+  test("the container agent runs a VANILLA permission set — the harness never denies it its own tools", () => {
     const cfg = buildAgentOpencodeConfig("opencode/some-model") as any;
-    expect(cfg.permission).toEqual({ "*": "deny", bash: "allow", external_directory: "allow" });
+    expect(cfg.permission).toEqual({ "*": "allow" });
+    expect(JSON.stringify(cfg.permission)).not.toContain("deny");
+    expect(JSON.stringify(cfg.permission)).not.toContain("ask");
   });
 
   test("deriveSteps: no member observed yet ⇒ every step pending", () => {
@@ -224,11 +293,66 @@ describe("member-agent container primitive", () => {
       "run",
       "--model", "opencode/deepseek-v4-flash",
       "--format", "json",
-      "--dangerously-skip-permissions",
+      "--auto",
       "--title", "onboarding-eval-run1",
       "--dir", "/home/agent",
       "PROMPT TEXT",
     ]);
+  });
+
+  test("the auto-approve flag is opencode's REAL one, never the flag that never existed", () => {
+    // `--dangerously-skip-permissions` is not an opencode flag — v1.18.1's
+    // `run` offers `--auto` — and yargs swallows unknown `--flags` in SILENCE.
+    // So the harness believed permissions were disabled through four red runs
+    // of the required gate while every `ask` rule stayed armed and, in a
+    // headless container, unanswerable. This assertion pins the spelling; the
+    // Docker-backed sibling (scripts/tests/integration/onboarding-eval-infra.test.ts)
+    // is what proves the spelling is real, by checking every flag emitted here
+    // against the pinned binary's own `--help`.
+    const argv = buildMemberAgentArgv({ ...base, modelConfig: FUNDED });
+    expect(argv).toContain("--auto");
+    expect(argv).not.toContain("--dangerously-skip-permissions");
+    expect(argv.at(-1)).toBe("PROMPT TEXT"); // the prompt stays the trailing positional
+  });
+
+  // ── ownerEnv: the human owner's half of the session environment ────────────
+  // The published committee-onboarding skill tells the agent to ask its owner
+  // to export the keystore passphrase and to WAIT for them ("Tell me once it's
+  // set"), and forbids accepting the value in conversation. A headless
+  // container has no owner to answer, so an agent that follows the skill
+  // CORRECTLY stops there — the exact shape of CI run 30395466780 (exit 0,
+  // every step still pending). The harness plays the owner (§11.3 E7).
+  test("ownerEnv is injected as -e pairs, in a deterministic order, alongside the model credential", () => {
+    const argv = buildMemberAgentArgv({
+      ...base,
+      modelConfig: FUNDED,
+      ownerEnv: { Z_LAST: "z", RMPC_COMMITTEE_IDENTITY_PASSPHRASE: "pass-phrase-xyz" },
+    });
+    expect(argv).toContain("RMPC_COMMITTEE_IDENTITY_PASSPHRASE=pass-phrase-xyz");
+    expect(argv).toContain("OPENCODE_API_KEY=sk-zen");
+    // Sorted, so the argv is diffable and a golden stays stable.
+    expect(argv.indexOf("RMPC_COMMITTEE_IDENTITY_PASSPHRASE=pass-phrase-xyz")).toBeLessThan(argv.indexOf("Z_LAST=z"));
+    // Every injected pair sits BEFORE the service name — after it, argv belongs
+    // to `opencode run`, where a stray `-e` would be read as a flag.
+    for (const v of ["OPENCODE_API_KEY=sk-zen", "RMPC_COMMITTEE_IDENTITY_PASSPHRASE=pass-phrase-xyz", "Z_LAST=z"])
+      expect(argv.indexOf(v)).toBeLessThan(argv.indexOf("member-agent"));
+  });
+
+  test("a KEYLESS model still gets its owner's secrets — a passphrase is not a model credential", () => {
+    const argv = buildMemberAgentArgv({
+      ...base,
+      modelConfig: KEYLESS,
+      ownerEnv: { RMPC_COMMITTEE_IDENTITY_PASSPHRASE: "pass-phrase-xyz" },
+    });
+    expect(argv.join(" ")).not.toMatch(/_API_KEY/);
+    expect(argv).toContain("RMPC_COMMITTEE_IDENTITY_PASSPHRASE=pass-phrase-xyz");
+    expect(argv.filter((a) => a === "-e")).toHaveLength(1);
+  });
+
+  test("no ownerEnv ⇒ the argv is exactly what it was — this is an opt-in, not an ambient read", () => {
+    expect(buildMemberAgentArgv({ ...base, modelConfig: FUNDED, ownerEnv: {} })).toEqual(
+      buildMemberAgentArgv({ ...base, modelConfig: FUNDED }),
+    );
   });
 
   test("KEYLESS: the SAME argv minus the -e pair — AGENT_MODEL=free is still a real, key-free path", () => {

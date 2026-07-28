@@ -1,7 +1,7 @@
 // Committee domain/service layer — the single place the rules live (window
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
-import { classifyRegime, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
+import { canonicalizeApplication, classifyRegime, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { config } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
@@ -395,7 +395,21 @@ export async function applyMember(input: ApplyInput) {
   // rolled-back write.
   const application = { name: input.name, contact: input.contact, lens: input.lens, publicKey: input.publicKey };
   if (!await verifyApplicationSignature(application, input.signature, input.publicKey)) {
-    return { ok: false, status: 400, error: "invalid signature over the canonical application payload" };
+    // Echo the EXACT bytes this application should have been signed over.
+    // Every byte of it is a field the caller just sent us, so this reveals
+    // nothing — and without it a headless applicant has no reachable source
+    // for the layout at all: the canonicalizer lives in a private repo, and
+    // `/docs/investment-committee/participation` renders client-side, so a
+    // non-browser client gets an empty shell. Measured live (§11.3 E7): a real
+    // member-agent with a correct key and a working `rmpc` burned minutes
+    // brute-forcing key order against this bare 400. "Setup-gated apply" (R6)
+    // is only fair if a correct setup can tell WHY it was rejected.
+    return {
+      ok: false,
+      status: 400,
+      error: "invalid signature over the canonical application payload",
+      expectedPayload: canonicalizeApplication(application),
+    };
   }
 
   return await sql.begin(async (tx) => {

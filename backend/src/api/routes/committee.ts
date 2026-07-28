@@ -152,7 +152,25 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   // NEVER overwrite an already-admitted member's key (that's admin).
   if (m === "POST" && p === C.apply) {
     const b = parseApply(await readJsonObject(req));
-    if (!b) return { status: 400, body: { error: "valid name, contact, publicKey, and signature required" } };
+    // Say what a valid application IS, not just that this one wasn't. This is
+    // the first response an unfamiliar client gets — measured live, every
+    // real member-agent in the §11 R8 eval probes this endpoint with `{}`
+    // before it builds anything — and `apply` is the one committee route whose
+    // audience is, by design, a program that has never seen our source.
+    // §11.3 E7: the eval reports on our instructions, and an API's own errors
+    // are part of them.
+    if (!b) {
+      return {
+        status: 400,
+        body: {
+          error: "valid name, contact, publicKey, and signature required",
+          expects: { name: "string", contact: "string", lens: "string (optional)", publicKey: "base64 ed25519 public key", signature: "base64 ed25519 signature" },
+          signatureCovers:
+            "the canonical application payload: JSON.stringify of {name, contact, lens?, publicKey} " +
+            "with the keys in EXACTLY that order, `lens` omitted entirely when absent, no whitespace and no trailing newline",
+        },
+      };
+    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.contact)) {
       return { status: 400, body: { error: "valid contact email required for activation notification" } };
     }

@@ -75,10 +75,15 @@ export type OnboardingOutcome =
  * Verbatim prefix of the error opencode returns when a tool call is rejected by
  * a configured permission rule. Verified against the pinned opencode build the
  * member-agent image installs (1.18.1, scripts/lib/member-agent/Dockerfile) and
- * observed live in the 2026-07-27 layer-4 sweep. It appears only in a tool
- * call's `error` field; a healthy run — the harness passes
- * `--dangerously-skip-permissions` precisely to have no permission gate at all
- * — cannot contain it.
+ * observed live in the 2026-07-27 layer-4 sweep and again in CI run
+ * 30395466780. It appears only in a tool call's `error` field; a healthy run
+ * cannot contain it, because the harness denies nothing (`{"*": "allow"}`) and
+ * auto-approves the rest (`--auto`) precisely to have no permission gate at
+ * all — see scripts/agent/member-agent.ts.
+ *
+ * Both of those were WRONG when this constant was written, which is why it
+ * kept firing: the config was `{"*": "deny", bash: "allow", …}` and the flag
+ * was `--dangerously-skip-permissions`, which opencode has never had.
  */
 export const HARNESS_PERMISSION_REJECTION = "The user has specified a rule which prevents you from using this specific tool call";
 
