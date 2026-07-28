@@ -22,9 +22,11 @@
 # not part of the retirement. What IS covered nightly below is real-inference
 # ONBOARDING (ONBOARDING_REAL_EVAL), a different surface.
 #
-# NO SECRET (keyless default)
-# `opencode/big-pickle` is a free, no-credential OpenCode Zen model. The sweep
-# job below opts into a paid model via ANTHROPIC_API_KEY for reliability.
+# CREDENTIAL
+# The sweep runs FUNDED models billed to the `OPENCODE_API_KEY` repo secret
+# (D22 as amended 2026-07-28). Which agents it sweeps is selected by
+# `ONBOARDING_SWEEP_MODELS` — AGENT_MODEL selectors resolved against
+# scripts/lib/model-registry.ts, so the model ids stay in versioned source.
 #
 # CI taxonomy class: heavy (scheduled real external-model drift check). Heavy
 # suites are sweep-only: NO `pull_request` trigger — schedule + on-demand only.
@@ -38,7 +40,7 @@
 # only means something with a real model doing the reasoning — it is measured
 # here, nightly, and on pushes to main, rather than per PR. This sweep is also
 # strictly WIDER than the per-PR admission ever was (more identities, more model
-# variety), using an ANTHROPIC_API_KEY secret. If this job stops running, the
+# variety), using the OPENCODE_API_KEY secret. If this job stops running, the
 # real-inference onboarding surface loses its coverage: treat a red here as a
 # genuine regression signal, never as an optional nightly.
 name: committee-opencode-nightly
@@ -61,7 +63,7 @@ jobs:
   # (scheduled/workflow_dispatch triggers are never fork PRs), so no
   # trust-context gating is needed.
   onboarding-real-inference-sweep:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, robotmoney-self-hosted]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -93,8 +95,8 @@ jobs:
       # single admission e2e.yml runs on a push to main; the PR path runs no
       # real eval at all since #289), against that SAME booted stack (RMPC_RELEASE_E2E-style
       # additive reuse — see scripts/lib/demo-main.ts's ONBOARDING_REAL_EVAL
-      # block). Fails loudly (non-zero exit, no skip) if the model key isn't
-      # usable, the rmpc binary can't be fetched/verified, or any swept
+      # block). Fails loudly (non-zero exit, no skip) if OPENCODE_API_KEY is
+      # missing or unfunded, the rmpc binary can't be fetched/verified, or any swept
       # admission doesn't reach the active roster.
       - name: Boot demo stack + real-inference onboarding sweep
         run: bun run scripts/demo.ts
@@ -103,11 +105,15 @@ jobs:
           DEMO_PROJECT: rmdemo_ci_onboarding_${{ github.run_id }}_${{ github.run_attempt }}
           RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
           ONBOARDING_REAL_EVAL: "1"
-          OPENCODE_MODEL: ${{ vars.ONBOARDING_EVAL_MODEL || 'anthropic/claude-haiku-4-5' }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           # Wider than the PR gate's implicit single model / single identity:
-          # two models, two fresh identities each = 4 real admissions/night.
-          ONBOARDING_SWEEP_MODELS: "anthropic/claude-haiku-4-5:anthropic/claude-sonnet-5"
+          # two model FAMILIES, two fresh identities each = 4 real admissions a
+          # night. Deliberately deepseek + kimi rather than the Claude family:
+          # Zen's Claude models carry a coding-assistant framing that refuses
+          # persona-shaped prompts, which would measure that refusal rather than
+          # our onboarding instructions. Each entry is an AGENT_MODEL selector,
+          # so the ids resolve through scripts/lib/model-registry.ts.
+          ONBOARDING_SWEEP_MODELS: "deepseek:kimi"
           ONBOARDING_SWEEP_IDENTITIES_PER_MODEL: "2"
         timeout-minutes: 55
       - name: Reclaim this run's demo volume (no leaks on the shared runner)

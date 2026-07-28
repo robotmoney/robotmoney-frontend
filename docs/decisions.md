@@ -728,17 +728,25 @@ secure.
 
 ---
 
-## D22 — Evals run on a vanilla keyless OpenCode install; the onboarding eval is layered and shares the demo's stack
+## D22 — Evals run a registry-selected OpenCode model; the onboarding eval is layered and shares the demo's stack
+
+> **Rule 1 amended 2026-07-28.** This decision originally mandated a *vanilla
+> keyless* install. Evals now run a funded, registry-selected model
+> (`AGENT_MODEL` → `scripts/lib/model-registry.ts`), with `AGENT_MODEL=free`
+> still available as a keyless path. Rules 2-4 are unchanged and still
+> binding. Read the amendment at the end of this decision before relying on
+> any statement below it.
 
 **Decision.** Four rules, binding on every eval in this repo.
 
-1. **Keyless, always.** Every eval runs on a **vanilla, keyless OpenCode
-   installation**, pinned to the free OpenCode Zen tier (`opencode/big-pickle`).
-   No API key, no provider secret, no paid model, and **no "paid opt-in"
-   override** — not as a default, not as an operator escape hatch, not as a
-   nightly-only widening. The model is an **in-code constant**, never an
-   environment variable, so there is no configuration surface through which a
-   keyed model could be selected.
+1. ~~**Keyless, always.**~~ **AMENDED 2026-07-28 — see "Amendment: rule 1" at
+   the end of this decision.** The original text read: "Every eval runs on a
+   **vanilla, keyless OpenCode installation**, pinned to the free OpenCode Zen
+   tier (`opencode/big-pickle`). No API key, no provider secret, no paid model,
+   and **no 'paid opt-in' override** — not as a default, not as an operator
+   escape hatch, not as a nightly-only widening. The model is an **in-code
+   constant**, never an environment variable, so there is no configuration
+   surface through which a keyed model could be selected."
 2. **No inference-off mode on an eval path.** An eval always makes a real model
    call. Inference-off *rails* checks are legitimate and valuable (they prove the
    machinery an eval rides on), but they are not evals, must not be named as
@@ -810,10 +818,12 @@ exactly this reason.
 
 **Relationship.**
 - **Revises architecture.md §11 R8** (onboarding is an eval): R8's "vanilla
-  OpenCode agent container doing real inference" is unchanged in intent and is
-  now explicit that the install is **keyless**, that no API key may appear on an
-  eval path, and that no inference-off substitute exists. The layered structure,
-  scoring, and shared components are specified in the new **§11.3**.
+  OpenCode agent container doing real inference" is unchanged in intent, and no
+  inference-off substitute exists. ~~The install is **keyless** and no API key
+  may appear on an eval path.~~ **Superseded by the rule-1 amendment below** —
+  the eval runs a funded, registry-selected model and `OPENCODE_API_KEY` is
+  expected on the eval path; §11.3 E1 carries the amended normative text. The
+  layered structure, scoring, and shared components are specified in **§11.3**.
 - **Retires the paid-model opt-ins.** `resolveModelConfig`'s non-default branch
   (`OPENCODE_MODEL` + `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`), `e2e.yml`'s
   `ONBOARDING_EVAL_MODEL` + `ANTHROPIC_API_KEY` trusted-context gate, and
@@ -829,9 +839,17 @@ exactly this reason.
 - **Adds no workflow.** `committee-opencode-nightly.yml` is repointed at the eval
   on a `core` stack. It gets smaller: no Chromium install, no backend deps for
   the EDGAR seed bootstrap, no demo-volume reclaim, and no `env:` block. It stays
-  `CI_CLASS: heavy` (sweep-only — no `pull_request` trigger) on `ubuntu-latest`,
-  which matters because the self-hosted runner shares its IP with the standing
-  `rmdemo_*` stack and has a documented history of 429 flake on live-call gates.
+  `CI_CLASS: heavy` (sweep-only — no `pull_request` trigger). ~~On
+  `ubuntu-latest`, because the self-hosted runner shares its IP with the standing
+  `rmdemo_*` stack and has a documented history of 429 flake on live-call
+  gates.~~ **Superseded by the rule-1 amendment (2026-07-28):** that IP-flake
+  rationale was a property of the FREE tier, which rate-limits per source IP.
+  Funded models bill the workspace, not an IP quota — verified from the
+  self-hosted host itself, where `big-pickle` returns 429 while
+  `deepseek-v4-flash` and `kimi-k2.7-code` return 200 at the same instant. Every
+  workflow now runs on `[self-hosted, robotmoney-self-hosted]`, which is this
+  repo's spec; `ubuntu-latest` was the exception that rationale bought, and it
+  is retired with it.
 - **Does not revise D21.** The REST-only onboarding flow is unchanged; this
   decision is about how that flow is evaluated.
 - **Implementation is follow-up work**, tracked as its own issue so the code
@@ -859,6 +877,83 @@ exactly this reason.
   already exists to run the real-inference onboarding sweep. A second workflow
   would duplicate its schedule, class annotation, and rmpc cache to run a
   strictly simpler job.
+
+### Amendment: rule 1 (2026-07-28) — evals run a funded model, selected from a versioned registry
+
+**What changed.** Rule 1's keyless mandate is replaced by:
+
+> Every eval runs a model resolved from the **versioned registry** in
+> `scripts/lib/model-registry.ts`, selected by the single `AGENT_MODEL` signal
+> and billed to the environment's own `OPENCODE_API_KEY`. The repo default is
+> `opencode/deepseek-v4-flash`. A keyless run remains **available and
+> supported** — `AGENT_MODEL=free` selects Zen's no-credential tier — but it is
+> no longer mandatory.
+
+Rules 2, 3, and 4 are **unchanged and still binding**: no inference-off mode on
+an eval path, layered not monolithic, scored by sampling.
+
+**Why.** The keyless mandate did not survive contact with the free tier.
+
+*The pinned model stopped existing in practice.* `opencode/big-pickle` returns
+`FreeUsageLimitError` on every probe from CI's host — 429 on 5/5 and then 3/3
+consecutive attempts, measured 2026-07-28 — while sibling free models answered
+`200` from the same IP, with the same key, at the same instant. The throttle is
+model-specific saturation upstream, not our network. And there is no funded tier
+to escape to: `big-pickle` is priced at zero across `input`, `output`,
+`cache_read`, and `cache_write`, and Zen's catalogue contains no paid sibling. A
+keyless default that always 429s is not a keyless default; it is an outage
+carrying a rationale. Issue #289 had already removed the per-PR eval for exactly
+this reason — the rule was costing us the measurement it was meant to protect.
+
+*The reproducibility argument was weaker than it looked.* Rule 1's case was that
+a keyed eval is unreproducible by a contributor without the secret. But
+`AGENT_MODEL=free` keeps a genuinely keyless path one env var away, so a
+contributor can still run the complete eval unfunded. What they cannot do is
+reproduce the *funded* run's model — which is the same, ordinary situation as
+any other CI secret in this repo, and is why rule 4's sampling exists.
+
+*The "changes the subject under test" argument is now handled better by naming
+the model than by banning keys.* The concern was that a stronger model measures
+its own tolerance for our instructions rather than the instructions. That is
+real, and measurement showed it cuts both ways: Zen's Claude family carries an
+OpenCode coding-assistant framing that **refuses** persona-shaped prompts
+outright (`claude/haiku-4-5` declined a committee take as outside its scope;
+`claude/sonnet-5` went off-format), which would have measured the refusal, not
+our onboarding. The registry addresses this directly — each family carries a
+note on what it is and is not suitable for, the nightly sweeps deepseek + kimi
+deliberately, and every eval result records the model it ran. A named model in
+versioned source is more honest than an unnamed one that happens to be free.
+
+**What keeps rule 1's original intent.** The specific failure rule 1 guarded
+against was *ambient, unreviewable* model selection. That guard is preserved,
+and arguably strengthened: model **ids** live in versioned source, and the
+environment carries only a **selector**. `AGENT_MODEL=deepseek` says which
+family; which deepseek it is remains a code review away. An unknown family or
+model **fails loudly** rather than falling back, so a run can never quietly use
+a model other than the one it was asked for — the property rule 1's "in-code
+constant" was actually protecting.
+
+**Consequences.**
+- `.github/workflows/e2e.yml` and `committee-opencode-nightly.yml` supply
+  `OPENCODE_API_KEY`; the retired `ANTHROPIC_API_KEY` + `ONBOARDING_EVAL_MODEL`
+  opt-in is removed rather than preserved.
+- The nightly sweeps `deepseek:kimi` (families, not raw ids).
+- Fork PRs cannot reach the secret. The eval fails loudly there rather than
+  silently degrading; `AGENT_MODEL=free` is the documented fork-safe path.
+- Re-enabling the per-PR eval that #289 removed is now affordable, but is
+  **deliberately not part of this change** — it is a gating decision that
+  deserves its own review.
+- The surviving property is **enforced, not merely documented**:
+  `scripts/checks/check-model-selection.sh` fails CI if a raw model-id literal
+  appears outside `scripts/lib/model-registry.ts`, if a retired knob
+  (`OPENCODE_MODEL`, `ONBOARDING_EVAL_MODEL`, a provider `*_API_KEY`) reappears,
+  or if the contribution-advisory reviewer stops resolving through
+  `keylessModel()`. It runs in the required per-PR `backend-integration` job,
+  and `scripts/tests/unit/model-selection-guard.test.ts` executes it against
+  planted fixtures so a green can never come from a scan that matched nothing.
+  Rules 2-4's `evals/` properties (no conditional skip, no mock or injection
+  seam) are enforced by the same script once that tree exists (#278); until then
+  it prints exactly what it did not scan rather than passing silently.
 
 ---
 

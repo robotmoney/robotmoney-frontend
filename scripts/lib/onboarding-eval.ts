@@ -9,19 +9,21 @@
 // + the installed committee-onboarding skill — exactly what a real prospective
 // member's own agent would have to do (D21: over the committee REST API).
 //
-// Real inference is the DEFAULT mode here, never an optional extra — and it
-// requires NO secret to run. This module defaults to the SAME free,
-// no-credential OpenCode Zen model (`opencode/big-pickle`) that
-// scripts/lib/committee/inference.ts already uses for real committee takes
-// (docker-compose.demo.yml's member-agent comment has the same reference).
-// That is genuinely real inference — a real model call against a free
-// provider tier, not a template or a mock — which is exactly why it's the
-// right default for a REQUIRED per-PR gate: no operator has to configure a
-// secret before this eval can run for real. An operator MAY opt into a paid
-// model (faster, more reliable, useful for the nightly's wider sweep) by
-// setting OPENCODE_MODEL to a non-default id plus the matching provider key;
-// resolveModelConfig() throws loudly if that explicit request can't actually
-// be honored — it never silently substitutes a different model behind the
+// Real inference is the DEFAULT mode here, never an optional extra. The model
+// is whatever AGENT_MODEL resolves to against ./model-registry.ts — by default
+// `opencode/deepseek-v4-flash`, a funded model billed to the environment's own
+// OPENCODE_API_KEY (D22 as amended 2026-07-28).
+//
+// This used to pin the free, no-credential `opencode/big-pickle`. That pin is
+// gone because the model is gone in practice: it is saturated upstream (429 on
+// every probe from CI's host while sibling free models answered 200 at the same
+// instant) and, having zero cost across every field with no paid sibling in
+// Zen's catalogue, there is no funded tier to escape to. A keyless default that
+// returns 429 is not a keyless default; it is an outage with a rationale. The
+// `free` family in the registry remains available for genuinely unfunded runs.
+//
+// resolveModelConfig() throws loudly when a paid model is selected with no
+// funded key — it never silently substitutes a different model behind the
 // operator's back.
 //
 // ── Observe-only design, and its known coarseness ───────────────────────────
@@ -59,6 +61,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ONBOARDING_PROMPT, path as routePath, ROUTES } from "@robotmoney/contract";
+import { AGENT_MODEL_ENV, DEFAULT_AGENT_MODEL, isKeylessModel, resolveAgentModel } from "./model-registry.ts";
+import { ZEN_KEY_ENV, zenApiKey } from "./opencode-key.ts";
 
 export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.demo.yml"];
 // The committee REST API the member-agent container reaches over the compose
@@ -127,46 +131,45 @@ export function buildAgentPrompt(identity: OnboardingIdentity, apiBaseUrl: strin
   return `${fillPromptIdentity(ONBOARDING_PROMPT, identity)}${demoNetworkNote(apiBaseUrl)}`;
 }
 
-// ── Model configuration (real inference is the default, not opt-in — and it
-//    needs no secret: the default model is the same free, no-credential
-//    OpenCode Zen tier scripts/lib/committee/inference.ts already uses) ───────────────────
-export const MODEL_API_KEY_ENV_CANDIDATES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] as const;
-
-// Free, no-credential OpenCode Zen model (mirrors scripts/lib/committee/inference.ts's
-// DEFAULT_INFERENCE_MODEL exactly — same pin, same rationale: real inference,
-// no secret required). Pinned for determinism; override via OPENCODE_MODEL.
-export const DEFAULT_INFERENCE_MODEL = "opencode/big-pickle";
+// ── Model configuration ─────────────────────────────────────────────────────
+// The model is selected by ONE signal, AGENT_MODEL, resolved against the
+// versioned registry in ./model-registry.ts (`deepseek`, `kimi/k2.6`, …). The
+// credential is the single OpenCode Zen key, OPENCODE_API_KEY, whose value
+// differs per environment (CI secret vs Stage .env) — see ./opencode-key.ts.
+//
+// A container inherits no ambient environment, so BOTH have to be resolved here
+// and passed in explicitly: the model on argv, the key via `-e`.
+export const DEFAULT_INFERENCE_MODEL = DEFAULT_AGENT_MODEL;
 
 export interface ModelConfig {
   model: string;
-  apiKeyEnv: (typeof MODEL_API_KEY_ENV_CANDIDATES)[number] | null;
+  apiKeyEnv: typeof ZEN_KEY_ENV | null;
   apiKey: string | null;
+  /** True when the resolved model needs no credit (the `free` family). */
+  keyless: boolean;
 }
 
-// Resolves to the free keyless default UNLESS an operator explicitly opts
-// into a different model via OPENCODE_MODEL — in which case a matching
-// provider key is required and its absence THROWS loudly (never falls back
-// to a different model than the one explicitly requested; never falls back
-// to a scripted/templated path either way — see the module doc comment).
+// Resolves the model + credential the member-agent container will run with.
+//
+// A paid model with no funded key THROWS here rather than at the far end of a
+// container boot: the failure is a configuration mistake, and it costs ~20
+// minutes of stack bring-up to discover it any later. Selecting a `free/…`
+// model is the supported way to run with no key at all.
 export function resolveModelConfig(env: Record<string, string | undefined> = process.env): ModelConfig {
-  const model = env.OPENCODE_MODEL?.trim() || DEFAULT_INFERENCE_MODEL;
+  const model = resolveAgentModel(env); // throws loudly on an unknown family/model
+  const keyless = isKeylessModel(model);
+  const apiKey = zenApiKey(env);
 
-  if (model === DEFAULT_INFERENCE_MODEL) {
-    // No key needed or passed through — even if one happens to be set in the
-    // environment for an unrelated reason, the keyless default never uses it.
-    return { model, apiKeyEnv: null, apiKey: null };
-  }
+  if (keyless) return { model, apiKeyEnv: null, apiKey: null, keyless };
 
-  const apiKeyEnv = MODEL_API_KEY_ENV_CANDIDATES.find((name) => env[name]?.trim());
-  if (!apiKeyEnv) {
+  if (!apiKey) {
     throw new Error(
-      `OPENCODE_MODEL=${model} was explicitly requested but no provider key is configured ` +
-        `(checked ${MODEL_API_KEY_ENV_CANDIDATES.join(", ")}). Refusing to silently fall back to a ` +
-        `different model — either configure the matching key, or unset OPENCODE_MODEL to use the ` +
-        `default free keyless tier (${DEFAULT_INFERENCE_MODEL}).`,
+      `${AGENT_MODEL_ENV} resolved to ${model}, which is a paid OpenCode Zen model, but ${ZEN_KEY_ENV} is not set. ` +
+        `Set ${ZEN_KEY_ENV} (CI: repository secret; Stage/local: .env), or select a keyless model ` +
+        `(${AGENT_MODEL_ENV}=free, or free/<model>). Refusing to silently substitute a different model.`,
     );
   }
-  return { model, apiKeyEnv, apiKey: env[apiKeyEnv]!.trim() };
+  return { model, apiKeyEnv: ZEN_KEY_ENV, apiKey, keyless };
 }
 
 // opencode.json written per-run, mounted read-only into the container (never
@@ -337,7 +340,10 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     // harness gave up on it and a RETRY launched a second container
     // concurrently with the still-running first one).
     const containerName = `${opts.composeProject}-member-agent-eval-${identity.runId}`;
-    log(`launching member-agent container for ${identity.contact} (model=${modelConfig.model}${modelConfig.apiKeyEnv ? "" : ", keyless"})`);
+    log(
+      `launching member-agent container for ${identity.contact} (model=${modelConfig.model}, ` +
+        `${modelConfig.apiKeyEnv ? `funded via ${modelConfig.apiKeyEnv}` : "keyless"})`,
+    );
     const containerProc = Bun.spawn(
       [
         "docker",
@@ -349,8 +355,9 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
         containerName,
         "-v",
         `${opencodeConfigPath}:/home/agent/opencode.json:ro`,
-        // Only pass a key when the resolved model actually needs one — the
-        // default free tier is genuinely keyless (no -e flag at all).
+        // Only pass a key when the resolved model actually needs one — a
+        // `free/…` model is genuinely keyless (no -e flag at all). A container
+        // inherits nothing, so this explicit injection is the only way in.
         ...(modelConfig.apiKeyEnv ? ["-e", `${modelConfig.apiKeyEnv}=${modelConfig.apiKey}`] : []),
         "member-agent",
         "run",
@@ -499,7 +506,13 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
   const backoff = opts.backoffMsSchedule ?? DEFAULT_RETRY_BACKOFF_MS;
   const runOnce = opts.runOnce ?? runOnboardingEval;
   const log = opts.onEvent ?? (() => {});
-  const usingKeylessDefault = resolveModelConfig(opts.env ?? process.env).model === DEFAULT_INFERENCE_MODEL;
+  // A BARE timeout is only worth retrying on the free tier, where slowness is
+  // expected and says nothing about whether the agent could navigate onboarding.
+  // On a funded model a timeout is a real signal, so it is NOT retried away.
+  // Keyed off the resolved model's own billing property, not off equality with
+  // whatever the default happens to be — those stopped meaning the same thing
+  // the moment the default became a funded model.
+  const usingKeylessModel = resolveModelConfig(opts.env ?? process.env).keyless;
   let last: OnboardingEvalResult | undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Fresh identity per attempt — reusing one across retries would re-apply
@@ -508,7 +521,7 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
     const identity = attempt === 1 && opts.identity ? opts.identity : generateIdentity(`ci-retry-${attempt}-${crypto.randomUUID().slice(0, 6)}`);
     last = await runOnce({ ...opts, identity });
     if (last.admitted) return last;
-    const worthRetrying = looksRateLimited(last.transcript) || (usingKeylessDefault && last.timedOut);
+    const worthRetrying = looksRateLimited(last.transcript) || (usingKeylessModel && last.timedOut);
     if (attempt === maxAttempts || !worthRetrying) return last;
     const delayMs = backoff[Math.min(attempt - 1, backoff.length - 1)];
     const reason = looksRateLimited(last.transcript) ? "looked rate-limited" : "timed out on the free keyless tier";

@@ -923,8 +923,10 @@ verify; a no-show renders **absent**, not fabricated; out-of-window POSTs
 are rejected; cross-role writes are denied; a published session renders the *real*
 takes. The demo is the same harness at scale. Hermetic: a missing dependency fails
 the run rather than silently skipping. Real-LLM member takes are a separate
-opt-in: `COMMITTEE_REAL_INFERENCE=1` swaps the templated take for a keyless
-opencode-zen call that is **time-bounded**
+opt-in: `COMMITTEE_REAL_INFERENCE=1` swaps the templated take for a real
+opencode-zen call — the model `AGENT_MODEL` resolves against
+`scripts/lib/model-registry.ts`, billed to `OPENCODE_API_KEY` (§11.3 E1) —
+that is **time-bounded**
 (`OPENCODE_TIMEOUT_MS`, default 120s — a hung inference kills the subprocess
 instead of freezing the session), and member runs are settled rather than
 `Promise.all`'d, so a per-member inference/session failure renders that member
@@ -2061,11 +2063,14 @@ Where any other code differs, this section wins.
   whether our instructions alone are enough to onboard a fresh agent. There are no
   mocks, stubs, or alternative code paths; the only permitted differences are
   configuration (endpoints, credentials) and who triggers approval and when (R7).
-  The container is a **vanilla, keyless OpenCode install** (D22): no API key, no
-  provider secret, no paid model, and no opt-in override may appear anywhere on an
-  eval path, and there is **no inference-off mode** — an eval always makes a real
-  model call, and a missing prerequisite fails loudly rather than passing by
-  absence. The eval's structure, scoring, and shared components are §11.3.
+  The container is a **vanilla OpenCode install** (D22) running the model
+  `AGENT_MODEL` resolves against `scripts/lib/model-registry.ts` — by default
+  `opencode/deepseek-v4-flash`, billed to the environment's own
+  `OPENCODE_API_KEY`; `AGENT_MODEL=free` still runs genuinely keyless. There is
+  **no inference-off mode** — an eval always makes a real model call, and a
+  missing prerequisite (Docker, egress, or a funded key for a paid model) fails
+  loudly rather than passing by absence. The eval's structure, scoring, and
+  shared components are §11.3.
 
 ### 11.2 Sequence
 
@@ -2115,13 +2120,24 @@ Status: target design (D22). R8 makes onboarding an eval; this section specifies
 what that eval is, how it is scored, and which components it shares with
 `bun run demo`. Where any other code differs, this section wins.
 
-**E1 — Keyless, no exceptions.** Every layer runs a **vanilla, keyless OpenCode
-install** pinned to the free OpenCode Zen tier (`opencode/big-pickle`). The model
-id is an in-code constant. No API key, provider secret, paid model, or opt-in
-override may be readable from, or passed to, any eval path — there is deliberately
-no configuration surface through which a keyed model could be selected. A
-contributor with a fresh checkout, Docker, and network egress can run the entire
-eval.
+**E1 — Vanilla install; the model is named in versioned source, never ambient.**
+Every layer runs a **vanilla OpenCode install** — no repo-specific harness, no
+pre-seeded state. Which model it runs is resolved from the versioned registry in
+`scripts/lib/model-registry.ts` by the single `AGENT_MODEL` selector, billed to
+the environment's own `OPENCODE_API_KEY`; the repo default is
+`opencode/deepseek-v4-flash`. The **ids live in source**, so the environment
+carries a selector (`deepseek`, `kimi/k2.6`) and never a raw model id, and an
+unknown family or member **throws** rather than falling back — an eval can never
+quietly run a model other than the one it was asked for. A contributor with a
+fresh checkout, Docker, and network egress can still run the entire eval unfunded
+via `AGENT_MODEL=free`, which selects Zen's no-credential tier and ignores any
+key that happens to be set.
+
+This amends E1's original "keyless, no exceptions" mandate, in step with **D22
+rule 1 as amended 2026-07-28** — the pinned free model `opencode/big-pickle` is
+saturated upstream (429 on every probe) with no funded tier to escape to, so the
+keyless mandate was costing the measurement it existed to protect. See D22's
+"Amendment: rule 1" for the full rationale. E2-E4 are unchanged.
 
 **E2 — No inference-off mode.** Every layer makes a real model call. There is no
 mock, no injection seam on the eval's own path, no scripted fallback that performs
@@ -2181,11 +2197,21 @@ path with fewer services booted. Three components are shared by construction:
 
 **E6 — CI placement.** The eval is `CI_CLASS: heavy` — sweep-only, therefore no
 `pull_request` trigger — and runs in the existing
-`committee-opencode-nightly.yml` on `ubuntu-latest` (the self-hosted runner
-shares its IP with the standing `rmdemo_*` stack and has a documented history of
-429 flake on live-call gates). No new workflow is added. The per-PR signal stays
-what it is today: the inference-off rails, plus the single real-inference
-admission the `e2e` job performs off its own demo boot.
+`committee-opencode-nightly.yml` on `[self-hosted, robotmoney-self-hosted]`, the
+runner **every** workflow in this repo uses. (It was pinned to `ubuntu-latest`
+because the self-hosted host shares its IP with the standing `rmdemo_*` stack
+and free-tier models rate-limit per IP. Funded models bill the workspace, not an
+IP quota, so that exception retired with D22 rule 1's amendment.) No new workflow
+is added.
+
+Because it is heavy and sweep-only, a run of this eval is **never** an acceptance
+criterion or test-plan item on a pull request: it runs on a schedule against
+`main`, so requiring it before merge would gate a change on a job that only
+exists after that change lands. It is post-merge monitoring — a model beginning
+to refuse, a key running dry — and a PR asserts the same surface through the
+per-PR checks below. The per-PR signal stays what it is today: the inference-off
+rails, plus the single real-inference admission the `e2e` job performs off its
+own demo boot.
 
 ---
 

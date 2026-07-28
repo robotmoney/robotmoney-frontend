@@ -45,6 +45,7 @@ import {
   resolveModelConfig,
   runOnboardingEvalWithRetry,
 } from "../../lib/onboarding-eval.ts";
+import { isKeylessModel, MODEL_FAMILIES, resolveAgentModel } from "../../lib/model-registry.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -80,28 +81,55 @@ describe("onboarding-eval pure helpers", () => {
     expect(prompt).toContain("Demo harness note"); // clearly delimited, not blended into the canonical text
   });
 
-  test("resolveModelConfig defaults to the free keyless tier when OPENCODE_MODEL is unset — genuinely real inference, no secret needed", () => {
-    const cfg = resolveModelConfig({});
+  test("resolveModelConfig defaults to the funded registry default when AGENT_MODEL is unset", () => {
+    const cfg = resolveModelConfig({ OPENCODE_API_KEY: "sk-zen" });
     expect(cfg.model).toBe(DEFAULT_INFERENCE_MODEL);
-    expect(cfg.apiKeyEnv).toBeNull();
-    expect(cfg.apiKey).toBeNull();
+    expect(cfg.model).toBe("opencode/deepseek-v4-flash");
+    expect(cfg).toEqual({ model: DEFAULT_INFERENCE_MODEL, apiKeyEnv: "OPENCODE_API_KEY", apiKey: "sk-zen", keyless: false });
   });
 
-  test("resolveModelConfig ignores an incidentally-present key when using the keyless default", () => {
-    // A key being SET for some unrelated reason must never get pulled into a
-    // keyless run — the default model genuinely needs (and gets) no key.
-    const cfg = resolveModelConfig({ ANTHROPIC_API_KEY: "unrelated-secret" });
-    expect(cfg.model).toBe(DEFAULT_INFERENCE_MODEL);
-    expect(cfg.apiKeyEnv).toBeNull();
+  test("resolveModelConfig throws loudly when a paid model is selected with no funded key — never a silent substitution", () => {
+    // Caught here rather than ~20 minutes later at the far end of a stack boot.
+    expect(() => resolveModelConfig({})).toThrow(/OPENCODE_API_KEY is not set/);
   });
 
-  test("resolveModelConfig throws loudly (never silently substitutes a different model) when an explicit non-default OPENCODE_MODEL has no matching key", () => {
-    expect(() => resolveModelConfig({ OPENCODE_MODEL: "anthropic/claude-x" })).toThrow(/model API key|provider key/);
+  test("resolveModelConfig keeps a `free` selection genuinely keyless, even with a key present", () => {
+    // A key set for an unrelated reason must never get pulled into a keyless run.
+    const cfg = resolveModelConfig({ AGENT_MODEL: "free", OPENCODE_API_KEY: "sk-zen" });
+    expect(cfg).toEqual({ model: "opencode/nemotron-3-ultra-free", apiKeyEnv: null, apiKey: null, keyless: true });
   });
 
-  test("resolveModelConfig resolves an explicitly-requested paid model + whichever provider key is present", () => {
-    const cfg = resolveModelConfig({ OPENCODE_MODEL: "anthropic/claude-x", ANTHROPIC_API_KEY: "secret" });
-    expect(cfg).toEqual({ model: "anthropic/claude-x", apiKeyEnv: "ANTHROPIC_API_KEY", apiKey: "secret" });
+  test("resolveModelConfig switches family by name and pins an exact member with family/model", () => {
+    expect(resolveModelConfig({ AGENT_MODEL: "kimi", OPENCODE_API_KEY: "k" }).model).toBe("opencode/kimi-k2.7-code");
+    expect(resolveModelConfig({ AGENT_MODEL: "kimi/k2.6", OPENCODE_API_KEY: "k" }).model).toBe("opencode/kimi-k2.6");
+  });
+
+  test("resolveAgentModel refuses an unknown family or member rather than falling back to the default", () => {
+    // A run must use the model it was asked for; a silent fallback turns a
+    // benchmark result into a lie about which agent produced it.
+    expect(() => resolveAgentModel({ AGENT_MODEL: "notafamily" })).toThrow(/unknown model family/);
+    expect(() => resolveAgentModel({ AGENT_MODEL: "kimi/notamodel" })).toThrow(/unknown model "notamodel"/);
+    expect(() => resolveAgentModel({ AGENT_MODEL: "a/b/c" })).toThrow(/malformed/);
+  });
+
+  test("resolveAgentModel passes a fully-qualified opencode/<id> through unmapped (escape hatch)", () => {
+    expect(resolveAgentModel({ AGENT_MODEL: "opencode/some-brand-new-model" })).toBe("opencode/some-brand-new-model");
+  });
+
+  test("every registry family default names a real member of that family", () => {
+    // Guards the one typo that would make a whole family unusable.
+    for (const [name, family] of Object.entries(MODEL_FAMILIES)) {
+      expect(family.models[family.default], `${name}.default`).toBeDefined();
+      expect(resolveAgentModel({ AGENT_MODEL: name })).toBe(`opencode/${family.models[family.default]}`);
+    }
+  });
+
+  test("isKeylessModel is derived from the registry, and big-pickle stays reachable but is not the default", () => {
+    expect(isKeylessModel("opencode/nemotron-3-ultra-free")).toBe(true);
+    expect(isKeylessModel("opencode/big-pickle")).toBe(true);
+    expect(isKeylessModel("opencode/deepseek-v4-flash")).toBe(false);
+    // Saturated upstream with no paid tier — deliberately no longer the default.
+    expect(DEFAULT_INFERENCE_MODEL).not.toBe("opencode/big-pickle");
   });
 
   test("buildAgentOpencodeConfig carries NO onboarding-specific knowledge and no Robot Money connectivity (D21 — REST via bash, no MCP client)", () => {
@@ -175,7 +203,7 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
+      env: { OPENCODE_API_KEY: "sk-zen" },
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -193,7 +221,7 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
+      env: { OPENCODE_API_KEY: "sk-zen" },
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -211,7 +239,7 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
+      env: { OPENCODE_API_KEY: "sk-zen" },
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -230,7 +258,7 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
+      env: { OPENCODE_API_KEY: "sk-zen" },
       maxAttempts: 3,
       backoffMsSchedule: [0, 0],
       runOnce: async () => {
@@ -249,7 +277,7 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {},
+      env: { OPENCODE_API_KEY: "sk-zen" },
       backoffMsSchedule: [0],
       identity: generateIdentity("first-attempt"),
       runOnce: async (opts) => {
@@ -261,14 +289,14 @@ describe("runOnboardingEvalWithRetry", () => {
     expect(new Set(identities).size).toBe(2); // no reused contact across attempts
   });
 
-  test("a bare timeout (no rate-limit signal) IS retried on the keyless default — the free tier is documented as slow/variable", async () => {
+  test("a bare timeout (no rate-limit signal) IS retried on a KEYLESS model — the free tier is documented as slow/variable", async () => {
     let calls = 0;
     const result = await runOnboardingEvalWithRetry({
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: {}, // no OPENCODE_MODEL → resolves to the keyless default
+      env: { AGENT_MODEL: "free" }, // keyless tier: slow, so a bare timeout says nothing
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;
@@ -280,14 +308,14 @@ describe("runOnboardingEvalWithRetry", () => {
     expect(calls).toBe(2);
   });
 
-  test("a bare timeout is NOT retried when an explicit paid model is configured — that stays a real result", async () => {
+  test("a bare timeout is NOT retried on a FUNDED model — there, a timeout is a real result", async () => {
     let calls = 0;
     const result = await runOnboardingEvalWithRetry({
       repoRoot: "/tmp",
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: { OPENCODE_MODEL: "anthropic/claude-x", ANTHROPIC_API_KEY: "secret" },
+      env: { OPENCODE_API_KEY: "sk-zen" }, // funded default model
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;

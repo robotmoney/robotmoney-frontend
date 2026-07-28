@@ -59,7 +59,7 @@ on:
 
 jobs:
   demo-live-smoke:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, robotmoney-self-hosted]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4

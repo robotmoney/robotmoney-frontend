@@ -101,6 +101,18 @@ jobs:
         run: bash backend/scripts/check-no-supabase.sh
       - name: No AI/LLM overview enrichment in backend/src (issue #93)
         run: bash backend/scripts/check-no-ai-overview.sh
+      # D22 rule 1 as amended (2026-07-28): model ids live ONLY in
+      # scripts/lib/model-registry.ts and the environment carries a SELECTOR,
+      # never a raw id — the anti-ambient-selection property that survived the
+      # retirement of the old "keyless" mandate. Also re-asserts the retired
+      # knobs stay retired and that the contribution-advisory reviewer resolves
+      # keylessly. Runs here, in a REQUIRED per-PR job, so it genuinely gates.
+      # Its behaviour is separately EXECUTED against planted fixtures by
+      # scripts/tests/unit/model-selection-guard.test.ts (already run by "Check
+      # root scripts" above) — so a green here cannot come from a scan that
+      # silently matched nothing.
+      - name: Model selection is registry-sourced, not ambient (D22 rule 1 as amended)
+        run: bash scripts/checks/check-model-selection.sh
       - name: Verify vendored contract
         run: bun run check-contract
       # contract/ has tests but, until this step existed, NO workflow ever ran

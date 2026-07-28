@@ -95,14 +95,19 @@ services:
   # committee REST API the agent applies against; D21 retired the MCP server),
   # GitHub Releases (github.com + objects.githubusercontent.com, for the `rmpc`
   # binary and the committee-onboarding skill the agent installs itself), and
-  # OpenCode Zen (the real model API). Real inference is the NORMAL case (§11 R8)
-  # and needs NO secret by default: scripts/lib/onboarding-eval.ts's
-  # resolveModelConfig() defaults to the SAME free, no-credential
-  # `opencode/big-pickle` tier scripts/lib/committee/inference.ts already uses
-  # for real committee takes — genuinely real inference, not a template. An
-  # operator MAY opt into a paid model (OPENCODE_MODEL + a matching key below)
-  # for speed/reliability; an explicit opt-in with no matching key fails loudly
-  # rather than silently falling back to a different model.
+  # OpenCode Zen (the real model API). Real inference is the NORMAL case (§11 R8).
+  #
+  # Which agent runs here is switchable per environment by AGENT_MODEL, resolved
+  # against the versioned registry in scripts/lib/model-registry.ts — a family
+  # name (`deepseek`, `kimi`) takes that family's pinned default, `family/model`
+  # (`kimi/k2.6`) pins one exactly, and unset takes the repo default
+  # (`opencode/deepseek-v4-flash`). The environment carries the SELECTOR only;
+  # the model ids themselves stay in source, one code review away.
+  #
+  # Both values reach the container by explicit `-e` injection from
+  # scripts/lib/onboarding-eval.ts at `docker compose run` time — a container
+  # inherits no ambient environment. The entries below only matter when someone
+  # starts this service by hand.
   member-agent:
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
@@ -111,13 +116,13 @@ services:
       dockerfile: scripts/lib/member-agent/Dockerfile
     profiles: ["member-agent"] # never started by `docker compose up` alone
     environment:
-      # Optional: a paid-provider opt-in. Never baked into the image — always
-      # injected at `docker compose run` time by scripts/lib/onboarding-eval.ts,
-      # which only sets these when OPENCODE_MODEL requests a non-default
-      # model; the default free tier passes neither.
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENCODE_MODEL: ${OPENCODE_MODEL:-}
+      # The OpenCode Zen credential. ONE name across every environment; the
+      # VALUE differs per environment (CI secret / Stage .env / local .env) so
+      # spend is attributable and rotating one never touches another. Paid
+      # models need it funded; an `AGENT_MODEL=free/…` selection needs no key.
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+      # Which agent to run. See scripts/lib/model-registry.ts for the catalogue.
+      AGENT_MODEL: ${AGENT_MODEL:-}
     depends_on:
       - api
     restart: "no"

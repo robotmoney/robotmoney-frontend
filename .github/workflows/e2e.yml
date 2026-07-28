@@ -62,19 +62,18 @@
 #       stack, which has caused 429 rate-limit flake on other live-call gates
 #       before, and the free tier is documented as slower/more variable than a
 #       paid one. scripts/lib/onboarding-eval.ts's runOnboardingEvalWithRetry
-#       retries a detected 429/overload signal, and — only while the keyless
-#       default is in use — a bare timeout too (never a genuine navigation
+#       retries a detected 429/overload signal, and — only when a KEYLESS
+#       model is in use — a bare timeout too (never a genuine navigation
 #       failure either way) with backoff — see that function's doc comment.
-#       scripts/lib/onboarding-eval.ts defaults to the same free
-#       `opencode/big-pickle` tier scripts/lib/committee/inference.ts already
-#       uses for real committee takes, so there is no secret to be missing —
-#       see that file's own doc comment for why keyless is genuinely real
-#       inference, not a degraded fallback.
-#   (b) An operator MAY opt into a faster/more reliable PAID model via the
-#       `ONBOARDING_EVAL_MODEL` repo variable + the `ANTHROPIC_API_KEY` repo
-#       secret. That opt-in only ever applies in a trusted context — which,
-#       now that the eval runs on pushes to main only, is every run that can
-#       reach it at all.
+#       scripts/lib/onboarding-eval.ts resolves the same model
+#       scripts/lib/committee/inference.ts already
+#       uses for real committee takes.
+#   (b) That model is FUNDED (D22 as amended 2026-07-28): the default is
+#       `opencode/deepseek-v4-flash`, billed to the `OPENCODE_API_KEY` repo
+#       secret. Which model runs is selected by `AGENT_MODEL` against
+#       scripts/lib/model-registry.ts; `AGENT_MODEL=free` still runs keyless.
+#       The key only ever resolves in a trusted context — which, now that the
+#       eval runs on pushes to main only, is every run that can reach it.
 name: e2e
 env:
   CI_CLASS: system-correctness
@@ -188,17 +187,17 @@ jobs:
         env:
           IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
           TRUSTED_CONTEXT: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-          HAS_MODEL_OPT_IN: ${{ vars.ONBOARDING_EVAL_MODEL != '' && secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_ZEN_KEY: ${{ secrets.OPENCODE_API_KEY != '' }}
         run: |
           if [ "$IS_PULL_REQUEST" = "true" ]; then
-            echo "use_paid_model=" >> "$GITHUB_OUTPUT"
-            MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent (issue #289: the free keyless OpenCode tier cannot fund one real eval per PR). This is a recorded removal, not a silent one. Where it DOES run: .github/workflows/committee-opencode-nightly.yml — nightly 04:37 UTC (schedule '37 4 * * *') plus workflow_dispatch — which sweeps more models and more identities than this gate ever did; and on pushes to main in this same workflow. What this PR run DID assert about that surface: the inference-off 'Onboarding eval infra rails' step above, which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full."
-          elif [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_MODEL_OPT_IN" = "true" ]; then
-            echo "use_paid_model=1" >> "$GITHUB_OUTPUT"
-            MSG="§11 R8 real-inference onboarding eval: RUNNING with the paid-model opt-in (non-PR/trusted context, ONBOARDING_EVAL_MODEL + ANTHROPIC_API_KEY configured) as part of the Full-stack demo step below."
+            echo "use_zen_key=" >> "$GITHUB_OUTPUT"
+            MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent (issue #289, from when the default was an exhaustible free tier; the default is now funded, so re-enabling per-PR evals is affordable and tracked separately). This is a recorded removal, not a silent one. Where it DOES run: .github/workflows/committee-opencode-nightly.yml — nightly 04:37 UTC (schedule '37 4 * * *') plus workflow_dispatch — which sweeps more models and more identities than this gate ever did; and on pushes to main in this same workflow. What this PR run DID assert about that surface: the inference-off 'Onboarding eval infra rails' step above, which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full."
+          elif [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_ZEN_KEY" = "true" ]; then
+            echo "use_zen_key=1" >> "$GITHUB_OUTPUT"
+            MSG="§11 R8 real-inference onboarding eval: RUNNING on the funded default model (non-PR/trusted context, OPENCODE_API_KEY configured) as part of the Full-stack demo step below."
           else
-            echo "use_paid_model=" >> "$GITHUB_OUTPUT"
-            MSG="§11 R8 real-inference onboarding eval: RUNNING on the default free keyless tier (no ONBOARDING_EVAL_MODEL + ANTHROPIC_API_KEY opt-in is configured, so the paid-model opt-in doesn't apply here — the eval itself still runs in full)."
+            echo "use_zen_key=" >> "$GITHUB_OUTPUT"
+            MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is funded (D22 as amended), so the eval will fail loudly rather than silently degrade. Configure the OPENCODE_API_KEY secret, or set AGENT_MODEL=free to run keyless."
           fi
           echo "$MSG"
           echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
@@ -241,9 +240,8 @@ jobs:
           # after D21 removed the external-agent MCP-tools harness that used to
           # drive it — see committee-opencode-nightly.yml's header; re-adding a
           # job that sets COMMITTEE_REAL_INFERENCE=1 and loud-fails on the
-          # deterministic fallback is tracked follow-up. Do NOT wire
-          # ANTHROPIC_API_KEY (or any secret) here — the keyless design removed
-          # that dependency (closes the #92 no-secret blocker).
+          # deterministic fallback is tracked follow-up. The committee-take
+          # path here stays on the deterministic template, so it needs no key.
           #
           # Every OTHER external dependency here IS live and keyless: public Base
           # mainnet JSON-RPC (vault-economics eth_call reads), and the keyless
@@ -262,18 +260,16 @@ jobs:
           # committee-opencode-nightly.yml (04:37 UTC + workflow_dispatch) is
           # where this measurement lives, and it sweeps wider than this gate
           # ever did. demo-main.ts reads ONBOARDING_REAL_EVAL === "1"; empty is
-          # simply "off". When it IS on, it uses the default free keyless tier,
-          # exactly like this file's committee-TAKE-authoring path above stays
-          # keyless. OPENCODE_MODEL/ANTHROPIC_API_KEY below are the OPTIONAL
-          # paid-model opt-in: injected ONLY into the short-lived member-agent
-          # container scripts/lib/onboarding-eval.ts launches (never into the
-          # api/worker services), and only when the "Configure onboarding
-          # real-inference eval" step resolved an opt-in — otherwise both
-          # resolve to empty and onboarding-eval.ts's resolveModelConfig()
-          # falls through to opencode/big-pickle on its own.
+          # simply "off". When it IS on, it runs the funded default model
+          # (D22 as amended). OPENCODE_API_KEY below is injected ONLY into the
+          # short-lived member-agent container scripts/lib/onboarding-eval.ts
+          # launches (never into the api/worker services), and only when the
+          # "Configure onboarding real-inference eval" step resolved one.
+          # AGENT_MODEL is left unset so the repo default applies; set it to a
+          # family name (e.g. `kimi`) to switch which agent this gate measures.
           ONBOARDING_REAL_EVAL: ${{ github.event_name != 'pull_request' && '1' || '' }}
-          OPENCODE_MODEL: ${{ steps.onboarding-gate.outputs.use_paid_model == '1' && (vars.ONBOARDING_EVAL_MODEL || 'anthropic/claude-haiku-4-5') || '' }}
-          ANTHROPIC_API_KEY: ${{ steps.onboarding-gate.outputs.use_paid_model == '1' && secrets.ANTHROPIC_API_KEY || '' }}
+          OPENCODE_API_KEY: ${{ steps.onboarding-gate.outputs.use_zen_key == '1' && secrets.OPENCODE_API_KEY || '' }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
         # 40 min for the pre-existing checks + headroom for the onboarding eval
         # on the NON-PR runs that still spend one (issue #289 — a PR run stops
         # well short of this ceiling because no eval runs there; the ceiling is

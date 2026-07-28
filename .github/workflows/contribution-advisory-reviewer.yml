@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   advisory-review:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, robotmoney-self-hosted]
     timeout-minutes: 30
     steps:
       # Only trusted default-branch automation is executed. The reviewed head is
@@ -48,6 +48,15 @@ jobs:
           MANUAL_PR_NUMBER: ${{ inputs.pr_number }}
           OPENCODE_BIN: ${{ runner.temp }}/opencode
           OPENCODE_TIMEOUT_MS: "120000"
+          # DELIBERATELY NO OPENCODE_API_KEY, and no other secret, in this job.
+          # It feeds an UNTRUSTED PR diff to a model and posts the result as a
+          # PR comment, so any credential here is one prompt-injection away from
+          # being echoed into a public comment. scripts/tests/
+          # contribution-advisory-workflow.test.ts asserts this file references
+          # no repository secret at all — that assertion is the contract, not an
+          # oversight, so it also rejects this comment naming one.
+          # The reviewer therefore pins a KEYLESS model (see
+          # CONTRIBUTION_REVIEW_MODEL in scripts/contribution-advisory-reviewer.ts).
         run: |
           set -euo pipefail
           marker='<!-- robotmoney-contribution-advisory-reviewer -->'
