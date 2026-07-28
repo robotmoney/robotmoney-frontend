@@ -184,9 +184,9 @@ describe("urls and credentials", () => {
 
 // ── scripts/stack/host-env.ts ───────────────────────────────────────────────
 // The ONE deliberate ambient-environment read on a stack path exists so the
-// keyless eval under evals/ (which may contain no environment read at all —
-// scripts/checks/check-eval-keyless.sh enforces that) can still find a Docker
-// daemon. These tests are what make "provably nothing else comes out of it"
+// keyless eval under evals/ (which may contain no environment read at all; the
+// scripts/checks/ guard enforcing that ships with the eval itself) can still find
+// a Docker daemon. These tests are what make "provably nothing else comes out of it"
 // true rather than merely claimed.
 describe("dockerClientHostEnv", () => {
   const polluted = {
