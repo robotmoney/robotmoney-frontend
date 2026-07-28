@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, visibleLen, type Tui } from "./tui.ts";
 import { resolveDemoEnv } from "./demo-env.ts";
-import { listDemoVolumes, makeDockerRunner, removeDemoVolumes } from "./demo-volumes.ts";
+import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "./demo-volumes.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
 import { COMMITTEE_INTERVAL_MS, COMMITTEE_STAGGER_MS } from "./demo-schedule.ts";
 import {
@@ -456,6 +456,17 @@ let cleaned = false;
 function cleanup(): void {
   if (cleaned) return;
   cleaned = true;
+  try {
+    const purged = purgeDemoEvalContainers(makeDockerRunner(dockerEnv), { project });
+    if (purged.removed.length > 0) {
+      console.log(`[demo] purged ${purged.removed.length} evaluation container(s): ${purged.removed.join(", ")}`);
+    }
+    if (purged.skipped.length > 0) {
+      console.log(`[demo] WARNING: failed to purge evaluation container(s): ${purged.skipped.map((s) => `${s.name} (${s.reason})`).join(", ")}`);
+    }
+  } catch (err) {
+    console.log(`[demo] WARNING: failed purging evaluation containers: ${err instanceof Error ? err.message : err}`);
+  }
   console.log("\n[demo] tearing down (keeping postgres data)…");
   const r = dockerCompose(["down"], false);
   const where = pgDataDir ? `--pg-data dir ${pgDataDir}` : `volume ${project}_pgdata`;

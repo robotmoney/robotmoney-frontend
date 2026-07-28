@@ -111,3 +111,70 @@ export function removeDemoVolumes(run: DockerRunner, names: string[]): CleanResu
   }
   return { removed, skipped };
 }
+
+// Purge dynamic member-agent evaluation containers (e.g. `<project>-member-agent-eval-*`).
+// These are spawned dynamically during demo runs and must be force-removed before network/stack
+// teardown to prevent zombie containers from holding compose networks in use.
+export function purgeDemoEvalContainers(
+  run: DockerRunner,
+  opts: { project?: string } = {},
+): CleanResult {
+  const r = run(["ps", "-a", "--format", "json"]);
+  if (r.exitCode !== 0) {
+    return { removed: [], skipped: [] };
+  }
+
+  const foundNames = new Set<string>();
+  for (const line of r.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let names: string[] = [];
+    if (trimmed.startsWith("{")) {
+      try {
+        const obj = JSON.parse(trimmed) as { Names?: string | string[]; Name?: string };
+        if (typeof obj.Names === "string") {
+          names = obj.Names.split(",").map((s) => s.trim());
+        } else if (Array.isArray(obj.Names)) {
+          names = obj.Names.map((s) => String(s).trim());
+        } else if (obj.Name) {
+          names = [obj.Name.trim()];
+        }
+      } catch {
+        names = [trimmed];
+      }
+    } else {
+      names = [trimmed];
+    }
+
+    for (const name of names) {
+      const cleanName = name.replace(/^\//, "");
+      if (!cleanName) continue;
+      let matches = false;
+      if (opts.project) {
+        const prefix = `${opts.project}-member-agent-eval-`;
+        matches = cleanName.startsWith(prefix) || cleanName.includes(prefix);
+      } else {
+        matches = cleanName.includes("-member-agent-eval-") || cleanName.includes("member-agent-eval-");
+      }
+      if (matches) {
+        foundNames.add(cleanName);
+      }
+    }
+  }
+
+  const removed: string[] = [];
+  const skipped: { name: string; reason: string }[] = [];
+
+  for (const name of foundNames) {
+    const res = run(["rm", "-f", name]);
+    if (res.exitCode === 0) {
+      removed.push(name);
+    } else {
+      const msg = (res.stderr.trim() || res.stdout.trim()).replace(/\s+/g, " ");
+      skipped.push({ name, reason: msg || `exit code ${res.exitCode}` });
+    }
+  }
+
+  return { removed, skipped };
+}
+
