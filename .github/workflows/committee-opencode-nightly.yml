@@ -29,14 +29,18 @@
 # CI taxonomy class: heavy (scheduled real external-model drift check). Heavy
 # suites are sweep-only: NO `pull_request` trigger — schedule + on-demand only.
 #
-# The job below, `onboarding-real-inference-sweep`, is NOT a duplicate of the
-# required PR gate's (.github/workflows/e2e.yml) real-inference onboarding
-# admission — real inference is no longer nightly-exclusive (that's the whole
-# point of the §11 R8 rework: onboarding-as-eval only means something with a
-# real model doing the reasoning, on every PR that touches this surface). This
-# job is additive: it runs a WIDER sweep (more identities, more model variety)
-# than the PR gate can afford to spend on every push, using an
-# ANTHROPIC_API_KEY secret.
+# Since issue #289 the job below, `onboarding-real-inference-sweep`, is the
+# PRIMARY home of the real-inference onboarding measurement, not an additive
+# extra. The required PR gate (.github/workflows/e2e.yml) used to run one real
+# admission per PR too; the free keyless OpenCode tier could not fund that at PR
+# cadence, so e2e.yml now sets ONBOARDING_REAL_EVAL on NON-PR events only
+# (`github.event_name != 'pull_request'`). §11 R8 still holds — onboarding-as-eval
+# only means something with a real model doing the reasoning — it is measured
+# here, nightly, and on pushes to main, rather than per PR. This sweep is also
+# strictly WIDER than the per-PR admission ever was (more identities, more model
+# variety), using an ANTHROPIC_API_KEY secret. If this job stops running, the
+# real-inference onboarding surface loses its coverage: treat a red here as a
+# genuine regression signal, never as an optional nightly.
 name: committee-opencode-nightly
 env:
   CI_CLASS: heavy
@@ -52,10 +56,10 @@ jobs:
   # rmpc-release-e2e-nightly.yml's "boot once, drive the extra check off the
   # same boot" — no parallel stack stood up here) but sweeps
   # ONBOARDING_SWEEP_MODELS × ONBOARDING_SWEEP_IDENTITIES_PER_MODEL admissions
-  # instead of the PR gate's single one. A run here has full repo-secret
-  # access (scheduled/workflow_dispatch triggers are never fork PRs), so no
-  # trust-context gating is needed — unlike e2e.yml, which must gate this
-  # exact eval behind a same-repo/trusted-context check.
+  # instead of the single one e2e.yml runs on a push to main (and, since #289,
+  # zero on a pull_request). A run here has full repo-secret access
+  # (scheduled/workflow_dispatch triggers are never fork PRs), so no
+  # trust-context gating is needed.
   onboarding-real-inference-sweep:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -85,8 +89,9 @@ jobs:
         with:
           path: ${{ github.workspace }}/.rmpc-cache
           key: rmpc-${{ steps.rmpc-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
-      # Boot demo stack + a WIDER real-inference onboarding sweep than the PR
-      # gate runs, against that SAME booted stack (RMPC_RELEASE_E2E-style
+      # Boot demo stack + the real-inference onboarding sweep (wider than the
+      # single admission e2e.yml runs on a push to main; the PR path runs no
+      # real eval at all since #289), against that SAME booted stack (RMPC_RELEASE_E2E-style
       # additive reuse — see scripts/lib/demo-main.ts's ONBOARDING_REAL_EVAL
       # block). Fails loudly (non-zero exit, no skip) if the model key isn't
       # usable, the rmpc binary can't be fetched/verified, or any swept
