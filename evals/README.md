@@ -107,8 +107,12 @@ the provider simply stopped answering. Two consequences worth knowing before
 reading any result:
 
 - `rate-limited` will rarely fire on the free tier. **`timed-out` is the real
-  throttle signal there** — which is why the retry wrapper only treats a bare
-  timeout as retryable when the resolved model is keyless.
+  throttle signal there** — which is why the retry wrapper treats a bare timeout
+  as retryable. It used to do that only on the keyless tier; a funded
+  `opencode/deepseek-v4-flash` was measured stalling mid-session for ~18 minutes
+  with no token, tool call, or error on 2026-07-28, so the tier gate is gone. A
+  genuine navigation failure presents as a container **exit**, not a timeout,
+  and is still never retried on any tier.
 - **A red layer 0 invalidates the run.** Layer 0 asks the agent to write two
   characters to a file. Nothing about Robot Money appears in it, so it cannot be
   refused on the merits and it cannot fail for any product reason. When layer 0

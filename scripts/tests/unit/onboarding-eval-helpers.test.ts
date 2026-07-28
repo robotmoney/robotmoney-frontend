@@ -562,42 +562,58 @@ describe("runOnboardingEvalWithRetry", () => {
     expect(new Set(identities).size).toBe(2); // no reused contact across attempts
   });
 
-  test("a bare timeout IS retried on a KEYLESS model — the free tier is documented as slow/variable", async () => {
-    let calls = 0;
-    const result = await runOnboardingEvalWithRetry({
-      repoRoot: "/tmp",
-      composeProject: "p",
-      backendUrl: "http://x",
-      adminToken: "t",
-      env: KEYLESS_ENV, // keyless tier: slow, so a bare timeout says nothing
-      backoffMsSchedule: [0],
-      runOnce: async () => {
-        calls++;
-        if (calls === 1) return fakeResult({ timedOut: true, transcript: "" });
-        return fakeResult({ admitted: true });
-      },
+  // A bare timeout is retried on EVERY tier. It used to be keyless-only, on the
+  // theory that a funded model is fast enough for a timeout to mean something.
+  // Measured otherwise on 2026-07-28: a funded `opencode/deepseek-v4-flash`
+  // generated its key, said "Key generated! Now I need to build the canonical
+  // application payload bytes", and then emitted nothing at all for ~18 minutes
+  // — no tool call, no token, no error.
+  //
+  // The bar is not softened, and the pair of cases below is what proves it: a
+  // timeout is an ABSENCE of signal, while a genuine navigation failure
+  // presents as a container EXIT (CI run 30395466780: exit 0, every step
+  // pending) — and that is never retried, on either tier.
+  for (const [tier, env] of [
+    ["keyless", KEYLESS_ENV],
+    ["funded", FUNDED_ENV],
+  ] as const) {
+    test(`a bare timeout IS retried on a ${tier} model — a timeout is an absence of signal, not a result`, async () => {
+      let calls = 0;
+      const result = await runOnboardingEvalWithRetry({
+        repoRoot: "/tmp",
+        composeProject: "p",
+        backendUrl: "http://x",
+        adminToken: "t",
+        env,
+        backoffMsSchedule: [0],
+        runOnce: async () => {
+          calls++;
+          if (calls === 1) return fakeResult({ timedOut: true, transcript: "" });
+          return fakeResult({ admitted: true });
+        },
+      });
+      expect(result.admitted).toBe(true);
+      expect(calls).toBe(2);
     });
-    expect(result.admitted).toBe(true);
-    expect(calls).toBe(2);
-  });
 
-  test("a bare timeout is NOT retried on a FUNDED model — there, a timeout is a real result", async () => {
-    let calls = 0;
-    const result = await runOnboardingEvalWithRetry({
-      repoRoot: "/tmp",
-      composeProject: "p",
-      backendUrl: "http://x",
-      adminToken: "t",
-      env: FUNDED_ENV, // funded default model
-      backoffMsSchedule: [0],
-      runOnce: async () => {
-        calls++;
-        return fakeResult({ timedOut: true, transcript: "" });
-      },
+    test(`a container EXIT is never retried on a ${tier} model — that is how a real navigation failure presents`, async () => {
+      let calls = 0;
+      const result = await runOnboardingEvalWithRetry({
+        repoRoot: "/tmp",
+        composeProject: "p",
+        backendUrl: "http://x",
+        adminToken: "t",
+        env,
+        backoffMsSchedule: [0],
+        runOnce: async () => {
+          calls++;
+          return fakeResult({ timedOut: false, containerExitCode: 0, transcript: "agent ended its session without applying" });
+        },
+      });
+      expect(result.admitted).toBe(false);
+      expect(calls).toBe(1);
     });
-    expect(result.admitted).toBe(false);
-    expect(calls).toBe(1); // no retry — a timeout on a paid model is a real result
-  });
+  }
 
   // ── Refusal is retryable (the 2026-07-25 zero-admission demo run) ─────────
   // The classifier itself is unit-tested exhaustively (positives AND the
@@ -652,7 +668,7 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       adminToken: "t",
-      env: KEYLESS_ENV, // even on the tier whose bare timeouts ARE retried
+      env: KEYLESS_ENV, // a tier whose bare timeouts ARE retried — this still is not
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;

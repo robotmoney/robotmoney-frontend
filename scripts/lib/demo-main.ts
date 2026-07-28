@@ -1217,11 +1217,11 @@ async function main(): Promise<void> {
     // admission THROWS (via `run`'s pattern — no silent pass): the whole point
     // of real inference is that a vanilla agent failing to navigate our own
     // onboarding instructions is a real regression signal, not a shrug.
-    // Provider/infra flake (rate-limit signals, model refusals, and — on a
-    // keyless model — bare timeouts too) is mitigated by
+    // Provider/infra flake (rate-limit signals, model refusals, and bare
+    // timeouts on ANY tier — funded Zen stalls mid-session too) is mitigated by
     // runOnboardingEvalWithRetry's own retry/backoff
     // (scripts/lib/onboarding-eval.ts); it never retries a genuine navigation
-    // failure.
+    // failure, which presents as a container EXIT rather than a timeout.
     //
     // Sweep width (nightly-only knobs, both optional, both no-ops for e2e.yml,
     // which never sets them): ONBOARDING_SWEEP_MODELS is a ":"-separated

@@ -73,8 +73,8 @@
 #
 # WHY IT IS OFF BY DEFAULT (issue #289): the eval used to run unconditionally on
 # every non-draft PR, and scripts/lib/onboarding-eval.ts's
-# runOnboardingEvalWithRetry retries on a 429/overload signal or a keyless-tier
-# timeout, so a single job could spend several model runs. The free,
+# runOnboardingEvalWithRetry retries on a 429/overload signal, a model refusal,
+# or a bare timeout, so a single job could spend several model runs. The free,
 # no-credential OpenCode Zen tier is quota-limited, and ordinary PR cadence
 # exhausted it — turning this REQUIRED gate red on every open PR for a reason
 # that had nothing to do with the code under test. The default model is FUNDED
@@ -91,9 +91,12 @@
 #       stack, which has caused 429 rate-limit flake on other live-call gates
 #       before, and the free tier is documented as slower/more variable than a
 #       paid one. scripts/lib/onboarding-eval.ts's runOnboardingEvalWithRetry
-#       retries a detected 429/overload signal, and — only when a KEYLESS
-#       model is in use — a bare timeout too (never a genuine navigation
-#       failure either way) with backoff — see that function's doc comment.
+#       retries, with backoff, a detected 429/overload signal, a model refusal,
+#       and a bare timeout on ANY tier — measured 2026-07-28, a FUNDED
+#       deepseek-v4-flash run stalled mid-session for ~18 minutes with no
+#       token, no tool call and no error. It never retries a genuine navigation
+#       failure, which presents as a container EXIT rather than a timeout —
+#       see that function's doc comment.
 #       scripts/lib/onboarding-eval.ts resolves the same model
 #       scripts/lib/committee/inference.ts already
 #       uses for real committee takes.
@@ -346,15 +349,16 @@ jobs:
         # on the runs that spend one (push to main, a `real-eval`-labelled PR, a
         # dispatch with real_eval=true — issue #289; an ordinary PR run stops
         # well short of this ceiling because no eval runs there; the ceiling is
-        # left where it was rather than split per event, so every eval-spending
-        # path keeps exactly the headroom it was verified against). Headroom =
-        # default 20-minute timeout per admission attempt — live-verified as
-        # realistic for a free-tier agent doing genuine exploration, see
-        # onboarding-eval.ts's DEFAULT_TIMEOUT_MS comment — up to 2 attempts
-        # with runOnboardingEvalWithRetry's 45s backoff, only retried on a
-        # detected 429/overload signal or a keyless-tier timeout, see the
-        # file-level comment above).
-        timeout-minutes: 85
+        # not split per event, so every eval-spending path keeps the same
+        # headroom). Headroom is DERIVED, not guessed: DEFAULT_TIMEOUT_MS is 30
+        # minutes per admission attempt (raised from 20 on measurement — see
+        # onboarding-eval.ts's comment: a real admission took 1183s) and
+        # runOnboardingEvalWithRetry allows 2 attempts with a 45s backoff, so
+        # the eval's own worst case is ~61 min. 40 + 61 ≈ 101, rounded to 105.
+        # Raising DEFAULT_TIMEOUT_MS without raising this would just move the
+        # truncation from the eval to the job, which reports as an infra kill
+        # rather than the honest `timed-out` outcome.
+        timeout-minutes: 105
       # Volume-leak backstop (issue: demo persistent volumes). The demo boot above
       # reclaims its own volume on both success and failure (demo-main.ts
       # cleanCiVolume). This always() step is the belt-and-suspenders case: if the

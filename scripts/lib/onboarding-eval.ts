@@ -531,15 +531,26 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 //      roster (scripts/lib/demo-newcomers.ts) permanently lost a seat. See
 //      scripts/agent/classify-outcome.ts for the three-conjunct evidence a
 //      refusal must show before it earns a retry.
-//   3. `timed-out` — but ONLY when the resolved model is KEYLESS. Per
-//      committee-opencode-nightly.yml's own documented experience with the free
-//      tier, "a call can take minutes and occasionally returns nothing", so a
-//      timeout there is far more likely to be provider slowness than a stuck
-//      agent. Since D22 rule 1 was amended the default model is FUNDED, and a
-//      funded model is fast/reliable enough that a timeout keeps meaning what
-//      it always meant (a real, non-retried result). Keyed off the resolved
-//      model's own billing property (`resolveModelConfig().keyless`), never off
-//      equality with whatever the default happens to be.
+//   3. `timed-out` — on ANY tier. This used to be restricted to the KEYLESS
+//      tier, on committee-opencode-nightly.yml's documented experience that a
+//      free-tier "call can take minutes and occasionally returns nothing",
+//      with the corollary that a FUNDED model is fast/reliable enough for a
+//      timeout to keep meaning what it always meant. Measurement retired that
+//      corollary: on 2026-07-28 a funded `opencode/deepseek-v4-flash` run
+//      generated its key, printed "Key generated! Now I need to build the
+//      canonical application payload bytes", and then emitted nothing at all
+//      for ~18 minutes until the harness killed it — no tool call, no token,
+//      no error. Zen stalls mid-session whoever is paying.
+//
+//      This is NOT a softened bar, because a timeout is not how a genuine
+//      navigation failure presents. The one real navigation failure we have
+//      measured (CI run 30395466780) EXITED — cleanly, code 0, every step
+//      pending — and a container exit is never retried by this wrapper, on any
+//      tier. A timeout means the harness has NO signal either way about
+//      whether the instructions were followable, which §11.3 E4 already
+//      classifies as its own outcome (`timed-out`), distinct from
+//      `navigation-failure`. Reporting "our onboarding docs failed" on the
+//      strength of an upstream hang is the more dishonest of the two options.
 //
 // `harness-error` is deliberately NOT retryable: the harness is broken the same
 // way on the next attempt, so a retry costs another twenty minutes and turns
@@ -548,10 +559,9 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 // ONE definition of both the classification and the retry decision (§11.3 E5):
 // `classifyOutcome` + `shouldRetry` come from scripts/agent/classify-outcome.ts
 // and are shared with the demo's onboarding driver and the layer-4 scorecard.
-// The only thing added on top of `shouldRetry` here is the TIER gate on case 3,
-// which needs a fact `shouldRetry` deliberately does not have (which model tier
-// this run used) and which the caller — this file, the one that resolved the
-// model — is the only place that knows.
+// Nothing is added on top of `shouldRetry` here any more: dropping case 3's
+// tier gate removed the one place this wrapper's policy diverged from the
+// shared one, so there is now exactly one retry decision in the repo.
 //
 // LOAD-BEARING BOUNDARY: this wrapper serves the DEMO's onboarding driver and
 // the nightly's real-inference admissions. D22 §11.3 E4's layer-4 SAMPLER must
@@ -593,9 +603,11 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
   const backoff = opts.backoffMsSchedule ?? DEFAULT_RETRY_BACKOFF_MS;
   const runOnce = opts.runOnce ?? runOnboardingEval;
   const log = opts.onEvent ?? (() => {});
-  // Resolved ONCE, from the same single selection signal every other path uses.
-  // Throws loudly here (before any attempt) on a misconfigured selector.
-  const usingKeylessModel = resolveModelConfig(opts.env ?? process.env).keyless;
+  // Resolved for its SIDE EFFECT of failing loudly on a misconfigured model
+  // selector BEFORE any attempt is spent. The retry decision itself no longer
+  // depends on the tier (see case 3 in the doc comment above: funded Zen stalls
+  // mid-session too), so nothing reads the returned config.
+  resolveModelConfig(opts.env ?? process.env);
   let last: OnboardingEvalResult | undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Fresh CONTACT per attempt — reusing one across retries would re-apply
@@ -606,9 +618,11 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
     last = await runOnce({ ...opts, identity });
     if (last.admitted) return last;
     const outcome = classifyOutcome(last);
-    // shouldRetry is the shared, pure decision over the classified outcome; the
-    // tier gate is the one fact it cannot know (see the doc comment above).
-    const worthRetrying = shouldRetry(outcome) && (outcome !== "timed-out" || usingKeylessModel);
+    // The shared, pure decision over the classified outcome, applied whole. A
+    // container EXIT is never retried on any tier — `navigation-failure` is not
+    // in shouldRetry's set — and that is how a genuine navigation failure
+    // presents.
+    const worthRetrying = shouldRetry(outcome);
     // Always logged, retried or not: a misclassification must be diagnosable
     // from CI logs rather than invisible.
     log(
@@ -622,7 +636,7 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
         ? "looked rate-limited"
         : outcome === "refused"
           ? "was refused by the model (the agent never attempted onboarding)"
-          : "timed out on the keyless tier";
+          : "timed out with no signal either way";
     log(`onboarding eval attempt ${attempt}/${maxAttempts} ${reason} — retrying in ${delayMs}ms (§11 R8)`);
     await Bun.sleep(delayMs);
   }
