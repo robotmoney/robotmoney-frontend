@@ -47,6 +47,7 @@ import {
   generateStackCredentials,
   type Stack,
 } from "../../stack/index.ts";
+import { makeDockerRunner, purgeDemoEvalContainers } from "../../lib/demo-volumes.ts";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -119,6 +120,9 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
 
   afterAll(() => {
     if (!stack) return;
+    try {
+      purgeDemoEvalContainers(makeDockerRunner(stack.spawnEnv), { project: stack.config.project });
+    } catch {}
     const r = stack.down({ removeVolumes: true, removeOrphans: true });
     if (r.exitCode !== 0) {
       // Never mask an earlier test failure by throwing here — but a failed
