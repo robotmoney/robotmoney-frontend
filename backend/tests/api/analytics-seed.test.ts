@@ -79,6 +79,9 @@ afterEach(async () => {
   config.allowInsecure = origAllowInsecure;
   await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
   await sql`DELETE FROM job_schedules WHERE kind = 'research.refresh'`;
+  // #287: leave no demo flag or cold-start job behind for later test files.
+  delete process.env.DEMO_MODE;
+  await sql`DELETE FROM jobs WHERE dedupe_key = 'research.refresh:coldstart'`;
 });
 
 // ── cold-DB load: empty → exact projection; second load is a no-op ─────────
@@ -163,6 +166,57 @@ test("research-eligibility flips a disabled research.refresh schedule to enabled
   await enableResearchEligibility(cfg);
   const [again] = await sql<{ enabled: boolean }[]>`SELECT enabled FROM job_schedules WHERE kind = 'research.refresh'`;
   expect(again!.enabled).toBe(true);
+});
+
+test("research-eligibility never resurrects the demo's superseded ~2-minute row (#287), while enabling the hourly + daily ones", async () => {
+  // An already-deployed demo, seeded after #287: the hourly row supersedes the
+  // ~2-minute one, which db/seed.ts disabled. Enabling by kind ALONE would flip
+  // it straight back on at the next boot and restore the Base RPC drain.
+  await sql`
+    INSERT INTO job_schedules (kind, cron, enabled) VALUES
+      ('research.refresh', '0 23 * * *', false),
+      ('research.refresh', '37 * * * *', false),
+      ('research.refresh', '1-59/2 * * * *', false)`;
+
+  await enableResearchEligibility(cfg);
+
+  const rows = await sql<{ cron: string; enabled: boolean }[]>`
+    SELECT cron, enabled FROM job_schedules WHERE kind = 'research.refresh'`;
+  const byCron = Object.fromEntries(rows.map((r) => [r.cron, r.enabled]));
+  expect(byCron["0 23 * * *"]).toBe(true);
+  expect(byCron["37 * * * *"]).toBe(true);
+  expect(byCron["1-59/2 * * * *"]).toBe(false);
+});
+
+test("research-eligibility cold start (#287): under DEMO_MODE it enqueues exactly ONE immediate research.refresh, and never without it", async () => {
+  await sql`DELETE FROM jobs WHERE dedupe_key = 'research.refresh:coldstart'`;
+  await sql`
+    INSERT INTO job_schedules (kind, cron, enabled) VALUES ('research.refresh', '37 * * * *', false)`;
+  const coldStarts = async (): Promise<number> => {
+    const [row] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM jobs WHERE dedupe_key = 'research.refresh:coldstart'`;
+    return row!.n;
+  };
+
+  // Prod/CI (no DEMO_MODE): the daily 23:00 schedule owns the first run — no enqueue.
+  delete process.env.DEMO_MODE;
+  await enableResearchEligibility(cfg);
+  expect(await coldStarts()).toBe(0);
+
+  // Demo: hourly cadence would leave the readiness gate with no research leg
+  // for up to an hour, so the eligibility flip lands ONE immediate run.
+  process.env.DEMO_MODE = "1";
+  await sql`UPDATE job_schedules SET enabled = false WHERE kind = 'research.refresh'`;
+  await enableResearchEligibility(cfg);
+  expect(await coldStarts()).toBe(1);
+
+  // Idempotent on the constant dedupe_key: a re-boot never queues a second one.
+  await sql`UPDATE job_schedules SET enabled = false WHERE kind = 'research.refresh'`;
+  await enableResearchEligibility(cfg);
+  expect(await coldStarts()).toBe(1);
+
+  delete process.env.DEMO_MODE;
+  await sql`DELETE FROM jobs WHERE dedupe_key = 'research.refresh:coldstart'`;
 });
 
 test("bootstrap ingestion succeeding, then research-eligibility: the full ordered gate over the real API", async () => {

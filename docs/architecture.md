@@ -642,6 +642,14 @@ rows past the pinned as-of) live in
   become claimable before the floor is seeded. `scripts/lib/demo-main.ts` runs
   this CLI once, right after API health and before anything else (CI checks or
   the local action loops) that could observe a fired `research.refresh` job.
+  Two `DEMO_MODE` details (issue #287): the flip EXCLUDES the demo's superseded
+  `1-59/2 * * * *` row (`db/seed.ts` disables it in favour of the hourly one —
+  enabling by `kind` alone would resurrect it every boot), and under `DEMO_MODE`
+  the endpoint also enqueues ONE immediate `research.refresh` job (constant
+  `dedupe_key`, so at most once per database) — this is the first moment a
+  research run is legitimate, and the hourly demo cadence would otherwise leave
+  the readiness gate with no research leg for up to an hour. Prod/CI without the
+  flag enqueue nothing: their daily 23:00 schedule owns the first run.
 - **Repopulation** (`edgar-seed-loader.ts::repopulateEdgarSeed` →
   `backend/scripts/edgar-seed-repopulate.ts`) is an operator command for a
   database that lost some MNA rows: it diffs the committed artifact against
