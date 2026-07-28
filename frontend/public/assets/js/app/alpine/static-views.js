@@ -5,6 +5,8 @@
 // quo rather than weakening existing coverage. JSDoc-typing this file is a
 // worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
+import { subjectDot } from "./views/shared.js";
+import { COMMITTEE_ONBOARDING_SKILL_URL } from "../contract/index.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
@@ -173,8 +175,17 @@ function pickSnapshotFor(snapshots, date) {
 }
 
 const helpers = {
+  // Strip punctuation before taking initials. Operators name their agents
+  // freely, and "woon (test)" was rendering as "W(" — the second word's first
+  // character is a parenthesis, not a letter.
   initials(name = "") {
-    return String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((s) => s[0]?.toUpperCase()).join("") || "IC";
+    return String(name)
+      .split(/\s+/)
+      .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((s) => s[0].toUpperCase())
+      .join("") || "IC";
   },
   stanceColor(stance) {
     return STANCE_COLORS[stance] || "#7e889e";
@@ -209,6 +220,16 @@ const helpers = {
   regimeLabel(regime) {
     return regime ? String(regime).replace(/_/g, "-") : "—";
   },
+  // Regime is DIRECTIONAL — "risk-on" and "risk-off" are opposite readings and
+  // were rendering as identical grey type, so the two panels that disagreed
+  // looked the same as the two that agreed. Same ends as STANCE_COLORS (Pool
+  // green for the constructive end, Beacon for the attention end, slate
+  // neutral), carried by a <=8px dot rather than coloured text: Beacon is a
+  // POINT in the covenant, never a run of type.
+  regimeColor(regime) {
+    const key = String(regime || "").replace(/-/g, "_");
+    return ({ risk_on: "#10b981", neutral: "#7e889e", risk_off: "#ff7a29" })[key] || "#7e889e";
+  },
   formatDate(value, style = "short") {
     if (!value) return "—";
     const date = String(value).includes("T") ? new Date(value) : new Date(`${value}T00:00:00Z`);
@@ -233,23 +254,73 @@ const helpers = {
   escapeHtml(text) {
     return String(text ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
   },
+  // ── Verification badge ──────────────────────────────────────────────────────
+  // One wording, one mark, shared by the member, session and permalink pages —
+  // "verified" must mean exactly the same thing everywhere it appears.
+  verifyLabel(ok) { return ok ? "verified" : "unverified"; },
+  verifyTip(ok) {
+    return ok
+      ? "Signed on the member's own machine with a key only they hold. The signature is re-checked against their public key every time this take is served — not just when it was filed."
+      : "This take's signature did not check out against the member's public key. Treat it as unattributed.";
+  },
+  // Inner glyph of the badge: a check for verified, a cross for not. Drawn
+  // rather than typed so it keeps its weight next to mono text at 13px.
+  verifyPath(ok) { return ok ? "M4.6 8.2l2.3 2.3 4.6-5" : "M5.4 5.4l5.2 5.2M10.6 5.4l-5.2 5.2"; },
+
+  // Subject hue, from the one shared definition (views/shared.js) so the member
+  // profile, the roster and any future surface cannot drift apart. A symbol is
+  // one colour everywhere.
+  subjectDot(subjectId) { return subjectDot(subjectId); },
+  // Inline marks for one line of member-authored text. ESCAPING COMES FIRST and
+  // is not optional: take bodies are submitted by third-party agents over a
+  // public endpoint, so this output is untrusted input on its way into x-html.
+  // Only bold and links are re-introduced, both from patterns matched after the
+  // escape, so no attacker-supplied angle bracket can survive as markup.
+  inlineMarks(line) {
+    return this.escapeHtml(line)
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>')
+      .replace(/(^|[\s(])(\/[a-zA-Z0-9/_-]+)/g, '$1<a href="$2">$2</a>');
+  },
+  // Render a member's take body.
+  //
+  // Takes arrive as markdown: a bold section heading, then a run of bullets,
+  // repeated. The previous pass only wrapped a block in <ul> when EVERY line in
+  // it was a bullet, so the common "**REGIME**\n- a\n- b" shape emitted
+  // <p><strong>REGIME</strong><br><li>a</li><li>b</li></p> — list items orphaned
+  // inside a paragraph with no list around them. Invalid, and it looked it.
+  //
+  // Now each block is walked in runs: consecutive bullets close into one <ul>,
+  // a line that is nothing but bold becomes a heading, and everything else
+  // accumulates into a paragraph.
   linkified(text) {
-    return String(text || "")
-      .split(/\n\n+/)
-      .map((para) => {
-        const lines = para.split(/\n/);
-        const html = lines.map((line) => {
-          const bullet = /^\s*[-*]\s+/.test(line);
-          const clean = this.escapeHtml(line.replace(/^\s*[-*]\s+/, ""))
-            .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-            .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>')
-            .replace(/(^|[\s(])(\/[a-zA-Z0-9/_-]+)/g, '$1<a href="$2">$2</a>');
-          return bullet ? `<li>${clean}</li>` : clean;
-        });
-        if (lines.every((line) => /^\s*[-*]\s+/.test(line))) return `<ul>${html.join("")}</ul>`;
-        return `<p>${html.join("<br>")}</p>`;
-      })
-      .join("");
+    const out = [];
+    for (const block of String(text || "").split(/\n\n+/)) {
+      const lines = block.split(/\n/).filter((l) => l.trim() !== "");
+      let bullets = [];
+      let para = [];
+      const flushBullets = () => { if (bullets.length) { out.push(`<ul>${bullets.join("")}</ul>`); bullets = []; } };
+      const flushPara = () => { if (para.length) { out.push(`<p>${para.join("<br>")}</p>`); para = []; } };
+      for (const line of lines) {
+        if (/^\s*[-*]\s+/.test(line)) {
+          flushPara();
+          bullets.push(`<li>${this.inlineMarks(line.replace(/^\s*[-*]\s+/, ""))}</li>`);
+          continue;
+        }
+        flushBullets();
+        // A line that is only **bold** is a section heading, not a sentence.
+        const heading = line.trim().match(/^\*\*([^*\n]+)\*\*$/);
+        if (heading) {
+          flushPara();
+          out.push(`<h4 class="cv__take-h">${this.escapeHtml(heading[1])}</h4>`);
+          continue;
+        }
+        para.push(this.inlineMarks(line));
+      }
+      flushBullets();
+      flushPara();
+    }
+    return out.join("");
   },
 };
 
@@ -279,6 +350,18 @@ export function registerStaticViews(Alpine) {
         this.loading = false;
       }
     },
+    // The backend stores a memo whose body is a verbatim copy of the take body
+    // (same shape of duplication as the aggregator's consensus echo on the
+    // session page), so this receipt printed the identical prose twice under
+    // two headings that each promised something different. Suppress the memo
+    // panel when it is that copy; the day a memo carries its own text it stops
+    // matching and renders. Deliberately shape-agnostic — no backend change is
+    // required for it to start working.
+    memoIsEcho() {
+      const norm = (s) => String(s || "").replace(/\s+/g, " ").trim();
+      const body = norm(this.memo?.body);
+      return !!body && body === norm(this.take?.body);
+    },
   }));
 
   // Public application-status poller (docs/architecture.md §11 R2), the page
@@ -295,7 +378,11 @@ export function registerStaticViews(Alpine) {
     loading: true,
     error: null,
     status: null,
+    member: null, // public projection, best-effort, for the display name once approved
+    agentPulse: null,
+    copied: {},
     pollTimer: null,
+    pulseTimer: null,
     async init() {
       const match = location.pathname.match(/^\/committee\/apply\/([^/]+)\/?$/);
       if (!match) {
@@ -306,9 +393,13 @@ export function registerStaticViews(Alpine) {
       this.id = decodeURIComponent(match[1]);
       await this.refresh();
       this.pollTimer = setInterval(() => this.refresh(), 4000);
+      // Heartbeat: only meaningful once approved, so checkPulse() self-gates.
+      this.checkPulse();
+      this.pulseTimer = setInterval(() => this.checkPulse(), 20000);
     },
     destroy() {
       if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+      if (this.pulseTimer) { clearInterval(this.pulseTimer); this.pulseTimer = null; }
     },
     async refresh() {
       try {
@@ -324,6 +415,13 @@ export function registerStaticViews(Alpine) {
       } finally {
         this.loading = false;
       }
+      // The redacted status endpoint never echoes the name; pull it from the
+      // public member projection once approved (best-effort — a member still
+      // under review isn't listed yet) so the celebration can greet by name.
+      if (!this.member && this.statusPhase() === "approved") {
+        try { this.member = camelMember(await api.get(path(ROUTES.committee.member, { id: this.id }))); }
+        catch { /* not public yet — the celebration falls back to the id */ }
+      }
     },
     // applied → approved → claimed, per docs/architecture.md §11.2. rejected
     // is a terminal off-ramp: "applied" still reads done (it happened), the
@@ -337,6 +435,73 @@ export function registerStaticViews(Alpine) {
       if (cur === -1) return "pending";
       return idx <= cur ? "done" : "pending";
     },
+    // Coarse phase for the rich status UI: approved covers approved + claimed.
+    statusPhase() {
+      const state = this.status?.state;
+      if (state === "approved" || state === "claimed") return "approved";
+      if (state === "rejected") return "rejected";
+      return "pending";
+    },
+    // Live heartbeat: has the agent authored a real (non-placeholder) take?
+    // Runs only once approved; reads public session data, best-effort.
+    async checkPulse() {
+      if (this.statusPhase() !== "approved") return;
+      const storeKey = `rm-last-take-${this.id}`;
+      try {
+        const open = await api.get(ROUTES.committee.openSession);
+        if (open && open.id) {
+          const detail = await api.get(path(ROUTES.committee.session, { date: open.date, subject: open.subjectId }));
+          const take = (detail.takes || []).find((t) => t.memberId === this.id);
+          if (take) {
+            const seen = {
+              date: open.date, subjectId: open.subjectId, verified: take.verified,
+              placeholder: /^\*\*REGIME\*\* Neutral pending/.test(take.body || ""),
+              url: `/committee/${open.date}/${encodeURIComponent(open.subjectId)}`,
+            };
+            try { localStorage.setItem(storeKey, JSON.stringify(seen)); } catch { /* private mode */ }
+            this.agentPulse = { kind: "received", ...seen };
+          } else {
+            this.agentPulse = { kind: "waiting", date: open.date, subjectId: open.subjectId, closesAt: open.windowClosesAt };
+          }
+          return;
+        }
+        let last = null;
+        try { last = JSON.parse(localStorage.getItem(storeKey) || "null"); } catch { /* corrupt entry */ }
+        this.agentPulse = { kind: "idle", last };
+      } catch { /* heartbeat is best-effort — never surface errors for it */ }
+    },
+    pulseSeen() {
+      return this.agentPulse?.kind === "received" ? this.agentPulse : this.agentPulse?.last;
+    },
+    mindOn() {
+      const seen = this.pulseSeen();
+      return !!seen && seen.placeholder === false;
+    },
+    memberName() {
+      return (this.member && this.member.name) || this.id;
+    },
+    profileUrl() {
+      return `/committee/members/${encodeURIComponent(this.id)}`;
+    },
+    printWelcome() {
+      try { window.print(); } catch { /* headless / blocked print — no-op */ }
+    },
+    // Direct install of the committee-onboarding skill (robotmoney-core) for an
+    // agent you drive by hand; the pasted apply prompt installs it for you.
+    skillInstallCommand() {
+      const dir = "~/.claude/skills/committee-onboarding";
+      return `mkdir -p ${dir} && curl -fsSL ${COMMITTEE_ONBOARDING_SKILL_URL} -o ${dir}/SKILL.md`;
+    },
+    recoveryMailto() {
+      return `mailto:hi@robotmoney.net?subject=${encodeURIComponent(`Key rotation for committee member ${this.id}`)}`;
+    },
+    async copy(key, text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        this.copied = { ...this.copied, [key]: true };
+        setTimeout(() => { this.copied = { ...this.copied, [key]: false }; }, 1600);
+      } catch { /* clipboard blocked — the text is visible to select manually */ }
+    },
   }));
 
   Alpine.data("memberProfile", () => ({
@@ -344,44 +509,75 @@ export function registerStaticViews(Alpine) {
     loading: true,
     error: null,
     member: null,
-    sessions: [],
+    rows: [],
+    subject: null,   // active session filter; null = every subject
+    openTakes: {},   // take id → expanded
     async init() {
       const memberId = location.pathname.split("/").filter(Boolean).pop();
       try {
         this.member = await loadArchiveMember(memberId).catch(() => null);
         if (!this.member) this.member = await api.get(path(ROUTES.committee.member, { id: memberId })).then(camelMember);
-        const sessionData = await api.get(ROUTES.committee.sessions);
-        // Prioritise in-progress sessions by STATE, not date position: a
-        // member's just-submitted take lives in a collecting session, and the
-        // list is date-ordered — a manually-opened window can sit deep in the
-        // list, so a naive slice would drop it and the page would read "No
-        // sessions yet" right after a verified submit. Always include every
-        // in-progress session + the most recent published for the track record.
-        const all = sessionData.sessions || [];
-        const inProgress = all.filter((s) => ["collecting", "window_closed", "aggregated"].includes(s.state));
-        const published = all.filter((s) => s.state === "published").slice(0, 20);
-        const details = await Promise.all([...inProgress, ...published].map(async (s) => {
-          try {
-            const detail = await api.get(path(ROUTES.committee.session, { date: s.date, subject: s.subjectId }));
-            return { ...s, takes: detail.takes || [] };
-          } catch (_) {
-            // Fall back to the shipped static archive for pre-2026-07-01 sessions
-            // so their takes stay visible during offline / static rendering.
-            if (archivePreferred(s.date)) {
-              try {
-                const archive = await loadArchiveSession(s.date, s.subjectId);
-                return { ...s, takes: archive.takes || [] };
-              } catch (_) { /* fall through to empty */ }
-            }
-            return { ...s, takes: [] };
-          }
-        }));
-        this.sessions = details;
+        // Route-level SEO titleizes the last URL segment, which here is a raw
+        // UUID ("D6e430f5 D706 4325…"). This is the page onboarding hands a new
+        // operator, so name the tab after the member once it is known.
+        if (this.member?.name) document.title = `${this.member.name} — Robot Money Investment Committee`;
+        this.rows = await this.loadRows(memberId);
       } catch (e) {
         this.error = e.message || "Member not found";
       } finally {
         this.loading = false;
       }
+    },
+    // This member's record, from the member-scoped takes endpoint (#243): one
+    // request that returns every take they have filed, newest first.
+    //
+    // The page used to rebuild the record by fetching the sessions index and
+    // scanning each session for a matching take. That index is capped at the 20
+    // most recent sessions, so any member whose takes had scrolled past that
+    // window read "Track record (0)" on their own profile while the API held a
+    // full history — and it cost 21 requests to get the wrong answer.
+    async loadRows(memberId) {
+      try {
+        const res = await api.get(`${path(ROUTES.committee.memberTakes, { id: memberId })}?limit=50`);
+        return (res.takes || []).map((r) => ({
+          session: { date: r.sessionDate, subjectId: r.subjectId, subjectName: r.subjectName, state: r.sessionState },
+          take: r.take,
+          phase: this.takePhase(r.sessionState),
+        }));
+      } catch (_) {
+        return this.scanSessions();
+      }
+    },
+    // Fallback for hosts without the member-takes endpoint, and the path that
+    // still serves the shipped static archive for pre-2026-07-01 sessions.
+    // Prioritises in-progress sessions by STATE, not date position: a
+    // just-submitted take lives in a collecting session, and a manually-opened
+    // window can sit deep in a date-ordered list, so a naive slice would drop it
+    // and the page would read "no sessions yet" right after a verified submit.
+    async scanSessions() {
+      const all = (await api.get(ROUTES.committee.sessions)).sessions || [];
+      const inProgress = all.filter((s) => ["collecting", "window_closed", "aggregated"].includes(s.state));
+      const published = all.filter((s) => s.state === "published").slice(0, 20);
+      const details = await Promise.all([...inProgress, ...published].map(async (s) => {
+        try {
+          const detail = await api.get(path(ROUTES.committee.session, { date: s.date, subject: s.subjectId }));
+          return { ...s, takes: detail.takes || [] };
+        } catch (_) {
+          if (archivePreferred(s.date)) {
+            try {
+              const archive = await loadArchiveSession(s.date, s.subjectId);
+              return { ...s, takes: archive.takes || [] };
+            } catch (_) { /* fall through to empty */ }
+          }
+          return { ...s, takes: [] };
+        }
+      }));
+      return details
+        .map((session) => {
+          const take = (session.takes || []).find((t) => t.memberId === this.member?.id);
+          return take ? { session, take, phase: this.takePhase(session.state) } : null;
+        })
+        .filter(Boolean);
     },
     takePhase(state) {
       if (state === "collecting") return "live";
@@ -393,19 +589,53 @@ export function registerStaticViews(Alpine) {
         : phase === "closing" ? "Closed · awaiting publish"
         : "Published";
     },
-    allTakes() {
-      if (!this.member) return [];
-      return this.sessions
-        .map((session) => {
-          const take = (session.takes || []).find((t) => t.memberId === this.member.id);
-          return take ? { session, take, phase: this.takePhase(session.state) } : null;
-        })
-        .filter(Boolean);
+    allTakes() { return this.member ? this.rows : []; },
+    // The record at a glance. Counts every take, published or still collecting,
+    // so a just-submitted one registers immediately rather than reading as zero
+    // while its window is open. Conviction is the mean confidence across them.
+    recordStats() {
+      const all = this.allTakes();
+      const conf = all.map((r) => Number(r.take.confidence)).filter((n) => Number.isFinite(n));
+      return {
+        takes: all.length,
+        verified: all.filter((r) => r.take.verified).length,
+        conviction: conf.length ? this.fmtPct(conf.reduce((a, b) => a + b, 0) / conf.length) : "—",
+      };
     },
     // Takes in sessions that haven't published yet — the current, live activity.
     inProgressTakes() { return this.allTakes().filter((r) => r.phase !== "published"); },
     // The published track record (what "Recent takes" has always meant).
     recentTakes() { return this.allTakes().filter((r) => r.phase === "published"); },
+
+    // ── Session filter ───────────────────────────────────────────────────────
+    // A member files against several subjects, and the list interleaves them by
+    // date. Reading "how has this member treated Mav Holdings" meant scanning
+    // every card, so the subjects become filter chips.
+    subjects() {
+      const by = new Map();
+      for (const r of this.recentTakes()) {
+        const cur = by.get(r.session.subjectId);
+        if (cur) cur.count += 1;
+        else by.set(r.session.subjectId, { id: r.session.subjectId, name: r.session.subjectName || r.session.subjectId, count: 1 });
+      }
+      return [...by.values()].sort((a, b) => b.count - a.count);
+    },
+    // The rows actually listed. Kept separate from recentTakes() so the empty
+    // states stay keyed to the whole record: a filter that matches nothing is a
+    // narrowed view, not a member who has never submitted.
+    visibleTakes() {
+      const rows = this.recentTakes();
+      return this.subject ? rows.filter((r) => r.session.subjectId === this.subject) : rows;
+    },
+    filterBy(subjectId) { this.subject = this.subject === subjectId ? null : subjectId; },
+
+    // ── Take body collapse ───────────────────────────────────────────────────
+    // Bodies run to several hundred words across three sections. Collapsed by
+    // default so the record can be scanned; the toggle only appears when there
+    // is genuinely more to see, so short takes get no pointless control.
+    expandable(body) { return String(body || "").length > 320; },
+    isOpen(id) { return !!this.openTakes[id]; },
+    toggleTake(id) { this.openTakes = { ...this.openTakes, [id]: !this.openTakes[id] }; },
   }));
 
   Alpine.data("icSessionDetail", () => ({
@@ -478,6 +708,63 @@ export function registerStaticViews(Alpine) {
     },
     memberById(memberId) {
       return this.members.find((m) => m.id === memberId) || null;
+    },
+    // `absent` is a list of member IDs, printed raw — a reader got
+    // "absent: draco, 88efd6b9-e865-417d-afe1-45d84510338b". Resolve what we
+    // can; an id we hold no member record for still prints, because silently
+    // dropping it would understate who missed the session.
+    absentNames() {
+      return (this.session?.committeeRecommendation?.absent || [])
+        .map((id) => this.memberById(id)?.name || id);
+    },
+    // Stance distribution, largest first, with each share of the submitted
+    // takes — the proportional bar and the key both read from this so they can
+    // never disagree.
+    stanceSpread() {
+      const stances = this.session?.committeeRecommendation?.stances || {};
+      const total = Object.values(stances).reduce((sum, n) => sum + Number(n || 0), 0);
+      return Object.entries(stances)
+        .map(([stance, n]) => ({ stance, n: Number(n), pct: total ? (Number(n) / total) * 100 : 0 }))
+        .sort((a, b) => b.n - a.n || a.stance.localeCompare(b.stance));
+    },
+    // The recommendation block used to lead with turnout ("3/5", set in the
+    // largest type on the page) and leave the reader to tally the stance chips
+    // themselves. Turnout is procedural; the finding is the modal stance — or,
+    // when nothing outpolls anything else, that there ISN'T one. A split is a
+    // real committee result and this page stated it nowhere.
+    verdict() {
+      const rows = this.stanceSpread();
+      if (!rows.length) return { label: "No stances recorded", detail: "", color: "#7e889e", split: true };
+      const submitted = rows.reduce((sum, r) => sum + r.n, 0);
+      const tied = rows.filter((r) => r.n === rows[0].n);
+      if (tied.length > 1) {
+        return {
+          label: "Split · no majority",
+          detail: `${tied.map((r) => r.stance).join(", ")} tied at ${rows[0].n} member${rows[0].n === 1 ? "" : "s"} each.`,
+          color: "#7e889e",
+          split: true,
+        };
+      }
+      return {
+        label: rows[0].stance,
+        detail: `${rows[0].n} of ${submitted} submitted take${submitted === 1 ? "" : "s"} took this position.`,
+        color: this.stanceColor(rows[0].stance),
+        split: false,
+      };
+    },
+    quorumText() {
+      const q = this.session?.committeeRecommendation?.quorum;
+      const submitted = q?.submitted ?? this.takes.length;
+      const active = q?.active ?? this.members.length;
+      return `${submitted} of ${active} submitted`;
+    },
+    // The Brief panel rendered "Subject: {name}. Regime: {label}." — the <h1>
+    // and a backdrop chip, restated in a half-width panel that was otherwise
+    // empty. Only the part a reader has not already seen earns the space.
+    briefExtra() {
+      const body = this.brief?.body || this.brief;
+      const n = Array.isArray(body?.researchSignals) ? body.researchSignals.length : 0;
+      return n ? `${n} research signal${n === 1 ? "" : "s"} were attached to the brief members received.` : "";
     },
     panelInputs() {
       const r = this.session?.regimeSummary;
@@ -628,9 +915,41 @@ export function registerStaticViews(Alpine) {
         <circle cx="${x(h.length - 1)}" cy="${y(h[h.length - 1].composite)}" r="2.8" fill="var(--color-accent)"/>
       </svg>`;
     },
-    consensusItems() {
-      return this.session?.committeeRecommendation?.consensus || [];
+    // The aggregator currently fills `consensus` with every take body verbatim
+    // and `disagreements[].positions[].view` with two of those same bodies
+    // (backend committee/domain.ts: `authoredTakes.map(t => t.body)`). Rendered
+    // literally, one take appears three times on this page under three headings
+    // that each promise synthesis.
+    //
+    // So anything byte-identical to a take already listed above is treated as an
+    // echo and dropped. This is deliberately shape-agnostic: the day the
+    // aggregator emits real synthesis, those items stop matching any body and
+    // appear on their own. Nothing here has to change for that to work.
+    // NB: takes live on the factory root (`this.takes`), not under `session` —
+    // the page's own x-for iterates `takes`.
+    takeBodies() {
+      return new Set((this.takes || []).map((t) => this.normText(t.body)).filter(Boolean));
     },
+    normText(s) { return String(s || "").replace(/\s+/g, " ").trim(); },
+    isEcho(text) { const n = this.normText(text); return !!n && this.takeBodies().has(n); },
+    // Synthesis has the same problem one level up: the aggregator builds it by
+    // joining every take body, so the section headed "Synthesis" reprints the
+    // member takes already listed above it rather than drawing a conclusion
+    // from them. Suppressed when it demonstrably contains every body verbatim;
+    // a genuine synthesis will not, and will render untouched.
+    synthesisIsEcho() {
+      const bodies = [...this.takeBodies()];
+      if (!bodies.length) return false;
+      const n = this.normText(this.session?.synthesis);
+      return !!n && bodies.every((b) => n.includes(b));
+    },
+    takeOf(memberId) { return (this.takes || []).find((t) => t.memberId === memberId); },
+    consensusItems() {
+      return (this.session?.committeeRecommendation?.consensus || []).filter((c) => !this.isEcho(c));
+    },
+    // Kept even when every view is an echo: WHO disagreed, and how far apart
+    // they sat, is real information the takes list does not state anywhere.
+    // Only the duplicated prose is suppressed — see the markup.
     disagreements() {
       return this.session?.committeeRecommendation?.disagreements || [];
     },

@@ -63,6 +63,7 @@ export const MONO_FONT = { family: "JetBrains Mono", size: 10 };
 export const GRID_COLOR = rgba(PALETTE.border, 0.4);
 
 // Consolidates views.js `_alpha` and walletPerfView `_rgba`: 6-digit hex → rgba.
+/** @param {string} hex 6-digit hex, leading '#'. @param {number} alpha 0..1. */
 export function rgba(hex, alpha) {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
@@ -86,7 +87,10 @@ export function applyChartDefaults() {
   if (!Chart) return;
   _applied = true;
 
-  const d = Chart.defaults;
+  // Chart.js is a CDN global whose ambient type here only declares getChart /
+  // instances, so `defaults` is not on it. Cast at the boundary rather than
+  // widening the global.
+  const d = /** @type {any} */ (Chart).defaults;
   d.color = PALETTE.textMuted;
   d.borderColor = PALETTE.border;
   d.font.family = MONO_FONT.family;

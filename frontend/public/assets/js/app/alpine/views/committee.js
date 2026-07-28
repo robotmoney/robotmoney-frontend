@@ -1,6 +1,7 @@
 // Alpine factory for the /committee directory view. Moved verbatim from the
 // monolithic views.js (finding 025).
 import { api, ROUTES } from "../../lib/api.js";
+import { subjectDot } from "./shared.js";
 
 export function registerCommitteeView(Alpine) {
   // ── Investment Committee ──────────────────────────────────────────────────
@@ -25,6 +26,36 @@ export function registerCommitteeView(Alpine) {
       }
     },
     publishedSessions() { return this.sessions.filter((s) => s.state === "published"); },
+    // Subject encoding + filter, identical in behaviour to the member profile's
+    // track record — the roster is the same problem at larger scale (every
+    // subject interleaved by date), and the two lists must not teach different
+    // conventions for the same data.
+    subjectFilter: null,
+    subjectDot(subjectId) { return subjectDot(subjectId); },
+    filterBy(id) { this.subjectFilter = this.subjectFilter === id ? null : id; },
+    visibleSessions() {
+      const rows = this.publishedSessions();
+      return this.subjectFilter ? rows.filter((s) => s.subjectId === this.subjectFilter) : rows;
+    },
+    sessionSubjects() {
+      const by = new Map();
+      for (const s of this.publishedSessions()) {
+        const cur = by.get(s.subjectId);
+        if (cur) cur.count += 1;
+        else by.set(s.subjectId, { id: s.subjectId, name: s.subjectName || s.subjectId, count: 1 });
+      }
+      return [...by.values()].sort((a, b) => b.count - a.count);
+    },
+    // The aggregator fills `synthesis` by joining every take body (see
+    // backend committee/domain.ts), so the preview under each row was a wall of
+    // raw markdown that opened with "**REGIME**" on EVERY row — identical text
+    // twenty times over, which is worse than no preview at all. Show it only
+    // when it is genuinely a summary rather than a dump of the takes.
+    synthesisPreview(s) {
+      const t = String(s?.synthesis || "").trim();
+      if (!t || t.includes("**") || t.length > 600) return "";
+      return t;
+    },
     subjects() {
       const map = new Map();
       for (const s of this.sessions) {
@@ -50,8 +81,16 @@ export function registerCommitteeView(Alpine) {
       if (Array.isArray(m.biases)) return m.biases.filter(Boolean);
       return m.lens ? [m.lens] : [];
     },
+    // Punctuation-stripped: "woon (test)" must read "WT", not "W(". Kept in
+    // sync with the same helper in static-views.js.
     initials(name = "") {
-      return String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((s) => s[0]?.toUpperCase()).join("") || "IC";
+      return String(name)
+        .split(/\s+/)
+        .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((s) => s[0].toUpperCase())
+        .join("") || "IC";
     },
     stanceEntries(s) { return Object.entries(s.committeeRecommendation?.stances || {}); },
     quorumText(s) {

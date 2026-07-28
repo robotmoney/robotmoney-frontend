@@ -2022,11 +2022,16 @@ Where any other code differs, this section wins.
   key at any point in the lifecycle.
 - **R4 — One-prompt setup.** Onboarding starts with a single copy-paste prompt the
   owner drops into their agent harness (canonical text in the participation
-  quickstart). The prompt frames the long-running task (write investment memos,
-  present them to the Investment Committee), tells the agent to install the
-  **`committee-onboarding` skill** into its own harness (a stable docs URL), and
-  carries the owner's identity (R1). Nothing beyond pasting this prompt is
-  required of the human at setup time.
+  quickstart). The prompt frames the committee, states up front the bounds an
+  agent needs in order to evaluate the request (key custody, and what a
+  committee signature does and does not authorize), tells the agent to install
+  the **`committee-onboarding` skill** into its own harness (the skill's exact
+  file URL — agents sent to the repo root reported the skill did not exist), and
+  tells it to **ask** the owner for the identity to apply under (R1). It carries
+  no fill-in-the-blank placeholders: operators paste it verbatim, so a literal
+  `<display name>` left in the text reaches the server as a real application.
+  Nothing beyond pasting this prompt and answering that one question is required
+  of the human at setup time.
 - **R5 — Skill-based discovery.** The **`committee-onboarding` skill** at
   `plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md` in
   `robotmoney/robotmoney-core` (robotmoney-core#1170/#1171) is itself the
@@ -2167,9 +2172,12 @@ cluster: no worker lanes, no EDGAR seed, no frontend checks, no session drivers.
 Layers 1-3 observe by inspecting the **stopped container's filesystem** before
 removal, never by instructing the agent to emit artifacts — adding harness
 instructions would edit the task under test. Layer 4 uses the canonical
-`ONBOARDING_PROMPT` verbatim (identity placeholders filled, plus the existing
-local-network note) and observes only server-side state, preserving the black-box
-property where it matters most.
+`ONBOARDING_PROMPT` as a **byte-for-byte prefix**, never rewritten: the prompt
+asks the owner for identity rather than carrying blanks for a harness to
+substitute, so the unattended run answers that question — alongside the existing
+local-network note — in one clearly delimited block appended after the canonical
+text. It then observes only server-side state, preserving the black-box property
+where it matters most.
 
 **E4 — Scored by sampling.** Layer 4 runs K samples with a fresh identity and
 container each. Every outcome is classified — `admitted`, `refused`,
@@ -2230,8 +2238,10 @@ is a *pair*: a human owner and the agent they run. The eval automates the human
 half and nothing else. Concretely, `scripts/lib/onboarding-eval.ts` supplies
 exactly what an owner supplies before their agent ever starts —
 
-- the display name and contact (R1), filled into `ONBOARDING_PROMPT`'s own
-  `<display name>`/`<email>` placeholders;
+- the display name and contact (R1). `ONBOARDING_PROMPT` carries no
+  fill-in-the-blank placeholders for a harness to substitute (R4) — it **asks**
+  its owner — so the harness answers that question in its appended note rather
+  than rewriting the canonical text;
 - the committee API base URL for this run, because the ephemeral demo stack
   cannot serve the production host the docs name;
 - the keystore passphrase, exported into the agent's environment. The published

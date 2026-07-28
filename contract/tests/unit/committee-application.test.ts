@@ -165,11 +165,22 @@ describe("canonicalizeApplication — golden vectors (Stage 3 rmpc/Rust byte-exa
 });
 
 describe("ONBOARDING_PROMPT — canonical copy-paste prompt (R4)", () => {
-  test("is a single non-empty string carrying owner-identity placeholders", () => {
+  // This pin used to assert the OPPOSITE — that the prompt carries literal
+  // `<display name>` / `<email>` blanks for the owner to fill in by hand. It
+  // was inverted deliberately, as a product change, not to make a red test go
+  // green: a tester pasted the prompt verbatim and applied under the literal
+  // string "<display name>", which reached the server as a real application.
+  // Identity is the human gate (R1), so the agent now ASKS for it instead of
+  // the operator hand-editing text; robotmoney-core#1190 made the skill ask
+  // too. What replaces it is strictly stronger than what it replaces: it bans
+  // every angle-bracket blank, not just the two that happened to ship.
+  test("is a single non-empty string that collects owner identity by asking, carrying no fill-in-the-blank placeholders", () => {
     expect(typeof ONBOARDING_PROMPT).toBe("string");
     expect(ONBOARDING_PROMPT.length).toBeGreaterThan(0);
-    expect(ONBOARDING_PROMPT).toContain("<display name>");
-    expect(ONBOARDING_PROMPT).toContain("<email>");
+    expect(ONBOARDING_PROMPT.toLowerCase()).toContain("ask me for");
+    expect(ONBOARDING_PROMPT).not.toContain("<display name>");
+    expect(ONBOARDING_PROMPT).not.toContain("<email>");
+    expect(ONBOARDING_PROMPT).not.toMatch(/<[a-z][a-z ]*>/i);
   });
 
   test("points the agent at installing the committee-onboarding skill instead of embedding steps itself (R5 — never goes stale)", () => {

@@ -1,3 +1,11 @@
+// @ts-nocheck — buildless browser JS that was outside the root TS program until
+// static-views.js began importing subjectDot() from it, which pulled the whole
+// file in and surfaced a pile of pre-existing implicit-any errors in the regime
+// chart helpers. Same situation, and same call, as the pragma at the top of
+// alpine/static-views.js: this preserves the status quo rather than weakening
+// coverage that existed, and JSDoc-typing this file is a worthwhile follow-up
+// rather than a drive-by inside an unrelated change.
+//
 // Shared regime-dashboard chart/data helpers, moved verbatim from the top of
 // the old monolithic views.js (review-maintainability finding 025). Today
 // every export is consumed only by views/regime.js, but they are the shared
@@ -123,6 +131,7 @@ export const ASSET_LABEL = { cash: "cash", eth: "ETH", sp500: "SP500" };
 // must tell apart), so we never collapse a whole asset class onto one green —
 // that reads as an indistinguishable blob. Native tokens share the cyan family
 // (bright vs deep) so they stay visually related while remaining distinct.
+/** @type {Record<string, string>} — indexed by arbitrary symbol, not just the keys below. */
 export const ASSET_DOT = {
   USDC: "#10b981",        // green  — primary stable
   "ZYFAI-SS1": "#5fb3a1", // teal   — strategy position
@@ -135,11 +144,29 @@ export const ASSET_DOT = {
 };
 // Unmapped symbol: hash to a stable CATEGORICAL hue so a new asset still gets a
 // distinct colour rather than every unknown collapsing onto one grey.
+/** @param {string} sym */
 export const assetDot = (sym) => {
   if (ASSET_DOT[sym]) return ASSET_DOT[sym];
   let h = 0;
   for (const ch of String(sym)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return CATEGORICAL[h % CATEGORICAL.length];
+};
+
+// Stable colour for a committee session subject. Same construction as assetDot
+// because it answers the same question — subjects are a CATEGORICAL encoding
+// (Mav Holdings is not "more" than Woon Treasury), so they take distinct hues
+// rather than a ramp, hashed on id so a subject keeps one colour on every page
+// instead of shifting with its position in whatever list is being drawn.
+//
+// Beacon is withheld: it means loss/drawdown/attention in the covenant, so
+// letting the hash land an ordinary subject on it would say something untrue
+// about that subject permanently.
+/** @param {string} subjectId */
+export const subjectDot = (subjectId) => {
+  const hues = CATEGORICAL.filter((c) => c !== SERIES.beacon);
+  let h = 0;
+  for (const ch of String(subjectId || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return hues[h % hues.length];
 };
 
 // Correlation ("Predictive power & alignment") table columns + row order.
