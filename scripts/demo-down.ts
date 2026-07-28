@@ -16,6 +16,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeDockerRunner, purgeDemoEvalContainers } from "./lib/demo-volumes.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -62,6 +63,16 @@ const dockerEnv: Record<string, string> = {
 } as Record<string, string>;
 
 console.log(`[demo:down] tearing down project=${s.project} (created ${s.createdAt}) — keeping postgres data…`);
+
+const run = makeDockerRunner(dockerEnv);
+const purged = purgeDemoEvalContainers(run, { project: s.project });
+if (purged.removed.length > 0) {
+  console.log(`[demo:down] purged ${purged.removed.length} evaluation container(s): ${purged.removed.join(", ")}`);
+}
+if (purged.skipped.length > 0) {
+  console.log(`[demo:down] WARNING: failed to purge evaluation container(s): ${purged.skipped.map((sk) => `${sk.name} (${sk.reason})`).join(", ")}`);
+}
+
 // NO `-v`: keep the volume / --pg-data dir.
 const r = Bun.spawnSync(["docker", "compose", "down"], {
   cwd: repoRoot,

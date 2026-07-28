@@ -19,7 +19,7 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listDemoVolumes, makeDockerRunner, removeDemoVolumes } from "../../lib/demo-volumes.ts";
+import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "../../lib/demo-volumes.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 const BASE = ["-f", "docker-compose.yml", "-f", "docker-compose.demo.yml"];
@@ -112,6 +112,9 @@ describe("--pg-data bind override merges by target (offline)", () => {
 
 // Force-clean this test's project + volume no matter how the run ended.
 afterAll(() => {
+  try {
+    purgeDemoEvalContainers(makeDockerRunner(composeEnv()), { project });
+  } catch {}
   compose(["down", "-v"], composeEnv());
   makeDockerRunner(composeEnv())(["volume", "rm", "-f", pgVolume]);
 });

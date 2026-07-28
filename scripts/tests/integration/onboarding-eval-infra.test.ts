@@ -39,19 +39,310 @@ import {
   ROUTES,
 } from "@robotmoney/contract";
 import { fetchRmpc, runRmpcJson } from "../../lib/rmpc-fetch.ts";
-import { DEFAULT_COMPOSE_FILES } from "../../lib/onboarding-eval.ts";
+import {
+  buildAgentOpencodeConfig,
+  buildAgentPrompt,
+  DEFAULT_INFERENCE_MODEL,
+  deriveSteps,
+  fillPromptIdentity,
+  generateIdentity,
+  looksRateLimited,
+  ONBOARDING_STEPS,
+  type OnboardingEvalResult,
+  resolveModelConfig,
+  runOnboardingEvalWithRetry,
+} from "../../lib/onboarding-eval.ts";
+import { isKeylessModel, MODEL_FAMILIES, resolveAgentModel } from "../../lib/model-registry.ts";
 import {
   allocatePorts,
   createStack,
+  DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
   generateStackCredentials,
   type Stack,
 } from "../../stack/index.ts";
+import { makeDockerRunner, purgeDemoEvalContainers } from "../../lib/demo-volumes.ts";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 
+// ── Pure helper unit tests (no Docker) ──────────────────────────────────────
+describe("onboarding-eval pure helpers", () => {
+  test("generateIdentity produces a fresh, matching name/contact pair each call", () => {
+    const a = generateIdentity();
+    const b = generateIdentity();
+    expect(a.runId).not.toBe(b.runId);
+    expect(a.contact).toContain(a.runId);
+    expect(a.name).toContain(a.runId);
+  });
+
+  test("fillPromptIdentity substitutes both placeholders and nothing else", () => {
+    const identity = { runId: "abc123", name: "Test Applicant", contact: "test@example.test" };
+    expect(fillPromptIdentity("I am <display name>, contact <email>.", identity)).toBe(
+      "I am Test Applicant, contact test@example.test.",
+    );
+  });
+
+  test("fillPromptIdentity throws loudly if the canonical prompt's placeholders ever disappear", () => {
+    expect(() => fillPromptIdentity("no placeholders here", generateIdentity())).toThrow(/placeholders/);
+  });
+
+  test("buildAgentPrompt injects identity into the UNMODIFIED canonical prompt plus a clearly separate note", () => {
+    const identity = generateIdentity("fixed-run");
+    const prompt = buildAgentPrompt(identity);
+    expect(prompt).toContain(identity.name);
+    expect(prompt).toContain(identity.contact);
+    expect(prompt).toContain("committee-onboarding"); // canonical prompt content survives untouched
+    expect(prompt).toContain("Demo harness note"); // clearly delimited, not blended into the canonical text
+  });
+
+  test("resolveModelConfig defaults to the funded registry default when AGENT_MODEL is unset", () => {
+    const cfg = resolveModelConfig({ OPENCODE_API_KEY: "sk-zen" });
+    expect(cfg.model).toBe(DEFAULT_INFERENCE_MODEL);
+    expect(cfg.model).toBe("opencode/deepseek-v4-flash");
+    expect(cfg).toEqual({ model: DEFAULT_INFERENCE_MODEL, apiKeyEnv: "OPENCODE_API_KEY", apiKey: "sk-zen", keyless: false });
+  });
+
+  test("resolveModelConfig throws loudly when a paid model is selected with no funded key — never a silent substitution", () => {
+    // Caught here rather than ~20 minutes later at the far end of a stack boot.
+    expect(() => resolveModelConfig({})).toThrow(/OPENCODE_API_KEY is not set/);
+  });
+
+  test("resolveModelConfig keeps a `free` selection genuinely keyless, even with a key present", () => {
+    // A key set for an unrelated reason must never get pulled into a keyless run.
+    const cfg = resolveModelConfig({ AGENT_MODEL: "free", OPENCODE_API_KEY: "sk-zen" });
+    expect(cfg).toEqual({ model: "opencode/nemotron-3-ultra-free", apiKeyEnv: null, apiKey: null, keyless: true });
+  });
+
+  test("resolveModelConfig switches family by name and pins an exact member with family/model", () => {
+    expect(resolveModelConfig({ AGENT_MODEL: "kimi", OPENCODE_API_KEY: "k" }).model).toBe("opencode/kimi-k2.7-code");
+    expect(resolveModelConfig({ AGENT_MODEL: "kimi/k2.6", OPENCODE_API_KEY: "k" }).model).toBe("opencode/kimi-k2.6");
+  });
+
+  test("resolveAgentModel refuses an unknown family or member rather than falling back to the default", () => {
+    // A run must use the model it was asked for; a silent fallback turns a
+    // benchmark result into a lie about which agent produced it.
+    expect(() => resolveAgentModel({ AGENT_MODEL: "notafamily" })).toThrow(/unknown model family/);
+    expect(() => resolveAgentModel({ AGENT_MODEL: "kimi/notamodel" })).toThrow(/unknown model "notamodel"/);
+    expect(() => resolveAgentModel({ AGENT_MODEL: "a/b/c" })).toThrow(/malformed/);
+  });
+
+  test("resolveAgentModel passes a fully-qualified opencode/<id> through unmapped (escape hatch)", () => {
+    expect(resolveAgentModel({ AGENT_MODEL: "opencode/some-brand-new-model" })).toBe("opencode/some-brand-new-model");
+  });
+
+  test("every registry family default names a real member of that family", () => {
+    // Guards the one typo that would make a whole family unusable.
+    for (const [name, family] of Object.entries(MODEL_FAMILIES)) {
+      expect(family.models[family.default], `${name}.default`).toBeDefined();
+      expect(resolveAgentModel({ AGENT_MODEL: name })).toBe(`opencode/${family.models[family.default]}`);
+    }
+  });
+
+  test("isKeylessModel is derived from the registry, and big-pickle stays reachable but is not the default", () => {
+    expect(isKeylessModel("opencode/nemotron-3-ultra-free")).toBe(true);
+    expect(isKeylessModel("opencode/big-pickle")).toBe(true);
+    expect(isKeylessModel("opencode/deepseek-v4-flash")).toBe(false);
+    // Saturated upstream with no paid tier — deliberately no longer the default.
+    expect(DEFAULT_INFERENCE_MODEL).not.toBe("opencode/big-pickle");
+  });
+
+  test("buildAgentOpencodeConfig carries NO onboarding-specific knowledge and no Robot Money connectivity (D21 — REST via bash, no MCP client)", () => {
+    const cfg = buildAgentOpencodeConfig("anthropic/claude-x") as any;
+    expect(cfg.model).toBe("anthropic/claude-x");
+    expect(cfg.permission).toEqual({ "*": "deny", bash: "allow", external_directory: "allow" });
+    expect(cfg.mcp).toBeUndefined();
+    expect(JSON.stringify(cfg)).not.toMatch(/rmpc|apply|committee|robotmoney/i);
+  });
+
+  test("deriveSteps: no member observed yet ⇒ every step pending", () => {
+    const steps = deriveSteps({ memberId: null, applyState: null, onActiveRoster: false });
+    expect(steps.every((s) => s.status === "pending")).toBe(true);
+    expect(steps.map((s) => s.step)).toEqual([...ONBOARDING_STEPS]);
+  });
+
+  test("deriveSteps: a member row exists ⇒ connect/discover/toolchain/apply done, rest pending", () => {
+    const steps = deriveSteps({ memberId: "m1", applyState: "applied", onActiveRoster: false });
+    const byStep = Object.fromEntries(steps.map((s) => [s.step, s.status]));
+    expect(byStep).toEqual({
+      connect: "done", discover: "done", toolchain: "done", apply: "done",
+      approve: "pending", claim: "pending", session: "pending",
+    });
+  });
+
+  test("deriveSteps: approved but not yet claimed", () => {
+    const byStep = Object.fromEntries(
+      deriveSteps({ memberId: "m1", applyState: "approved", onActiveRoster: false }).map((s) => [s.step, s.status]),
+    );
+    expect(byStep.approve).toBe("done");
+    expect(byStep.claim).toBe("pending");
+  });
+
+  test("deriveSteps: on the active roster ⇒ every step done (admitted)", () => {
+    const steps = deriveSteps({ memberId: "m1", applyState: "claimed", onActiveRoster: true });
+    expect(steps.every((s) => s.status === "done")).toBe(true);
+  });
+});
+
+// ── Retry/backoff decision logic (no Docker, no model call — Stage 7, §11 R8)
+// Exercises runOnboardingEvalWithRetry's OWN control flow via its injectable
+// runOnce seam. The real admission path (runOnboardingEval itself) is proven
+// separately by the Docker-backed block below and by the live CI run — this
+// suite is deliberately narrow: it is testing the retry DECISION, not
+// re-proving the eval.
+describe("runOnboardingEvalWithRetry", () => {
+  function fakeResult(overrides: Partial<OnboardingEvalResult> = {}): OnboardingEvalResult {
+    return {
+      identity: generateIdentity("fake"),
+      memberId: null,
+      steps: [],
+      admitted: false,
+      timedOut: false,
+      containerExitCode: 1,
+      containerLaunched: true,
+      ...overrides,
+    };
+  }
+
+  test("looksRateLimited matches known provider rate-limit/overload signals", () => {
+    expect(looksRateLimited("Error: 429 Too Many Requests")).toBe(true);
+    expect(looksRateLimited("anthropic rate_limit_error: slow down")).toBe(true);
+    expect(looksRateLimited("upstream returned 529 overloaded_error")).toBe(true);
+    expect(looksRateLimited(undefined)).toBe(false);
+    expect(looksRateLimited("agent could not install the committee-onboarding skill")).toBe(false);
+  });
+
+  test("admitted on the first attempt — never retries", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: { OPENCODE_API_KEY: "sk-zen" },
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        return fakeResult({ admitted: true });
+      },
+    });
+    expect(result.admitted).toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  test("a real (non-rate-limited) failure is returned as-is — no retry", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: { OPENCODE_API_KEY: "sk-zen" },
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        return fakeResult({ transcript: "agent never submitted a signed application" });
+      },
+    });
+    expect(result.admitted).toBe(false);
+    expect(calls).toBe(1); // no retry — this is a real eval result
+  });
+
+  test("a rate-limited failure IS retried, and a subsequent success is returned", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: { OPENCODE_API_KEY: "sk-zen" },
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        if (calls === 1) return fakeResult({ transcript: "429 rate_limit_error from provider" });
+        return fakeResult({ admitted: true });
+      },
+    });
+    expect(result.admitted).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  test("exhausts maxAttempts and returns the last (still rate-limited) failure — never retries forever", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: { OPENCODE_API_KEY: "sk-zen" },
+      maxAttempts: 3,
+      backoffMsSchedule: [0, 0],
+      runOnce: async () => {
+        calls++;
+        return fakeResult({ transcript: "529 overloaded_error" });
+      },
+    });
+    expect(result.admitted).toBe(false);
+    expect(calls).toBe(3);
+  });
+
+  test("retries use a FRESH identity each attempt (never re-apply the same contact)", async () => {
+    const identities: string[] = [];
+    await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: { OPENCODE_API_KEY: "sk-zen" },
+      backoffMsSchedule: [0],
+      identity: generateIdentity("first-attempt"),
+      runOnce: async (opts) => {
+        identities.push(opts.identity!.contact);
+        return fakeResult({ transcript: "429" });
+      },
+    });
+    expect(identities.length).toBe(2);
+    expect(new Set(identities).size).toBe(2); // no reused contact across attempts
+  });
+
+  test("a bare timeout (no rate-limit signal) IS retried on a KEYLESS model — the free tier is documented as slow/variable", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: { AGENT_MODEL: "free" }, // keyless tier: slow, so a bare timeout says nothing
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        if (calls === 1) return fakeResult({ timedOut: true, transcript: "" });
+        return fakeResult({ admitted: true });
+      },
+    });
+    expect(result.admitted).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  test("a bare timeout is NOT retried on a FUNDED model — there, a timeout is a real result", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: { OPENCODE_API_KEY: "sk-zen" }, // funded default model
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        return fakeResult({ timedOut: true, transcript: "" });
+      },
+    });
+    expect(result.admitted).toBe(false);
+    expect(calls).toBe(1); // no retry — a timeout on a paid model is a real result
+  });
+});
 // ── Docker-backed rails check ────────────────────────────────────────────────
 const SETUP_TIMEOUT_MS = 5 * 60_000;
 const TEST_TIMEOUT_MS = 2 * 60_000;
@@ -119,6 +410,9 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
 
   afterAll(() => {
     if (!stack) return;
+    try {
+      purgeDemoEvalContainers(makeDockerRunner(stack.spawnEnv), { project: stack.config.project });
+    } catch {}
     const r = stack.down({ removeVolumes: true, removeOrphans: true });
     if (r.exitCode !== 0) {
       // Never mask an earlier test failure by throwing here — but a failed

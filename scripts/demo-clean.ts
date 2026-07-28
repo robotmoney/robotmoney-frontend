@@ -21,7 +21,7 @@
 // (an in-use volume — a container still references it — is reported, not
 // force-removed). Exit code is non-zero only on a docker/daemon failure, so
 // "nothing to remove" is a clean exit 0.
-import { listDemoVolumes, makeDockerRunner, removeDemoVolumes } from "./lib/demo-volumes.ts";
+import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "./lib/demo-volumes.ts";
 
 // --project <name> scopes the clean to a single run's volume; omitted = ALL demo
 // volumes on this host. A CLI flag, not an env var (per the demo's no-per-property
@@ -35,6 +35,16 @@ const project = flagValue("--project")?.trim() || undefined;
 const run = makeDockerRunner();
 const scope = project ? `project=${project}` : "ALL demo volumes (label robotmoney.demo=1)";
 console.log(`[demo:clean] scanning for ${scope}…`);
+
+const evalPurged = purgeDemoEvalContainers(run, { project });
+if (evalPurged.removed.length > 0) {
+  console.log(`[demo:clean] purged ${evalPurged.removed.length} zombie evaluation container(s):`);
+  for (const n of evalPurged.removed) console.log(`  ✓ ${n}`);
+}
+if (evalPurged.skipped.length > 0) {
+  console.log(`[demo:clean] SKIPPED ${evalPurged.skipped.length} evaluation container(s):`);
+  for (const s of evalPurged.skipped) console.log(`  ⚠ ${s.name} — ${s.reason}`);
+}
 
 let volumes;
 try {

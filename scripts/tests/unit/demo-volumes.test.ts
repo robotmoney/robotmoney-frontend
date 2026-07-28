@@ -11,6 +11,7 @@ import {
   DEMO_VOLUME_PROJECT_LABEL,
   listDemoVolumes,
   parseVolumeLine,
+  purgeDemoEvalContainers,
   removeDemoVolumes,
   type DockerRunResult,
   type DockerRunner,
@@ -26,16 +27,19 @@ function volLine(name: string, labels: Record<string, string>): string {
 // Build a fake runner that records every argv it received and answers `volume ls`
 // from a fixture set and `volume rm <name>` from an in-use set.
 function fakeRunner(opts: {
-  volumes: string[];
+  volumes?: string[];
+  containers?: string[];
   inUse?: Set<string>;
   lsExit?: number;
+  psExit?: number;
+  rmExit?: Record<string, number>;
 }): { run: DockerRunner; calls: string[][] } {
   const calls: string[][] = [];
   const run: DockerRunner = (args) => {
     calls.push(args);
     if (args[0] === "volume" && args[1] === "ls") {
       const exitCode = opts.lsExit ?? 0;
-      return { exitCode, stdout: exitCode === 0 ? opts.volumes.join("\n") + "\n" : "", stderr: exitCode === 0 ? "" : "daemon down" } satisfies DockerRunResult;
+      return { exitCode, stdout: exitCode === 0 ? (opts.volumes ?? []).join("\n") + "\n" : "", stderr: exitCode === 0 ? "" : "daemon down" } satisfies DockerRunResult;
     }
     if (args[0] === "volume" && args[1] === "rm") {
       const name = args[2];
@@ -44,10 +48,26 @@ function fakeRunner(opts: {
       }
       return { exitCode: 0, stdout: `${name}\n`, stderr: "" };
     }
+    if (args[0] === "ps") {
+      const exitCode = opts.psExit ?? 0;
+      if (exitCode !== 0) {
+        return { exitCode, stdout: "", stderr: "docker ps failed" };
+      }
+      const lines = (opts.containers ?? []).map((c) => JSON.stringify({ Names: c }));
+      return { exitCode: 0, stdout: lines.join("\n") + "\n", stderr: "" };
+    }
+    if (args[0] === "rm") {
+      const name = args.includes("-f") ? args[args.indexOf("-f") + 1] : args[1];
+      if (opts.inUse?.has(name) || (opts.rmExit && opts.rmExit[name])) {
+        return { exitCode: 1, stdout: "", stderr: `Error response from daemon: container ${name} in use` };
+      }
+      return { exitCode: 0, stdout: `${name}\n`, stderr: "" };
+    }
     return { exitCode: 0, stdout: "", stderr: "" };
   };
   return { run, calls };
 }
+
 
 describe("parseVolumeLine", () => {
   test("pulls name + the project label out of the flat Labels string", () => {
@@ -118,3 +138,61 @@ describe("removeDemoVolumes", () => {
     expect(res.skipped.map((s) => s.name)).toEqual(["b"]);
   });
 });
+
+describe("purgeDemoEvalContainers", () => {
+  test("scoped project purge finds and force-removes ${project}-member-agent-eval-*", () => {
+    const { run, calls } = fakeRunner({
+      containers: [
+        "rmdemo_123-member-agent-eval-woon",
+        "rmdemo_123-member-agent-eval-mav",
+        "otherproj-member-agent-eval-woon",
+        "rmdemo_123-api",
+      ],
+    });
+    const res = purgeDemoEvalContainers(run, { project: "rmdemo_123" });
+    expect(res.removed).toEqual([
+      "rmdemo_123-member-agent-eval-woon",
+      "rmdemo_123-member-agent-eval-mav",
+    ]);
+    expect(res.skipped).toHaveLength(0);
+
+    const rmCalls = calls.filter((c) => c[0] === "rm");
+    expect(rmCalls).toHaveLength(2);
+    expect(rmCalls[0]).toEqual(["rm", "-f", "rmdemo_123-member-agent-eval-woon"]);
+    expect(rmCalls[1]).toEqual(["rm", "-f", "rmdemo_123-member-agent-eval-mav"]);
+  });
+
+  test("unscoped purge finds and force-removes all *-member-agent-eval-* containers", () => {
+    const { run, calls } = fakeRunner({
+      containers: [
+        "rmdemo_123-member-agent-eval-woon",
+        "otherproj-member-agent-eval-mav",
+        "member-agent-eval-standalone",
+        "rmdemo_123-api",
+      ],
+    });
+    const res = purgeDemoEvalContainers(run);
+    expect(res.removed).toEqual([
+      "rmdemo_123-member-agent-eval-woon",
+      "otherproj-member-agent-eval-mav",
+      "member-agent-eval-standalone",
+    ]);
+    expect(res.skipped).toHaveLength(0);
+
+    const rmCalls = calls.filter((c) => c[0] === "rm");
+    expect(rmCalls).toHaveLength(3);
+  });
+
+  test("gracefully handles empty lists and docker CLI error outputs", () => {
+    const { run: runEmpty } = fakeRunner({ containers: [] });
+    const resEmpty = purgeDemoEvalContainers(runEmpty, { project: "rmdemo_123" });
+    expect(resEmpty.removed).toEqual([]);
+    expect(resEmpty.skipped).toEqual([]);
+
+    const { run: runErr } = fakeRunner({ containers: [], psExit: 1 });
+    const resErr = purgeDemoEvalContainers(runErr, { project: "rmdemo_123" });
+    expect(resErr.removed).toEqual([]);
+    expect(resErr.skipped).toEqual([]);
+  });
+});
+
