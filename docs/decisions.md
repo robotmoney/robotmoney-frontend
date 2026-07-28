@@ -935,6 +935,17 @@ constant" was actually protecting.
 - Re-enabling the per-PR eval that #289 removed is now affordable, but is
   **deliberately not part of this change** — it is a gating decision that
   deserves its own review.
+- The surviving property is **enforced, not merely documented**:
+  `scripts/checks/check-model-selection.sh` fails CI if a raw model-id literal
+  appears outside `scripts/lib/model-registry.ts`, if a retired knob
+  (`OPENCODE_MODEL`, `ONBOARDING_EVAL_MODEL`, a provider `*_API_KEY`) reappears,
+  or if the contribution-advisory reviewer stops resolving through
+  `keylessModel()`. It runs in the required per-PR `backend-integration` job,
+  and `scripts/tests/unit/model-selection-guard.test.ts` executes it against
+  planted fixtures so a green can never come from a scan that matched nothing.
+  Rules 2-4's `evals/` properties (no conditional skip, no mock or injection
+  seam) are enforced by the same script once that tree exists (#278); until then
+  it prints exactly what it did not scan rather than passing silently.
 
 ---
 
