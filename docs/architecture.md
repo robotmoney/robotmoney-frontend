@@ -2213,6 +2213,18 @@ per-PR checks below. The per-PR signal stays what it is today: the inference-off
 rails, plus the single real-inference admission the `e2e` job performs off its
 own demo boot.
 
+The `e2e` job's real-inference admission is **off by default on pull requests
+and opt-in per PR** (D22 amendment "E6 (2026-07-28)"): add the label `real-eval`
+to a PR and `ONBOARDING_REAL_EVAL` resolves to `"1"` for that PR's runs; remove
+it and the PR is back to zero model spend. `labeled` is in the workflow's
+`pull_request.types` so the label takes effect immediately, and the job guard
+drops `labeled` events for any other label so tagging a PR does not boot the
+live stack. That opt-in exists so a change *to this gate* can be exercised
+before it merges — without it the gate is only reachable on `main`, where a
+regression is discovered after the fact rather than on the PR that caused it.
+It does not make the eval an acceptance criterion: the paragraph above still
+holds for the nightly sweep.
+
 ---
 
 ## Admin Surface: Research and Investment Committee
