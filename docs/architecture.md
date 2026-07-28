@@ -642,6 +642,14 @@ rows past the pinned as-of) live in
   become claimable before the floor is seeded. `scripts/lib/demo-main.ts` runs
   this CLI once, right after API health and before anything else (CI checks or
   the local action loops) that could observe a fired `research.refresh` job.
+  Two `DEMO_MODE` details (issue #287): the flip EXCLUDES the demo's superseded
+  `1-59/2 * * * *` row (`db/seed.ts` disables it in favour of the hourly one —
+  enabling by `kind` alone would resurrect it every boot), and under `DEMO_MODE`
+  the endpoint also enqueues ONE immediate `research.refresh` job (constant
+  `dedupe_key`, so at most once per database) — this is the first moment a
+  research run is legitimate, and the hourly demo cadence would otherwise leave
+  the readiness gate with no research leg for up to an hour. Prod/CI without the
+  flag enqueue nothing: their daily 23:00 schedule owns the first run.
 - **Repopulation** (`edgar-seed-loader.ts::repopulateEdgarSeed` →
   `backend/scripts/edgar-seed-repopulate.ts`) is an operator command for a
   database that lost some MNA rows: it diffs the committed artifact against
@@ -1512,8 +1520,8 @@ deletes demo data volumes.
 flowchart TB
     subgraph Scheduler["⏱ Worker Scheduler"]
         SC["tickScheduler() every 30s<br/>reads job_schedules<br/>FOR UPDATE SKIP LOCKED"]
-        SC -->|even minute| R["regime.classify<br/>→ regime snapshot<br/>(analytics lane)"]
-        SC -->|odd minute| A["research.refresh<br/>→ research signals<br/>(research lane)"]
+        SC -->|hourly, minute 7| R["regime.classify<br/>→ regime snapshot<br/>(analytics lane)"]
+        SC -->|hourly, minute 37| A["research.refresh<br/>→ research signals<br/>(research lane)"]
         R -->|"poll DB (TUI)"| TP
         A -->|"poll DB (TUI)"| TP
     end
@@ -1587,18 +1595,26 @@ so re-booting on old data converges rather than duplicating rows. (Bind mounts w
 verified working on the Linux CI host — postgres:17-alpine chowns the bind dir to its own
 container user and inits/resumes cleanly — so the named-volume fallback was not needed.)
 
-**(b) Staggered scheduled actions (~2 min cadence).** The demo continuously produces
+**(b) Staggered scheduled actions.** The demo continuously produces
 fresh activity, driven two ways (hybrid):
 
 - **Regime + research** — driven by the worker's own scheduler. In demo mode
   (`DEMO_MODE=1` — the single demo-stack flag, pinned on every demo container by
   `docker-compose.demo.yml` and passed to the migrate/seed one-shot; it replaced
-  the old `DEMO_FAST_SCHEDULES`) the seed appends fast
+  the old `DEMO_FAST_SCHEDULES`) the seed appends
   demo-cadence rows to `job_schedules` in addition to the default daily 22:30 UTC rows:
-  `regime.classify` on `*/2 * * * *` (regime only, analytics lane) and
-  `research.refresh` on `1-59/2 * * * *` (both research signals only, research
+  `regime.classify` on `7 * * * *` (regime only, analytics lane) and
+  `research.refresh` on `37 * * * *` (both research signals only, research
   lane — issue #107 split the retired combined `analytics.run` kind). The
-  one-minute cron offset staggers them so they fire at different times.
+  distinct cron minutes stagger them so they never fire in the same minute (nor
+  in the same minute as the hourly vault sample at minute 0 or the demo wallet
+  sampler at minute 3). Both are HOURLY as of issue #287: the original
+  `*/2` + `1-59/2` pair fired one analytics action every minute against the
+  public Base RPC, exhausting the shared host's per-IP quota and starving CI's
+  own demo-readiness gate (blocker #285). Since the conflict key is
+  `(kind, cron)`, seeding on an existing deployment also DISABLES the superseded
+  `*/2` / `1-59/2` rows (one-directional, `AND enabled`-guarded) — that is what
+  actually switches the cadence.
   `DEMO_MODE` also SLOWS the wallet sampler: it seeds an hourly
   `wallet.sample_balances` row (`3 * * * *`, staggered off the hourly vault
   sample) and disables the per-minute baseline — the standing demo and the
