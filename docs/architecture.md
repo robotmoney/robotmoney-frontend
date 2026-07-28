@@ -2061,11 +2061,14 @@ Where any other code differs, this section wins.
   whether our instructions alone are enough to onboard a fresh agent. There are no
   mocks, stubs, or alternative code paths; the only permitted differences are
   configuration (endpoints, credentials) and who triggers approval and when (R7).
-  The container is a **vanilla, keyless OpenCode install** (D22): no API key, no
-  provider secret, no paid model, and no opt-in override may appear anywhere on an
-  eval path, and there is **no inference-off mode** — an eval always makes a real
-  model call, and a missing prerequisite fails loudly rather than passing by
-  absence. The eval's structure, scoring, and shared components are §11.3.
+  The container is a **vanilla OpenCode install** (D22) running the model
+  `AGENT_MODEL` resolves against `scripts/lib/model-registry.ts` — by default
+  `opencode/deepseek-v4-flash`, billed to the environment's own
+  `OPENCODE_API_KEY`; `AGENT_MODEL=free` still runs genuinely keyless. There is
+  **no inference-off mode** — an eval always makes a real model call, and a
+  missing prerequisite (Docker, egress, or a funded key for a paid model) fails
+  loudly rather than passing by absence. The eval's structure, scoring, and
+  shared components are §11.3.
 
 ### 11.2 Sequence
 
@@ -2115,13 +2118,24 @@ Status: target design (D22). R8 makes onboarding an eval; this section specifies
 what that eval is, how it is scored, and which components it shares with
 `bun run demo`. Where any other code differs, this section wins.
 
-**E1 — Keyless, no exceptions.** Every layer runs a **vanilla, keyless OpenCode
-install** pinned to the free OpenCode Zen tier (`opencode/big-pickle`). The model
-id is an in-code constant. No API key, provider secret, paid model, or opt-in
-override may be readable from, or passed to, any eval path — there is deliberately
-no configuration surface through which a keyed model could be selected. A
-contributor with a fresh checkout, Docker, and network egress can run the entire
-eval.
+**E1 — Vanilla install; the model is named in versioned source, never ambient.**
+Every layer runs a **vanilla OpenCode install** — no repo-specific harness, no
+pre-seeded state. Which model it runs is resolved from the versioned registry in
+`scripts/lib/model-registry.ts` by the single `AGENT_MODEL` selector, billed to
+the environment's own `OPENCODE_API_KEY`; the repo default is
+`opencode/deepseek-v4-flash`. The **ids live in source**, so the environment
+carries a selector (`deepseek`, `kimi/k2.6`) and never a raw model id, and an
+unknown family or member **throws** rather than falling back — an eval can never
+quietly run a model other than the one it was asked for. A contributor with a
+fresh checkout, Docker, and network egress can still run the entire eval unfunded
+via `AGENT_MODEL=free`, which selects Zen's no-credential tier and ignores any
+key that happens to be set.
+
+This amends E1's original "keyless, no exceptions" mandate, in step with **D22
+rule 1 as amended 2026-07-28** — the pinned free model `opencode/big-pickle` is
+saturated upstream (429 on every probe) with no funded tier to escape to, so the
+keyless mandate was costing the measurement it existed to protect. See D22's
+"Amendment: rule 1" for the full rationale. E2-E4 are unchanged.
 
 **E2 — No inference-off mode.** Every layer makes a real model call. There is no
 mock, no injection seam on the eval's own path, no scripted fallback that performs

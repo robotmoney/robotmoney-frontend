@@ -144,6 +144,13 @@ frontend, never committed (`.env` stays gitignored):
 - **`DATABASE_URL`** (§4.3)
 - **`FRED_API_KEY`**, **`BASE_RPC_URL`** — per ARCHITECTURE §8.
   **`ANTHROPIC_API_KEY`** is reserved — not currently consumed by any code.
+- **`OPENCODE_API_KEY`** — the OpenCode Zen credential for every real-inference
+  path (committee take authorship, the member-agent onboarding containers). ONE
+  variable name across CI / Stage / local, with a **different value in each**, so
+  spend is attributable and rotating one never touches another. Needs pay-as-you-go
+  credit on its Zen workspace (an opencode subscription does not fund it).
+  `AGENT_MODEL` selects which model it buys — see `.env.example` and
+  `scripts/lib/model-registry.ts`; `AGENT_MODEL=free` runs with no key at all.
 - **`PROJECTS_SOURCE=live`** — not a secret, but **required in prod**: the
   `/projects` directory pipelines fail closed
   (`backend/src/projects/access/select.ts` throws
@@ -214,6 +221,8 @@ Do this **once per environment** (staging, then production):
 **Application**
 - `FRED_API_KEY`, `BASE_RPC_URL` (`ANTHROPIC_API_KEY` is reserved — not
       currently consumed by any code)
+- `OPENCODE_API_KEY` (§5) — rotate per environment independently; revoking the
+      Stage key must never affect CI's.
 - `PROJECTS_SOURCE=live` in the prod droplet env (§5 — the projects
       pipelines fail closed without it)
 
