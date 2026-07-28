@@ -973,13 +973,11 @@ function committeeProgress(subjectId: string): SessionProgress {
 async function main(): Promise<void> {
   // §11 R8: real inference is the demo's onboarding mode, never an optional
   // extra behind a flag — there is no hermetic/scripted onboarding fallback.
-  // resolveModelConfig() defaults to the free keyless tier (so this
-  // ordinarily just succeeds with zero configuration, for both a local demo
-  // and CI), but an operator's EXPLICIT, incomplete paid-model opt-in
-  // (OPENCODE_MODEL set to a non-default model with no matching key) must
-  // still fail LOUDLY here, before the demo spends minutes standing up the
-  // stack, rather than have onboardingDriver() throw quietly in the
-  // background later. CI's own invocation of this file exits (via the
+  // resolveModelConfig() resolves AGENT_MODEL against the registry and pairs
+  // it with OPENCODE_API_KEY. A misconfiguration — an unknown model family, or
+  // a paid model with no funded key — must fail LOUDLY here, before the demo
+  // spends minutes standing up the stack, rather than have onboardingDriver()
+  // throw quietly in the background later. CI's own invocation of this file exits (via the
   // `if (process.env.CI)` branch below) before ever reaching
   // onboardingDriver() — it runs a different, non-onboarding check suite — so
   // this check applies to a LOCAL standing demo unconditionally, and to a CI
@@ -1192,10 +1190,10 @@ async function main(): Promise<void> {
     // .github/workflows/committee-opencode-nightly.yml, and
     // .github/workflows/e2e.yml on NON-PR events only — e2e.yml derives it from
     // `github.event_name != 'pull_request'`, so a per-PR run of the required
-    // gate spends no model call. The free, no-credential OpenCode Zen default
-    // (see resolveModelConfig() in onboarding-eval.ts) means there is no secret
-    // to be missing, but it IS quota-limited, and one eval per PR exhausted it
-    // — the nightly measures the same surface on a cadence we can fund. A run
+    // gate spends no model call. That gating dates from the free-tier default,
+    // whose quota one eval per PR exhausted; the default is now a funded model
+    // (D22 as amended), so per-PR evals are affordable again and re-enabling
+    // them is tracked separately rather than smuggled into this change. A run
     // without ONBOARDING_REAL_EVAL set at all (a `pull_request` run of e2e.yml,
     // a plain local `bun run demo`, or any invocation predating this env var)
     // is a no-op here and relies on Stage 5's separate inference-off
@@ -1204,27 +1202,27 @@ async function main(): Promise<void> {
     // admission THROWS (via `run`'s pattern — no silent pass): the whole point
     // of real inference is that a vanilla agent failing to navigate our own
     // onboarding instructions is a real regression signal, not a shrug.
-    // Provider/infra flake (rate-limit signals, and — on the keyless default —
+    // Provider/infra flake (rate-limit signals, and — on a keyless model —
     // bare timeouts too) is mitigated by runOnboardingEvalWithRetry's own
     // retry/backoff (scripts/lib/onboarding-eval.ts); it never retries a
     // genuine navigation failure.
     //
     // Sweep width (nightly-only knobs, both optional, both no-ops for e2e.yml,
     // which never sets them): ONBOARDING_SWEEP_MODELS is a ":"-separated
-    // list of OPENCODE_MODEL values to try (default: the single model
-    // resolveModelConfig() resolves — the keyless default unless an operator
-    // opted into a paid one); ONBOARDING_SWEEP_IDENTITIES_PER_MODEL is how
+    // list of AGENT_MODEL selectors to try — family names, family/model pins,
+    // or raw opencode/<id> (e.g. "deepseek:kimi:gpt/5.4"); default is the
+    // single model resolveModelConfig() resolves.
+    // ONBOARDING_SWEEP_IDENTITIES_PER_MODEL is how
     // many fresh admissions to run per model (default 1). e2e.yml never sets
     // either, so its non-PR runs stay exactly one admission on one model —
     // this block is a strict superset of that behaviour, not a different code
     // path (§11 R8: one real flow, config-only differences).
     if (process.env.ONBOARDING_REAL_EVAL === "1") {
-      // No model configured (OPENCODE_MODEL/ONBOARDING_SWEEP_MODELS unset) is
-      // NOT an error anymore — it means "use the default free keyless tier",
-      // exactly like resolveModelConfig() resolves it for a single admission.
-      // Reuse that same resolution here so the sweep's default and a plain
-      // admission's default can never drift apart.
-      const sweepModels = (process.env.ONBOARDING_SWEEP_MODELS?.trim() || process.env.OPENCODE_MODEL || resolveModelConfig().model)
+      // Nothing configured means "use the repo default", exactly as
+      // resolveModelConfig() resolves it for a single admission. Reuse that
+      // same resolution here so the sweep's default and a plain admission's
+      // default can never drift apart.
+      const sweepModels = (process.env.ONBOARDING_SWEEP_MODELS?.trim() || process.env.AGENT_MODEL || resolveModelConfig().model)
         .split(":")
         .map((m) => m.trim())
         .filter(Boolean);
@@ -1243,7 +1241,7 @@ async function main(): Promise<void> {
             composeFiles: composeFilesRun.split(":"),
             backendUrl,
             adminToken: adminPassword,
-            env: { ...process.env, OPENCODE_MODEL: model },
+            env: { ...process.env, AGENT_MODEL: model },
             onEvent: (msg) => console.log(`[demo] onboarding-real-eval[${model}]: ${msg}`),
           });
           sweepResults.push({ model, result });

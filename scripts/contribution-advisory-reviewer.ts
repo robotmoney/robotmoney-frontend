@@ -3,8 +3,17 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { delimitContributionDiff } from "./lib/contribution-reviewer-diff.ts";
+import { keylessModel } from "./lib/model-registry.ts";
 
-export const CONTRIBUTION_REVIEW_MODEL = "opencode/big-pickle";
+// PINNED KEYLESS, and not by accident. Unlike every other real-inference path
+// in this repo, this reviewer reads an UNTRUSTED pull-request diff and posts the
+// model's output as a public PR comment. A funded credential in that job is one
+// prompt-injection away from being echoed into that comment, so the workflow
+// carries no secret at all (asserted by scripts/tests/
+// contribution-advisory-workflow.test.ts) and this model must need none.
+// Resolved from the registry's `free` family rather than hardcoded, so it moves
+// with the catalogue instead of rotting independently.
+export const CONTRIBUTION_REVIEW_MODEL = keylessModel();
 export const CLEAN_CONTRIBUTION_REVIEW = "No contribution-governance concerns.";
 export const MAX_CONTRIBUTION_DIFF_CHARS = 200_000;
 export const MAX_CONCERNS = 5;
