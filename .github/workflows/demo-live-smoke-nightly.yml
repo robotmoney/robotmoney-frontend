@@ -37,7 +37,7 @@
 # scripts/demo-live-smoke.ts exits non-zero on starvation, a stale snapshot, a
 # NEW silently-stale leg, or a missing signal — an unavailable LIVE leg turns
 # this job RED, never green-via-skip. The loud-failure paths of the smoke
-# script are themselves proven by scripts/tests/demo-live-smoke.test.ts in the
+# script are themselves proven by scripts/tests/integration/demo-live-smoke.test.ts in the
 # required integration root job.
 #
 # NO SECRET

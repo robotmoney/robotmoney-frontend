@@ -1199,7 +1199,7 @@ async function main(): Promise<void> {
     // without ONBOARDING_REAL_EVAL set at all (a `pull_request` run of e2e.yml,
     // a plain local `bun run demo`, or any invocation predating this env var)
     // is a no-op here and relies on Stage 5's separate inference-off
-    // infra-rails test (scripts/tests/onboarding-eval-infra.test.ts), which
+    // infra-rails test (scripts/tests/integration/onboarding-eval-infra.test.ts), which
     // e2e.yml still runs unconditionally on every PR. A failed/timed-out
     // admission THROWS (via `run`'s pattern — no silent pass): the whole point
     // of real inference is that a vanilla agent failing to navigate our own

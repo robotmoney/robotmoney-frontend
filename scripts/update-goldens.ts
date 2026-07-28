@@ -9,7 +9,7 @@
 // analytics, NOT hand-written and NOT generated from other fixtures.
 //
 // Goldens freshness is ENTIRELY the responsibility of the agent making the
-// system change. A CI drift gate is wired into scripts/tests/goldens-drift.test.ts,
+// system change. A CI drift gate is wired into scripts/tests/unit/goldens-drift.test.ts,
 // which blocks a PR if goldens have drifted from the code (route set or field
 // shapes no longer match). Rerun this capture whenever a change alters an API
 // shape, and the test will enforce the update before merge.

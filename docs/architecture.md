@@ -317,11 +317,11 @@ deploy-side check. Two gates run in the normal PR suite:
   links. It runs in the regular Playwright suite (`bun run test:browser`),
   executed by the **`e2e` workflow's `e2e` job** (demo readiness gate) on every
   ready PR.
-- **Goldens drift gate** — `scripts/tests/goldens-drift.test.ts` blocks a PR
+- **Goldens drift gate** — `scripts/tests/unit/goldens-drift.test.ts` blocks a PR
   whose goldens no longer match the code (route set or field shapes). It runs in
   `bun test scripts/tests` in the **`integration` workflow's
   `backend-integration` job** ("Check root scripts" step), which also runs
-  `scripts/tests/cloudflare-statics.test.ts` (asserts the assemble script lands
+  `scripts/tests/unit/cloudflare-statics.test.ts` (asserts the assemble script lands
   the key files in `_site`).
 
 An agent (or human) whose change alters an API route or shape must recapture in
@@ -1793,7 +1793,7 @@ RM never holds the private key at any point.
 - The resolver (`scripts/lib/demo-env.ts::resolveDemoEnv`, re-exported by
   `scripts/demo.ts`) is the single source of truth for the live data path;
   `docker-compose.demo.yml` mirrors its defaults so the two layers can never
-  disagree (asserted by `scripts/tests/demo-compose-config.test.ts`).
+  disagree (asserted by `scripts/tests/integration/demo-compose-config.test.ts`).
 
 ### 7b. Demo readiness gate
 
@@ -1818,13 +1818,13 @@ and runs the loud-failure guards that keep broken demos off main:
   the required gate and the nightly sweep can never drift apart.
 
 The core-surface detector's own loud-failure path is **self-tested**, not assumed:
-`scripts/tests/demo-frontend-check.test.ts` (run in the required `integration` job via
+`scripts/tests/integration/demo-frontend-check.test.ts` (run in the required `integration` job via
 `bun run test`) spawns the real `scripts/demo-frontend-check.ts` against an in-process
 stub backend and proves both directions — it exits non-zero when the
 `x-data="committeeView()"` marker is stripped from the served `/views/committee.html`,
 and exits 0 against the correct, unmodified content — so a change that silently weakened
 the detector's assertions is caught. The `demo-live-smoke.ts` assertions are likewise
-self-tested by `scripts/tests/demo-live-smoke.test.ts`.
+self-tested by `scripts/tests/integration/demo-live-smoke.test.ts`.
 
 Because every PR's required gate now depends on live external providers (public
 Base mainnet RPC, FRED/Coin Metrics/GeckoTerminal/Yahoo/EDGAR), this job runs
@@ -2127,7 +2127,7 @@ eval.
 mock, no injection seam on the eval's own path, no scripted fallback that performs
 the agent's steps for it, and no conditional skip: a missing Docker daemon or
 missing egress **throws**, failing the eval loudly. Inference-off *rails* checks
-(`scripts/tests/onboarding-eval-infra.test.ts`) remain valuable and remain
+(`scripts/tests/integration/onboarding-eval-infra.test.ts`) remain valuable and remain
 separate — they prove the machinery an eval rides on, and they are never a
 substitute for one.
 

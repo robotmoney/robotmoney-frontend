@@ -42,7 +42,7 @@ review; stop it with Ctrl-C.
 
 Goldens are mock API responses the preview wrapper replays. **Correct goldens are
 the responsibility of the change author** — there is no nightly job that fixes
-them for you, and a CI **drift gate** (`scripts/tests/goldens-drift.test.ts`)
+them for you, and a CI **drift gate** (`scripts/tests/unit/goldens-drift.test.ts`)
 will block a PR whose goldens no longer match the code (see the preview/goldens
 section of `docs/architecture.md`).
 
@@ -99,7 +99,7 @@ mechanism** — the dictionary is the only authorization surface.
 | Server / queue / workers / migrations | `backend/` |
 | Shared HTTP contract | `contract/` — re-vendor with `bun run sync-contract`, never hand-edit |
 | Committee MCP server | `mcp/` |
-| Tooling & CI scripts | `scripts/` — tests in `scripts/tests/` |
+| Tooling & CI scripts | `scripts/` — tests in `scripts/tests/unit/` (checkout-only: no Docker, no network, `bun run test:unit`) or `scripts/tests/integration/` (Docker- or network-backed, `bun run test:integration`). The directory IS the CI cost class (D23); never leave a test loose at `scripts/tests/`. |
 | Technical docs about this repo | `docs/**/*.md` (kebab-case) |
 | Workflows | `.github/workflows/` |
 | Root | config only — new root files/dirs are a review flag |

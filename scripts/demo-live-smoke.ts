@@ -43,7 +43,7 @@
 // pass or the deadline lapses; the deadline derives from the demo's own
 // schedule constants (scripts/lib/demo-schedule.ts), not magic numbers.
 // DEMO_LIVE_SMOKE_DEADLINE_MS overrides it ONLY so the unit self-test
-// (scripts/tests/demo-live-smoke.test.ts) can prove the red paths quickly.
+// (scripts/tests/integration/demo-live-smoke.test.ts) can prove the red paths quickly.
 import { ROUTES, path as routePath } from "@robotmoney/contract";
 import { COMMITTEE_INTERVAL_MS } from "./lib/demo-schedule.ts";
 
@@ -77,7 +77,7 @@ export const LIVE_SMOKE_DEADLINE_MS = 2 * COMMITTEE_INTERVAL_MS;
 // ── Pure evaluators ─────────────────────────────────────────────────────────
 // Each takes the parsed API payload (null ⇒ the fetch failed / non-2xx) and
 // returns failure strings naming the leg/feed. Unit-tested directly in
-// scripts/tests/demo-live-smoke.test.ts.
+// scripts/tests/integration/demo-live-smoke.test.ts.
 
 interface SessionRow { state?: string; date?: string; subjectId?: string }
 export function evaluateSessions(body: { sessions?: SessionRow[] } | null): string[] {

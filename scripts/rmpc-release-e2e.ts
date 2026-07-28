@@ -5,7 +5,7 @@
 // SAME rmpc release binary and the SAME public REST API a real agent would use
 // (D21 — the MCP transport is retired; see docs/decisions.md D21).
 // robotmoney-core unit/integration tests prove rmpc's own crypto/CLI behavior
-// in isolation; scripts/tests/rmpc-canonical-apply.test.ts proves the JS
+// in isolation; scripts/tests/integration/rmpc-canonical-apply.test.ts proves the JS
 // canonical serializer and rmpc's signing are byte-exact against Stage 0's
 // golden fixtures; THIS script is the only thing that proves a released binary
 // drives the full chain against a LIVE robotmoney-frontend backend stack:
@@ -37,10 +37,10 @@ import { canonicalizeApplication, canonicalizeClaimChallenge, canonicalizeSubmis
 import { fetchRmpc, runRmpcJson, RMPC_VERSION, resolveRmpcAsset, missingCommitteeIdentitySubcommands } from "./lib/rmpc-fetch.ts";
 import { admin, enqueueLifecycleJob, waitForSessionState } from "./lib/committee/session.ts";
 
-// Re-exported so scripts/tests/rmpc-release-e2e.test.ts (this script's own
+// Re-exported so scripts/tests/unit/rmpc-release-e2e.test.ts (this script's own
 // unit tests) can keep importing the pure asset/subcommand helpers from
 // here; the implementations now live in scripts/lib/rmpc-fetch.ts (Stage 3),
-// shared with scripts/tests/rmpc-canonical-apply.test.ts.
+// shared with scripts/tests/integration/rmpc-canonical-apply.test.ts.
 export { resolveRmpcAsset, missingCommitteeIdentitySubcommands };
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8787";
