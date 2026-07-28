@@ -107,9 +107,12 @@ container to depend on:
   preinstalled) added to `docker-compose.demo.yml`, one instance per admission,
   with egress to the demo **API** container, the `robotmoney-core` release
   assets (`rmpc` download **and** the `committee-onboarding` skill), and the
-  model API. Real inference on a **vanilla keyless OpenCode install** — no API
-  key, no paid model, no opt-in override anywhere on the eval path (D22); the
-  model id is an in-code constant, not an environment variable.
+  model API. Real inference on a **vanilla OpenCode install** running a funded,
+  registry-selected model (D22 rule 1 as amended 2026-07-28): the model is chosen
+  by the single `AGENT_MODEL` signal resolved against
+  `scripts/lib/model-registry.ts`, and billed to `OPENCODE_API_KEY`. Model ids
+  live in versioned source, never in the environment — the environment carries
+  only the selector. `AGENT_MODEL=free` remains a genuinely keyless path.
 - **Harness**: for each scheduled admission, `onboardingDriver()`
   (`scripts/lib/demo-main.ts:1295+`) generates an identity, starts the
   container, and injects the canonical copy-paste prompt verbatim (same text as

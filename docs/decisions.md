@@ -728,7 +728,14 @@ secure.
 
 ---
 
-## D22 — Evals run on a vanilla keyless OpenCode install; the onboarding eval is layered and shares the demo's stack
+## D22 — Evals run a registry-selected OpenCode model; the onboarding eval is layered and shares the demo's stack
+
+> **Rule 1 amended 2026-07-28.** This decision originally mandated a *vanilla
+> keyless* install. Evals now run a funded, registry-selected model
+> (`AGENT_MODEL` → `scripts/lib/model-registry.ts`), with `AGENT_MODEL=free`
+> still available as a keyless path. Rules 2-4 are unchanged and still
+> binding. Read the amendment at the end of this decision before relying on
+> any statement below it.
 
 **Decision.** Four rules, binding on every eval in this repo.
 
@@ -811,10 +818,12 @@ exactly this reason.
 
 **Relationship.**
 - **Revises architecture.md §11 R8** (onboarding is an eval): R8's "vanilla
-  OpenCode agent container doing real inference" is unchanged in intent and is
-  now explicit that the install is **keyless**, that no API key may appear on an
-  eval path, and that no inference-off substitute exists. The layered structure,
-  scoring, and shared components are specified in the new **§11.3**.
+  OpenCode agent container doing real inference" is unchanged in intent, and no
+  inference-off substitute exists. ~~The install is **keyless** and no API key
+  may appear on an eval path.~~ **Superseded by the rule-1 amendment below** —
+  the eval runs a funded, registry-selected model and `OPENCODE_API_KEY` is
+  expected on the eval path; §11.3 E1 carries the amended normative text. The
+  layered structure, scoring, and shared components are specified in **§11.3**.
 - **Retires the paid-model opt-ins.** `resolveModelConfig`'s non-default branch
   (`OPENCODE_MODEL` + `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`), `e2e.yml`'s
   `ONBOARDING_EVAL_MODEL` + `ANTHROPIC_API_KEY` trusted-context gate, and
