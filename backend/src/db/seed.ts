@@ -33,7 +33,9 @@ interface SeedSchedule {
 // enqueues lifecycle jobs explicitly via the admin enqueue-job endpoint, which
 // lets it control the pace while still exercising the real worker claim loop +
 // handler path.
-const SCHEDULES: SeedSchedule[] = [
+// Exported so tests can assert the non-DEMO_MODE seed is byte-for-byte this
+// list (prod/CI correctness depends on the demo gating never leaking).
+export const SCHEDULES: SeedSchedule[] = [
   // Daily 22:30 UTC: regime-only classification. After the US equity close
   // (21:00 UTC) + FRED's daily refresh, mirroring the original scripts/regime
   // cron so the fetched raw is the settled end-of-day data. Regime and research
@@ -95,19 +97,39 @@ const SCHEDULES: SeedSchedule[] = [
 // replaced the retired per-property fast-schedules flag). Prod/CI leave it unset,
 // so the default seed above is byte-for-byte unchanged there.
 //
-// These drive the worker's scheduler at a ~2-minute cadence and are STAGGERED by
+// These drive the worker's scheduler at an HOURLY cadence and are STAGGERED by
 // different cron minute offsets (cron is minute-granularity) so the two analytics
-// action types never fire in the same minute:
-//   - regime.classify  (regime-only, analytics lane)   → even minutes (*/2)
-//   - research.refresh (research-only, research lane)  → odd minutes  (1-59/2)
+// action types never fire in the same minute — and neither collides with
+// vault.sample_share_price (minute 0) or the demo wallet sampler (minute 3):
+//   - regime.classify  (regime-only, analytics lane)   → minute 7
+//   - research.refresh (research-only, research lane)  → minute 37
+// Hourly, not the original ~2-minute pair (issue #287): together those fired one
+// analytics action EVERY minute (~1440/day) against the public Base RPC, and the
+// standing demo shares one host IP with the self-hosted CI runner, so the drain
+// exhausted the per-IP quota and starved CI's own demo-readiness gate (blocker
+// #285). Same disease #211 treated for the wallet sampler / GeckoTerminal reads,
+// in the artery it did not cover. CI's fresh demo stacks pay this cost too, so
+// the fix is worthwhile independent of the standing demo.
 // New (kind, cron) combos, so ON CONFLICT DO NOTHING inserts them once and lets
-// the scheduler own next_run_at/enabled bookkeeping thereafter.
+// the scheduler own next_run_at/enabled bookkeeping thereafter. Because the
+// conflict key is (kind, cron), these hourly rows merely COEXIST with the
+// superseded */2 rows on an already-deployed database; seedJobSchedules()
+// additionally DISABLES those rows under DEMO_MODE (see below) — that is what
+// actually switches the cadence.
 // research.refresh is seeded DISABLED here too (issue #108) — the demo's
 // edgar-seed-bootstrap step flips it on after the fast demo's seed ingestion
 // completes, same as the daily schedule above.
 const FAST_DEMO_SCHEDULES: SeedSchedule[] = [
-  { kind: "regime.classify", cron: "*/2 * * * *", payload: {}, timezone: "UTC", enabled: true },
-  { kind: "research.refresh", cron: "1-59/2 * * * *", payload: {}, timezone: "UTC", enabled: false },
+  { kind: "regime.classify", cron: "7 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "research.refresh", cron: "37 * * * *", payload: {}, timezone: "UTC", enabled: false },
+];
+
+// The pre-#287 demo analytics rows, superseded by FAST_DEMO_SCHEDULES above and
+// disabled (never deleted — job_runs history and operator intent stay legible)
+// on any database that already holds them.
+const SUPERSEDED_FAST_DEMO_SCHEDULES: { kind: string; cron: string }[] = [
+  { kind: "regime.classify", cron: "*/2 * * * *" },
+  { kind: "research.refresh", cron: "1-59/2 * * * *" },
 ];
 
 // Slow demo samplers — also gated on DEMO_MODE. The standing local demo and
@@ -195,6 +217,20 @@ export async function seedJobSchedules(): Promise<void> {
        WHERE kind = 'wallet.sample_balances' AND cron = '* * * * *' AND enabled
     `;
     console.log("DEMO_MODE: disabled per-minute wallet.sample_balances (hourly demo cadence owns sampling)");
+
+    // Same one-directional treatment for the superseded ~2-minute demo
+    // analytics rows (issue #287): the hourly (kind, cron) rows inserted above
+    // only COEXIST with "*/2 * * * *" / "1-59/2 * * * *", so flipping the old
+    // rows off is what actually switches the cadence and stops the Base RPC
+    // drain. Only ever sets false (an operator's manual disable is never
+    // re-enabled) and the `AND enabled` guard makes re-runs no-ops.
+    for (const s of SUPERSEDED_FAST_DEMO_SCHEDULES) {
+      await sql`
+        UPDATE job_schedules SET enabled = false
+         WHERE kind = ${s.kind} AND cron = ${s.cron} AND enabled
+      `;
+    }
+    console.log("DEMO_MODE: disabled superseded ~2-minute regime.classify/research.refresh rows (hourly demo cadence owns analytics)");
   }
 
   // Retire the combined `analytics.run` kind (issue #107). This seed is

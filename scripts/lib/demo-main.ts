@@ -575,8 +575,8 @@ async function expectRunFailure(cmd: string[], cwd: string, env: Record<string, 
 }
 
 // --- Research polling (no backend change) ---------------------------------
-// The worker's scheduler drives regime.classify (even min, analytics lane) +
-// research.refresh (odd min, research lane) via the fast demo schedules. We
+// The worker's scheduler drives regime.classify (hourly at :07, analytics lane) +
+// research.refresh (hourly at :37, research lane) via the demo schedules. We
 // observe them by polling the REAL task queue over
 // `docker compose exec -T postgres psql`. The `jobs` table carries the
 // honest lifecycle state (pending→running→succeeded/failed); `job_runs` only ever
@@ -1068,9 +1068,12 @@ async function main(): Promise<void> {
   // one-shot too); the explicit -e here is deliberate redundancy so the seed's
   // demo gating never silently depends on which overlay files a future
   // invocation composes. Under DEMO_MODE the seed (backend/src/db/seed.ts):
-  //   - adds the fast (~2 min, staggered) regime/research schedules so the
-  //     worker's own scheduler drives them — the required per-PR e2e gate
-  //     asserts a real LIVE steady state via scripts/demo-live-smoke.ts (#147);
+  //   - adds HOURLY, staggered regime/research schedules (minutes 7 and 37) so
+  //     the worker's own scheduler drives them — the required per-PR e2e gate
+  //     asserts a real LIVE steady state via scripts/demo-live-smoke.ts (#147).
+  //     Hourly since #287: the earlier ~2-minute pair fired one analytics
+  //     action per minute against the public Base RPC and exhausted the shared
+  //     host's per-IP quota, starving that very gate;
   //   - adds an HOURLY wallet.sample_balances row and disables the per-minute
   //     baseline (per-IP quota protection: the standing demo and the
   //     self-hosted CI runner share one host IP, and the per-minute sampler's
@@ -1307,9 +1310,9 @@ async function main(): Promise<void> {
     .then(() => log("frontend checks passed"))
     .catch((err) => log(`frontend checks failed (stack still running): ${err instanceof Error ? err.message : err}`));
 
-  // ── Phase B: staggered ~2-min demo actions ───────────────────────────────
+  // ── Phase B: staggered demo actions ──────────────────────────────────────
   // Analytics (regime + research) is driven by the WORKER's own scheduler via the
-  // fast demo schedules seeded above — regime on even minutes, research on odd, so
+  // demo schedules seeded above — regime hourly at :07, research hourly at :37, so
   // those two action types are already staggered from each other (see seed.ts).
   //
   // The committee session drives live agents to submit takes over REST, so it
