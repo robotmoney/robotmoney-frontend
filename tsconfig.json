@@ -15,6 +15,7 @@
   },
   "include": [
     "scripts/**/*.ts",
+    "evals/**/*.ts",
     "playwright.config.ts",
     "frontend/test/browser/**/*.ts"
   ]
