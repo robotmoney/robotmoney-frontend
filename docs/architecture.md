@@ -2197,11 +2197,21 @@ path with fewer services booted. Three components are shared by construction:
 
 **E6 — CI placement.** The eval is `CI_CLASS: heavy` — sweep-only, therefore no
 `pull_request` trigger — and runs in the existing
-`committee-opencode-nightly.yml` on `ubuntu-latest` (the self-hosted runner
-shares its IP with the standing `rmdemo_*` stack and has a documented history of
-429 flake on live-call gates). No new workflow is added. The per-PR signal stays
-what it is today: the inference-off rails, plus the single real-inference
-admission the `e2e` job performs off its own demo boot.
+`committee-opencode-nightly.yml` on `[self-hosted, robotmoney-self-hosted]`, the
+runner **every** workflow in this repo uses. (It was pinned to `ubuntu-latest`
+because the self-hosted host shares its IP with the standing `rmdemo_*` stack
+and free-tier models rate-limit per IP. Funded models bill the workspace, not an
+IP quota, so that exception retired with D22 rule 1's amendment.) No new workflow
+is added.
+
+Because it is heavy and sweep-only, a run of this eval is **never** an acceptance
+criterion or test-plan item on a pull request: it runs on a schedule against
+`main`, so requiring it before merge would gate a change on a job that only
+exists after that change lands. It is post-merge monitoring — a model beginning
+to refuse, a key running dry — and a PR asserts the same surface through the
+per-PR checks below. The per-PR signal stays what it is today: the inference-off
+rails, plus the single real-inference admission the `e2e` job performs off its
+own demo boot.
 
 ---
 
