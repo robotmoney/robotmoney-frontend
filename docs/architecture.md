@@ -923,8 +923,10 @@ verify; a no-show renders **absent**, not fabricated; out-of-window POSTs
 are rejected; cross-role writes are denied; a published session renders the *real*
 takes. The demo is the same harness at scale. Hermetic: a missing dependency fails
 the run rather than silently skipping. Real-LLM member takes are a separate
-opt-in: `COMMITTEE_REAL_INFERENCE=1` swaps the templated take for a keyless
-opencode-zen call that is **time-bounded**
+opt-in: `COMMITTEE_REAL_INFERENCE=1` swaps the templated take for a real
+opencode-zen call — the model `AGENT_MODEL` resolves against
+`scripts/lib/model-registry.ts`, billed to `OPENCODE_API_KEY` (§11.3 E1) —
+that is **time-bounded**
 (`OPENCODE_TIMEOUT_MS`, default 120s — a hung inference kills the subprocess
 instead of freezing the session), and member runs are settled rather than
 `Promise.all`'d, so a per-member inference/session failure renders that member
