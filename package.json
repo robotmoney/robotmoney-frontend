@@ -17,6 +17,7 @@
     "preview": "bun scripts/preview-server.ts",
     "goldens:update": "bun scripts/update-goldens.ts",
     "demo": "bun scripts/demo.ts",
+    "onboarding-eval": "bun scripts/onboarding-eval-local.ts",
     "demo:down": "bun scripts/demo-down.ts",
     "demo:status": "bun scripts/demo-status.ts",
     "demo:clean": "bun scripts/demo-clean.ts",

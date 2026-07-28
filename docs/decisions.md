@@ -955,6 +955,53 @@ constant" was actually protecting.
   seam) are enforced by the same script once that tree exists (#278); until then
   it prints exactly what it did not scan rather than passing silently.
 
+### Amendment: E6 (2026-07-28) — the per-PR eval is opt-in, not unreachable
+
+**What changed.** `.github/workflows/e2e.yml` gains a per-PR opt-in for the §11
+R8 real-inference onboarding eval. `ONBOARDING_REAL_EVAL` now resolves to `"1"`
+on three routes instead of one:
+
+1. a push to `main` (unchanged);
+2. a `pull_request` whose PR carries the label **`real-eval`**;
+3. a `workflow_dispatch` started with the `real_eval` input set true.
+
+Everything else is unchanged: an ordinary PR run still spends **zero** model
+tokens, the nightly `committee-opencode-nightly.yml` still owns the trend
+sweep, and the inference-off rails check still runs on every PR.
+
+**Why.** #289's arrangement made the eval reachable only *after* merge. A PR
+that changes the eval — its model selection, its prompt, its stack — therefore
+merges green and then breaks `main`, because the gate it changed could not be
+exercised on the branch. That is exactly what happened to PR #292 (`main` red on
+this gate for 5 of the 6 runs that followed). The missing capability was never
+"run it on every PR"; it was "run it on the one PR that needs it".
+
+**Why not on by default.** Cost is no longer an exhaustible free quota (rule 1's
+amendment above), but this repo has one self-hosted runner, and an eval per PR
+is minutes of exclusive runner time per PR against a stochastic metric. Off by
+default, opt-in per PR, nightly for the trend.
+
+**Mechanics and their costs.**
+- `pull_request.types` gains `labeled` so applying the label re-triggers the
+  workflow at once — no push, no manual re-run. The `workflow_dispatch` input is
+  the secondary route only, because Actions reads dispatch input definitions
+  from the **default branch's** copy of a workflow, so a dispatch input is
+  unusable on the very PR that introduces it.
+- The job-level `if:` ignores a `labeled` event whose label is not `real-eval`,
+  so tagging a PR with anything else does not boot the live stack. Accepted
+  cost: a job skipped by `if:` reports as *passing* to branch protection, so an
+  unrelated label added on top of a red `e2e` would supersede it with a green
+  skip. No automation in this repo labels PRs, the same property already holds
+  for the pre-existing draft guard, and the alternative — running the full
+  ~40-minute gate on every label event — is worse on one runner.
+- A labelled **fork** PR still resolves no `OPENCODE_API_KEY`; the job summary
+  reports `CANNOT RUN` rather than degrading silently.
+- `scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts` no longer greps the
+  workflow — it **evaluates** e2e.yml's real Actions expressions against
+  synthetic event payloads and asserts the resolved values, with red controls
+  (including an expression that mentions `pull_request` yet still pays on every
+  PR) proving the guard is not a tautology.
+
 ---
 
 ## D23 — Organize by CI cost class and domain; no big-bang reorg

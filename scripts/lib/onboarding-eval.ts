@@ -44,19 +44,29 @@
 // intentional limit of the observe-only design, not a bug — documented here
 // rather than faked with invented per-step signals.
 //
-// ── Local-network substitution for the unprovisioned staging committee host
+// ── What the harness supplies, and what it refuses to supply (§11.3 E7) ─────
 // ONBOARDING_PROMPT is injected with its <display name>/<email> placeholders
 // filled in (exactly as the prompt's own text says a human would do by hand
-// before pasting). Nothing else about the prompt text is changed. Because the
-// prompt's doc link is a production URL this ephemeral demo stack cannot serve,
-// the injected prompt carries a harness note with the committee REST API base
-// URL reachable over this run's compose network — the ONE piece of information
-// a real applicant's own agent would already have (a human, per the real docs,
-// would apply against committee.robotmoney.net). Discovering WHAT to do —
-// installing the committee-onboarding skill, installing rmpc, generating keys,
-// signing, submitting the signed apply over REST, waiting, claiming — is still
-// 100% the agent's own real inference; nothing carries onboarding-specific
-// knowledge (D21: the MCP transport is retired; the agent uses plain HTTP).
+// before pasting). Nothing else about the prompt text is changed. Everything
+// else the harness provides is the OWNER's side of onboarding — the half a real
+// applicant's human would have handled before their agent ever started:
+//
+//   - the committee REST API base URL for this run (the prompt's doc link is a
+//     production host this ephemeral demo stack cannot serve; a real human, per
+//     the real docs, would be applying against committee.robotmoney.net);
+//   - the keystore passphrase, exported into the container's environment
+//     (KEYSTORE_PASSPHRASE_ENV) — the published committee-onboarding skill
+//     tells the agent to ask its owner for exactly this and to WAIT for them,
+//     which is unanswerable in a headless container;
+//   - a vanilla, non-hostile permission set and the real auto-approve flag
+//     (scripts/agent/member-agent.ts), so the eval measures our instructions
+//     rather than our own sandbox refusing the agent's tool calls.
+//
+// Discovering WHAT to do — installing the committee-onboarding skill,
+// installing rmpc, generating keys, signing, submitting the signed apply over
+// REST, waiting, claiming — is still 100% the agent's own real inference. No
+// harness-supplied string names a tool, an endpoint, a payload shape or a step
+// (D21: the MCP transport is retired; the agent uses plain HTTP).
 //
 // ── Where the machinery lives now ─────────────────────────────────────
 // The container mechanics (tmpdir + mounted opencode.json, deterministic
@@ -91,6 +101,7 @@ export {
   drain,
   memberAgentContainerName,
   memberAgentSpawnEnv,
+  redactSecrets,
   runMemberAgent,
   type MemberAgentModel,
 } from "../agent/member-agent.ts";
@@ -121,10 +132,26 @@ export const DEFAULT_API_URL_INTERNAL = "http://api:8787";
 // was still productively working past 11 minutes, nowhere near stuck. The
 // original 8-minute bound was arbitrary and too short for how much real
 // work a prompt-only agent legitimately needs on the free/slower keyless
-// tier; 20 minutes gives it realistic room without being unbounded.
-export const DEFAULT_TIMEOUT_MS = 20 * 60_000;
+// tier; 20 minutes gave it realistic room without being unbounded.
+//
+// Raised again, 20 → 30 minutes, on measurement rather than feel. Four local
+// admissions against the fixed harness (2026-07-28, opencode/deepseek-v4-flash,
+// `bun run onboarding-eval`) took 148s, 331s, 347s and **1183s**. The tail is
+// not a stuck agent: the slow sample was productively signing, submitting,
+// reading the rejection and re-signing right up to the end, and it landed with
+// 17 seconds to spare. A bound that a real success clears by 1.4% is a
+// coin-flip gate, and a false "timed out" is the most expensive result this
+// eval can produce — it reads as "our instructions failed" when they did not.
+// This costs nothing on a fast run; it only stops truncating a slow one.
+export const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 export const DEFAULT_POLL_INTERVAL_MS = 3_000;
 export const DEFAULT_AUTO_APPROVE_DELAY_MS = 10_000; // §11 R7
+// The env var `rmpc` reads its keystore passphrase from — the ONE secret the
+// published committee-onboarding skill tells the agent to have its human owner
+// export before launching it. The harness plays the owner here (see
+// demoNetworkNote); it is not a hint about what the agent should do with it.
+// Same name scripts/rmpc-release-e2e.ts and the rails check already use.
+export const KEYSTORE_PASSPHRASE_ENV = "RMPC_COMMITTEE_IDENTITY_PASSPHRASE";
 
 // ── Identity generation (R1/R4: the harness stands in for "the human owner") ─
 export interface OnboardingIdentity {
@@ -153,6 +180,26 @@ export function fillPromptIdentity(prompt: string, identity: OnboardingIdentity)
   return prompt.replace("<display name>", identity.name).replace("<email>", identity.contact);
 }
 
+// Two facts about THIS machine that a real applicant's own owner would have
+// already told their agent, and that nothing in the container can discover:
+//
+//  1. the committee API base URL — the ephemeral demo stack cannot serve the
+//     production host the docs name;
+//  2. that the owner has already put the secrets they'd otherwise be asked to
+//     type into the session's environment.
+//
+// (2) is not a convenience. The published committee-onboarding skill tells the
+// agent, in as many words, to ask its owner to export the keystore passphrase
+// and to *wait* for them ("Tell me once it's set"), and forbids accepting the
+// value in conversation. A headless eval container has no owner to answer, so
+// an agent that follows the skill correctly stops there — which is exactly the
+// observed failure: 2026-07-28 run 30395466780, `deepseek-v4-flash` ended its
+// session cleanly (exit 0) with every onboarding step still pending. The fix is
+// to make the harness do the owner's half of that exchange, the same way it
+// already supplies the owner's display name and contact (R1/R4) — NOT to tell
+// the agent what to do with it. The note deliberately names no tool, no env
+// var, no endpoint and no step: discovering all of that is still 100% the
+// agent's own inference from the prompt + the skill.
 function demoNetworkNote(apiBaseUrl: string): string {
   return (
     "\n\n---\n" +
@@ -160,7 +207,10 @@ function demoNetworkNote(apiBaseUrl: string): string {
     `Money committee REST API for this run is reachable at ${apiBaseUrl} over ` +
     "this local demo network. Apply against that base URL instead of the " +
     "production host in the docs (which this ephemeral demo stack does not " +
-    "serve) — everything else above is unchanged."
+    "serve). Your owner is not at the keyboard for this session and cannot " +
+    "answer questions, but has already exported into this environment every " +
+    "secret you would otherwise have had to ask them to type — so proceed on " +
+    "your own rather than waiting on them. Everything else above is unchanged."
   );
 }
 
@@ -335,6 +385,11 @@ export interface OnboardingEvalResult {
   // is the stdout portion — and when the container never starts, there is no
   // agent output anywhere, because this stream is the only place the agent
   // ever writes.
+  //
+  // REDACTED at the source of every secret the harness injected (the model
+  // credential and the keystore passphrase) — scripts/agent/member-agent.ts's
+  // redactSecrets. This string is printed whole into CI logs and the demo
+  // console, and an agent exploring its container runs `env`.
   transcript?: string;
 }
 
@@ -358,6 +413,11 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
   const log = opts.onEvent ?? (() => {});
 
   const prompt = buildAgentPrompt(identity, apiUrlInternal);
+
+  // Fresh per run and never reused: the keystore it protects is created inside
+  // a container that is destroyed at the end of this function, and the value is
+  // redacted out of the transcript by the primitive that injects it.
+  const keystorePassphrase = crypto.randomUUID();
 
   // Everything the container needs — the mounted opencode.json, the
   // deterministic name, the `docker compose run` argv (including the single
@@ -385,6 +445,11 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     prompt,
     runId: identity.runId,
     modelConfig,
+    // The owner's half of onboarding, left in the environment exactly the way a
+    // real owner would leave it before launching their agent (see
+    // demoNetworkNote's comment). Never logged, never read back by this
+    // harness — the keystore it protects lives and dies inside the container.
+    ownerEnv: { [KEYSTORE_PASSPHRASE_ENV]: keystorePassphrase },
     title: `onboarding-eval-${identity.runId}`,
     onEvent: log,
     observe: async (handle) => {
@@ -466,15 +531,26 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 //      roster (scripts/lib/demo-newcomers.ts) permanently lost a seat. See
 //      scripts/agent/classify-outcome.ts for the three-conjunct evidence a
 //      refusal must show before it earns a retry.
-//   3. `timed-out` — but ONLY when the resolved model is KEYLESS. Per
-//      committee-opencode-nightly.yml's own documented experience with the free
-//      tier, "a call can take minutes and occasionally returns nothing", so a
-//      timeout there is far more likely to be provider slowness than a stuck
-//      agent. Since D22 rule 1 was amended the default model is FUNDED, and a
-//      funded model is fast/reliable enough that a timeout keeps meaning what
-//      it always meant (a real, non-retried result). Keyed off the resolved
-//      model's own billing property (`resolveModelConfig().keyless`), never off
-//      equality with whatever the default happens to be.
+//   3. `timed-out` — on ANY tier. This used to be restricted to the KEYLESS
+//      tier, on committee-opencode-nightly.yml's documented experience that a
+//      free-tier "call can take minutes and occasionally returns nothing",
+//      with the corollary that a FUNDED model is fast/reliable enough for a
+//      timeout to keep meaning what it always meant. Measurement retired that
+//      corollary: on 2026-07-28 a funded `opencode/deepseek-v4-flash` run
+//      generated its key, printed "Key generated! Now I need to build the
+//      canonical application payload bytes", and then emitted nothing at all
+//      for ~18 minutes until the harness killed it — no tool call, no token,
+//      no error. Zen stalls mid-session whoever is paying.
+//
+//      This is NOT a softened bar, because a timeout is not how a genuine
+//      navigation failure presents. The one real navigation failure we have
+//      measured (CI run 30395466780) EXITED — cleanly, code 0, every step
+//      pending — and a container exit is never retried by this wrapper, on any
+//      tier. A timeout means the harness has NO signal either way about
+//      whether the instructions were followable, which §11.3 E4 already
+//      classifies as its own outcome (`timed-out`), distinct from
+//      `navigation-failure`. Reporting "our onboarding docs failed" on the
+//      strength of an upstream hang is the more dishonest of the two options.
 //
 // `harness-error` is deliberately NOT retryable: the harness is broken the same
 // way on the next attempt, so a retry costs another twenty minutes and turns
@@ -483,10 +559,9 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 // ONE definition of both the classification and the retry decision (§11.3 E5):
 // `classifyOutcome` + `shouldRetry` come from scripts/agent/classify-outcome.ts
 // and are shared with the demo's onboarding driver and the layer-4 scorecard.
-// The only thing added on top of `shouldRetry` here is the TIER gate on case 3,
-// which needs a fact `shouldRetry` deliberately does not have (which model tier
-// this run used) and which the caller — this file, the one that resolved the
-// model — is the only place that knows.
+// Nothing is added on top of `shouldRetry` here any more: dropping case 3's
+// tier gate removed the one place this wrapper's policy diverged from the
+// shared one, so there is now exactly one retry decision in the repo.
 //
 // LOAD-BEARING BOUNDARY: this wrapper serves the DEMO's onboarding driver and
 // the nightly's real-inference admissions. D22 §11.3 E4's layer-4 SAMPLER must
@@ -528,9 +603,11 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
   const backoff = opts.backoffMsSchedule ?? DEFAULT_RETRY_BACKOFF_MS;
   const runOnce = opts.runOnce ?? runOnboardingEval;
   const log = opts.onEvent ?? (() => {});
-  // Resolved ONCE, from the same single selection signal every other path uses.
-  // Throws loudly here (before any attempt) on a misconfigured selector.
-  const usingKeylessModel = resolveModelConfig(opts.env ?? process.env).keyless;
+  // Resolved for its SIDE EFFECT of failing loudly on a misconfigured model
+  // selector BEFORE any attempt is spent. The retry decision itself no longer
+  // depends on the tier (see case 3 in the doc comment above: funded Zen stalls
+  // mid-session too), so nothing reads the returned config.
+  resolveModelConfig(opts.env ?? process.env);
   let last: OnboardingEvalResult | undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Fresh CONTACT per attempt — reusing one across retries would re-apply
@@ -541,9 +618,11 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
     last = await runOnce({ ...opts, identity });
     if (last.admitted) return last;
     const outcome = classifyOutcome(last);
-    // shouldRetry is the shared, pure decision over the classified outcome; the
-    // tier gate is the one fact it cannot know (see the doc comment above).
-    const worthRetrying = shouldRetry(outcome) && (outcome !== "timed-out" || usingKeylessModel);
+    // The shared, pure decision over the classified outcome, applied whole. A
+    // container EXIT is never retried on any tier — `navigation-failure` is not
+    // in shouldRetry's set — and that is how a genuine navigation failure
+    // presents.
+    const worthRetrying = shouldRetry(outcome);
     // Always logged, retried or not: a misclassification must be diagnosable
     // from CI logs rather than invisible.
     log(
@@ -557,7 +636,7 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
         ? "looked rate-limited"
         : outcome === "refused"
           ? "was refused by the model (the agent never attempted onboarding)"
-          : "timed out on the keyless tier";
+          : "timed out with no signal either way";
     log(`onboarding eval attempt ${attempt}/${maxAttempts} ${reason} — retrying in ${delayMs}ms (§11 R8)`);
     await Bun.sleep(delayMs);
   }

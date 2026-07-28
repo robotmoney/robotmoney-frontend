@@ -29,12 +29,20 @@
 // nothing — so an explicit `-e` injection at `docker compose run` time is the
 // only way the credential can reach it.
 //
-// What survives from that invariant, and is enforced here: AT MOST ONE `-e`
-// flag, carrying exactly the env NAME the registry chose (`apiKeyEnv`), and
-// ONLY when the resolved model actually needs credit. A keyless selection
-// (`AGENT_MODEL=free`, `isKeylessModel(model) === true`) yields `apiKeyEnv:
-// null` and the argv carries no `-e` at all — the keyless path is still a real,
-// fully-supported path, it is simply no longer the only one.
+// What survives from that invariant, and is enforced here: AT MOST ONE MODEL
+// CREDENTIAL `-e` flag, carrying exactly the env NAME the registry chose
+// (`apiKeyEnv`), and ONLY when the resolved model actually needs credit. A
+// keyless selection (`AGENT_MODEL=free`, `isKeylessModel(model) === true`)
+// yields `apiKeyEnv: null` and the argv carries no credential `-e` at all — the
+// keyless path is still a real, fully-supported path, it is simply no longer
+// the only one.
+//
+// The ONE other source of `-e` flags is the caller's explicit `ownerEnv`: the
+// half of the session environment a real applicant's HUMAN would have exported
+// before launching their agent (the onboarding eval's single use is the
+// keystore passphrase the published committee-onboarding skill tells the agent
+// to ask its owner for). It is an explicit parameter, never an ambient read,
+// and every value in it is redacted out of the returned transcript.
 //
 // It also has no inference-off affordance: the `observe`/`inspect` hooks watch
 // a real run, they can never stand in for one (E2).
@@ -75,39 +83,75 @@ export interface MemberAgentModel {
 // The model arrives as a PARAMETER, resolved by the caller from the registry —
 // this function invents nothing.
 //
-// ── Why `external_directory` is spelled out (2026-07-27) ────────────────────
-// opencode's own default permission set contains
-// `external_directory: { "*": "ask", <its tool-output dir>: "allow",
-// /tmp/opencode/*: "allow" }` — confirmed with `opencode debug agent build`
-// inside the pinned image. `--dangerously-skip-permissions` (the flag
-// buildMemberAgentArgv already passes; a hidden alias of `--auto` in the pinned
-// binary) does NOT lift it: the 2026-07-27 layer-4 run passed that flag and
-// opencode still rejected the calls, citing that exact rule. In a
-// non-interactive `opencode run` an "ask" has nobody to ask, so it resolves to
-// a REJECTION rather than a wait.
+// ── Why EVERY tool is allowed (this used to be `{"*": "deny", bash: "allow"}`)
+// §11 R8 says the container is a VANILLA OpenCode install and the eval measures
+// OUR INSTRUCTIONS. A deny-by-default ruleset measured our own permission
+// gauntlet instead — and it measured it wrong. opencode merges this config with
+// its own built-in rules and evaluates them LAST-MATCH-WINS, so a blanket
+// `"*": "deny"` silently overrode the built-in allowances too. Measured live in
+// CI run 30395466780 the agent lost `read`, `write`, `edit` and `webfetch`
+// outright, and even a plain `cat` of a file it had just cloned was refused:
 //
-// The effect, observed live in that sweep: an agent that discovers the
-// committee-onboarding skill by cloning robotmoney-core into /tmp can `ls` its
-// way to SKILL.md and then cannot read one byte of it — everything outside
-// `--dir /home/agent` is "external". The agent was structurally unable to read
-// the very document the eval measures it for, and the run was scored as a
-// product failure. scripts/agent/classify-outcome.ts's `harness-error` outcome
-// exists to make that class of defect loud; this line removes this instance of
-// it.
+//   $ cat /tmp/opencode/robotmoney-core/BOOTSTRAP.md
+//   The user has specified a rule which prevents you from using this specific
+//   tool call. Here are some of the relevant rules [… {"permission":
+//   "external_directory","pattern":"/tmp/opencode/*","action":"allow"},
+//   {"permission":"*","action":"deny","pattern":"*"} …]
 //
-// Verified against the pinned opencode 1.18.1 with `opencode debug agent
-// build`: adding it appends `external_directory * → allow` AFTER the default
-// `external_directory * → ask`, and later rules win (the same mechanism by
-// which the `* → deny` below overrides opencode's own default `* → allow`).
-// It carries no onboarding knowledge: it names no path, host, repository, or
-// step — only that this container does not stop to ask permission.
+// It burned minutes of its budget rediscovering `grep -n "." <file>` as a `cat`
+// substitute and never reached the API. None of that is a fact about our
+// onboarding instructions, which is the only thing this eval is allowed to
+// report on.
+//
+// The 2026-07-27 revision tried to patch that one symptom at a time: it added
+// `external_directory: "allow"` because opencode's defaults contain
+// `external_directory: { "*": "ask", … }` and an "ask" in a non-interactive
+// `opencode run` has nobody to ask, so it RESOLVES TO A REJECTION rather than a
+// wait — an agent that cloned the committee-onboarding skill into /tmp could
+// `ls` its way to SKILL.md and never read a byte of it. That diagnosis was
+// right and its fix survives here in the general form: nothing in this
+// container stops to ask, and nothing is denied.
+//
+// An operator who pastes the canonical prompt into their own agent runs it with
+// their own permissions — headlessly, that means auto-approve — so allow-all is
+// the faithful analogue, and the blast radius is one disposable container on an
+// ephemeral compose network. `--auto` (buildMemberAgentArgv) auto-approves
+// everything not explicitly denied; this config denies nothing, so the two
+// agree instead of fighting.
+//
+// The model arrives as a PARAMETER, resolved by the caller from the registry —
+// this function invents nothing.
 export function buildAgentOpencodeConfig(model: string): Record<string, unknown> {
   return {
     $schema: "https://opencode.ai/config.json",
     model,
     autoupdate: false,
-    permission: { "*": "deny", bash: "allow", external_directory: "allow" },
+    permission: { "*": "allow" },
   };
+}
+
+// ── Secret redaction ────────────────────────────────────────────────────────
+// A failed run's transcript is printed WHOLE into CI logs and the demo's
+// console (scripts/lib/demo-main.ts). This primitive hands the container its
+// secrets by `-e`, and a curious agent runs `env` — observed verbatim in a
+// local run:
+//
+//   $ env | sort
+//   RMPC_COMMITTEE_IDENTITY_PASSPHRASE=3e4bab64-…
+//   OPENCODE_API_KEY=sk-…
+//
+// GitHub masks registered repository secrets, but nothing masks them in a local
+// `bun run demo`, on Stage, or in a transcript pasted into an issue. So redact
+// AT THE SOURCE — here, where the injection happens and where the exact values
+// are known — never on a pattern guess, which would either miss a rotated key
+// shape or scrub unrelated text out of the evidence.
+export function redactSecrets(text: string, secrets: Array<[string | null | undefined, string]>): string {
+  let out = text;
+  for (const [secret, placeholder] of secrets) {
+    if (!secret || secret.length < 8) continue; // never mass-replace a short/empty string
+    out = out.split(secret).join(placeholder);
+  }
+  return out;
 }
 
 export async function drain(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -144,6 +188,21 @@ export interface MemberAgentArgvOptions {
   prompt: string;
   /** Resolved by the caller from scripts/lib/model-registry.ts. Required. */
   modelConfig: MemberAgentModel;
+  /**
+   * The OWNER's half of the session's environment — what a real applicant's
+   * human would have exported into the shell they launch their agent from,
+   * emitted as additional `-e NAME=VALUE` pairs in a stable, sorted order.
+   *
+   * NOT a general escape hatch for harness knowledge: values here are secrets
+   * and machine facts the container cannot discover, never instructions. The
+   * onboarding eval's single use is the keystore passphrase (see
+   * scripts/lib/onboarding-eval.ts's KEYSTORE_PASSPHRASE_ENV), because the
+   * published committee-onboarding skill tells the agent to ask its owner to
+   * export it and to WAIT for them — unanswerable in a headless container.
+   *
+   * Anything passed here is REDACTED out of the returned transcript.
+   */
+  ownerEnv?: Record<string, string>;
   // When true, `--rm` is omitted so the STOPPED container survives long enough
   // to be inspected (eval layers 1-3 read its filesystem). Nothing else about
   // the argv changes.
@@ -158,7 +217,9 @@ export interface MemberAgentArgvOptions {
  * all when it does not. A container inherits no ambient environment, so this
  * explicit injection is the only route in — and because the NAME comes from
  * the resolved config rather than from a list of candidates, there is exactly
- * one credential env var the container can ever see.
+ * one MODEL credential env var the container can ever see. The only other `-e`
+ * flags are the caller's explicit `ownerEnv` (see its doc comment); nothing is
+ * ever sourced from the ambient environment.
  *
  * Throws when a non-keyless config arrives with no key rather than silently
  * launching an unauthenticated container that will 401 twenty minutes later.
@@ -182,16 +243,35 @@ export function buildMemberAgentArgv(a: MemberAgentArgvOptions): string[] {
     a.containerName,
     "-v",
     `${a.opencodeConfigPath}:/home/agent/opencode.json:ro`,
-    // AT MOST ONE `-e`, under the env name the registry chose, and only when
-    // the resolved model is funded. A keyless model gets no flag at all.
+    // AT MOST ONE MODEL credential `-e`, under the env name the registry chose,
+    // and only when the resolved model is funded. A keyless model gets no flag
+    // at all.
     ...(apiKeyEnv ? ["-e", `${apiKeyEnv}=${apiKey}`] : []),
+    // The owner's half of the session environment, sorted so the argv is
+    // deterministic and diffable.
+    ...Object.entries(a.ownerEnv ?? {})
+      .sort(([l], [r]) => (l < r ? -1 : l > r ? 1 : 0))
+      .flatMap(([k, v]) => ["-e", `${k}=${v}`]),
     "member-agent",
     "run",
     "--model",
     model,
     "--format",
     "json",
-    "--dangerously-skip-permissions",
+    // opencode's REAL "the operator is not at the keyboard" flag: auto-approve
+    // every permission that is not explicitly denied, and buildAgentOpencodeConfig
+    // denies none.
+    //
+    // This used to be `--dangerously-skip-permissions`, which opencode has
+    // never had — `opencode run --help` in the pinned v1.18.1 image offers
+    // `--auto`. yargs accepts unknown `--flags` SILENTLY, so nothing failed and
+    // nothing warned while every permission `ask` stayed armed and, in a
+    // headless container, unanswerable. That cost four consecutive red runs of
+    // the required gate. The Docker-backed rails check
+    // (scripts/tests/integration/onboarding-eval-infra.test.ts) now asserts
+    // every flag emitted here against the pinned binary's own `--help`, because
+    // an assertion on our own argv could never have caught it.
+    "--auto",
     "--title",
     a.title,
     "--dir",
@@ -311,6 +391,12 @@ export interface MemberAgentOptions {
    * Required and never defaulted: this primitive has no model of its own.
    */
   modelConfig: MemberAgentModel;
+  /**
+   * The OWNER's half of the container's environment — see
+   * MemberAgentArgvOptions.ownerEnv. Injected as `-e` pairs and REDACTED out
+   * of every string this function returns.
+   */
+  ownerEnv?: Record<string, string>;
   title?: string;
   onEvent?: (msg: string) => void;
   // Honoured ONLY when `observe` is absent. When an observer is supplied it
@@ -325,6 +411,10 @@ export interface MemberAgentOptions {
 export interface MemberAgentResult {
   containerName: string;
   exitCode: number | null;
+  // All three are REDACTED of every secret this primitive injected by `-e`
+  // (the model credential and each `ownerEnv` value) — see redactSecrets. They
+  // are printed whole into CI logs and the demo console, so there is
+  // deliberately no un-redacted variant to reach for.
   stdout: string;
   stderr: string;
   transcript: string;
@@ -363,6 +453,7 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
         title: opts.title ?? `member-agent-${opts.runId}`,
         prompt: opts.prompt,
         modelConfig: opts.modelConfig,
+        ownerEnv: opts.ownerEnv,
         keep,
       }),
       // `stdin: "ignore"` and the derived DEMO_PROJECT are both load-bearing —
@@ -448,8 +539,18 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
     // LOAD-BEARING ORDERING: `docker rm -f` runs BEFORE the drains are awaited.
     // Closing the container's pipes is what lets the drains finish; awaiting
     // them first would hang. Do not "tidy" this.
-    const [stdout, stderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, proc.exited]);
+    const [rawStdout, rawStderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, proc.exited]);
     await launchWatcher; // resolves as soon as the CLI is gone; never outlives the run
+
+    // Every value this function injected by `-e`, scrubbed before ANY of it
+    // leaves here — the caller cannot forget to do it, and there is no
+    // un-redacted field to reach for by mistake. See redactSecrets.
+    const injected: Array<[string | null | undefined, string]> = [
+      [opts.modelConfig.apiKey, `<${opts.modelConfig.apiKeyEnv ?? "MODEL_KEY"} redacted>`],
+      ...Object.entries(opts.ownerEnv ?? {}).map(([k, v]) => [v, `<${k} redacted>`] as [string, string]),
+    ];
+    const stdout = redactSecrets(rawStdout, injected);
+    const stderr = redactSecrets(rawStderr, injected);
 
     return {
       containerName,

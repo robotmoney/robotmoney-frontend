@@ -27,18 +27,23 @@
 #
 # Stage 7 (docs/plans/onboarding-ic-workflow.md, §11 R8) + issue #289: this job
 # carries the onboarding eval's rails, but it does NOT spend a real model call
-# on `pull_request` runs. Exactly what runs where:
+# on an ORDINARY `pull_request` run. Exactly what runs where:
 #   - EVERY run of this job, PRs and forks included: the inference-off
 #     infra-rails check, scripts/tests/integration/onboarding-eval-infra.test.ts (step
 #     below). It proves every rail the real eval rides on — member-agent image
 #     builds and starts, reaches the committee REST API over the compose
 #     network, a signed apply lands through POST /api/committee/apply — without
 #     spending a model token. Nothing about that step changed.
-#   - NON-PR runs only (push to main): the REAL-INFERENCE onboarding eval — one
-#     vanilla OpenCode member-agent container navigating our own onboarding docs
-#     end to end via a real model call. ONBOARDING_REAL_EVAL on the "Full-stack
-#     demo" step below is derived from `github.event_name != 'pull_request'`, so
-#     a PR run never sets it and never spends an eval.
+#   - PUSH TO MAIN: the REAL-INFERENCE onboarding eval — one vanilla OpenCode
+#     member-agent container navigating our own onboarding docs end to end via a
+#     real model call.
+#   - OPT-IN PER PR (the `real-eval` label — see "OPTING ONE PR IN" below): the
+#     same real-inference eval, on demand, for the one PR that needs it.
+#   - MANUAL RUN: `workflow_dispatch` with the `real_eval` input set true.
+#     (Actions reads dispatch inputs from the DEFAULT BRANCH's copy of this
+#     file, so this route only works once this change is on main; the label
+#     route works from a PR head immediately, which is why the label — not the
+#     dispatch input — is the primary mechanism.)
 #   - The real-inference measurement's SCHEDULED HOME is
 #     .github/workflows/committee-opencode-nightly.yml (`schedule: 37 4 * * *`
 #     — nightly 04:37 UTC — plus `workflow_dispatch`), which already sets
@@ -46,25 +51,52 @@
 #     models × multiple fresh identities). Dropping the per-PR eval therefore
 #     removed a duplicate measurement, not the only coverage of this surface.
 #
-# WHY (issue #289): the eval used to run unconditionally on every non-draft PR,
-# and scripts/lib/onboarding-eval.ts's runOnboardingEvalWithRetry retries on a
-# 429/overload signal or a keyless-tier timeout, so a single job could spend
-# several model runs. The free, no-credential OpenCode Zen tier is
-# quota-limited, and ordinary PR cadence exhausted it — turning this REQUIRED
-# gate red on every open PR for a reason that had nothing to do with the code
-# under test. The nightly above measures the same thing on a cadence we can pay
-# for. This is a deliberate, recorded removal, not a silent one: the "Configure
-# onboarding real-inference eval" step below writes to the job summary, on
-# every PR run, that the eval was not run here and where it does run.
+# OPTING ONE PR IN — add the label `real-eval` to the pull request. That is the
+# whole procedure: `pull_request.types` below includes `labeled`, so adding it
+# re-triggers this workflow immediately (no push, no re-run needed), and
+# ONBOARDING_REAL_EVAL on the "Full-stack demo" step resolves to "1" for that
+# run and every later run of the PR while the label is still attached. Remove
+# the label to go back to zero model spend. Two guards keep the opt-in from
+# leaking cost:
+#   - the job `if:` below IGNORES a `labeled` event whose label is not
+#     `real-eval`, so labelling a PR `docs` (or anything else) does NOT boot the
+#     ~40-minute live stack. The known cost of that guard: a skipped job reports
+#     as passing to branch protection, so an unrelated label added on top of a
+#     RED e2e would supersede it with a green skip. Accepted deliberately — no
+#     automation in this repo labels PRs, the same property already holds for
+#     the draft guard on the line below, and the alternative (running the full
+#     gate on every label event) is worse on a single self-hosted runner.
+#   - the label is read from the PR payload at trigger time, so a fork PR that
+#     carries the label still cannot reach OPENCODE_API_KEY; the "Configure
+#     onboarding real-inference eval" step reports CANNOT RUN there rather than
+#     degrading silently.
+#
+# WHY IT IS OFF BY DEFAULT (issue #289): the eval used to run unconditionally on
+# every non-draft PR, and scripts/lib/onboarding-eval.ts's
+# runOnboardingEvalWithRetry retries on a 429/overload signal, a model refusal,
+# or a bare timeout, so a single job could spend several model runs. The free,
+# no-credential OpenCode Zen tier is quota-limited, and ordinary PR cadence
+# exhausted it — turning this REQUIRED gate red on every open PR for a reason
+# that had nothing to do with the code under test. The default model is FUNDED
+# now (D22 as amended), so cost is money rather than an exhaustible quota — but
+# this repo has ONE self-hosted runner, and an eval per PR is still minutes of
+# exclusive runner time per PR against a stochastic metric. Off by default,
+# opt-in per PR, nightly for the trend. This is a deliberate, recorded default,
+# not a silent one: the "Configure onboarding real-inference eval" step below
+# writes to the job summary, on every run, whether the eval ran here, why not if
+# it did not, and how to opt this PR in.
 #
 # Two things the NON-PR path accounts for, not ignores:
 #   (a) This self-hosted runner shares its IP with the standing rmdemo_* demo
 #       stack, which has caused 429 rate-limit flake on other live-call gates
 #       before, and the free tier is documented as slower/more variable than a
 #       paid one. scripts/lib/onboarding-eval.ts's runOnboardingEvalWithRetry
-#       retries a detected 429/overload signal, and — only when a KEYLESS
-#       model is in use — a bare timeout too (never a genuine navigation
-#       failure either way) with backoff — see that function's doc comment.
+#       retries, with backoff, a detected 429/overload signal, a model refusal,
+#       and a bare timeout on ANY tier — measured 2026-07-28, a FUNDED
+#       deepseek-v4-flash run stalled mid-session for ~18 minutes with no
+#       token, no tool call and no error. It never retries a genuine navigation
+#       failure, which presents as a container EXIT rather than a timeout —
+#       see that function's doc comment.
 #       scripts/lib/onboarding-eval.ts resolves the same model
 #       scripts/lib/committee/inference.ts already
 #       uses for real committee takes.
@@ -72,8 +104,9 @@
 #       `opencode/deepseek-v4-flash`, billed to the `OPENCODE_API_KEY` repo
 #       secret. Which model runs is selected by `AGENT_MODEL` against
 #       scripts/lib/model-registry.ts; `AGENT_MODEL=free` still runs keyless.
-#       The key only ever resolves in a trusted context — which, now that the
-#       eval runs on pushes to main only, is every run that can reach it.
+#       The key only ever resolves in a trusted context: a push to main, or a
+#       `real-eval`-labelled PR from a branch in THIS repo. A labelled fork PR
+#       resolves no key and fails loudly instead of degrading.
 name: e2e
 env:
   CI_CLASS: system-correctness
@@ -82,14 +115,34 @@ on:
     branches: [main]
     paths-ignore: ['**.md', '**.txt']
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `labeled` is here ONLY so that adding the `real-eval` opt-in label
+    # re-triggers this workflow on an already-open PR (see the "OPTING ONE PR
+    # IN" block in the header). It does not make this gate run more often for
+    # unlabelled PRs: the job `if:` below drops any `labeled` event carrying a
+    # different label before a runner is allocated.
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths-ignore: ['**.md', '**.txt']
+  # Manual re-run of the whole gate, with an explicit opt-in for the paid
+  # real-inference onboarding eval. NOTE: GitHub reads these input definitions
+  # from the DEFAULT BRANCH's copy of this file, so `real_eval` is only
+  # dispatchable once this file is on main — the `real-eval` PR label is the
+  # route that works from a PR head today.
+  workflow_dispatch:
+    inputs:
+      real_eval:
+        description: "Run the §11 R8 real-inference onboarding eval (spends real model tokens)."
+        type: boolean
+        default: false
 
 jobs:
   e2e:
-    # Deferred until ready-for-review: run on push (non-PR) and on non-draft PRs;
-    # skip while the PR is still a draft.
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    # Two guards, both evaluated before a runner is allocated:
+    #   1. Deferred until ready-for-review: run on push/dispatch (non-PR) and on
+    #      non-draft PRs; skip while the PR is still a draft.
+    #   2. A `labeled` event only proceeds when the label added is the
+    #      `real-eval` opt-in. Without this, `types: [..., labeled]` above would
+    #      boot the full ~40-minute live stack every time anyone tagged a PR.
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event.action != 'labeled' || github.event.label.name == 'real-eval') }}
     runs-on: [self-hosted, robotmoney-self-hosted]
     env:
       # Read by scripts/lib/rmpc-fetch.ts's fetchRmpc() — shared by the
@@ -172,32 +225,42 @@ jobs:
         run: bun test scripts/tests/integration/onboarding-eval-infra.test.ts
         timeout-minutes: 15
       # Resolves — and RECORDS — what the real-inference eval does on this run.
-      # On a `pull_request` run it does not run at all (issue #289: the free
-      # OpenCode tier cannot fund one eval per PR, and the nightly
-      # committee-opencode-nightly.yml already measures this surface wider).
-      # Removing a runtime assertion from a REQUIRED gate must never be silent,
-      # so the PR branch below writes that fact, and the eval's real home, to
-      # the job summary — loudly — on every PR run. On a non-PR run this step
-      # keeps its original job: resolve whether an operator opted into a paid
-      # model; with no opt-in configured the keyless default is a full §11 R8
-      # pass, not a degraded fallback. Written LOUDLY to the job summary in
-      # every case.
+      # On an ordinary `pull_request` run it does not run at all (issue #289 +
+      # the single-runner cost above; the nightly committee-opencode-nightly.yml
+      # already measures this surface wider). Withholding a runtime assertion
+      # from a REQUIRED gate must never be silent, so the PR branch below writes
+      # that fact, how to opt THIS PR in, and the eval's real home, to the job
+      # summary — loudly — on every such run. When the eval IS on (push to main,
+      # `real-eval` label, or a dispatch that asked for it) this step keeps its
+      # original job: resolve whether the funded key is reachable, and say so.
+      #
+      # REAL_EVAL_REQUESTED below MUST stay textually identical to
+      # ONBOARDING_REAL_EVAL on the "Full-stack demo" step — one expression, two
+      # consumers — so this notice can never claim the eval was skipped on a run
+      # that in fact spent one, or vice versa. Asserted by
+      # scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts.
       - name: Configure onboarding real-inference eval
         id: onboarding-gate
         env:
           IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
+          REAL_EVAL_REQUESTED: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
           TRUSTED_CONTEXT: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           HAS_ZEN_KEY: ${{ secrets.OPENCODE_API_KEY != '' }}
         run: |
-          if [ "$IS_PULL_REQUEST" = "true" ]; then
+          if [ "$REAL_EVAL_REQUESTED" = "1" ]; then
+            if [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_ZEN_KEY" = "true" ]; then
+              echo "use_zen_key=1" >> "$GITHUB_OUTPUT"
+              MSG="§11 R8 real-inference onboarding eval: RUNNING on the funded default model (trusted context, OPENCODE_API_KEY configured) as part of the Full-stack demo step below. Requested by: push to main, the 'real-eval' pull-request label, or workflow_dispatch with real_eval=true — whichever triggered this run."
+            else
+              echo "use_zen_key=" >> "$GITHUB_OUTPUT"
+              MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — the eval was requested for this run, but no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is funded (D22 as amended), so the eval will fail loudly rather than silently degrade. Configure the OPENCODE_API_KEY secret, or set AGENT_MODEL=free to run keyless."
+            fi
+          elif [ "$IS_PULL_REQUEST" = "true" ]; then
             echo "use_zen_key=" >> "$GITHUB_OUTPUT"
-            MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent (issue #289, from when the default was an exhaustible free tier; the default is now funded, so re-enabling per-PR evals is affordable and tracked separately). This is a recorded removal, not a silent one. Where it DOES run: .github/workflows/committee-opencode-nightly.yml — nightly 04:37 UTC (schedule '37 4 * * *') plus workflow_dispatch — which sweeps more models and more identities than this gate ever did; and on pushes to main in this same workflow. What this PR run DID assert about that surface: the inference-off 'Onboarding eval infra rails' step above, which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full."
-          elif [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_ZEN_KEY" = "true" ]; then
-            echo "use_zen_key=1" >> "$GITHUB_OUTPUT"
-            MSG="§11 R8 real-inference onboarding eval: RUNNING on the funded default model (non-PR/trusted context, OPENCODE_API_KEY configured) as part of the Full-stack demo step below."
+            MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the single self-hosted runner this repo shares, on which per-PR evals cost minutes of exclusive runner time against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: .github/workflows/committee-opencode-nightly.yml — nightly 04:37 UTC (schedule '37 4 * * *') plus workflow_dispatch — which sweeps more models and more identities than this gate ever did; and on every push to main in this same workflow. What this PR run DID assert about that surface: the inference-off 'Onboarding eval infra rails' step above, which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full."
           else
             echo "use_zen_key=" >> "$GITHUB_OUTPUT"
-            MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is funded (D22 as amended), so the eval will fail loudly rather than silently degrade. Configure the OPENCODE_API_KEY secret, or set AGENT_MODEL=free to run keyless."
+            MSG="§11 R8 real-inference onboarding eval: NOT REQUESTED on this manual run — re-dispatch this workflow with real_eval=true to spend one. ZERO model tokens are spent here. The inference-off 'Onboarding eval infra rails' step above still ran in full."
           fi
           echo "$MSG"
           echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
@@ -253,35 +316,49 @@ jobs:
           # than the retired hermetic boot was — an accepted, deliberate
           # consequence of issue #147/#163, not a bug in this workflow.
           #
-          # Stage 7 (§11 R8) + issue #289: the onboarding eval runs on NON-PR
-          # runs only. ONBOARDING_REAL_EVAL below resolves to "1" on a push to
-          # main and to the empty string on any `pull_request` event, so a PR
-          # run spends no model call — the nightly
-          # committee-opencode-nightly.yml (04:37 UTC + workflow_dispatch) is
-          # where this measurement lives, and it sweeps wider than this gate
-          # ever did. demo-main.ts reads ONBOARDING_REAL_EVAL === "1"; empty is
-          # simply "off". When it IS on, it runs the funded default model
-          # (D22 as amended). OPENCODE_API_KEY below is injected ONLY into the
-          # short-lived member-agent container scripts/lib/onboarding-eval.ts
-          # launches (never into the api/worker services), and only when the
-          # "Configure onboarding real-inference eval" step resolved one.
-          # AGENT_MODEL is left unset so the repo default applies; set it to a
-          # family name (e.g. `kimi`) to switch which agent this gate measures.
-          ONBOARDING_REAL_EVAL: ${{ github.event_name != 'pull_request' && '1' || '' }}
+          # Stage 7 (§11 R8) + issue #289: the onboarding eval is OFF by default
+          # on pull requests and opt-in per PR. ONBOARDING_REAL_EVAL below
+          # resolves to "1" for exactly three cases — (1) a push to main, (2) a
+          # `pull_request` event whose PR carries the `real-eval` label, (3) a
+          # `workflow_dispatch` run started with real_eval=true — and to the
+          # empty string otherwise, so an ordinary PR run spends no model call.
+          # Add the `real-eval` label to a PR to opt it in; remove it to opt out
+          # (full rationale in this file's header, "OPTING ONE PR IN"). The
+          # nightly committee-opencode-nightly.yml (04:37 UTC +
+          # workflow_dispatch) still owns the trend measurement and sweeps wider
+          # than this gate ever did. demo-main.ts reads ONBOARDING_REAL_EVAL ===
+          # "1"; empty is simply "off". When it IS on, it runs the funded
+          # default model (D22 as amended). OPENCODE_API_KEY below is injected
+          # ONLY into the short-lived member-agent container
+          # scripts/lib/onboarding-eval.ts launches (never into the api/worker
+          # services), and only when the "Configure onboarding real-inference
+          # eval" step resolved one — so a labelled FORK PR still gets no key
+          # and a loud failure rather than a silent degrade. AGENT_MODEL is left
+          # unset so the repo default applies; set it to a family name (e.g.
+          # `kimi`) to switch which agent this gate measures.
+          #
+          # This expression is duplicated as REAL_EVAL_REQUESTED on the
+          # "Configure onboarding real-inference eval" step above so the job
+          # summary always describes what actually happened; the two must stay
+          # byte-identical, which
+          # scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts asserts.
+          ONBOARDING_REAL_EVAL: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
           OPENCODE_API_KEY: ${{ steps.onboarding-gate.outputs.use_zen_key == '1' && secrets.OPENCODE_API_KEY || '' }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
         # 40 min for the pre-existing checks + headroom for the onboarding eval
-        # on the NON-PR runs that still spend one (issue #289 — a PR run stops
+        # on the runs that spend one (push to main, a `real-eval`-labelled PR, a
+        # dispatch with real_eval=true — issue #289; an ordinary PR run stops
         # well short of this ceiling because no eval runs there; the ceiling is
-        # left where it was rather than split per event, so the push-to-main
-        # path keeps exactly the headroom it was verified against). Headroom =
-        # default 20-minute timeout per admission attempt — live-verified as
-        # realistic for a free-tier agent doing genuine exploration, see
-        # onboarding-eval.ts's DEFAULT_TIMEOUT_MS comment — up to 2 attempts
-        # with runOnboardingEvalWithRetry's 45s backoff, only retried on a
-        # detected 429/overload signal or a keyless-tier timeout, see the
-        # file-level comment above).
-        timeout-minutes: 85
+        # not split per event, so every eval-spending path keeps the same
+        # headroom). Headroom is DERIVED, not guessed: DEFAULT_TIMEOUT_MS is 30
+        # minutes per admission attempt (raised from 20 on measurement — see
+        # onboarding-eval.ts's comment: a real admission took 1183s) and
+        # runOnboardingEvalWithRetry allows 2 attempts with a 45s backoff, so
+        # the eval's own worst case is ~61 min. 40 + 61 ≈ 101, rounded to 105.
+        # Raising DEFAULT_TIMEOUT_MS without raising this would just move the
+        # truncation from the eval to the job, which reports as an infra kill
+        # rather than the honest `timed-out` outcome.
+        timeout-minutes: 105
       # Volume-leak backstop (issue: demo persistent volumes). The demo boot above
       # reclaims its own volume on both success and failure (demo-main.ts
       # cleanCiVolume). This always() step is the belt-and-suspenders case: if the

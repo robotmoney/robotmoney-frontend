@@ -37,6 +37,16 @@ RUN curl -fsSLo /tmp/opencode.tar.gz \
 # docs/architecture.md §11.2) via GitHub Releases egress — never by this image.
 # A writable dir on PATH so the agent's own `curl | tar -C ... ` install lands
 # somewhere it can execute rmpc from without root.
+#
+# HOME must agree with that dir. The container runs as root, so without this
+# `~` is /root while PATH advertises /home/agent/.local/bin — and the published
+# committee-onboarding skill's own copy-paste install line,
+# `install -m 755 rmpc ~/.local/bin/rmpc`, then puts the binary somewhere PATH
+# does not look. Observed live: the agent ran exactly that line, got
+# `rmpc: command not found`, and had to spend turns rediscovering where its own
+# install went. That friction is this image's, not our documentation's, and the
+# eval is only allowed to report on the latter.
+ENV HOME="/home/agent"
 RUN mkdir -p /home/agent/.local/bin \
     && git config --global user.email "member-agent@robotmoney.invalid" \
     && git config --global user.name "member-agent" \

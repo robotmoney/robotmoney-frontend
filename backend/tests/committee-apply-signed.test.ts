@@ -127,6 +127,60 @@ test("signature over the WRONG bytes (valid key/signature pair, wrong payload): 
   expect(await sql`SELECT id FROM committee_members`).toHaveLength(0);
 });
 
+test("a malformed application is answered with what a VALID one looks like, including the exact bytes the signature must cover", async () => {
+  // The first response any unfamiliar client gets. Measured live in the §11 R8
+  // eval: every real member-agent probes this endpoint with `{}` before it
+  // builds anything, and the bare "…required" it used to get sent them off to
+  // clone repos looking for the key order. An API whose documented audience is
+  // a program that has never seen our source has to answer that question here.
+  const res = await post(ROUTES.committee.apply, {});
+  expect(res?.status).toBe(400);
+  const body = res!.body as Record<string, any>;
+  expect(body.error).toContain("required");
+  expect(Object.keys(body.expects).sort()).toEqual(["contact", "lens", "name", "publicKey", "signature"]);
+  // The statement must actually describe canonicalizeApplication's contract:
+  // fixed key order, optional lens omitted, no whitespace.
+  expect(body.signatureCovers).toContain("{name, contact, lens?, publicKey}");
+  expect(body.signatureCovers).toMatch(/EXACTLY that order/);
+  expect(body.signatureCovers).toMatch(/omitted entirely when absent/);
+  expect(body.signatureCovers).toMatch(/no whitespace/);
+  // …and be TRUE of the real canonicalizer, not just plausible prose.
+  const sample = { name: "N", contact: "c@example.test", publicKey: "PK" };
+  expect(canonicalizeApplication(sample)).toBe('{"name":"N","contact":"c@example.test","publicKey":"PK"}');
+  expect(canonicalizeApplication({ ...sample, lens: "L" })).toBe('{"name":"N","contact":"c@example.test","lens":"L","publicKey":"PK"}');
+  expect(await sql`SELECT id FROM committee_members`).toHaveLength(0);
+});
+
+test("a rejected signature names the EXACT canonical bytes it should have covered — and leaks nothing the caller did not send", async () => {
+  // §11.3 E7 / R6: setup-gated apply is only fair if a correct setup can learn
+  // WHY it was rejected. The canonicalizer lives in a private repo and the
+  // participation guide renders client-side, so this 400 is the only reachable
+  // statement of the byte layout for a headless applicant — measured live,
+  // a real member-agent with a working key and a working `rmpc` spent minutes
+  // brute-forcing key order against the bare message this replaced.
+  const { publicKeyB64, privateKey } = await generateKeyPair();
+  const fields = { name: "Byte Order Desk", contact: `${rid("bytes")}@example.test`, lens: "macro" };
+  // Signed over the same FIELDS in a different key order — the exact mistake.
+  const wrongOrder = JSON.stringify({ contact: fields.contact, name: fields.name, lens: fields.lens, publicKey: publicKeyB64 });
+  const res = await post(ROUTES.committee.apply, {
+    ...fields,
+    publicKey: publicKeyB64,
+    signature: await signMessage(wrongOrder, privateKey),
+  });
+  expect(res?.status).toBe(400);
+  const body = res!.body as Record<string, unknown>;
+  expect(body.expectedPayload).toBe(canonicalizeApplication({ ...fields, publicKey: publicKeyB64 }));
+  // It is the canonical form, not an echo of what was signed.
+  expect(body.expectedPayload).not.toBe(wrongOrder);
+  // Nothing beyond the caller's own submitted fields: no signature, no key
+  // material, no server state.
+  const echoed = JSON.parse(body.expectedPayload as string);
+  expect(Object.keys(echoed).sort()).toEqual(["contact", "lens", "name", "publicKey"]);
+  expect(JSON.stringify(body)).not.toContain(await signMessage(wrongOrder, privateKey));
+  // Still fully rejected: nothing recorded (R6).
+  expect(await sql`SELECT id FROM committee_members`).toHaveLength(0);
+});
+
 test("GET /api/committee/apply/:id: redacted 'applied' state, no contact/name/publicKey echoed, unknown id is an indistinguishable 404", async () => {
   const unknown = await get(`${ROUTES.committee.apply}/${crypto.randomUUID()}`);
   expect(unknown?.status).toBe(404);

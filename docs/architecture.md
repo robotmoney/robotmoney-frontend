@@ -2105,7 +2105,7 @@ public application-status API, with the 10 s auto-approval as the only scripted
 divergence. A member that fails to onboard is a red eval result — evidence the
 instructions or tooling regressed, not something the demo papers over. The demo
 admits its first member ~1 min after start and attempts the next ~5 minutes after
-the previous admission finishes (real eval duration is additive, so a 20-minute
+the previous admission finishes (real eval duration is additive, so a 30-minute
 timeout pushes the next attempt out by that much). The newcomer roster is
 **fixed and finite** — the five names in `scripts/lib/demo-newcomers.ts`, in
 order, with no generated fallback once the list is exhausted (#260). The driver
@@ -2212,6 +2212,46 @@ to refuse, a key running dry — and a PR asserts the same surface through the
 per-PR checks below. The per-PR signal stays what it is today: the inference-off
 rails, plus the single real-inference admission the `e2e` job performs off its
 own demo boot.
+
+The `e2e` job's real-inference admission is **off by default on pull requests
+and opt-in per PR** (D22 amendment "E6 (2026-07-28)"): add the label `real-eval`
+to a PR and `ONBOARDING_REAL_EVAL` resolves to `"1"` for that PR's runs; remove
+it and the PR is back to zero model spend. `labeled` is in the workflow's
+`pull_request.types` so the label takes effect immediately, and the job guard
+drops `labeled` events for any other label so tagging a PR does not boot the
+live stack. That opt-in exists so a change *to this gate* can be exercised
+before it merges — without it the gate is only reachable on `main`, where a
+regression is discovered after the fact rather than on the PR that caused it.
+It does not make the eval an acceptance criterion: the paragraph above still
+holds for the nightly sweep.
+
+**E7 — The harness plays the owner, and only the owner.** A prospective member
+is a *pair*: a human owner and the agent they run. The eval automates the human
+half and nothing else. Concretely, `scripts/lib/onboarding-eval.ts` supplies
+exactly what an owner supplies before their agent ever starts —
+
+- the display name and contact (R1), filled into `ONBOARDING_PROMPT`'s own
+  `<display name>`/`<email>` placeholders;
+- the committee API base URL for this run, because the ephemeral demo stack
+  cannot serve the production host the docs name;
+- the keystore passphrase, exported into the agent's environment. The published
+  `committee-onboarding` skill tells the agent to ask its owner for this and to
+  **wait** for them ("Tell me once it's set"), and forbids accepting the value
+  in conversation. A headless container has no owner to answer, so an agent
+  following the skill correctly *stops*. Supplying it is the owner's job, not a
+  hint;
+- a **vanilla** agent runtime with auto-approve, because R8 says the container
+  is a vanilla OpenCode install. A harness-imposed permission denial measures
+  our own sandbox, not our instructions.
+
+Everything past that point — finding the skill, installing `rmpc`, keygen,
+building the canonical payload, signing it, submitting it, waiting, claiming —
+is the agent's own inference, and no harness-supplied string may name a tool, an
+endpoint, a payload shape, or a step. Two outcomes are **product defects, not
+eval flake, and are reported as results**: a *refusal* (the agent declines the
+task — the measured refusals that shaped `ONBOARDING_PROMPT`'s opening bounds)
+and a *stall* (the agent correctly waits on an owner who cannot answer). Both
+mean the published instructions do not stand on their own.
 
 ---
 

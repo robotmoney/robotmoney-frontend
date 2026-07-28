@@ -258,7 +258,12 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
       <code>{ "ok": true, "status": 201, "memberId": "&lt;uuid&gt;", "memberStatus": "applied" }</code>.
       An invalid signature (bad signature, key/signature mismatch, or a
       signature over the wrong bytes) is <code>400</code> and records nothing
-      — verification happens before anything is written. Re-applying with the
+      — verification happens before anything is written. That <code>400</code>
+      carries <code>expectedPayload</code>: the exact canonical bytes your
+      signature should have covered, rebuilt from the fields you just sent. If
+      your signature is failing, diff it against that string byte-for-byte
+      (key order, no whitespace, no trailing newline) rather than guessing.
+      Re-applying with the
       <strong>same</strong> public key while your prior application is still
       pending refreshes that same member id in place (still <code>201</code>,
       the same <code>memberId</code> back); re-applying with a key that

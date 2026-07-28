@@ -998,11 +998,11 @@ async function main(): Promise<void> {
   // ONBOARDING_REAL_EVAL=1 — see the CI branch below): fail before spending
   // minutes standing up the stack, not ~20 minutes later at the eval step
   // itself. Which CI runs set it (issue #289): the nightly sweep in
-  // .github/workflows/committee-opencode-nightly.yml, and e2e.yml on NON-PR
-  // events only — e2e.yml derives it from `github.event_name != 'pull_request'`
-  // so a per-PR run never spends a model call on an exhaustible free tier. A
-  // PR run therefore leaves ONBOARDING_REAL_EVAL empty and skips this resolve,
-  // which is correct: it has no eval to fail early for.
+  // .github/workflows/committee-opencode-nightly.yml, and e2e.yml on a push to
+  // main, on a `pull_request` whose PR carries the `real-eval` opt-in label, or
+  // on a `workflow_dispatch` started with real_eval=true. An ORDINARY PR run
+  // therefore leaves ONBOARDING_REAL_EVAL empty and skips this resolve, which
+  // is correct: it has no eval to fail early for.
   if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
     resolveModelConfig(process.env);
   }
@@ -1201,24 +1201,27 @@ async function main(): Promise<void> {
     // pattern as RMPC_RELEASE_E2E above. Only runs when ONBOARDING_REAL_EVAL=1.
     // Which CI runs set it (issue #289): the nightly sweep in
     // .github/workflows/committee-opencode-nightly.yml, and
-    // .github/workflows/e2e.yml on NON-PR events only — e2e.yml derives it from
-    // `github.event_name != 'pull_request'`, so a per-PR run of the required
-    // gate spends no model call. That gating dates from the free-tier default,
-    // whose quota one eval per PR exhausted; the default is now a funded model
-    // (D22 as amended), so per-PR evals are affordable again and re-enabling
-    // them is tracked separately rather than smuggled into this change. A run
-    // without ONBOARDING_REAL_EVAL set at all (a `pull_request` run of e2e.yml,
-    // a plain local `bun run demo`, or any invocation predating this env var)
-    // is a no-op here and relies on Stage 5's separate inference-off
+    // .github/workflows/e2e.yml on exactly three events — a push to main, a
+    // `pull_request` whose PR carries the `real-eval` OPT-IN LABEL, and a
+    // `workflow_dispatch` started with real_eval=true. It is off by default on
+    // pull requests: that gating dates from the free-tier default whose quota
+    // one eval per PR exhausted, and survives the funded default (D22 as
+    // amended) because this repo has one self-hosted runner and an eval per PR
+    // is minutes of exclusive runner time against a stochastic metric. Add the
+    // `real-eval` label to opt a PR in; remove it to opt back out. A run
+    // without ONBOARDING_REAL_EVAL set at all (an unlabelled `pull_request` run
+    // of e2e.yml, a plain local `bun run demo`, or any invocation predating this
+    // env var) is a no-op here and relies on Stage 5's separate inference-off
     // infra-rails test (scripts/tests/integration/onboarding-eval-infra.test.ts), which
     // e2e.yml still runs unconditionally on every PR. A failed/timed-out
     // admission THROWS (via `run`'s pattern — no silent pass): the whole point
     // of real inference is that a vanilla agent failing to navigate our own
     // onboarding instructions is a real regression signal, not a shrug.
-    // Provider/infra flake (rate-limit signals, and — on a keyless model —
-    // bare timeouts too) is mitigated by runOnboardingEvalWithRetry's own
-    // retry/backoff (scripts/lib/onboarding-eval.ts); it never retries a
-    // genuine navigation failure.
+    // Provider/infra flake (rate-limit signals, model refusals, and bare
+    // timeouts on ANY tier — funded Zen stalls mid-session too) is mitigated by
+    // runOnboardingEvalWithRetry's own retry/backoff
+    // (scripts/lib/onboarding-eval.ts); it never retries a genuine navigation
+    // failure, which presents as a container EXIT rather than a timeout.
     //
     // Sweep width (nightly-only knobs, both optional, both no-ops for e2e.yml,
     // which never sets them): ONBOARDING_SWEEP_MODELS is a ":"-separated
@@ -1227,9 +1230,9 @@ async function main(): Promise<void> {
     // single model resolveModelConfig() resolves.
     // ONBOARDING_SWEEP_IDENTITIES_PER_MODEL is how
     // many fresh admissions to run per model (default 1). e2e.yml never sets
-    // either, so its non-PR runs stay exactly one admission on one model —
-    // this block is a strict superset of that behaviour, not a different code
-    // path (§11 R8: one real flow, config-only differences).
+    // either, so its eval-spending runs stay exactly one admission on one
+    // model — this block is a strict superset of that behaviour, not a
+    // different code path (§11 R8: one real flow, config-only differences).
     if (process.env.ONBOARDING_REAL_EVAL === "1") {
       // Nothing configured means "use the repo default", exactly as
       // resolveModelConfig() resolves it for a single admission. Reuse that
