@@ -28,7 +28,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const repoRoot = join(import.meta.dir, "../..");
+const repoRoot = join(import.meta.dir, "../../..");
 const e2eYml = readFileSync(join(repoRoot, ".github/workflows/e2e.yml"), "utf8");
 const nightlyYml = readFileSync(
   join(repoRoot, ".github/workflows/committee-opencode-nightly.yml"),
@@ -170,7 +170,7 @@ describe("the coverage that replaces the per-PR eval is really there", () => {
   test("the inference-off rails step still runs on PRs, with no if: guard", () => {
     const step = stepContaining(
       e2eYml,
-      "bun test scripts/tests/onboarding-eval-infra.test.ts",
+      "bun test scripts/tests/integration/onboarding-eval-infra.test.ts",
       "e2e.yml",
     );
     expect(step).toContain("Onboarding eval infra rails (inference-off, fail-fast)");
