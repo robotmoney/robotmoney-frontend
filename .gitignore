@@ -10,5 +10,6 @@ test-results/
 # Cloudflare Pages deploy dir assembled by scripts/cloudflare-statics.sh.
 _site/
 
-# Standing local demo state (written by `bun run demo`, removed by `demo:down`).
-.agents/demo-state.json
+# Agent/loop runtime state only — demo state files, logs, caches, plan backups.
+# Never source, never committed, so the whole directory is ignored.
+.agents/
