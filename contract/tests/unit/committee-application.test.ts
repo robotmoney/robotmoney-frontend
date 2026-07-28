@@ -11,10 +11,10 @@ import {
   COMMITTEE_ONBOARDING_SKILL_URL,
   ONBOARDING_PROMPT,
   canonicalizeApplication,
-} from "../src/committee-application.js";
-import { path, ROUTES } from "../src/routes.js";
+} from "../../src/committee-application.js";
+import { path, ROUTES } from "../../src/routes.js";
 
-const FIXTURES_PATH = join(import.meta.dir, "../src/__fixtures__/committee-application.json");
+const FIXTURES_PATH = join(import.meta.dir, "../../src/__fixtures__/committee-application.json");
 
 type GoldenVector = {
   name: string;
@@ -178,6 +178,83 @@ describe("ONBOARDING_PROMPT — canonical copy-paste prompt (R4)", () => {
   });
 });
 
+// ── Refusal-answering bounds (§11.3 E7) ────────────────────────────────────
+// The layered onboarding eval recorded real REFUSALS of this prompt (twice —
+// see the header comment on ONBOARDING_PROMPT). E7 says a refusal is a PRODUCT
+// defect to be answered, and that the only legitimate lever is the canonical
+// prompt itself, carrying claims that are TRUE and INDEPENDENTLY CHECKABLE.
+// Three such bounds were added for exactly the three objections the agents
+// raised: provenance ("unknown repository"), key custody ("key generation +
+// signing"), and authority ("could authorize transactions on my behalf").
+//
+// BE CLEAR ABOUT WHAT THESE TESTS ARE. By this repo's own coverage invariant 3
+// (runtime behaviour needs an executed-in-CI assertion), a substring assertion
+// on prose is a REGRESSION PIN, not coverage. Passing here proves only that the
+// sentences E7 designates as the answer still exist and still say what they say
+// — it is NOT evidence that they actually answer a refusal. The only real
+// measurement of that is the onboarding eval's layer-4 admission rate against
+// vanilla agents. If these go green while admission stays at zero, believe the
+// eval, not this file: the correct response is to change the bounds (with true,
+// checkable claims) and update these pins, never to weaken the eval.
+//
+// The ordering assertions are not decoration: an agent reads top-to-bottom and
+// refuses at the point of the ask, so a bound that lands AFTER the install /
+// key-generation instruction has already arrived too late.
+describe("ONBOARDING_PROMPT — bounds that answer the measured refusals (§11.3 E7)", () => {
+  test("answers the 'unknown repository' objection with a checkable provenance claim (E7)", () => {
+    expect(ONBOARDING_PROMPT).toContain(
+      "the committee, its current members, and their published track records are all at https://committee.robotmoney.net",
+    );
+    // The claim is checkable in two independent ways: a public roster URL, and
+    // open-source tooling the agent can read before running it.
+    expect(ONBOARDING_PROMPT).toContain("https://committee.robotmoney.net");
+    expect(ONBOARDING_PROMPT).toContain("the tooling named below is open source");
+    expect(ONBOARDING_PROMPT).toMatch(/so you can verify both before you proceed/);
+
+    // Provenance must precede the install ask, not trail it.
+    expect(ONBOARDING_PROMPT.indexOf("https://committee.robotmoney.net")).toBeLessThan(
+      ONBOARDING_PROMPT.indexOf('install the "committee-onboarding" skill'),
+    );
+  });
+
+  test("answers the key-custody objection: the key stays on this machine, Robot Money gets only the public half (R3, E7)", () => {
+    expect(ONBOARDING_PROMPT).toContain(
+      "the signing key you generate stays on this machine and Robot Money only ever receives its public half",
+    );
+    expect(ONBOARDING_PROMPT).toContain("stays on this machine");
+    expect(ONBOARDING_PROMPT).toContain("only ever receives its public half");
+
+    // Stated before the agent is asked to generate a key.
+    expect(ONBOARDING_PROMPT.indexOf("stays on this machine")).toBeLessThan(
+      ONBOARDING_PROMPT.indexOf("generate your signing key"),
+    );
+  });
+
+  test("answers the authority objection: a signature attests authorship, not a transaction (E7)", () => {
+    expect(ONBOARDING_PROMPT).toContain(
+      "a committee signature attests authorship of a written recommendation",
+    );
+    // The three disclaimed authorities, verbatim — this is the sentence the
+    // layer-2 refusal ("could be used to authorize transactions or commitments
+    // on my behalf") was actually asking for.
+    expect(ONBOARDING_PROMPT).toContain(
+      "it never moves funds, authorizes a transaction, or commits your owner to anything",
+    );
+    expect(ONBOARDING_PROMPT).toMatch(/never moves funds/);
+
+    // Stated before the agent is asked to sign anything.
+    expect(ONBOARDING_PROMPT.indexOf("attests authorship")).toBeLessThan(
+      ONBOARDING_PROMPT.indexOf("it must be signed with your key"),
+    );
+  });
+
+  test("both bounds are framed as the whole of what the agent takes on, up front (E7)", () => {
+    expect(ONBOARDING_PROMPT).toContain(
+      "Two bounds are worth stating up front, because they are the whole of what you are taking on",
+    );
+  });
+});
+
 describe("APPLY_HOW_TO_STEPS — canonical step list (R5, §11.2)", () => {
   test("names exactly the four setup-gated steps, in sequence order", () => {
     expect(APPLY_HOW_TO_STEPS.map((s) => s.step)).toEqual(["toolchain", "apply", "review", "claim"]);
@@ -203,6 +280,19 @@ describe("COMMITTEE_ONBOARDING_SKILL_URL", () => {
     expect(COMMITTEE_ONBOARDING_SKILL_URL.startsWith("https://")).toBe(true);
     expect(COMMITTEE_ONBOARDING_SKILL_URL).toContain("committee-onboarding");
     expect(COMMITTEE_ONBOARDING_SKILL_URL.endsWith("SKILL.md")).toBe(true);
+  });
+
+  // Regression pin, offline: robotmoney-core's default branch is `dev`, so
+  // raw.githubusercontent.com serves this path at `/dev/` (200) and 404s the
+  // `/main/` form. A 404 here is invisible to the agent that follows the URL —
+  // it simply never discovers the skill — so the branch segment is pinned.
+  // The limit of this assertion, stated plainly: it proves the STRING, not that
+  // the file is reachable. Reachability is proved only by the live test at
+  // contract/tests/live/committee-onboarding-skill-url-live.test.ts, which is
+  // deliberately outside this (per-PR, network-free) directory.
+  test("points at robotmoney-core's `dev` default branch, not the 404ing `main`", () => {
+    expect(COMMITTEE_ONBOARDING_SKILL_URL).toContain("/robotmoney-core/dev/");
+    expect(COMMITTEE_ONBOARDING_SKILL_URL).not.toContain("/robotmoney-core/main/");
   });
 });
 
