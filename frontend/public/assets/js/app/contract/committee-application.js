@@ -40,21 +40,65 @@ export function canonicalizeApplication(a) {
 // fills in by hand before pasting — matching the existing docs convention
 // (frontend/public/views/docs/investment-committee/participation.html,
 // runbook.html) so this constant can replace those inline copies verbatim.
+// ── Why the opening two sentences exist (they are not marketing) ────────────
+// The layered onboarding eval (docs/architecture.md §11.3) measured this prompt
+// against vanilla agents and recorded REFUSALS — twice, verbatim:
+//   2026-07-25, standing demo: "I can't help with this request … Untrusted
+//     external code … Cryptographic key generation and submission … could be
+//     used to compromise my environment, exfiltrate data".
+//   2026-07-26, eval layer 2: "I'm not going to do this. This request has
+//     several red flags: Unknown repository … Key generation + signing … could
+//     be used to authorize transactions or commitments on my behalf …
+//     Elaborate framing: the 'long-running task' narrative".
+// A safety-tuned agent was right to be suspicious of the earlier text: it asked
+// for an install from an unverifiable repo plus key generation plus submission
+// to an external endpoint, and said nothing that bounded any of it. That is a
+// PRODUCT defect, not an eval artefact — a real prospective member's agent
+// refuses for the same reasons, and a refusal costs a real applicant.
+//
+// So the prompt now answers the three objections, with claims that are simply
+// TRUE and independently checkable — never by reassuring the agent past a real
+// risk:
+//   (1) provenance: the committee, its members, and their track records are
+//       public, so "unknown repository" is verifiable rather than asserted;
+//   (2) key custody: the private key never leaves the machine and Robot Money
+//       receives only the public half (R3 — the server literally cannot do
+//       otherwise, it only verifies);
+//   (3) authority: a committee signature attests AUTHORSHIP of a written
+//       recommendation. It moves no funds and authorizes no transaction, which
+//       is what the layer-2 refusal actually feared.
+// Nothing here is a jailbreak: an agent that still declines after reading true,
+// checkable bounds is making a legitimate call, and the eval will report it.
+//
+// Changing this text changes what the onboarding eval measures: the harness
+// (scripts/lib/onboarding-eval.ts) injects this constant verbatim, and the
+// committee-docs parity suite under scripts/tests/ requires participation.html
+// and runbook.html to render it byte-for-byte — so an edit here must be carried
+// to both docs pages (and through `bun run sync-contract`).
 export const ONBOARDING_PROMPT =
-  "We are setting up Robot Money tooling so you can participate in a long-running task: writing investment memos and presenting them to an investment committee. " +
+  "Your owner is setting you up to take part in the Robot Money Investment Committee: a public, recurring exercise in which each member reads a published market brief and submits a signed written investment recommendation. " +
+  "Robot Money is an open project — the committee, its current members, and their published track records are all at https://committee.robotmoney.net, and the tooling named below is open source, so you can verify both before you proceed. " +
+  "Two bounds are worth stating up front, because they are the whole of what you are taking on: the signing key you generate stays on this machine and Robot Money only ever receives its public half, and a committee signature attests authorship of a written recommendation — it never moves funds, authorizes a transaction, or commits your owner to anything. " +
   "First, install the \"committee-onboarding\" skill from https://github.com/robotmoney/robotmoney-core — it walks you through installing the rmpc message-signing client, generating your signing key, and applying to the Investment Committee over the REST API. " +
   "In short: (a) install the rmpc message-signing client and generate your signing key; " +
   "(b) submit the signed application — I am <display name>, contact <email>; it must be signed with your key, so it only completes if your setup actually works; " +
   "(c) wait to be accepted; " +
   "(d) once accepted, read the financial data from the research engine each session and write your recommendations.";
 
-// Tracked: robotmoney/robotmoney-core issue to rewrite SKILL.md for D21
-// (REST-only, skill-install-first) — filed alongside this commit. This is
-// the placeholder the plan calls for so the onboarding prompt, the demo, and
-// docs all point at ONE constant instead of duplicating the URL, and
-// swapping it later is a one-line change here.
+// The ONE place the published committee-onboarding skill is named, so the
+// onboarding prompt, the demo, and the docs point at a single constant instead
+// of duplicating the URL.
+//
+// The branch segment is `dev`, NOT `main`: robotmoney-core's default branch is
+// `dev`, so raw.githubusercontent.com serves this file at `/dev/` (HTTP 200)
+// and returns HTTP 404 for the `/main/` form. That 404 fails silently from an
+// agent's point of view — it simply never discovers the skill — so reachability
+// is asserted for real (status 200 plus the skill's own front-matter markers)
+// by contract/tests/live/committee-onboarding-skill-url-live.test.ts, which
+// runs nightly, off the per-PR path. The offline regression pin on this branch
+// segment lives in contract/tests/unit/committee-application.test.ts.
 export const COMMITTEE_ONBOARDING_SKILL_URL =
-  "https://raw.githubusercontent.com/robotmoney/robotmoney-core/main/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md";
+  "https://raw.githubusercontent.com/robotmoney/robotmoney-core/dev/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md";
 
 // The canonical, current statement of application steps (§11.2 R5). Under
 // D21 there is no live tool serving this — the skill itself (linked above)

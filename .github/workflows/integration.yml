@@ -70,6 +70,17 @@ jobs:
         run: bash backend/scripts/check-no-ai-overview.sh
       - name: Verify vendored contract
         run: bun run check-contract
+      # contract/ has tests but, until this step existed, NO workflow ever ran
+      # them (nothing used `working-directory: contract`) — a test-coverage
+      # invariant-4 violation, and the reason a 404ing
+      # COMMITTEE_ONBOARDING_SKILL_URL survived in a file that already had a
+      # test asserting the constant's shape. `bun run test` in contract/
+      # resolves to `bun test tests/unit`, which pins the cost class: the
+      # package's network-touching live test lives in contract/tests/live/ and
+      # is run only by nightly-fetchers.yml, so this step stays offline.
+      - name: Contract tests (unit)
+        working-directory: contract
+        run: bun run test
       - name: Run tests (ephemeral Postgres via Docker)
         working-directory: backend
         run: bun test
