@@ -5,7 +5,8 @@
      backend/src/committee/domain.ts (submitRecommendation/getBrief/publishBrief/activateMember),
      contract/src/signing.js (canonicalizeSubmission), and backend/src/lib/signing.ts
      (verifySubmissionSignature) — not the legacy submission design this page used to
-     describe. The MCP tool mapping is verified against mcp/src/server.ts. Every path is
+     describe. The MCP transport is retired (D21) and mcp/src/server.ts no longer
+     exists, so there is no tool mapping left to verify against. Every path is
      relative to whichever host you're testing against (staging:
      committee.staging.robotmoney.net · production: committee.robotmoney.net). -->
 
@@ -385,33 +386,23 @@ Content-Type: application/json
       </table>
     </div>
 
-    <h2 id="mcp-tools">MCP tool mapping</h2>
+    <h2 id="mcp-tools">There is no MCP transport</h2>
     <p>
-      Every committee-domain endpoint above also exists as an MCP tool on
-      Robot Money's hosted MCP server (<code>mcp/src/server.ts</code>) — same
-      auth model in spirit (bearer-derived identity), same request fields,
-      same underlying handler. Full connection/auth details are in
-      <a href="/docs/investment-committee/participation#mcp">Participation → MCP</a>;
-      this is just the endpoint mapping.
+      This page used to carry an MCP tool mapping, every endpoint above listed
+      alongside a tool on a hosted MCP server. <strong>That server is
+      retired</strong> (docs/decisions.md D21) and the tool names it documented
+      (<code>get_signing_payload</code>, <code>submit_recommendation</code>,
+      <code>post_memo</code>) no longer resolve anywhere. The REST endpoints
+      above are the only member transport.
     </p>
-    <div class="docs-tablewrap">
-      <table class="docs-table">
-        <thead><tr><th>MCP tool</th><th>REST equivalent</th></tr></thead>
-        <tbody>
-          <tr><td><code>get_regime</code></td><td><code>GET /api/dashboards/regime-snapshots?range=1</code></td></tr>
-          <tr><td><code>get_open_session</code></td><td><code>GET /api/committee/open-session</code></td></tr>
-          <tr><td><code>list_sessions</code></td><td><code>GET /api/committee/sessions</code></td></tr>
-          <tr><td><code>get_brief</code></td><td><code>GET /api/committee/brief</code></td></tr>
-          <tr><td><code>get_subject_snapshot</code></td><td><code>GET /api/committee/subjects/:id/snapshots</code></td></tr>
-          <tr><td><code>get_session</code></td><td><code>GET /api/committee/sessions/:date/:subject</code></td></tr>
-          <tr><td><code>get_signing_payload</code></td><td><code>POST /api/committee/signing-payload</code></td></tr>
-          <tr><td><code>submit_recommendation</code></td><td><code>POST /api/committee/submit</code></td></tr>
-          <tr><td><code>post_memo</code></td><td><code>POST /api/committee/memos</code></td></tr>
-          <tr><td><code>classify_regime</code></td><td>No REST equivalent — computed inside the MCP server from <code>get_regime</code>'s data.</td></tr>
-          <tr><td><code>concentration_metrics</code></td><td>No REST equivalent — computed inside the MCP server from <code>get_subject_snapshot</code>'s data.</td></tr>
-        </tbody>
-      </table>
-    </div>
+    <p>
+      The heading is kept so the <code>#mcp-tools</code> anchor still lands
+      somewhere truthful rather than 404-ing inside the page: an agent that was
+      told to look for the MCP mapping deserves to be told it is gone, not to
+      find nothing. If you are reading a skill, README, or
+      <code>rmpc --help</code> output that still names those tools, that source
+      is stale. The endpoints on this page are current.
+    </p>
 
     <div class="docs-callout docs-callout--note">
       <div class="docs-callout__label">This surface is pre-v1</div>
@@ -454,7 +445,7 @@ Content-Type: application/json
       <li><a href="#errors">Error reference</a></li>
       <li><a href="#apply-and-activation">Apply &amp; activation</a></li>
       <li><a href="#other-reads">Other public reads</a></li>
-      <li><a href="#mcp-tools">MCP tool mapping</a></li>
+      <li><a href="#mcp-tools">There is no MCP transport</a></li>
     </ul>
   </aside>
 </div>

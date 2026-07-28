@@ -32,15 +32,45 @@ export function canonicalizeApplication(a) {
   return JSON.stringify(ordered);
 }
 
+// The ONE place the published committee-onboarding skill is named, so the
+// onboarding prompt, the demo, and the docs point at a single constant instead
+// of duplicating the URL. It is the deep FILE url, not the repo root, and that
+// is deliberate: the skill sits five levels down, and agents pointed at the
+// repo root reported back that no such skill existed instead of finding it.
+//
+// The branch segment is `dev`, NOT `main`: robotmoney-core has NO `main` branch
+// at all — `dev` is its default and only long-lived branch — so
+// raw.githubusercontent.com serves this file at `/dev/` (HTTP 200) and returns
+// HTTP 404 for the `/main/` form (verified 2026-07-27). That 404 fails silently
+// from an agent's point of view — it simply never discovers the skill — so
+// reachability is asserted for real (status 200 plus the skill's own
+// front-matter markers) by
+// contract/tests/live/committee-onboarding-skill-url-live.test.ts, which runs
+// nightly, off the per-PR path. The offline regression pin on this branch
+// segment lives in contract/tests/unit/committee-application.test.ts.
+export const COMMITTEE_ONBOARDING_SKILL_URL =
+  "https://raw.githubusercontent.com/robotmoney/robotmoney-core/dev/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md";
+
 // The single copy-paste prompt an owner drops into their agent harness (R4).
-// It never goes stale because it only ever points at installing the
-// `committee-onboarding` skill (R5) — maintained centrally in robotmoney-core
-// and fetched fresh on each install — rather than embedding the step list
-// itself. `<display name>` and `<email>` are literal placeholders the owner
-// fills in by hand before pasting — matching the existing docs convention
-// (frontend/public/views/docs/investment-committee/participation.html,
-// runbook.html) so this constant can replace those inline copies verbatim.
-// ── Why the opening two sentences exist (they are not marketing) ────────────
+//
+// Two rules decide what belongs in here. They pull in opposite directions only
+// if you read them carelessly:
+//
+//   PROCEDURE belongs to the skill, not to this text — the skill is fetched
+//   fresh on every run and so can never go stale, and this constant ships with
+//   the frontend. So each ask is named exactly ONCE, and nothing here explains
+//   HOW to do it. An earlier revision recapped the step list inline ("(a)
+//   install rmpc … (b) submit the signed application … (c) wait to be accepted
+//   …"), a summary of the very skill it tells the agent to fetch: it tripled
+//   what an operator pastes and created a second place to update whenever the
+//   procedure moved (as it did at D21, MCP → REST). That recap is gone.
+//
+//   The BOUNDS on what the agent is taking on belong in here and NOWHERE ELSE,
+//   because the agent reading this prompt never sees the page it was copied
+//   from. They are not marketing and they are not padding to trim — they are
+//   the fix for a measured product defect, below.
+//
+// ── Why the opening sentences exist (they are not marketing) ────────────────
 // The layered onboarding eval (docs/architecture.md §11.3) measured this prompt
 // against vanilla agents and recorded REFUSALS — twice, verbatim:
 //   2026-07-25, standing demo: "I can't help with this request … Untrusted
@@ -56,9 +86,8 @@ export function canonicalizeApplication(a) {
 // PRODUCT defect, not an eval artefact — a real prospective member's agent
 // refuses for the same reasons, and a refusal costs a real applicant.
 //
-// So the prompt now answers the three objections, with claims that are simply
-// TRUE and independently checkable — never by reassuring the agent past a real
-// risk:
+// So the prompt answers the three objections, with claims that are simply TRUE
+// and independently checkable — never by reassuring the agent past a real risk:
 //   (1) provenance: the committee, its members, and their track records are
 //       public, so "unknown repository" is verifiable rather than asserted;
 //   (2) key custody: the private key never leaves the machine and Robot Money
@@ -67,8 +96,22 @@ export function canonicalizeApplication(a) {
 //   (3) authority: a committee signature attests AUTHORSHIP of a written
 //       recommendation. It moves no funds and authorizes no transaction, which
 //       is what the layer-2 refusal actually feared.
-// Nothing here is a jailbreak: an agent that still declines after reading true,
-// checkable bounds is making a legitimate call, and the eval will report it.
+// Each bound sits IMMEDIATELY BEFORE the ask it answers, because an agent reads
+// top-to-bottom and refuses at the point of the ask: a bound that lands after
+// the install / keygen / signing instruction has already arrived too late. That
+// ordering is pinned in contract/tests/unit/committee-application.test.ts —
+// which is also why dropping an ask from this text is not a free saving, since
+// it removes the thing a bound is anchored to. Nothing here is a jailbreak: an
+// agent that still declines after reading true, checkable bounds is making a
+// legitimate call, and the eval will report it.
+//
+// It carries NO fill-in-the-blank placeholders. An earlier revision embedded
+// `<display name>` and `<email>` for the owner to replace by hand, which
+// defeats the point of a copy-paste prompt — operators paste it verbatim and
+// apply under the literal string "<display name>" without noticing. Identity is
+// the human gate, so the agent asks for it face to face; the prompt only tells
+// it to. The skill likewise refuses to invent a name or contact (that changed
+// in robotmoney-core#1190; the skill now asks when identity is missing).
 //
 // Changing this text changes what the onboarding eval measures: the harness
 // (scripts/lib/onboarding-eval.ts) injects this constant verbatim, and the
@@ -79,26 +122,8 @@ export const ONBOARDING_PROMPT =
   "Your owner is setting you up to take part in the Robot Money Investment Committee: a public, recurring exercise in which each member reads a published market brief and submits a signed written investment recommendation. " +
   "Robot Money is an open project — the committee, its current members, and their published track records are all at https://committee.robotmoney.net, and the tooling named below is open source, so you can verify both before you proceed. " +
   "Two bounds are worth stating up front, because they are the whole of what you are taking on: the signing key you generate stays on this machine and Robot Money only ever receives its public half, and a committee signature attests authorship of a written recommendation — it never moves funds, authorizes a transaction, or commits your owner to anything. " +
-  "First, install the \"committee-onboarding\" skill from https://github.com/robotmoney/robotmoney-core — it walks you through installing the rmpc message-signing client, generating your signing key, and applying to the Investment Committee over the REST API. " +
-  "In short: (a) install the rmpc message-signing client and generate your signing key; " +
-  "(b) submit the signed application — I am <display name>, contact <email>; it must be signed with your key, so it only completes if your setup actually works; " +
-  "(c) wait to be accepted; " +
-  "(d) once accepted, read the financial data from the research engine each session and write your recommendations.";
-
-// The ONE place the published committee-onboarding skill is named, so the
-// onboarding prompt, the demo, and the docs point at a single constant instead
-// of duplicating the URL.
-//
-// The branch segment is `dev`, NOT `main`: robotmoney-core's default branch is
-// `dev`, so raw.githubusercontent.com serves this file at `/dev/` (HTTP 200)
-// and returns HTTP 404 for the `/main/` form. That 404 fails silently from an
-// agent's point of view — it simply never discovers the skill — so reachability
-// is asserted for real (status 200 plus the skill's own front-matter markers)
-// by contract/tests/live/committee-onboarding-skill-url-live.test.ts, which
-// runs nightly, off the per-PR path. The offline regression pin on this branch
-// segment lives in contract/tests/unit/committee-application.test.ts.
-export const COMMITTEE_ONBOARDING_SKILL_URL =
-  "https://raw.githubusercontent.com/robotmoney/robotmoney-core/dev/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md";
+  `First, install the "committee-onboarding" skill from ${COMMITTEE_ONBOARDING_SKILL_URL} — it carries the whole current procedure: install the rmpc message-signing client, generate your signing key, and submit the signed application over the REST API. ` +
+  "Ask me for the display name and contact email to apply with; it must be signed with your key, so it only completes if your setup actually works.";
 
 // The canonical, current statement of application steps (§11.2 R5). Under
 // D21 there is no live tool serving this — the skill itself (linked above)

@@ -40,7 +40,6 @@ import {
   DEFAULT_COMPOSE_FILES,
   DEFAULT_INFERENCE_MODEL,
   deriveSteps,
-  fillPromptIdentity,
   generateIdentity,
   KEYSTORE_PASSPHRASE_ENV,
   looksRateLimited,
@@ -67,24 +66,28 @@ describe("onboarding-eval pure helpers", () => {
     expect(a.name).toContain(a.runId);
   });
 
-  test("fillPromptIdentity substitutes both placeholders and nothing else", () => {
-    const identity = { runId: "abc123", name: "Test Applicant", contact: "test@example.test" };
-    expect(fillPromptIdentity("I am <display name>, contact <email>.", identity)).toBe(
-      "I am Test Applicant, contact test@example.test.",
-    );
+  test("the canonical prompt carries no fill-in-the-blank placeholders for the harness to substitute", () => {
+    // Real testers pasted the prompt verbatim and submitted "<display name>" as
+    // a live application. Placeholders are gone for good: the prompt asks the
+    // operator for identity, and the harness answers in its note instead. If a
+    // future edit reintroduces a blank, this goes red before an eval run can
+    // quietly go back to rewriting the canonical text.
+    expect(ONBOARDING_PROMPT).not.toContain("<display name>");
+    expect(ONBOARDING_PROMPT).not.toContain("<email>");
+    expect(ONBOARDING_PROMPT.toLowerCase()).toContain("ask me for");
   });
 
-  test("fillPromptIdentity throws loudly if the canonical prompt's placeholders ever disappear", () => {
-    expect(() => fillPromptIdentity("no placeholders here", generateIdentity())).toThrow(/placeholders/);
-  });
-
-  test("buildAgentPrompt injects identity into the UNMODIFIED canonical prompt plus a clearly separate note", () => {
+  test("buildAgentPrompt supplies identity in a separate note, leaving the canonical prompt byte-for-byte intact", () => {
+    // The whole point of this eval is that it exercises the prompt operators
+    // actually copy. If the harness ever rewrites that text, the run stops
+    // being evidence about the real thing — so assert the canonical prompt is
+    // the verbatim PREFIX, not merely "contained somewhere".
     const identity = generateIdentity("fixed-run");
     const prompt = buildAgentPrompt(identity);
+    expect(prompt.startsWith(ONBOARDING_PROMPT)).toBe(true);
     expect(prompt).toContain(identity.name);
     expect(prompt).toContain(identity.contact);
-    expect(prompt).toContain("committee-onboarding"); // canonical prompt content survives untouched
-    expect(prompt).toContain("Demo harness note"); // clearly delimited, not blended into the canonical text
+    expect(prompt).toContain("Demo harness note"); // clearly delimited, not blended in
   });
 
   test("buildAgentPrompt tells the agent its owner is absent and their secrets are already exported", () => {
@@ -94,7 +97,8 @@ describe("onboarding-eval pure helpers", () => {
     // WITHOUT this the correct behaviour IS to stop — which is exactly what CI
     // run 30395466780 recorded: exit 0, every onboarding step still pending.
     // This is the harness playing the owner, the same role it already plays by
-    // filling in the display name and contact (§11 R1/R4, §11.3 E7).
+    // answering the prompt's own request for a display name and contact
+    // (§11 R1/R4, §11.3 E7).
     const prompt = buildAgentPrompt(generateIdentity("fixed-run"));
     expect(prompt).toMatch(/not at the keyboard/i);
     expect(prompt).toMatch(/already exported into this environment every secret/i);
@@ -107,7 +111,7 @@ describe("onboarding-eval pure helpers", () => {
     // must NOT name the env var the passphrase arrives in: finding it is part
     // of what the skill is being measured on.
     const identity = generateIdentity("fixed-run");
-    const note = buildAgentPrompt(identity).slice(fillPromptIdentity(ONBOARDING_PROMPT, identity).length);
+    const note = buildAgentPrompt(identity).slice(ONBOARDING_PROMPT.length);
     expect(note.length).toBeGreaterThan(0);
     for (const leak of ["rmpc", "ed25519", "sign", "keygen", "canonical", "/api/", "POST", "public key", "bearer", KEYSTORE_PASSPHRASE_ENV])
       expect(note.toLowerCase()).not.toContain(leak.toLowerCase());

@@ -45,12 +45,17 @@
 // rather than faked with invented per-step signals.
 //
 // ── What the harness supplies, and what it refuses to supply (§11.3 E7) ─────
-// ONBOARDING_PROMPT is injected with its <display name>/<email> placeholders
-// filled in (exactly as the prompt's own text says a human would do by hand
-// before pasting). Nothing else about the prompt text is changed. Everything
-// else the harness provides is the OWNER's side of onboarding — the half a real
-// applicant's human would have handled before their agent ever started:
+// ONBOARDING_PROMPT is injected BYTE-FOR-BYTE VERBATIM, as its own prefix; the
+// canonical text is never rewritten or substituted into. Everything the harness
+// adds rides in one clearly delimited note appended after it, and every line of
+// that note is the OWNER's side of onboarding — the half a real applicant's
+// human would have handled before their agent ever started:
 //
+//   - the display name and contact to apply under. The prompt tells the agent
+//     to ASK its owner for these (it carries no fill-in-the-blank placeholders,
+//     because operators paste it verbatim and "<display name>" then reaches the
+//     server as a real application), and a headless container has no owner to
+//     ask, so the note answers the question the prompt raised;
 //   - the committee REST API base URL for this run (the prompt's doc link is a
 //     production host this ephemeral demo stack cannot serve; a real human, per
 //     the real docs, would be applying against committee.robotmoney.net);
@@ -149,7 +154,7 @@ export const DEFAULT_AUTO_APPROVE_DELAY_MS = 10_000; // §11 R7
 // The env var `rmpc` reads its keystore passphrase from — the ONE secret the
 // published committee-onboarding skill tells the agent to have its human owner
 // export before launching it. The harness plays the owner here (see
-// demoNetworkNote); it is not a hint about what the agent should do with it.
+// demoHarnessNote); it is not a hint about what the agent should do with it.
 // Same name scripts/rmpc-release-e2e.ts and the rails check already use.
 export const KEYSTORE_PASSPHRASE_ENV = "RMPC_COMMITTEE_IDENTITY_PASSPHRASE";
 
@@ -168,27 +173,25 @@ export function generateIdentity(runId: string = crypto.randomUUID().slice(0, 8)
   };
 }
 
-// Fill the prompt's literal <display name>/<email> placeholders — exactly the
-// substitution the prompt's own text describes a human doing by hand before
-// pasting. Throws if either placeholder is missing so a future edit to
-// ONBOARDING_PROMPT can never silently strand a real name/contact string out
-// of the injected prompt.
-export function fillPromptIdentity(prompt: string, identity: OnboardingIdentity): string {
-  if (!prompt.includes("<display name>") || !prompt.includes("<email>")) {
-    throw new Error("ONBOARDING_PROMPT no longer contains the <display name>/<email> placeholders this harness fills in");
-  }
-  return prompt.replace("<display name>", identity.name).replace("<email>", identity.contact);
-}
-
-// Two facts about THIS machine that a real applicant's own owner would have
-// already told their agent, and that nothing in the container can discover:
+// Everything this run needs that the canonical prompt deliberately does not
+// carry, in one clearly delimited block appended AFTER a byte-for-byte-verbatim
+// copy of ONBOARDING_PROMPT. It is exactly what a real applicant's own owner
+// would have already told their agent, and nothing more (§11.3 E7):
 //
-//  1. the committee API base URL — the ephemeral demo stack cannot serve the
+//  1. the display name and contact to apply under (R1). The prompt used to
+//     embed literal `<display name>`/`<email>` placeholders that this harness
+//     substituted in place; those placeholders are GONE, because real operators
+//     paste the prompt verbatim and the literal string "<display name>" reached
+//     the server as an actual application. The prompt now *asks* its owner for
+//     identity, so the harness answers that question here instead of rewriting
+//     the canonical text — which is what keeps this an eval of the real prompt
+//     rather than of a harness-only variant;
+//  2. the committee API base URL — the ephemeral demo stack cannot serve the
 //     production host the docs name;
-//  2. that the owner has already put the secrets they'd otherwise be asked to
+//  3. that the owner has already put the secrets they'd otherwise be asked to
 //     type into the session's environment.
 //
-// (2) is not a convenience. The published committee-onboarding skill tells the
+// (3) is not a convenience. The published committee-onboarding skill tells the
 // agent, in as many words, to ask its owner to export the keystore passphrase
 // and to *wait* for them ("Tell me once it's set"), and forbids accepting the
 // value in conversation. A headless eval container has no owner to answer, so
@@ -196,29 +199,33 @@ export function fillPromptIdentity(prompt: string, identity: OnboardingIdentity)
 // observed failure: 2026-07-28 run 30395466780, `deepseek-v4-flash` ended its
 // session cleanly (exit 0) with every onboarding step still pending. The fix is
 // to make the harness do the owner's half of that exchange, the same way it
-// already supplies the owner's display name and contact (R1/R4) — NOT to tell
-// the agent what to do with it. The note deliberately names no tool, no env
-// var, no endpoint and no step: discovering all of that is still 100% the
-// agent's own inference from the prompt + the skill.
-function demoNetworkNote(apiBaseUrl: string): string {
+// answers the identity question in (1) — NOT to tell the agent what to do with
+// it. The note deliberately names no tool, no env var, no endpoint and no step:
+// discovering all of that is still 100% the agent's own inference from the
+// prompt + the skill.
+function demoHarnessNote(identity: OnboardingIdentity, apiBaseUrl: string): string {
   return (
     "\n\n---\n" +
-    "Demo harness note (environment info, not part of your task): the Robot " +
-    `Money committee REST API for this run is reachable at ${apiBaseUrl} over ` +
-    "this local demo network. Apply against that base URL instead of the " +
-    "production host in the docs (which this ephemeral demo stack does not " +
-    "serve). Your owner is not at the keyboard for this session and cannot " +
-    "answer questions, but has already exported into this environment every " +
-    "secret you would otherwise have had to ask them to type — so proceed on " +
-    "your own rather than waiting on them. Everything else above is unchanged."
+    "Demo harness note (environment info, not part of your task):\n" +
+    `- Apply as "${identity.name}" with contact email ${identity.contact}. The ` +
+    "instructions above tell you to ask for these; this run is unattended, so " +
+    "take them from here rather than waiting for a reply.\n" +
+    `- The Robot Money committee REST API for this run is reachable at ${apiBaseUrl} ` +
+    "over this local demo network. Apply against that base URL instead of the " +
+    "production host in the docs, which this ephemeral demo stack does not serve.\n" +
+    "- Your owner is not at the keyboard for this session and cannot answer " +
+    "anything else, but has already exported into this environment every secret " +
+    "you would otherwise have had to ask them to type — so proceed on your own " +
+    "rather than waiting on them.\n" +
+    "Everything above this note is unchanged."
   );
 }
 
-// The exact text injected into the container — ONBOARDING_PROMPT with its
-// identity placeholders filled, plus the harness's local-network note (kept
-// clearly delimited and separate, per the module doc comment above).
+// The exact text injected into the container: the canonical ONBOARDING_PROMPT
+// verbatim as the prefix, plus the harness note (kept clearly delimited and
+// separate, per the module doc comment above).
 export function buildAgentPrompt(identity: OnboardingIdentity, apiBaseUrl: string = DEFAULT_API_URL_INTERNAL): string {
-  return `${fillPromptIdentity(ONBOARDING_PROMPT, identity)}${demoNetworkNote(apiBaseUrl)}`;
+  return `${ONBOARDING_PROMPT}${demoHarnessNote(identity, apiBaseUrl)}`;
 }
 
 // ── Model configuration ─────────────────────────────────────────────────────
@@ -447,7 +454,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     modelConfig,
     // The owner's half of onboarding, left in the environment exactly the way a
     // real owner would leave it before launching their agent (see
-    // demoNetworkNote's comment). Never logged, never read back by this
+    // demoHarnessNote's comment). Never logged, never read back by this
     // harness — the keystore it protects lives and dies inside the container.
     ownerEnv: { [KEYSTORE_PASSPHRASE_ENV]: keystorePassphrase },
     title: `onboarding-eval-${identity.runId}`,

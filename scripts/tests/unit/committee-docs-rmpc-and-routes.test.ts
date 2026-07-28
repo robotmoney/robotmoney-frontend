@@ -147,12 +147,16 @@ describe("documented /api/committee/... paths match contract/src/routes.js", () 
 // runbook.html had "<desk name>" where the constant and participation.html
 // both say "<display name>").
 describe("participation.html and runbook.html render ONBOARDING_PROMPT verbatim", () => {
-  // Canary against a vacuous pass — the constant itself must be non-empty and
-  // must actually carry the placeholders a reader fills in.
-  test("ONBOARDING_PROMPT is non-empty and names the committee-onboarding skill", () => {
+  // Canary against a vacuous pass — the constant itself must be non-empty, must
+  // point at the skill, and must tell the agent to COLLECT the owner's identity.
+  // It must NOT carry fill-in-the-blank placeholders: operators paste the prompt
+  // verbatim, so a `<display name>` left in the text gets applied under
+  // literally that string instead of a real person's name.
+  test("ONBOARDING_PROMPT is non-empty, names the committee-onboarding skill, and collects identity without placeholders", () => {
     expect(ONBOARDING_PROMPT.length).toBeGreaterThan(0);
     expect(ONBOARDING_PROMPT).toContain("committee-onboarding");
-    expect(ONBOARDING_PROMPT).toContain("<display name>");
+    expect(ONBOARDING_PROMPT.toLowerCase()).toContain("ask me for");
+    expect(ONBOARDING_PROMPT).not.toMatch(/<[a-z][a-z ]*>/i);
   });
 
   for (const [label, rel, sectionId] of [

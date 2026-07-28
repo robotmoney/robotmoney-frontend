@@ -1,19 +1,22 @@
 import { expect, test } from "@playwright/test";
 
-// A verified badge is `✓ verified` (session/member views) or `✓ server verified`
-// (take permalink); a negative badge is `✕ not verified` and always carries the
-// cv__verified--negative class (frontend/public/views/committee/{session,member,take}.html).
-// Assertions below require the EXACT text and check the class directly so a take
-// that actually rendered as NOT verified can never satisfy a "verified" assertion
-// via substring match (✕ not verified contains "verified" too).
-async function expectPositiveBadge(badge: ReturnType<import("@playwright/test").Page["locator"]>, text: string) {
-  await expect(badge).toHaveText(text);
-  await expect(badge).not.toHaveClass(/cv__verified--negative/);
+// The badge (frontend/public/views/committee/{session,member,take}.html) is a
+// drawn mark, a one-word label, and an explanatory line shown on hover/focus.
+//
+// Its text is therefore NOT a safe discriminator, and the original hazard this
+// file guards against got worse rather than better: the old pair was
+// `✓ verified` / `✕ not verified`, and the current pair is `verified` /
+// `unverified` — which still contains "verified" as a substring. So assert the
+// machine-readable state instead, plus the negative class directly, and a take
+// that rendered as NOT verified can never satisfy a "verified" assertion.
+async function expectPositiveBadge(badge: ReturnType<import("@playwright/test").Page["locator"]>) {
+  await expect(badge).toHaveAttribute("data-verified-state", "verified");
+  await expect(badge).not.toHaveClass(/cv__vfy--bad/);
 }
 
-async function expectNegativeBadge(badge: ReturnType<import("@playwright/test").Page["locator"]>, text: string) {
-  await expect(badge).toHaveText(text);
-  await expect(badge).toHaveClass(/cv__verified--negative/);
+async function expectNegativeBadge(badge: ReturnType<import("@playwright/test").Page["locator"]>) {
+  await expect(badge).toHaveAttribute("data-verified-state", "unverified");
+  await expect(badge).toHaveClass(/cv__vfy--bad/);
 }
 
 test("public committee take shows an exact verified badge on the session view, member view, and rendered receipt permalink", async ({
@@ -56,14 +59,14 @@ test("public committee take shows an exact verified badge on the session view, m
   // 1. Public session view: exact positive badge text, no negative class.
   await page.goto(`/committee/${encodeURIComponent(session.date)}/${encodeURIComponent(session.subjectId)}`);
   const sessionBadge = page.locator(`[data-verified-badge][data-take-id="${take.id}"]`);
-  await expectPositiveBadge(sessionBadge, "✓ verified");
+  await expectPositiveBadge(sessionBadge);
 
   // 2. Public member view: the same take's badge and permalink must also render
   // the exact positive state (issue #207 Behaviour: "On the public session AND
   // member views each take shows a verified badge").
   await page.goto(`/committee/members/${encodeURIComponent(take.memberId)}`);
   const memberBadge = page.locator(`[data-verified-badge][data-take-id="${take.id}"]`);
-  await expectPositiveBadge(memberBadge, "✓ verified");
+  await expectPositiveBadge(memberBadge);
   const memberPermalink = page.locator(`[data-take-permalink][href="/committee/takes/${take.id}"]`);
   await expect(memberPermalink).toBeVisible();
 
@@ -76,7 +79,7 @@ test("public committee take shows an exact verified badge on the session view, m
   await expect(page).toHaveURL(new RegExp(`/committee/takes/${take.id}$`));
   await expect(page.locator("[data-committee-take-receipt]")).toBeVisible();
   const receiptBadge = page.locator("[data-committee-take-receipt] [data-verified-badge]");
-  await expectPositiveBadge(receiptBadge, "✓ server verified");
+  await expectPositiveBadge(receiptBadge);
   await expect(page.locator("body")).not.toContainText('"take":');
 });
 
@@ -119,5 +122,5 @@ test("public session view renders an unverified/tampered take as NOT verified", 
 
   await page.goto(`/committee/${date}/${subjectId}`);
   const badge = page.locator(`[data-verified-badge][data-take-id="${tamperedTakeId}"]`);
-  await expectNegativeBadge(badge, "✕ not verified");
+  await expectNegativeBadge(badge);
 });

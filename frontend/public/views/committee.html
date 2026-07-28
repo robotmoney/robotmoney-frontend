@@ -69,16 +69,36 @@
 
         <div class="cv__sessions-head">
           <p class="cv__panel-label">Sessions</p>
-          <span class="cv__session-count" x-text="`${publishedSessions().length} published`"></span>
+          <span class="cv__session-count" x-text="`${visibleSessions().length} published`"></span>
+        </div>
+
+        <!-- Same filter component and colours as the member profile's track
+             record: one convention for "which subject is this", everywhere. -->
+        <div class="mp-filter" x-show="sessionSubjects().length > 1" x-cloak>
+          <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === null }"
+                  @click="subjectFilter = null" :aria-pressed="subjectFilter === null">
+            All <span class="mp-chip__n" x-text="publishedSessions().length"></span>
+          </button>
+          <template x-for="s in sessionSubjects()" :key="s.id">
+            <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === s.id }"
+                    @click="filterBy(s.id)" :aria-pressed="subjectFilter === s.id"
+                    :title="subjectFilter === s.id ? `Clear the ${s.name} filter` : `Show only ${s.name}`">
+              <i class="mp-chip__dot" :style="`background:${subjectDot(s.id)}`" aria-hidden="true"></i>
+              <span x-text="s.name"></span> <span class="mp-chip__n" x-text="s.count"></span>
+              <span class="mp-chip__x" x-show="subjectFilter === s.id" aria-hidden="true">×</span>
+            </button>
+          </template>
         </div>
 
         <div class="cv__empty" x-show="publishedSessions().length === 0" x-cloak>No sessions yet. The first one publishes once the daily workflow runs.</div>
         <div class="cv__session-list">
-          <template x-for="s in publishedSessions()" :key="`${s.date}-${s.subjectId}`">
-            <a class="cv__session-card" :href="`/committee/${s.date}/${s.subjectId}`">
+          <template x-for="s in visibleSessions()" :key="`${s.date}-${s.subjectId}`">
+            <a class="cv__session-card mp-take" :href="`/committee/${s.date}/${s.subjectId}`"
+               :style="`--mp-subject:${subjectDot(s.subjectId)}`">
               <div class="cv__session-top">
                 <div class="cv__session-titleline">
                   <span class="cv__date" x-text="formatDate(s.date, 'short')"></span>
+                  <i class="mp-take__dot" aria-hidden="true"></i>
                   <span class="cv__session-title" x-text="s.subjectName"></span>
                 </div>
                 <div class="cv__session-meta">
@@ -92,7 +112,7 @@
                   <span class="cv__stance-dotline"><i :style="`background:${stanceColor(stance)}`"></i><b x-text="n"></b> <span x-text="stance"></span></span>
                 </template>
               </div>
-              <p class="cv__session-copy" x-text="s.synthesis || 'No synthesis yet.'"></p>
+              <p class="cv__session-copy" x-show="synthesisPreview(s)" x-text="synthesisPreview(s)"></p>
             </a>
           </template>
         </div>
