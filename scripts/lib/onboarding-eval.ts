@@ -57,14 +57,58 @@
 // signing, submitting the signed apply over REST, waiting, claiming — is still
 // 100% the agent's own real inference; nothing carries onboarding-specific
 // knowledge (D21: the MCP transport is retired; the agent uses plain HTTP).
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+//
+// ── Where the machinery lives now ─────────────────────────────────────
+// The container mechanics (tmpdir + mounted opencode.json, deterministic
+// container name, the `docker compose run` argv, both pipe drains, the launch
+// watcher, guaranteed removal) live in the SHARED primitive
+// scripts/agent/member-agent.ts, and the outcome vocabulary in
+// scripts/agent/classify-outcome.ts (D22 "shared components", §11.3 E4/E5).
+// This file is the layer-4 OBSERVER that rides that primitive: it resolves the
+// model, supplies the prompt, and runs the poll loop — it never touches the
+// container itself. Every moved symbol is re-exported below, so this module's
+// public API is unchanged.
+//
+// MODEL SELECTION STAYS HERE, AND ONLY HERE. resolveModelConfig() below is the
+// single place an AGENT_MODEL selector becomes a model id and a credential; the
+// primitive takes that record and invents nothing.
 import { ONBOARDING_PROMPT, path as routePath, ROUTES } from "@robotmoney/contract";
+import { classifyOutcome, shouldRetry } from "../agent/classify-outcome.ts";
+import { runMemberAgent } from "../agent/member-agent.ts";
+import { finalAssistantText } from "../agent/transcript.ts";
 import { AGENT_MODEL_ENV, DEFAULT_AGENT_MODEL, isKeylessModel, resolveAgentModel } from "./model-registry.ts";
 import { ZEN_KEY_ENV, zenApiKey } from "./opencode-key.ts";
 
-export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.demo.yml"];
+// One definition of the compose file list and the compose argv prefix in the
+// repo (scripts/stack/config.ts); re-exported here so every existing importer
+// stays byte-compatible.
+export { composeArgs, DEFAULT_COMPOSE_FILES } from "../stack/config.ts";
+import { DEFAULT_COMPOSE_FILES } from "../stack/config.ts";
+export {
+  buildAgentOpencodeConfig,
+  buildMemberAgentArgv,
+  containerExists,
+  drain,
+  memberAgentContainerName,
+  memberAgentSpawnEnv,
+  runMemberAgent,
+  type MemberAgentModel,
+} from "../agent/member-agent.ts";
+// One outcome classifier for every member-agent run (§11.3 E4/E5) — the retry
+// predicate below, the demo's onboarding driver, and the layer-4 scorecard all
+// read the SAME definition. Re-exported so importers of this module keep
+// working unchanged.
+export {
+  classifyOutcome,
+  explainOutcome,
+  formatOutcomeEvidence,
+  livenessOf,
+  looksRateLimited,
+  looksRefusal,
+  shouldRetry,
+} from "../agent/classify-outcome.ts";
+export type { ClassifiableRun, OnboardingOutcome, OutcomeExplanation } from "../agent/classify-outcome.ts";
+export { assistantTextParts, extractAssistantText, finalAssistantText } from "../agent/transcript.ts";
 // The committee REST API the member-agent container reaches over the compose
 // network — the `api` service on its internal port. D21 retired the `mcp`
 // service; the agent applies over this REST surface (POST /api/committee/apply)
@@ -81,10 +125,6 @@ export const DEFAULT_API_URL_INTERNAL = "http://api:8787";
 export const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 export const DEFAULT_POLL_INTERVAL_MS = 3_000;
 export const DEFAULT_AUTO_APPROVE_DELAY_MS = 10_000; // §11 R7
-
-export function composeArgs(project: string, files: string[] = DEFAULT_COMPOSE_FILES): string[] {
-  return ["compose", "-p", project, ...files.flatMap((f) => ["-f", f])];
-}
 
 // ── Identity generation (R1/R4: the harness stands in for "the human owner") ─
 export interface OnboardingIdentity {
@@ -172,19 +212,10 @@ export function resolveModelConfig(env: Record<string, string | undefined> = pro
   return { model, apiKeyEnv: ZEN_KEY_ENV, apiKey, keyless };
 }
 
-// opencode.json written per-run, mounted read-only into the container (never
-// baked into the image). Carries NO onboarding-specific knowledge and no
-// Robot Money connectivity config — the agent reaches the committee REST API
-// with plain HTTP (bash), using the base URL carried in the prompt's harness
-// note (D21: the MCP transport is retired, so there is no MCP client to wire).
-export function buildAgentOpencodeConfig(model: string): Record<string, unknown> {
-  return {
-    $schema: "https://opencode.ai/config.json",
-    model,
-    autoupdate: false,
-    permission: { "*": "deny", bash: "allow" },
-  };
-}
+// `buildAgentOpencodeConfig(model)` moved to the shared primitive
+// (scripts/agent/member-agent.ts) with the rest of the container mechanics, and
+// is re-exported at the top of this file — its signature is unchanged: the
+// model is a parameter, resolved by resolveModelConfig() above.
 
 // ── Step-state derivation (pure; testable without Docker) ───────────────────
 export const ONBOARDING_STEPS = ["connect", "discover", "toolchain", "apply", "approve", "claim", "session"] as const;
@@ -266,18 +297,6 @@ export function scheduleAutoApprove(
   }, delayMs);
 }
 
-async function drain(stream: ReadableStream<Uint8Array>): Promise<string> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let out = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    out += decoder.decode(value, { stream: true });
-  }
-  return out;
-}
-
 // ── Orchestration ────────────────────────────────────────────────────────────
 export interface RunOnboardingEvalOptions {
   repoRoot: string;
@@ -301,7 +320,22 @@ export interface OnboardingEvalResult {
   admitted: boolean;
   timedOut: boolean;
   containerExitCode: number | null;
-  transcript?: string; // only populated when the eval did NOT admit the member
+  // Was the container ever observed to exist? See MemberAgentResult. `null`
+  // means the launch watcher could not tell, which is deliberately NOT
+  // treated as evidence of anything.
+  containerLaunched: boolean | null;
+  // ALWAYS populated, including for an admitted run (changed 2026-07-27).
+  // Withholding it from successes made the successful and the failed runs of
+  // one sweep incomparable: when four samples produced nothing, there was no
+  // healthy run from the SAME sweep to diff them against, and the first hours
+  // of the investigation went into re-deriving what a good run even looks like.
+  //
+  // NOT a "transcript" in the narrow sense: this is the whole combined
+  // stdout+stderr of the `docker compose run` process. The agent's own NDJSON
+  // is the stdout portion — and when the container never starts, there is no
+  // agent output anywhere, because this stream is the only place the agent
+  // ever writes.
+  transcript?: string;
 }
 
 /**
@@ -323,169 +357,142 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
   const autoApproveDelayMs = opts.autoApproveDelayMs ?? DEFAULT_AUTO_APPROVE_DELAY_MS;
   const log = opts.onEvent ?? (() => {});
 
-  const workDir = mkdtempSync(join(tmpdir(), "onboarding-eval-"));
-  const opencodeConfigPath = join(workDir, "opencode.json");
-  try {
-    writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(modelConfig.model), null, 2));
-    const prompt = buildAgentPrompt(identity, apiUrlInternal);
+  const prompt = buildAgentPrompt(identity, apiUrlInternal);
 
-    // A deterministic, explicit container name — NOT left to `docker compose
-    // run`'s auto-generated one — so cleanup can target the real container
-    // directly. This matters because `containerProc.kill()` below only
-    // signals the local `docker` CLI process; `docker compose run` is a
-    // client of the Docker daemon, and the CONTAINER it starts is NOT a
-    // child process of that CLI. Killing the CLI does not reliably stop the
-    // container (a well-known Docker gotcha, confirmed live: a "timed out"
-    // eval's container kept running and reasoning for 10+ minutes after the
-    // harness gave up on it and a RETRY launched a second container
-    // concurrently with the still-running first one).
-    const containerName = `${opts.composeProject}-member-agent-eval-${identity.runId}`;
-    log(
-      `launching member-agent container for ${identity.contact} (model=${modelConfig.model}, ` +
-        `${modelConfig.apiKeyEnv ? `funded via ${modelConfig.apiKeyEnv}` : "keyless"})`,
-    );
-    const containerProc = Bun.spawn(
-      [
-        "docker",
-        ...composeArgs(opts.composeProject, composeFiles),
-        "run",
-        "--rm",
-        "--no-deps",
-        "--name",
-        containerName,
-        "-v",
-        `${opencodeConfigPath}:/home/agent/opencode.json:ro`,
-        // Only pass a key when the resolved model actually needs one — a
-        // `free/…` model is genuinely keyless (no -e flag at all). A container
-        // inherits nothing, so this explicit injection is the only way in.
-        ...(modelConfig.apiKeyEnv ? ["-e", `${modelConfig.apiKeyEnv}=${modelConfig.apiKey}`] : []),
-        "member-agent",
-        "run",
-        "--model",
-        modelConfig.model,
-        "--format",
-        "json",
-        "--dangerously-skip-permissions",
-        "--title",
-        `onboarding-eval-${identity.runId}`,
-        "--dir",
-        "/home/agent",
-        prompt,
-      ],
-      { cwd: opts.repoRoot, stdout: "pipe", stderr: "pipe" },
-    );
-    // Actively drain both pipes for the whole run — an un-drained pipe can
-    // fill its OS buffer and deadlock the child once its own transcript
-    // exceeds a few tens of KB, which a real multi-tool-call session easily
-    // does.
-    const stdoutPromise = drain(containerProc.stdout as ReadableStream<Uint8Array>);
-    const stderrPromise = drain(containerProc.stderr as ReadableStream<Uint8Array>);
+  // Everything the container needs — the mounted opencode.json, the
+  // deterministic name, the `docker compose run` argv (including the single
+  // `-e` credential injection when the resolved model is funded), both pipe
+  // drains, the launch watcher, the kill + `docker rm -f`, the tmpdir removal
+  // — belongs to the shared primitive. What stays HERE is the model resolution
+  // and the observation: the poll loop below runs as the primitive's `observe`
+  // hook, so it owns all timing exactly as it did when it was inlined
+  // (deadline, post-exit grace, and the auto-approve watcher), and the
+  // primitive's own timeout is deliberately not used.
+  let memberId: string | null = null;
+  let applyState: ApplyState = null;
+  let onActiveRoster = false;
+  let admitted = false;
+  let timedOut = false;
 
-    const deadline = Date.now() + timeoutMs;
-    // Once the container itself has exited, cap how much longer we keep
-    // polling: the R7 auto-approve delay plus margin covers the ONE thing
-    // that can still land after the agent's own process ends (the harness's
-    // own scheduled activate call); nothing else can advance with no agent
-    // left to drive it.
-    const postExitGraceMs = autoApproveDelayMs + 20_000;
+  log(
+    `launching member-agent container for ${identity.contact} (model=${modelConfig.model}, ` +
+      `${modelConfig.apiKeyEnv ? `funded via ${modelConfig.apiKeyEnv}` : "keyless"})`,
+  );
+  const run = await runMemberAgent({
+    repoRoot: opts.repoRoot,
+    composeProject: opts.composeProject,
+    composeFiles,
+    prompt,
+    runId: identity.runId,
+    modelConfig,
+    title: `onboarding-eval-${identity.runId}`,
+    onEvent: log,
+    observe: async (handle) => {
+      const deadline = Date.now() + timeoutMs;
+      // Once the container itself has exited, cap how much longer we keep
+      // polling: the R7 auto-approve delay plus margin covers the ONE thing
+      // that can still land after the agent's own process ends (the harness's
+      // own scheduled activate call); nothing else can advance with no agent
+      // left to drive it.
+      const postExitGraceMs = autoApproveDelayMs + 20_000;
 
-    let memberId: string | null = null;
-    let applyState: ApplyState = null;
-    let onActiveRoster = false;
-    let approveScheduledForMemberId: string | null = null;
-    let containerExitedAt: number | null = null;
+      let approveScheduledForMemberId: string | null = null;
+      let containerExitedAt: number | null = null;
 
-    for (;;) {
-      if (containerProc.exitCode !== null && containerExitedAt === null) {
-        containerExitedAt = Date.now();
-        log(`member-agent container exited (code ${containerProc.exitCode})`);
-      }
-
-      if (!memberId) {
-        memberId = await findMemberIdByContact(opts.backendUrl, opts.adminToken, identity.contact).catch(() => null);
-        if (memberId) log(`observed server-minted memberId=${memberId} for ${identity.contact} (§11 R2)`);
-      }
-      if (memberId) {
-        applyState = await fetchApplyState(opts.backendUrl, memberId).catch(() => applyState);
-        if (applyState === "applied" && approveScheduledForMemberId !== memberId) {
-          approveScheduledForMemberId = memberId;
-          log(`application ${memberId} applied — auto-approving in ${autoApproveDelayMs}ms (§11 R7)`);
-          scheduleAutoApprove(opts.backendUrl, opts.adminToken, memberId, autoApproveDelayMs, log);
+      for (;;) {
+        if (handle.exitCode !== null && containerExitedAt === null) {
+          containerExitedAt = Date.now();
+          log(`member-agent container exited (code ${handle.exitCode})`);
         }
-        onActiveRoster = await isOnActiveRoster(opts.backendUrl, memberId).catch(() => onActiveRoster);
+
+        if (!memberId) {
+          memberId = await findMemberIdByContact(opts.backendUrl, opts.adminToken, identity.contact).catch(() => null);
+          if (memberId) log(`observed server-minted memberId=${memberId} for ${identity.contact} (§11 R2)`);
+        }
+        if (memberId) {
+          applyState = await fetchApplyState(opts.backendUrl, memberId).catch(() => applyState);
+          if (applyState === "applied" && approveScheduledForMemberId !== memberId) {
+            approveScheduledForMemberId = memberId;
+            log(`application ${memberId} applied — auto-approving in ${autoApproveDelayMs}ms (§11 R7)`);
+            scheduleAutoApprove(opts.backendUrl, opts.adminToken, memberId, autoApproveDelayMs, log);
+          }
+          onActiveRoster = await isOnActiveRoster(opts.backendUrl, memberId).catch(() => onActiveRoster);
+        }
+
+        if (onActiveRoster) break; // admitted
+        if (Date.now() >= deadline) break; // overall timeout
+        if (containerExitedAt !== null && Date.now() - containerExitedAt >= postExitGraceMs) break; // nothing left to advance it
+
+        await Bun.sleep(pollIntervalMs);
       }
 
-      if (onActiveRoster) break; // admitted
-      if (Date.now() >= deadline) break; // overall timeout
-      if (containerExitedAt !== null && Date.now() - containerExitedAt >= postExitGraceMs) break; // nothing left to advance it
+      // Computed BEFORE the primitive kills anything, exactly as before.
+      admitted = onActiveRoster;
+      timedOut = !admitted && Date.now() >= deadline;
+    },
+  });
 
-      await Bun.sleep(pollIntervalMs);
-    }
+  const steps = deriveSteps({ memberId, applyState, onActiveRoster });
+  log(`eval finished: admitted=${admitted} timedOut=${timedOut} steps=${JSON.stringify(steps)}`);
 
-    const admitted = onActiveRoster;
-    const timedOut = !admitted && Date.now() >= deadline;
-
-    // Kill BOTH the local CLI process AND the actual container by its
-    // deterministic name — killing only containerProc leaves the real
-    // container running under the Docker daemon (see the name comment
-    // above). `docker rm -f` is a superset of `docker kill`: it stops AND
-    // removes, so this is also the cleanup `--rm` would otherwise handle on
-    // a normal exit. Best-effort — an already-exited container/process is
-    // not an error here.
-    try {
-      containerProc.kill();
-    } catch {
-      /* already exited */
-    }
-    try {
-      Bun.spawnSync(["docker", "rm", "-f", containerName], { stdout: "ignore", stderr: "ignore" });
-    } catch {
-      /* already removed */
-    }
-    const [stdout, stderr, containerExitCode] = await Promise.all([stdoutPromise, stderrPromise, containerProc.exited]);
-
-    const steps = deriveSteps({ memberId, applyState, onActiveRoster });
-    log(`eval finished: admitted=${admitted} timedOut=${timedOut} steps=${JSON.stringify(steps)}`);
-
-    return {
-      identity,
-      memberId,
-      steps,
-      admitted,
-      timedOut,
-      containerExitCode,
-      ...(admitted ? {} : { transcript: `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}` }),
-    };
-  } finally {
-    rmSync(workDir, { recursive: true, force: true });
-  }
+  return {
+    identity,
+    memberId,
+    steps,
+    admitted,
+    timedOut,
+    containerExitCode: run.exitCode,
+    containerLaunched: run.containerLaunched,
+    transcript: run.transcript,
+  };
 }
 
 // ── CI retry/backoff wrapper (Stage 7, §11 R8) ──────────────────────────────
-// Two known-flaky, non-eval failure modes get ONE retry with backoff; any
-// OTHER failure (the agent genuinely couldn't navigate onboarding, a
-// container crash) IS a real result and is never retried — same "no retry of
-// member steps" policy scripts/lib/demo-main.ts's own onboardingDriver()
-// follows for the standing demo. This wrapper only softens known provider/
-// infra flake, it does not relax the eval itself:
-//   1. A rate-limit/overload signal in the transcript — the self-hosted CI
-//      runner shares its IP with the standing rmdemo_* demo stack, which has
-//      caused 429 flake on other live-model-call gates before. A transient
-//      429/overload never let the agent reason at all, so it's not a real
-//      result. Checked regardless of which model is configured.
-//   2. A bare timeout — but ONLY when the default free, no-credential
-//      OpenCode Zen tier is in use. Per committee-opencode-nightly.yml's own
-//      documented experience with this exact model tier, "a call can take
-//      minutes and occasionally returns nothing" — a timeout there is far
-//      more likely to be provider slowness than a genuinely stuck agent. An
-//      operator-configured paid model is fast/reliable enough that a timeout
-//      keeps meaning what it always meant (a real, non-retried result).
-const RATE_LIMIT_PATTERNS = [/\b429\b/, /rate[ _-]?limit/i, /overloaded_error/i, /rate_limit_error/i, /\b529\b/];
-
-export function looksRateLimited(transcript: string | undefined): boolean {
-  if (!transcript) return false;
-  return RATE_LIMIT_PATTERNS.some((re) => re.test(transcript));
-}
+// Three known-flaky, NON-EVAL failure modes get ONE retry with backoff; any
+// OTHER failure (the agent genuinely couldn't navigate onboarding, a container
+// crash, a broken harness) IS a real result and is never retried. This wrapper
+// only softens outcomes in which the agent never actually ATTEMPTED onboarding,
+// it does not relax the eval itself:
+//   1. `rate-limited` — a provider 429/overload that DOMINATES the run (see
+//      scripts/agent/classify-outcome.ts: a 429 appearing only inside tool
+//      output is NOT this). The self-hosted CI runner shares its IP with the
+//      standing rmdemo_* demo stack, which has caused 429 flake on other
+//      live-model-call gates before. Checked regardless of which model is
+//      configured.
+//   2. `refused` — the model declined the prompt outright, so the agent never
+//      ATTEMPTED onboarding at all. Identical reasoning to case 1. This is the
+//      fix for the 2026-07-25 demo run that admitted zero members: the agent
+//      refused, exited 0 in ~15s, nothing retried it, and the finite newcomer
+//      roster (scripts/lib/demo-newcomers.ts) permanently lost a seat. See
+//      scripts/agent/classify-outcome.ts for the three-conjunct evidence a
+//      refusal must show before it earns a retry.
+//   3. `timed-out` — but ONLY when the resolved model is KEYLESS. Per
+//      committee-opencode-nightly.yml's own documented experience with the free
+//      tier, "a call can take minutes and occasionally returns nothing", so a
+//      timeout there is far more likely to be provider slowness than a stuck
+//      agent. Since D22 rule 1 was amended the default model is FUNDED, and a
+//      funded model is fast/reliable enough that a timeout keeps meaning what
+//      it always meant (a real, non-retried result). Keyed off the resolved
+//      model's own billing property (`resolveModelConfig().keyless`), never off
+//      equality with whatever the default happens to be.
+//
+// `harness-error` is deliberately NOT retryable: the harness is broken the same
+// way on the next attempt, so a retry costs another twenty minutes and turns
+// one loud diagnosis into two quiet ones.
+//
+// ONE definition of both the classification and the retry decision (§11.3 E5):
+// `classifyOutcome` + `shouldRetry` come from scripts/agent/classify-outcome.ts
+// and are shared with the demo's onboarding driver and the layer-4 scorecard.
+// The only thing added on top of `shouldRetry` here is the TIER gate on case 3,
+// which needs a fact `shouldRetry` deliberately does not have (which model tier
+// this run used) and which the caller — this file, the one that resolved the
+// model — is the only place that knows.
+//
+// LOAD-BEARING BOUNDARY: this wrapper serves the DEMO's onboarding driver and
+// the nightly's real-inference admissions. D22 §11.3 E4's layer-4 SAMPLER must
+// call the bare runOnboardingEval and classify each sample itself — retrying
+// refusals inside the sampler would erase the refusal RATE, which is the metric
+// the whole eval exists to report.
 
 export interface RunOnboardingEvalWithRetryOptions extends RunOnboardingEvalOptions {
   maxAttempts?: number; // default 2 (1 retry)
@@ -501,30 +508,56 @@ export interface RunOnboardingEvalWithRetryOptions extends RunOnboardingEvalOpti
 
 export const DEFAULT_RETRY_BACKOFF_MS = [45_000];
 
+// Identity for attempt N. Attempt 1 uses the caller's identity exactly as
+// before. Later attempts DERIVE from it instead of discarding it: the display
+// NAME is preserved (the demo's roster records the planned newcomer's name, and
+// a retry that admitted "Onboarding Eval ci-retry-2-…" instead would put a
+// different person on the committee than the one the demo announced), while the
+// runId and the contact local-part get an -rN suffix so no attempt ever re-uses
+// a contact — the key this harness matches the server-minted member row on.
+export function retryIdentity(base: OnboardingIdentity | undefined, attempt: number): OnboardingIdentity {
+  if (attempt === 1) return base ?? generateIdentity(`ci-retry-1-${crypto.randomUUID().slice(0, 6)}`);
+  if (!base) return generateIdentity(`ci-retry-${attempt}-${crypto.randomUUID().slice(0, 6)}`);
+  const at = base.contact.indexOf("@");
+  const contact = at === -1 ? `${base.contact}-r${attempt}` : `${base.contact.slice(0, at)}-r${attempt}${base.contact.slice(at)}`;
+  return { runId: `${base.runId}-r${attempt}`, name: base.name, contact };
+}
+
 export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetryOptions): Promise<OnboardingEvalResult> {
   const maxAttempts = opts.maxAttempts ?? 2;
   const backoff = opts.backoffMsSchedule ?? DEFAULT_RETRY_BACKOFF_MS;
   const runOnce = opts.runOnce ?? runOnboardingEval;
   const log = opts.onEvent ?? (() => {});
-  // A BARE timeout is only worth retrying on the free tier, where slowness is
-  // expected and says nothing about whether the agent could navigate onboarding.
-  // On a funded model a timeout is a real signal, so it is NOT retried away.
-  // Keyed off the resolved model's own billing property, not off equality with
-  // whatever the default happens to be — those stopped meaning the same thing
-  // the moment the default became a funded model.
+  // Resolved ONCE, from the same single selection signal every other path uses.
+  // Throws loudly here (before any attempt) on a misconfigured selector.
   const usingKeylessModel = resolveModelConfig(opts.env ?? process.env).keyless;
   let last: OnboardingEvalResult | undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    // Fresh identity per attempt — reusing one across retries would re-apply
-    // with an already-used contact and confuse the "which member row is
-    // this" lookup the harness relies on to observe progress.
-    const identity = attempt === 1 && opts.identity ? opts.identity : generateIdentity(`ci-retry-${attempt}-${crypto.randomUUID().slice(0, 6)}`);
+    // Fresh CONTACT per attempt — reusing one across retries would re-apply
+    // with an already-used contact and confuse the "which member row is this"
+    // lookup the harness relies on to observe progress. The caller's display
+    // name survives (see retryIdentity).
+    const identity = retryIdentity(opts.identity, attempt);
     last = await runOnce({ ...opts, identity });
     if (last.admitted) return last;
-    const worthRetrying = looksRateLimited(last.transcript) || (usingKeylessModel && last.timedOut);
+    const outcome = classifyOutcome(last);
+    // shouldRetry is the shared, pure decision over the classified outcome; the
+    // tier gate is the one fact it cannot know (see the doc comment above).
+    const worthRetrying = shouldRetry(outcome) && (outcome !== "timed-out" || usingKeylessModel);
+    // Always logged, retried or not: a misclassification must be diagnosable
+    // from CI logs rather than invisible.
+    log(
+      `onboarding eval attempt ${attempt}/${maxAttempts} did not admit — classified ${outcome}; ` +
+        `agent's final message: ${JSON.stringify(finalAssistantText(last.transcript ?? "").slice(0, 200))}`,
+    );
     if (attempt === maxAttempts || !worthRetrying) return last;
     const delayMs = backoff[Math.min(attempt - 1, backoff.length - 1)];
-    const reason = looksRateLimited(last.transcript) ? "looked rate-limited" : "timed out on the free keyless tier";
+    const reason =
+      outcome === "rate-limited"
+        ? "looked rate-limited"
+        : outcome === "refused"
+          ? "was refused by the model (the agent never attempted onboarding)"
+          : "timed out on the keyless tier";
     log(`onboarding eval attempt ${attempt}/${maxAttempts} ${reason} — retrying in ${delayMs}ms (§11 R8)`);
     await Bun.sleep(delayMs);
   }

@@ -1,0 +1,20 @@
+# PROVENANCE: the SHAPE of a real layer-3 run observed on 2026-07-26 (worktree
+# adhoc/20260725-200034). The agent did substantial, successful work — cloned
+# robotmoney-core, read 3704 files, installed rmpc v0.3.3, generated an ed25519
+# key, built a payload and signed it — then reported it all in a detailed final
+# message. It was nonetheless classified `rate-limited`, because a 429 / rate
+# limit substring appeared somewhere in the TOOL OUTPUT of the files it had read.
+# The final assistant text below is the real one (truncated exactly as the
+# harness logged it); the tool events are reconstructed to carry the substrings
+# that tripped the match.
+#
+# THIS IS THE FALSE POSITIVE THE STRUCTURAL CONJUNCT EXISTS TO KILL. `rate-limited`
+# is retryable and tells callers to back off for hours, so misreading a real run as
+# provider flake erases the finding underneath it — here, that the harvested
+# signature did not verify against the canonical bytes.
+{"type": "step_start", "step": {"id": "s1"}}
+{"type": "text", "part": {"type": "text", "text": "Cloning robotmoney-core to find the canonical application serializer."}}
+{"type": "tool_use", "part": {"type": "tool", "tool": "bash", "state": {"status": "completed", "input": {"command": "grep -rn 'status' clients/rust-payment-client/src | head"}, "output": "src/http.rs:429:    if resp.status() == StatusCode::TOO_MANY_REQUESTS {\nsrc/http.rs:430:        return Err(Error::RateLimited);\ntests/retry.rs:88:    // retries on rate limit, then succeeds\n"}}}
+{"type": "tool_use", "part": {"type": "tool", "tool": "bash", "state": {"status": "completed", "input": {"command": "rmpc committee-identity generate --path /tmp/opencode/robotmoney-identity.json"}, "output": "wrote keystore /tmp/opencode/robotmoney-identity.json\npublic key /XzD9fFWi5C6lzUeSUmxfNtwK8hJiaqrD3+np4mFy0I=\n"}}}
+{"type": "text", "part": {"type": "text", "text": "Here's my status summary:\n\n**Completed successfully:**\n1. **Installed rmpc** (v0.3.3, linux-amd64) \u2014 `rmpc --help` confirms `committee-identity` subcommand\n2. **Generated Ed25519 signing key** \u2014 keystore at `/tmp/opencode/robotmoney-identity.json`\n3. **Public key**: `/XzD9fFWi5C6lzUeSUmxfNtwK8hJiaqrD3+np4mFy0I=`\n4. **Built canonical application payload** and **signed it** \u2014 signature: `dymD820SfLG+qh+O8GmPeNRCVVbg7zzvkfzLj11Jirre3iNX+QCTFFdmi4Atxd6ZT8ZSLv9Dh+3LxDW+QNTmAQ==`\n\n**Blocked on the API submission:**\n\nThe skill's SKILL.md specifies the application endpoint as `POST <host>/api/committe"}}
+{"type": "step_finish", "step": {"id": "s1"}}
