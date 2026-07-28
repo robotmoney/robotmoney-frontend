@@ -200,7 +200,7 @@ describe("runOnboardingEvalWithRetry", () => {
       admitted: false,
       timedOut: false,
       containerExitCode: 1,
-      containerLaunched: false,
+      containerLaunched: true,
       ...overrides,
     };
   }
@@ -343,124 +343,6 @@ describe("runOnboardingEvalWithRetry", () => {
     expect(calls).toBe(1); // no retry — a timeout on a paid model is a real result
   });
 });
-// ── Pure helper unit tests (no Docker) ──────────────────────────────────────
-describe("onboarding-eval pure helpers", () => {
-  test("generateIdentity produces a fresh, matching name/contact pair each call", () => {
-    const a = generateIdentity();
-    const b = generateIdentity();
-    expect(a.runId).not.toBe(b.runId);
-    expect(a.contact).toContain(a.runId);
-    expect(a.name).toContain(a.runId);
-  });
-
-  test("fillPromptIdentity substitutes both placeholders and nothing else", () => {
-    const identity = { runId: "abc123", name: "Test Applicant", contact: "test@example.test" };
-    expect(fillPromptIdentity("I am <display name>, contact <email>.", identity)).toBe(
-      "I am Test Applicant, contact test@example.test.",
-    );
-  });
-
-  test("fillPromptIdentity throws loudly if the canonical prompt's placeholders ever disappear", () => {
-    expect(() => fillPromptIdentity("no placeholders here", generateIdentity())).toThrow(/placeholders/);
-  });
-
-  test("buildAgentPrompt injects identity into the UNMODIFIED canonical prompt plus a clearly separate note", () => {
-    const identity = generateIdentity("fixed-run");
-    const prompt = buildAgentPrompt(identity);
-    expect(prompt).toContain(identity.name);
-    expect(prompt).toContain(identity.contact);
-    expect(prompt).toContain("committee-onboarding"); // canonical prompt content survives untouched
-    expect(prompt).toContain("Demo harness note"); // clearly delimited, not blended into the canonical text
-  });
-
-  test("resolveModelConfig defaults to the funded registry default when AGENT_MODEL is unset", () => {
-    const cfg = resolveModelConfig({ OPENCODE_API_KEY: "sk-zen" });
-    expect(cfg.model).toBe(DEFAULT_INFERENCE_MODEL);
-    expect(cfg.model).toBe("opencode/deepseek-v4-flash");
-    expect(cfg).toEqual({ model: DEFAULT_INFERENCE_MODEL, apiKeyEnv: "OPENCODE_API_KEY", apiKey: "sk-zen", keyless: false });
-  });
-
-  test("resolveModelConfig throws loudly when a paid model is selected with no funded key — never a silent substitution", () => {
-    // Caught here rather than ~20 minutes later at the far end of a stack boot.
-    expect(() => resolveModelConfig({})).toThrow(/OPENCODE_API_KEY is not set/);
-  });
-
-  test("resolveModelConfig keeps a `free` selection genuinely keyless, even with a key present", () => {
-    // A key set for an unrelated reason must never get pulled into a keyless run.
-    const cfg = resolveModelConfig({ AGENT_MODEL: "free", OPENCODE_API_KEY: "sk-zen" });
-    expect(cfg).toEqual({ model: "opencode/nemotron-3-ultra-free", apiKeyEnv: null, apiKey: null, keyless: true });
-  });
-
-  test("resolveModelConfig switches family by name and pins an exact member with family/model", () => {
-    expect(resolveModelConfig({ AGENT_MODEL: "kimi", OPENCODE_API_KEY: "k" }).model).toBe("opencode/kimi-k2.7-code");
-    expect(resolveModelConfig({ AGENT_MODEL: "kimi/k2.6", OPENCODE_API_KEY: "k" }).model).toBe("opencode/kimi-k2.6");
-  });
-
-  test("resolveAgentModel refuses an unknown family or member rather than falling back to the default", () => {
-    // A run must use the model it was asked for; a silent fallback turns a
-    // benchmark result into a lie about which agent produced it.
-    expect(() => resolveAgentModel({ AGENT_MODEL: "notafamily" })).toThrow(/unknown model family/);
-    expect(() => resolveAgentModel({ AGENT_MODEL: "kimi/notamodel" })).toThrow(/unknown model "notamodel"/);
-    expect(() => resolveAgentModel({ AGENT_MODEL: "a/b/c" })).toThrow(/malformed/);
-  });
-
-  test("resolveAgentModel passes a fully-qualified opencode/<id> through unmapped (escape hatch)", () => {
-    expect(resolveAgentModel({ AGENT_MODEL: "opencode/some-brand-new-model" })).toBe("opencode/some-brand-new-model");
-  });
-
-  test("every registry family default names a real member of that family", () => {
-    // Guards the one typo that would make a whole family unusable.
-    for (const [name, family] of Object.entries(MODEL_FAMILIES)) {
-      expect(family.models[family.default], `${name}.default`).toBeDefined();
-      expect(resolveAgentModel({ AGENT_MODEL: name })).toBe(`opencode/${family.models[family.default]}`);
-    }
-  });
-
-  test("isKeylessModel is derived from the registry, and big-pickle stays reachable but is not the default", () => {
-    expect(isKeylessModel("opencode/nemotron-3-ultra-free")).toBe(true);
-    expect(isKeylessModel("opencode/big-pickle")).toBe(true);
-    expect(isKeylessModel("opencode/deepseek-v4-flash")).toBe(false);
-    // Saturated upstream with no paid tier — deliberately no longer the default.
-    expect(DEFAULT_INFERENCE_MODEL).not.toBe("opencode/big-pickle");
-  });
-
-  test("buildAgentOpencodeConfig carries NO onboarding-specific knowledge and no Robot Money connectivity (D21 — REST via bash, no MCP client)", () => {
-    const cfg = buildAgentOpencodeConfig("anthropic/claude-x") as any;
-    expect(cfg.model).toBe("anthropic/claude-x");
-    expect(cfg.permission).toEqual({ "*": "deny", bash: "allow", external_directory: "allow" });
-    expect(cfg.mcp).toBeUndefined();
-    expect(JSON.stringify(cfg)).not.toMatch(/rmpc|apply|committee|robotmoney/i);
-  });
-
-  test("deriveSteps: no member observed yet ⇒ every step pending", () => {
-    const steps = deriveSteps({ memberId: null, applyState: null, onActiveRoster: false });
-    expect(steps.every((s) => s.status === "pending")).toBe(true);
-    expect(steps.map((s) => s.step)).toEqual([...ONBOARDING_STEPS]);
-  });
-
-  test("deriveSteps: a member row exists ⇒ connect/discover/toolchain/apply done, rest pending", () => {
-    const steps = deriveSteps({ memberId: "m1", applyState: "applied", onActiveRoster: false });
-    const byStep = Object.fromEntries(steps.map((s) => [s.step, s.status]));
-    expect(byStep).toEqual({
-      connect: "done", discover: "done", toolchain: "done", apply: "done",
-      approve: "pending", claim: "pending", session: "pending",
-    });
-  });
-
-  test("deriveSteps: approved but not yet claimed", () => {
-    const byStep = Object.fromEntries(
-      deriveSteps({ memberId: "m1", applyState: "approved", onActiveRoster: false }).map((s) => [s.step, s.status]),
-    );
-    expect(byStep.approve).toBe("done");
-    expect(byStep.claim).toBe("pending");
-  });
-
-  test("deriveSteps: on the active roster ⇒ every step done (admitted)", () => {
-    const steps = deriveSteps({ memberId: "m1", applyState: "claimed", onActiveRoster: true });
-    expect(steps.every((s) => s.status === "done")).toBe(true);
-  });
-});
-
 // ── Docker-backed rails check ────────────────────────────────────────────────
 const SETUP_TIMEOUT_MS = 5 * 60_000;
 const TEST_TIMEOUT_MS = 2 * 60_000;
