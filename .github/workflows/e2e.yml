@@ -29,7 +29,7 @@
 # carries the onboarding eval's rails, but it does NOT spend a real model call
 # on `pull_request` runs. Exactly what runs where:
 #   - EVERY run of this job, PRs and forks included: the inference-off
-#     infra-rails check, scripts/tests/onboarding-eval-infra.test.ts (step
+#     infra-rails check, scripts/tests/integration/onboarding-eval-infra.test.ts (step
 #     below). It proves every rail the real eval rides on — member-agent image
 #     builds and starts, reaches the committee REST API over the compose
 #     network, a signed apply lands through POST /api/committee/apply — without
@@ -170,7 +170,7 @@ jobs:
       # job makes, and it is inference-off by design. It is unconditional: no
       # `if:` guard, so it cannot quietly stop running too.
       - name: Onboarding eval infra rails (inference-off, fail-fast)
-        run: bun test scripts/tests/onboarding-eval-infra.test.ts
+        run: bun test scripts/tests/integration/onboarding-eval-infra.test.ts
         timeout-minutes: 15
       # Resolves — and RECORDS — what the real-inference eval does on this run.
       # On a `pull_request` run it does not run at all (issue #289: the free
@@ -192,7 +192,7 @@ jobs:
         run: |
           if [ "$IS_PULL_REQUEST" = "true" ]; then
             echo "use_paid_model=" >> "$GITHUB_OUTPUT"
-            MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent (issue #289: the free keyless OpenCode tier cannot fund one real eval per PR). This is a recorded removal, not a silent one. Where it DOES run: .github/workflows/committee-opencode-nightly.yml — nightly 04:37 UTC (schedule '37 4 * * *') plus workflow_dispatch — which sweeps more models and more identities than this gate ever did; and on pushes to main in this same workflow. What this PR run DID assert about that surface: the inference-off 'Onboarding eval infra rails' step above, which executes scripts/tests/onboarding-eval-infra.test.ts in full."
+            MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent (issue #289: the free keyless OpenCode tier cannot fund one real eval per PR). This is a recorded removal, not a silent one. Where it DOES run: .github/workflows/committee-opencode-nightly.yml — nightly 04:37 UTC (schedule '37 4 * * *') plus workflow_dispatch — which sweeps more models and more identities than this gate ever did; and on pushes to main in this same workflow. What this PR run DID assert about that surface: the inference-off 'Onboarding eval infra rails' step above, which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full."
           elif [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_MODEL_OPT_IN" = "true" ]; then
             echo "use_paid_model=1" >> "$GITHUB_OUTPUT"
             MSG="§11 R8 real-inference onboarding eval: RUNNING with the paid-model opt-in (non-PR/trusted context, ONBOARDING_EVAL_MODEL + ANTHROPIC_API_KEY configured) as part of the Full-stack demo step below."
@@ -213,7 +213,7 @@ jobs:
       # >=2 published committee sessions, fresh regime snapshot, live wallet/vault
       # provenance with only the documented #120 degrades, both research signals
       # landed). scripts/demo-frontend-check.ts's own loud-failure path is itself
-      # self-tested by scripts/tests/demo-frontend-check.test.ts (run in the required
+      # self-tested by scripts/tests/integration/demo-frontend-check.test.ts (run in the required
       # `integration` job), which proves it exits non-zero when a core surface marker
       # is stripped and 0 against correct content. See docs/architecture.md §"Demo
       # readiness gate". The job id below stays `e2e` so branch protection's existing

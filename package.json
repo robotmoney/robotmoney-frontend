@@ -10,6 +10,8 @@
     "check-docs": "bash scripts/check-docs-analytics.sh",
     "check:contribution": "bun scripts/check-contribution.ts",
     "test": "bun test scripts/tests",
+    "test:unit": "bun test scripts/tests/unit",
+    "test:integration": "bun test scripts/tests/integration",
     "test:browser": "playwright test",
     "typecheck": "tsc --noEmit",
     "preview": "bun scripts/preview-server.ts",

@@ -74,7 +74,7 @@ Today `POST /api/committee/apply` takes a **client-supplied `memberId`** plus
   accepting the agent-produced signed application payload for owners who prefer
   submitting by hand — same contract, no unsigned path.
 - Tests: status-route redaction; docs/route tests extended
-  (`scripts/tests/committee-docs-rmpc-and-routes.test.ts`).
+  (`scripts/tests/unit/committee-docs-rmpc-and-routes.test.ts`).
 
 ## Phase 3 — retired (D21)
 

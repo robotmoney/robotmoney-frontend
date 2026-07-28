@@ -37,7 +37,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
-      # scripts/tests/admin-live-guard.test.ts spawns `bun run test:browser --
+      # scripts/tests/integration/admin-live-guard.test.ts spawns `bun run test:browser --
       # --list`, which shells out to Playwright's CLI/transform — that runs on
       # Node.js (its bin is `#!/usr/bin/env node`), which `setup-bun` does not
       # provide. On a self-hosted runner without a system node, Playwright's
@@ -50,7 +50,7 @@ jobs:
       - name: Install root tooling
         run: bun install --frozen-lockfile
       # Installed BEFORE "Check root scripts" (issue #108): scripts/tests/
-      # demo-edgar-bootstrap.test.ts spawns backend/scripts/edgar-seed-bootstrap.ts
+      # integration/demo-edgar-bootstrap.test.ts spawns backend/scripts/edgar-seed-bootstrap.ts
       # as a host-side subprocess (cwd: backend/), which needs backend's own
       # node_modules (@robotmoney/contract) resolvable — the same reason the
       # rest of this job's backend steps need it, just moved earlier.
@@ -59,6 +59,39 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Check root scripts
         run: bun run typecheck && bun run test
+      # ── D23 cost-class split (docs/decisions.md D23, docs/architecture.md §3) ──
+      # Every step below is UNCONDITIONAL on purpose. A cost class behind
+      # `continue-on-error` or a per-step guard would be a coverage loss dressed
+      # up as an optimization; scripts/tests/unit/runtime-import-guard.test.ts
+      # asserts that the only guard in this file stays the job-level draft one.
+      - name: Runtime code never imports test or eval code (D23)
+        run: bash scripts/checks/check-no-test-imports-in-runtime.sh
+      # The unit class must hold on a bare checkout — no Docker, no network.
+      # The greps are the "exit 0 is not tested" evidence: bun's own summary must
+      # report a NON-ZERO pass count and a zero fail count, so a run that
+      # collected nothing cannot be mistaken for a green. ANSI codes are stripped
+      # first because bun colours its summary even when stdout is a pipe.
+      - name: Unit cost class (scripts/tests/unit)
+        run: |
+          set -o pipefail
+          bun run test:unit 2>&1 | tee /tmp/test-unit.log
+          sed -E 's/\x1b\[[0-9;]*m//g' /tmp/test-unit.log > /tmp/test-unit.plain
+          grep -qE '^ *[1-9][0-9]* pass$' /tmp/test-unit.plain
+          grep -qE '^ *0 fail$' /tmp/test-unit.plain
+      # Pins fail-red-on-empty-selection: the two selectors above are just
+      # directory paths, so a future rename must break CI rather than silently
+      # collect zero files in both classes.
+      - name: Empty test selection is red
+        run: |
+          if bun test scripts/tests/__no_such_dir__ >/dev/null 2>&1; then
+            echo "bun test over an empty selection exited 0 — 0 tests collected must never be green" >&2
+            exit 1
+          fi
+      # Docker- and network-backed suites. This job is the only place they run
+      # per-PR, which is exactly what the split buys: cheaper jobs can select
+      # scripts/tests/unit without paying for these.
+      - name: Integration cost class (scripts/tests/integration)
+        run: bun run test:integration
       - name: Check docs/analytics consistency
         run: bash scripts/check-docs-analytics.sh
       - name: Typecheck backend

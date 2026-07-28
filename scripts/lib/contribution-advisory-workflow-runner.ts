@@ -3,7 +3,7 @@
  * inline `run:` bash (issue #230). Previously that PR-selection / draft-state
  * validation / reviewed-head-SHA skip / PATCH-vs-POST comment upsert logic was
  * only ever exercised by Bun.YAML.parse + string assertions in
- * `scripts/tests/contribution-advisory-workflow.test.ts` — nothing actually
+ * `scripts/tests/unit/contribution-advisory-workflow.test.ts` — nothing actually
  * ran the bash.
  *
  * This module extracts the exact `run:` string for the workflow's single
