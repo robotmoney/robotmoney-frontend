@@ -839,9 +839,17 @@ exactly this reason.
 - **Adds no workflow.** `committee-opencode-nightly.yml` is repointed at the eval
   on a `core` stack. It gets smaller: no Chromium install, no backend deps for
   the EDGAR seed bootstrap, no demo-volume reclaim, and no `env:` block. It stays
-  `CI_CLASS: heavy` (sweep-only — no `pull_request` trigger) on `ubuntu-latest`,
-  which matters because the self-hosted runner shares its IP with the standing
-  `rmdemo_*` stack and has a documented history of 429 flake on live-call gates.
+  `CI_CLASS: heavy` (sweep-only — no `pull_request` trigger). ~~On
+  `ubuntu-latest`, because the self-hosted runner shares its IP with the standing
+  `rmdemo_*` stack and has a documented history of 429 flake on live-call
+  gates.~~ **Superseded by the rule-1 amendment (2026-07-28):** that IP-flake
+  rationale was a property of the FREE tier, which rate-limits per source IP.
+  Funded models bill the workspace, not an IP quota — verified from the
+  self-hosted host itself, where `big-pickle` returns 429 while
+  `deepseek-v4-flash` and `kimi-k2.7-code` return 200 at the same instant. Every
+  workflow now runs on `[self-hosted, robotmoney-self-hosted]`, which is this
+  repo's spec; `ubuntu-latest` was the exception that rationale bought, and it
+  is retired with it.
 - **Does not revise D21.** The REST-only onboarding flow is unchanged; this
   decision is about how that flow is evaluated.
 - **Implementation is follow-up work**, tracked as its own issue so the code
