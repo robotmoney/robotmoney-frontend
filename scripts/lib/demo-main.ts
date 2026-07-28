@@ -984,9 +984,14 @@ async function main(): Promise<void> {
   // onboardingDriver() — it runs a different, non-onboarding check suite — so
   // this check applies to a LOCAL standing demo unconditionally, and to a CI
   // run only when it's running the real-inference onboarding eval (Stage 7,
-  // ONBOARDING_REAL_EVAL=1, unconditionally set by e2e.yml — see the CI
-  // branch below): fail before spending minutes standing up the stack, not
-  // ~20 minutes later at the eval step itself.
+  // ONBOARDING_REAL_EVAL=1 — see the CI branch below): fail before spending
+  // minutes standing up the stack, not ~20 minutes later at the eval step
+  // itself. Which CI runs set it (issue #289): the nightly sweep in
+  // .github/workflows/committee-opencode-nightly.yml, and e2e.yml on NON-PR
+  // events only — e2e.yml derives it from `github.event_name != 'pull_request'`
+  // so a per-PR run never spends a model call on an exhaustible free tier. A
+  // PR run therefore leaves ONBOARDING_REAL_EVAL empty and skips this resolve,
+  // which is correct: it has no eval to fail early for.
   if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
     resolveModelConfig(process.env);
   }
@@ -1179,33 +1184,37 @@ async function main(): Promise<void> {
     // Additive, env-gated (Stage 7, §11 R8, docs/plans/onboarding-ic-workflow.md):
     // the REAL-INFERENCE onboarding admission sweep reuses this EXACT
     // already-booted stack instead of standing up a parallel one — same
-    // pattern as RMPC_RELEASE_E2E above. Only runs when ONBOARDING_REAL_EVAL=1,
-    // which .github/workflows/e2e.yml now sets UNCONDITIONALLY for every run
-    // (including forks) — the default model is the free, no-credential
-    // OpenCode Zen tier (see resolveModelConfig() in onboarding-eval.ts), so
-    // there is no secret to be missing and nothing to gate on. A run without
-    // ONBOARDING_REAL_EVAL set at all (e.g. a plain local `bun run demo`, or
-    // any invocation predating this env var) stays a zero-behaviour-change
-    // no-op, relying on Stage 5's separate inference-off infra-rails test
-    // (scripts/tests/onboarding-eval-infra.test.ts) as its fail-fast
-    // substitute. A failed/timed-out admission THROWS (via `run`'s pattern —
-    // no silent pass): the whole point of putting real inference in the PR
-    // gate is that a vanilla agent failing to navigate our own onboarding
-    // instructions is a real regression signal, not a shrug. Provider/infra
-    // flake (rate-limit signals, and — on the keyless default — bare
-    // timeouts too) is mitigated by runOnboardingEvalWithRetry's own
+    // pattern as RMPC_RELEASE_E2E above. Only runs when ONBOARDING_REAL_EVAL=1.
+    // Which CI runs set it (issue #289): the nightly sweep in
+    // .github/workflows/committee-opencode-nightly.yml, and
+    // .github/workflows/e2e.yml on NON-PR events only — e2e.yml derives it from
+    // `github.event_name != 'pull_request'`, so a per-PR run of the required
+    // gate spends no model call. The free, no-credential OpenCode Zen default
+    // (see resolveModelConfig() in onboarding-eval.ts) means there is no secret
+    // to be missing, but it IS quota-limited, and one eval per PR exhausted it
+    // — the nightly measures the same surface on a cadence we can fund. A run
+    // without ONBOARDING_REAL_EVAL set at all (a `pull_request` run of e2e.yml,
+    // a plain local `bun run demo`, or any invocation predating this env var)
+    // is a no-op here and relies on Stage 5's separate inference-off
+    // infra-rails test (scripts/tests/onboarding-eval-infra.test.ts), which
+    // e2e.yml still runs unconditionally on every PR. A failed/timed-out
+    // admission THROWS (via `run`'s pattern — no silent pass): the whole point
+    // of real inference is that a vanilla agent failing to navigate our own
+    // onboarding instructions is a real regression signal, not a shrug.
+    // Provider/infra flake (rate-limit signals, and — on the keyless default —
+    // bare timeouts too) is mitigated by runOnboardingEvalWithRetry's own
     // retry/backoff (scripts/lib/onboarding-eval.ts); it never retries a
     // genuine navigation failure.
     //
-    // Sweep width (nightly-only knobs, both optional, both no-ops for the PR
-    // gate which never sets them): ONBOARDING_SWEEP_MODELS is a ":"-separated
+    // Sweep width (nightly-only knobs, both optional, both no-ops for e2e.yml,
+    // which never sets them): ONBOARDING_SWEEP_MODELS is a ":"-separated
     // list of OPENCODE_MODEL values to try (default: the single model
     // resolveModelConfig() resolves — the keyless default unless an operator
     // opted into a paid one); ONBOARDING_SWEEP_IDENTITIES_PER_MODEL is how
-    // many fresh admissions to run per model (default 1). The PR gate's
-    // e2e.yml never sets either, so it stays exactly one admission on one
-    // model — this block is a strict superset of that behaviour, not a
-    // different code path (§11 R8: one real flow, config-only differences).
+    // many fresh admissions to run per model (default 1). e2e.yml never sets
+    // either, so its non-PR runs stay exactly one admission on one model —
+    // this block is a strict superset of that behaviour, not a different code
+    // path (§11 R8: one real flow, config-only differences).
     if (process.env.ONBOARDING_REAL_EVAL === "1") {
       // No model configured (OPENCODE_MODEL/ONBOARDING_SWEEP_MODELS unset) is
       // NOT an error anymore — it means "use the default free keyless tier",
