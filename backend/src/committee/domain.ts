@@ -469,10 +469,32 @@ export async function applyMember(input: ApplyInput) {
   });
 }
 
-// Public, redacted application-status projection (§11 R2, applyStatus route).
-// Deliberately excludes name/contact/publicKey — only the derived lifecycle
-// state and timestamps are exposed. An unknown id and a never-issued id are
-// indistinguishable: both return null, which the route folds to a plain 404.
+// Public, privacy-safe application-status projection (Issue #237).
+// Returns ONLY { memberId, status, claimable, claimed } — no name, lens, contact,
+// or credentials. Benign, PII-free, membership-indistinguishable for unknown IDs.
+export interface ApplicationStatusResponse {
+  memberId: string;
+  status: "pending" | "active" | "unknown";
+  claimable: boolean;
+  claimed: boolean;
+}
+
+export async function getApplicationStatus(memberId: string): Promise<ApplicationStatusResponse> {
+  const row = (await sql<{ status: string }[]>`
+    SELECT status FROM committee_members WHERE id = ${memberId}`)[0];
+  const raw = row?.status ?? null; // 'applied' | 'active' | 'inactive' | null
+  const active = raw === "active";
+  const claimed = active && (await sql`
+    SELECT 1 FROM committee_member_keys
+    WHERE member_id = ${memberId} AND active = true AND token_hash IS NOT NULL LIMIT 1`).length > 0;
+  const status = raw === "applied" ? "pending"
+               : active ? "active"
+               : raw ? "pending" // inactive/other → don't leak specifics
+               : "unknown";
+  return { memberId, status, claimable: active && !claimed, claimed };
+}
+
+// Public, redacted application-status projection (§11 R2, legacy applyStatus route).
 export type ApplicationState = "applied" | "approved" | "claimed" | "rejected" | "inactive";
 export interface ApplicationStatus {
   id: string;
@@ -482,7 +504,7 @@ export interface ApplicationStatus {
   claimedAt: string | null;
 }
 
-export async function getApplicationStatus(memberId: string): Promise<ApplicationStatus | null> {
+export async function getApplyStatus(memberId: string): Promise<ApplicationStatus | null> {
   const member = (await sql<{ status: string; applied_at: Date | null }[]>`
     SELECT status, applied_at FROM committee_members WHERE id = ${memberId}`)[0];
   if (!member) return null;

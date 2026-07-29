@@ -11,17 +11,30 @@ import type { CommitteeRouteExtension } from "./types.ts";
 // indistinguishable 404s — ic.getApplicationStatus returns null for both.
 const APPLY_STATUS_PREFIX = `${ROUTES.committee.apply}/`;
 
+function templateRe(template: string, paramRe: Record<string, string> = {}): RegExp {
+  return new RegExp(`^${template.replace(/:([a-zA-Z_]+)/g, (_, k: string) => paramRe[k] ?? "[^/]+")}$`);
+}
+
+const RE_APPLICATION_STATUS = templateRe(ROUTES.committee.applicationStatus);
+
 /**
  * Onboarding routes (issue #205's challenge/key-proof claim flow, plus the
- * public apply-status read added alongside it). Keep behavior aligned with
- * frontend/public/views/docs/investment-committee/participation.html and
+ * public privacy-safe application-status read added in issue #237). Keep behavior
+ * aligned with frontend/public/views/docs/investment-committee/participation.html and
  * frontend/public/views/docs/investment-committee/api-reference.html.
  */
 export const handleCommitteeOnboardingRoutes: CommitteeRouteExtension = async (req, url) => {
+  if (req.method === "GET" && RE_APPLICATION_STATUS.test(url.pathname)) {
+    const parts = url.pathname.split("/");
+    const id = decodeURIComponent(parts[4] ?? "");
+    if (!id || id.includes("/")) return { status: 404, body: { error: "not found" } };
+    return { status: 200, body: await ic.getApplicationStatus(id) };
+  }
+
   if (req.method === "GET" && url.pathname.startsWith(APPLY_STATUS_PREFIX)) {
     const id = decodeURIComponent(url.pathname.slice(APPLY_STATUS_PREFIX.length));
     if (!id || id.includes("/")) return { status: 404, body: { error: "not found" } };
-    const status = await ic.getApplicationStatus(id);
+    const status = await ic.getApplyStatus(id);
     return status ? { status: 200, body: status } : { status: 404, body: { error: "not found" } };
   }
 

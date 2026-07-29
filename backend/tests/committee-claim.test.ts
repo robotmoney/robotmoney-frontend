@@ -22,6 +22,11 @@ async function post(path: string, body: Record<string, unknown>) {
   return handleCommittee(request, new URL(request.url));
 }
 
+async function get(path: string) {
+  const request = new Request(`http://test${path}`);
+  return handleCommittee(request, new URL(request.url));
+}
+
 async function applyAndActivate(prefix: string) {
   const label = rid(prefix);
   const keypair = await generateKeyPair();
@@ -183,4 +188,73 @@ test("0019 migration is idempotent when executed repeatedly against real Postgre
     "committee_claim_challenges",
     "committee_notification_outbox",
   ]);
+});
+
+test("GET /api/committee/applications/:memberId/status returns privacy-safe fields across onboarding lifecycle without PII", async () => {
+  const secretContact = "secret_agent_007@example.test";
+  const agentName = "Secret Agent Desk";
+  const keypair = await generateKeyPair();
+  const application = { name: agentName, contact: secretContact, lens: "macro", publicKey: keypair.publicKeyB64 };
+  const signature = await signMessage(canonicalizeApplication(application), keypair.privateKey);
+
+  const appliedRes = await post(ROUTES.committee.apply, { ...application, signature });
+  expect(appliedRes?.status).toBe(201);
+  const memberId = (appliedRes!.body as { memberId: string }).memberId;
+
+  // 1. Pending stage
+  const pendingStatusRes = await get(`/api/committee/applications/${memberId}/status`);
+  expect(pendingStatusRes?.status).toBe(200);
+  expect(pendingStatusRes?.body).toEqual({
+    memberId,
+    status: "pending",
+    claimable: false,
+    claimed: false,
+  });
+  // Verify strict key set: only memberId, status, claimable, claimed (no PII)
+  expect(Object.keys(pendingStatusRes!.body as object).sort()).toEqual(["claimable", "claimed", "memberId", "status"]);
+  expect(JSON.stringify(pendingStatusRes?.body)).not.toContain(secretContact);
+  expect(JSON.stringify(pendingStatusRes?.body)).not.toContain(agentName);
+  expect(JSON.stringify(pendingStatusRes?.body)).not.toContain(keypair.publicKeyB64);
+
+  // 2. Approved-unclaimed stage
+  const activated = await ic.activateMember(memberId);
+  expect(activated.status).toBe(200);
+
+  const approvedStatusRes = await get(`/api/committee/applications/${memberId}/status`);
+  expect(approvedStatusRes?.status).toBe(200);
+  expect(approvedStatusRes?.body).toEqual({
+    memberId,
+    status: "active",
+    claimable: true,
+    claimed: false,
+  });
+  expect(Object.keys(approvedStatusRes!.body as object).sort()).toEqual(["claimable", "claimed", "memberId", "status"]);
+
+  // 3. Claimed stage
+  const challenge = await challengeFor(memberId);
+  const claimSig = await signMessage(canonicalizeClaimChallenge(challenge), keypair.privateKey);
+  const claimRes = await post(ROUTES.committee.claimToken, { ...challenge, signature: claimSig });
+  expect(claimRes?.status).toBe(200);
+
+  const claimedStatusRes = await get(`/api/committee/applications/${memberId}/status`);
+  expect(claimedStatusRes?.status).toBe(200);
+  expect(claimedStatusRes?.body).toEqual({
+    memberId,
+    status: "active",
+    claimable: false,
+    claimed: true,
+  });
+  expect(Object.keys(claimedStatusRes!.body as object).sort()).toEqual(["claimable", "claimed", "memberId", "status"]);
+
+  // 4. Unknown member ID -> benign unknown shape (no 404 existence oracle, no PII)
+  const unknownId = rid("nonexistent_member");
+  const unknownStatusRes = await get(`/api/committee/applications/${unknownId}/status`);
+  expect(unknownStatusRes?.status).toBe(200);
+  expect(unknownStatusRes?.body).toEqual({
+    memberId: unknownId,
+    status: "unknown",
+    claimable: false,
+    claimed: false,
+  });
+  expect(Object.keys(unknownStatusRes!.body as object).sort()).toEqual(["claimable", "claimed", "memberId", "status"]);
 });
