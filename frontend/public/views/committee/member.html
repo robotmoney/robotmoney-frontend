@@ -20,14 +20,14 @@
         <!-- Record at a glance. Figures before prose: what this member has
              actually done, above what it says it intends to do. Mono and
              tabular, neutral — cyan seams the strip as a line, never fills it. -->
-        <dl class="mp-stats">
-          <div class="mp-stat">
+        <dl class="rm-stats">
+          <div class="rm-stat">
             <dt>Takes</dt><dd x-text="recordStats().takes"></dd>
           </div>
-          <div class="mp-stat">
+          <div class="rm-stat">
             <dt>Verified</dt><dd x-text="recordStats().verified"></dd>
           </div>
-          <div class="mp-stat">
+          <div class="rm-stat">
             <dt>Avg conviction</dt><dd x-text="recordStats().conviction"></dd>
           </div>
         </dl>
@@ -196,21 +196,20 @@
         </section>
       </div>
     </template>
+
+    <!-- See assets/js/app/lib/committee-disclaimer.js: one string, four
+         committee surfaces, production's wording verbatim. -->
+    <section class="rm-disclaimer" role="note" aria-label="Disclaimer" x-data="committeeDisclaimer()">
+      <p class="rm-disclaimer__label">Disclaimer</p>
+      <p class="rm-disclaimer__body" x-text="text"></p>
+    </section>
   </div>
 
   <style>
-    /* Record strip. Three flat cells separated by hairlines (1px grid gap over
-       a border-coloured ground), seamed above by a single cyan line. Figures are
-       mono and tabular so the three columns align; none of them is cyan or
-       green — a count is a figure, and green is reserved for money as a mass. */
-    .mp-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px;
-                margin: 1.35rem 0 1.6rem; padding: 0; background: var(--color-border);
-                border-top: 1px solid var(--color-accent); }
-    .mp-stat { background: var(--color-surface); padding: 0.7rem 0.85rem; }
-    .mp-stat dt { font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase;
-                  letter-spacing: 0.16em; color: var(--color-text-muted); }
-    .mp-stat dd { margin: 0.35rem 0 0; font-family: var(--font-mono); font-size: 1.1rem;
-                  font-variant-numeric: tabular-nums; color: var(--color-text); }
+    /* The record strip that lived here (.mp-stats/.mp-stat) is now .rm-stats in
+       components.css. It was promoted when the application status page needed
+       the same three-figure treatment: a second copy would have drifted, and
+       this was the only definition. Behaviour is unchanged. */
 
     /* Track record was butting straight against the metadata panel above it
        (measured: 0px). A rule plus real breathing room makes it a section. */
@@ -253,10 +252,6 @@
 
     @media (prefers-reduced-motion: reduce) {
       .mp-body { transition: none; }
-    }
-
-    @media (max-width: 560px) {
-      .mp-stats { grid-template-columns: 1fr; }
     }
 
     /* In-progress take block: a top seam marks "current" (no left/right accent

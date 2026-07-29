@@ -6,7 +6,8 @@
 // worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
 import { subjectDot } from "./views/shared.js";
-import { COMMITTEE_ONBOARDING_SKILL_URL } from "../contract/index.js";
+import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
+import { COMMITTEE_DISCLAIMER } from "../lib/committee-disclaimer.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
@@ -325,6 +326,10 @@ const helpers = {
 };
 
 export function registerStaticViews(Alpine) {
+  // One string, four committee surfaces. See lib/committee-disclaimer.js for
+  // why the wording is production's verbatim and not this repo's to edit.
+  Alpine.data("committeeDisclaimer", () => ({ text: COMMITTEE_DISCLAIMER }));
+
   Alpine.data("committeeTakeReceipt", () => ({
     ...helpers,
     loading: true,
@@ -374,13 +379,27 @@ export function registerStaticViews(Alpine) {
   Alpine.data("committeeApplyStatus", () => ({
     ...helpers,
     STEPS: ["applied", "approved", "claimed"],
+    // The KEYS above are lifecycle states and are pinned by
+    // scripts/tests/unit/committee-apply-form-and-status.test.ts. These are the
+    // words an operator reads, and they are the apply page's three beats
+    // verbatim: Apply, Approve, Vote. "Claimed" was the API's word for the
+    // agent proving it holds its private key, and as a label it did two things
+    // wrong: it sat one synonym away from "approved" on a page whose whole job
+    // is telling those two apart, and it named an internal mechanism rather
+    // than the thing the operator is waiting for, which is the agent voting.
+    STEP_LABELS: { applied: "Apply", approved: "Approve", claimed: "Vote" },
+    stepLabel(step) { return this.STEP_LABELS[step] || step; },
     id: null,
     loading: true,
     error: null,
     status: null,
-    member: null, // public projection, best-effort, for the display name once approved
-    agentPulse: null,
-    copied: {},
+    member: null, // public projection, best-effort, for the display name
+    memberFetchTried: false,
+    record: [],          // this member's filed takes, newest first
+    recordLoaded: false,
+    openSessions: [],    // every session currently collecting, not just one
+    pulseTicks: 0,
+    copiedId: false,
     pollTimer: null,
     pulseTimer: null,
     async init() {
@@ -410,22 +429,66 @@ export function registerStaticViews(Alpine) {
           this.pollTimer = null;
         }
       } catch (e) {
-        this.error = e.status === 404 ? "No application found for this id." : (e.message || "Could not load application status.");
-        if (e.status === 404 && this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+        // Only surface an error when there is nothing good on screen. This runs
+        // on a 4s poll, so an unguarded assignment let one dropped request
+        // insert a page-level error above the article, shove everything down,
+        // and clear itself four seconds later, on a page that was displaying
+        // correct data throughout.
+        if (!this.status || e.status === 404) {
+          this.error = e.status === 404 ? "No application found for this id." : (e.message || "Could not load application status.");
+        }
+        if (e.status === 404) {
+          // A remembered pointer that 404s is worse than none: it would send the
+          // operator here again from the apply page every time.
+          forgetApplication();
+          if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+        }
       } finally {
         this.loading = false;
       }
-      // The redacted status endpoint never echoes the name; pull it from the
-      // public member projection once approved (best-effort — a member still
-      // under review isn't listed yet) so the celebration can greet by name.
-      if (!this.member && this.statusPhase() === "approved") {
+      // The redacted status endpoint never echoes the name, so pull it from the
+      // public member projection. This is NOT gated on approval: GET
+      // /api/committee/members/:id already returns `name` for a member still in
+      // `applied` (verified against a live stack), so the status route's
+      // redaction was not withholding anything that endpoint does not publish
+      // anyway, and gating here only meant the operator stared at a bare UUID
+      // during the one phase where they most need to recognise their own agent.
+      // Contact and publicKey stay redacted in both places, which is the part
+      // that actually matters.
+      //
+      // Tried once, not once per poll: this runs inside a 4s loop, and a member
+      // that genuinely has no public projection would otherwise 404 forever.
+      if (!this.member && !this.memberFetchTried) {
+        this.memberFetchTried = true;
         try { this.member = camelMember(await api.get(path(ROUTES.committee.member, { id: this.id }))); }
-        catch { /* not public yet — the celebration falls back to the id */ }
+        catch { /* no public projection — every caller falls back to the id */ }
       }
+      // Opening this page is the one moment the browser ever learns the id, so
+      // it is the one chance to make the page reachable again later. See
+      // lib/application-memory.js.
+      if (this.status) {
+        rememberApplication({ id: this.id, name: this.member?.name, state: this.status.state });
+      }
+      this.syncTitle();
+    },
+    // Route-level SEO titleizes the last URL segment, which here is a raw UUID
+    // ("88efd6b9 E865 417d Afe1 45d84510338b — Robot Money Investment
+    // Committee"). Same fix memberProfile already applies: name the tab after
+    // the member once it is known, and after the state until then.
+    syncTitle() {
+      const suffix = "Robot Money Investment Committee";
+      const name = this.member?.name;
+      document.title = name
+        ? `${name}: ${suffix}`
+        : `${this.status?.state === "rejected" ? "Application not accepted" : "Application status"}: ${suffix}`;
     },
     // applied → approved → claimed, per docs/architecture.md §11.2. rejected
     // is a terminal off-ramp: "applied" still reads done (it happened), the
     // remaining steps read neither done nor pending — they're moot, not "next".
+    //
+    // This is the LIFECYCLE state and its three values are pinned by
+    // scripts/tests/unit/committee-apply-form-and-status.test.ts (#245 AC2).
+    // Presentation-only distinctions belong in stepClass(), not here.
     stepState(step) {
       const order = ["applied", "approved", "claimed"];
       const idx = order.indexOf(step);
@@ -435,6 +498,167 @@ export function registerStaticViews(Alpine) {
       if (cur === -1) return "pending";
       return idx <= cur ? "done" : "pending";
     },
+    // What the row actually renders as. Identical to stepState() except that
+    // the single step immediately after the current one is "next" rather than
+    // "pending", so the list can say where the operator is standing. Every step
+    // used to be done-or-pending, which on a finished application painted all
+    // three markers identically and left the row saying nothing.
+    //
+    // Deliberately separate from stepState(): that method's three values are a
+    // pinned contract, and a purely visual distinction is not worth widening it.
+    stepClass(step) {
+      const state = this.stepState(step);
+      // The Vote step is NOT finished the moment the token is claimed. Claiming
+      // proves the agent holds its key; voting is the duty that proof unlocks,
+      // and it is the thing the operator is actually waiting for. So the step
+      // stays "next" through claimed-but-never-filed and only completes once a
+      // take exists. Guarded on recordLoaded so a failed fetch cannot walk a
+      // finished step backwards.
+      if (step === "claimed" && state === "done" && this.recordLoaded && !this.record.length) return "next";
+      if (state !== "pending") return state;
+      const order = ["applied", "approved", "claimed"];
+      const cur = order.indexOf(this.status?.state);
+      return cur !== -1 && order.indexOf(step) === cur + 1 ? "next" : "pending";
+    },
+    // What each step says on its right-hand side: the timestamp once it has
+    // happened, otherwise what is being waited on. This is why the page no
+    // longer carries a separate Timeline panel — it repeated these three dates
+    // directly under the same three labels.
+    // The raw timestamp behind a step, or null. A rejected application still
+    // carries a reviewedAt, but that is when it was DECLINED, so the moot rows
+    // never surface it here: rendered as a plain stamp it reads as though the
+    // seat had been granted. The word for those rows comes from stepChip().
+    stepAt(step) {
+      if (this.stepClass(step) === "moot") return null;
+      return {
+        applied: this.status?.appliedAt,
+        approved: this.status?.reviewedAt,
+        claimed: this.status?.claimedAt,
+      }[step] || null;
+    },
+    stepWhen(step) {
+      const at = this.stepAt(step);
+      return at ? this.formatDate(at, "long") : "";
+    },
+    // The clock time under the date. All three steps routinely land on the same
+    // day, which made the date column three identical strings and hid the only
+    // thing it was there to show: the order and the gaps. Seconds are included
+    // because they are not decoration here, two applications filed by the same
+    // operator can be seconds apart. UTC is stated rather than localised so an
+    // operator and an administrator reading the same record read one clock.
+    stepTime(step) {
+      const at = this.stepAt(step);
+      if (!at) return "";
+      try {
+        const t = new Date(at).toLocaleTimeString("en-GB", {
+          hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "UTC",
+        });
+        return `${t} UTC`;
+      } catch { return ""; }
+    },
+    // The state word for a step, as a shared .rm-status chip, or null when the
+    // step's timestamp already says everything. Returning a tone rather than a
+    // colour keeps the covenant decision in CSS: "in review" was previously
+    // rendered as raw cyan text, which put the house/interface hue on a status
+    // word and made an ordinary wait look like a signal.
+    stepChip(step) {
+      const state = this.stepClass(step);
+      if (state === "moot") {
+        const at = step === "approved" ? this.status?.reviewedAt : null;
+        return at
+          ? { label: `declined ${this.formatDate(at, "long")}`, tone: "alert" }
+          : { label: "not reached", tone: "pending" };
+      }
+      if (state !== "next") return null;
+      if (step === "approved") return { label: "in review", tone: "pending" };
+      // The Vote step is "next" for two different reasons and they are not
+      // interchangeable. Before the token is claimed the agent is still
+      // proving it holds its key ("proving identity" rather than the API's word
+      // "claiming", which names a mechanism the operator never touches). After
+      // it is claimed, the identity question is settled and the only thing
+      // outstanding is a window to file in.
+      return this.status?.state === "claimed"
+        ? { label: "awaiting first take", tone: "pending" }
+        : { label: "proving identity", tone: "pending" };
+    },
+    // The subject of this page is the agent, so name it. The <h1> was the raw
+    // application UUID at 3.6rem before this, then the state; the state is a
+    // chip now (stateChip) and the id is the support reference it always was.
+    //
+    // Falls back to the short id, never to the state: the previous fallback
+    // printed "Application under review" as the <h1> directly beside a chip
+    // reading "under review", which said one thing twice and still did not
+    // identify the application.
+    headline() {
+      return this.member?.name || `Application ${String(this.id || "").slice(0, 8)}`;
+    },
+    // Overall state, for the header chip beside the name.
+    //
+    // Green is spent in ONE place on this page: a member that is actually
+    // voting. It used to also mark "approved", which told the operator the job
+    // was done at the exact moment two things still had to happen, the agent
+    // proving its key and filing its first take. An approved-but-silent member
+    // is a member that does nothing, and it must not wear the same colour as a
+    // working one. "Seat claimed" is gone for the same reason it left the step
+    // list: it named the mechanism, and it sat one synonym away from
+    // "approved" on the page whose job is telling those two apart.
+    stateChip() {
+      switch (this.status?.state) {
+        case "rejected": return { label: "not accepted", tone: "alert" };
+        case "approved": return { label: "not voting yet", tone: "pending" };
+        case "claimed":
+          return this.recordLoaded && !this.record.length
+            ? { label: "no takes yet", tone: "pending" }
+            : { label: "voting", tone: "good" };
+        default: return { label: "under review", tone: "pending" };
+      }
+    },
+    // The single "what is happening right now" panel at the top of the page.
+    // It replaced a callout and a separate Agent activity section that sat at
+    // the foot: between them they said "<name> is on the committee" twice, in
+    // near-identical shapes, while the one genuinely live fact was below the
+    // fold. One panel, one position, in every state.
+    liveStatus() {
+      const name = this.memberName();
+      const state = this.status?.state;
+
+      if (state === "rejected") {
+        return { tone: "alert", label: "not accepted",
+          lead: "This application was not accepted.",
+          body: "Reapplying requires a fresh signed application from the same agent." };
+      }
+      if (this.statusPhase() === "pending") {
+        return { tone: "pending", label: "under review",
+          lead: "An operator reviews your application, usually within a day.",
+          body: "You do not need to keep this page open: it updates itself the moment you are approved, and we email you too. Keep the identity your agent generated with rmpc, because it is the one thing you cannot recreate." };
+      }
+      if (state === "approved") {
+        return { tone: "pending", label: "not voting yet",
+          lead: `${name} has a seat, and is not voting yet.`,
+          body: "Two things still have to happen, and both belong to your agent, not to you: it proves it holds the private key it generated, then it files its first take. There is nothing for you to schedule or install." };
+      }
+      // Claimed. A window it has not filed in outranks everything else here,
+      // because it is the only state on this page with a deadline attached.
+      const pending = this.pendingWindow();
+      if (pending) {
+        return { tone: "pending", label: "window open", live: true,
+          lead: `A window is open for ${pending.date} / ${pending.subjectId}.`,
+          body: `${name} has until it closes to read the brief and file its take.`,
+          url: `/committee/${pending.date}/${encodeURIComponent(pending.subjectId)}`,
+          linkText: "Follow the session" };
+      }
+      if (this.recordLoaded && !this.record.length) {
+        return { tone: "pending", label: "no takes yet",
+          lead: `${name} is ready, and has not filed yet.`,
+          body: "It has proved it holds its key, so it can file. No session is collecting right now, which is the committee's normal resting state: it catches the next window on its own." };
+      }
+      const last = this.record[0];
+      return { tone: "good", label: "voting",
+        lead: `${name} is voting.`,
+        body: "Nothing is left for you to do. It files a take in every window on its own, signed with a key that never leaves its machine.",
+        url: last ? `/committee/takes/${encodeURIComponent(last.take?.id || "")}` : null,
+        linkText: "See the latest take" };
+    },
     // Coarse phase for the rich status UI: approved covers approved + claimed.
     statusPhase() {
       const state = this.status?.state;
@@ -442,40 +666,68 @@ export function registerStaticViews(Alpine) {
       if (state === "rejected") return "rejected";
       return "pending";
     },
-    // Live heartbeat: has the agent authored a real (non-placeholder) take?
-    // Runs only once approved; reads public session data, best-effort.
+    // This member's filed takes, newest first, from the member-scoped endpoint
+    // (#243) the profile page already uses. Best-effort: the record is a
+    // courtesy on this page, never a reason to fail it.
+    async loadRecord() {
+      try {
+        const res = await api.get(`${path(ROUTES.committee.memberTakes, { id: this.id })}?limit=50`);
+        this.record = res.takes || [];
+        this.recordLoaded = true;
+      } catch { /* leave the strip hidden rather than render a wrong zero */ }
+    },
+    // Three figures that answer "is it working, and does what it files check
+    // out". Deliberately NOT an average conviction: high confidence is not
+    // correctness, and a conviction figure sitting beside two counts reads as a
+    // score for judgement we have no basis to give. That one stays on the
+    // profile, next to the takes it summarises.
+    recordStats() {
+      return {
+        takes: this.record.length,
+        verified: this.record.filter((r) => r.take?.verified).length,
+        lastFiled: this.record[0] ? this.formatDate(this.record[0].sessionDate, "short") : "—",
+        last: this.record[0] || null,
+      };
+    },
+    // Live heartbeat. Runs only once approved; reads public data, best-effort.
+    //
+    // Reads EVERY collecting session, not GET /open-session, which returns a
+    // single session while several routinely collect at once (verified live:
+    // woon and mav both collecting, open-session naming only woon). The old
+    // code could therefore tell an operator "your agent has until the window
+    // closes" about a window it had already voted in, while staying silent
+    // about the one it had not.
+    //
+    // It also drops a localStorage cache of the last seen take. That cache
+    // existed because the only source was a single session's detail payload, so
+    // a second browser saw no history at all; the member-takes endpoint is the
+    // real record and needs no shadow copy.
     async checkPulse() {
       if (this.statusPhase() !== "approved") return;
-      const storeKey = `rm-last-take-${this.id}`;
+      // Take bodies are large, so the record is not on the 20s beat: once, then
+      // every third tick.
+      if (!this.recordLoaded || this.pulseTicks++ % 3 === 0) await this.loadRecord();
       try {
-        const open = await api.get(ROUTES.committee.openSession);
-        if (open && open.id) {
-          const detail = await api.get(path(ROUTES.committee.session, { date: open.date, subject: open.subjectId }));
-          const take = (detail.takes || []).find((t) => t.memberId === this.id);
-          if (take) {
-            const seen = {
-              date: open.date, subjectId: open.subjectId, verified: take.verified,
-              placeholder: /^\*\*REGIME\*\* Neutral pending/.test(take.body || ""),
-              url: `/committee/${open.date}/${encodeURIComponent(open.subjectId)}`,
-            };
-            try { localStorage.setItem(storeKey, JSON.stringify(seen)); } catch { /* private mode */ }
-            this.agentPulse = { kind: "received", ...seen };
-          } else {
-            this.agentPulse = { kind: "waiting", date: open.date, subjectId: open.subjectId, closesAt: open.windowClosesAt };
-          }
-          return;
-        }
-        let last = null;
-        try { last = JSON.parse(localStorage.getItem(storeKey) || "null"); } catch { /* corrupt entry */ }
-        this.agentPulse = { kind: "idle", last };
-      } catch { /* heartbeat is best-effort — never surface errors for it */ }
+        const res = await api.get(`${ROUTES.committee.sessions}?state=collecting&limit=10`);
+        this.openSessions = res.sessions || [];
+      } catch { /* best-effort: an unreachable index just means no window shown */ }
     },
-    pulseSeen() {
-      return this.agentPulse?.kind === "received" ? this.agentPulse : this.agentPulse?.last;
-    },
-    mindOn() {
-      const seen = this.pulseSeen();
-      return !!seen && seen.placeholder === false;
+    // The first session this member could still file in, or null.
+    //
+    // `state=collecting` is not the same question as "is the window open".
+    // A session stays in `collecting` until the close job runs, so a stack
+    // whose worker is idle, paused, or behind keeps advertising sessions whose
+    // windowClosesAt is hours in the past — and this panel is the one element
+    // on the page that claims to be live. It was telling an operator their
+    // agent "has until it closes to read the brief and file its take" about a
+    // window that had closed two days earlier. The close time is on the row, so
+    // trust that over the state label.
+    pendingWindow() {
+      const now = Date.now();
+      return this.openSessions.find(
+        (s) => (!s.windowClosesAt || new Date(s.windowClosesAt).getTime() > now) &&
+          !this.record.some((r) => r.sessionDate === s.date && r.subjectId === s.subjectId),
+      ) || null;
     },
     memberName() {
       return (this.member && this.member.name) || this.id;
@@ -483,25 +735,24 @@ export function registerStaticViews(Alpine) {
     profileUrl() {
       return `/committee/members/${encodeURIComponent(this.id)}`;
     },
-    printWelcome() {
-      try { window.print(); } catch { /* headless / blocked print — no-op */ }
-    },
-    // Direct install of the committee-onboarding skill (robotmoney-core) for an
-    // agent you drive by hand; the pasted apply prompt installs it for you.
-    skillInstallCommand() {
-      const dir = "~/.claude/skills/committee-onboarding";
-      return `mkdir -p ${dir} && curl -fsSL ${COMMITTEE_ONBOARDING_SKILL_URL} -o ${dir}/SKILL.md`;
-    },
     recoveryMailto() {
       return `mailto:hi@robotmoney.net?subject=${encodeURIComponent(`Key rotation for committee member ${this.id}`)}`;
     },
-    async copy(key, text) {
+    // The member id is a 36-character UUID that support, the admin surface and
+    // the API all key on, so it gets a copy control rather than an invitation
+    // to transcribe it by hand.
+    async copyId() {
       try {
-        await navigator.clipboard.writeText(text);
-        this.copied = { ...this.copied, [key]: true };
-        setTimeout(() => { this.copied = { ...this.copied, [key]: false }; }, 1600);
-      } catch { /* clipboard blocked — the text is visible to select manually */ }
+        await navigator.clipboard.writeText(this.id);
+        this.copiedId = true;
+        setTimeout(() => { this.copiedId = false; }, 1600);
+      } catch { /* clipboard blocked: the id is still selectable text */ }
     },
+    // printWelcome() and skillInstallCommand() were removed with the "Give it a
+    // mind" section they served. The install command told an already onboarded
+    // agent to install the skill it had just used to get here, and the print
+    // affordance existed to produce a keepsake of a celebration card that is no
+    // longer a separate object on the page.
   }));
 
   Alpine.data("memberProfile", () => ({
@@ -520,7 +771,7 @@ export function registerStaticViews(Alpine) {
         // Route-level SEO titleizes the last URL segment, which here is a raw
         // UUID ("D6e430f5 D706 4325…"). This is the page onboarding hands a new
         // operator, so name the tab after the member once it is known.
-        if (this.member?.name) document.title = `${this.member.name} — Robot Money Investment Committee`;
+        if (this.member?.name) document.title = `${this.member.name}: Robot Money Investment Committee`;
         this.rows = await this.loadRows(memberId);
       } catch (e) {
         this.error = e.message || "Member not found";
@@ -792,6 +1043,29 @@ export function registerStaticViews(Alpine) {
     isRollupRecommendation() {
       const rec = this.session?.committeeRecommendation;
       return !!(rec && (rec.quorum || rec.stances));
+    },
+    // The recommendation's own prose, or "" when it cannot be trusted.
+    //
+    // On a rollup the aggregator currently fills `rationale` with the member
+    // take bodies concatenated: measured on 2026-09-25/mav it is 3714 characters
+    // and BYTE-IDENTICAL to session.synthesis. Printing it would repeat the same
+    // text a reader has already scrolled past under the takes, a third time,
+    // under a heading claiming it is the committee's reasoning. This is the same
+    // judgement synthesisIsEcho() and consensusItems() already make elsewhere on
+    // this page; the fix belongs in the aggregator, and until it lands the page
+    // stays silent rather than pretending three quoted takes are a rationale.
+    recommendationRationale() {
+      const rec = this.session?.committeeRecommendation;
+      if (!rec || this.isRollupRecommendation()) return "";
+      return rec.rationale || "";
+    },
+    // Structured, and correct on a rollup as much as on a typed recommendation:
+    // these are the positions the committee is actually calling for.
+    recommendationActions() {
+      return this.session?.committeeRecommendation?.actions || [];
+    },
+    hasRecommendationDetail() {
+      return !!(this.isBucketWeights() || this.recommendationActions().length || this.recommendationRationale());
     },
     positionRows() {
       const total = this.snapshot?.totalValueUsd || 0;

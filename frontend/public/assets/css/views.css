@@ -463,13 +463,12 @@
 .cv__submit:disabled { opacity: 0.5; cursor: default; }
 .cv__applied { flex-direction: column; align-items: flex-start; }
 
-/* application-status checklist (/committee/apply/:id) — applied → approved → claimed */
-.cv__steps { display: flex; flex-wrap: wrap; gap: 1.5rem; list-style: none; margin: 1.5rem 0 2rem; padding: 0; }
-.cv__step { display: flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-dim); }
-.cv__step-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; border: 1px solid var(--color-border); background: transparent; }
-.cv__step--done { color: var(--color-text); }
-.cv__step--done .cv__step-dot { background: var(--color-accent); border-color: var(--color-accent); }
-.cv__step--moot { color: var(--color-text-dim); opacity: 0.5; }
+/* The application-status checklist that lived here (.cv__steps/.cv__step-dot)
+   is gone. It filled its "done" dots with Beam cyan, which put a cyan mass
+   behind a figure, and on a finished application all three read identically.
+   Its replacement is the numbered, dated .ap-steps in the page's own
+   <style> (frontend/public/views/committee/apply-status.html) — that page was
+   the only consumer, so this set had no other callers. */
 
 @media (min-width: 768px) {
   /* .rv__cards base 4-col grid promoted to components.css (.rm-cards). */

@@ -18,12 +18,27 @@
   --color-surface-light: #181d28;
   --color-border: #222a38;
   --color-border-light: #2e3a4e;
+  /* Four text rungs, not three. #e2e4ec and #7e889e are 33 points of lightness
+     apart with nothing between them, so a page that needed "quieter than a
+     heading but still running prose" had to pick one of the two and every page
+     picked #e2e4ec: on /committee/apply, 84% of all rendered characters are the
+     single tone --color-text. The missing rung is why controls reached for cyan
+     to separate themselves from body copy, which is how cyan ended up as 26% of
+     the type on the application status page.
+     --color-text-soft is not a new colour: it is #aeb6c6, the value the apply
+     page had already forked privately as `--ap-lede`, promoted so there is one
+     copy. 9.8:1 on Void, 9.1:1 on Surface. --color-text-dim stays below AA and
+     remains decoration-only. */
   --color-text: #e2e4ec;
+  --color-text-soft: #aeb6c6;
   --color-text-muted: #7e889e;
   --color-text-dim: #4a5268;
   --color-accent: #00e5ff;
   --color-accent-dim: #00b8d4;
   --color-accent-glow: rgba(0, 229, 255, 0.12);
+  /* Beam at rest, for a rule that marks a control without shouting. Still a
+     LINE and still Beam's hue — only its weight changes, never its meaning. */
+  --color-accent-line: rgba(0, 229, 255, 0.42);
   --color-warm: #e8a640;
   --color-warn: #ff6644;
   --color-green: #10b981;

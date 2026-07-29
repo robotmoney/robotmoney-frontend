@@ -118,5 +118,13 @@
         </div>
       </div>
     </template>
+
+    <!-- Outside the loading template on purpose: the disclaimer is true before
+         the feed arrives and true if it never does. One string, four surfaces —
+         see assets/js/app/lib/committee-disclaimer.js. -->
+    <section class="rm-disclaimer" role="note" aria-label="Disclaimer" x-data="committeeDisclaimer()">
+      <p class="rm-disclaimer__label">Disclaimer</p>
+      <p class="rm-disclaimer__body" x-text="text"></p>
+    </section>
   </div>
 </section>

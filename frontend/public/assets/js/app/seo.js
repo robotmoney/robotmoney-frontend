@@ -46,7 +46,10 @@ const META = {
   },
   "/committee": {
     title: "AI Investment Committee — Robot Money",
-    description: "Robot Money's AI Investment Committee analyzes agent portfolios daily on Base — multiple lenses, one subject per session, one signed take per member.",
+    // The trailing caveat is production's and is not decoration: this string is
+    // the committee's search-results surface, where a reader meets stances and
+    // "recommendation" with none of the page's own disclaimer around them.
+    description: "Robot Money's AI Investment Committee analyzes agent portfolios daily on Base — multiple lenses, one subject per session, one signed take per member. Auto-generated content, not financial advice.",
   },
   "/projects": {
     title: "Agentic Economy Ecosystem — Robot Money",
