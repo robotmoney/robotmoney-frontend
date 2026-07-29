@@ -2,7 +2,8 @@
 // of docs/plans/onboarding-ic-workflow.md). Launches ONE vanilla member-agent
 // container (docker-compose.demo.yml's `member-agent` service,
 // scripts/lib/member-agent/Dockerfile) per admission, injects the canonical
-// copy-paste prompt (contract's ONBOARDING_PROMPT) with a generated identity,
+// copy-paste prompt (contract's ONBOARDING_PROMPT text, with only its skill URL
+// pointed at this checkout's static asset) with a generated identity,
 // then OBSERVES ONLY: this module never applies, signs, claims, or connects on
 // the member's behalf. Everything from "install the skill" onward is the
 // containerized agent's own real inference, working out §11.2 from the prompt
@@ -45,8 +46,8 @@
 // rather than faked with invented per-step signals.
 //
 // ── What the harness supplies, and what it refuses to supply (§11.3 E7) ─────
-// ONBOARDING_PROMPT is injected BYTE-FOR-BYTE VERBATIM, as its own prefix; the
-// canonical text is never rewritten or substituted into. Everything the harness
+// ONBOARDING_PROMPT's canonical text is injected with only the skill URL
+// parameter changed to this stack's local static asset. Everything the harness
 // adds rides in one clearly delimited note appended after it, and every line of
 // that note is the OWNER's side of onboarding — the half a real applicant's
 // human would have handled before their agent ever started:
@@ -60,7 +61,7 @@
 //     production host this ephemeral demo stack cannot serve; a real human, per
 //     the real docs, would be applying against committee.robotmoney.net);
 //   - the keystore passphrase, exported into the container's environment
-//     (KEYSTORE_PASSPHRASE_ENV) — the published committee-onboarding skill
+//     (KEYSTORE_PASSPHRASE_ENV) — the repo-owned committee-onboarding skill
 //     tells the agent to ask its owner for exactly this and to WAIT for them,
 //     which is unanswerable in a headless container;
 //   - a vanilla, non-hostile permission set and the real auto-approve flag
@@ -87,12 +88,18 @@
 // MODEL SELECTION STAYS HERE, AND ONLY HERE. resolveModelConfig() below is the
 // single place an AGENT_MODEL selector becomes a model id and a credential; the
 // primitive takes that record and invents nothing.
-import { ONBOARDING_PROMPT, path as routePath, ROUTES } from "@robotmoney/contract";
+import { buildOnboardingPrompt, path as routePath, ROUTES } from "@robotmoney/contract";
 import { classifyOutcome, shouldRetry } from "../agent/classify-outcome.ts";
 import { runMemberAgent } from "../agent/member-agent.ts";
 import { finalAssistantText } from "../agent/transcript.ts";
 import { AGENT_MODEL_ENV, DEFAULT_AGENT_MODEL, isKeylessModel, resolveAgentModel } from "./model-registry.ts";
 import { ZEN_KEY_ENV, zenApiKey } from "./opencode-key.ts";
+import {
+  createOnboardingTelemetry,
+  redactTelemetryText,
+  type OnboardingEventSink,
+  type OnboardingTelemetry,
+} from "./onboarding-telemetry.ts";
 
 // One definition of the compose file list and the compose argv prefix in the
 // repo (scripts/stack/config.ts); re-exported here so every existing importer
@@ -130,6 +137,7 @@ export { assistantTextParts, extractAssistantText, finalAssistantText } from "..
 // service; the agent applies over this REST surface (POST /api/committee/apply)
 // directly, following the committee-onboarding skill.
 export const DEFAULT_API_URL_INTERNAL = "http://api:8787";
+export const LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH = "/skills/committee-onboarding/SKILL.md";
 // Live-verified via a real GitHub Actions e2e run: a vanilla agent doing
 // genuine reasoning (fetching docs, downloading rmpc, generating a key, and
 // — when the linked skill's payload description wasn't quite enough —
@@ -152,7 +160,7 @@ export const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 export const DEFAULT_POLL_INTERVAL_MS = 3_000;
 export const DEFAULT_AUTO_APPROVE_DELAY_MS = 10_000; // §11 R7
 // The env var `rmpc` reads its keystore passphrase from — the ONE secret the
-// published committee-onboarding skill tells the agent to have its human owner
+// repo-owned committee-onboarding skill tells the agent to have its human owner
 // export before launching it. The harness plays the owner here (see
 // demoHarnessNote); it is not a hint about what the agent should do with it.
 // Same name scripts/rmpc-release-e2e.ts and the rails check already use.
@@ -174,8 +182,9 @@ export function generateIdentity(runId: string = crypto.randomUUID().slice(0, 8)
 }
 
 // Everything this run needs that the canonical prompt deliberately does not
-// carry, in one clearly delimited block appended AFTER a byte-for-byte-verbatim
-// copy of ONBOARDING_PROMPT. It is exactly what a real applicant's own owner
+// carry, in one clearly delimited block appended AFTER the canonical prompt
+// whose only eval-specific parameter is its locally served skill URL. It is
+// exactly what a real applicant's own owner
 // would have already told their agent, and nothing more (§11.3 E7):
 //
 //  1. the display name and contact to apply under (R1). The prompt used to
@@ -191,7 +200,7 @@ export function generateIdentity(runId: string = crypto.randomUUID().slice(0, 8)
 //  3. that the owner has already put the secrets they'd otherwise be asked to
 //     type into the session's environment.
 //
-// (3) is not a convenience. The published committee-onboarding skill tells the
+// (3) is not a convenience. The repo-owned committee-onboarding skill tells the
 // agent, in as many words, to ask its owner to export the keystore passphrase
 // and to *wait* for them ("Tell me once it's set"), and forbids accepting the
 // value in conversation. A headless eval container has no owner to answer, so
@@ -221,11 +230,19 @@ function demoHarnessNote(identity: OnboardingIdentity, apiBaseUrl: string): stri
   );
 }
 
-// The exact text injected into the container: the canonical ONBOARDING_PROMPT
-// verbatim as the prefix, plus the harness note (kept clearly delimited and
+// The canonical prompt used by the eval. Production keeps the published GitHub
+// URL in ONBOARDING_PROMPT; the eval changes only that URL so the agent fetches
+// the repo-owned skill from the same API container it is already evaluating.
+export function buildEvalOnboardingPrompt(apiBaseUrl: string = DEFAULT_API_URL_INTERNAL): string {
+  const localSkillUrl = `${apiBaseUrl.replace(/\/+$/, "")}${LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH}`;
+  return buildOnboardingPrompt(localSkillUrl);
+}
+
+// The exact text injected into the container: the URL-parameterized canonical
+// prompt as the prefix, plus the harness note (kept clearly delimited and
 // separate, per the module doc comment above).
 export function buildAgentPrompt(identity: OnboardingIdentity, apiBaseUrl: string = DEFAULT_API_URL_INTERNAL): string {
-  return `${ONBOARDING_PROMPT}${demoHarnessNote(identity, apiBaseUrl)}`;
+  return `${buildEvalOnboardingPrompt(apiBaseUrl)}${demoHarnessNote(identity, apiBaseUrl)}`;
 }
 
 // ── Model configuration ─────────────────────────────────────────────────────
@@ -290,19 +307,25 @@ export interface ObservedApplication {
   onActiveRoster: boolean;
 }
 
-// See the module doc comment ("observe-only design, and its known
-// coarseness") for why connect/discover/toolchain are reported as ONE unit.
-function observedRank(observed: ObservedApplication): number {
-  if (observed.onActiveRoster) return ONBOARDING_STEPS.indexOf("session");
-  if (observed.applyState === "claimed") return ONBOARDING_STEPS.indexOf("claim");
-  if (observed.applyState === "approved") return ONBOARDING_STEPS.indexOf("approve");
-  if (observed.memberId) return ONBOARDING_STEPS.indexOf("apply"); // member row exists ⇒ apply landed
-  return -1; // no observable signal yet
+export function deriveSteps(observed: ObservedApplication): StepState[] {
+  // Approval activates the member row before the agent proves possession and
+  // claims its token. The states are therefore not a simple roster-derived
+  // rank: active-roster membership can complete approve, but never claim.
+  const applied = observed.memberId !== null;
+  const approved = observed.applyState === "approved" || observed.applyState === "claimed" || observed.onActiveRoster;
+  const claimed = observed.applyState === "claimed";
+  const sessionReady = claimed && observed.onActiveRoster;
+  const done = new Set<OnboardingStep>([
+    ...(applied ? (["connect", "discover", "toolchain", "apply"] as OnboardingStep[]) : []),
+    ...(approved ? (["approve"] as OnboardingStep[]) : []),
+    ...(claimed ? (["claim"] as OnboardingStep[]) : []),
+    ...(sessionReady ? (["session"] as OnboardingStep[]) : []),
+  ]);
+  return ONBOARDING_STEPS.map((step) => ({ step, status: done.has(step) ? "done" : "pending" }));
 }
 
-export function deriveSteps(observed: ObservedApplication): StepState[] {
-  const rank = observedRank(observed);
-  return ONBOARDING_STEPS.map((step, i) => ({ step, status: i <= rank ? "done" : "pending" }) as StepState);
+export function isFullyOnboarded(observed: ObservedApplication & { claimedAt: string | null }): boolean {
+  return observed.applyState === "claimed" && observed.claimedAt !== null && observed.onActiveRoster;
 }
 
 // ── External observation (public status route + admin roster) ───────────────
@@ -313,12 +336,17 @@ async function findMemberIdByContact(backendUrl: string, adminToken: string, con
   return body.members.find((m) => m.contactEmail === contact)?.id ?? null;
 }
 
-async function fetchApplyState(backendUrl: string, memberId: string): Promise<ApplyState> {
+interface ApplyStatusObservation {
+  state: ApplyState;
+  claimedAt: string | null;
+}
+
+async function fetchApplyStatus(backendUrl: string, memberId: string): Promise<ApplyStatusObservation | null> {
   const p = routePath(ROUTES.committee.applyStatus, { id: memberId });
   const res = await fetch(`${backendUrl}${p}`);
-  if (!res.ok) return null;
-  const body = (await res.json()) as { state: ApplyState };
-  return body.state;
+  if (!res.ok) throw new Error(`GET ${p} -> ${res.status}`);
+  const body = (await res.json()) as { state: ApplyState; claimedAt?: string | null };
+  return { state: body.state, claimedAt: body.claimedAt ?? null };
 }
 
 async function isOnActiveRoster(backendUrl: string, memberId: string): Promise<boolean> {
@@ -326,6 +354,43 @@ async function isOnActiveRoster(backendUrl: string, memberId: string): Promise<b
   if (!res.ok) throw new Error(`GET ${ROUTES.committee.members} -> ${res.status}`);
   const body = (await res.json()) as { members: Array<{ id: string }> };
   return body.members.some((m) => m.id === memberId);
+}
+
+export interface ObserverPollTracker {
+  poll<T>(endpoint: string, read: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false }>;
+  persistentError(): string | null;
+}
+
+/**
+ * Track failures per observer endpoint, logging only state transitions. A
+ * recovered read remains useful evidence in the merged timeline; a failure
+ * still active when observation ends makes the whole run a harness error.
+ */
+export function createObserverPollTracker(log: (message: string) => void): ObserverPollTracker {
+  const failures = new Map<string, string>();
+  return {
+    async poll<T>(endpoint: string, read: () => Promise<T>) {
+      try {
+        const value = await read();
+        if (failures.delete(endpoint)) log(`observer.poll.recovered endpoint=${endpoint}`);
+        return { ok: true as const, value };
+      } catch (error) {
+        const message = redactTelemetryText(error instanceof Error ? error.message : String(error));
+        if (failures.get(endpoint) !== message) {
+          log(`observer.poll.failed endpoint=${endpoint} error=${message}`);
+        }
+        failures.set(endpoint, message);
+        return { ok: false as const };
+      }
+    },
+    persistentError() {
+      if (failures.size === 0) return null;
+      return [...failures]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([endpoint, message]) => `${endpoint}: ${message}`)
+        .join("; ");
+    },
+  };
 }
 
 // Auto-approve watcher (§11 R7): after an application completes ("applied"),
@@ -368,6 +433,13 @@ export interface RunOnboardingEvalOptions {
   autoApproveDelayMs?: number;
   identity?: OnboardingIdentity;
   onEvent?: (msg: string) => void;
+  /** Exact environment returned by createStack; used by Compose child calls. */
+  composeSpawnEnv?: Record<string, string>;
+  /** Optional structured stream; omitted by existing demo/CI callers. */
+  onStructuredEvent?: OnboardingEventSink;
+  /** Shared sequencer for callers that also merge service/cleanup logs. */
+  telemetry?: OnboardingTelemetry;
+  attempt?: number;
 }
 
 export interface OnboardingEvalResult {
@@ -375,12 +447,20 @@ export interface OnboardingEvalResult {
   memberId: string | null;
   steps: StepState[];
   admitted: boolean;
+  /** Public apply state, distinct from active-roster membership. */
+  applyState: ApplyState;
+  /** Public proof that the one-time bearer claim completed. */
+  claimedAt: string | null;
+  /** Approval/activation signal; does not by itself mean onboarding succeeded. */
+  onActiveRoster: boolean;
   timedOut: boolean;
   containerExitCode: number | null;
   // Was the container ever observed to exist? See MemberAgentResult. `null`
   // means the launch watcher could not tell, which is deliberately NOT
   // treated as evidence of anything.
   containerLaunched: boolean | null;
+  /** Active observer failures at the end of the run; classifies as harness-error. */
+  observerError: string | null;
   // ALWAYS populated, including for an admitted run (changed 2026-07-27).
   // Withholding it from successes made the successful and the failed runs of
   // one sweep incomparable: when four samples produced nothing, there was no
@@ -401,8 +481,8 @@ export interface OnboardingEvalResult {
 }
 
 /**
- * Launch one member-agent container, inject the canonical prompt (R4,
- * verbatim aside from the identity placeholders — see module doc comment),
+ * Launch one member-agent container, inject the canonical prompt (R4, with
+ * only its skill URL pointed at this stack — see module doc comment),
  * and observe until the member reaches the active roster ("admitted") or the
  * overall timeout elapses. Never acts on the member's behalf — the only
  * server-side action this function ever takes is the R7 auto-approve, which
@@ -417,7 +497,23 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const autoApproveDelayMs = opts.autoApproveDelayMs ?? DEFAULT_AUTO_APPROVE_DELAY_MS;
-  const log = opts.onEvent ?? (() => {});
+  const telemetry =
+    opts.telemetry ??
+    createOnboardingTelemetry(
+      { composeProject: opts.composeProject, runId: identity.runId, attempt: opts.attempt },
+      opts.onStructuredEvent,
+      [{ value: identity.contact, placeholder: "<contact redacted>" }],
+    );
+  const log = (message: string) => {
+    opts.onEvent?.(message);
+    telemetry.emit({
+      source: "harness",
+      stream: "event",
+      // Contact is useful on the interactive console but is local PII and is
+      // never persisted in structured telemetry.
+      message: redactTelemetryText(message, [{ value: identity.contact, placeholder: "<contact redacted>" }]),
+    });
+  };
 
   const prompt = buildAgentPrompt(identity, apiUrlInternal);
 
@@ -437,9 +533,12 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
   // primitive's own timeout is deliberately not used.
   let memberId: string | null = null;
   let applyState: ApplyState = null;
+  let claimedAt: string | null = null;
   let onActiveRoster = false;
   let admitted = false;
   let timedOut = false;
+  let observerError: string | null = null;
+  const observer = createObserverPollTracker(log);
 
   log(
     `launching member-agent container for ${identity.contact} (model=${modelConfig.model}, ` +
@@ -457,8 +556,12 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     // demoHarnessNote's comment). Never logged, never read back by this
     // harness — the keystore it protects lives and dies inside the container.
     ownerEnv: { [KEYSTORE_PASSPHRASE_ENV]: keystorePassphrase },
+    redactions: [{ value: identity.contact, placeholder: "<contact redacted>" }],
+    composeSpawnEnv: opts.composeSpawnEnv,
     title: `onboarding-eval-${identity.runId}`,
     onEvent: log,
+    telemetry,
+    attempt: opts.attempt,
     observe: async (handle) => {
       const deadline = Date.now() + timeoutMs;
       // Once the container itself has exited, cap how much longer we keep
@@ -470,6 +573,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 
       let approveScheduledForMemberId: string | null = null;
       let containerExitedAt: number | null = null;
+      let lastLoggedApplyState: ApplyState = null;
 
       for (;;) {
         if (handle.exitCode !== null && containerExitedAt === null) {
@@ -478,20 +582,43 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
         }
 
         if (!memberId) {
-          memberId = await findMemberIdByContact(opts.backendUrl, opts.adminToken, identity.contact).catch(() => null);
-          if (memberId) log(`observed server-minted memberId=${memberId} for ${identity.contact} (§11 R2)`);
+          const observedMember = await observer.poll("admin.members", () =>
+            findMemberIdByContact(opts.backendUrl, opts.adminToken, identity.contact),
+          );
+          if (observedMember.ok) memberId = observedMember.value;
+          if (observedMember.ok && memberId) {
+            telemetry.setMemberId(memberId);
+            log(`observed server-minted memberId=${memberId} for ${identity.contact} (§11 R2)`);
+          }
         }
         if (memberId) {
-          applyState = await fetchApplyState(opts.backendUrl, memberId).catch(() => applyState);
+          const observedStatus = await observer.poll("application.status", () =>
+            fetchApplyStatus(opts.backendUrl, memberId!),
+          );
+          const status = observedStatus.ok ? observedStatus.value : null;
+          if (observedStatus.ok && status) {
+            applyState = status.state;
+            claimedAt = status.claimedAt;
+            if (applyState !== lastLoggedApplyState) {
+              lastLoggedApplyState = applyState;
+              log(`observed public application state=${applyState} claimedAt=${claimedAt ? "present" : "absent"}`);
+            }
+          }
           if (applyState === "applied" && approveScheduledForMemberId !== memberId) {
             approveScheduledForMemberId = memberId;
             log(`application ${memberId} applied — auto-approving in ${autoApproveDelayMs}ms (§11 R7)`);
             scheduleAutoApprove(opts.backendUrl, opts.adminToken, memberId, autoApproveDelayMs, log);
           }
-          onActiveRoster = await isOnActiveRoster(opts.backendUrl, memberId).catch(() => onActiveRoster);
+          const observedRoster = await observer.poll("committee.members", () =>
+            isOnActiveRoster(opts.backendUrl, memberId!),
+          );
+          if (observedRoster.ok) onActiveRoster = observedRoster.value;
         }
 
-        if (onActiveRoster) break; // admitted
+        if (
+          observer.persistentError() === null &&
+          isFullyOnboarded({ memberId, applyState, claimedAt, onActiveRoster })
+        ) break;
         if (Date.now() >= deadline) break; // overall timeout
         if (containerExitedAt !== null && Date.now() - containerExitedAt >= postExitGraceMs) break; // nothing left to advance it
 
@@ -499,7 +626,8 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
       }
 
       // Computed BEFORE the primitive kills anything, exactly as before.
-      admitted = onActiveRoster;
+      observerError = observer.persistentError();
+      admitted = observerError === null && isFullyOnboarded({ memberId, applyState, claimedAt, onActiveRoster });
       timedOut = !admitted && Date.now() >= deadline;
     },
   });
@@ -512,9 +640,13 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     memberId,
     steps,
     admitted,
+    applyState,
+    claimedAt,
+    onActiveRoster,
     timedOut,
     containerExitCode: run.exitCode,
     containerLaunched: run.containerLaunched,
+    observerError,
     transcript: run.transcript,
   };
 }
@@ -622,7 +754,7 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
     // lookup the harness relies on to observe progress. The caller's display
     // name survives (see retryIdentity).
     const identity = retryIdentity(opts.identity, attempt);
-    last = await runOnce({ ...opts, identity });
+    last = await runOnce({ ...opts, identity, attempt });
     if (last.admitted) return last;
     const outcome = classifyOutcome(last);
     // The shared, pure decision over the classified outcome, applied whole. A

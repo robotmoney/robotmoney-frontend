@@ -17,6 +17,7 @@
     "preview": "bun scripts/preview-server.ts",
     "goldens:update": "bun scripts/update-goldens.ts",
     "demo": "bun scripts/demo.ts",
+    "eval": "cd evals && EVAL_SUITE_RUN_ID=\"${EVAL_SUITE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}\" bun test",
     "onboarding-eval": "bun scripts/onboarding-eval-local.ts",
     "demo:down": "bun scripts/demo-down.ts",
     "demo:status": "bun scripts/demo-status.ts",

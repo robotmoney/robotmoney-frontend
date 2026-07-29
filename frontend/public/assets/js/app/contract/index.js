@@ -5,6 +5,7 @@
 export { ROUTES, path } from "./routes.js";
 export {
   canonicalizeApplication,
+  buildOnboardingPrompt,
   ONBOARDING_PROMPT,
   COMMITTEE_ONBOARDING_SKILL_URL,
   APPLY_HOW_TO_STEPS,

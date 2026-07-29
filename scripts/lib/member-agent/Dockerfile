@@ -8,7 +8,7 @@
 # installing rmpc, generating keys, building + signing the canonical application
 # payload, submitting it over the REST API — is something the agent inside the
 # container must work out at runtime from the injected canonical prompt
-# (contract's ONBOARDING_PROMPT, injected verbatim by
+# (contract's ONBOARDING_PROMPT text, with the skill URL pointed locally by
 # scripts/lib/onboarding-eval.ts) plus the committee-onboarding skill it
 # installs (D21 — the MCP transport is retired; the agent uses plain HTTP). A
 # failure to figure any of this out is a valid (red) eval result about our
@@ -39,7 +39,7 @@ RUN curl -fsSLo /tmp/opencode.tar.gz \
 # somewhere it can execute rmpc from without root.
 #
 # HOME must agree with that dir. The container runs as root, so without this
-# `~` is /root while PATH advertises /home/agent/.local/bin — and the published
+# `~` is /root while PATH advertises /home/agent/.local/bin — and the repo-owned
 # committee-onboarding skill's own copy-paste install line,
 # `install -m 755 rmpc ~/.local/bin/rmpc`, then puts the binary somewhere PATH
 # does not look. Observed live: the agent ran exactly that line, got

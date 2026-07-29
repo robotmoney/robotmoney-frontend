@@ -879,11 +879,13 @@ retired the MCP transport that previously shared this layer). Reads public
 #### 9.5.1 Member surface — skill-taught, REST-only
 
 A member's agent has nothing RM-hosted to connect to: it calls the REST API
-directly. The **`committee-onboarding` skill** — installed into the agent's own
-harness from `robotmoney-core` (robotmoney-core#1170/#1171; §11 R4/R5) — is the
-procedure a member's owner follows, and is itself the discovery mechanism (its
-content is maintained centrally, so it stays current without any live
-server-side lookup). It teaches installing and configuring the `rmpc` client
+directly. The **`committee-onboarding` skill** — maintained for development and
+evaluation at `frontend/public/skills/committee-onboarding/SKILL.md` and
+installed into the agent's own harness — is the procedure a member's owner
+follows, and is itself the discovery mechanism. The production prompt retains
+the published `robotmoney-core` URL; synchronizing an approved repo-owned skill
+to that release location is a separate release concern, never a prerequisite
+for local evaluation. It teaches installing and configuring the `rmpc` client
 (keygen, canonical-payload signing) and then walks the agent through the REST
 calls (`ROUTES.committee.apply`, `signingPayload`, `submit`, `memos`).
 **Signing stays member-side**: `rmpc` signs the canonical payload in the
@@ -2120,17 +2122,17 @@ Where any other code differs, this section wins.
   Nothing beyond pasting this prompt and answering that one question is required
   of the human at setup time.
 - **R5 — Skill-based discovery.** The **`committee-onboarding` skill** at
-  `plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md` in
-  `robotmoney/robotmoney-core` (robotmoney-core#1170/#1171) is itself the
-  canonical, current statement of the application steps — set up `rmpc`,
+  `frontend/public/skills/committee-onboarding/SKILL.md` is the repo-owned
+  canonical development and evaluation statement of the application steps — set up `rmpc`,
   generate keys, submit the signed application over the REST API, wait for
   approval, then participate — **and** the detailed procedure: setting up the
   owner's agent runtime (Claude Code, OpenClaw, Codex, or OpenCode) and
   installing the `rmpc` binary (from `robotmoney-core`), which manages keygen
   and all signatures. There is no separate discovery tool or endpoint call —
-  the skill is maintained centrally in `robotmoney-core` and is fetched fresh
-  on each install, so the copy-paste prompt never goes stale even though it
-  only ever names the skill, not the steps themselves. (D21 retired the
+  the eval fetches that exact file from its local API container, so uncommitted
+  instruction changes are exercised without waiting for an external publish.
+  Production keeps the existing published `robotmoney-core` URL; vendoring an
+  approved skill there is a separate release process. (D21 retired the
   MCP-server `apply-how-to` tool that previously served this role; the skill
   now carries that property on its own.)
 - **R6 — Setup-gated apply.** An application **cannot complete** unless the owner's
@@ -2158,8 +2160,8 @@ Where any other code differs, this section wins.
   The container is a **vanilla OpenCode install** (D22) running the model
   `AGENT_MODEL` resolves against `scripts/lib/model-registry.ts` — by default
   `opencode/deepseek-v4-flash`, billed to the environment's own
-  `OPENCODE_API_KEY`; `AGENT_MODEL=free` still runs genuinely keyless. There is
-  **no inference-off mode** — an eval always makes a real model call, and a
+  `OPENCODE_API_KEY`. The eval suite requires keyed access and rejects
+  no-credential selections before Docker. There is **no inference-off mode** — an eval always makes a real model call, and a
   missing prerequisite (Docker, egress, or a funded key for a paid model) fails
   loudly rather than passing by absence. The eval's structure, scoring, and
   shared components are §11.3.
@@ -2212,6 +2214,22 @@ Status: target design (D22). R8 makes onboarding an eval; this section specifies
 what that eval is, how it is scored, and which components it shares with
 `bun run demo`. Where any other code differs, this section wins.
 
+The local entrypoint is an eval-only native Bun test suite: `bun run eval`
+discovers files under `evals/`, and Bun's normal path and
+`--test-name-pattern` filters select cases. It is separate from the PR unit
+suite. Every registered definition declares stable metadata, sample count,
+timeout/budget, real `run(context)` execution and `score(results)` semantics.
+Zero selected tests, zero executed samples, red scores and harness/configuration
+errors are all non-zero results. The integrated admission case reuses
+`scripts/onboarding-eval-local.ts`; it does not duplicate stack, observer, agent,
+or telemetry logic.
+
+Suite artifacts live at `.agents/evals/<suite-run-id>/`, with a manifest and
+atomic summary above the existing per-case/sample redacted timelines. The suite,
+eval, sample and model identifiers correlate every retained event. Domain
+outcome remains data in the summary; the Bun verdict records whether the score
+accepted that outcome.
+
 **E1 — Vanilla install; the model is named in versioned source, never ambient.**
 Every layer runs a **vanilla OpenCode install** — no repo-specific harness, no
 pre-seeded state. Which model it runs is resolved from the versioned registry in
@@ -2220,16 +2238,16 @@ the environment's own `OPENCODE_API_KEY`; the repo default is
 `opencode/deepseek-v4-flash`. The **ids live in source**, so the environment
 carries a selector (`deepseek`, `kimi/k2.6`) and never a raw model id, and an
 unknown family or member **throws** rather than falling back — an eval can never
-quietly run a model other than the one it was asked for. A contributor with a
-fresh checkout, Docker, and network egress can still run the entire eval unfunded
-via `AGENT_MODEL=free`, which selects Zen's no-credential tier and ignores any
-key that happens to be set.
+quietly run a model other than the one it was asked for. The executable suite
+requires the single OpenCode credential and a funded registry selection; a
+missing key or no-credential selector fails before Docker and never causes a
+provider probe or model substitution.
 
-This amends E1's original "keyless, no exceptions" mandate, in step with **D22
-rule 1 as amended 2026-07-28** — the pinned free model `opencode/big-pickle` is
-saturated upstream (429 on every probe) with no funded tier to escape to, so the
-keyless mandate was costing the measurement it existed to protect. See D22's
-"Amendment: rule 1" for the full rationale. E2-E4 are unchanged.
+This supersedes E1's original "keyless, no exceptions" mandate and its interim
+optional no-credential mode. The pinned free model was saturated upstream and
+made local iteration slow and misleading; the registry remains the source of
+model identity while funded access is now a harness precondition. E2-E4 are
+unchanged.
 
 **E2 — No inference-off mode.** Every layer makes a real model call. There is no
 mock, no injection seam on the eval's own path, no scripted fallback that performs
@@ -2259,7 +2277,8 @@ cluster: no worker lanes, no EDGAR seed, no frontend checks, no session drivers.
 Layers 1-3 observe by inspecting the **stopped container's filesystem** before
 removal, never by instructing the agent to emit artifacts — adding harness
 instructions would edit the task under test. Layer 4 uses the canonical
-`ONBOARDING_PROMPT` as a **byte-for-byte prefix**, never rewritten: the prompt
+`ONBOARDING_PROMPT` construction as its prefix, changing **only** the skill URL
+to `${apiUrlInternal}/skills/committee-onboarding/SKILL.md`: the prompt
 asks the owner for identity rather than carrying blanks for a harness to
 substitute, so the unattended run answers that question — alongside the existing
 local-network note — in one clearly delimited block appended after the canonical

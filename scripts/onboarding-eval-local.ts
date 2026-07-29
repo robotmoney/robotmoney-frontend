@@ -1,50 +1,31 @@
-// `bun run onboarding-eval` — run ONLY the §11 R8 real-inference onboarding
-// eval, locally, against a throwaway stack.
-//
-// Why it exists: the eval is the required `e2e` gate's most expensive and most
-// failure-prone step, and until this file the only way to exercise it was a
-// full `bun run demo` in CI mode (browser checks, live smoke, Base RPC — tens
-// of minutes, and rate-limit-prone on the shared runner) or a push to `main`.
-// So a broken eval took a full CI cycle per hypothesis. That is how the gate
-// stayed red for five consecutive runs over a container-permission bug and a
-// CLI flag that never existed — neither of which needed a demo stack to find.
-// This boots the `core` stack §11.3 E3 says layer 4 actually needs — postgres
-// and the api, no worker lanes, no EDGAR seed, no frontend — and calls
-// `runOnboardingEval` directly. One admission, ~3-20 minutes end to end.
-//
-// It is a DEVELOPER tool, never a CI gate: nothing in .github/workflows runs
-// it, and it asserts nothing beyond the eval's own result. The eval that gates
-// merges is the one `bun run demo` performs with ONBOARDING_REAL_EVAL=1, off
-// the same `runOnboardingEval` this calls — one implementation, two callers
-// (§11 R8: config-only differences, never a parallel code path).
-//
-// The bring-up is the SHARED scripts/stack module on its `core` profile, the
-// same one scripts/tests/integration/onboarding-eval-infra.test.ts uses — not a
-// fork of it. (§11.3 E5 / D22 "shared components": a second copy of the compose
-// lifecycle is exactly the thing that module exists to delete.)
-//
-// Usage (needs docker + OPENCODE_API_KEY, or AGENT_MODEL=free for a keyless run):
-//
-//   OPENCODE_API_KEY=… bun run onboarding-eval
-//   AGENT_MODEL=kimi bun run onboarding-eval --project rmeval_kimi_1 --keep
-//
-// Flags:
-//   --project <name>  compose project name (default: the environment-scoped
-//                     rm_demo_eval_<hash>, or rm_ci_eval_<hash> under Actions)
-//   --keep            leave the stack up afterwards (prints the teardown command)
-//
-// Co-tenancy: this host also runs the self-hosted CI runner and the standing
-// stage demo. Both published ports are assigned by DOCKER (the compose files
-// publish container ports only — scripts/stack/ports.ts explains why the
-// daemon's atomic choose-and-bind beats drawing one ourselves) and the default
-// project name carries this environment's class + hash
-// (scripts/stack/naming.ts), so a local run can never collide with a CI run,
-// with another local run, or with the standing demo — and anything it leaks is
-// attributable to THIS environment by container label. Teardown removes this
-// run's volumes, this run's member-agent containers, and nothing else.
+// Reusable §11 R8 real-inference admission case. `bun run eval` is the
+// canonical suite entrypoint; `bun run onboarding-eval` remains as a thin,
+// backwards-compatible one-case entrypoint.
+import { join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
 import { makeDockerRunner, purgeDemoEvalContainers } from "./lib/demo-volumes.ts";
-import { runOnboardingEval } from "./lib/onboarding-eval.ts";
+import {
+  buildAgentPrompt,
+  classifyOutcome,
+  DEFAULT_AUTO_APPROVE_DELAY_MS,
+  DEFAULT_POLL_INTERVAL_MS,
+  DEFAULT_TIMEOUT_MS,
+  generateIdentity,
+  LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH,
+  runOnboardingEval,
+  type OnboardingEvalResult,
+  type ModelConfig,
+} from "./lib/onboarding-eval.ts";
+import { isKeylessModel, resolveAgentModel } from "./lib/model-registry.ts";
+import { ZEN_KEY_ENV, zenApiKey } from "./lib/opencode-key.ts";
+import {
+  createOnboardingArtifactWriter,
+  createOnboardingTelemetry,
+  redactTelemetryText,
+  startComposeServiceLogFollower,
+  type ComposeServiceLogFollower,
+  type OnboardingEvent,
+} from "./lib/onboarding-telemetry.ts";
 import {
   createStack,
   DEFAULT_COMPOSE_FILES,
@@ -55,83 +36,263 @@ import {
   STAGE_WEB_PORT,
 } from "./stack/index.ts";
 
-const repoRoot = new URL("..", import.meta.url).pathname;
-const argv = Bun.argv.slice(2);
-const keep = argv.includes("--keep");
-const projectArg = argv.indexOf("--project");
-// Resolved ONCE: the local hash is per-boot random, so a second call would
-// describe a different environment than the one the containers are labelled with.
-const stackEnvironment = resolveStackEnvironment(process.env);
-const project = projectArg >= 0 ? argv[projectArg + 1]! : stackProjectName("eval", stackEnvironment);
+export interface AdmissionEvalCaseOptions {
+  repoRoot?: string;
+  env?: Record<string, string | undefined>;
+  keep?: boolean;
+  project?: string;
+  suiteRunId?: string;
+  evalId?: string;
+  sampleId?: string;
+}
 
+export interface AdmissionEvalCaseResult {
+  admitted: boolean;
+  outcome: string | null;
+  durationMs: number;
+  model: string;
+  artifactDirectory: string;
+  result: OnboardingEvalResult | null;
+}
+
+/** Keyed evals never probe or silently substitute a no-credential model. */
+export function resolveAdmissionEvalModelConfig(env: Record<string, string | undefined>): ModelConfig {
+  const model = resolveAgentModel(env);
+  if (isKeylessModel(model)) {
+    throw new Error(
+      "Real-inference evals require OPENCODE_API_KEY and a funded AGENT_MODEL selection; no-credential models are not an eval fallback.",
+    );
+  }
+  const apiKey = zenApiKey(env);
+  if (!apiKey) {
+    throw new Error(
+      "Real-inference evals require OPENCODE_API_KEY before Docker; configure the keyed eval environment. No free-model probe or fallback will be attempted.",
+    );
+  }
+  return { model, apiKeyEnv: ZEN_KEY_ENV, apiKey, keyless: false };
+}
+
+export async function runAdmissionEvalCase(options: AdmissionEvalCaseOptions = {}): Promise<AdmissionEvalCaseResult> {
+const repoRoot = options.repoRoot ?? new URL("..", import.meta.url).pathname;
+const env = options.env ?? process.env;
+// This preflight is intentionally before credentials, stack construction, and
+// every Docker call.
+const modelConfig = resolveAdmissionEvalModelConfig(env);
+const keep = options.keep ?? false;
+const stackEnvironment = resolveStackEnvironment(env);
+const project = options.project ?? stackProjectName("eval", stackEnvironment);
+const identity = generateIdentity(options.sampleId);
+const selectedModel = modelConfig.model;
+const prompt = buildAgentPrompt(identity);
+const skillPath = join(repoRoot, "frontend", "public", LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH);
+const artifacts = createOnboardingArtifactWriter({
+  repoRoot,
+  composeProject: project,
+  runId: identity.runId,
+  model: selectedModel,
+  contact: identity.contact,
+  prompt,
+  skillPath,
+  timeoutMs: DEFAULT_TIMEOUT_MS,
+  pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
+  autoApproveDelayMs: DEFAULT_AUTO_APPROVE_DELAY_MS,
+  suiteRunId: options.suiteRunId,
+  evalId: options.evalId,
+  sampleId: options.sampleId,
+});
+
+function renderLive(event: OnboardingEvent): void {
+  // Harness milestones retain their established `[eval]` console rendering via
+  // onEvent below. Agent and service streams are the newly-live evidence.
+  if (event.source === "agent" && event.stream !== "event") {
+    console.log(`[eval][agent:${event.stream}] ${event.message}`);
+  } else if (event.source === "api" || event.source === "postgres" || event.source === "compose") {
+    console.log(`[eval][${event.source}:${event.stream}] ${event.message}`);
+  }
+}
+
+const telemetry = createOnboardingTelemetry(
+  {
+    composeProject: project,
+    runId: identity.runId,
+    suiteRunId: options.suiteRunId,
+    evalId: options.evalId,
+    sampleId: options.sampleId,
+    model: selectedModel,
+  },
+  (event) => {
+    artifacts.sink(event);
+    renderLive(event);
+  },
+  [{ value: identity.contact, placeholder: "<contact redacted>" }],
+);
 const credentials = generateStackCredentials();
 const stack = createStack(
   {
     repoRoot,
     project,
     profile: "core",
-    // No host ports: DEFAULT_COMPOSE_FILES publishes container ports only and
-    // the daemon picks the host side. They are read back from `up()`.
     composeFiles: DEFAULT_COMPOSE_FILES,
     database: DEFAULT_STACK_DATABASE,
     credentials,
     environment: stackEnvironment,
   },
-  { hostEnv: process.env, io: { stdout: "inherit", stderr: "inherit" } },
+  {
+    hostEnv: env,
+    io: { stdout: "inherit", stderr: "inherit" },
+    hooks: {
+      onEvent(event) {
+        telemetry.emit({
+          source: "harness",
+          stream: "event",
+          message:
+            event.phase === "log"
+              ? event.message
+              : `stack ${event.phase} ${event.status}${event.detail ? `: ${event.detail}` : ""}`,
+        });
+      },
+    },
+  },
 );
 
 console.log(`[eval] project=${project} env=${stackEnvironment.class}/${stackEnvironment.hash}`);
-// Throws (never skips) on a missing/unusable Docker daemon, a postgres that
-// never becomes ready, a failed migration, or a /health that never answers.
-const { apiPort, pgPort } = await stack.up();
-console.log(`[eval] host ports (Docker-assigned): api=${apiPort} pg=${pgPort}`);
-if (apiPort === STAGE_WEB_PORT) {
-  // Docker draws from the host's ephemeral range, which CONTAINS 48787, so
-  // this is possible whenever no stage demo is holding it. The eval must never
-  // occupy the cloudflared origin — tear the stack straight back down rather
-  // than run a 3-20 minute admission on top of the stage hostname.
-  stack.down({ removeVolumes: true, removeOrphans: true });
-  throw new Error(
-    `Docker published the api on ${STAGE_WEB_PORT}, the stage tunnel origin; stack torn down. Re-run — ` +
-      `the daemon picks a different port next time.`,
-  );
-}
-await stack.waitForHttp(`${stack.backendUrl}${ROUTES.committee.members}`, 30_000);
-await stack.build(["member-agent"]);
+console.log(`[eval] artifacts=${artifacts.directory}`);
+telemetry.emit({ source: "harness", stream: "event", message: `eval starting with model=${selectedModel}` });
 
 const started = Date.now();
 let admitted = false;
+let result: OnboardingEvalResult | null = null;
+let outcome: string | null = null;
+let failure: unknown = null;
+let follower: ComposeServiceLogFollower | null = null;
+const cleanup: Record<string, unknown> = {};
+
 try {
-  const result = await runOnboardingEval({
+  const { apiPort, pgPort } = await stack.up();
+  console.log(`[eval] host ports (Docker-assigned): api=${apiPort} pg=${pgPort}`);
+  if (apiPort === STAGE_WEB_PORT) {
+    throw new Error(
+      `Docker published the api on ${STAGE_WEB_PORT}, the stage tunnel origin; refusing to run the eval on it.`,
+    );
+  }
+  await stack.waitForHttp(`${stack.backendUrl}${ROUTES.committee.members}`, 30_000);
+  await stack.build(["member-agent"]);
+
+  // Follow only after readiness, so startup/build chatter cannot bury the
+  // agent/API exchange this artifact is intended to diagnose.
+  follower = startComposeServiceLogFollower({
+    repoRoot,
+    composeProject: project,
+    composeFiles: DEFAULT_COMPOSE_FILES,
+    spawnEnv: stack.spawnEnv,
+    telemetry,
+    redactions: [{ value: identity.contact, placeholder: "<contact redacted>" }],
+  });
+  telemetry.emit({ source: "harness", stream: "event", message: "api/postgres log follower started" });
+
+  result = await runOnboardingEval({
     repoRoot,
     composeProject: project,
     composeFiles: DEFAULT_COMPOSE_FILES,
     backendUrl: stack.backendUrl,
     adminToken: credentials.adminToken,
-    onEvent: (m) => console.log(`[eval] ${m}`),
+    composeSpawnEnv: stack.spawnEnv,
+    identity,
+    env,
+    telemetry,
+    onEvent: (message) => console.log(`[eval] ${message}`),
   });
   admitted = result.admitted;
+  outcome = classifyOutcome(result);
+  telemetry.emit({ source: "harness", stream: "event", message: `classifier outcome=${outcome}` });
   console.log(
     `\n[eval] admitted=${result.admitted} timedOut=${result.timedOut} ` +
       `containerExit=${result.containerExitCode} elapsed=${Math.round((Date.now() - started) / 1000)}s`,
   );
-  // Always present, admitted or not (an admitted run's transcript is what a
-  // failed one gets diffed against). Already redacted of every secret this
-  // process injected — see scripts/agent/member-agent.ts's redactSecrets.
-  // Printing it is the whole point of running locally.
+  // Kept for backwards compatibility and convenient copying. It is assembled
+  // from the same redacted records already written live above.
   if (result.transcript) console.log(`\n[eval] container transcript:\n${result.transcript}`);
+} catch (error) {
+  failure = error;
+  const message = redactTelemetryText(error instanceof Error ? error.message : String(error));
+  telemetry.emit({ source: "harness", stream: "event", message: `eval failed: ${message}` });
+  console.error(`[eval] ${message}`);
 } finally {
-  // A member-agent container outlives its `docker compose run` CLI when that
-  // CLI is killed (see memberAgentContainerName's comment), and `down` does not
-  // reach one-shot `run` containers. Scoped to THIS project.
+  // Stop and fully drain the follower before any service is torn down.
+  if (follower) {
+    try {
+      const stopped = await follower.stop();
+      cleanup.logFollowerExitCode = stopped.exitCode;
+      telemetry.emit({ source: "cleanup", stream: "event", message: `service log follower stopped (exit ${stopped.exitCode})` });
+    } catch (error) {
+      cleanup.logFollowerError = redactTelemetryText(error instanceof Error ? error.message : String(error));
+      telemetry.emit({ source: "cleanup", stream: "event", message: `service log follower stop failed: ${cleanup.logFollowerError}` });
+    }
+  }
+
   try {
     purgeDemoEvalContainers(makeDockerRunner(stack.spawnEnv), { project });
-  } catch (e) {
-    console.error(`[eval] eval-container purge failed: ${e instanceof Error ? e.message : String(e)}`);
+    cleanup.evalContainersPurged = true;
+    telemetry.emit({ source: "cleanup", stream: "event", message: "eval containers purged" });
+  } catch (error) {
+    cleanup.evalContainersPurged = false;
+    cleanup.evalContainerPurgeError = redactTelemetryText(error instanceof Error ? error.message : String(error));
+    telemetry.emit({ source: "cleanup", stream: "event", message: `eval-container purge failed: ${cleanup.evalContainerPurgeError}` });
   }
-  if (keep) console.log(`\n[eval] --keep: tear down with:\n  docker compose -p ${project} down --volumes --remove-orphans`);
-  else stack.down({ removeVolumes: true, removeOrphans: true });
+
+  if (keep) {
+    cleanup.stack = "kept";
+    console.log(`\n[eval] --keep: tear down with:\n  docker compose -p ${project} down --volumes --remove-orphans`);
+  } else {
+    const down = stack.down({ removeVolumes: true, removeOrphans: true });
+    cleanup.stack = down.exitCode === 0 ? "removed" : "remove-failed";
+    cleanup.stackDownExitCode = down.exitCode;
+    telemetry.emit({ source: "cleanup", stream: "event", message: `stack teardown exit=${down.exitCode}` });
+    if (down.exitCode !== 0) console.error(`[eval] stack teardown failed: ${redactTelemetryText(down.stderr)}`);
+  }
+
+  artifacts.finish({
+    version: 1,
+    finishedAt: new Date().toISOString(),
+    durationMs: Date.now() - started,
+    admitted,
+    outcome,
+    ...(result
+      ? {
+          timedOut: result.timedOut,
+          memberId: result.memberId,
+          applyState: result.applyState,
+          claimedAt: result.claimedAt,
+          onActiveRoster: result.onActiveRoster,
+          steps: result.steps,
+          containerExitCode: result.containerExitCode,
+          containerLaunched: result.containerLaunched,
+        }
+      : {}),
+    ...(failure
+      ? { error: redactTelemetryText(failure instanceof Error ? failure.message : String(failure)) }
+      : {}),
+    cleanup,
+  });
 }
-// Non-zero on a failed admission so this is usable in a loop, matching how
-// scripts/lib/demo-main.ts treats the same result.
-process.exit(admitted ? 0 : 1);
+
+if (failure) throw failure;
+return {
+  admitted,
+  outcome,
+  durationMs: Date.now() - started,
+  model: selectedModel,
+  artifactDirectory: artifacts.directory,
+  result,
+};
+}
+
+if (import.meta.main) {
+  const argv = Bun.argv.slice(2);
+  const projectArg = argv.indexOf("--project");
+  const result = await runAdmissionEvalCase({
+    keep: argv.includes("--keep"),
+    project: projectArg >= 0 ? argv[projectArg + 1] : undefined,
+  });
+  process.exitCode = result.admitted ? 0 : 1;
+}

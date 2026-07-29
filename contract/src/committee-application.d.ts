@@ -7,6 +7,8 @@ export interface CommitteeApplication {
 
 export function canonicalizeApplication(a: CommitteeApplication): string;
 
+export function buildOnboardingPrompt(skillUrl?: string): string;
+
 export const ONBOARDING_PROMPT: string;
 
 export const COMMITTEE_ONBOARDING_SKILL_URL: string;

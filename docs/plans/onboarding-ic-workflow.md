@@ -105,8 +105,9 @@ container to depend on:
 
 - **Member container**: a vanilla OpenCode agent image (no Robot Money tooling
   preinstalled) added to `docker-compose.demo.yml`, one instance per admission,
-  with egress to the demo **API** container, the `robotmoney-core` release
-  assets (`rmpc` download **and** the `committee-onboarding` skill), and the
+  with egress to the demo **API** container, the `robotmoney-core` `rmpc`
+  release asset, the repo-owned `committee-onboarding` skill served by the API
+  from `frontend/public/skills/committee-onboarding/SKILL.md`, and the
   model API. Real inference on a **vanilla OpenCode install** running a funded,
   registry-selected model (D22 rule 1 as amended 2026-07-28): the model is chosen
   by the single `AGENT_MODEL` signal resolved against
@@ -115,9 +116,9 @@ container to depend on:
   only the selector. `AGENT_MODEL=free` remains a genuinely keyless path.
 - **Harness**: for each scheduled admission, `onboardingDriver()`
   (`scripts/lib/demo-main.ts:1295+`) generates an identity, starts the
-  container, and injects the canonical copy-paste prompt verbatim (same text as
-  the participation quickstart — sourced from the contract constant, not
-  duplicated). No further interaction: the agent must install the
+  container, and injects the canonical copy-paste prompt with only the skill
+  URL pointed at that local static file (all other text is sourced from the
+  contract, not duplicated). No further interaction: the agent must install the
   `committee-onboarding` skill, install `rmpc`, keygen, and submit the signed
   application over the REST API on its own.
 - **Observation**: the strip's step states come from the outside — the public
@@ -172,8 +173,9 @@ Per the test-coverage invariants (loud-skip only, executed-in-CI assertions):
 ## Phase 6 — Deployment/provisioning
 
 - Demo: no `mcp` container in `docker-compose.demo.yml` (D21) — the member
-  containers need egress to the demo **API** container and the
-  `robotmoney-core` release assets (skill + `rmpc`), not a demo MCP surface.
+  containers need egress to the demo **API** container (which serves the
+  repo-owned skill) and the `robotmoney-core` `rmpc` release asset, not a demo
+  MCP surface or a remotely published development skill.
 - Staging: nothing to provision for onboarding specifically — the copy-paste
   prompt is exercised against `committee.<staging-domain>`'s existing REST API,
   the same surface everything else on staging already uses. (D18's `mcp.`
@@ -183,12 +185,10 @@ Per the test-coverage invariants (loud-skip only, executed-in-CI assertions):
 
 ## Cross-repo dependencies (robotmoney-core)
 
-- #1170/#1171: the `committee-onboarding` skill must teach (a) installing
-  itself into the agent's harness as the first onboarding step, (b) installing
-  and configuring the `rmpc` client (keygen, canonical-payload signing), and
-  (c) applying via the REST API using the `rmpc`-signed payload — no MCP tool
-  or MCP-access setup step, and no separate prove-setup step or pre-issued
-  applicant id (D21).
+- The onboarding skill is no longer a development dependency on
+  `robotmoney-core`: its canonical eval copy lives in this repo. Publishing an
+  approved copy externally is a separate vendoring/release process and is out
+  of scope for this phase.
 - `rmpc`: confirm the pinned release (v0.3.2 per `scripts/rmpc-release-e2e.ts:31`)
   can sign the canonical application payload byte-exactly; if a new subcommand or
   release is needed, it gates Phases 1 and 4.
