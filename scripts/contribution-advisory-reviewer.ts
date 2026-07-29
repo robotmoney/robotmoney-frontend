@@ -114,7 +114,7 @@ export async function reviewContributionDiff(
   let processHandle: ReturnType<typeof Bun.spawn>;
   try {
     processHandle = Bun.spawn(
-      [bin, "run", prompt, "--model", model, "--format", "json", "--dangerously-skip-permissions"],
+      [bin, "run", prompt, "--model", model, "--format", "json", "--auto"],
       { cwd: isolatedWorkingDirectory, stdout: "pipe", stderr: "pipe" },
     );
   } catch (error) {
