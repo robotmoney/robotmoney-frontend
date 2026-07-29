@@ -29,6 +29,15 @@ export function stanceFor(composite: number, bias?: number): { stance: Stance; c
 
 export type MemberStatus = "active" | "inactive" | "applied";
 
+export interface CommitteeWaitlistEntry {
+  id: string;
+  email: string;
+  emailNorm: string;
+  createdAt: string;
+  notifiedAt: string | null;
+  source: string | null;
+}
+
 export interface CommitteeMember {
   id: string;
   status: MemberStatus;

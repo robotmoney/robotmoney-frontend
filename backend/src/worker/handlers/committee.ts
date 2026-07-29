@@ -34,3 +34,10 @@ export async function sendActivationNotification(payload: Record<string, unknown
   if (!outboxId) throw new Error("committee activation notification requires outboxId");
   return deliverCommitteeNotification(outboxId);
 }
+
+export async function sendSeatOpenNotification(payload: Record<string, unknown>): Promise<unknown> {
+  const outboxId = String(payload.outboxId ?? "");
+  if (!outboxId) throw new Error("committee seat open notification requires outboxId");
+  return deliverCommitteeNotification(outboxId);
+}
+
