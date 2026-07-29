@@ -74,7 +74,7 @@ describe("applyForm: roster-full waitlist capture (issue #245 AC2)", () => {
     expect(f.seatsOpen()).toBe(0);
   });
 
-  test("joinWaitlist(): empty email is a no-op; a real email captures interest and marks waitlisted", () => {
+  test("joinWaitlist(): empty email is a no-op; a real email captures interest via POST and falls back to mailto on error", async () => {
     const savedWindow = (globalThis as any).window;
     (globalThis as any).window = { location: { href: "" } };
     try {
@@ -82,12 +82,13 @@ describe("applyForm: roster-full waitlist capture (issue #245 AC2)", () => {
       f.seats = { filled: 10, cap: 10 };
 
       f.waitEmail = "   ";
-      f.joinWaitlist();
+      await f.joinWaitlist();
       expect(f.waitlisted).toBe(false);
       expect((globalThis as any).window.location.href).toBe("");
 
+      // Test offline/error fallback to mailto
       f.waitEmail = "operator@example.test";
-      f.joinWaitlist();
+      await f.joinWaitlist();
       expect(f.waitlisted).toBe(true);
       const href = (globalThis as any).window.location.href as string;
       expect(href.startsWith("mailto:hi@robotmoney.net")).toBe(true);
