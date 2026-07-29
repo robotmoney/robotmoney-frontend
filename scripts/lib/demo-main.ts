@@ -20,10 +20,19 @@ import {
   allocatePorts,
   createStack,
   DEFAULT_STACK_DATABASE,
+  describePortHolders,
+  ENV_CLASS_COMPOSE_VAR,
+  ENV_HASH_COMPOSE_VAR,
   generateStackCredentials,
   hostBackendUrl,
   internalDatabaseUrl,
-  parsePort,
+  makeCommandRunner,
+  PortUnavailableError,
+  resolveStackEnvironment,
+  stackPortRequests,
+  stackProjectName,
+  stalePortEnvWarnings,
+  STAGE_WEB_PORT,
   type StackConfig,
   type StackEvent,
 } from "../stack/index.ts";
@@ -38,34 +47,88 @@ const stateFile = join(repoRoot, ".agents", "demo-state.json");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // --- Run config -----------------------------------------------------------
-// Host ports for api AND postgres. The api port prefers the stable
-// cloudflared-facing default (48787 — the same default docker-compose falls
-// back to, and what the host tunnel routes robotmonet.net to) so a standing
-// demo is reachable over the tunnel without extra config; if the default is
-// already taken (another demo up), it falls back to a random free one.
+// HOST PORTS ARE ALWAYS RANDOM. Both published ports (api and postgres) are
+// drawn free at boot on every single run. There is no pinned default left
+// anywhere: docker-compose.yml's port lines are `${VAR:?…}` (loud refusal, no
+// fallback), `.env.example` no longer ships WEB_PORT/POSTGRES_PORT, and the
+// env-pin INPUT path that used to live right here is gone.
+//
+// Why (the full rationale is in scripts/stack/ports.ts's header): the api port
+// used to PREFER 48787 and either port could be pinned from the environment.
+// The operator's gitignored `.env` pinned both — so nothing was ever randomized
+// locally — while CI, which has no `.env`, took the preferred-48787 path and
+// raced the standing stage demo for the exact port cloudflared routes
+// stage.robotmoney-labs.dev to. That was a real outage, not a hypothetical.
 // (D21 retired the member-facing MCP server — there is no longer an `mcp`
-// container or host port; members reach the committee REST API on the api
-// port.)
+// container or host port; members reach the committee REST API on the api port.)
 //
-// Postgres has NO preferred default: a dev box often already has postgres on
-// :5432, and nothing external routes to the demo's pg (api/worker reach it over
-// the compose network by service name), so its host port is always random.
-//
-// Both can still be PINNED via env (WEB_PORT/POSTGRES_PORT), which is honored
-// as-is. Every returned socket is held open until both are chosen, then closed
-// together, so no two draws collide (scripts/stack/ports.ts owns that property
-// now; the env reads for the pin knobs stay HERE, in the entrypoint, which is
-// the point of the split — the shared module never touches process.env).
-const fixedApiPort = parsePort("WEB_PORT", process.env.WEB_PORT);
-const fixedPgPort = parsePort("POSTGRES_PORT", process.env.POSTGRES_PORT);
-const [apiPort, pgPort] = (await allocatePorts([
-  { fixed: fixedApiPort, preferred: 48787 },
-  { fixed: fixedPgPort },
-])) as [number, number];
+// THE ONE EXCEPTION: `bun run demo -- --stage` pins the WEB port (only) to
+// 48787, the tunnel origin. It is a CLI ARGUMENT, never an env var — the same
+// hard rule `--pg-data` follows (no per-property env config) — because pinning
+// the tunnel port is a property of one deliberate invocation, never of a shell
+// that happens to have something exported. It FAILS LOUDLY when the port is
+// held rather than falling back, because cloudflared routes 48787 and nothing
+// else: a fallback would produce a green boot serving a 502.
+const stageMode = process.argv.includes("--stage");
+
+// Loud, never silent. A stale `.env` (or an exported shell var) carrying
+// WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
+// rather than letting an operator believe a pin took effect.
+for (const warning of stalePortEnvWarnings(process.env)) console.warn(`[demo] ${warning}`);
+
+if (stageMode) {
+  console.warn(
+    `[demo] ############################################################\n` +
+      `[demo] # --stage: the web/api host port is PINNED to ${STAGE_WEB_PORT}.\n` +
+      `[demo] # This is the ONE fixed port in the system — cloudflared routes\n` +
+      `[demo] # stage.robotmoney-labs.dev to it and to nothing else. Only one\n` +
+      `[demo] # stack can hold it at a time, so do not run --stage alongside\n` +
+      `[demo] # another --stage boot or CI's demo. Postgres (and every other\n` +
+      `[demo] # published port) stays RANDOM even under --stage.\n` +
+      `[demo] ############################################################`,
+  );
+}
+
+// Every returned socket is held open until both ports are chosen, then closed
+// together, so no two draws can collide (scripts/stack/ports.ts owns that
+// property). A held stage port is a hard stop with a named culprit — never a
+// silent fallback.
+async function allocateHostPorts(): Promise<[number, number]> {
+  try {
+    const [api, pg] = await allocatePorts(stackPortRequests({ stage: stageMode }));
+    return [api!, pg!];
+  } catch (err) {
+    if (err instanceof PortUnavailableError) {
+      console.error(`[demo] FATAL: ${err.message}`);
+      console.error(`[demo] what currently holds :${err.port}:`);
+      console.error(describePortHolders(err.port, makeCommandRunner(process.env)));
+      console.error(
+        `[demo] NOT falling back to a random port: cloudflared routes only :${STAGE_WEB_PORT}, so a\n` +
+          `[demo] fallback would boot green and serve a 502 to every visitor. Free the port\n` +
+          `[demo] (e.g. \`bun run demo:down\` for a standing demo) and re-run, or drop --stage\n` +
+          `[demo] to boot on a random port with no tunnel.`,
+      );
+      process.exit(1);
+    }
+    throw err;
+  }
+}
+const [apiPort, pgPort] = await allocateHostPorts();
+
+// WHICH ENVIRONMENT this boot belongs to (scripts/stack/naming.ts): `ci` under
+// GitHub Actions with a hash of the workflow/run/attempt/job quadruple (stable
+// for every step of one job), `local` with a per-boot random hash otherwise.
+// It drives BOTH the compose project name and the labels every container and
+// volume carries, so a leaked container is attributable to the environment that
+// created it instead of being unreapable on a host shared by the stage demo,
+// the CI runner and local evals.
+const stackEnvironment = resolveStackEnvironment(process.env);
 // Pin the compose project name when DEMO_PROJECT is set (re-runs reuse/tear down the
-// same containers); otherwise a fresh random project per run. dockerEnv sets
-// DEMO_PROJECT=project either way, so the compose label stays consistent.
-const project = process.env.DEMO_PROJECT?.trim() || `rmdemo_${crypto.randomUUID().slice(0, 8)}`;
+// same containers); otherwise the environment-scoped default, e.g.
+// `rm_demo_stack_9f2a1c4b7d` locally or `rm_ci_stack_…` under Actions.
+// dockerEnv sets DEMO_PROJECT=project either way, so the compose label stays
+// consistent.
+const project = process.env.DEMO_PROJECT?.trim() || stackProjectName("stack", stackEnvironment);
 // The baked-in demo database credentials and the two derived URLs now come from
 // the shared stack config (scripts/stack/config.ts), which carries the
 // "127.0.0.1, never localhost" rationale for backendUrl. DB_USER/DB_PASSWORD/
@@ -209,6 +272,13 @@ const dockerEnv: Record<string, string> = {
   COMPOSE_PROJECT_NAME: project,
   COMPOSE_FILE: composeFilesRun,
   DEMO_PROJECT: project,
+  // Environment labels (scripts/stack/naming.ts) — docker-compose.demo.yml
+  // stamps these on every service and on the pgdata volume so a reaper can
+  // select by label instead of by name substring. Set here as well as in
+  // buildComposeEnv because this map drives the direct `docker compose` calls
+  // below, which do not go through the shared stack's spawn env.
+  [ENV_CLASS_COMPOSE_VAR]: stackEnvironment.class,
+  [ENV_HASH_COMPOSE_VAR]: stackEnvironment.hash,
   DATABASE_URL: databaseUrl,
   // Guards the /admin task-queue dashboard (X-Admin-Token). Passed to the api
   // container via docker-compose's `ADMIN_TOKEN: ${ADMIN_TOKEN:-}` line. Random
@@ -238,6 +308,7 @@ const demoStackConfig: StackConfig = {
   composeFiles: composeFilesRun.split(":"),
   database,
   credentials,
+  environment: stackEnvironment,
   extraComposeEnv: { ...demoEnv.composeEnv, ...demoPassthroughEnv(process.env) },
 };
 
@@ -410,13 +481,17 @@ function unpatchConsole(): void {
   console.log = origConsole.log; console.error = origConsole.error; console.warn = origConsole.warn;
 }
 
-// Annotate pinned ports/project with "(fixed)" so the operator can see at a glance
-// which host ports came from env (the stable-cloudflared-origin path) vs random.
+// One line naming the run's identity: the compose project (annotated "(fixed)"
+// when DEMO_PROJECT overrode the environment-scoped default), the environment
+// class + hash that every container label carries, and the two host ports.
+// The api port is annotated STAGE-PINNED when --stage claimed the tunnel origin
+// — the ONLY way a port here is ever anything but random.
 const fx = (isFixed: boolean) => (isFixed ? " (fixed)" : "");
 log(
   `project=${project}${fx(Boolean(process.env.DEMO_PROJECT?.trim()))}  ` +
-    `api=:${apiPort}${fx(fixedApiPort !== undefined)}  ` +
-    `pg=:${pgPort}${fx(fixedPgPort !== undefined)}`,
+    `env=${stackEnvironment.class}/${stackEnvironment.hash}  ` +
+    `api=:${apiPort}${stageMode ? " (STAGE-PINNED — cloudflared origin)" : ""}  ` +
+    `pg=:${pgPort}`,
 );
 log(
   `data path: LIVE (production parity — Base RPC ${demoEnv.baseRpcUrl ?? "config default https://mainnet.base.org"}, ` +
@@ -512,6 +587,15 @@ function writeStateFile(): void {
     project,
     apiPort,
     pgPort,
+    // Was the web port PINNED by `--stage`? Recorded so demo:down / demo:status
+    // reconstruct the same env (and so `demo:status` can say out loud that this
+    // demo is the one the tunnel points at). Ports themselves are read back
+    // from apiPort/pgPort — this flag is provenance, not a second source.
+    stage: stageMode,
+    // The environment this boot belongs to, so the container/volume labels
+    // demo:down and demo:status interpolate match the ones `up` stamped.
+    envClass: stackEnvironment.class,
+    envHash: stackEnvironment.hash,
     composeFiles: composeFilesBase,
     databaseUrl,
     dbUser: DB_USER,

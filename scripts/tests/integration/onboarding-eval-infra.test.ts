@@ -46,7 +46,10 @@ import {
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
   generateStackCredentials,
+  resolveStackEnvironment,
+  stackProjectName,
   type Stack,
+  type StackEnvironment,
 } from "../../stack/index.ts";
 import { makeDockerRunner, purgeDemoEvalContainers } from "../../lib/demo-volumes.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -69,19 +72,32 @@ const TEST_TIMEOUT_MS = 2 * 60_000;
 // in the beforeAll below.
 let stack: Stack | null = null;
 
+// This file's environment identity (scripts/stack/naming.ts) — `ci`/<job hash>
+// under Actions, `local`/<random> otherwise. Computed inside a FUNCTION, not at
+// module scope, to hold the "declaration only at module scope" rule below.
+function infraEnvironment(): StackEnvironment {
+  return resolveStackEnvironment(process.env);
+}
+
 // A stack pointed at a daemon that cannot exist. Constructing it is free
 // (createStack spawns nothing); only assertDockerAvailable() touches Docker.
+// It still gets a real environment-scoped name so nothing in this repo mints an
+// unlabelled ad-hoc project name, and a `_unreachable` suffix so it can never
+// be confused with the real bring-up below inside one CI job (where the env
+// hash is by design identical for both).
 function unreachableDaemonStack(): Stack {
+  const environment = infraEnvironment();
   return createStack(
     {
       repoRoot,
-      project: "rm_onboarding_infra_unreachable",
+      project: `${stackProjectName("infra", environment)}_unreachable`,
       profile: "core",
       apiPort: 1,
       pgPort: 2,
       composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
       credentials: generateStackCredentials(),
+      environment,
     },
     { hostEnv: { PATH: process.env.PATH, DOCKER_HOST: "tcp://127.0.0.1:1" } },
   );
@@ -100,16 +116,21 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     // verification, never touches the job queue, so booting the worker images
     // would only slow this "fast, cheap" check down for nothing. (D21: no mcp
     // service — the committee surface is the api's REST API.)
+    const environment = infraEnvironment();
     stack = createStack(
       {
         repoRoot,
-        project: `rm_onboarding_infra_${crypto.randomUUID().slice(0, 8)}`,
+        // Environment-scoped (rm_ci_infra_<job hash> / rm_demo_infra_<random>)
+        // so a container this check leaks on the shared self-hosted runner is
+        // attributable to the job that leaked it, by label as well as by name.
+        project: stackProjectName("infra", environment),
         profile: "core",
         apiPort: apiPort!,
         pgPort: pgPort!,
         composeFiles: DEFAULT_COMPOSE_FILES,
         database: DEFAULT_STACK_DATABASE,
         credentials: generateStackCredentials(),
+        environment,
       },
       { hostEnv: process.env, io: { stdout: "pipe", stderr: "pipe" } },
     );

@@ -104,10 +104,14 @@ describe("copyablePrompt: the base-URL fact the canonical prompt cannot carry (i
     expect(copyablePrompt("PROMPT", undefined as unknown as string)).toBe("PROMPT");
   });
 
+  // A deliberately ARBITRARY high port, not 48787: demo host ports are drawn
+  // free on every run, so an off-production origin is whatever this boot got.
+  // (48787 as a fixture would quietly re-teach "the demo port" — the exact
+  // assumption that raced the stage tunnel.)
   test("off-production origin → the host's base URL is appended, prompt kept as the prefix", () => {
-    const out = copyablePrompt("PROMPT", "http://localhost:48787");
+    const out = copyablePrompt("PROMPT", "http://localhost:53127");
     expect(out.startsWith("PROMPT")).toBe(true);
-    expect(out).toBe("PROMPT Use http://localhost:48787 as the API base URL.");
+    expect(out).toBe("PROMPT Use http://localhost:53127 as the API base URL.");
   });
 });
 

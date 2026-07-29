@@ -175,6 +175,13 @@ export async function drain(stream: ReadableStream<Uint8Array>): Promise<string>
 // confirmed live: a "timed out" eval's container kept running and reasoning
 // for 10+ minutes after the harness gave up on it and a RETRY launched a
 // second container concurrently with the still-running first one).
+//
+// The name inherits its environment scope from `project`, which is the compose
+// project (scripts/stack/naming.ts: `rm_ci_stack_<job hash>` /
+// `rm_demo_eval_<random>` / …). So an eval container is attributable to the
+// environment that spawned it by NAME, and — since `docker compose run` applies
+// docker-compose.demo.yml's member-agent labels — by robotmoney.env /
+// robotmoney.env.hash LABEL as well.
 export function memberAgentContainerName(project: string, runId: string): string {
   return `${project}-member-agent-eval-${runId}`;
 }

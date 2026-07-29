@@ -1,7 +1,12 @@
 // Capture / refresh the preview goldens (goldens/api-goldens.json) from a REAL
 // running system — a deployed test cluster or a local `bun run demo` stack.
 //
-//   BACKEND_URL=http://127.0.0.1:48787 bun run goldens:update
+//   BACKEND_URL=http://127.0.0.1:<demo api port> bun run goldens:update
+//
+// BACKEND_URL is REQUIRED in practice: `bun run demo` draws its host port free
+// on every run, so the 48787 default below is correct only for a `bun run demo
+// -- --stage` boot (the one sanctioned pin — the cloudflared tunnel origin).
+// Read the port off the demo's startup line or `bun run demo:status`.
 //
 // Goldens are mock API responses the client-side preview wrapper replays inside
 // an iframe. Their VALUES may be point-in-time, but their FIELD SHAPES must

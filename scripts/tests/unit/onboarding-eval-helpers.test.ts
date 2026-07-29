@@ -270,27 +270,27 @@ describe("member-agent container primitive", () => {
   const KEYLESS: MemberAgentModel = { model: "opencode/nemotron-3-ultra-free", apiKeyEnv: null, apiKey: null };
 
   const base = {
-    composeProject: "rmdemo_abc",
-    containerName: "rmdemo_abc-member-agent-eval-run1",
+    composeProject: "rm_demo_stack_abc",
+    containerName: "rm_demo_stack_abc-member-agent-eval-run1",
     opencodeConfigPath: "/tmp/wd/opencode.json",
     title: "onboarding-eval-run1",
     prompt: "PROMPT TEXT",
   };
 
   test("memberAgentContainerName is the exact <project>-member-agent-eval-<runId> format cleanup targets", () => {
-    expect(memberAgentContainerName("rmdemo_abc", "run1")).toBe("rmdemo_abc-member-agent-eval-run1");
+    expect(memberAgentContainerName("rm_demo_stack_abc", "run1")).toBe("rm_demo_stack_abc-member-agent-eval-run1");
   });
 
   test("FUNDED: the argv is byte-for-byte what the eval spawns, with exactly one -e credential", () => {
     expect(buildMemberAgentArgv({ ...base, modelConfig: FUNDED })).toEqual([
       "docker",
-      "compose", "-p", "rmdemo_abc",
+      "compose", "-p", "rm_demo_stack_abc",
       "-f", "docker-compose.yml",
       "-f", "docker-compose.demo.yml",
       "run",
       "--rm",
       "--no-deps",
-      "--name", "rmdemo_abc-member-agent-eval-run1",
+      "--name", "rm_demo_stack_abc-member-agent-eval-run1",
       "-v", "/tmp/wd/opencode.json:/home/agent/opencode.json:ro",
       "-e", "OPENCODE_API_KEY=sk-zen",
       "member-agent",
@@ -425,12 +425,12 @@ describe("member-agent container primitive", () => {
   // the invocation never returns.
   describe("memberAgentSpawnEnv", () => {
     test("always carries DEMO_PROJECT, and it is exactly the compose project name", () => {
-      expect(memberAgentSpawnEnv("rmeval_layer4_abc", {}).DEMO_PROJECT).toBe("rmeval_layer4_abc");
+      expect(memberAgentSpawnEnv("rm_demo_eval_abc", {}).DEMO_PROJECT).toBe("rm_demo_eval_abc");
     });
 
     test("a host value can never shadow it — the compose model must match the project it runs against", () => {
-      const env = memberAgentSpawnEnv("rmeval_layer4_abc", { DEMO_PROJECT: "rmdemo_someone_elses_stack" });
-      expect(env.DEMO_PROJECT).toBe("rmeval_layer4_abc");
+      const env = memberAgentSpawnEnv("rm_demo_eval_abc", { DEMO_PROJECT: "rm_demo_stack_someone_else" });
+      expect(env.DEMO_PROJECT).toBe("rm_demo_eval_abc");
     });
 
     test("docker-client plumbing from the host survives (a child that cannot find the daemon runs nothing)", () => {

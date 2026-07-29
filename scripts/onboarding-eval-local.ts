@@ -29,15 +29,18 @@
 //   AGENT_MODEL=kimi bun run onboarding-eval --project rmeval_kimi_1 --keep
 //
 // Flags:
-//   --project <name>  compose project name (default: a fresh rmeval_local_<hex>)
+//   --project <name>  compose project name (default: the environment-scoped
+//                     rm_demo_eval_<hash>, or rm_ci_eval_<hash> under Actions)
 //   --keep            leave the stack up afterwards (prints the teardown command)
 //
-// Co-tenancy: this host also runs the self-hosted CI runner and a standing
-// `rmdemo_*` demo. Both published ports are drawn free by allocatePorts (never
-// the stage tunnel's pinned 48787, which is asserted below) and the default
-// project name is unique per run, so a local run can never collide with CI's
-// `rmdemo_ci_*` or with the standing demo. Teardown removes this run's volumes,
-// this run's member-agent containers, and nothing else.
+// Co-tenancy: this host also runs the self-hosted CI runner and the standing
+// stage demo. Both published ports are drawn free by allocatePorts (never the
+// stage tunnel's pinned 48787, which is asserted below) and the default project
+// name carries this environment's class + hash (scripts/stack/naming.ts), so a
+// local run can never collide with a CI run, with another local run, or with
+// the standing demo — and anything it leaks is attributable to THIS
+// environment by container label. Teardown removes this run's volumes, this
+// run's member-agent containers, and nothing else.
 import { ROUTES } from "@robotmoney/contract";
 import { makeDockerRunner, purgeDemoEvalContainers } from "./lib/demo-volumes.ts";
 import { runOnboardingEval } from "./lib/onboarding-eval.ts";
@@ -47,19 +50,26 @@ import {
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
   generateStackCredentials,
+  resolveStackEnvironment,
+  stackProjectName,
+  STAGE_WEB_PORT,
 } from "./stack/index.ts";
-
-const STAGE_TUNNEL_PORT = 48787; // pinned by cloudflared — never bind it here
 
 const repoRoot = new URL("..", import.meta.url).pathname;
 const argv = Bun.argv.slice(2);
 const keep = argv.includes("--keep");
 const projectArg = argv.indexOf("--project");
-const project = projectArg >= 0 ? argv[projectArg + 1]! : `rmeval_local_${crypto.randomUUID().slice(0, 8)}`;
+// Resolved ONCE: the local hash is per-boot random, so a second call would
+// describe a different environment than the one the containers are labelled with.
+const stackEnvironment = resolveStackEnvironment(process.env);
+const project = projectArg >= 0 ? argv[projectArg + 1]! : stackProjectName("eval", stackEnvironment);
 
 const [apiPort, pgPort] = await allocatePorts([{}, {}]);
 for (const p of [apiPort!, pgPort!]) {
-  if (p === STAGE_TUNNEL_PORT) throw new Error(`refusing to bind ${STAGE_TUNNEL_PORT} — the stage tunnel is pinned to it`);
+  // Belt-and-braces: allocatePorts draws free ports and never prefers 48787, so
+  // this can only fire if the tunnel port happens to be free AND the kernel
+  // hands it out. Still refuse — the eval must never occupy the stage origin.
+  if (p === STAGE_WEB_PORT) throw new Error(`refusing to bind ${STAGE_WEB_PORT} — the stage tunnel is pinned to it`);
 }
 
 const credentials = generateStackCredentials();
@@ -73,11 +83,12 @@ const stack = createStack(
     composeFiles: DEFAULT_COMPOSE_FILES,
     database: DEFAULT_STACK_DATABASE,
     credentials,
+    environment: stackEnvironment,
   },
   { hostEnv: process.env, io: { stdout: "inherit", stderr: "inherit" } },
 );
 
-console.log(`[eval] project=${project} api=${apiPort} pg=${pgPort}`);
+console.log(`[eval] project=${project} env=${stackEnvironment.class}/${stackEnvironment.hash} api=${apiPort} pg=${pgPort}`);
 // Throws (never skips) on a missing/unusable Docker daemon, a postgres that
 // never becomes ready, a failed migration, or a /health that never answers.
 await stack.up();

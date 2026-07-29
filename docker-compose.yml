@@ -2,8 +2,20 @@
 # `api` process serves BOTH the JSON API and the static frontend (STATIC_DIR),
 # so there's nothing else to run in front of it.
 #
-# Local dev / CI usually only needs Postgres:   docker compose up -d postgres
-# Full box:                                      docker compose up -d
+# HOST PORTS ARE REQUIRED INPUTS, NOT DEFAULTS. Both published ports below are
+# `${VAR:?…}`: compose REFUSES to start without them rather than falling back.
+# `bun run demo` / scripts/stack draw them free per run (scripts/stack/ports.ts);
+# a RAW compose invocation must supply them itself, e.g.
+#
+#   WEB_PORT=8787 POSTGRES_PORT=5433 docker compose up -d postgres
+#
+# The old `${WEB_PORT:-48787}` / `${POSTGRES_PORT:-5432}` defaults are gone
+# because they are what let a CI boot silently claim the port cloudflared routes
+# stage.robotmoney-labs.dev to and take the site down; a loud refusal is the
+# whole point. (`bun demo --stage` is the single sanctioned 48787 pin.)
+#
+# Local dev / CI usually only needs Postgres:   POSTGRES_PORT=… docker compose up -d postgres
+# Full box:                                     WEB_PORT=… POSTGRES_PORT=… docker compose up -d
 #
 # DB modes are driven by DATABASE_URL + the postgres volume:
 #   ephemeral (CI)  : run with a throwaway volume / `docker compose down -v`
@@ -69,7 +81,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robotmoney}
       POSTGRES_DB: ${POSTGRES_DB:-robotmoney}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # No `:-5432` default (see this file's header): the caller MUST supply a
+      # host port. Nothing outside the compose network routes to postgres — api
+      # and the worker lanes reach it by service name — so this publish exists
+      # only for host-side psql, and a predictable :5432 just collided with
+      # whatever postgres the dev box already runs.
+      - "${POSTGRES_PORT:?POSTGRES_PORT is required - host ports are drawn free per run by scripts/stack/ports.ts and there is no default; for raw compose set it explicitly}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -86,7 +103,9 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       RM_ENV: ${RM_ENV:-demo}
-      API_PORT: "8787"
+      # No API_PORT here on purpose — see the `ports:` comment below. The api
+      # listens on backend/src/config.ts's 8787 default, which is the single
+      # source of truth for the container-internal port.
       # Guards the privileged surface incl. the /admin task-queue dashboard
       # (X-Admin-Token). The api process is the one that authenticates HTTP; the
       # demo sets a random per-launch value (worker doesn't serve the API).
@@ -118,7 +137,19 @@ services:
       # Serve the static frontend from this same process — no Caddy/nginx.
       STATIC_DIR: /srv/frontend
     ports:
-      - "${WEB_PORT:-48787}:8787"
+      # HOST side: required, never defaulted (see this file's header) — a
+      # `:-48787` fallback is precisely what raced the stage tunnel.
+      # CONTAINER side: the literal 8787, deliberately NOT configurable. Each
+      # container has its own network namespace, so nothing can contend for a
+      # port inside it; there is no variability to express. All legitimate
+      # variability is host-side and `WEB_PORT` already owns it. (The api
+      # process's own default lives once, in backend/src/config.ts's
+      # `Number(process.env.API_PORT ?? 8787)`, which is live for a host-side
+      # `bun run` of the backend. The redundant `API_PORT: "8787"` that used to
+      # sit in this service's environment was removed: it made the host `.env`
+      # value look effective while compose overrode it, and it turned one port
+      # into three places that had to agree with nothing checking them.)
+      - "${WEB_PORT:?WEB_PORT is required - host ports are drawn free per run by scripts/stack/ports.ts and there is no default; use `bun demo --stage` for the pinned tunnel port, or set it explicitly for raw compose}:8787"
     volumes:
       - ./frontend/public:/srv/frontend:ro
     depends_on:

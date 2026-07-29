@@ -10,7 +10,9 @@
 // calls run until a function is invoked) so demo-main.ts can import it safely.
 //
 // Namespacing (docker-compose.demo.yml): every demo pgdata volume carries the
-// label robotmoney.demo=1 (plus robotmoney.demo.project=<project>). We filter by
+// label robotmoney.demo=1 (plus robotmoney.demo.project=<project> and, since
+// the environment-scoped naming change, robotmoney.env=ci|local +
+// robotmoney.env.hash=<10 hex> — see scripts/stack/naming.ts). We filter by
 // LABEL, never by name-substring — a name like "…_pgdata" could belong to a
 // non-demo stack, but the label is applied only by our overlay.
 //
@@ -115,6 +117,13 @@ export function removeDemoVolumes(run: DockerRunner, names: string[]): CleanResu
 // Purge dynamic member-agent evaluation containers (e.g. `<project>-member-agent-eval-*`).
 // These are spawned dynamically during demo runs and must be force-removed before network/stack
 // teardown to prevent zombie containers from holding compose networks in use.
+//
+// `opts.project` is the environment-scoped compose project (scripts/stack/naming.ts,
+// e.g. `rm_ci_stack_<job hash>`), so the scoped branch is inherently
+// environment-scoped too: a CI teardown can never match the standing demo's
+// containers. The UNSCOPED branch below matches every member-agent container on
+// the host and is therefore only ever safe for an operator who means "all of
+// them" (`bun run demo:clean` with no --project).
 export function purgeDemoEvalContainers(
   run: DockerRunner,
   opts: { project?: string } = {},

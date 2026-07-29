@@ -102,7 +102,7 @@ jobs:
         run: bun run scripts/demo.ts
         env:
           CI: "true"
-          DEMO_PROJECT: rmdemo_ci_onboarding_${{ github.run_id }}_${{ github.run_attempt }}
+          DEMO_PROJECT: rm_ci_onboarding_${{ github.run_id }}_${{ github.run_attempt }}
           RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
           ONBOARDING_REAL_EVAL: "1"
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
@@ -120,4 +120,4 @@ jobs:
         if: always()
         run: bun run scripts/demo-clean.ts --project "$DEMO_PROJECT"
         env:
-          DEMO_PROJECT: rmdemo_ci_onboarding_${{ github.run_id }}_${{ github.run_attempt }}
+          DEMO_PROJECT: rm_ci_onboarding_${{ github.run_id }}_${{ github.run_attempt }}

@@ -4,13 +4,17 @@
 // volumes. `bun run demo` (SIGTERM/Ctrl-C) and `bun run demo:down` now run
 // `docker compose down` WITHOUT `-v`, so a demo's pgdata volume survives and a
 // reboot resumes from where it left off. Over time that leaks named volumes
-// (one per fresh-per-run `rmdemo_<hex>` boot). This command reclaims them.
+// (one per fresh-per-run boot — `rm_demo_stack_<hash>` locally,
+// `rm_ci_stack_<hash>` under Actions; see scripts/stack/naming.ts). This
+// command reclaims them.
 //
 // What it removes: EXACTLY the volumes labeled robotmoney.demo=1 (applied only by
 // docker-compose.demo.yml — see scripts/lib/demo-volumes.ts). Never a
 // name-substring match. With `--project <name>` it scopes to one run's volume
 // (used by CI teardown so a shared self-hosted runner deletes only its own run,
-// never a co-tenant standing demo).
+// never a co-tenant standing demo). Every volume also now carries
+// robotmoney.env / robotmoney.env.hash, so a future reaper can scope to "this
+// CI job" or "not this operator's shell" without inventing a name pattern.
 //
 // What it never touches: a `bun run demo -- --pg-data <host-dir>` boot bind-mounts
 // postgres to a HOST directory and creates no named volume, so it cannot appear

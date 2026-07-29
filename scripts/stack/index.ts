@@ -18,5 +18,10 @@
 //      this module serves; a missing Docker daemon throws.
 export * from "./config.ts";
 export * from "./host-env.ts";
+// naming.ts computes the environment-scoped compose project / container name
+// prefix and the labels every spawner stamps, so a leaked container is
+// attributable to the environment that made it (CI job vs local shell) and can
+// be reaped by LABEL rather than by name substring.
+export * from "./naming.ts";
 export * from "./ports.ts";
 export * from "./stack.ts";

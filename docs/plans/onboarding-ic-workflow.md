@@ -152,7 +152,7 @@ Per the test-coverage invariants (loud-skip only, executed-in-CI assertions):
   succeeds, a signed apply built with the real `rmpc` binary lands over the
   REST API) as a fast fail-fast step that runs *before* the real-inference
   eval in the same job, not as a substitute for it. The known flake risk
-  (self-hosted runner shares its IP with the standing `rmdemo_*` stack — live
+  (self-hosted runner shares its IP with the standing `rm_demo_*` stack — live
   quota flake) is handled with retry/backoff around the model call, not by
   dropping inference from the gate. Because the eval is keyless (D22) there is
   no secret to withhold and therefore **no fork/same-repo distinction**: every

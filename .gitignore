@@ -1,6 +1,12 @@
 node_modules/
-.env
-.env.local
+# Secret-bearing env files. A GLOB with an explicit negation, not two
+# exact-match lines: `.env` + `.env.local` left `.env.bak`, `.env.prod`,
+# `.env.staging` — every ad-hoc copy an operator actually makes — committable,
+# and this repo's `.env` carries a FUNDED OPENCODE_API_KEY, so one `git add -A`
+# was all it took to publish it. The negation keeps the tracked, secret-free
+# template committable (and documents that intent if it is ever re-added).
+.env*
+!.env.example
 *.log
 .DS_Store
 dist/

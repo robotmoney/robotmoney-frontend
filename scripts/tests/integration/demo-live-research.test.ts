@@ -34,6 +34,13 @@ function composeConfig(): ComposeConfig {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   env.DEMO_PROJECT = "lane-topology-test";
+  env.RM_STACK_ENV_CLASS = "local";
+  env.RM_STACK_ENV_HASH = "lanetopo000";
+  // `${WEB_PORT:?…}` / `${POSTGRES_PORT:?…}` are REQUIRED inputs now (no
+  // defaults — see scripts/stack/ports.ts), so `config` needs values even
+  // though this test only inspects the resolved service environments.
+  env.WEB_PORT = "18788";
+  env.POSTGRES_PORT = "15433";
   const r = Bun.spawnSync(
     ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.demo.yml", "config", "--format", "json"],
     { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },

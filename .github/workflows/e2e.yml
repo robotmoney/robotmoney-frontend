@@ -87,7 +87,7 @@
 # it did not, and how to opt this PR in.
 #
 # Two things the NON-PR path accounts for, not ignores:
-#   (a) This self-hosted runner shares its IP with the standing rmdemo_* demo
+#   (a) This self-hosted runner shares its IP with the standing rm_demo_* demo
 #       stack, which has caused 429 rate-limit flake on other live-call gates
 #       before, and the free tier is documented as slower/more variable than a
 #       paid one. scripts/lib/onboarding-eval.ts's runOnboardingEvalWithRetry
@@ -291,9 +291,20 @@ jobs:
           # (robotmoney.demo.project=<this>) unique per run+attempt, so both the
           # in-process cleanup (demo-main.ts cleanCiVolume) and the always() backstop
           # step below can scope the delete to exactly this run — never the co-tenant
-          # standing demo. Keeps the required rmdemo_ prefix; underscores are valid
-          # in a compose project name. run_attempt makes reruns collision-free.
-          DEMO_PROJECT: rmdemo_ci_${{ github.run_id }}_${{ github.run_attempt }}
+          # standing demo. run_attempt makes reruns collision-free.
+          #
+          # The `rm_ci_` prefix is the CI half of the environment-scoped naming
+          # scheme (scripts/stack/naming.ts, CI_PROJECT_PREFIX) — the single fact
+          # a reaper needs before it touches anything on this shared host: a
+          # `rm_demo_*` container belongs to the standing stage demo or to an
+          # operator's shell and must never be swept by CI. Spelled from the
+          # GitHub context rather than left to the helper's default because the
+          # `always()` teardown step below has to name the same project from
+          # YAML; scripts/tests/unit/stack-naming.test.ts asserts both values
+          # here carry the prefix. Every container ALSO carries
+          # robotmoney.env=ci + robotmoney.env.hash labels from the helper, which
+          # is the channel tooling should select on.
+          DEMO_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
           # This required e2e boots the LIVE data path (issue #147 — DEMO_HERMETIC
           # removed): committee takes use the deterministic stanceFor() +
           # buildMemo() template path (scripts/lib/committee/agent.ts, memo.ts) — no live model,
@@ -364,11 +375,12 @@ jobs:
       # cleanCiVolume). This always() step is the belt-and-suspenders case: if the
       # boot step is KILLED (e.g. the timeout above) it never reaches its own
       # teardown, so reclaim here too. Scoped to THIS run's project label — it
-      # deletes only rmdemo_ci_<run>_<attempt>_pgdata, never the standing demo that
-      # shares this self-hosted runner. Never touches --pg-data host dirs (CI does
-      # not use --pg-data; they are not docker volumes anyway).
+      # deletes only rm_ci_stack_<run>_<attempt>_pgdata, never the standing demo
+      # that shares this self-hosted runner. Never touches --pg-data host dirs (CI
+      # does not use --pg-data; they are not docker volumes anyway).
+      # MUST stay byte-identical to the boot step's DEMO_PROJECT above.
       - name: Reclaim this run's demo volume (no leaks on the shared runner)
         if: always()
         run: bun run scripts/demo-clean.ts --project "$DEMO_PROJECT"
         env:
-          DEMO_PROJECT: rmdemo_ci_${{ github.run_id }}_${{ github.run_attempt }}
+          DEMO_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}

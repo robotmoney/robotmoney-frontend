@@ -1,11 +1,36 @@
+# CONTAINER LABELS — the reap-by-label channel (scripts/stack/naming.ts).
+#
+# Every service below carries the same three labels, and so does the pgdata
+# volume at the bottom of this file:
+#
+#   robotmoney.demo.project=<compose project>  which RUN created it
+#   robotmoney.env=ci|local                    which ENVIRONMENT CLASS created it
+#   robotmoney.env.hash=<10 hex>               which environment INSTANCE — one
+#                                              GitHub Actions job (stable across
+#                                              every step in that job, distinct
+#                                              across runs/attempts/workflows),
+#                                              or one local boot.
+#
+# Names encode the same facts (`rm_ci_stack_<hash>` / `rm_demo_stack_<hash>`) so
+# `docker ps` is readable, but tools must select on these LABELS: name-substring
+# matching is the fragile channel, and on this host — which runs the standing
+# stage demo, the self-hosted CI runner and local evals at once — getting a
+# selector wrong means killing the live site.
+#
+# The two RM_STACK_* values are set by scripts/stack/config.ts's buildComposeEnv
+# and reproduced from .agents/demo-state.json by demo:down / demo:status.
 services:
   postgres:
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
+      robotmoney.env: ${RM_STACK_ENV_CLASS}
+      robotmoney.env.hash: ${RM_STACK_ENV_HASH}
 
   api:
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
+      robotmoney.env: ${RM_STACK_ENV_CLASS}
+      robotmoney.env.hash: ${RM_STACK_ENV_HASH}
     environment:
       RM_ALLOW_INSECURE: "1"
       # Data-path knobs (issue #50, made unconditional by issue #147 — the
@@ -62,6 +87,8 @@ services:
   worker-committee: &demo-worker
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
+      robotmoney.env: ${RM_STACK_ENV_CLASS}
+      robotmoney.env.hash: ${RM_STACK_ENV_HASH}
     environment:
       BASE_RPC_URL: ${BASE_RPC_URL:-}
       BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-}
@@ -111,6 +138,8 @@ services:
   member-agent:
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
+      robotmoney.env: ${RM_STACK_ENV_CLASS}
+      robotmoney.env.hash: ${RM_STACK_ENV_HASH}
     build:
       context: .
       dockerfile: scripts/lib/member-agent/Dockerfile
@@ -145,3 +174,7 @@ volumes:
     labels:
       robotmoney.demo: "1"
       robotmoney.demo.project: ${DEMO_PROJECT}
+      # Same environment labels the containers carry, so a volume left behind by
+      # a killed CI job is attributable to that job without parsing its name.
+      robotmoney.env: ${RM_STACK_ENV_CLASS}
+      robotmoney.env.hash: ${RM_STACK_ENV_HASH}

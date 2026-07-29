@@ -29,6 +29,16 @@ interface DemoState {
   // older standing demo's state file may still carry it.
   mcpPort?: number;
   pgPort?: number;
+  // Was the web port pinned to the cloudflared origin by `bun run demo --stage`?
+  // Provenance only — the port itself is read from apiPort. Optional because a
+  // state file written before --stage existed has no such flag.
+  stage?: boolean;
+  // Environment class + hash (scripts/stack/naming.ts) so the labels compose
+  // interpolates here match the ones `up` stamped. Optional for the same
+  // backward-compatibility reason; labels are irrelevant to `down` (it creates
+  // nothing), so an older file just leaves them unknown rather than failing.
+  envClass?: string;
+  envHash?: string;
   composeFiles: string;
   databaseUrl: string;
   dbUser: string;
@@ -49,20 +59,38 @@ if (!existsSync(stateFile)) {
 const s: DemoState = JSON.parse(readFileSync(stateFile, "utf8"));
 
 // Rebuild the same dockerEnv the demo used, so we target the right project.
+//
+// WEB_PORT / POSTGRES_PORT are supplied here purely to satisfy compose
+// INTERPOLATION — docker-compose.yml's port lines are now `${VAR:?…}` and
+// refuse to resolve without a value. `down` publishes nothing, so the numbers
+// only have to exist. An older state file with no pgPort therefore gets a
+// deliberately meaningless placeholder plus a warning, NOT the old silent 5432
+// default: 5432 is exactly the fixed port this change exists to stop pretending
+// is real, and a plausible-looking wrong number is worse than an obvious one.
+if (s.pgPort === undefined) {
+  console.warn("[demo:down] state file predates the pgPort field; using a placeholder for compose interpolation (no port is published by `down`).");
+}
 const dockerEnv: Record<string, string> = {
   ...process.env,
   COMPOSE_PROJECT_NAME: s.project,
   COMPOSE_FILE: s.composeFiles,
   DEMO_PROJECT: s.project,
+  RM_STACK_ENV_CLASS: s.envClass ?? "unknown",
+  RM_STACK_ENV_HASH: s.envHash ?? "unknown",
   DATABASE_URL: s.databaseUrl,
   WEB_PORT: String(s.apiPort),
-  POSTGRES_PORT: String(s.pgPort ?? 5432),
+  POSTGRES_PORT: String(s.pgPort ?? 1),
   POSTGRES_USER: s.dbUser,
   POSTGRES_PASSWORD: s.dbPassword,
   POSTGRES_DB: s.dbName,
 } as Record<string, string>;
 
 console.log(`[demo:down] tearing down project=${s.project} (created ${s.createdAt}) — keeping postgres data…`);
+if (s.stage) {
+  // Worth saying out loud: this is the demo the tunnel points at, so tearing it
+  // down takes stage.robotmoney-labs.dev offline until a `--stage` boot returns.
+  console.log(`[demo:down] this demo was booted with --stage (web port pinned to :${s.apiPort}, the cloudflared origin) — the stage site goes down with it.`);
+}
 
 const run = makeDockerRunner(dockerEnv);
 const purged = purgeDemoEvalContainers(run, { project: s.project });

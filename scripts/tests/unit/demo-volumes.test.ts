@@ -71,8 +71,8 @@ function fakeRunner(opts: {
 
 describe("parseVolumeLine", () => {
   test("pulls name + the project label out of the flat Labels string", () => {
-    const v = parseVolumeLine(volLine("rmdemo_ab12_pgdata", { "robotmoney.demo": "1", "robotmoney.demo.project": "rmdemo_ab12" }));
-    expect(v).toEqual({ name: "rmdemo_ab12_pgdata", project: "rmdemo_ab12" });
+    const v = parseVolumeLine(volLine("rm_demo_stack_ab12_pgdata", { "robotmoney.demo": "1", "robotmoney.demo.project": "rm_demo_stack_ab12" }));
+    expect(v).toEqual({ name: "rm_demo_stack_ab12_pgdata", project: "rm_demo_stack_ab12" });
   });
   test("project is null when the project label is absent", () => {
     const v = parseVolumeLine(volLine("x", { "robotmoney.demo": "1" }));
@@ -87,22 +87,22 @@ describe("listDemoVolumes", () => {
   test("filters by the robotmoney.demo=1 label and parses every row", () => {
     const { run, calls } = fakeRunner({
       volumes: [
-        volLine("rmdemo_a_pgdata", { "robotmoney.demo": "1", "robotmoney.demo.project": "rmdemo_a" }),
-        volLine("rmdemo_b_pgdata", { "robotmoney.demo": "1", "robotmoney.demo.project": "rmdemo_b" }),
+        volLine("rm_demo_stack_a_pgdata", { "robotmoney.demo": "1", "robotmoney.demo.project": "rm_demo_stack_a" }),
+        volLine("rm_demo_stack_b_pgdata", { "robotmoney.demo": "1", "robotmoney.demo.project": "rm_demo_stack_b" }),
       ],
     });
     const vols = listDemoVolumes(run);
-    expect(vols.map((v) => v.name)).toEqual(["rmdemo_a_pgdata", "rmdemo_b_pgdata"]);
+    expect(vols.map((v) => v.name)).toEqual(["rm_demo_stack_a_pgdata", "rm_demo_stack_b_pgdata"]);
     // The label filter is what makes this "ours only" — assert it is actually passed.
     expect(calls[0]).toContain("--filter");
     expect(calls[0]).toContain(`label=${DEMO_VOLUME_LABEL}`);
   });
 
   test("scoping to a project adds the project label filter (CI reclaims only its own run)", () => {
-    const { run, calls } = fakeRunner({ volumes: [volLine("rmdemo_ci_1_pgdata", { "robotmoney.demo": "1", "robotmoney.demo.project": "rmdemo_ci_1" })] });
-    const vols = listDemoVolumes(run, { project: "rmdemo_ci_1" });
+    const { run, calls } = fakeRunner({ volumes: [volLine("rm_ci_stack_1_pgdata", { "robotmoney.demo": "1", "robotmoney.demo.project": "rm_ci_stack_1" })] });
+    const vols = listDemoVolumes(run, { project: "rm_ci_stack_1" });
     expect(vols).toHaveLength(1);
-    expect(calls[0]).toContain(`label=${DEMO_VOLUME_PROJECT_LABEL}=rmdemo_ci_1`);
+    expect(calls[0]).toContain(`label=${DEMO_VOLUME_PROJECT_LABEL}=rm_ci_stack_1`);
   });
 
   test("a docker/daemon failure throws loudly — never a silent empty list", () => {
@@ -120,12 +120,12 @@ describe("removeDemoVolumes", () => {
   test("removes free volumes and LOUDLY skips in-use ones (never force-removes)", () => {
     const { run, calls } = fakeRunner({
       volumes: [],
-      inUse: new Set(["rmdemo_busy_pgdata"]),
+      inUse: new Set(["rm_demo_stack_busy_pgdata"]),
     });
-    const res = removeDemoVolumes(run, ["rmdemo_free_pgdata", "rmdemo_busy_pgdata"]);
-    expect(res.removed).toEqual(["rmdemo_free_pgdata"]);
+    const res = removeDemoVolumes(run, ["rm_demo_stack_free_pgdata", "rm_demo_stack_busy_pgdata"]);
+    expect(res.removed).toEqual(["rm_demo_stack_free_pgdata"]);
     expect(res.skipped).toHaveLength(1);
-    expect(res.skipped[0].name).toBe("rmdemo_busy_pgdata");
+    expect(res.skipped[0].name).toBe("rm_demo_stack_busy_pgdata");
     expect(res.skipped[0].reason).toMatch(/in use/i);
     // Never a `-f`: an in-use volume is reported, not forced.
     for (const c of calls) expect(c).not.toContain("-f");
@@ -143,37 +143,37 @@ describe("purgeDemoEvalContainers", () => {
   test("scoped project purge finds and force-removes ${project}-member-agent-eval-*", () => {
     const { run, calls } = fakeRunner({
       containers: [
-        "rmdemo_123-member-agent-eval-woon",
-        "rmdemo_123-member-agent-eval-mav",
+        "rm_ci_stack_123-member-agent-eval-woon",
+        "rm_ci_stack_123-member-agent-eval-mav",
         "otherproj-member-agent-eval-woon",
-        "rmdemo_123-api",
+        "rm_ci_stack_123-api",
       ],
     });
-    const res = purgeDemoEvalContainers(run, { project: "rmdemo_123" });
+    const res = purgeDemoEvalContainers(run, { project: "rm_ci_stack_123" });
     expect(res.removed).toEqual([
-      "rmdemo_123-member-agent-eval-woon",
-      "rmdemo_123-member-agent-eval-mav",
+      "rm_ci_stack_123-member-agent-eval-woon",
+      "rm_ci_stack_123-member-agent-eval-mav",
     ]);
     expect(res.skipped).toHaveLength(0);
 
     const rmCalls = calls.filter((c) => c[0] === "rm");
     expect(rmCalls).toHaveLength(2);
-    expect(rmCalls[0]).toEqual(["rm", "-f", "rmdemo_123-member-agent-eval-woon"]);
-    expect(rmCalls[1]).toEqual(["rm", "-f", "rmdemo_123-member-agent-eval-mav"]);
+    expect(rmCalls[0]).toEqual(["rm", "-f", "rm_ci_stack_123-member-agent-eval-woon"]);
+    expect(rmCalls[1]).toEqual(["rm", "-f", "rm_ci_stack_123-member-agent-eval-mav"]);
   });
 
   test("unscoped purge finds and force-removes all *-member-agent-eval-* containers", () => {
     const { run, calls } = fakeRunner({
       containers: [
-        "rmdemo_123-member-agent-eval-woon",
+        "rm_ci_stack_123-member-agent-eval-woon",
         "otherproj-member-agent-eval-mav",
         "member-agent-eval-standalone",
-        "rmdemo_123-api",
+        "rm_ci_stack_123-api",
       ],
     });
     const res = purgeDemoEvalContainers(run);
     expect(res.removed).toEqual([
-      "rmdemo_123-member-agent-eval-woon",
+      "rm_ci_stack_123-member-agent-eval-woon",
       "otherproj-member-agent-eval-mav",
       "member-agent-eval-standalone",
     ]);
@@ -185,12 +185,12 @@ describe("purgeDemoEvalContainers", () => {
 
   test("gracefully handles empty lists and docker CLI error outputs", () => {
     const { run: runEmpty } = fakeRunner({ containers: [] });
-    const resEmpty = purgeDemoEvalContainers(runEmpty, { project: "rmdemo_123" });
+    const resEmpty = purgeDemoEvalContainers(runEmpty, { project: "rm_ci_stack_123" });
     expect(resEmpty.removed).toEqual([]);
     expect(resEmpty.skipped).toEqual([]);
 
     const { run: runErr } = fakeRunner({ containers: [], psExit: 1 });
-    const resErr = purgeDemoEvalContainers(runErr, { project: "rmdemo_123" });
+    const resErr = purgeDemoEvalContainers(runErr, { project: "rm_ci_stack_123" });
     expect(resErr.removed).toEqual([]);
     expect(resErr.skipped).toEqual([]);
   });

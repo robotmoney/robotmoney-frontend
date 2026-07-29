@@ -20,12 +20,16 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "../../lib/demo-volumes.ts";
+import { resolveStackEnvironment, stackProjectName } from "../../stack/naming.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 const BASE = ["-f", "docker-compose.yml", "-f", "docker-compose.demo.yml"];
 
-// Unique project per run so nothing collides with the standing demo on this host.
-const project = `rmdemo_test_${crypto.randomUUID().slice(0, 8)}`;
+// Unique, ENVIRONMENT-SCOPED project per run (scripts/stack/naming.ts) so
+// nothing collides with the standing demo on this host and anything this test
+// leaks is attributable to the environment that ran it.
+const environment = resolveStackEnvironment(process.env);
+const project = `${stackProjectName("infra", environment)}_vol`;
 const pgVolume = `${project}_pgdata`;
 
 function composeEnv(extra: Record<string, string> = {}): Record<string, string> {
@@ -35,10 +39,17 @@ function composeEnv(extra: Record<string, string> = {}): Record<string, string> 
     ...env,
     COMPOSE_PROJECT_NAME: project,
     DEMO_PROJECT: project,
+    RM_STACK_ENV_CLASS: environment.class,
+    RM_STACK_ENV_HASH: environment.hash,
     DATABASE_URL: "postgres://robotmoney:robotmoney@postgres:5432/robotmoney",
     POSTGRES_USER: "robotmoney",
     POSTGRES_PASSWORD: "robotmoney",
     POSTGRES_DB: "robotmoney",
+    // `${WEB_PORT:?…}` is a REQUIRED input now (no default — see
+    // scripts/stack/ports.ts). This test never starts the api service, so the
+    // value only has to exist for interpolation; POSTGRES_PORT is a real free
+    // port supplied per case below, because postgres IS started.
+    WEB_PORT: "18789",
     ...extra,
   };
 }
@@ -81,6 +92,22 @@ describe("demo overlay — pgdata volume namespacing (offline)", () => {
     expect(vol).toBeDefined();
     expect(vol.labels?.["robotmoney.demo"]).toBe("1");
     expect(vol.labels?.["robotmoney.demo.project"]).toBe(project);
+    // …and the environment labels, so a volume left behind by a killed CI job
+    // can be attributed to that job without parsing its name.
+    expect(vol.labels?.["robotmoney.env"]).toBe(environment.class);
+    expect(vol.labels?.["robotmoney.env.hash"]).toBe(environment.hash);
+  });
+
+  test("every demo-overlay service carries the same environment labels as the volume", () => {
+    const cfg = configJson([], composeEnv()) as unknown as {
+      services: Record<string, { labels?: Record<string, string> }>;
+    };
+    for (const svc of ["postgres", "api", "worker-committee", "worker-analytics", "worker-research"]) {
+      const labels = cfg.services?.[svc]?.labels ?? {};
+      expect({ svc, project: labels["robotmoney.demo.project"] }).toEqual({ svc, project });
+      expect({ svc, env: labels["robotmoney.env"] }).toEqual({ svc, env: environment.class });
+      expect({ svc, hash: labels["robotmoney.env.hash"] }).toEqual({ svc, hash: environment.hash });
+    }
   });
 
   test("postgres mounts the pgdata NAMED volume by default (no --pg-data)", () => {
