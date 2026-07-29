@@ -327,7 +327,13 @@
 .md-thumb--research { background: linear-gradient(135deg, #050508 0%, #0a0a12 50%, rgba(0,229,255,0.12) 100%); }
 .md-thumb--partnership { background: linear-gradient(135deg, #050508 0%, #0a0a12 50%, rgba(232,166,64,0.12) 100%); }
 .md-thumb--announcement { background: linear-gradient(135deg, #050508 0%, #0a0a12 50%, rgba(16,185,129,0.12) 100%); }
-.md-thumb__glyph { font-size: 2.25rem; opacity: 0.6; }
+/* Set the colour and force text presentation. Left unset, the browser renders
+   ◈ / ◉ / ◆ from the emoji font in its own blue, which is not a house colour
+   and does not match robotmoney.net. The coverage thumbs below already set a
+   colour; the publication thumbs never did. */
+.md-thumb__glyph { font-size: 2.25rem; opacity: 0.6; color: var(--color-text-dim);
+                   font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+                   font-variant-emoji: text; }
 .md-pub__body { flex: 1; padding: 1.1rem 1.25rem; display: flex; flex-direction: column; justify-content: space-between; }
 .md-pub__title {
   font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; font-size: 1rem;
