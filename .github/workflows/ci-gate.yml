@@ -1,0 +1,90 @@
+# CI gate: the single required branch-protection check for this repository.
+# Every assurance domain has its own workflow; this workflow collects their
+# results and enforces the test-coverage invariants mechanically.
+#
+# WHY NOT `on.paths`? A skipped required workflow reports NO STATUS CHECK
+# CONTEXT, which deadlocks the PR (branch protection waits forever for a context
+# that never arrives). This workflow runs on EVERY PR — no paths-ignore, no
+# paths filter — and uses an in-workflow change-detection job
+# (dorny/paths-filter) to tell the fan-in gate which domains SHOULD have run.
+# A domain whose workflow was legitimately skipped by path (no matching changed
+# files) passes the gate; one that was skipped while matching files DID change
+# fails it (test-coverage invariant 4).
+#
+# CI taxonomy class: meta (not itself an assurance; it aggregates them).
+name: ci-gate
+env:
+  # This is required-check plumbing, not an assurance job.  `ignore` is the
+  # taxonomy's explicit opt-out for non-test orchestration.
+  CI_CLASS: ignore
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  # ── change detection ───────────────────────────────────────────────────────
+  changes:
+    runs-on: [self-hosted, robotmoney-self-hosted]
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      contract: ${{ steps.filter.outputs.contract }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      scripts: ${{ steps.filter.outputs.scripts }}
+      docs_only: ${{ steps.filter.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'docker-compose*.yml'
+            contract:
+              - 'contract/**'
+            frontend:
+              - 'frontend/**'
+              - 'playwright.config.ts'
+            scripts:
+              - 'scripts/**'
+              - 'evals/**'
+              - '.github/**'
+              - 'tsconfig.json'
+              - 'package.json'
+              - 'bun.lock'
+            docs_only:
+              - '**/*.md'
+              - '**/*.txt'
+
+  # ── fan-in gate ────────────────────────────────────────────────────────────
+  gate:
+    needs:
+      - changes
+    runs-on: [self-hosted, robotmoney-self-hosted]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Install root tooling
+        run: bun install --frozen-lockfile
+      - name: Evaluate CI gate
+        env:
+          # The change-detection outputs from the changes job.
+          CHANGED_BACKEND: ${{ needs.changes.outputs.backend }}
+          CHANGED_CONTRACT: ${{ needs.changes.outputs.contract }}
+          CHANGED_FRONTEND: ${{ needs.changes.outputs.frontend }}
+          CHANGED_SCRIPTS: ${{ needs.changes.outputs.scripts }}
+          CHANGED_DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          # Whether this is a draft PR.
+          IS_DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == true }}
+          IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
+          # Workflow run conclusions fetched by the gate script via gh CLI.
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: bun run scripts/checks/ci-gate.ts

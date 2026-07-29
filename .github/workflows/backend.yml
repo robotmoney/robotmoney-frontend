@@ -1,0 +1,48 @@
+# Backend tier: typecheck, policy greps, and integration test against a real
+# ephemeral Postgres via Docker. The self-contained preload starts an ephemeral
+# Postgres via Docker (available on the self-hosted runner) and applies
+# migrations, then tears it down — the SAME harness used locally, so there is
+# no CI-specific behavior. A missing Docker/Postgres fails the run loudly.
+#
+# CI taxonomy class: system-correctness (backend suite vs real Postgres). Per the
+# taxonomy gating matrix this is DEFERRED until a PR is ready for review: it must
+# SKIP on draft PRs and RUN once the PR is marked ready-for-review, plus on push
+# to the default branch.
+#
+# This workflow replaces the backend-specific steps that previously lived in
+# integration.yml (issue #275). It feeds the ci-gate fan-in required check.
+name: backend
+env:
+  CI_CLASS: system-correctness
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  backend:
+    # Deferred until ready-for-review: run on push (non-PR) and on non-draft PRs;
+    # skip while the PR is still a draft.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: [self-hosted, robotmoney-self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Install root tooling
+        run: bun install --frozen-lockfile
+      - name: Install deps
+        working-directory: backend
+        run: bun install --frozen-lockfile
+      - name: Typecheck backend
+        working-directory: backend
+        run: bun run typecheck
+      - name: No Supabase infra in backend/src (issue #87)
+        run: bash backend/scripts/check-no-supabase.sh
+      - name: No AI/LLM overview enrichment in backend/src (issue #93)
+        run: bash backend/scripts/check-no-ai-overview.sh
+      - name: Run tests (ephemeral Postgres via Docker)
+        working-directory: backend
+        run: bun test

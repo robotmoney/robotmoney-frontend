@@ -117,6 +117,14 @@ Status: target layout (D23). Two rules govern where things go.
 *without* the rest must have its own directory. A test that needs Docker, a real
 network, or a real model call never shares a directory with a pure unit test.
 
+**CI fan-in.** Per-PR assurance is split into `unit` (root typecheck and unit
+tests), `repo-guards`, `contract`, `integration`, `backend`, and `e2e` workflows.
+`ci-gate.yml` is the single required context: it detects changed domains inside
+the workflow (never with `on.paths`, which would omit required contexts), waits
+for relevant workflows, and rejects failures, cancellations, incorrect skips,
+or zero-test code changes. System-correctness workflows defer on draft PRs;
+unit and repository guards continue to execute there.
+
 **L2 — Shared code is named for its domain, never for its consumer.** `stack/`,
 `agent/`, `toolchain/` state what belongs in them; `lib/`, `utils/`, `helpers/`
 invite anything. Code shared between the demo runtime and test/eval time lives in

@@ -1,0 +1,46 @@
+# Repo-wide guards: one-shot checks whose exit code IS the verdict. No Docker,
+# no network, no model. Each guard has its own unit-test suite that proves the
+# guard can fail (planted violations); this workflow is the CI wiring that makes
+# those guards run on every PR.
+#
+# CI taxonomy class: feature-correctness. Runs on every PR (draft AND ready) —
+# all guards are milliseconds, no Docker, no network. No path filter: every PR
+# must pass every guard regardless of what files changed.
+#
+# This workflow replaces the guard steps that previously lived in
+# integration.yml (issue #275). It feeds the ci-gate fan-in required check.
+name: repo-guards
+env:
+  CI_CLASS: feature-correctness
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  repo-guards:
+    runs-on: [self-hosted, robotmoney-self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Install root tooling
+        run: bun install --frozen-lockfile
+      - name: Runtime code never imports test or eval code (D23)
+        run: bash scripts/checks/check-no-test-imports-in-runtime.sh
+      - name: Check docs/analytics consistency
+        run: bash scripts/check-docs-analytics.sh
+      # D22 rule 1 as amended (2026-07-28): model ids live ONLY in
+      # scripts/lib/model-registry.ts and the environment carries a SELECTOR,
+      # never a raw id — the anti-ambient-selection property that survived the
+      # retirement of the old "keyless" mandate. Also re-asserts the retired
+      # knobs stay retired and that the contribution-advisory reviewer resolves
+      # keylessly. Runs here, in a REQUIRED per-PR job, so it genuinely gates.
+      # Its behaviour is separately EXECUTED against planted fixtures by
+      # scripts/tests/unit/model-selection-guard.test.ts (already run by "Check
+      # root scripts" in unit.yml) — so a green here cannot come from a scan that
+      # silently matched nothing.
+      - name: Model selection is registry-sourced, not ambient (D22 rule 1 as amended)
+        run: bash scripts/checks/check-model-selection.sh

@@ -1,0 +1,66 @@
+# Unit tier of the test pyramid: typecheck + scripts/tests/unit — no Docker, no
+# network, no model. Every test in this class must run on a bare checkout with
+# only bun installed.
+#
+# CI taxonomy class: feature-correctness. Per the taxonomy gating matrix this
+# runs on EVERY PR (draft AND ready) — cheap enough to gate early, and the unit
+# suite is the fastest signal a contributor gets. No draft deferral, no
+# paths-ignore: every code change must pass the unit suite.
+#
+# This workflow replaces the "Check root scripts" and "Unit cost class" steps
+# that previously lived in integration.yml (issue #275). It feeds the ci-gate
+# fan-in required check.
+name: unit
+env:
+  CI_CLASS: feature-correctness
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  unit:
+    runs-on: [self-hosted, robotmoney-self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      # scripts/tests/integration/admin-live-guard.test.ts spawns `bun run test:browser --
+      # --list`, which shells out to Playwright's CLI/transform — that runs on
+      # Node.js (its bin is `#!/usr/bin/env node`), which `setup-bun` does not
+      # provide. Provision node so the guard exercises the real spec load path.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install root tooling
+        run: bun install --frozen-lockfile
+      # Installed BEFORE test steps: scripts/tests/ may import backend types
+      # that need backend's own node_modules resolvable.
+      - name: Install deps
+        working-directory: backend
+        run: bun install --frozen-lockfile
+      - name: Check root scripts
+        run: bun run typecheck && bun run test
+      # The unit class must hold on a bare checkout — no Docker, no network.
+      # The greps are the "exit 0 is not tested" evidence: bun's own summary must
+      # report a NON-ZERO pass count and a zero fail count, so a run that
+      # collected nothing cannot be mistaken for a green. ANSI codes are stripped
+      # first because bun colours its summary even when stdout is a pipe.
+      - name: Unit cost class (scripts/tests/unit)
+        run: |
+          set -o pipefail
+          bun run test:unit 2>&1 | tee /tmp/test-unit.log
+          sed -E 's/\x1b\[[0-9;]*m//g' /tmp/test-unit.log > /tmp/test-unit.plain
+          grep -qE '^ *[1-9][0-9]* pass$' /tmp/test-unit.plain
+          grep -qE '^ *0 fail$' /tmp/test-unit.plain
+      # Pins fail-red-on-empty-selection: the two selectors above are just
+      # directory paths, so a future rename must break CI rather than silently
+      # collect zero files in both classes.
+      - name: Empty test selection is red
+        run: |
+          if bun test scripts/tests/__no_such_dir__ >/dev/null 2>&1; then
+            echo "bun test over an empty selection exited 0 — 0 tests collected must never be green" >&2
+            exit 1
+          fi
