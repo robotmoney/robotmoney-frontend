@@ -44,10 +44,32 @@ export function servicesFor(profile: StackProfile): string[] {
 }
 
 // The compose file list every consumer of this module defaults to. The demo
-// overrides it (it may append a generated pg-data bind overlay); the eval
-// harness and the rails check, which today each spell their own copy out, take
-// this one as they adopt the module.
+// overrides it (it may append the stage overlay and/or a generated pg-data bind
+// overlay); the eval harness and the rails check, which today each spell their
+// own copy out, take this one as they adopt the module.
 export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.demo.yml"];
+
+// The `bun run demo -- --stage` overlay: the ONLY file in the repo that names a
+// host port. APPENDED to the list above (never a replacement, and never
+// selected from the environment) exactly the way the generated `--pg-data` bind
+// overlay is. See docker-compose.stage.yml's header for why it uses
+// `ports: !override` rather than a plain `ports:`.
+export const STAGE_COMPOSE_FILE = "docker-compose.stage.yml";
+
+// ── Container-internal ports ────────────────────────────────────────────────
+// The CONTAINER side of each publish — fixed literals, not knobs (each
+// container has its own network namespace, so nothing can contend for a port
+// inside it). They are the argument to `docker compose port <svc> <port>`,
+// which is how the HOST side is discovered after `up`; the host side itself is
+// chosen by Docker and appears nowhere in this repo's configuration.
+export const API_CONTAINER_PORT = 8787;
+export const POSTGRES_CONTAINER_PORT = 5432;
+
+// The host ports Docker assigned to one running stack, read back after `up`.
+export interface StackHostPorts {
+  apiPort: number;
+  pgPort: number;
+}
 
 // ── Database ────────────────────────────────────────────────────────────────
 export interface StackDatabase {
@@ -102,8 +124,12 @@ export interface StackConfig {
   repoRoot: string;
   project: string;
   profile: StackProfile;
-  apiPort: number;
-  pgPort: number;
+  // NO apiPort/pgPort. A host port is not an INPUT to a bring-up any more: the
+  // compose files publish container ports only and Docker picks the host side,
+  // so the numbers do not exist until after `up` and are read back with
+  // `docker compose port` (scripts/stack/stack.ts's hostPorts()). Carrying them
+  // here at all is what made the old pre-bind race possible — a config field
+  // has to be filled in before the daemon is asked.
   composeFiles: string[];
   database: StackDatabase;
   credentials: StackCredentials;
@@ -139,13 +165,12 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     DATABASE_URL: internalDatabaseUrl(cfg.database),
     ADMIN_TOKEN: cfg.credentials.adminToken,
     ANALYTICS_TOKEN: cfg.credentials.analyticsToken,
-    // The ALLOCATED host ports, as output. These two names are the compose
-    // interpolation targets only — the env-pin INPUT path they used to double
-    // as was removed (scripts/stack/ports.ts's header): a value exported in the
-    // operator's shell influences nothing, and `bun demo` warns loudly when it
-    // finds one so nobody believes a pin took effect.
-    WEB_PORT: String(cfg.apiPort),
-    POSTGRES_PORT: String(cfg.pgPort),
+    // No WEB_PORT / POSTGRES_PORT. They were compose interpolation OUTPUTS
+    // right up until the compose files stopped naming a host port at all
+    // (`ports: ["8787"]` / `["5432"]` — Docker assigns the host side). Emitting
+    // them now would be a value nothing reads, which is how the last one
+    // survived long enough to look like configuration; `bun demo` warns loudly
+    // when it finds either in the operator's environment.
     POSTGRES_USER: cfg.database.user,
     POSTGRES_PASSWORD: cfg.database.password,
     POSTGRES_DB: cfg.database.name,
@@ -230,4 +255,13 @@ export function downArgs(opts: { removeVolumes?: boolean; removeOrphans?: boolea
 
 export function pgReadyArgs(db: StackDatabase): string[] {
   return ["exec", "-T", "postgres", "pg_isready", "-U", db.user, "-d", db.name];
+}
+
+// Ask the daemon which HOST port it published `service`'s `containerPort` on.
+// This is the only way the host side is ever learned: the compose files no
+// longer name one, so nothing in this repo could otherwise say. Parsed by
+// scripts/stack/ports.ts's parseComposePortOutput (which handles the IPv4 +
+// IPv6 dual-line case).
+export function portArgs(service: string, containerPort: number): string[] {
+  return ["port", service, String(containerPort)];
 }

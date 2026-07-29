@@ -1,0 +1,35 @@
+# THE ONE FIXED HOST PORT IN THE SYSTEM, isolated in its own overlay.
+#
+# Applied ONLY by `bun run demo -- --stage` (scripts/lib/demo-main.ts appends
+# this file to the compose file list, the same mechanism the generated
+# `--pg-data` bind overlay already uses). Never applied by CI, never by a plain
+# `bun run demo`, and never selectable from the environment — pinning the
+# tunnel-facing port is a property of one deliberate invocation, not of a shell
+# that happens to have something exported (the same hard rule `--pg-data`
+# follows: no per-property env config).
+#
+# WHY THE PIN IS REQUIRED RATHER THAN PREFERRED. cloudflared on the demo host
+# routes stage.robotmoney-labs.dev to localhost:48787 and to nothing else. A
+# stage boot that "helpfully" fell back to another port would come up green and
+# serve a 502 to every visitor, so a held 48787 must STOP the boot. demo-main.ts
+# runs an explicit pre-flight before `compose up` (scripts/stack/ports.ts's
+# assertStageWebPortFree) that names the holder from `docker ps` / `ss -tlnp`,
+# because compose's own bind failure alone is too opaque to act on.
+#
+# WHY `!override` AND NOT A PLAIN `ports:`. Compose merges the `ports` sequence
+# by APPENDING, not replacing — verified with `docker compose config`, which
+# emits BOTH `target: 8787` (docker-assigned) and `target: 8787, published:
+# 48787` when the overlay omits the tag. That would publish the api twice: once
+# on the tunnel origin and once on a stray ephemeral port. `!override` replaces
+# the base sequence outright, so the resolved config carries exactly ONE api
+# mapping. (scripts/tests/unit/stack-ports.test.ts guards the tag; the
+# integration half in scripts/tests/integration/demo-compose-config.test.ts
+# asserts the resolved mapping count from real `docker compose config` output.)
+#
+# POSTGRES IS DELIBERATELY ABSENT. Nothing external routes to the database —
+# api and the worker lanes reach it over the compose network by service name —
+# so it stays Docker-assigned even under --stage. Publishing the stage demo's
+# database on a predictable host port is a liability, not a feature.
+services:
+  api:
+    ports: !override ["48787:8787"]

@@ -24,14 +24,17 @@ const stateFile = join(repoRoot, ".agents", "demo-state.json");
 
 interface DemoState {
   project: string;
+  // A RECORD of what Docker assigned on the boot that wrote this file, not an
+  // input: `down` publishes nothing and compose no longer interpolates a host
+  // port anywhere. Reported below only so the operator recognises the stack.
   apiPort: number;
   // Optional: D21 retired the mcp container; newer state files omit it, but an
   // older standing demo's state file may still carry it.
   mcpPort?: number;
   pgPort?: number;
-  // Was the web port pinned to the cloudflared origin by `bun run demo --stage`?
-  // Provenance only — the port itself is read from apiPort. Optional because a
-  // state file written before --stage existed has no such flag.
+  // Did this boot apply docker-compose.stage.yml (`bun run demo -- --stage`),
+  // pinning the api to the cloudflared origin? Provenance only. Optional
+  // because a state file written before --stage existed has no such flag.
   stage?: boolean;
   // Environment class + hash (scripts/stack/naming.ts) so the labels compose
   // interpolates here match the ones `up` stamped. Optional for the same
@@ -60,16 +63,12 @@ const s: DemoState = JSON.parse(readFileSync(stateFile, "utf8"));
 
 // Rebuild the same dockerEnv the demo used, so we target the right project.
 //
-// WEB_PORT / POSTGRES_PORT are supplied here purely to satisfy compose
-// INTERPOLATION — docker-compose.yml's port lines are now `${VAR:?…}` and
-// refuse to resolve without a value. `down` publishes nothing, so the numbers
-// only have to exist. An older state file with no pgPort therefore gets a
-// deliberately meaningless placeholder plus a warning, NOT the old silent 5432
-// default: 5432 is exactly the fixed port this change exists to stop pretending
-// is real, and a plausible-looking wrong number is worse than an obvious one.
-if (s.pgPort === undefined) {
-  console.warn("[demo:down] state file predates the pgPort field; using a placeholder for compose interpolation (no port is published by `down`).");
-}
+// NO WEB_PORT / POSTGRES_PORT. They used to be required here purely to satisfy
+// compose INTERPOLATION, because docker-compose.yml's port lines were
+// `${VAR:?…}`. Those lines are gone: both services publish container ports only
+// (`ports: ["8787"]` / `["5432"]`) and the daemon assigns the host side, so
+// `docker compose config` for a teardown-shaped invocation resolves with no
+// port input at all. One less thing a stale state file can get wrong.
 const dockerEnv: Record<string, string> = {
   ...process.env,
   COMPOSE_PROJECT_NAME: s.project,
@@ -78,8 +77,6 @@ const dockerEnv: Record<string, string> = {
   RM_STACK_ENV_CLASS: s.envClass ?? "unknown",
   RM_STACK_ENV_HASH: s.envHash ?? "unknown",
   DATABASE_URL: s.databaseUrl,
-  WEB_PORT: String(s.apiPort),
-  POSTGRES_PORT: String(s.pgPort ?? 1),
   POSTGRES_USER: s.dbUser,
   POSTGRES_PASSWORD: s.dbPassword,
   POSTGRES_DB: s.dbName,
@@ -89,7 +86,7 @@ console.log(`[demo:down] tearing down project=${s.project} (created ${s.createdA
 if (s.stage) {
   // Worth saying out loud: this is the demo the tunnel points at, so tearing it
   // down takes stage.robotmoney-labs.dev offline until a `--stage` boot returns.
-  console.log(`[demo:down] this demo was booted with --stage (web port pinned to :${s.apiPort}, the cloudflared origin) — the stage site goes down with it.`);
+  console.log(`[demo:down] this demo was booted with --stage (api pinned to :${s.apiPort}, the cloudflared origin) — the stage site goes down with it.`);
 }
 
 const run = makeDockerRunner(dockerEnv);

@@ -17,7 +17,7 @@ import {
 } from "./onboarding-eval.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./demo-newcomers.ts";
 import {
-  allocatePorts,
+  assertStageWebPortFree,
   createStack,
   DEFAULT_STACK_DATABASE,
   describePortHolders,
@@ -29,12 +29,13 @@ import {
   makeCommandRunner,
   PortUnavailableError,
   resolveStackEnvironment,
-  stackPortRequests,
   stackProjectName,
   stalePortEnvWarnings,
+  STAGE_COMPOSE_FILE,
   STAGE_WEB_PORT,
   type StackConfig,
   type StackEvent,
+  type StackHostPorts,
 } from "../stack/index.ts";
 import { COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 
@@ -47,28 +48,33 @@ const stateFile = join(repoRoot, ".agents", "demo-state.json");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // --- Run config -----------------------------------------------------------
-// HOST PORTS ARE ALWAYS RANDOM. Both published ports (api and postgres) are
-// drawn free at boot on every single run. There is no pinned default left
-// anywhere: docker-compose.yml's port lines are `${VAR:?…}` (loud refusal, no
-// fallback), `.env.example` no longer ships WEB_PORT/POSTGRES_PORT, and the
-// env-pin INPUT path that used to live right here is gone.
+// HOST PORTS ARE ASSIGNED BY DOCKER. Both published ports (api and postgres)
+// are chosen by the daemon: docker-compose.yml publishes container ports only
+// (`ports: ["8787"]` / `["5432"]`), and this file learns the host side back
+// from `docker compose port` after the containers are up. Nothing here — and
+// nothing in .env / .env.example — names a host port.
 //
-// Why (the full rationale is in scripts/stack/ports.ts's header): the api port
-// used to PREFER 48787 and either port could be pinned from the environment.
-// The operator's gitignored `.env` pinned both — so nothing was ever randomized
-// locally — while CI, which has no `.env`, took the preferred-48787 path and
-// raced the standing stage demo for the exact port cloudflared routes
-// stage.robotmoney-labs.dev to. That was a real outage, not a hypothetical.
+// Why (the full rationale is in scripts/stack/ports.ts's header). Two shapes
+// have already failed. First, a FIXED default: the api port "preferred" 48787,
+// so a CI boot (no `.env`) raced the standing stage demo for the exact port
+// cloudflared routes stage.robotmoney-labs.dev to and took the site down, while
+// the operator's `.env` pinned both ports so nothing was random locally at all.
+// Then, a SELF-DRAWN random port: bind a free port, close it, hand the number
+// to compose — a TOCTOU race, because anything on this box (a second demo, a
+// concurrent job on the self-hosted runner) can take the port in the gap before
+// compose binds it, and randomizing more stacks only widened the gap. Docker
+// choosing and binding in one step inside the daemon has neither failure mode.
 // (D21 retired the member-facing MCP server — there is no longer an `mcp`
 // container or host port; members reach the committee REST API on the api port.)
 //
-// THE ONE EXCEPTION: `bun run demo -- --stage` pins the WEB port (only) to
-// 48787, the tunnel origin. It is a CLI ARGUMENT, never an env var — the same
-// hard rule `--pg-data` follows (no per-property env config) — because pinning
-// the tunnel port is a property of one deliberate invocation, never of a shell
-// that happens to have something exported. It FAILS LOUDLY when the port is
-// held rather than falling back, because cloudflared routes 48787 and nothing
-// else: a fallback would produce a green boot serving a 502.
+// THE ONE EXCEPTION: `bun run demo -- --stage` appends docker-compose.stage.yml,
+// which pins the api's host port (only) to 48787, the tunnel origin. It is a
+// CLI ARGUMENT, never an env var — the same hard rule `--pg-data` follows (no
+// per-property env config) — because pinning the tunnel port is a property of
+// one deliberate invocation, never of a shell that happens to have something
+// exported. It FAILS LOUDLY when the port is held rather than falling back,
+// because cloudflared routes 48787 and nothing else: a fallback would produce a
+// green boot serving a 502. Postgres stays Docker-assigned even under --stage.
 const stageMode = process.argv.includes("--stage");
 
 // Loud, never silent. A stale `.env` (or an exported shell var) carrying
@@ -84,36 +90,45 @@ if (stageMode) {
       `[demo] # stage.robotmoney-labs.dev to it and to nothing else. Only one\n` +
       `[demo] # stack can hold it at a time, so do not run --stage alongside\n` +
       `[demo] # another --stage boot or CI's demo. Postgres (and every other\n` +
-      `[demo] # published port) stays RANDOM even under --stage.\n` +
+      `[demo] # published port) is still DOCKER-ASSIGNED under --stage.\n` +
       `[demo] ############################################################`,
   );
 }
 
-// Every returned socket is held open until both ports are chosen, then closed
-// together, so no two draws can collide (scripts/stack/ports.ts owns that
-// property). A held stage port is a hard stop with a named culprit — never a
-// silent fallback.
-async function allocateHostPorts(): Promise<[number, number]> {
+// --stage PRE-FLIGHT. The pin now lives entirely in docker-compose.stage.yml,
+// so a held 48787 would surface as compose's own bind failure — accurate but
+// opaque, buried in build output, and silent about WHO holds the port. This
+// check runs BEFORE `compose up` so the operator gets the actionable version:
+// name the holder, refuse to boot, exit non-zero. It is a diagnostic, not an
+// allocation — the port is 48787 either way (see assertStageWebPortFree's
+// comment on why this bind is not the TOCTOU pattern we just deleted).
+async function stagePreflight(): Promise<void> {
   try {
-    const [api, pg] = await allocatePorts(stackPortRequests({ stage: stageMode }));
-    return [api!, pg!];
+    await assertStageWebPortFree();
   } catch (err) {
     if (err instanceof PortUnavailableError) {
       console.error(`[demo] FATAL: ${err.message}`);
       console.error(`[demo] what currently holds :${err.port}:`);
       console.error(describePortHolders(err.port, makeCommandRunner(process.env)));
       console.error(
-        `[demo] NOT falling back to a random port: cloudflared routes only :${STAGE_WEB_PORT}, so a\n` +
+        `[demo] NOT falling back to another port: cloudflared routes only :${STAGE_WEB_PORT}, so a\n` +
           `[demo] fallback would boot green and serve a 502 to every visitor. Free the port\n` +
           `[demo] (e.g. \`bun run demo:down\` for a standing demo) and re-run, or drop --stage\n` +
-          `[demo] to boot on a random port with no tunnel.`,
+          `[demo] to boot on a Docker-assigned port with no tunnel.`,
       );
       process.exit(1);
     }
     throw err;
   }
 }
-const [apiPort, pgPort] = await allocateHostPorts();
+if (stageMode) await stagePreflight();
+
+// Filled in from `docker compose port` once the containers exist — see
+// applyHostPorts() below. They are 0 until then, and nothing may publish a URL
+// built from them before that: a number nobody assigned is worse than no number.
+let apiPort = 0;
+let pgPort = 0;
+let backendUrl = "";
 
 // WHICH ENVIRONMENT this boot belongs to (scripts/stack/naming.ts): `ci` under
 // GitHub Actions with a hash of the workflow/run/attempt/job quadruple (stable
@@ -138,11 +153,15 @@ const DB_USER = database.user;
 const DB_PASSWORD = database.password;
 const DB_NAME = database.name;
 const databaseUrl = internalDatabaseUrl(database);
-const backendUrl = hostBackendUrl(apiPort);
 // Base compose files (what demo:down/demo:status rebuild from — they stop/inspect
 // by project and never need the pg-data bind overlay). composeFilesRun MAY append
 // a generated bind overlay below; that fuller value drives the up/run calls here.
-const composeFilesBase = "docker-compose.yml:docker-compose.demo.yml";
+//
+// The --stage overlay belongs to the BASE list, not to the run-only extension:
+// it is the one file that names a host port, so demo:status must resolve the
+// same topology when it asks `docker compose port` what is actually published.
+const composeFilesBase = ["docker-compose.yml", "docker-compose.demo.yml", ...(stageMode ? [STAGE_COMPOSE_FILE] : [])]
+  .join(":");
 let composeFilesRun = composeFilesBase;
 const researchKeys = ["channel-divergence", "late-cycle-signals"];
 
@@ -265,7 +284,9 @@ function demoPassthroughEnv(env: Record<string, string | undefined>): Record<str
 }
 
 // Env shared by every `docker compose` call — pins the project, selects the
-// demo override, resolves the data path, and sets random host ports + credentials.
+// demo override, resolves the data path, and sets credentials. NO host ports:
+// the compose files publish container ports only and Docker picks the host
+// side, so there is nothing left for WEB_PORT/POSTGRES_PORT to interpolate.
 const dockerEnv: Record<string, string> = {
   ...process.env,
   ...demoEnv.composeEnv,
@@ -288,8 +309,6 @@ const dockerEnv: Record<string, string> = {
   // it (docker-compose's `ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}` lines). Never
   // printed anywhere.
   ANALYTICS_TOKEN: analyticsToken,
-  WEB_PORT: String(apiPort),
-  POSTGRES_PORT: String(pgPort),
   POSTGRES_USER: DB_USER,
   POSTGRES_PASSWORD: DB_PASSWORD,
   POSTGRES_DB: DB_NAME,
@@ -303,8 +322,6 @@ const demoStackConfig: StackConfig = {
   repoRoot,
   project,
   profile: "full", // core (postgres + api) + the three worker lanes
-  apiPort,
-  pgPort,
   composeFiles: composeFilesRun.split(":"),
   database,
   credentials,
@@ -380,17 +397,25 @@ interface DemoState {
   upcoming: UpcomingMember[]; // scheduled future admissions, each with a countdown to its turn
   messages: string[];
 }
-const state: DemoState = {
-  services: [
-    { name: "Site", url: `${backendUrl}/` },
-    { name: "Regime", url: `${backendUrl}/regime` },
-    { name: "Committee", url: `${backendUrl}/committee` },
-    ...researchKeys.map((k) => ({ name: "Research", url: `${backendUrl}/research/${k}` })),
+// The route table, rebuilt once the api's host port is known. Before that the
+// base is "" and every row says so rather than rendering a link to a port
+// nobody has been given — Docker assigns it when the container starts, which is
+// several minutes into a cold build.
+function serviceRoutes(base: string): { name: string; url: string }[] {
+  const at = (p: string) => (base ? `${base}${p}` : "(pending — Docker assigns the host port when api starts)");
+  return [
+    { name: "Site", url: at("/") },
+    { name: "Regime", url: at("/regime") },
+    { name: "Committee", url: at("/committee") },
+    ...researchKeys.map((k) => ({ name: "Research", url: at(`/research/${k}`) })),
     // Admin task-queue jobs dashboard. URL only here (safe to appear anywhere);
     // the password is rendered on its own line in the TUI Services pane, never
     // stored in state.services.
-    { name: "Admin", url: `${backendUrl}/admin` },
-  ],
+    { name: "Admin", url: at("/admin") },
+  ];
+}
+const state: DemoState = {
+  services: serviceRoutes(""),
   containers: [
     { name: "postgres", phase: "pending" },
     { name: "api", phase: "pending" },
@@ -482,17 +507,38 @@ function unpatchConsole(): void {
 }
 
 // One line naming the run's identity: the compose project (annotated "(fixed)"
-// when DEMO_PROJECT overrode the environment-scoped default), the environment
-// class + hash that every container label carries, and the two host ports.
-// The api port is annotated STAGE-PINNED when --stage claimed the tunnel origin
-// — the ONLY way a port here is ever anything but random.
+// when DEMO_PROJECT overrode the environment-scoped default) and the
+// environment class + hash that every container label carries. The host ports
+// are DELIBERATELY absent here — they do not exist yet; applyHostPorts() logs
+// them the moment the daemon reports them.
 const fx = (isFixed: boolean) => (isFixed ? " (fixed)" : "");
 log(
   `project=${project}${fx(Boolean(process.env.DEMO_PROJECT?.trim()))}  ` +
     `env=${stackEnvironment.class}/${stackEnvironment.hash}  ` +
-    `api=:${apiPort}${stageMode ? " (STAGE-PINNED — cloudflared origin)" : ""}  ` +
-    `pg=:${pgPort}`,
+    `host ports=(assigned by Docker at start${stageMode ? "; api PINNED to :" + STAGE_WEB_PORT + " by --stage" : ""})`,
 );
+
+// The single point at which this process learns its host ports. Everything
+// downstream — the route table, BACKEND_URL for every child, the READY banner,
+// the state file — reads them from here, so there is exactly one place that
+// knows a host port and it learned it from the daemon rather than guessing.
+function applyHostPorts(ports: StackHostPorts): void {
+  apiPort = ports.apiPort;
+  pgPort = ports.pgPort;
+  backendUrl = hostBackendUrl(apiPort);
+  state.services = serviceRoutes(backendUrl);
+  log(`host ports (Docker-assigned): api=:${apiPort}${stageMode ? " (STAGE-PINNED — cloudflared origin)" : ""}  pg=:${pgPort}`);
+  if (!stageMode && apiPort === STAGE_WEB_PORT) {
+    // Possible but rare: Docker draws from the host's ephemeral range, which
+    // CONTAINS 48787 — it can only happen while no stage demo holds it. Not
+    // fatal (nothing is broken; cloudflared would simply route the stage
+    // hostname at this demo), but it must never be a silent surprise.
+    log(
+      `WARNING: Docker assigned this NON-stage demo the tunnel origin :${STAGE_WEB_PORT}. ` +
+        `stage.robotmoney-labs.dev will resolve to THIS stack until it is torn down.`,
+    );
+  }
+}
 log(
   `data path: LIVE (production parity — Base RPC ${demoEnv.baseRpcUrl ?? "config default https://mainnet.base.org"}, ` +
     `ANALYTICS_SOURCE=${demoEnv.analyticsSource}, ANALYTICS_FLOOR_SEED=${demoEnv.analyticsFloorSeed})`,
@@ -585,12 +631,19 @@ function writeStateFile(): void {
   mkdirSync(dirname(stateFile), { recursive: true });
   const state = {
     project,
+    // A RECORD of what Docker assigned, never an instruction. Nothing rebuilds
+    // a stack from these — compose publishes container ports only — and they
+    // are 0 on the early-failure path, where the file is written best-effort
+    // before the containers existed. `demo:status` therefore asks
+    // `docker compose port` for the LIVE values and treats these as history:
+    // a state file left by a previous boot really can disagree with the daemon.
     apiPort,
     pgPort,
-    // Was the web port PINNED by `--stage`? Recorded so demo:down / demo:status
-    // reconstruct the same env (and so `demo:status` can say out loud that this
-    // demo is the one the tunnel points at). Ports themselves are read back
-    // from apiPort/pgPort — this flag is provenance, not a second source.
+    // Was the api port PINNED by `--stage` (i.e. did this boot apply
+    // docker-compose.stage.yml)? Recorded so demo:down / demo:status
+    // reconstruct the same compose topology, and so `demo:status` can say out
+    // loud that this demo is the one the tunnel points at. Provenance only —
+    // the port itself is whatever the daemon reports.
     stage: stageMode,
     // The environment this boot belongs to, so the container/volume labels
     // demo:down and demo:status interpolate match the ones `up` stamped.
@@ -1140,6 +1193,11 @@ async function main(): Promise<void> {
         for (const n of WORKER_LANES) setContainer(n, "healthy", "running");
         setStep("api /health", "running");
       }
+    } else if (phase === "ports" && status === "done") {
+      // The daemon has been asked what it published (`docker compose port`).
+      // Narrated because a boot that hangs here is hanging on the readback, not
+      // on the health check — a distinction that is invisible otherwise.
+      log(`host ports discovered: ${e.detail ?? "?"}`);
     } else if (phase === "health" && status === "done") {
       setContainer("api", "healthy");
       setStep("api /health", "done");
@@ -1186,7 +1244,12 @@ async function main(): Promise<void> {
   //
   // Both are passed as `migrateEnv` DATA; scripts/stack/config.ts's migrateArgs()
   // renders them as the same `-e KEY=VALUE` pairs the hand-built argv used.
-  await stack.up({ migrateEnv: { DEMO_MODE: "1", DEMO_SEED_PROJECTS: "1" } });
+  //
+  // up() RETURNS the host ports Docker assigned (read back with
+  // `docker compose port` once the containers exist — see scripts/stack/ports.ts
+  // for why the daemon picks them instead of us). Everything below this line
+  // depends on that call having happened.
+  applyHostPorts(await stack.up({ migrateEnv: { DEMO_MODE: "1", DEMO_SEED_PROJECTS: "1" } }));
 
   // EDGAR/MNA seed bootstrap (issue #108) — AFTER migrations + API readiness,
   // BEFORE the research schedule may fire. Loads the committed seed artifact

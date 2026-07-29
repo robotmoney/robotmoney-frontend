@@ -41,7 +41,6 @@ import {
 import { fetchRmpc, runRmpcJson } from "../../lib/rmpc-fetch.ts";
 import { buildMemberAgentArgv, KEYSTORE_PASSPHRASE_ENV } from "../../lib/onboarding-eval.ts";
 import {
-  allocatePorts,
   createStack,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
@@ -92,8 +91,6 @@ function unreachableDaemonStack(): Stack {
       repoRoot,
       project: `${stackProjectName("infra", environment)}_unreachable`,
       profile: "core",
-      apiPort: 1,
-      pgPort: 2,
       composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
       credentials: generateStackCredentials(),
@@ -109,7 +106,6 @@ function unreachableDaemonStack(): Stack {
 // Docker-free block be added here without paying this bring-up.
 describe("onboarding eval infra rails (Docker, no inference)", () => {
   beforeAll(async () => {
-    const [apiPort, pgPort] = await allocatePorts([{}, {}]);
     // Minimal stack: the shared module's `core` profile — postgres (api's
     // dependency) + api, and NOTHING else. No worker lanes: applying/
     // activating a committee membership is pure Postgres CRUD + crypto
@@ -125,8 +121,6 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         // attributable to the job that leaked it, by label as well as by name.
         project: stackProjectName("infra", environment),
         profile: "core",
-        apiPort: apiPort!,
-        pgPort: pgPort!,
         composeFiles: DEFAULT_COMPOSE_FILES,
         database: DEFAULT_STACK_DATABASE,
         credentials: generateStackCredentials(),

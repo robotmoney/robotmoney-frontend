@@ -34,18 +34,18 @@
 //   --keep            leave the stack up afterwards (prints the teardown command)
 //
 // Co-tenancy: this host also runs the self-hosted CI runner and the standing
-// stage demo. Both published ports are drawn free by allocatePorts (never the
-// stage tunnel's pinned 48787, which is asserted below) and the default project
-// name carries this environment's class + hash (scripts/stack/naming.ts), so a
-// local run can never collide with a CI run, with another local run, or with
-// the standing demo — and anything it leaks is attributable to THIS
-// environment by container label. Teardown removes this run's volumes, this
-// run's member-agent containers, and nothing else.
+// stage demo. Both published ports are assigned by DOCKER (the compose files
+// publish container ports only — scripts/stack/ports.ts explains why the
+// daemon's atomic choose-and-bind beats drawing one ourselves) and the default
+// project name carries this environment's class + hash
+// (scripts/stack/naming.ts), so a local run can never collide with a CI run,
+// with another local run, or with the standing demo — and anything it leaks is
+// attributable to THIS environment by container label. Teardown removes this
+// run's volumes, this run's member-agent containers, and nothing else.
 import { ROUTES } from "@robotmoney/contract";
 import { makeDockerRunner, purgeDemoEvalContainers } from "./lib/demo-volumes.ts";
 import { runOnboardingEval } from "./lib/onboarding-eval.ts";
 import {
-  allocatePorts,
   createStack,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
@@ -64,22 +64,14 @@ const projectArg = argv.indexOf("--project");
 const stackEnvironment = resolveStackEnvironment(process.env);
 const project = projectArg >= 0 ? argv[projectArg + 1]! : stackProjectName("eval", stackEnvironment);
 
-const [apiPort, pgPort] = await allocatePorts([{}, {}]);
-for (const p of [apiPort!, pgPort!]) {
-  // Belt-and-braces: allocatePorts draws free ports and never prefers 48787, so
-  // this can only fire if the tunnel port happens to be free AND the kernel
-  // hands it out. Still refuse — the eval must never occupy the stage origin.
-  if (p === STAGE_WEB_PORT) throw new Error(`refusing to bind ${STAGE_WEB_PORT} — the stage tunnel is pinned to it`);
-}
-
 const credentials = generateStackCredentials();
 const stack = createStack(
   {
     repoRoot,
     project,
     profile: "core",
-    apiPort: apiPort!,
-    pgPort: pgPort!,
+    // No host ports: DEFAULT_COMPOSE_FILES publishes container ports only and
+    // the daemon picks the host side. They are read back from `up()`.
     composeFiles: DEFAULT_COMPOSE_FILES,
     database: DEFAULT_STACK_DATABASE,
     credentials,
@@ -88,10 +80,22 @@ const stack = createStack(
   { hostEnv: process.env, io: { stdout: "inherit", stderr: "inherit" } },
 );
 
-console.log(`[eval] project=${project} env=${stackEnvironment.class}/${stackEnvironment.hash} api=${apiPort} pg=${pgPort}`);
+console.log(`[eval] project=${project} env=${stackEnvironment.class}/${stackEnvironment.hash}`);
 // Throws (never skips) on a missing/unusable Docker daemon, a postgres that
 // never becomes ready, a failed migration, or a /health that never answers.
-await stack.up();
+const { apiPort, pgPort } = await stack.up();
+console.log(`[eval] host ports (Docker-assigned): api=${apiPort} pg=${pgPort}`);
+if (apiPort === STAGE_WEB_PORT) {
+  // Docker draws from the host's ephemeral range, which CONTAINS 48787, so
+  // this is possible whenever no stage demo is holding it. The eval must never
+  // occupy the cloudflared origin — tear the stack straight back down rather
+  // than run a 3-20 minute admission on top of the stage hostname.
+  stack.down({ removeVolumes: true, removeOrphans: true });
+  throw new Error(
+    `Docker published the api on ${STAGE_WEB_PORT}, the stage tunnel origin; stack torn down. Re-run — ` +
+      `the daemon picks a different port next time.`,
+  );
+}
 await stack.waitForHttp(`${stack.backendUrl}${ROUTES.committee.members}`, 30_000);
 await stack.build(["member-agent"]);
 
