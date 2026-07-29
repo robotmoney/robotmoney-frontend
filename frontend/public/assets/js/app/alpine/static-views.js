@@ -21,6 +21,10 @@ const STANCE_COLORS = {
   bearish: "#ff7a29",
 };
 
+// One series palette, read by the concentration chart and by the holdings
+// table's key rule so a colour means the same token in both.
+const SERIES_COLORS = ["#00e5ff", "#5fb3a1", "#10b981", "#e8a640", "#ff7a29", "#7e889e", "#6ee7b7"];
+
 const ARCHIVE_LAST_DATE = "2026-06-25";
 const KNOWN_ARCHIVE_MEMBERS = ["athena", "robotmoney", "woon"];
 
@@ -871,13 +875,20 @@ export function registerStaticViews(Alpine) {
         }
       }));
     },
-    recordStats() {
-      const rows = this.positionRows();
-      return {
-        total: this.snapshot ? this.fmtUsd(this.snapshot.totalValueUsd) : "—",
-        top: rows.length ? `${rows[0].token} ${this.fmtPct1(rows[0].share)}` : "—",
-        sessions: this.sessions.length || "0",
-      };
+    // One sentence saying what this page is. It replaced a three-figure stat
+    // strip whose "top position" was the fourth place the same holding appeared,
+    // and which never told a reader what a "subject" actually is.
+    summaryLine() {
+      const worth = this.snapshot ? `It holds ${this.fmtUsd(this.snapshot.totalValueUsd)} today` : null;
+      const n = this.sessions.length;
+      const oldest = n ? this.sessions[n - 1].date : null;
+      const since = oldest ? this.formatDate(oldest, "long").replace(/\s*\d{1,2},\s*/, " ") : null;
+      const reviewed = !n
+        ? "The committee has not reviewed it yet"
+        : `the committee has reviewed it ${n === 1 ? "once" : n + " times"}${since ? " since " + since : ""}`;
+      const parts = ["This is a portfolio the Robot Money Investment Committee reviews."];
+      parts.push(worth ? `${worth} and ${reviewed}.` : `${reviewed[0].toUpperCase()}${reviewed.slice(1)}.`);
+      return parts.join(" ");
     },
     positionRows() {
       const total = this.snapshot?.totalValueUsd || 0;
@@ -885,9 +896,12 @@ export function registerStaticViews(Alpine) {
         .map((p) => ({ ...p, share: total > 0 ? p.value_usd / total : 0 }))
         .sort((a, b) => b.share - a.share);
     },
-    donutStyle(p, i) {
-      const colors = ["#00e5ff", "#5fb3a1", "#10b981", "#e8a640", "#ff7a29", "#7e889e", "#6ee7b7"];
-      return `--c:${colors[i % colors.length]};--p:${this.clampPct((p.share || 0) * 100)};`;
+    // The chart draws one line per top token; the holdings table repeats that
+    // colour as a short rule beside the token. Keyed by TOKEN, not by row index,
+    // so the two cannot drift apart if either list is re-sorted.
+    seriesColor(token) {
+      const i = this.topTokens().indexOf(token);
+      return i === -1 ? "var(--color-border)" : SERIES_COLORS[i % SERIES_COLORS.length];
     },
     // The snapshots inside the chart window, oldest first.
     windowed() {
@@ -897,11 +911,6 @@ export function registerStaticViews(Alpine) {
     // the legend and the newest column of the chart always agree.
     topTokens() {
       return this.positionRows().slice(0, this.topN).map((p) => p.token);
-    },
-    legendRows() {
-      const rows = this.positionRows().slice(0, this.topN);
-      const rest = this.positionRows().slice(this.topN).reduce((sum, p) => sum + (p.share || 0), 0);
-      return rest > 0.001 ? [...rows, { token: "other", share: rest }] : rows;
     },
     // "readings", not "days": the archive path carries one snapshot per session
     // rather than one per calendar day, so eight points can span a month. Naming
@@ -928,7 +937,7 @@ export function registerStaticViews(Alpine) {
       if (rows.length < 2) return "";
       const tokens = this.topTokens();
       if (!tokens.length) return "";
-      const colors = ["#00e5ff", "#5fb3a1", "#10b981", "#e8a640", "#ff7a29", "#7e889e", "#6ee7b7"];
+      const colors = SERIES_COLORS;
       const W = 640, H = 132, padB = 16, padT = 6, padL = 26;
       const plotH = H - padB - padT;
       const plotW = W - padL;
