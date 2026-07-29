@@ -1,7 +1,38 @@
 import type { ApplyInput, SubmissionInput } from "../committee/domain.ts";
-import type { canonicalizeSubmission } from "@robotmoney/contract";
+import { STANCES, type canonicalizeSubmission } from "@robotmoney/contract";
 
 export type JsonObject = Record<string, unknown>;
+
+const STANCE_SET: ReadonlySet<string> = new Set(STANCES);
+
+const SIGNING_KEYS = new Set([
+  "memberId",
+  "date",
+  "subjectId",
+  "nonce",
+  "stance",
+  "confidence",
+  "body",
+  "memoUrl",
+  "weights",
+]);
+
+const SUBMISSION_KEYS = new Set([
+  "memberId",
+  "date",
+  "subjectId",
+  "nonce",
+  "stance",
+  "confidence",
+  "body",
+  "memoUrl",
+  "weights",
+  "signature",
+]);
+
+export type ValidationResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string };
 
 export async function readJsonObject(req: Request): Promise<JsonObject | null> {
   const value = await req.json().catch(() => null);
@@ -80,8 +111,16 @@ export function parseApply(body: JsonObject | null): ApplyInput | null {
   };
 }
 
-export function parseSubmission(body: JsonObject | null): SubmissionInput | null {
-  if (!body) return null;
+export function validateSubmission(
+  body: JsonObject | null,
+): ValidationResult<SubmissionInput> {
+  if (!body) return { ok: false, error: "invalid submission" };
+
+  const unknown = Object.keys(body).filter((k) => !SUBMISSION_KEYS.has(k));
+  if (unknown.length) {
+    return { ok: false, error: `unknown field: ${unknown.join(", ")}` };
+  }
+
   const memberId = requiredString(body, "memberId", 100);
   const date = requiredString(body, "date", 10);
   const subjectId = requiredString(body, "subjectId", 100);
@@ -90,30 +129,71 @@ export function parseSubmission(body: JsonObject | null): SubmissionInput | null
   const signature = requiredString(body, "signature", 2000);
   const confidence = body.confidence;
   const weights = optionalWeights(body);
+
+  if (typeof body.stance === "string") {
+    const s = body.stance.trim();
+    if (!STANCE_SET.has(s)) {
+      return {
+        ok: false,
+        error: `stance must be one of ${STANCES.join(", ")}`,
+      };
+    }
+  }
+
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { ok: false, error: "date must be YYYY-MM-DD" };
+  }
+
+  if (
+    confidence !== undefined &&
+    (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1)
+  ) {
+    return { ok: false, error: "confidence must be a number between 0 and 1" };
+  }
+
+  if (weights === null) {
+    return { ok: false, error: "invalid weights" };
+  }
+
   if (
     !memberId || !date || !subjectId || !nonce || !stance || !signature ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
-    typeof confidence !== "number" || !Number.isFinite(confidence) ||
-    confidence < 0 || confidence > 1 || weights === null
-  ) return null;
+    typeof confidence !== "number"
+  ) {
+    return { ok: false, error: "invalid submission" };
+  }
+
   return {
-    memberId,
-    date,
-    subjectId,
-    nonce,
-    stance,
-    confidence,
-    signature,
-    body: optionalString(body, "body", 10_000),
-    memoUrl: optionalString(body, "memoUrl", 2000),
-    weights,
+    ok: true,
+    data: {
+      memberId,
+      date,
+      subjectId,
+      nonce,
+      stance,
+      confidence,
+      signature,
+      body: optionalString(body, "body", 10_000),
+      memoUrl: optionalString(body, "memoUrl", 2000),
+      weights,
+    },
   };
 }
 
-export function parseSigningDraft(
+export function parseSubmission(body: JsonObject | null): SubmissionInput | null {
+  const res = validateSubmission(body);
+  return res.ok ? res.data : null;
+}
+
+export function validateSigningDraft(
   body: JsonObject | null,
-): Parameters<typeof canonicalizeSubmission>[0] | null {
-  if (!body) return null;
+): ValidationResult<Parameters<typeof canonicalizeSubmission>[0]> {
+  if (!body) return { ok: false, error: "invalid signing draft" };
+
+  const unknown = Object.keys(body).filter((k) => !SIGNING_KEYS.has(k));
+  if (unknown.length) {
+    return { ok: false, error: `unknown field: ${unknown.join(", ")}` };
+  }
+
   const memberId = requiredString(body, "memberId", 100);
   const date = requiredString(body, "date", 10);
   const subjectId = requiredString(body, "subjectId", 100);
@@ -121,23 +201,60 @@ export function parseSigningDraft(
   const stance = requiredString(body, "stance", 100);
   const confidence = body.confidence;
   const weights = optionalWeights(body);
+
+  if (typeof body.stance === "string") {
+    const s = body.stance.trim();
+    if (!STANCE_SET.has(s)) {
+      return {
+        ok: false,
+        error: `stance must be one of ${STANCES.join(", ")}`,
+      };
+    }
+  }
+
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { ok: false, error: "date must be YYYY-MM-DD" };
+  }
+
+  if (
+    confidence !== undefined &&
+    (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1)
+  ) {
+    return { ok: false, error: "confidence must be a number between 0 and 1" };
+  }
+
+  if (weights === null) {
+    return { ok: false, error: "invalid weights" };
+  }
+
   if (
     !memberId || !date || !subjectId || !nonce || !stance ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
-    typeof confidence !== "number" || !Number.isFinite(confidence) ||
-    confidence < 0 || confidence > 1 || weights === null
-  ) return null;
+    typeof confidence !== "number"
+  ) {
+    return { ok: false, error: "invalid signing draft" };
+  }
+
   return {
-    memberId,
-    date,
-    subjectId,
-    nonce,
-    stance,
-    confidence,
-    body: optionalString(body, "body", 10_000),
-    memoUrl: optionalString(body, "memoUrl", 2000),
-    weights,
+    ok: true,
+    data: {
+      memberId,
+      date,
+      subjectId,
+      nonce,
+      stance,
+      confidence,
+      body: optionalString(body, "body", 10_000),
+      memoUrl: optionalString(body, "memoUrl", 2000),
+      weights,
+    },
   };
+}
+
+export function parseSigningDraft(
+  body: JsonObject | null,
+): Parameters<typeof canonicalizeSubmission>[0] | null {
+  const res = validateSigningDraft(body);
+  return res.ok ? res.data : null;
 }
 
 export function parsePositiveNumber(value: unknown, fallback: number): number {

@@ -18,6 +18,8 @@ import {
   parseSubmission,
   readJsonObject,
   requiredString,
+  validateSigningDraft,
+  validateSubmission,
 } from "../validation.ts";
 import { COMMITTEE_ROUTE_EXTENSIONS } from "./committee/extensions.ts";
 
@@ -100,9 +102,9 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
 
   // get_signing_payload: return the exact canonical bytes the member must sign.
   if (m === "POST" && p === C.signingPayload) {
-    const sub = parseSigningDraft(await readJsonObject(req));
-    if (!sub) return { status: 400, body: { error: "invalid signing draft" } };
-    return { status: 200, body: { canonical: canonicalizeSubmission(sub) } };
+    const res = validateSigningDraft(await readJsonObject(req));
+    if (!res.ok) return { status: 400, body: { error: res.error } };
+    return { status: 200, body: { canonical: canonicalizeSubmission(res.data) } };
   }
 
   // Memo: post (member-authenticated) and get (public read).
@@ -309,10 +311,10 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   if (m === "POST" && p === C.submit) {
     const token = bearer(req);
     if (!token) return { status: 401, body: { error: "missing bearer token" } };
-    const sub = parseSubmission(await readJsonObject(req));
-    if (!sub) return { status: 400, body: { error: "invalid submission" } };
-    const res = await ic.submitRecommendation(token, sub);
-    return { status: res.status, body: res };
+    const res = validateSubmission(await readJsonObject(req));
+    if (!res.ok) return { status: 400, body: { error: res.error } };
+    const subRes = await ic.submitRecommendation(token, res.data);
+    return { status: subRes.status, body: subRes };
   }
 
   // Pre-registered, concern-owned extension points keep the onboarding routes
