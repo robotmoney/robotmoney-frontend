@@ -50,6 +50,12 @@ function optionalWeights(body: JsonObject): { bucket: string; weight: number }[]
   return total > 0 && Number.isFinite(total) ? weights : null;
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export function isEmail(email: string): boolean {
+  return EMAIL_RE.test(email);
+}
+
+
 // §11 R2/R6 — the public onboarding shape carries NO client-supplied id: the
 // server mints the member UUID at apply time. It DOES carry the rmpc
 // signature over the canonical application payload (@robotmoney/contract);

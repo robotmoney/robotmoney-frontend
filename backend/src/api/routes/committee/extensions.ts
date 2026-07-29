@@ -1,5 +1,6 @@
 import { handleCommitteeOnboardingRoutes } from "./onboarding.ts";
 import { handleCommitteeReceiptRoutes } from "./receipts.ts";
+import { handleCommitteeWaitlistRoutes } from "./waitlist.ts";
 import type { CommitteeRouteExtension } from "./types.ts";
 
 // Register concern-owned stubs once so downstream issues only edit their own
@@ -8,4 +9,6 @@ import type { CommitteeRouteExtension } from "./types.ts";
 export const COMMITTEE_ROUTE_EXTENSIONS: readonly CommitteeRouteExtension[] = [
   handleCommitteeOnboardingRoutes,
   handleCommitteeReceiptRoutes,
+  handleCommitteeWaitlistRoutes,
 ];
+

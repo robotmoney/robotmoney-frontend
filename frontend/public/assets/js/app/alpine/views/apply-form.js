@@ -60,16 +60,18 @@ export function registerApplyForm(Alpine) {
     },
     rosterFull() { return !!this.seats && this.seats.filled >= this.seats.cap; },
     seatsOpen() { return this.seats ? Math.max(0, this.seats.cap - this.seats.filled) : null; },
-    // Roster-full waitlist. Until a persisted endpoint + auto-notify lands
-    // (backend, bundled with the mail transport), capture interest by opening a
-    // note to the team so a full roster is never a dead end for an operator.
-    joinWaitlist() {
+    async joinWaitlist() {
       const email = this.waitEmail.trim();
       if (!email) return;
-      const subject = encodeURIComponent("Robot Money committee waitlist");
-      const body = encodeURIComponent(`Please add me to the committee waitlist and email ${email} when a seat opens.`);
-      window.location.href = `mailto:hi@robotmoney.net?subject=${subject}&body=${body}`;
-      this.waitlisted = true;
+      try {
+        await api.post(ROUTES.committee.waitlist, { email, source: "apply-page" });
+        this.waitlisted = true;
+      } catch {
+        const subject = encodeURIComponent("Robot Money committee waitlist");
+        const body = encodeURIComponent(`Please add me to the committee waitlist and email ${email} when a seat opens.`);
+        window.location.href = `mailto:hi@robotmoney.net?subject=${subject}&body=${body}`;
+        this.waitlisted = true;
+      }
     },
     // The committee-onboarding skill (robotmoney-core) the pasted prompt installs;
     // linked so agents you drive by hand can open the same source of truth.
