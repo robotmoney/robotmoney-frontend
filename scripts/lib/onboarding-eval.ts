@@ -94,6 +94,12 @@ import { runMemberAgent } from "../agent/member-agent.ts";
 import { finalAssistantText } from "../agent/transcript.ts";
 import { AGENT_MODEL_ENV, DEFAULT_AGENT_MODEL, isKeylessModel, resolveAgentModel } from "./model-registry.ts";
 import { ZEN_KEY_ENV, zenApiKey } from "./opencode-key.ts";
+import {
+  createOnboardingTelemetry,
+  redactTelemetryText,
+  type OnboardingEventSink,
+  type OnboardingTelemetry,
+} from "./onboarding-telemetry.ts";
 
 // One definition of the compose file list and the compose argv prefix in the
 // repo (scripts/stack/config.ts); re-exported here so every existing importer
@@ -301,19 +307,25 @@ export interface ObservedApplication {
   onActiveRoster: boolean;
 }
 
-// See the module doc comment ("observe-only design, and its known
-// coarseness") for why connect/discover/toolchain are reported as ONE unit.
-function observedRank(observed: ObservedApplication): number {
-  if (observed.onActiveRoster) return ONBOARDING_STEPS.indexOf("session");
-  if (observed.applyState === "claimed") return ONBOARDING_STEPS.indexOf("claim");
-  if (observed.applyState === "approved") return ONBOARDING_STEPS.indexOf("approve");
-  if (observed.memberId) return ONBOARDING_STEPS.indexOf("apply"); // member row exists ⇒ apply landed
-  return -1; // no observable signal yet
+export function deriveSteps(observed: ObservedApplication): StepState[] {
+  // Approval activates the member row before the agent proves possession and
+  // claims its token. The states are therefore not a simple roster-derived
+  // rank: active-roster membership can complete approve, but never claim.
+  const applied = observed.memberId !== null;
+  const approved = observed.applyState === "approved" || observed.applyState === "claimed" || observed.onActiveRoster;
+  const claimed = observed.applyState === "claimed";
+  const sessionReady = claimed && observed.onActiveRoster;
+  const done = new Set<OnboardingStep>([
+    ...(applied ? (["connect", "discover", "toolchain", "apply"] as OnboardingStep[]) : []),
+    ...(approved ? (["approve"] as OnboardingStep[]) : []),
+    ...(claimed ? (["claim"] as OnboardingStep[]) : []),
+    ...(sessionReady ? (["session"] as OnboardingStep[]) : []),
+  ]);
+  return ONBOARDING_STEPS.map((step) => ({ step, status: done.has(step) ? "done" : "pending" }));
 }
 
-export function deriveSteps(observed: ObservedApplication): StepState[] {
-  const rank = observedRank(observed);
-  return ONBOARDING_STEPS.map((step, i) => ({ step, status: i <= rank ? "done" : "pending" }) as StepState);
+export function isFullyOnboarded(observed: ObservedApplication & { claimedAt: string | null }): boolean {
+  return observed.applyState === "claimed" && observed.claimedAt !== null && observed.onActiveRoster;
 }
 
 // ── External observation (public status route + admin roster) ───────────────
@@ -324,12 +336,17 @@ async function findMemberIdByContact(backendUrl: string, adminToken: string, con
   return body.members.find((m) => m.contactEmail === contact)?.id ?? null;
 }
 
-async function fetchApplyState(backendUrl: string, memberId: string): Promise<ApplyState> {
+interface ApplyStatusObservation {
+  state: ApplyState;
+  claimedAt: string | null;
+}
+
+async function fetchApplyStatus(backendUrl: string, memberId: string): Promise<ApplyStatusObservation | null> {
   const p = routePath(ROUTES.committee.applyStatus, { id: memberId });
   const res = await fetch(`${backendUrl}${p}`);
   if (!res.ok) return null;
-  const body = (await res.json()) as { state: ApplyState };
-  return body.state;
+  const body = (await res.json()) as { state: ApplyState; claimedAt?: string | null };
+  return { state: body.state, claimedAt: body.claimedAt ?? null };
 }
 
 async function isOnActiveRoster(backendUrl: string, memberId: string): Promise<boolean> {
@@ -379,6 +396,13 @@ export interface RunOnboardingEvalOptions {
   autoApproveDelayMs?: number;
   identity?: OnboardingIdentity;
   onEvent?: (msg: string) => void;
+  /** Exact environment returned by createStack; used by Compose child calls. */
+  composeSpawnEnv?: Record<string, string>;
+  /** Optional structured stream; omitted by existing demo/CI callers. */
+  onStructuredEvent?: OnboardingEventSink;
+  /** Shared sequencer for callers that also merge service/cleanup logs. */
+  telemetry?: OnboardingTelemetry;
+  attempt?: number;
 }
 
 export interface OnboardingEvalResult {
@@ -386,6 +410,12 @@ export interface OnboardingEvalResult {
   memberId: string | null;
   steps: StepState[];
   admitted: boolean;
+  /** Public apply state, distinct from active-roster membership. */
+  applyState: ApplyState;
+  /** Public proof that the one-time bearer claim completed. */
+  claimedAt: string | null;
+  /** Approval/activation signal; does not by itself mean onboarding succeeded. */
+  onActiveRoster: boolean;
   timedOut: boolean;
   containerExitCode: number | null;
   // Was the container ever observed to exist? See MemberAgentResult. `null`
@@ -428,7 +458,23 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const autoApproveDelayMs = opts.autoApproveDelayMs ?? DEFAULT_AUTO_APPROVE_DELAY_MS;
-  const log = opts.onEvent ?? (() => {});
+  const telemetry =
+    opts.telemetry ??
+    createOnboardingTelemetry(
+      { composeProject: opts.composeProject, runId: identity.runId, attempt: opts.attempt },
+      opts.onStructuredEvent,
+      [{ value: identity.contact, placeholder: "<contact redacted>" }],
+    );
+  const log = (message: string) => {
+    opts.onEvent?.(message);
+    telemetry.emit({
+      source: "harness",
+      stream: "event",
+      // Contact is useful on the interactive console but is local PII and is
+      // never persisted in structured telemetry.
+      message: redactTelemetryText(message, [{ value: identity.contact, placeholder: "<contact redacted>" }]),
+    });
+  };
 
   const prompt = buildAgentPrompt(identity, apiUrlInternal);
 
@@ -448,6 +494,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
   // primitive's own timeout is deliberately not used.
   let memberId: string | null = null;
   let applyState: ApplyState = null;
+  let claimedAt: string | null = null;
   let onActiveRoster = false;
   let admitted = false;
   let timedOut = false;
@@ -468,8 +515,12 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     // demoHarnessNote's comment). Never logged, never read back by this
     // harness — the keystore it protects lives and dies inside the container.
     ownerEnv: { [KEYSTORE_PASSPHRASE_ENV]: keystorePassphrase },
+    redactions: [{ value: identity.contact, placeholder: "<contact redacted>" }],
+    composeSpawnEnv: opts.composeSpawnEnv,
     title: `onboarding-eval-${identity.runId}`,
     onEvent: log,
+    telemetry,
+    attempt: opts.attempt,
     observe: async (handle) => {
       const deadline = Date.now() + timeoutMs;
       // Once the container itself has exited, cap how much longer we keep
@@ -481,6 +532,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 
       let approveScheduledForMemberId: string | null = null;
       let containerExitedAt: number | null = null;
+      let lastLoggedApplyState: ApplyState = null;
 
       for (;;) {
         if (handle.exitCode !== null && containerExitedAt === null) {
@@ -490,10 +542,21 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 
         if (!memberId) {
           memberId = await findMemberIdByContact(opts.backendUrl, opts.adminToken, identity.contact).catch(() => null);
-          if (memberId) log(`observed server-minted memberId=${memberId} for ${identity.contact} (§11 R2)`);
+          if (memberId) {
+            telemetry.setMemberId(memberId);
+            log(`observed server-minted memberId=${memberId} for ${identity.contact} (§11 R2)`);
+          }
         }
         if (memberId) {
-          applyState = await fetchApplyState(opts.backendUrl, memberId).catch(() => applyState);
+          const status = await fetchApplyStatus(opts.backendUrl, memberId).catch(() => null);
+          if (status) {
+            applyState = status.state;
+            claimedAt = status.claimedAt;
+            if (applyState !== lastLoggedApplyState) {
+              lastLoggedApplyState = applyState;
+              log(`observed public application state=${applyState} claimedAt=${claimedAt ? "present" : "absent"}`);
+            }
+          }
           if (applyState === "applied" && approveScheduledForMemberId !== memberId) {
             approveScheduledForMemberId = memberId;
             log(`application ${memberId} applied — auto-approving in ${autoApproveDelayMs}ms (§11 R7)`);
@@ -502,7 +565,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
           onActiveRoster = await isOnActiveRoster(opts.backendUrl, memberId).catch(() => onActiveRoster);
         }
 
-        if (onActiveRoster) break; // admitted
+        if (isFullyOnboarded({ memberId, applyState, claimedAt, onActiveRoster })) break;
         if (Date.now() >= deadline) break; // overall timeout
         if (containerExitedAt !== null && Date.now() - containerExitedAt >= postExitGraceMs) break; // nothing left to advance it
 
@@ -510,7 +573,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
       }
 
       // Computed BEFORE the primitive kills anything, exactly as before.
-      admitted = onActiveRoster;
+      admitted = isFullyOnboarded({ memberId, applyState, claimedAt, onActiveRoster });
       timedOut = !admitted && Date.now() >= deadline;
     },
   });
@@ -523,6 +586,9 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     memberId,
     steps,
     admitted,
+    applyState,
+    claimedAt,
+    onActiveRoster,
     timedOut,
     containerExitCode: run.exitCode,
     containerLaunched: run.containerLaunched,
@@ -633,7 +699,7 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
     // lookup the harness relies on to observe progress. The caller's display
     // name survives (see retryIdentity).
     const identity = retryIdentity(opts.identity, attempt);
-    last = await runOnce({ ...opts, identity });
+    last = await runOnce({ ...opts, identity, attempt });
     if (last.admitted) return last;
     const outcome = classifyOutcome(last);
     // The shared, pure decision over the classified outcome, applied whole. A

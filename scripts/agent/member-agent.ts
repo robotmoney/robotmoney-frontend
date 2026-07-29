@@ -53,6 +53,14 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { composeArgs, DEFAULT_COMPOSE_FILES } from "../stack/config.ts";
+import {
+  createOnboardingTelemetry,
+  drainRedactedStream,
+  redactTelemetryText,
+  type OnboardingEventSink,
+  type OnboardingTelemetry,
+  type RedactionSecret,
+} from "../lib/onboarding-telemetry.ts";
 
 /**
  * The model + credential this primitive runs with, resolved by the caller.
@@ -146,12 +154,10 @@ export function buildAgentOpencodeConfig(model: string): Record<string, unknown>
 // are known — never on a pattern guess, which would either miss a rotated key
 // shape or scrub unrelated text out of the evidence.
 export function redactSecrets(text: string, secrets: Array<[string | null | undefined, string]>): string {
-  let out = text;
-  for (const [secret, placeholder] of secrets) {
-    if (!secret || secret.length < 8) continue; // never mass-replace a short/empty string
-    out = out.split(secret).join(placeholder);
-  }
-  return out;
+  return redactTelemetryText(
+    text,
+    secrets.map(([value, placeholder]) => ({ value, placeholder })),
+  );
 }
 
 export async function drain(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -404,8 +410,17 @@ export interface MemberAgentOptions {
    * of every string this function returns.
    */
   ownerEnv?: Record<string, string>;
+  /** Additional caller-known sensitive values (for example local contact PII). */
+  redactions?: RedactionSecret[];
+  /** Exact generated Compose environment for the already-running stack. */
+  composeSpawnEnv?: Record<string, string>;
   title?: string;
   onEvent?: (msg: string) => void;
+  /** Optional durable/live structured event consumer. Existing callers need not provide one. */
+  onStructuredEvent?: OnboardingEventSink;
+  /** Shared sequencer used by runOnboardingEval to merge agent and observer events. */
+  telemetry?: OnboardingTelemetry;
+  attempt?: number;
   // Honoured ONLY when `observe` is absent. When an observer is supplied it
   // owns ALL timing (that is how the onboarding eval keeps its own deadline
   // and post-exit grace semantics unchanged).
@@ -444,13 +459,31 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
   const keep = opts.keepUntilInspected ?? false;
   const startedAt = Date.now();
   const containerName = memberAgentContainerName(opts.composeProject, opts.runId);
+  const injected: RedactionSecret[] = [
+    {
+      value: opts.modelConfig.apiKey,
+      placeholder: `<${opts.modelConfig.apiKeyEnv ?? "MODEL_KEY"} redacted>`,
+    },
+    ...Object.entries(opts.ownerEnv ?? {}).map(([k, value]) => ({ value, placeholder: `<${k} redacted>` })),
+    ...(opts.redactions ?? []),
+  ];
+  const telemetry =
+    opts.telemetry ??
+    createOnboardingTelemetry(
+      { composeProject: opts.composeProject, runId: opts.runId, attempt: opts.attempt },
+      opts.onStructuredEvent,
+      injected,
+    );
 
   const workDir = mkdtempSync(join(tmpdir(), "member-agent-"));
   const opencodeConfigPath = join(workDir, "opencode.json");
   try {
     writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(opts.modelConfig.model), null, 2));
 
-    const spawnEnv = memberAgentSpawnEnv(opts.composeProject, process.env);
+    // A stack created by scripts/stack carries generated label and credential
+    // interpolation values. Re-resolving Compose without that exact map makes
+    // its project volume hash differ and prompts to recreate live data.
+    const spawnEnv = memberAgentSpawnEnv(opts.composeProject, opts.composeSpawnEnv ?? process.env);
     const proc = Bun.spawn(
       buildMemberAgentArgv({
         composeProject: opts.composeProject,
@@ -467,12 +500,20 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
       // see memberAgentSpawnEnv's comment. Do not "tidy" either away.
       { cwd: opts.repoRoot, env: spawnEnv, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
     );
+    telemetry.emit({ source: "agent", stream: "event", message: "member-agent process spawned", containerName });
+    void proc.exited.then((code) => {
+      telemetry.emit({ source: "agent", stream: "event", message: `member-agent process exited (code ${code})`, containerName });
+    });
     // Actively drain both pipes for the whole run — an un-drained pipe can
     // fill its OS buffer and deadlock the child once its own transcript
     // exceeds a few tens of KB, which a real multi-tool-call session easily
     // does. Started BEFORE any await, and never moved after one.
-    const stdoutPromise = drain(proc.stdout as ReadableStream<Uint8Array>);
-    const stderrPromise = drain(proc.stderr as ReadableStream<Uint8Array>);
+    const stdoutPromise = drainRedactedStream(proc.stdout as ReadableStream<Uint8Array>, injected, ({ message }) => {
+      telemetry.emit({ source: "agent", stream: "stdout", message, containerName });
+    });
+    const stderrPromise = drainRedactedStream(proc.stderr as ReadableStream<Uint8Array>, injected, ({ message }) => {
+      telemetry.emit({ source: "agent", stream: "stderr", message, containerName });
+    });
 
     // POSITIVE evidence that the container came into being, gathered while the
     // run is still in flight. Without it, "the compose CLI never started
@@ -487,6 +528,7 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
       for (;;) {
         if (containerExists(containerName, spawnEnv)) {
           containerLaunched = true;
+          telemetry.emit({ source: "agent", stream: "event", message: "member-agent container observed", containerName });
           return;
         }
         if (proc.exitCode !== null) {
@@ -514,6 +556,7 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
       if (timer !== undefined) clearTimeout(timer); // never leave a 20-minute timer holding the event loop open
       timedOut = finished === "timeout";
       if (timedOut) log(`member-agent container ${containerName} hit its ${timeoutMs}ms deadline`);
+      if (timedOut) telemetry.emit({ source: "agent", stream: "event", message: `member-agent deadline reached after ${timeoutMs}ms`, containerName });
     }
 
     // Kill BOTH the local CLI process AND the actual container by its
@@ -538,26 +581,29 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
       if (opts.inspect) await opts.inspect({ containerName, timedOut });
     }
 
+    let containerCleanupExitCode: number | null = null;
     try {
-      Bun.spawnSync(["docker", "rm", "-f", containerName], { stdout: "ignore", stderr: "ignore" });
+      const cleanup = Bun.spawnSync(["docker", "rm", "-f", containerName], { stdout: "ignore", stderr: "ignore" });
+      containerCleanupExitCode = cleanup.exitCode;
     } catch {
       /* already removed */
     }
+    telemetry.emit({
+      source: "cleanup",
+      stream: "event",
+      message: `member-agent container cleanup exit=${containerCleanupExitCode ?? "already-removed"}`,
+      containerName,
+    });
     // LOAD-BEARING ORDERING: `docker rm -f` runs BEFORE the drains are awaited.
     // Closing the container's pipes is what lets the drains finish; awaiting
     // them first would hang. Do not "tidy" this.
     const [rawStdout, rawStderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, proc.exited]);
     await launchWatcher; // resolves as soon as the CLI is gone; never outlives the run
 
-    // Every value this function injected by `-e`, scrubbed before ANY of it
-    // leaves here — the caller cannot forget to do it, and there is no
-    // un-redacted field to reach for by mistake. See redactSecrets.
-    const injected: Array<[string | null | undefined, string]> = [
-      [opts.modelConfig.apiKey, `<${opts.modelConfig.apiKeyEnv ?? "MODEL_KEY"} redacted>`],
-      ...Object.entries(opts.ownerEnv ?? {}).map(([k, v]) => [v, `<${k} redacted>`] as [string, string]),
-    ];
-    const stdout = redactSecrets(rawStdout, injected);
-    const stderr = redactSecrets(rawStderr, injected);
+    // Both strings were assembled only from already-redacted stream records;
+    // there is no raw transcript variant for a caller to accidentally persist.
+    const stdout = rawStdout;
+    const stderr = rawStderr;
 
     return {
       containerName,

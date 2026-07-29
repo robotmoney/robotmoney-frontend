@@ -42,6 +42,7 @@ import {
   DEFAULT_INFERENCE_MODEL,
   deriveSteps,
   generateIdentity,
+  isFullyOnboarded,
   KEYSTORE_PASSPHRASE_ENV,
   LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH,
   looksRateLimited,
@@ -261,17 +262,25 @@ describe("onboarding-eval pure helpers", () => {
     });
   });
 
-  test("deriveSteps: approved but not yet claimed", () => {
+  test("deriveSteps: approved and active-roster but not yet claimed keeps claim/session pending", () => {
     const byStep = Object.fromEntries(
-      deriveSteps({ memberId: "m1", applyState: "approved", onActiveRoster: false }).map((s) => [s.step, s.status]),
+      deriveSteps({ memberId: "m1", applyState: "approved", onActiveRoster: true }).map((s) => [s.step, s.status]),
     );
     expect(byStep.approve).toBe("done");
     expect(byStep.claim).toBe("pending");
+    expect(byStep.session).toBe("pending");
   });
 
-  test("deriveSteps: on the active roster ⇒ every step done (admitted)", () => {
+  test("deriveSteps: claimed and on the active roster ⇒ every step done", () => {
     const steps = deriveSteps({ memberId: "m1", applyState: "claimed", onActiveRoster: true });
     expect(steps.every((s) => s.status === "done")).toBe(true);
+  });
+
+  test("full-onboarding success requires claimed state, claimedAt, and active roster independently", () => {
+    expect(isFullyOnboarded({ memberId: "m1", applyState: "approved", claimedAt: null, onActiveRoster: true })).toBe(false);
+    expect(isFullyOnboarded({ memberId: "m1", applyState: "claimed", claimedAt: null, onActiveRoster: true })).toBe(false);
+    expect(isFullyOnboarded({ memberId: "m1", applyState: "claimed", claimedAt: "2026-07-29T00:00:00Z", onActiveRoster: false })).toBe(false);
+    expect(isFullyOnboarded({ memberId: "m1", applyState: "claimed", claimedAt: "2026-07-29T00:00:00Z", onActiveRoster: true })).toBe(true);
   });
 });
 
@@ -454,6 +463,20 @@ describe("member-agent container primitive", () => {
       expect(env.DOCKER_HOST).toBe("unix:///var/run/docker.sock");
       expect("GONE" in env).toBe(false);
     });
+
+    test("the generated stack label environment survives into member-agent Compose resolution", () => {
+      const env = memberAgentSpawnEnv("rm_demo_eval_abc", {
+        PATH: "/usr/bin",
+        RM_STACK_ENV_CLASS: "local",
+        RM_STACK_ENV_HASH: "abc123",
+        DEMO_PROJECT: "from-stack",
+      });
+      expect(env).toMatchObject({
+        RM_STACK_ENV_CLASS: "local",
+        RM_STACK_ENV_HASH: "abc123",
+        DEMO_PROJECT: "rm_demo_eval_abc",
+      });
+    });
   });
 });
 
@@ -473,6 +496,9 @@ describe("runOnboardingEvalWithRetry", () => {
       memberId: null,
       steps: [],
       admitted: false,
+      applyState: null,
+      claimedAt: null,
+      onActiveRoster: false,
       timedOut: false,
       containerExitCode: 1,
       containerLaunched: true,
