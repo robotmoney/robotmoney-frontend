@@ -1,27 +1,33 @@
 // Pure unit tests for scripts/stack/ports.ts — no Docker, no network beyond
 // binding loopback sockets the test itself releases.
 //
-// What this file is really defending: the property that EVERY published host
-// port is drawn free on every run, with exactly one sanctioned exception. The
-// previous shape (an api port that "preferred" 48787 plus WEB_PORT/POSTGRES_PORT
-// env pins) raced the standing stage demo for the cloudflared origin and took
-// the site down, so "no fixed default" is a behaviour under test here, not a
-// convention.
+// What this file is really defending: the property that NOBODY IN THIS REPO
+// PICKS A HOST PORT. Two shapes have already failed in production. A fixed
+// default (the api port "preferred" 48787) let a CI boot race the standing
+// stage demo for the cloudflared origin and take the site down. Its replacement
+// — draw a free port ourselves, close the socket, hand the number to compose —
+// swapped that for a TOCTOU race: anything on this shared host can take the
+// port in the gap before compose binds it, and randomizing more stacks widened
+// the gap. Docker now chooses and binds atomically, and we read back what it
+// chose. So the assertions here are about PARSING the daemon's answer, about
+// the one sanctioned pin, and about no allocator having crept back in.
 import { describe, expect, test } from "bun:test";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  allocatePorts,
+  assertStageWebPortFree,
   describePortHolders,
   IGNORED_PORT_ENV_VARS,
+  parseComposePortOutput,
+  PortDiscoveryError,
   PortUnavailableError,
-  stackPortRequests,
   stalePortEnvWarnings,
   STAGE_WEB_PORT,
   type CommandResult,
 } from "../../stack/ports.ts";
+import { API_CONTAINER_PORT, portArgs, POSTGRES_CONTAINER_PORT, STAGE_COMPOSE_FILE } from "../../stack/config.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 
@@ -38,70 +44,107 @@ async function holding<T>(fn: (port: number) => Promise<T>): Promise<T> {
   }
 }
 
-describe("port policy — random always, no fixed default", () => {
-  test("an ordinary (non-stage) stack requests NOTHING fixed: both ports are free draws", () => {
-    const [web, pg] = stackPortRequests({ stage: false });
-    expect(web).toEqual({});
-    expect(pg).toEqual({});
+// A port the kernel just handed out and we immediately released — free at the
+// instant it is returned, which is all these probe tests need.
+function recentlyFreePort(): Promise<number> {
+  return new Promise((resolve) => {
+    const s = createServer();
+    s.listen(0, "127.0.0.1", () => {
+      const p = (s.address() as AddressInfo).port;
+      s.close(() => resolve(p));
+    });
+  });
+}
+
+describe("parseComposePortOutput — reading back what Docker assigned", () => {
+  test("a single IPv4 binding yields that port", () => {
+    expect(parseComposePortOutput("0.0.0.0:32768\n", "api", 8787)).toBe(32768);
   });
 
-  test("both allocated ports are real, distinct, and neither is a hard-coded default", async () => {
-    const [api, pg] = stackPortRequests({ stage: false });
-    const [apiPort, pgPort] = await allocatePorts([api, pg]);
-    expect(apiPort).toBeGreaterThan(1024);
-    expect(pgPort).toBeGreaterThan(1024);
-    expect(apiPort).not.toBe(pgPort);
-    // The two literals this change exists to delete.
-    expect(apiPort).not.toBe(STAGE_WEB_PORT);
-    expect(pgPort).not.toBe(5432);
+  test("the DUAL-STACK case: an IPv4 and an IPv6 line, and the IPv4 one wins", () => {
+    // Docker publishes on both families and the two numbers are not guaranteed
+    // equal. Everything host-side here talks to 127.0.0.1 (hostBackendUrl's
+    // comment: "localhost" resolves ::1 first under Bun and breaks the CI
+    // health check), so taking the IPv6 line would build a URL that times out.
+    expect(parseComposePortOutput("0.0.0.0:32768\n[::]:32769\n", "api", 8787)).toBe(32768);
+    // Order must not matter — compose has printed them both ways.
+    expect(parseComposePortOutput("[::]:32769\n0.0.0.0:32768\n", "api", 8787)).toBe(32768);
   });
 
-  test("two random draws never collide — every socket is held until both are chosen", async () => {
-    // Looped: a fork that closed each socket before drawing the next would
-    // eventually hand out the same port twice, which is precisely the
-    // regression this batch API exists to prevent.
-    for (let i = 0; i < 20; i++) {
-      const [a, b] = await allocatePorts([{}, {}]);
-      expect(a).not.toBe(b);
+  test("a bare `::` IPv6 host is recognised as IPv6, not mistaken for IPv4", () => {
+    expect(parseComposePortOutput(":::32769\n0.0.0.0:32768\n", "api", 8787)).toBe(32768);
+  });
+
+  test("an IPv6-ONLY result is accepted rather than refused", () => {
+    // Refusing would turn a working stack into a failed boot over something the
+    // operator cannot act on.
+    expect(parseComposePortOutput("[::]:32769\n", "api", 8787)).toBe(32769);
+  });
+
+  test("a specific bind address (not 0.0.0.0) is still an IPv4 answer", () => {
+    expect(parseComposePortOutput("127.0.0.1:41234\n", "postgres", 5432)).toBe(41234);
+  });
+
+  test("blank lines and stray whitespace are ignored", () => {
+    expect(parseComposePortOutput("\n  0.0.0.0:32768  \n\n", "api", 8787)).toBe(32768);
+  });
+
+  test("EMPTY output THROWS — a service that publishes nothing must not read as a port", () => {
+    let thrown: unknown;
+    try {
+      parseComposePortOutput("", "api", 8787);
+    } catch (e) {
+      thrown = e;
     }
+    expect(thrown).toBeInstanceOf(PortDiscoveryError);
+    const err = thrown as PortDiscoveryError;
+    expect(err.service).toBe("api");
+    expect(err.containerPort).toBe(8787);
+    expect(err.message).toContain("no binding was reported at all");
   });
 
-  test("allocated ports are usable afterwards (every held socket is released)", async () => {
-    const [p] = await allocatePorts([{}]);
-    const again = await allocatePorts([{ required: p! }]);
-    expect(again).toEqual([p]);
+  test("MALFORMED output THROWS and quotes what it actually got", () => {
+    // The failure an operator hits is "docker said something unexpected"; an
+    // error that hides the something is unactionable.
+    let thrown: unknown;
+    try {
+      parseComposePortOutput("no such service: api\n", "api", 8787);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(PortDiscoveryError);
+    expect((thrown as Error).message).toContain("no such service: api");
+  });
+
+  test("`:0` — compose's 'not published' — THROWS instead of becoming port 0", () => {
+    // A caller that took the 0 would go on to build http://127.0.0.1:0.
+    expect(() => parseComposePortOutput("0.0.0.0:0\n", "postgres", 5432)).toThrow(PortDiscoveryError);
+    expect(() => parseComposePortOutput("0.0.0.0:0\n[::]:0\n", "postgres", 5432)).toThrow(PortDiscoveryError);
+  });
+
+  test("an out-of-range or non-numeric port is not a candidate", () => {
+    expect(() => parseComposePortOutput("0.0.0.0:70000\n", "api", 8787)).toThrow(PortDiscoveryError);
+    expect(() => parseComposePortOutput("0.0.0.0:abc\n", "api", 8787)).toThrow(PortDiscoveryError);
+    // ...but a valid line alongside a junk one still resolves.
+    expect(parseComposePortOutput("garbage\n0.0.0.0:32768\n", "api", 8787)).toBe(32768);
+  });
+
+  test("portArgs asks the daemon rather than guessing, per service", () => {
+    expect(portArgs("api", API_CONTAINER_PORT)).toEqual(["port", "api", "8787"]);
+    expect(portArgs("postgres", POSTGRES_CONTAINER_PORT)).toEqual(["port", "postgres", "5432"]);
   });
 });
 
-describe("--stage — the ONE pinned port", () => {
-  test("pins the web port to the tunnel origin and leaves postgres random", async () => {
-    const [web, pg] = stackPortRequests({ stage: true });
-    expect(web.required).toBe(STAGE_WEB_PORT);
-    expect(web.purpose).toContain("stage");
-    // Postgres is NEVER pinned: nothing external routes to it, and a
-    // predictable database port on a shared host is a liability.
-    expect(pg).toEqual({});
+describe("--stage — the ONE pinned port, and its pre-flight", () => {
+  test("a FREE port passes the pre-flight silently", async () => {
+    await expect(assertStageWebPortFree(await recentlyFreePort(), "test")).resolves.toBeUndefined();
   });
 
-  test("the stage pin is the ONLY fixed port the builder can ever produce", () => {
-    for (const stage of [true, false]) {
-      const reqs = stackPortRequests({ stage });
-      const fixed = reqs.filter((r) => r.required !== undefined).map((r) => r.required);
-      expect(fixed).toEqual(stage ? [STAGE_WEB_PORT] : []);
-    }
-  });
-
-  test("a FREE required port is taken as-is", async () => {
-    // Draw one, release it, then require exactly it.
-    const [p] = await allocatePorts([{}]);
-    expect(await allocatePorts([{ required: p!, purpose: "test" }])).toEqual([p]);
-  });
-
-  test("a HELD required port FAILS LOUDLY — never a silent fallback to a random port", async () => {
+  test("a HELD port FAILS LOUDLY — the pre-flight has no boolean to branch on", async () => {
     await holding(async (port) => {
       let thrown: unknown;
       try {
-        await allocatePorts([{ required: port, purpose: "web/api (--stage)" }]);
+        await assertStageWebPortFree(port, "web/api (--stage)");
       } catch (e) {
         thrown = e;
       }
@@ -116,14 +159,17 @@ describe("--stage — the ONE pinned port", () => {
     });
   });
 
-  test("a held required port does not leak the other ports it was batched with", async () => {
-    await holding(async (port) => {
-      await expect(allocatePorts([{ required: port }, {}])).rejects.toThrow(PortUnavailableError);
-      // The batch's already-held sockets are released in the finally, so the
-      // very next allocation still works.
-      const [again] = await allocatePorts([{}]);
-      expect(again).toBeGreaterThan(1024);
-    });
+  test("the default subject is the cloudflared tunnel origin", () => {
+    expect(STAGE_WEB_PORT).toBe(48787);
+  });
+
+  test("the pre-flight RELEASES the port it probed — it is a check, not a reservation", async () => {
+    // This is the difference between this probe and the deleted allocator: a
+    // reservation would leave the socket open and compose could never bind.
+    const port = await recentlyFreePort();
+    await assertStageWebPortFree(port, "test");
+    // Still bindable immediately afterwards ⇒ nothing was held.
+    await assertStageWebPortFree(port, "test");
   });
 });
 
@@ -145,29 +191,12 @@ describe("stale WEB_PORT / POSTGRES_PORT are IGNORED, loudly", () => {
     for (const line of w) expect(line).toContain("--stage");
   });
 
-  test("a stale pin cannot influence what is allocated — the builder takes no environment at all", () => {
-    // stackPortRequests has no env parameter by construction; assert the shape
-    // it produces is identical regardless of what is exported.
-    const before = JSON.stringify(stackPortRequests({ stage: false }));
-    const saved = { WEB_PORT: process.env.WEB_PORT, POSTGRES_PORT: process.env.POSTGRES_PORT };
-    process.env.WEB_PORT = "48787";
-    process.env.POSTGRES_PORT = "5432";
-    try {
-      expect(JSON.stringify(stackPortRequests({ stage: false }))).toBe(before);
-    } finally {
-      for (const [k, v] of Object.entries(saved)) {
-        if (v === undefined) delete process.env[k];
-        else process.env[k] = v;
-      }
-    }
-  });
-
-  test("the ignored-var list is exactly the two names compose still interpolates as OUTPUTS", () => {
+  test("the ignored-var list is exactly the two names that used to pin a host port", () => {
     expect([...IGNORED_PORT_ENV_VARS]).toEqual(["WEB_PORT", "POSTGRES_PORT"]);
   });
 });
 
-describe("describePortHolders — the diagnostic on a failed stage pin", () => {
+describe("describePortHolders — the diagnostic on a failed stage pre-flight", () => {
   const ok = (stdout: string): CommandResult => ({ exitCode: 0, stdout, stderr: "" });
 
   test("names the container publishing the port and the listening socket", () => {
@@ -210,31 +239,62 @@ describe("describePortHolders — the diagnostic on a failed stage pin", () => {
 // ── Source/config guards ────────────────────────────────────────────────────
 // These read the real on-disk files and assert, so they are executed coverage
 // (test-coverage policy), not doc-grep standing in for behaviour: the artefacts
-// asserted here are compose interpolation defaults and an entrypoint code path,
+// asserted here are compose publish declarations and an entrypoint code path,
 // neither of which any unit test can otherwise reach (demo-main.ts boots a
-// stack at module scope and cannot be imported).
-describe("no fixed host-port default survives anywhere", () => {
-  // EFFECTIVE lines only — the prose in this compose file explains the removed
+// stack at module scope and cannot be imported). The BEHAVIOURAL half — that
+// `docker compose config` really resolves to exactly one api mapping — is
+// asserted from real compose output in
+// scripts/tests/integration/demo-compose-config.test.ts, which is where a
+// Docker dependency belongs.
+describe("no host port is named anywhere except the stage overlay", () => {
+  // EFFECTIVE lines only — the prose in these files explains the removed
   // `${WEB_PORT:-48787}` default by quoting it, and a guard that could not tell
   // a comment from a directive would forbid documenting the very change it
   // guards.
-  const composeLines = readFileSync(join(repoRoot, "docker-compose.yml"), "utf8")
-    .split("\n")
-    .filter((l) => !l.trim().startsWith("#"));
+  const effective = (path: string) =>
+    readFileSync(join(repoRoot, path), "utf8")
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("#"));
+  const composeLines = effective("docker-compose.yml");
   const compose = composeLines.join("\n");
+  const stageLines = effective(STAGE_COMPOSE_FILE);
 
-  test("docker-compose.yml REQUIRES both host ports (`:?`) instead of defaulting them", () => {
-    expect(compose).toContain("${WEB_PORT:?");
-    expect(compose).toContain("${POSTGRES_PORT:?");
-    expect(composeLines.filter((l) => l.includes("${WEB_PORT:-"))).toEqual([]);
-    expect(composeLines.filter((l) => l.includes("${POSTGRES_PORT:-"))).toEqual([]);
+  test("docker-compose.yml publishes CONTAINER PORTS ONLY — Docker assigns the host side", () => {
+    // The short form: a quoted bare container port, no host half, no variable.
+    const trimmed = composeLines.map((l) => l.trim());
+    expect(trimmed).toContain(`- "${API_CONTAINER_PORT}"`);
+    expect(trimmed).toContain(`- "${POSTGRES_CONTAINER_PORT}"`);
+  });
+
+  test("no `${WEB_PORT…}` / `${POSTGRES_PORT…}` interpolation survives — there is no host side to fill", () => {
+    for (const v of IGNORED_PORT_ENV_VARS) {
+      expect(composeLines.filter((l) => l.includes(`\${${v}`))).toEqual([]);
+    }
+  });
+
+  test("no fixed host port appears in the base compose file at all", () => {
+    // A `HOST:CONTAINER` mapping is exactly the shape that raced the tunnel.
+    expect(composeLines.filter((l) => /^\s*-\s*"\d+:\d+"/.test(l))).toEqual([]);
+    expect(compose).not.toContain(String(STAGE_WEB_PORT));
   });
 
   test("the container-internal api port stays the literal 8787 and is not a knob", () => {
-    expect(compose).toContain(':8787"');
     // A compose-set API_PORT made the host `.env` value look effective while
     // compose overrode it; the single default now lives in backend/src/config.ts.
     expect(composeLines.filter((l) => /^\s*API_PORT:/.test(l))).toEqual([]);
+  });
+
+  test("the stage overlay declares EXACTLY ONE api mapping, and does it with !override", () => {
+    // Compose merges `ports` by APPENDING. A plain `ports:` here would publish
+    // BOTH the base file's ephemeral binding and 48787 — verified against real
+    // `docker compose config` output, which emits two entries without the tag.
+    const portLines = stageLines.filter((l) => l.includes("ports:"));
+    expect(portLines).toHaveLength(1);
+    expect(portLines[0]).toContain("!override");
+    expect(portLines[0]).toContain(`"${STAGE_WEB_PORT}:${API_CONTAINER_PORT}"`);
+    // ...and it pins the api ONLY: postgres stays Docker-assigned under --stage
+    // because nothing external routes to the database.
+    expect(stageLines.filter((l) => /^\s{2}\S+:\s*$/.test(l)).map((l) => l.trim())).toEqual(["api:"]);
   });
 
   test(".env.example ships no host-port pin (an operator copying it must not re-create the outage)", () => {
@@ -246,12 +306,26 @@ describe("no fixed host-port default survives anywhere", () => {
     }
   });
 
-  test("the demo entrypoint no longer reads a port pin from the environment", () => {
+  test("the demo entrypoint neither reads a port pin nor pre-binds one", () => {
     const src = readFileSync(join(repoRoot, "scripts", "lib", "demo-main.ts"), "utf8");
     expect(src).not.toContain("process.env.WEB_PORT");
     expect(src).not.toContain("process.env.POSTGRES_PORT");
-    expect(src).not.toContain("parsePort");
-    // ...and it does still WARN about them, which is the loud half of the rule.
+    // The deleted allocator. Its return is a number nobody else agreed to, and
+    // that is the TOCTOU race this whole change removes.
+    expect(src).not.toContain("allocatePorts");
+    expect(src).not.toContain("stackPortRequests");
+    // ...and it does still WARN about a stale pin, which is the loud half.
     expect(src).toContain("stalePortEnvWarnings");
+  });
+
+  test("the pre-bind allocator is gone from the stack module, not just from its call sites", () => {
+    const ports = readFileSync(join(repoRoot, "scripts", "stack", "ports.ts"), "utf8");
+    // A surviving helper is an invitation to re-introduce the race, so its
+    // absence is the assertion — not merely that nothing calls it today.
+    for (const gone of ["export function allocatePorts", "export function stackPortRequests", "interface PortRequest"]) {
+      expect(ports).not.toContain(gone);
+    }
+    // The one bind left is the stage PRE-FLIGHT, which chooses nothing.
+    expect(ports).toContain("export async function assertStageWebPortFree");
   });
 });

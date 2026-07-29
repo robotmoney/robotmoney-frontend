@@ -20,6 +20,7 @@
 // boolean, no "available?" predicate, and no option — no shape a caller could
 // turn into a conditional skip.
 import {
+  API_CONTAINER_PORT,
   buildArgs,
   buildComposeEnv,
   buildSpawnEnv,
@@ -29,12 +30,16 @@ import {
   internalDatabaseUrl,
   migrateArgs,
   pgReadyArgs,
+  portArgs,
+  POSTGRES_CONTAINER_PORT,
   servicesFor,
   upArgs,
   type StackConfig,
+  type StackHostPorts,
 } from "./config.ts";
+import { parseComposePortOutput, PortDiscoveryError } from "./ports.ts";
 
-export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "health";
+export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "ports" | "health";
 
 export type StackEvent =
   | { phase: StackPhase; status: "start" | "done"; detail?: string }
@@ -69,6 +74,13 @@ export interface Stack {
   readonly config: StackConfig;
   readonly composeEnv: Record<string, string>;
   readonly spawnEnv: Record<string, string>;
+  /**
+   * `http://127.0.0.1:<the host port Docker gave api>`. A GETTER, not a value
+   * fixed at construction: the port does not exist until the container is
+   * running, so reading this before `up()` (or before an explicit
+   * `hostPorts()`) THROWS rather than handing back a plausible-looking URL
+   * built from a number nobody assigned.
+   */
   readonly backendUrl: string;
   readonly databaseUrl: string;
   readonly services: string[];
@@ -79,7 +91,11 @@ export interface Stack {
   waitForPostgres(timeoutMs?: number): Promise<void>;
   waitForHttp(url: string, timeoutMs?: number): Promise<void>;
   migrate(extraEnv?: Record<string, string>): Promise<void>;
-  up(opts?: StackUpOptions): Promise<void>;
+  /** Ask the daemon which host port it published one container port on. */
+  publishedPort(service: string, containerPort: number): number;
+  /** Both stack ports, queried live and then cached for this handle. */
+  hostPorts(): StackHostPorts;
+  up(opts?: StackUpOptions): Promise<StackHostPorts>;
   down(opts?: { removeVolumes?: boolean; removeOrphans?: boolean }): ComposeResult;
 }
 
@@ -102,8 +118,11 @@ export function createStack(
 
   const composeEnv = buildComposeEnv(cfg);
   const spawnEnv = buildSpawnEnv(cfg, hostEnv);
-  const backendUrl = hostBackendUrl(cfg.apiPort);
   const databaseUrl = internalDatabaseUrl(cfg.database);
+  // Discovered by hostPorts() after the containers are running, then reused.
+  // `undefined` is the honest state before that: this module has no other way
+  // to know a number Docker has not yet chosen.
+  let discovered: StackHostPorts | undefined;
   const services = servicesFor(cfg.profile);
   const prefix = composeArgs(cfg.project, cfg.composeFiles);
 
@@ -194,7 +213,50 @@ export function createStack(
     emit({ phase: "migrate", status: "done" });
   }
 
-  async function up(upOpts: StackUpOptions = {}): Promise<void> {
+  // ── Host-port readback ────────────────────────────────────────────────────
+  // The compose files publish CONTAINER ports only, so the daemon picks the
+  // host side and binds it atomically — no window in which someone else can
+  // take a number we already handed to compose (scripts/stack/ports.ts's header
+  // has the full TOCTOU rationale). The price is that the number is unknown
+  // until the container exists, and this is where we pay it: ask the daemon.
+  function publishedPort(service: string, containerPort: number): number {
+    const r = compose(portArgs(service, containerPort), { stdout: "pipe", stderr: "pipe" });
+    if (r.exitCode !== 0) {
+      throw new PortDiscoveryError(
+        service,
+        containerPort,
+        r.stdout,
+        `\`docker compose port\` exited ${r.exitCode}: ${r.stderr.trim() || "(no stderr)"}`,
+      );
+    }
+    return parseComposePortOutput(r.stdout, service, containerPort);
+  }
+
+  // Cached per handle: within one process the containers do not move, and
+  // demo-main asks for the api port on several code paths. A stale cache is
+  // impossible for the same reason — a `down` invalidates the handle, not the
+  // number. Callers that must not trust a cache (demo:status, whose state file
+  // CAN be stale across processes) query publishedPort() themselves.
+  function hostPorts(): StackHostPorts {
+    if (discovered) return discovered;
+    discovered = {
+      apiPort: publishedPort("api", API_CONTAINER_PORT),
+      pgPort: publishedPort("postgres", POSTGRES_CONTAINER_PORT),
+    };
+    return discovered;
+  }
+
+  function currentBackendUrl(): string {
+    if (!discovered) {
+      throw new Error(
+        "stack.backendUrl was read before the host port was discovered — Docker assigns it when the " +
+          "api container starts, so call up() (or hostPorts()) first",
+      );
+    }
+    return hostBackendUrl(discovered.apiPort);
+  }
+
+  async function up(upOpts: StackUpOptions = {}): Promise<StackHostPorts> {
     assertDockerAvailable();
     await build();
 
@@ -212,9 +274,18 @@ export function createStack(
     await composeAsync(upArgs(rest), "start services");
     emit({ phase: "services", status: "done", detail: rest.join(", ") });
 
+    // Only NOW do the host ports exist. Everything downstream — the health
+    // check below, the caller's READY banner, its state file — takes them from
+    // here, so there is exactly one place in the system that knows a host port
+    // and it learned it from the daemon.
+    emit({ phase: "ports", status: "start" });
+    const ports = hostPorts();
+    emit({ phase: "ports", status: "done", detail: `api=:${ports.apiPort} pg=:${ports.pgPort}` });
+
     emit({ phase: "health", status: "start" });
-    await waitForHttp(`${backendUrl}/health`, upOpts.healthTimeoutMs ?? 60_000);
+    await waitForHttp(`${hostBackendUrl(ports.apiPort)}/health`, upOpts.healthTimeoutMs ?? 60_000);
     emit({ phase: "health", status: "done" });
+    return ports;
   }
 
   // Returns the raw result so callers keep their own loud logging — teardown
@@ -228,7 +299,11 @@ export function createStack(
     config: cfg,
     composeEnv,
     spawnEnv,
-    backendUrl,
+    // A getter so `stack.backendUrl` stays a plain property read at every call
+    // site while still reflecting a port that is only known after up().
+    get backendUrl() {
+      return currentBackendUrl();
+    },
     databaseUrl,
     services,
     compose,
@@ -238,6 +313,8 @@ export function createStack(
     waitForPostgres,
     waitForHttp,
     migrate,
+    publishedPort,
+    hostPorts,
     up,
     down,
   };

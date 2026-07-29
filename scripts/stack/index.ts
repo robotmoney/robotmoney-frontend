@@ -23,5 +23,10 @@ export * from "./host-env.ts";
 // attributable to the environment that made it (CI job vs local shell) and can
 // be reaped by LABEL rather than by name substring.
 export * from "./naming.ts";
+// ports.ts DISCOVERS host ports; it does not choose them. There is deliberately
+// no allocator export left (`allocatePorts`/`stackPortRequests` were deleted):
+// the compose files publish container ports only, Docker binds the host side
+// atomically, and this module reads back what it chose. A surviving "pick a
+// free port" helper would only invite the TOCTOU race back in.
 export * from "./ports.ts";
 export * from "./stack.ts";

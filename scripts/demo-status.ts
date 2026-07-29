@@ -8,6 +8,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  API_CONTAINER_PORT,
+  parseComposePortOutput,
+  portArgs,
+  POSTGRES_CONTAINER_PORT,
+} from "./stack/index.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -15,14 +21,16 @@ const stateFile = join(repoRoot, ".agents", "demo-state.json");
 
 interface DemoState {
   project: string;
+  // HISTORY, not truth: what Docker assigned to the boot that wrote this file.
+  // livePort() below asks the daemon what is published now and that wins.
   apiPort: number;
   // Optional: D21 retired the mcp container; state files written since then omit
   // it, but an older standing demo's state file may still carry it.
   mcpPort?: number;
   pgPort?: number;
-  // Was the web port pinned to the cloudflared origin by `bun run demo --stage`?
-  // Provenance only (the port is read from apiPort); optional because a state
-  // file written before --stage existed has no such flag.
+  // Did this boot apply docker-compose.stage.yml (`bun run demo -- --stage`),
+  // pinning the api to the cloudflared origin? Provenance only; optional
+  // because a state file written before --stage existed has no such flag.
   stage?: boolean;
   // Environment class + hash (scripts/stack/naming.ts) so the labels compose
   // interpolates here match the ones `up` stamped. Optional for the same
@@ -49,14 +57,10 @@ if (!existsSync(stateFile)) {
 
 const s: DemoState = JSON.parse(readFileSync(stateFile, "utf8"));
 
-// WEB_PORT / POSTGRES_PORT exist here only to satisfy compose INTERPOLATION
-// (docker-compose.yml's port lines are `${VAR:?…}` and refuse to resolve
-// without a value). `ps` publishes nothing, so an older state file with no
-// pgPort gets an obviously-meaningless placeholder rather than the old silent
-// 5432 — that fixed default is precisely what this change removed.
-if (s.pgPort === undefined) {
-  console.warn("[demo:status] state file predates the pgPort field; using a placeholder for compose interpolation (no port is published by `ps`).");
-}
+// NO WEB_PORT / POSTGRES_PORT. docker-compose.yml no longer interpolates a host
+// port anywhere (both services publish container ports only; the daemon assigns
+// the host side), so nothing here has to invent a value for `config`/`ps` to
+// resolve.
 const dockerEnv: Record<string, string> = {
   ...process.env,
   COMPOSE_PROJECT_NAME: s.project,
@@ -65,21 +69,58 @@ const dockerEnv: Record<string, string> = {
   RM_STACK_ENV_CLASS: s.envClass ?? "unknown",
   RM_STACK_ENV_HASH: s.envHash ?? "unknown",
   DATABASE_URL: s.databaseUrl,
-  WEB_PORT: String(s.apiPort),
-  POSTGRES_PORT: String(s.pgPort ?? 1),
   POSTGRES_USER: s.dbUser,
   POSTGRES_PASSWORD: s.dbPassword,
   POSTGRES_DB: s.dbName,
 } as Record<string, string>;
 
-console.log(`[demo:status] project=${s.project}  api=:${s.apiPort}  (created ${s.createdAt})`);
+// THE LIVE PORTS COME FROM THE DAEMON, NOT FROM THE STATE FILE.
+//
+// The state file records what Docker assigned to the boot that wrote it, and
+// that is genuinely history: it survives teardown by design, it is left behind
+// by a crashed boot before any container existed (ports 0), and a later boot in
+// another checkout can be the one actually running. Reporting a stale number as
+// "the demo is at :NNNNN" sends the operator to a dead or foreign port — that
+// exact failure was hit on this host. `docker compose port` asks what is
+// published RIGHT NOW; an unrunning service simply yields nothing.
+function livePort(service: string, containerPort: number): number | undefined {
+  const r = Bun.spawnSync(["docker", "compose", ...portArgs(service, containerPort)], {
+    cwd: repoRoot,
+    env: dockerEnv,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (r.exitCode !== 0) return undefined;
+  try {
+    return parseComposePortOutput(new TextDecoder().decode(r.stdout), service, containerPort);
+  } catch {
+    // Not running / not published. `docker compose ps` below is the honest
+    // report of that, so this stays quiet rather than shouting about a stopped
+    // demo the operator is deliberately inspecting.
+    return undefined;
+  }
+}
+const liveApiPort = livePort("api", API_CONTAINER_PORT);
+const livePgPort = livePort("postgres", POSTGRES_CONTAINER_PORT);
+// `?? undefined` on the recorded pgPort keeps an old state file (no pgPort
+// field) from printing "undefined" as if it were a number.
+const shownApi = liveApiPort !== undefined ? `:${liveApiPort} (live)` : `:${s.apiPort} (from state file — NOT RUNNING)`;
+const shownPg = livePgPort !== undefined ? `:${livePgPort} (live)` : s.pgPort !== undefined ? `:${s.pgPort} (from state file — NOT RUNNING)` : "unknown";
+
+console.log(`[demo:status] project=${s.project}  api=${shownApi}  pg=${shownPg}  (created ${s.createdAt})`);
 if (s.envClass || s.envHash) {
   console.log(`[demo:status]   environment: ${s.envClass ?? "unknown"}/${s.envHash ?? "unknown"}  (container labels robotmoney.env / robotmoney.env.hash)`);
 }
 if (s.stage) {
-  console.log(`[demo:status]   --stage:    web port PINNED to :${s.apiPort} — this is the cloudflared origin for stage.robotmoney-labs.dev.`);
+  console.log(`[demo:status]   --stage:    api PINNED to :${liveApiPort ?? s.apiPort} — this is the cloudflared origin for stage.robotmoney-labs.dev.`);
 }
-console.log(`[demo:status]   Site:      http://127.0.0.1:${s.apiPort}/`);
+if (liveApiPort !== undefined && liveApiPort !== s.apiPort) {
+  // Worth saying out loud rather than silently preferring the live value: it
+  // means the state file belongs to a DIFFERENT boot than the running stack.
+  console.log(`[demo:status]   NOTE: the state file records api=:${s.apiPort}, but the daemon publishes :${liveApiPort}. The live value wins.`);
+}
+if (liveApiPort !== undefined) console.log(`[demo:status]   Site:      http://127.0.0.1:${liveApiPort}/`);
 console.log(`[demo:status]   state file: ${stateFile}`);
 if (s.logFile) console.log(`[demo:status]   log file:   ${s.logFile}`);
 if (s.pgDataDir) {

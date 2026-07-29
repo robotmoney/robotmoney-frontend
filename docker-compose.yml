@@ -2,20 +2,33 @@
 # `api` process serves BOTH the JSON API and the static frontend (STATIC_DIR),
 # so there's nothing else to run in front of it.
 #
-# HOST PORTS ARE REQUIRED INPUTS, NOT DEFAULTS. Both published ports below are
-# `${VAR:?…}`: compose REFUSES to start without them rather than falling back.
-# `bun run demo` / scripts/stack draw them free per run (scripts/stack/ports.ts);
-# a RAW compose invocation must supply them itself, e.g.
+# HOST PORTS ARE ASSIGNED BY DOCKER, NEVER BY US. Both published ports below
+# use the container-port-only short form (`- "8787"`), which makes the Docker
+# daemon pick a free host port and bind it ATOMICALLY. There is no host port to
+# supply, no variable to interpolate, and nothing to collide over:
 #
-#   WEB_PORT=8787 POSTGRES_PORT=5433 docker compose up -d postgres
+#   docker compose up -d postgres     # postgres lands on some free host port
+#   docker compose port postgres 5432 # ask which one
 #
-# The old `${WEB_PORT:-48787}` / `${POSTGRES_PORT:-5432}` defaults are gone
-# because they are what let a CI boot silently claim the port cloudflared routes
-# stage.robotmoney-labs.dev to and take the site down; a loud refusal is the
-# whole point. (`bun demo --stage` is the single sanctioned 48787 pin.)
+# Why not draw the port ourselves first. The previous shape did exactly that —
+# scripts/stack/ports.ts opened a socket on a free port, closed it, and passed
+# the number in as `${WEB_PORT:?…}` / `${POSTGRES_PORT:?…}`. That is a TOCTOU
+# race: between the close and compose's own bind, ANY other process on this box
+# (a second demo, a concurrent job on the self-hosted runner, an unrelated
+# service) can take the port, and the boot then fails — or worse, succeeds on a
+# port somebody else believes they own. Making more stacks random made the race
+# MORE likely, not less. Docker's own allocator has no such window.
 #
-# Local dev / CI usually only needs Postgres:   POSTGRES_PORT=… docker compose up -d postgres
-# Full box:                                     WEB_PORT=… POSTGRES_PORT=… docker compose up -d
+# Read the assignment back with `docker compose -p <project> port <svc> <port>`
+# (scripts/stack/ports.ts's parseComposePortOutput); `bun run demo` prints both
+# in its READY banner and records them in .agents/demo-state.json.
+#
+# THE ONE FIXED PORT in the whole system is the stage tunnel origin, and it
+# lives in its own overlay: docker-compose.stage.yml pins api to 48787 with
+# `ports: !override`, applied only by `bun run demo -- --stage`.
+#
+# Local dev / CI usually only needs Postgres:   docker compose up -d postgres
+# Full box:                                     docker compose up -d
 #
 # DB modes are driven by DATABASE_URL + the postgres volume:
 #   ephemeral (CI)  : run with a throwaway volume / `docker compose down -v`
@@ -81,12 +94,15 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robotmoney}
       POSTGRES_DB: ${POSTGRES_DB:-robotmoney}
     ports:
-      # No `:-5432` default (see this file's header): the caller MUST supply a
-      # host port. Nothing outside the compose network routes to postgres — api
+      # CONTAINER PORT ONLY — Docker picks the host port (see this file's
+      # header). Nothing outside the compose network routes to postgres — api
       # and the worker lanes reach it by service name — so this publish exists
-      # only for host-side psql, and a predictable :5432 just collided with
-      # whatever postgres the dev box already runs.
-      - "${POSTGRES_PORT:?POSTGRES_PORT is required - host ports are drawn free per run by scripts/stack/ports.ts and there is no default; for raw compose set it explicitly}:5432"
+      # only for host-side psql. A predictable :5432 collided with whatever
+      # postgres the dev box already runs; a self-drawn "free" port raced
+      # whoever grabbed it in the gap before compose bound it. Docker assigning
+      # it has neither failure mode. Postgres is Docker-assigned even under
+      # `--stage`: the stage overlay pins the api port and nothing else.
+      - "5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -137,19 +153,28 @@ services:
       # Serve the static frontend from this same process — no Caddy/nginx.
       STATIC_DIR: /srv/frontend
     ports:
-      # HOST side: required, never defaulted (see this file's header) — a
-      # `:-48787` fallback is precisely what raced the stage tunnel.
+      # HOST side: ABSENT on purpose — the short form publishes the container
+      # port on a host port the Docker daemon picks and binds atomically (see
+      # this file's header for why that beats drawing one ourselves). A
+      # `:-48787` fallback here is precisely what raced the stage tunnel, and
+      # the self-drawn replacement traded that collision for a TOCTOU one.
+      # `docker compose -p <project> port api 8787` reports the assignment.
       # CONTAINER side: the literal 8787, deliberately NOT configurable. Each
       # container has its own network namespace, so nothing can contend for a
-      # port inside it; there is no variability to express. All legitimate
-      # variability is host-side and `WEB_PORT` already owns it. (The api
-      # process's own default lives once, in backend/src/config.ts's
-      # `Number(process.env.API_PORT ?? 8787)`, which is live for a host-side
-      # `bun run` of the backend. The redundant `API_PORT: "8787"` that used to
-      # sit in this service's environment was removed: it made the host `.env`
-      # value look effective while compose overrode it, and it turned one port
-      # into three places that had to agree with nothing checking them.)
-      - "${WEB_PORT:?WEB_PORT is required - host ports are drawn free per run by scripts/stack/ports.ts and there is no default; use `bun demo --stage` for the pinned tunnel port, or set it explicitly for raw compose}:8787"
+      # port inside it; there is no variability to express, and all legitimate
+      # variability is host-side. (The api process's own default lives once, in
+      # backend/src/config.ts's `Number(process.env.API_PORT ?? 8787)`, which is
+      # live for a host-side `bun run` of the backend. The redundant
+      # `API_PORT: "8787"` that used to sit in this service's environment was
+      # removed: it made the host `.env` value look effective while compose
+      # overrode it, and it turned one port into three places that had to agree
+      # with nothing checking them.)
+      #
+      # docker-compose.stage.yml REPLACES this line (`ports: !override`) with
+      # the pinned 48787 the cloudflared tunnel routes to. Compose merges
+      # `ports` by APPENDING, so the overlay must override rather than add —
+      # otherwise --stage would publish 48787 AND a second ephemeral port.
+      - "8787"
     volumes:
       - ./frontend/public:/srv/frontend:ro
     depends_on:
