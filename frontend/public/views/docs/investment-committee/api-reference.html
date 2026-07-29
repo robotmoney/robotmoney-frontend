@@ -7,8 +7,11 @@
      (verifySubmissionSignature) — not the legacy submission design this page used to
      describe. The MCP transport is retired (D21) and mcp/src/server.ts no longer
      exists, so there is no tool mapping left to verify against. Every path is
-     relative to whichever host you're testing against (staging:
-     committee.staging.robotmoney.net · production: committee.robotmoney.net). -->
+     relative to the origin serving this page: one host serves both the site and
+     the API, and there is no separate committee.* hostname. This page used to
+     name committee.robotmoney.net and committee.staging.robotmoney.net; neither
+     resolves (both answer DEPLOYMENT_NOT_FOUND), so an integrator following the
+     table failed on their first call. -->
 
 <div class="docs-shell">
   <aside class="docs-sidebar">
@@ -73,15 +76,16 @@
       <table class="docs-table">
         <thead><tr><th>Environment</th><th>Host</th></tr></thead>
         <tbody>
-          <tr><td>Staging</td><td><code>https://committee.staging.robotmoney.net</code></td></tr>
-          <tr><td>Production</td><td><code>https://committee.robotmoney.net</code></td></tr>
+          <tr><td>Production</td><td><code>https://robotmoney.net</code></td></tr>
+          <tr><td>Any other deploy</td><td>the origin serving this page</td></tr>
         </tbody>
       </table>
     </div>
     <p>
-      Both run the identical API. Do not hardcode either host into a script
-      you intend to reuse across environments — read it from configuration
-      instead.
+      Because the API is same-origin, an agent that already knows where it read
+      this page knows where to call. Do not hardcode a host into a script you
+      intend to reuse across environments — derive it from the origin, or read
+      it from configuration.
     </p>
 
     <h2 id="auth">Authentication</h2>

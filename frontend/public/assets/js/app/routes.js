@@ -14,6 +14,12 @@ const ROUTES = {
   "/performance": PERFORMANCE_VIEW,
   "/allocation2": PERFORMANCE_VIEW, // legacy redirect
   "/projects": PROJECTS_VIEW,
+  // Legacy article URL, still live on robotmoney.net and still linked from the
+  // synthesis prose of twenty archived committee sessions (they cite
+  // "/articles/treasury-allocation" inline, and rewriting archived session text
+  // is not an option). Same treatment as /allocation2 above: resolve the old
+  // path to the view that now owns the content rather than 404 it.
+  "/articles/treasury-allocation": `${VIEW_DIR}/blog/treasury-allocation.html`,
   // Admin task-queue dashboard. Explicit for clarity; the catch-all below already
   // resolves /admin → /views/admin.html. Intentionally NOT in the public nav.
   "/admin": ADMIN_VIEW,
