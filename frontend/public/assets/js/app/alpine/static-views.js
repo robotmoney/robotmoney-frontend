@@ -903,10 +903,13 @@ export function registerStaticViews(Alpine) {
       const rest = this.positionRows().slice(this.topN).reduce((sum, p) => sum + (p.share || 0), 0);
       return rest > 0.001 ? [...rows, { token: "other", share: rest }] : rows;
     },
+    // "readings", not "days": the archive path carries one snapshot per session
+    // rather than one per calendar day, so eight points can span a month. Naming
+    // them days would misdescribe the x-axis.
     spanLabel() {
       const w = this.windowed();
       if (w.length < 2) return "";
-      return `${w[0].date} → ${w[w.length - 1].date} · ${w.length} days`;
+      return `${w[0].date} → ${w[w.length - 1].date} · ${w.length} readings`;
     },
     // Share-of-NAV over time, one LINE per position. A holdings table is a single
     // day; the question a reader has is whether the book is concentrating or
