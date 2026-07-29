@@ -65,8 +65,6 @@ describe("scripts/stack purity", () => {
         repoRoot,
         project: "rm_purity_probe",
         profile: "core",
-        apiPort: 1,
-        pgPort: 2,
         composeFiles: DEFAULT_COMPOSE_FILES,
         database: DEFAULT_STACK_DATABASE,
         credentials: { adminToken: "a", analyticsToken: "b" },
@@ -76,7 +74,7 @@ describe("scripts/stack purity", () => {
     );
     expect(events).toEqual([]);
     expect(stack.services).toEqual(["postgres", "api"]);
-    expect(stack.backendUrl).toBe("http://127.0.0.1:1");
+    expect(() => stack.backendUrl).toThrow("stack.backendUrl was read before the host port was discovered");
   });
 
   test("with no hostEnv the child environment is hermetic — nothing is inherited by accident", () => {
@@ -84,8 +82,6 @@ describe("scripts/stack purity", () => {
       repoRoot,
       project: "rm_purity_probe",
       profile: "core",
-      apiPort: 1,
-      pgPort: 2,
       composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
       credentials: { adminToken: "a", analyticsToken: "b" },
