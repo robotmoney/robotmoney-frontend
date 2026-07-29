@@ -29,6 +29,12 @@ export async function publishSession(payload: Record<string, unknown>): Promise<
   return await ic.publishSession(sessionId);
 }
 
+export async function sendApplicationReceivedNotification(payload: Record<string, unknown>): Promise<unknown> {
+  const outboxId = String(payload.outboxId ?? "");
+  if (!outboxId) throw new Error("committee application received notification requires outboxId");
+  return deliverCommitteeNotification(outboxId);
+}
+
 export async function sendActivationNotification(payload: Record<string, unknown>): Promise<unknown> {
   const outboxId = String(payload.outboxId ?? "");
   if (!outboxId) throw new Error("committee activation notification requires outboxId");

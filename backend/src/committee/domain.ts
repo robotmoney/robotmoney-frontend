@@ -11,7 +11,7 @@ import {
   verifyClaimChallengeSignature,
   verifySubmissionSignature,
 } from "../lib/signing.ts";
-import { enqueueActivationNotification } from "./notifications.ts";
+import { enqueueActivationNotification, enqueueApplicationReceivedNotification } from "./notifications.ts";
 import {
   day,
   instant,
@@ -464,6 +464,12 @@ export async function applyMember(input: ApplyInput) {
         SET payload = ${tx.json(input as any)}, status = 'pending', reviewed_at = NULL
         WHERE member_id = ${memberId}`;
       await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('public:apply', 'apply_refresh', ${tx.json({ memberId })})`;
+      // Re-apply gets the receipt too, and that is the case it matters most for:
+      // the usual reason an operator runs the skill a second time with the same
+      // key is that the first run's member id is gone from their terminal. See
+      // enqueueApplicationReceivedNotification for how the re-send is armed
+      // against the UNIQUE (kind, member_id) row that already exists.
+      await sendApplicationReceipt(tx, memberId, input.name, input.contact);
       return { ok: true, status: 201, memberId, memberStatus: "applied" as const };
     }
 
@@ -474,8 +480,34 @@ export async function applyMember(input: ApplyInput) {
     await tx`INSERT INTO committee_applications (member_id, payload, status) VALUES (${memberId}, ${tx.json(input as any)}, 'pending')`;
     // actor is the request source, NOT the self-asserted body identity.
     await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('public:apply', 'apply', ${tx.json({ memberId })})`;
+    await sendApplicationReceipt(tx, memberId, input.name, input.contact);
     return { ok: true, status: 201, memberId, memberStatus: "applied" as const };
   });
+}
+
+// Queue the apply-time receipt carrying the status-page URL, on the same
+// transaction as the application itself so the row can never exist without its
+// email (or the email without the row). Delivery is the worker's problem: the
+// outbox write is complete the moment this transaction commits, so an unreachable
+// or unconfigured mail transport costs a retry, never an application.
+//
+// The one thing this will not do is fail the application. Every other caller of
+// the notification module throws on an unset COMMITTEE_NOTIFICATION_EMAIL_FROM,
+// which is right for them: activate is an admin action and seat-open runs behind
+// one, so a loud failure lands in front of someone who can fix the env. Apply is
+// the public front door. Turning a sender misconfiguration into a 500 on every
+// inbound application would cost us the applicants themselves, which is a strictly
+// worse outcome than a missing receipt, so we check the sender first and skip
+// rather than throw. The route already refuses applications without a contact
+// email, so `recipient` is a real address by the time we get here.
+//
+// `memberName` comes straight off the application rather than being read back
+// from the row we just wrote: it is the same value either way, and parseApply has
+// already trimmed it and refused an empty one, so there is nothing a re-select
+// would add except a query.
+async function sendApplicationReceipt(tx: DbHandle, memberId: string, memberName: string, recipient: string): Promise<void> {
+  if (!config.committeeNotificationEmailFrom) return;
+  await enqueueApplicationReceivedNotification(tx, memberId, memberName, recipient);
 }
 
 // Public, privacy-safe application-status projection (Issue #237).
@@ -550,9 +582,14 @@ export async function getApplyStatus(memberId: string): Promise<ApplicationStatu
 // a token hash.
 export async function activateMember(memberId: string) {
   return await sql.begin(async (tx) => {
+    // `name` rides along on the row we are already locking, because the approval
+    // email leads with it: an operator running several members recognises the name
+    // they chose and nothing else, least of all a UUID. Adding the column here
+    // beats a second select inside the notification module, which would have to
+    // re-find a row this transaction is already holding.
     const existing = (await tx`
-      SELECT id, contact_email FROM committee_members WHERE id = ${memberId} FOR UPDATE`)[0] as
-      | { id: string; contact_email: string | null }
+      SELECT id, name, contact_email FROM committee_members WHERE id = ${memberId} FOR UPDATE`)[0] as
+      | { id: string; name: string; contact_email: string | null }
       | undefined;
     if (!existing) return { ok: false, status: 404, error: "no such applicant" };
     const key = (await tx`SELECT id FROM committee_member_keys WHERE member_id = ${memberId} AND active = false ORDER BY created_at DESC LIMIT 1 FOR UPDATE`)[0] as { id: number } | undefined;
@@ -572,7 +609,7 @@ export async function activateMember(memberId: string) {
     await tx`UPDATE committee_applications SET status = 'approved', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
     await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'activate_member', ${tx.json({ memberId })})`;
     const notificationOutboxId = existing.contact_email
-      ? await enqueueActivationNotification(tx, memberId, existing.contact_email)
+      ? await enqueueActivationNotification(tx, memberId, existing.name, existing.contact_email)
       : null;
     return {
       ok: true,
