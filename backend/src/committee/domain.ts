@@ -66,6 +66,15 @@ export async function countActiveMembers(): Promise<number> {
   return Number(rows[0]?.n ?? 0);
 }
 
+export async function getRosterCapacity(): Promise<{ rosterCap: number; seatsFilled: number; seatsAvailable: number }> {
+  const count = await countActiveMembers();
+  return {
+    rosterCap: COMMITTEE_ROSTER_CAP,
+    seatsFilled: count,
+    seatsAvailable: Math.max(0, COMMITTEE_ROSTER_CAP - count),
+  };
+}
+
 // Serialize every roster-admission transaction on one advisory key. A bare
 // count()-then-write is a TOCTOU race: two concurrent activations each read
 // count=CAP-1 and both admit, blowing past COMMITTEE_ROSTER_CAP. A txn-scoped

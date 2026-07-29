@@ -46,7 +46,10 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
   const p = url.pathname;
   const m = req.method;
 
-  if (m === "GET" && p === C.members) return { status: 200, body: { members: await ic.getMembers() } };
+  if (m === "GET" && p === C.members) {
+    const [members, roster] = await Promise.all([ic.getMembers(), ic.getRosterCapacity()]);
+    return { status: 200, body: { members, ...roster } };
+  }
   // Checked BEFORE the single-segment member-detail route below — a bare
   // `.startsWith` there would otherwise swallow `/members/:id/takes` too (its
   // `.split("/").pop()` would read "takes" as the member id).
