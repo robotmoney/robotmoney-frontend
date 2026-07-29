@@ -1,46 +1,371 @@
-<!-- /research/late-cycle-signals — mirrors the original surface. Fetches the
-     late-cycle research signal and renders its gauges + chart. -->
-<section class="rs container" x-data="researchView('late-cycle-signals')" x-init="load()">
-  <header class="rs__head">
-    <span class="rs__eyebrow">Research</span>
-    <h1 class="rs__title" x-text="payload?.title || 'Late-cycle signals'">Late-cycle signals</h1>
-    <p class="rs__q" x-show="payload" x-cloak x-text="payload?.question"></p>
-    <p class="rs__asof" x-show="payload" x-cloak>As of <span x-text="payload?.asof"></span> · complements the regime composite (not wired into it).</p>
-  </header>
+<!-- /research/late-cycle-signals — Late-cycle signals research preview.
+     Full long-form content ported from the published page at
+     robotmoney.net/research/late-cycle-signals: four slow-moving gauges
+     (index concentration, M&A activity, margin debt, consumer confidence),
+     each with its write-up and read-it-this-way line, plus the framing and
+     regime-composite sections.
+     Static fragment. NO <script>, NO custom Alpine factories. -->
 
-  <p class="rs__loading" x-show="loading">Loading signal…</p>
-  <p class="rs__error" x-show="error" x-text="error" x-cloak></p>
+<section class="stub">
+  <div class="stub__container">
+    <header class="stub__head">
+      <div class="stub__eyebrow">Research preview</div>
+      <h1 class="stub__title">How late in the rally <span class="stub__accent">are we?</span></h1>
+      <p class="stub__lede">
+        The <a class="stub__inline" href="/regime">regime classifier</a> answers a fast
+        question: is risk appetite on <em>right now</em>? These four gauges answer a slow
+        one: how mature is the cycle that&rsquo;s producing that risk appetite? They move on
+        monthly and quarterly data, so they don&rsquo;t belong in a daily composite directly
+        &mdash; but a loud risk-on composite combined with saturated late-cycle gauges is
+        historically the configuration where trimming into strength beats chasing.
+      </p>
+      <p class="stub__lede">
+        The selection is inspired by BofA&rsquo;s &ldquo;signposts of a market peak&rdquo;
+        checklist (10 signals, ~70% triggered as of May 2026, vs 80&ndash;90% at the
+        1990/2000/2007 peaks) &mdash; rebuilt here from free sources only. The honest caveat
+        up front: peak checklists are assembled retrospectively, every signal is in-sample by
+        construction, and the 2018/2020 rows of BofA&rsquo;s own table show the false-positive
+        cost. Read these as gradients, not triggers.
+      </p>
+    </header>
 
-  <template x-if="payload">
-    <div>
-      <div class="rs__gauges">
-        <template x-for="g in payload.gauges" :key="g.id">
-          <div class="rs__gauge">
-            <div class="rs__gauge-name" x-text="g.name"></div>
-            <div class="rs__gauge-val" x-text="g.value"></div>
-            <div class="rs__bar"><div class="rs__bar-fill" :style="`width:${g.percentile*100}%`"></div></div>
-            <div class="rs__gauge-pct">percentile <span x-text="pct(g.percentile)"></span></div>
-            <span :class="readClass(g.read)" x-text="g.read"></span>
-          </div>
-        </template>
-      </div>
-      <div class="rs__chart"><canvas x-ref="chart"></canvas></div>
-
-      <!-- Real richer indicator series from the payload (concentration, top7_vs_spy,
-           mna, margin_debt_yoy, consumer_conf and their percentile tracks). -->
-      <template x-if="indicatorNames().length">
-        <div>
-          <h2 class="rs__h2">Indicator series</h2>
-          <div class="rs__series-grid">
-            <template x-for="name in indicatorNames()" :key="name">
-              <div class="rs__series-card">
-                <div class="rs__series-label" x-text="prettify(name)"></div>
-                <div class="rs__series-canvas"><canvas :data-series="name"></canvas></div>
-              </div>
-            </template>
-          </div>
-        </div>
-      </template>
+    <div class="stub__table-wrap">
+      <table class="stub__table">
+        <caption class="stub__caption">Where the four gauges stand</caption>
+        <thead>
+          <tr>
+            <th scope="col" class="stub__th">Gauge</th>
+            <th scope="col" class="stub__th stub__th--num">Reading</th>
+            <th scope="col" class="stub__th">Basis</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row" class="stub__rowhead">Concentration</th>
+            <td class="stub__num">53%</td>
+            <td class="stub__td-sub">SPY/RSP 3y percentile</td>
+          </tr>
+          <tr>
+            <th scope="row" class="stub__rowhead">M&amp;A activity</th>
+            <td class="stub__num">94%</td>
+            <td class="stub__td-sub">S-4 count 3y percentile</td>
+          </tr>
+          <tr>
+            <th scope="row" class="stub__rowhead">Margin debt</th>
+            <td class="stub__num">+9.9%</td>
+            <td class="stub__td-sub">YoY growth</td>
+          </tr>
+          <tr>
+            <th scope="row" class="stub__rowhead">Consumer conf.</th>
+            <td class="stub__num">44.8</td>
+            <td class="stub__td-sub">UMich sentiment</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="stub__table-note">Readings as published on the live research preview.</p>
     </div>
-  </template>
+
+    <div class="stub__body">
+      <section class="stub__sec">
+        <h2 class="stub__h2">1. Index concentration &mdash; the top of the index vs the index</h2>
+        <p class="stub__p">
+          Cap-weighted S&amp;P 500 (SPY) divided by equal-weighted (RSP). When a handful of
+          megacaps carry the index, cap-weight outruns equal-weight and the ratio climbs. This
+          is the generic version of &ldquo;top 7 vs the index&rdquo; &mdash; it doesn&rsquo;t
+          hard-code today&rsquo;s leaders, so it keeps working when leadership rotates. We
+          chart the top-7-today basket as a secondary line; its past values carry a
+          survivorship caveat (we picked today&rsquo;s winners), which is exactly why the
+          generic ratio is the primary signal. Extreme concentration is not a sell signal by
+          itself &mdash; it can persist for years &mdash; but every major unwind (2000, 2022)
+          started from a concentration extreme, because an index priced off 7 stories has
+          fewer independent legs to stand on.
+        </p>
+        <div class="stub__series">
+          <div class="stub__series-label">Series: SPY/RSP 3y percentile (scale 0 to 1)</div>
+          <div class="stub__series-label">Secondary: Top-7-today basket vs SPY, 3y %ile (survivorship caveat)</div>
+          <p class="stub__read">
+            <span class="stub__read-key">Read it this way</span>
+            Higher = narrower leadership. Persistent readings above 0.8 are the late-cycle
+            configuration; the unwind direction (rotation vs drawdown) is not predictable from
+            this alone.
+          </p>
+        </div>
+      </section>
+
+      <section class="stub__sec">
+        <h2 class="stub__h2">2. M&amp;A activity &mdash; S-4 filings per month</h2>
+        <p class="stub__p">
+          Monthly count of S-4 registration statements filed with the SEC (the form companies
+          file for stock-financed mergers and exchange offers), via EDGAR full-text search.
+          Deal-making is a confidence trade: boards commit capital at scale when financing is
+          cheap and projections extrapolate well &mdash; which is why deal counts historically
+          crest near cycle tops (BofA&rsquo;s version of this trigger: 5y deal-count Z-score
+          &gt; 1). Mechanical, free, and harder to game than survey data.
+        </p>
+        <div class="stub__series">
+          <div class="stub__series-label">Series: S-4 monthly count, 3y percentile (scale 0 to 1)</div>
+          <p class="stub__read">
+            <span class="stub__read-key">Read it this way</span>
+            Higher = more deal-making = later cycle. Lows mark early-cycle risk aversion
+            (2020, 2023).
+          </p>
+        </div>
+      </section>
+
+      <section class="stub__sec">
+        <h2 class="stub__h2">3. Margin debt &mdash; speculative leverage</h2>
+        <p class="stub__p">
+          Broker-dealer margin loans from the Fed&rsquo;s Z.1 flow-of-funds accounts
+          (quarterly), read as year-over-year growth. This is the liquidity-and-leverage proxy:
+          when investors borrow aggressively against portfolios, marginal buying power is being
+          manufactured rather than earned. YoY growth peaks led the 2000, 2007 and 2021 equity
+          peaks; the deepest contractions marked durable bottoms. Quarterly data means
+          it&rsquo;s slow &mdash; treat it as cycle positioning, not timing.
+        </p>
+        <div class="stub__series">
+          <div class="stub__series-label">Series: Margin debt YoY growth</div>
+          <p class="stub__read">
+            <span class="stub__read-key">Read it this way</span>
+            Positive and rising = leverage expanding (risk-on, but froth at extremes). Deeply
+            negative = deleveraging done, historically a bottoming signal.
+          </p>
+        </div>
+      </section>
+
+      <section class="stub__sec">
+        <h2 class="stub__h2">4. Consumer confidence &mdash; the contrarian survey</h2>
+        <p class="stub__p">
+          University of Michigan consumer sentiment (the free cousin of the Conference Board
+          series BofA uses with its &gt;110 trigger; scales differ, shape is similar).
+          Confidence is a coincident-to-contrarian signal: very high readings mean the good
+          news is fully absorbed &mdash; households are all-in &mdash; which is late-cycle. The
+          classic pre-recession pattern is elevated-then-rolling-over. Very low readings are
+          historically excellent forward-return setups (2009, 2022).
+        </p>
+        <div class="stub__series">
+          <div class="stub__series-label">Series: UMich consumer sentiment</div>
+          <p class="stub__read">
+            <span class="stub__read-key">Read it this way</span>
+            Elevated and rolling over = late-cycle warning. Depressed = contrarian risk-on.
+          </p>
+        </div>
+      </section>
+
+      <section class="stub__sec">
+        <h2 class="stub__h2">How these would feed the regime composite</h2>
+        <p class="stub__p">
+          Proposed panel assignments if promoted: concentration, M&amp;A activity and margin
+          debt join the equity factor panel; consumer confidence joins the macro panel. All
+          four would be sign-aligned the same way as existing indicators (percentile-ranked,
+          +1 = risk-on), with concentration and M&amp;A carrying a <em>negative</em> sign at
+          the extremes &mdash; the subtlety being that these are hump-shaped signals: rising
+          from low levels is healthy risk-on, saturated readings are late-cycle. That
+          nonlinearity is why they start here as a research preview rather than going straight
+          into a linear panel, and why any promotion would be a version bump with a documented
+          relock, per <code class="stub__code">data/regime/regime-versions.json</code>.
+        </p>
+        <p class="stub__p">
+          Read together with the
+          <a class="stub__inline" href="/research/channel-divergence">channel-divergence preview</a>:
+          if late-cycle gauges saturate in equities while crypto isn&rsquo;t absorbing
+          risk-appetite flow, that&rsquo;s the &ldquo;AI vs crypto&rdquo; configuration &mdash;
+          equity euphoria without crypto beta &mdash; and the composite should read it as
+          something other than uniform risk-on.
+        </p>
+      </section>
+    </div>
+
+    <div class="stub__back">
+      <a class="stub__back-link" href="/regime">&larr; Back to /regime</a>
+    </div>
+  </div>
 </section>
+
+<style>
+.stub {
+  min-height: 100vh;
+  padding: 8rem 1.5rem 5rem;
+  background: var(--color-void);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+.stub__container { max-width: 768px; margin: 0 auto; }
+.stub__head { margin-bottom: 2.5rem; }
+.stub__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+.stub__title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: 2.5rem;
+  line-height: 1.05;
+  margin: 0;
+}
+.stub__accent {
+  font-family: var(--font-display);
+  font-style: normal;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+.stub__lede {
+  color: var(--color-text-muted);
+  max-width: 44rem;
+  margin: 1.25rem 0 0;
+  line-height: 1.65;
+  font-size: 1.0625rem;
+}
+.stub__lede em { font-style: normal; color: var(--color-text); }
+.stub__body { display: flex; flex-direction: column; gap: 2.5rem; }
+.stub__sec { display: flex; flex-direction: column; gap: 1rem; }
+.stub__h2 {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text);
+  margin: 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-accent);
+}
+.stub__p {
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+.stub__p em { font-style: normal; color: var(--color-text); text-decoration: underline; text-underline-offset: 3px; }
+.stub__code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--color-text-dim);
+}
+.stub__inline {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.stub__inline:hover { color: var(--color-text); }
+.stub__table-wrap { overflow-x: auto; margin: 0 0 3rem; }
+.stub__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.stub__caption {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+  text-align: left;
+  padding-bottom: 0.5rem;
+}
+.stub__table thead tr { border-bottom: 1px solid var(--color-border); }
+.stub__th {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+  text-align: left;
+  padding: 0.5rem 1rem 0.5rem 0;
+  white-space: nowrap;
+}
+.stub__th--num { text-align: right; }
+.stub__table tbody tr { border-bottom: 1px solid var(--color-border); }
+.stub__rowhead {
+  font-weight: 500;
+  text-align: left;
+  color: var(--color-text);
+  padding: 0.6rem 1rem 0.6rem 0;
+  white-space: nowrap;
+}
+.stub__num {
+  font-family: var(--font-mono);
+  color: var(--color-text);
+  text-align: right;
+  padding: 0.6rem 1rem 0.6rem 0;
+  white-space: nowrap;
+}
+.stub__td-sub {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-text-dim);
+  padding: 0.6rem 0;
+}
+.stub__table-note {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--color-text-dim);
+  margin: 0.5rem 0 0;
+}
+.stub__series {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.stub__series-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-dim);
+  line-height: 1.5;
+}
+.stub__read {
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--color-text-muted);
+  margin: 0.4rem 0 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border);
+}
+.stub__read-key {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-accent);
+  margin-bottom: 0.35rem;
+}
+.stub__back { margin-top: 3rem; }
+.stub__back-link {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: border-color 0.3s, color 0.3s;
+}
+.stub__back-link:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.stub a:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stub__back-link { transition: none; }
+}
+@media (min-width: 1024px) {
+  .stub { padding: 10rem 2rem 6rem; }
+  .stub__title { font-size: 3.5rem; }
+}
+</style>

@@ -1,43 +1,1162 @@
-<!-- /regime-detection — Regime Detection research brief.
-     Referenced from regime methodology + blog/changelog/media.
-     Static on-brand placeholder for the prior-art survey / design-space mapping.
+<!-- /regime-detection — Regime Detection research brief (full text).
+     Faithful port of the production robotmoney.net/regime-detection page:
+     12 numbered sections, Appendix A glossary, 8 data tables.
+     Model-agnostic survey of regime-detection prior art, methods and data sources.
+     Referenced from /regime methodology + blog/changelog/media.
      NO <script>, NO custom Alpine factories. -->
 
 <section class="stub">
   <div class="stub__container">
     <header class="stub__head">
-      <div class="stub__eyebrow">Research Brief</div>
+      <div class="stub__eyebrow">Research</div>
       <h1 class="stub__title">Regime <span class="stub__accent">Detection</span></h1>
       <p class="stub__lede">
-        A survey of prior art in market-regime detection and a mapping of the
-        design space that informs the Robot Money classifier. The full brief is
-        being written; this page will host the literature review and the rationale
-        behind the composite, panel-based approach.
+        Prior art, methods, and data sources for building a daily multi-asset regime
+        classifier and tactical asset allocation engine
       </p>
     </header>
 
-    <div class="stub__body">
-      <section class="stub__sec">
-        <h2 class="stub__h2">Prior-art survey</h2>
+    <article class="stub__body">
+
+      <p class="stub__intro">
+        <strong>This document catalogs the institutional frameworks, quantitative methods, and
+        data sources for regime detection across equities, fixed income, FX, commodities, crypto,
+        and DeFi yield.</strong> The goal is not to prescribe a single model, but to map the design
+        space so builders can pick methods suited to their governance constraints, data budget, and
+        asset universe. Written to be model-agnostic. Date of brief: April 2026.
+      </p>
+
+      <section class="stub__callout">
+        <h2 class="stub__h2 stub__h2--callout">Scope &amp; Audience</h2>
         <p class="stub__p">
-          Regime models span Markov-switching estimators, volatility-target rules,
-          trend and breadth composites, and cross-asset risk indicators. This brief
-          will catalog the major families, their assumptions, and where each breaks
-          down — the groundwork for a classifier built to be transparent and
-          reproducible rather than opaque.
+          Cross-asset regime detection covering equities, fixed income, FX, commodities, crypto,
+          and DeFi yield, with explicit attention to data and indicators that exist as of 2026.
+          Intended audience: analysts or AI agents designing a daily multi-asset regime classifier
+          and tactical asset allocation engine.
         </p>
       </section>
 
+      <p class="stub__related">
+        Related on this site: the live classifier at <a class="stub__inline" href="/regime">/regime</a>,
+        the per-indicator explainer at <a class="stub__inline" href="/regime/indicators">/regime/indicators</a>,
+        and the legacy two-panel reference at <a class="stub__inline" href="/regime_2panel">/regime_2panel</a>.
+      </p>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ 1 ============ -->
       <section class="stub__sec">
-        <h2 class="stub__h2">Design-space mapping</h2>
+        <h2 class="stub__h2">1. What &ldquo;Regime Detection&rdquo; Actually Means</h2>
         <p class="stub__p">
-          The Robot Money classifier reads indicators across independent macro,
-          on-chain, and factor panels and produces a daily composite label. See the
-          live classification and current methodology at
-          <a class="stub__inline" href="/regime">robotmoney.net/regime</a>.
+          The term covers three distinct problems that are often conflated. Any build should pick
+          one as the primary target before selecting a method.
+        </p>
+
+        <div class="stub__cards">
+          <div class="stub__card stub__card--lead">
+            <h3 class="stub__h3">Regime Classification</h3>
+            <p class="stub__p">
+              Assign each point in time to one of N discrete states (typically 2&ndash;4: risk-on /
+              neutral / risk-off, or expansion / slowdown / contraction / recovery). Output is a
+              label or probability vector. <strong>This is the right framing for a top-down TAA
+              tilting engine</strong> because allocations are themselves discrete shifts.
+            </p>
+          </div>
+          <div class="stub__card">
+            <h3 class="stub__h3">Vol/Correlation Regime</h3>
+            <p class="stub__p">
+              Identify shifts in the <strong>volatility and correlation structure</strong> of asset
+              returns rather than direction. Useful for risk budgeting, less directly useful for
+              directional allocation.
+            </p>
+          </div>
+          <div class="stub__card">
+            <h3 class="stub__h3">Return Prediction</h3>
+            <p class="stub__p">
+              Forecast next-period return for each asset. Different problem, much harder, generally
+              low signal-to-noise at horizons under 30 days. <strong>Should not be the primary
+              signal</strong> in a TAA system; can be a soft tilt overlay if backtests support it.
+            </p>
+          </div>
+        </div>
+
+        <p class="stub__note">
+          <strong>Institutional consensus (Goldman, BlackRock, Bridgewater, AQR):</strong> regime
+          classification is more tractable and more explainable than return prediction, and a
+          defensible TAA framework runs allocations off classified regimes rather than off
+          forecasted returns.
         </p>
       </section>
-    </div>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ 2 ============ -->
+      <section class="stub__sec">
+        <h2 class="stub__h2">2. Institutional Prior Art</h2>
+        <p class="stub__p">
+          The named programs below are the reference points for &ldquo;what good looks like.&rdquo;
+          They share three properties: composite indicators built from many independent inputs,
+          explicit decomposition (you can always say which sub-indicator drove the signal), and a
+          published methodology that survives external scrutiny.
+        </p>
+
+        <section class="stub__entry">
+          <div class="stub__entry-head">
+            <span class="stub__entry-num">2.1</span>
+            <h3 class="stub__h3">Goldman Sachs Financial Conditions Index (GS FCI)</h3>
+          </div>
+          <p class="stub__p">
+            A weighted composite of five components: short-term real interest rate, long-term real
+            interest rate, trade-weighted dollar, credit spreads (corporate), and equity prices.
+            Weights derived from the estimated impact of each component on GDP growth one year ahead.
+          </p>
+          <p class="stub__p">
+            Published in real time, decomposable into &ldquo;what is driving conditions today.&rdquo;
+            The methodology has been public for ~25 years and is a model for a transparent composite.
+          </p>
+          <p class="stub__p">
+            <strong>Limitation:</strong> focused on US economic conditions, not directly a
+            market-timing signal.
+          </p>
+        </section>
+
+        <section class="stub__entry">
+          <div class="stub__entry-head">
+            <span class="stub__entry-num">2.2</span>
+            <h3 class="stub__h3">Chicago Fed National Financial Conditions Index (NFCI)</h3>
+          </div>
+          <p class="stub__p">
+            Composite of <strong>105 financial market indicators</strong> across risk, credit, and
+            leverage subindexes. Released weekly. Constructed using dynamic factor analysis. The
+            Adjusted NFCI removes the part explained by current macro conditions, isolating
+            &ldquo;financial conditions independent of the cycle.&rdquo;
+          </p>
+          <p class="stub__p">
+            A useful free public benchmark &mdash; historical data freely available on
+            <a class="stub__inline" href="https://fred.stlouisfed.org" target="_blank" rel="noopener noreferrer">FRED</a>.
+            An obvious validation reference for any composite built privately.
+          </p>
+        </section>
+
+        <section class="stub__entry">
+          <div class="stub__entry-head">
+            <span class="stub__entry-num">2.3</span>
+            <h3 class="stub__h3">St. Louis Fed Financial Stress Index (STLFSI)</h3>
+          </div>
+          <p class="stub__p">
+            18 weekly inputs (rates, spreads, vol). Updates weekly, freely available. Simpler than
+            NFCI but a useful sanity check.
+          </p>
+        </section>
+
+        <section class="stub__entry">
+          <div class="stub__entry-head">
+            <span class="stub__entry-num">2.4</span>
+            <h3 class="stub__h3">BlackRock Macro GPS / Inflation GPS</h3>
+          </div>
+          <p class="stub__p">
+            Directional indicators for global growth and inflation, intended to lead consensus
+            economist forecasts by ~3&ndash;6 months. Constructed from &ldquo;big data&rdquo; inputs
+            (web search trends, satellite, shipping, etc.) plus traditional macro.
+          </p>
+          <p class="stub__p">
+            Output is a directional surprise indicator, not a regime label. The methodology is
+            partially proprietary; the publicly explained version uses Bayesian shrinkage to combine
+            many noisy leading indicators into a smoothed signal.
+          </p>
+          <p class="stub__p">
+            <strong>Relevant principle:</strong> leading indicators should be aggregated, not picked.
+          </p>
+        </section>
+
+        <section class="stub__entry">
+          <div class="stub__entry-head">
+            <span class="stub__entry-num">2.5</span>
+            <h3 class="stub__h3">Bridgewater All Weather / Risk Parity / &ldquo;Regime Cube&rdquo;</h3>
+          </div>
+          <p class="stub__p">
+            Allocates by <strong>economic regime</strong> rather than market regime. The
+            four-quadrant framework crosses growth (rising / falling) with inflation (rising /
+            falling), producing four regimes, each with an asset class that historically
+            outperforms in it.
+          </p>
+          <p class="stub__p">
+            Allocation balances risk contribution across regimes so the portfolio is robust to which
+            regime materializes. This is structurally different from a tactical tilting engine
+            &mdash; it does not try to predict the regime, it tries to be <strong>neutral to
+            it</strong>.
+          </p>
+          <p class="stub__p">
+            <strong>Worth understanding as an alternative philosophy:</strong> instead of
+            &ldquo;detect risk-off and tilt to safe assets,&rdquo; the answer is &ldquo;always be
+            balanced across regimes.&rdquo; For a system with strong governance constraints, the All
+            Weather framing is sometimes cleaner because it requires no prediction.
+          </p>
+        </section>
+
+        <section class="stub__entry">
+          <div class="stub__entry-head">
+            <span class="stub__entry-num">2.6</span>
+            <h3 class="stub__h3">AQR Style Premia and Regime Overlays</h3>
+          </div>
+          <p class="stub__p">
+            AQR runs systematic style portfolios (value, momentum, carry, defensive) and overlays
+            regime conditioning on them. Their published research argues that regime detection works
+            best for <strong>style timing</strong> (tilting between value and momentum, e.g.) rather
+            than direct asset class timing.
+          </p>
+          <p class="stub__p">
+            Methodology is generally tree-based ML with explicit feature attribution. Useful
+            precedent for the explainability tier.
+          </p>
+        </section>
+
+        <section class="stub__entry">
+          <div class="stub__entry-head">
+            <span class="stub__entry-num">2.7</span>
+            <h3 class="stub__h3">Two Sigma / Renaissance / D.E. Shaw</h3>
+          </div>
+          <p class="stub__p">
+            Largely opaque. Published research suggests heavy use of: alternative data, ensemble ML
+            (gradient boosted trees), short-horizon mean reversion signals, and order book
+            microstructure. These shops do not publish regime methodologies.
+          </p>
+          <p class="stub__p">
+            <strong>The relevant lesson:</strong> black-box ML beats explainable models on raw
+            predictive power but is not appropriate where governance, communication, or auditability
+            matter. <strong>A token-governed protocol cannot run on Renaissance-style methods
+            because the model itself must be defensible to voters.</strong>
+          </p>
+        </section>
+
+        <section class="stub__entry">
+          <div class="stub__entry-head">
+            <span class="stub__entry-num">2.8</span>
+            <h3 class="stub__h3">JP Morgan / Marko Kolanovic-style Positioning Indicators</h3>
+          </div>
+          <p class="stub__p">
+            Composite positioning indices built from CTA exposure estimates, dealer gamma
+            positioning, options skew, and futures COT data. Treated by buyside as
+            <strong>contrarian indicators</strong> &mdash; extreme positioning typically precedes
+            mean reversion.
+          </p>
+          <p class="stub__p">
+            Less directly applicable to crypto where positioning data is fragmented but the
+            underlying logic (extreme positioning = late-cycle = risk-off lean) carries over to perp
+            funding rates.
+          </p>
+        </section>
+
+        <section class="stub__entry">
+          <div class="stub__entry-head">
+            <span class="stub__entry-num">2.9</span>
+            <h3 class="stub__h3">Conference Board Leading Economic Index (LEI)</h3>
+          </div>
+          <p class="stub__p">
+            The original &ldquo;leading indicators&rdquo; composite, ten components covering
+            manufacturing, building permits, equities, credit, consumer expectations. LEI has a
+            documented track record of leading recessions by 6&ndash;12 months. Free, monthly.
+            Usually included as one input in a broader macro composite.
+          </p>
+        </section>
+
+        <section class="stub__entry">
+          <div class="stub__entry-head">
+            <span class="stub__entry-num">2.10</span>
+            <h3 class="stub__h3">Ned Davis Research Five-Factor Recession Probability Model</h3>
+          </div>
+          <p class="stub__p">
+            Logistic regression on five inputs (yield curve, credit spreads, ISM new orders,
+            building permits, ECRI weekly leading index). Outputs probability of recession in next
+            6 months. Explainable, well-documented, free in summary form.
+          </p>
+          <p class="stub__p">
+            A common reference for &ldquo;how to combine 5&ndash;10 leading indicators into a single
+            regime probability.&rdquo;
+          </p>
+        </section>
+      </section>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ 3 ============ -->
+      <section class="stub__sec">
+        <h2 class="stub__h2">3. Quantitative Methods Catalogue</h2>
+        <p class="stub__p">
+          Methods organized by complexity tier. Each tier trades off explainability against
+          potential predictive accuracy. The most appropriate method depends on governance
+          constraints, available training data, and required cadence.
+        </p>
+
+        <section class="stub__tier stub__tier--lead">
+          <h3 class="stub__h3 stub__h3--tier">Tier 1: Fully Explainable</h3>
+
+          <div class="stub__method">
+            <h4 class="stub__h4">Composite z-score indicator</h4>
+            <p class="stub__p">
+              N indicators, each z-scored over a rolling 3- or 5-year window, signed so positive
+              means risk-off pressure, weighted (equal or by historical predictive accuracy), summed
+              into a composite. Output mapped to discrete regimes by percentile thresholds.
+            </p>
+            <p class="stub__p">
+              This is the methodology behind Goldman FCI, NFCI, and most central bank financial
+              conditions indices.
+            </p>
+            <ul class="stub__list">
+              <li><strong>Strengths:</strong> transparent, decomposable, robust to overfitting, easy to validate</li>
+              <li><strong>Weaknesses:</strong> linear, doesn&rsquo;t capture interactions, weights need periodic review</li>
+            </ul>
+          </div>
+
+          <div class="stub__method">
+            <h4 class="stub__h4">Logistic regression on regime labels</h4>
+            <p class="stub__p">
+              If historical regimes are labeled (NBER recession dates, NDR-style binary), fit a
+              logistic regression with leading indicators as features. Outputs probability of being
+              in regime. Explainable via coefficient inspection. Standard in macro.
+              <strong>Limitation:</strong> requires labeled regime history, which doesn&rsquo;t
+              really exist for crypto.
+            </p>
+          </div>
+
+          <div class="stub__method">
+            <h4 class="stub__h4">Rule-based threshold systems</h4>
+            <p class="stub__p">
+              If yield curve inverts AND HY spreads &gt; X AND VIX term inverted, flip to risk-off.
+              Brittle in isolation but useful as confirmation logic on top of a composite.
+            </p>
+          </div>
+        </section>
+
+        <section class="stub__tier">
+          <h3 class="stub__h3 stub__h3--tier">Tier 2: Conditionally Explainable</h3>
+
+          <div class="stub__method">
+            <h4 class="stub__h4">Hidden Markov Models (HMM)</h4>
+            <p class="stub__p">
+              Hamilton (1989) pioneered the regime-switching framework. Fit a 2- or 3-state HMM on a
+              panel of indicators; output is the probability of being in each regime at each time.
+              Each regime has its own mean and covariance for the indicators.
+            </p>
+            <p class="stub__p">
+              Output is interpretable (you can describe what each regime &ldquo;looks like&rdquo; in
+              terms of indicator values) but the state assignment itself is statistical, not
+              rule-based. Standard implementations: <code class="stub__code-inline">hmmlearn</code>
+              (Python), regime-switching packages in R.
+            </p>
+            <ul class="stub__list">
+              <li><strong>Strength:</strong> captures non-linear regime dynamics; well-suited to detecting structural breaks</li>
+              <li><strong>Weakness:</strong> number of regimes is a hyperparameter, sensitive to feature selection, probabilities can be unstable on small windows</li>
+            </ul>
+          </div>
+
+          <div class="stub__method">
+            <h4 class="stub__h4">Markov-Switching VAR (MS-VAR)</h4>
+            <p class="stub__p">
+              Extension that allows the dynamics between indicators to change by regime. More
+              flexible, more parameters, harder to fit reliably with limited data.
+            </p>
+          </div>
+
+          <div class="stub__method">
+            <h4 class="stub__h4">Gaussian Mixture Models (GMM)</h4>
+            <p class="stub__p">
+              Cluster historical data points by indicator signature; each cluster is a
+              &ldquo;regime.&rdquo; Less common than HMM for time series because GMM doesn&rsquo;t
+              model state persistence &mdash; adjacent points are treated independently. Useful for
+              unsupervised regime discovery before fixing a number for HMM.
+            </p>
+          </div>
+
+          <div class="stub__method">
+            <h4 class="stub__h4">Tree-based ML with SHAP attribution</h4>
+            <p class="stub__p">
+              Gradient boosted trees (XGBoost, LightGBM) on a feature panel predicting regime
+              probability or forward return. SHAP values give per-prediction feature attribution,
+              providing post-hoc explainability. AQR-style overlay logic. <strong>Strength:</strong>
+              handles non-linearities and interactions. <strong>Weakness:</strong> needs careful
+              walk-forward validation; easy to overfit on noisy financial data.
+            </p>
+          </div>
+
+          <div class="stub__method">
+            <h4 class="stub__h4">Change point detection</h4>
+            <p class="stub__p">
+              Methods like CUSUM, PELT, or Bayesian online change point detection identify
+              structural breaks in time series. Useful for detecting that a regime has shifted, less
+              useful for classifying which regime is current. Often paired with HMM (CUSUM as alarm,
+              HMM for classification).
+            </p>
+          </div>
+        </section>
+
+        <section class="stub__tier stub__tier--muted">
+          <h3 class="stub__h3 stub__h3--tier">Tier 3: Low-Explainability, High-Flexibility</h3>
+
+          <div class="stub__method">
+            <h4 class="stub__h4">LSTM / Transformer sequence models</h4>
+            <p class="stub__p">
+              Deep learning on sequential indicator data. Can capture long-range dependencies.
+              Generally requires more training data than financial markets provide. Highly opaque.
+              Used by quant funds with deep data infrastructure; <strong>not appropriate for
+              governance-defensible systems.</strong>
+            </p>
+          </div>
+
+          <div class="stub__method">
+            <h4 class="stub__h4">Reinforcement learning for allocation</h4>
+            <p class="stub__p">
+              Treat allocation as a sequential decision problem; train an agent to maximize
+              risk-adjusted return. Theoretically appealing, practically fragile (reward hacking,
+              distribution shift, sample inefficiency in low-frequency financial data). Active
+              research area; not production-ready for institutional TAA.
+            </p>
+          </div>
+
+          <div class="stub__method">
+            <h4 class="stub__h4">Topological data analysis, multi-fractal methods</h4>
+            <p class="stub__p">
+              Various exotic approaches. Generally not used in production at scale.
+            </p>
+          </div>
+        </section>
+
+        <section class="stub__tier stub__tier--lead">
+          <h3 class="stub__h3 stub__h3--tier">Method Selection Guide</h3>
+          <div class="stub__table-wrap">
+            <table class="stub__table">
+              <thead>
+                <tr>
+                  <th scope="col">Constraint</th>
+                  <th scope="col">Recommended Tier</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td>Governance vote / regulatory review required</td><td>Tier 1</td></tr>
+                <tr><td>Need to publish reasoning for each call</td><td>Tier 1</td></tr>
+                <tr><td>Backtest sample &gt; 20 years, stable structure</td><td>Tier 1 + Tier 2</td></tr>
+                <tr><td>Backtest sample &lt; 10 years, regime shifts likely</td><td>Tier 2 (HMM)</td></tr>
+                <tr><td>Pure performance, no governance constraint</td><td>Tier 2 + selective Tier 3</td></tr>
+                <tr><td>&lt; 5 years of clean data</td><td>Tier 1 only</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="stub__p">
+            <strong>Common institutional pattern:</strong> Tier 1 as primary signal, Tier 2 as
+            validation, Tier 3 only if backtest demonstrates statistically significant lift after
+            costs and over a sufficient out-of-sample window.
+          </p>
+        </section>
+      </section>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ 4 ============ -->
+      <section class="stub__sec">
+        <h2 class="stub__h2">4. Indicator Universe</h2>
+        <p class="stub__p">
+          Organized by category. Each indicator is tagged Leading (L), Coincident (C), or Lagging
+          (Lg) relative to risk asset prices. Leading indicators belong in regime detection; lagging
+          indicators are for monitoring and confirmation only.
+        </p>
+
+        <h3 class="stub__h3">4.1 Macro / Interest Rate</h3>
+        <div class="stub__table-wrap">
+          <table class="stub__table stub__table--ind">
+            <thead>
+              <tr>
+                <th scope="col">Indicator</th>
+                <th scope="col">L/C/Lg</th>
+                <th scope="col">Source</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>US 10Y real yield (TIPS)</td><td>L</td><td>FRED (DFII10)</td><td>Single most important risk-asset driver post-2022</td></tr>
+              <tr><td>2s10s yield curve slope</td><td>L</td><td>FRED (T10Y2Y)</td><td>Recession proxy; inversion-to-recession lag is variable</td></tr>
+              <tr><td>3m10y curve</td><td>L</td><td>FRED (T10Y3M)</td><td>Fed-preferred recession indicator</td></tr>
+              <tr><td>5y5y forward inflation breakeven</td><td>L</td><td>FRED (T5YIFR)</td><td>Forward inflation expectations</td></tr>
+              <tr><td>Federal funds rate</td><td>C</td><td>FRED (FEDFUNDS)</td><td>Policy stance, not predictive</td></tr>
+              <tr><td>CPI YoY</td><td>Lg</td><td>FRED (CPIAUCSL)</td><td>Backward-looking</td></tr>
+              <tr><td>PCE core YoY</td><td>Lg</td><td>FRED (PCEPILFE)</td><td>Fed&rsquo;s preferred inflation gauge</td></tr>
+              <tr><td>Real GDP YoY</td><td>Lg</td><td>FRED (A191RL1Q225SBEA)</td><td>Quarterly, lagged release</td></tr>
+              <tr><td>ISM Manufacturing PMI new orders</td><td>L</td><td>ISM (paid) or FRED proxy</td><td>Strong recession lead</td></tr>
+              <tr><td>Initial jobless claims (4w MA)</td><td>L</td><td>FRED (IC4WSA)</td><td>Labor market lead</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 class="stub__h3">4.2 Credit</h3>
+        <div class="stub__table-wrap">
+          <table class="stub__table stub__table--ind">
+            <thead>
+              <tr>
+                <th scope="col">Indicator</th>
+                <th scope="col">L/C/Lg</th>
+                <th scope="col">Source</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>HY OAS (BofA HY index)</td><td>L</td><td>FRED (BAMLH0A0HYM2)</td><td>Highest-information single macro indicator; widens before equities crack</td></tr>
+              <tr><td>IG OAS</td><td>L</td><td>FRED (BAMLC0A0CM)</td><td>Less sensitive than HY</td></tr>
+              <tr><td>TED spread / SOFR-OIS</td><td>C</td><td>Bloomberg / institutional</td><td>Bank stress indicator (post-LIBOR transition)</td></tr>
+              <tr><td>CDX HY series spread</td><td>L</td><td>Markit / Bloomberg</td><td>Credit derivative pricing of distress</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 class="stub__h3">4.3 Equity Microstructure</h3>
+        <div class="stub__table-wrap">
+          <table class="stub__table stub__table--ind">
+            <thead>
+              <tr>
+                <th scope="col">Indicator</th>
+                <th scope="col">L/C/Lg</th>
+                <th scope="col">Source</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>SPX vs 200d MA</td><td>C</td><td>Yahoo / Polygon</td><td>Trend regime, binary</td></tr>
+              <tr><td>VIX level</td><td>C</td><td>CBOE / FRED (VIXCLS)</td><td>Coincident fear gauge</td></tr>
+              <tr><td>VIX term structure (front/6M)</td><td>L</td><td>CBOE</td><td>Inversion = acute fear, high-conviction risk-off marker</td></tr>
+              <tr><td>SPX % above 200d (breadth)</td><td>C</td><td>various</td><td>Confirmation signal</td></tr>
+              <tr><td>Put/call ratio</td><td>C/L</td><td>CBOE</td><td>Sentiment, contrarian at extremes</td></tr>
+              <tr><td>Realized volatility (60d)</td><td>C</td><td>computed from prices</td><td>Vol regime</td></tr>
+              <tr><td>SKEW index</td><td>C</td><td>CBOE</td><td>Tail risk pricing</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 class="stub__h3">4.4 FX / Commodities</h3>
+        <div class="stub__table-wrap">
+          <table class="stub__table stub__table--ind">
+            <thead>
+              <tr>
+                <th scope="col">Indicator</th>
+                <th scope="col">L/C/Lg</th>
+                <th scope="col">Source</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>DXY (dollar index)</td><td>L</td><td>ICE / Yahoo</td><td>Strong dollar = risk-off pressure on EM and crypto</td></tr>
+              <tr><td>Gold/copper ratio</td><td>L</td><td>computed</td><td>Safe-haven vs cyclical demand</td></tr>
+              <tr><td>Brent / WTI level + change</td><td>C</td><td>ICE / NYMEX</td><td>Inflation input + cyclical demand</td></tr>
+              <tr><td>EM FX index</td><td>C</td><td>various</td><td>Risk-on/off in EM currencies</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 class="stub__h3">4.5 Crypto-Native</h3>
+        <div class="stub__table-wrap">
+          <table class="stub__table stub__table--ind">
+            <thead>
+              <tr>
+                <th scope="col">Indicator</th>
+                <th scope="col">L/C/Lg</th>
+                <th scope="col">Source</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>BTC dominance</td><td>C</td><td>CoinGecko</td><td>Rising = risk-off within crypto</td></tr>
+              <tr><td>ETH/BTC ratio</td><td>L</td><td>CoinGecko / exchanges</td><td>Rising = risk-on, leads alt rotation</td></tr>
+              <tr><td>Stablecoin total float change</td><td>L</td><td>DefiLlama, on-chain</td><td>Fresh capital signal; faster than addresses</td></tr>
+              <tr><td>Aggregate perp funding rates</td><td>L</td><td>Coinglass / Velo</td><td>Extreme positive = late-cycle euphoria; sustained negative = capitulation</td></tr>
+              <tr><td>Open interest in BTC/ETH perps</td><td>C</td><td>Coinglass / Velo</td><td>Leverage in the system</td></tr>
+              <tr><td>BTC MVRV z-score</td><td>C/L</td><td>Glassnode</td><td>Long-cycle positioning</td></tr>
+              <tr><td>BTC realized cap</td><td>Lg</td><td>Glassnode / CoinMetrics</td><td>Cost basis of holders</td></tr>
+              <tr><td>Spot BTC ETF net flows</td><td>L</td><td>issuer disclosures (BlackRock IBIT, etc.)</td><td>New in 2024+; clean institutional signal</td></tr>
+              <tr><td>Spot ETH ETF net flows</td><td>L</td><td>issuer disclosures</td><td>New in 2024+</td></tr>
+              <tr><td>ETH staking ratio / queue</td><td>C</td><td>beaconcha.in / Nansen</td><td>Slow-moving positioning</td></tr>
+              <tr><td>L1/L2 transaction counts</td><td>C</td><td>various block explorers</td><td>Activity, not directional</td></tr>
+              <tr><td>L1/L2 fees revenue</td><td>C</td><td>Token Terminal</td><td>Fundamental valuation input</td></tr>
+              <tr><td>DeFi TVL by chain</td><td>C</td><td>DefiLlama</td><td>Capital deployed</td></tr>
+              <tr><td>DEX/CEX volume ratio</td><td>C</td><td>various</td><td>Crypto-native vs centralized appetite</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 class="stub__h3">4.6 2026-Specific Additions</h3>
+        <div class="stub__table-wrap">
+          <table class="stub__table stub__table--ind">
+            <thead>
+              <tr>
+                <th scope="col">Indicator</th>
+                <th scope="col">L/C/Lg</th>
+                <th scope="col">Source</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>Agent-economy activity (e.g. Virtuals aGDP)</td><td>L</td><td>Virtuals dashboard</td><td>New asset-class-specific signal</td></tr>
+              <tr><td>Agent token sector index</td><td>C</td><td>constructed</td><td>Robot Money&rsquo;s most relevant micro-cap proxy</td></tr>
+              <tr><td>Stablecoin yield spreads (Aave vs Morpho vs Compound)</td><td>C</td><td>DefiLlama yields API</td><td>Bucket A optimization input</td></tr>
+              <tr><td>Restaking TVL (EigenLayer, Symbiotic)</td><td>C</td><td>DefiLlama</td><td>Risk-seeking yield measure</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 class="stub__h3">4.7 Sentiment and Positioning (Use with Caution)</h3>
+        <div class="stub__table-wrap">
+          <table class="stub__table stub__table--ind">
+            <thead>
+              <tr>
+                <th scope="col">Indicator</th>
+                <th scope="col">L/C/Lg</th>
+                <th scope="col">Source</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>AAII bull/bear survey</td><td>C</td><td>AAII</td><td>Retail sentiment; contrarian at extremes</td></tr>
+              <tr><td>CFTC COT positioning</td><td>L</td><td>CFTC</td><td>Institutional positioning, weekly</td></tr>
+              <tr><td>Crypto Fear &amp; Greed Index</td><td>C</td><td>alternative.me</td><td>Crypto-specific composite</td></tr>
+              <tr><td>Farcaster activity</td><td>C</td><td>Neynar API</td><td>Native attention measure for agent-token sector</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ 5 ============ -->
+      <section class="stub__sec">
+        <h2 class="stub__h2">5. Data Infrastructure for 2026</h2>
+
+        <section class="stub__tier stub__tier--lead">
+          <h3 class="stub__h3 stub__h3--tier">Free / Public</h3>
+          <ul class="stub__list">
+            <li><strong><a class="stub__inline" href="https://fred.stlouisfed.org" target="_blank" rel="noopener noreferrer">FRED (St. Louis Fed)</a>:</strong> comprehensive macro, rates, credit. Highest-quality free source.</li>
+            <li><strong>Yahoo Finance / yfinance:</strong> equities, ETFs, indices. Reliable but rate-limited.</li>
+            <li><strong><a class="stub__inline" href="https://defillama.com" target="_blank" rel="noopener noreferrer">DefiLlama</a>:</strong> DeFi TVL, yields, protocol revenue, stablecoin float. Best free crypto fundamentals source as of 2026.</li>
+            <li><strong>CoinGecko:</strong> prices, market caps, volumes, basic on-chain. Free tier sufficient for most use.</li>
+            <li><strong>Etherscan / Basescan / Arbiscan:</strong> raw on-chain data, free.</li>
+            <li><strong>ETF issuer disclosures:</strong> spot BTC and ETH ETF flows published daily by BlackRock, Fidelity, Bitwise, etc.</li>
+            <li><strong><a class="stub__inline" href="https://www.cftc.gov/MarketReports/CommitmentsofTraders" target="_blank" rel="noopener noreferrer">CFTC</a>:</strong> futures positioning, COT reports, free weekly.</li>
+            <li><strong>Treasury.gov:</strong> yield curve daily, issuance.</li>
+          </ul>
+        </section>
+
+        <section class="stub__tier">
+          <h3 class="stub__h3 stub__h3--tier">Paid, Low Cost (under $500/month)</h3>
+          <ul class="stub__list">
+            <li><strong><a class="stub__inline" href="https://www.coinglass.com" target="_blank" rel="noopener noreferrer">Coinglass</a> or Velo:</strong> derivatives data &mdash; funding rates, perp OI, basis, options IV. Essential for any serious crypto regime model.</li>
+            <li><strong><a class="stub__inline" href="https://tokenterminal.com" target="_blank" rel="noopener noreferrer">Token Terminal</a>:</strong> protocol fundamentals (revenue, P/F, P/S). Useful for Bucket C fundamentals.</li>
+            <li><strong>CoinMetrics community/pro:</strong> on-chain metrics, network value ratios.</li>
+          </ul>
+        </section>
+
+        <section class="stub__tier">
+          <h3 class="stub__h3 stub__h3--tier">Paid, Institutional</h3>
+          <ul class="stub__list">
+            <li><strong>Glassnode or Nansen:</strong> deep on-chain analytics, holder behavior, exchange flows. ~$1k+/month for serious tier.</li>
+            <li><strong>Kaiko:</strong> institutional-grade crypto pricing and order book data.</li>
+            <li><strong>Bloomberg Terminal or Refinitiv Eikon:</strong> full tradfi coverage. ~$24k/year per seat.</li>
+            <li><strong>Dune Analytics (paid tier):</strong> custom on-chain SQL queries at scale.</li>
+            <li><strong>Allium:</strong> multi-chain on-chain data warehouse.</li>
+          </ul>
+        </section>
+
+        <div class="stub__method">
+          <h4 class="stub__h4">Recommendation by Stage</h4>
+          <ul class="stub__list">
+            <li><strong>v0 build (proof of concept):</strong> FRED + Yahoo + DefiLlama + CoinGecko + Coinglass. Sub-$200/month.</li>
+            <li><strong>v1 production:</strong> add Token Terminal, expanded Coinglass tier. ~$500/month.</li>
+            <li><strong>v2 institutional:</strong> add Glassnode and Kaiko. ~$2-3k/month.</li>
+          </ul>
+        </div>
+      </section>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ 6 ============ -->
+      <section class="stub__sec">
+        <h2 class="stub__h2">6. Allocation Methods</h2>
+        <p class="stub__p">
+          Once a regime is detected, weights need to translate into portfolio positions. Brief
+          survey of methods used by institutional TAA:
+        </p>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Mean-Variance Optimization (Markowitz)</h3>
+          <p class="stub__p">
+            The textbook method. Maximize expected return for given variance, or minimize variance
+            for given return. Inputs: expected return vector and covariance matrix.
+            <strong>Generally inappropriate for TAA</strong> because outputs are notoriously
+            sensitive to expected return inputs (which are unstable), produces corner solutions, and
+            is hard to defend. Used in academic illustrations more than in production.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Minimum Variance</h3>
+          <p class="stub__p">
+            Drop the expected return input; just minimize portfolio variance subject to weight
+            constraints. More robust than full MVO. Conservative &mdash; produces low-vol but also
+            low-return portfolios. Good baseline for a defensive sleeve.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Risk Parity (Equal Risk Contribution)</h3>
+          <p class="stub__p">
+            Weight assets so each contributes equally to portfolio risk. Bridgewater All Weather is
+            the canonical implementation. Robust to expected return uncertainty. Standard reference
+            benchmark for cross-asset allocation.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Hierarchical Risk Parity (HRP)</h3>
+          <p class="stub__p">
+            Lopez de Prado (2016). Cluster assets first by correlation distance, then allocate
+            hierarchically using inverse-variance within and between clusters. Doesn&rsquo;t require
+            expected returns, handles noisy correlation matrices well, robust to small universe
+            sizes. <strong>Best-in-class for token-level allocation within sleeves where
+            correlations are unstable.</strong>
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Black-Litterman</h3>
+          <p class="stub__p">
+            Bayesian framework combining a market-equilibrium prior with analyst views. Produces
+            tilted portfolios that are stable under uncertainty. Requires a market-cap baseline
+            (reasonable for tradfi, awkward for crypto micro-caps). Useful for layering
+            regime-conditional views onto a strategic baseline.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Strategic Asset Allocation + Tactical Bands (Rule-based)</h3>
+          <p class="stub__p">
+            Define a SAA (neutral portfolio). Define per-asset bands (min and max weights). Compute
+            tactical weight = SAA + (max tilt) &times; f(regime z-score), where f is typically tanh
+            to bound tilts. Re-normalize. <strong>This is what most institutional GTAA shops
+            actually do.</strong> Transparent, defensible, easy to backtest, easy to communicate to
+            governance.
+          </p>
+        </div>
+
+        <section class="stub__tier stub__tier--lead">
+          <h3 class="stub__h3 stub__h3--tier">Recommended Pattern for Regime-Driven TAA</h3>
+          <ul class="stub__list">
+            <li><strong>Top layer:</strong> SAA + bounded tactical tilts via tanh of regime composite. Rule-based, defensible.</li>
+            <li><strong>Within-sleeve:</strong> HRP for token-level allocation in equity/crypto sleeves.</li>
+            <li><strong>Within stables:</strong> linear program for yield maximization with concentration and liquidity constraints.</li>
+          </ul>
+        </section>
+      </section>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ 7 ============ -->
+      <section class="stub__sec">
+        <h2 class="stub__h2">7. Explainability Tiers and Governance Fit</h2>
+        <p class="stub__p">
+          Defensibility varies by method. A token-governed protocol or institutional fund needs to
+          explain decisions at three depths:
+        </p>
+
+        <div class="stub__cards">
+          <div class="stub__card">
+            <h3 class="stub__h3">To Governance / Voters</h3>
+            <p class="stub__p">
+              &ldquo;Why are we more defensive this month?&rdquo; Answer must be one sentence,
+              citing 2&ndash;3 specific indicators. <strong>Only Tier 1 methods support this
+              natively.</strong>
+            </p>
+          </div>
+          <div class="stub__card">
+            <h3 class="stub__h3">To Analysts / Due Diligence</h3>
+            <p class="stub__p">
+              &ldquo;What&rsquo;s the model&rsquo;s hit rate, and how does it perform in each
+              regime?&rdquo; Walk-forward backtest with regime-conditional performance. <strong>All
+              tiers support this</strong> if backtested properly.
+            </p>
+          </div>
+          <div class="stub__card">
+            <h3 class="stub__h3">To Regulators / Auditors</h3>
+            <p class="stub__p">
+              &ldquo;What inputs drive the model and how are they computed?&rdquo; Full data
+              pipeline traceability. <strong>Tier 1 best, Tier 2 acceptable with documentation,
+              Tier 3 problematic.</strong>
+            </p>
+          </div>
+        </div>
+
+        <p class="stub__note">
+          <strong>Regulatory note:</strong> The SEC has not specifically opined on AI-driven asset
+          management for tokens, but the emerging EU AI Act treats financial decision systems as
+          high-risk, requiring documentation and explainability. <strong>Tier 1 + Tier 2
+          architectures will age better against regulatory drift than Tier 3.</strong>
+        </p>
+      </section>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ 8 ============ -->
+      <section class="stub__sec">
+        <h2 class="stub__h2">8. Catalogued Examples of Prior Practitioner Approaches</h2>
+        <p class="stub__p">
+          Documenting specific implementations as data points in the survey, neutrally and without
+          ranking. Each is one approach among many, included to illustrate the range of choices made
+          by different practitioners.
+        </p>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Goldman Sachs FCI</h3>
+          <p class="stub__p">
+            Tier 1 composite, 5 macro inputs, weighted by GDP impact. Real-time. Public methodology
+            since ~2000. <strong>Strengths:</strong> simplicity, transparency, GDP-grounded weights.
+            <strong>Limitations:</strong> no asset-class allocation output, limited crypto
+            applicability.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Chicago Fed NFCI</h3>
+          <p class="stub__p">
+            Tier 1 + dynamic factor analysis (mild Tier 2). 105 inputs. Weekly. Free, public. Often
+            used as a benchmark for private composites.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Bridgewater All Weather Framework</h3>
+          <p class="stub__p">
+            Risk parity allocation across regime-tagged assets. Does not predict the regime;
+            allocates to be neutral to it. Philosophy alternative to tactical tilting.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">NDR Five-Factor Recession Model</h3>
+          <p class="stub__p">
+            Tier 1 logistic regression on 5 macro leading indicators. Outputs recession probability.
+            Documented hit rate and false-positive rate.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Consensys &ldquo;Aggregate Risk&rdquo; Framework (2023, Sokolin)</h3>
+          <p class="stub__p">
+            Four-quadrant qualitative composite (Cycle / Global Macro / Crypto Macro / Web3
+            Fundamentals), each scored 1&ndash;5 by analyst, summed monthly. Tier 0 (subjective).
+            <strong>Strengths:</strong> communicable, decomposable, captures Web3-specific category
+            that institutional frameworks lack. <strong>Limitations:</strong> monthly cadence,
+            subjective scoring drifts with consensus, lagging by construction. Documented as one
+            example of a qualitative composite.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Consensys ETH Factor Valuation Model (2022)</h3>
+          <p class="stub__p">
+            Multi-method ensemble for single-asset price target (not regime classification).
+            Methods: factor regression, Monte Carlo, DCF, multiples. Factor regression used 10
+            inputs blending crypto-native (active addresses, MVRV, network fees, supply in smart
+            contracts, exchange outflow, ETH inflation, ETH staked) with tradfi (SPX, US 2Y forward
+            rate). <strong>Strengths:</strong> ensemble framing, explicit cross-asset blend, range
+            output rather than point estimate. <strong>Limitations:</strong> targets price not
+            regime, did not distinguish leading from lagging indicators, single-asset focus,
+            struggles with structural breaks.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Glassnode / Coinmetrics On-Chain Composite Indices</h3>
+          <p class="stub__p">
+            Various composites combining MVRV, NVT, SOPR, realized cap, etc. Tier 1. Crypto-native,
+            no tradfi inputs. Useful as crypto-only sub-composite.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Two Sigma / Renaissance / D.E. Shaw Style</h3>
+          <p class="stub__p">
+            Tier 3 ensemble ML on alternative data. Strong predictive performance, opaque,
+            inappropriate for governance-driven systems.
+          </p>
+        </div>
+      </section>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ 9 ============ -->
+      <section class="stub__sec">
+        <h2 class="stub__h2">9. Selection Criteria</h2>
+        <p class="stub__p">
+          To pick among methods, evaluate against the following constraints in order:
+        </p>
+        <ol class="stub__ol">
+          <li>
+            <strong>Governance / explainability requirement:</strong> if voters or regulators must
+            understand each decision, restrict to Tier 1.
+          </li>
+          <li>
+            <strong>Available training data:</strong> HMM and ML methods need 10+ years of stable
+            data per regime; crypto only has ~7&ndash;10 years usable depending on cutoff. Prefer
+            Tier 1 if sample is thin.
+          </li>
+          <li>
+            <strong>Cadence requirement:</strong> real-time &rarr; composite z-score; daily &rarr;
+            composite or HMM; weekly &rarr; any; monthly &rarr; any.
+          </li>
+          <li>
+            <strong>Operator override needed:</strong> rule-based and composite methods support
+            clean overrides; ML methods don&rsquo;t.
+          </li>
+          <li>
+            <strong>Asset universe complexity:</strong> single asset &rarr; factor regression
+            viable; cross-asset &rarr; composite indicator + per-asset tilts.
+          </li>
+          <li>
+            <strong>Compute / engineering budget:</strong> Tier 1 runs in seconds on a laptop;
+            Tier 3 may need GPU and pipeline infrastructure.
+          </li>
+        </ol>
+      </section>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ 10 ============ -->
+      <section class="stub__sec">
+        <h2 class="stub__h2">10. Recommended Starting Architecture</h2>
+
+        <section class="stub__tier stub__tier--lead">
+          <p class="stub__p">
+            For a daily multi-asset TAA engine with governance constraints (the Robot Money use case
+            being one example):
+          </p>
+
+          <div class="stub__method">
+            <h3 class="stub__h3">Layer 0 &mdash; Strategic Asset Allocation</h3>
+            <p class="stub__p">
+              Define neutral portfolio across sleeves (e.g., stables / large-cap crypto / equities /
+              commodities). Set tactical bands per asset. This is policy, not modeled.
+            </p>
+          </div>
+
+          <div class="stub__method">
+            <h3 class="stub__h3">Layer 1 &mdash; Composite z-score regime classifier (Tier 1)</h3>
+            <p class="stub__p">Two sub-composites:</p>
+            <ul class="stub__list">
+              <li><strong>Macro composite:</strong> 5&ndash;7 leading indicators (real yields, HY OAS, yield curve, DXY, PMI new orders)</li>
+              <li><strong>Crypto composite:</strong> 4&ndash;6 crypto-native (stablecoin float change, ETH/BTC, funding rates, spot ETF flows)</li>
+            </ul>
+            <p class="stub__p">
+              Each indicator z-scored over 3y rolling window, signed, weighted (equal as starting
+              point), summed. Map to discrete regimes by percentile. Combine sub-composites into
+              asset-specific tilts.
+            </p>
+          </div>
+
+          <div class="stub__method">
+            <h3 class="stub__h3">Layer 2 &mdash; HMM validation (Tier 2)</h3>
+            <p class="stub__p">
+              Fit 3-state HMM on the same indicator panel. Use as a sanity check, not a primary
+              signal, until 6+ months of operation establish where it agrees and disagrees with
+              Layer 1.
+            </p>
+          </div>
+
+          <div class="stub__method">
+            <h3 class="stub__h3">Layer 3 &mdash; Manual override channel</h3>
+            <p class="stub__p">
+              Operator can override the systematic call with a documented, dated, public reason.
+              Captures qualitative information the data hasn&rsquo;t priced yet.
+            </p>
+          </div>
+        </section>
+
+        <p class="stub__related">
+          A running implementation of this shape is published at
+          <a class="stub__inline" href="/regime">/regime</a>, with every input documented at
+          <a class="stub__inline" href="/regime/indicators">/regime/indicators</a> and the earlier
+          two-panel version kept for comparison at
+          <a class="stub__inline" href="/regime_2panel">/regime_2panel</a>.
+        </p>
+
+        <div class="stub__card">
+          <h3 class="stub__h3">Allocation Output Formula</h3>
+          <p class="stub__formula">target_weight = SAA + tactical_band &times; tanh(regime_zscore)</p>
+          <p class="stub__p">Normalized to sum to 1.</p>
+        </div>
+
+        <p class="stub__p">
+          <strong>Backtest discipline:</strong> walk-forward, with realistic transaction costs.
+          Benchmark against 60/40, all-stables, fixed SAA (no tilts), and naive risk parity. The
+          fixed-SAA benchmark is the critical one &mdash; it tests whether the regime model itself
+          adds value, separate from the asset mix.
+        </p>
+        <p class="stub__p">
+          <strong>Output cadence:</strong> indicators and regime probabilities computed daily;
+          allocation changes recommended weekly (avoid daily churn at low TVL); strategic weights
+          reviewed monthly.
+        </p>
+      </section>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ 11 ============ -->
+      <section class="stub__sec">
+        <h2 class="stub__h2">11. Open Questions and Known Limitations</h2>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Crypto Sample Size Remains Thin</h3>
+          <p class="stub__p">
+            All cross-asset regime models for crypto are working with ~7&ndash;10 years of data and
+            only 1&ndash;2 full cycles. HMM and ML approaches are statistically underpowered. This
+            is structural and won&rsquo;t resolve for several more cycles.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Macro/Crypto Correlation Regime is Non-Stationary</h3>
+          <p class="stub__p">
+            The 2020&ndash;2022 high-correlation period (crypto as risk asset) was followed by
+            2023&ndash;2024 partial decoupling (BTC as inflation hedge / debasement trade). Models
+            calibrated on one period mis-specify the other.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Spot ETF Flows as a Signal are Post-2024 Only</h3>
+          <p class="stub__p">
+            No historical analog. Cannot be backtested against prior cycles.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Agent-Economy Indicators are Post-2025 Only</h3>
+          <p class="stub__p">
+            Virtuals aGDP, agent sector indices &mdash; will need 2&ndash;3 years of history to be
+            statistically usable.
+          </p>
+        </div>
+
+        <div class="stub__method">
+          <h3 class="stub__h3">Fed Policy Regime Shift Post-2022</h3>
+          <p class="stub__p">
+            From ZIRP to active rate management changes the relevance of pre-2022 macro
+            relationships for the crypto-macro link. Limit cross-asset crypto backtests to ~2018+
+            (post-ICO normalization, post-CME futures).
+          </p>
+        </div>
+      </section>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ 12 ============ -->
+      <section class="stub__sec">
+        <h2 class="stub__h2">12. References</h2>
+
+        <h3 class="stub__h3">Foundational Academic</h3>
+        <ul class="stub__list">
+          <li>Hamilton, J. D. (1989). &ldquo;A New Approach to the Economic Analysis of Nonstationary Time Series.&rdquo; <em>Econometrica.</em> &mdash; HMM regime switching origin.</li>
+          <li>Stock, J. H., &amp; Watson, M. W. (2002). &ldquo;Macroeconomic Forecasting Using Diffusion Indexes.&rdquo; &mdash; dynamic factor models.</li>
+          <li>Lopez de Prado, M. (2016). &ldquo;Building Diversified Portfolios that Outperform Out-of-Sample.&rdquo; &mdash; HRP origin.</li>
+          <li>Chen, N. F., Roll, R., &amp; Ross, S. A. (1986). &ldquo;Economic Forces and the Stock Market.&rdquo; &mdash; multi-factor model template.</li>
+        </ul>
+
+        <h3 class="stub__h3">Institutional Methodology</h3>
+        <ul class="stub__list">
+          <li>Hatzius, J. et al. (2010). &ldquo;Financial Conditions Indexes: A Fresh Look after the Financial Crisis.&rdquo; &mdash; Goldman FCI methodology.</li>
+          <li>Brave, S. &amp; Butters, R. A. (2011). &ldquo;Monitoring Financial Stability: A Financial Conditions Index Approach.&rdquo; &mdash; Chicago Fed NFCI methodology.</li>
+          <li>Dalio, R. (2012). &ldquo;An In-Depth Look at Deleveragings.&rdquo; &mdash; Bridgewater regime framework.</li>
+          <li>BlackRock Investment Institute. &ldquo;Macro Insights&rdquo; series. &mdash; GPS methodology overview.</li>
+        </ul>
+
+        <h3 class="stub__h3">Crypto-Native</h3>
+        <ul class="stub__list">
+          <li>Burniske, C. &amp; Tatar, J. (2017). <em>Cryptoassets.</em> &mdash; early framework for crypto valuation.</li>
+          <li>Coinmetrics &ldquo;State of the Network&rdquo; reports. &mdash; on-chain factor methodology.</li>
+          <li>Glassnode Insights. &mdash; MVRV, SOPR, realized cap definitions and applications.</li>
+        </ul>
+
+        <h3 class="stub__h3">Data Sources (Active Links)</h3>
+        <ul class="stub__list stub__list--links">
+          <li>FRED: <a class="stub__inline" href="https://fred.stlouisfed.org" target="_blank" rel="noopener noreferrer">https://fred.stlouisfed.org</a></li>
+          <li>DefiLlama: <a class="stub__inline" href="https://defillama.com" target="_blank" rel="noopener noreferrer">https://defillama.com</a></li>
+          <li>Coinglass: <a class="stub__inline" href="https://www.coinglass.com" target="_blank" rel="noopener noreferrer">https://www.coinglass.com</a></li>
+          <li>Token Terminal: <a class="stub__inline" href="https://tokenterminal.com" target="_blank" rel="noopener noreferrer">https://tokenterminal.com</a></li>
+          <li>CFTC COT: <a class="stub__inline" href="https://www.cftc.gov/MarketReports/CommitmentsofTraders" target="_blank" rel="noopener noreferrer">https://www.cftc.gov/MarketReports/CommitmentsofTraders</a></li>
+        </ul>
+      </section>
+
+      <hr class="stub__rule" />
+
+      <!-- ============ Appendix A ============ -->
+      <section class="stub__sec">
+        <h2 class="stub__h2">Appendix A: Glossary</h2>
+        <dl class="stub__gloss">
+          <div class="stub__gloss-item">
+            <dt>CVaR:</dt>
+            <dd>Conditional Value at Risk; expected loss in the worst &alpha;% of scenarios.</dd>
+          </div>
+          <div class="stub__gloss-item">
+            <dt>EWMA:</dt>
+            <dd>Exponentially Weighted Moving Average.</dd>
+          </div>
+          <div class="stub__gloss-item">
+            <dt>GTAA:</dt>
+            <dd>Global Tactical Asset Allocation.</dd>
+          </div>
+          <div class="stub__gloss-item">
+            <dt>HMM:</dt>
+            <dd>Hidden Markov Model.</dd>
+          </div>
+          <div class="stub__gloss-item">
+            <dt>HRP:</dt>
+            <dd>Hierarchical Risk Parity.</dd>
+          </div>
+          <div class="stub__gloss-item">
+            <dt>Ledoit-Wolf shrinkage:</dt>
+            <dd>Method to stabilize covariance matrix estimation.</dd>
+          </div>
+          <div class="stub__gloss-item">
+            <dt>MVRV:</dt>
+            <dd>Market Value to Realized Value ratio (crypto on-chain valuation metric).</dd>
+          </div>
+          <div class="stub__gloss-item">
+            <dt>NFCI:</dt>
+            <dd>National Financial Conditions Index (Chicago Fed).</dd>
+          </div>
+          <div class="stub__gloss-item">
+            <dt>OAS:</dt>
+            <dd>Option-Adjusted Spread (credit).</dd>
+          </div>
+          <div class="stub__gloss-item">
+            <dt>SAA:</dt>
+            <dd>Strategic Asset Allocation (neutral baseline weights).</dd>
+          </div>
+          <div class="stub__gloss-item">
+            <dt>TAA:</dt>
+            <dd>Tactical Asset Allocation (deviations from SAA based on conditions).</dd>
+          </div>
+          <div class="stub__gloss-item">
+            <dt>z-score:</dt>
+            <dd>Standardized value: (x &minus; rolling mean) / rolling standard deviation.</dd>
+          </div>
+        </dl>
+      </section>
+
+      <div class="stub__end">
+        <p class="stub__end-p">
+          End of exhibit. This document is a methodology survey, not a product specification. Use as
+          reference material when scoping a regime detection system; pick methods based on the
+          constraints documented in Section 9 and the recommended starting architecture in
+          Section 10.
+        </p>
+        <p class="stub__end-p">
+          Date of brief: April 2026 &middot; Document type: Reference exhibit / methodology survey
+        </p>
+      </div>
+    </article>
 
     <div class="stub__back">
       <a class="stub__back-link" href="/regime">&larr; Back to the live classifier</a>
@@ -53,8 +1172,12 @@
   color: var(--color-text);
   font-family: var(--font-sans);
 }
-.stub__container { max-width: 768px; margin: 0 auto; }
-.stub__head { margin-bottom: 3rem; }
+.stub__container { max-width: 880px; margin: 0 auto; }
+.stub__head {
+  margin-bottom: 3rem;
+  padding-bottom: 2.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
 .stub__eyebrow {
   font-family: var(--font-mono);
   font-size: 0.625rem;
@@ -87,28 +1210,287 @@
   line-height: 1.65;
   font-size: 1.0625rem;
 }
-.stub__body { display: flex; flex-direction: column; gap: 2.5rem; }
+
+.stub__body { display: flex; flex-direction: column; gap: 1.75rem; }
+
+.stub__intro {
+  font-size: 1.0625rem;
+  line-height: 1.75;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+.stub__intro strong { color: var(--color-text); font-weight: 600; }
+
+/* Callout: cyan appears only as a 2px rule, never as a fill. */
+.stub__callout {
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-accent);
+  background: var(--color-surface);
+  padding: 1.5rem;
+}
+/* Defined again after .stub__h2 below would be fragile; compound the class
+   so the callout heading wins regardless of source order. */
+.stub__h2.stub__h2--callout {
+  border-bottom: 0;
+  padding-bottom: 0;
+  margin-bottom: 0.75rem;
+  font-size: 1.125rem;
+}
+
+.stub__related {
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  margin: 0;
+  padding-left: 1rem;
+  border-left: 1px solid var(--color-border);
+}
+
+.stub__rule {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  margin: 1.75rem 0;
+  height: 0;
+}
+
 .stub__sec { display: flex; flex-direction: column; gap: 1rem; }
+
 .stub__h2 {
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.005em;
   color: var(--color-text);
   margin: 0;
   padding-bottom: 0.5rem;
   border-bottom: 1px solid var(--color-border);
 }
+.stub__h3 {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+  line-height: 1.35;
+}
+.stub__h3--tier {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-text);
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.stub__h4 {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+  line-height: 1.35;
+}
+
 .stub__p {
   font-size: 0.95rem;
   line-height: 1.7;
   color: var(--color-text-muted);
   margin: 0;
 }
+.stub__p strong { color: var(--color-text); font-weight: 600; }
+.stub__p em { font-style: italic; }
+
+.stub__note {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  margin: 0;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-accent);
+  background: var(--color-surface);
+}
+.stub__note strong { color: var(--color-text); font-weight: 600; }
+
+/* Card grid (three-up on wide screens) */
+.stub__cards {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+.stub__card {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.stub__card--lead { border-left: 2px solid var(--color-accent); }
+
+/* Numbered prior-art entries */
+.stub__entry {
+  border-left: 2px solid var(--color-accent);
+  padding: 0.5rem 0 0.5rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.stub__entry-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.stub__entry-num {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-accent);
+}
+
+/* Method / tier blocks */
+.stub__tier {
+  border: 1px solid var(--color-border);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.stub__tier--lead { border-left: 2px solid var(--color-accent); }
+.stub__tier--muted { color: var(--color-text-dim); }
+.stub__method { display: flex; flex-direction: column; gap: 0.5rem; }
+
+.stub__list {
+  color: var(--color-text-muted);
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  margin: 0;
+  padding-left: 1.25rem;
+  list-style: disc;
+}
+.stub__list li { margin-bottom: 0.375rem; }
+.stub__list strong { color: var(--color-text); font-weight: 600; }
+.stub__list em { font-style: italic; }
+.stub__list--links { word-break: break-word; }
+
+.stub__ol {
+  color: var(--color-text-muted);
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  margin: 0;
+  padding-left: 1.5rem;
+  list-style: decimal;
+}
+.stub__ol li { margin-bottom: 0.625rem; }
+.stub__ol strong { color: var(--color-text); font-weight: 600; }
+
+.stub__code-inline {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  padding: 0.0625rem 0.25rem;
+}
+
+.stub__formula {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--color-text);
+  background: var(--color-void);
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-accent);
+  padding: 0.75rem;
+  margin: 0;
+  overflow-x: auto;
+}
+
+/* Tables */
+.stub__table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+.stub__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+}
+.stub__table--ind { min-width: 640px; }
+.stub__table thead tr { border-bottom: 1px solid var(--color-border); }
+.stub__table th {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 400;
+  color: var(--color-text);
+  text-align: left;
+  padding: 0.5rem 1rem 0.5rem 0;
+  white-space: nowrap;
+}
+.stub__table tbody tr { border-bottom: 1px solid var(--color-border); }
+.stub__table tbody tr:last-child { border-bottom: 0; }
+.stub__table td {
+  padding: 0.5rem 1rem 0.5rem 0;
+  line-height: 1.5;
+  vertical-align: top;
+}
+.stub__table td:first-child { color: var(--color-text); }
+.stub__table--ind td:nth-child(2) {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.stub__table th:last-child, .stub__table td:last-child { padding-right: 0; }
+
+/* Glossary */
+.stub__gloss {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem 2rem;
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--color-text-muted);
+}
+.stub__gloss-item { margin: 0; }
+.stub__gloss dt {
+  display: inline;
+  color: var(--color-text);
+  font-weight: 600;
+}
+.stub__gloss dd {
+  display: inline;
+  margin: 0 0 0 0.375rem;
+}
+
+.stub__end {
+  margin-top: 1rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.stub__end-p {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1.7;
+  color: var(--color-text-dim);
+  margin: 0;
+}
+
 .stub__inline {
   color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 .stub__inline:hover { color: var(--color-text); }
+
 .stub__back { margin-top: 3rem; }
 .stub__back-link {
   display: inline-block;
@@ -123,8 +1505,22 @@
   transition: border-color 0.3s, color 0.3s;
 }
 .stub__back-link:hover { border-color: var(--color-accent); color: var(--color-accent); }
+
+.stub a:focus-visible,
+.stub__back-link:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (min-width: 768px) {
+  .stub__cards { grid-template-columns: repeat(3, 1fr); }
+  .stub__gloss { grid-template-columns: repeat(2, 1fr); }
+}
 @media (min-width: 1024px) {
   .stub { padding: 10rem 2rem 6rem; }
   .stub__title { font-size: 3.5rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stub__back-link { transition: none; }
 }
 </style>

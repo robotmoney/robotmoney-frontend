@@ -1,337 +1,817 @@
-<!-- /regime/indicators — Regime Indicators reference.
+<!-- /regime/indicators — Indicator glossary for the regime classifier.
+     Full-prose reference ported from the production page at
+     https://www.robotmoney.net/regime/indicators : for each of the 26
+     indicators it carries the spec block (source, transform, units, sign)
+     plus the three prose blocks — What it is / How it's derived /
+     How to read it — with the published numeric thresholds intact.
      The /regime dashboard links each indicator's info icon to
-     /regime/indicators#<indicator_id>; this static reference page emits a
-     section with a matching id for every indicator so those fragment links land.
-     Generated from goldens/api-goldens.json
-     (routes["/api/dashboards/regime-snapshots"].latest.indicators).
+     /regime/indicators#<indicator_id>, so every indicator emits a section
+     with a matching id and those fragment links land.
+     Every indicator keeps its upstream primary-source link (FRED, Yahoo
+     Finance, DefiLlama, Blockchain.com, Coinmetrics, GeckoTerminal,
+     multpl.com) so a reader can verify each number at source.
      NO <script>, NO custom Alpine factories. -->
 
 <section class="ri">
   <div class="ri__container">
     <header class="ri__head">
-      <div class="ri__eyebrow">Methodology</div>
-      <h1 class="ri__title">Regime <span class="ri__accent">Indicators</span></h1>
+      <div class="ri__eyebrow">Methodology &middot; Indicator Glossary</div>
+      <h1 class="ri__title">The 26 indicators behind the regime classifier</h1>
       <p class="ri__lede">
-        A reference for every indicator in the Robot Money regime classifier,
-        grouped by panel. Each entry lists its data source, the transform applied,
-        and its sign — the direction that reads as risk-on. See the live
+        What each measures, where the number comes from, and how to interpret high vs low readings.
+        Every indicator is built from open data and links back to its upstream source. See the live
         classification at <a class="ri__inline" href="/regime">/regime</a>.
       </p>
     </header>
 
-      <section class="ri__panel">
-        <div class="ri__panel-head" id="panel-macro">
-          <span class="ri__panel-tag">Macro</span>
-          <span class="ri__panel-count">8 indicators</span>
-        </div>
-        <p class="ri__panel-desc">Traditional-finance signals — rates, credit, the dollar, volatility, and cross-asset ratios.</p>
-        <div class="ri__list">
-          <section class="ri__ind" id="T10Y2Y">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">10y–2y yield curve</h3>
-              <code class="ri__ind-id">T10Y2Y</code>
-            </div>
+    <nav class="ri__index" aria-label="Indicator index">
+      <div class="ri__index-group">
+        <div class="ri__index-title">Macro panel <span class="ri__index-count">(8)</span></div>
+        <ul class="ri__index-list">
+          <li><a class="ri__index-link" href="#T10Y2Y">10y&ndash;2y yield curve</a></li>
+          <li><a class="ri__index-link" href="#DFII10">Real 10y yield</a></li>
+          <li><a class="ri__index-link" href="#T5YIE">5y breakeven inflation</a></li>
+          <li><a class="ri__index-link" href="#HY_OAS">HY OAS credit spread</a></li>
+          <li><a class="ri__index-link" href="#DXY">DXY (trade-weighted USD)</a></li>
+          <li><a class="ri__index-link" href="#ICSA">Initial jobless claims</a></li>
+          <li><a class="ri__index-link" href="#VIX">VIX</a></li>
+          <li><a class="ri__index-link" href="#COPPER_GOLD">Copper / Gold ratio</a></li>
+        </ul>
+      </div>
+      <div class="ri__index-group">
+        <div class="ri__index-title">On-chain / crypto panel <span class="ri__index-count">(10)</span></div>
+        <ul class="ri__index-list">
+          <li><a class="ri__index-link" href="#DEFI_TVL">Total DeFi TVL</a></li>
+          <li><a class="ri__index-link" href="#STABLES">Total stablecoin float</a></li>
+          <li><a class="ri__index-link" href="#BTC_ACTIVE">BTC active addresses</a></li>
+          <li><a class="ri__index-link" href="#ETH_ACTIVE">ETH active addresses</a></li>
+          <li><a class="ri__index-link" href="#BTC_MVRV">BTC MVRV</a></li>
+          <li><a class="ri__index-link" href="#BTC_ETH">BTC / ETH ratio</a></li>
+          <li><a class="ri__index-link" href="#ETH_TREND">ETH 50d/200d trend</a></li>
+          <li><a class="ri__index-link" href="#NEW_TOKENS">New DEX pools (24h)</a></li>
+          <li><a class="ri__index-link" href="#DEFI_GROWTH">DeFi TVL growth (90d)</a></li>
+          <li><a class="ri__index-link" href="#STABLES_GROWTH">Stablecoin float growth (90d)</a></li>
+        </ul>
+      </div>
+      <div class="ri__index-group">
+        <div class="ri__index-title">Equity factor panel <span class="ri__index-count">(8)</span></div>
+        <ul class="ri__index-list">
+          <li><a class="ri__index-link" href="#SPX_TREND">S&amp;P 500 50d/200d trend</a></li>
+          <li><a class="ri__index-link" href="#IWM_SPY">Equity breadth (IWM/SPY)</a></li>
+          <li><a class="ri__index-link" href="#SPHB_SPLV">High-beta vs low-vol</a></li>
+          <li><a class="ri__index-link" href="#MTUM_SPY">Momentum factor</a></li>
+          <li><a class="ri__index-link" href="#IWF_IWD">Growth vs value</a></li>
+          <li><a class="ri__index-link" href="#XLU_SPY">Utilities leadership</a></li>
+          <li><a class="ri__index-link" href="#XLP_XLY">Staples vs discretionary</a></li>
+          <li><a class="ri__index-link" href="#SHILLER_CAPE">Shiller CAPE (cyclically adjusted P/E)</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <section class="ri__panel">
+      <div class="ri__panel-head" id="panel-macro">
+        <h2 class="ri__panel-tag">Macro panel</h2>
+        <span class="ri__panel-count">8 indicators</span>
+      </div>
+      <p class="ri__panel-desc">Traditional-finance signals &mdash; rates, credit, the dollar, volatility, and cross-asset ratios.</p>
+      <div class="ri__list">
+
+        <section class="ri__ind" id="T10Y2Y">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">10y&ndash;2y yield curve</h3>
+            <code class="ri__ind-id">T10Y2Y &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>FRED</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://fred.stlouisfed.org/series/T10Y2Y" target="_blank" rel="noopener noreferrer">FRED</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">percent</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="DFII10">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">Real 10y yield</h3>
-              <code class="ri__ind-id">DFII10</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">The difference between 10-year and 2-year US Treasury yields. When negative (&ldquo;inverted&rdquo;), short-dated bonds yield more than long-dated ones &mdash; a configuration that has historically preceded every US recession since 1955.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">FRED publishes this as a daily spread (DGS10 &minus; DGS2). We read the raw level in percentage points.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Steep positive curve (above ~1.5%) signals healthy growth expectations &mdash; long-term capital wants compensation for tying up money. Flat or inverted curve (below 0%) signals that the bond market expects future rate cuts because growth is slowing. Risk-on when steepening; risk-off when flattening or inverted.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="DFII10">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">Real 10y yield</h3>
+            <code class="ri__ind-id">DFII10 &middot; sign &minus;1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>FRED</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-off when rising (inverted)</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://fred.stlouisfed.org/series/DFII10" target="_blank" rel="noopener noreferrer">FRED</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">percent</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>&minus;1 &mdash; risk-off when rising (inverted)</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="T5YIE">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">5y breakeven inflation</h3>
-              <code class="ri__ind-id">T5YIE</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">The yield on 10-year Treasury Inflation-Protected Securities (TIPS) &mdash; the &ldquo;real&rdquo; interest rate after stripping out inflation expectations. The pure cost of capital that policymakers actually care about.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">FRED series DFII10, published daily.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Low or negative real rates (below 0.5%) mean monetary policy is loose, which lifts risk assets &mdash; investors are pushed out the risk curve. High real rates (above 2%) mean restrictive policy, which compresses valuations and squeezes leveraged businesses. Risk-on when low; risk-off when high.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="T5YIE">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">5y breakeven inflation</h3>
+            <code class="ri__ind-id">T5YIE &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>FRED</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://fred.stlouisfed.org/series/T5YIE" target="_blank" rel="noopener noreferrer">FRED</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">percent</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="HY_OAS">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">HY OAS credit spread</h3>
-              <code class="ri__ind-id">HY_OAS</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">The bond market&rsquo;s implied forecast for average inflation over the next 5 years. Computed as the spread between nominal 5-year Treasury yield and 5-year TIPS yield.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">FRED T5YIE, daily. The number is the inflation rate at which an investor would be indifferent between a nominal Treasury and a TIPS over the period &mdash; &ldquo;breaking even.&rdquo;</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Historically read as a regime-dependent signal. In deflationary periods (2009&ndash;2020), rising breakevens meant the Fed was succeeding at reflating &mdash; risk-on. In the post-2022 inflation regime, elevated breakevens can also signal Fed hawkishness &mdash; risk-off. Our sign is +1 (reflation framing). Treat with care during stagflation-like conditions.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="HY_OAS">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">HY OAS credit spread</h3>
+            <code class="ri__ind-id">HY_OAS &middot; sign &minus;1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>FRED</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-off when rising (inverted)</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://fred.stlouisfed.org/series/BAMLH0A0HYM2" target="_blank" rel="noopener noreferrer">FRED</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">percent</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>&minus;1 &mdash; risk-off when rising (inverted)</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="DXY">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">DXY (trade-weighted USD)</h3>
-              <code class="ri__ind-id">DXY</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">ICE BofA US High Yield Option-Adjusted Spread. The yield premium that investors demand to hold US junk-rated corporate bonds over Treasuries. A direct, real-time measure of credit risk appetite.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">FRED series BAMLH0A0HYM2, daily. Already an OAS &mdash; adjusts for embedded call/put options in the bond universe so it&rsquo;s comparable across regimes.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Tight spreads (below 3.5%) signal that credit markets are complacent, default risk is being priced low &mdash; risk-on. Wide spreads (above 6%) signal that credit investors are pricing-in stress &mdash; risk-off. Above 10% is recessionary. One of the most reliable late-cycle / crisis indicators we have.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="DXY">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">DXY (trade-weighted USD)</h3>
+            <code class="ri__ind-id">DXY &middot; sign &minus;1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>FRED</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-off when rising (inverted)</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://fred.stlouisfed.org/series/DTWEXBGS" target="_blank" rel="noopener noreferrer">FRED</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">index</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>&minus;1 &mdash; risk-off when rising (inverted)</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="ICSA">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">Initial jobless claims</h3>
-              <code class="ri__ind-id">ICSA</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">A broad trade-weighted index of the US dollar against the currencies of major US trading partners. Measures dollar strength globally, not just against the major reserve currencies.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">FRED series DTWEXBGS. Published weekly (not the daily DXY ICE futures index). We read the raw index level.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">A stronger dollar tightens global financial conditions &mdash; emerging-market borrowers with dollar debt struggle, commodity prices fall, and risk assets typically suffer. A weaker dollar does the opposite. Risk-off when DXY is high or rising; risk-on when low or falling.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="ICSA">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">Initial jobless claims</h3>
+            <code class="ri__ind-id">ICSA &middot; sign &minus;1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>FRED</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-off when rising (inverted)</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://fred.stlouisfed.org/series/ICSA" target="_blank" rel="noopener noreferrer">FRED</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">count</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>&minus;1 &mdash; risk-off when rising (inverted)</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="VIX">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">VIX</h3>
-              <code class="ri__ind-id">VIX</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">The number of new claims filed for US unemployment insurance benefits in the most recent week. The cleanest high-frequency read on labor market health.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">FRED series ICSA, published every Thursday for the prior week ending Saturday. We use the raw weekly count.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Low claims (below 250k) signal a tight labor market &mdash; workers are hard to replace, businesses are hesitant to lay off. Rising claims (above 350k) signal labor market stress and have historically preceded recessions by 3&ndash;6 months. Risk-on when low; risk-off when rising.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="VIX">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">VIX</h3>
+            <code class="ri__ind-id">VIX &middot; sign &minus;1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Yahoo Finance</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-off when rising (inverted)</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://finance.yahoo.com/quote/%5EVIX" target="_blank" rel="noopener noreferrer">Yahoo Finance</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">index</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>&minus;1 &mdash; risk-off when rising (inverted)</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="COPPER_GOLD">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">Copper / Gold ratio</h3>
-              <code class="ri__ind-id">COPPER_GOLD</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">CBOE Volatility Index. The market&rsquo;s expected 30-day volatility of the S&amp;P 500, derived from the prices of out-of-the-money S&amp;P options. Universally known as the &ldquo;fear gauge.&rdquo;</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Yahoo Finance ticker ^VIX, daily close. The number is annualized expected volatility in percentage points.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Below 15 = complacency, low fear, risk-on environment. 15&ndash;25 = normal. 25&ndash;40 = elevated stress, risk-off. Above 40 = panic (rare &mdash; March 2020, Lehman, 1987). VIX tends to mean-revert; sustained elevated readings matter more than spikes.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="COPPER_GOLD">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">Copper / Gold ratio</h3>
+            <code class="ri__ind-id">COPPER_GOLD &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Yahoo Finance</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://finance.yahoo.com/quote/HG=F" target="_blank" rel="noopener noreferrer">Yahoo Finance</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">ratio4</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-        </div>
-      </section>
-      <section class="ri__panel">
-        <div class="ri__panel-head" id="panel-onchain">
-          <span class="ri__panel-tag">On-chain</span>
-          <span class="ri__panel-count">10 indicators</span>
-        </div>
-        <p class="ri__panel-desc">Crypto-native signals — TVL, stablecoin float, active addresses, valuation, and trend.</p>
-        <div class="ri__list">
-          <section class="ri__ind" id="DEFI_TVL">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">Total DeFi TVL</h3>
-              <code class="ri__ind-id">DEFI_TVL</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Price of copper futures divided by price of gold futures. Copper is an industrial-demand proxy (used heavily in construction, electronics, manufacturing); gold is a defensive store of value. The ratio captures whether the commodity complex is leaning cyclical or defensive.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Yahoo Finance HG=F (Comex copper futures) divided by GC=F (Comex gold futures), daily.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Rising ratio signals industrial activity outpacing safe-haven demand &mdash; growth confidence &mdash; risk-on. Falling ratio signals investors flocking to gold while copper demand fades &mdash; defensive positioning &mdash; risk-off. A classic Druckenmiller-favorite cyclical gauge.</p>
+          </div>
+        </section>
+
+      </div>
+    </section>
+
+    <section class="ri__panel">
+      <div class="ri__panel-head" id="panel-onchain">
+        <h2 class="ri__panel-tag">On-chain / crypto panel</h2>
+        <span class="ri__panel-count">10 indicators</span>
+      </div>
+      <p class="ri__panel-desc">Crypto-native signals &mdash; TVL, stablecoin float, active addresses, valuation, and trend.</p>
+      <div class="ri__list">
+
+        <section class="ri__ind" id="DEFI_TVL">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">Total DeFi TVL</h3>
+            <code class="ri__ind-id">DEFI_TVL &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>DefiLlama (TVL)</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://defillama.com/" target="_blank" rel="noopener noreferrer">DefiLlama</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">usd</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="STABLES">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">Total stablecoin float</h3>
-              <code class="ri__ind-id">STABLES</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Total dollar value of crypto assets locked across all DeFi protocols &mdash; lending, automated market makers, liquid staking, restaking, yield aggregators. The aggregate measure of capital deployment into permissionless finance.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">DefiLlama aggregates TVL across all tracked protocols on all chains in USD terms. Updated daily.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Rising TVL = capital flowing into DeFi = on-chain risk appetite = risk-on. Falling TVL = capital withdrawal back to centralized rails or stables = risk-off. Note: USD value is sensitive to ETH/BTC price moves, so growth measures (90d &Delta;) are often more informative than the level alone.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="STABLES">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">Total stablecoin float</h3>
+            <code class="ri__ind-id">STABLES &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>DefiLlama (stablecoins)</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://defillama.com/stablecoins" target="_blank" rel="noopener noreferrer">DefiLlama</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">usd</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="BTC_ACTIVE">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">BTC active addresses</h3>
-              <code class="ri__ind-id">BTC_ACTIVE</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Total outstanding supply of USD-pegged stablecoins (USDT, USDC, DAI, and others) across all chains. Approximates the dollar liquidity sitting on crypto rails.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">DefiLlama stablecoin aggregate, in USD. Updated daily.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Growing stablecoin float = capital entering the crypto ecosystem (often a leading indicator of upcoming deployment into risky assets). Shrinking float = capital leaving crypto. Risk-on when growing; risk-off when contracting. Counter-intuitively, stablecoin growth alongside falling crypto prices is sometimes the most bullish setup &mdash; dry powder accumulating during a sell-off.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="BTC_ACTIVE">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">BTC active addresses</h3>
+            <code class="ri__ind-id">BTC_ACTIVE &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Blockchain.com</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://www.blockchain.com/explorer/charts/n-unique-addresses" target="_blank" rel="noopener noreferrer">Blockchain.com</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">count</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="ETH_ACTIVE">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">ETH active addresses</h3>
-              <code class="ri__ind-id">ETH_ACTIVE</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Number of unique Bitcoin addresses that participated in transactions on a given day. A proxy for organic network usage and on-chain engagement.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Blockchain.com&rsquo;s n-unique-addresses chart, daily.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Rising active addresses = engaged user base, growing network utility = risk-on. Caveat: structural decline is real &mdash; ETF custody, Lightning Network, and exchange consolidation have moved transactions off-chain. So absolute levels are less informative than they were pre-2021. Treat this as a directional indicator, not a level read.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="ETH_ACTIVE">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">ETH active addresses</h3>
+            <code class="ri__ind-id">ETH_ACTIVE &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Coin Metrics</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://charts.coinmetrics.io/network-data/eth/AdrActCnt" target="_blank" rel="noopener noreferrer">Coinmetrics</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">count</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="BTC_MVRV">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">BTC MVRV</h3>
-              <code class="ri__ind-id">BTC_MVRV</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Number of unique Ethereum addresses that transacted on a given day. Equivalent to the BTC measure, for ETH mainnet specifically.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Coinmetrics community data, asset=ETH, metric=AdrActCnt. Daily.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Same logic as BTC active addresses &mdash; rising = engaged network = risk-on. Caveats also similar: L2 migration has moved a lot of ETH activity off mainnet. Look for trend changes rather than absolute levels.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="BTC_MVRV">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">BTC MVRV</h3>
+            <code class="ri__ind-id">BTC_MVRV &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Blockchain.com</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://www.blockchain.com/explorer/charts/mvrv" target="_blank" rel="noopener noreferrer">Blockchain.com</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">ratio2</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="BTC_ETH">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">BTC / ETH ratio</h3>
-              <code class="ri__ind-id">BTC_ETH</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Market Value to Realized Value ratio. Divides BTC market capitalization by its &ldquo;realized cap&rdquo; &mdash; the sum of (price-at-last-move &times; amount) across all UTXOs. Represents how big a paper gain or loss the average bitcoin holder is sitting on.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Blockchain.com mvrv chart. Realized cap is computed from on-chain UTXO data.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Below 1 = market cap below cost basis of holders = historical bottoms (March 2020, late 2022). Above 3 = average holder up 3x = historical tops (late 2017, early 2021). Risk-on when rising from low; the indicator becomes a contrarian peak signal above 3.5. Use with care near extremes.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="BTC_ETH">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">BTC / ETH ratio</h3>
+            <code class="ri__ind-id">BTC_ETH &middot; sign &minus;1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Yahoo Finance</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-off when rising (inverted)</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://finance.yahoo.com/quote/BTC-USD" target="_blank" rel="noopener noreferrer">Yahoo Finance</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">ratio2</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>&minus;1 &mdash; risk-off when rising (inverted)</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="ETH_TREND">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">ETH 50d/200d trend</h3>
-              <code class="ri__ind-id">ETH_TREND</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">BTC price divided by ETH price. A proxy for &ldquo;crypto risk preference&rdquo; &mdash; when capital flies to the safest crypto asset (BTC) over the higher-beta major (ETH), risk-off is happening within crypto.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Yahoo Finance BTC-USD &divide; ETH-USD, daily. We use this as a proxy for BTC dominance because true BTC.D historical data requires a paid feed.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Rising ratio = BTC outperforming ETH = capital seeking shelter within crypto = crypto risk-off. Falling ratio = ETH outperforming = animal spirits, alt-rotation = risk-on. Strongly correlates with the broader &ldquo;alt season&rdquo; framework.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="ETH_TREND">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">ETH 50d/200d trend</h3>
+            <code class="ri__ind-id">ETH_TREND &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Yahoo Finance</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>50d/200d trend</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://finance.yahoo.com/quote/ETH-USD" target="_blank" rel="noopener noreferrer">Yahoo Finance</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>50d/200d trend <code class="ri__code">trend_50_200</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">index</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="NEW_TOKENS">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">New DEX pools (24h)</h3>
-              <code class="ri__ind-id">NEW_TOKENS</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Ratio of ETH&rsquo;s 50-day simple moving average to its 200-day SMA. The ETH-specific equivalent of SPX_TREND.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Yahoo ETH-USD daily closes. SMA(50) &divide; SMA(200).</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Above 1 = ETH in uptrend = risk-on. Below 1 = downtrend = risk-off. Like SPX_TREND, lags but filters noise.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="NEW_TOKENS">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">New DEX pools (24h)</h3>
+            <code class="ri__ind-id">NEW_TOKENS &middot; sign &minus;1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>GeckoTerminal (new pools)</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-off when rising (inverted)</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://www.geckoterminal.com/new-pools" target="_blank" rel="noopener noreferrer">GeckoTerminal</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">count</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>&minus;1 &mdash; risk-off when rising (inverted)</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="DEFI_GROWTH">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">DeFi TVL growth (90d)</h3>
-              <code class="ri__ind-id">DEFI_GROWTH</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Count of new DEX liquidity pools (&asymp; new token launches) observed across all networks in the trailing 24 hours. A real-time measure of crypto speculation intensity.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">GeckoTerminal&rsquo;s /networks/new_pools endpoint, polled daily. The cron appends each day&rsquo;s count to data/regime/token-launches.csv; the percentile rank reads from that accumulated history.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">High count = speculative froth (think 2021 NFT/meme manias, 2024 memecoin frenzy) = late-cycle behavior = contrarian risk-off signal. Low count = calm market = risk-on. Sign &minus;1: rising count counts as risk-off. Note: this indicator is &ldquo;accumulate-forward&rdquo; &mdash; it only became reliable once we had ~60 days of daily samples, and the upstream API caps make it under-count on the busiest days.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="DEFI_GROWTH">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">DeFi TVL growth (90d)</h3>
+            <code class="ri__ind-id">DEFI_GROWTH &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>DefiLlama (TVL)</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>90-day change</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://defillama.com/" target="_blank" rel="noopener noreferrer">DefiLlama</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>90-day change <code class="ri__code">change90</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">percent_change</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="STABLES_GROWTH">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">Stablecoin float growth (90d)</h3>
-              <code class="ri__ind-id">STABLES_GROWTH</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">The 90-day percent change in total DeFi TVL. Captures flow &mdash; whether capital is actively expanding or contracting the on-chain ecosystem &mdash; independent of where the absolute level happens to be.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">DefiLlama TVL series, transformed via (TVL[today] &minus; TVL[today&minus;90]) &divide; TVL[today&minus;90].</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Positive growth = capital flowing in = risk-on. Negative growth = capital exit = risk-off. Sits alongside DEFI_TVL (level): position vs. flow are different questions and both matter for treasury context.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="STABLES_GROWTH">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">Stablecoin float growth (90d)</h3>
+            <code class="ri__ind-id">STABLES_GROWTH &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>DefiLlama (stablecoins)</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>90-day change</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://defillama.com/stablecoins" target="_blank" rel="noopener noreferrer">DefiLlama</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>90-day change <code class="ri__code">change90</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">percent_change</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-        </div>
-      </section>
-      <section class="ri__panel">
-        <div class="ri__panel-head" id="panel-factor">
-          <span class="ri__panel-tag">Factor</span>
-          <span class="ri__panel-count">8 indicators</span>
-        </div>
-        <p class="ri__panel-desc">Equity-factor and valuation signals — trend, breadth, momentum, style, and cyclically-adjusted valuation.</p>
-        <div class="ri__list">
-          <section class="ri__ind" id="SPX_TREND">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">S&amp;P 500 50d/200d trend</h3>
-              <code class="ri__ind-id">SPX_TREND</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">The 90-day percent change in total stablecoin float. Captures whether dollar liquidity on crypto rails is expanding or shrinking &mdash; a leading indicator of imminent risk-asset deployment or withdrawal.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">DefiLlama stablecoin aggregate, transformed via (Stables[today] &minus; Stables[today&minus;90]) &divide; Stables[today&minus;90].</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Stablecoin float almost always grows over multi-month periods (the asset class is structurally growing), so a 90d change above ~5% counts as healthy expansion = risk-on. Stagnation or contraction = capital leaving crypto = risk-off. One of the cleaner pure-flow signals.</p>
+          </div>
+        </section>
+
+      </div>
+    </section>
+
+    <section class="ri__panel">
+      <div class="ri__panel-head" id="panel-factor">
+        <h2 class="ri__panel-tag">Equity factor panel</h2>
+        <span class="ri__panel-count">8 indicators</span>
+      </div>
+      <p class="ri__panel-desc">Equity-factor and valuation signals &mdash; trend, breadth, momentum, style, and cyclically-adjusted valuation.</p>
+      <div class="ri__list">
+
+        <section class="ri__ind" id="SPX_TREND">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">S&amp;P 500 50d/200d trend</h3>
+            <code class="ri__ind-id">SPX_TREND &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Yahoo Finance</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>50d/200d trend</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://finance.yahoo.com/quote/%5EGSPC" target="_blank" rel="noopener noreferrer">Yahoo Finance</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>50d/200d trend <code class="ri__code">trend_50_200</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">index</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="IWM_SPY">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">Equity breadth (IWM/SPY)</h3>
-              <code class="ri__ind-id">IWM_SPY</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Ratio of the S&amp;P 500&rsquo;s 50-day simple moving average to its 200-day simple moving average. The classic &ldquo;golden cross / death cross&rdquo; trend indicator on the broadest equity benchmark.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Yahoo ^GSPC daily closes. We compute SMA(50) &divide; SMA(200) for each day. Stored value is the ratio itself (above 1 = uptrend, below 1 = downtrend).</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Ratio above 1 (golden cross) = SPX in a sustained uptrend = risk-on. Ratio below 1 (death cross) = downtrend = risk-off. Trend signals lag price action but filter out short-term noise, which is desirable in a regime classifier.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="IWM_SPY">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">Equity breadth (IWM/SPY)</h3>
+            <code class="ri__ind-id">IWM_SPY &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Yahoo Finance</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://finance.yahoo.com/quote/IWM" target="_blank" rel="noopener noreferrer">Yahoo Finance</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">ratio4</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="SPHB_SPLV">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">High-beta vs low-vol</h3>
-              <code class="ri__ind-id">SPHB_SPLV</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Ratio of the Russell 2000 small-cap ETF (IWM) to the S&amp;P 500 ETF (SPY). A measure of market breadth &mdash; whether small-caps are participating in the rally or just the mega-cap leaders.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Yahoo Finance IWM &divide; SPY, daily.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Rising ratio = small-caps outperforming = broad-based participation = healthy risk-on. Falling ratio = mega-cap concentration without breadth = late-cycle, narrow leadership = risk-off. Bear markets typically start with small-cap underperformance well before the index tops.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="SPHB_SPLV">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">High-beta vs low-vol</h3>
+            <code class="ri__ind-id">SPHB_SPLV &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Yahoo Finance</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://finance.yahoo.com/quote/SPHB" target="_blank" rel="noopener noreferrer">Yahoo Finance</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">ratio4</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="MTUM_SPY">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">Momentum factor</h3>
-              <code class="ri__ind-id">MTUM_SPY</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Ratio of the Invesco S&amp;P 500 High Beta ETF (SPHB) to the Invesco S&amp;P 500 Low Volatility ETF (SPLV). Both are S&amp;P 500 subsets, so the ratio isolates the risk-axis directly without cross-cap or sector confounds.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Yahoo Finance SPHB &divide; SPLV, daily.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Rising = high-beta in favor = appetite for volatility = risk-on. Falling = defensive low-vol leading = risk-off. Sign-stable by construction since it measures beta itself.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="MTUM_SPY">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">Momentum factor</h3>
+            <code class="ri__ind-id">MTUM_SPY &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Yahoo Finance</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://finance.yahoo.com/quote/MTUM" target="_blank" rel="noopener noreferrer">Yahoo Finance</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">ratio4</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="IWF_IWD">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">Growth vs value</h3>
-              <code class="ri__ind-id">IWF_IWD</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Ratio of the iShares MSCI USA Momentum Factor ETF (MTUM) to the S&amp;P 500 ETF (SPY). Captures whether cross-sectional momentum &mdash; buying recent winners &mdash; is working in the current market.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Yahoo Finance MTUM &divide; SPY, daily.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Rising = trends persisting, momentum-as-style in favor = risk-on. Falling = momentum reversal or crash, often clustering at regime turns.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="IWF_IWD">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">Growth vs value</h3>
+            <code class="ri__ind-id">IWF_IWD &middot; sign +1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Yahoo Finance</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-on when rising</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://finance.yahoo.com/quote/IWF" target="_blank" rel="noopener noreferrer">Yahoo Finance</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">ratio4</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>+1 &mdash; risk-on when rising</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="XLU_SPY">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">Utilities leadership</h3>
-              <code class="ri__ind-id">XLU_SPY</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Ratio of the iShares Russell 1000 Growth ETF (IWF) to the iShares Russell 1000 Value ETF (IWD). Captures the high-duration / risk-asset side of the equity style axis.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Yahoo Finance IWF &divide; IWD, daily.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Rising = growth leading = long-duration appetite, low-rate or easing regime = risk-on. Falling = growth derating, often a rates or risk-off event. Value-leading is the inverse, no separate indicator needed.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="XLU_SPY">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">Utilities leadership</h3>
+            <code class="ri__ind-id">XLU_SPY &middot; sign &minus;1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Yahoo Finance</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-off when rising (inverted)</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://finance.yahoo.com/quote/XLU" target="_blank" rel="noopener noreferrer">Yahoo Finance</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">ratio4</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>&minus;1 &mdash; risk-off when rising (inverted)</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="XLP_XLY">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">Staples vs discretionary</h3>
-              <code class="ri__ind-id">XLP_XLY</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Ratio of the SPDR Utilities Select Sector ETF (XLU) to the S&amp;P 500 ETF (SPY). Utilities are the canonical defensive / bond-proxy sector.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Yahoo Finance XLU &divide; SPY, daily.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Rising = utilities outperforming = flight to safety and yield = risk-off. Falling = cyclical leadership = risk-on. Sign-stable across modern regimes; can also rally on falling rates for non-risk reasons.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="XLP_XLY">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">Staples vs discretionary</h3>
+            <code class="ri__ind-id">XLP_XLY &middot; sign &minus;1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Yahoo Finance</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-off when rising (inverted)</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://finance.yahoo.com/quote/XLP" target="_blank" rel="noopener noreferrer">Yahoo Finance</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">ratio4</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>&minus;1 &mdash; risk-off when rising (inverted)</dd></div>
             </dl>
-          </section>
-          <section class="ri__ind" id="SHILLER_CAPE">
-            <div class="ri__ind-head">
-              <h3 class="ri__ind-name">Shiller CAPE (cyclically adjusted P/E)</h3>
-              <code class="ri__ind-id">SHILLER_CAPE</code>
-            </div>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Ratio of the SPDR Consumer Staples ETF (XLP) to the SPDR Consumer Discretionary ETF (XLY). Direct read on consumer-driven cyclical vs defensive rotation.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Yahoo Finance XLP &divide; XLY, daily.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">Rising = staples leading discretionary = consumer defensives in favor = risk-off. Falling = discretionary leading = appetite for cyclical consumption = risk-on. One of the most sign-stable sector signals in the literature.</p>
+          </div>
+        </section>
+
+        <section class="ri__ind" id="SHILLER_CAPE">
+          <div class="ri__ind-head">
+            <h3 class="ri__ind-name">Shiller CAPE (cyclically adjusted P/E)</h3>
+            <code class="ri__ind-id">SHILLER_CAPE &middot; sign &minus;1</code>
+          </div>
+          <div class="ri__specs">
             <dl class="ri__meta">
-              <div class="ri__meta-row"><dt>Source</dt><dd>Shiller CAPE dataset</dd></div>
-              <div class="ri__meta-row"><dt>Transform</dt><dd>Level</dd></div>
-              <div class="ri__meta-row"><dt>Sign</dt><dd>Risk-off when rising (inverted)</dd></div>
+              <div class="ri__meta-row"><dt>Source</dt><dd><a class="ri__src" href="https://www.multpl.com/shiller-pe" target="_blank" rel="noopener noreferrer">Shiller spreadsheet (datasets/s-and-p-500)</a></dd></div>
+              <div class="ri__meta-row"><dt>Transform</dt><dd>Level <code class="ri__code">level</code></dd></div>
+              <div class="ri__meta-row"><dt>Units</dt><dd><code class="ri__code">ratio2</code></dd></div>
+              <div class="ri__meta-row"><dt>Sign</dt><dd>&minus;1 &mdash; risk-off when rising (inverted)</dd></div>
             </dl>
-          </section>
-        </div>
-      </section>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">What it is</span>
+            <p class="ri__block-p">Robert Shiller&rsquo;s Cyclically Adjusted Price-to-Earnings ratio for the S&amp;P 500 &mdash; current real price divided by the 10-year average of real earnings. Smooths the earnings cycle so the multiple is comparable across business cycles, unlike raw trailing P/E which spikes mechanically in recessions.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How it&rsquo;s derived</span>
+            <p class="ri__block-p">Sourced from the datasets/s-and-p-500 GitHub mirror of Robert Shiller&rsquo;s spreadsheet (PE10 column), with a multpl.com HTML scrape as a fallback if the primary source is unreachable. Monthly cadence, forward-filled to daily by the framework. The 3y rolling percentile rank then measures elevation against the indicator&rsquo;s own trailing 3-year range.</p>
+          </div>
+          <div class="ri__block">
+            <span class="ri__block-label">How to read it</span>
+            <p class="ri__block-p">High CAPE = expensive equity market = lower long-horizon expected returns and elevated drawdown risk = risk-off (sign -1). The signal is strongest at tails (top/bottom decile); between extremes it is a slow-moving level rather than a precise short-horizon timer.</p>
+          </div>
+        </section>
+
+      </div>
+    </section>
+
+    <aside class="ri__note">
+      <p class="ri__note-p">
+        <strong class="ri__note-lead">Note on sign convention.</strong>
+        Each indicator carries a sign (+1 or &minus;1) that maps &ldquo;rising raw value&rdquo; to either risk-on or risk-off.
+        The sign is internal mechanics: after applying it, the indicator&rsquo;s percentile rank can be read consistently as
+        &ldquo;high percentile = risk-on, low = risk-off&rdquo; across the whole universe. The &ldquo;Interpretation&rdquo;
+        paragraph for each indicator explains the actual reading in plain language, not the sign-aligned version.
+      </p>
+    </aside>
 
     <div class="ri__back">
       <a class="ri__back-link" href="/regime">&larr; Back to the live classifier</a>
@@ -347,8 +827,8 @@
   color: var(--color-text);
   font-family: var(--font-sans);
 }
-.ri__container { max-width: 860px; margin: 0 auto; }
-.ri__head { margin-bottom: 3.5rem; }
+.ri__container { max-width: 60rem; margin: 0 auto; }
+.ri__head { margin-bottom: 3rem; }
 .ri__eyebrow {
   font-family: var(--font-mono);
   font-size: 0.625rem;
@@ -359,47 +839,90 @@
 }
 .ri__title {
   font-family: var(--font-display);
+  font-style: normal;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: -0.01em;
   font-size: 2.5rem;
   line-height: 1.05;
   margin: 0;
-}
-.ri__accent {
-  font-family: var(--font-display);
-  font-style: normal;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  color: var(--color-text);
+  max-width: 20ch;
 }
 .ri__lede {
   color: var(--color-text-muted);
-  max-width: 44rem;
+  max-width: 46rem;
   margin: 1.25rem 0 0;
   line-height: 1.65;
   font-size: 1.0625rem;
 }
-.ri__inline { color: var(--color-accent); text-decoration: underline; text-underline-offset: 2px; }
+.ri__inline {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .ri__inline:hover { color: var(--color-text); }
-.ri__panel { margin-bottom: 3.5rem; }
+
+/* Index */
+.ri__index {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.75rem;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  padding: 1.75rem 0;
+  margin-bottom: 3.5rem;
+}
+.ri__index-title {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text);
+  margin-bottom: 0.75rem;
+}
+.ri__index-count { color: var(--color-text-dim); }
+.ri__index-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.ri__index-link {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.ri__index-link:hover {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent);
+}
+
+/* Panels */
+.ri__panel { margin-bottom: 4rem; }
 .ri__panel-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 1rem;
+  flex-wrap: wrap;
   padding-bottom: 0.6rem;
   border-bottom: 1px solid var(--color-border);
   scroll-margin-top: 6rem;
 }
 .ri__panel-tag {
   font-family: var(--font-display);
+  font-style: normal;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: -0.01em;
   font-size: 1.75rem;
+  line-height: 1.1;
   color: var(--color-text);
+  margin: 0;
 }
 .ri__panel-count {
   font-family: var(--font-mono);
@@ -414,12 +937,13 @@
   color: var(--color-text-muted);
   margin: 1rem 0 1.75rem;
 }
-.ri__list { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+.ri__list { display: flex; flex-direction: column; gap: 1.25rem; }
+
+/* Indicator card */
 .ri__ind {
-  padding: 1.25rem 1.5rem;
+  padding: 1.5rem;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
   scroll-margin-top: 6rem;
 }
 .ri__ind:target { border-color: var(--color-accent); }
@@ -429,30 +953,107 @@
   justify-content: space-between;
   gap: 0.75rem;
   flex-wrap: wrap;
-  margin-bottom: 0.9rem;
+  margin-bottom: 1rem;
 }
-.ri__ind-name { font-size: 1.05rem; font-weight: 600; color: var(--color-text); margin: 0; }
+.ri__ind-name {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+  line-height: 1.25;
+}
 .ri__ind-id {
   font-family: var(--font-mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  color: var(--color-accent-dim, var(--color-accent));
-  background: var(--color-accent-glow, transparent);
-  padding: 0.1rem 0.4rem;
-  border-radius: 3px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--color-text-dim);
+  background: transparent;
+  padding: 0;
 }
-.ri__meta { margin: 0; display: flex; flex-direction: column; gap: 0.4rem; }
-.ri__meta-row { display: flex; gap: 0.75rem; }
+
+/* Spec block */
+.ri__specs {
+  overflow-x: auto;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  padding: 0.9rem 0;
+  margin-bottom: 1.25rem;
+}
+.ri__meta { margin: 0; display: flex; flex-direction: column; gap: 0.4rem; min-width: 18rem; }
+.ri__meta-row { display: flex; gap: 0.75rem; align-items: baseline; }
 .ri__meta-row dt {
-  flex: 0 0 6.5rem;
+  flex: 0 0 5.5rem;
   font-family: var(--font-mono);
-  font-size: 0.65rem;
+  font-size: 0.625rem;
   text-transform: uppercase;
   letter-spacing: 0.15em;
   color: var(--color-text-dim);
-  padding-top: 0.1rem;
 }
-.ri__meta-row dd { margin: 0; font-size: 0.9rem; color: var(--color-text-muted); }
+.ri__meta-row dd {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+.ri__src {
+  color: var(--color-text-muted);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+.ri__src:hover { color: var(--color-accent); }
+.ri__code {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  color: var(--color-text-dim);
+}
+
+/* Prose blocks */
+.ri__block { margin-bottom: 1rem; }
+.ri__block:last-child { margin-bottom: 0; }
+.ri__block-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-accent);
+  margin-bottom: 0.4rem;
+}
+.ri__block-p {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Sign-convention note */
+.ri__note {
+  border-top: 1px solid var(--color-border);
+  padding-top: 1.75rem;
+  margin-bottom: 2.5rem;
+}
+.ri__note-p {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  max-width: 46rem;
+}
+.ri__note-lead {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text);
+  margin-bottom: 0.5rem;
+}
+
 .ri__back { margin-top: 2rem; }
 .ri__back-link {
   display: inline-block;
@@ -467,11 +1068,21 @@
   transition: border-color 0.3s, color 0.3s;
 }
 .ri__back-link:hover { border-color: var(--color-accent); color: var(--color-accent); }
+
+.ri a:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 @media (min-width: 700px) {
-  .ri__list { grid-template-columns: 1fr 1fr; }
+  .ri__index { grid-template-columns: repeat(3, 1fr); gap: 2rem; }
+  .ri__ind { padding: 1.75rem 2rem; }
 }
 @media (min-width: 1024px) {
   .ri { padding: 10rem 2rem 6rem; }
-  .ri__title { font-size: 3.5rem; }
+  .ri__title { font-size: 3.25rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ri__back-link { transition: none; }
 }
 </style>
