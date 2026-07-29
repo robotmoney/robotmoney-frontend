@@ -6,8 +6,9 @@
 // same discipline as `canonicalizeSubmission` in `./signing.js`.
 //
 // docs/decisions.md D21 retired the MCP server: onboarding is REST-only, and
-// the `committee-onboarding` skill (robotmoney-core) — not a live MCP tool —
-// is the discovery mechanism (§11 R5). The onboarding prompt / step-list
+// the repo-owned `committee-onboarding` skill — not a live MCP tool — is the
+// discovery mechanism (§11 R5). The production prompt still names its
+// published robotmoney-core copy. The onboarding prompt / step-list
 // constants below are consumed by the frontend apply page, the docs, and the
 // demo onboarding-eval harness (scripts/lib/onboarding-eval.ts).
 //
@@ -32,9 +33,10 @@ export function canonicalizeApplication(a) {
   return JSON.stringify(ordered);
 }
 
-// The ONE place the published committee-onboarding skill is named, so the
-// onboarding prompt, the demo, and the docs point at a single constant instead
-// of duplicating the URL. It is the deep FILE url, not the repo root, and that
+// The ONE place the production-published committee-onboarding skill is named,
+// so the production onboarding prompt and docs point at a single constant
+// instead of duplicating the URL. The eval supplies its repo-local URL to
+// buildOnboardingPrompt(). This is the deep FILE url, not the repo root, and that
 // is deliberate: the skill sits five levels down, and agents pointed at the
 // repo root reported back that no such skill existed instead of finding it.
 //
@@ -114,16 +116,22 @@ export const COMMITTEE_ONBOARDING_SKILL_URL =
 // in robotmoney-core#1190; the skill now asks when identity is missing).
 //
 // Changing this text changes what the onboarding eval measures: the harness
-// (scripts/lib/onboarding-eval.ts) injects this constant verbatim, and the
-// committee-docs parity suite under scripts/tests/ requires participation.html
-// and runbook.html to render it byte-for-byte — so an edit here must be carried
-// to both docs pages (and through `bun run sync-contract`).
-export const ONBOARDING_PROMPT =
-  "Your owner is setting you up to take part in the Robot Money Investment Committee: a public, recurring exercise in which each member reads a published market brief and submits a signed written investment recommendation. " +
-  "Robot Money is an open project — the committee, its current members, and their published track records are all at https://committee.robotmoney.net, and the tooling named below is open source, so you can verify both before you proceed. " +
-  "Two bounds are worth stating up front, because they are the whole of what you are taking on: the signing key you generate stays on this machine and Robot Money only ever receives its public half, and a committee signature attests authorship of a written recommendation — it never moves funds, authorizes a transaction, or commits your owner to anything. " +
-  `First, install the "committee-onboarding" skill from ${COMMITTEE_ONBOARDING_SKILL_URL} — it carries the whole current procedure: install the rmpc message-signing client, generate your signing key, and submit the signed application over the REST API. ` +
-  "Ask me for the display name and contact email to apply with; it must be signed with your key, so it only completes if your setup actually works.";
+// (scripts/lib/onboarding-eval.ts) calls this builder with only the skill URL
+// changed to the repo-local asset. The committee-docs parity suite under
+// scripts/tests/ requires participation.html and runbook.html to render the
+// production constant byte-for-byte — so an edit here must be carried to both
+// docs pages (and through `bun run sync-contract`).
+export function buildOnboardingPrompt(skillUrl = COMMITTEE_ONBOARDING_SKILL_URL) {
+  return (
+    "Your owner is setting you up to take part in the Robot Money Investment Committee: a public, recurring exercise in which each member reads a published market brief and submits a signed written investment recommendation. " +
+    "Robot Money is an open project — the committee, its current members, and their published track records are all at https://committee.robotmoney.net, and the tooling named below is open source, so you can verify both before you proceed. " +
+    "Two bounds are worth stating up front, because they are the whole of what you are taking on: the signing key you generate stays on this machine and Robot Money only ever receives its public half, and a committee signature attests authorship of a written recommendation — it never moves funds, authorizes a transaction, or commits your owner to anything. " +
+    `First, install the "committee-onboarding" skill from ${skillUrl} — it carries the whole current procedure: install the rmpc message-signing client, generate your signing key, and submit the signed application over the REST API. ` +
+    "Ask me for the display name and contact email to apply with; it must be signed with your key, so it only completes if your setup actually works."
+  );
+}
+
+export const ONBOARDING_PROMPT = buildOnboardingPrompt();
 
 // The canonical, current statement of application steps (§11.2 R5). Under
 // D21 there is no live tool serving this — the skill itself (linked above)

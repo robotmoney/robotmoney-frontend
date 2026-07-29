@@ -39,7 +39,11 @@ import {
   ROUTES,
 } from "@robotmoney/contract";
 import { fetchRmpc, runRmpcJson } from "../../lib/rmpc-fetch.ts";
-import { buildMemberAgentArgv, KEYSTORE_PASSPHRASE_ENV } from "../../lib/onboarding-eval.ts";
+import {
+  buildMemberAgentArgv,
+  KEYSTORE_PASSPHRASE_ENV,
+  LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH,
+} from "../../lib/onboarding-eval.ts";
 import {
   createStack,
   DEFAULT_COMPOSE_FILES,
@@ -207,7 +211,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
   );
 
   test(
-    "the container's HOME agrees with the writable PATH dir the published skill installs rmpc into",
+    "the container's HOME agrees with the writable PATH dir the repo-owned skill installs rmpc into",
     () => {
       // scripts/lib/member-agent/Dockerfile puts /home/agent/.local/bin on PATH,
       // but the container runs as root — so without an explicit HOME, `~`
@@ -234,6 +238,33 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
       const r = stack!.compose(["run", "--rm", "--no-deps", "--entrypoint", "curl", "member-agent", "-fsS", "http://api:8787/health"]);
       expect(r.exitCode).toBe(0);
       expect(JSON.parse(r.stdout)).toMatchObject({ status: "ok" });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "member-agent fetches the repo-owned onboarding skill and participation guide as exact static files",
+    () => {
+      const assets = [
+        {
+          path: LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH,
+          marker: "name: committee-onboarding",
+        },
+        {
+          path: "/views/docs/investment-committee/participation.html",
+          marker: "<h1>Participation</h1>",
+        },
+      ];
+
+      for (const asset of assets) {
+        const r = stack!.compose([
+          "run", "--rm", "--no-deps", "--entrypoint", "curl", "member-agent",
+          "-fsS", `http://api:8787${asset.path}`,
+        ]);
+        expect(r.exitCode, `${asset.path}: ${r.stderr}`).toBe(0);
+        expect(r.stdout).toContain(asset.marker);
+        expect(r.stdout).not.toContain("<title>Robot Money — Autonomous Treasury for the Agent Economy</title>");
+      }
     },
     TEST_TIMEOUT_MS,
   );
@@ -291,4 +322,3 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     TEST_TIMEOUT_MS,
   );
 });
-

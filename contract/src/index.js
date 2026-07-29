@@ -6,6 +6,7 @@ export { REGIME_RISK_OFF, REGIME_RISK_ON, classifyRegime } from "./regime.js";
 export { STANCES, COMMITTEE_ROSTER_CAP, DEMO_NO_SHOWS, demoAttends, stanceFor } from "./committee.js";
 export {
   canonicalizeApplication,
+  buildOnboardingPrompt,
   ONBOARDING_PROMPT,
   COMMITTEE_ONBOARDING_SKILL_URL,
   APPLY_HOW_TO_STEPS,

@@ -2,7 +2,8 @@
 // of docs/plans/onboarding-ic-workflow.md). Launches ONE vanilla member-agent
 // container (docker-compose.demo.yml's `member-agent` service,
 // scripts/lib/member-agent/Dockerfile) per admission, injects the canonical
-// copy-paste prompt (contract's ONBOARDING_PROMPT) with a generated identity,
+// copy-paste prompt (contract's ONBOARDING_PROMPT text, with only its skill URL
+// pointed at this checkout's static asset) with a generated identity,
 // then OBSERVES ONLY: this module never applies, signs, claims, or connects on
 // the member's behalf. Everything from "install the skill" onward is the
 // containerized agent's own real inference, working out §11.2 from the prompt
@@ -45,8 +46,8 @@
 // rather than faked with invented per-step signals.
 //
 // ── What the harness supplies, and what it refuses to supply (§11.3 E7) ─────
-// ONBOARDING_PROMPT is injected BYTE-FOR-BYTE VERBATIM, as its own prefix; the
-// canonical text is never rewritten or substituted into. Everything the harness
+// ONBOARDING_PROMPT's canonical text is injected with only the skill URL
+// parameter changed to this stack's local static asset. Everything the harness
 // adds rides in one clearly delimited note appended after it, and every line of
 // that note is the OWNER's side of onboarding — the half a real applicant's
 // human would have handled before their agent ever started:
@@ -60,7 +61,7 @@
 //     production host this ephemeral demo stack cannot serve; a real human, per
 //     the real docs, would be applying against committee.robotmoney.net);
 //   - the keystore passphrase, exported into the container's environment
-//     (KEYSTORE_PASSPHRASE_ENV) — the published committee-onboarding skill
+//     (KEYSTORE_PASSPHRASE_ENV) — the repo-owned committee-onboarding skill
 //     tells the agent to ask its owner for exactly this and to WAIT for them,
 //     which is unanswerable in a headless container;
 //   - a vanilla, non-hostile permission set and the real auto-approve flag
@@ -87,7 +88,7 @@
 // MODEL SELECTION STAYS HERE, AND ONLY HERE. resolveModelConfig() below is the
 // single place an AGENT_MODEL selector becomes a model id and a credential; the
 // primitive takes that record and invents nothing.
-import { ONBOARDING_PROMPT, path as routePath, ROUTES } from "@robotmoney/contract";
+import { buildOnboardingPrompt, path as routePath, ROUTES } from "@robotmoney/contract";
 import { classifyOutcome, shouldRetry } from "../agent/classify-outcome.ts";
 import { runMemberAgent } from "../agent/member-agent.ts";
 import { finalAssistantText } from "../agent/transcript.ts";
@@ -130,6 +131,7 @@ export { assistantTextParts, extractAssistantText, finalAssistantText } from "..
 // service; the agent applies over this REST surface (POST /api/committee/apply)
 // directly, following the committee-onboarding skill.
 export const DEFAULT_API_URL_INTERNAL = "http://api:8787";
+export const LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH = "/skills/committee-onboarding/SKILL.md";
 // Live-verified via a real GitHub Actions e2e run: a vanilla agent doing
 // genuine reasoning (fetching docs, downloading rmpc, generating a key, and
 // — when the linked skill's payload description wasn't quite enough —
@@ -152,7 +154,7 @@ export const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 export const DEFAULT_POLL_INTERVAL_MS = 3_000;
 export const DEFAULT_AUTO_APPROVE_DELAY_MS = 10_000; // §11 R7
 // The env var `rmpc` reads its keystore passphrase from — the ONE secret the
-// published committee-onboarding skill tells the agent to have its human owner
+// repo-owned committee-onboarding skill tells the agent to have its human owner
 // export before launching it. The harness plays the owner here (see
 // demoHarnessNote); it is not a hint about what the agent should do with it.
 // Same name scripts/rmpc-release-e2e.ts and the rails check already use.
@@ -174,8 +176,9 @@ export function generateIdentity(runId: string = crypto.randomUUID().slice(0, 8)
 }
 
 // Everything this run needs that the canonical prompt deliberately does not
-// carry, in one clearly delimited block appended AFTER a byte-for-byte-verbatim
-// copy of ONBOARDING_PROMPT. It is exactly what a real applicant's own owner
+// carry, in one clearly delimited block appended AFTER the canonical prompt
+// whose only eval-specific parameter is its locally served skill URL. It is
+// exactly what a real applicant's own owner
 // would have already told their agent, and nothing more (§11.3 E7):
 //
 //  1. the display name and contact to apply under (R1). The prompt used to
@@ -191,7 +194,7 @@ export function generateIdentity(runId: string = crypto.randomUUID().slice(0, 8)
 //  3. that the owner has already put the secrets they'd otherwise be asked to
 //     type into the session's environment.
 //
-// (3) is not a convenience. The published committee-onboarding skill tells the
+// (3) is not a convenience. The repo-owned committee-onboarding skill tells the
 // agent, in as many words, to ask its owner to export the keystore passphrase
 // and to *wait* for them ("Tell me once it's set"), and forbids accepting the
 // value in conversation. A headless eval container has no owner to answer, so
@@ -221,11 +224,19 @@ function demoHarnessNote(identity: OnboardingIdentity, apiBaseUrl: string): stri
   );
 }
 
-// The exact text injected into the container: the canonical ONBOARDING_PROMPT
-// verbatim as the prefix, plus the harness note (kept clearly delimited and
+// The canonical prompt used by the eval. Production keeps the published GitHub
+// URL in ONBOARDING_PROMPT; the eval changes only that URL so the agent fetches
+// the repo-owned skill from the same API container it is already evaluating.
+export function buildEvalOnboardingPrompt(apiBaseUrl: string = DEFAULT_API_URL_INTERNAL): string {
+  const localSkillUrl = `${apiBaseUrl.replace(/\/+$/, "")}${LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH}`;
+  return buildOnboardingPrompt(localSkillUrl);
+}
+
+// The exact text injected into the container: the URL-parameterized canonical
+// prompt as the prefix, plus the harness note (kept clearly delimited and
 // separate, per the module doc comment above).
 export function buildAgentPrompt(identity: OnboardingIdentity, apiBaseUrl: string = DEFAULT_API_URL_INTERNAL): string {
-  return `${ONBOARDING_PROMPT}${demoHarnessNote(identity, apiBaseUrl)}`;
+  return `${buildEvalOnboardingPrompt(apiBaseUrl)}${demoHarnessNote(identity, apiBaseUrl)}`;
 }
 
 // ── Model configuration ─────────────────────────────────────────────────────
@@ -401,8 +412,8 @@ export interface OnboardingEvalResult {
 }
 
 /**
- * Launch one member-agent container, inject the canonical prompt (R4,
- * verbatim aside from the identity placeholders — see module doc comment),
+ * Launch one member-agent container, inject the canonical prompt (R4, with
+ * only its skill URL pointed at this stack — see module doc comment),
  * and observe until the member reaches the active roster ("admitted") or the
  * overall timeout elapses. Never acts on the member's behalf — the only
  * server-side action this function ever takes is the R7 auto-approve, which

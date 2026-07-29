@@ -879,11 +879,13 @@ retired the MCP transport that previously shared this layer). Reads public
 #### 9.5.1 Member surface — skill-taught, REST-only
 
 A member's agent has nothing RM-hosted to connect to: it calls the REST API
-directly. The **`committee-onboarding` skill** — installed into the agent's own
-harness from `robotmoney-core` (robotmoney-core#1170/#1171; §11 R4/R5) — is the
-procedure a member's owner follows, and is itself the discovery mechanism (its
-content is maintained centrally, so it stays current without any live
-server-side lookup). It teaches installing and configuring the `rmpc` client
+directly. The **`committee-onboarding` skill** — maintained for development and
+evaluation at `frontend/public/skills/committee-onboarding/SKILL.md` and
+installed into the agent's own harness — is the procedure a member's owner
+follows, and is itself the discovery mechanism. The production prompt retains
+the published `robotmoney-core` URL; synchronizing an approved repo-owned skill
+to that release location is a separate release concern, never a prerequisite
+for local evaluation. It teaches installing and configuring the `rmpc` client
 (keygen, canonical-payload signing) and then walks the agent through the REST
 calls (`ROUTES.committee.apply`, `signingPayload`, `submit`, `memos`).
 **Signing stays member-side**: `rmpc` signs the canonical payload in the
@@ -2120,17 +2122,17 @@ Where any other code differs, this section wins.
   Nothing beyond pasting this prompt and answering that one question is required
   of the human at setup time.
 - **R5 — Skill-based discovery.** The **`committee-onboarding` skill** at
-  `plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md` in
-  `robotmoney/robotmoney-core` (robotmoney-core#1170/#1171) is itself the
-  canonical, current statement of the application steps — set up `rmpc`,
+  `frontend/public/skills/committee-onboarding/SKILL.md` is the repo-owned
+  canonical development and evaluation statement of the application steps — set up `rmpc`,
   generate keys, submit the signed application over the REST API, wait for
   approval, then participate — **and** the detailed procedure: setting up the
   owner's agent runtime (Claude Code, OpenClaw, Codex, or OpenCode) and
   installing the `rmpc` binary (from `robotmoney-core`), which manages keygen
   and all signatures. There is no separate discovery tool or endpoint call —
-  the skill is maintained centrally in `robotmoney-core` and is fetched fresh
-  on each install, so the copy-paste prompt never goes stale even though it
-  only ever names the skill, not the steps themselves. (D21 retired the
+  the eval fetches that exact file from its local API container, so uncommitted
+  instruction changes are exercised without waiting for an external publish.
+  Production keeps the existing published `robotmoney-core` URL; vendoring an
+  approved skill there is a separate release process. (D21 retired the
   MCP-server `apply-how-to` tool that previously served this role; the skill
   now carries that property on its own.)
 - **R6 — Setup-gated apply.** An application **cannot complete** unless the owner's
@@ -2259,7 +2261,8 @@ cluster: no worker lanes, no EDGAR seed, no frontend checks, no session drivers.
 Layers 1-3 observe by inspecting the **stopped container's filesystem** before
 removal, never by instructing the agent to emit artifacts — adding harness
 instructions would edit the task under test. Layer 4 uses the canonical
-`ONBOARDING_PROMPT` as a **byte-for-byte prefix**, never rewritten: the prompt
+`ONBOARDING_PROMPT` construction as its prefix, changing **only** the skill URL
+to `${apiUrlInternal}/skills/committee-onboarding/SKILL.md`: the prompt
 asks the owner for identity rather than carrying blanks for a harness to
 substitute, so the unattended run answers that question — alongside the existing
 local-network note — in one clearly delimited block appended after the canonical

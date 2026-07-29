@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   APPLY_HOW_TO_STEPS,
+  buildOnboardingPrompt,
   COMMITTEE_ONBOARDING_SKILL_URL,
   ONBOARDING_PROMPT,
   canonicalizeApplication,
@@ -186,6 +187,18 @@ describe("ONBOARDING_PROMPT — canonical copy-paste prompt (R4)", () => {
   test("points the agent at installing the committee-onboarding skill instead of embedding steps itself (R5 — never goes stale)", () => {
     expect(ONBOARDING_PROMPT).toContain("committee-onboarding");
     expect(ONBOARDING_PROMPT).toContain("rmpc");
+  });
+
+  test("the production constant remains the default prompt built with the published GitHub skill URL", () => {
+    expect(ONBOARDING_PROMPT).toBe(buildOnboardingPrompt());
+    expect(ONBOARDING_PROMPT).toContain(COMMITTEE_ONBOARDING_SKILL_URL);
+  });
+
+  test("a different skill origin changes only the URL", () => {
+    const localUrl = "http://api:8787/skills/committee-onboarding/SKILL.md";
+    expect(buildOnboardingPrompt(localUrl)).toBe(
+      ONBOARDING_PROMPT.replace(COMMITTEE_ONBOARDING_SKILL_URL, localUrl),
+    );
   });
 });
 

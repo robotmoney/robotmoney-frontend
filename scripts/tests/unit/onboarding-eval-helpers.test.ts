@@ -36,12 +36,14 @@ import { join } from "node:path";
 import {
   buildAgentOpencodeConfig,
   buildAgentPrompt,
+  buildEvalOnboardingPrompt,
   buildMemberAgentArgv,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_INFERENCE_MODEL,
   deriveSteps,
   generateIdentity,
   KEYSTORE_PASSPHRASE_ENV,
+  LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH,
   looksRateLimited,
   type MemberAgentModel,
   memberAgentContainerName,
@@ -53,7 +55,11 @@ import {
   retryIdentity,
   runOnboardingEvalWithRetry,
 } from "../../lib/onboarding-eval.ts";
-import { ONBOARDING_PROMPT } from "@robotmoney/contract";
+import {
+  buildOnboardingPrompt,
+  COMMITTEE_ONBOARDING_SKILL_URL,
+  ONBOARDING_PROMPT,
+} from "@robotmoney/contract";
 import { isKeylessModel, MODEL_FAMILIES, resolveAgentModel } from "../../lib/model-registry.ts";
 
 // ── Pure helper unit tests (no Docker) ──────────────────────────────────────
@@ -77,21 +83,29 @@ describe("onboarding-eval pure helpers", () => {
     expect(ONBOARDING_PROMPT.toLowerCase()).toContain("ask me for");
   });
 
-  test("buildAgentPrompt supplies identity in a separate note, leaving the canonical prompt byte-for-byte intact", () => {
+  test("the eval prompt changes only the canonical prompt's skill URL", () => {
+    const localSkillUrl = `http://api:8787${LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH}`;
+    const evalPrompt = buildEvalOnboardingPrompt();
+    expect(evalPrompt).toBe(buildOnboardingPrompt(localSkillUrl));
+    expect(evalPrompt).toBe(ONBOARDING_PROMPT.replace(COMMITTEE_ONBOARDING_SKILL_URL, localSkillUrl));
+    expect(evalPrompt).toContain(localSkillUrl);
+    expect(evalPrompt).not.toContain(COMMITTEE_ONBOARDING_SKILL_URL);
+  });
+
+  test("buildAgentPrompt supplies identity in a separate note after the locally parameterized canonical prompt", () => {
     // The whole point of this eval is that it exercises the prompt operators
-    // actually copy. If the harness ever rewrites that text, the run stops
-    // being evidence about the real thing — so assert the canonical prompt is
-    // the verbatim PREFIX, not merely "contained somewhere".
+    // actually copy, changing only where the skill is fetched. Assert that
+    // exact prompt is the prefix, not merely "contained somewhere".
     const identity = generateIdentity("fixed-run");
     const prompt = buildAgentPrompt(identity);
-    expect(prompt.startsWith(ONBOARDING_PROMPT)).toBe(true);
+    expect(prompt.startsWith(buildEvalOnboardingPrompt())).toBe(true);
     expect(prompt).toContain(identity.name);
     expect(prompt).toContain(identity.contact);
     expect(prompt).toContain("Demo harness note"); // clearly delimited, not blended in
   });
 
   test("buildAgentPrompt tells the agent its owner is absent and their secrets are already exported", () => {
-    // The published committee-onboarding skill instructs the agent to ask its
+    // The repo-owned committee-onboarding skill instructs the agent to ask its
     // human owner to export the keystore passphrase and to WAIT for them ("Tell
     // me once it's set"). A headless container has no owner to answer, so
     // WITHOUT this the correct behaviour IS to stop — which is exactly what CI
@@ -111,7 +125,8 @@ describe("onboarding-eval pure helpers", () => {
     // must NOT name the env var the passphrase arrives in: finding it is part
     // of what the skill is being measured on.
     const identity = generateIdentity("fixed-run");
-    const note = buildAgentPrompt(identity).slice(ONBOARDING_PROMPT.length);
+    const evalPrompt = buildEvalOnboardingPrompt();
+    const note = buildAgentPrompt(identity).slice(evalPrompt.length);
     expect(note.length).toBeGreaterThan(0);
     for (const leak of ["rmpc", "ed25519", "sign", "keygen", "canonical", "/api/", "POST", "public key", "bearer", KEYSTORE_PASSPHRASE_ENV])
       expect(note.toLowerCase()).not.toContain(leak.toLowerCase());
