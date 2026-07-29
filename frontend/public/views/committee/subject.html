@@ -141,7 +141,7 @@
           </ul>
         </section>
 
-        <section class="mp-record">
+        <section class="sp-sessions">
           <div class="cv__sessions-head">
             <p class="cv__panel-label">Sessions (<span x-text="sessions.length"></span>)</p>
           </div>
@@ -183,6 +183,21 @@
        round dot is a reading, a square one is an identity. subjectDot() already
        returns this subject's identity colour everywhere else on the site, so the
        avatar seams with it rather than inventing a second colour for the page. */
+    /* Record strip. Figures before prose, the same idea the member profile
+       carries, but styled here rather than borrowed: the shared .rm-stats rule
+       lands with the committee-parity change and does not exist on main, so
+       depending on it would ship this page with an unstyled stack of numbers.
+       Mono and tabular, seamed with a cyan line and never filled by one. */
+    .rm-stats { display: grid; grid-template-columns: 1fr; gap: 1px; margin: 22px 0 0;
+                background: var(--color-border); border: 1px solid var(--color-border);
+                border-top: 1px solid var(--color-accent); }
+    @media (min-width: 640px) { .rm-stats { grid-template-columns: repeat(3, 1fr); } }
+    .rm-stat { background: var(--color-surface, #10141c); padding: 13px 16px; margin: 0; }
+    .rm-stat dt { font-family: var(--font-mono, ui-monospace, monospace); font-size: 9.5px;
+                  letter-spacing: .14em; text-transform: uppercase; color: var(--color-text-dim); }
+    .rm-stat dd { font-family: var(--font-mono, ui-monospace, monospace); font-size: 1.15rem;
+                  font-variant-numeric: tabular-nums; color: var(--color-text); margin: 6px 0 0; }
+    .sp-sessions { margin-top: 34px; }
     .sp-mark { border-radius: 0; border-color: var(--sp-subject, var(--color-border)); }
     .sp-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px;
                 font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }

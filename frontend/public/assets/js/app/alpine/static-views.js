@@ -806,25 +806,55 @@ export function registerStaticViews(Alpine) {
     async loadSnapshots(id) {
       try {
         const res = await api.get(path(ROUTES.committee.subjectSnapshots, { id }));
-        const list = (res.snapshots || res || []).filter(Boolean);
-        return list.slice().sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+        const list = (Array.isArray(res) ? res : res.snapshots || []).filter(Boolean);
+        if (list.length) return list.slice().sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+      } catch (_) { /* fall through to the archive */ }
+      return this.archiveSnapshots(id);
+    },
+    // Static-archive fallback, the same path every other committee surface has.
+    // Without it this page renders a subject with an empty chart and a dashed
+    // book value whenever the API is unreachable — and the shipped archive holds
+    // 28-30 real daily snapshots per subject, which is a better answer than a
+    // blank panel. There is no snapshot index file, so the dates come from the
+    // session index: those are the days the committee actually read this book.
+    async archiveSnapshots(id) {
+      let dates = [];
+      try {
+        const index = await fetchJson("/data/committee/sessions/index.json");
+        dates = (index.sessions || [])
+          .filter((s) => (s.subjectId ?? s.subject_id) === id)
+          .map((s) => s.date)
+          .filter(Boolean)
+          .sort();
       } catch (_) {
         return [];
       }
+      const snaps = await Promise.all(dates.map((d) => loadArchiveSnapshot(id, d)));
+      return snaps.filter(Boolean);
     },
     // Sessions carry their synthesis only on the detail endpoint, so the list is
     // filtered to this subject first and only the visible page of it is expanded.
     // Same shape as memberProfile.scanSessions: guarded per session, with the
     // shipped static archive behind it for dates that predate the live API.
     async loadSessions(id) {
+      const pick = (list) => list
+        .filter((s) => (s.subjectId ?? s.subject_id) === id && s.state === "published")
+        .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+        .slice(0, 20)
+        .map((s) => ({ date: s.date, subjectId: s.subjectId ?? s.subject_id, subjectName: s.subjectName ?? s.subject_name }));
       let index = [];
       try {
-        index = ((await api.get(ROUTES.committee.sessions)).sessions || [])
-          .filter((s) => s.subjectId === id && s.state === "published")
-          .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
-          .slice(0, 20);
-      } catch (_) {
-        return [];
+        index = pick((await api.get(ROUTES.committee.sessions)).sessions || []);
+      } catch (_) { /* fall through to the archive */ }
+      // Same archive fallback the snapshots take. index.json is snake_case while
+      // the API is camelCase, so pick() reads both rather than silently matching
+      // nothing and rendering "no published session yet" over a full archive.
+      if (!index.length) {
+        try {
+          index = pick((await fetchJson("/data/committee/sessions/index.json")).sessions || []);
+        } catch (_) {
+          return [];
+        }
       }
       return Promise.all(index.map(async (s) => {
         try {
