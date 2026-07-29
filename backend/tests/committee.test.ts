@@ -629,3 +629,49 @@ test("GET /api/committee/members/:id/takes: an unknown/never-submitted member ge
   expect(res?.status).toBe(200);
   expect((res!.body as { takes: any[] }).takes).toEqual([]);
 });
+
+test("GET /api/committee/members exposes rosterCap, seatsFilled, and seatsAvailable, updating on activate/deactivate", async () => {
+  await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
+
+  const getMembersRoute = async () => {
+    const req = new Request(`http://test${ROUTES.committee.members}`);
+    const res = await handleCommittee(req, new URL(req.url));
+    expect(res?.status).toBe(200);
+    return res!.body as { members: any[]; rosterCap: number; seatsFilled: number; seatsAvailable: number };
+  };
+
+  const initial = await getMembersRoute();
+  expect(initial.members).toEqual([]);
+  expect(initial.rosterCap).toBe(ic.COMMITTEE_ROSTER_CAP);
+  expect(initial.seatsFilled).toBe(0);
+  expect(initial.seatsAvailable).toBe(ic.COMMITTEE_ROSTER_CAP);
+
+  // Apply a new applicant (status = 'applied') — should not consume a seat
+  const applicant = await signedApply({ name: "Roster Applicant", contact: "roster-applicant@example.test" });
+  const appliedRes = await ic.applyMember(applicant.body as any);
+  expect(appliedRes.status).toBe(201);
+  const memberId = (appliedRes as any).memberId as string;
+
+  const afterApply = await getMembersRoute();
+  expect(afterApply.seatsFilled).toBe(0);
+  expect(afterApply.seatsAvailable).toBe(ic.COMMITTEE_ROSTER_CAP);
+
+  // Activate the applicant (status = 'active') — consumes 1 seat
+  const actRes = await ic.activateMember(memberId);
+  expect(actRes.status).toBe(200);
+
+  const afterActivate = await getMembersRoute();
+  expect(afterActivate.members.length).toBe(1);
+  expect(afterActivate.rosterCap).toBe(ic.COMMITTEE_ROSTER_CAP);
+  expect(afterActivate.seatsFilled).toBe(1);
+  expect(afterActivate.seatsAvailable).toBe(ic.COMMITTEE_ROSTER_CAP - 1);
+
+  // Deactivate member (status = 'inactive') — frees 1 seat
+  await sql`UPDATE committee_members SET status = 'inactive' WHERE id = ${memberId}`;
+
+  const afterDeactivate = await getMembersRoute();
+  expect(afterDeactivate.members.length).toBe(0);
+  expect(afterDeactivate.seatsFilled).toBe(0);
+  expect(afterDeactivate.seatsAvailable).toBe(ic.COMMITTEE_ROSTER_CAP);
+});
+
