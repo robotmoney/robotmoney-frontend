@@ -76,6 +76,13 @@ function camelSession(raw) {
 function camelTake(raw) {
   return {
     id: raw.id || raw.member_id || raw.memberId,
+    // The permalink id is NOT the same thing as `id` above. `id` falls back to
+    // the member id so x-for has something stable to key on, but the shipped
+    // archive's takes carry no id at all — only member_id — so that fallback was
+    // producing /committee/takes/athena, a member slug in a route that expects a
+    // take id. Three per session across 32 archived sessions: 96 links that all
+    // 404. Only a real take id gets a permalink.
+    permalinkId: raw.id ?? null,
     memberId: raw.memberId || raw.member_id,
     memberName: raw.memberName || raw.member_name,
     mode: raw.mode || "submit",
@@ -273,7 +280,7 @@ const helpers = {
     return `Evaluate each subject through the ${member?.lens || "committee"} lens and submit a signed stance with confidence and rationale.`;
   },
   takeHref(take) {
-    return path(ROUTES.committee.takePermalink, { id: take?.id });
+    return take?.permalinkId ? path(ROUTES.committee.takePermalink, { id: take.permalinkId }) : null;
   },
   escapeHtml(text) {
     return String(text ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
@@ -1398,6 +1405,22 @@ export function registerStaticViews(Alpine) {
       return Object.entries(weights).map(([id, w]) => ({
         name: this.humanize(id), target: null, actual: null, recommended: num(w) ?? 0,
       }));
+    },
+    // Per-constituent weights inside each bucket. The payload has carried
+    // `within_bucket_weights` all along and nothing rendered it, so allocation
+    // sessions answered "95/5/0/0" and stopped — while the page's own copy asks
+    // "within each bucket are the right constituents weighted correctly?".
+    // Production prints this table; this rebuild dropped it.
+    withinBucketWeights() {
+      const rec = this.session?.committeeRecommendation;
+      const raw = rec?.withinBucketWeights || rec?.within_bucket_weights;
+      if (!raw || typeof raw !== "object") return [];
+      return Object.entries(raw).map(([bucket, items]) => ({
+        bucket: this.humanize(bucket),
+        items: Object.entries(items || {})
+          .map(([name, w]) => ({ name: this.humanize(name), weight: Number(w) || 0 }))
+          .sort((a, b) => b.weight - a.weight),
+      })).filter((b) => b.items.length);
     },
     isBucketWeights() {
       const rec = this.session?.committeeRecommendation;
