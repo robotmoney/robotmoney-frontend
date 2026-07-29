@@ -22,14 +22,26 @@ A directory is a selectable unit of CI cost. Everything under `evals/` needs
 `package.json`'s `test` script is deliberately path-scoped
 (`bun test scripts/tests`) so nothing here can drift onto that path by accident.
 
-## Current contents
+## Running evals
 
-**This directory is a scaffold.** The layered onboarding suites — layers 0-3
-(isolated: runtime, skill install, `rmpc` toolchain, keygen + offline signature
-verification), layer 4 (the sampled admission sweep on a `core` stack), and
-their support modules, budget, probe/harvest and scorecard — land in the
-follow-up feature of this phase. What already exists, and what those suites will
-ride on, is the shared machinery outside this directory:
+The root entrypoint uses Bun's native test discovery with this directory as its
+working directory. It is intentionally separate from `bun run test`:
+
+```bash
+bun run eval
+bun run eval -- onboarding
+bun run eval -- onboarding/admission.eval.test.ts
+bun run eval -- --test-name-pattern admission
+```
+
+File and test-name filters are native Bun filters. A filter that selects no
+file or no test exits non-zero. Every selected file contains real inference;
+there is no listing or rehearsal mode under this directory.
+
+The current suite registers the integrated onboarding admission case. Support
+code in `evals/support/` provides validated definitions, sample planning,
+scoring, Bun registration, and suite artifacts. The real stack and agent logic
+remain shared machinery outside this directory:
 
 | Piece | Where |
 |---|---|
@@ -39,7 +51,40 @@ ride on, is the shared machinery outside this directory:
 | Outcome classifier (`classifyOutcome` / `explainOutcome`) | `scripts/agent/classify-outcome.ts` |
 | `opencode run --format json` transcript parser | `scripts/agent/transcript.ts` |
 | Shared compose bring-up (`core` / `full` profiles) | `scripts/stack/` |
-| Layer-4 observer (prompt + poll loop) | `scripts/lib/onboarding-eval.ts` |
+| Admission observer (prompt + poll loop) | `scripts/lib/onboarding-eval.ts` |
+| Reusable local admission case | `scripts/onboarding-eval-local.ts` |
+
+Definitions declare a stable id/title/tags, the `real-inference` tier, sample
+count, timeout and optional budget metadata, plus `run(context)` and
+`score(results)`. The wrapper registers an ordinary Bun test. Zero executed
+samples, a red score, or a harness/configuration error makes that test red.
+
+The canonical local skill and participation guide are served from this
+checkout's `frontend/public/` tree by the existing stack. The development loop
+therefore tests uncommitted local instruction changes; publishing those assets
+to another repository is a separate release concern.
+
+## Artifacts
+
+Each invocation receives a suite run id and writes owner-only files beneath:
+
+```text
+.agents/evals/<suite-run-id>/
+  manifest.json
+  summary.json
+  cases/<eval-id>/<sample-id>/
+    manifest.json
+    events.ndjson
+    agent.stdout.ndjson
+    agent.stderr.log
+    services.log
+    result.json
+```
+
+Suite summaries keep domain outcomes distinct from the Bun runner verdict.
+Every sample event carries the suite run id, eval id, sample id, model, compose
+project, container/session identifiers when known, and member id when known.
+The existing redaction boundary applies before console or disk output.
 
 The invariants below are enforced against this directory whether or not it yet
 holds a suite: `scripts/checks/check-model-selection.sh` announces loudly when
@@ -70,8 +115,9 @@ credential is `OPENCODE_API_KEY`, injected into the container by one explicit
 `-e` at `docker compose run` time and nowhere else.
 
 A raw model id anywhere outside the registry, or a second env knob, or a second
-selection path, fails the gate. `AGENT_MODEL=free` remains fully supported for
-genuinely unfunded runs; it is an option, not a mandate.
+selection path, fails the gate. The eval suite requires `OPENCODE_API_KEY` and a
+funded registry selection. A missing key or no-credential selector fails before
+the first Docker call; the suite never probes or falls back to a free model.
 
 **E2 — no inference-off mode.** Every layer makes a real model call. No test
 double, no injection seam on the eval's own path, no scripted fallback that
@@ -99,16 +145,11 @@ sweep redder.
 
 ## Cost, stated plainly
 
-Read this before choosing `AGENT_MODEL=free`. The free tier **degrades by
-HANGING, not by returning 429**. In one
-observed run four layers took 4.3, 25.0, 25.0 and 5.0 minutes — three of them
-hitting their cap — with not one rate-limit string in the entire 59-minute log;
-the provider simply stopped answering. Two consequences worth knowing before
-reading any result:
+Every selected sample spends funded inference. A provider can degrade by
+hanging rather than returning a rate-limit response, so two consequences are
+worth knowing before reading any result:
 
-- `rate-limited` will rarely fire on the free tier. **`timed-out` is the real
-  throttle signal there** — which is why the retry wrapper treats a bare timeout
-  as retryable. It used to do that only on the keyless tier; a funded
+- `timed-out` can be the real throttle signal. A funded
   `opencode/deepseek-v4-flash` was measured stalling mid-session for ~18 minutes
   with no token, tool call, or error on 2026-07-28, so the tier gate is gone. A
   genuine navigation failure presents as a container **exit**, not a timeout,

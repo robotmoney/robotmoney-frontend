@@ -25,12 +25,27 @@ export interface OnboardingEvent {
   containerName?: string;
   openCodeSessionId?: string;
   memberId?: string;
+  suiteRunId?: string;
+  evalId?: string;
+  sampleId?: string;
+  model?: string;
 }
 
 export type OnboardingEventSink = (event: OnboardingEvent) => void;
 export type OnboardingEventInput = Omit<
   OnboardingEvent,
-  "version" | "composeProject" | "runId" | "attempt" | "seq" | "timestamp" | "openCodeSessionId" | "memberId"
+  | "version"
+  | "composeProject"
+  | "runId"
+  | "attempt"
+  | "seq"
+  | "timestamp"
+  | "openCodeSessionId"
+  | "memberId"
+  | "suiteRunId"
+  | "evalId"
+  | "sampleId"
+  | "model"
 > & { openCodeSessionId?: string; memberId?: string };
 
 export interface OnboardingTelemetry {
@@ -43,7 +58,15 @@ export interface OnboardingTelemetry {
 const SESSION_ID = /\bses_[A-Za-z0-9_-]{8,}\b/;
 
 export function createOnboardingTelemetry(
-  context: { composeProject: string; runId: string; attempt?: number },
+  context: {
+    composeProject: string;
+    runId: string;
+    attempt?: number;
+    suiteRunId?: string;
+    evalId?: string;
+    sampleId?: string;
+    model?: string;
+  },
   sink?: OnboardingEventSink,
   redactions: RedactionSecret[] = [],
 ): OnboardingTelemetry {
@@ -72,6 +95,10 @@ export function createOnboardingTelemetry(
         ...(input.containerName ? { containerName: input.containerName } : {}),
         ...(openCodeSessionId ? { openCodeSessionId } : {}),
         ...(memberId ? { memberId } : {}),
+        ...(context.suiteRunId ? { suiteRunId: context.suiteRunId } : {}),
+        ...(context.evalId ? { evalId: context.evalId } : {}),
+        ...(context.sampleId ? { sampleId: context.sampleId } : {}),
+        ...(context.model ? { model: context.model } : {}),
       };
       sink?.(event);
       return event;
@@ -204,6 +231,9 @@ export interface OnboardingArtifactManifestInput {
   timeoutMs: number;
   pollIntervalMs: number;
   autoApproveDelayMs: number;
+  suiteRunId?: string;
+  evalId?: string;
+  sampleId?: string;
 }
 
 export interface OnboardingArtifactWriter {
@@ -213,7 +243,9 @@ export interface OnboardingArtifactWriter {
 }
 
 export function createOnboardingArtifactWriter(input: OnboardingArtifactManifestInput): OnboardingArtifactWriter {
-  const directory = join(input.repoRoot, ".agents", "onboarding-evals", input.composeProject, input.runId);
+  const directory = input.suiteRunId && input.evalId && input.sampleId
+    ? join(input.repoRoot, ".agents", "evals", input.suiteRunId, "cases", input.evalId, input.sampleId)
+    : join(input.repoRoot, ".agents", "onboarding-evals", input.composeProject, input.runId);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
   const paths = {
@@ -233,6 +265,9 @@ export function createOnboardingArtifactWriter(input: OnboardingArtifactManifest
         version: 1,
         composeProject: input.composeProject,
         runId: input.runId,
+        ...(input.suiteRunId ? { suiteRunId: input.suiteRunId } : {}),
+        ...(input.evalId ? { evalId: input.evalId } : {}),
+        ...(input.sampleId ? { sampleId: input.sampleId } : {}),
         attempt: input.attempt ?? 1,
         model: input.model,
         startedAt: new Date().toISOString(),

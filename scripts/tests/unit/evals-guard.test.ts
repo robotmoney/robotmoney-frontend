@@ -85,15 +85,15 @@ describe("real-inference evals stay OFF the per-PR trigger", () => {
   //   * this very suite, scripts/tests/unit/evals-guard.test.ts.
   // A false RED on any of them is as much an instrument lie as a false green,
   // so the patterns require something that would actually EXECUTE the eval
-  // tree: a path under `evals/`, or the `eval:onboarding` package target.
+  // tree: a path under `evals/`, or the root `eval` package target.
   const EVAL_RUN_PATTERNS = [
     // A path INTO the eval tree, in command position: `bun test evals/…`,
     // `node ./evals/…`, `evals/x.ts` at the start of a command. The trailing
     // slash is what separates it from prose about "evals" and from the
     // `evals-guard.test.ts` filename.
     /(?:^|[\n;&|]\s*|\b(?:bun|bunx|node|npx|test|run)\s+)\.?\/?evals\//,
-    // the eval package targets this directory will carry: eval:onboarding{,:*}.
-    /\beval:onboarding/,
+    // the root package target whose working directory limits native discovery.
+    /\bbun\s+run\s+eval(?:\s|$)/,
   ];
 
   interface WorkflowStep {
@@ -150,8 +150,8 @@ describe("real-inference evals stay OFF the per-PR trigger", () => {
 
   // ── negative controls: the assertion above must be able to FAIL ───────────
   test("FIRES when an eval target is wired into the per-PR e2e workflow", () => {
-    const e2e = readFileSync(join(wfDir, "e2e.yml"), "utf8").replace("bun run scripts/demo.ts", "bun run eval:onboarding");
-    expect(evalRunsUnderPullRequest(e2e)).toEqual(["bun run eval:onboarding"]);
+    const e2e = readFileSync(join(wfDir, "e2e.yml"), "utf8").replace("bun run scripts/demo.ts", "bun run eval");
+    expect(evalRunsUnderPullRequest(e2e)).toEqual(["bun run eval"]);
   });
 
   test("FIRES on a bare `bun test evals` path, not just the named package targets", () => {
@@ -160,11 +160,11 @@ describe("real-inference evals stay OFF the per-PR trigger", () => {
   });
 
   test("FIRES when a schedule-only eval workflow gains a pull_request trigger", () => {
-    const scheduled = "on:\n  schedule:\n    - cron: '0 4 * * *'\njobs:\n  j:\n    steps:\n      - run: bun run eval:onboarding:isolated\n";
+    const scheduled = "on:\n  schedule:\n    - cron: '0 4 * * *'\njobs:\n  j:\n    steps:\n      - run: bun run eval -- onboarding\n";
     expect(evalRunsUnderPullRequest(scheduled)).toEqual([]); // schedule-only: its eval step is legitimate
     const withPr = scheduled.replace(/^on:\n/m, "on:\n  pull_request: {}\n");
     expect(withPr).not.toBe(scheduled);
-    expect(evalRunsUnderPullRequest(withPr)).toEqual(["bun run eval:onboarding:isolated"]);
+    expect(evalRunsUnderPullRequest(withPr)).toEqual(["bun run eval -- onboarding"]);
   });
 
   // ── false-RED controls: it must NOT fire on the legitimate per-PR work ────

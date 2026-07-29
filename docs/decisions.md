@@ -730,6 +730,17 @@ secure.
 
 ## D22 — Evals run a registry-selected OpenCode model; the onboarding eval is layered and shares the demo's stack
 
+**Local suite refinement (2026-07-29).** Development evals are registered as
+native Bun tests under `evals/` and run through the separate `bun run eval`
+entrypoint. Definitions own stable metadata, sample count, timeout/budget and
+run/score semantics; the integrated admission definition reuses the existing
+stack and member-agent observer. Suite manifest/summary files correlate the
+existing redacted per-sample artifacts. Local eval execution now requires
+`OPENCODE_API_KEY` and a funded registry selection before Docker: it does not
+probe or fall back to the unreliable no-credential tier. The model registry
+remains the only source of model ids and `AGENT_MODEL` remains the only
+selector.
+
 > **Rule 1 amended 2026-07-28.** This decision originally mandated a *vanilla
 > keyless* install. Evals now run a funded, registry-selected model
 > (`AGENT_MODEL` → `scripts/lib/model-registry.ts`), with `AGENT_MODEL=free`

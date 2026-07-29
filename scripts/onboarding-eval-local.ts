@@ -1,7 +1,6 @@
-// `bun run onboarding-eval` — run ONLY the §11 R8 real-inference onboarding
-// eval locally against a throwaway core stack. This is the existing harness,
-// augmented with one redacted timeline and durable artifacts; it is not a
-// second runner, proxy, sidecar, or model adapter.
+// Reusable §11 R8 real-inference admission case. `bun run eval` is the
+// canonical suite entrypoint; `bun run onboarding-eval` remains as a thin,
+// backwards-compatible one-case entrypoint.
 import { join } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
 import { makeDockerRunner, purgeDemoEvalContainers } from "./lib/demo-volumes.ts";
@@ -15,7 +14,10 @@ import {
   LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH,
   runOnboardingEval,
   type OnboardingEvalResult,
+  type ModelConfig,
 } from "./lib/onboarding-eval.ts";
+import { isKeylessModel, resolveAgentModel } from "./lib/model-registry.ts";
+import { ZEN_KEY_ENV, zenApiKey } from "./lib/opencode-key.ts";
 import {
   createOnboardingArtifactWriter,
   createOnboardingTelemetry,
@@ -24,7 +26,6 @@ import {
   type ComposeServiceLogFollower,
   type OnboardingEvent,
 } from "./lib/onboarding-telemetry.ts";
-import { resolveAgentModel } from "./lib/model-registry.ts";
 import {
   createStack,
   DEFAULT_COMPOSE_FILES,
@@ -35,17 +36,53 @@ import {
   STAGE_WEB_PORT,
 } from "./stack/index.ts";
 
-const repoRoot = new URL("..", import.meta.url).pathname;
-const argv = Bun.argv.slice(2);
-const keep = argv.includes("--keep");
-const projectArg = argv.indexOf("--project");
-const stackEnvironment = resolveStackEnvironment(process.env);
-const project = projectArg >= 0 ? argv[projectArg + 1]! : stackProjectName("eval", stackEnvironment);
-const identity = generateIdentity();
-// Resolve the selector (which carries no credential) before artifact creation;
-// funded-key validation remains inside the captured eval try block, so a bad
-// local environment still produces a diagnosable failure artifact.
-const selectedModel = resolveAgentModel(process.env);
+export interface AdmissionEvalCaseOptions {
+  repoRoot?: string;
+  env?: Record<string, string | undefined>;
+  keep?: boolean;
+  project?: string;
+  suiteRunId?: string;
+  evalId?: string;
+  sampleId?: string;
+}
+
+export interface AdmissionEvalCaseResult {
+  admitted: boolean;
+  outcome: string | null;
+  durationMs: number;
+  model: string;
+  artifactDirectory: string;
+  result: OnboardingEvalResult | null;
+}
+
+/** Keyed evals never probe or silently substitute a no-credential model. */
+export function resolveAdmissionEvalModelConfig(env: Record<string, string | undefined>): ModelConfig {
+  const model = resolveAgentModel(env);
+  if (isKeylessModel(model)) {
+    throw new Error(
+      "Real-inference evals require OPENCODE_API_KEY and a funded AGENT_MODEL selection; no-credential models are not an eval fallback.",
+    );
+  }
+  const apiKey = zenApiKey(env);
+  if (!apiKey) {
+    throw new Error(
+      "Real-inference evals require OPENCODE_API_KEY before Docker; configure the keyed eval environment. No free-model probe or fallback will be attempted.",
+    );
+  }
+  return { model, apiKeyEnv: ZEN_KEY_ENV, apiKey, keyless: false };
+}
+
+export async function runAdmissionEvalCase(options: AdmissionEvalCaseOptions = {}): Promise<AdmissionEvalCaseResult> {
+const repoRoot = options.repoRoot ?? new URL("..", import.meta.url).pathname;
+const env = options.env ?? process.env;
+// This preflight is intentionally before credentials, stack construction, and
+// every Docker call.
+const modelConfig = resolveAdmissionEvalModelConfig(env);
+const keep = options.keep ?? false;
+const stackEnvironment = resolveStackEnvironment(env);
+const project = options.project ?? stackProjectName("eval", stackEnvironment);
+const identity = generateIdentity(options.sampleId);
+const selectedModel = modelConfig.model;
 const prompt = buildAgentPrompt(identity);
 const skillPath = join(repoRoot, "frontend", "public", LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH);
 const artifacts = createOnboardingArtifactWriter({
@@ -59,6 +96,9 @@ const artifacts = createOnboardingArtifactWriter({
   timeoutMs: DEFAULT_TIMEOUT_MS,
   pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
   autoApproveDelayMs: DEFAULT_AUTO_APPROVE_DELAY_MS,
+  suiteRunId: options.suiteRunId,
+  evalId: options.evalId,
+  sampleId: options.sampleId,
 });
 
 function renderLive(event: OnboardingEvent): void {
@@ -72,7 +112,14 @@ function renderLive(event: OnboardingEvent): void {
 }
 
 const telemetry = createOnboardingTelemetry(
-  { composeProject: project, runId: identity.runId },
+  {
+    composeProject: project,
+    runId: identity.runId,
+    suiteRunId: options.suiteRunId,
+    evalId: options.evalId,
+    sampleId: options.sampleId,
+    model: selectedModel,
+  },
   (event) => {
     artifacts.sink(event);
     renderLive(event);
@@ -91,7 +138,7 @@ const stack = createStack(
     environment: stackEnvironment,
   },
   {
-    hostEnv: process.env,
+    hostEnv: env,
     io: { stdout: "inherit", stderr: "inherit" },
     hooks: {
       onEvent(event) {
@@ -151,6 +198,7 @@ try {
     adminToken: credentials.adminToken,
     composeSpawnEnv: stack.spawnEnv,
     identity,
+    env,
     telemetry,
     onEvent: (message) => console.log(`[eval] ${message}`),
   });
@@ -229,4 +277,22 @@ try {
 }
 
 if (failure) throw failure;
-process.exitCode = admitted ? 0 : 1;
+return {
+  admitted,
+  outcome,
+  durationMs: Date.now() - started,
+  model: selectedModel,
+  artifactDirectory: artifacts.directory,
+  result,
+};
+}
+
+if (import.meta.main) {
+  const argv = Bun.argv.slice(2);
+  const projectArg = argv.indexOf("--project");
+  const result = await runAdmissionEvalCase({
+    keep: argv.includes("--keep"),
+    project: projectArg >= 0 ? argv[projectArg + 1] : undefined,
+  });
+  process.exitCode = result.admitted ? 0 : 1;
+}

@@ -247,3 +247,36 @@ is reused by the member-agent Compose process, and claim-based success is
 covered by approved-but-unclaimed and claimed regression tests. The retained
 sample's `admitted=true` result records the pre-fix semantics and is preserved
 as evidence rather than rewritten.
+
+## Generic eval-suite follow-up
+
+The local admission runner is now a reusable case in a native Bun eval suite.
+`bun run eval` discovers only `evals/`, while appended path and test-name
+filters retain Bun's normal behavior and fail on an empty selection. The first
+registered case is `onboarding.admission`; its executor is the existing local
+stack/agent/observer path, not a second harness.
+
+Definitions carry stable metadata, real-inference tier, samples, timeout and
+budget plus run/score functions. Suite artifacts are consolidated under
+`.agents/evals/<suite-run-id>/` with manifest/summary files and the existing
+redacted case files nested by eval and sample. The suite requires keyed model
+access before Docker and does not probe the retired free-tier path.
+
+The first suite-native funded sample used `deepseek/v4-flash` and completed in
+257 seconds. Suite run `2026-07-29T19-36-30-430Z-694961d2` executed exactly one
+sample and correctly scored red: the agent submitted a valid signed
+application, was auto-approved and appeared on the active roster, but exited
+without claiming its bearer token (`applyState=approved`, `claimedAt=null`).
+The domain outcome is `navigation-failure`; the separate runner result is
+`failed`, with admission rate 0/1.
+
+The retained 109-event timeline has complete suite/eval/sample/model
+correlation, one OpenCode session and the server-minted member id. It exposed
+two concrete instruction defects before the final claim failure: the canonical
+payload recipe invokes `node`, which the vanilla member-agent image does not
+contain, and the recipe initially treats `show-public-key` and `sign` output as
+raw strings although released `rmpc` returns JSON objects. The agent recovered
+with shell extraction, but then interpreted “wait for human approval” as a
+terminal state even though the harness approved it while the process was still
+alive. These are product findings from the eval, not harness errors; no second
+funded sample was run.
