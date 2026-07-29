@@ -124,6 +124,12 @@ test("notify-on-seat-open — enqueues outbox + worker jobs on member deactivati
     SELECT kind, payload FROM jobs WHERE kind = 'committee.send_seat_open_notification'`;
   expect(jobRows.length).toBe(2);
 
+  // Queueing is not delivery: waitlist rows are only marked after the transport
+  // accepts the notification, so failed jobs remain retryable.
+  const queuedWaitlistRows = await sql<{ notified_at: Date | null }[]>`
+    SELECT notified_at FROM committee_waitlist ORDER BY email`;
+  expect(queuedWaitlistRows.every((row) => row.notified_at === null)).toBe(true);
+
   // Deliver notifications using test transport
   const sentMessages: CommitteeEmailMessage[] = [];
   const fakeTransport: CommitteeEmailTransport = {

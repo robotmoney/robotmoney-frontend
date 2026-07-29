@@ -121,7 +121,6 @@ export async function enqueueSeatOpenNotifications(
         'system:seat_open'
       )
       ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`;
-    await tx`UPDATE committee_waitlist SET notified_at = now() WHERE id = ${w.id}`;
   }
   return outboxIds;
 }
@@ -169,4 +168,3 @@ export async function deliverCommitteeNotification(
   }
   return { sent: true };
 }
-
