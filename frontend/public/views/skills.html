@@ -30,54 +30,6 @@
     <a class="sk__cta" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">Install Skill &rarr;</a>
   </p>
 
-  <!-- Documentation hub cards -->
-  <div class="sk__section">
-    <span class="sk__eyebrow">Documentation</span>
-    <h2 class="sk__section-title">Skill documentation</h2>
-    <div class="sk__grid">
-      <a class="sk-card sk-card--feature" href="/docs/skill">
-        <span class="sk-card__num">01</span>
-        <h3 class="sk-card__title">Skill overview</h3>
-        <p class="sk-card__desc">
-          What the Robot Money skill is, how it loads protocol context into an agent,
-          and the simulate &rarr; sign &rarr; broadcast write flow.
-        </p>
-        <span class="sk-card__cta">Read overview &rarr;</span>
-      </a>
-
-      <a class="sk-card" href="/docs/skill/installation">
-        <span class="sk-card__num">02</span>
-        <h3 class="sk-card__title">Installation</h3>
-        <p class="sk-card__desc">
-          Add the skill to Claude Code, Cursor, Codex, or any MCP runtime. Wallet
-          bootstrap via the Open Wallet Standard and the RPC health check.
-        </p>
-        <span class="sk-card__cta">Install guide &rarr;</span>
-      </a>
-
-      <a class="sk-card" href="/docs/skill/commands">
-        <span class="sk-card__num">03</span>
-        <h3 class="sk-card__title">Commands</h3>
-        <p class="sk-card__desc">
-          Twelve commands across Wallet, Read, Prepare, and Execute groups &mdash;
-          from <code>get-vault</code> and <code>get-apy</code> to
-          <code>prepare-deposit</code> and <code>execute-withdraw</code>.
-        </p>
-        <span class="sk-card__cta">Command reference &rarr;</span>
-      </a>
-
-      <a class="sk-card" href="/docs/skill/agent-basket">
-        <span class="sk-card__num">04</span>
-        <h3 class="sk-card__title">Agent basket</h3>
-        <p class="sk-card__desc">
-          The 5% basket leg: 6 curated agent tokens routed via Uniswap, per-token
-          holdings, and how the basket is bought and sold alongside the vault.
-        </p>
-        <span class="sk-card__cta">Basket details &rarr;</span>
-      </a>
-    </div>
-  </div>
-
   <!-- 01 / How it Works -->
   <div class="sk__section" id="how-it-works">
     <span class="sk__eyebrow">01 / How it Works</span>
@@ -417,10 +369,9 @@
       prompt, fully permissionless.
     </p>
     <div class="sk__footer-links">
-      <a class="sk__footer-link sk__footer-link--primary" href="/docs">All documentation &rarr;</a>
       <a class="sk__footer-link" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">View on GitHub</a>
       <a class="sk__footer-link" href="https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd" target="_blank" rel="noopener noreferrer">Vault on BaseScan</a>
-      <a class="sk__footer-link" href="/docs/skill">View SKILL.md</a>
+      <a class="sk__footer-link" href="/skill.md">View SKILL.md</a>
     </div>
   </footer>
 </section>
@@ -557,61 +508,14 @@
 }
 
 /* Card grid */
-.sk__grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1.25rem;
-}
 
-.sk-card {
-  display: block;
-  padding: 1.75rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  text-decoration: none;
-  color: inherit;
-  transition: border-color 0.25s var(--ease-out-expo), transform 0.25s var(--ease-out-expo);
-}
 
-.sk-card:hover {
-  border-color: var(--color-accent);
-  transform: translateY(-2px);
-}
 
-.sk-card--feature {
-  border-color: var(--color-border-light);
-}
 
-.sk-card__num {
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.3em;
-  color: var(--color-text-dim);
-}
 
-.sk-card__title {
-  font-size: 1.35rem;
-  font-weight: 600;
-  margin: 0.75rem 0 0.6rem;
-}
 
-.sk-card:hover .sk-card__title { color: var(--color-accent); }
 
-.sk-card__desc {
-  font-size: 0.9rem;
-  line-height: 1.6;
-  color: var(--color-text-muted);
-  margin: 0 0 1rem;
-}
 
-.sk-card__cta {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  color: var(--color-accent);
-}
 
 /* Inline code: square, bordered, never a cyan mass */
 .sk code {
@@ -891,8 +795,6 @@
 @media (min-width: 700px) {
   .sk__title { font-size: 3.5rem; }
   .sk__section-title { font-size: 2.25rem; }
-  .sk__grid { grid-template-columns: 1fr 1fr; }
-  .sk-card--feature { grid-column: 1 / -1; }
   .sk__steps { grid-template-columns: repeat(3, 1fr); }
   .sk__mech { grid-template-columns: 1fr 1fr; }
   .sk__footer-links { flex-direction: row; flex-wrap: wrap; }
@@ -904,10 +806,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sk .sk-card,
-  .sk .sk__cta,
-  .sk .sk-addr,
-  .sk .sk__footer-link { transition: none; }
-  .sk .sk-card:hover { transform: none; }
 }
 </style>
