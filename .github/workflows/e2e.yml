@@ -370,17 +370,68 @@ jobs:
         # truncation from the eval to the job, which reports as an infra kill
         # rather than the honest `timed-out` outcome.
         timeout-minutes: 105
-      # Volume-leak backstop (issue: demo persistent volumes). The demo boot above
-      # reclaims its own volume on both success and failure (demo-main.ts
-      # cleanCiVolume). This always() step is the belt-and-suspenders case: if the
-      # boot step is KILLED (e.g. the timeout above) it never reaches its own
-      # teardown, so reclaim here too. Scoped to THIS run's project label — it
-      # deletes only rm_ci_stack_<run>_<attempt>_pgdata, never the standing demo
-      # that shares this self-hosted runner. Never touches --pg-data host dirs (CI
-      # does not use --pg-data; they are not docker volumes anyway).
-      # MUST stay byte-identical to the boot step's DEMO_PROJECT above.
-      - name: Reclaim this run's demo volume (no leaks on the shared runner)
+      # Stack-leak backstop (issue: demo persistent volumes; hardened after e2e
+      # run 30406428674). The demo boot above tears its own stack down on both
+      # success and failure. This always() step is the belt-and-suspenders case:
+      # if the boot step is KILLED (the timeout above, or a job cancellation) it
+      # never reaches its own teardown, so tear down here too.
+      #
+      # THE ORDER IS THE FIX. This step used to run demo-clean ALONE, which
+      # removes VOLUMES only. Run 30406428674 was cancelled mid-boot, its
+      # containers survived, so its volume was in use, so demo-clean loudly
+      # skipped it — and exited 0. The step reported SUCCESS over a live leak,
+      # and the surviving api container held :48787 (the cloudflared origin for
+      # stage.robotmoney-labs.dev) for over an hour. `compose down` must come
+      # FIRST so the volume is unreferenced by the time demo-clean reaches it;
+      # demo-clean now also EXITS NON-ZERO on an in-use skip when --project is
+      # given (scripts/demo-clean.ts's header), so this step can no longer be
+      # green while a leak survives.
+      #
+      # Strictly scoped to THIS run: `-p "$DEMO_PROJECT"` (byte-identical to the
+      # boot step's DEMO_PROJECT above) and the same project label on the volume.
+      # This runner is shared with the standing stage demo, which must never be
+      # touched — hence no bare `docker compose down`, no `docker system prune`,
+      # no name globbing. `--remove-orphans` is what kills the dynamically
+      # spawned member-agent eval containers that the compose model does not
+      # declare; `-v` reclaims this project's volumes in the same pass.
+      #
+      # WEB_PORT / POSTGRES_PORT are placeholders purely to satisfy compose
+      # INTERPOLATION: docker-compose.yml's port lines are `${VAR:?…}` and refuse
+      # to resolve without a value (c0d34f4). `down` publishes nothing, so the
+      # numbers only have to exist — same trick scripts/demo-down.ts uses. The
+      # `|| true` is deliberate: a compose-down failure must not skip the
+      # demo-clean verdict below, which is the step's actual gate.
+      - name: Tear down this run's demo stack (no leaks on the shared runner)
         if: always()
-        run: bun run scripts/demo-clean.ts --project "$DEMO_PROJECT"
+        run: |
+          set -u
+          echo "::group::docker compose -p $DEMO_PROJECT down -v --remove-orphans"
+          docker compose -p "$DEMO_PROJECT" \
+            -f docker-compose.yml -f docker-compose.demo.yml \
+            down -v --remove-orphans || echo "compose down exited non-zero — demo-clean below is the gate"
+          echo "::endgroup::"
+          bun run scripts/demo-clean.ts --project "$DEMO_PROJECT"
         env:
           DEMO_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
+          WEB_PORT: "1"
+          POSTGRES_PORT: "1"
+      # Cross-run orphan reaper (the third gap behind run 30406428674): even a
+      # perfect teardown above only ever cleans ITS OWN run, so a run whose
+      # teardown was killed outright leaked forever. This host had accumulated
+      # containers up to four days old. Selection is by the robotmoney.env LABEL
+      # (c0d34f4), pinned to `ci` — it can therefore never match `robotmoney.env
+      # =local`, i.e. the standing stage demo or an operator's shell — and the
+      # 6h threshold is comfortably longer than this job's own 105-minute
+      # ceiling, so no live CI run can reap another's stack. The reaper's own G3
+      # guard additionally excludes this job's env hash. Full guard rationale in
+      # scripts/lib/demo-reap.ts; assertions in
+      # scripts/tests/unit/demo-reap.test.ts.
+      #
+      # Non-blocking on purpose: clearing a PRIOR run's orphan is housekeeping,
+      # not a defect in THIS PR, so it must not turn someone else's leak into
+      # this PR's red X. The leak that IS this run's own is gated by the step
+      # above, which does fail.
+      - name: Reap CI container leftovers from prior runs
+        if: always()
+        continue-on-error: true
+        run: bun run scripts/demo-reap.ts --env-class ci --older-than 6h

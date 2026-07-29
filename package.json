@@ -21,6 +21,7 @@
     "demo:down": "bun scripts/demo-down.ts",
     "demo:status": "bun scripts/demo-status.ts",
     "demo:clean": "bun scripts/demo-clean.ts",
+    "demo:reap": "bun scripts/demo-reap.ts",
     "credentials": "bun scripts/gitops-credentials.ts",
     "credentials:check": "bun scripts/gitops-credentials.ts --check"
   },

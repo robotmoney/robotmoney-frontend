@@ -189,6 +189,8 @@ bun test                     # hermetic suite (spins ephemeral Postgres) — bac
 bun run typecheck            # tsc --noEmit            — backend/
 bun run demo:down            # tear down the standing demo (containers + network; KEEPS pg data)
 bun run demo:clean           # delete stopped demos' pg data volumes (label robotmoney.demo=1)
+bun run demo:reap -- --dry-run          # SHOW errant containers a sweep would remove (changes nothing)
+bun run demo:reap -- --older-than 6h    # …then actually reap them (labels only, never name matching)
 bun run demo -- --pg-data <host-dir>   # resumable demo: bind postgres data to <host-dir>
 bun run preview              # serve the SPA with /api/* mocked from goldens (random port) — root
 bun run goldens:update       # recapture goldens from a running backend (BACKEND_URL) — root

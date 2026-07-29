@@ -114,6 +114,18 @@ export function removeDemoVolumes(run: DockerRunner, names: string[]): CleanResu
   return { removed, skipped };
 }
 
+// docker spells an in-use refusal as
+//   "Error response from daemon: remove <vol>: volume is in use - [676c43de5091…, …]"
+// The bracketed list is the container IDs still referencing it — the single most
+// actionable fact in the whole message, and precisely what run 30406428674's log
+// printed while the step exited 0. Pulled out so the caller can name the holders
+// and hand the operator a command instead of a symptom.
+export function parseInUseContainerIds(reason: string): string[] {
+  const m = /\[([^\]]+)\]/.exec(reason ?? "");
+  if (!m) return [];
+  return m[1]!.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+}
+
 // Purge dynamic member-agent evaluation containers (e.g. `<project>-member-agent-eval-*`).
 // These are spawned dynamically during demo runs and must be force-removed before network/stack
 // teardown to prevent zombie containers from holding compose networks in use.

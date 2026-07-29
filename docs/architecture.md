@@ -1692,13 +1692,52 @@ running (e.g. started in the background, or its process was killed with SIGKILL)
   volume labeled `robotmoney.demo=1` (with `--project <name>` it scopes to one run),
   listing what it removed and **loudly skipping** any in-use volume (a demo still running
   on it). It **never** touches a `--pg-data` host directory (those are not docker volumes).
+  Its exit code is **role-dependent**: with `--project` (the CI-backstop role) any
+  surviving resource is a **leak** and exits non-zero; without it (the operator role) an
+  in-use volume just means your demo is up, so it is reported and exits 0. See "Teardown
+  leaks" below.
+- `bun run demo:reap` — the cross-run **reaper**. Removes errant containers left by any of
+  the four spawner families, selected by the `robotmoney.env` / `robotmoney.env.hash`
+  **labels** (never a name substring), older than `--older-than` (default `6h`), then
+  their compose networks and now-unreferenced labeled volumes. `--dry-run` first is the
+  safe posture: it performs every read and no mutation, so what it prints is exactly what
+  a real run would remove. `--env-class ci|local|all` scopes the sweep. Three guards make
+  it safe (`scripts/lib/demo-reap.ts`; assertions in
+  `scripts/tests/unit/demo-reap.test.ts`):
+  **G1** never touches the project named in `.agents/demo-state.json`; **G2** never
+  touches a non-CI project with a running container that is healthcheck-healthy or
+  publishing a host port (belt-and-braces, because that state file *has been observed
+  stale* — pointing at a dead project while a different stack served `:48787`); **G3**
+  under Actions, never touches this job's own env hash. G2 deliberately does **not**
+  exempt `robotmoney.env=ci`: no CI job outlives the threshold, so a still-healthy CI
+  stack past it *is* the leak.
 
-CI (`process.env.CI`) runs the checks once and then tears down; because keep-by-default
-would leak a volume on the **shared self-hosted runner**, the CI path additionally
-reclaims **its own run's** volume (scoped by the `robotmoney.demo.project` label) on both
-success and failure, and `.github/workflows/e2e.yml` has an `if: always()` backstop for a
-killed/timed-out boot — so CI leaves zero volumes behind while never touching a co-tenant
-standing demo.
+**Teardown leaks — the shared self-hosted runner.** CI (`process.env.CI`) runs the checks
+once and then tears down. Because keep-by-default would leak a volume on a runner shared
+with the standing stage demo, the CI path also reclaims **its own run's** volume (scoped
+by the `robotmoney.demo.project` label) on success and failure, and both
+`.github/workflows/e2e.yml` and `committee-opencode-nightly.yml` carry an `if: always()`
+backstop for a killed/cancelled/timed-out boot. That backstop has **three parts, in this
+order**, and the order is the fix:
+
+1. `docker compose -p "$DEMO_PROJECT" down -v --remove-orphans` — scoped to this run's
+   project only (never a bare `compose down`, never `docker system prune`, never a name
+   glob). `--remove-orphans` is what clears the dynamically spawned member-agent eval
+   containers the compose model does not declare.
+2. `bun run scripts/demo-clean.ts --project "$DEMO_PROJECT"` — reclaims the volume and,
+   in this role, **exits non-zero** if anything survived.
+3. `bun run scripts/demo-reap.ts --env-class ci --older-than 6h` — sweeps leftovers from
+   **prior** runs, non-blocking (someone else's leak must not fail this PR).
+
+> Why the order and the exit code changed: e2e run **30406428674** was cancelled
+> mid-boot, so its in-process teardown never ran and the stack survived. The backstop of
+> the day ran `demo:clean` **alone** — which removes volumes only — found the pgdata
+> volume still referenced by a live container, printed `SKIPPED 1 volume(s)` and **exited
+> 0**. The step reported success over a live leak, and the surviving api container held
+> host port `48787` (the `cloudflared` origin for `stage.robotmoney-labs.dev`) for over an
+> hour. Nothing reaped prior runs' orphans either, so the leak was permanent; the host had
+> accumulated containers up to four days old. All three gaps — no `compose down`, a
+> silent-skip exit 0, no cross-run reaper — are closed above.
 
 ## 1. Lifecycle stages
 
@@ -1928,6 +1967,13 @@ no-history indicator is excluded + logged (never synthetic).
   once, tears down (`docker compose down`, no `-v`), then deletes **only its own run's**
   volume (scoped by the `robotmoney.demo.project` label) so the shared self-hosted runner
   leaks nothing while a co-tenant standing demo is untouched.
+- **A killed boot cannot leak silently.** The in-process teardown above dies with the
+  process, so both CI workflows carry an `if: always()` backstop that runs
+  `docker compose -p "$DEMO_PROJECT" down -v --remove-orphans` **before** `demo:clean
+  --project`, and `demo:clean` in that role **exits non-zero** on any surviving resource.
+  A separate always() step reaps `robotmoney.env=ci` leftovers older than 6h from prior
+  runs (`bun run demo:reap`). Full rationale — and the incident that produced it, e2e run
+  30406428674 — under §"Demo Specification" (c).
 - A missing Docker dependency (Postgres image, build failure) must fail the run
   loudly, never silently skip.
 
@@ -3553,6 +3599,9 @@ These documents describe current product and system commitments:
   former preview-server spec was retired by decision D19 — preview mode is
   now described in §4 "Preview mode (goldens-backed, no backend)".)
 - [Credential doctor](./runbooks/credential-doctor.md)
+- [Demo/CI container leaks](./runbooks/demo-container-leaks.md) — reading the
+  `robotmoney.env` labels, clearing one project, and running the reaper on the
+  host that also serves `stage.robotmoney-labs.dev`.
 
 ## Reviews and investigations
 
