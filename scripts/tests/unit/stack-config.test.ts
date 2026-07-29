@@ -30,16 +30,22 @@ import {
   type StackConfig,
 } from "../../stack/index.ts";
 
+// A FIXED environment (seeded, so the local hash is deterministic) — these are
+// pure-builder tests, and a per-boot random hash would make the compose-env
+// assertions below unassertable.
+const ENVIRONMENT = { class: "local", hash: "0123456789" } as const;
+
 function cfg(overrides: Partial<StackConfig> = {}): StackConfig {
   return {
     repoRoot: "/repo",
-    project: "rmtest",
+    project: "rm_demo_stack_0123456789",
     profile: "core",
     apiPort: 41234,
     pgPort: 45678,
     composeFiles: DEFAULT_COMPOSE_FILES,
     database: DEFAULT_STACK_DATABASE,
     credentials: { adminToken: "cfg-admin", analyticsToken: "cfg-analytics" },
+    environment: ENVIRONMENT,
     ...overrides,
   };
 }
@@ -69,8 +75,14 @@ describe("buildComposeEnv", () => {
       "POSTGRES_PASSWORD",
       "POSTGRES_PORT",
       "POSTGRES_USER",
+      // The environment-class + hash labels every demo-overlay service and the
+      // pgdata volume interpolate (scripts/stack/naming.ts).
+      "RM_STACK_ENV_CLASS",
+      "RM_STACK_ENV_HASH",
       "WEB_PORT",
     ]);
+    expect(env.RM_STACK_ENV_CLASS).toBe("local");
+    expect(env.RM_STACK_ENV_HASH).toBe("0123456789");
     expect(env.COMPOSE_FILE).toBeUndefined();
     expect(env.COMPOSE_PROJECT_NAME).toBeUndefined();
   });

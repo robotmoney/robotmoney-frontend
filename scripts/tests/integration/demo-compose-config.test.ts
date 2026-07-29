@@ -37,6 +37,16 @@ function baseEnv(): Record<string, string> {
     env[k] = v;
   }
   env.DEMO_PROJECT = "compose-config-test"; // used by labels; avoids interpolation warnings
+  // The environment labels docker-compose.demo.yml stamps on every service and
+  // on the pgdata volume (scripts/stack/naming.ts). Same reason as above:
+  // supplied so `config` resolves without interpolation warnings.
+  env.RM_STACK_ENV_CLASS = "local";
+  env.RM_STACK_ENV_HASH = "composecfg0";
+  // REQUIRED inputs now, not defaults: docker-compose.yml's two port lines are
+  // `${VAR:?…}` and `docker compose config` refuses to resolve without them.
+  // Values are arbitrary — this test never publishes anything.
+  env.WEB_PORT = "18787";
+  env.POSTGRES_PORT = "15432";
   return env;
 }
 

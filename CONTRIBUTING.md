@@ -53,7 +53,7 @@ backend actually returns:
 ```bash
 # Against a local full stack:
 bun run demo                                             # brings up real backend + analytics
-BACKEND_URL=http://127.0.0.1:48787 bun run goldens:update
+BACKEND_URL=http://127.0.0.1:<demo api port> bun run goldens:update
 # …or against a deployed test cluster:
 BACKEND_URL=https://<test-cluster> bun run goldens:update
 git add goldens/api-goldens.json && commit

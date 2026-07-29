@@ -18,6 +18,11 @@
 //   3. Nothing here has an inference-off, injection, or skip affordance
 //      (D22 §11.3 E2). A missing dependency is the caller's problem to throw
 //      about, never something this layer papers over.
+import {
+  ENV_CLASS_COMPOSE_VAR,
+  ENV_HASH_COMPOSE_VAR,
+  type StackEnvironment,
+} from "./naming.ts";
 
 // ── Profiles ────────────────────────────────────────────────────────────────
 // `core` is postgres + api: everything apply/approve/claim needs (Postgres CRUD
@@ -102,6 +107,13 @@ export interface StackConfig {
   composeFiles: string[];
   database: StackDatabase;
   credentials: StackCredentials;
+  // WHICH ENVIRONMENT started this stack (scripts/stack/naming.ts). REQUIRED,
+  // not optional: it is the input to both the compose project name AND the
+  // labels every container carries, and an optional field is one a spawner
+  // forgets — which is exactly how the host accumulated containers that could
+  // not be attributed to a CI job or to an operator's shell, and therefore
+  // could not be reaped without risking the standing demo.
+  environment: StackEnvironment;
   // Extra compose interpolation values a specific consumer needs (the demo
   // passes its resolved data-path env here). Merged LAST so a consumer can
   // extend, and deliberately never sourced from the ambient environment.
@@ -117,9 +129,21 @@ export interface StackConfig {
 export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
   return {
     DEMO_PROJECT: cfg.project,
+    // The environment labels every demo-overlay service and the pgdata volume
+    // stamp (docker-compose.demo.yml). Threaded through compose interpolation
+    // rather than applied by a wrapper so a bare `docker compose -f … up` gets
+    // them too, and so `demo:down`/`demo:status` reproduce them from the state
+    // file without a second code path.
+    [ENV_CLASS_COMPOSE_VAR]: cfg.environment.class,
+    [ENV_HASH_COMPOSE_VAR]: cfg.environment.hash,
     DATABASE_URL: internalDatabaseUrl(cfg.database),
     ADMIN_TOKEN: cfg.credentials.adminToken,
     ANALYTICS_TOKEN: cfg.credentials.analyticsToken,
+    // The ALLOCATED host ports, as output. These two names are the compose
+    // interpolation targets only — the env-pin INPUT path they used to double
+    // as was removed (scripts/stack/ports.ts's header): a value exported in the
+    // operator's shell influences nothing, and `bun demo` warns loudly when it
+    // finds one so nobody believes a pin took effect.
     WEB_PORT: String(cfg.apiPort),
     POSTGRES_PORT: String(cfg.pgPort),
     POSTGRES_USER: cfg.database.user,

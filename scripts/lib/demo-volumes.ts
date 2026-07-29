@@ -10,7 +10,9 @@
 // calls run until a function is invoked) so demo-main.ts can import it safely.
 //
 // Namespacing (docker-compose.demo.yml): every demo pgdata volume carries the
-// label robotmoney.demo=1 (plus robotmoney.demo.project=<project>). We filter by
+// label robotmoney.demo=1 (plus robotmoney.demo.project=<project> and, since
+// the environment-scoped naming change, robotmoney.env=ci|local +
+// robotmoney.env.hash=<10 hex> — see scripts/stack/naming.ts). We filter by
 // LABEL, never by name-substring — a name like "…_pgdata" could belong to a
 // non-demo stack, but the label is applied only by our overlay.
 //
@@ -112,9 +114,28 @@ export function removeDemoVolumes(run: DockerRunner, names: string[]): CleanResu
   return { removed, skipped };
 }
 
+// docker spells an in-use refusal as
+//   "Error response from daemon: remove <vol>: volume is in use - [676c43de5091…, …]"
+// The bracketed list is the container IDs still referencing it — the single most
+// actionable fact in the whole message, and precisely what run 30406428674's log
+// printed while the step exited 0. Pulled out so the caller can name the holders
+// and hand the operator a command instead of a symptom.
+export function parseInUseContainerIds(reason: string): string[] {
+  const m = /\[([^\]]+)\]/.exec(reason ?? "");
+  if (!m) return [];
+  return m[1]!.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+}
+
 // Purge dynamic member-agent evaluation containers (e.g. `<project>-member-agent-eval-*`).
 // These are spawned dynamically during demo runs and must be force-removed before network/stack
 // teardown to prevent zombie containers from holding compose networks in use.
+//
+// `opts.project` is the environment-scoped compose project (scripts/stack/naming.ts,
+// e.g. `rm_ci_stack_<job hash>`), so the scoped branch is inherently
+// environment-scoped too: a CI teardown can never match the standing demo's
+// containers. The UNSCOPED branch below matches every member-agent container on
+// the host and is therefore only ever safe for an operator who means "all of
+// them" (`bun run demo:clean` with no --project).
 export function purgeDemoEvalContainers(
   run: DockerRunner,
   opts: { project?: string } = {},

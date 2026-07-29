@@ -102,7 +102,7 @@ jobs:
         run: bun run scripts/demo.ts
         env:
           CI: "true"
-          DEMO_PROJECT: rmdemo_ci_onboarding_${{ github.run_id }}_${{ github.run_attempt }}
+          DEMO_PROJECT: rm_ci_onboarding_${{ github.run_id }}_${{ github.run_attempt }}
           RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
           ONBOARDING_REAL_EVAL: "1"
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
@@ -116,8 +116,37 @@ jobs:
           ONBOARDING_SWEEP_MODELS: "deepseek:kimi"
           ONBOARDING_SWEEP_IDENTITIES_PER_MODEL: "2"
         timeout-minutes: 55
-      - name: Reclaim this run's demo volume (no leaks on the shared runner)
+      # Same shape, same fix, same reason as e2e.yml's teardown step — see its
+      # long comment for the full incident writeup (e2e run 30406428674). In
+      # short: this step used to run demo-clean ALONE, which removes VOLUMES
+      # only, so a killed boot left containers alive, the volume in use, the skip
+      # loud, and the step GREEN over a live leak on a runner shared with the
+      # standing stage demo. `compose down -v --remove-orphans` now runs FIRST,
+      # scoped to this run's project; demo-clean then exits non-zero if anything
+      # still survived. WEB_PORT/POSTGRES_PORT are interpolation placeholders
+      # (docker-compose.yml's port lines are `${VAR:?…}`); `down` publishes
+      # nothing.
+      - name: Tear down this run's demo stack (no leaks on the shared runner)
         if: always()
-        run: bun run scripts/demo-clean.ts --project "$DEMO_PROJECT"
+        run: |
+          set -u
+          echo "::group::docker compose -p $DEMO_PROJECT down -v --remove-orphans"
+          docker compose -p "$DEMO_PROJECT" \
+            -f docker-compose.yml -f docker-compose.demo.yml \
+            down -v --remove-orphans || echo "compose down exited non-zero — demo-clean below is the gate"
+          echo "::endgroup::"
+          bun run scripts/demo-clean.ts --project "$DEMO_PROJECT"
         env:
-          DEMO_PROJECT: rmdemo_ci_onboarding_${{ github.run_id }}_${{ github.run_attempt }}
+          DEMO_PROJECT: rm_ci_onboarding_${{ github.run_id }}_${{ github.run_attempt }}
+          WEB_PORT: "1"
+          POSTGRES_PORT: "1"
+      # Cross-run orphan reaper, label-scoped to robotmoney.env=ci so it can
+      # never touch the standing stage demo (robotmoney.env=local) that shares
+      # this host. Nightly is the wider sweep of the two: it runs on a schedule
+      # rather than per-PR, so it is the path that clears leftovers from runs
+      # whose own teardown never executed. Non-blocking — a prior run's orphan is
+      # housekeeping, not a nightly regression. See scripts/lib/demo-reap.ts.
+      - name: Reap CI container leftovers from prior runs
+        if: always()
+        continue-on-error: true
+        run: bun run scripts/demo-reap.ts --env-class ci --older-than 6h

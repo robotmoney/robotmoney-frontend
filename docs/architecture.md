@@ -1586,6 +1586,43 @@ run state file at `.agents/demo-state.json` (compose project name + this run's r
 ports + compose env + the postgres data location, so teardown/status can find the run)
 and prints the READY route table.
 
+**Host ports — always random, one sanctioned exception.** Every published host port
+(api and postgres) is drawn free at boot on **every** run (`scripts/stack/ports.ts`).
+There is no fixed default anywhere: `docker-compose.yml`'s two port lines are
+`${WEB_PORT:?…}` / `${POSTGRES_PORT:?…}` (compose refuses to start rather than fall
+back), `.env.example` ships neither, and the env-pin **input** path is gone — a
+`WEB_PORT`/`POSTGRES_PORT` left in a shell or `.env` influences nothing and produces a
+loud warning at boot. The names survive only as compose interpolation **outputs**, set
+from the allocated values by `buildComposeEnv`. This is the fix for a real outage: the
+api port used to *prefer* 48787, so a CI boot (no `.env`) raced the standing stage demo
+for the exact port `cloudflared` routes `stage.robotmoney-labs.dev` to, while the
+operator's `.env` pinned both ports and meant nothing was random locally at all.
+
+The one exception is `bun run demo -- --stage`, a CLI **argument** (never an env var —
+same rule as `--pg-data`), which pins **only** the web/api port to 48787, the tunnel
+origin, warns prominently that it has done so, and — when the port is held — **fails
+without starting**, naming the holder from `docker ps`/`ss -tlnp`. It never falls back:
+`cloudflared` routes 48787 and nothing else, so a fallback would boot green and serve a
+502. Postgres stays random even under `--stage`. The flag is recorded in
+`.agents/demo-state.json` so `demo:down`/`demo:status` reconstruct the same env.
+
+**Container naming and labels — environment-scoped.** Four families spawn containers on
+this host (the demo, the local onboarding eval, the inference-off rails check, and the
+backend suite's ephemeral postgres), and the host is simultaneously the self-hosted
+Actions runner and the stage demo box. `scripts/stack/naming.ts` gives all four ONE
+scheme: `<prefix>_<role>_<hash>`, where the prefix is `rm_ci` under GitHub Actions
+(`GITHUB_ACTIONS === "true"`) and `rm_demo` otherwise, the role is
+`stack`/`eval`/`infra`/`pgtest`, and the hash is a short digest of the ENVIRONMENT —
+`GITHUB_WORKFLOW`+`GITHUB_RUN_ID`+`GITHUB_RUN_ATTEMPT`+`GITHUB_JOB` under Actions
+(stable across every step of one job, distinct across runs/attempts/workflows), a
+per-boot random value locally. The same facts are also attached as **labels** —
+`robotmoney.env=ci|local` and `robotmoney.env.hash=<hash>` alongside the existing
+`robotmoney.demo.project` — on every service in `docker-compose.demo.yml`, on the
+pgdata volume, and (via explicit `--label` flags, since it is a raw `docker run`) on
+`backend/tests/preload.ts`'s postgres. Names are the human channel; **labels are the
+channel tooling must select on**, because on a host that also serves the live site a
+wrong name-substring match is an outage.
+
 **Postgres data location.** By default each run uses a fresh anonymous named volume
 `<project>_pgdata`, labeled `robotmoney.demo=1` (so `demo:clean` can find it). Passing
 `bun run demo -- --pg-data <host-dir>` instead bind-mounts postgres's data directory to
@@ -1655,13 +1692,52 @@ running (e.g. started in the background, or its process was killed with SIGKILL)
   volume labeled `robotmoney.demo=1` (with `--project <name>` it scopes to one run),
   listing what it removed and **loudly skipping** any in-use volume (a demo still running
   on it). It **never** touches a `--pg-data` host directory (those are not docker volumes).
+  Its exit code is **role-dependent**: with `--project` (the CI-backstop role) any
+  surviving resource is a **leak** and exits non-zero; without it (the operator role) an
+  in-use volume just means your demo is up, so it is reported and exits 0. See "Teardown
+  leaks" below.
+- `bun run demo:reap` — the cross-run **reaper**. Removes errant containers left by any of
+  the four spawner families, selected by the `robotmoney.env` / `robotmoney.env.hash`
+  **labels** (never a name substring), older than `--older-than` (default `6h`), then
+  their compose networks and now-unreferenced labeled volumes. `--dry-run` first is the
+  safe posture: it performs every read and no mutation, so what it prints is exactly what
+  a real run would remove. `--env-class ci|local|all` scopes the sweep. Three guards make
+  it safe (`scripts/lib/demo-reap.ts`; assertions in
+  `scripts/tests/unit/demo-reap.test.ts`):
+  **G1** never touches the project named in `.agents/demo-state.json`; **G2** never
+  touches a non-CI project with a running container that is healthcheck-healthy or
+  publishing a host port (belt-and-braces, because that state file *has been observed
+  stale* — pointing at a dead project while a different stack served `:48787`); **G3**
+  under Actions, never touches this job's own env hash. G2 deliberately does **not**
+  exempt `robotmoney.env=ci`: no CI job outlives the threshold, so a still-healthy CI
+  stack past it *is* the leak.
 
-CI (`process.env.CI`) runs the checks once and then tears down; because keep-by-default
-would leak a volume on the **shared self-hosted runner**, the CI path additionally
-reclaims **its own run's** volume (scoped by the `robotmoney.demo.project` label) on both
-success and failure, and `.github/workflows/e2e.yml` has an `if: always()` backstop for a
-killed/timed-out boot — so CI leaves zero volumes behind while never touching a co-tenant
-standing demo.
+**Teardown leaks — the shared self-hosted runner.** CI (`process.env.CI`) runs the checks
+once and then tears down. Because keep-by-default would leak a volume on a runner shared
+with the standing stage demo, the CI path also reclaims **its own run's** volume (scoped
+by the `robotmoney.demo.project` label) on success and failure, and both
+`.github/workflows/e2e.yml` and `committee-opencode-nightly.yml` carry an `if: always()`
+backstop for a killed/cancelled/timed-out boot. That backstop has **three parts, in this
+order**, and the order is the fix:
+
+1. `docker compose -p "$DEMO_PROJECT" down -v --remove-orphans` — scoped to this run's
+   project only (never a bare `compose down`, never `docker system prune`, never a name
+   glob). `--remove-orphans` is what clears the dynamically spawned member-agent eval
+   containers the compose model does not declare.
+2. `bun run scripts/demo-clean.ts --project "$DEMO_PROJECT"` — reclaims the volume and,
+   in this role, **exits non-zero** if anything survived.
+3. `bun run scripts/demo-reap.ts --env-class ci --older-than 6h` — sweeps leftovers from
+   **prior** runs, non-blocking (someone else's leak must not fail this PR).
+
+> Why the order and the exit code changed: e2e run **30406428674** was cancelled
+> mid-boot, so its in-process teardown never ran and the stack survived. The backstop of
+> the day ran `demo:clean` **alone** — which removes volumes only — found the pgdata
+> volume still referenced by a live container, printed `SKIPPED 1 volume(s)` and **exited
+> 0**. The step reported success over a live leak, and the surviving api container held
+> host port `48787` (the `cloudflared` origin for `stage.robotmoney-labs.dev`) for over an
+> hour. Nothing reaped prior runs' orphans either, so the leak was permanent; the host had
+> accumulated containers up to four days old. All three gaps — no `compose down`, a
+> silent-skip exit 0, no cross-run reaper — are closed above.
 
 ## 1. Lifecycle stages
 
@@ -1872,8 +1948,12 @@ The live path (the only path) can still be tuned via env before `bun run demo`.
 
 The live path preserves the honesty model: empty fetch → persisted real floor; a
 no-history indicator is excluded + logged (never synthetic).
-- Random ports (Postgres, API, MCP) + unique compose project name: concurrent runs do
-  not collide. The run identity (project + ports + compose env) is written to
+- Random ports (Postgres, API) on every run, with no fixed default and no env-pin path
+  — `bun run demo -- --stage` is the sole exception and pins only the api port to the
+  cloudflared origin — plus an environment-scoped compose project name
+  (`rm_ci_stack_<hash>` / `rm_demo_stack_<hash>`): concurrent runs do not collide, and a
+  leaked container is attributable to the environment that made it. The run identity
+  (project + environment class/hash + ports + compose env) is written to
   `.agents/demo-state.json` so the explicit teardown command can find it.
 - **Teardown on exit (local).** Ctrl-C / SIGTERM tears the stack down
   (`docker compose down`, **no `-v`** — containers + network removed, postgres data
@@ -1887,6 +1967,13 @@ no-history indicator is excluded + logged (never synthetic).
   once, tears down (`docker compose down`, no `-v`), then deletes **only its own run's**
   volume (scoped by the `robotmoney.demo.project` label) so the shared self-hosted runner
   leaks nothing while a co-tenant standing demo is untouched.
+- **A killed boot cannot leak silently.** The in-process teardown above dies with the
+  process, so both CI workflows carry an `if: always()` backstop that runs
+  `docker compose -p "$DEMO_PROJECT" down -v --remove-orphans` **before** `demo:clean
+  --project`, and `demo:clean` in that role **exits non-zero** on any surviving resource.
+  A separate always() step reaps `robotmoney.env=ci` leftovers older than 6h from prior
+  runs (`bun run demo:reap`). Full rationale — and the incident that produced it, e2e run
+  30406428674 — under §"Demo Specification" (c).
 - A missing Docker dependency (Postgres image, build failure) must fail the run
   loudly, never silently skip.
 
@@ -2207,7 +2294,7 @@ path with fewer services booted. Three components are shared by construction:
 `pull_request` trigger — and runs in the existing
 `committee-opencode-nightly.yml` on `[self-hosted, robotmoney-self-hosted]`, the
 runner **every** workflow in this repo uses. (It was pinned to `ubuntu-latest`
-because the self-hosted host shares its IP with the standing `rmdemo_*` stack
+because the self-hosted host shares its IP with the standing `rm_demo_*` stack
 and free-tier models rate-limit per IP. Funded models bill the workspace, not an
 IP quota, so that exception retired with D22 rule 1's amendment.) No new workflow
 is added.
@@ -3512,6 +3599,9 @@ These documents describe current product and system commitments:
   former preview-server spec was retired by decision D19 — preview mode is
   now described in §4 "Preview mode (goldens-backed, no backend)".)
 - [Credential doctor](./runbooks/credential-doctor.md)
+- [Demo/CI container leaks](./runbooks/demo-container-leaks.md) — reading the
+  `robotmoney.env` labels, clearing one project, and running the reaper on the
+  host that also serves `stage.robotmoney-labs.dev`.
 
 ## Reviews and investigations
 

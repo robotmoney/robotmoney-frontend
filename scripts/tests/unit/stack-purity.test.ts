@@ -70,6 +70,7 @@ describe("scripts/stack purity", () => {
         composeFiles: DEFAULT_COMPOSE_FILES,
         database: DEFAULT_STACK_DATABASE,
         credentials: { adminToken: "a", analyticsToken: "b" },
+        environment: { class: "local", hash: "0000000000" },
       },
       { hooks: { onEvent: (e) => events.push(e) } },
     );
@@ -88,6 +89,7 @@ describe("scripts/stack purity", () => {
       composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
       credentials: { adminToken: "a", analyticsToken: "b" },
+      environment: { class: "local", hash: "0000000000" },
     });
     expect(stack.spawnEnv.PATH).toBeUndefined();
     expect(Object.keys(stack.spawnEnv).sort()).toEqual(Object.keys(stack.composeEnv).sort());
