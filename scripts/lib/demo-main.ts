@@ -1404,6 +1404,7 @@ async function main(): Promise<void> {
             composeFiles: composeFilesRun.split(":"),
             backendUrl,
             adminToken: adminPassword,
+            composeSpawnEnv: stack.spawnEnv,
             env: { ...process.env, AGENT_MODEL: model },
             onEvent: (msg) => console.log(`[demo] onboarding-real-eval[${model}]: ${msg}`),
           });
@@ -1666,6 +1667,7 @@ async function main(): Promise<void> {
           composeFiles: composeFilesRun.split(":"),
           backendUrl,
           adminToken: adminPassword,
+          composeSpawnEnv: stack.spawnEnv,
           identity,
           onEvent: (msg) => log(`onboarding-eval[${identity.runId}]: ${msg}`),
         });

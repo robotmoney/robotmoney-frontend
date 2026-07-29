@@ -35,6 +35,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
   canonicalizeApplication,
+  canonicalizeClaimChallenge,
   path as routePath,
   ROUTES,
 } from "@robotmoney/contract";
@@ -52,6 +53,7 @@ import {
   resolveStackEnvironment,
   stackProjectName,
   type Stack,
+  type StackCredentials,
   type StackEnvironment,
 } from "../../stack/index.ts";
 import { makeDockerRunner, purgeDemoEvalContainers } from "../../lib/demo-volumes.ts";
@@ -74,6 +76,7 @@ const TEST_TIMEOUT_MS = 2 * 60_000;
 // compose call — so merely importing this file costs nothing. All of it happens
 // in the beforeAll below.
 let stack: Stack | null = null;
+let stackCredentials: StackCredentials | null = null;
 
 // This file's environment identity (scripts/stack/naming.ts) — `ci`/<job hash>
 // under Actions, `local`/<random> otherwise. Computed inside a FUNCTION, not at
@@ -117,6 +120,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     // would only slow this "fast, cheap" check down for nothing. (D21: no mcp
     // service — the committee surface is the api's REST API.)
     const environment = infraEnvironment();
+    stackCredentials = generateStackCredentials();
     stack = createStack(
       {
         repoRoot,
@@ -127,7 +131,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         profile: "core",
         composeFiles: DEFAULT_COMPOSE_FILES,
         database: DEFAULT_STACK_DATABASE,
-        credentials: generateStackCredentials(),
+        credentials: stackCredentials,
         environment,
       },
       { hostEnv: process.env, io: { stdout: "pipe", stderr: "pipe" } },
@@ -270,7 +274,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
   );
 
   test(
-    "a signed apply built with the REAL rmpc release binary lands end-to-end through POST /api/committee/apply",
+    "a REAL rmpc identity completes signed apply, approval, challenge claim, and public claimed state",
     async () => {
       // Driven directly by this test — never by an agent — exactly like
       // scripts/rmpc-release-e2e.ts / scripts/tests/integration/rmpc-canonical-apply.test.ts.
@@ -315,6 +319,45 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         // Redaction: the status route never echoes contact/publicKey.
         expect(JSON.stringify(status)).not.toContain(application.contact);
         expect(JSON.stringify(status)).not.toContain(publicKeyB64);
+
+        const approveRes = await fetch(`${stack!.backendUrl}/api/committee/admin/members/${memberId}/review`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Admin-Token": stackCredentials!.adminToken,
+          },
+          body: JSON.stringify({ decision: "approve" }),
+        });
+        expect(approveRes.status).toBe(200);
+
+        const challengeRes = await fetch(`${stack!.backendUrl}${ROUTES.committee.claimChallenge}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ memberId }),
+        });
+        expect(challengeRes.status).toBe(200);
+        const challenge = await challengeRes.json();
+        const claimPayloadFile = join(workDir, "claim-payload.txt");
+        writeFileSync(claimPayloadFile, canonicalizeClaimChallenge(challenge));
+        const claimSignature = runRmpcJson(
+          rmpcPath,
+          ["committee-identity", "--path", keystorePath, "sign", "--payload-file", claimPayloadFile],
+          rmpcEnv,
+        );
+        expect(claimSignature.ok).toBe(true);
+
+        const claimRes = await fetch(`${stack!.backendUrl}${ROUTES.committee.claimToken}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...challenge, signature: claimSignature.signature }),
+        });
+        expect(claimRes.status).toBe(200);
+        const claimed = await claimRes.json();
+        expect(claimed.token).toMatch(/^tok_/);
+
+        const claimedStatusRes = await fetch(`${stack!.backendUrl}${statusPath}`);
+        expect(claimedStatusRes.status).toBe(200);
+        expect(await claimedStatusRes.json()).toMatchObject({ state: "claimed", claimedAt: expect.any(String) });
       } finally {
         rmSync(workDir, { recursive: true, force: true });
       }

@@ -31,6 +31,7 @@ const read = (rel: string) => readFileSync(join(repoRoot, rel), "utf8");
 const PARTICIPATION = "frontend/public/views/docs/investment-committee/participation.html";
 const API_REFERENCE = "frontend/public/views/docs/investment-committee/api-reference.html";
 const RUNBOOK = "frontend/public/views/docs/investment-committee/runbook.html";
+const ONBOARDING_SKILL = "frontend/public/skills/committee-onboarding/SKILL.md";
 
 function decodeEntities(html: string): string {
   return html.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
@@ -195,5 +196,31 @@ describe("the public application-status route is documented", () => {
     const docPaths = extractDocPaths(html).map(normalize);
     expect(docPaths).toContain(normalize(applyStatusPath));
     expect(html).toContain("/committee/apply/&lt;memberId&gt;");
+  });
+});
+
+describe("the repo-owned onboarding skill completes claim before declaring success", () => {
+  const skill = read(ONBOARDING_SKILL);
+
+  test("uses vanilla jq with current rmpc JSON fields, not an unavailable Node runtime", () => {
+    expect(skill).toContain("jq -er '.public_key'");
+    expect(skill).toContain("jq -er '.signature'");
+    expect(skill).toContain("jq -cjn");
+    expect(skill).not.toMatch(/\bnode\s+-/i);
+  });
+
+  test("keeps polling through approval, performs the signed claim, and verifies public claimed state", () => {
+    expect(skill).toContain('applied) sleep 5');
+    expect(skill).toContain("/api/committee/token-claim/challenge");
+    expect(skill).toContain("committee-token-claim-v1");
+    expect(skill).toContain("/api/committee/token-claim");
+    expect(skill).toContain('[ "$RM_STATE" = claimed ]');
+  });
+
+  test("the completion report appears only after the claimed-state guard", () => {
+    const guard = skill.indexOf('[ "$RM_STATE" = claimed ]');
+    const completion = skill.indexOf("Onboarding complete —");
+    expect(guard).toBeGreaterThan(0);
+    expect(completion).toBeGreaterThan(guard);
   });
 });

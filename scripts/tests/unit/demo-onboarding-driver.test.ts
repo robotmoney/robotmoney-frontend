@@ -71,6 +71,18 @@ export function logsClassifiedOutcome(body: string): string | null {
   return null;
 }
 
+/** Every demo admission must reuse the exact environment of its live stack. */
+export function retryCallsReuseStackEnvironment(src: string): string | null {
+  const calls = [...src.matchAll(/await\s+runOnboardingEvalWithRetry\(\{[\s\S]*?\n\s*\}\);/g)].map((m) => m[0]);
+  if (calls.length !== 2) {
+    return `expected exactly two demo retry-wrapper call sites, found ${calls.length}`;
+  }
+  const missing = calls.filter((call) => !/composeSpawnEnv:\s*stack\.spawnEnv/.test(call));
+  return missing.length === 0
+    ? null
+    : `${missing.length}/${calls.length} demo retry-wrapper call site(s) re-resolve Compose without stack.spawnEnv`;
+}
+
 describe("the demo's onboarding driver (scripts/lib/demo-main.ts)", () => {
   const body = onboardingDriverBody(demoMain);
 
@@ -102,6 +114,10 @@ describe("the demo's onboarding driver (scripts/lib/demo-main.ts)", () => {
     // distinction §11 R8 depends on: a navigation failure is a real red result.
     expect(body).toContain("this is a real eval result, never retried");
     expect(body).toContain("retries exhausted");
+  });
+
+  test("both the CI sweep and standing driver reuse the running stack's exact Compose environment", () => {
+    expect(retryCallsReuseStackEnvironment(demoMain)).toBeNull();
   });
 });
 
@@ -168,5 +184,10 @@ describe("red control: the 2026-07-25 driver, which lost a seat to one refusal",
   test("a missing anchor THROWS rather than grading an empty string", () => {
     expect(() => onboardingDriverBody("export const x = 1;\n")).toThrow(/anchor is gone/);
     expect(() => onboardingDriverBody("async function onboardingDriver() {}\n")).toThrow(/anchor is gone/);
+  });
+
+  test("the stack-environment guard reports a call site that drops composeSpawnEnv", () => {
+    const broken = demoMain.replaceAll("composeSpawnEnv: stack.spawnEnv,", "");
+    expect(retryCallsReuseStackEnvironment(broken)).toContain("2/2");
   });
 });
