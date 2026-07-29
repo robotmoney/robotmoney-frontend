@@ -58,10 +58,12 @@ export async function getMembers() {
   const rows = await sql`SELECT * FROM committee_members WHERE status = 'active' ORDER BY id`;
   return rows.map(toMember);
 }
-// Read-side count of currently active committee members — the gate the onboarding
-// path checks against COMMITTEE_ROSTER_CAP before admitting a newcomer.
 export async function countActiveMembers(): Promise<number> {
-  const rows = await sql<{ n: number }[]>`
+  return countActiveMembersTx(sql);
+}
+
+export async function countActiveMembersTx(tx: DbHandle): Promise<number> {
+  const rows = await tx<{ n: number }[]>`
     SELECT count(*)::int AS n FROM committee_members WHERE status = 'active'`;
   return Number(rows[0]?.n ?? 0);
 }
@@ -73,6 +75,13 @@ export async function getRosterCapacity(): Promise<{ rosterCap: number; seatsFil
     seatsFilled: count,
     seatsAvailable: Math.max(0, COMMITTEE_ROSTER_CAP - count),
   };
+}
+
+/** Roster capacity and available seats surface (#236 / #238 contract seam). */
+export async function getRosterCapacityStatus(tx: DbHandle = sql): Promise<{ active: number; cap: number; seatsAvailable: number }> {
+  const active = await countActiveMembersTx(tx);
+  const seatsAvailable = Math.max(0, COMMITTEE_ROSTER_CAP - active);
+  return { active, cap: COMMITTEE_ROSTER_CAP, seatsAvailable };
 }
 
 // Serialize every roster-admission transaction on one advisory key. A bare

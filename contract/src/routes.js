@@ -41,6 +41,7 @@ export const ROUTES = {
 
   committee: {
     members: "/api/committee/members", // GET
+    waitlist: "/api/committee/waitlist", // POST — capture interest when roster is full
     member: "/api/committee/members/:id", // GET
     memberTakes: "/api/committee/members/:id/takes", // GET ?limit= — this member's takes across sessions (issue #243), newest first, in-progress included
     subject: "/api/committee/subjects/:id", // GET

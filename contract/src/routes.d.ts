@@ -19,6 +19,7 @@ export const ROUTES: {
   };
   committee: {
     members: string;
+    waitlist: string;
     member: string;
     memberTakes: string;
     subject: string;
