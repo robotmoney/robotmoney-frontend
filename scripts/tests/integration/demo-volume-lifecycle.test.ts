@@ -45,11 +45,10 @@ function composeEnv(extra: Record<string, string> = {}): Record<string, string> 
     POSTGRES_USER: "robotmoney",
     POSTGRES_PASSWORD: "robotmoney",
     POSTGRES_DB: "robotmoney",
-    // `${WEB_PORT:?…}` is a REQUIRED input now (no default — see
-    // scripts/stack/ports.ts). This test never starts the api service, so the
-    // value only has to exist for interpolation; POSTGRES_PORT is a real free
-    // port supplied per case below, because postgres IS started.
+    // `${WEB_PORT:?…}` and `${POSTGRES_PORT:?…}` are REQUIRED inputs now (no default — see
+    // scripts/stack/ports.ts).
     WEB_PORT: "18789",
+    POSTGRES_PORT: "15432",
     ...extra,
   };
 }
