@@ -138,6 +138,21 @@ describe("onboarding telemetry stream", () => {
     expect(out).toContain('"signature":"signature-ok"');
   });
 
+  test("redacts the real rmpc keystore ciphertext inside JSON-wrapped OpenCode tool output", () => {
+    const ciphertext = "base64-encrypted-seed-material";
+    const keystore = JSON.stringify({
+      version: 1,
+      kind: "rmpc-committee-identity-keystore",
+      public_key: "public-ok",
+      cipher: { salt: "salt-ok", nonce: "nonce-ok", ciphertext },
+    });
+    const toolEvent = JSON.stringify({ type: "tool_result", part: { output: keystore } });
+    const out = redactTelemetryText(toolEvent);
+    expect(out).not.toContain(ciphertext);
+    expect(out).toContain("<secret redacted>");
+    expect(out).toContain("public-ok");
+  });
+
   test("suppresses multiline private-key and keystore bodies before callbacks", async () => {
     const records: string[] = [];
     const raw = [

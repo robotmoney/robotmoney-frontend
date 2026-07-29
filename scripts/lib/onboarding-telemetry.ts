@@ -131,7 +131,7 @@ export function structurallyRedactSecrets(text: string): string {
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer <token redacted>")
     .replace(/\btok_[A-Za-z0-9_-]{6,}\b/g, "<claim token redacted>")
     .replace(
-      /(["']?(?:token|claim[_-]?token|token[_-]?claim|member[_-]?token|admin[_-]?token|analytics[_-]?token|access[_-]?token|refresh[_-]?token|api[_-]?key|passphrase|private[_-]?key|secret[_-]?key|keystore)["']?\s*[:=]\s*)(["'])(?!<[^>\r\n]+ redacted>)(.*?)\2/gi,
+      /((?:\\?["']?)(?:token|claim[_-]?token|token[_-]?claim|member[_-]?token|admin[_-]?token|analytics[_-]?token|access[_-]?token|refresh[_-]?token|api[_-]?key|passphrase|private[_-]?key|secret[_-]?key|keystore|ciphertext)(?:\\?["']?)\s*[:=]\s*)((?:\\?["']))(?!<[^>\r\n]+ redacted>)(.*?)\2/gi,
       "$1$2<secret redacted>$2",
     )
     .replace(

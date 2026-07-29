@@ -344,7 +344,7 @@ interface ApplyStatusObservation {
 async function fetchApplyStatus(backendUrl: string, memberId: string): Promise<ApplyStatusObservation | null> {
   const p = routePath(ROUTES.committee.applyStatus, { id: memberId });
   const res = await fetch(`${backendUrl}${p}`);
-  if (!res.ok) return null;
+  if (!res.ok) throw new Error(`GET ${p} -> ${res.status}`);
   const body = (await res.json()) as { state: ApplyState; claimedAt?: string | null };
   return { state: body.state, claimedAt: body.claimedAt ?? null };
 }
@@ -354,6 +354,43 @@ async function isOnActiveRoster(backendUrl: string, memberId: string): Promise<b
   if (!res.ok) throw new Error(`GET ${ROUTES.committee.members} -> ${res.status}`);
   const body = (await res.json()) as { members: Array<{ id: string }> };
   return body.members.some((m) => m.id === memberId);
+}
+
+export interface ObserverPollTracker {
+  poll<T>(endpoint: string, read: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false }>;
+  persistentError(): string | null;
+}
+
+/**
+ * Track failures per observer endpoint, logging only state transitions. A
+ * recovered read remains useful evidence in the merged timeline; a failure
+ * still active when observation ends makes the whole run a harness error.
+ */
+export function createObserverPollTracker(log: (message: string) => void): ObserverPollTracker {
+  const failures = new Map<string, string>();
+  return {
+    async poll<T>(endpoint: string, read: () => Promise<T>) {
+      try {
+        const value = await read();
+        if (failures.delete(endpoint)) log(`observer.poll.recovered endpoint=${endpoint}`);
+        return { ok: true as const, value };
+      } catch (error) {
+        const message = redactTelemetryText(error instanceof Error ? error.message : String(error));
+        if (failures.get(endpoint) !== message) {
+          log(`observer.poll.failed endpoint=${endpoint} error=${message}`);
+        }
+        failures.set(endpoint, message);
+        return { ok: false as const };
+      }
+    },
+    persistentError() {
+      if (failures.size === 0) return null;
+      return [...failures]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([endpoint, message]) => `${endpoint}: ${message}`)
+        .join("; ");
+    },
+  };
 }
 
 // Auto-approve watcher (§11 R7): after an application completes ("applied"),
@@ -422,6 +459,8 @@ export interface OnboardingEvalResult {
   // means the launch watcher could not tell, which is deliberately NOT
   // treated as evidence of anything.
   containerLaunched: boolean | null;
+  /** Active observer failures at the end of the run; classifies as harness-error. */
+  observerError: string | null;
   // ALWAYS populated, including for an admitted run (changed 2026-07-27).
   // Withholding it from successes made the successful and the failed runs of
   // one sweep incomparable: when four samples produced nothing, there was no
@@ -498,6 +537,8 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
   let onActiveRoster = false;
   let admitted = false;
   let timedOut = false;
+  let observerError: string | null = null;
+  const observer = createObserverPollTracker(log);
 
   log(
     `launching member-agent container for ${identity.contact} (model=${modelConfig.model}, ` +
@@ -541,15 +582,21 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
         }
 
         if (!memberId) {
-          memberId = await findMemberIdByContact(opts.backendUrl, opts.adminToken, identity.contact).catch(() => null);
-          if (memberId) {
+          const observedMember = await observer.poll("admin.members", () =>
+            findMemberIdByContact(opts.backendUrl, opts.adminToken, identity.contact),
+          );
+          if (observedMember.ok) memberId = observedMember.value;
+          if (observedMember.ok && memberId) {
             telemetry.setMemberId(memberId);
             log(`observed server-minted memberId=${memberId} for ${identity.contact} (§11 R2)`);
           }
         }
         if (memberId) {
-          const status = await fetchApplyStatus(opts.backendUrl, memberId).catch(() => null);
-          if (status) {
+          const observedStatus = await observer.poll("application.status", () =>
+            fetchApplyStatus(opts.backendUrl, memberId!),
+          );
+          const status = observedStatus.ok ? observedStatus.value : null;
+          if (observedStatus.ok && status) {
             applyState = status.state;
             claimedAt = status.claimedAt;
             if (applyState !== lastLoggedApplyState) {
@@ -562,10 +609,16 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
             log(`application ${memberId} applied — auto-approving in ${autoApproveDelayMs}ms (§11 R7)`);
             scheduleAutoApprove(opts.backendUrl, opts.adminToken, memberId, autoApproveDelayMs, log);
           }
-          onActiveRoster = await isOnActiveRoster(opts.backendUrl, memberId).catch(() => onActiveRoster);
+          const observedRoster = await observer.poll("committee.members", () =>
+            isOnActiveRoster(opts.backendUrl, memberId!),
+          );
+          if (observedRoster.ok) onActiveRoster = observedRoster.value;
         }
 
-        if (isFullyOnboarded({ memberId, applyState, claimedAt, onActiveRoster })) break;
+        if (
+          observer.persistentError() === null &&
+          isFullyOnboarded({ memberId, applyState, claimedAt, onActiveRoster })
+        ) break;
         if (Date.now() >= deadline) break; // overall timeout
         if (containerExitedAt !== null && Date.now() - containerExitedAt >= postExitGraceMs) break; // nothing left to advance it
 
@@ -573,7 +626,8 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
       }
 
       // Computed BEFORE the primitive kills anything, exactly as before.
-      admitted = isFullyOnboarded({ memberId, applyState, claimedAt, onActiveRoster });
+      observerError = observer.persistentError();
+      admitted = observerError === null && isFullyOnboarded({ memberId, applyState, claimedAt, onActiveRoster });
       timedOut = !admitted && Date.now() >= deadline;
     },
   });
@@ -592,6 +646,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     timedOut,
     containerExitCode: run.exitCode,
     containerLaunched: run.containerLaunched,
+    observerError,
     transcript: run.transcript,
   };
 }

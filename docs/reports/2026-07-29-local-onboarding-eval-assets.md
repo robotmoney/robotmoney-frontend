@@ -146,7 +146,12 @@ runner, proxy, sidecar, service, CLI, or OpenCode mode was introduced:
 3. One sequencer normalizes those records with compose project, run ID,
    attempt, source, stream, timestamp, container name, OpenCode session ID when
    observed, and member ID after it is minted.
-4. Every local run, successful or failed, persists under the ignored runtime tree:
+4. Observer reads emit `observer.poll.failed` and
+   `observer.poll.recovered` transitions per API surface. A failure still
+   active when observation ends is retained in the result and classified as a
+   non-retryable `harness-error`, rather than being mislabeled as an agent
+   navigation failure or timeout.
+5. Every local run, successful or failed, persists under the ignored runtime tree:
 
    ```text
    .agents/onboarding-evals/<project>/<run-id>/
@@ -158,7 +163,7 @@ runner, proxy, sidecar, service, CLI, or OpenCode mode was introduced:
      result.json
    ```
 
-5. The manifest/result records prompt and skill hashes, selected model, timing
+6. The manifest/result records prompt and skill hashes, selected model, timing
    limits, exit status, step observations, errors, and cleanup results. It does
    not persist the prompt, credentials, or contact; only a run-scoped contact
    hash is retained.
@@ -177,7 +182,9 @@ or disk, including secrets split across read chunks.
 Exact injected-value redaction is followed by structural scrubbing for
 Authorization/Bearer values, claim-token shapes, admin/analytics/access/refresh
 tokens, API-key/passphrase/private-key assignments, keystores, and private-key
-blocks. The local contact is also an exact redaction input for agent and service
+blocks. JSON-escaped secret fields are scrubbed too, including the real
+`rmpc-committee-identity-keystore` ciphertext when a shell tool result is
+wrapped inside OpenCode NDJSON. The local contact is also an exact redaction input for agent and service
 streams. Public keys, signatures, member IDs, HTTP status, and redacted
 request/response shapes remain because they are useful evidence.
 
@@ -191,10 +198,11 @@ Executed in the adhoc worktree:
 
 - `bun test scripts/tests/unit/onboarding-telemetry.test.ts
   scripts/tests/unit/onboarding-eval-helpers.test.ts
-  scripts/tests/unit/member-agent-classify.test.ts` — 109 passed, 0 failed.
+  scripts/tests/unit/member-agent-classify.test.ts` — 112 passed, 0 failed.
   This includes executable checks for live-before-exit output, interleaved
   ordering, chunk-split and generated-secret redaction, transcript/classifier
-  compatibility, success/failure artifacts, and follower termination.
+  compatibility, observer failure/recovery classification, success/failure
+  artifacts, and follower termination.
 - `bun test contract/tests/unit/committee-application.test.ts scripts/tests/unit/onboarding-eval-helpers.test.ts` — 88 passed, 0 failed.
 - `bun test scripts/tests/integration/onboarding-eval-infra.test.ts` — 7
   passed, 0 failed, including in-container static-file fetches and a real

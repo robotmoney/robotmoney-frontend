@@ -100,7 +100,8 @@ export const COMPOSE_VOLUME_RECREATE_PROMPT = "exists but doesn't match configur
 export type HarnessFaultKind =
   | "agent-blocked-by-harness-permissions"
   | "compose-volume-config-mismatch"
-  | "container-never-launched";
+  | "container-never-launched"
+  | "observer-polling-failed";
 
 export interface HarnessFault {
   kind: HarnessFaultKind;
@@ -116,6 +117,12 @@ export interface HarnessFault {
  */
 export function harnessFaultOf(run: ClassifiableRun): HarnessFault | null {
   const t = run.transcript ?? "";
+  if (run.observerError) {
+    return {
+      kind: "observer-polling-failed",
+      detail: `the harness could not observe application state reliably: ${run.observerError}`,
+    };
+  }
   // ORDER IS PRESENTATION ONLY — every branch below is equally fatal and
   // produces the same `harness-error`. The agent-blocking fault is reported
   // first because it is the one that explains what the AGENT did; the compose
@@ -275,6 +282,10 @@ export interface ClassifiableRun {
   // (an older caller, or a watcher that could not tell) is NOT evidence and
   // never classifies anything.
   containerLaunched?: boolean | null;
+  // A polling failure that remained active when observation ended. This is
+  // positive first-party evidence that the harness could not measure the run,
+  // never evidence that the onboarding instructions failed.
+  observerError?: string | null;
 }
 
 /**

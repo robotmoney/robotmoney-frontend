@@ -38,6 +38,7 @@ import {
   buildAgentPrompt,
   buildEvalOnboardingPrompt,
   buildMemberAgentArgv,
+  classifyOutcome,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_INFERENCE_MODEL,
   deriveSteps,
@@ -51,6 +52,7 @@ import {
   memberAgentSpawnEnv,
   ONBOARDING_STEPS,
   type OnboardingEvalResult,
+  createObserverPollTracker,
   redactSecrets,
   resolveModelConfig,
   retryIdentity,
@@ -282,6 +284,21 @@ describe("onboarding-eval pure helpers", () => {
     expect(isFullyOnboarded({ memberId: "m1", applyState: "claimed", claimedAt: "2026-07-29T00:00:00Z", onActiveRoster: false })).toBe(false);
     expect(isFullyOnboarded({ memberId: "m1", applyState: "claimed", claimedAt: "2026-07-29T00:00:00Z", onActiveRoster: true })).toBe(true);
   });
+
+  test("observer polling logs failure/recovery transitions and retains only persistent failures", async () => {
+    const events: string[] = [];
+    const tracker = createObserverPollTracker((message) => events.push(message));
+
+    expect(await tracker.poll("admin.members", async () => { throw new Error("HTTP 503"); })).toEqual({ ok: false });
+    expect(await tracker.poll("admin.members", async () => { throw new Error("HTTP 503"); })).toEqual({ ok: false });
+    expect(tracker.persistentError()).toBe("admin.members: HTTP 503");
+    expect(await tracker.poll("admin.members", async () => "member-1")).toEqual({ ok: true, value: "member-1" });
+    expect(tracker.persistentError()).toBeNull();
+    expect(events).toEqual([
+      "observer.poll.failed endpoint=admin.members error=HTTP 503",
+      "observer.poll.recovered endpoint=admin.members",
+    ]);
+  });
 });
 
 // ── GOLDEN member-agent argv (no Docker) ────────────────────────────────────
@@ -502,6 +519,7 @@ describe("runOnboardingEvalWithRetry", () => {
       timedOut: false,
       containerExitCode: 1,
       containerLaunched: true,
+      observerError: null,
       ...overrides,
     };
   }
@@ -724,6 +742,27 @@ describe("runOnboardingEvalWithRetry", () => {
       },
     });
     expect(result.admitted).toBe(false);
+    expect(calls).toBe(1);
+  });
+
+  test("a persistent observer failure is a non-retryable harness error", async () => {
+    let calls = 0;
+    const result = await runOnboardingEvalWithRetry({
+      repoRoot: "/tmp",
+      composeProject: "p",
+      backendUrl: "http://x",
+      adminToken: "t",
+      env: FUNDED_ENV,
+      backoffMsSchedule: [0],
+      runOnce: async () => {
+        calls++;
+        return fakeResult({
+          timedOut: true,
+          observerError: "application.status: GET /api/committee/apply/m1 -> 503",
+        });
+      },
+    });
+    expect(classifyOutcome(result)).toBe("harness-error");
     expect(calls).toBe(1);
   });
 
