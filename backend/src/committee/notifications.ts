@@ -83,6 +83,49 @@ export async function enqueueActivationNotification(
   return outboxId;
 }
 
+/** Persist seat_open emails and worker jobs for all unnotified waitlist entries. */
+export async function enqueueSeatOpenNotifications(
+  tx: DbHandle,
+): Promise<string[]> {
+  const from = config.committeeNotificationEmailFrom || process.env.COMMITTEE_NOTIFICATION_EMAIL_FROM;
+  if (!from) throw new Error("missing required env var: COMMITTEE_NOTIFICATION_EMAIL_FROM");
+
+  const waitlist = await tx<{ id: string; email: string }[]>`
+    SELECT id, email FROM committee_waitlist WHERE notified_at IS NULL FOR UPDATE`;
+  if (waitlist.length === 0) return [];
+
+  const outboxIds: string[] = [];
+  for (const w of waitlist) {
+    const payload = {
+      subject: "A seat has opened on the Robot Money Investment Committee",
+      text: [
+        "A seat is now open on the Robot Money Investment Committee.",
+        "Apply now at https://robotmoney.net/committee/apply",
+      ].join("\n\n"),
+      waitlistId: w.id,
+    };
+    const rows = await tx<{ id: string }[]>`
+      INSERT INTO committee_notification_outbox (kind, from_email, to_email, payload)
+      VALUES ('seat_open', ${from}, ${w.email}, ${tx.json(jsonValue(payload))})
+      RETURNING id`;
+    const outboxId = rows[0].id;
+    outboxIds.push(outboxId);
+    await tx`
+      INSERT INTO jobs (kind, payload, dedupe_key, scope_type, scope_id, requested_by)
+      VALUES (
+        'committee.send_seat_open_notification',
+        ${tx.json(jsonValue({ outboxId, waitlistId: w.id }))},
+        ${`committee:seat-open-notification:${outboxId}`},
+        'committee_waitlist',
+        ${w.id},
+        'system:seat_open'
+      )
+      ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`;
+    await tx`UPDATE committee_waitlist SET notified_at = now() WHERE id = ${w.id}`;
+  }
+  return outboxIds;
+}
+
 /** Send one persisted message. The queue retries thrown transport failures. */
 export async function deliverCommitteeNotification(
   outboxId: string,
@@ -91,7 +134,7 @@ export async function deliverCommitteeNotification(
   const row = (await sql<{
     from_email: string;
     to_email: string;
-    payload: ActivationPayload;
+    payload: { subject: string; text: string; waitlistId?: string };
     sent_at: Date | null;
   }[]>`
     SELECT from_email, to_email, payload, sent_at
@@ -118,5 +161,12 @@ export async function deliverCommitteeNotification(
     UPDATE committee_notification_outbox
     SET attempts = attempts + 1, sent_at = now(), last_error = NULL, updated_at = now()
     WHERE id = ${outboxId} AND sent_at IS NULL`;
+  if (row.payload?.waitlistId) {
+    await sql`
+      UPDATE committee_waitlist
+      SET notified_at = COALESCE(notified_at, now())
+      WHERE id = ${row.payload.waitlistId}`;
+  }
   return { sent: true };
 }
+

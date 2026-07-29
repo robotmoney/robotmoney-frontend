@@ -11,7 +11,8 @@
 // rollup), it composes those functions rather than duplicating them.
 import { sql, type DbHandle } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
-import { activateMember, aggregateSession as domainAggregateSession, assertRosterCapacity } from "./domain.ts";
+import { activateMember, aggregateSession as domainAggregateSession, assertRosterCapacity, COMMITTEE_ROSTER_CAP, countActiveMembersTx } from "./domain.ts";
+import { enqueueSeatOpenNotifications } from "./notifications.ts";
 
 type Actor = string;
 export const ADMIN_ACTOR = "admin";
@@ -259,12 +260,19 @@ export async function deactivateMemberAdmin(
     const row = (await tx`SELECT * FROM committee_members WHERE id = ${memberId} FOR UPDATE`)[0];
     if (!row) return err(404, "member not found");
     if (Number(row.version) !== expectedVersion) return err(409, "stale_version");
+    const wasActive = row.status === "active";
     const upd = await tx`
       UPDATE committee_members SET status = 'inactive', version = version + 1, updated_at = now()
       WHERE id = ${memberId} AND version = ${expectedVersion}
       RETURNING *`;
     if (upd.length === 0) return err(409, "stale_version");
     await tx`UPDATE committee_member_keys SET active = false WHERE member_id = ${memberId} AND active = true`;
+    if (wasActive) {
+      const activeCount = await countActiveMembersTx(tx);
+      if (activeCount < COMMITTEE_ROSTER_CAP) {
+        await enqueueSeatOpenNotifications(tx);
+      }
+    }
     await audit(actor, "member_deactivate", { memberId }, tx);
     return { ok: true, status: 200, member: toMemberAdmin(upd[0]) };
   });
