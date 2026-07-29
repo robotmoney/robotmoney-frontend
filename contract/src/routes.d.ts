@@ -35,6 +35,7 @@ export const ROUTES: {
     verifyToken: string;
     apply: string;
     applyStatus: string;
+    applicationStatus: string;
     claimChallenge: string;
     claimToken: string;
     register: string;

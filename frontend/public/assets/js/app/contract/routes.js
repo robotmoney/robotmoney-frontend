@@ -61,6 +61,7 @@ export const ROUTES = {
     verifyToken: "/api/committee/verify-token", // GET (member bearer) → { memberId }
     apply: "/api/committee/apply", // POST — public onboarding (recorded 'applied', inactive key)
     applyStatus: "/api/committee/apply/:id", // GET — public, redacted application status (applied/approved/claimed)
+    applicationStatus: "/api/committee/applications/:id/status", // GET — public, privacy-safe application status
     claimChallenge: "/api/committee/token-claim/challenge", // POST — opaque 10-minute key-proof challenge
     claimToken: "/api/committee/token-claim", // POST — first valid key proof returns the sole bearer token
     register: "/api/committee/register", // POST (privileged) — apply+activate shortcut for demo/E2E
