@@ -49,6 +49,14 @@ export function viewFor(pathname) {
   if (/^\/committee\/members\/[^/]+\/?$/.test(pathname)) {
     return `${VIEW_DIR}/committee/member.html`;
   }
+  // Public subject profile. The admin tree has had a subject detail page since
+  // #159; this is the reader-facing counterpart, and production robotmoney.net
+  // has published one per subject all along. Checked here (not by the catch-all)
+  // because /committee/subjects/<id> would otherwise resolve to a per-id
+  // fragment that does not exist and 404.
+  if (/^\/committee\/subjects\/[^/]+\/?$/.test(pathname)) {
+    return `${VIEW_DIR}/committee/subject.html`;
+  }
   if (/^\/committee\/takes\/[^/]+\/?$/.test(pathname)) {
     return `${VIEW_DIR}/committee/take.html`;
   }

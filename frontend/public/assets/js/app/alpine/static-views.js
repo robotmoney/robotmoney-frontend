@@ -115,6 +115,10 @@ function camelSubject(raw) {
     thesisBlurb: raw.thesis_blurb || raw.thesisBlurb,
     wallets: raw.wallets || [],
     structuralNotes: raw.structural_notes || raw.structuralNotes || [],
+    // The subject endpoint has always returned these; nothing mapped them, so
+    // every consumer saw `undefined` and rendered nothing. The public subject
+    // profile is the first surface that shows them.
+    nftContracts: raw.nft_contracts || raw.nftContracts || [],
     recommendationType: raw.recommendation_type || raw.recommendationType,
     linkedMemberId: raw.linked_member_id || raw.linkedMemberId,
   };
@@ -753,6 +757,222 @@ export function registerStaticViews(Alpine) {
     // agent to install the skill it had just used to get here, and the print
     // affordance existed to produce a keepsake of a celebration card that is no
     // longer a separate object on the page.
+  }));
+
+  // Public subject profile (/committee/subjects/:id). The reader-facing
+  // counterpart to the admin subject page: what portfolio is under review, what
+  // it holds, which wallets are tracked, and every session about it.
+  //
+  // Both endpoints this needs have been live all along — the session detail page
+  // already calls them for its own portfolio block — so this page is markup and
+  // shaping over an API that was already answering.
+  Alpine.data("subjectProfile", () => ({
+    ...helpers,
+    loading: true,
+    error: null,
+    subject: null,
+    snapshots: [],
+    snapshot: null,
+    sessions: [],
+    // How many days of history the concentration chart reads. The API returns
+    // every snapshot ever taken (311 on the demo stack), and a two-year stack of
+    // 1px columns says nothing a reader can act on.
+    windowDays: 90,
+    // Positions beyond this fold into "other" rather than adding a colour. Seven
+    // is the donut list's own cap on the session page; the two must agree or the
+    // same book reads as two different shapes across two pages.
+    topN: 7,
+    async init() {
+      const id = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
+      try {
+        this.subject = await api.get(path(ROUTES.committee.subject, { id })).then(camelSubject)
+          .catch(() => loadArchiveSubject(id));
+        if (!this.subject) throw new Error("Subject not found");
+        // Route-level SEO titleizes the last URL segment, which for a slug like
+        // "robotmoney-allocation" reads "Robotmoney Allocation". Name the tab
+        // after the subject once we know what it is actually called.
+        if (this.subject?.name) document.title = `${this.subject.name}: Robot Money Investment Committee`;
+        // Each side-fetch is guarded on its own: a subject with no snapshot yet
+        // still has sessions worth reading, and vice versa.
+        this.snapshots = await this.loadSnapshots(id);
+        this.snapshot = this.snapshots.length ? normalizeSnapshot(this.snapshots[this.snapshots.length - 1]) : null;
+        this.sessions = await this.loadSessions(id);
+      } catch (e) {
+        this.error = e.message || "Subject not found";
+      } finally {
+        this.loading = false;
+      }
+    },
+    async loadSnapshots(id) {
+      try {
+        const res = await api.get(path(ROUTES.committee.subjectSnapshots, { id }));
+        const list = (res.snapshots || res || []).filter(Boolean);
+        return list.slice().sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+      } catch (_) {
+        return [];
+      }
+    },
+    // Sessions carry their synthesis only on the detail endpoint, so the list is
+    // filtered to this subject first and only the visible page of it is expanded.
+    // Same shape as memberProfile.scanSessions: guarded per session, with the
+    // shipped static archive behind it for dates that predate the live API.
+    async loadSessions(id) {
+      let index = [];
+      try {
+        index = ((await api.get(ROUTES.committee.sessions)).sessions || [])
+          .filter((s) => s.subjectId === id && s.state === "published")
+          .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+          .slice(0, 20);
+      } catch (_) {
+        return [];
+      }
+      return Promise.all(index.map(async (s) => {
+        try {
+          const detail = await api.get(path(ROUTES.committee.session, { date: s.date, subject: s.subjectId }));
+          return { ...s, synthesis: camelSession(detail.session || detail).synthesis, takes: (detail.takes || []).length };
+        } catch (_) {
+          if (archivePreferred(s.date)) {
+            try {
+              const archive = await loadArchiveSession(s.date, s.subjectId);
+              return { ...s, synthesis: archive.session?.synthesis || "", takes: (archive.takes || []).length };
+            } catch (_) { /* fall through */ }
+          }
+          return { ...s, synthesis: "", takes: 0 };
+        }
+      }));
+    },
+    recordStats() {
+      const rows = this.positionRows();
+      return {
+        total: this.snapshot ? this.fmtUsd(this.snapshot.totalValueUsd) : "—",
+        top: rows.length ? `${rows[0].token} ${this.fmtPct1(rows[0].share)}` : "—",
+        sessions: this.sessions.length || "0",
+      };
+    },
+    positionRows() {
+      const total = this.snapshot?.totalValueUsd || 0;
+      return (this.snapshot?.positions || [])
+        .map((p) => ({ ...p, share: total > 0 ? p.value_usd / total : 0 }))
+        .sort((a, b) => b.share - a.share);
+    },
+    donutStyle(p, i) {
+      const colors = ["#00e5ff", "#5fb3a1", "#10b981", "#e8a640", "#ff7a29", "#7e889e", "#6ee7b7"];
+      return `--c:${colors[i % colors.length]};--p:${this.clampPct((p.share || 0) * 100)};`;
+    },
+    // The snapshots inside the chart window, oldest first.
+    windowed() {
+      return this.snapshots.slice(-this.windowDays);
+    },
+    // Which tokens get their own band. Ranked by share on the most recent day, so
+    // the legend and the newest column of the chart always agree.
+    topTokens() {
+      return this.positionRows().slice(0, this.topN).map((p) => p.token);
+    },
+    legendRows() {
+      const rows = this.positionRows().slice(0, this.topN);
+      const rest = this.positionRows().slice(this.topN).reduce((sum, p) => sum + (p.share || 0), 0);
+      return rest > 0.001 ? [...rows, { token: "other", share: rest }] : rows;
+    },
+    spanLabel() {
+      const w = this.windowed();
+      if (w.length < 2) return "";
+      return `${w[0].date} → ${w[w.length - 1].date} · ${w.length} days`;
+    },
+    // Share-of-NAV over time, one LINE per position. A holdings table is a single
+    // day; the question a reader has is whether the book is concentrating or
+    // diversifying, and only a series answers that.
+    //
+    // Lines rather than a stacked area, deliberately. This palette leads with
+    // cyan, and the covenant is explicit that cyan is a line and never a mass —
+    // a stacked band chart turns rank-1 into a ~770x140px cyan fill, which is
+    // the largest covenant breach on the page and reads as "cyan means value".
+    // Drawn as strokes it is covenant-clean AND the palette can stay identical to
+    // the donut lists below, so a colour means the same token everywhere on the
+    // page. Percentage share also composes better as lines: the reader is asking
+    // whether one line is climbing, not what the stack sums to (always 100%).
+    concentrationLines() {
+      const rows = this.windowed();
+      if (rows.length < 2) return "";
+      const tokens = this.topTokens();
+      if (!tokens.length) return "";
+      const colors = ["#00e5ff", "#5fb3a1", "#10b981", "#e8a640", "#ff7a29", "#7e889e", "#6ee7b7"];
+      const W = 640, H = 132, padB = 16, padT = 6, padL = 26;
+      const plotH = H - padB - padT;
+      const plotW = W - padL;
+      const stepX = rows.length > 1 ? plotW / (rows.length - 1) : plotW;
+      const shareOf = (snap, token) => {
+        const total = Number(snap.total_value_usd ?? snap.totalValueUsd ?? 0);
+        if (!(total > 0)) return 0;
+        const hit = (snap.positions || []).find((p) => p.token === token);
+        return hit ? Number(hit.value_usd || 0) / total : 0;
+      };
+      // The y-domain is a fixed 0-100% of NAV rather than fitted to the data, so
+      // the same line height means the same concentration on every subject and
+      // two books can be compared by eye. Ticks at 100 and 50 say so out loud —
+      // without them a flat run of lines low in the frame reads as a broken
+      // chart rather than as a diversified book. 50% is the line a single
+      // position crosses when it becomes the majority of the book.
+      const tick = (frac, label, dashed) => {
+        const y = padT + plotH - frac * plotH;
+        return `<line x1="26" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}" stroke="var(--color-border)" stroke-width="1"${dashed ? ' stroke-dasharray="3 4"' : ''}/>
+          <text x="0" y="${(y + 3).toFixed(1)}" fill="var(--color-text-dim)" font-size="8.5" font-family="ui-monospace,monospace">${label}</text>`;
+      };
+      const grid = tick(1, "100%", false) + tick(0.5, "50%", true);
+      const lines = tokens.map((token, i) => {
+        const pts = rows.map((snap, x) => {
+          const y = padT + plotH - this.clampPct(shareOf(snap, token) * 100) / 100 * plotH;
+          return `${(padL + x * stepX).toFixed(2)},${y.toFixed(2)}`;
+        }).join(" ");
+        return `<polyline points="${pts}" fill="none" stroke="${colors[i % colors.length]}" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+      }).join("");
+      const axis = `<line x1="${padL}" y1="${padT + plotH}" x2="${W}" y2="${padT + plotH}" stroke="var(--color-border)" stroke-width="1"/>`;
+      const ends = `<text x="${padL}" y="${H - 3}" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[0].date || "")}</text>
+        <text x="${W}" y="${H - 3}" text-anchor="end" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[rows.length - 1].date || "")}</text>`;
+      return `<svg viewBox="0 0 ${W} ${H}" role="img"
+        aria-label="Each top position as a share of net asset value, ${this.escapeHtml(rows[0].date || "")} to ${this.escapeHtml(rows[rows.length - 1].date || "")}">
+        ${grid}${lines}${axis}${ends}</svg>`;
+    },
+    // Wallets come off the subject manifest where the operator declared them, and
+    // off the latest snapshot where the indexer actually read them. Prefer the
+    // manifest, fall back to the snapshot, and de-duplicate by address.
+    trackedWallets() {
+      const raw = (this.subject?.wallets?.length ? this.subject.wallets : this.snapshot?.wallets) || [];
+      const seen = new Set();
+      return raw.filter(Boolean).map((w) => ({
+        label: w.label || w.name || "",
+        chain: w.chain || "",
+        address: w.address || w.addr || "",
+      })).filter((w) => {
+        const key = `${w.chain}:${w.address}`.toLowerCase();
+        if (!w.address || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    },
+    nftContracts() {
+      return (this.subject?.nftContracts || []).filter(Boolean).map((n) => ({
+        name: n.name || n.label || String(n.address || "").slice(0, 10),
+        chain: n.chain || "",
+      }));
+    },
+    // Tolerates both shapes the field arrives in: a list of notes, or a single
+    // paragraph from an older manifest.
+    structuralNotes() {
+      const raw = this.subject?.structuralNotes;
+      if (Array.isArray(raw)) return raw.filter(Boolean);
+      return raw ? [raw] : [];
+    },
+    takeCountLabel(s) {
+      const n = Number(s?.takes || 0);
+      return n === 1 ? "1 take" : `${n} takes`;
+    },
+    truncAddress(addr) {
+      const a = String(addr || "");
+      return a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
+    },
+    hostOf(url) {
+      try { return new URL(url).host.replace(/^www\./, ""); } catch (_) { return String(url || ""); }
+    },
   }));
 
   Alpine.data("memberProfile", () => ({
