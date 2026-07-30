@@ -278,6 +278,11 @@ export async function seed(): Promise<void> {
     VALUES ('vault.sample_adapters', ${sql.json(jsonValue({}))}, 'vault.sample_adapters:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
   `;
+  await sql`
+    INSERT INTO jobs (kind, payload, dedupe_key)
+    VALUES ('vault.sample_share_price', ${sql.json(jsonValue({}))}, 'vault.sample_share_price:coldstart')
+    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+  `;
   console.log("enqueued cold-start sampler jobs (idempotent on dedupe_key)");
 
   // One-time prop-wallet history backfill (issue #84): seed the pre-launch
