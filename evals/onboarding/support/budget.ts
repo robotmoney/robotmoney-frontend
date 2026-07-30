@@ -1,5 +1,7 @@
-// The isolated onboarding eval suite's COST MODEL, in one place
-// (docs/architecture.md §11.3).
+// The onboarding eval suite's COST MODEL, in one place (docs/architecture.md
+// §11.3) — the four ISOLATED claims (runtime, skill-install, toolchain,
+// keygen-signing) and the sampled ADMISSION sweep both derive their workflow
+// timeouts from here.
 //
 // WHY THIS FILE EXISTS
 // A workflow's `timeout-minutes` and a Bun test's in-test timeout are two
@@ -7,11 +9,13 @@
 // repo shows what happens when nothing does: a step killed at a lower bound
 // than the code inside it permitted, or an in-test timeout that ties (races)
 // the CI kill instead of firing first. GitHub's kill is a SIGKILL of the runner
-// step — no `not-measured` classification, no explanation, no final assistant
-// message: the exact diagnostics an isolated layer exists to produce are the
-// first thing lost.
+// step — no `not-measured`/scorecard diagnosis, no explanation, no final
+// assistant message: the exact diagnostics an isolated claim or the admission
+// sweep exists to produce are the first thing lost.
 //
-// THE INVARIANT, which scripts/tests/unit/onboarding-eval-budget.test.ts pins:
+// THE INVARIANT, which scripts/tests/unit/onboarding-eval-budget.test.ts and
+// scripts/tests/unit/admission-eval-nightly-workflow.test.ts each pin for
+// their own workflow:
 //
 //     in-test timeout  <  CI step timeout  <  CI job timeout
 //
@@ -22,9 +26,14 @@
 // A NOTE ON "CHEAP"
 // The isolated job is cheap in EXPECTATION (~45 min: four claims, no retries)
 // and expensive only in the pathological case where every non-runtime claim is
-// rate-limited twice (~181 min). The nightly must be budgeted for the second
-// number while being described by the first.
+// rate-limited twice (~181 min). The admission sweep, by contrast, is never
+// retried (a refusal is the datum it measures) so its cost is a plain product:
+// SAMPLE_COUNT samples at up to DEFAULT_TIMEOUT_MS each. Both nightlies must be
+// budgeted for their own worst case while being described by their own
+// expectation.
 import { ISOLATED_LAYER_TIMEOUT_MS, MAX_ATTEMPTS, RATE_LIMIT_BACKOFF_MS } from "./run.ts";
+import { SAMPLE_COUNT } from "./scorecard.ts";
+import { DEFAULT_TIMEOUT_MS } from "../../../scripts/lib/onboarding-eval.ts";
 
 const MINUTE_MS = 60_000;
 
@@ -72,6 +81,21 @@ export const ISOLATED_JOB_WORST_CASE_MS =
   claimWorstCaseMs(RUNTIME_RUN_TIMEOUT_MS) +
   3 * claimWorstCaseMs(ISOLATED_LAYER_TIMEOUT_MS);
 
+// Bringing up the `core` stack (postgres + api) once for the whole sweep and
+// waiting for it to become healthy, before the first sample runs.
+export const STACK_BRINGUP_BUDGET_MS = 10 * MINUTE_MS;
+
+// The admission sweep's `beforeAll` runs the whole thing. Samples are
+// SEQUENTIAL and are never retried (runOnboardingEval, not …WithRetry — a
+// refusal is the datum the admission eval exists to measure), so this is a
+// plain product, not a retry cycle: every sample pays its own full
+// DEFAULT_TIMEOUT_MS worst case, plus one image build and one stack bring-up
+// for the whole job.
+export const SWEEP_TIMEOUT_MS = SAMPLE_COUNT * DEFAULT_TIMEOUT_MS + IMAGE_BUILD_BUDGET_MS + STACK_BRINGUP_BUDGET_MS;
+
+// The admission-eval-nightly job's own worst case: one sweep, nothing else.
+export const ADMISSION_JOB_WORST_CASE_MS = SWEEP_TIMEOUT_MS;
+
 // CI backstops sit ABOVE the in-test bound so the in-test timeout always wins.
 export const CI_STEP_MARGIN_MS = 10 * MINUTE_MS;
 export const CI_JOB_MARGIN_MS = 20 * MINUTE_MS;
@@ -94,3 +118,4 @@ export function jobBudget(worstCaseMs: number): JobBudget {
 }
 
 export const ISOLATED_JOB_BUDGET = jobBudget(ISOLATED_JOB_WORST_CASE_MS);
+export const ADMISSION_JOB_BUDGET = jobBudget(ADMISSION_JOB_WORST_CASE_MS);

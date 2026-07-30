@@ -1,0 +1,92 @@
+# Nightly admission eval — the sampled onboarding sweep (issue #280).
+#
+# WHY THIS WORKFLOW EXISTS
+# The headline product question is not "did one agent get admitted" but "what
+# RATE of vanilla, keyless-capable agents get admitted" — on 2026-07-25 the
+# identical canonical prompt was refused in roughly 1 sample in 5, a demo
+# admitted zero members because of it, and no instrument in this repo could
+# see it. `evals/onboarding/admission.eval.test.ts` runs the whole R4->R8
+# onboarding SAMPLE_COUNT times against a real `core` stack (postgres + api),
+# each sample with a fresh identity and a fresh container, and scores the
+# sweep with `evals/onboarding/support/scorecard.ts`.
+#
+# CI taxonomy class: heavy — sweep-only, so this workflow carries NO
+# `pull_request` trigger. The job/step timeouts below are DERIVED from
+# evals/onboarding/support/budget.ts's `ADMISSION_JOB_BUDGET` (itself derived
+# from `SWEEP_TIMEOUT_MS`), never hand-written literals —
+# scripts/tests/unit/admission-eval-nightly-workflow.test.ts recomputes the
+# same numbers from that module and pins them against this file, plus the
+# trigger set, CI_CLASS, run step, and the scorecard upload's `if: always()`.
+#
+# Distinct from onboarding-evals-nightly.yml (issue #279's four ISOLATED,
+# serverless claims — runtime/skill-install/toolchain/keygen-signing, which
+# bisect the funnel but boot no server): this workflow is the ONE integrated,
+# server-observed measurement — admission itself, sampled.
+name: admission-eval-nightly
+env:
+  CI_CLASS: heavy
+on:
+  schedule:
+    - cron: "42 5 * * *" # nightly 05:42 UTC — offset from onboarding-evals-nightly's 05:18 and committee-opencode-nightly's 04:37 so the three heavy suites don't contend for the same runner
+  workflow_dispatch: {}
+
+jobs:
+  admission-eval:
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    # Derived from budget.ts's ADMISSION_JOB_BUDGET.jobTimeoutMinutes — a CI
+    # backstop ABOVE every in-test timeout, never the primary bound.
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Install root tooling
+        run: bun install --frozen-lockfile
+      - name: Set up Blacksmith Docker builder
+        uses: useblacksmith/setup-docker-builder@v1
+      # Real inference, always (D22 rule 2 / §11.3 E2): no mock, no injection
+      # seam, no conditional skip. A missing OPENCODE_API_KEY, a missing Docker
+      # daemon, or missing egress fails this step loudly rather than passing by
+      # absence — see scripts/lib/onboarding-eval.ts's resolveModelConfig.
+      - name: Run the admission eval (sampled onboarding sweep)
+        run: bun run eval:onboarding:admission
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        # Derived from budget.ts's ADMISSION_JOB_BUDGET.stepTimeoutMinutes —
+        # strictly above the in-test SWEEP_TIMEOUT_MS bound, so the in-test
+        # bound always fires first and a SIGKILL can never eat the scorecard.
+        timeout-minutes: 180
+      # The scorecard and every sample's run log, uploaded on BOTH green and
+      # red outcomes — a red sweep's per-outcome counts are the only thing
+      # that distinguishes a product regression from a provider outage, and
+      # they live only in these files.
+      - name: Upload admission scorecard and run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: admission-eval-scorecard
+          path: |
+            .agents/onboarding-eval-scorecard.json
+            .agents/onboarding-eval-run-logs/
+          if-no-files-found: warn
+          retention-days: 14
+      # Containers/networks/volumes ONLY — never images, which is what keeps
+      # this nightly's Docker build cache warm across runs. The admission
+      # sweep's single "eval" role project (scripts/stack/naming.ts's
+      # `stackProjectName("eval", environment)`) is scoped by the CI-class
+      # prefix so a killed step's leaked resources are still reclaimed even
+      # though the in-test `stack.down()` never ran.
+      - name: Tear down any leaked rm_ci_eval_* containers/networks/volumes (image cache preserved)
+        if: always()
+        run: |
+          set -u
+          echo "::group::rm_ci_eval_* containers"
+          docker ps -a --filter "name=rm_ci_eval_" -q | xargs -r docker rm -f
+          echo "::endgroup::"
+          echo "::group::rm_ci_eval_* networks"
+          docker network ls --filter "name=rm_ci_eval_" -q | xargs -r docker network rm
+          echo "::endgroup::"
+          echo "::group::rm_ci_eval_* volumes"
+          docker volume ls --filter "name=rm_ci_eval_" -q | xargs -r docker volume rm
+          echo "::endgroup::"
