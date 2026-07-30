@@ -1157,3 +1157,132 @@ original ok:false-on-price-failure behavior unchanged.
   does not grow.
 
 ---
+
+## D25 — No `workflow_run` fan-in gate for now; per-workflow required checks stand (closes the issue #348 investigation)
+
+**Decision.** Do not build a `workflow_run`-based (or any other) fan-in
+aggregator to replace the polling-based `ci-gate.yml`/`ci-gate.ts` that PR
+#316 shipped and then removed (D-addendum, "No fan-in gate" in
+[architecture.md](./architecture.md#test-eval-and-tooling-layout)). The
+status quo — each real-work workflow (`unit`, `repo-guards`, `contract`,
+`frontend`, `backend`, `research-pipeline`, `integration`,
+`onboarding-eval-rails`, `e2e`, `docs-lint`) required directly in branch
+protection — is already the structurally sounder replacement this issue was
+opened to look for, and it is already implemented and load-bearing today
+(every workflow's own header states it, e.g. `.github/workflows/unit.yml`,
+`.github/workflows/backend.yml`). This decision closes issue #348's
+investigation without writing any new CI code.
+
+**Why direct-required is sound on its own, without a gate.** Every
+path-narrowed domain (`PATH_GATED_WORKFLOWS` in
+`scripts/tests/unit/ci-workflows-structure.test.ts`) skips via a **job-level**
+`if:`, never a workflow-level `on.paths`/`paths-ignore`. A job-level skip
+still reports a real `skipped` conclusion to the Checks API, so a required
+context is always concluded — branch protection never hangs waiting on a
+context a path filter silently ate, which was the entire deadlock risk a
+fan-in was originally shielding against. `unit.yml` and `repo-guards.yml`
+carry no path filter at all and run unconditionally. Nothing about this
+property depends on there being an aggregator in front of it.
+
+**Tradeoff analysis: `workflow_run` vs. the retired polling gate vs. today's direct-required design.**
+
+- **Polling (`ci-gate.ts`, removed).** `gh run list --commit $SHA`, retried
+  with a sleep loop, inside a job that starts *concurrently* with its
+  siblings because GitHub Actions has no native `needs:` across workflow
+  files. This is where the PR #316 production incident came from: on a
+  `pull_request` event bare `github.sha`/`$GITHUB_SHA` resolves to GitHub's
+  synthetic PR-merge commit, not the real head commit every sibling run is
+  filed under, so the poll matched zero runs and burned its ~180-minute
+  budget before failing even though every sibling had already succeeded
+  (fixed once, by resolving `github.event.pull_request.head.sha`, but the
+  owner chose to remove the mechanism rather than keep a
+  cross-workflow-polling design at all — this repo has exactly one
+  self-hosted runner shared by every open PR, so queuing alone made the
+  worst case observed ~35 minutes before the gate job even started).
+- **`workflow_run`.** Genuinely removes the SHA-resolution bug class:
+  `github.event.workflow_run.head_sha` is unambiguous, and the trigger is
+  event-driven rather than polled. But it trades that bug away for three new
+  problems this issue asked to weigh, and none of them are free:
+  1. `workflow_run: types: [completed]` fires **once per completed sibling**,
+     not once when the full set is done, so the gate's own job still has to
+     re-derive "has everything I need reported in for this exact SHA" on
+     every invocation — essentially `ci-gate.ts`'s `evaluateGate()` logic
+     again, just re-triggered nine times per push instead of once, each of
+     which must independently query the other eight siblings' conclusions
+     for that `head_sha` (via `gh api`/Checks API) since `workflow_run`'s own
+     payload only describes the one workflow that completed.
+  2. A `workflow_run`-triggered job is not "in" the PR's `pull_request` event
+     graph, so it cannot report through the ordinary job-status mechanism the
+     required-check list already reads today (a job's own `conclusion`
+     wired to a required context) — it has to open a Check Run against
+     `head_sha` explicitly (`gh api repos/.../check-runs` or
+     `actions/github-script`), a second API surface with its own auth scope,
+     idempotency (multiple firings must not create nine separate check
+     runs), and retry-on-failure behavior to get right and test.
+  3. Whether a workflow whose only job is job-level-skipped fires
+     `workflow_run` with a `completed`/`skipped` conclusion (rather than not
+     firing, or firing with a different shape) is exactly the kind of
+     platform-behavior assumption that caused the original SHA bug — it was
+     not verified as part of this investigation and would need a planted
+     spike (a throwaway workflow pair in a scratch branch) before committing
+     any real implementation to it, not just documentation review.
+- **Direct-required (today).** No aggregator, no second API surface, no
+  re-derivation problem — branch protection's own required-check list *is*
+  the fan-in, and GitHub's own semantics (a required context must conclude,
+  `skipped` counts as concluded) do the waiting. The cost paid instead is
+  administrative: the branch-protection required-check list itself must be
+  kept in sync with the workflow set by hand in the GitHub UI (documented as
+  an explicit out-of-band step in architecture.md), and that list has no
+  test coverage from inside this repo the way a single `ci-gate` context
+  would.
+
+**Residual gap, accepted rather than closed: invariant 4 is now static, not live.** `ci-gate.ts` had four invariants; the one this decision leaves genuinely
+weaker is invariant 4 — "a domain reported `skipped` despite the diff
+matching its own changed-file predicate," computed at runtime from the
+actual diff and the actual reported outcome for that specific PR.
+`scripts/tests/unit/ci-gate-path-filters.test.ts` (issue #276) replaces this
+with a **static** check: it extracts each workflow's real, live
+`dorny/paths-filter` `filters:` block and asserts a fixture table of paths
+classifies exactly as CI would, with a planted-typo red control proving the
+table can catch a broken pattern. That catches a hand-authored regression
+in a filter pattern (the same class of bug the fixture table's red control
+demonstrates), but it does **not** re-verify, per actual PR, that the
+concrete outcome GitHub recorded for a concrete diff matches what the
+filter should have produced — it is a test on the workflow authoring, not a
+gate on the PR's own CI run. This is judged an acceptable, deliberate gap:
+nothing in this repo's CI history has yet surfaced a case the static test
+would have missed, and closing it fully would mean rebuilding some version
+of the runtime cross-check this decision just declined to build. If a real
+incident of that shape occurs, revisit as a new, narrowly-scoped issue
+rather than reopening this one.
+
+**Recommendation for if/when a fan-in is needed again.** Prefer
+`workflow_run` over reviving polling — it is the structurally sounder
+mechanism between those two — but do not build either speculatively.
+Concrete triggers that would justify it: branch protection's required-check
+list growing past what's administratively manageable by hand, or a real
+need for a single external-facing "CI" status (e.g. a status badge or a
+third-party integration that can only watch one context). Neither exists
+today.
+
+**Alternatives rejected.**
+- **Build the `workflow_run` gate now, since this issue asked to investigate
+  it.** Rejected: investigating a mechanism and deciding to build it are
+  different questions, and the tradeoff analysis above shows real,
+  unresolved implementation risk (point 3) that a documentation-only pass
+  cannot close. Building it without a platform-behavior spike would repeat
+  the exact mistake — shipping an unverified GitHub Actions cross-workflow
+  assumption straight into a required check — that produced the PR #316
+  incident this issue exists because of.
+- **Revive the polling design with the SHA fix already known to work.**
+  Rejected: the SHA bug was only the trigger for removing it; the owner's
+  stated reason for removing the mechanism entirely was to stop depending on
+  cross-workflow `gh run list` polling going forward, not merely to patch
+  that one bug. Reviving it would relitigate a decision already made in
+  PR #316's own review.
+- **Rebuild invariant 4 as a live runtime check without the rest of
+  `ci-gate.ts`.** Rejected as premature: doing so still requires either
+  polling (the mechanism just rejected) or `workflow_run` (not yet spiked),
+  so it inherits the same two open problems rather than avoiding them.
+
+---

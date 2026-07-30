@@ -156,10 +156,15 @@ succeeded. That specific bug was fixed (resolving `GITHUB_SHA` from
 owner's final decision was to remove the fan-in mechanism entirely rather than
 keep a cross-workflow `gh run list`-polling design going forward, and to
 require each real-work workflow directly instead — accepted as safe per the
-job-level-skip property above. Issue #348 tracks investigating a structurally
-sounder fan-in replacement (likely `workflow_run`-based, avoiding the
-polling-for-an-external-commit class of bug entirely) for if/when one is
-needed again. Flipping the actual branch-protection required-check list to
+job-level-skip property above. Issue #348 tracked investigating a
+structurally sounder fan-in replacement; [decision D25](./decisions.md#d25--no-workflow_run-fan-in-gate-for-now-per-workflow-required-checks-stand-closes-the-issue-348-investigation)
+concluded that today's direct-required design already *is* that replacement,
+declined to build a `workflow_run` gate speculatively, and recorded the
+tradeoff analysis (including why `workflow_run` would still be the right
+mechanism to reach for if a fan-in is ever needed again) plus the one
+residual gap it leaves open (invariant 4 is now a static filter-pattern test,
+not a live per-PR runtime check). Flipping the actual branch-protection
+required-check list to
 list these workflows individually (`unit`, `backend`, `contract`, `frontend`,
 `integration`, `e2e`, `repo-guards`, `research-pipeline`,
 `onboarding-eval-rails`, `docs-lint`) is an out-of-band administrative step in
