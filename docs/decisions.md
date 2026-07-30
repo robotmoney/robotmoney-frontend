@@ -1087,3 +1087,73 @@ rots.
   within their package, the cost of the divergence is a small lookup, and the
   migration is broad and touches every import path. Not worth it absent another
   reason to touch those files.
+
+---
+
+## D24 — Postgres as the indexer of record for vault-adapter and wallet-sleeve samples (refines D15/D17)
+
+**Decision.** Finish the "worker schedule, never the request path" rule that
+D16 already established for wallet-balances (§10.1) for the two remaining
+request-time `eth_call` feeds: `/api/dashboards/vault-economics`'s per-adapter
+balances and `/api/dashboards/wallet-sleeves`'s per-wallet holdings (issue
+#294). Two new tables, migration `0021_chain_indexer_samples.sql`:
+`wallet_sleeve_samples` (`UNIQUE (sample_date, wallet_address, symbol)`) and
+`vault_adapter_samples` (`UNIQUE (vault_address, adapter_address, sample_hour)`),
+upserted by two new worker handlers (`sampleWalletSleeves`,
+`sampleVaultAdapters`, both boot-time one-shot enqueued mirroring
+`wallet.sample_balances`'s cold start). `getWalletSleeves()` and
+`fetchVaultEconomics()` are rewritten to read exclusively from Postgres —
+**zero Base RPC and zero third-party price requests on either request path**.
+`stale` is redefined per feed as `(now - observedAt) > freshness budget OR the
+backing sample's own provenance is not 'live'`; both DTOs gain per-row
+`observedAt`/`balanceObservedAt` fields so a consumer can see exactly how old a
+served value is, never just a boolean. An executed guard
+(`scripts/tests/unit/no-client-side-feeds.test.ts`) now fails CI if any file
+under `frontend/public/` ever issues a chain-RPC or third-party-feed request,
+with a planted-violation control proving the guard is not vacuous.
+
+**Why.** The root-cause investigation
+(`docs/archive/allocation-data-root-causes.md`) found `/allocation` intermittently
+rendering `—` across the Vault TVL and Wallet Holdings (Sleeves) tables not
+because of a frontend bug but because `vault-economics.ts` and
+`wallet-sleeves.ts` still performed request-time Base RPC `eth_call`s and
+degraded to nulls whenever the public node throttled — the same quota pressure
+tracked by #285/#286/#287. Two dimensions had **no persisted home at all**:
+per-wallet sleeve holdings (`wallet_balance_samples` has no wallet dimension)
+and per-adapter vault balances (never persisted anywhere). D16 already proved
+the fix for wallet-balances: move the chain read to a scheduled sampler and
+serve the request path purely from the last-persisted row. This decision
+applies that same shape to the two remaining feeds rather than inventing a
+different one, so "the browser never calls a data feed" becomes an executed
+guard instead of a documented intention that held for one feed out of three.
+
+**Explicitly preserved boundary.** `valueLeg` (`chain/wallet-valuation.ts`)'s
+default `priceReader` parameter stays `providerWalletPriceReader` — the
+sampler that needs the persisted-fallback behavior
+(`persistedFallbackWalletPriceReader`, used when a live price-provider read
+fails) passes it **explicitly** at its own call site
+(`sampleWalletSleeves`, `backend/src/worker/handlers/wallet.ts`), not via
+`valueLeg`'s default. `wallet-balances.ts::valueAsset` (the out-of-scope
+`/api/dashboards/wallet-balances` request path, fed by `sampleWalletBalances`)
+calls `valueLeg` with no reader argument and must keep inheriting the
+original ok:false-on-price-failure behavior unchanged.
+
+**Rejected.**
+- **A per-wallet/per-adapter degrade store instead of a full sampler.** The
+  live-data contract (§ Live-data contract) already anticipated this shape for
+  wallet-sleeves ("Postgres: none authoritative … optional per-wallet degrade
+  store is out of scope") when the feed was still request-time RPC; once a
+  scheduled sampler exists anyway, a degrade-only store adds a second
+  persistence path for no benefit over just making the sampler's table
+  authoritative.
+- **Backfilling historical per-wallet/per-adapter series before the first
+  sampler run.** Out of scope — the indexer accumulates forward only, same as
+  every other samples table in this repo (`wallet_balance_samples`,
+  `vault_share_price_history`).
+- **Weakening the cold-boot demo-readiness gate to tolerate the new samplers'
+  empty-table window.** Ratified at intake (2026-07-28): the gate is not
+  weakened; both new samplers get the same boot-time one-shot enqueue the
+  existing wallet-balances sampler already relies on, and `ALLOWED_STALE_LEGS`
+  does not grow.
+
+---

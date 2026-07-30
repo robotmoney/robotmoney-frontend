@@ -1068,8 +1068,15 @@ brought the prop-wallet valuation feed into scope the same way (§10.1). Decisio
 cron `15 */6 * * *`, persisted via migration `0015_buyback_swaps.sql`), token
 metrics (`/token-metrics`), per-wallet sleeves (`/wallet-sleeves`), and the
 `allocation_framework` read are all live endpoints now — nothing of the
-original out-of-scope line remains static. The shared endpoint contract (DTOs,
-provenance fields, degrade rules) those feeds were built against is the
+original out-of-scope line remains static. Decision
+[D24](./decisions.md#d24--postgres-as-the-indexer-of-record-for-vault-adapter-and-wallet-sleeve-samples-refines-d15d17)
+(issue #294) then finished the "worker schedule, never the request path" rule
+(established for wallet-balances below) for the two remaining request-time
+`eth_call` feeds: vault-economics' per-adapter balances and wallet-sleeves'
+per-wallet holdings now read exclusively from Postgres (`vault_adapter_samples`,
+`wallet_sleeve_samples`) — **zero Base RPC and zero third-party price requests**
+on either request path. The shared endpoint contract (DTOs, provenance fields,
+degrade rules) those feeds were built against is the
 [live-data contract section](#live-data-contract--4-new-dashboard-endpoints).
 
 - **`backend/src/chain/base-rpc-client.ts`** — a minimal JSON-RPC client and,
@@ -1084,14 +1091,26 @@ provenance fields, degrade rules) those feeds were built against is the
   `vault-economics.ts`, `wallet-balances.ts`, `buyback-logs.ts`,
   `token-metrics.ts`, and `wallet-sleeves.ts`. Keeps the buildless-backend
   dependency footprint (§2) unchanged.
-- **`backend/src/chain/vault-economics.ts`** — reads the vault's
-  `totalAssets()`/`totalSupply()` (→ `sharePrice = totalAssets / totalSupply`,
-  `null` iff `totalSupply = 0`), the vault's idle USDC balance
-  (`USDC.balanceOf(vault)`), and every **configured** adapter's `totalAssets()`
-  (an unconfigured/placeholder adapter is never `eth_call`'d — see below),
-  behind a 30s in-process cache. On any RPC failure it returns
-  `stale: true` with the **last-persisted share-price sample** (or `null`) —
-  never a fabricated number, never a 5xx.
+- **`backend/src/chain/vault-economics.ts`** (issue #294: rewritten to make
+  Postgres the sole request-path source) — `fetchVaultEconomics()` makes
+  **ZERO Base RPC calls**. Core totals (`tvlUsd`, `sharePrice`, `totalShares`)
+  read the latest `vault_share_price_history` row; every **configured**
+  adapter's `balanceUsd` (an unconfigured/placeholder adapter is never
+  `eth_call`'d, at sample time or request time — see below) reads the latest
+  `vault_adapter_samples` row for that `(vault_address, adapter_address)`;
+  `idleUsdc` is derived as `tvlUsd - Σ adapter balanceUsd` (never its own
+  chain read) once every configured adapter has a value. `stale` is true when
+  the core row or any configured adapter's row is missing, itself marked
+  non-`'live'` provenance, or older than
+  `VAULT_ECONOMICS_FRESHNESS_BUDGET_MS` (1 hour) — never a fabricated number,
+  never a 5xx. The **sampling** side (`vault.sample_share_price`,
+  `vault.sample_adapters` worker jobs, `backend/src/worker/handlers/vault.ts`)
+  is the only code that still performs the `totalAssets()`/`totalSupply()`/
+  per-adapter `eth_call`s, each independently isolated (`Promise.allSettled`)
+  so one adapter's failed read never erases another's persisted value, and a
+  thrown read persists no row rather than a fabricated zero. Both jobs get a
+  boot-time one-shot enqueue mirroring `wallet.sample_balances`'s cold start.
+  A 30s in-process cache still sits in front of the request-path reads.
 - **Config, not on-chain discovery** — `config.vault` (`backend/src/config.ts`)
   holds the vault + USDC addresses (already documented publicly at
   `frontend/public/views/docs/skill/installation.html` and `skills.html`) and
@@ -1105,26 +1124,36 @@ provenance fields, degrade rules) those feeds were built against is the
 - **RPC provenance + per-adapter `configured` (issue #50).** `config.ts` exports
   `resolveBaseRpcSource()` (env `BASE_RPC_SOURCE`, fail-closed on an
   unrecognized value; unset/`live` → `"live"`, `"stub"` → `"stub"`) and
-  `resolveVaultAdapters()` (per-adapter `configured: Boolean(ADAPTER_*_ADDRESS)`),
-  both resolved **at call time** by `vault-economics.ts` (not module load) so
-  tests that flip `BASE_RPC_SOURCE=stub` directly (issue #147 removed the
-  hermetic demo/CI stub that used to set this automatically — the demo/CI path
-  now always resolves `'live'`) and env-overridden adapters are always
-  reflected. An adapter still at its placeholder address is `configured: false`
-  and its `totalAssets()` is **never called** — its `balanceUsd` is always
-  `null`, never a live-looking `$0`.
+  `resolveVaultAdapters()` (per-adapter `configured: Boolean(ADAPTER_*_ADDRESS)`).
+  As of #294, `resolveVaultAdapters()` is still resolved **at call time** by
+  `vault-economics.ts` (not module load — env-overridden adapters are always
+  reflected), but it now only decides which persisted `vault_adapter_samples`
+  row to look up and whether an unconfigured adapter is presented as `null`; the
+  actual `eth_call` gating (an adapter still at its placeholder address is
+  `configured: false` and its `totalAssets()` is **never called**, at sample
+  time — its `balanceUsd` is always `null`, never a live-looking `$0`) moved to
+  the `vault.sample_adapters` worker job alongside it.
 - **`vault_share_price_history`** (migration `0012_vault_share_price_history.sql`)
   — one row per `(vault_address, sample_hour)`, upserted by the hourly
   `vault.sample_share_price` job (`backend/src/worker/handlers/vault.ts`,
   seeded in `db/seed.ts`, cron `0 * * * *`). 7-day APY
   (`(1 + growth)^(365/daysElapsed) - 1`) is computed from these samples in
   `computeApy7d`; fewer than two samples in the lookback yields `null`.
+- **`vault_adapter_samples`** (issue #294, migration
+  `0021_chain_indexer_samples.sql`) — one row per
+  `(vault_address, adapter_address, sample_hour)`, upserted by the hourly
+  `vault.sample_adapters` job (`backend/src/worker/handlers/vault.ts`, seeded
+  in `db/seed.ts`). Each row carries `balance_usd`, `configured`, and
+  `provenance` (`'live' | 'stub' | 'stale' | 'seed'`); a thrown per-adapter
+  read persists no row, leaving the previous sample intact.
 - **`GET /api/dashboards/vault-economics`** (`ROUTES.dashboards.vaultEconomics`,
   `backend/src/api/routes/dashboards.ts`) returns
   `{ asOf, stale, source, tvlUsd, sharePrice, totalShares, idleUsdc, apy7d, adapters }`
   where `source` is `'live'` or `'stub'` (RPC provenance — never presented as
   live when the backend is running against the hermetic stub) and `adapters` is
-  the three `{name, address, configured, balanceUsd}` entries.
+  the three `{name, address, configured, balanceUsd, balanceObservedAt,
+  provenance}` entries (`balanceObservedAt`/`provenance` added in #294, echoing
+  the backing `vault_adapter_samples` row's `sampled_at`/`provenance` exactly).
   `allocationView()` (`frontend/public/assets/js/app/alpine/views.js`)
   fetches this on init and binds it into `views/allocation.html`, showing a
   `stale` badge, a non-live badge when `source === 'stub'`, an explicit
@@ -1170,6 +1199,21 @@ hardcoded in `alpine/views.js`.
   baked constants — never presented as a live sample; see
   `backend/src/chain/wallet-history-seed.ts` and migration `0014`'s honesty
   invariant). A value is never fabricated and never silently frozen.
+- **`valueLeg`'s default price reader is `providerWalletPriceReader`, not the
+  persisted-fallback reader (issue #294 guardrail).** `sampleWalletBalances`
+  (this sampler, feeding the out-of-scope `/api/dashboards/wallet-balances`
+  request path) calls the shared `chain/wallet-valuation.ts::valueLeg` with
+  **no explicit reader argument**, so it always inherits this default: a
+  live-price-fetch failure with a successful chain read is `{ok: false}` and
+  the WHOLE holding falls through to `lastPersistedHolding()`'s fully-stale
+  snapshot (amount, price, and value all from the same persisted row) — never
+  a blend of a fresh on-chain amount with a stale persisted price. The
+  wallet-sleeves sampler (`sampleWalletSleeves`, §3) needs the opposite
+  behavior for its own feed and gets it by passing
+  `persistedFallbackWalletPriceReader` **explicitly** at its own call site
+  (`backend/src/worker/handlers/wallet.ts`) — `valueLeg`'s default must never
+  be changed to accommodate that, since every caller that omits the argument
+  (this one included) would silently inherit the different failure mode.
 - **`wallet_balance_samples`** persists the last-known amount/price/value per
   symbol (the degrade floor above); the continuous `history` series read by
   `fetchWalletBalances()` is sparse per day (some tracked assets are
@@ -1421,21 +1465,40 @@ interface TokenMetrics {
 
 - **Method**: GET (no query params).
 - **Module/function**: `backend/src/chain/wallet-sleeves.ts` → `getWalletSleeves()`.
-- **Source of truth**: per-prop-wallet on-chain reads (`config.propWallets`).
-  This is the **per-wallet breakdown** the aggregate `wallet-balances` endpoint
-  does NOT provide: `wallet_balance_samples` has **no wallet dimension**
-  (`UNIQUE (sample_date, symbol)` only), so wallet-sleeves MUST do fresh
-  per-wallet `callBalanceOf` / `ethGetBalance` reads — it cannot be derived from
-  that table. Names/types come from the prop-wallet metadata:
+- **Source of truth (issue #294): `wallet_sleeve_samples` in Postgres — ZERO
+  RPC on the request path.** This is still the **per-wallet breakdown** the
+  aggregate `wallet-balances` endpoint does NOT provide (`wallet_balance_samples`
+  has no wallet dimension, `UNIQUE (sample_date, symbol)` only), but as of #294
+  that breakdown is no longer served by a fresh per-wallet `eth_call` — it is
+  populated ahead of time by the scheduled `wallet.sample_sleeves` worker job
+  (`sampleWalletSleeves`, `backend/src/worker/handlers/wallet.ts`) into
+  `wallet_sleeve_samples` (migration `0021_chain_indexer_samples.sql`,
+  `UNIQUE (sample_date, wallet_address, symbol)`), and `getWalletSleeves()`
+  reads that table only. Names/types come from the prop-wallet metadata:
   - `0xfbc2…c9d6` — "Bankr" / primary
   - `0x422c…8eee` — "Stablecoin Strategy 1" (delegated ZyfAI, ZYFAI-SS1)
   - `0x8d0c…9442` — "Stablecoin Strategy 2" (delegated Giza, GIZA-SS1)
-- **Reuse**: value each holding with the same `resolveTrackedAssets` valuation
-  kinds + `fetchAssetPriceUsd` as `wallet-balances.ts::valueAsset`, but keyed
-  per wallet (do **not** `sumOverWallets`). Per-holding provenance mirrors #50.
-- **Postgres**: none authoritative (no per-wallet table). Optional per-wallet
-  degrade store is out of scope; a failed leg → holding value `null` +
-  provenance `"stale"`.
+- **Sampler valuation**: `sampleWalletSleeves` values each (wallet, symbol) leg
+  with the same shared `resolveTrackedAssets` valuation kinds + `valueLeg`
+  (`wallet-valuation.ts`) as `wallet-balances.ts::valueAsset`, keyed per wallet
+  (never `sumOverWallets`), and passes `persistedFallbackWalletPriceReader`
+  **explicitly** as `valueLeg`'s reader argument — a live price-provider hiccup
+  degrades to a recent persisted per-symbol price rather than skipping the
+  sample. This is a deliberate difference from `wallet-balances.ts`'s reader,
+  which relies on `valueLeg`'s default (`providerWalletPriceReader`) and must
+  not inherit the persisted-fallback behavior (see §10.1).
+- **Request-path read**: `getWalletSleeves()` selects the latest
+  `wallet_sleeve_samples` row per `(wallet_address, symbol)` — no chain call,
+  no price fetch. A holding with no sample yet is `null` + provenance
+  `"stale"`; a holding whose sample exceeds the freshness budget
+  (`WALLET_SLEEVES_FRESHNESS_BUDGET_MS`, 5 minutes) is also `stale`, and its
+  `observedAt` carries the sample's real `sampled_at`, never relabelled live.
+  A sleeve's `stale` is true if any of its holdings is stale; the DTO's
+  top-level `stale` is true if any sleeve is stale.
+- **Postgres**: `wallet_sleeve_samples` is now the authoritative per-wallet
+  store (migration `0021_chain_indexer_samples.sql`). A thrown RPC read inside
+  the sampler persists no row — the previous sample is left intact, never a
+  fabricated zero.
 
 **DTO**
 ```ts
@@ -1445,18 +1508,22 @@ interface SleeveHolding {
   priceUsd: number | null;
   valueUsd: number | null;
   provenance: "live" | "stub" | "stale" | "seed";
+  observedAt?: string | null; // the backing sample's sampled_at
 }
 interface WalletSleeve {
   name: string;      // "Bankr" | "Stablecoin Strategy 1" | …
   address: string;   // 0x… (lowercased)
   type: string;      // "primary" | "strategy"
   totalUsd: number;  // sum of holdings[].valueUsd (nulls as 0)
+  stale: boolean;    // true if any holding is stale (degraded or over freshness budget)
   holdings: SleeveHolding[];
+  observedAt?: string | null; // newest holding sample's sampled_at
 }
 interface WalletSleeves {
   wallets: WalletSleeve[];
   asOf: string;
   source: "live" | "stub";
+  stale: boolean; // true if any sleeve is stale
 }
 ```
 
@@ -1464,23 +1531,24 @@ interface WalletSleeves {
 ```json
 {
   "wallets": [
-    { "name": "Bankr", "address": "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6", "type": "primary", "totalUsd": 38331,
+    { "name": "Bankr", "address": "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6", "type": "primary", "totalUsd": 38331, "stale": false,
       "holdings": [
-        { "symbol": "USDC", "amount": 9037.405, "priceUsd": 0.9983, "valueUsd": 9022, "provenance": "stub" },
-        { "symbol": "ROBOTMONEY", "amount": 6499610000, "priceUsd": 0.00000451, "valueUsd": 29300, "provenance": "stub" },
-        { "symbol": "BNKR", "amount": 25081.3083, "priceUsd": 0.000377, "valueUsd": 9, "provenance": "stub" }
-      ] },
-    { "name": "Stablecoin Strategy 1", "address": "0x422c906083ca40b7e055b811d517f03bbbef8eee", "type": "strategy", "totalUsd": 9022,
+        { "symbol": "USDC", "amount": 9037.405, "priceUsd": 0.9983, "valueUsd": 9022, "provenance": "stub", "observedAt": "2026-07-09T12:04:40.696Z" },
+        { "symbol": "ROBOTMONEY", "amount": 6499610000, "priceUsd": 0.00000451, "valueUsd": 29300, "provenance": "stub", "observedAt": "2026-07-09T12:04:40.696Z" },
+        { "symbol": "BNKR", "amount": 25081.3083, "priceUsd": 0.000377, "valueUsd": 9, "provenance": "stub", "observedAt": "2026-07-09T12:04:40.696Z" }
+      ], "observedAt": "2026-07-09T12:04:40.696Z" },
+    { "name": "Stablecoin Strategy 1", "address": "0x422c906083ca40b7e055b811d517f03bbbef8eee", "type": "strategy", "totalUsd": 9022, "stale": false,
       "holdings": [
-        { "symbol": "ZYFAI-SS1", "amount": 9037.405, "priceUsd": 0.9983, "valueUsd": 9022, "provenance": "stub" }
-      ] },
-    { "name": "Stablecoin Strategy 2", "address": "0x8d0c331e45beca4184b758f3049f8897aabb9442", "type": "strategy", "totalUsd": 8965,
+        { "symbol": "ZYFAI-SS1", "amount": 9037.405, "priceUsd": 0.9983, "valueUsd": 9022, "provenance": "stub", "observedAt": "2026-07-09T12:04:40.696Z" }
+      ], "observedAt": "2026-07-09T12:04:40.696Z" },
+    { "name": "Stablecoin Strategy 2", "address": "0x8d0c331e45beca4184b758f3049f8897aabb9442", "type": "strategy", "totalUsd": 8965, "stale": false,
       "holdings": [
-        { "symbol": "GIZA-SS1", "amount": 8980.0, "priceUsd": 0.9983, "valueUsd": 8965, "provenance": "stub" }
-      ] }
+        { "symbol": "GIZA-SS1", "amount": 8980.0, "priceUsd": 0.9983, "valueUsd": 8965, "provenance": "stub", "observedAt": "2026-07-09T12:04:40.696Z" }
+      ], "observedAt": "2026-07-09T12:04:40.696Z" }
   ],
   "asOf": "2026-07-09T12:04:40.696Z",
-  "source": "stub"
+  "source": "stub",
+  "stale": false
 }
 ```
 
