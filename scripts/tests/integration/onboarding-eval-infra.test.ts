@@ -39,7 +39,7 @@ import {
   path as routePath,
   ROUTES,
 } from "@robotmoney/contract";
-import { fetchRmpc, runRmpcJson } from "../../lib/rmpc-fetch.ts";
+import { fetchRmpc } from "../../lib/rmpc-fetch.ts";
 import {
   buildMemberAgentArgv,
   KEYSTORE_PASSPHRASE_ENV,
@@ -169,7 +169,11 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     // compose model (docker volume create), so `down --volumes` does not know
     // it — remove it explicitly, loudly on failure.
     const volumeCleanup = Bun.spawnSync(
-      ["docker", "volume", "rm", "-f", memberHomeVolumeName(stack.config.project, "rails-check")],
+      [
+        "docker", "volume", "rm", "-f",
+        memberHomeVolumeName(stack.config.project, "rails-check"),
+        memberHomeVolumeName(stack.config.project, "rmpc-continuity"),
+      ],
       { env: stack.spawnEnv, stdin: "ignore", stdout: "ignore", stderr: "pipe" },
     );
     if (volumeCleanup.exitCode !== 0) {
@@ -299,29 +303,100 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
   );
 
   test(
-    "a REAL rmpc identity completes signed apply, approval, challenge claim, and public claimed state",
+    "IDENTITY CONTINUITY (issue #361 AC3): one REAL RMPC-onboarded member keeps its persisted key through admission and a later verified session take",
     async () => {
-      // Driven directly by this test — never by an agent — exactly like
-      // scripts/rmpc-release-e2e.ts / scripts/tests/integration/rmpc-canonical-apply.test.ts.
-      // No JS keygen fallback anywhere in this path (test-coverage policy #4).
-      // (D21: over the REST API, not the retired MCP apply tool.)
+      // Inference-OFF, but NOT identity/submission-off: a deterministic
+      // opencode transcript supplies prose only. The real release rmpc binary
+      // creates and holds the key inside a persistent member HOME, signs the
+      // application and claim in separate containers, then the production
+      // member-session client launches in a later container with that exact
+      // HOME and signs/submits over the real REST boundary. The public receipt
+      // recomputes verification against the registered key. No JS keygen,
+      // privileged register, mocked keystore, mocked REST, or mocked signature
+      // verifier exists anywhere in this path.
       const rmpcPath = await fetchRmpc();
       const workDir = mkdtempSync(join(tmpdir(), "onboarding-eval-infra-"));
+      const volume = memberHomeVolumeName(stack!.config.project, "rmpc-continuity");
+      ensureMemberVolume(volume, stack!.config.project, stack!.spawnEnv);
+      const keyless: MemberAgentModel = { model: "opencode/fixture-prose-only", apiKeyEnv: null, apiKey: null };
+      const passphrase = crypto.randomUUID();
+      const rmpcOwnerEnv = { RMPC_COMMITTEE_IDENTITY_PASSPHRASE: passphrase };
+      const runInMemberHome = (opts: {
+        runId: string;
+        entrypoint: string;
+        command: string[];
+        mounts?: Array<{ source: string; target: string; readonly?: boolean }>;
+        extraEnv?: Record<string, string>;
+        ownerEnv?: Record<string, string>;
+      }) => runMemberAgent({
+        repoRoot,
+        composeProject: stack!.config.project,
+        composeFiles: DEFAULT_COMPOSE_FILES,
+        runId: opts.runId,
+        entrypoint: opts.entrypoint,
+        command: opts.command,
+        mounts: [
+          { source: volume, target: "/home/agent" },
+          ...(opts.mounts ?? []),
+        ],
+        extraEnv: opts.extraEnv,
+        ownerEnv: opts.ownerEnv,
+        modelConfig: keyless,
+        composeSpawnEnv: stack!.spawnEnv,
+        timeoutMs: TEST_TIMEOUT_MS,
+      });
+      const parseRmpc = (stdout: string) => {
+        const line = stdout.split("\n").findLast((candidate) => candidate.trim().startsWith("{"));
+        expect(line, `no rmpc JSON in member stdout: ${stdout.slice(-400)}`).toBeDefined();
+        return JSON.parse(line!.trim()) as { ok?: boolean; public_key?: string; signature?: string };
+      };
+      const signFromMemberHome = async (payloadPath: string, runId: string) => {
+        const signedRun = await runInMemberHome({
+          runId,
+          entrypoint: "rmpc",
+          command: [
+            "committee-identity", "--path", "/home/agent/robotmoney-identity.json",
+            "sign", "--payload-file", "/tmp/signing-payload",
+          ],
+          mounts: [{ source: payloadPath, target: "/tmp/signing-payload", readonly: true }],
+          ownerEnv: rmpcOwnerEnv,
+        });
+        expect(signedRun.exitCode, signedRun.transcript).toBe(0);
+        const signed = parseRmpc(signedRun.stdout);
+        expect(signed.ok).toBe(true);
+        expect(typeof signed.signature).toBe("string");
+        return signed;
+      };
       try {
-        const passphrase = crypto.randomUUID();
-        const keystorePath = join(workDir, "identity.json");
-        const rmpcEnv = { RMPC_COMMITTEE_IDENTITY_PASSPHRASE: passphrase };
-
-        const created = runRmpcJson(rmpcPath, ["committee-identity", "--path", keystorePath, "create"], rmpcEnv);
+        // Container 1 is the prospective member's machine. It installs the
+        // real rmpc release into its durable HOME and creates the encrypted
+        // keystore there. Later containers see both through the same volume.
+        const createRun = await runInMemberHome({
+          runId: `rmpc-create-${crypto.randomUUID().slice(0, 6)}`,
+          entrypoint: "sh",
+          command: [
+            "-c",
+            "install -m 755 /opt/rmpc /home/agent/.local/bin/rmpc && exec rmpc committee-identity --path /home/agent/robotmoney-identity.json create",
+          ],
+          mounts: [{ source: rmpcPath, target: "/opt/rmpc", readonly: true }],
+          ownerEnv: rmpcOwnerEnv,
+        });
+        expect(createRun.exitCode, createRun.transcript).toBe(0);
+        const created = parseRmpc(createRun.stdout);
         expect(created.ok).toBe(true);
-        const publicKeyB64: string = created.public_key;
+        const publicKeyB64 = created.public_key!;
+        expect(typeof publicKeyB64).toBe("string");
 
-        const application = { name: "Infra Rails Check", contact: `infra-rails-${crypto.randomUUID().slice(0, 8)}@example.test`, publicKey: publicKeyB64 };
+        const application = {
+          name: "RMPC Continuity Check",
+          contact: `rmpc-continuity-${crypto.randomUUID().slice(0, 8)}@example.test`,
+          lens: "identity continuity",
+          publicKey: publicKeyB64,
+        };
         const canonical = canonicalizeApplication(application);
         const payloadFile = join(workDir, "payload.txt");
         writeFileSync(payloadFile, canonical);
-        const signed = runRmpcJson(rmpcPath, ["committee-identity", "--path", keystorePath, "sign", "--payload-file", payloadFile], rmpcEnv);
-        expect(signed.ok).toBe(true);
+        const signed = await signFromMemberHome(payloadFile, `rmpc-apply-${crypto.randomUUID().slice(0, 6)}`);
         expect(signed.public_key).toBe(publicKeyB64);
 
         const applyRes = await fetch(`${stack!.backendUrl}${ROUTES.committee.apply}`, {
@@ -364,12 +439,10 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         const challenge = await challengeRes.json();
         const claimPayloadFile = join(workDir, "claim-payload.txt");
         writeFileSync(claimPayloadFile, canonicalizeClaimChallenge(challenge));
-        const claimSignature = runRmpcJson(
-          rmpcPath,
-          ["committee-identity", "--path", keystorePath, "sign", "--payload-file", claimPayloadFile],
-          rmpcEnv,
+        const claimSignature = await signFromMemberHome(
+          claimPayloadFile,
+          `rmpc-claim-${crypto.randomUUID().slice(0, 6)}`,
         );
-        expect(claimSignature.ok).toBe(true);
 
         const claimRes = await fetch(`${stack!.backendUrl}${ROUTES.committee.claimToken}`, {
           method: "POST",
@@ -383,6 +456,150 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         const claimedStatusRes = await fetch(`${stack!.backendUrl}${statusPath}`);
         expect(claimedStatusRes.status).toBe(200);
         expect(await claimedStatusRes.json()).toMatchObject({ state: "claimed", claimedAt: expect.any(String) });
+
+        // Give the claimed bearer to the member client exactly once. This is a
+        // separate container using the same HOME; enroll detects the RMPC
+        // keystore (never client-native), persists the token, and verifies it
+        // authenticates as the admitted server-minted member id.
+        const runtime = await buildMemberSessionRuntime(repoRoot);
+        try {
+          const enrollRun = await runInMemberHome({
+            runId: `rmpc-enroll-${crypto.randomUUID().slice(0, 6)}`,
+            entrypoint: "bun",
+            command: [CLIENT_ENTRY, "enroll"],
+            mounts: [{ source: runtime.artifactPath, target: CLIENT_ENTRY, readonly: true }],
+            extraEnv: { RM_API_URL: "http://api:8787", RM_MEMBER_ID: memberId },
+            ownerEnv: {
+              ...rmpcOwnerEnv,
+              RM_MEMBER_TOKEN: claimed.token,
+            },
+          });
+          expect(enrollRun.exitCode, enrollRun.transcript).toBe(0);
+          const enroll = enrollRun.stdout.split("\n").find((line) => line.startsWith("RM_ENROLL "));
+          expect(enroll, enrollRun.stdout).toBeDefined();
+          expect(JSON.parse(enroll!.slice("RM_ENROLL ".length))).toMatchObject({
+            keystoreKind: "rmpc",
+            tokenValid: true,
+            memberId,
+          });
+          expect(enrollRun.transcript).not.toContain(claimed.token);
+
+          // Open a real collecting session. Core profile intentionally has no
+          // worker, so the existing admin dispatcher drives the same domain
+          // lifecycle synchronously instead of adding another service.
+          const admin = async (action: string, input: Record<string, unknown>) => {
+            const res = await fetch(
+              `${stack!.backendUrl}${routePath(ROUTES.committee.admin.action, { action })}`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Admin-Token": stackCredentials!.adminToken,
+                },
+                body: JSON.stringify(input),
+              },
+            );
+            const responseBody = await res.json();
+            expect(res.status, `${action}: ${JSON.stringify(responseBody)}`).toBe(200);
+            return responseBody;
+          };
+          const date = new Date().toISOString().slice(0, 10);
+          const subjectId = `continuity-${crypto.randomUUID().slice(0, 8)}`;
+          await admin("subject", { id: subjectId, name: "Identity Continuity Fixture" });
+          const opened = await admin("open", { date, subjectId });
+          await admin("brief", { sessionId: String(opened.id), windowMinutes: 10 });
+
+          // The only deterministic seam is external model prose. The
+          // production participation client still fetches its own context,
+          // posts its own memo, asks the API for canonical bytes, invokes the
+          // real persisted rmpc, and submits the resulting signature itself.
+          const authoredTake = [
+            "**REGIME**",
+            "- The live context is available inside the isolated member session.",
+            "- Identity continuity is the decisive operational signal.",
+            "- The persisted machine state remains intact across launches.",
+            "",
+            "**ALLOCATION**",
+            "- Keep the allocation unchanged while the signature rail is verified.",
+            "- Preserve the member-owned keystore as the controlling mechanism.",
+            "- Revisit only if API verification rejects the admitted key.",
+            "",
+            "**SUBJECT**",
+            "- The subject is evaluated through the real collecting-session API.",
+            "- The principal risk is accidental identity rotation between duties.",
+            "- Accept the take only under the originally admitted public key.",
+            "",
+            "STANCE: neutral | CONFIDENCE: 0.61",
+          ].join("\n");
+          const opencodeShim = join(workDir, "opencode-prose-fixture");
+          writeFileSync(
+            opencodeShim,
+            `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ type: "text", part: { type: "text", text: authoredTake } })}'\n`,
+            { mode: 0o755 },
+          );
+          const participateRun = await runInMemberHome({
+            runId: `rmpc-participate-${crypto.randomUUID().slice(0, 6)}`,
+            entrypoint: "bun",
+            command: [CLIENT_ENTRY, "participate"],
+            mounts: [
+              { source: runtime.artifactPath, target: CLIENT_ENTRY, readonly: true },
+              { source: opencodeShim, target: "/opt/opencode-prose-fixture", readonly: true },
+            ],
+            extraEnv: {
+              RM_API_URL: "http://api:8787",
+              RM_MEMBER_ID: memberId,
+              RM_MEMBER_NAME: application.name,
+              RM_MEMBER_LENS: application.lens,
+              RM_MEMBER_BIAS: "0",
+              RM_SESSION_DATE: date,
+              RM_SUBJECT_ID: subjectId,
+              RM_SESSION_ID: String(opened.id),
+              AGENT_MODEL: keyless.model,
+              OPENCODE_BIN: "/opt/opencode-prose-fixture",
+            },
+            // No token is re-injected: this later session proves the member's
+            // credential and key both came from its persisted HOME.
+            ownerEnv: rmpcOwnerEnv,
+          });
+          expect(participateRun.exitCode, participateRun.transcript).toBe(0);
+          const result = participateRun.stdout.split("\n").find((line) => line.startsWith("RM_RESULT "));
+          expect(result, participateRun.stdout).toBeDefined();
+          expect(JSON.parse(result!.slice("RM_RESULT ".length))).toMatchObject({
+            memberId,
+            stance: "neutral",
+            confidence: 0.61,
+            verified: true,
+          });
+
+          // Read-time verification is deliberately stronger than trusting the
+          // POST response's `verified` flag: session projection re-verifies the
+          // stored payload/signature, and the public receipt exposes the exact
+          // active-key fingerprint used for that verification.
+          const sessionRes = await fetch(
+            `${stack!.backendUrl}${routePath(ROUTES.committee.session, { date, subject: subjectId })}`,
+          );
+          expect(sessionRes.status).toBe(200);
+          const session = await sessionRes.json();
+          const take = session.takes.find((candidate: { memberId?: string }) => candidate.memberId === memberId);
+          expect(take).toMatchObject({ memberId, verified: true, stance: "neutral", confidence: 0.61 });
+          expect(take.id).toMatch(/^[0-9a-f-]{36}$/i);
+
+          const receiptRes = await fetch(
+            `${stack!.backendUrl}${routePath(ROUTES.committee.take, { id: take.id })}`,
+          );
+          expect(receiptRes.status).toBe(200);
+          const receipt = await receiptRes.json();
+          const admittedKeyDigest = await crypto.subtle.digest("SHA-256", Buffer.from(publicKeyB64, "base64"));
+          expect(receipt).toMatchObject({
+            take: { id: take.id, memberId, verified: true },
+            signer: {
+              id: memberId,
+              publicKeyFingerprint: `sha256:${Buffer.from(admittedKeyDigest).toString("hex")}`,
+            },
+          });
+        } finally {
+          runtime.dispose();
+        }
       } finally {
         rmSync(workDir, { recursive: true, force: true });
       }
