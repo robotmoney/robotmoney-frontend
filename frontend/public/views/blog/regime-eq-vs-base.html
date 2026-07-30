@@ -88,16 +88,16 @@
 
     <h2>Equity curves, side by side</h2>
     <p>
-      Same starting capital, same backtest engine, same cost assumptions. The cyan line
-      is the 3-panel /regime composite. The purple is the legacy /regime_2panel base.
-      The dashed amber is the factor panel run as a <em>standalone</em> classifier &mdash;
-      worth watching, more below.
+      Same starting capital, same backtest engine, same cost assumptions, across three
+      classifiers: the 3-panel /regime composite, the legacy /regime_2panel base, and the
+      factor panel run as a <em>standalone</em> classifier, which is worth watching for
+      reasons covered below.
     </p>
     <figure class="blog-figure">
       <div class="blog-figure-label">Equity curves &mdash; 3-panel /regime vs legacy 2-panel vs factor-alone</div>
       <p class="blog-figure-caption">
-        The augmented composite (cyan) edges out the legacy base (purple) across the full
-        8-year window; the standalone factor panel (amber) runs hottest of all. Live
+        The augmented composite edges out the legacy base across the full
+        8-year window; the standalone factor panel runs hottest of all. Live
         snapshots at <a href="/regime">/regime</a> and
         <a href="/regime_2panel">/regime_2panel</a>.
       </p>
@@ -131,17 +131,16 @@
 
     <h2>The composite, over time</h2>
     <p>
-      The augmented composite (cyan) tracks the base composite (purple) closely but
-      diverges meaningfully around inflection points. Across the full window the two
-      composites assign the same regime label on roughly <strong>80%</strong> of days; the
-      ~20% of days they disagree on are where the factor panel is pulling the call. The
-      dashed amber line is the factor panel index by itself &mdash; note how often it leads
-      the base composite into and out of risk-on territory.
+      The augmented composite tracks the base composite closely but diverges meaningfully
+      around inflection points. Across the full window the two composites assign the same
+      regime label on roughly <strong>80%</strong> of days; the ~20% of days they disagree
+      on are where the factor panel is pulling the call. Run by itself, the factor panel
+      index repeatedly leads the base composite into and out of risk-on territory.
     </p>
     <figure class="blog-figure">
       <div class="blog-figure-label">Composite regime index over time &mdash; 3-panel vs 2-panel vs factor</div>
       <p class="blog-figure-caption">
-        The two composites agree on ~80% of days; the factor panel index (amber) frequently
+        The two composites agree on ~80% of days; the factor panel index frequently
         leads the base composite into and out of risk-on territory at the inflection points.
       </p>
     </figure>
