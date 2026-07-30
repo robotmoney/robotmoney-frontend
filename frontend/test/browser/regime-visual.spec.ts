@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { mapEqSnapshotToDto } from "../../../backend/src/analytics/report/regime-eq-map.ts";
+import { navigate } from "./navigation.ts";
 
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
@@ -37,13 +38,6 @@ async function stub(page: Page) {
   }
   await page.route("**/api/dashboards/regime-snapshots*", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(regimeDto()) }));
-}
-
-async function navigate(page: Page, path: string) {
-  await page.evaluate((p) => {
-    history.pushState({}, "", p);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, path);
 }
 
 test("regime dashboard matches its visual baseline", async ({ page }) => {

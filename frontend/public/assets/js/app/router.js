@@ -62,6 +62,20 @@ async function render(pathname) {
   // Rewrite <title>/description/canonical/OG per route so each view is distinct
   // to JS-rendering crawlers (Googlebot) and to history/bookmarks.
   applyRouteMeta(pathname);
+  // The closing half of the pair opened by `rm:before-view-change` above: the
+  // new view is in the DOM, the nav is synced, and the route's meta is applied,
+  // so this is the first moment a consumer can observe the route as CHANGED
+  // rather than as CHANGING. Dispatched last, deliberately.
+  //
+  // Until this existed, "the route finished rendering" was unobservable from
+  // outside the router: render() awaits a view fetch, so anything that pushed
+  // state and dispatched popstate returned while the swap was still in flight.
+  // Every browser spec hand-rolled that fire-and-forget navigation and then
+  // read the DOM, which was only safe when the very next assertion happened to
+  // be a retrying locator matcher that waited the fetch out. One that was not
+  // (the robots directive in projects.spec.ts) went red as soon as CI moved to
+  // ephemeral runners with cold asset caches.
+  window.dispatchEvent(new CustomEvent("rm:view-changed", { detail: { pathname } }));
 }
 
 // Intercept same-origin, plain left-clicks on anchors and route them in-app.

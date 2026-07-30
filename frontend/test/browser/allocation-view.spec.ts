@@ -16,6 +16,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
+import { navigate } from "./navigation.ts";
 
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
@@ -126,13 +127,6 @@ async function stubEnvironment(page: Page, vault: VaultEconomics, wallet: Wallet
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(vault) }));
   await page.route("**/api/dashboards/wallet-balances", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(wallet) }));
-}
-
-async function navigate(page: Page, path: string) {
-  await page.evaluate((p) => {
-    history.pushState({}, "", p);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, path);
 }
 
 test("allocation view binds vault economics to the golden payload, and Total AUM to the LIVE prop-wallet feed + vault tvl (issue #84)", async ({ page }) => {

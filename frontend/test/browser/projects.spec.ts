@@ -6,6 +6,7 @@
 // tokens, facet pills, the inline sparkline, and interactive column sorting.
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
+import { navigate } from "./navigation.ts";
 
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
@@ -63,13 +64,6 @@ async function stubEnvironment(page: Page) {
   }
   await page.route("**/api/projects*", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(PROJECTS) }));
-}
-
-async function navigate(page: Page, path: string) {
-  await page.evaluate((p) => {
-    history.pushState({}, "", p);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, path);
 }
 
 const rowNames = (page: Page) => page.locator(".pj-table tbody tr .pj-name__text");
@@ -130,10 +124,50 @@ test("ANALYTICS navigates off site and /projects is de-advertised", async ({ pag
 
   // ...but it asks not to be indexed, and the directive is restored on the way out
   // so a noindex route cannot leak onto the next one.
-  const robots = () => page.locator('meta[name="robots"]').getAttribute("content");
-  expect(await robots()).toBe("noindex, follow");
+  //
+  // Keep these as retrying matchers as defense in depth. `navigate` now waits
+  // for the router's matching rm:view-changed event, so the route metadata is
+  // already applied when it resolves.
+  const robots = page.locator('meta[name="robots"]');
+  await expect(robots).toHaveAttribute("content", "noindex, follow");
   await navigate(page, "/regime");
-  expect(await robots()).toBe("index, follow, max-image-preview:large, max-snippet:-1");
+  await expect(robots).toHaveAttribute("content", "index, follow, max-image-preview:large, max-snippet:-1");
+});
+
+test("navigate waits for the completion event for its requested route", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/projects");
+
+  await page.route("**/views/regime.html", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await route.continue();
+  });
+  await page.evaluate(() => {
+    window.addEventListener("popstate", () => {
+      window.dispatchEvent(new CustomEvent("rm:view-changed", { detail: { pathname: "/projects" } }));
+    }, { once: true });
+  });
+
+  await navigate(page, "/regime");
+  expect(await page.locator('meta[name="robots"]').getAttribute("content"))
+    .toBe("index, follow, max-image-preview:large, max-snippet:-1");
+  const currentNavLinks = page.locator('a[href="/regime"][aria-current="page"]');
+  await expect(currentNavLinks).toHaveCount(2);
+  await expect(currentNavLinks.first()).toHaveClass(/nav__link--active/);
+});
+
+test("navigate rejects within its configured timeout when completion never arrives", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await page.route("**/views/regime.html", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await route.continue();
+  });
+
+  await expect(navigate(page, "/regime", { timeoutMs: 25 })).rejects.toThrow(
+    "navigate(/regime): router never dispatched rm:view-changed within 25ms",
+  );
 });
 
 test("sticky project pins first on load; clicking a header re-sorts and releases the pin", async ({ page }) => {
