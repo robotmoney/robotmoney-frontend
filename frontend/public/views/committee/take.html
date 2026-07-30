@@ -65,6 +65,13 @@
         </p>
       </article>
     </template>
+
+    <!-- See assets/js/app/lib/committee-disclaimer.js: one string, four
+         committee surfaces, production's wording verbatim. -->
+    <section class="rm-disclaimer" role="note" aria-label="Disclaimer" x-data="committeeDisclaimer()">
+      <p class="rm-disclaimer__label">Disclaimer</p>
+      <p class="rm-disclaimer__body" x-text="text"></p>
+    </section>
   </div>
 
   <style>

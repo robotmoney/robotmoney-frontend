@@ -164,24 +164,36 @@
               </dl>
             </div>
           </template>
-          <template x-if="!isRollupRecommendation()">
-            <div class="cv__rich-rec">
-              <div class="cv__bucket-bars" x-show="isBucketWeights()">
-                <p class="cv__panel-sub">Target open · Actual muted · Recommended accent</p>
-                <div class="cv__bucket-bars-svg" x-html="bucketWeightsBars()"></div>
-              </div>
-              <p class="cv__body-copy" x-show="session.committeeRecommendation.rationale" x-text="session.committeeRecommendation.rationale"></p>
-              <div class="cv__rec-actions" x-show="(session.committeeRecommendation.actions || []).length">
-                <template x-for="a in session.committeeRecommendation.actions || []" :key="`${a.token}-${a.action}`">
-                  <div class="cv__action-row">
-                    <span x-text="a.token"></span>
-                    <b x-text="a.action"></b>
-                    <p x-text="a.rationale"></p>
-                  </div>
-                </template>
-              </div>
+          <!-- WHAT THE COMMITTEE ACTUALLY RECOMMENDED.
+               This block was wrapped in <template x-if="!isRollupRecommendation()">,
+               and isRollupRecommendation() is true whenever the payload carries
+               `quorum` or `stances` — which every published session does. So the
+               action table never rendered once, on any session, while the API was
+               returning it the whole time: 2 rows, USDC/rotate and rmUSDC/add,
+               each with its own rationale. The page showed turnout and a stance
+               spread and then simply stopped before the verdict.
+               The gate was conflating two independent things. A rollup describes
+               HOW the recommendation was reached; `actions` and `bucket_weights`
+               are WHAT it says, and both are already self-gating (isBucketWeights()
+               requires type === "bucket_weights"; the action row requires a
+               non-empty array). Only `rationale` needed the rollup test, and it
+               needs it for a different reason — see recommendationRationale(). -->
+          <div class="cv__rich-rec" x-show="hasRecommendationDetail()">
+            <div class="cv__bucket-bars" x-show="isBucketWeights()">
+              <p class="cv__panel-sub">Target open · Actual muted · Recommended accent</p>
+              <div class="cv__bucket-bars-svg" x-html="bucketWeightsBars()"></div>
             </div>
-          </template>
+            <p class="cv__body-copy" x-show="recommendationRationale()" x-text="recommendationRationale()"></p>
+            <div class="cv__rec-actions" x-show="recommendationActions().length">
+              <template x-for="a in recommendationActions()" :key="`${a.token}-${a.action}`">
+                <div class="cv__action-row">
+                  <span x-text="a.token"></span>
+                  <b x-text="a.action"></b>
+                  <p x-text="a.rationale"></p>
+                </div>
+              </template>
+            </div>
+          </div>
         </section>
 
         <section class="cv__discussion" x-show="consensusItems().length || disagreements().length">
@@ -290,5 +302,13 @@
         </section>
       </div>
     </template>
+
+    <!-- The page that prints stances, confidence figures and a recommendation
+         is the page that most needs to say a member may hold what it argues
+         about. See assets/js/app/lib/committee-disclaimer.js. -->
+    <section class="rm-disclaimer" role="note" aria-label="Disclaimer" x-data="committeeDisclaimer()">
+      <p class="rm-disclaimer__label">Disclaimer</p>
+      <p class="rm-disclaimer__body" x-text="text"></p>
+    </section>
   </div>
 </section>
