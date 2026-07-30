@@ -189,5 +189,5 @@ export async function handleCommitteeAdmin(
     };
   }
 
-  return { status: 404, body: { error: "unknown committee admin route" } };
+  return { status: 404, body: { error: "unknown swarm admin route" } };
 }

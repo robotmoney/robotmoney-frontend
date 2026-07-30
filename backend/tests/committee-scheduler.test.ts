@@ -1,10 +1,10 @@
 // Committee session-cron configurability (issue #208; resolved design scout
 // #214). Three things proven here:
-//   1. resolveCommitteeSchedules() resolves enabled/cron/window from the
+//   1. resolveSwarmSchedules() resolves enabled/cron/window from the
 //      environment and DEFAULTS TO DISABLED when unset, so a plain CI/e2e/demo
 //      boot (no COMMITTEE_* env set) never auto-enqueues real committee
 //      lifecycle jobs.
-//   2. seedCommitteeSchedules() is an explicit conflict-update BY KIND (not the
+//   2. seedSwarmSchedules() is an explicit conflict-update BY KIND (not the
 //      general (kind, cron) natural key) — a changed COMMITTEE_*_CRON /
 //      COMMITTEE_SCHEDULES_ENABLED is actually applied to an EXISTING row, not
 //      left stale alongside a new duplicate.
@@ -13,8 +13,8 @@
 //      against a committee kind specifically per issue #208's AC.
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import { resolveCommitteeSchedules } from "../src/config.ts";
-import { seedCommitteeSchedules, seedJobSchedules } from "../src/db/seed.ts";
+import { resolveSwarmSchedules } from "../src/config.ts";
+import { seedSwarmSchedules, seedJobSchedules } from "../src/db/seed.ts";
 import { tickScheduler } from "../src/worker/scheduler.ts";
 
 const COMMITTEE_KINDS = [
@@ -45,8 +45,8 @@ afterAll(async () => {
   await seedJobSchedules();
 });
 
-test("resolveCommitteeSchedules: defaults to disabled with the documented cron/window defaults when every env var is unset", () => {
-  const schedules = resolveCommitteeSchedules({});
+test("resolveSwarmSchedules: defaults to disabled with the documented cron/window defaults when every env var is unset", () => {
+  const schedules = resolveSwarmSchedules({});
   expect(schedules).toHaveLength(5);
   expect(schedules.every((s) => s.enabled === false)).toBe(true);
   const byKind = Object.fromEntries(schedules.map((s) => [s.kind, s]));
@@ -58,8 +58,8 @@ test("resolveCommitteeSchedules: defaults to disabled with the documented cron/w
   expect(byKind["committee.publish_brief"].payload).toEqual({ windowMinutes: 60 });
 });
 
-test("resolveCommitteeSchedules: COMMITTEE_SCHEDULES_ENABLED + per-kind cron + window overrides all apply", () => {
-  const schedules = resolveCommitteeSchedules({
+test("resolveSwarmSchedules: COMMITTEE_SCHEDULES_ENABLED + per-kind cron + window overrides all apply", () => {
+  const schedules = resolveSwarmSchedules({
     COMMITTEE_SCHEDULES_ENABLED: "1",
     COMMITTEE_OPEN_SESSION_CRON: "*/2 * * * *",
     COMMITTEE_PUBLISH_BRIEF_CRON: "1-59/2 * * * *",
@@ -74,28 +74,28 @@ test("resolveCommitteeSchedules: COMMITTEE_SCHEDULES_ENABLED + per-kind cron + w
   expect(byKind["committee.close_window"].cron).toBe("0 8 * * *");
 });
 
-test("resolveCommitteeSchedules: an invalid/non-positive COMMITTEE_WINDOW_MINUTES falls back to 60", () => {
-  expect(resolveCommitteeSchedules({ COMMITTEE_WINDOW_MINUTES: "0" })[1]!.payload).toEqual({ windowMinutes: 60 });
-  expect(resolveCommitteeSchedules({ COMMITTEE_WINDOW_MINUTES: "not-a-number" })[1]!.payload).toEqual({ windowMinutes: 60 });
+test("resolveSwarmSchedules: an invalid/non-positive COMMITTEE_WINDOW_MINUTES falls back to 60", () => {
+  expect(resolveSwarmSchedules({ COMMITTEE_WINDOW_MINUTES: "0" })[1]!.payload).toEqual({ windowMinutes: 60 });
+  expect(resolveSwarmSchedules({ COMMITTEE_WINDOW_MINUTES: "not-a-number" })[1]!.payload).toEqual({ windowMinutes: 60 });
 });
 
-test("resolveCommitteeSchedules: fails closed on a malformed COMMITTEE_*_CRON instead of silently persisting it", () => {
+test("resolveSwarmSchedules: fails closed on a malformed COMMITTEE_*_CRON instead of silently persisting it", () => {
   // tickScheduler evaluates every due job_schedules row inside ONE transaction
   // (worker/scheduler.ts) — an unparseable cron on any row throws mid-loop and
   // stalls EVERY schedule that tick (vault/wallet/buybacks/projects/analytics
   // too), not just committee's. Catching a typo here, at config-resolution
   // (deploy) time, is what prevents that shared-scheduler-wide degradation.
-  expect(() => resolveCommitteeSchedules({ COMMITTEE_OPEN_SESSION_CRON: "not a cron" })).toThrow(
+  expect(() => resolveSwarmSchedules({ COMMITTEE_OPEN_SESSION_CRON: "not a cron" })).toThrow(
     /invalid COMMITTEE_OPEN_SESSION_CRON/,
   );
-  expect(() => resolveCommitteeSchedules({ COMMITTEE_CLOSE_WINDOW_CRON: "99 99 * * *" })).toThrow(
+  expect(() => resolveSwarmSchedules({ COMMITTEE_CLOSE_WINDOW_CRON: "99 99 * * *" })).toThrow(
     /invalid COMMITTEE_CLOSE_WINDOW_CRON/,
   );
 });
 
-test("seedCommitteeSchedules: applied to an EXISTING row — a changed cron/enabled is actually updated, not left as a stale duplicate", async () => {
+test("seedSwarmSchedules: applied to an EXISTING row — a changed cron/enabled is actually updated, not left as a stale duplicate", async () => {
   delete process.env.COMMITTEE_SCHEDULES_ENABLED;
-  await seedCommitteeSchedules();
+  await seedSwarmSchedules();
   const disabled = await sql<{ id: number; cron: string; enabled: boolean }[]>`
     SELECT id, cron, enabled FROM job_schedules WHERE kind = 'committee.open_session'`;
   expect(disabled).toHaveLength(1);
@@ -107,7 +107,7 @@ test("seedCommitteeSchedules: applied to an EXISTING row — a changed cron/enab
   // migrate/seed step (exactly what a redeploy does).
   process.env.COMMITTEE_SCHEDULES_ENABLED = "1";
   process.env.COMMITTEE_OPEN_SESSION_CRON = "*/2 * * * *";
-  await seedCommitteeSchedules();
+  await seedSwarmSchedules();
   const updated = await sql<{ id: number; cron: string; enabled: boolean }[]>`
     SELECT id, cron, enabled FROM job_schedules WHERE kind = 'committee.open_session'`;
   expect(updated).toHaveLength(1); // same row, not a second one

@@ -62,7 +62,7 @@ export async function getWalletSleeves() {
   return fetchWalletSleeves();
 }
 
-// GET /api/dashboards/allocation → admin/committee-managed strategy + bucket
+// GET /api/dashboards/allocation → admin/swarm-managed strategy + bucket
 // target weights from the allocation_framework table (managed:true, no chain
 // read, no AI enrichment). Static until an admin rewrites the row.
 export async function getAllocation() {

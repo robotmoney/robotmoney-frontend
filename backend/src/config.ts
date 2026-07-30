@@ -344,10 +344,10 @@ export function assertNoVaultAddressCollision(
   }
 }
 
-// --- Committee session-lifecycle cron cadence (issue #208) -------------------
+// --- Swarm session-lifecycle cron cadence (issue #208) -------------------
 // The five committee.* job_schedules rows (open_session/publish_brief/
 // close_window/aggregate/publish) ship seed-time DISABLED by default so a
-// fresh CI/e2e/demo database never auto-enqueues real committee lifecycle jobs
+// fresh CI/e2e/demo database never auto-enqueues real swarm lifecycle jobs
 // alongside the demo's own explicit enqueue-job admin path.
 // COMMITTEE_SCHEDULES_ENABLED is the single switch that turns the WHOLE
 // managed sequence on for a deployment: production sets it explicitly (daily
@@ -357,7 +357,7 @@ export function assertNoVaultAddressCollision(
 // pattern). Resolved once at seed-time (backend/src/db/seed.ts) — job_schedules
 // rows are the persisted source of truth thereafter; the scheduler
 // (worker/scheduler.ts) owns next_run_at/last_enqueued_at bookkeeping.
-export interface CommitteeScheduleConfig {
+export interface SwarmScheduleConfig {
   kind: string;
   cron: string;
   enabled: boolean;
@@ -384,9 +384,9 @@ function assertValidCron(envVarName: string, cron: string): void {
   }
 }
 
-export function resolveCommitteeSchedules(
+export function resolveSwarmSchedules(
   env: Record<string, string | undefined> = process.env,
-): CommitteeScheduleConfig[] {
+): SwarmScheduleConfig[] {
   const enabled = env.COMMITTEE_SCHEDULES_ENABLED === "1" || env.COMMITTEE_SCHEDULES_ENABLED === "true";
   const windowMinutesRaw = Number(env.COMMITTEE_WINDOW_MINUTES ?? "");
   const windowMinutes = Number.isFinite(windowMinutesRaw) && windowMinutesRaw > 0 ? windowMinutesRaw : 60;
@@ -444,7 +444,7 @@ export const config = {
   // it is required (every env); if unset, the role is allowed only outside prod
   // (demo/ephemeral convenience), mirroring adminToken.
   analyticsToken: process.env.ANALYTICS_TOKEN || null,
-  // Committee activation email uses a durable outbox + committee worker job.
+  // Swarm activation email uses a durable outbox + swarm worker job.
   // The sender is persisted with the message; the deployment transport is an
   // HTTP email adapter invoked only by that worker (tests inject a fake).
   committeeNotificationEmailFrom: process.env.COMMITTEE_NOTIFICATION_EMAIL_FROM || null,

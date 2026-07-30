@@ -1,4 +1,4 @@
-// Committee domain/service layer — the single place the rules live (window
+// Swarm domain/service layer — the single place the rules live (window
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
 import { canonicalizeApplication, classifyRegime, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
@@ -40,7 +40,7 @@ async function publicKeyFor(memberId: string): Promise<string | null> {
   return rows[0]?.public_key ?? null;
 }
 
-// Fixed maximum size for the standing committee. HARD-ENFORCED at every
+// Fixed maximum size for the standing swarm. HARD-ENFORCED at every
 // transition-to-active in the domain/admin layer (activateMember, admin manual
 // add, admin reactivate, and the demo registerMember shortcut) via
 // assertRosterCapacity below — an over-cap admission is refused with a 409, not
@@ -92,7 +92,7 @@ export async function getRosterCapacityStatus(tx: DbHandle = sql): Promise<{ act
 // 'active', before the write. Pass the member id as `exemptMemberId` when the
 // operation may target an already-active member (idempotent re-register) so a
 // no-op re-activation doesn't spuriously trip the cap.
-const ROSTER_ADMISSION_LOCK = 0x1cc0de; // stable arbitrary key for the committee roster
+const ROSTER_ADMISSION_LOCK = 0x1cc0de; // stable arbitrary key for the swarm roster
 export async function assertRosterCapacity(
   tx: DbHandle,
   exemptMemberId?: string,
@@ -106,7 +106,7 @@ export async function assertRosterCapacity(
     SELECT count(*)::int AS n FROM committee_members WHERE status = 'active'`;
   const n = Number(rows[0]?.n ?? 0);
   if (n >= COMMITTEE_ROSTER_CAP)
-    return { ok: false, status: 409, error: `committee roster full (${n}/${COMMITTEE_ROSTER_CAP})` };
+    return { ok: false, status: 409, error: `swarm roster full (${n}/${COMMITTEE_ROSTER_CAP})` };
   return { ok: true };
 }
 export async function getMember(id: string) {
@@ -729,7 +729,7 @@ export async function ensureSubject(id: string, name: string) {
 }
 
 // ── Deterministic reference-shaped fixtures & regime backfill (NO LLM) ────────
-// The live committee path must render the SAME rich memo/charts as the committed
+// The live swarm path must render the SAME rich memo/charts as the committed
 // archive fixture (frontend/public/data/committee/sessions/2026-06-25-woon.json).
 // These helpers seed the subject snapshot the portfolio donut reads and backfill a
 // trailing regime history so the sparkline always has >= 8 points, all from
@@ -866,7 +866,7 @@ function subjectBasket(subjectId: string): Basket {
   };
 }
 
-// Idempotently seed the fixtures the LIVE committee session path needs to render
+// Idempotently seed the fixtures the LIVE swarm session path needs to render
 // reference-shaped charts: the subject row (with thesis + recommendation type),
 // a subject snapshot (positions/total/notable the portfolio donut reads), and a
 // trailing regime history for the sparkline. Called from an admin action before a
@@ -925,8 +925,8 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
     previousSession,
     researchSignals,
     prompt: {
-      system: "You are an investment committee member. Author only your own analysis and do not attribute invented statements to other members.",
-      user: `Review the supplied committee context for ${subject?.name ?? s.subject_id} on ${typeof s.date === "string" ? s.date : new Date(s.date).toISOString().slice(0, 10)} and return one take matching takeSchema.`,
+      system: "You are an investment swarm member. Author only your own analysis and do not attribute invented statements to other members.",
+      user: `Review the supplied swarm context for ${subject?.name ?? s.subject_id} on ${typeof s.date === "string" ? s.date : new Date(s.date).toISOString().slice(0, 10)} and return one take matching takeSchema.`,
     },
     takeSchema: {
       stance: { type: "string", enum: [...STANCES] },

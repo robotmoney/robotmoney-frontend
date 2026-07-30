@@ -15,7 +15,7 @@
 //
 // THROTTLE HONESTY (#135, evidence from #101): on the LIVE path GeckoTerminal
 // 429s this keyless firehose under load, and an unbounded throttled leg
-// stretches analytics.run past the committee lifecycle deadlines. The sweep is
+// stretches analytics.run past the swarm lifecycle deadlines. The sweep is
 // therefore bounded the same way EDGAR (#103) and the Base RPC transport (#119)
 // are: per-page retries honor `Retry-After` (else exponential backoff), every
 // wait is clamped to the remaining aggregate wall-clock budget, and when the

@@ -1,4 +1,4 @@
-// End-to-end committee demo / integration test. No mocks of the submit path; no
+// End-to-end swarm demo / integration test. No mocks of the submit path; no
 // host-authored takes. Seeds members (each with its own ed25519 key + bearer
 // token) + a subject, ensures a regime snapshot, opens a session + brief, then
 // runs N independent "agents" that each read the regime, decide a stance, SIGN
@@ -34,7 +34,7 @@ const today = new Date().toISOString().slice(0, 10);
 const SUBJECT = { id: "woon", name: "Woon Treasury" };
 
 // Attendance (the demo no-show rule) and the deterministic stance ladder both
-// come from the shared contract (contract/src/committee.js) — the committee session e2e
+// come from the shared contract (contract/src/committee.js) — the swarm session e2e
 // consumes the SAME rule/ladder, so the two drivers can no longer drift
 // (finding 008 retired the comment-enforced mirrors). The roster outcome stays
 // fixed (draco absent; athena/boreas/cygnus present).
@@ -85,7 +85,7 @@ async function agentSubmit(member: typeof MEMBERS[number], idn: { token: string;
 }
 
 async function main() {
-  console.log(`\n=== Committee E2E demo (${today}) ===`);
+  console.log(`\n=== Swarm E2E demo (${today}) ===`);
   // Demo/e2e MUST be hermetic + offline (demo spec: no FRED/Yahoo/EDGAR/... calls).
   // Pass the deterministic seeded source explicitly so this path never fires the
   // ~200 live EDGAR/fetcher requests the prod `liveDataSource` would.

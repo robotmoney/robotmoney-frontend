@@ -1,5 +1,5 @@
 import * as ic from "../../committee/domain.ts";
-import { deliverCommitteeNotification } from "../../committee/notifications.ts";
+import { deliverSwarmNotification } from "../../committee/notifications.ts";
 
 export async function openSession(payload: Record<string, unknown>): Promise<unknown> {
   const date = String(payload.date ?? new Date().toISOString().slice(0, 10));
@@ -31,13 +31,13 @@ export async function publishSession(payload: Record<string, unknown>): Promise<
 
 export async function sendActivationNotification(payload: Record<string, unknown>): Promise<unknown> {
   const outboxId = String(payload.outboxId ?? "");
-  if (!outboxId) throw new Error("committee activation notification requires outboxId");
-  return deliverCommitteeNotification(outboxId);
+  if (!outboxId) throw new Error("swarm activation notification requires outboxId");
+  return deliverSwarmNotification(outboxId);
 }
 
 export async function sendSeatOpenNotification(payload: Record<string, unknown>): Promise<unknown> {
   const outboxId = String(payload.outboxId ?? "");
-  if (!outboxId) throw new Error("committee seat open notification requires outboxId");
-  return deliverCommitteeNotification(outboxId);
+  if (!outboxId) throw new Error("swarm seat open notification requires outboxId");
+  return deliverSwarmNotification(outboxId);
 }
 

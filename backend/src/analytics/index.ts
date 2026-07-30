@@ -106,7 +106,7 @@ function boundedTelemetrySummary(raw: Record<string, unknown>): Record<string, u
 // AnalyticsPersistence port. The DEFAULT is the authenticated HTTP client
 // (analytics/api-client.ts) — what updater processes (the worker) use, wired
 // from ANALYTICS_API_URL + ANALYTICS_TOKEN at call time. The API process (its
-// committee regime routes), tests, and demo tooling inject the API-owned direct
+// swarm regime routes), tests, and demo tooling inject the API-owned direct
 // service (analytics/store/direct.ts) instead.
 //
 // TELEMETRY (issue #151): every access/extract/transform/analyze/store/report

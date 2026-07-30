@@ -1,5 +1,5 @@
 // Execution lanes (issue #107): deterministic kind-allowlist filtering for queue
-// claims so interactive committee work, regime analytics, and slow research
+// claims so interactive swarm work, regime analytics, and slow research
 // fetches run with independent capacity. A lane is a pair of SQL LIKE pattern
 // lists applied inside the FOR UPDATE SKIP LOCKED claim (loop.ts) — ownership
 // semantics are unchanged, a lane only narrows WHICH pending kinds a worker may
@@ -7,7 +7,7 @@
 //
 // Topology (production default = the docker-compose services):
 //   - `committee` — RESERVED interactive lane; claims ONLY `committee.%`
-//     session-lifecycle kinds. No other lane may claim them, so committee work
+//     session-lifecycle kinds. No other lane may claim them, so swarm work
 //     is always immediately claimable regardless of what analytics/research are
 //     doing (service `worker-committee`).
 //   - `analytics` — regime classification + the scheduled data pipelines
@@ -15,7 +15,7 @@
 //     `research.%` (service `worker-analytics`).
 //   - `research` — claims ONLY `research.%`: the slow external research fetches
 //     are quarantined here so a blocked research job can never occupy a
-//     committee or analytics slot (service `worker-research`).
+//     swarm or analytics slot (service `worker-research`).
 //   - `generic` — single-process dev/tooling convenience: everything EXCEPT the
 //     reserved `committee.%` kinds. A generic worker can NEVER consume reserved
 //     interactive capacity. Not part of the compose topology.
@@ -52,7 +52,7 @@ export function describeLane(lane: Lane): string {
 // Resolve a worker's lane from configuration (WORKER_LANE). FAIL-CLOSED: an
 // empty/missing or unknown value throws at startup — a misconfigured worker must
 // never fall through to claiming every kind (that would silently consume the
-// reserved committee capacity).
+// reserved swarm capacity).
 export function resolveLane(raw: string | undefined | null): Lane {
   const value = (raw ?? "").trim();
   const valid = Object.keys(LANES).join(" | ");

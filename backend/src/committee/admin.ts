@@ -1,4 +1,4 @@
-// Committee ADMIN domain layer (issue #152): topic/member CRUD with optimistic
+// Swarm ADMIN domain layer (issue #152): topic/member CRUD with optimistic
 // concurrency, member lifecycle + one-time credential issuance, session
 // scheduling with a frozen roster snapshot, roster add/excuse/restore, guarded
 // session lifecycle transitions, and audit-log filtering.

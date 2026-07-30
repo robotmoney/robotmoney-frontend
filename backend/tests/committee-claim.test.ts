@@ -5,8 +5,8 @@ import { canonicalizeApplication, canonicalizeClaimChallenge, COMMITTEE_ROSTER_C
 import { handleCommittee } from "../src/api/routes/committee.ts";
 import * as ic from "../src/committee/domain.ts";
 import {
-  deliverCommitteeNotification,
-  type CommitteeEmailMessage,
+  deliverSwarmNotification,
+  type SwarmEmailMessage,
 } from "../src/committee/notifications.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -66,9 +66,9 @@ test("activation persists an email outbox and the executed fake transport delive
       AND payload->>'outboxId' = ${outbox.id}`;
   expect(jobs).toHaveLength(1);
 
-  const delivered: CommitteeEmailMessage[] = [];
-  const fakeTransport = { send: async (message: CommitteeEmailMessage) => { delivered.push(message); } };
-  expect(await deliverCommitteeNotification(outbox.id, fakeTransport)).toEqual({ sent: true });
+  const delivered: SwarmEmailMessage[] = [];
+  const fakeTransport = { send: async (message: SwarmEmailMessage) => { delivered.push(message); } };
+  expect(await deliverSwarmNotification(outbox.id, fakeTransport)).toEqual({ sent: true });
   expect(delivered).toHaveLength(1);
   expect(delivered[0]).toMatchObject({
     from: "committee-test@robotmoney.invalid",
@@ -76,7 +76,7 @@ test("activation persists an email outbox and the executed fake transport delive
   });
   expect(delivered[0].text).toContain(ROUTES.committee.claimChallenge);
   expect(delivered[0].text).toContain(ROUTES.committee.claimToken);
-  expect(await deliverCommitteeNotification(outbox.id, fakeTransport)).toEqual({ sent: false, idempotent: true });
+  expect(await deliverSwarmNotification(outbox.id, fakeTransport)).toEqual({ sent: false, idempotent: true });
   expect(delivered).toHaveLength(1);
 });
 
