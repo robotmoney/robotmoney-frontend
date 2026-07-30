@@ -117,6 +117,97 @@ Status: target layout (D23). Two rules govern where things go.
 *without* the rest must have its own directory. A test that needs Docker, a real
 network, or a real model call never shares a directory with a pure unit test.
 
+**CI fan-in.** Per-PR assurance is split into one workflow per assurance domain
+(issue #275): `unit` (root typecheck and unit tests), `repo-guards`, `contract`,
+`integration` (the `scripts/tests/integration` cost class), `backend`,
+`research-pipeline`, `frontend`, `onboarding-eval-rails`, and `e2e`. Each of
+these is **directly required** in branch protection — there is no fan-in/gate
+workflow aggregating them (see "No fan-in gate" below for why, and for what
+used to be here).
+
+Every domain besides `unit` and `repo-guards` narrows further by embedding its
+OWN `dorny/paths-filter` change-detection job and gating its main job's `if:`
+on that job's own filter output — but ONLY on `pull_request` events
+(`github.event_name != 'pull_request' || (...)`), so a `push` to the default
+branch always runs every workflow in full regardless of what changed
+(asserted by `ci-workflows-structure.test.ts`). `unit.yml` and
+`repo-guards.yml` are the two deliberate exceptions: both are cheap enough
+(no Docker, no network) to run unconditionally on every PR, and both say so in
+their own header comments. Because every path-based skip is a **job-level**
+`if:` guard (never a workflow-level `on.paths`/`paths-ignore`), a legitimately
+skipped domain still reports a real `skipped` conclusion to the GitHub Checks
+API — the property that makes requiring these workflows directly, rather than
+through a fan-in aggregator, safe: branch protection sees a concluded check
+either way and never hangs waiting for a context that never arrives.
+
+**No fan-in gate (issue #275 addendum 2, 2026-07-30).** This design originally
+had a `ci-gate.yml`/`scripts/checks/ci-gate.ts` fan-in: a single required
+`gate` job that polled `gh run list` for every sibling workflow's conclusion on
+the current commit and enforced the test-coverage invariants (needed-domain
+success, failure/cancellation propagation, invariant-4 incorrect-skip
+rejection, invariant-2 zero-test rejection) centrally. It was removed after a
+production incident on PR #316: on a `pull_request` event, bare `github.sha`
+resolves to GitHub's synthetic PR merge commit, not the branch's real head
+commit every sibling workflow's run is recorded under, so `gh run list
+--commit $GITHUB_SHA` matched zero runs and the gate burned its entire polling
+budget before failing — even though every sibling workflow had already
+succeeded. That specific bug was fixed (resolving `GITHUB_SHA` from
+`github.event.pull_request.head.sha` on `pull_request` events), but the repo
+owner's final decision was to remove the fan-in mechanism entirely rather than
+keep a cross-workflow `gh run list`-polling design going forward, and to
+require each real-work workflow directly instead — accepted as safe per the
+job-level-skip property above. Issue #348 tracks investigating a structurally
+sounder fan-in replacement (likely `workflow_run`-based, avoiding the
+polling-for-an-external-commit class of bug entirely) for if/when one is
+needed again. Flipping the actual branch-protection required-check list to
+list these workflows individually (`unit`, `backend`, `contract`, `frontend`,
+`integration`, `e2e`, `repo-guards`, `research-pipeline`,
+`onboarding-eval-rails`, `docs-lint`) is an out-of-band administrative step in
+the GitHub UI, not something automatable from this repo.
+
+- `research-pipeline` (issue #275 addendum) narrows the coarse `backend`
+  category to the GeckoTerminal/analytics-fetch surface specifically
+  (`backend/src/analytics/**`, `backend/src/chain/**`). It owns exactly the two
+  tests whose entire subject is that surface
+  (`backend/tests/geckoterminal-resilience.test.ts`,
+  `backend/tests/token-prices-resilience.test.ts`) — `backend.yml`'s own
+  `bun test` excludes them (`--path-ignore-patterns`) so an unrelated backend
+  change (committee, admin, chain-agnostic routes) no longer pays for them.
+  Broader tests that also happen to touch analytics/chain code but assert
+  API-route behavior outside that surface
+  (`backend/tests/api/wallet-balances.test.ts`,
+  `backend/tests/api/dashboards-live.test.ts`) stay in the general `backend`
+  suite, since narrowing them to this filter would regress their non-analytics
+  coverage.
+- `onboarding-eval-rails` (issue #275 addendum) is the inference-off
+  member-agent rails check
+  (`scripts/tests/integration/onboarding-eval-infra.test.ts`), split out of the
+  `e2e` monolith: it brings up its own minimal `core`-profile stack
+  (postgres + api only, via the shared `scripts/stack` module) and never needed
+  `e2e`'s full LIVE demo boot. It stays system-correctness (Docker-backed,
+  deferred on draft PRs), gated on the paths that surface actually depends on
+  (`evals/**`, `scripts/lib/member-agent/**`, `scripts/lib/rmpc-fetch.ts`,
+  `scripts/lib/onboarding-eval.ts`, `scripts/lib/committee/**`,
+  `backend/src/committee/**`). The REAL-inference eval (the one that spends a
+  model token) stays inside `e2e.yml`'s "Full-stack demo" step, unchanged — it
+  deliberately reuses that already-booted LIVE stack rather than standing up a
+  second one.
+- `frontend` (issue #275 addendum, critical-bug fix — see "No fan-in gate"
+  above for what backed this requirement before it was removed) is a genuine,
+  dedicated workflow (`.github/workflows/frontend.yml`, `name: frontend`). It
+  runs ONLY the Playwright specs that don't need a live backend — today exactly
+  `frontend/test/browser/preview-smoke.spec.ts`, which spawns its own
+  `scripts/preview-server.ts` (no `BACKEND_URL`, no Docker) — as a fast,
+  feature-correctness-class addition, not a substitute: `e2e.yml`'s
+  `test:browser` step still runs the ENTIRE `frontend/test/browser/` suite,
+  including specs that need the live backend the full demo boot provides.
+
+System-correctness workflows (`backend`, `research-pipeline`, `integration`,
+`onboarding-eval-rails`, `e2e`) defer on draft PRs; the feature-correctness
+workflows (`unit`, `repo-guards`, `contract`, `frontend`) continue to execute
+there — cheap enough (no Docker, no live network) to gate early regardless of
+draft state.
+
 **L2 — Shared code is named for its domain, never for its consumer.** `stack/`,
 `agent/`, `toolchain/` state what belongs in them; `lib/`, `utils/`, `helpers/`
 invite anything. Code shared between the demo runtime and test/eval time lives in

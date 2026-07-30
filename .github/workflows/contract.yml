@@ -1,0 +1,69 @@
+# Contract tier: verifies the vendored contract copy matches the source and runs
+# the contract's unit tests. The contract package has its own test:unit selector
+# that runs offline tests; the live tests in contract/tests/live/ are run only
+# by nightly-fetchers.yml.
+#
+# CI taxonomy class: feature-correctness. Runs on every PR (draft AND ready) —
+# cheap, no Docker, no network. This workflow replaces the contract-specific
+# steps that previously lived in integration.yml (issue #275). It is directly
+# required in branch protection (issue #275 addendum: the ci-gate.yml/
+# ci-gate.ts fan-in mechanism this workflow used to feed was removed after a
+# production incident on PR #316; a structurally sounder fan-in replacement is
+# tracked in issue #348).
+#
+# Path-gated (issue #275 addendum): a `pull_request` run whose changed files
+# don't match `contract/**` skips the job body — a REAL dorny/paths-filter skip,
+# not a synthetic outcome. Because it's a job-level `if:` skip (never
+# workflow-level `on.paths`), it reports a real `skipped` conclusion to the
+# Checks API, so requiring this workflow directly carries no deadlock risk.
+# `push` to `main` is never path-filtered (see the job `if:` below), so a
+# merge to main always runs this in full.
+name: contract
+env:
+  CI_CLASS: feature-correctness
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  # ── change detection ───────────────────────────────────────────────────────
+  changes:
+    # Plumbing, not an assurance job itself — overriding the workflow-level
+    # CI_CLASS keeps the taxonomy scanner from grading this filter step as
+    # if it were a test.
+    env:
+      CI_CLASS: ignore
+    runs-on: [self-hosted, robotmoney-self-hosted]
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      contract: ${{ steps.filter.outputs.contract }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+        id: filter
+        with:
+          filters: |
+            contract:
+              - 'contract/**'
+
+  contract:
+    needs: [changes]
+    # Path-gated ONLY on pull_request: a push to main always runs regardless.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.contract == 'true' }}
+    runs-on: [self-hosted, robotmoney-self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Install root tooling
+        run: bun install --frozen-lockfile
+      - name: Verify vendored contract
+        run: bun run check-contract
+      - name: Contract tests (unit)
+        working-directory: contract
+        run: bun run test

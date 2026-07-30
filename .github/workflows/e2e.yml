@@ -26,14 +26,18 @@
 # nightly sweep of the identical assertions would be pure duplication.
 #
 # Stage 7 (docs/plans/onboarding-ic-workflow.md, §11 R8) + issue #289: this job
-# carries the onboarding eval's rails, but it does NOT spend a real model call
-# on an ORDINARY `pull_request` run. Exactly what runs where:
-#   - EVERY run of this job, PRs and forks included: the inference-off
-#     infra-rails check, scripts/tests/integration/onboarding-eval-infra.test.ts (step
-#     below). It proves every rail the real eval rides on — member-agent image
-#     builds and starts, reaches the committee REST API over the compose
-#     network, a signed apply lands through POST /api/committee/apply — without
-#     spending a model token. Nothing about that step changed.
+# carries the onboarding eval's REAL-INFERENCE half, but it does NOT spend a
+# real model call on an ORDINARY `pull_request` run. Exactly what runs where:
+#   - EVERY PR, drafts and forks included, via the separate
+#     .github/workflows/onboarding-eval-rails.yml (issue #275 addendum: split
+#     out of this job): the inference-off infra-rails check,
+#     scripts/tests/integration/onboarding-eval-infra.test.ts. It proves every
+#     rail the real eval rides on — member-agent image builds and starts,
+#     reaches the committee REST API over the compose network, a signed apply
+#     lands through POST /api/committee/apply — without spending a model
+#     token. It moved to its own workflow because it brings up its own minimal
+#     stack (postgres + api only) and never needed this job's full LIVE demo
+#     boot; nothing about the check ITSELF changed.
 #   - PUSH TO MAIN: the REAL-INFERENCE onboarding eval — one vanilla OpenCode
 #     member-agent container navigating our own onboarding docs end to end via a
 #     real model call.
@@ -145,10 +149,13 @@ jobs:
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event.action != 'labeled' || github.event.label.name == 'real-eval') }}
     runs-on: [self-hosted, robotmoney-self-hosted]
     env:
-      # Read by scripts/lib/rmpc-fetch.ts's fetchRmpc() — shared by the
-      # infra-rails test below and the real-inference eval inside "Full-stack
-      # demo", so both hit the same cached binary instead of each fetching
-      # their own copy.
+      # Read by scripts/lib/rmpc-fetch.ts's fetchRmpc() for the real-inference
+      # eval inside "Full-stack demo" below. The infra-rails check that used to
+      # share this cache moved to onboarding-eval-rails.yml (issue #275
+      # addendum); its "Cache rmpc release binary" step uses the SAME cache key
+      # pattern, so GitHub Actions' cross-workflow cache sharing (scoped by key,
+      # not by workflow file) still avoids a redundant download whichever
+      # workflow runs first for a given rmpc version.
       RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
     steps:
       - uses: actions/checkout@v4
@@ -189,6 +196,13 @@ jobs:
         run: bun install --frozen-lockfile
 
       # === Onboarding eval (Stage 7, §11 R8) ===
+      # The inference-off infra-rails check (Stage 5's test) that used to run
+      # here moved to .github/workflows/onboarding-eval-rails.yml (issue #275
+      # addendum) — it never needed this job's full LIVE demo boot, only its
+      # own minimal postgres+api stack. The steps below remain because the
+      # REAL-INFERENCE eval further down (inside "Full-stack demo") also needs
+      # the rmpc binary, and reuses THIS already-booted stack rather than
+      # standing up a second one.
       - name: Resolve pinned rmpc release version (cache key)
         id: rmpc-version
         run: |
@@ -198,32 +212,16 @@ jobs:
       # Cache the pinned rmpc release binary by tag (Stage 3's
       # scripts/lib/rmpc-fetch.ts): avoids re-downloading a GitHub Releases
       # asset on every PR run for a binary that only changes when RMPC_VERSION
-      # is bumped. Both consumers below (the infra-rails test and the
-      # real-inference eval inside "Full-stack demo") read RMPC_CACHE_DIR
-      # (job-level env above), so both land in — and reuse — this same cache.
+      # is bumped. Consumed by RMPC_CACHE_DIR (job-level env above) inside the
+      # real-inference eval nested in "Full-stack demo" below. The SAME cache
+      # key pattern is used by onboarding-eval-rails.yml's identical step, so
+      # the underlying GitHub Actions cache entry is shared across both
+      # workflows even though each computes its own local RMPC_CACHE_DIR path.
       - name: Cache rmpc release binary
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.rmpc-cache
           key: rmpc-${{ steps.rmpc-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
-      # Fail-fast, inference-off rails check (Stage 5's test, wired into CI here
-      # per Stage 7). Proves every rail the real eval rides on without spending
-      # a model token: the member-agent image builds and starts, it reaches the
-      # committee REST API over the compose network, and a signed apply built
-      # with the real rmpc release binary lands end-to-end through POST
-      # /api/committee/apply (D21 — the MCP transport is retired). Runs for
-      # EVERY run (including forks — nothing here needs a secret) before the
-      # expensive live demo boot, so a broken rail fails in minutes, not tens
-      # of minutes. On a NON-PR run it is a supplement to the real-inference
-      # eval further below, never a substitute for it. On a PR run — where
-      # issue #289 turned that eval off, because the nightly
-      # committee-opencode-nightly.yml measures the same surface more widely —
-      # this step is deliberately the only onboarding-surface assertion this
-      # job makes, and it is inference-off by design. It is unconditional: no
-      # `if:` guard, so it cannot quietly stop running too.
-      - name: Onboarding eval infra rails (inference-off, fail-fast)
-        run: bun test scripts/tests/integration/onboarding-eval-infra.test.ts
-        timeout-minutes: 15
       # Resolves — and RECORDS — what the real-inference eval does on this run.
       # On an ordinary `pull_request` run it does not run at all (issue #289 +
       # the single-runner cost above; the nightly committee-opencode-nightly.yml
@@ -257,10 +255,10 @@ jobs:
             fi
           elif [ "$IS_PULL_REQUEST" = "true" ]; then
             echo "use_zen_key=" >> "$GITHUB_OUTPUT"
-            MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the single self-hosted runner this repo shares, on which per-PR evals cost minutes of exclusive runner time against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: .github/workflows/committee-opencode-nightly.yml — nightly 04:37 UTC (schedule '37 4 * * *') plus workflow_dispatch — which sweeps more models and more identities than this gate ever did; and on every push to main in this same workflow. What this PR run DID assert about that surface: the inference-off 'Onboarding eval infra rails' step above, which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full."
+            MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the single self-hosted runner this repo shares, on which per-PR evals cost minutes of exclusive runner time against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: .github/workflows/committee-opencode-nightly.yml — nightly 04:37 UTC (schedule '37 4 * * *') plus workflow_dispatch — which sweeps more models and more identities than this gate ever did; and on every push to main in this same workflow. What this PR run DID assert about that surface: the separate, inference-off .github/workflows/onboarding-eval-rails.yml workflow (issue #275 addendum), which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full whenever its own path filter matches."
           else
             echo "use_zen_key=" >> "$GITHUB_OUTPUT"
-            MSG="§11 R8 real-inference onboarding eval: NOT REQUESTED on this manual run — re-dispatch this workflow with real_eval=true to spend one. ZERO model tokens are spent here. The inference-off 'Onboarding eval infra rails' step above still ran in full."
+            MSG="§11 R8 real-inference onboarding eval: NOT REQUESTED on this manual run — re-dispatch this workflow with real_eval=true to spend one. ZERO model tokens are spent here. The separate onboarding-eval-rails.yml workflow still covers the inference-off rails check."
           fi
           echo "$MSG"
           echo "$MSG" >> "$GITHUB_STEP_SUMMARY"

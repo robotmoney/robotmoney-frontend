@@ -41,6 +41,12 @@ import { join } from "node:path";
 
 const repoRoot = join(import.meta.dir, "../../..");
 const e2eYml = readFileSync(join(repoRoot, ".github/workflows/e2e.yml"), "utf8");
+// Issue #275 addendum: the inference-off infra-rails step moved out of e2e.yml
+// into its own workflow (it never needed the full LIVE demo boot).
+const onboardingRailsYml = readFileSync(
+  join(repoRoot, ".github/workflows/onboarding-eval-rails.yml"),
+  "utf8",
+);
 const nightlyYml = readFileSync(
   join(repoRoot, ".github/workflows/committee-opencode-nightly.yml"),
   "utf8",
@@ -694,16 +700,28 @@ describe("the expression interpreter reproduces Actions semantics", () => {
 //    nightly the summary points at, both still exist.
 // ---------------------------------------------------------------------------
 describe("the coverage that replaces the per-PR eval is really there", () => {
-  test("the inference-off rails step still runs on PRs, with no if: guard", () => {
+  // Issue #275 addendum: this step moved out of e2e.yml into its own
+  // onboarding-eval-rails.yml workflow (it never needed the full LIVE demo
+  // boot e2e.yml exists for — its own minimal postgres+api stack was always
+  // enough). The STEP itself still carries no additional if: guard beyond the
+  // JOB-level draft+path gate onboarding-eval-rails.yml declares — an `if:`
+  // on the step would let the last onboarding-surface assertion a relevant PR
+  // makes disappear as quietly as the removed per-PR eval did.
+  test("the inference-off rails step still runs unconditionally within its job, in its own workflow", () => {
     const step = stepContaining(
-      e2eYml,
+      onboardingRailsYml,
       "bun test scripts/tests/integration/onboarding-eval-infra.test.ts",
-      "e2e.yml",
+      "onboarding-eval-rails.yml",
     );
     expect(step).toContain("Onboarding eval infra rails (inference-off, fail-fast)");
-    // An `if:` on this step would let the last onboarding-surface assertion a
-    // PR makes disappear as quietly as the eval did.
     expect(step).not.toMatch(/^\s*if:/m);
+    // e2e.yml no longer runs this test directly — the split moved it, not
+    // duplicated it.
+    expect(e2eYml).not.toContain("bun test scripts/tests/integration/onboarding-eval-infra.test.ts");
+  });
+
+  test("onboarding-eval-rails.yml's job defers on draft PRs, same as the e2e job it split from", () => {
+    expect(onboardingRailsYml).toMatch(/github\.event\.pull_request\.draft == false/);
   });
 
   test("the nightly still sets ONBOARDING_REAL_EVAL=1 on schedule + workflow_dispatch", () => {

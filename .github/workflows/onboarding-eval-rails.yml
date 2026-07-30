@@ -1,0 +1,111 @@
+# Onboarding-eval infra rails (issue #275 addendum): split out of the e2e.yml
+# monolith. This is the inference-OFF rails check for the real-inference
+# onboarding eval (scripts/lib/onboarding-eval.ts, docs/architecture.md §11
+# R8): it proves the member-agent image builds and starts, reaches the
+# committee REST API over the compose network, and a signed apply built with
+# the real `rmpc` release binary lands end-to-end through POST
+# /api/committee/apply — all WITHOUT spending a single model token.
+# (scripts/tests/integration/onboarding-eval-infra.test.ts)
+#
+# Why this is genuinely separable from the full `e2e` LIVE demo boot: the test
+# brings up its OWN minimal stack — the shared scripts/stack module's `core`
+# profile (postgres + api only, no worker lanes, no live RPC/analytics/
+# committee inference). Applying/activating a committee membership is pure
+# Postgres CRUD + crypto verification, never touches the job queue, so this
+# never needed the heavy full-stack boot it used to ride inside. Moving it to
+# its own workflow means it no longer waits behind — or pays for — the ~40+
+# minute LIVE demo boot when only paths in the filter below changed.
+#
+# The REAL-INFERENCE eval itself (the one that spends a model token) stays
+# INSIDE e2e.yml's "Full-stack demo" step, unchanged: it deliberately reuses
+# that already-booted LIVE stack rather than standing up a second one (see
+# e2e.yml's own header). Only the inference-off rails check moved here.
+#
+# Same Docker requirement as the rest of this rails check always had: a
+# missing/unusable Docker daemon THROWS out of stack.up()'s
+# assertDockerAvailable() — no skip, ever (test-coverage policy).
+#
+# CI taxonomy class: system-correctness (Docker-backed). Per the taxonomy
+# gating matrix this is DEFERRED until a PR is ready for review: it must SKIP
+# on draft PRs and RUN once the PR is marked ready-for-review, plus on push to
+# the default branch.
+#
+# Path-gated (issue #275 addendum): a `pull_request` run whose changed files
+# don't match evals/**, scripts/lib/member-agent/**, scripts/lib/rmpc-fetch.ts,
+# scripts/lib/onboarding-eval.ts, scripts/lib/committee/**, or
+# backend/src/committee/** skips the job body — a REAL dorny/paths-filter skip,
+# not a synthetic outcome. `push` to `main` is never path-filtered (see the job
+# `if:` below), so a merge to main always runs this in full.
+name: onboarding-eval-rails
+env:
+  CI_CLASS: system-correctness
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  # ── change detection ───────────────────────────────────────────────────────
+  changes:
+    # Plumbing, not an assurance job itself — it must run in EVERY context,
+    # including pr_draft, so the main job below has a filter output to gate
+    # on. Overriding the workflow-level CI_CLASS here keeps the taxonomy
+    # scanner from flagging this job as a system-correctness job that
+    # wrongly runs on drafts.
+    env:
+      CI_CLASS: ignore
+    runs-on: [self-hosted, robotmoney-self-hosted]
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      onboarding_eval_rails: ${{ steps.filter.outputs.onboarding_eval_rails }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+        id: filter
+        with:
+          filters: |
+            onboarding_eval_rails:
+              - 'evals/**'
+              - 'scripts/lib/member-agent/**'
+              - 'scripts/lib/rmpc-fetch.ts'
+              - 'scripts/lib/onboarding-eval.ts'
+              - 'scripts/lib/committee/**'
+              - 'backend/src/committee/**'
+
+  onboarding-eval-rails:
+    needs: [changes]
+    # Deferred until ready-for-review: run on push (non-PR) and on non-draft PRs;
+    # skip while the PR is still a draft. Path-gated ONLY on pull_request: a
+    # push to main always runs regardless of needs.changes' output.
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.draft == false && needs.changes.outputs.onboarding_eval_rails == 'true') }}
+    runs-on: [self-hosted, robotmoney-self-hosted]
+    env:
+      # Read by scripts/lib/rmpc-fetch.ts's fetchRmpc().
+      RMPC_CACHE_DIR: ${{ github.workspace }}/.rmpc-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Install root tooling
+        run: bun install --frozen-lockfile
+      - name: Resolve pinned rmpc release version (cache key)
+        id: rmpc-version
+        run: |
+          VERSION=$(bun -e 'import("./scripts/lib/rmpc-fetch.ts").then((m) => console.log(m.RMPC_VERSION))')
+          echo "resolved rmpc version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      # Same cache key pattern as e2e.yml's identical step — GitHub Actions
+      # cache is shared across workflow files by key, so whichever workflow
+      # runs first for a given rmpc version populates it for the other.
+      - name: Cache rmpc release binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.rmpc-cache
+          key: rmpc-${{ steps.rmpc-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Onboarding eval infra rails (inference-off, fail-fast)
+        run: bun test scripts/tests/integration/onboarding-eval-infra.test.ts
+        timeout-minutes: 15

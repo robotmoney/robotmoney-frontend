@@ -1,36 +1,73 @@
-# Integration tier of the test pyramid: the backend suite runs against a real
-# Postgres. The self-contained preload starts an ephemeral Postgres via Docker
-# (available on ubuntu-latest) and applies migrations, then tears it down — the
-# SAME harness used locally, so there is no CI-specific behavior. A missing
+# Integration tier of the test pyramid: Docker- and network-backed suites that
+# cannot run on a bare checkout. The self-contained preload starts an ephemeral
+# Postgres via Docker and applies migrations, then tears it down — the SAME
+# harness used locally, so there is no CI-specific behavior. A missing
 # Docker/Postgres fails the run loudly.
 #
-# CI taxonomy class: system-correctness (backend suite vs real Postgres). Per the
-# taxonomy gating matrix this is DEFERRED until a PR is ready for review: it must
-# SKIP on draft PRs and RUN once the PR is marked ready-for-review, plus on push
-# to the default branch. Wiring that enforces this:
-#   - `pull_request.types` includes `ready_for_review` so flipping a draft to
-#     ready re-triggers the workflow (default PR types would not).
-#   - the job `if:` guard skips the run while the PR is still a draft.
-#   - `paths-ignore: ['**.md','**.txt']` bypasses this code check on docs-only PRs.
-# A nightly sweep is intentionally NOT added: the intended triggers are ready PRs
-# + push main. The taxonomy grader flags a missing nightly sweep only as an
-# optional full-sweep warning, never an error.
+# CI taxonomy class: system-correctness. Per the taxonomy gating matrix this is
+# DEFERRED until a PR is ready for review: it must SKIP on draft PRs and RUN
+# once the PR is marked ready-for-review, plus on push to the default branch.
+#
+# Post-split (issue #275): this workflow runs ONLY the scripts/tests/integration
+# cost class. The unit class, backend, contract, and repo-guards have their own
+# dedicated workflows. This workflow is directly required in branch protection
+# (issue #275 addendum: the ci-gate.yml/ci-gate.ts fan-in mechanism this
+# workflow used to feed was removed after a production incident on PR #316; a
+# structurally sounder fan-in replacement is tracked in issue #348).
+#
+# Path-gated (issue #275 addendum): a `pull_request` run whose changed files
+# don't match the `scripts` category (scripts/**, evals/**, .github/**,
+# tsconfig.json, package.json, bun.lock) skips the job body — a REAL
+# dorny/paths-filter skip, not a synthetic outcome. Because it's a job-level
+# `if:` skip (never workflow-level `on.paths`), it reports a real `skipped`
+# conclusion to the Checks API, so requiring this workflow directly carries no
+# deadlock risk. `push` to `main` is never path-filtered (see the job `if:`
+# below), so a merge to main always runs this in full.
 name: integration
 env:
   CI_CLASS: system-correctness
 on:
   push:
     branches: [main]
-    paths-ignore: ['**.md', '**.txt']
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore: ['**.md', '**.txt']
 
 jobs:
-  backend-integration:
+  # ── change detection ───────────────────────────────────────────────────────
+  changes:
+    # Plumbing, not an assurance job itself — it must run in EVERY context,
+    # including pr_draft, so the main job below has a filter output to gate
+    # on. Overriding the workflow-level CI_CLASS here keeps the taxonomy
+    # scanner from flagging this job as a system-correctness job that
+    # wrongly runs on drafts.
+    env:
+      CI_CLASS: ignore
+    runs-on: [self-hosted, robotmoney-self-hosted]
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      scripts: ${{ steps.filter.outputs.scripts }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+        id: filter
+        with:
+          filters: |
+            scripts:
+              - 'scripts/**'
+              - 'evals/**'
+              - '.github/**'
+              - 'tsconfig.json'
+              - 'package.json'
+              - 'bun.lock'
+
+  integration:
+    needs: [changes]
     # Deferred until ready-for-review: run on push (non-PR) and on non-draft PRs;
-    # skip while the PR is still a draft.
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    # skip while the PR is still a draft. Path-gated ONLY on pull_request: a
+    # push to main always runs regardless of needs.changes' output.
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.draft == false && needs.changes.outputs.scripts == 'true') }}
     runs-on: [self-hosted, robotmoney-self-hosted]
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +86,7 @@ jobs:
           node-version: "20"
       - name: Install root tooling
         run: bun install --frozen-lockfile
-      # Installed BEFORE "Check root scripts" (issue #108): scripts/tests/
+      # Installed BEFORE test steps (issue #108): scripts/tests/
       # integration/demo-edgar-bootstrap.test.ts spawns backend/scripts/edgar-seed-bootstrap.ts
       # as a host-side subprocess (cwd: backend/), which needs backend's own
       # node_modules (@robotmoney/contract) resolvable — the same reason the
@@ -57,75 +94,8 @@ jobs:
       - name: Install deps
         working-directory: backend
         run: bun install --frozen-lockfile
-      - name: Check root scripts
-        run: bun run typecheck && bun run test
-      # ── D23 cost-class split (docs/decisions.md D23, docs/architecture.md §3) ──
-      # Every step below is UNCONDITIONAL on purpose. A cost class behind
-      # `continue-on-error` or a per-step guard would be a coverage loss dressed
-      # up as an optimization; scripts/tests/unit/runtime-import-guard.test.ts
-      # asserts that the only guard in this file stays the job-level draft one.
-      - name: Runtime code never imports test or eval code (D23)
-        run: bash scripts/checks/check-no-test-imports-in-runtime.sh
-      # The unit class must hold on a bare checkout — no Docker, no network.
-      # The greps are the "exit 0 is not tested" evidence: bun's own summary must
-      # report a NON-ZERO pass count and a zero fail count, so a run that
-      # collected nothing cannot be mistaken for a green. ANSI codes are stripped
-      # first because bun colours its summary even when stdout is a pipe.
-      - name: Unit cost class (scripts/tests/unit)
-        run: |
-          set -o pipefail
-          bun run test:unit 2>&1 | tee /tmp/test-unit.log
-          sed -E 's/\x1b\[[0-9;]*m//g' /tmp/test-unit.log > /tmp/test-unit.plain
-          grep -qE '^ *[1-9][0-9]* pass$' /tmp/test-unit.plain
-          grep -qE '^ *0 fail$' /tmp/test-unit.plain
-      # Pins fail-red-on-empty-selection: the two selectors above are just
-      # directory paths, so a future rename must break CI rather than silently
-      # collect zero files in both classes.
-      - name: Empty test selection is red
-        run: |
-          if bun test scripts/tests/__no_such_dir__ >/dev/null 2>&1; then
-            echo "bun test over an empty selection exited 0 — 0 tests collected must never be green" >&2
-            exit 1
-          fi
       # Docker- and network-backed suites. This job is the only place they run
       # per-PR, which is exactly what the split buys: cheaper jobs can select
       # scripts/tests/unit without paying for these.
       - name: Integration cost class (scripts/tests/integration)
         run: bun run test:integration
-      - name: Check docs/analytics consistency
-        run: bash scripts/check-docs-analytics.sh
-      - name: Typecheck backend
-        working-directory: backend
-        run: bun run typecheck
-      - name: No Supabase infra in backend/src (issue #87)
-        run: bash backend/scripts/check-no-supabase.sh
-      - name: No AI/LLM overview enrichment in backend/src (issue #93)
-        run: bash backend/scripts/check-no-ai-overview.sh
-      # D22 rule 1 as amended (2026-07-28): model ids live ONLY in
-      # scripts/lib/model-registry.ts and the environment carries a SELECTOR,
-      # never a raw id — the anti-ambient-selection property that survived the
-      # retirement of the old "keyless" mandate. Also re-asserts the retired
-      # knobs stay retired and that the contribution-advisory reviewer resolves
-      # keylessly. Runs here, in a REQUIRED per-PR job, so it genuinely gates.
-      # Its behaviour is separately EXECUTED against planted fixtures by
-      # scripts/tests/unit/model-selection-guard.test.ts (already run by "Check
-      # root scripts" above) — so a green here cannot come from a scan that
-      # silently matched nothing.
-      - name: Model selection is registry-sourced, not ambient (D22 rule 1 as amended)
-        run: bash scripts/checks/check-model-selection.sh
-      - name: Verify vendored contract
-        run: bun run check-contract
-      # contract/ has tests but, until this step existed, NO workflow ever ran
-      # them (nothing used `working-directory: contract`) — a test-coverage
-      # invariant-4 violation, and the reason a 404ing
-      # COMMITTEE_ONBOARDING_SKILL_URL survived in a file that already had a
-      # test asserting the constant's shape. `bun run test` in contract/
-      # resolves to `bun test tests/unit`, which pins the cost class: the
-      # package's network-touching live test lives in contract/tests/live/ and
-      # is run only by nightly-fetchers.yml, so this step stays offline.
-      - name: Contract tests (unit)
-        working-directory: contract
-        run: bun run test
-      - name: Run tests (ephemeral Postgres via Docker)
-        working-directory: backend
-        run: bun test
