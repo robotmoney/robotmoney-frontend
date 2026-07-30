@@ -54,7 +54,7 @@ test("the root demo bootstrap orchestration (scripts/lib/demo-main.ts) gained NO
   // NEW edgar-seed-bootstrap wiring didn't introduce a direct import.
   const file = join(import.meta.dir, "..", "..", "scripts", "lib", "demo-main.ts");
   const src = readFileSync(file, "utf8");
-  expect(src).toContain("edgar-seed-bootstrap.ts");
+  expect(src).toContain('"analytics-producer", "bun", "run", "src/producer/index.ts", "seed"');
   expect(src).not.toMatch(/from\s+["'][^"']*db\/client(\.ts)?["']/);
   expect(src).not.toMatch(/from\s+["'][^"']*analytics\/store\/[^"']*["']/);
   expect(src).not.toMatch(/from\s+["']postgres["']/);

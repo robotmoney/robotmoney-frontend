@@ -137,8 +137,8 @@ test("overview: enabled analytics schedules + next committee event + alert shape
     nextCommitteeEvent: { jobId: number; kind: string } | null;
     alerts: Array<{ level: string; source: string; message: string }>;
   };
-  // regime.classify is seeded enabled=true (backend/src/db/seed.ts) — always present.
-  expect(body.enabledAnalyticsSchedules.some((s) => s.kind === "regime.classify")).toBe(true);
+  // External producer owns cadence; no consumer-DB analytics schedule is enabled.
+  expect(body.enabledAnalyticsSchedules).toEqual([]);
   expect(body.nextCommitteeEvent).not.toBeNull();
   expect(body.nextCommitteeEvent!.jobId).toBeGreaterThanOrEqual(0);
   const ALLOWED = new Set(["not_run", "running", "degraded", "failed", "dead", "stale", "healthy"]);
@@ -271,25 +271,31 @@ test("retry: validation — short reason and unknown fields → 400", async () =
   ).toBe(400);
 });
 
+test("retry: admin cannot retry analytics producer jobs", async () => {
+  for (const kind of PRODUCTION_KINDS) {
+    const deadId = await insertJob({ kind, status: "dead" });
+    const before = await sql`SELECT count(*)::int AS n FROM jobs`;
+    const res = await call(
+      req("POST", `/api/admin/jobs/${deadId}/retry`, PROD.adminToken, { reason: "analytics producer boundary test" }),
+    );
+    expect(res?.status).toBe(409);
+    const after = await sql`SELECT count(*)::int AS n FROM jobs`;
+    expect(after[0].n).toBe(before[0].n);
+  }
+});
+
 // ── PATCH /api/admin/schedules/:id ──────────────────────────────────────────
 
-test("schedule toggle: flips only enabled + records an audit event", async () => {
+test("schedule toggle: admin cannot enable retired consumer analytics schedules", async () => {
   const [row] = await sql`SELECT id, enabled FROM job_schedules WHERE kind = 'regime.classify' LIMIT 1`;
   const target = !row.enabled;
   const res = await call(
     req("PATCH", `/api/admin/schedules/${row.id}`, PROD.adminToken, { enabled: target, reason: "operational toggle for test coverage" }),
   );
-  expect(res?.status).toBe(200);
-  const body = res?.body as { item: { id: number; enabled: boolean }; auditRequestId: string };
-  expect(body.item.enabled).toBe(target);
+  expect(res?.status).toBe(409);
   const [updated] = await sql`SELECT enabled, cron, kind FROM job_schedules WHERE id = ${row.id}`;
-  expect(updated.enabled).toBe(target);
+  expect(updated.enabled).toBe(row.enabled);
   expect(updated.kind).toBe("regime.classify"); // untouched
-  const [audit] = await sql`SELECT action, before_state, after_state FROM audit_log WHERE request_id = ${body.auditRequestId}`;
-  expect(audit.action).toBe("toggle_schedule");
-  expect(audit.after_state).toEqual({ enabled: target });
-  // restore original value so this test is order-independent of others reading the seed row
-  await sql`UPDATE job_schedules SET enabled = ${row.enabled} WHERE id = ${row.id}`;
 });
 
 test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields, non-analytics kind, committee demo rows", async () => {

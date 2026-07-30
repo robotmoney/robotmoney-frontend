@@ -8,12 +8,6 @@
 //                               POST /api/analytics/raw-history/seed (the
 //                               #106 server-side gap-fill: existing real rows
 //                               always win, a second run is a no-op).
-//   enableResearchEligibility — flip job_schedules.research.refresh to
-//                               enabled via POST
-//                               /api/analytics/research-eligibility. Called
-//                               ONLY after bootstrapEdgarSeed resolves, so a
-//                               fresh boot's research schedule never becomes
-//                               claimable before the floor is seeded.
 //   repopulateEdgarSeed       — an operator-run offline repopulation client:
 //                               diff the committed artifact against whatever
 //                               is currently persisted, ingest through the
@@ -22,7 +16,6 @@
 //                               already present with the same value, or
 //                               already present with a DIFFERENT (real) value
 //                               that was correctly left standing.
-import { ROUTES } from "@robotmoney/contract";
 import { resolveAnalyticsApiConfig, analyticsApiClient, type AnalyticsApiConfig } from "./api-client.ts";
 import { loadEdgarSeed, EDGAR_SEED_INDICATOR } from "./extract/edgar-seed.ts";
 import type { FloorSeedResult } from "./persistence.ts";
@@ -30,21 +23,6 @@ import type { FloorSeedResult } from "./persistence.ts";
 export async function bootstrapEdgarSeed(cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig()): Promise<FloorSeedResult> {
   const { history } = await loadEdgarSeed();
   return analyticsApiClient(cfg).seedRawHistory(history);
-}
-
-// Fail-loud: any non-2xx (401/403 missing or wrong ANALYTICS_TOKEN, or any
-// other server error) throws — the caller (the demo/live bootstrap CLI) must
-// never enable the research schedule on a rejected/uncertain ingestion.
-export async function enableResearchEligibility(cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig()): Promise<void> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (cfg.token) headers.Authorization = `Bearer ${cfg.token}`;
-  const res = await fetch(`${cfg.baseUrl}${ROUTES.analytics.researchEligibility}`, { method: "POST", headers });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(
-      `analytics API POST ${ROUTES.analytics.researchEligibility} failed: HTTP ${res.status}${detail ? ` — ${detail.slice(0, 500)}` : ""}`,
-    );
-  }
 }
 
 export interface RepopulationReport {

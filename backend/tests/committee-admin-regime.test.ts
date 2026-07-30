@@ -1,8 +1,8 @@
 // The regime write boundary (issue #361 Phase 4; docs/decisions.md D25, §9.6):
 // POST /api/committee/regime is a genuine provider SUBMISSION gate (validate +
 // persist; NEVER recompute server-side), the ADMIN_TOKEN classifier path
-// (POST /api/committee/admin/regime) is REMOVED, and the platform schedules
-// the producer's own regime.classify job via admin enqueue-job instead.
+// (POST /api/committee/admin/regime) is REMOVED. The independent producer owns
+// cadence; ADMIN_TOKEN cannot enqueue a consumer-worker replacement.
 //
 // Dispatches through handleCommittee in-process (the same pattern authz.test.ts
 // uses) rather than over HTTP.
@@ -116,7 +116,7 @@ test("the ADMIN_TOKEN classifier path is gone: POST /api/committee/admin/regime 
   expect((res!.body as { error: string }).error).toBe("unknown admin action");
 });
 
-test("admin enqueue-job schedules the producer's own regime.classify job", async () => {
+test("ADMIN_TOKEN cannot trigger classification through enqueue-job", async () => {
   config.adminToken = null;
   config.allowInsecure = true;
   const req = new Request("http://x/api/committee/admin/enqueue-job", {
@@ -125,14 +125,8 @@ test("admin enqueue-job schedules the producer's own regime.classify job", async
     body: JSON.stringify({ action: "regime_classify", asof: "2031-06-17" }),
   });
   const res = await call(req);
-  expect(res!.status).toBe(200);
-  const body = res!.body as { jobId: number; kind: string };
-  expect(body.kind).toBe("regime.classify");
-  const [job] = await sql<{ kind: string; payload: { asof?: string } }[]>`
-    SELECT kind, payload FROM jobs WHERE id = ${body.jobId}`;
-  expect(job.kind).toBe("regime.classify");
-  expect(job.payload.asof).toBe("2031-06-17");
-  await sql`DELETE FROM jobs WHERE id = ${body.jobId}`;
+  expect(res!.status).toBe(400);
+  expect((res!.body as { error: string }).error).toContain("unknown action");
 });
 
 // Migration 0017 (admin surface, issue #150) against the suite's real,

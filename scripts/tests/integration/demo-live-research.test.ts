@@ -41,6 +41,7 @@ function composeConfig(): ComposeConfig {
   // though this test only inspects the resolved service environments.
   env.WEB_PORT = "18788";
   env.POSTGRES_PORT = "15433";
+  env.ANALYTICS_TOKEN_FILE_HOST = "/dev/null"; // compose-config only; no producer launch
   const r = Bun.spawnSync(
     ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.demo.yml", "config", "--format", "json"],
     { cwd: repoRoot, env, stdout: "pipe", stderr: "pipe" },

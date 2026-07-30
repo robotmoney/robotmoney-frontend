@@ -49,6 +49,7 @@ function composeEnv(extra: Record<string, string> = {}): Record<string, string> 
     // scripts/stack/ports.ts).
     WEB_PORT: "18789",
     POSTGRES_PORT: "15432",
+    ANALYTICS_TOKEN_FILE_HOST: "/dev/null", // compose-config/lifecycle fixture; no producer execution
     ...extra,
   };
 }

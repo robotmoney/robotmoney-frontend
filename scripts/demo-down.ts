@@ -17,6 +17,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeDockerRunner, purgeDemoEvalContainers } from "./lib/demo-volumes.ts";
+import { removeDemoAnalyticsToken } from "./lib/demo-secret.ts";
+import { buildDemoLifecycleComposeEnv } from "./lib/demo-lifecycle-env.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -47,6 +49,8 @@ interface DemoState {
   dbUser: string;
   dbPassword: string;
   dbName: string;
+  /** External per-session Docker-secret path; contains no credential value. */
+  analyticsTokenFile?: string;
   // Exactly one is set (issue: demo persistent volumes): a `--pg-data` host bind
   // dir, or the fresh-per-run named volume that survives teardown.
   pgDataDir?: string;
@@ -69,18 +73,7 @@ const s: DemoState = JSON.parse(readFileSync(stateFile, "utf8"));
 // (`ports: ["8787"]` / `["5432"]`) and the daemon assigns the host side, so
 // `docker compose config` for a teardown-shaped invocation resolves with no
 // port input at all. One less thing a stale state file can get wrong.
-const dockerEnv: Record<string, string> = {
-  ...process.env,
-  COMPOSE_PROJECT_NAME: s.project,
-  COMPOSE_FILE: s.composeFiles,
-  DEMO_PROJECT: s.project,
-  RM_STACK_ENV_CLASS: s.envClass ?? "unknown",
-  RM_STACK_ENV_HASH: s.envHash ?? "unknown",
-  DATABASE_URL: s.databaseUrl,
-  POSTGRES_USER: s.dbUser,
-  POSTGRES_PASSWORD: s.dbPassword,
-  POSTGRES_DB: s.dbName,
-} as Record<string, string>;
+const dockerEnv = buildDemoLifecycleComposeEnv(s, process.env);
 
 console.log(`[demo:down] tearing down project=${s.project} (created ${s.createdAt}) — keeping postgres data…`);
 if (s.stage) {
@@ -109,6 +102,12 @@ const r = Bun.spawnSync(["docker", "compose", "down"], {
 if (r.exitCode !== 0) {
   console.error(`[demo:down] docker compose down exited ${r.exitCode}`);
   process.exit(r.exitCode ?? 1);
+}
+
+if (s.analyticsTokenFile) {
+  if (!removeDemoAnalyticsToken(s.analyticsTokenFile, s.project)) {
+    console.warn(`[demo:down] refused unsafe analytics-token cleanup path: ${s.analyticsTokenFile}`);
+  }
 }
 
 const where = s.pgDataDir ? `--pg-data dir ${s.pgDataDir}` : `volume ${s.pgVolume ?? `${s.project}_pgdata`}`;

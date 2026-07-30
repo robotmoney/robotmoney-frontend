@@ -232,10 +232,10 @@ export interface MemberAgentArgvOptions {
    */
   extraEnv?: Record<string, string>;
   /**
-   * Additional mounts: the member's own client software (a read-only bind of
-   * the repo, standing in for "the owner installed the published client") and
-   * the member's persistent keystore/home volume (issue #361 Phase 3 —
-   * identity continuity across sessions).
+   * Additional mounts: the member's own minimal client artifact (a read-only
+   * single-file bind, never the repository/worktree) and the member's
+   * persistent keystore/home volume (issue #361 Phase 3 — identity continuity
+   * across sessions).
    */
   mounts?: MemberAgentMount[];
   /**
@@ -304,8 +304,8 @@ export function buildMemberAgentArgv(a: MemberAgentArgvOptions): string[] {
     "--name",
     a.containerName,
     ...(commandMode ? [] : ["-v", `${a.opencodeConfigPath}:/home/agent/opencode.json:ro`]),
-    // The caller's explicit additional mounts (member client software +
-    // persistent keystore volume), in caller order.
+    // The caller's explicit additional mounts (minimal member client artifact
+    // + persistent keystore volume), in caller order.
     ...(a.mounts ?? []).flatMap((m) => ["-v", `${m.source}:${m.target}${m.readonly ? ":ro" : ""}`]),
     // AT MOST ONE MODEL credential `-e`, under the env name the registry chose,
     // and only when the resolved model is funded. A keyless model gets no flag

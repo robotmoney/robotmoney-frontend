@@ -12,9 +12,10 @@
 //
 // MODEL + CREDENTIAL: the model comes from AGENT_MODEL resolved against
 // ../model-registry.ts (default `opencode/deepseek-v4-flash`); the credential is
-// OPENCODE_API_KEY, which the spawned CLI picks up by plain environment
-// inheritance. Its value differs per environment (CI secret vs Stage .env) —
-// see ../opencode-key.ts.
+// OPENCODE_API_KEY. The member-agent launcher injects both explicitly into the
+// member container, and this module passes only its documented allowlist to
+// the spawned CLI. No compose-service or host ambient credential fallback
+// exists. See ../opencode-key.ts.
 //
 // MODEL CHOICE IS NOT NEUTRAL HERE. This prompt asks the model to hold an
 // investment-committee persona, and Zen's Claude family carries an OpenCode
@@ -28,9 +29,6 @@
 // THROWS — it NEVER falls back to a templated body.
 import { STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { extractAssistantText } from "../../agent/transcript.ts";
 import { DEFAULT_AGENT_MODEL, resolveAgentModel } from "../model-registry.ts";
 import { ZEN_KEY_ENV, zenApiKey } from "../opencode-key.ts";
@@ -190,53 +188,11 @@ export function promptFor(p: Persona, regime: RegimeContext, subjectId: string):
   ].join("\n");
 }
 
-// Per-call XDG overrides isolating the opencode CLI's own local state.
-//
-// WHY (issue: the e2e "demo readiness gate" failing on one or two members per
-// run, seemingly at random). Committee members author CONCURRENTLY
-// (session.ts's mapSettledWithConcurrency, COMMITTEE_MAX_CONCURRENCY=4), and
-// every one of those host-side `opencode run` processes opens the SAME SQLite
-// state database under `$XDG_DATA_HOME/opencode`. On a cold runner that file
-// does not exist yet, so all N processes run the CLI's schema migration at
-// once, exactly one wins, and the losers die before they ever reach the model:
-//
-//   Error: Unexpected error
-//   Failed query:
-//           CREATE TABLE `workspace` ( … )
-//
-// which surfaces here as the misleading "empty transcript … the zen model is
-// unreachable, rate-limited, unfunded" throw and fails the required gate on a
-// member whose model call was never made. Reproduced off-CI with the pinned
-// v1.18.1 binary: three concurrent cold-start `opencode run` calls sharing one
-// XDG_DATA_HOME, no credential involved, one loses the CREATE TABLE race; the
-// same four calls with the per-call dirs below all start clean.
-//
-// Isolating the DATA and STATE dirs (not the CACHE dir — the shared models.dev
-// registry cache is read-mostly and racing it was never the failure) gives each
-// call its own database, so there is no shared schema to race on. The CLI is
-// invoked one-shot per take and keeps nothing across calls that this path
-// reads, so a private state dir costs a local migration and nothing else.
-// The credential still arrives by plain environment inheritance.
-async function withIsolatedOpencodeHome<T>(fn: (env: Record<string, string>) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "committee-opencode-home-"));
-  try {
-    return await fn({
-      XDG_DATA_HOME: join(dir, "data"),
-      XDG_STATE_HOME: join(dir, "state"),
-    });
-  } finally {
-    // Best-effort: a killed (timed-out) opencode may still hold files here.
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
 // The EXACT environment a spawned `opencode` subprocess receives — an
-// allowlist, never an inherit. The committee session harness runs with the
-// stack's whole credential set in its own environment (ADMIN_TOKEN,
-// ANALYTICS_TOKEN, DATABASE_URL, …), and `Bun.spawn` inheriting `process.env`
-// handed every one of those to every member-model subprocess. The eval rail's
-// doctrine (docs/architecture.md §11.3 E1) is one explicitly injected model
-// credential and nothing else; this is the host-side spawn's equivalent.
+// allowlist, never an inherit. The member client itself holds its scoped bearer
+// token and may hold an owner-supplied keystore passphrase; neither belongs in
+// the model subprocess. The external-actor rail's doctrine is one explicitly
+// injected model credential and nothing else.
 //
 //   - PATH/HOME/TERM: what any CLI needs to run at all (binary resolution,
 //     its default XDG dirs, terminal handling);
@@ -261,10 +217,6 @@ export function opencodeSpawnEnv(
 // assistant text. Throws loudly (no template fallback) when the binary cannot be
 // spawned (opencode unavailable) or the run yields no assistant text.
 async function runOpencode(prompt: string): Promise<string> {
-  return withIsolatedOpencodeHome((homeEnv) => runOpencodeWithEnv(prompt, homeEnv));
-}
-
-async function runOpencodeWithEnv(prompt: string, homeEnv: Record<string, string>): Promise<string> {
   const bin = opencodeBin();
   const model = inferenceModel();
   let proc: ReturnType<typeof Bun.spawn>;
@@ -273,10 +225,11 @@ async function runOpencodeWithEnv(prompt: string, homeEnv: Record<string, string
       [bin, "run", prompt, "--model", model, "--format", "json", "--auto"],
       // SCRUBBED environment (issue #361 Phase 0): the subprocess gets the
       // opencodeSpawnEnv allowlist (PATH/HOME/TERM + the single model
-      // credential) plus the per-call XDG overrides — never a `process.env`
-      // spread, which handed every member-model subprocess the stack's whole
-      // admin credential set (ADMIN_TOKEN, ANALYTICS_TOKEN, …).
-      { stdout: "pipe", stderr: "pipe", env: { ...opencodeSpawnEnv(process.env), ...homeEnv } },
+      // credential) — never a `process.env` spread, which handed every
+      // member-model subprocess the stack's whole admin credential set
+      // (ADMIN_TOKEN, ANALYTICS_TOKEN, …). OpenCode state stays in this
+      // member container's isolated, persistent HOME.
+      { stdout: "pipe", stderr: "pipe", env: opencodeSpawnEnv(process.env) },
     );
   } catch (err) {
     throw new Error(

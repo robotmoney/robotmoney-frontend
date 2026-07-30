@@ -6,12 +6,21 @@
 // present member's take is containerized there and asserted post-publish by
 // assertAuthoredTakes).
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildMemberAgentArgv,
   memberHomeVolumeName,
   type MemberAgentModel,
 } from "../../agent/member-agent.ts";
-import { parseClientLine, railFromEnv } from "../../lib/committee/agent.ts";
+import {
+  buildMemberSessionRuntime,
+  CLIENT_ENTRY,
+  memberSessionMounts,
+  parseClientLine,
+  railFromEnv,
+} from "../../lib/committee/agent.ts";
 
 const FUNDED: MemberAgentModel = { model: "opencode/test-model", apiKeyEnv: "OPENCODE_API_KEY", apiKey: "sk-test" };
 
@@ -21,11 +30,11 @@ function sessionArgv(overrides: Record<string, unknown> = {}): string[] {
     containerName: "rm_ci_stack_x-member-agent-eval-athena-s1",
     modelConfig: FUNDED,
     entrypoint: "bun",
-    command: ["/rm/scripts/agent/member-session-client.ts", "participate"],
-    mounts: [
-      { source: "/repo", target: "/rm", readonly: true },
-      { source: "rm_ci_stack_x_member_home_athena", target: "/home/agent" },
-    ],
+    command: [CLIENT_ENTRY, "participate"],
+    mounts: memberSessionMounts(
+      "/tmp/robotmoney-member-client-safe/member-session-client.js",
+      "rm_ci_stack_x_member_home_athena",
+    ),
     extraEnv: { RM_MEMBER_ID: "athena", AGENT_MODEL: "opencode/test-model" },
     ownerEnv: { RM_MEMBER_TOKEN: "tok_athena_secret" },
     ...overrides,
@@ -40,17 +49,47 @@ describe("buildMemberAgentArgv — session-participation mode", () => {
     expect(argv[entrypointAt + 1]).toBe("bun");
     // Command tail follows the service name.
     const serviceAt = argv.indexOf("member-agent");
-    expect(argv.slice(serviceAt + 1)).toEqual(["/rm/scripts/agent/member-session-client.ts", "participate"]);
+    expect(argv.slice(serviceAt + 1)).toEqual([CLIENT_ENTRY, "participate"]);
     // No opencode-mode remnants.
     expect(argv).not.toContain("--auto");
     expect(argv).not.toContain("--title");
     expect(argv.join(" ")).not.toContain("opencode.json");
   });
 
-  test("mounts the client software read-only and the member home volume writable", () => {
+  test("mounts only the sanitized client artifact read-only and the member home volume writable", () => {
     const argv = sessionArgv().join(" ");
-    expect(argv).toContain("-v /repo:/rm:ro");
+    expect(argv).toContain(`-v /tmp/robotmoney-member-client-safe/member-session-client.js:${CLIENT_ENTRY}:ro`);
     expect(argv).toContain("-v rm_ci_stack_x_member_home_athena:/home/agent");
+  });
+
+  test("mount set excludes the repo, .agents, .env, and analytics-token host path", () => {
+    const repo = "/workspace/robotmoney-frontend";
+    const analyticsTokenFile = "/tmp/robotmoney-demo-secrets/analytics-token";
+    const mounts = memberSessionMounts(
+      "/tmp/robotmoney-member-client-safe/member-session-client.js",
+      "rm_ci_stack_x_member_home_athena",
+    );
+    expect(mounts).toHaveLength(2);
+    expect(mounts[0]).toMatchObject({ target: CLIENT_ENTRY, readonly: true });
+    expect(mounts[1]).toEqual({ source: "rm_ci_stack_x_member_home_athena", target: "/home/agent" });
+    const serialized = JSON.stringify(mounts);
+    for (const forbidden of [repo, `${repo}/.agents`, `${repo}/.env`, analyticsTokenFile]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
+
+  test("builds the self-contained client artifact in OS temp space and brackets cleanup", async () => {
+    const repoRoot = join(import.meta.dir, "../../..");
+    const runtime = await buildMemberSessionRuntime(repoRoot);
+    try {
+      expect(existsSync(runtime.artifactPath)).toBe(true);
+      expect(runtime.artifactPath.startsWith(repoRoot)).toBe(false);
+      expect(runtime.artifactPath.startsWith(tmpdir())).toBe(true);
+    } finally {
+      const artifact = runtime.artifactPath;
+      runtime.dispose();
+      expect(existsSync(artifact)).toBe(false);
+    }
   });
 
   test("injects exactly one model credential -e plus the declared extra/owner env", () => {
@@ -95,6 +134,10 @@ describe("parseClientLine — the RM_* stdout protocol", () => {
   test("parses a tagged JSON line and ignores everything else", () => {
     expect(parseClientLine("RM_STAGE", 'RM_STAGE {"stage":"thinking"}')).toEqual({ stage: "thinking" });
     expect(parseClientLine("RM_RESULT", '  RM_RESULT {"verified":true}  ')).toEqual({ verified: true });
+    expect(parseClientLine("RM_ENROLL", 'RM_ENROLL {"keystoreKind":"client","tokenValid":false}')).toEqual({
+      keystoreKind: "client",
+      tokenValid: false,
+    });
     expect(parseClientLine("RM_STAGE", 'RM_RESULT {"stage":"thinking"}')).toBeNull();
     expect(parseClientLine("RM_STAGE", "free-form log line")).toBeNull();
     expect(parseClientLine("RM_STAGE", "RM_STAGE not-json")).toBeNull();

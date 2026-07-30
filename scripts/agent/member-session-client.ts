@@ -18,8 +18,9 @@
 //     (scripts/lib/committee/inference.ts — the same authoring library, now
 //     executed inside the member's private filesystem, which makes the old
 //     host-side concurrent-cold-start SQLite race structurally impossible);
-//   - the canonical submission bytes are built and SIGNED in here, and the
-//     memo + submission are POSTed from in here with the member's own bearer.
+//   - the canonical submission bytes are fetched from RM's signing-payload
+//     endpoint and SIGNED exactly as returned in here, and the memo + submission
+//     are POSTed from in here with the member's own bearer.
 //
 // TWO KEYSTORE SHAPES, one client:
 //   - "client" — this client's own identity file (a private-key JWK) at
@@ -50,14 +51,14 @@
 //
 // STDOUT PROTOCOL (line-oriented; the harness parses these, everything else is
 // free-form logging):
-//   RM_ENROLL {json}   enroll-mode result: { keystore, publicKey?, tokenValid, memberId? }
+//   RM_ENROLL {json}   enroll-mode result: { keystoreKind, publicKey?, tokenValid, memberId? }
 //   RM_STAGE  {json}   { stage: connect|fetch|thinking|reporting|done, stance?, confidence? }
 //   RM_RESULT {json}   { memberId, stance, confidence, memoUrl?, verified }
 //
 // LOUD-FAILURE CONTRACT: any failure exits non-zero with the reason on
 // stderr; the harness renders that member ABSENT (#122 semantics) and the
 // session proceeds without it. There is no fallback of any kind in here.
-import { canonicalizeSubmission, classifyRegime, ROUTES } from "@robotmoney/contract";
+import { classifyRegime, ROUTES } from "@robotmoney/contract";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -86,7 +87,16 @@ function apiUrl(): string {
   return requiredEnv("RM_API_URL").replace(/\/+$/, "");
 }
 
-async function restJson<T = any>(route: string, init?: RequestInit): Promise<{ status: number; body: T }> {
+export interface RestJsonOptions {
+  /** Expected non-success statuses a caller deliberately interprets. */
+  allowStatuses?: readonly number[];
+}
+
+export async function restJson<T = any>(
+  route: string,
+  init?: RequestInit,
+  options: RestJsonOptions = {},
+): Promise<{ status: number; body: T }> {
   const res = await fetch(`${apiUrl()}${route}`, init);
   const text = await res.text();
   let body: T;
@@ -95,7 +105,28 @@ async function restJson<T = any>(route: string, init?: RequestInit): Promise<{ s
   } catch {
     throw new Error(`${route} returned non-JSON HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
+  if (!res.ok && !options.allowStatuses?.includes(res.status)) {
+    const error = body && typeof body === "object" && "error" in body
+      ? String((body as { error?: unknown }).error)
+      : text.slice(0, 200);
+    throw new Error(`${route} failed with HTTP ${res.status}${error ? `: ${error}` : ""}`);
+  }
   return { status: res.status, body };
+}
+
+/** Fetch the exact canonical byte string RM validated for this draft. */
+export async function fetchSigningPayload(draft: Record<string, unknown>): Promise<string> {
+  const { body } = await restJson<{ canonical?: unknown }>(ROUTES.committee.signingPayload, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(draft),
+  });
+  if (typeof body?.canonical !== "string" || body.canonical.length === 0) {
+    throw new Error(`${ROUTES.committee.signingPayload} returned HTTP 200 without a non-empty .canonical string`);
+  }
+  // Do not trim, normalize, parse, or locally reconstruct this value: these
+  // are the exact bytes the API promises to verify.
+  return body.canonical;
 }
 
 const b64 = (b: ArrayBuffer | Uint8Array) =>
@@ -123,7 +154,7 @@ function persistToken(kind: KeystoreKind, token: string): void {
 async function verifyToken(token: string): Promise<string | null> {
   const { status, body } = await restJson<{ memberId?: string }>(ROUTES.committee.verifyToken, {
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }, { allowStatuses: [401] });
   return status === 200 && body?.memberId ? body.memberId : null;
 }
 
@@ -189,7 +220,7 @@ async function enroll(): Promise<void> {
     // none is ever requested from here. Either the stored token still works,
     // or this member is honestly absent until its owner intervenes.
     out("RM_ENROLL", {
-      keystore: "rmpc",
+      keystoreKind: "rmpc",
       tokenValid: tokenMemberId !== null,
       memberId: tokenMemberId ?? (existsSync(RMPC_MEMBER_ID) ? readFileSync(RMPC_MEMBER_ID, "utf8").trim() : null),
     });
@@ -197,7 +228,7 @@ async function enroll(): Promise<void> {
   }
   const { publicKeyB64 } = await ensureClientKeyPair();
   out("RM_ENROLL", {
-    keystore: "client",
+    keystoreKind: "client",
     publicKey: publicKeyB64,
     tokenValid: tokenMemberId !== null && tokenMemberId === process.env.RM_MEMBER_ID,
     memberId: tokenMemberId,
@@ -265,8 +296,9 @@ async function participate(): Promise<void> {
   const body = `${authored.body}${provenanceText}`;
   stage("reporting", { stance: authored.stance, confidence: authored.confidence });
 
-  // Post the memo, canonicalize locally (@robotmoney/contract — the same bytes
-  // the server's signing-payload endpoint returns), sign IN HERE, submit.
+  // Post the memo, ask the API for the exact validated canonical byte string,
+  // sign those bytes IN HERE, then submit. Local canonical reconstruction is
+  // deliberately absent: the server response is the protocol authority.
   const memo = await restJson<{ ok?: boolean; url?: string }>(ROUTES.committee.memos, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -283,7 +315,7 @@ async function participate(): Promise<void> {
     body,
     memoUrl,
   };
-  const canonical = canonicalizeSubmission(draft);
+  const canonical = await fetchSigningPayload(draft);
   let signature: string;
   if (kind === "rmpc") {
     signature = rmpcSign(canonical);
@@ -316,7 +348,9 @@ async function main(): Promise<void> {
   throw new Error(`usage: member-session-client.ts <enroll|participate> (got ${JSON.stringify(mode)})`);
 }
 
-main().catch((err) => {
-  console.error(`member-session-client failed: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error(`member-session-client failed: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  });
+}

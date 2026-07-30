@@ -34,21 +34,22 @@
 #   ephemeral (CI)  : run with a throwaway volume / `docker compose down -v`
 #   demo            : named volume `pgdata` persists across restarts
 #   prod            : point DATABASE_URL at an external/managed Postgres and run
-#                     only `api` + the worker lanes
-#                     (docker compose up api worker-committee worker-analytics worker-research)
+#                     `api` + internal worker lanes + independent producer
+#                     (docker compose up api worker-committee worker-analytics worker-research analytics-producer)
 
 # Task-queue worker lanes (issue #107): one container per execution lane. This
 # IS the production/default lane topology:
 #   worker-committee — RESERVED for interactive committee session-lifecycle
 #                      jobs (committee.%); no other lane may claim them.
-#   worker-analytics — regime classification + the scheduled data pipelines
-#                      (everything except committee.% / research.%).
-#   worker-research  — research.% only, so a slow/blocked research fetch can
-#                      never occupy a committee or regime slot.
+#   worker-analytics — internal scheduled pipelines (vault/wallet/buybacks/
+#                      projects), excluding committee.% / research.%.
+#   worker-research  — compatibility lane for unreachable legacy research.%
+#                      queue handlers; D25 producer execution does not use it.
+#   analytics-producer — owns regime/research timers and submits over REST; no
+#                        DATABASE_URL or admin credential.
 # WORKER_LANE is REQUIRED by the worker entry (fails loudly when empty/unknown);
 # WORKER_ID defaults to `<lane>-<pid>` (unique per container, lane-visible in
-# locked_by/logs/admin dashboard). Scale a lane independently, e.g.
-# `docker compose up -d --scale worker-research=2`.
+# locked_by/logs/admin dashboard). The producer is not a queue lane.
 x-worker-base: &worker-base
   build:
     context: .
@@ -70,15 +71,6 @@ x-worker-env: &worker-env
   # when unset.
   WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
   RM_ENV: ${RM_ENV:-demo}
-  # Updater → API wiring (issue #106): analytics jobs submit computed outputs
-  # through the authenticated /api/analytics/* boundary on the api service —
-  # never direct SQL. The token is the same shared secret the api verifies;
-  # a worker REFUSES to boot in demo/prod without it
-  # (assertAnalyticsUpdaterCredentials). Shared across lanes: every lane runs
-  # the same worker entry (only the analytics lane submits, but the boot guard
-  # is uniform and the secret is one deployment value).
-  ANALYTICS_API_URL: http://api:8787
-  ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
   # Activation notifications are persisted by the API and delivered by the
   # reserved committee worker through the deployment's HTTP mail adapter.
@@ -130,6 +122,7 @@ services:
       # POST /api/committee/regime + every /api/analytics/* route. Fail-closed:
       # unset locks those routes except under RM_ALLOW_INSECURE/ephemeral.
       ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
+      ANALYTICS_TOKEN_FILE: /run/secrets/analytics_token
       # Projects data source (backend/src/projects/access/select.ts). Unset →
       # offline fixture source (demo/dev). FAIL-CLOSED IN PROD: RM_ENV=prod
       # REQUIRES PROJECTS_SOURCE=live — the projects pipelines throw rather
@@ -177,6 +170,8 @@ services:
       - "8787"
     volumes:
       - ./frontend/public:/srv/frontend:ro
+    secrets:
+      - analytics_token
     depends_on:
       postgres:
         condition: service_healthy
@@ -200,8 +195,37 @@ services:
       <<: *worker-env
       WORKER_LANE: research
 
+  # Independent external producer (issue #361 Phase 4): no DATABASE_URL, no
+  # queue access, no ADMIN_TOKEN. It computes regime/research outputs in its own
+  # container and can persist only through the analytics REST submission gate.
+  analytics-producer:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["bun", "run", "src/producer/index.ts", "serve"]
+    environment:
+      ANALYTICS_API_URL: http://api:8787
+      ANALYTICS_TOKEN_FILE: /run/secrets/analytics_token
+      ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
+      PRODUCER_REGIME_CRON: ${PRODUCER_REGIME_CRON:-30 22 * * *}
+      PRODUCER_RESEARCH_CRON: ${PRODUCER_RESEARCH_CRON:-0 23 * * *}
+    secrets:
+      - analytics_token
+    depends_on:
+      - api
+    restart: unless-stopped
+
   # D21 retired the member-facing MCP server: committee members reach the
   # committee REST API on the `api` service directly (docs/decisions.md D21).
 
 volumes:
   pgdata:
+
+secrets:
+  analytics_token:
+    # Compose resolves every top-level secret even when the requested command
+    # only targets postgres/core services (or is merely `config`, `ps`, or
+    # `down`).  Keep parsing independent of producer launch; the shared full
+    # stack preflight validates a real non-empty file before `up`, and the
+    # producer itself refuses to boot from this empty sentinel.
+    file: ${ANALYTICS_TOKEN_FILE_HOST:-/dev/null}

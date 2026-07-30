@@ -2,6 +2,7 @@
 // RM_ENV selects behavior hints (ephemeral | demo | prod) but the connection
 // itself is always driven by DATABASE_URL so the same code runs everywhere.
 import parser from "cron-parser";
+import { envSecret } from "./lib/env-secret.ts";
 
 function required(name: string): string {
   const v = process.env[name];
@@ -443,7 +444,7 @@ export const config = {
   // regime via POST /api/committee/regime. Presented as a Bearer token. If set,
   // it is required (every env); if unset, the role is allowed only outside prod
   // (demo/ephemeral convenience), mirroring adminToken.
-  analyticsToken: process.env.ANALYTICS_TOKEN || null,
+  analyticsToken: envSecret("ANALYTICS_TOKEN"),
   // Swarm activation email uses a durable outbox + swarm worker job.
   // The sender is persisted with the message; the deployment transport is an
   // HTTP email adapter invoked only by that worker (tests inject a fake).

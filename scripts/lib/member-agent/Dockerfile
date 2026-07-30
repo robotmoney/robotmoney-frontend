@@ -23,9 +23,9 @@ ARG OPENCODE_LINUX_X64_SHA256=9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b9948
 # class as curl/git/jq above — it carries no Robot Money knowledge. It exists
 # here because a SITTING committee member's container runs the member's own
 # deterministic session client (scripts/agent/member-session-client.ts,
-# mounted read-only at launch by the member's owner — exactly like an operator
-# installing the published starter client on their own machine), and that
-# client is TypeScript. The onboarding EVAL's vanilla-ness is unchanged: the
+# bundled into one sanitized artifact and mounted read-only at launch by the
+# member's owner — exactly like an operator installing the published starter
+# client on their own machine). The onboarding EVAL's vanilla-ness is unchanged: the
 # eval still injects only the canonical prompt, and nothing Robot-Money-
 # specific is baked in.
 ARG BUN_VERSION=1.3.5

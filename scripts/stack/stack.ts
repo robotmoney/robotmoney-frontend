@@ -38,6 +38,7 @@ import {
   type StackHostPorts,
 } from "./config.ts";
 import { parseComposePortOutput, PortDiscoveryError } from "./ports.ts";
+import { readFileSync } from "node:fs";
 
 export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "ports" | "health";
 
@@ -100,6 +101,28 @@ export interface Stack {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * A full stack starts the independent analytics producer, so its Docker-secret
+ * source must exist and contain a credential before Docker does any work.
+ * Core/status/down operations deliberately do not have this requirement.
+ */
+export function assertFullStackProducerCredential(cfg: StackConfig): void {
+  if (cfg.profile !== "full") return;
+  const file = cfg.credentials.analyticsTokenFile;
+  if (!file) {
+    throw new Error("full stack profile requires credentials.analyticsTokenFile for the independent analytics producer");
+  }
+  let value: string;
+  try {
+    value = readFileSync(file, "utf8").trim();
+  } catch (error) {
+    throw new Error(
+      `full stack analytics producer credential file is not readable: ${file} (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  if (!value) throw new Error(`full stack analytics producer credential file is empty: ${file}`);
+}
 
 function decode(buf: unknown): string {
   return buf instanceof Uint8Array ? new TextDecoder().decode(buf) : "";
@@ -257,6 +280,7 @@ export function createStack(
   }
 
   async function up(upOpts: StackUpOptions = {}): Promise<StackHostPorts> {
+    assertFullStackProducerCredential(cfg);
     assertDockerAvailable();
     await build();
 

@@ -1,7 +1,7 @@
 // GET /api/admin/overview projection (issue #155, docs/architecture.md
-// US-A2). Composes queue counts, production-kind (regime.classify /
-// research.refresh) run health, regime + research staleness, enabled
-// analytics schedules, the next queued swarm event, and an explicit
+// US-A2). Composes queue counts, historical consumer-kind (regime.classify /
+// research.refresh) run health, regime + research staleness, any accidentally
+// enabled legacy analytics schedules, the next queued swarm event, and an explicit
 // `alerts` feed distinguishing not_run/running/degraded/failed/dead/stale/
 // healthy — never guessed, always derived from the same columns the rest of
 // the admin surface reads.
@@ -13,9 +13,9 @@ import { computeRegimeStaleness, type RegimeStaleness } from "../analytics/repor
 // named constant RESEARCH_STALE_DAYS = 2 in the admin projection").
 export const RESEARCH_STALE_DAYS = 2;
 
-// The two scheduled production job kinds this projection reports on by name
-// (docs/architecture.md §3: "The production jobs are regime.classify at
-// 22:30 UTC and research.refresh at 23:00 UTC").
+// Retired consumer-queue analytics kinds. The overview still recognizes them
+// so stale/dead rows remain visible and admin mutation paths can reject them;
+// the independent producer does not enqueue either kind.
 export const PRODUCTION_KINDS = ["regime.classify", "research.refresh"] as const;
 export type ProductionKind = (typeof PRODUCTION_KINDS)[number];
 

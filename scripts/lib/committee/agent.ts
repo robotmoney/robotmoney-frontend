@@ -30,12 +30,15 @@
 // its admission already bound its key, and a broken stored credential renders
 // it absent rather than re-keyed.
 import { ROUTES } from "@robotmoney/contract";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ensureMemberVolume,
   memberHomeVolumeName,
   runMemberAgent,
+  type MemberAgentMount,
   type MemberAgentModel,
 } from "../../agent/member-agent.ts";
 import { DEFAULT_API_URL_INTERNAL, resolveModelConfig } from "../onboarding-eval.ts";
@@ -43,11 +46,51 @@ import { DEFAULT_COMPOSE_FILES } from "../../stack/config.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(scriptDir, "..", "..", "..");
-// Where the member's own client software lives inside the container: a
-// READ-ONLY bind of this checkout, the runnable analogue of "the owner
-// installed the published client on the member's machine".
-const CLIENT_MOUNT_TARGET = "/rm";
-const CLIENT_ENTRY = `${CLIENT_MOUNT_TARGET}/scripts/agent/member-session-client.ts`;
+// Where the member's own client software lives inside the container. The host
+// builds one self-contained artifact into a per-run OS temp directory and
+// mounts ONLY that file read-only. The repository/worktree is never mounted:
+// read-only access would still disclose .env, .agents, and unrelated source or
+// credentials to a model-driven member process.
+export const CLIENT_ENTRY = "/opt/robotmoney/member-session-client.js";
+
+export interface MemberSessionRuntime {
+  artifactPath: string;
+  dispose(): void;
+}
+
+/** Build the minimal member runtime outside the repository/worktree. */
+export async function buildMemberSessionRuntime(repoRoot: string): Promise<MemberSessionRuntime> {
+  const runtimeDir = mkdtempSync(join(tmpdir(), "robotmoney-member-client-"));
+  const artifactPath = join(runtimeDir, "member-session-client.js");
+  try {
+    const built = await Bun.build({
+      entrypoints: [join(repoRoot, "scripts", "agent", "member-session-client.ts")],
+      outdir: runtimeDir,
+      naming: "member-session-client.js",
+      target: "bun",
+      format: "esm",
+      sourcemap: "none",
+    });
+    if (!built.success) {
+      throw new Error(`member session client bundle failed: ${built.logs.map(String).join("; ")}`);
+    }
+    return {
+      artifactPath,
+      dispose: () => rmSync(runtimeDir, { recursive: true, force: true }),
+    };
+  } catch (err) {
+    rmSync(runtimeDir, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+/** The complete session-member mount set: one sanitized file + durable HOME. */
+export function memberSessionMounts(runtimeArtifact: string, homeVolume: string): MemberAgentMount[] {
+  return [
+    { source: runtimeArtifact, target: CLIENT_ENTRY, readonly: true },
+    { source: homeVolume, target: "/home/agent" },
+  ];
+}
 
 function backendUrl(): string {
   return process.env.BACKEND_URL ?? "http://localhost:8787";
@@ -162,32 +205,34 @@ interface MemberRunOpts {
 }
 
 async function runMemberContainer(rail: SessionRail, o: MemberRunOpts) {
-  return runMemberAgent({
-    repoRoot: rail.repoRoot,
-    composeProject: rail.composeProject,
-    composeFiles: rail.composeFiles,
-    runId: o.runId,
-    entrypoint: "bun",
-    command: [CLIENT_ENTRY, o.mode],
-    mounts: [
-      { source: rail.repoRoot, target: CLIENT_MOUNT_TARGET, readonly: true },
-      { source: o.homeVolume, target: "/home/agent" },
-    ],
-    extraEnv: {
-      RM_API_URL: rail.apiUrlInternal ?? DEFAULT_API_URL_INTERNAL,
-      AGENT_MODEL: rail.modelConfig.model,
-      ...o.extraEnv,
-    },
-    ownerEnv: o.ownerEnv,
-    modelConfig: rail.modelConfig,
-    composeSpawnEnv: rail.composeSpawnEnv,
-    timeoutMs: o.timeoutMs,
-    onStructuredEvent: o.onStdoutLine
-      ? (ev) => {
-          if (ev.source === "agent" && ev.stream === "stdout") o.onStdoutLine!(ev.message);
-        }
-      : undefined,
-  });
+  const runtime = await buildMemberSessionRuntime(rail.repoRoot);
+  try {
+    return await runMemberAgent({
+      repoRoot: rail.repoRoot,
+      composeProject: rail.composeProject,
+      composeFiles: rail.composeFiles,
+      runId: o.runId,
+      entrypoint: "bun",
+      command: [CLIENT_ENTRY, o.mode],
+      mounts: memberSessionMounts(runtime.artifactPath, o.homeVolume),
+      extraEnv: {
+        RM_API_URL: rail.apiUrlInternal ?? DEFAULT_API_URL_INTERNAL,
+        AGENT_MODEL: rail.modelConfig.model,
+        ...o.extraEnv,
+      },
+      ownerEnv: o.ownerEnv,
+      modelConfig: rail.modelConfig,
+      composeSpawnEnv: rail.composeSpawnEnv,
+      timeoutMs: o.timeoutMs,
+      onStructuredEvent: o.onStdoutLine
+        ? (ev) => {
+            if (ev.source === "agent" && ev.stream === "stdout") o.onStdoutLine!(ev.message);
+          }
+        : undefined,
+    });
+  } finally {
+    runtime.dispose();
+  }
 }
 
 // ── Enrollment (once per identity per harness process) ──────────────────────
@@ -244,7 +289,7 @@ async function ensureMemberIdentityUncached(
     );
   }
 
-  if (enroll.keystore === "rmpc") {
+  if (enroll.keystoreKind === "rmpc") {
     // Real-onboarded identity: its key was bound at admission; there is
     // nothing the harness may legitimately re-register. A dead stored token
     // is an honest absence, not a re-key.

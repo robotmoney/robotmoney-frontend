@@ -1,12 +1,12 @@
 // Hermetic guards on HOW committee inference invokes the opencode CLI: the argv
-// it passes, and the per-call environment isolation that keeps concurrent
-// members from racing each other inside the CLI's own local state database. A
+// it passes and the strict environment allowlist. Each invocation now runs
+// inside its member's own container/home, so the retired host-side temp-XDG
+// collision workaround has no place in this module. A
 // fake `opencode` on OPENCODE_BIN records one JSON file per invocation, so both
 // properties are asserted without a model call, a network hop, or a real
 // opencode binary.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { authorTake, opencodeSpawnEnv, parseStanceFromBody } from "../../lib/committee/inference.ts";
@@ -17,15 +17,17 @@ let callsDir = "";
 const originalBin = process.env.OPENCODE_BIN;
 const originalAdminToken = process.env.ADMIN_TOKEN;
 const originalAnalyticsToken = process.env.ANALYTICS_TOKEN;
+const originalMemberToken = process.env.RM_MEMBER_TOKEN;
+const originalPassphrase = process.env.RMPC_COMMITTEE_IDENTITY_PASSPHRASE;
 
 interface RecordedCall {
   argv: string[];
-  dataHome: string;
-  stateHome: string;
   // The subprocess's own view of the credentials the harness holds — asserted
   // EMPTY below (issue #361 Phase 0: scrubbed spawn env, not an inherit).
   adminToken: string;
   analyticsToken: string;
+  memberToken: string;
+  passphrase: string;
   envKeys: string[];
 }
 
@@ -46,10 +48,10 @@ await Bun.write(
   ${JSON.stringify(callsDir)} + "/" + crypto.randomUUID() + ".json",
   JSON.stringify({
     argv: Bun.argv.slice(2),
-    dataHome: process.env.XDG_DATA_HOME ?? "",
-    stateHome: process.env.XDG_STATE_HOME ?? "",
     adminToken: process.env.ADMIN_TOKEN ?? "",
     analyticsToken: process.env.ANALYTICS_TOKEN ?? "",
+    memberToken: process.env.RM_MEMBER_TOKEN ?? "",
+    passphrase: process.env.RMPC_COMMITTEE_IDENTITY_PASSPHRASE ?? "",
     envKeys: Object.keys(process.env).sort(),
   }),
 );
@@ -61,6 +63,8 @@ console.log(JSON.stringify({ type: "text", part: { type: "text", text: "**REGIME
   // reaches the spawned model subprocess.
   process.env.ADMIN_TOKEN = "planted-admin-token";
   process.env.ANALYTICS_TOKEN = "planted-analytics-token";
+  process.env.RM_MEMBER_TOKEN = "tok_planted_member_secret";
+  process.env.RMPC_COMMITTEE_IDENTITY_PASSPHRASE = "planted-keystore-passphrase";
 });
 
 afterAll(async () => {
@@ -70,12 +74,16 @@ afterAll(async () => {
   else process.env.ADMIN_TOKEN = originalAdminToken;
   if (originalAnalyticsToken === undefined) delete process.env.ANALYTICS_TOKEN;
   else process.env.ANALYTICS_TOKEN = originalAnalyticsToken;
+  if (originalMemberToken === undefined) delete process.env.RM_MEMBER_TOKEN;
+  else process.env.RM_MEMBER_TOKEN = originalMemberToken;
+  if (originalPassphrase === undefined) delete process.env.RMPC_COMMITTEE_IDENTITY_PASSPHRASE;
+  else process.env.RMPC_COMMITTEE_IDENTITY_PASSPHRASE = originalPassphrase;
   await rm(fakeDir, { recursive: true, force: true });
 });
 
 const persona = (memberId: string) => ({ memberId, name: memberId, lens: "risk", bias: 0 });
 
-test("committee inference passes OpenCode's real host-side auto-approval flag", async () => {
+test("committee inference passes OpenCode's real auto-approval flag", async () => {
   const take = await authorTake(persona("member-1"), { composite: 0.5 }, "subject-1");
 
   const calls = await recordedCalls();
@@ -87,56 +95,31 @@ test("committee inference passes OpenCode's real host-side auto-approval flag", 
   }
 });
 
-// Regression guard for the e2e "demo readiness gate" failing on one or two
-// committee members per run. Members author concurrently, and every one of
-// those `opencode run` processes migrates the CLI's SQLite state database under
-// $XDG_DATA_HOME/opencode on first use. Sharing one data home means exactly one
-// concurrent cold start wins the `CREATE TABLE workspace` race and the rest die
-// with "Unexpected error" BEFORE any model call — reported here as an empty
-// transcript, blaming the model for a collision in our own process management.
-describe("each opencode call gets its own XDG state, so concurrent members cannot race", () => {
-  test("concurrent authorTake calls never share a data home", async () => {
-    const before = (await recordedCalls()).length;
-    await Promise.all([
-      authorTake(persona("athena"), { composite: 0.5 }, "woon"),
-      authorTake(persona("boreas"), { composite: 0.5 }, "woon"),
-      authorTake(persona("cygnus"), { composite: 0.5 }, "woon"),
-    ]);
-
-    const fresh = (await recordedCalls()).slice(before);
-    expect(fresh.length).toBe(3);
-    for (const call of fresh) {
-      expect(call.dataHome).not.toBe("");
-      expect(call.stateHome).not.toBe("");
-      // Scratch state, not the runner's real home: nothing here outlives the call.
-      expect(call.dataHome).toContain("committee-opencode-home-");
-      // ...and it is cleaned up once the call returns.
-      expect(existsSync(call.dataHome)).toBe(false);
-    }
-    expect(new Set(fresh.map((c) => c.dataHome)).size).toBe(3);
-    expect(new Set(fresh.map((c) => c.stateHome)).size).toBe(3);
-  });
-});
-
 // ── Issue #361 Phase 0: the spawn environment is an ALLOWLIST, not an inherit ─
 describe("opencode subprocess env is scrubbed down to the single model credential", () => {
-  test("a spawned call never sees ADMIN_TOKEN / ANALYTICS_TOKEN even when the harness holds them", async () => {
+  test("a spawned call sees only the model key, never product or member credentials", async () => {
     const before = (await recordedCalls()).length;
     await authorTake(persona("scrub-check"), { composite: 0.5 }, "subject-1");
     const fresh = (await recordedCalls()).slice(before);
     expect(fresh.length).toBe(1);
-    // The harness process REALLY held both (planted in beforeAll) …
+    // The member-client process REALLY held all four (planted in beforeAll) …
     expect(process.env.ADMIN_TOKEN).toBe("planted-admin-token");
     expect(process.env.ANALYTICS_TOKEN).toBe("planted-analytics-token");
     // … and the subprocess saw neither.
     expect(fresh[0].adminToken).toBe("");
     expect(fresh[0].analyticsToken).toBe("");
+    expect(fresh[0].memberToken).toBe("");
+    expect(fresh[0].passphrase).toBe("");
     expect(fresh[0].envKeys).not.toContain("ADMIN_TOKEN");
     expect(fresh[0].envKeys).not.toContain("ANALYTICS_TOKEN");
-    // Everything present is on the documented allowlist (+ the per-call XDG
-    // isolation dirs).
-    const allowed = new Set(["PATH", "HOME", "TERM", "OPENCODE_API_KEY", "XDG_DATA_HOME", "XDG_STATE_HOME"]);
+    expect(fresh[0].envKeys).not.toContain("RM_MEMBER_TOKEN");
+    expect(fresh[0].envKeys).not.toContain("RMPC_COMMITTEE_IDENTITY_PASSPHRASE");
+    // Everything present is on the documented allowlist. XDG overrides are
+    // intentionally absent: isolation comes from the member container HOME.
+    const allowed = new Set(["PATH", "HOME", "TERM", "OPENCODE_API_KEY"]);
     for (const k of fresh[0].envKeys) expect(allowed.has(k)).toBe(true);
+    expect(fresh[0].envKeys).not.toContain("XDG_DATA_HOME");
+    expect(fresh[0].envKeys).not.toContain("XDG_STATE_HOME");
   });
 
   test("opencodeSpawnEnv is a pure allowlist over its input", () => {

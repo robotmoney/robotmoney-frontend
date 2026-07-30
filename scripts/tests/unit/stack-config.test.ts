@@ -9,7 +9,11 @@
 //     ambient provider key or an operator's own admin token can never reach a
 //     container.
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  assertFullStackProducerCredential,
   buildComposeEnv,
   buildSpawnEnv,
   composeArgs,
@@ -27,6 +31,7 @@ import {
   servicesFor,
   upArgs,
   WORKER_LANE_SERVICES,
+  PRODUCER_SERVICES,
   type StackConfig,
 } from "../../stack/index.ts";
 
@@ -55,18 +60,25 @@ describe("stack profiles", () => {
     expect(servicesFor("core")).not.toContain("member-agent");
   });
 
-  test("full is core plus the three worker lanes, in order", () => {
-    expect(servicesFor("full")).toEqual([...CORE_SERVICES, ...WORKER_LANE_SERVICES]);
+  test("full is core plus worker lanes and the independent producer, in order", () => {
+    expect(servicesFor("full")).toEqual([...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES]);
     expect(servicesFor("full")).not.toContain("member-agent");
   });
 });
 
 describe("buildComposeEnv", () => {
+  test("full profile requires a real producer credential file", () => {
+    expect(() => buildComposeEnv(cfg({ profile: "full" }))).toThrow(
+      "full stack profile requires credentials.analyticsTokenFile",
+    );
+  });
+
   test("returns EXACTLY the compose interpolation keys — and no COMPOSE_FILE/COMPOSE_PROJECT_NAME", () => {
     const env = buildComposeEnv(cfg());
     expect(Object.keys(env).sort()).toEqual([
       "ADMIN_TOKEN",
       "ANALYTICS_TOKEN",
+      "ANALYTICS_TOKEN_FILE_HOST",
       "DATABASE_URL",
       "DEMO_PROJECT",
       "POSTGRES_DB",
@@ -107,6 +119,39 @@ describe("buildComposeEnv", () => {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
       }
+    }
+  });
+});
+
+describe("full-stack producer credential preflight", () => {
+  test("core does not require producer secret material", () => {
+    expect(() => assertFullStackProducerCredential(cfg())).not.toThrow();
+  });
+
+  test("full rejects missing, unreadable, and empty token files before Docker launch", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rm-stack-token-preflight-"));
+    try {
+      expect(() => assertFullStackProducerCredential(cfg({ profile: "full" }))).toThrow(
+        "full stack profile requires credentials.analyticsTokenFile",
+      );
+      expect(() => assertFullStackProducerCredential(cfg({
+        profile: "full",
+        credentials: { adminToken: "a", analyticsToken: "b", analyticsTokenFile: join(dir, "missing") },
+      }))).toThrow("is not readable");
+      const empty = join(dir, "empty");
+      writeFileSync(empty, "\n", { mode: 0o600 });
+      expect(() => assertFullStackProducerCredential(cfg({
+        profile: "full",
+        credentials: { adminToken: "a", analyticsToken: "b", analyticsTokenFile: empty },
+      }))).toThrow("is empty");
+      const valid = join(dir, "valid");
+      writeFileSync(valid, "bearer\n", { mode: 0o600 });
+      expect(() => assertFullStackProducerCredential(cfg({
+        profile: "full",
+        credentials: { adminToken: "a", analyticsToken: "b", analyticsTokenFile: valid },
+      }))).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

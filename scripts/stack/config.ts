@@ -35,7 +35,8 @@ export type StackProfile = "core" | "full";
 
 export const CORE_SERVICES = ["postgres", "api"] as const;
 export const WORKER_LANE_SERVICES = ["worker-committee", "worker-analytics", "worker-research"] as const;
-export const FULL_SERVICES = [...CORE_SERVICES, ...WORKER_LANE_SERVICES] as const;
+export const PRODUCER_SERVICES = ["analytics-producer"] as const;
+export const FULL_SERVICES = [...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES] as const;
 
 // Services are always named EXPLICITLY (never a bare `docker compose up -d`),
 // so a compose service added in the future can never leak into `core`.
@@ -109,6 +110,8 @@ export interface StackCredentials {
   // Analytics-provider bearer (issue #106): the api verifies it, the worker
   // submits with it. Fresh per stack, never printed anywhere.
   analyticsToken: string;
+  /** Optional host path mounted as a Docker secret; avoids placing the token in child env. */
+  analyticsTokenFile?: string;
 }
 
 // A FUNCTION, called by the caller — never executed on import (invariant 1).
@@ -153,6 +156,11 @@ export interface StackConfig {
 // topology is expressed as argv (`-p` / `-f`, see composeArgs) so a stale
 // exported COMPOSE_* value can never redirect a bring-up.
 export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
+  if (cfg.profile === "full" && !cfg.credentials.analyticsTokenFile) {
+    throw new Error(
+      "full stack profile requires credentials.analyticsTokenFile for the independent analytics producer",
+    );
+  }
   return {
     DEMO_PROJECT: cfg.project,
     // The environment labels every demo-overlay service and the pgdata volume
@@ -164,7 +172,8 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     [ENV_HASH_COMPOSE_VAR]: cfg.environment.hash,
     DATABASE_URL: internalDatabaseUrl(cfg.database),
     ADMIN_TOKEN: cfg.credentials.adminToken,
-    ANALYTICS_TOKEN: cfg.credentials.analyticsToken,
+    ANALYTICS_TOKEN: cfg.credentials.analyticsTokenFile ? "" : cfg.credentials.analyticsToken,
+    ANALYTICS_TOKEN_FILE_HOST: cfg.credentials.analyticsTokenFile ?? "/dev/null",
     // No WEB_PORT / POSTGRES_PORT. They were compose interpolation OUTPUTS
     // right up until the compose files stopped naming a host port at all
     // (`ports: ["8787"]` / `["5432"]` — Docker assigns the host side). Emitting

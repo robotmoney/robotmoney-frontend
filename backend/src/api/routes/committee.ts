@@ -252,11 +252,10 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
       // docs/architecture.md's authz model says admin credentials never
       // substitute for the analytics role, and regime data now only ever
       // arrives as a provider SUBMISSION (POST /api/committee/regime above, or
-      // the typed /api/analytics ingestion routes). Demo/e2e drivers that used
-      // it now enqueue the producer's own `regime.classify` job (see
-      // `enqueue-job` below): the worker-analytics lane computes and submits
-      // under its own credential. An old caller reaching for the removed
-      // action falls through to the 404 default — loud, not silent.
+      // the typed /api/analytics ingestion routes). The independent producer
+      // owns its own cadence; neither this dispatcher nor `enqueue-job` can
+      // create a consumer-worker analytics job. An old caller reaching for the
+      // removed action falls through to the 404 default — loud, not silent.
       case "subject": {
         const id = requiredString(b, "id", 100);
         const name = requiredString(b, "name", 200);
@@ -301,13 +300,6 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
           close_window: "committee.close_window",
           aggregate: "committee.aggregate",
           publish: "committee.publish",
-          // Platform-operated scheduling of the PRODUCER's own job (issue
-          // #361 Phase 4): the admin can ask the analytics worker to run its
-          // regime classification now, but the compute happens in the
-          // worker-analytics lane and the result arrives back through the
-          // authenticated analytics boundary under the provider credential —
-          // the admin token itself can no longer run the classifier.
-          regime_classify: "regime.classify",
         };
         const queueAction = requiredString(b, "action", 100);
         const kind = queueAction ? actionMap[queueAction] : undefined;

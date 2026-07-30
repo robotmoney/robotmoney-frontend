@@ -14,6 +14,7 @@ import {
   portArgs,
   POSTGRES_CONTAINER_PORT,
 } from "./stack/index.ts";
+import { buildDemoLifecycleComposeEnv } from "./lib/demo-lifecycle-env.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -61,18 +62,7 @@ const s: DemoState = JSON.parse(readFileSync(stateFile, "utf8"));
 // port anywhere (both services publish container ports only; the daemon assigns
 // the host side), so nothing here has to invent a value for `config`/`ps` to
 // resolve.
-const dockerEnv: Record<string, string> = {
-  ...process.env,
-  COMPOSE_PROJECT_NAME: s.project,
-  COMPOSE_FILE: s.composeFiles,
-  DEMO_PROJECT: s.project,
-  RM_STACK_ENV_CLASS: s.envClass ?? "unknown",
-  RM_STACK_ENV_HASH: s.envHash ?? "unknown",
-  DATABASE_URL: s.databaseUrl,
-  POSTGRES_USER: s.dbUser,
-  POSTGRES_PASSWORD: s.dbPassword,
-  POSTGRES_DB: s.dbName,
-} as Record<string, string>;
+const dockerEnv = buildDemoLifecycleComposeEnv(s, process.env);
 
 // THE LIVE PORTS COME FROM THE DAEMON, NOT FROM THE STATE FILE.
 //

@@ -10,12 +10,13 @@
 //     session-lifecycle kinds. No other lane may claim them, so swarm work
 //     is always immediately claimable regardless of what analytics/research are
 //     doing (service `worker-committee`).
-//   - `analytics` — regime classification + the scheduled data pipelines
+//   - `analytics` — non-research scheduled product pipelines
 //     (vault/wallet/buybacks/projects): everything EXCEPT `committee.%` and
-//     `research.%` (service `worker-analytics`).
-//   - `research` — claims ONLY `research.%`: the slow external research fetches
-//     are quarantined here so a blocked research job can never occupy a
-//     swarm or analytics slot (service `worker-research`).
+//     `research.%` (service `worker-analytics`). Legacy regime.classify rows are
+//     disabled/dead-lettered and have no supported enqueue path.
+//   - `research` — compatibility lane for legacy `research.%` queue rows. D25's
+//     independent producer owns supported research execution; seed retires
+//     pending rows and control-plane endpoints cannot create new ones.
 //   - `generic` — single-process dev/tooling convenience: everything EXCEPT the
 //     reserved `committee.%` kinds. A generic worker can NEVER consume reserved
 //     interactive capacity. Not part of the compose topology.

@@ -1,15 +1,14 @@
-// Demo-boot EDGAR/MNA seed ordering (issue #108): migrations complete, the
-// API becomes healthy, authenticated seed ingestion completes, and ONLY THEN
-// may the research schedule become eligible to claim research.refresh. This
-// is asserted two ways:
+// Demo-boot EDGAR/MNA seed ordering (issue #108, revised by D25): migrations
+// complete, the API becomes healthy, and authenticated seed ingestion completes
+// without touching the retired consumer research queue. This is asserted two
+// ways:
 //
 //   1. behaviourally — spawn the REAL backend/scripts/edgar-seed-bootstrap.ts
 //      CLI (the exact command scripts/lib/demo-main.ts runs after migrations
 //      + API readiness) against a minimal in-process stub standing in for
 //      the analytics API, and assert the seed-ingestion request always lands
-//      BEFORE the research-eligibility request — and, on a rejected/invalid
-//      credential, that the eligibility endpoint is NEVER called at all
-//      (fail-closed).
+//      while the retired research-eligibility endpoint is NEVER called — on
+//      success or on a rejected/invalid credential.
 //   2. structurally — scripts/lib/demo-main.ts (which spawns docker
 //      containers and cannot be safely imported here) is checked at the
 //      source-text level for calling this exact command AFTER API health and
@@ -99,7 +98,7 @@ async function runBootstrapCli(apiUrl: string, token: string | undefined, seedEn
   return { exitCode, stdout, stderr };
 }
 
-test("edgar-seed-bootstrap.ts: seed ingestion completes BEFORE research-eligibility is called", async () => {
+test("edgar-seed-bootstrap.ts: seed ingestion never calls the retired consumer research control path", async () => {
   const TOKEN = "tok_boot_ordering";
   const { server, requests } = startStubApi(TOKEN);
   const seed = writeTinySeedFixture();
@@ -111,8 +110,7 @@ test("edgar-seed-bootstrap.ts: seed ingestion completes BEFORE research-eligibil
     const seedIdx = requests.findIndex((r) => r.path === "/api/analytics/raw-history/seed");
     const eligIdx = requests.findIndex((r) => r.path === "/api/analytics/research-eligibility");
     expect(seedIdx).toBeGreaterThanOrEqual(0);
-    expect(eligIdx).toBeGreaterThanOrEqual(0);
-    expect(seedIdx).toBeLessThan(eligIdx); // strict ordering
+    expect(eligIdx).toBe(-1);
   } finally {
     server.stop(true);
     rmSync(seed.dir, { recursive: true, force: true });
@@ -151,9 +149,9 @@ test("edgar-seed-bootstrap.ts: a WRONG token also fails closed (403) before elig
 
 // ── structural: demo-main.ts wires the CLI after migrations+API health, before CI checks ──
 
-test("scripts/lib/demo-main.ts runs edgar-seed-bootstrap.ts AFTER API health and BEFORE the CI checks / local action loops", () => {
+test("scripts/lib/demo-main.ts runs the isolated producer seed command AFTER API health and BEFORE the CI checks / local action loops", () => {
   const src = readFileSync(join(repoRoot, "scripts", "lib", "demo-main.ts"), "utf8");
-  expect(src).toContain("edgar-seed-bootstrap.ts");
+  expect(src).toContain('"analytics-producer", "bun", "run", "src/producer/index.ts", "seed"');
 
   // The bring-up moved into scripts/stack (docs/architecture.md §11.3 E5):
   // `stack.up()` is now the step that ends with waitForHttp(`${backendUrl}/health`)
@@ -162,7 +160,7 @@ test("scripts/lib/demo-main.ts runs edgar-seed-bootstrap.ts AFTER API health and
   // health and precede any post-boot check — only the expression marking the
   // boundary moved.
   const apiHealthIdx = src.indexOf("await stack.up(");
-  const bootstrapIdx = src.indexOf("edgar-seed-bootstrap.ts");
+  const bootstrapIdx = src.indexOf('"analytics-producer", "bun", "run", "src/producer/index.ts", "seed"');
   const ciBranchIdx = src.indexOf("if (process.env.CI) {");
 
   expect(apiHealthIdx).toBeGreaterThan(-1);

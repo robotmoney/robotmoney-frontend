@@ -26,6 +26,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // #361 Phase 4): the annotations now derive from the server's OBSERVED
 // response status — strictly more truthful, and the analytics credential never
 // reaches this driver at all (it belongs to the producer and its verifier).
+// Keep the pure mirror exported for the hermetic polarity guard: callers must
+// inject an environment explicitly, so production session code cannot use it
+// as a reason to inspect or inherit the producer's credential.
+export function regimeWriteInsecure(env: Record<string, string | undefined>): boolean {
+  return env.RM_ALLOW_INSECURE === "1" && !env.ANALYTICS_TOKEN;
+}
 
 // Run `fn` over `items` with at most `limit` invocations in flight, returning
 // results in INPUT order as PromiseSettledResult — like Promise.allSettled but
@@ -210,29 +216,57 @@ export async function enqueueLifecycleJob(action: string, payload: Record<string
   return result;
 }
 
+export type ProducerComposeRail = Pick<
+  SessionRail,
+  "repoRoot" | "composeProject" | "composeFiles" | "composeSpawnEnv" | "backendUrl"
+>;
+
+export interface ProducerInvocationDeps {
+  runProducer?: (rail: ProducerComposeRail, asof: string) => Promise<void>;
+  readLatest?: (baseUrl: string) => Promise<any>;
+  wait?: (ms: number) => Promise<void>;
+}
+
+async function runProducerRegimeContainer(rail: ProducerComposeRail, asof: string): Promise<void> {
+  const producer = Bun.spawn(
+    ["docker", "compose", "-p", rail.composeProject, ...rail.composeFiles.flatMap((f) => ["-f", f]),
+      "run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "regime", asof],
+    { cwd: rail.repoRoot, env: rail.composeSpawnEnv, stdin: "ignore", stdout: "inherit", stderr: "inherit" },
+  );
+  const exit = await producer.exited;
+  if (exit !== 0) throw new Error(`independent analytics producer exited ${exit} for regime ${asof}`);
+}
+
 // Ask the PRODUCER to land a regime snapshot for `asof`, then wait until it is
 // served (issue #361 Phase 4). The former `admin("regime")` action ran the
 // classifier INSIDE the api process under the admin token; that path is
-// removed — the platform now only SCHEDULES the producer's own `regime.classify`
-// job, which the worker-analytics lane computes and submits back through the
-// authenticated analytics boundary under the provider credential. Waiting on
+// removed — this harness now launches the independent producer explicitly in
+// the target stack, and the producer submits through the authenticated
+// analytics boundary under its own provider credential. Waiting on
 // the PUBLIC read keeps this a black-box observation: the snapshot is "landed"
 // when the site would serve it.
-export async function runRegimeClassify(asof: string, timeoutMs = 300_000) {
-  await enqueueLifecycleJob("regime_classify", { asof });
+export async function runRegimeClassify(
+  asof: string,
+  rail: ProducerComposeRail,
+  timeoutMs = 300_000,
+  deps: ProducerInvocationDeps = {},
+) {
+  await (deps.runProducer ?? runProducerRegimeContainer)(rail, asof);
+  const readLatest = deps.readLatest ?? (async (baseUrl: string) =>
+    fetch(`${baseUrl}${ROUTES.dashboards.regimeSnapshots}?range=1`).then(responseJson).catch(() => null));
+  const wait = deps.wait ?? sleep;
+  const baseUrl = rail.backendUrl ?? backendUrl();
   const deadline = Date.now() + timeoutMs;
   let last: any = null;
   while (Date.now() < deadline) {
-    last = await fetch(`${backendUrl()}${ROUTES.dashboards.regimeSnapshots}?range=1`)
-      .then(responseJson)
-      .catch(() => null);
+    last = await readLatest(baseUrl);
     const servedAsof: string | null = last?.staleness?.asof ?? null;
     if (servedAsof && servedAsof >= asof) return last;
-    await sleep(2000);
+    await wait(2000);
   }
   throw new Error(
     `regime.classify for ${asof} did not land within ${timeoutMs}ms ` +
-      `(served asof: ${last?.staleness?.asof ?? "none"}) — is the worker-analytics lane running?`,
+      `(served asof: ${last?.staleness?.asof ?? "none"}) — is the analytics producer configured for this stack?`,
   );
 }
 
@@ -260,7 +294,7 @@ export async function runSession(
   // Ensure subject exists; regime is already seeded by the first session.
   if (sessionIndex > 0) {
     await admin("subject", subject);
-    await runRegimeClassify(date);
+    await runRegimeClassify(date, rail);
   }
 
   // Seed the reference-shaped subject fixtures (subject row + subject snapshot the
@@ -374,7 +408,7 @@ async function main() {
   // Setup (reset + subject are direct admin calls; the regime snapshot is the
   // PRODUCER's own job — issue #361 Phase 4)
   await admin("reset");
-  await runRegimeClassify(today);
+  await runRegimeClassify(today, rail);
   await admin("subject", SUBJECTS[0]);
 
   // Session 1: today's subject
@@ -428,7 +462,12 @@ async function main() {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ asof: today }),
   });
-  const regimeGateOpen = regimeWriteInsecure();
+  // A member token can only get past the analytics-role check when that gate
+  // is open. The body intentionally has the retired trigger shape, so 400 is
+  // positive evidence that authorization passed and payload validation ran;
+  // 403 is the enforced-role result. Observe that boundary instead of reading
+  // ANALYTICS_TOKEN in this harness process.
+  const regimeGateOpen = regimeWriteRes.status !== 403;
   console.log(`  cross-role: member → regime write → ${regimeWriteRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
   // 5d. Known member token calling admin lifecycle (same insecure-mode caveat).

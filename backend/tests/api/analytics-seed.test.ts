@@ -3,9 +3,9 @@
 // handleAnalytics route handler (same code the api process mounts) — no live
 // network, no mocked persistence. Covers: cold-DB load (empty→exact
 // projection, second load is a no-op), overlap precedence (existing real
-// value wins), authorization (401/403, zero row changes) for both the seed
-// client and the research-eligibility endpoint, and the research-eligibility
-// endpoint's real effect on job_schedules.
+// value wins), authorization (401/403, zero row changes), and the retired
+// research-eligibility control path's authenticated 409 with zero schedule/job
+// mutations. Analytics cadence belongs to the independent producer (D25).
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { gzipSync } from "node:zlib";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -15,7 +15,7 @@ import { sql } from "../../src/db/client.ts";
 import { config } from "../../src/config.ts";
 import { handleAnalytics } from "../../src/api/routes/analytics.ts";
 import { canonicalCsv, buildManifest, type EdgarSeedRow } from "../../src/analytics/extract/edgar-seed.ts";
-import { bootstrapEdgarSeed, enableResearchEligibility } from "../../src/analytics/edgar-seed-loader.ts";
+import { bootstrapEdgarSeed } from "../../src/analytics/edgar-seed-loader.ts";
 import type { AnalyticsApiConfig } from "../../src/analytics/api-client.ts";
 
 const TOKEN = "tok_edgar_seed_test";
@@ -48,6 +48,12 @@ let requests: { method: string; path: string; auth: string | null }[] = [];
 let cfg: AnalyticsApiConfig;
 const origAnalyticsToken = config.analyticsToken;
 const origAllowInsecure = config.allowInsecure;
+
+async function postResearchEligibility(token: string | null): Promise<Response> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return fetch(`${cfg.baseUrl}/api/analytics/research-eligibility`, { method: "POST", headers });
+}
 
 beforeEach(async () => {
   ({ dir: fixtureDir } = installSeedFixture());
@@ -141,99 +147,70 @@ test("wrong credentials: bootstrap client gets 403 and writes zero rows", async 
   expect(Number(rows[0]!.n)).toBe(0);
 });
 
-test("missing/invalid credentials: research-eligibility endpoint 401/403s and never flips the schedule", async () => {
+test("missing/invalid credentials: retired research-eligibility endpoint 401/403s before any mutation", async () => {
   await sql`
     INSERT INTO job_schedules (kind, cron, enabled) VALUES ('research.refresh', '0 23 * * *', false)`;
 
-  await expect(enableResearchEligibility({ baseUrl: cfg.baseUrl, token: null })).rejects.toThrow(/HTTP 401/);
-  await expect(enableResearchEligibility({ baseUrl: cfg.baseUrl, token: "wrong-token" })).rejects.toThrow(/HTTP 403/);
+  expect((await postResearchEligibility(null)).status).toBe(401);
+  expect((await postResearchEligibility("wrong-token")).status).toBe(403);
 
   const [row] = await sql<{ enabled: boolean }[]>`SELECT enabled FROM job_schedules WHERE kind = 'research.refresh'`;
   expect(row!.enabled).toBe(false);
 });
 
-// ── research-eligibility: the real gate job_schedules effect ────────────────
+// ── retired research-eligibility control plane ─────────────────────────────
 
-test("research-eligibility flips a disabled research.refresh schedule to enabled, and is idempotent", async () => {
-  await sql`
-    INSERT INTO job_schedules (kind, cron, enabled) VALUES ('research.refresh', '0 23 * * *', false)`;
-
-  await enableResearchEligibility(cfg);
-  const [after] = await sql<{ enabled: boolean }[]>`SELECT enabled FROM job_schedules WHERE kind = 'research.refresh'`;
-  expect(after!.enabled).toBe(true);
-
-  // Idempotent: calling again on an already-enabled schedule is a harmless no-op.
-  await enableResearchEligibility(cfg);
-  const [again] = await sql<{ enabled: boolean }[]>`SELECT enabled FROM job_schedules WHERE kind = 'research.refresh'`;
-  expect(again!.enabled).toBe(true);
-});
-
-test("research-eligibility never resurrects the demo's superseded ~2-minute row (#287), while enabling the hourly + daily ones", async () => {
-  // An already-deployed demo, seeded after #287: the hourly row supersedes the
-  // ~2-minute one, which db/seed.ts disabled. Enabling by kind ALONE would flip
-  // it straight back on at the next boot and restore the Base RPC drain.
+test("authenticated research-eligibility fails closed without enabling schedules or enqueueing consumer research", async () => {
   await sql`
     INSERT INTO job_schedules (kind, cron, enabled) VALUES
       ('research.refresh', '0 23 * * *', false),
       ('research.refresh', '37 * * * *', false),
       ('research.refresh', '1-59/2 * * * *', false)`;
+  const [before] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM jobs WHERE kind = 'research.refresh'`;
+  process.env.DEMO_MODE = "1";
 
-  await enableResearchEligibility(cfg);
+  const res = await postResearchEligibility(TOKEN);
+  expect(res.status).toBe(409);
+  expect(await res.json()).toEqual({
+    error: "research scheduling is owned by the independent analytics producer",
+    code: "producer_owned",
+  });
 
   const rows = await sql<{ cron: string; enabled: boolean }[]>`
     SELECT cron, enabled FROM job_schedules WHERE kind = 'research.refresh'`;
   const byCron = Object.fromEntries(rows.map((r) => [r.cron, r.enabled]));
-  expect(byCron["0 23 * * *"]).toBe(true);
-  expect(byCron["37 * * * *"]).toBe(true);
+  expect(byCron["0 23 * * *"]).toBe(false);
+  expect(byCron["37 * * * *"]).toBe(false);
   expect(byCron["1-59/2 * * * *"]).toBe(false);
+  const [after] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM jobs WHERE kind = 'research.refresh'`;
+  expect(after!.n).toBe(before!.n);
 });
 
-test("research-eligibility cold start (#287): under DEMO_MODE it enqueues exactly ONE immediate research.refresh, and never without it", async () => {
-  await sql`DELETE FROM jobs WHERE dedupe_key = 'research.refresh:coldstart'`;
-  await sql`
-    INSERT INTO job_schedules (kind, cron, enabled) VALUES ('research.refresh', '37 * * * *', false)`;
-  const coldStarts = async (): Promise<number> => {
-    const [row] = await sql<{ n: number }[]>`
-      SELECT count(*)::int AS n FROM jobs WHERE dedupe_key = 'research.refresh:coldstart'`;
-    return row!.n;
-  };
-
-  // Prod/CI (no DEMO_MODE): the daily 23:00 schedule owns the first run — no enqueue.
-  delete process.env.DEMO_MODE;
-  await enableResearchEligibility(cfg);
-  expect(await coldStarts()).toBe(0);
-
-  // Demo: hourly cadence would leave the readiness gate with no research leg
-  // for up to an hour, so the eligibility flip lands ONE immediate run.
-  process.env.DEMO_MODE = "1";
-  await sql`UPDATE job_schedules SET enabled = false WHERE kind = 'research.refresh'`;
-  await enableResearchEligibility(cfg);
-  expect(await coldStarts()).toBe(1);
-
-  // Idempotent on the constant dedupe_key: a re-boot never queues a second one.
-  await sql`UPDATE job_schedules SET enabled = false WHERE kind = 'research.refresh'`;
-  await enableResearchEligibility(cfg);
-  expect(await coldStarts()).toBe(1);
-
-  delete process.env.DEMO_MODE;
-  await sql`DELETE FROM jobs WHERE dedupe_key = 'research.refresh:coldstart'`;
-});
-
-test("bootstrap ingestion succeeding, then research-eligibility: the full ordered gate over the real API", async () => {
+test("seed ingestion succeeds while the retired control path remains fail-closed", async () => {
   await sql`
     INSERT INTO job_schedules (kind, cron, enabled) VALUES ('research.refresh', '0 23 * * *', false)`;
+  const [beforeJobs] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM jobs WHERE kind = 'research.refresh'`;
 
   const result = await bootstrapEdgarSeed(cfg);
   expect(result.seededPoints).toBe(3);
-  await enableResearchEligibility(cfg);
+  const control = await postResearchEligibility(TOKEN);
+  expect(control.status).toBe(409);
 
   const [row] = await sql<{ enabled: boolean }[]>`SELECT enabled FROM job_schedules WHERE kind = 'research.refresh'`;
-  expect(row!.enabled).toBe(true);
+  expect(row!.enabled).toBe(false);
+  const [jobs] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM jobs WHERE kind = 'research.refresh'`;
+  expect(jobs!.n).toBe(beforeJobs!.n);
 
-  // Every request carried the analytics-provider bearer over the real HTTP boundary.
-  expect(requests.length).toBeGreaterThanOrEqual(2);
+  // Both the supported seed write and retired control path authenticate first.
+  expect(requests.map((r) => r.path)).toEqual([
+    "/api/analytics/raw-history/seed",
+    "/api/analytics/research-eligibility",
+  ]);
   for (const r of requests) {
-    expect(r.path.startsWith("/api/analytics/")).toBe(true);
     expect(r.auth).toBe(`Bearer ${TOKEN}`);
   }
 });

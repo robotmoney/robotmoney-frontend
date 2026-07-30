@@ -66,6 +66,18 @@ const validBodies: [string, string, unknown][] = [
   ["POST", A.researchSignals, { signals: [{ key: `sig-${rid()}`, date: "1999-01-01", payload: { title: "t" } }] }],
 ];
 
+test("readiness authenticates the producer credential without reading or mutating analytics data", async () => {
+  prodAuth();
+  const before = await tableCounts();
+  expect((await call(req("GET", A.readiness)))?.status).toBe(401);
+  expect((await call(req("GET", A.readiness, undefined, "wrong-token")))?.status).toBe(403);
+  expect(await call(req("GET", A.readiness, undefined, TOKEN))).toEqual({
+    status: 200,
+    body: { ok: true, role: "analytics-provider" },
+  });
+  expect(await tableCounts()).toEqual(before);
+});
+
 test("every mutation: 401 with no bearer, 403 with a wrong/admin/member bearer — and ZERO row changes", async () => {
   prodAuth();
   // A real committee-member credential (the strongest confusable substitute).

@@ -51,7 +51,12 @@ import {
   runMemberAgent,
   type MemberAgentModel,
 } from "../../agent/member-agent.ts";
-import { ensureMemberIdentity } from "../../lib/committee/agent.ts";
+import {
+  buildMemberSessionRuntime,
+  CLIENT_ENTRY,
+  ensureMemberIdentity,
+  memberSessionMounts,
+} from "../../lib/committee/agent.ts";
 import {
   createStack,
   DEFAULT_COMPOSE_FILES,
@@ -389,34 +394,38 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     "SESSION RAIL (issue #361): a member container enrolls with a container-held key, the harness registers only the public key, and identity + credential persist across container runs",
     async () => {
       // Inference-OFF proof of the member-container session rail's enrollment
-      // half: the client runs under the image's own bun from the read-only
-      // repo mount, generates its ed25519 key INSIDE the container (persisted
+      // half: the client runs under the image's own bun from a read-only,
+      // self-contained artifact in OS temp space — the checkout itself is NOT
+      // mounted. It generates its ed25519 key INSIDE the container (persisted
       // in a labeled named volume), and the harness's only privileged act is
-      // registering the PUBLIC key. The authoring/submission half (a real
-      // model call) is executed and asserted by the required e2e demo gate's
+      // registering the PUBLIC key. The authoring/submission half (a real model
+      // call) is executed and asserted by the required e2e demo gate's
       // committee sessions (assertAuthoredTakes).
       const memberId = "rails-check";
       const volume = memberHomeVolumeName(stack!.config.project, memberId);
       ensureMemberVolume(volume, stack!.config.project, stack!.spawnEnv);
       const keyless: MemberAgentModel = { model: "opencode/unused-by-enroll", apiKeyEnv: null, apiKey: null };
-      const enrollRun = (ownerEnv?: Record<string, string>) =>
-        runMemberAgent({
-          repoRoot,
-          composeProject: stack!.config.project,
-          composeFiles: DEFAULT_COMPOSE_FILES,
-          runId: `${memberId}-${crypto.randomUUID().slice(0, 6)}`,
-          entrypoint: "bun",
-          command: ["/rm/scripts/agent/member-session-client.ts", "enroll"],
-          mounts: [
-            { source: repoRoot, target: "/rm", readonly: true },
-            { source: volume, target: "/home/agent" },
-          ],
-          extraEnv: { RM_API_URL: "http://api:8787", RM_MEMBER_ID: memberId },
-          ownerEnv,
-          modelConfig: keyless,
-          composeSpawnEnv: stack!.spawnEnv,
-          timeoutMs: TEST_TIMEOUT_MS,
-        });
+      const enrollRun = async (ownerEnv?: Record<string, string>) => {
+        const runtime = await buildMemberSessionRuntime(repoRoot);
+        try {
+          return await runMemberAgent({
+            repoRoot,
+            composeProject: stack!.config.project,
+            composeFiles: DEFAULT_COMPOSE_FILES,
+            runId: `${memberId}-${crypto.randomUUID().slice(0, 6)}`,
+            entrypoint: "bun",
+            command: [CLIENT_ENTRY, "enroll"],
+            mounts: memberSessionMounts(runtime.artifactPath, volume),
+            extraEnv: { RM_API_URL: "http://api:8787", RM_MEMBER_ID: memberId },
+            ownerEnv,
+            modelConfig: keyless,
+            composeSpawnEnv: stack!.spawnEnv,
+            timeoutMs: TEST_TIMEOUT_MS,
+          });
+        } finally {
+          runtime.dispose();
+        }
+      };
       const parseEnroll = (stdout: string) => {
         const line = stdout.split("\n").find((l) => l.trim().startsWith("RM_ENROLL "));
         expect(line, `no RM_ENROLL in client stdout: ${stdout.slice(-400)}`).toBeDefined();
@@ -427,7 +436,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
       const run1 = await enrollRun();
       expect(run1.exitCode).toBe(0);
       const enroll1 = parseEnroll(run1.stdout);
-      expect(enroll1.keystore).toBe("client");
+      expect(enroll1.keystoreKind).toBe("client");
       expect(enroll1.tokenValid).toBe(false);
       expect(typeof enroll1.publicKey).toBe("string");
 
