@@ -184,6 +184,22 @@
               <div class="cv__bucket-bars-svg" x-html="bucketWeightsBars()"></div>
             </div>
             <p class="cv__body-copy" x-show="recommendationRationale()" x-text="recommendationRationale()"></p>
+            <!-- Per-constituent weights. The bucket bars above say how much
+                 goes to each bucket; this says what is inside them, which is
+                 the question the allocation subject exists to answer. -->
+            <div class="cv__within" x-show="withinBucketWeights().length">
+              <p class="cv__panel-sub">Within-bucket weights &middot; per-item recommendations</p>
+              <template x-for="b in withinBucketWeights()" :key="b.bucket">
+                <div class="cv__within-bucket">
+                  <p class="cv__within-name" x-text="b.bucket"></p>
+                  <ul class="cv__within-list">
+                    <template x-for="it in b.items" :key="`${b.bucket}-${it.name}`">
+                      <li><span x-text="it.name"></span><b x-text="fmtPct1(it.weight)"></b></li>
+                    </template>
+                  </ul>
+                </div>
+              </template>
+            </div>
             <div class="cv__rec-actions" x-show="recommendationActions().length">
               <template x-for="a in recommendationActions()" :key="`${a.token}-${a.action}`">
                 <div class="cv__action-row">
@@ -233,7 +249,7 @@
                                take is not in this response, and x-show still
                                evaluates the binding. -->
                           <template x-if="isEcho(p.view) && takeOf(p.member_id)?.id">
-                            <a class="cv__dis-read" :href="takeHref(takeOf(p.member_id))">Read their take →</a>
+                            <a class="cv__dis-read" x-show="takeHref(takeOf(p.member_id))" :href="takeHref(takeOf(p.member_id))">Read their take →</a>
                           </template>
                         </span>
                       </li>

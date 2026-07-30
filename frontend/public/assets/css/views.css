@@ -698,3 +698,19 @@
 .adm-meta-grid dt { color: var(--color-text-muted); font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .adm-meta-grid dd { margin: 0; }
 .adm-bullet-list { list-style: disc; margin: 0 0 1rem; padding-left: 1.25rem; font-size: 0.85rem; }
+
+/* Within-bucket weights. The bucket bars say how much goes to each bucket; this
+   says what is inside them. Rows are a name and a number, tabular so the column
+   of percentages reads down. No fills: the figure is the point, not a bar. */
+.cv__within { margin-top: 1rem; }
+.cv__within-bucket { margin-top: 0.75rem; }
+.cv__within-name { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em;
+                   text-transform: uppercase; color: var(--color-text-dim); margin: 0 0 0.35rem; }
+.cv__within-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px;
+                   background: var(--color-border); border: 1px solid var(--color-border); }
+.cv__within-list li { display: flex; justify-content: space-between; align-items: baseline;
+                      gap: 1rem; background: var(--color-surface); padding: 0.4rem 0.65rem;
+                      font-size: 0.85rem; color: var(--color-text-muted); }
+.cv__within-list b { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+                     color: var(--color-text); font-weight: 600; }
+@media (min-width: 640px) { .cv__within-list { grid-template-columns: 1fr 1fr; } }

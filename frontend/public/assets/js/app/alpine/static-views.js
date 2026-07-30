@@ -73,9 +73,20 @@ function camelSession(raw) {
   };
 }
 
-function camelTake(raw) {
+// Exported so scripts/tests/unit/frontend-routes.test.ts can assert the
+// permalinkId contract directly: a take shaped like the member-scoped and
+// archive-scanned takes on the member profile (no `id`, only `member_id`)
+// must never mint a permalink out of the member id.
+export function camelTake(raw) {
   return {
     id: raw.id || raw.member_id || raw.memberId,
+    // The permalink id is NOT the same thing as `id` above. `id` falls back to
+    // the member id so x-for has something stable to key on, but the shipped
+    // archive's takes carry no id at all — only member_id — so that fallback was
+    // producing /committee/takes/athena, a member slug in a route that expects a
+    // take id. Three per session across 32 archived sessions: 96 links that all
+    // 404. Only a real take id gets a permalink.
+    permalinkId: raw.id ?? null,
     memberId: raw.memberId || raw.member_id,
     memberName: raw.memberName || raw.member_name,
     mode: raw.mode || "submit",
@@ -198,6 +209,38 @@ function pickSnapshotFor(snapshots, date) {
   return normalizeSnapshot(chosen);
 }
 
+// Exported alongside camelTake so scripts/tests/unit/frontend-routes.test.ts
+// can assert the two together: only permalinkId (never a member id) ever
+// produces a /committee/takes/* href.
+export function takeHref(take) {
+  return take?.permalinkId ? path(ROUTES.committee.takePermalink, { id: take.permalinkId }) : null;
+}
+
+// Shared with the Alpine `humanize` helper below and, via
+// withinBucketWeightsFrom(), exported so
+// scripts/tests/unit/frontend-routes.test.ts can assert the within-bucket
+// weight transform directly.
+function humanizeLabel(id) {
+  return String(id || "").replace(/[_-]+/g, " ").trim();
+}
+
+// Pure transform behind the Alpine `withinBucketWeights()` method (below):
+// normalizes a committeeRecommendation's per-bucket constituent weights into
+// the { bucket, items: [{ name, weight }] } rows session.html's `.cv__within`
+// block iterates. Exported so scripts/tests/unit/frontend-routes.test.ts can
+// assert AC2 (within-bucket weights render, matching production) without a
+// browser — the same reason camelTake/takeHref are exported above.
+export function withinBucketWeightsFrom(rec) {
+  const raw = rec?.withinBucketWeights || rec?.within_bucket_weights;
+  if (!raw || typeof raw !== "object") return [];
+  return Object.entries(raw).map(([bucket, items]) => ({
+    bucket: humanizeLabel(bucket),
+    items: Object.entries(items || {})
+      .map(([name, w]) => ({ name: humanizeLabel(name), weight: Number(w) || 0 }))
+      .sort((a, b) => b.weight - a.weight),
+  })).filter((b) => b.items.length);
+}
+
 const helpers = {
   // Strip punctuation before taking initials. Operators name their agents
   // freely, and "woon (test)" was rendering as "W(" — the second word's first
@@ -272,9 +315,7 @@ const helpers = {
   fallbackMandate(member) {
     return `Evaluate each subject through the ${member?.lens || "committee"} lens and submit a signed stance with confidence and rationale.`;
   },
-  takeHref(take) {
-    return path(ROUTES.committee.takePermalink, { id: take?.id });
-  },
+  takeHref,
   escapeHtml(text) {
     return String(text ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
   },
@@ -1065,7 +1106,10 @@ export function registerStaticViews(Alpine) {
         const res = await api.get(`${path(ROUTES.committee.memberTakes, { id: memberId })}?limit=50`);
         return (res.takes || []).map((r) => ({
           session: { date: r.sessionDate, subjectId: r.subjectId, subjectName: r.subjectName, state: r.sessionState },
-          take: r.take,
+          // camelTake, not the raw row: raw takes carry no `permalinkId`, only
+          // `id`/`member_id`, so takeHref() silently returned null for every
+          // take on this page and the "Verification receipt" link vanished.
+          take: camelTake(r.take),
           phase: this.takePhase(r.sessionState),
         }));
       } catch (_) {
@@ -1098,7 +1142,11 @@ export function registerStaticViews(Alpine) {
       }));
       return details
         .map((session) => {
-          const take = (session.takes || []).find((t) => t.memberId === this.member?.id);
+          // camelTake before matching: this is the fallback path for the
+          // pre-2026-07-01 static archive, whose takes are snake_case and
+          // carry no `permalinkId` until camelTake derives one from a real
+          // take `id` (never from `member_id`).
+          const take = (session.takes || []).map(camelTake).find((t) => t.memberId === this.member?.id);
           return take ? { session, take, phase: this.takePhase(session.state) } : null;
         })
         .filter(Boolean);
@@ -1349,7 +1397,7 @@ export function registerStaticViews(Alpine) {
       return `--c:${colors[i % colors.length]};--p:${this.clampPct((p.share || 0) * 100)};`;
     },
     humanize(id) {
-      return String(id || "").replace(/[_-]+/g, " ").trim();
+      return humanizeLabel(id);
     },
     // Inline-SVG panel-divergence bars (macro/onchain/factor percentiles) with a
     // dashed 50th-percentile reference line — mirrors the reference
@@ -1398,6 +1446,14 @@ export function registerStaticViews(Alpine) {
       return Object.entries(weights).map(([id, w]) => ({
         name: this.humanize(id), target: null, actual: null, recommended: num(w) ?? 0,
       }));
+    },
+    // Per-constituent weights inside each bucket. The payload has carried
+    // `within_bucket_weights` all along and nothing rendered it, so allocation
+    // sessions answered "95/5/0/0" and stopped — while the page's own copy asks
+    // "within each bucket are the right constituents weighted correctly?".
+    // Production prints this table; this rebuild dropped it.
+    withinBucketWeights() {
+      return withinBucketWeightsFrom(this.session?.committeeRecommendation);
     },
     isBucketWeights() {
       const rec = this.session?.committeeRecommendation;
