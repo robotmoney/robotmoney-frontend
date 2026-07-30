@@ -1,4 +1,4 @@
-# Nightly REAL committee-member inference check (issue #77).
+# Nightly real-inference onboarding sweep.
 #
 # WHY THIS SUITE EXISTS
 # Real-inference onboarding — a vanilla OpenCode agent navigating our own docs
@@ -12,15 +12,9 @@
 # deleted that harness (scripts/opencode-committee-tools-test.ts, mcp/), so the
 # job is removed here — it tested a surface that no longer exists.
 #
-# COVERAGE GAP (honest): with that job gone, NO CI job currently exercises the
-# real-model committee-take authoring path (COMMITTEE_REAL_INFERENCE=1,
-# scripts/lib/committee/inference.ts) — every committee take in CI, including in
-# the demo boot below, takes the deterministic stanceFor()/buildMemo() template
-# path. Re-establishing that coverage — a job that sets COMMITTEE_REAL_INFERENCE=1
-# and loud-fails on the deterministic fallback, and/or drives an external
-# real-inference agent through the REST participation chain — is follow-up work,
-# not part of the retirement. What IS covered nightly below is real-inference
-# ONBOARDING (ONBOARDING_REAL_EVAL), a different surface.
+# Committee takes in every demo session are live-authored in
+# scripts/lib/committee/inference.ts; this workflow additionally sweeps the
+# distinct live-inference onboarding surface.
 #
 # CREDENTIAL
 # The sweep runs FUNDED models billed to the `OPENCODE_API_KEY` repo secret
