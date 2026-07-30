@@ -216,6 +216,31 @@ export function takeHref(take) {
   return take?.permalinkId ? path(ROUTES.committee.takePermalink, { id: take.permalinkId }) : null;
 }
 
+// Shared with the Alpine `humanize` helper below and, via
+// withinBucketWeightsFrom(), exported so
+// scripts/tests/unit/frontend-routes.test.ts can assert the within-bucket
+// weight transform directly.
+function humanizeLabel(id) {
+  return String(id || "").replace(/[_-]+/g, " ").trim();
+}
+
+// Pure transform behind the Alpine `withinBucketWeights()` method (below):
+// normalizes a committeeRecommendation's per-bucket constituent weights into
+// the { bucket, items: [{ name, weight }] } rows session.html's `.cv__within`
+// block iterates. Exported so scripts/tests/unit/frontend-routes.test.ts can
+// assert AC2 (within-bucket weights render, matching production) without a
+// browser — the same reason camelTake/takeHref are exported above.
+export function withinBucketWeightsFrom(rec) {
+  const raw = rec?.withinBucketWeights || rec?.within_bucket_weights;
+  if (!raw || typeof raw !== "object") return [];
+  return Object.entries(raw).map(([bucket, items]) => ({
+    bucket: humanizeLabel(bucket),
+    items: Object.entries(items || {})
+      .map(([name, w]) => ({ name: humanizeLabel(name), weight: Number(w) || 0 }))
+      .sort((a, b) => b.weight - a.weight),
+  })).filter((b) => b.items.length);
+}
+
 const helpers = {
   // Strip punctuation before taking initials. Operators name their agents
   // freely, and "woon (test)" was rendering as "W(" — the second word's first
@@ -1372,7 +1397,7 @@ export function registerStaticViews(Alpine) {
       return `--c:${colors[i % colors.length]};--p:${this.clampPct((p.share || 0) * 100)};`;
     },
     humanize(id) {
-      return String(id || "").replace(/[_-]+/g, " ").trim();
+      return humanizeLabel(id);
     },
     // Inline-SVG panel-divergence bars (macro/onchain/factor percentiles) with a
     // dashed 50th-percentile reference line — mirrors the reference
@@ -1428,15 +1453,7 @@ export function registerStaticViews(Alpine) {
     // "within each bucket are the right constituents weighted correctly?".
     // Production prints this table; this rebuild dropped it.
     withinBucketWeights() {
-      const rec = this.session?.committeeRecommendation;
-      const raw = rec?.withinBucketWeights || rec?.within_bucket_weights;
-      if (!raw || typeof raw !== "object") return [];
-      return Object.entries(raw).map(([bucket, items]) => ({
-        bucket: this.humanize(bucket),
-        items: Object.entries(items || {})
-          .map(([name, w]) => ({ name: this.humanize(name), weight: Number(w) || 0 }))
-          .sort((a, b) => b.weight - a.weight),
-      })).filter((b) => b.items.length);
+      return withinBucketWeightsFrom(this.session?.committeeRecommendation);
     },
     isBucketWeights() {
       const rec = this.session?.committeeRecommendation;

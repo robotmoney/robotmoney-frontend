@@ -15,6 +15,7 @@ import {
   loadArchiveSnapshot,
   structuralNotesOf,
   takeHref,
+  withinBucketWeightsFrom,
 } from "../../../frontend/public/assets/js/app/alpine/static-views.js";
 
 const repoRoot = join(import.meta.dir, "../../..");
@@ -308,5 +309,66 @@ describe("frontend route resolution", () => {
     expect(takeHref(rawWithRealId)).toBeNull();
     // After the fix, camelTake'ing the row restores it.
     expect(takeHref(camelTake(rawWithRealId))).toBe("/committee/takes/take-real-1");
+  });
+
+  // issue #359 AC2: `within_bucket_weights` has been in the session payload
+  // all along — the API/archive never stopped serving it — but no surface
+  // read it, so an allocation session's own bucket_weights table answered
+  // "95/5/0/0" and stopped, on a page whose copy asks "within each bucket are
+  // the right constituents weighted correctly?". withinBucketWeightsFrom() is
+  // the pure transform behind session.html's `.cv__within` block (the
+  // Alpine `withinBucketWeights()` method just delegates to it), exported the
+  // same way camelTake/takeHref are so this can be asserted without a
+  // browser. This drives it off the real archived fixture that shipped with
+  // the fix — 2026-06-13/robotmoney-allocation, which the fix commit verified
+  // in-browser rendered "Aave 32% / Morpho 32% / Sky 22% / Compound 14%".
+  test("withinBucketWeightsFrom renders the archived allocation session's 4 buckets with production's constituent weights", async () => {
+    const detail = await loadArchiveSession("2026-06-13", "robotmoney-allocation");
+    if (!detail.session) throw new Error("archive session normalized to null");
+
+    const rec = detail.session.committeeRecommendation as { type: string; within_bucket_weights: Record<string, Record<string, number>> };
+    expect(rec.type).toBe("bucket_weights");
+    expect(Object.keys(rec.within_bucket_weights)).toHaveLength(4);
+
+    const groups = withinBucketWeightsFrom(rec);
+    expect(groups).toHaveLength(4);
+    expect(groups.map((g) => g.bucket)).toEqual([
+      "conservative defi yield",
+      "agent tokens",
+      "protocol tokens",
+      "real world assets",
+    ]);
+
+    // Conservative DeFi Yield: the exact production readout from the fix
+    // commit's browser verification (Aave 32 / Morpho 32 / Sky 22 / Compound
+    // 14), sorted by weight descending — ties (aave/morpho at 0.32) keep
+    // their payload order under a stable sort.
+    const conservative = groups[0];
+    expect(conservative.items).toEqual([
+      { name: "aave", weight: 0.32 },
+      { name: "morpho", weight: 0.32 },
+      { name: "sky", weight: 0.22 },
+      { name: "compound", weight: 0.14 },
+    ]);
+    // fmtPct1's convention (one decimal place, e.g. "32.0%") is what
+    // session.html's `.cv__within-list` binds each item's weight through —
+    // confirm the raw numbers this test asserts are exactly what that
+    // formatter would print, so a future rounding regression in either place
+    // shows up here too.
+    const fmtPct1 = (v: number) => `${(v * 100).toFixed(1)}%`;
+    expect(conservative.items.map((it) => fmtPct1(it.weight))).toEqual(["32.0%", "32.0%", "22.0%", "14.0%"]);
+
+    // Every group is non-empty (the transform filters out empty buckets) and
+    // every weight round-trips to a finite number, not NaN/undefined.
+    for (const group of groups) {
+      expect(group.items.length).toBeGreaterThan(0);
+      for (const item of group.items) expect(Number.isFinite(item.weight)).toBe(true);
+    }
+
+    // A recommendation with no within_bucket_weights payload at all (older
+    // archived sessions, or a non-allocation subject) must render nothing —
+    // the `.cv__within` block's x-show guards on this being empty.
+    expect(withinBucketWeightsFrom(null)).toEqual([]);
+    expect(withinBucketWeightsFrom({ type: "bucket_weights" })).toEqual([]);
   });
 });
