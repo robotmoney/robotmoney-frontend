@@ -10,9 +10,8 @@
 //   • allowlisted raw-series/signal reads reject unregistered indicators/keys,
 //     invalid dates, and excessive limits, while valid requests return the
 //     bounded projection;
-//   • the rerun endpoint validates kind/tool/as-of/reason, inserts a distinct
-//     pending job with a unique manual dedupe key, returns 202 + the new job
-//     id, and leaves any original job unchanged.
+//   • the retired rerun endpoint fails closed because ADMIN_TOKEN must not
+//     grant analytics-production authority.
 import { test, expect, afterAll } from "bun:test";
 import { sql } from "../../src/db/client.ts";
 import { handleAdmin } from "../../src/api/routes/admin.ts";
@@ -60,11 +59,9 @@ function sampleRun(overrides: Partial<TelemetryRunSubmission> = {}): TelemetryRu
 }
 
 let seededRunId: number;
-let seededJobId: number;
 
 afterAll(async () => {
   await sql`DELETE FROM research_pipeline_runs WHERE kind = ${KIND}`;
-  await sql`DELETE FROM jobs WHERE kind LIKE ${"art_test_%"}`;
 });
 
 test("prod-mode with no token → 403 on every owned research route (fail-closed, before DB access)", async () => {
@@ -166,53 +163,15 @@ test("GET /api/admin/research/signals/:key: rejects an unregistered signal key; 
   await sql`DELETE FROM research_signals WHERE signal_key = 'channel-divergence' AND date = '2026-01-01'`;
 });
 
-test("POST /api/admin/research/rerun: validates kind/tool/asof/reason before enqueueing", async () => {
-  expect((await call(req("POST", "/api/admin/research/rerun", { token: PROD.adminToken, body: { kind: "not.a.kind", asof: ASOF, reason: "x" } })))?.status).toBe(400);
-  expect((await call(req("POST", "/api/admin/research/rerun", { token: PROD.adminToken, body: { kind: "regime.classify", tool: "channel-divergence", asof: ASOF, reason: "x" } })))?.status).toBe(400);
-  expect((await call(req("POST", "/api/admin/research/rerun", { token: PROD.adminToken, body: { kind: "research.refresh", tool: "not-a-tool", asof: ASOF, reason: "x" } })))?.status).toBe(400);
-  expect((await call(req("POST", "/api/admin/research/rerun", { token: PROD.adminToken, body: { kind: "regime.classify", asof: "not-a-date", reason: "x" } })))?.status).toBe(400);
-  expect((await call(req("POST", "/api/admin/research/rerun", { token: PROD.adminToken, body: { kind: "regime.classify", asof: ASOF, reason: "" } })))?.status).toBe(400);
-  expect((await call(req("POST", "/api/admin/research/rerun", { token: PROD.adminToken, body: { kind: "regime.classify", asof: ASOF } })))?.status).toBe(400);
-});
-
-test("POST /api/admin/research/rerun: inserts a distinct pending job with a unique manual dedupe key, returns 202 + the new job id, and leaves the original job unchanged", async () => {
-  const originalKind = "art_test_original";
-  const [original] = await sql`INSERT INTO jobs (kind, payload, status) VALUES (${originalKind}, '{}'::jsonb, 'succeeded') RETURNING id, status, dedupe_key`;
-  seededJobId = Number(original.id);
-
-  const res = await call(req("POST", "/api/admin/research/rerun", {
-    token: PROD.adminToken,
-    body: { kind: "research.refresh", tool: "late-cycle-signals", asof: ASOF, reason: "admin investigating a stale signal" },
-  }));
-  expect(res?.status).toBe(202);
-  const body = res?.body as { jobId: number; kind: string; dedupeKey: string };
-  expect(body.kind).toBe("research.refresh");
-  expect(body.dedupeKey).toContain("manual:research.refresh:late-cycle-signals:" + ASOF);
-
-  const [newJob] = await sql`SELECT id, kind, status, payload, dedupe_key FROM jobs WHERE id = ${body.jobId}`;
-  expect(newJob.kind).toBe("research.refresh");
-  expect(newJob.status).toBe("pending");
-  expect(newJob.payload.asof).toBe(ASOF);
-  expect(newJob.payload.tool).toBe("late-cycle-signals");
-  expect(newJob.payload.manual).toBe(true);
-  expect(newJob.payload.reason).toBe("admin investigating a stale signal");
-  expect(newJob.dedupe_key).toBe(body.dedupeKey);
-  expect(Number(newJob.id)).not.toBe(seededJobId);
-
-  // A second rerun request never collides on dedupe_key (always unique).
-  const res2 = await call(req("POST", "/api/admin/research/rerun", {
-    token: PROD.adminToken,
-    body: { kind: "research.refresh", tool: "late-cycle-signals", asof: ASOF, reason: "second investigation" },
-  }));
-  expect(res2?.status).toBe(202);
-  const body2 = res2?.body as { jobId: number; dedupeKey: string };
-  expect(body2.dedupeKey).not.toBe(body.dedupeKey);
-  expect(body2.jobId).not.toBe(body.jobId);
-
-  // The original job is untouched.
-  const [origAfter] = await sql`SELECT status, dedupe_key FROM jobs WHERE id = ${seededJobId}`;
-  expect(origAfter.status).toBe(original.status);
-  expect(origAfter.dedupe_key).toBe(original.dedupe_key);
-
-  await sql`DELETE FROM jobs WHERE id IN (${body.jobId}, ${body2.jobId})`;
+test("POST /api/admin/research/rerun: admin cannot trigger analytics production", async () => {
+  for (const body of [
+    { kind: "regime.classify", asof: ASOF, reason: "manual classification" },
+    { kind: "research.refresh", tool: "late-cycle-signals", asof: ASOF, reason: "manual refresh" },
+  ]) {
+    const before = await sql`SELECT count(*)::int AS n FROM jobs`;
+    const res = await call(req("POST", "/api/admin/research/rerun", { token: PROD.adminToken, body }));
+    expect(res?.status).toBe(409);
+    const after = await sql`SELECT count(*)::int AS n FROM jobs`;
+    expect(after[0].n).toBe(before[0].n);
+  }
 });

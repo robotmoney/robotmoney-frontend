@@ -135,13 +135,7 @@ function rejectUnknownFields(body: unknown, allowed: string[]): Record<string, u
 }
 
 // ── Research pipeline telemetry admin surface (issue #151) ──────────────────
-// Job kinds/tools this endpoint may enqueue a rerun for. Duplicated (not
-// imported) from worker/handlers/analytics.ts's REGIME_TOOL/RESEARCH_TOOLS —
-// the API layer never imports worker code — but pinned to the same values.
-const RERUN_JOB_KINDS = ["regime.classify", "research.refresh"] as const;
 const RERUN_RESEARCH_TOOLS = ["channel-divergence", "late-cycle-signals"] as const;
-type RerunJobKind = (typeof RERUN_JOB_KINDS)[number];
-type RerunResearchTool = (typeof RERUN_RESEARCH_TOOLS)[number];
 
 // Allowlisted raw_indicator_history indicators: the regime registry plus MNA
 // (persisted by the late-cycle-signals research tool, not itself a registry
@@ -185,8 +179,8 @@ export async function handleAdmin(
   }
 
   // GET /api/admin/overview — health cards + explicit alert feed (issue #155,
-  // US-A2). Queue counts, production-kind (regime.classify/research.refresh)
-  // run health, regime + research staleness, enabled analytics schedules, the
+  // US-A2). Queue counts, historical consumer analytics run health, regime +
+  // research staleness, accidentally enabled legacy analytics schedules, the
   // next queued swarm event, and a not_run/running/degraded/failed/dead/
   // stale/healthy alert feed.
   if (m === "GET" && p === "/api/admin/overview") {
@@ -269,6 +263,12 @@ export async function handleAdmin(
           return {
             status: 409,
             body: { error: "only a dead job can be retried", code: "invalid_transition", current: job.status },
+          };
+        }
+        if (PRODUCTION_KINDS.includes(job.kind)) {
+          return {
+            status: 409,
+            body: { error: "analytics production is owned by the independent producer; admin cannot retry it" },
           };
         }
         const dedupeKey = `admin-retry:${id}:${randomUUID()}`;
@@ -356,10 +356,10 @@ export async function handleAdmin(
     }
   }
 
-  // PATCH /api/admin/schedules/:id — toggle ONLY `enabled` on an analytics
-  // (regime.classify / research.refresh) job_schedules row. Cron, timezone,
-  // kind, and payload are read-only; the five disabled `committee.*` demo rows
-  // are protected and cannot be enabled/disabled from here. (issue #155, US-Q1.)
+  // RETIRED analytics-schedule control. Keep the path for fail-closed responses
+  // to old clients, but neither regime.classify nor research.refresh can be
+  // toggled in the consumer DB: the independent producer owns cadence. Other
+  // schedule kinds were never accepted by this endpoint. (D25 / issue #361.)
   if (m === "PATCH" && /^\/api\/admin\/schedules\/[^/]+$/.test(p)) {
     if (!requireAdmin(req, cfg)) return FORBIDDEN;
     const idStr = decodeURIComponent(p.slice("/api/admin/schedules/".length));
@@ -369,8 +369,7 @@ export async function handleAdmin(
       const body = await req.json().catch(() => null);
       const b = rejectUnknownFields(body, ["enabled", "reason"]);
       if (typeof b.enabled !== "boolean") throw new ValidationError("enabled must be a boolean");
-      const reason = validateReason(b.reason);
-      const enabled = b.enabled;
+      validateReason(b.reason);
 
       return await sql.begin(async (tx) => {
         const [schedule] = await tx`SELECT * FROM job_schedules WHERE id = ${id} FOR UPDATE`;
@@ -387,19 +386,13 @@ export async function handleAdmin(
         if (!(PRODUCTION_KINDS as readonly string[]).includes(schedule.kind)) {
           throw new ValidationError(`schedule kind "${schedule.kind}" is not an analytics schedule`);
         }
-        const [updated] = await tx`
-          UPDATE job_schedules SET enabled = ${enabled} WHERE id = ${id}
-          RETURNING id, kind, cron, enabled`;
-        const audit = await recordAudit(tx, {
-          actor: "admin",
-          action: "toggle_schedule",
-          targetType: "job_schedule",
-          targetId: String(id),
-          reason,
-          beforeState: { enabled: schedule.enabled },
-          afterState: { enabled },
-        });
-        return { status: 200, body: { item: updated, auditRequestId: audit.request_id } };
+        return {
+          status: 409,
+          body: {
+            error: "analytics execution belongs to the independent producer; admin cannot toggle consumer schedules",
+            code: "invalid_transition",
+          },
+        };
       });
     } catch (e) {
       if (e instanceof ValidationError) return BAD(e.message);
@@ -547,45 +540,14 @@ export async function handleAdmin(
     return { status: 200, body: { key, points } };
   }
 
-  // POST /api/admin/research/rerun — enqueue a complete (regime.classify) or
-  // single-tool (research.refresh + tool) rerun for a supplied as-of date.
-  // ALWAYS inserts a NEW job with a fresh, unique dedupe key: the original job
-  // (if any) is never touched. `reason` is the audit trail for this manual
-  // action — carried in the new job's payload alongside the requested kind/
-  // tool/as-of (issue #151 depends on #150's fuller audit_log, which had not
-  // landed at authoring time; this is the pragmatic substitute — see PR notes).
+  // Analytics production is outside the admin authority domain. Keep this
+  // retired route explicit so old clients fail closed.
   if (m === "POST" && p === "/api/admin/research/rerun") {
     if (!requireAdmin(req, cfg)) return FORBIDDEN;
-    const body = await req.json().catch(() => null);
-    if (!body || typeof body !== "object") return { status: 400, body: { error: "body must be a JSON object" } };
-    const b = body as Record<string, unknown>;
-    const kind = b.kind;
-    if (typeof kind !== "string" || !RERUN_JOB_KINDS.includes(kind as RerunJobKind)) {
-      return { status: 400, body: { error: `kind must be one of ${RERUN_JOB_KINDS.join(", ")}` } };
-    }
-    const tool = b.tool;
-    if (tool != null && (typeof tool !== "string" || !RERUN_RESEARCH_TOOLS.includes(tool as RerunResearchTool))) {
-      return { status: 400, body: { error: `tool must be one of ${RERUN_RESEARCH_TOOLS.join(", ")} (or omitted)` } };
-    }
-    if (kind === "regime.classify" && tool != null) {
-      return { status: 400, body: { error: "regime.classify does not take a tool" } };
-    }
-    const asof = b.asof;
-    if (typeof asof !== "string" || !isIsoDate(asof)) return { status: 400, body: { error: "asof must be a valid YYYY-MM-DD date" } };
-    const reason = b.reason;
-    if (typeof reason !== "string" || !reason.trim() || reason.length > 500) {
-      return { status: 400, body: { error: "reason must be a non-empty string (≤500 chars)" } };
-    }
-    // Unique per request — never collides with a scheduled slot's dedupe_key
-    // (kind:minute) nor with any other rerun, so this NEVER silently no-ops
-    // via ON CONFLICT DO NOTHING; every valid rerun request enqueues.
-    const dedupeKey = `manual:${kind}:${tool ?? "all"}:${asof}:${crypto.randomUUID()}`;
-    const payload = { asof, tool: tool ?? undefined, manual: true, reason, requestedAt: new Date().toISOString() };
-    const [row] = await sql`
-      INSERT INTO jobs (kind, payload, dedupe_key)
-      VALUES (${kind}, ${sql.json(jsonValue(payload))}, ${dedupeKey})
-      RETURNING id, kind`;
-    return { status: 202, body: { jobId: row.id, kind: row.kind, dedupeKey } };
+    return {
+      status: 409,
+      body: { error: "analytics production is owned by the independent producer; admin cannot rerun it" },
+    };
   }
 
   return null;

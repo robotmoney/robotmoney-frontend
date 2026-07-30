@@ -192,15 +192,52 @@ export function memberAgentContainerName(project: string, runId: string): string
   return `${project}-member-agent-eval-${runId}`;
 }
 
+/** One additional `-v` mount: a host path (bind) or a named volume. */
+export interface MemberAgentMount {
+  /** Host path (absolute) or docker named-volume name. */
+  source: string;
+  /** Absolute path inside the container. */
+  target: string;
+  readonly?: boolean;
+}
+
 export interface MemberAgentArgvOptions {
   composeProject: string;
   composeFiles?: string[];
   containerName: string;
-  opencodeConfigPath: string;
-  title: string;
-  prompt: string;
+  opencodeConfigPath?: string;
+  title?: string;
+  prompt?: string;
   /** Resolved by the caller from scripts/lib/model-registry.ts. Required. */
   modelConfig: MemberAgentModel;
+  /**
+   * SESSION-PARTICIPATION MODE (issue #361 Phase 2). When set, the container
+   * runs `--entrypoint <entrypoint>` with `command` as its argv instead of the
+   * default `opencode run …` tail — this is how a SITTING member's container
+   * runs the member's own deterministic session client (the member's "own
+   * software", mounted by its owner via `mounts`) rather than a prompt-driven
+   * vanilla agent. Everything else about the rail — the explicit single model
+   * credential `-e`, the ownerEnv injection + redaction, the deterministic
+   * container name, launch watcher, kill + `docker rm -f` — is IDENTICAL in
+   * both modes; there is deliberately no second launch path.
+   */
+  entrypoint?: string;
+  command?: string[];
+  /**
+   * Additional read-only facts the container needs that are NOT secrets
+   * (API base URL, member id, session date, resolved model id …), emitted as
+   * sorted `-e` pairs. NEVER put a secret here — values are NOT redacted from
+   * the returned transcript; secrets belong in `ownerEnv` (or the model
+   * credential in `modelConfig`), whose values are redacted at the source.
+   */
+  extraEnv?: Record<string, string>;
+  /**
+   * Additional mounts: the member's own minimal client artifact (a read-only
+   * single-file bind, never the repository/worktree) and the member's
+   * persistent keystore/home volume (issue #361 Phase 3 — identity continuity
+   * across sessions).
+   */
+  mounts?: MemberAgentMount[];
   /**
    * The OWNER's half of the session's environment — what a real applicant's
    * human would have exported into the shell they launch their agent from,
@@ -246,29 +283,51 @@ export function buildMemberAgentArgv(a: MemberAgentArgvOptions): string[] {
         "resolveModelConfig() throws on that case; do not construct one by hand.",
     );
   }
+  const commandMode = a.command !== undefined;
+  if (commandMode && (!a.entrypoint || a.command!.length === 0)) {
+    throw new Error("buildMemberAgentArgv: session-participation mode requires both `entrypoint` and a non-empty `command`");
+  }
+  if (!commandMode && (!a.opencodeConfigPath || a.title === undefined || a.prompt === undefined)) {
+    throw new Error("buildMemberAgentArgv: opencode mode requires opencodeConfigPath, title, and prompt");
+  }
+  const sortedEnvPairs = (env: Record<string, string> | undefined) =>
+    Object.entries(env ?? {})
+      .sort(([l], [r]) => (l < r ? -1 : l > r ? 1 : 0))
+      .flatMap(([k, v]) => ["-e", `${k}=${v}`]);
   return [
     "docker",
     ...composeArgs(a.composeProject, a.composeFiles ?? DEFAULT_COMPOSE_FILES),
     "run",
     ...(a.keep ? [] : ["--rm"]),
     "--no-deps",
+    ...(commandMode ? ["--entrypoint", a.entrypoint!] : []),
     "--name",
     a.containerName,
-    "-v",
-    `${a.opencodeConfigPath}:/home/agent/opencode.json:ro`,
+    ...(commandMode ? [] : ["-v", `${a.opencodeConfigPath}:/home/agent/opencode.json:ro`]),
+    // The caller's explicit additional mounts (minimal member client artifact
+    // + persistent keystore volume), in caller order.
+    ...(a.mounts ?? []).flatMap((m) => ["-v", `${m.source}:${m.target}${m.readonly ? ":ro" : ""}`]),
     // AT MOST ONE MODEL credential `-e`, under the env name the registry chose,
     // and only when the resolved model is funded. A keyless model gets no flag
     // at all.
     ...(apiKeyEnv ? ["-e", `${apiKeyEnv}=${apiKey}`] : []),
+    // Non-secret configuration facts (never redacted — see extraEnv's doc).
+    ...sortedEnvPairs(a.extraEnv),
     // The owner's half of the session environment, sorted so the argv is
     // deterministic and diffable.
-    ...Object.entries(a.ownerEnv ?? {})
-      .sort(([l], [r]) => (l < r ? -1 : l > r ? 1 : 0))
-      .flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+    ...sortedEnvPairs(a.ownerEnv),
     "member-agent",
+    ...(commandMode ? a.command! : buildOpencodeRunTail(a)),
+  ];
+}
+
+// The default (opencode) command tail, extracted verbatim so the two modes
+// share one argv builder above it.
+function buildOpencodeRunTail(a: MemberAgentArgvOptions): string[] {
+  return [
     "run",
     "--model",
-    model,
+    a.modelConfig.model,
     "--format",
     "json",
     // opencode's REAL "the operator is not at the keyboard" flag: auto-approve
@@ -286,11 +345,54 @@ export function buildMemberAgentArgv(a: MemberAgentArgvOptions): string[] {
     // an assertion on our own argv could never have caught it.
     "--auto",
     "--title",
-    a.title,
+    a.title!,
     "--dir",
     "/home/agent",
-    a.prompt,
+    a.prompt!,
   ];
+}
+
+// ── Persistent member volumes (issue #361 Phase 3: identity continuity) ─────
+// A named docker volume that carries one member's HOME (its keystore, its
+// stored bearer token, its installed tooling) across container runs, so the
+// key that enrolled/onboarded a member is the key that signs every later take.
+// Created explicitly — never left to `docker run`'s implicit auto-create — so
+// it carries the SAME reap-by-label channel every demo container and the
+// pgdata volume already carry (robotmoney.demo=1 + robotmoney.demo.project):
+// `bun run demo:clean` and CI's teardown can find and reclaim it by LABEL.
+export function memberHomeVolumeName(project: string, slug: string): string {
+  // Docker volume names must match [a-zA-Z0-9][a-zA-Z0-9_.-]*.
+  const safe = slug.replace(/[^a-zA-Z0-9_.-]/g, "-");
+  return `${project}_member_home_${safe}`;
+}
+
+export function ensureMemberVolume(
+  name: string,
+  project: string,
+  env?: Record<string, string>,
+): void {
+  const inspect = Bun.spawnSync(["docker", "volume", "inspect", name], {
+    ...(env ? { env } : {}),
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  if (inspect.exitCode === 0) return;
+  const create = Bun.spawnSync(
+    [
+      "docker", "volume", "create",
+      "--label", "robotmoney.demo=1",
+      "--label", `robotmoney.demo.project=${project}`,
+      name,
+    ],
+    { ...(env ? { env } : {}), stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+  );
+  if (create.exitCode !== 0) {
+    throw new Error(
+      `ensureMemberVolume: docker volume create ${name} failed (exit ${create.exitCode}): ` +
+        `${new TextDecoder().decode(create.stderr as Uint8Array).slice(0, 300)}`,
+    );
+  }
 }
 
 // ── The compose child's environment and stdio (both LOAD-BEARING) ───────────
@@ -396,8 +498,16 @@ export interface MemberAgentOptions {
   repoRoot: string;
   composeProject: string;
   composeFiles?: string[];
-  prompt: string;
+  /** Required in opencode mode; ignored in session-participation mode. */
+  prompt?: string;
   runId: string;
+  /** Session-participation mode — see MemberAgentArgvOptions.entrypoint. */
+  entrypoint?: string;
+  command?: string[];
+  /** Non-secret config `-e` pairs — see MemberAgentArgvOptions.extraEnv. */
+  extraEnv?: Record<string, string>;
+  /** Additional mounts — see MemberAgentArgvOptions.mounts. */
+  mounts?: MemberAgentMount[];
   /**
    * Model + credential, resolved by the CALLER (resolveModelConfig() →
    * resolveAgentModel()/isKeylessModel() against scripts/lib/model-registry.ts).
@@ -475,10 +585,16 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
       injected,
     );
 
+  const commandMode = opts.command !== undefined;
   const workDir = mkdtempSync(join(tmpdir(), "member-agent-"));
   const opencodeConfigPath = join(workDir, "opencode.json");
   try {
-    writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(opts.modelConfig.model), null, 2));
+    // opencode mode mounts a per-run opencode.json; session-participation mode
+    // runs the member's own client (which invokes opencode itself, passing the
+    // model on argv) and needs no mounted config.
+    if (!commandMode) {
+      writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(opts.modelConfig.model), null, 2));
+    }
 
     // A stack created by scripts/stack carries generated label and credential
     // interpolation values. Re-resolving Compose without that exact map makes
@@ -489,9 +605,15 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
         composeProject: opts.composeProject,
         composeFiles: opts.composeFiles,
         containerName,
-        opencodeConfigPath,
-        title: opts.title ?? `member-agent-${opts.runId}`,
-        prompt: opts.prompt,
+        ...(commandMode
+          ? { entrypoint: opts.entrypoint, command: opts.command }
+          : {
+              opencodeConfigPath,
+              title: opts.title ?? `member-agent-${opts.runId}`,
+              prompt: opts.prompt,
+            }),
+        extraEnv: opts.extraEnv,
+        mounts: opts.mounts,
         modelConfig: opts.modelConfig,
         ownerEnv: opts.ownerEnv,
         keep,

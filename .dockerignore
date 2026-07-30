@@ -6,6 +6,8 @@
 **/node_modules
 .git
 **/.git
+.agents
+**/.agents
 *.log
 .env
 .env.*

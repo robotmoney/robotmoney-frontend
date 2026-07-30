@@ -183,6 +183,30 @@ An autonomous agent (or a human) can follow this checklist deterministically:
    ask an admin to add/extend a grant in `.github/file-permissions.json` (that
    file is itself **admin-only** to edit). **Do not** work around the gate.
 
+### External-actor changes — reviewer no-cheating checklist
+
+For any PR that claims to move an onboarding candidate, committee member, or
+analytics/research producer onto the external-actor rail
+([D25](docs/decisions.md#d25--external-actor-rail-for-simulated-independent-entities)),
+the reviewer must verify every item in the diff and its executed test evidence:
+
+- [ ] One private container/filesystem represents each actor; no shared home,
+  state database, keystore, or host-process fallback remains on the converted
+  path.
+- [ ] The container inherits no ambient host environment. Every injected secret
+  is explicit, redacted, and scoped to that actor; admin credentials never
+  substitute for member or analytics-provider roles.
+- [ ] The harness does not fetch context, author, repair, sign, submit, or
+  compute provider output for the actor. Private keys remain actor-held, and an
+  admitted member keeps the same identity across later sessions.
+- [ ] The claimed boundary is crossed through real REST calls with no direct DB
+  write or privileged shortcut; a producer POSTs already-computed data rather
+  than triggering computation in the consumer/API process.
+- [ ] Missing resources and actor failures are loud, at least one real actor
+  execution is asserted in the existing CI gates, and no mock, skip, template,
+  or inference-off mode can make the behavior green. Extend an existing gate;
+  do not add a workflow solely for this review bar.
+
 ### Sensitive surfaces are protected implicitly
 
 Because the dictionary is deny-by-default, `contract/`,

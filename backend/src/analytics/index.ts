@@ -104,8 +104,8 @@ function boundedTelemetrySummary(raw: Record<string, unknown>): Record<string, u
 // PERSISTENCE BOUNDARY (issue #106): this orchestrator never writes SQL. Every
 // read/write of the analytics tables goes through the injected
 // AnalyticsPersistence port. The DEFAULT is the authenticated HTTP client
-// (analytics/api-client.ts) — what updater processes (the worker) use, wired
-// from ANALYTICS_API_URL + ANALYTICS_TOKEN at call time. The API process (its
+// (analytics/api-client.ts) — what the independent producer uses, wired from
+// ANALYTICS_API_URL + its scoped bearer at call time. The API process (its
 // swarm regime routes), tests, and demo tooling inject the API-owned direct
 // service (analytics/store/direct.ts) instead.
 //

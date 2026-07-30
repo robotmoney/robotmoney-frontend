@@ -90,7 +90,7 @@
 // primitive takes that record and invents nothing.
 import { buildOnboardingPrompt, path as routePath, ROUTES } from "@robotmoney/contract";
 import { classifyOutcome, shouldRetry } from "../agent/classify-outcome.ts";
-import { runMemberAgent } from "../agent/member-agent.ts";
+import { ensureMemberVolume, runMemberAgent } from "../agent/member-agent.ts";
 import { finalAssistantText } from "../agent/transcript.ts";
 import { AGENT_MODEL_ENV, DEFAULT_AGENT_MODEL, isKeylessModel, resolveAgentModel } from "./model-registry.ts";
 import { ZEN_KEY_ENV, zenApiKey } from "./opencode-key.ts";
@@ -440,6 +440,25 @@ export interface RunOnboardingEvalOptions {
   /** Shared sequencer for callers that also merge service/cleanup logs. */
   telemetry?: OnboardingTelemetry;
   attempt?: number;
+  /**
+   * IDENTITY CONTINUITY (issue #361 Phase 3). When set, the candidate's HOME
+   * is a persistent, labeled named volume (created here if absent, named per
+   * ATTEMPT identity so every attempt still starts on a vanilla machine), so
+   * an ADMITTED member's rmpc keystore, member id, and claimed token survive
+   * the eval container — the demo's session rail later mounts the same volume
+   * and the identity that onboarded keeps signing. Omitted (CI sweeps, local
+   * one-shot evals) ⇒ exactly the old behavior: the container's filesystem
+   * dies with it.
+   */
+  homeVolumeFor?: (identity: OnboardingIdentity) => string;
+  /**
+   * Owner-held keystore passphrase override (issue #361 Phase 3). Default
+   * remains a fresh, discarded UUID per run; a caller that intends the
+   * admitted member to keep participating supplies (and RETAINS) one, because
+   * the same passphrase must unlock the keystore in every later session — the
+   * owner's half of the exchange, per §11.3 E7.
+   */
+  keystorePassphrase?: string;
 }
 
 export interface OnboardingEvalResult {
@@ -478,6 +497,12 @@ export interface OnboardingEvalResult {
   // redactSecrets. This string is printed whole into CI logs and the demo
   // console, and an agent exploring its container runs `env`.
   transcript?: string;
+  /**
+   * The persistent HOME volume THIS run (this attempt's identity) mounted, or
+   * null when continuity was not wired — how the demo maps an admitted
+   * memberId onto the volume its keystore lives in (issue #361 Phase 3).
+   */
+  homeVolume: string | null;
 }
 
 /**
@@ -517,10 +542,20 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 
   const prompt = buildAgentPrompt(identity, apiUrlInternal);
 
-  // Fresh per run and never reused: the keystore it protects is created inside
-  // a container that is destroyed at the end of this function, and the value is
-  // redacted out of the transcript by the primitive that injects it.
-  const keystorePassphrase = crypto.randomUUID();
+  // Default: fresh per run and never reused — the keystore it protects dies
+  // with the container. A caller wiring identity continuity (Phase 3) supplies
+  // and retains one instead; either way the value is redacted out of the
+  // transcript by the primitive that injects it.
+  const keystorePassphrase = opts.keystorePassphrase ?? crypto.randomUUID();
+
+  // Optional persistent member HOME (Phase 3) — vanilla per attempt (the
+  // volume is named from THIS attempt's identity and created empty), durable
+  // after admission.
+  const homeVolume = opts.homeVolumeFor?.(identity) ?? null;
+  if (homeVolume) {
+    ensureMemberVolume(homeVolume, opts.composeProject, opts.composeSpawnEnv);
+    log(`persistent member home volume: ${homeVolume}`);
+  }
 
   // Everything the container needs — the mounted opencode.json, the
   // deterministic name, the `docker compose run` argv (including the single
@@ -551,10 +586,14 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     prompt,
     runId: identity.runId,
     modelConfig,
+    // The persistent HOME mount, when identity continuity is wired (Phase 3).
+    mounts: homeVolume ? [{ source: homeVolume, target: "/home/agent" }] : undefined,
     // The owner's half of onboarding, left in the environment exactly the way a
     // real owner would leave it before launching their agent (see
     // demoHarnessNote's comment). Never logged, never read back by this
-    // harness — the keystore it protects lives and dies inside the container.
+    // harness — the keystore it protects lives in the member's own HOME
+    // (a volume only when the caller wired continuity, else the container's
+    // ephemeral filesystem).
     ownerEnv: { [KEYSTORE_PASSPHRASE_ENV]: keystorePassphrase },
     redactions: [{ value: identity.contact, placeholder: "<contact redacted>" }],
     composeSpawnEnv: opts.composeSpawnEnv,
@@ -648,6 +687,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
     containerLaunched: run.containerLaunched,
     observerError,
     transcript: run.transcript,
+    homeVolume,
   };
 }
 

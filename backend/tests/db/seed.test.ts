@@ -138,18 +138,16 @@ const analyticsRows = async (): Promise<ScheduleRow[]> =>
        WHERE kind IN ('regime.classify', 'research.refresh')`,
   );
 
-test("demo analytics cadence (#287): DEMO_MODE seeds regime.classify and research.refresh HOURLY on distinct minutes", async () => {
+test("demo analytics cadence (#287): legacy consumer schedules remain disabled for the independent producer", async () => {
   process.env.DEMO_MODE = "1";
   await seedJobSchedules();
   const byKey = Object.fromEntries((await analyticsRows()).map((r) => [`${r.kind}|${r.cron}`, r.enabled]));
-  // Hourly, and staggered off each other AND off vault.sample_share_price
-  // (minute 0) / the demo wallet sampler (minute 3) — cron is minute-granular.
-  expect(byKey["regime.classify|7 * * * *"]).toBe(true);
-  // research.refresh stays seeded DISABLED (issue #108): edgar-seed-bootstrap
-  // owns enabling it once the demo's seed ingestion succeeds.
+  // Rows remain for migration compatibility, but the independent producer
+  // owns the cadence and shared consumers must never claim these jobs.
+  expect(byKey["regime.classify|7 * * * *"]).toBe(false);
   expect(byKey["research.refresh|37 * * * *"]).toBe(false);
   // The daily production rows are untouched by the demo path.
-  expect(byKey["regime.classify|30 22 * * *"]).toBe(true);
+  expect(byKey["regime.classify|30 22 * * *"]).toBe(false);
 });
 
 test("demo analytics cadence (#287): seeding over pre-existing */2 rows leaves them DISABLED, and a re-run is a no-op", async () => {
@@ -170,7 +168,7 @@ test("demo analytics cadence (#287): seeding over pre-existing */2 rows leaves t
   // superseded ones — disabling those is what actually switches the cadence.
   expect(byKey["regime.classify|*/2 * * * *"]).toBe(false);
   expect(byKey["research.refresh|1-59/2 * * * *"]).toBe(false);
-  expect(byKey["regime.classify|7 * * * *"]).toBe(true);
+  expect(byKey["regime.classify|7 * * * *"]).toBe(false);
   expect(byKey["research.refresh|37 * * * *"]).toBe(false);
 
   await seedJobSchedules(); // every boot re-runs it: idempotent (`AND enabled` guard)

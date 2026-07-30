@@ -20,8 +20,9 @@
 //   → canonicalizeSubmission → rmpc sign → POST /api/committee/submit
 // then reads the result back and independently re-verifies the signature.
 //
-// Run standalone against a locally booted `bun run demo` stack:
-//   BACKEND_URL=http://127.0.0.1:<web-port> bun run scripts/rmpc-release-e2e.ts
+// Run standalone against a locally booted `bun run demo` stack (use the
+// compose project printed by the demo):
+//   BACKEND_URL=http://127.0.0.1:<web-port> DEMO_PROJECT=<project> bun run scripts/rmpc-release-e2e.ts
 // (same BACKEND_URL convention as scripts/lib/committee/session.ts — defaults
 // to the standard demo port when unset.) In CI, scripts/lib/demo-main.ts runs
 // this script against the SAME stack it just booted when RMPC_RELEASE_E2E=1 is
@@ -35,7 +36,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalizeApplication, canonicalizeClaimChallenge, canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { fetchRmpc, runRmpcJson, RMPC_VERSION, resolveRmpcAsset, missingCommitteeIdentitySubcommands } from "./lib/rmpc-fetch.ts";
-import { admin, enqueueLifecycleJob, waitForSessionState } from "./lib/committee/session.ts";
+import { admin, enqueueLifecycleJob, runRegimeClassify, waitForSessionState } from "./lib/committee/session.ts";
+import { DEFAULT_COMPOSE_FILES } from "./stack/config.ts";
 
 // Re-exported so scripts/tests/unit/rmpc-release-e2e.test.ts (this script's own
 // unit tests) can keep importing the pure asset/subcommand helpers from
@@ -57,6 +59,21 @@ const RUN_ID = process.env.GITHUB_RUN_ID?.trim() || crypto.randomUUID().slice(0,
 const RUN_LABEL = `rmpc-e2e-${RUN_ID}`;
 const SUBJECT_ID = "rmpc-release-e2e";
 const TODAY = new Date().toISOString().slice(0, 10);
+
+function producerRail() {
+  const composeProject = process.env.DEMO_PROJECT?.trim();
+  if (!composeProject) {
+    throw new Error("DEMO_PROJECT is required to run the analytics producer against the target stack");
+  }
+  const configuredComposeFiles = process.env.COMPOSE_FILE?.split(":").filter(Boolean) ?? [];
+  return {
+    repoRoot: new URL("..", import.meta.url).pathname,
+    composeProject,
+    composeFiles: configuredComposeFiles.length > 0 ? configuredComposeFiles : [...DEFAULT_COMPOSE_FILES],
+    composeSpawnEnv: { ...process.env } as Record<string, string>,
+    backendUrl: BACKEND_URL,
+  };
+}
 
 function fail(msg: string): never {
   console.error(`[rmpc-release-e2e] FAIL: ${msg}`);
@@ -177,7 +194,9 @@ async function main(): Promise<void> {
   await admin("subject", { id: SUBJECT_ID, name: "RMPC Release E2E Subject" });
   // Idempotent, matches runSession()'s own pre-session regime seed — makes this
   // script self-sufficient even if run before any other regime seed exists.
-  await admin("regime", { asof: TODAY });
+  // The snapshot is the PRODUCER's own regime.classify job (issue #361 Phase
+  // 4); the removed admin("regime") classifier path no longer exists.
+  await runRegimeClassify(TODAY, producerRail());
 
   await enqueueLifecycleJob("open_session", { date: TODAY, subjectId: SUBJECT_ID });
   const scheduled = await waitForSessionState(TODAY, SUBJECT_ID, "scheduled");

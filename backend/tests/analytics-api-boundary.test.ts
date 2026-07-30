@@ -11,11 +11,11 @@
 // migration/import/demo tooling (src/db/**, src/demo/**) may touch analytics
 // SQL. A new violating import fails this test with the offending file + line.
 //
-// PART 2 — updater boundary at runtime: the worker's analytics job (regime +
-// research update clients) executes against a REAL http server wrapping the
-// REAL /api/analytics handler; every persistence call is recorded as an
-// authenticated HTTP request, analytical rows change through the API service,
-// and the job lifecycle rows (jobs/job_runs) still complete normally.
+// PART 2 — retained-handler boundary at runtime: legacy worker handlers execute
+// only when this test inserts jobs directly and injects a provider credential.
+// The supported runtime cannot enqueue/reactivate these kinds and shared workers
+// receive no bearer (D25). Keeping this test proves the compatibility code still
+// cannot bypass HTTP/SQL ownership while it remains in the tree.
 import { test, expect } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -89,9 +89,9 @@ test("only API persistence + migration/demo tooling import the analytics store w
   expect(violations).toEqual([]);
 });
 
-// ── PART 2: the worker's update clients over the REAL boundary ──────────────
+// ── PART 2: retained worker clients over the REAL boundary ─────────────────
 test(
-  "worker analytics jobs (regime.classify + research.refresh): update clients persist ONLY via authenticated HTTP; queue lifecycle completes",
+  "retained analytics handlers persist only via authenticated HTTP when invoked directly by a compatibility test",
   async () => {
     const TOKEN = "tok_analytics_worker_boundary";
     const requests: { method: string; path: string; auth: string | null }[] = [];
@@ -117,7 +117,8 @@ test(
     };
     try {
       // Server side verifies the analytics-provider bearer (prod-shaped: no
-      // insecure fallback); worker side is wired via env, exactly like compose.
+      // insecure fallback). This test explicitly wires the retained handler;
+      // production shared workers deliberately receive no provider secret.
       config.analyticsToken = TOKEN;
       config.allowInsecure = false;
       process.env.ANALYTICS_SOURCE = "hermetic"; // deterministic + offline sources
@@ -128,9 +129,8 @@ test(
       await sql`DELETE FROM regime_snapshots`;
       await sql`DELETE FROM research_signals`;
       const asof = new Date().toISOString().slice(0, 10);
-      // The two lane-scoped analytics kinds (issue #107 retired `analytics.run`):
-      // regime.classify exercises the regime update client, research.refresh the
-      // research update clients — both must submit over the boundary.
+      // Direct insertion is test-only. No supported API/admin/scheduler path can
+      // create these legacy consumer jobs after D25.
       const [{ id: regimeJobId }] = await sql`
         INSERT INTO jobs (kind, payload) VALUES ('regime.classify', ${sql.json({ asof })}) RETURNING id`;
       const [{ id: researchJobId }] = await sql`

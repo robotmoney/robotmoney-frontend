@@ -6,8 +6,8 @@ import * as ic from "../../committee/domain.ts";
 import { handleCommitteeAdmin } from "./committee-admin.ts";
 import { isPlausibleKey } from "../../lib/keys.ts";
 import { isValidEd25519PublicKey } from "../../lib/signing.ts";
-import { resolveAnalyticsSource, runAnalytics } from "../../analytics/index.ts";
-import { directAnalyticsPersistence } from "../../analytics/store/direct.ts";
+import { saveRegimeSnapshots } from "../../analytics/store/regime-store.ts";
+import { parseSnapshots } from "./analytics.ts";
 import { bearer, hasAnalyticsProviderRole, isPrivileged } from "../auth.ts";
 import { jsonValue, sql } from "../../db/client.ts";
 import {
@@ -189,18 +189,22 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     return { status: res.status, body: res };
   }
 
-  // Role-gated regime write: ONLY the analytics-provider may persist the regime.
-  // Narrowed (issue #106): scoped to the regime composite (toolId="regime") — the
-  // full research suite is the worker's own scheduled job, not a committee-facing
-  // behavior — and the orchestrator persists through the API-OWNED direct
-  // persistence service (analytics/store/direct.ts), never ad-hoc SQL: the
-  // fetch/compute stages carry no store or db/client imports.
+  // Role-gated regime write: ONLY the analytics-provider may persist the
+  // regime — and it is a genuine SUBMISSION gate (issue #361 Phase 4, docs/
+  // decisions.md D25, §9.6): the provider COMPUTES on its own infrastructure
+  // and submits finished snapshots here; this API validates and persists,
+  // and never recomputes server-side (the previous shape — a trigger that ran
+  // the classifier inside the API process — made the "independent producer"
+  // an execution alias rather than an actor). Payload shape and validation
+  // are exactly the /api/analytics/regime-snapshots route's ({ snapshots:
+  // RegimeSnapshotRow[] }); persistence is the same idempotent upsert on
+  // (date).
   if (m === "POST" && p === C.regime) {
     if (!hasAnalyticsProviderRole(req)) return { status: 403, body: { error: "analytics-provider role required" } };
-    const b = await readJsonObject(req) ?? {};
-    const asof = typeof b.asof === "string" ? b.asof : new Date().toISOString().slice(0, 10);
-    const tools = Object.keys(await runAnalytics(asof, "regime", resolveAnalyticsSource(), directAnalyticsPersistence));
-    return { status: 200, body: { ok: true, tools } };
+    const parsed = parseSnapshots(await readJsonObject(req));
+    if (!Array.isArray(parsed)) return { status: 400, body: { error: parsed.error } };
+    await saveRegimeSnapshots(parsed);
+    return { status: 200, body: { ok: true, saved: parsed.length } };
   }
 
   // Onboarding (privileged alias): register a member's public key and mint a
@@ -243,12 +247,15 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
         return { status: res.status, body: res };
       }
       case "reset": return { status: 200, body: await ic.resetSessions() };
-      // Scope to the regime composite only (toolId="regime"). The demo-startup
-      // and ~2-min committee session cycles hit this repeatedly; recomputing the
-      // full suite here re-ran the multi-minute live SEC EDGAR research crawl and
-      // hung `bun demo`. The worker refreshes research signals on its own
-      // independent schedule, so this route never needs them (issue #59).
-      case "regime": return { status: 200, body: { tools: Object.keys(await runAnalytics(typeof b.asof === "string" ? b.asof : new Date().toISOString().slice(0, 10), "regime", resolveAnalyticsSource(), directAnalyticsPersistence)) } };
+      // The former `regime` action — the ADMIN_TOKEN classifier path that ran
+      // runAnalytics inside the API process — is REMOVED (issue #361 Phase 4):
+      // docs/architecture.md's authz model says admin credentials never
+      // substitute for the analytics role, and regime data now only ever
+      // arrives as a provider SUBMISSION (POST /api/committee/regime above, or
+      // the typed /api/analytics ingestion routes). The independent producer
+      // owns its own cadence; neither this dispatcher nor `enqueue-job` can
+      // create a consumer-worker analytics job. An old caller reaching for the
+      // removed action falls through to the 404 default — loud, not silent.
       case "subject": {
         const id = requiredString(b, "id", 100);
         const name = requiredString(b, "name", 200);

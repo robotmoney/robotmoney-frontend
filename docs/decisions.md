@@ -1157,3 +1157,107 @@ original ok:false-on-price-failure behavior unchanged.
   does not grow.
 
 ---
+
+## D25 — External-actor rail for simulated independent entities
+
+**Decision (required topology, not an implementation-status claim).** Every
+process that the product, demo, or an eval presents as an independent actor must
+run on one shared **external-actor rail**: one disposable container per actor, a
+private writable filesystem, no ambient environment inheritance, explicitly
+injected scoped credentials only, self-held signing keys, and REST-only access
+to Robot Money. This applies to an onboarding-eval candidate, every sitting
+committee member in demo/e2e, and the independent analytics/research producer
+described in §9.6 of [architecture.md](./architecture.md). A long-lived actor
+gets a private persistent home volume so its identity survives disposable
+executions; actors must never share a home, state database, keystore, or bearer
+credential.
+
+**Rollout status (2026-07-30).** The onboarding candidate and sitting-member
+paths use the shared member-agent launch primitive; the sitting-member migration
+and its identity-continuity checks are the member-side implementation of this
+decision. The analytics/research boundary is also implemented: a dedicated
+`analytics-producer` service has no database or admin credential, owns its cron
+cadence, computes outside the API process, and submits through authenticated
+HTTP. Its bearer is mounted from a secret file only into that producer and the
+API verifier; the demo host, committee members, and shared workers do not receive
+the value. Consumer-DB analytics schedules are forced disabled, queued legacy
+jobs are dead-lettered, and admin retry/toggle/rerun/enqueue plus the retired
+`research-eligibility` path cannot reactivate them.
+
+Two compatibility artifacts remain explicit. The old worker handler/lane code
+and disabled schedule rows remain readable for tests, migrations, and historical
+queue visibility, but have neither a supported control-plane caller nor the
+producer bearer. The demo TUI still observes those retired queue rows rather
+than producer-native run/cadence telemetry. These are cleanup and observability
+gaps, not alternate production paths or exceptions to the trust boundary.
+
+Agent actors share `scripts/agent/member-agent.ts`'s `runMemberAgent()` launch
+primitive, backed by the generic `scripts/lib/member-agent/Dockerfile`. It passes
+no host environment through to the container. Non-secret facts are enumerated
+explicitly; secrets are supplied only through the redacted owner/model inputs.
+At most one registry-selected model credential is injected when an actor
+performs inference. The analytics producer is a dedicated service rather than a
+member-agent invocation, but obeys the same isolation rule: no DB/admin access
+and only its secret-file-mounted provider bearer plus enumerated producer
+configuration. An owner-held keystore passphrase may unlock a member's persisted
+key; it does not give the harness the key.
+
+**The harness plays only the owner/operator.** It may launch and stop the actor,
+provide connection coordinates and owner-held secrets, open/close a committee
+session, register a fixed demo member's *public* key once as the protocol
+operator, and observe externally visible results. It must not fetch analytical
+context for a member, author or repair a take, hold a member private key, sign,
+post a memo, or submit on the member's behalf. Those actions execute inside the
+member container in `scripts/agent/member-session-client.ts`. A real-onboarded
+member is never re-keyed by the harness: the key created during admission and
+stored in that member's home volume signs later recommendations. A missing key,
+bad credential, malformed model response, timeout, or container failure is
+reported loudly and leaves that member absent; there is no template, neutral
+stance, privileged re-enrollment, or host-process fallback.
+
+For the analytics/research producer, the boundary means more than putting a
+bearer string on an internal trigger. The producer computes outside the
+consumer/API trust domain and submits the resulting data through the analytics
+REST boundary under its scoped credential. The API verifies and persists the
+submission; it does not recompute the provider's result, and an admin credential
+does not substitute for the provider role. Scheduling lives in the producer,
+not `job_schedules`; seed-time research is a producer command after authenticated
+seed ingestion, not a consumer queue enqueue.
+
+**Relationship to earlier decisions.** D21 remains the transport rule: REST is
+the only member/provider boundary. D22 remains the normative eval policy and
+model-selection rule. D25 generalizes D22's container primitive and zero-ambient
+trust boundary to every simulated independent actor, including required demo
+and test executions. Internal protocol-host components (API, session worker,
+aggregation) are not external actors and remain on the stack rail.
+
+**Why.** A host-run committee driver previously placed every member in one
+process environment. The harness fetched context, held signing keys, authored
+prompts, signed and submitted, while concurrent OpenCode children shared host
+state and inherited privileged credentials. A cold-run SQLite migration race
+made one member fail nondeterministically. A temporary per-call XDG workaround
+isolated that CLI database collision, but it is now retired: every sitting
+member runs with its own private persistent `HOME` inside its container, and its
+model credential reaches that environment only through the rail's explicit,
+zero-ambient injection. The more serious defect was that the demo could claim
+independent authorship without executing an independent trust boundary. One
+rail makes the production claim executable: isolation, identity continuity,
+credential scope, and owner/member separation are properties of the launch
+shape rather than prompt discipline.
+
+**Rejected.**
+- **Host subprocesses with scrubbed environment variables or per-call XDG
+  directories.** These were temporary hardening, not a private filesystem,
+  actor-held identity, or production-like trust boundary. The XDG workaround is
+  removed, not retained as a second isolation path alongside the container
+  rail.
+- **A separate purpose-built harness for each actor.** Parallel launch paths
+  drift on cleanup, redaction, credential injection, and failure semantics; the
+  onboarding eval, sitting members, and producer must share the primitive.
+- **Privileged shortcuts in the surface under test.** Admin registration may
+  seed the fixed demo roster once, but cannot replace real admission for an
+  onboarding candidate, rotate an admitted member's identity, synthesize a
+  take, or impersonate the analytics role.
+- **Mocks, templates, and inference-off substitutes in behavioral gates.** A
+  missing external resource fails loudly, and the gate must prove that at least
+  one real actor execution crossed the REST boundary.

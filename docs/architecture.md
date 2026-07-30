@@ -536,13 +536,14 @@ startup). Lanes are deterministic kind allowlists applied inside the claim:
 | Lane | Claims | Purpose |
 |------|--------|---------|
 | `committee` | `committee.%` only | **Reserved** interactive session-lifecycle capacity — no other lane may claim these kinds. |
-| `analytics` | everything except `committee.%`/`research.%` | Regime classification + the scheduled data pipelines. |
-| `research` | `research.%` only | Slow external research fetches, quarantined so a blocked fetch can never starve committee/regime work. |
+| `analytics` | everything except `committee.%`/`research.%` | Internal scheduled pipelines (vault/wallet/buybacks/projects); legacy `regime.classify` rows are disabled/dead-lettered. |
+| `research` | `research.%` only | Compatibility lane for retired queue rows; supported research runs in the independent producer. |
 | `generic` | everything except `committee.%` | Single-process dev convenience; never part of the compose topology and never able to consume reserved capacity. |
 
 The production/default topology is one container per lane
 (`worker-committee`/`worker-analytics`/`worker-research` in
-`docker-compose.yml`); lanes scale independently (`--scale worker-research=2`).
+`docker-compose.yml`), plus the non-queue `analytics-producer`. Worker lanes
+scale independently; producer cadence does not pass through a worker lane.
 Worker ids default to `<lane>-<pid>`, so `locked_by`, logs, and the admin jobs
 dashboard are lane-attributable. Shutdown is **bounded**: on SIGINT/SIGTERM a
 worker finishes its in-flight job up to `WORKER_SHUTDOWN_TIMEOUT_MS`, then
@@ -551,8 +552,11 @@ leaves an orphaned `running` row.
 
 **Idempotency** comes from upserting on natural keys; **exactly-once scheduling**
 from the dedupe key; **concurrency safety** from `SKIP LOCKED`. Handlers
-(`worker/handlers/`) are registered per `kind`; the distinct `regime.classify`
-and `research.refresh` handlers drive the analytics suite (§7.1) on independent
+(`worker/handlers/`) are registered per `kind`. The retained `regime.classify`
+and `research.refresh` handlers are compatibility code only: their schedules are
+disabled, pending/running rows are dead-lettered, supported API/admin paths
+cannot enqueue them, and shared workers receive no producer bearer. The
+independent producer (§7.1) drives the analytics suite on independent
 schedules (the combined `analytics.run` kind is retired).
 
 ### Admin dashboard (task-queue observability)
@@ -580,10 +584,12 @@ launcher generates a fresh random password each run and prints it to the
 interactive TUI ONLY (never logged, never written to `demo-state.json`).
 
 The frontend shell also renders `/admin/research` and `/admin/queue` sections
-(stage timeline, bounded artifact previews, filtered queue jobs, controlled
-rerun/dead-job retry — issue #157) against the `admin.overview`,
+(stage timeline, bounded artifact previews, filtered queue jobs, and
+non-analytics dead-job retry — issue #157) against the `admin.overview`,
 `admin.researchRuns`, `admin.researchRun`, and `admin.jobRetry` routes declared
-in `contract/src/routes.js`. Every `/admin/*` path resolves to this one shell
+in `contract/src/routes.js`. Analytics retry/schedule controls are retained only
+to return fail-closed `409` responses because the producer owns execution. Every
+`/admin/*` path resolves to this one shell
 fragment (`frontend/public/assets/js/app/routes.js`); the component reads
 `location.pathname` to pick a section. See the
 [Admin Surface specification](#admin-surface-research-and-investment-committee) for the
@@ -672,22 +678,21 @@ into six independently testable stages — **access → extract → transform �
 **Persistence boundary (issue #106).** The orchestrator
 (`analytics/index.ts::runAnalytics`) never writes SQL: every analytics-table
 read/write goes through the `AnalyticsPersistence` port
-(`analytics/persistence.ts`). Updater processes — the worker's `regime.classify`
-and `research.refresh` jobs (issue #107 lanes) — use the HTTP implementation
-(`analytics/api-client.ts`), submitting through the authenticated typed routes
+(`analytics/persistence.ts`). The independent `analytics-producer` uses the HTTP
+implementation (`analytics/api-client.ts`), submitting through authenticated typed routes
 `GET/POST /api/analytics/raw-history`, `POST /api/analytics/raw-history/seed`,
 `POST /api/analytics/regime-snapshots`, and `POST /api/analytics/research-signals`
 (`api/routes/analytics.ts`) with the analytics-provider bearer
-(`ANALYTICS_TOKEN`; wiring: `ANALYTICS_API_URL`). Mutations validate the entire
-payload before opening a transaction, are idempotent on their natural keys, and
-there is NO generic SQL-over-HTTP endpoint. The API process injects the direct
-service (`analytics/store/direct.ts`) instead; the worker's boot fails loudly in
-demo/prod without its token (`assertAnalyticsUpdaterCredentials`), its DB pool
-(`db/worker-client.ts`) is queue-scoped (`rm_worker`,
-`0016_worker_role.sql` — analytics-table writes are DENIED at the database), and
-`tests/analytics-api-boundary.test.ts` fails CI if updater/orchestrator/worker
-modules import `db/client.ts`, `postgres`, a SQL tag, or an analytics store
-writer.
+(`ANALYTICS_TOKEN_FILE`; wiring: `ANALYTICS_API_URL`). Only the producer and API
+verifier mount that secret; the producer has no `DATABASE_URL` or admin token.
+Mutations validate the entire payload before opening a transaction, are
+idempotent on natural keys, and there is NO generic SQL-over-HTTP endpoint. The
+API process injects the direct service (`analytics/store/direct.ts`) instead.
+Shared worker DB access remains queue/non-analytics scoped (`rm_worker`,
+`0016_worker_role.sql`), and legacy analytics handler code has no supported
+enqueue path or bearer. `tests/analytics-api-boundary.test.ts` and the producer
+boundary tests fail CI if the compute side imports SQL/store writers or gains
+ambient DB/admin credentials.
 
 Three pipelines run through these stages:
 
@@ -721,26 +726,18 @@ monthly coverage, finite non-negative integer counts, single indicator, no
 rows past the pinned as-of) live in
 `analytics/extract/edgar-seed.ts` — pure, no I/O.
 
-- **Bootstrap** (`analytics/edgar-seed-loader.ts::bootstrapEdgarSeed` →
-  `backend/scripts/edgar-seed-bootstrap.ts`) loads + validates the committed
-  artifact and submits it through the SAME authenticated seed-ingestion
-  endpoint the vendored floor seed uses (`POST
-  /api/analytics/raw-history/seed` → `store/floor-seed.ts`'s server-side
-  gap-fill: existing real rows always win, a second run is a no-op). On
-  success it calls `POST /api/analytics/research-eligibility`, which flips
-  `job_schedules.research.refresh` to `enabled` — seeded **disabled** by
-  `db/seed.ts` specifically so a fresh database's research schedule cannot
-  become claimable before the floor is seeded. `scripts/lib/demo-main.ts` runs
-  this CLI once, right after API health and before anything else (CI checks or
-  the local action loops) that could observe a fired `research.refresh` job.
-  Two `DEMO_MODE` details (issue #287): the flip EXCLUDES the demo's superseded
-  `1-59/2 * * * *` row (`db/seed.ts` disables it in favour of the hourly one —
-  enabling by `kind` alone would resurrect it every boot), and under `DEMO_MODE`
-  the endpoint also enqueues ONE immediate `research.refresh` job (constant
-  `dedupe_key`, so at most once per database) — this is the first moment a
-  research run is legitimate, and the hourly demo cadence would otherwise leave
-  the readiness gate with no research leg for up to an hour. Prod/CI without the
-  flag enqueue nothing: their daily 23:00 schedule owns the first run.
+- **Bootstrap** (`analytics/edgar-seed-loader.ts::bootstrapEdgarSeed`, invoked by
+  the producer's `seed` command) loads + validates the committed artifact and
+  submits it through the SAME authenticated seed-ingestion endpoint the vendored
+  floor seed uses (`POST /api/analytics/raw-history/seed` →
+  `store/floor-seed.ts`'s server-side gap-fill: existing real rows always win, a
+  second run is a no-op). After ingestion, that same producer command runs one
+  immediate producer-owned research refresh over HTTP, so demo readiness never
+  depends on a consumer queue. `POST /api/analytics/research-eligibility` is a
+  retained fail-closed compatibility path: after provider authentication it
+  returns `409 producer_owned` and mutates neither `job_schedules` nor `jobs`.
+  All legacy `regime.classify`/`research.refresh` schedule rows remain disabled;
+  no admin or analytics endpoint can reactivate or enqueue them.
 - **Repopulation** (`edgar-seed-loader.ts::repopulateEdgarSeed` →
   `backend/scripts/edgar-seed-repopulate.ts`) is an operator command for a
   database that lost some MNA rows: it diffs the committed artifact against
@@ -764,11 +761,11 @@ rows past the pinned as-of) live in
   what's expected and that the diff is additive (new trailing months), never a
   silent revision of historical counts.
 
-The worker runs regime and research as **distinct jobs** (issue #107):
-`regime.classify` daily at **22:30 UTC** (after US market close, so the fetched
-raw is settled end-of-day data) in the analytics lane, and `research.refresh`
-(both research signals, never the regime tool) daily at **23:00 UTC** in the
-research lane; the API exposes regime at `/api/dashboards/regime-snapshots?range=`
+The independent producer runs regime and research on **distinct timers**:
+`regime` daily at **22:30 UTC** (after US market close, so fetched raw data is
+settled end-of-day) and `research` (both research signals, never the regime
+tool) daily at **23:00 UTC**. These timers live in `analytics-producer`, not
+`job_schedules` or worker lanes. The API exposes regime at `/api/dashboards/regime-snapshots?range=`
 and each research signal at `/api/dashboards/research-signals/:key`; the frontend
 renders `/regime` (including the backtest + predictive-correlations panels) and the
 `/research/*` views (mirroring the original site's surfaces). The regime DTO also
@@ -998,33 +995,73 @@ binary, not a service RM operates.
 
 ### 9.6 RM analytics provider (the data utility)
 
-The regime classifier runs on the provider's own infrastructure and **submits
-regime snapshots through the authenticated `/api/analytics` boundary under a
-scoped credential** (`ANALYTICS_TOKEN`; issue #106 — never direct SQL), the same
-pattern as a member posting a take, different scope. Members consume it **optionally** via the regime read
-(`ROUTES.dashboards.regimeSnapshots`) and may record which RM tools vs. their own
-data they used. Producer (privileged write) and consumers (read) are cleanly
-separated; this actor can later be a third party with no change.
+**Required boundary (D25).** The regime classifier runs on the provider's own
+infrastructure and **submits computed regime snapshots through the authenticated
+`/api/analytics` boundary under its exclusive scoped credential**
+(`ANALYTICS_TOKEN`; issue #106 — never direct SQL), the same pattern as a member
+posting a take, different scope. Members consume it **optionally** via the regime
+read (`ROUTES.dashboards.regimeSnapshots`) and may record which RM tools vs.
+their own data they used. The API validates and persists provider output; it
+does not run the provider's classifier, and an admin credential cannot
+substitute for the analytics role.
+
+**Implemented boundary.** `analytics-producer` has no database or admin
+credential, owns the regime/research cron timers, computes on its side, and
+submits through the typed analytics routes. Its bearer is file-mounted only into
+the producer and API verifier; shared workers, the demo host, and committee
+members do not receive it. Consumer schedules are disabled and legacy queued
+analytics jobs are dead-lettered. Admin retry/toggle/rerun/enqueue operations and
+the retired research-eligibility endpoint fail closed, so no supported consumer
+path can substitute for the producer. Remaining legacy handler/lane code and the
+demo TUI's queue-based analytics display are compatibility/observability debt,
+not active producer paths.
 
 ### 9.7 Testing & demo
 
-**No mocks of the submit path; no host-authored takes.** E2E runs the real
-single-box stack (Postgres + API + worker + the analytics-provider client + N
-member agents, each identified by its own access-key hash and signing with its
-own key) and asserts: regime write lands and reads back; member signatures
-verify; a no-show renders **absent**, not fabricated; out-of-window POSTs
-are rejected; cross-role writes are denied; a published session renders the *real*
-takes. The demo is the same harness at scale. Every present member authors a
-live opencode-zen take — a missing dependency fails the run rather than silently
-skipping or emitting a template. The model `AGENT_MODEL` resolves against
-`scripts/lib/model-registry.ts`, billed to `OPENCODE_API_KEY` (§11.3 E1) —
-that is **time-bounded**
-(`OPENCODE_TIMEOUT_MS`, default 120s — a hung inference kills the subprocess
-instead of freezing the session), and member runs are settled rather than
-`Promise.all`'d, so a per-member inference/session failure renders that member
-**absent** instead of failing the whole session (#122; the e2e harness — formerly
-`mcp/src/e2e.ts` — is relocated out of the retired `mcp/` package as part of
-D21's follow-up code retirement).
+Decision [D25](./decisions.md#d25--external-actor-rail-for-simulated-independent-entities)
+defines the required topology for every actor the demo or an eval presents as
+independent.
+
+**Implemented member/eval topology.** E2E runs the real single-box stack
+(Postgres + API + worker), but each onboarding candidate and each present
+committee member runs in its **own disposable member-agent container** through
+`scripts/agent/member-agent.ts`'s shared `runMemberAgent()` primitive.
+Containers inherit no host environment. Each gets only enumerated
+connection/session facts, its scoped model credential when inference requires
+one, and explicit owner-held secrets; a member never receives the stack's
+`ADMIN_TOKEN` or `ANALYTICS_TOKEN`.
+
+Member state is not centralized in the harness. Each actor has a private
+persistent home volume containing its own keystore and member credential, so the
+key generated during admission is the key used in later sessions. Inside the
+container, `scripts/agent/member-session-client.ts` fetches regime and brief data
+over REST, performs the member's live inference, builds and signs the canonical
+payload, posts its memo, and submits its recommendation. The harness-side
+`scripts/lib/committee/agent.ts` only launches/observes the container and may
+register a fixed demo member's public key once; `scripts/lib/committee/session.ts`
+owns session orchestration. Neither harness module holds a member private key or
+authors, signs, repairs, or submits a take.
+
+**Implemented producer topology.** Analytics/research computation and cadence
+live in the dedicated producer service; provider output crosses only the REST
+ingestion gate under the file-mounted provider credential. The consumer API
+validates/persists but cannot compute, schedule, retry, or enqueue producer work.
+The required tests assert both positive submission and negative authority: API,
+admin, shared-worker, member, and demo-host paths cannot obtain the bearer or
+reactivate a legacy consumer job.
+
+**No mocks of the submit path; no host-authored takes.** The required execution
+asserts: provider data lands and reads back; member signatures verify; a no-show
+renders **absent**, not fabricated; out-of-window POSTs are rejected; cross-role
+writes are denied; and a published session renders the *real* takes. Every
+present member authors a live OpenCode take — a missing dependency, malformed
+stance, timeout, or failed container is loud and renders that member absent
+rather than silently skipping or emitting a template. `AGENT_MODEL` resolves
+against `scripts/lib/model-registry.ts`, billed to `OPENCODE_API_KEY` when the
+selected model requires it (§11.3 E1). Inference is time-bounded
+(`OPENCODE_TIMEOUT_MS`, default 120s), container runs have an outer deadline and
+bracketed cleanup, and member outcomes are settled independently so one failure
+does not sink the session (#122).
 
 The required `e2e` demo boot therefore executes and asserts live committee-take
 authorship on every run. The nightly workflow additionally measures
@@ -1674,12 +1711,12 @@ deletes demo data volumes.
 
 ```mermaid
 flowchart TB
-    subgraph Scheduler["⏱ Worker Scheduler"]
-        SC["tickScheduler() every 30s<br/>reads job_schedules<br/>FOR UPDATE SKIP LOCKED"]
-        SC -->|hourly, minute 7| R["regime.classify<br/>→ regime snapshot<br/>(analytics lane)"]
-        SC -->|hourly, minute 37| A["research.refresh<br/>→ research signals<br/>(research lane)"]
-        R -->|"poll DB (TUI)"| TP
-        A -->|"poll DB (TUI)"| TP
+    subgraph Producer["⏱ Independent analytics-producer"]
+        PC["producer-owned cron timers<br/>no consumer DB/admin credential"]
+        PC -->|regime timer| R["compute regime<br/>POST authenticated snapshot"]
+        PC -->|research timer| A["compute research<br/>POST authenticated signals"]
+        R -->|"public output observed"| TP
+        A -->|"public output observed"| TP
     end
 
     subgraph Core["👥 Core Members (seated at start)"]
@@ -1715,11 +1752,11 @@ flowchart TB
     Core -->|"sign → submit"| S3
     Prospects -->|walk through| Onboarding
     O6 -->|"admitted → joins roster"| S3
-    Scheduler -.->|visible in| TP
+    Producer -.->|visible in| TP
     Session -.->|visible in| TP2
     Onboarding -.->|visible in| TP3
 
-    style Scheduler fill:#1e3a5f33,stroke:#1e3a5f,stroke-width:2px
+    style Producer fill:#1e3a5f33,stroke:#1e3a5f,stroke-width:2px
     style Core fill:#3b076433,stroke:#7c3aed,stroke-width:2px
     style Prospects fill:#3b076433,stroke:#a855f7,stroke-width:2px,stroke-dasharray:5 5
     style Session fill:#1e1b4b33,stroke:#4338ca,stroke-width:2px
@@ -1791,23 +1828,13 @@ container user and inits/resumes cleanly — so the named-volume fallback was no
 **(b) Staggered scheduled actions.** The demo continuously produces
 fresh activity, driven two ways (hybrid):
 
-- **Regime + research** — driven by the worker's own scheduler. In demo mode
-  (`DEMO_MODE=1` — the single demo-stack flag, pinned on every demo container by
-  `docker-compose.demo.yml` and passed to the migrate/seed one-shot; it replaced
-  the old `DEMO_FAST_SCHEDULES`) the seed appends
-  demo-cadence rows to `job_schedules` in addition to the default daily 22:30 UTC rows:
-  `regime.classify` on `7 * * * *` (regime only, analytics lane) and
-  `research.refresh` on `37 * * * *` (both research signals only, research
-  lane — issue #107 split the retired combined `analytics.run` kind). The
-  distinct cron minutes stagger them so they never fire in the same minute (nor
-  in the same minute as the hourly vault sample at minute 0 or the demo wallet
-  sampler at minute 3). Both are HOURLY as of issue #287: the original
-  `*/2` + `1-59/2` pair fired one analytics action every minute against the
-  public Base RPC, exhausting the shared host's per-IP quota and starving CI's
-  own demo-readiness gate (blocker #285). Since the conflict key is
-  `(kind, cron)`, seeding on an existing deployment also DISABLES the superseded
-  `*/2` / `1-59/2` rows (one-directional, `AND enabled`-guarded) — that is what
-  actually switches the cadence.
+- **Regime + research** — driven by `analytics-producer`'s own
+  `PRODUCER_REGIME_CRON` / `PRODUCER_RESEARCH_CRON` timers, never the consumer
+  queue. On boot its finite `seed` command ingests the EDGAR floor and performs
+  an immediate producer-owned research refresh before readiness checks. Legacy
+  `regime.classify` / `research.refresh` rows (including the old fast-demo
+  cadences) are forced disabled and pending/running jobs dead-lettered; no
+  supported endpoint can revive them.
   `DEMO_MODE` also SLOWS the wallet sampler: it seeds an hourly
   `wallet.sample_balances` row (`3 * * * *`, staggered off the hourly vault
   sample) and disables the per-minute baseline — the standing demo and the
@@ -2192,12 +2219,11 @@ the TUI shows only distilled state. Layout:
 - **Activity** (largest region) — Research plus **one pane per committee subject**, laid
   out as responsive columns (side by side when they fit, stacking when the terminal is
   narrow):
-  - **Research** — recent `regime.classify` / `research.refresh` runs, advancing
-    queued → running → done as the worker's queue transitions are observed, annotated
-    with what landed (e.g. `regime → risk_on 0.76`). Fidelity is queue-level (see
-    [this specification's §10](#10-demo-output)), not fabricated sub-steps. The header shows a live **countdown** to
-    the next scheduled regime/research run (from `job_schedules.next_run_at`, using the
-    DB clock).
+  - **Research** — currently a **legacy observability view** over historical
+    `regime.classify` / `research.refresh` queue rows and
+    `job_schedules.next_run_at`. It does not control execution and must not be
+    read as producer-native run/cadence telemetry. Repointing this pane and its
+    countdown at producer telemetry is the remaining UI observability gap.
   - **One pane per subject** (woon, mav, …) — each subject runs on its **own schedule**
     (independent interval + stagger offset, serialized execution) and gets its own pane
     showing its session lifecycle state, each member's real stage (connect → fetch →
@@ -2609,12 +2635,12 @@ The implementation must extend, not replace, these pieces:
   `degraded` on `job_runs`.
 - Analytics runs through `runAnalytics()` and the stages described in
   `docs/architecture.md`: `access → extract → transform → analyze → store →
-  report`. The production jobs are `regime.classify` at 22:30 UTC and
-  `research.refresh` at 23:00 UTC.
-- The analytics worker must persist through the authenticated
-  `/api/analytics/*` boundary. Migration `0016` denies its database role writes
-  to analytics tables. New analytics telemetry writes must respect the same
-  boundary.
+  report`. The independent producer owns `regime` at 22:30 UTC and `research`
+  at 23:00 UTC; retired consumer job rows are observability/cleanup debt only.
+- The independent analytics producer persists through the authenticated
+  `/api/analytics/*` boundary and has no database credential. Migration `0016`
+  continues denying the shared worker role writes to analytics tables. New
+  analytics telemetry writes must respect the same boundary.
 - The current committee domain supports public reads, applications, activation,
   signed submissions, memos, subject creation, and the five-state lifecycle.
   Several lifecycle functions currently lack state guards; this plan adds them.
@@ -2649,9 +2675,10 @@ and the next scheduled events on one page.
 
 Acceptance:
 
-- Overview cards show queue counts, last success/failure by production kind,
-  stale analytics outputs, the next enabled analytics schedules, and the next
-  committee session event.
+- Overview cards show queue counts, stale analytics outputs, historical retired
+  consumer-job health, any accidentally enabled legacy analytics schedule, and
+  the next committee session event. Producer-native cadence/run health remains
+  an observability follow-up.
 - Alerts distinguish `not_run`, `running`, `degraded`, `failed`, `dead`,
   `stale`, and `healthy`.
 - A “running too long” alert means `jobs.status = 'running'` and
@@ -2668,12 +2695,12 @@ As an admin, I can find a run by job kind, tool, as-of date, status, or job id.
 
 Acceptance:
 
-- One `regime.classify` attempt creates one analytics run with the `regime` tool.
-- One scheduled `research.refresh` attempt creates one analytics run containing
+- One producer regime execution creates one analytics run with the `regime` tool.
+- One producer research execution creates one analytics run containing
   `channel-divergence` and `late-cycle-signals` tool traces.
-- A manual single-tool research rerun creates a `research.refresh` run containing
-  only the requested research tool.
-- The list shows run id, job id, attempt, source mode, as-of date, tools,
+- Admin rerun/retry endpoints reject analytics execution with `409`; they never
+  enqueue `regime.classify` or `research.refresh`.
+- The list shows run id, optional legacy job id, attempt, source mode, as-of date, tools,
   current stage, status, warning count, start, finish, and duration.
 
 ### US-R2 — Inspect every research stage
@@ -2718,24 +2745,21 @@ Acceptance:
 - Links open the corresponding public `/regime` or `/research/:key` page in a
   separate tab.
 
-### US-R4 — Rerun research safely
+### US-R4 — Keep producer execution outside admin authority
 
-As an admin, I can rerun a failed, degraded, or stale research tool for an
-explicit as-of date.
+As an admin, I can inspect analytics results without gaining the producer's
+credential or a consumer-queue path that impersonates it.
 
 Acceptance:
 
-- The form requires `kind`, `asof`, and a reason of 10–500 characters.
-- `regime.classify` only permits tool `regime`.
-- `research.refresh` permits either both research tools or exactly one of
-  `channel-divergence` and `late-cycle-signals`.
-- The API inserts a new pending job with a unique manual dedupe key and returns
-  202 with the job id. It never resets or mutates the original job.
-- The queue payload records only `asof`, optional `toolId`, and an internal
-  audit request id. The human reason is stored in audit data, not copied into
-  worker logs.
-- A rerun may upsert existing natural keys. The store stage records before and
-  after checksums so the admin can see whether the canonical output changed.
+- Research rerun, analytics job retry, and analytics schedule-toggle endpoints
+  return `409` without inserting a job or changing a schedule.
+- The committee admin dispatcher accepts lifecycle actions only; it cannot
+  enqueue `regime.classify` or `research.refresh`.
+- The retired authenticated `research-eligibility` path returns
+  `409 producer_owned` and performs zero queue/schedule mutations.
+- Operational reruns execute from the independent producer environment under
+  its own scoped credential, not through `ADMIN_TOKEN`.
 
 ### US-Q1 — Inspect and retry queue work
 
@@ -3133,14 +3157,14 @@ state is 409, accepted queue work is 202, and successful synchronous mutation is
 | `GET /api/admin/overview` | health cards and alert feed |
 | `GET /api/admin/jobs` | extend existing list with filters and scope fields |
 | `GET /api/admin/jobs/:id` | extend existing detail with domain links |
-| `POST /api/admin/jobs/:id/retry` | clone a dead job |
+| `POST /api/admin/jobs/:id/retry` | clone a non-analytics dead job; analytics kinds return `409` |
 | `GET /api/admin/runs` | retain queue-run feed and add filters |
-| `PATCH /api/admin/schedules/:id` | toggle an analytics schedule only |
+| `PATCH /api/admin/schedules/:id` | retired analytics control; returns `409` without mutation |
 | `GET /api/admin/research/runs` | analytics-run list |
 | `GET /api/admin/research/runs/:id` | stages, artifacts, linked queue runs |
 | `GET /api/admin/research/series/:indicator` | allowlisted raw history range |
 | `GET /api/admin/research/signals/:key/:date` | stored signal payload |
-| `POST /api/admin/research/runs` | enqueue manual rerun |
+| `POST /api/admin/research/rerun` | retired producer control; returns `409` without enqueue |
 | `GET /api/admin/committee/overview` | session/member/topic summary |
 | `GET/POST /api/admin/committee/subjects` | list/create topics |
 | `GET/PATCH /api/admin/committee/subjects/:id` | topic detail/edit |
@@ -3360,7 +3384,8 @@ Add tests proving:
 - analytics run/stage/artifact recording, redaction, preview limits, and missing
   telemetry warning behavior;
 - dead-job retry clones rather than mutates; and
-- schedule PATCH cannot modify cron/kind/payload or enable committee demo rows.
+- analytics retry/rerun/schedule paths return `409` with zero queue/schedule
+  mutation; committee demo rows remain protected too.
 
 ### 8.2 Browser tests
 
@@ -3369,8 +3394,9 @@ Expand `frontend/test/browser/admin-view.spec.ts` into focused cases for:
 - login, persisted tab session, 403 logout, navigation, and browser back/forward;
 - overview alerts and polling pause;
 - research list filters, stage timeline, artifact preview, raw-series navigation,
-  and rerun confirmation;
-- queue filters, job detail, dead-job retry, and schedule toggle;
+  and retired-rerun warning;
+- queue filters, job detail, non-analytics dead-job retry, and fail-closed legacy
+  schedule controls;
 - topic create/edit/deactivate validation;
 - member application activation, manual add, one-time token modal,
   deactivation, and participation history;
@@ -3650,7 +3676,11 @@ own same-host API) use CORS.
 ## 11. Task queue topology
 
 The Postgres-backed task queue replaces the old GitHub Actions cron. Three
-concurrent loops run inside the `worker` process:
+concurrent loops run inside the `worker` process for internal product work.
+Analytics/research producer cadence is outside this topology. The registered
+legacy analytics handlers shown below are unreachable compatibility debt:
+their rows are disabled/dead-lettered, no supported endpoint enqueues them, and
+shared workers have no producer credential.
 
 ```mermaid
 flowchart TB
@@ -3681,7 +3711,7 @@ flowchart TB
     end
 
     subgraph Handlers["Registered Handlers"]
-        H1["regime.classify daily 22:30 UTC<br/>research.refresh daily 23:00 UTC<br/>(distinct kinds, own lanes)"]
+        H1["legacy regime.classify / research.refresh<br/>unreachable compatibility handlers<br/>(cleanup debt)"]
         H2["committee.*<br/>session lifecycle<br/>(open → brief → close →<br/>aggregate → publish)"]
     end
 
@@ -3700,11 +3730,11 @@ flowchart TB
     style Handlers fill:#1e1b4b33,stroke:#4338ca,stroke-width:2px
 ```
 
-## 12. Analytics pipeline — research & report jobs
+## 12. Analytics pipeline — producer executions
 
-The analytics suite runs as two scheduled jobs with distinct kinds and lanes
-(issue #107): `regime.classify` (daily 22:30 UTC, analytics lane) and
-`research.refresh` (daily 23:00 UTC, research lane).
+The analytics suite runs as two independent-producer timers: `regime` daily at
+22:30 UTC and `research` daily at 23:00 UTC. Neither timer creates a consumer
+queue job; computed output is submitted through authenticated REST.
 It drives three compute pipelines through a shared 6-stage access → extract →
 transform → analyze → store → report flow:
 

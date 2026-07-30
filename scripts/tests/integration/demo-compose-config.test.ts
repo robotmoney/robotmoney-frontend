@@ -24,7 +24,12 @@ import { resolveDemoEnv } from "../../demo.ts";
 const repoRoot = join(import.meta.dir, "../../..");
 
 interface ComposeConfig {
-  services: Record<string, { environment?: Record<string, string | null> }>;
+  services: Record<string, {
+    environment?: Record<string, string | null>;
+    secrets?: Array<{ source: string; target: string }>;
+    volumes?: Array<{ source?: string; target?: string; read_only?: boolean }>;
+  }>;
+  secrets?: Record<string, { file?: string }>;
 }
 
 // Base env for the compose call: inherit the caller's env (PATH/HOME/DOCKER_*)
@@ -33,7 +38,10 @@ function baseEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v === undefined) continue;
-    if (["BASE_RPC_URL", "BASE_RPC_SOURCE", "ANALYTICS_SOURCE", "ANALYTICS_FLOOR_SEED", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME"].includes(k)) continue;
+    if ([
+      "BASE_RPC_URL", "BASE_RPC_SOURCE", "ANALYTICS_SOURCE", "ANALYTICS_FLOOR_SEED",
+      "ANALYTICS_TOKEN", "ANALYTICS_TOKEN_FILE_HOST", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME",
+    ].includes(k)) continue;
     env[k] = v;
   }
   env.DEMO_PROJECT = "compose-config-test"; // used by labels; avoids interpolation warnings
@@ -72,6 +80,13 @@ function serviceEnv(cfg: ComposeConfig, svc: string): Record<string, string | nu
 const RPC_CONSUMERS = ["api", "worker-committee", "worker-analytics", "worker-research"] as const;
 
 describe("docker compose config — demo data path resolution", () => {
+  test("the complete compose model parses without an analytics token file", () => {
+    const cfg = composeConfig({});
+    expect(cfg.secrets?.analytics_token?.file).toBe("/dev/null");
+    expect(cfg.services["postgres"]).toBeDefined();
+    expect(cfg.services["api"]).toBeDefined();
+  });
+
   test("no base-rpc-stub service exists anymore", () => {
     const cfg = composeConfig({});
     expect(cfg.services?.["base-rpc-stub"]).toBeUndefined();
@@ -118,6 +133,28 @@ describe("docker compose config — demo data path resolution", () => {
     for (const svc of RPC_CONSUMERS) {
       expect(serviceEnv(cfg, svc).BASE_RPC_URL ?? "").not.toContain("mainnet.base.org");
     }
+  });
+});
+
+describe("member-agent compose template — zero ambient model configuration", () => {
+  test("OPENCODE_API_KEY and AGENT_MODEL never propagate through service environment", () => {
+    const cfg = composeConfig({
+      OPENCODE_API_KEY: "planted-compose-secret",
+      AGENT_MODEL: "opencode/planted-model",
+    });
+    const env = cfg.services?.["member-agent"]?.environment ?? {};
+    expect("OPENCODE_API_KEY" in env).toBe(false);
+    expect("AGENT_MODEL" in env).toBe(false);
+  });
+
+  test("analytics secret is mounted into the producer, never the member-agent", () => {
+    const tokenPath = "/tmp/robotmoney-demo-session-secrets/analytics-token";
+    const cfg = composeConfig({ ANALYTICS_TOKEN_FILE_HOST: tokenPath });
+    expect(cfg.secrets?.analytics_token?.file).toBe(tokenPath);
+    expect(cfg.services["analytics-producer"]?.environment?.ANALYTICS_TOKEN_FILE).toBe("/run/secrets/analytics_token");
+    expect(cfg.services["analytics-producer"]?.secrets?.map((s) => s.source)).toContain("analytics_token");
+    expect(cfg.services["member-agent"]?.secrets ?? []).toEqual([]);
+    expect(JSON.stringify(cfg.services["member-agent"]?.volumes ?? [])).not.toContain(tokenPath);
   });
 });
 

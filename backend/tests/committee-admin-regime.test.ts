@@ -1,52 +1,133 @@
-// Placeholder for the Demo readiness gate phase (issue #63, dev-scout). Reserves
-// the CI seam for the POST /api/committee/admin/regime handler's dedicated test
-// file so #59 can land its tools-array scoping assertion without also owning
-// file creation. #59 extends this file; it does not need to build the harness.
+// The regime write boundary (issue #361 Phase 4; docs/decisions.md D25, §9.6):
+// POST /api/committee/regime is a genuine provider SUBMISSION gate (validate +
+// persist; NEVER recompute server-side), the ADMIN_TOKEN classifier path
+// (POST /api/committee/admin/regime) is REMOVED. The independent producer owns
+// cadence; ADMIN_TOKEN cannot enqueue a consumer-worker replacement.
 //
 // Dispatches through handleCommittee in-process (the same pattern authz.test.ts
-// uses) rather than over HTTP, and pins ANALYTICS_SOURCE=hermetic so the run
-// never touches the network (mirrors hermetic-source.test.ts).
+// uses) rather than over HTTP.
 import { test, expect, afterEach } from "bun:test";
 import { config } from "../src/config.ts";
 import { handleCommittee } from "../src/api/routes/committee.ts";
 import { sql } from "../src/db/client.ts";
 
-const origConfig = { adminToken: config.adminToken, allowInsecure: config.allowInsecure };
-const origSource = process.env.ANALYTICS_SOURCE;
+const origConfig = {
+  adminToken: config.adminToken,
+  allowInsecure: config.allowInsecure,
+  analyticsToken: config.analyticsToken,
+};
 afterEach(() => {
   config.adminToken = origConfig.adminToken;
   config.allowInsecure = origConfig.allowInsecure;
-  if (origSource === undefined) delete process.env.ANALYTICS_SOURCE;
-  else process.env.ANALYTICS_SOURCE = origSource;
+  config.analyticsToken = origConfig.analyticsToken;
 });
 
-// runAnalytics computes the full indicator + backtest suite even in hermetic
-// mode, so this mirrors the extended timeouts other suites use around it
-// (hermetic-source.test.ts, analytics-suite.test.ts) rather than the 5s default.
-test(
-  "POST /api/committee/admin/regime recomputes ONLY the regime composite (tools === ['regime'])",
-  async () => {
-    config.adminToken = null;
-    config.allowInsecure = true;
-    process.env.ANALYTICS_SOURCE = "hermetic";
+const call = (req: Request) => handleCommittee(req, new URL(req.url));
 
-    const req = new Request("http://x/api/committee/admin/regime", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ asof: "2026-06-29" }),
-    });
-    const res = await handleCommittee(req, new URL(req.url));
+function snapshotRow(date: string, composite: number) {
+  return {
+    date,
+    composite,
+    compositePercentile: 0.5,
+    regime: "neutral",
+    macroRegime: "neutral",
+    onchainRegime: "neutral",
+    factorRegime: "neutral",
+    macroIndex: 0.5,
+    onchainIndex: 0.5,
+    factorIndex: 0.5,
+    macroPercentile: 0.5,
+    onchainPercentile: 0.5,
+    factorPercentile: 0.5,
+    panelWeights: null,
+    version: "test-v1",
+    percentiles: { test_indicator: 0.5 },
+    indicators: [],
+    panels: null,
+    bucketThresholds: null,
+    backtest: null,
+    correlations: null,
+    extras: null,
+  };
+}
 
-    expect(res).not.toBeNull();
-    expect(res!.status).toBe(200);
-    // The scoping fix (issue #59): this admin route must NOT recompute the full
-    // suite (regime + both research signals) — only the regime composite, so it
-    // never triggers the multi-minute live SEC EDGAR research crawl that hung
-    // `bun demo`. Object.keys of the scoped runAnalytics result is exactly ["regime"].
-    expect((res!.body as { tools: string[] }).tools).toEqual(["regime"]);
-  },
-  { timeout: 120_000 },
-);
+function regimeReq(body: unknown, headers: Record<string, string> = {}) {
+  return new Request("http://x/api/committee/regime", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+test("POST /api/committee/regime is a provider SUBMISSION gate: analytics bearer persists submitted snapshots verbatim, with no server-side recompute", async () => {
+  config.analyticsToken = "analytics-secret";
+  config.allowInsecure = false;
+
+  const date = "2031-06-15";
+  await sql`DELETE FROM regime_snapshots WHERE date = ${date}`;
+  const res = await call(
+    regimeReq({ snapshots: [snapshotRow(date, 0.731)] }, { Authorization: "Bearer analytics-secret" }),
+  );
+  expect(res).not.toBeNull();
+  expect(res!.status).toBe(200);
+  expect(res!.body).toMatchObject({ ok: true, saved: 1 });
+  // The SUBMITTED composite landed — not a recomputed one: 0.731 is not a
+  // value any classifier run over this suite's data would produce for a
+  // future date, so reading it back proves persistence of the provider's own
+  // computation.
+  const [row] = await sql<{ composite: number | null; version: string | null }[]>`
+    SELECT composite, version FROM regime_snapshots WHERE date = ${date}`;
+  expect(Number(row.composite)).toBeCloseTo(0.731, 6);
+  expect(row.version).toBe("test-v1");
+  await sql`DELETE FROM regime_snapshots WHERE date = ${date}`;
+});
+
+test("POST /api/committee/regime rejects a malformed submission with 400 and zero writes", async () => {
+  config.analyticsToken = "analytics-secret";
+  config.allowInsecure = false;
+  const res = await call(
+    regimeReq({ snapshots: [{ date: "not-a-date" }] }, { Authorization: "Bearer analytics-secret" }),
+  );
+  expect(res!.status).toBe(400);
+  expect(String((res!.body as { error: string }).error)).toContain("snapshots[0]");
+});
+
+test("POST /api/committee/regime refuses ADMIN_TOKEN and member-shaped bearers — the analytics role is not substitutable", async () => {
+  config.analyticsToken = "analytics-secret";
+  config.adminToken = "admin-secret";
+  config.allowInsecure = false;
+  const payload = { snapshots: [snapshotRow("2031-06-16", 0.5)] };
+  // Admin header is not the analytics role.
+  expect((await call(regimeReq(payload, { "X-Admin-Token": "admin-secret" })))!.status).toBe(403);
+  // Neither is an arbitrary (member-shaped) bearer.
+  expect((await call(regimeReq(payload, { Authorization: "Bearer tok_member_x" })))!.status).toBe(403);
+});
+
+test("the ADMIN_TOKEN classifier path is gone: POST /api/committee/admin/regime is an unknown admin action", async () => {
+  config.adminToken = null;
+  config.allowInsecure = true;
+  const req = new Request("http://x/api/committee/admin/regime", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ asof: "2026-06-29" }),
+  });
+  const res = await call(req);
+  expect(res!.status).toBe(404);
+  expect((res!.body as { error: string }).error).toBe("unknown admin action");
+});
+
+test("ADMIN_TOKEN cannot trigger classification through enqueue-job", async () => {
+  config.adminToken = null;
+  config.allowInsecure = true;
+  const req = new Request("http://x/api/committee/admin/enqueue-job", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "regime_classify", asof: "2031-06-17" }),
+  });
+  const res = await call(req);
+  expect(res!.status).toBe(400);
+  expect((res!.body as { error: string }).error).toContain("unknown action");
+});
 
 // Migration 0017 (admin surface, issue #150) against the suite's real,
 // already-migrated Postgres. Full pre-migration legacy-fixture and backfill

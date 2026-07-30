@@ -66,7 +66,7 @@ export const ROUTES = {
     claimChallenge: "/api/committee/token-claim/challenge", // POST — opaque 10-minute key-proof challenge
     claimToken: "/api/committee/token-claim", // POST — first valid key proof returns the sole bearer token
     register: "/api/committee/register", // POST (privileged) — apply+activate shortcut for demo/E2E
-    regime: "/api/committee/regime", // POST (analytics-provider bearer) — persist the regime
+    regime: "/api/committee/regime", // POST (analytics-provider bearer) — provider SUBMITS computed snapshots ({ snapshots }); never a server-side recompute
     submit: "/api/committee/submit", // POST (member bearer, ed25519-signed)
     // Admin lifecycle (X-Admin-Token). The backend registers ONE dispatcher at
     // admin.action; the named entries below enumerate the verbs it accepts so
@@ -75,7 +75,9 @@ export const ROUTES = {
       action: "/api/committee/admin/:action", // POST — generic lifecycle dispatch
       activate: "/api/committee/admin/activate", // POST — flip applied→active, mint bearer token
       reset: "/api/committee/admin/reset", // POST — wipe session data (dev/demo)
-      regime: "/api/committee/admin/regime", // POST — recompute the regime composite
+      // The former admin `regime` action and analytics queue action were
+      // removed by issue #361: producer data only arrives as a submission,
+      // and the independent producer owns its own cadence.
       subject: "/api/committee/admin/subject", // POST — ensure a subject row
       subjectFixtures: "/api/committee/admin/subject_fixtures", // POST — seed reference-shaped demo fixtures
       open: "/api/committee/admin/open", // POST — open a session
@@ -126,13 +128,13 @@ export const ROUTES = {
   // opening a transaction and are idempotent on their natural keys. There is NO
   // generic SQL-over-HTTP endpoint.
   analytics: {
+    readiness: "/api/analytics/readiness", // GET — authenticate producer credential; no data read or mutation
     rawHistory: "/api/analytics/raw-history", // GET → persisted floor; POST — batch upsert on (date, indicator)
     rawHistorySeed: "/api/analytics/raw-history/seed", // POST — cold-DB gap-fill (existing rows win; EDGAR seed ingestion)
     regimeSnapshots: "/api/analytics/regime-snapshots", // POST — snapshot batch upsert on (date)
     researchSignals: "/api/analytics/research-signals", // POST — signal batch upsert on (signal_key, date)
-    // POST — flips job_schedules.research.refresh to enabled (issue #108). Called
-    // ONLY after the EDGAR/MNA seed bootstrap ingests successfully, so a fresh
-    // boot's research schedule never becomes claimable before the floor is seeded.
+    // POST — retired control-plane path; authenticated callers receive 409 and
+    // no consumer schedule/job mutation. Retained so old clients fail closed.
     researchEligibility: "/api/analytics/research-eligibility",
     // POST — submit one run's structured telemetry (stages/warnings/artifacts/
     // outcome; issue #151). Non-fatal to callers: a failed submission never
@@ -151,7 +153,7 @@ export const ROUTES = {
     job: "/api/admin/jobs/:id", // GET — one job + its recent runs (the logs)
     jobRetry: "/api/admin/jobs/:id/retry", // POST — clone a dead job into a new pending job (US-Q1)
     runs: "/api/admin/runs", // GET ?kind=&status=&limit=&cursor= — recent job_runs feed (the logs)
-    schedule: "/api/admin/schedules/:id", // PATCH — toggle enabled on an analytics job_schedules row (issue #155)
+    schedule: "/api/admin/schedules/:id", // PATCH — legacy analytics rows fail closed; non-analytics rows are not accepted
     audit: "/api/admin/audit", // GET ?actor=&action=&targetType=&targetId=&from=&to=&limit=&cursor= — redacted, filtered audit_log feed (issue #155)
     // Research pipeline telemetry admin surface (issue #151, consumed by the
     // #157 operator UI per docs/architecture.md US-R1..US-R4).
@@ -160,7 +162,7 @@ export const ROUTES = {
     researchRun: "/api/admin/research/runs/:id", // GET — run detail: stage timeline, warnings, artifacts, freshness
     researchRawSeries: "/api/admin/research/raw-series/:indicator", // GET ?from=&to=&limit= — allowlisted raw_indicator_history read
     researchSignal: "/api/admin/research/signals/:key", // GET ?from=&to=&limit= — allowlisted research_signals read
-    researchRerun: "/api/admin/research/rerun", // POST — enqueue a complete or single-tool rerun for a given as-of date
+    researchRerun: "/api/admin/research/rerun", // POST — retired; 409 because the independent producer owns execution
   },
 
   // Committee operations surface (issue #159 UI over issue #152/PR #169's

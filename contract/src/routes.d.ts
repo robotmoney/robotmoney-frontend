@@ -78,6 +78,7 @@ export const ROUTES: {
     };
   };
   analytics: {
+    readiness: string;
     rawHistory: string;
     rawHistorySeed: string;
     regimeSnapshots: string;

@@ -3,9 +3,9 @@
 // tables (raw_indicator_history, regime_snapshots, research_signals) goes
 // through this interface. Two implementations exist:
 //
-//   • analytics/api-client.ts — the HTTP client updater processes (the worker)
-//     use: typed calls to the authenticated /api/analytics/* boundary with the
-//     ANALYTICS_TOKEN bearer credential.
+//   • analytics/api-client.ts — the independent producer's HTTP client: typed
+//     calls to the authenticated /api/analytics/* boundary with its scoped
+//     bearer credential.
 //   • analytics/store/direct.ts — the API-owned domain service backed by the
 //     SQL store writers. ONLY the API process (and migration/demo tooling with
 //     its own DB credentials) may use it.

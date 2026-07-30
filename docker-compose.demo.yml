@@ -77,13 +77,11 @@ services:
       # whatever COMMITTEE_SCHEDULES_ENABLED the invoking shell happens to have.
       COMMITTEE_SCHEDULES_ENABLED: "0"
 
-  # All three worker lanes (issue #107: worker-committee reserved for the
-  # interactive committee lifecycle; worker-analytics for regime + pipelines;
-  # worker-research for the research fetches) get the same demo data-path knobs
-  # as api (issue #50): the analytics worker's share-price sampler
-  # (worker/handlers/vault.ts) reads the vault over eth_call, and the
-  # analytics/research jobs honor the same source knob. DEFAULT = LIVE, always
-  # (issue #147 removed the DEMO_HERMETIC stubbed/offline opt-in).
+  # Internal worker lanes share demo data-path knobs for their remaining queue
+  # work: worker-committee owns lifecycle jobs and worker-analytics owns chain/
+  # projects samplers. worker-research remains only for unreachable legacy rows;
+  # the independent analytics-producer owns regime/research compute and cadence.
+  # The share-price sampler still reads the vault over eth_call.
   worker-committee: &demo-worker
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
@@ -98,7 +96,7 @@ services:
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
-      # Same pinned demo signal as api — the analytics worker's samplers are the
+      # Same pinned demo signal as api — the internal samplers are the
       # main provider-quota consumers, so the DEMO_MODE-selected 1h cache TTLs
       # (analytics/extract/fetch-cache.ts, chain/token-prices.ts) matter most here.
       DEMO_MODE: "1"
@@ -132,9 +130,10 @@ services:
   # the model ids themselves stay in source, one code review away.
   #
   # Both values reach the container by explicit `-e` injection from
-  # scripts/lib/onboarding-eval.ts at `docker compose run` time — a container
-  # inherits no ambient environment. The entries below only matter when someone
-  # starts this service by hand.
+  # scripts/agent/member-agent.ts at `docker compose run` time — a container
+  # inherits no ambient environment. There is deliberately no service-level
+  # environment fallback: a manual invocation must also supply the intended
+  # model selector and, when funded, its one credential explicitly.
   member-agent:
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
@@ -144,14 +143,6 @@ services:
       context: .
       dockerfile: scripts/lib/member-agent/Dockerfile
     profiles: ["member-agent"] # never started by `docker compose up` alone
-    environment:
-      # The OpenCode Zen credential. ONE name across every environment; the
-      # VALUE differs per environment (CI secret / Stage .env / local .env) so
-      # spend is attributable and rotating one never touches another. Paid
-      # models need it funded; an `AGENT_MODEL=free/…` selection needs no key.
-      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
-      # Which agent to run. See scripts/lib/model-registry.ts for the catalogue.
-      AGENT_MODEL: ${AGENT_MODEL:-}
     depends_on:
       - api
     restart: "no"

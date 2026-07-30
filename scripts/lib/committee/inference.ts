@@ -12,9 +12,10 @@
 //
 // MODEL + CREDENTIAL: the model comes from AGENT_MODEL resolved against
 // ../model-registry.ts (default `opencode/deepseek-v4-flash`); the credential is
-// OPENCODE_API_KEY, which the spawned CLI picks up by plain environment
-// inheritance. Its value differs per environment (CI secret vs Stage .env) —
-// see ../opencode-key.ts.
+// OPENCODE_API_KEY. The member-agent launcher injects both explicitly into the
+// member container, and this module passes only its documented allowlist to
+// the spawned CLI. No compose-service or host ambient credential fallback
+// exists. See ../opencode-key.ts.
 //
 // MODEL CHOICE IS NOT NEUTRAL HERE. This prompt asks the model to hold an
 // investment-committee persona, and Zen's Claude family carries an OpenCode
@@ -28,12 +29,9 @@
 // THROWS — it NEVER falls back to a templated body.
 import { STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { extractAssistantText } from "../../agent/transcript.ts";
 import { DEFAULT_AGENT_MODEL, resolveAgentModel } from "../model-registry.ts";
-import { zenApiKey } from "../opencode-key.ts";
+import { ZEN_KEY_ENV, zenApiKey } from "../opencode-key.ts";
 // Regime inputs passed to each live author. This used to live beside the retired
 // deterministic memo template; it belongs with the only remaining authoring
 // path so a future fallback cannot accidentally reappear through that module.
@@ -86,22 +84,45 @@ export interface ParsedTake {
 
 // Parse a trailing "STANCE: <...> | CONFIDENCE: <0-1>" line from a model take
 // into { stance, confidence } and return the stored body with that control line
-// stripped. When the control line is absent, degrade to neutral/0.5 and keep the
-// body intact. Mirrors the reference parser (generate-session.js
-// parseStanceFromBody) so submitted and API takes render identically.
+// stripped. A missing or malformed control line THROWS — it renders the member
+// ABSENT, loudly (session.ts settles per-member failures into a no-show), and
+// NEVER degrades to a fabricated neutral/0.5 stance. The silent default this
+// function used to carry was a template remnant from the retired hermetic mode
+// (#301/#319): a fabricated stance is a fabricated signed vote, which is worse
+// than an honest absence. The happy-path parse still mirrors the reference
+// parser (generate-session.js parseStanceFromBody) so submitted and API takes
+// render identically.
 export function parseStanceFromBody(body: string): ParsedTake {
   const trimmed = body.trim();
   const lines = trimmed.split("\n");
   const last = lines[lines.length - 1] ?? "";
   const m = last.match(/STANCE:\s*(\w+)\s*\|\s*CONFIDENCE:\s*([\d.]+)/i);
-  if (m) {
-    return {
-      stance: m[1].toLowerCase(),
-      confidence: Math.max(0, Math.min(1, parseFloat(m[2]))),
-      body: lines.slice(0, -1).join("\n").trim(),
-    };
+  if (!m) {
+    throw new Error(
+      `model take is missing its trailing "STANCE: <${STANCE_VALUES.join("|")}> | CONFIDENCE: <0-1>" control line — ` +
+        `the member is rendered ABSENT, never defaulted to a fabricated neutral/0.5 stance. ` +
+        `Last line of the take was: ${JSON.stringify(last.slice(0, 160))}`,
+    );
   }
-  return { stance: "neutral", confidence: 0.5, body: trimmed };
+  const stance = m[1].toLowerCase();
+  if (!(STANCES as readonly string[]).includes(stance)) {
+    throw new Error(
+      `model take's control line names stance '${stance}', which is outside {${[...STANCES].join(",")}} — ` +
+        `the member is rendered ABSENT, never coerced onto the stance vocabulary.`,
+    );
+  }
+  const confidence = parseFloat(m[2]);
+  if (!Number.isFinite(confidence)) {
+    throw new Error(
+      `model take's control line carries unparseable confidence ${JSON.stringify(m[2])} — ` +
+        `the member is rendered ABSENT, never defaulted.`,
+    );
+  }
+  return {
+    stance,
+    confidence: Math.max(0, Math.min(1, confidence)),
+    body: lines.slice(0, -1).join("\n").trim(),
+  };
 }
 
 // The `opencode run --format json` NDJSON parser now lives in
@@ -167,63 +188,48 @@ export function promptFor(p: Persona, regime: RegimeContext, subjectId: string):
   ].join("\n");
 }
 
-// Per-call XDG overrides isolating the opencode CLI's own local state.
+// The EXACT environment a spawned `opencode` subprocess receives — an
+// allowlist, never an inherit. The member client itself holds its scoped bearer
+// token and may hold an owner-supplied keystore passphrase; neither belongs in
+// the model subprocess. The external-actor rail's doctrine is one explicitly
+// injected model credential and nothing else.
 //
-// WHY (issue: the e2e "demo readiness gate" failing on one or two members per
-// run, seemingly at random). Committee members author CONCURRENTLY
-// (session.ts's mapSettledWithConcurrency, COMMITTEE_MAX_CONCURRENCY=4), and
-// every one of those host-side `opencode run` processes opens the SAME SQLite
-// state database under `$XDG_DATA_HOME/opencode`. On a cold runner that file
-// does not exist yet, so all N processes run the CLI's schema migration at
-// once, exactly one wins, and the losers die before they ever reach the model:
+//   - PATH/HOME/TERM: what any CLI needs to run at all (binary resolution,
+//     its default XDG dirs, terminal handling);
+//   - OPENCODE_API_KEY (ZEN_KEY_ENV): the single model credential — the ONLY
+//     secret that may reach the model subprocess.
 //
-//   Error: Unexpected error
-//   Failed query:
-//           CREATE TABLE `workspace` ( … )
-//
-// which surfaces here as the misleading "empty transcript … the zen model is
-// unreachable, rate-limited, unfunded" throw and fails the required gate on a
-// member whose model call was never made. Reproduced off-CI with the pinned
-// v1.18.1 binary: three concurrent cold-start `opencode run` calls sharing one
-// XDG_DATA_HOME, no credential involved, one loses the CREATE TABLE race; the
-// same four calls with the per-call dirs below all start clean.
-//
-// Isolating the DATA and STATE dirs (not the CACHE dir — the shared models.dev
-// registry cache is read-mostly and racing it was never the failure) gives each
-// call its own database, so there is no shared schema to race on. The CLI is
-// invoked one-shot per take and keeps nothing across calls that this path
-// reads, so a private state dir costs a local migration and nothing else.
-// The credential still arrives by plain environment inheritance.
-async function withIsolatedOpencodeHome<T>(fn: (env: Record<string, string>) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "committee-opencode-home-"));
-  try {
-    return await fn({
-      XDG_DATA_HOME: join(dir, "data"),
-      XDG_STATE_HOME: join(dir, "state"),
-    });
-  } finally {
-    // Best-effort: a killed (timed-out) opencode may still hold files here.
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
+// Pure and exported so the unit suite can pin the allowlist hermetically.
+export function opencodeSpawnEnv(
+  hostEnv: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of ["PATH", "HOME", "TERM"]) {
+    const v = hostEnv[k];
+    if (v !== undefined) out[k] = v;
   }
+  const key = hostEnv[ZEN_KEY_ENV];
+  if (key) out[ZEN_KEY_ENV] = key;
+  return out;
 }
 
 // Run the opencode CLI on a prompt and return the concatenated final
 // assistant text. Throws loudly (no template fallback) when the binary cannot be
 // spawned (opencode unavailable) or the run yields no assistant text.
 async function runOpencode(prompt: string): Promise<string> {
-  return withIsolatedOpencodeHome((homeEnv) => runOpencodeWithEnv(prompt, homeEnv));
-}
-
-async function runOpencodeWithEnv(prompt: string, homeEnv: Record<string, string>): Promise<string> {
   const bin = opencodeBin();
   const model = inferenceModel();
   let proc: ReturnType<typeof Bun.spawn>;
   try {
     proc = Bun.spawn(
       [bin, "run", prompt, "--model", model, "--format", "json", "--auto"],
-      // Bun.spawn REPLACES the environment when `env` is given, so the ambient
-      // one (OPENCODE_API_KEY included) is spread back in first.
-      { stdout: "pipe", stderr: "pipe", env: { ...process.env, ...homeEnv } },
+      // SCRUBBED environment (issue #361 Phase 0): the subprocess gets the
+      // opencodeSpawnEnv allowlist (PATH/HOME/TERM + the single model
+      // credential) — never a `process.env` spread, which handed every
+      // member-model subprocess the stack's whole admin credential set
+      // (ADMIN_TOKEN, ANALYTICS_TOKEN, …). OpenCode state stays in this
+      // member container's isolated, persistent HOME.
+      { stdout: "pipe", stderr: "pipe", env: opencodeSpawnEnv(process.env) },
     );
   } catch (err) {
     throw new Error(
@@ -263,11 +269,24 @@ async function runOpencodeWithEnv(prompt: string, homeEnv: Record<string, string
   }
   const text = extractAssistantText(stdout);
   if (!text) {
+    // HONEST cause attribution (issue #361 Phase 0). This error used to assert
+    // "the zen model is unreachable, rate-limited, unfunded" unconditionally —
+    // and during the 2026-07-30 incident that misdirected triage toward the
+    // provider while the captured stderr showed the opencode CLI dying
+    // LOCALLY on its own SQLite migration before any model call was made.
+    // An empty transcript with a non-empty stderr is evidence of a local CLI
+    // failure first; only an empty stderr leaves the provider-side causes as
+    // the likely ones. Either way: loud throw, NO template fallback.
+    const cause = stderr.trim()
+      ? `the CLI wrote to stderr, which usually means the opencode process itself failed locally ` +
+        `(crash, state/config error) BEFORE or INSTEAD OF a model exchange — do not blame the ` +
+        `provider/network without reading it. stderr: ${stderr.slice(0, 400)}`
+      : `stderr was empty, so the likely causes are provider-side: the model was unreachable, ` +
+        `rate-limited, unfunded, or returned nothing.`;
     throw new Error(
       `opencode inference produced an empty transcript (exit ${exitCode}) for model '${model}' ` +
-        `(${zenApiKey() ? "funded" : "no OPENCODE_API_KEY set"}): no assistant text in the --format json stream. ` +
-        `The zen model is unreachable, rate-limited, unfunded, or returned nothing; ` +
-        `NO template fallback. stderr: ${stderr.slice(0, 400)}`,
+        `(${zenApiKey() ? "funded" : "no OPENCODE_API_KEY set"}): no assistant text in the --format json stream; ` +
+        `NO template fallback. ${cause}`,
     );
   }
   return text;
