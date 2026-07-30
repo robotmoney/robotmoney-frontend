@@ -2,7 +2,28 @@
      Ported from robotmoney-site/src/app/blog/treasury-allocation/page.tsx
      Interactive <BacktestChart/> and <AttributionChart/> are replaced with
      static notes (no <script>/<canvas> in injected fragments). Table values
-     are static in the source and reproduced verbatim. -->
+     are static in the source and reproduced verbatim.
+
+     #350 (2026-07-30): investigated regenerating these two charts from
+     backend/src/analytics/analyze/{compute,backtest}.ts replayed over the
+     committed backend/tests/fixtures/regime/{raw-indicator-history,
+     regime-extras}.json.gz, truncated to this post's 2026-05-12 asof. The
+     pure asset baselines (100% ETH HODL, 100% SP500 HODL, 100% cash)
+     reproduce this page's table numbers exactly (CAGR/Sharpe/MaxDD match to
+     the displayed precision) — but the "Regime-based 3-state" composite row
+     this article is actually about does not: recomputed CAGR 29.9% /
+     Sharpe 0.99 / MaxDD -36.4% vs. the published +25.0% / 0.88 / -44%. Root
+     cause is documented in-repo (regime-versions.ts, CURRENT_REGIME_VERSION
+     "v3"): the regime pipeline has "no frozen lockout" — every replay
+     recomputes past regime labels on best-available raw data, and this
+     fixture's raw history already includes indicator corrections landed
+     after 2026-05-12 (Shiller/HY_OAS/BTC_ACTIVE fixes). Charting that
+     recompute would visibly contradict this page's own composite-row
+     numbers, so the static note stays. Closing this gap for real needs
+     either the exact frozen input vintage from 2026-05-12 (not present in
+     this repo) or a deliberate decision to rewrite this article's numbers to
+     a fresh vintage — the latter is a content change, out of scope for a
+     chart-wiring pass. -->
 
 <article class="blog-research">
   <header class="blog-research__head">

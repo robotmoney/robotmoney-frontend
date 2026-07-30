@@ -2,7 +2,29 @@
      Ported from robotmoney-site/src/app/blog/regime-conservative-aggressive/page.tsx
      Numbers are computed at render time from public/data/regime-snapshot.json
      (asof 2026-06-25); they are baked here from that snapshot. Interactive
-     <RegimeBandsCharts/> and <RuleComparisonChart/> become static notes. -->
+     <RegimeBandsCharts/> and <RuleComparisonChart/> become static notes.
+
+     #350 (2026-07-30): investigated regenerating these two charts by
+     replaying backend/src/analytics/analyze/{compute,backtest}.ts over the
+     committed backend/tests/fixtures/regime/{raw-indicator-history,
+     regime-extras}.json.gz, truncated to this post's 2026-06-25 asof. The
+     eth_hodl and stables_only baselines reproduce this page's table exactly
+     (2.03x/+8.7%/0.52/-94.0% and 1.24x/+2.6%/26.86/0.0% match to the
+     displayed precision). The conservative/aggressive/composite rows do
+     not: recomputed composite is 12.62x/+36.7%/0.83/-66.3%/58 trades vs. the
+     published 13.73x/+38.1%/0.85/-64.7%/56 trades — an ~8% final-value gap,
+     which is the exact "58<->56 transitions, ~8% final_value" vintage-drift
+     pattern backend/tests/backtest-correlations-fidelity.test.ts documents.
+     Root cause: CURRENT_REGIME_VERSION "v3" (regime-versions.ts) has no
+     frozen lockout — every replay recomputes past regime labels on
+     best-available raw data, and this fixture's history already carries
+     indicator corrections (Shiller/HY_OAS/BTC_ACTIVE) that landed after
+     2026-06-25. Charting the recompute would visibly contradict this page's
+     own composite/rule numbers — the very numbers the post is about — so
+     the static notes stay. Closing this for real needs either the exact
+     frozen 2026-06-25 input vintage (not present in this repo) or a
+     deliberate decision to rewrite this article to a fresh vintage, which
+     is a content change outside a chart-wiring pass. -->
 
 <article class="blog-research">
   <header class="blog-research__head">
