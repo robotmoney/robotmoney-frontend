@@ -14,3 +14,14 @@ test("ci-gate workflow command executes pass and red controls", () => {
   expect(run({ ...base, RESULT_INTEGRATION: "skipped" }).exitCode).not.toBe(0);
   expect(run({ ...base, RESULT_UNIT: "skipped", RESULT_INTEGRATION: "skipped", RESULT_E2E: "skipped" }).exitCode).not.toBe(0);
 });
+
+// Issue #275 addendum: the research_pipeline domain, exercised through the
+// real subprocess (not just the in-process fixture matrix in ci-gate.test.ts)
+// so the workflow-to-script seam is proven for this domain too.
+test("ci-gate workflow command executes research_pipeline pass and invariant-4 red control", () => {
+  const researchPass = { ...base, CHANGED_RESEARCH_PIPELINE: "true", RESULT_RESEARCH_PIPELINE: "success" };
+  expect(run(researchPass).exitCode).toBe(0);
+  // Negative control: research_pipeline paths changed, but the workflow
+  // reported "skipped" — invariant 4 must reject this, never pass it quietly.
+  expect(run({ ...researchPass, RESULT_RESEARCH_PIPELINE: "skipped" }).exitCode).not.toBe(0);
+});

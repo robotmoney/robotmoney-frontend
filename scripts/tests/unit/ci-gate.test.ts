@@ -17,16 +17,25 @@ const pass = (overrides: Partial<GateInput> = {}): GateInput => ({
 
 /** A full-scope passing fixture: every domain changed and succeeds. */
 const fullPass = (overrides: Partial<GateInput> = {}): GateInput => ({
-  changed: { backend: true, contract: true, frontend: true, scripts: true },
+  changed: {
+    backend: true,
+    contract: true,
+    frontend: true,
+    scripts: true,
+    researchPipeline: true,
+    onboardingEvalRails: true,
+  },
   docsOnly: false,
   draft: false,
   outcomes: {
     unit: "success",
     "repo-guards": "success",
     backend: "success",
+    "research-pipeline": "success",
     integration: "success",
     contract: "success",
     frontend: "success",
+    "onboarding-eval-rails": "success",
     e2e: "success",
   },
   ...overrides,
@@ -188,6 +197,131 @@ describe("ci gate", () => {
       ),
     ).not.toEqual([]);
   });
+
+  // ── research-pipeline domain (issue #275 addendum) ───────────────────────
+  test("passes when research_pipeline changed and research-pipeline succeeds", () =>
+    expect(
+      evaluateGate(
+        pass({
+          changed: { scripts: true, researchPipeline: true },
+          outcomes: {
+            unit: "success",
+            "repo-guards": "success",
+            integration: "success",
+            e2e: "success",
+            "research-pipeline": "success",
+          },
+        }),
+      ),
+    ).toEqual([]));
+
+  test("ready PR with research_pipeline changed FAILS when research-pipeline is missing", () => {
+    const errors = evaluateGate(
+      pass({
+        changed: { scripts: true, researchPipeline: true },
+        outcomes: {
+          unit: "success",
+          "repo-guards": "success",
+          integration: "success",
+          e2e: "success",
+        },
+      }),
+    );
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  // Negative control (invariant 4): a research_pipeline path DID change, but
+  // the research-pipeline workflow reported "skipped" anyway — the same shape
+  // of bug the other domains guard against.
+  test("rejects research-pipeline path-skip when research_pipeline files changed", () => {
+    expect(
+      evaluateGate(
+        fullPass({
+          outcomes: {
+            unit: "success",
+            "repo-guards": "success",
+            backend: "success",
+            "research-pipeline": "skipped",
+            integration: "success",
+            contract: "success",
+            frontend: "success",
+            "onboarding-eval-rails": "success",
+            e2e: "success",
+          },
+        }),
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("permits research-pipeline skip when no research_pipeline files changed", () =>
+    expect(
+      evaluateGate(
+        pass({
+          changed: { backend: true },
+          outcomes: {
+            unit: "success",
+            "repo-guards": "success",
+            backend: "success",
+            e2e: "success",
+            "research-pipeline": "skipped",
+          },
+        }),
+      ),
+    ).toEqual([]));
+
+  // ── onboarding-eval-rails domain (issue #275 addendum: split out of e2e.yml) ─
+  test("passes when onboarding_eval_rails changed and onboarding-eval-rails succeeds", () =>
+    expect(
+      evaluateGate(
+        pass({
+          changed: { scripts: true, onboardingEvalRails: true },
+          outcomes: {
+            unit: "success",
+            "repo-guards": "success",
+            integration: "success",
+            e2e: "success",
+            "onboarding-eval-rails": "success",
+          },
+        }),
+      ),
+    ).toEqual([]));
+
+  // Negative control (invariant 4) for the new domain.
+  test("rejects onboarding-eval-rails path-skip when onboarding_eval_rails files changed", () => {
+    expect(
+      evaluateGate(
+        fullPass({
+          outcomes: {
+            unit: "success",
+            "repo-guards": "success",
+            backend: "success",
+            "research-pipeline": "success",
+            integration: "success",
+            contract: "success",
+            frontend: "success",
+            "onboarding-eval-rails": "skipped",
+            e2e: "success",
+          },
+        }),
+      ),
+    ).not.toEqual([]);
+  });
+
+  test("permits onboarding-eval-rails skip when no onboarding_eval_rails files changed", () =>
+    expect(
+      evaluateGate(
+        pass({
+          changed: { scripts: true },
+          outcomes: {
+            unit: "success",
+            "repo-guards": "success",
+            integration: "success",
+            e2e: "success",
+            "onboarding-eval-rails": "skipped",
+          },
+        }),
+      ),
+    ).toEqual([]));
 
   // ── path-skip with NO matching changed files passes ──────────────────────
   test("permits backend skip when no backend files changed", () =>

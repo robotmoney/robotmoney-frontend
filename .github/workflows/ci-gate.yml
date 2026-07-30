@@ -39,6 +39,8 @@ jobs:
       contract: ${{ steps.filter.outputs.contract }}
       frontend: ${{ steps.filter.outputs.frontend }}
       scripts: ${{ steps.filter.outputs.scripts }}
+      research_pipeline: ${{ steps.filter.outputs.research_pipeline }}
+      onboarding_eval_rails: ${{ steps.filter.outputs.onboarding_eval_rails }}
       docs_only: ${{ steps.filter.outputs.docs_only }}
     steps:
       - uses: actions/checkout@v4
@@ -61,6 +63,26 @@ jobs:
               - 'tsconfig.json'
               - 'package.json'
               - 'bun.lock'
+            # issue #275 addendum: GeckoTerminal/analytics-fetch surface,
+            # narrower than the coarse `backend` filter above (which still
+            # ALSO matches these paths — filters are independent, not a
+            # partition). backend.yml's own test selection excludes the two
+            # tests this category owns; research-pipeline.yml is their only
+            # home, so they run only when these specific paths change instead
+            # of on every unrelated backend/** change.
+            research_pipeline:
+              - 'backend/src/analytics/**'
+              - 'backend/src/chain/**'
+            # issue #275 addendum: the inference-off member-agent rails check
+            # split out of the e2e.yml monolith (onboarding-eval-rails.yml).
+            # Also independent of, and overlapping with, `backend`/`scripts`.
+            onboarding_eval_rails:
+              - 'evals/**'
+              - 'scripts/lib/member-agent/**'
+              - 'scripts/lib/rmpc-fetch.ts'
+              - 'scripts/lib/onboarding-eval.ts'
+              - 'scripts/lib/committee/**'
+              - 'backend/src/committee/**'
             docs_only:
               - '**/*.md'
               - '**/*.txt'
@@ -91,6 +113,8 @@ jobs:
           CHANGED_CONTRACT: ${{ needs.changes.outputs.contract }}
           CHANGED_FRONTEND: ${{ needs.changes.outputs.frontend }}
           CHANGED_SCRIPTS: ${{ needs.changes.outputs.scripts }}
+          CHANGED_RESEARCH_PIPELINE: ${{ needs.changes.outputs.research_pipeline }}
+          CHANGED_ONBOARDING_EVAL_RAILS: ${{ needs.changes.outputs.onboarding_eval_rails }}
           CHANGED_DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           # Whether this is a draft PR.
           IS_DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == true }}
