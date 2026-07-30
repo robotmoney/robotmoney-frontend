@@ -2,7 +2,7 @@
 // shells out to
 //
 //   opencode run "<persona + regime/subject brief>" \
-//     --model <resolved> --format json --dangerously-skip-permissions
+//     --model <resolved> --format json --auto
 //
 // parses the NDJSON transcript for the final assistant message text, and returns
 // REGIME / ALLOCATION / SUBJECT prose ending in a parseable
@@ -164,7 +164,7 @@ async function runOpencode(prompt: string): Promise<string> {
   let proc: ReturnType<typeof Bun.spawn>;
   try {
     proc = Bun.spawn(
-      [bin, "run", prompt, "--model", model, "--format", "json", "--dangerously-skip-permissions"],
+      [bin, "run", prompt, "--model", model, "--format", "json", "--auto"],
       { stdout: "pipe", stderr: "pipe" },
     );
   } catch (err) {
