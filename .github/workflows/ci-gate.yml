@@ -27,6 +27,13 @@ jobs:
   # ── change detection ───────────────────────────────────────────────────────
   changes:
     runs-on: [self-hosted, robotmoney-self-hosted]
+    # dorny/paths-filter fetches the PR's changed-file list from the GitHub
+    # API on pull_request events; the repo's default GITHUB_TOKEN grants only
+    # contents/metadata/packages read, which 403s ("Resource not accessible
+    # by integration") without this explicit grant.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       contract: ${{ steps.filter.outputs.contract }}
@@ -64,6 +71,12 @@ jobs:
       - changes
     runs-on: [self-hosted, robotmoney-self-hosted]
     if: always()
+    # ci-gate.ts calls `gh run list` to read sibling workflow-run conclusions
+    # for this SHA; the repo's default GITHUB_TOKEN grants only
+    # contents/metadata/packages read, which 403s without this explicit grant.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
