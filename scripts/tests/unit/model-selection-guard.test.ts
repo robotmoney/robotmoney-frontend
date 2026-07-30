@@ -11,7 +11,7 @@
 // scripts/lib/model-registry.ts, because that file is the script's existence
 // anchor — its absence is itself a failure (asserted below).
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -143,6 +143,74 @@ describe("check-model-selection.sh (executed, not merely present)", () => {
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/expected the model registry/);
     expect(r.out).toMatch(/silently empty guard/);
+  });
+
+  // ── declared-roots meta-assertion (issue #276) ────────────────────────────
+  // Same shape as runtime-import-guard.test.ts's declaredRoots(): read the
+  // guard's OWN scan_roots=() declaration out of the shell source rather than
+  // hand-maintaining a second list, so a root ADDED to the script without a
+  // corresponding planted-violation control below goes red here instead of
+  // shipping a guard that silently never scans it.
+  function declaredRoots(scriptText: string): string[] {
+    const block = /^scan_roots=\(\n([\s\S]*?)^\)/m.exec(scriptText);
+    if (!block) throw new Error("check-model-selection.sh no longer declares a scan_roots=() array");
+    return block[1]
+      .split("\n")
+      .map((l) => l.replace(/#.*$/, "").trim())
+      .filter((l) => l.length > 0)
+      .map((l) => {
+        const m = /^"([^"]+)"$/.exec(l);
+        if (!m) throw new Error(`unparsed entry in scan_roots(): ${l}`);
+        return m[1];
+      });
+  }
+
+  // The docker-compose*.yml glob root cannot live in scan_roots (it is a glob,
+  // not a directory) — declared and controlled separately below.
+  const SCAN_ROOTS = ["scripts", ".github/workflows", "evals"];
+
+  test("the guard declares exactly the roots this suite proves — a new root must arrive with its own control", () => {
+    expect(declaredRoots(readFileSync(GUARD, "utf8")).sort()).toEqual([...SCAN_ROOTS].sort());
+  });
+
+  test("an ADDED root is caught even behind a trailing comment, and an unparsable entry THROWS rather than being silently dropped", () => {
+    const src = readFileSync(GUARD, "utf8");
+    const tampered = src.replace('  "evals"\n', '  "evals"\n  "newroot" # added later\n');
+    expect(tampered).not.toBe(src);
+    expect(declaredRoots(tampered)).toContain("newroot");
+    expect(declaredRoots(tampered).sort()).not.toEqual([...SCAN_ROOTS].sort());
+    expect(() => declaredRoots(src.replace('  "evals"\n', '  "evals"\n  $EXTRA_ROOT\n'))).toThrow(/unparsed entry/);
+  });
+
+  for (const rel of SCAN_ROOTS) {
+    test(`property 1 FAILS on a raw model-id literal planted in ${rel}/ — that root is really scanned`, () => {
+      const root = tree({ ...ANCHOR, [`${rel}/planted.ts`]: 'const m = "opencode/planted-model";\n' });
+      const r = run(root);
+      expect(r.code).toBe(1);
+      expect(r.out).toMatch(/model ids belong ONLY in scripts\/lib\/model-registry\.ts/);
+    });
+
+    test(`property 2 FAILS on a retired knob planted in ${rel}/ — that root is really scanned`, () => {
+      const root = tree({ ...ANCHOR, [`${rel}/planted.ts`]: "const v = process.env.OPENCODE_MODEL;\n" });
+      const r = run(root);
+      expect(r.code).toBe(1);
+      expect(r.out).toMatch(/retired model\/credential knob/);
+    });
+  }
+
+  // The docker-compose*.yml glob root: declared separately from scan_roots
+  // (see the comment above SCAN_ROOTS), so it gets its own explicit control
+  // rather than riding the loop above.
+  test("property 1 FAILS on a raw model-id literal planted in a root docker-compose*.yml — the glob root is really scanned", () => {
+    const root = tree({ ...ANCHOR, "docker-compose.instance.yml": '# model: "opencode/planted-model"\n  AGENT_MODEL_FALLBACK: "opencode/planted-model"\n' });
+    const r = run(root);
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/model ids belong ONLY in scripts\/lib\/model-registry\.ts/);
+  });
+
+  test("the docker-compose*.yml glob root is still declared in the script — removing it must be caught", () => {
+    const src = readFileSync(GUARD, "utf8");
+    expect(src).toContain('"$target_root"/docker-compose*.yml');
   });
 
   test("the guard passes on THIS repository's real tree", () => {
