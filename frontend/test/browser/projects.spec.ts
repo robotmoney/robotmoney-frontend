@@ -125,18 +125,33 @@ test("ANALYTICS navigates off site and /projects is de-advertised", async ({ pag
   // ...but it asks not to be indexed, and the directive is restored on the way out
   // so a noindex route cannot leak onto the next one.
   //
-  // Asserted with a RETRYING matcher, not `expect(await …getAttribute())`. The
-  // `navigate` helper above only dispatches popstate; the router's render()
-  // awaits a view fetch before it calls applyRouteMeta (see
-  // frontend/public/assets/js/app/router.js), so a one-shot read races the
-  // fetch and sees the PREVIOUS route's directive. The /projects read below
-  // happened to be safe because the .pj-provenance assertions above already
-  // waited out that render; the /regime read had nothing waiting for it and
-  // went red on slower runners.
+  // Keep these as retrying matchers as defense in depth. `navigate` now waits
+  // for the router's matching rm:view-changed event, so the route metadata is
+  // already applied when it resolves.
   const robots = page.locator('meta[name="robots"]');
   await expect(robots).toHaveAttribute("content", "noindex, follow");
   await navigate(page, "/regime");
   await expect(robots).toHaveAttribute("content", "index, follow, max-image-preview:large, max-snippet:-1");
+});
+
+test("navigate waits for the completion event for its requested route", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/projects");
+
+  await page.route("**/views/regime.html", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await route.continue();
+  });
+  await page.evaluate(() => {
+    window.addEventListener("popstate", () => {
+      window.dispatchEvent(new CustomEvent("rm:view-changed", { detail: { pathname: "/projects" } }));
+    }, { once: true });
+  });
+
+  await navigate(page, "/regime");
+  expect(await page.locator('meta[name="robots"]').getAttribute("content"))
+    .toBe("index, follow, max-image-preview:large, max-snippet:-1");
 });
 
 test("sticky project pins first on load; clicking a header re-sorts and releases the pin", async ({ page }) => {

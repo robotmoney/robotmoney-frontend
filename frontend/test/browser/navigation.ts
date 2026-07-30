@@ -28,7 +28,9 @@ export async function navigate(page: Page, path: string) {
   await page.evaluate(
     ([p, timeoutMs]) =>
       new Promise<void>((resolve, reject) => {
-        const done = () => {
+        const expectedPathname = new URL(p as string, location.href).pathname;
+        const done = (event: Event) => {
+          if ((event as CustomEvent<{ pathname?: string }>).detail?.pathname !== expectedPathname) return;
           clearTimeout(timer);
           window.removeEventListener("rm:view-changed", done);
           resolve();
