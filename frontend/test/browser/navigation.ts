@@ -15,16 +15,26 @@
 // and the route's meta is applied. Callers no longer have to know that a
 // retrying matcher is load-bearing.
 //
-// NOT used by spa.spec.ts: that spec fires interleaved navigations on purpose
-// to exercise the router's abort path, where an in-flight render is superseded
-// and never completes. Waiting for completion there would defeat the test.
+// spa.spec.ts uses this for ordinary transitions, but keeps its deliberately
+// interleaved navigation sequence inline: the first render in that sequence is
+// superseded and never completes, so awaiting it would defeat the abort test.
 import type { Page } from "@playwright/test";
 
 // Bounded so a navigation that never completes fails with a useful message
 // here rather than as an opaque 30s Playwright test timeout further down.
 const NAVIGATION_TIMEOUT_MS = 10_000;
 
-export async function navigate(page: Page, path: string) {
+export interface NavigateOptions {
+  // Tests that deliberately suppress or delay completion can use a short
+  // bound without weakening the production-like default used by callers.
+  timeoutMs?: number;
+}
+
+export async function navigate(
+  page: Page,
+  path: string,
+  { timeoutMs = NAVIGATION_TIMEOUT_MS }: NavigateOptions = {},
+) {
   await page.evaluate(
     ([p, timeoutMs]) =>
       new Promise<void>((resolve, reject) => {
@@ -44,6 +54,6 @@ export async function navigate(page: Page, path: string) {
         history.pushState({}, "", p as string);
         window.dispatchEvent(new PopStateEvent("popstate"));
       }),
-    [path, NAVIGATION_TIMEOUT_MS] as const,
+    [path, timeoutMs] as const,
   );
 }

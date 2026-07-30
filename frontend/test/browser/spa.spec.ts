@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
+import { navigate } from "./navigation.ts";
 
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
@@ -39,10 +40,7 @@ test("renders allocation and dynamic committee routes through Alpine", async ({ 
   const today = new Date().toISOString().slice(0, 10);
 
   await page.goto("/");
-  await page.evaluate(() => {
-    history.pushState({}, "", "/allocation");
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  });
+  await navigate(page, "/allocation");
   await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
   // The allocationView factory draws the strategy/vault/wallet pie canvases.
   await expect(page.locator("canvas").first()).toBeVisible();
@@ -63,10 +61,7 @@ test("renders allocation and dynamic committee routes through Alpine", async ({ 
   await expect(page.locator(".alloc-aum__value")).not.toHaveText("—");
 
   // Test performance page with Wallet Performance heading
-  await page.evaluate(() => {
-    history.pushState({}, "", "/performance");
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  });
+  await navigate(page, "/performance");
   await expect(page.getByRole("heading", { name: /Wallet Performance/, exact: false })).toBeVisible();
 
   await page.goto("/committee/members/athena");
@@ -121,10 +116,7 @@ test("navigation destroys Chart.js and p5 resources from the previous view", asy
   const errors = failOnBrowserErrors(page);
 
   await page.goto("/");
-  await page.evaluate(() => {
-    history.pushState({}, "", "/allocation");
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  });
+  await navigate(page, "/allocation");
   const allocCanvas = page.locator(".rm-chart canvas").first();
   await expect(allocCanvas).toBeVisible();
   const chartId = await allocCanvas.evaluate((canvas) => {
@@ -139,10 +131,7 @@ test("navigation destroys Chart.js and p5 resources from the previous view", asy
     page.evaluate((id) => Boolean(window.Chart?.instances?.[id]), chartId)
   ).toBe(false);
 
-  await page.evaluate(() => {
-    history.pushState({}, "", "/blog");
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  });
+  await navigate(page, "/blog");
   const p5Canvas = page.locator(".hero-art__canvas canvas").first();
   await expect(p5Canvas).toBeVisible();
   const handle = await p5Canvas.elementHandle();

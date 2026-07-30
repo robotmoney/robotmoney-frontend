@@ -152,6 +152,22 @@ test("navigate waits for the completion event for its requested route", async ({
   await navigate(page, "/regime");
   expect(await page.locator('meta[name="robots"]').getAttribute("content"))
     .toBe("index, follow, max-image-preview:large, max-snippet:-1");
+  const currentNavLinks = page.locator('a[href="/regime"][aria-current="page"]');
+  await expect(currentNavLinks).toHaveCount(2);
+  await expect(currentNavLinks.first()).toHaveClass(/nav__link--active/);
+});
+
+test("navigate rejects within its configured timeout when completion never arrives", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await page.route("**/views/regime.html", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await route.continue();
+  });
+
+  await expect(navigate(page, "/regime", { timeoutMs: 25 })).rejects.toThrow(
+    "navigate(/regime): router never dispatched rm:view-changed within 25ms",
+  );
 });
 
 test("sticky project pins first on load; clicking a header re-sorts and releases the pin", async ({ page }) => {
