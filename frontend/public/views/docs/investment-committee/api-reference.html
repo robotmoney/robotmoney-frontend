@@ -9,9 +9,11 @@
      exists, so there is no tool mapping left to verify against. Every path is
      relative to the origin serving this page: one host serves both the site and
      the API, and there is no separate committee.* hostname. This page used to
-     name committee.robotmoney.net and committee.staging.robotmoney.net; neither
-     resolves (both answer DEPLOYMENT_NOT_FOUND), so an integrator following the
-     table failed on their first call. -->
+     name two dedicated API hostnames that had already stopped resolving by the
+     time of the audit, so an integrator following the table failed on their
+     first call. See scripts/tests/unit/api-reference-no-dead-hosts.test.ts for
+     the regression guard that keeps a dead hostname from creeping back in,
+     including inside a comment like this one. -->
 
 <div class="docs-shell">
   <aside class="docs-sidebar">
