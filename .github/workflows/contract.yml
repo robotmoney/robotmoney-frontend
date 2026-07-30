@@ -7,6 +7,11 @@
 # cheap, no Docker, no network. This workflow replaces the contract-specific
 # steps that previously lived in integration.yml (issue #275). It feeds the
 # ci-gate fan-in required check.
+#
+# Path-gated (issue #275 addendum): a `pull_request` run whose changed files
+# don't match `contract/**` skips the job body — a REAL dorny/paths-filter skip,
+# not a synthetic outcome. `push` to `main` is never path-filtered (see the job
+# `if:` below), so a merge to main always runs this in full.
 name: contract
 env:
   CI_CLASS: feature-correctness
@@ -17,7 +22,32 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
+  # ── change detection ───────────────────────────────────────────────────────
+  changes:
+    # Plumbing, not an assurance job itself (same reasoning as ci-gate.yml's
+    # own `changes` job) — overriding the workflow-level CI_CLASS keeps the
+    # taxonomy scanner from grading this filter step as if it were a test.
+    env:
+      CI_CLASS: ignore
+    runs-on: [self-hosted, robotmoney-self-hosted]
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      contract: ${{ steps.filter.outputs.contract }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+        id: filter
+        with:
+          filters: |
+            contract:
+              - 'contract/**'
+
   contract:
+    needs: [changes]
+    # Path-gated ONLY on pull_request: a push to main always runs regardless.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.contract == 'true' }}
     runs-on: [self-hosted, robotmoney-self-hosted]
     steps:
       - uses: actions/checkout@v4

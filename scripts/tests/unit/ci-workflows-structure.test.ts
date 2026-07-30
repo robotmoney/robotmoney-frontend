@@ -8,6 +8,48 @@ const read = (name: string) => readFileSync(join(workflows, name), "utf8");
 const allWorkflows = () =>
   readdirSync(workflows).filter((name) => /\.ya?ml$/.test(name));
 
+// Minimal shape shared with evals-guard.test.ts's own Workflow interface —
+// duplicated rather than imported because these are independent unit files
+// and neither should depend on the other's internals.
+interface WorkflowStep {
+  name?: string;
+  if?: string;
+  run?: string;
+  uses?: string;
+}
+interface WorkflowJob {
+  if?: string;
+  needs?: string | string[];
+  steps?: WorkflowStep[];
+}
+interface Workflow {
+  name?: string;
+  on?: unknown;
+  true?: unknown;
+  jobs?: Record<string, WorkflowJob>;
+}
+const parse = (name: string): Workflow => Bun.YAML.parse(read(name)) as Workflow;
+
+const PATHS_FILTER_SHA = "de90cc6fb38fc0963ad72b210f1f284cd68cea36";
+
+/**
+ * Workflows expected to carry their OWN dorny/paths-filter change-detection
+ * job (issue #275 addendum item 2/3/4: real per-workflow path-skip wiring,
+ * since a standalone workflow file cannot read ci-gate.yml's `changes` job
+ * outputs across files). repo-guards.yml and unit.yml are DELIBERATELY
+ * excluded — both are documented (in their own headers) to run unconditionally
+ * on every PR regardless of path, and ci-workflows-structure.test.ts already
+ * pins repo-guards.yml's "no path filter" invariant above.
+ */
+const PATH_GATED_WORKFLOWS = [
+  "backend.yml",
+  "contract.yml",
+  "integration.yml",
+  "frontend.yml",
+  "research-pipeline.yml",
+  "onboarding-eval-rails.yml",
+];
+
 describe("split CI workflows retain taxonomy declarations and guard wiring", () => {
   test("every workflow declares CI_CLASS at workflow env", () => {
     for (const file of allWorkflows()) {
@@ -99,6 +141,95 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
     // because "bun run typecheck" is a substring of unit.yml's compound command.
     const backendYml = read("backend.yml");
     expect(backendYml).toMatch(/working-directory:\s*backend[\s\S]*?run:\s*bun run typecheck/);
+  });
+
+  // ── issue #275 addendum: every Domain ci-gate.ts requires must have a real
+  // workflow backing it ────────────────────────────────────────────────────
+  //
+  // This is the mechanical regression guard for the critical bug the addendum
+  // found: ci-gate.ts's Domain type named `"frontend"` as a required assurance
+  // whenever frontend/** changed, but no workflow anywhere produced a
+  // GitHub-Actions run literally named `frontend` — ci-gate.ts's
+  // outcomesFromGitHub() can only ever see `missing` for it, so the required
+  // `ci-gate` check would fail FOREVER on any PR touching frontend/**. This
+  // test parses the Domain union directly out of ci-gate.ts's source (never
+  // hand-copies it — a hand-copied list would drift silently the next time a
+  // domain is added) and asserts a workflow whose `name:` equals that literal
+  // exists, so this exact class of bug cannot land again undetected.
+  test("every Domain in ci-gate.ts's Domain union is backed by a workflow whose name: matches", () => {
+    const gateSource = readFileSync(join(root, "scripts/checks/ci-gate.ts"), "utf8");
+    const domainBlock = gateSource.match(/export type Domain =\s*([\s\S]*?);/);
+    expect(domainBlock, "ci-gate.ts declares `export type Domain = ...;`").not.toBeNull();
+    const domains = [...domainBlock![1].matchAll(/"([a-z0-9-]+)"/g)].map((m) => m[1]!);
+    expect(domains.length, "at least one domain literal was extracted").toBeGreaterThan(0);
+
+    const workflowNames = allWorkflows().map((file) => parse(file).name).filter((n): n is string => Boolean(n));
+    for (const domain of domains) {
+      expect(workflowNames, `a workflow named "${domain}" backs Domain "${domain}"`).toContain(domain);
+    }
+  });
+
+  // ── issue #275 addendum item 2/3/4: real per-workflow path-skip wiring ───
+  describe("path-gated workflows carry real dorny/paths-filter wiring, never on.paths", () => {
+    for (const file of PATH_GATED_WORKFLOWS) {
+      test(`${file} has its own SHA-pinned dorny/paths-filter change-detection job`, () => {
+        const text = read(file);
+        expect(text, `${file} uses dorny/paths-filter, not on.paths/paths-ignore for gating`).not.toMatch(/^\s+paths(?:-ignore)?:/m);
+        expect(text, `${file} pins dorny/paths-filter to the same SHA as ci-gate.yml`).toContain(`dorny/paths-filter@${PATHS_FILTER_SHA}`);
+
+        const wf = parse(file);
+        const jobs = Object.entries(wf.jobs ?? {});
+        expect(jobs.length, `${file} declares at least a changes + main job`).toBeGreaterThanOrEqual(2);
+        const mainJobs = jobs.filter(([name]) => name !== "changes");
+        expect(mainJobs.length, `${file} declares exactly one non-"changes" job`).toBe(1);
+        const [, mainJob] = mainJobs[0]!;
+        expect(mainJob.if, `${file}'s main job has an if: guard`).toBeTruthy();
+      });
+    }
+
+    // Issue #275 addendum item 5: a push to `main` must NEVER be path-filtered
+    // — every path-conditional `if:` this feature adds must be scoped so the
+    // path check only applies on a `pull_request` event. Asserted here by
+    // requiring every PATH_GATED_WORKFLOWS main-job `if:` to short-circuit
+    // true on a non-pull_request event BEFORE it ever consults
+    // needs.changes.outputs — i.e. it must read
+    // `github.event_name != 'pull_request' || (...)`.
+    for (const file of PATH_GATED_WORKFLOWS) {
+      test(`${file}'s path-conditional if: is guarded so push-to-main always runs in full`, () => {
+        const wf = parse(file);
+        const jobs = Object.entries(wf.jobs ?? {});
+        const [, mainJob] = jobs.find(([name]) => name !== "changes")!;
+        const condition = mainJob.if ?? "";
+        expect(condition, `${file}'s main job if: references needs.changes.outputs`).toMatch(/needs\.changes\.outputs\./);
+        expect(
+          condition,
+          `${file}'s main job if: is guarded by github.event_name != 'pull_request' ahead of the path check, so push events short-circuit past it`,
+        ).toMatch(/github\.event_name\s*!=\s*'pull_request'/);
+      });
+    }
+
+    test("repo-guards.yml and unit.yml carry no dorny/paths-filter (unconditional by design)", () => {
+      for (const file of ["repo-guards.yml", "unit.yml"]) {
+        expect(read(file), `${file} does not use dorny/paths-filter`).not.toContain("dorny/paths-filter@");
+      }
+    });
+  });
+
+  // ── issue #275 addendum item 3: research_pipeline test-file wiring ───────
+  test("backend.yml excludes exactly the two research-pipeline-owned test files, which research-pipeline.yml runs exclusively", () => {
+    const backendYml = read("backend.yml");
+    const researchYml = read("research-pipeline.yml");
+    const researchFiles = [
+      "tests/geckoterminal-resilience.test.ts",
+      "tests/token-prices-resilience.test.ts",
+    ];
+    for (const file of researchFiles) {
+      expect(backendYml, `backend.yml's bun test excludes ${file}`).toContain(file);
+      expect(backendYml, `backend.yml excludes ${file} via --path-ignore-patterns`).toMatch(
+        new RegExp(`--path-ignore-patterns=['"]${file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}['"]`),
+      );
+      expect(researchYml, `research-pipeline.yml runs ${file}`).toContain(file);
+    }
   });
 });
 
