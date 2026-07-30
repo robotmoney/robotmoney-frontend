@@ -63,7 +63,7 @@ jobs:
   # (scheduled/workflow_dispatch triggers are never fork PRs), so no
   # trust-context gating is needed.
   onboarding-real-inference-sweep:
-    runs-on: [self-hosted, robotmoney-self-hosted]
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4

@@ -147,7 +147,7 @@ jobs:
     #      `real-eval` opt-in. Without this, `types: [..., labeled]` above would
     #      boot the full ~40-minute live stack every time anyone tagged a PR.
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event.action != 'labeled' || github.event.label.name == 'real-eval') }}
-    runs-on: [self-hosted, robotmoney-self-hosted]
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     env:
       # Read by scripts/lib/rmpc-fetch.ts's fetchRmpc() for the real-inference
       # eval inside "Full-stack demo" below. The infra-rails check that used to

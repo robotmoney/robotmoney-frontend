@@ -42,7 +42,7 @@ jobs:
     # wrongly runs on drafts.
     env:
       CI_CLASS: ignore
-    runs-on: [self-hosted, robotmoney-self-hosted]
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     permissions:
       contents: read
       pull-requests: read
@@ -68,7 +68,7 @@ jobs:
     # skip while the PR is still a draft. Path-gated ONLY on pull_request: a
     # push to main always runs regardless of needs.changes' output.
     if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.draft == false && needs.changes.outputs.scripts == 'true') }}
-    runs-on: [self-hosted, robotmoney-self-hosted]
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2

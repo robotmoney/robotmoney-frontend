@@ -37,7 +37,7 @@ on:
 
 jobs:
   docs-lint:
-    runs-on: [self-hosted, robotmoney-self-hosted]
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     steps:
       - uses: actions/checkout@v4
         with:

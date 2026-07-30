@@ -48,7 +48,7 @@ on:
 
 jobs:
   rmpc-release-e2e:
-    runs-on: [self-hosted, robotmoney-self-hosted]
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
