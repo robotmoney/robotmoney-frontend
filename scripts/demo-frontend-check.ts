@@ -84,15 +84,22 @@ async function main() {
     "regimeLabel(latest.regime)",  // styled top-line regime label (pixel-parity rewrite)
     "rv__panels",                  // per-panel indicator tables section
   ]);
+  // channel-divergence stays data-driven: the long-form restoration (#331/#333)
+  // kept the live researchView payload (gauges + the three transmission-
+  // indicator sparklines) and only renamed the chart container from the old
+  // rs__chart to rs__series-canvas (wrapped in the new rs__figure prose block).
   await checkView("/views/research/channel-divergence.html", [
     "x-data=\"researchView('channel-divergence')\"",
     "payload.gauges",
-    "rs__chart",
+    "rs__series-canvas",
   ]);
+  // late-cycle-signals was fully converted to static long-form prose (#333):
+  // no researchView wiring, no live payload, no chart — just the ported
+  // write-up (four-gauge readings table + one stub__series block per gauge).
   await checkView("/views/research/late-cycle-signals.html", [
-    "x-data=\"researchView('late-cycle-signals')\"",
-    "payload.gauges",
-    "rs__chart",
+    "stub__title",
+    "stub__table",
+    "stub__series",
   ]);
   await checkView("/views/allocation.html", [
     "x-data=\"allocationView()\"",
