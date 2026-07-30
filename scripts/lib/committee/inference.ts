@@ -29,7 +29,7 @@
 import { STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
 import { extractAssistantText } from "../../agent/transcript.ts";
-import { DEFAULT_AGENT_MODEL, resolveAgentModel } from "../model-registry.ts";
+import { DEFAULT_AGENT_MODEL, keylessModel, resolveAgentModel } from "../model-registry.ts";
 import { zenApiKey } from "../opencode-key.ts";
 // Regime inputs passed to each live author. This used to live beside the retired
 // deterministic memo template; it belongs with the only remaining authoring
@@ -48,8 +48,13 @@ export interface RegimeContext {
 
 export const DEFAULT_INFERENCE_MODEL = DEFAULT_AGENT_MODEL;
 // Resolved at call time (not module load) so an env override / test toggle
-// takes effect.
-const inferenceModel = () => resolveAgentModel();
+// takes effect. When AGENT_MODEL is unset and no OPENCODE_API_KEY is configured,
+// fall back to the keyless model so committee authoring succeeds in keyless environments.
+const inferenceModel = () => {
+  const raw = process.env.AGENT_MODEL?.trim();
+  if (raw) return resolveAgentModel();
+  return zenApiKey() ? resolveAgentModel() : keylessModel();
+};
 // The opencode binary name/path. Resolved at call time so a unit test can point
 // it at a nonexistent path to prove the loud-throw contract without a live call.
 const opencodeBin = () => process.env.OPENCODE_BIN ?? "opencode";
@@ -170,11 +175,15 @@ export function promptFor(p: Persona, regime: RegimeContext, subjectId: string):
 async function runOpencode(prompt: string): Promise<string> {
   const bin = opencodeBin();
   const model = inferenceModel();
+  const spawnEnv = { ...process.env };
+  if (!zenApiKey(spawnEnv)) {
+    delete spawnEnv.OPENCODE_API_KEY;
+  }
   let proc: ReturnType<typeof Bun.spawn>;
   try {
     proc = Bun.spawn(
       [bin, "run", prompt, "--model", model, "--format", "json", "--auto"],
-      { stdout: "pipe", stderr: "pipe" },
+      { stdout: "pipe", stderr: "pipe", env: spawnEnv },
     );
   } catch (err) {
     throw new Error(

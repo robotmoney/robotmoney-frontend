@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { assertAuthoredTakes } from "../../lib/committee/session.ts";
+import { promptFor } from "../../lib/committee/inference.ts";
 
 const take = (memberId: string, body: string) => ({
   memberId,
@@ -34,3 +35,22 @@ describe("assertAuthoredTakes — every present member requires live prose", () 
     ], ["athena"])).toThrow("retired template fingerprint");
   });
 });
+
+describe("promptFor — builds well-formed prompt", () => {
+  test("generates expected persona prompt structure", () => {
+    const prompt = promptFor(
+      { memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1 },
+      { composite: 0.5 },
+      "woon",
+    );
+    expect(prompt).toContain("You are Athena");
+    expect(prompt).toContain("macro risk lens");
+    expect(prompt).toContain("Subject under review: woon");
+    expect(prompt).toContain("**REGIME**");
+    expect(prompt).toContain("**ALLOCATION**");
+    expect(prompt).toContain("**SUBJECT**");
+    expect(prompt).toContain("STANCE:");
+  });
+});
+
+
