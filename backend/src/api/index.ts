@@ -1,7 +1,6 @@
 // HTTP entrypoint. Uses Bun's native server (Bun.serve) — no framework. It both
 // answers the JSON API and serves the static frontend (STATIC_DIR), so a
 // single-box deployment needs no reverse proxy.
-import { join, normalize } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
 import { config, assertNoVaultAddressCollision } from "../config.ts";
 import { sql } from "../db/client.ts";
@@ -11,31 +10,13 @@ import { getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleCommittee } from "./routes/committee.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
+import { serveStatic } from "./static.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/json" },
   });
-}
-
-// Serve a file from STATIC_DIR; fall back to index.html for client routes so SPA
-// deep links and refreshes work. Returns null if static serving is disabled.
-async function serveStatic(pathname: string): Promise<Response | null> {
-  if (!config.staticDir) return null;
-  const safe = normalize(decodeURIComponent(pathname)).replace(/^(\.\.(\/|\\|$))+/, "");
-  let filePath = join(config.staticDir, safe);
-  if (pathname.endsWith("/")) filePath = join(filePath, "index.html");
-
-  const file = Bun.file(filePath);
-  if (await file.exists()) return new Response(file);
-
-  // No file extension → treat as a client route, serve the shell.
-  if (!safe.split("/").pop()!.includes(".")) {
-    const index = Bun.file(join(config.staticDir, "index.html"));
-    if (await index.exists()) return new Response(index);
-  }
-  return null;
 }
 
 // Config-time double-count guard (issue #84): refuse to boot if a prop-wallet
@@ -159,7 +140,7 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     // Unmatched API path → 404 JSON (never fall through to static).
     if (pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
 
-    const stat = await serveStatic(pathname);
+    const stat = await serveStatic(pathname, config.staticDir);
     if (stat) return stat;
     return new Response("Not found", { status: 404 });
 }
