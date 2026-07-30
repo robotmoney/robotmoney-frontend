@@ -117,6 +117,12 @@ interface ChainFixtures {
   nav?: Record<string, bigint>;
   // GeckoTerminal token_price (address → USD) for the live-price path.
   gecko?: Record<string, number>;
+  // Addresses to OMIT from an otherwise-successful token_price response (as
+  // opposed to a fixture typo, which still throws loudly). Mirrors
+  // runGeckoBatch's real per-address failure mode (token-prices.ts): a
+  // SUCCESSFUL batched response simply missing one address rejects only that
+  // address's waiter — every other co-batched address still resolves live.
+  geckoOmit?: string[];
   // Yahoo SP500 close for the live-price path.
   sp500Price?: number;
   // Token addresses whose balanceOf sub-call comes back success:false (forced
@@ -178,6 +184,7 @@ function mockChain(fx: ChainFixtures): MockCounter {
       const addrs = u.split("/token_price/")[1]!.toLowerCase().split(",");
       const token_prices: Record<string, string> = {};
       for (const addr of addrs) {
+        if (fx.geckoOmit?.map((a) => a.toLowerCase()).includes(addr)) continue; // per-address miss, not a request failure
         const price = fx.gecko?.[addr];
         if (price == null) throw new Error(`mockChain: no gecko price for ${addr}`);
         token_prices[addr] = String(price);
@@ -671,4 +678,59 @@ test("sampler: sampleWalletBalances upserts exactly one row per held symbol per 
   await sampleWalletBalances({});
   const again = await sql`SELECT count(*)::int AS c FROM wallet_balance_samples WHERE sample_date = ${today}`;
   expect(again[0]!.c).toBe(8);
+});
+
+// ── issue #294 regression guard ─────────────────────────────────────────────
+// wallet-sleeves.ts's new sampler (worker/handlers/wallet.ts::sampleWalletSleeves)
+// needs valueLeg to fall back to a recent PERSISTED price when the live price
+// provider fails, so it explicitly passes persistedFallbackWalletPriceReader as
+// an argument at that call site. valueLeg's DEFAULT priceReader parameter must
+// stay providerWalletPriceReader — wallet-balances.ts::valueAsset (called by
+// fetchWalletBalances, the /api/dashboards/wallet-balances request path, which
+// issue #294 explicitly puts out of scope) calls valueLeg with NO reader
+// argument and relies on that default. If the default were ever changed to
+// persistedFallbackWalletPriceReader, a price-fetch failure with a SUCCESSFUL
+// chain read would silently blend a FRESH on-chain amount with a STALE
+// persisted price instead of falling through to lastPersistedHolding()'s fully
+// -stale snapshot (amount, price, AND value all from the same persisted row).
+test("issue #294 regression: fetchWalletBalances degrade path is unchanged — a live price-fetch failure with a successful chain read still degrades the WHOLE holding to lastPersistedHolding(), never a fresh-amount/stale-price blend", async () => {
+  setBaseEnv();
+  // Live pricing (BASE_RPC_SOURCE/PRICE_SOURCE left unset) so the real
+  // providerWalletPriceReader → fetchAssetPriceUsd → GeckoTerminal path runs
+  // for BNKR. Every OTHER live-priced asset gets a gecko/yahoo fixture; BNKR's
+  // is deliberately omitted so its price fetch throws while its chain read
+  // (fresh balanceOf) still succeeds — exactly the failure mode the finding
+  // describes.
+  const fx = stubFixtures();
+  fx.gecko = { [A.WETH]: 1700, [A.ROBOTMONEY]: 0.00002, [A.BNKR]: 0.001 };
+  fx.geckoOmit = [A.BNKR]; // BNKR's address is missing from an otherwise-successful response
+  fx.sp500Price = 4700;
+  mockChain(fx);
+
+  // A recent (well within MAX_PERSISTED_PRICE_AGE_MS) persisted BNKR sample
+  // with amount/price DIFFERENT from the fresh chain fixture (20,000 BNKR
+  // above). This is deliberately "eligible" for
+  // persistedFallbackWalletPriceReader's fallback lookup, so if that reader
+  // ever became valueLeg's default again, this test would catch it: the
+  // buggy path would return the FRESH chain amount (20000) priced at the
+  // persisted price, not this persisted row's own amount/value.
+  await sql`
+    INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES ('2026-06-25', 'BNKR', 15000, 0.0004, 6, 'live', now())
+  `;
+
+  const r = await fetchWalletBalances();
+  const bnkr = r.holdings.find((h) => h.symbol === "BNKR")!;
+  // Correct (providerWalletPriceReader default): valueLeg's price read throws,
+  // so valueLeg returns {ok:false} and valueAsset degrades the WHOLE holding to
+  // lastPersistedHolding() — amount, priceUsd, AND valueUsd all come from the
+  // SAME persisted row, never a blend with the fresh on-chain amount.
+  expect(bnkr.provenance).toBe("stale");
+  expect(bnkr.amount).toBeCloseTo(15000, 6); // persisted amount, NOT the fresh 20000
+  expect(bnkr.priceUsd).toBeCloseTo(0.0004, 6);
+  expect(bnkr.valueUsd).toBeCloseTo(6, 6); // persisted value, NOT 20000 * 0.0004
+  // Other legs' live price reads succeeded and are unaffected.
+  for (const sym of ["WETH", "ROBOTMONEY", "SP500"]) {
+    expect(r.holdings.find((h) => h.symbol === sym)!.provenance).toBe("live");
+  }
 });

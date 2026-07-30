@@ -339,7 +339,7 @@ export async function valueLeg(
   chainAmount: ChainAmount,
   source: BaseRpcSource,
   priceSource: PriceSource,
-  priceReader: WalletPriceReader = persistedFallbackWalletPriceReader,
+  priceReader: WalletPriceReader = providerWalletPriceReader,
 ): Promise<LegValuation> {
   // The chain read failed (a reverted sub-call or a thrown batch) → degrade.
   if (!chainAmount.ok) return { ok: false, error: new Error(`${asset.symbol} chain read unavailable`) };

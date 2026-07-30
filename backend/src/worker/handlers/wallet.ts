@@ -22,7 +22,12 @@ import {
   resolveTrackedAssets,
   type TrackedAsset,
 } from "../../config.ts";
-import { readChainAmountsBatched, valueLeg, type KeyedAssetRead } from "../../chain/wallet-valuation.ts";
+import {
+  persistedFallbackWalletPriceReader,
+  readChainAmountsBatched,
+  valueLeg,
+  type KeyedAssetRead,
+} from "../../chain/wallet-valuation.ts";
 
 export async function sampleWalletBalances(_payload: Record<string, unknown>): Promise<unknown> {
   // Fresh read (bypass the request cache) so the sampler records current chain
@@ -95,7 +100,15 @@ export async function sampleWalletSleeves(_payload: Record<string, unknown>): Pr
     const chainAmount = chainAmounts.get(key);
     if (!chainAmount || !chainAmount.ok) continue;
 
-    const valued = await valueLeg(asset, chainAmount, source, priceSource);
+    // Explicit persisted-fallback reader (issue #294): this sampler runs on the
+    // worker schedule, not the request path, so a live-price-provider hiccup
+    // should still degrade to a recent persisted per-symbol price rather than
+    // skipping the sample entirely. This must be passed explicitly here and
+    // NOT via valueLeg's default — wallet-balances.ts:133 (fetchWalletBalances,
+    // the out-of-scope /api/dashboards/wallet-balances request path) calls
+    // valueLeg with no reader argument and must keep inheriting
+    // providerWalletPriceReader's original ok:false-on-failure behavior.
+    const valued = await valueLeg(asset, chainAmount, source, priceSource, persistedFallbackWalletPriceReader);
     if (!valued.ok) continue;
 
     await sql`
