@@ -272,17 +272,13 @@ jobs:
         run: |
           if [ "$REAL_EVAL_REQUESTED" = "1" ]; then
             if [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_ZEN_KEY" = "true" ]; then
-              echo "use_zen_key=1" >> "$GITHUB_OUTPUT"
               MSG="§11 R8 real-inference onboarding eval: RUNNING on the funded default model (trusted context, OPENCODE_API_KEY configured) as part of the Full-stack demo step below. Requested by: push to main, the 'real-eval' pull-request label, or workflow_dispatch with real_eval=true — whichever triggered this run."
             else
-              echo "use_zen_key=" >> "$GITHUB_OUTPUT"
               MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — the eval was requested for this run, but no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is funded (D22 as amended), so the eval will fail loudly rather than silently degrade. Configure the OPENCODE_API_KEY secret, or set AGENT_MODEL=free to run keyless."
             fi
           elif [ "$IS_PULL_REQUEST" = "true" ]; then
-            echo "use_zen_key=" >> "$GITHUB_OUTPUT"
             MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the single self-hosted runner this repo shares, on which per-PR evals cost minutes of exclusive runner time against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: .github/workflows/committee-opencode-nightly.yml — nightly 04:37 UTC (schedule '37 4 * * *') plus workflow_dispatch — which sweeps more models and more identities than this gate ever did; and on every push to main in this same workflow. What this PR run DID assert about that surface: the separate, inference-off .github/workflows/onboarding-eval-rails.yml workflow (issue #275 addendum), which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full whenever its own path filter matches."
           else
-            echo "use_zen_key=" >> "$GITHUB_OUTPUT"
             MSG="§11 R8 real-inference onboarding eval: NOT REQUESTED on this manual run — re-dispatch this workflow with real_eval=true to spend one. ZERO model tokens are spent here. The separate onboarding-eval-rails.yml workflow still covers the inference-off rails check."
           fi
           echo "$MSG"
