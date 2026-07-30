@@ -1,43 +1,1054 @@
-<!-- /smart-contract-risks — Smart Contract Risks (footer/dev link).
-     Static on-brand placeholder. A full risk-disclosure write-up is forthcoming.
-     NO <script>, NO custom Alpine factories. -->
+<!-- /smart-contract-risks — Smart Contract Risks (linked from every page footer and from /changelog).
+     Full research page: a field guide to how DeFi vaults get exploited, 2020-2026.
+     Chronological case studies (what happened / amount lost / parties / attack vector / root cause),
+     followed by Pattern Analysis and Design Recommendations.
+     Content ported faithfully from the production long-form page; presentation rebuilt in the
+     repo's own stub__ class family with a per-view <style> block.
+     NO <script>, NO custom Alpine factories, NO gradients, NO border-radius, NO box-shadow. -->
 
 <section class="stub">
   <div class="stub__container">
     <header class="stub__head">
-      <div class="stub__eyebrow">Risk Disclosure</div>
+      <div class="stub__eyebrow">Research</div>
       <h1 class="stub__title">Smart Contract <span class="stub__accent">Risks</span></h1>
       <p class="stub__lede">
-        A full, itemized smart-contract risk disclosure for the Robot Money vault
-        is forthcoming. This page will document the protocol&apos;s audit status,
-        upgrade authority, and the non-custodial caveats that every participant
-        assumes when interacting on-chain.
+        A field guide to how DeFi vaults get exploited &mdash; chronological case studies for protocol developers
       </p>
     </header>
 
     <div class="stub__body">
-      <section class="stub__sec">
-        <h2 class="stub__h2">Audit status</h2>
-        <p class="stub__p">
-          The vault and its strategy adapters are experimental software. Contracts
-          may undergo third-party auditing, but no audit eliminates the possibility
-          of undiscovered bugs, logic errors, or economic vulnerabilities. Audit
-          reports and scope will be linked here as they are completed.
+
+      <p class="stub__intro">
+        <strong>This document catalogs the most significant DeFi vault exploits between 2020 and 2026.</strong>
+        The goal is not to shame protocols, but to extract technical lessons for builders. Each entry
+        includes what happened, the financial impact, the parties involved, and the precise technical
+        attack vector. If you are building treasury infrastructure, these are the failure modes you
+        must design against.
+      </p>
+
+      <p class="stub__intro-links">
+        Robot Money vault mechanics, caps and adapter behaviour are described in the
+        <a class="stub__inline-link" href="/docs">documentation</a>. This page is research, not advice:
+        read the <a class="stub__inline-link" href="/disclaimer">legal disclaimer</a> before interacting
+        with any protocol described here.
+      </p>
+
+      <aside class="stub__callout">
+        <h2 class="stub__callout-h">2026 Update: The Year of Key Compromises</h2>
+        <p class="stub__callout-p">
+          2026 has seen a dramatic shift in attack vectors. According to Chainalysis,
+          <strong>private key compromises now account for 88% of all crypto theft</strong>
+          (up from 55% in 2024). Step Finance, IoTeX, Drift, and other major protocols have lost over
+          $330M combined not to code bugs, but to compromised keys with unchecked admin privileges.
         </p>
-      </section>
+        <p class="stub__callout-p">
+          <strong>New pattern (April 2026):</strong>
+          Compromised admin keys creating fake markets, manipulating oracles, and disabling circuit
+          breakers &mdash; all in a single transaction. The Drift exploit shows how a single signer with
+          unlimited market creation and oracle assignment authority can drain $213M in 10 seconds.
+        </p>
+      </aside>
+
+      <hr class="stub__rule">
 
       <section class="stub__sec">
-        <h2 class="stub__h2">Non-custodial caveats</h2>
-        <p class="stub__p">
-          Robot Money is non-custodial: no operator can freeze, seize, or restore
-          funds. Deposits are not insured by the FDIC, SIPC, or any private scheme.
-          Participants interact voluntarily and assume all smart-contract, oracle,
-          and dependency risk, including potential total loss of funds.
-        </p>
+        <h2 class="stub__h2">The Attack Chronology</h2>
+
+        <!-- May 2026 -->
+        <article class="stub__case stub__case--recent">
+          <header class="stub__case-head">
+            <span class="stub__case-date">May 2026</span>
+            <h3 class="stub__h3">New Market Trading &mdash; Confused Deputy in Gnosis Safe Module</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> An attacker exploited a broken access control check in New
+              Market Trading&rsquo;s custom Gnosis Safe module, SquidRouterModule. 88 user Safes were drained
+              across Ethereum, Base, and Arbitrum in under 15 minutes. No flash loan, no phishing, no bridge
+              exploit &mdash; the attacker read a public contract, copied a string, encoded a real delegate
+              address from an open on-chain registry, and called a function that had been left unguarded for
+              three months.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$3.78 million (88 user Safes across Ethereum, Base, Arbitrum)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">New Market Trading (victim), SquidRouterModule (custom Safe module), QuillAudits (post-hoc analysis)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>The PermissionsManager contract storing each Safe&rsquo;s registered delegate address was fully public on-chain &mdash; the attacker read it directly to enumerate real delegates per target Safe</li>
+                <li>For each target Safe, the attacker crafted a call payload encoding the real delegate address, along with three chained actions: APPROVE, PERMIT2 authorization, and SWAP targeting attacker-controlled pools (amountOutMin set to 0)</li>
+                <li>The module verified the caller with: <code class="stub__code">require(sourceAddress == squidRouter)</code> &mdash; but sourceAddress was a parameter the caller supplied themselves, with no binding to msg.sender</li>
+                <li>The module then ran: <code class="stub__code">require(hasPermission(safe, delegate, APPROVE))</code> &mdash; but the delegate address was decoded from the caller&rsquo;s own payload, not derived from msg.sender</li>
+                <li>The attacker passed the string &ldquo;squidRouter&rdquo; and encoded the real registered delegate. Both checks passed. The actual caller was never verified</li>
+                <li>The single missing line that stops the entire attack: <code class="stub__code">require(msg.sender == delegate)</code></li>
+                <li>With both checks cleared, the module executed all three actions: approved token balance, authorized Permit2, then forced a full-balance swap through attacker&rsquo;s Uniswap V3 pool into a worthless &ldquo;u&rdquo; token</li>
+                <li>Attacker removed liquidity, consolidated cross-chain via Relay, and swept everything to a single holding wallet as DAI</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Confused deputy vulnerability in SquidRouterModule. The module
+                inherited expressExecuteWithToken() from Axelar&rsquo;s gateway interface &mdash; built for
+                relayers, not for vault execution &mdash; and placed no additional access control behind it.
+                The contract verified that a valid delegate existed. It never verified that the caller is that
+                delegate. A documented, well-understood pattern entirely preventable with a single require check.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- April 2026 — Drift -->
+        <article class="stub__case stub__case--recent">
+          <header class="stub__case-head">
+            <span class="stub__case-date">April 2026</span>
+            <h3 class="stub__h3">Drift Protocol &mdash; Durable Nonce + Multisig Social Engineering Attack</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> On April 1, 2026 at 16:05 UTC, an exploit worth approximately
+              $285M struck Drift Protocol. The attacker used compromised multisig signers (2-of-5 Security
+              Council) combined with Solana&rsquo;s durable nonce mechanism to execute pre-signed malicious
+              transactions. Over a 9-day timeline, the attacker created durable nonce accounts, adapted to a
+              legitimate multisig migration on March 27, and obtained pre-signatures from legitimate signers
+              through transaction misrepresentation. No seed phrase leaks or smart contract bugs were involved.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$285 million (JLP, USDC, wETH, dSOL, cbBTC vaults)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Drift Protocol (victim), Switchboard (oracle infrastructure), Four Pillars (analysis)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Attack Timeline (9-Day Reconnaissance):</span>
+              <ul class="stub__list">
+                <li><strong>March 23 (T-9 days):</strong> Attacker created four durable nonce accounts &mdash; two for Drift Security Council signers, two attacker-controlled</li>
+                <li><strong>March 27 (T-5 days):</strong> Drift team executed planned multisig migration. Attacker adapted by creating new nonce account for signer (6UJbu9...Pvu924) on the updated multisig</li>
+                <li><strong>March 31 (T-1 day):</strong> Attacker re-established access to 2-of-5 signers on the migrated multisig</li>
+                <li><strong>April 1, 16:04 UTC:</strong> Drift team executed routine test withdrawal from insurance fund</li>
+                <li><strong>April 1, 16:05 UTC (~1 min later):</strong> Attacker executed two pre-signed durable nonce transactions in rapid succession</li>
+              </ul>
+            </div>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li><strong>Durable Nonce Mechanism:</strong> Solana feature allowing transactions to bypass standard blockhash expiration (~1 minute). Signatures collected in advance, executed later</li>
+                <li><strong>Social Engineering:</strong> Attacker obtained pre-signatures by misrepresenting actual transaction contents to legitimate signers</li>
+                <li>
+                  <strong>Single Transaction Dismantled Three Defenses:</strong> In transaction
+                  <code class="stub__code">4a5962R...st82X</code>, the attacker simultaneously:
+                  <ul class="stub__list stub__list--sub">
+                    <li>Called <code class="stub__code">initializeSpotMarket</code> to create Spot Market #63 for CVT, setting <code class="stub__code">initial_asset_weight</code> and <code class="stub__code">maintenance_asset_weight</code> to maximum via bundled <code class="stub__code">updateSpotMarketMarginWeights</code></li>
+                    <li>Assigned attacker-controlled <code class="stub__code">SwitchboardOnDemand</code> oracle (oracle_source=11)</li>
+                    <li>Called <code class="stub__code">updateWithdrawGuardThreshold</code> five times, raising limits on USDC, wETH, dSOL, JLP, and cbBTC markets to ~500 trillion (effectively infinite)</li>
+                  </ul>
+                </li>
+                <li>Deposited ~785M CVT as collateral. Attacker-controlled oracle valued it at hundreds of millions; maxed weights recognized nearly full valuation as collateral</li>
+                <li>Borrowed against inflated CVT collateral, draining real assets. JLP vault: 99.9997% drained (41.7M &rarr; 133 JLP)</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> A 9-day social engineering campaign against a 2-of-5 multisig using
+                durable nonces. But critically: the protocol&rsquo;s privilege architecture allowed market
+                creation, oracle assignment, weight configuration, and guard neutralization in a single
+                transaction. The contracts functioned exactly as audited &mdash;
+                <code class="stub__code">initializeSpotMarket</code>,
+                <code class="stub__code">updateWithdrawGuardThreshold</code>, and oracle assignment all worked
+                as designed. The flaw was architectural: no upper bounds on new market weights, no timelock for
+                weight changes, no separation between market creation and risk parameter modification. This
+                falls outside code auditing into privilege architecture and parameter constraints. Two
+                transactions dismantled the entire security architecture.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- April 2026 — Kelp DAO -->
+        <article class="stub__case stub__case--recent">
+          <header class="stub__case-head">
+            <span class="stub__case-date">April 2026</span>
+            <h3 class="stub__h3">Kelp DAO &mdash; 1/1 DVN Configuration Failure</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> An attacker exploited KelpDAO&rsquo;s LayerZero OFT (Omnichain
+              Fungible Token) configuration by leveraging a critically weak DVN (Decentralized Verifier Network)
+              setup: 1 required DVN, 0 optional DVNs, threshold 0. The single required DVN (LayerZero Labs)
+              signed an attestation for a message that was never actually emitted on the source chain
+              (Unichain). With no independent verifiers to contradict it, the forged message passed
+              verification and triggered minting of 116,500 rsETH (~$290M) on Ethereum.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">~$290 million (116,500 rsETH)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Kelp DAO (victim), LayerZero Labs (compromised/faulty DVN), Tornado Cash (funding)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">DVN Configuration (On-Chain Visible):</span>
+              <ul class="stub__list">
+                <li><strong>requiredDVNCount:</strong> 1</li>
+                <li><strong>requiredDVNNames:</strong> [LayerZero Labs]</li>
+                <li><strong>optionalDVNCount:</strong> 0</li>
+                <li><strong>optionalDVNThreshold:</strong> 0</li>
+                <li><strong>Destination OApp:</strong> rsETH OFT Adapter on Ethereum (0x85d456B2DfF1fd8245387C0BfB64Dfb700e98Ef3)</li>
+              </ul>
+            </div>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li><strong>Step 1:</strong> Attacker prepared infrastructure (funded via Tornado Cash months in advance)</li>
+                <li><strong>Step 2:</strong> Forged a cross-chain message that was never emitted on source chain (Unichain)</li>
+                <li><strong>Step 3:</strong> Single required DVN (LayerZero Labs) signed attestation for the non-existent packet</li>
+                <li><strong>Step 4:</strong> No optional DVNs or threshold to challenge the fraudulent attestation</li>
+                <li><strong>Step 5:</strong> Message passed verification: commitVerification &rarr; lzReceive &rarr; peer check &rarr; OFT decode &rarr; rsETH mint</li>
+                <li><strong>Result:</strong> 116,500 rsETH materialized on Ethereum with no corresponding lock on source chain</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Not a LayerZero protocol bug &mdash; a configuration failure.
+                KelpDAO chose a 1/1 DVN setup, the cross-chain equivalent of a 1-of-1 multisig on a treasury.
+                LayerZero V2 is modular by design; projects pick their own X-of-Y-of-N security stack. The
+                protocol provided the toolkit; KelpDAO failed to use it.
+              </p>
+            </div>
+
+            <div class="stub__callout stub__callout--inline">
+              <span class="stub__callout-label">Secure OFT/OApp Configuration Baseline:</span>
+              <ul class="stub__list">
+                <li>Multiple required DVNs (3&ndash;4+) with independent providers</li>
+                <li>Don&rsquo;t stack correlated risk &mdash; use diverse DVN operators</li>
+                <li>Add optional DVNs + threshold on top of required set</li>
+                <li>Sane block confirmations for finality</li>
+                <li>Verify any OApp&rsquo;s config on layerzeroscan.com today</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>If your requiredDVNCount is 1 and optionalDVNCount is 0:</strong> Reconfigure before
+                the market does it for you. Security is the application&rsquo;s responsibility.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- January 2026 — Step Finance -->
+        <article class="stub__case stub__case--recent">
+          <header class="stub__case-head">
+            <span class="stub__case-date">January 2026</span>
+            <h3 class="stub__h3">Step Finance &mdash; Private Key Compromise</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> An attacker compromised Step Finance executive devices through a
+              phishing/social engineering attack. Using the stolen keys, they transferred stake authorization to
+              their own wallet, unstaked 261,854 SOL ($27.3M), and drained the treasury. The smart contracts
+              worked flawlessly &mdash; the humans failed.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$27.3 million (261,854 SOL)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Step Finance (victim), executive team (compromised), CertiK (auditor of contracts)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>Attacker gained access to executive team devices (likely via phishing email)</li>
+                <li>Transferred stake authorization from Step&rsquo;s treasury wallets to attacker-controlled address</li>
+                <li>Unstaked 261,854 SOL (requires direct wallet permissions on Solana)</li>
+                <li>Withdrew all SOL to attacker wallet in single transaction</li>
+                <li>Bridge-hopped funds via THORChain to Bitcoin (66.77 BTC parked in 4 wallets)</li>
+                <li>Step recovered $4.7M via Token22 protections on Remora assets</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Weak key management with insufficient access controls. No
+                multi-sig requirement for treasury operations. Single points of failure in signing authority.
+                No monitoring/offline alerting during APAC hours when attack occurred.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- January 2026 — Truebit -->
+        <article class="stub__case stub__case--recent">
+          <header class="stub__case-head">
+            <span class="stub__case-date">January 2026</span>
+            <h3 class="stub__h3">Truebit &mdash; Integer Overflow in Legacy Code</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> An attacker exploited a 5-year-old unaudited contract with
+              unverified bytecode. By passing astronomical values to the minting function, they triggered an
+              integer overflow in an unprotected addition operation, minting 240M+ TRU tokens for essentially
+              zero cost, then burning them for ETH at a 12.5% buyback rate.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$26.2 million (8,535 ETH)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Truebit Protocol (victim), no auditors (code unverified), Banteg (flagged risk in 2021)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>Target: 5-year-old contract with unverified bytecode (Solidity v0.5.3)</li>
+                <li>Attacker reverse-engineered bytecode to find overflow vulnerability</li>
+                <li>Called getPurchasePrice() with absurdly large mint amounts</li>
+                <li>Unprotected addition overflowed, wrapping to near-zero</li>
+                <li>Cost to mint 240M TRU: essentially zero ETH</li>
+                <li>Burned tokens for ETH at 12.5% buyback rate (bonding curve mechanic)</li>
+                <li>Five iterations in single transaction extracted 8,535 ETH</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Pre-Solidity 0.8.x compiler without automatic overflow protection.
+                Unverified bytecode meant no community audit. Contract sat dormant for 5 years &mdash; a
+                &ldquo;relic hunter&rdquo; target. No supply cap or per-transaction limits.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- February 2026 — YieldBlox -->
+        <article class="stub__case stub__case--recent">
+          <header class="stub__case-head">
+            <span class="stub__case-date">February 2026</span>
+            <h3 class="stub__h3">YieldBlox &mdash; Oracle Manipulation via Illiquid Collateral</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> An attacker exploited a community-managed Blend V2 pool by
+              manipulating the price of USTRY &mdash; a yield-bearing stablebond with effectively zero market
+              depth. A single trade pumped USTRY 100x on the Stellar DEX, which the VWAP oracle dutifully
+              reported as truth, allowing the attacker to borrow $10.97M against collateral worth ~$160K.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$10.97 million (1M USDC + 61M XLM)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">YieldBlox/Script3 (victim), Reflector (oracle), Code4rena/Certora (auditors of Blend V2)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>USTRY/USDC market on SDEX had &lt;$1 in hourly volume, effectively a ghost town</li>
+                <li>Attacker placed sell offer for 1.2 USTRY at 107 USDC (100x real price)</li>
+                <li>Bought 0.05 USTRY against their own offer &mdash; that 50&cent; trade became the VWAP</li>
+                <li>Reflector oracle reported $106.74 (poisoned) vs real $1.06</li>
+                <li>Deposited 153K USTRY (~$160K real) as collateral worth $16M per oracle</li>
+                <li>Borrowed 1M USDC + 61M XLM against inflated collateral</li>
+                <li>No circuit breaker fired; no deviation check; no staleness flag on dead market</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Four stacked failures: (1) Illiquid collateral listed without
+                liquidity thresholds, (2) Single-source VWAP oracle with no median/deviation checks, (3) Oracle
+                adapter passed raw last price without validation, (4) No circuit breakers for dead markets.
+                Auditors checked contract logic but never scoped the economic reality of the collateral market.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- February 2026 — IoTeX -->
+        <article class="stub__case stub__case--recent">
+          <header class="stub__case-head">
+            <span class="stub__case-date">February 2026</span>
+            <h3 class="stub__h3">IoTeX &mdash; Private Key Compromise (Bridge)</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> An attacker obtained the owner key to IoTeX&rsquo;s ioTube bridge
+              validator contract. With unchecked upgrade authority, they pushed a malicious contract version,
+              seized control of the TokenSafe and MinterPool, drained $4.4M in real assets, and minted 821M
+              CIOTX tokens. A single EOA held the keys to everything.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$4.4 million + 821M CIOTX minted (86% frozen by team)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">IoTeX (victim), ioTube bridge (compromised), Specter/PeckShield (on-chain analysts)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>Attacker compromised validator owner EOA (0x6dd...148e) after 6-18 months of reconnaissance</li>
+                <li>Called upgrade() on TransferValidatorWithPayload contract</li>
+                <li>Deployed malicious contract with all validation checks stripped</li>
+                <li>No multisig, no timelock, no second signature required for upgrade</li>
+                <li>With ownership secured, transferred TokenSafe and MinterPool control</li>
+                <li>Drained 9 tokens from reserves: USDC, USDT, WBTC, WETH, IOTX, DAI, PAXG, BUSD, UNI</li>
+                <li>Minted 821M CIOTX across 10 transactions via MinterPool</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Single EOA held unchecked upgrade authority over contracts
+                custodying millions. No multisig requirement, no timelock, no circuit breaker. Architecture
+                assumed the key would never be compromised. IIP-55 (decentralized validator set) was drafted in
+                December 2025 &mdash; two months before the hack &mdash; but not prioritized until after the
+                vault emptied.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- March 2026 — Solv -->
+        <article class="stub__case stub__case--recent">
+          <header class="stub__case-head">
+            <span class="stub__case-date">March 2026</span>
+            <h3 class="stub__h3">Solv Protocol &mdash; Self-Reentrancy via ERC-3525</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> Solv&rsquo;s BitcoinReserveOffering (BRO) contract used ERC-3525
+              (semi-fungible token standard with NFT-like callbacks). The mint function triggered
+              onERC721Received before updating state, allowing the attacker to re-enter and mint twice. The
+              contract was unaudited and excluded from bug bounty coverage despite five audits on other Solv
+              contracts.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$2.73 million (38.05 SolvBTC)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Solv Protocol (victim), Quantstamp/Salus/OpenZeppelin (auditors of OTHER contracts), unaudited BRO contract</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>Contract used doSafeTransferIn() to receive NFT deposits during minting</li>
+                <li>This triggered onERC721Received callback in attacker&rsquo;s contract</li>
+                <li>Callback minted BRO tokens BEFORE execution returned to original mint()</li>
+                <li>Original mint() then minted BRO tokens again</li>
+                <li>Same deposit minted twice (double-mint)</li>
+                <li>Attacker started with 135 BRO, ended with 567 million BRO after 22 loops</li>
+                <li>Swapped BRO for 38.05 SolvBTC (~$2.73M), exited via Tornado Cash</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Missing reentrancy guard and improper ordering of state updates
+                vs. external calls. The BRO contract was unaudited and explicitly excluded from bug bounty
+                coverage (which only covered Web2 infrastructure and Solana contracts). Security theater: five
+                audits on other contracts created false confidence while the new product shipped without review.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- March 2026 — Venus -->
+        <article class="stub__case stub__case--recent">
+          <header class="stub__case-head">
+            <span class="stub__case-date">March 2026</span>
+            <h3 class="stub__h3">Venus Protocol &mdash; Donation Attack (Thena Market)</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> An attacker spent 9 months accumulating THE tokens, then bypassed
+              Venus&rsquo;s supply cap via direct ERC-20 transfers (donations) to inflate the vToken exchange
+              rate. This allowed borrowing against collateral that exceeded protocol limits, ultimately leaving
+              $2.15M in bad debt. Code4rena had flagged this exact vector in May 2023; Venus dismissed it as
+              &ldquo;supported behavior with no negative side effects.&rdquo;
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$3.7 million extracted, $2.15M bad debt remaining (1.18M CAKE + 1.84M THE)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Venus Protocol (victim, 4th exploit in 5 years), Thena (token), Code4rena (flagged M-10 in May 2023 &mdash; dismissed)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>Supply cap enforced only in mint() function, not in direct transfer()</li>
+                <li>Attacker accumulated 84% of supply cap via normal deposits (12.2M THE)</li>
+                <li>Transferred 49.5M THE directly to vTHE contract (bypassing cap)</li>
+                <li>Exchange rate inflated 3.81x because contract balance increased without new vTokens minted</li>
+                <li>Same position now represented $12M+ in collateral vs original $3.3M</li>
+                <li>Borrowed against inflated collateral in recursive loop</li>
+                <li>Pumped THE price via buy pressure, borrowed more as oracle caught up</li>
+                <li>Got greedy, liquidation triggered, $30M nominal collateral &rarr; $0</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Supply cap only checked in mint(), bypassable via direct ERC-20
+                transfers. Code4rena flagged this in May 2023 as M-10; Venus dismissed as &ldquo;supported
+                behavior with no negative side effects.&rdquo; February 2025 exploit on ZKSync deployment (same
+                vector) was not patched on BNB Chain. This is the 4th Venus exploit in 5 years &mdash;
+                institutional memory failure.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- March 2026 — Resolv -->
+        <article class="stub__case stub__case--recent">
+          <header class="stub__case-head">
+            <span class="stub__case-date">March 2026</span>
+            <h3 class="stub__h3">Resolv &mdash; No Circuit Breakers on Compromised SERVICE_ROLE Key</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> A malicious actor gained unauthorized access to Resolv
+              infrastructure through a compromised private key, minting approximately $80M of tokens. No
+              circuit breakers existed to pause minting when abnormal volumes were detected. A single
+              SERVICE_ROLE key had unilateral mint authority.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$25M+ (attacker minted $80M, portion recovered)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Resolv (victim), compromised SERVICE_ROLE key holder, no circuit breaker in place</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>Attacker compromised infrastructure access (likely via phishing/social engineering)</li>
+                <li>Gained control of SERVICE_ROLE key with unilateral mint authority</li>
+                <li>No multi-sig requirement on mint function &mdash; single key could mint unlimited supply</li>
+                <li>No circuit breaker to auto-pause when mint volume exceeded thresholds</li>
+                <li>No anomaly detection on mint rate (historical avg vs. attack volume)</li>
+                <li>Minted ~$80M in tokens before manual intervention stopped the drain</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Single point of failure in key management (no SERVICE_ROLE
+                redundancy) combined with complete absence of circuit breakers. The protocol relied entirely on
+                manual monitoring and response, which was too slow to prevent massive dilution.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- March 2026 — Aave -->
+        <article class="stub__case stub__case--recent">
+          <header class="stub__case-head">
+            <span class="stub__case-date">March 2026</span>
+            <h3 class="stub__h3">Aave &mdash; CAPO Oracle Misconfiguration</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> Aave&rsquo;s Correlated Asset Price Oracle (CAPO) had a stale
+              snapshot ratio from 2024. When Chaos Labs&rsquo; automated risk engine pushed an update, a rate
+              limiter prevented the ratio from catching up to market rates, causing the oracle to undervalue
+              wstETH by 2.85% and trigger liquidation of healthy positions. 34 accounts were liquidated for a
+              configuration error they had no part in.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$27.78 million (10,938 wstETH liquidated from 34 accounts)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Aave (victim), Chaos Labs (risk oracle provider), 34 liquidated users</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>CAPO initialized in 2024 with snapshotRatio of ~1.15 for wstETH/stETH</li>
+                <li>Off-chain engine computed correct update: snapshotRatio ~1.2282, timestamp 7 days ago</li>
+                <li>On-chain rate limiter capped single updates at 3% per 3 days</li>
+                <li>Ratio could only update to ~1.1919, but timestamp updated to 7 days ago</li>
+                <li>Formula extrapolated from wrong base: computed ceiling ~1.1939 vs market ~1.2285</li>
+                <li>Aave priced wstETH 2.85% below actual value</li>
+                <li>E-Mode (high leverage) positions liquidated despite being healthy in real markets</li>
+                <li>Similar misconfiguration nearly triggered a month earlier but agent wasn&rsquo;t connected</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Configuration mismatch between snapshotRatio and
+                snapshotTimestamp parameters. Rate limiter prevented correction as effectively as it prevented
+                manipulation. Stale 2024 anchor couldn&rsquo;t catch up to two years of yield growth. Near-miss
+                a month earlier wasn&rsquo;t investigated thoroughly &mdash; institutional memory failure.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <div class="stub__divider">
+          <p class="stub__divider-text">
+            Historical exploits from 2020-2025 &mdash; foundational patterns that continue to repeat
+          </p>
+        </div>
+
+        <!-- October 2020 — Harvest Finance -->
+        <article class="stub__case stub__case--historic">
+          <header class="stub__case-head">
+            <span class="stub__case-date">October 2020</span>
+            <h3 class="stub__h3">Harvest Finance &mdash; Price Oracle Manipulation</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> An attacker exploited Harvest Finance&rsquo;s yield vaults by
+              manipulating the price of stablecoins within Curve pools. Using a $50 million flash loan, the
+              attacker artificially inflated the price of USDT during deposits and deflated it during
+              withdrawals, extracting more value than deposited.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$33.8 million (24,830 ETH)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Harvest Finance (victim), PeckShield / Haechi Labs / CertiK (auditors), Curve Finance (external dependency)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>The vault calculated share prices using on-chain DEX prices that could be manipulated</li>
+                <li>Attacker swapped $11M USDC &rarr; USDT on Curve, inflating USDT price</li>
+                <li>Deposited 60.6M USDT into vault at inflated price (receiving fewer shares)</li>
+                <li>Swapped back, deflating USDT price</li>
+                <li>Withdrew at deflated price, receiving more USDT than deposited (~$500K profit per cycle)</li>
+                <li>Repeated 32 times in 7 minutes</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Using manipulable on-chain price sources (Curve&rsquo;s
+                get_virtual_price) for vault share calculations without sufficient slippage tolerance checks.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- March 2023 — Euler -->
+        <article class="stub__case stub__case--historic">
+          <header class="stub__case-head">
+            <span class="stub__case-date">March 2023</span>
+            <h3 class="stub__h3">Euler Finance &mdash; Donate-to-Reserves Exploit</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> An attacker exploited Euler&rsquo;s donateToReserves() function
+              combined with liquidation logic. The donation function failed to update the user&rsquo;s health
+              factor, allowing the attacker to donate away their collateral, become artificially insolvent,
+              then liquidate themselves for profit. All funds later returned by attacker.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$200 million (all funds returned)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Euler Finance (victim), Omniscia (auditor), Aave (flash loan source)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>Flash borrowed 30M DAI from Aave V2</li>
+                <li>Deposited into Euler to receive eDAI, then borrowed 10x via leverage</li>
+                <li>Called donateToReserves() to donate leveraged eDAI to protocol reserves</li>
+                <li>Function failed to update attacker&rsquo;s health score/accounting</li>
+                <li>Attacker now &ldquo;underwater&rdquo; according to Euler&rsquo;s accounting</li>
+                <li>Self-liquidated their own position &mdash; liquidation awarded massive collateral at discount</li>
+                <li>Cycle repeated across multiple assets (DAI, WETH, USDC, stETH)</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> donateToReserves() failed to update user health factor after
+                donation. Created path where attacker could donate away debt collateral (but not their debt),
+                then liquidate themselves for profit on collateral they never truly lost.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- July 2023 — Curve -->
+        <article class="stub__case stub__case--historic">
+          <header class="stub__case-head">
+            <span class="stub__case-date">July 2023</span>
+            <h3 class="stub__h3">Curve Finance &mdash; Vyper Compiler Reentrancy</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> A compiler bug in Vyper (versions 0.2.15, 0.2.16, 0.3.0) caused
+              the @nonreentrant decorator to fail when raw_call was used with default_return_value. This
+              allowed reentrancy attacks against multiple Curve pools simultaneously.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$70+ million (pETH-ETH, msETH-ETH, alETH-ETH, CRV/ETH pools)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Curve Finance (victim), Vyper compiler (bug source), multiple pool LPs</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>Attacker identified Curve pools written in Vyper using affected compiler versions</li>
+                <li>Vyper&rsquo;s raw_call with default_return_value had a bug in @nonreentrant</li>
+                <li>First call triggered external call to token contract</li>
+                <li>Compiler bug: reentrancy lock was not properly set on revert with default return value</li>
+                <li>Attacker re-entered pool contract before first call completed</li>
+                <li>Manipulated balance calculations during reentrancy window</li>
+                <li>Withdrew more than deposited</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Vyper compiler bug affecting all contracts compiled with versions
+                0.2.15-0.3.0 using raw_call with default_return_value and @nonreentrant. The reentrancy guard
+                state was reset before external call completed.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <!-- June 2016 — The DAO -->
+        <article class="stub__case stub__case--historic">
+          <header class="stub__case-head">
+            <span class="stub__case-date">June 2016</span>
+            <h3 class="stub__h3">The DAO &mdash; Recursive Call Reentrancy</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> An attacker exploited a reentrancy vulnerability in The
+              DAO&rsquo;s splitDAO function to recursively drain ether from the contract before the balance
+              could be updated. The attacker called the withdraw function repeatedly before the state change,
+              extracting 3.6M ETH (~$60M at the time). This exploit led to the Ethereum hard fork that created
+              Ethereum Classic.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">3.6M ETH (~$60 million at time of attack, ~$50M+ recovered later)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">The DAO (victim), no formal auditors, Ethereum Foundation (emergency response)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>Attacker identified reentrancy in splitDAO() function</li>
+                <li>Created a malicious child DAO contract with fallback function</li>
+                <li>Called splitDAO() to withdraw ETH to child DAO</li>
+                <li>Child DAO fallback function recursively called splitDAO() again</li>
+                <li>Each recursive call transferred ETH before parent call updated balance</li>
+                <li>Repeated ~46 times per transaction, draining ~50M ETH per block</li>
+                <li>Attacker also recruited others to use same exploit simultaneously</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Contract sent ETH before updating internal accounting
+                (checks-effects-interactions pattern violation). No reentrancy guards. Fallback functions in
+                child DAO enabled recursive calls back into parent.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <hr class="stub__rule">
+
+        <!-- February 2025 — Bybit -->
+        <article class="stub__case stub__case--historic">
+          <header class="stub__case-head">
+            <span class="stub__case-date">February 2025</span>
+            <h3 class="stub__h3">Bybit Safe &mdash; Multisig Compromise</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> An attacker compromised Bybit&rsquo;s Gnosis Safe multisig
+              through a sophisticated supply chain attack. The attacker gained access to the Safe Wallet
+              developer infrastructure, injected malicious JavaScript into the frontend, and intercepted
+              signing requests. When Bybit signers approved what appeared to be legitimate transactions, the
+              malicious code altered the transaction parameters to send funds to attacker-controlled addresses.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$1.5 billion in ETH and staked ETH derivatives (largest crypto theft in history)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Bybit (victim), Safe Wallet (compromised infrastructure), Gnosis Safe (multisig contracts)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>Attacker compromised Safe Wallet developer machine or build pipeline</li>
+                <li>Injected malicious JavaScript into Safe Wallet web application</li>
+                <li>JavaScript intercepted legitimate signing requests from Bybit signers</li>
+                <li>Displayed fake transaction details to signers while altering actual payload</li>
+                <li>Signers approved what appeared to be routine transfers</li>
+                <li>Malicious code substituted attacker addresses in final signed transaction</li>
+                <li>Multiple signers approved without detecting the parameter manipulation</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> Supply chain compromise of trusted frontend infrastructure. No
+                code vulnerability in Gnosis Safe contracts &mdash; the attack was at the application layer
+                where user interface was compromised to mislead signers about what they were approving.
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <hr class="stub__rule">
+
+        <!-- April 2022 — Beanstalk -->
+        <article class="stub__case stub__case--historic">
+          <header class="stub__case-head">
+            <span class="stub__case-date">April 2022</span>
+            <h3 class="stub__h3">Beanstalk &mdash; Flash Loan Governance Attack</h3>
+          </header>
+          <div class="stub__case-body">
+            <p class="stub__p">
+              <strong>What happened:</strong> An attacker used a flash loan to acquire majority voting power
+              and passed an emergency governance proposal that drained the protocol treasury. The key
+              vulnerability was that governance tokens were not locked and voting + execution could happen in
+              the same transaction.
+            </p>
+
+            <dl class="stub__facts">
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Amount Lost:</dt>
+                <dd class="stub__fact-value">$181 million (attacker kept ~$76M)</dd>
+              </div>
+              <div class="stub__fact">
+                <dt class="stub__fact-label">Parties:</dt>
+                <dd class="stub__fact-value">Beanstalk (victim), Omniscia (auditor), Aave/Uniswap/SushiSwap (flash loan sources)</dd>
+              </div>
+            </dl>
+
+            <div class="stub__block">
+              <span class="stub__label">Technical Attack Vector:</span>
+              <ul class="stub__list">
+                <li>Flash loaned $1B+ in stablecoins from Aave</li>
+                <li>Added liquidity to BEAN Curve pools, acquiring 32M BEAN governance tokens</li>
+                <li>Voted on malicious BIP-18 proposal (submitted 1 day earlier)</li>
+                <li>Called emergencyCommit() to execute immediately in same transaction</li>
+                <li>Proposal transferred all protocol assets to attacker</li>
+                <li>Removed liquidity, repaid flash loans, kept ~$76M profit</li>
+              </ul>
+              <p class="stub__p stub__p--tight">
+                <strong>Root cause:</strong> No vote-escrow locking mechanism; governance tokens could be
+                flash-borrowed. Voting and execution in same block allowed atomic governance takeover.
+              </p>
+            </div>
+          </div>
+        </article>
       </section>
+
+      <hr class="stub__rule">
+
+      <section class="stub__sec">
+        <h2 class="stub__h2">Pattern Analysis</h2>
+
+        <h3 class="stub__h3 stub__h3--plain">Common Attack Categories</h3>
+
+        <div class="stub__cats">
+
+          <div class="stub__cat stub__cat--flag">
+            <h4 class="stub__h4">1. Private Key Compromise (2026 Trend &mdash; 88% of theft)</h4>
+            <p class="stub__p">
+              <strong>Step Finance, IoTeX, Drift.</strong> The attack surface has moved from smart contracts to
+              humans holding signing authority. Executive devices compromised via phishing, social engineering,
+              or long-horizon infiltration. Single EOAs holding upgrade authority with no multisig/timelock.
+              <strong>Mitigation: Multi-sig requirements (3-of-5 minimum), hardware wallets with offline
+              signing, timelocks on all sensitive operations, executive security training, and monitoring
+              during off-hours.</strong>
+            </p>
+          </div>
+
+          <div class="stub__cat stub__cat--flag">
+            <h4 class="stub__h4">1a. Durable Nonce + Multisig Social Engineering (New Pattern)</h4>
+            <p class="stub__p">
+              <strong>Drift Protocol.</strong> A 9-day social engineering campaign against a 2-of-5 multisig.
+              The attacker used Solana&rsquo;s durable nonce mechanism to collect signatures in advance,
+              adapted to an unexpected multisig migration, and misrepresented transaction contents to obtain
+              valid pre-signatures.
+              <strong>Key lesson: Durable nonces are a double-edged sword &mdash; they enable batch operations
+              but also allow attackers to &ldquo;store&rdquo; malicious signatures. Mitigation: Disable durable
+              nonces for privileged operations, require real-time signing for sensitive transactions, implement
+              signer verification callbacks, and never allow market creation + oracle assignment from the same
+              compromised set of keys.</strong>
+            </p>
+          </div>
+
+          <div class="stub__cat">
+            <h4 class="stub__h4">2. Oracle Manipulation (~35% of exploits)</h4>
+            <p class="stub__p">
+              <strong>YieldBlox, Harvest, Yearn, Radiant, Venus, Aave.</strong> Whether using spot DEX prices,
+              internal exchange rates, VWAP from ghost-town markets, or stale configuration snapshots &mdash;
+              the lesson is consistent:
+              <strong>on-chain prices can lie, and your protocol will believe them. Use multi-source oracles
+              with deviation checks. Cap prices to prevent outliers. Circuit-break dead markets.</strong>
+            </p>
+          </div>
+
+          <div class="stub__cat">
+            <h4 class="stub__h4">3. Reentrancy (~20% of exploits)</h4>
+            <p class="stub__p">
+              <strong>Solv, Cream (ERC-777), Curve/Vyper (compiler bug).</strong> Any external call during
+              state transitions is a risk.
+              <strong>Checks-effects-interactions pattern and reentrancy guards are mandatory when integrating
+              tokens with callbacks or making external calls. New token standards (ERC-3525) carry old
+              risks.</strong>
+            </p>
+          </div>
+
+          <div class="stub__cat">
+            <h4 class="stub__h4">4. Legacy Code / Relic Hunters (~15% of 2026 exploits)</h4>
+            <p class="stub__p">
+              <strong>Truebit.</strong> Contracts sitting dormant for years with unverified bytecode, old
+              compiler versions, and known but unpatched vulnerabilities. Attackers now systematically hunt
+              legacy contracts.
+              <strong>Mitigation: Deprecate or sunset old contracts. Re-audit legacy code. Verify all bytecode
+              on Etherscan. Upgrade to modern compiler versions with overflow protection.</strong>
+            </p>
+          </div>
+
+          <div class="stub__cat">
+            <h4 class="stub__h4">5. Audit Scope Gaps (Security Theater)</h4>
+            <p class="stub__p">
+              <strong>Solv, YieldBlox.</strong> Five audits on some contracts, zero on the one that got
+              exploited. Auditors scoped contract logic but not economic reality of collateral markets. Bug
+              bounty programs that exclude new contracts.
+              <strong>Lesson: Audit every contract that touches user funds. Economic audit of collateral
+              markets is as important as code audit.</strong>
+            </p>
+          </div>
+
+          <div class="stub__cat">
+            <h4 class="stub__h4">6. Supply Cap / Collateral Accounting Bypass</h4>
+            <p class="stub__p">
+              <strong>Venus, Euler.</strong> Every path that affects effective collateral must be accounted for
+              &mdash; including direct transfers, donations, and rounding at the extremes. Code4rena flagged
+              Venus&rsquo;s donation vector in 2023; it was dismissed.
+              <strong>Near-misses should trigger reviews, not relief.</strong>
+            </p>
+          </div>
+
+          <div class="stub__cat">
+            <h4 class="stub__h4">8. Missing Circuit Breakers</h4>
+            <p class="stub__p">
+              <strong>Resolv.</strong> No automatic pause when $80M was minted in minutes. No volume anomaly
+              detection. No mint caps per block.
+              <strong>Every protocol should have automated circuit breakers: mint caps, volume thresholds,
+              price deviation triggers, and hot wallet limits. Manual response is too slow.</strong>
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <hr class="stub__rule">
+
+      <section class="stub__sec">
+        <h2 class="stub__h2">Design Recommendations</h2>
+
+        <p class="stub__p">
+          For vault developers, the following mitigations address the failure modes documented above:
+        </p>
+
+        <div class="stub__callout">
+          <h3 class="stub__callout-h">CIRCUIT BREAKERS (Post-Resolv Update)</h3>
+          <p class="stub__callout-p">
+            The Resolv $25M+ hack (March 2026) exposed a critical gap: no automatic pause when anomalies are
+            detected. A single compromised SERVICE_ROLE key minted $80M tokens with no circuit breaker to stop
+            it.
+          </p>
+          <ul class="stub__list">
+            <li><strong>Mint caps per block:</strong> Hard limit on mintable supply within single block (e.g., max 1% of total supply per hour). Require multi-sig to exceed.</li>
+            <li><strong>Volume anomaly detection:</strong> Auto-pause if daily volume exceeds 3-sigma historical average. Requires governance vote to unpause.</li>
+            <li><strong>Price deviation triggers:</strong> Pause minting/borrowing if oracle price deviates &gt;5% from reference sources. Prevent oracle manipulation exploits.</li>
+            <li><strong>Hot wallet limits:</strong> Treasury wallets should auto-pause if outbound transfers exceed daily limits. Require cold wallet multi-sig to resume.</li>
+            <li><strong>SERVICE_ROLE redundancy:</strong> No single key should have unilateral mint/upgrade authority. Require 2-of-3 or 3-of-5 for all privileged operations.</li>
+          </ul>
+        </div>
+
+        <ul class="stub__list stub__list--spaced">
+          <li><strong class="stub__strong-bright">Use manipulation-resistant oracles:</strong> Never use raw DEX spot prices for share calculations. Use TWAPs, Chainlink feeds, or the lower of two sources. Cap prices to prevent outliers. Implement deviation checks (&gt;5% triggers circuit breaker).</li>
+          <li><strong class="stub__strong-bright">Implement comprehensive reentrancy protection:</strong> Use OpenZeppelin&rsquo;s ReentrancyGuard on all functions that make external calls or accept callbacks. Apply checks-effects-interactions pattern religiously. New token standards (ERC-3525, ERC-777) carry old risks.</li>
+          <li><strong class="stub__strong-bright">Audit every contract that touches user funds:</strong> Security theater is dangerous. Five audits on some contracts while shipping unaudited new products creates false confidence. Include economic audits of collateral markets, not just code.</li>
+          <li><strong class="stub__strong-bright">Deprecate or sunset legacy contracts:</strong> Contracts sitting dormant for years are being systematically hunted. Verify all bytecode. Upgrade to modern compiler versions. If not maintained, sunset it.</li>
+          <li><strong class="stub__strong-bright">Validate all entry points:</strong> Supply caps, deposit limits, and access controls must apply to every function path &mdash; including direct ERC-20 transfers to the contract. Don&rsquo;t dismiss audit findings as &ldquo;supported behavior.&rdquo;</li>
+          <li><strong class="stub__strong-bright">Account for rounding:</strong> Use virtual shares/assets pattern (OpenZeppelin v4.9+) to prevent inflation attacks. Be especially careful when totalSupply is small.</li>
+          <li><strong class="stub__strong-bright">Review configuration drift:</strong> Stale parameters are silent killers. Automated oracles need human oversight. Near-misses should trigger reviews, not relief. Investigate every anomaly.</li>
+          <li><strong class="stub__strong-bright">Pin compiler versions:</strong> Use specific compiler versions, verify bytecode matches source, and stay aware of compiler-level bugs that could affect security assumptions.</li>
+          <li><strong class="stub__strong-bright">Block arbitrary external calls:</strong> Never allow user-controlled target addresses or calldata in contracts that hold funds. All external calls should be to whitelisted targets with validated parameters.</li>
+          <li><strong class="stub__strong-bright">Use vote-escrow for governance:</strong> If governance controls funds, require token locking (1+ weeks minimum). This eliminates flash loan governance attacks entirely.</li>
+        </ul>
+      </section>
+
+    </div>
+
+    <div class="stub__meta">
+      <p class="stub__meta-text">
+        Last Updated: June 2, 2026 &middot; Sources: Rekt News, protocol post-mortems, on-chain analysis,
+        Chainalysis Q1 2026 report, QuillAudits hack analysis
+      </p>
     </div>
 
     <div class="stub__cta">
+      <a class="stub__link" href="/docs">How the Robot Money vault is built &rarr;</a>
       <a class="stub__link" href="/disclaimer">Read the full legal disclaimer &rarr;</a>
     </div>
 
@@ -55,7 +1066,7 @@
   color: var(--color-text);
   font-family: var(--font-sans);
 }
-.stub__container { max-width: 768px; margin: 0 auto; }
+.stub__container { max-width: 880px; margin: 0 auto; }
 .stub__head { margin-bottom: 3rem; }
 .stub__eyebrow {
   font-family: var(--font-mono);
@@ -89,23 +1100,283 @@
   line-height: 1.65;
   font-size: 1.0625rem;
 }
+
 .stub__body { display: flex; flex-direction: column; gap: 2.5rem; }
-.stub__sec { display: flex; flex-direction: column; gap: 1rem; }
-.stub__h2 {
-  font-size: 1.25rem;
+
+.stub__intro {
+  font-size: 1.0625rem;
+  line-height: 1.75;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+.stub__intro strong { color: var(--color-text); font-weight: 600; }
+.stub__intro-links {
+  font-size: 0.9rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  margin: -1.25rem 0 0;
+}
+.stub__inline-link {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+.stub__inline-link:hover { color: var(--color-text); }
+
+/* Callouts: neutral frame, beacon used only as a small square marker */
+.stub__callout {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  padding: 1.25rem 1.5rem;
+}
+.stub__callout--inline { margin-top: 1.5rem; }
+.stub__callout-h {
+  font-size: 1.0625rem;
   font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.stub__callout-h::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  background: var(--color-beacon);
+}
+.stub__callout-p {
+  font-size: 0.9rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  margin: 0 0 0.75rem;
+}
+.stub__callout-p:last-child { margin-bottom: 0; }
+.stub__callout-p strong { color: var(--color-text); font-weight: 600; }
+.stub__callout-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-accent);
+  margin-bottom: 0.5rem;
+}
+
+.stub__rule {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  margin: 0;
+  height: 0;
+}
+
+.stub__sec { display: flex; flex-direction: column; gap: 2rem; }
+.stub__h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: 1.5rem;
+  line-height: 1.2;
   color: var(--color-text);
   margin: 0;
   padding-bottom: 0.5rem;
   border-bottom: 1px solid var(--color-border);
 }
+.stub__h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+  line-height: 1.35;
+}
+.stub__h3--plain { margin-top: 0.5rem; }
+.stub__h4 {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 0.5rem;
+  line-height: 1.4;
+}
+
+/* Case studies */
+.stub__case {
+  border-left: 1px solid var(--color-border);
+  padding: 0.25rem 0 0.25rem 1.5rem;
+}
+.stub__case--historic .stub__case-date { color: var(--color-text-dim); }
+.stub__case-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.stub__case-date {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.stub__case--recent .stub__case-date::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  background: var(--color-beacon);
+}
+.stub__case-body { display: flex; flex-direction: column; gap: 1.25rem; }
+
 .stub__p {
   font-size: 0.95rem;
   line-height: 1.7;
   color: var(--color-text-muted);
   margin: 0;
 }
-.stub__cta { margin-top: 3rem; }
+.stub__p--tight { font-size: 0.875rem; margin-top: 0.75rem; }
+.stub__p strong { color: var(--color-text); font-weight: 600; }
+.stub__strong-bright { color: var(--color-text); font-weight: 600; }
+
+/* Amount Lost / Parties pairs */
+.stub__facts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  margin: 0;
+  overflow-x: auto;
+}
+.stub__fact { min-width: 0; }
+.stub__fact-label {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-accent);
+  margin: 0;
+}
+.stub__fact-value {
+  margin: 0.35rem 0 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.stub__block { min-width: 0; }
+.stub__label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-accent);
+  margin-bottom: 0.6rem;
+}
+
+.stub__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.stub__list > li {
+  position: relative;
+  padding-left: 1.1rem;
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+.stub__list > li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.6em;
+  width: 5px;
+  height: 5px;
+  background: var(--color-text-dim);
+}
+.stub__list > li strong { color: var(--color-text); font-weight: 600; }
+.stub__list--sub {
+  margin-top: 0.5rem;
+  padding-left: 0.5rem;
+}
+.stub__list--sub > li::before {
+  width: 6px;
+  height: 1px;
+  top: 0.75em;
+  background: var(--color-text-dim);
+}
+.stub__list--spaced > li { font-size: 0.9rem; }
+
+.stub__code {
+  font-family: var(--font-mono);
+  font-size: 0.8125em;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  padding: 0.05em 0.35em;
+  overflow-wrap: anywhere;
+}
+
+.stub__divider {
+  border-top: 1px solid var(--color-border);
+  padding-top: 1.25rem;
+  margin-top: 0.5rem;
+}
+.stub__divider-text {
+  text-align: center;
+  font-size: 0.8125rem;
+  color: var(--color-text-dim);
+  margin: 0;
+}
+
+.stub__cats { display: flex; flex-direction: column; gap: 1.5rem; }
+.stub__cat { min-width: 0; }
+.stub__cat--flag {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  padding: 1.25rem 1.5rem;
+}
+.stub__cat--flag .stub__h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.stub__cat--flag .stub__h4::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  background: var(--color-beacon);
+}
+
+.stub__meta {
+  margin-top: 4rem;
+  padding-top: 3rem;
+  border-top: 1px solid var(--color-border);
+}
+.stub__meta-text {
+  font-size: 0.75rem;
+  line-height: 1.7;
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  margin: 0;
+}
+
+.stub__cta {
+  margin-top: 2rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
 .stub__link {
   font-family: var(--font-mono);
   font-size: 0.8rem;
@@ -129,8 +1400,21 @@
   transition: border-color 0.3s, color 0.3s;
 }
 .stub__back-link:hover { border-color: var(--color-accent); color: var(--color-accent); }
+
+.stub a:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (min-width: 640px) {
+  .stub__facts { grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+}
 @media (min-width: 1024px) {
   .stub { padding: 10rem 2rem 6rem; }
   .stub__title { font-size: 3.5rem; }
+  .stub__h2 { font-size: 1.75rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stub__back-link { transition: none; }
 }
 </style>

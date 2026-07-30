@@ -117,8 +117,8 @@ async function navigate(page: Page, path: string) {
 // reports the declared font-family stack and text-transform regardless of
 // whether the @font-face glyph data actually loaded, so this assertion is
 // network-independent and safe to run hermetically in CI.
-async function expectResearchTitleUsesDisplayFont(page: Page) {
-  const style = await page.locator(".rs__title").evaluate((el) => {
+async function expectResearchTitleUsesDisplayFont(page: Page, selector = ".rs__title") {
+  const style = await page.locator(selector).evaluate((el) => {
     const cs = getComputedStyle(el);
     return { fontFamily: cs.fontFamily, textTransform: cs.textTransform };
   });
@@ -213,7 +213,9 @@ test("channel-divergence view renders the Stablecoin-vs-QQQ-flow gauge with valu
   await page.goto("/");
   await navigate(page, "/research/channel-divergence");
 
-  await expect(page.locator(".rs__title")).toContainText("Channel divergence");
+  // The long-form restoration (#331/#333) retitled the page; "Channel
+  // divergence" is now only the eyebrow/API title, not the on-page <h1>.
+  await expect(page.locator(".rs__title")).toContainText("Is the macro–to–crypto channel breaking?");
   await expectResearchTitleUsesDisplayFont(page);
   const gauges = page.locator(".rs__gauge");
   await expect(gauges).toHaveCount(4);
@@ -229,20 +231,31 @@ test("channel-divergence view renders the Stablecoin-vs-QQQ-flow gauge with valu
   await expect(page.locator('.rs__series-canvas canvas[data-series="stables_vs_qqq_flow"]')).toHaveCount(1);
 });
 
-test("late-cycle view renders the Top-7-vs-SPY gauge with value + read", async ({ page }) => {
+test("late-cycle view renders the static four-gauge readings table", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");
   await navigate(page, "/research/late-cycle-signals");
 
-  await expect(page.locator(".rs__title")).toContainText("Late-cycle");
-  await expectResearchTitleUsesDisplayFont(page);
-  const gauges = page.locator(".rs__gauge");
-  await expect(gauges).toHaveCount(5);
+  // late-cycle-signals was fully converted to static long-form prose (#333,
+  // synced in #353): no researchView wiring, no live payload, so there is no
+  // .rs__title/.rs__gauge at all anymore — only the ported stub__ markup that
+  // demo-frontend-check.ts also asserts against (stub__title/stub__table/stub__series).
+  await expect(page.locator(".stub__title")).toContainText("How late in the rally");
+  await expectResearchTitleUsesDisplayFont(page, ".stub__title");
+  await expect(page.locator(".rs__gauge")).toHaveCount(0);
 
-  const top7 = page.locator(".rs__gauge", { hasText: "Top-7 basket vs SPY" });
-  await expect(top7.locator(".rs__gauge-val")).toHaveText("1.8342");
-  await expect(top7.locator(".rs__gauge-pct")).toContainText("91%");
-  await expect(top7.locator(".read")).toHaveText("saturated (late-cycle)");
+  // The four-gauge readings table, ported verbatim from the published page.
+  const rows = page.locator(".stub__table tbody tr");
+  await expect(rows).toHaveCount(4);
+  await expect(rows.filter({ hasText: "Concentration" }).locator(".stub__num")).toHaveText("53%");
+  await expect(rows.filter({ hasText: "M&A activity" }).locator(".stub__num")).toHaveText("94%");
+  await expect(rows.filter({ hasText: "Margin debt" }).locator(".stub__num")).toHaveText("+9.9%");
+  await expect(rows.filter({ hasText: "Consumer conf." }).locator(".stub__num")).toHaveText("44.8");
+
+  // And one stub__series write-up block per gauge (four numbered sections).
+  await expect(page.locator(".stub__series")).toHaveCount(4);
+  const concentration = page.locator(".stub__sec", { hasText: "Index concentration" });
+  await expect(concentration.locator(".stub__read")).toContainText("late-cycle configuration");
 });
 
 // The loud-staleness surface: when the analytics pipeline stops refreshing in a

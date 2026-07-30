@@ -504,9 +504,16 @@
 .rs__bar { height: 4px; background: var(--color-border); border-radius: var(--radius); overflow: hidden; margin: 0.5rem 0; }
 .rs__bar-fill { height: 100%; background: var(--color-green); }
 .read { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; padding: 0.2rem 0.55rem; border-radius: var(--radius); }
-.read--ok { color: var(--color-accent); background: rgba(0,229,255,0.1); }
-.read--mid { color: var(--color-warm); background: rgba(232,166,64,0.1); }
-.read--warn { color: var(--color-warn); background: rgba(255,102,68,0.1); }
+/* These chips carried a 10%-alpha fill behind a ~143x20 badge: roughly 1,300px2
+   of cyan on read--ok and 2,900px2 of warm orange on read--warn. The covenant is
+   that cyan is a line and never a mass, and that warm orange is a point capped
+   around 12px, so both were breaches — on shared CSS, so on every research page
+   that renders a chip. The hue still carries the reading; a hairline carries the
+   chip. Fixed here rather than scoped per page so the two research siblings
+   cannot drift apart. */
+.read--ok { color: var(--color-accent); border: 1px solid var(--color-accent); }
+.read--mid { color: var(--color-warm); border: 1px solid var(--color-warm); }
+.read--warn { color: var(--color-warn); border: 1px solid var(--color-warn); }
 .rs__gauge-pct { font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-muted); margin: 0.25rem 0 0.5rem; }
 .rs__chart { height: 280px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1rem; margin-top: 1.5rem; }
 .rs__h2 { font-size: 1.25rem; margin: 2.5rem 0 1rem; }

@@ -1,122 +1,377 @@
-<!-- /skills — Skill documentation hub.
-     Ported from robotmoney-site/src/app/skills/page.tsx (+ _components copy).
-     Static link-card hub pointing at the /docs/skill subpages.
+<!-- /skills: Agent Skill product page.
+     Full content restored from production (robotmoney.net/skills): hero + install,
+     how it works, the two wallet paths, the twelve-command capability table,
+     protocol mechanics, verified contract + basket token addresses, and about.
+     The /docs/skill/* hub cards are kept alongside the restored page content.
      NO <script>, NO <canvas>, NO custom Alpine factories. -->
 
 <section class="sk container">
   <header class="sk__head">
     <div class="sk__head-inner">
-    <h1 class="sk__title">
-      Agent <span class="sk__title-accent">Skill</span> docs
-    </h1>
-    <p class="sk__lede">
-      One deposit splits 95% into a multi-protocol USDC yield vault and 5% into a
-      curated basket of 6 agent tokens. Install the skill into any MCP-compatible
-      agent runtime and the full deposit &rarr; yield + basket &rarr; withdraw loop
-      runs with no human in the loop.
-    </p>
+      <h1 class="sk__title">
+        Agent <span class="sk__title-accent">Skill</span>
+      </h1>
+      <p class="sk__lede">
+        One deposit splits 95% into a multi-protocol USDC yield vault and 5% into a
+        curated basket of 6 agent tokens.
+      </p>
     </div>
   </header>
 
   <div class="sk__install">
     <span class="sk__install-label">install</span>
+    <span class="sk__install-prompt">$</span>
     <code class="sk__install-cmd">npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli</code>
   </div>
   <p class="sk__install-note">
     Works with Claude Code, Cursor, Codex, and any MCP-compatible agent runtime.
   </p>
+  <p class="sk__install-cta">
+    <a class="sk__cta" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">Install Skill &rarr;</a>
+  </p>
 
-  <!-- Primary doc cards -->
-  <div class="sk__grid">
-    <a class="sk-card sk-card--feature" href="/docs/skill">
-      <span class="sk-card__num">01</span>
-      <h2 class="sk-card__title">Skill overview</h2>
-      <p class="sk-card__desc">
-        What the Robot Money skill is, how it loads protocol context into an agent,
-        and the simulate &rarr; sign &rarr; broadcast write flow.
-      </p>
-      <span class="sk-card__cta">Read overview &rarr;</span>
-    </a>
+  <!-- 01 / How it Works -->
+  <div class="sk__section" id="how-it-works">
+    <span class="sk__eyebrow">01 / How it Works</span>
+    <h2 class="sk__section-title">Skill loads.<br>Agent acts.</h2>
+    <p class="sk__sec-lede">
+      Robot Money skills give the agent protocol context, route requests through the
+      CLI tool layer, and simulate before any write path reaches your wallet.
+    </p>
 
-    <a class="sk-card" href="/docs/skill/installation">
-      <span class="sk-card__num">02</span>
-      <h2 class="sk-card__title">Installation</h2>
-      <p class="sk-card__desc">
-        Add the skill to Claude Code, Cursor, Codex, or any MCP runtime. Wallet
-        bootstrap via the Open Wallet Standard and the RPC health check.
-      </p>
-      <span class="sk-card__cta">Install guide &rarr;</span>
-    </a>
+    <div class="sk__steps">
+      <div class="sk-step">
+        <span class="sk-step__num">01</span>
+        <h3 class="sk-step__title">Prompt</h3>
+        <p class="sk-step__desc">
+          User initiates from their agent or machine &mdash; e.g. &ldquo;deposit 50 USDC into Robot Money.&rdquo;
+        </p>
+      </div>
+      <div class="sk-step">
+        <span class="sk-step__num">02</span>
+        <h3 class="sk-step__title">Skill loads</h3>
+        <p class="sk-step__desc">
+          The agent pulls Robot Money protocol context and the command list into its working memory.
+        </p>
+      </div>
+      <div class="sk-step">
+        <span class="sk-step__num">03</span>
+        <h3 class="sk-step__title">Simulate &rarr; Sign &rarr; Broadcast</h3>
+        <p class="sk-step__desc">
+          The CLI simulates locally for accurate gas, signs via the caller&rsquo;s wallet or OWS,
+          and returns a confirmed transaction hash.
+        </p>
+      </div>
+    </div>
 
-    <a class="sk-card" href="/docs/skill/commands">
-      <span class="sk-card__num">03</span>
-      <h2 class="sk-card__title">Commands</h2>
-      <p class="sk-card__desc">
-        Twelve commands across Wallet, Read, Prepare, and Execute groups &mdash;
-        from <code>get-vault</code> and <code>get-apy</code> to
-        <code>prepare-deposit</code> and <code>execute-withdraw</code>.
-      </p>
-      <span class="sk-card__cta">Command reference &rarr;</span>
-    </a>
-
-    <a class="sk-card" href="/docs/skill/agent-basket">
-      <span class="sk-card__num">04</span>
-      <h2 class="sk-card__title">Agent basket</h2>
-      <p class="sk-card__desc">
-        The 5% basket leg: 6 curated agent tokens routed via Uniswap, per-token
-        holdings, and how the basket is bought and sold alongside the vault.
-      </p>
-      <span class="sk-card__cta">Basket details &rarr;</span>
-    </a>
+    <ul class="sk__checks">
+      <li class="sk-check"><span class="sk-check__mark" aria-hidden="true">&#10003;</span>Works from agent code</li>
+      <li class="sk-check"><span class="sk-check__mark" aria-hidden="true">&#10003;</span>Simulation-first write flows</li>
+      <li class="sk-check"><span class="sk-check__mark" aria-hidden="true">&#10003;</span>Built on Open Wallet Standard</li>
+    </ul>
   </div>
 
-  <!-- Command group summary -->
+  <!-- 02 / Two Paths -->
   <div class="sk__section">
-    <h2 class="sk__section-title">Twelve commands, four groups</h2>
-    <div class="sk__groups">
-      <div class="sk-group">
-        <span class="sk-group__label">Wallet</span>
-        <ul class="sk-group__list">
-          <li><code>create-wallet</code> &mdash; bootstrap a new OWS wallet for an agent or machine</li>
-        </ul>
+    <span class="sk__eyebrow">02 / Two Paths</span>
+    <h2 class="sk__section-title">Bring your own wallet,<br>or bootstrap a fresh one.</h2>
+    <p class="sk__sec-lede">
+      Sign externally with whatever you already use, or let the CLI generate an OWS
+      wallet and sign + broadcast for you.
+    </p>
+
+    <div class="sk__table-wrap">
+      <table class="sk-table sk-table--paths">
+        <thead>
+          <tr>
+            <th scope="col"><span class="sk-sr">Step</span></th>
+            <th scope="col">With your own wallet</th>
+            <th scope="col">With a fresh OWS wallet</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">Setup</th>
+            <td>(nothing &mdash; use your existing wallet)</td>
+            <td><code>create-wallet --label my-agent</code></td>
+          </tr>
+          <tr>
+            <th scope="row">Fund</th>
+            <td>
+              Your existing wallet with USDC + a small amount of ETH for gas
+              <span class="sk-table__sub">~$0.01&ndash;0.05 ETH covers ~10 vault transactions</span>
+            </td>
+            <td>
+              The generated address with USDC + a small amount of ETH for gas
+              <span class="sk-table__sub">~$0.01&ndash;0.05 ETH covers ~10 vault transactions</span>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">Deposit</th>
+            <td><code>prepare-deposit</code></td>
+            <td><code>execute-deposit</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sk__table-note">
+      Either flow works with Claude Code, Cursor, Codex, or any MCP-compatible agent.
+    </p>
+  </div>
+
+  <!-- 03 / Capabilities -->
+  <div class="sk__section" id="capabilities">
+    <span class="sk__eyebrow">03 / Capabilities</span>
+    <h2 class="sk__section-title">Twelve commands.<br>Onboard, earn, exit.</h2>
+    <p class="sk__sec-lede">
+      Everything an agent or machine needs to deposit yield + an agent-token basket,
+      and exit on demand &mdash; your wallet or OWS.
+    </p>
+
+    <div class="sk__table-wrap">
+      <table class="sk-table sk-table--cmds">
+        <thead>
+          <tr>
+            <th scope="col">Command</th>
+            <th scope="col">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="sk-table__group">
+            <th scope="rowgroup" colspan="2">Wallet</th>
+          </tr>
+          <tr>
+            <td><code>create-wallet</code></td>
+            <td>Bootstrap a new Open Wallet Standard (OWS) wallet for an agent or machine</td>
+          </tr>
+
+          <tr class="sk-table__group">
+            <th scope="rowgroup" colspan="2">Read</th>
+          </tr>
+          <tr>
+            <td><code>health-check</code></td>
+            <td>Check RPC connectivity and vault reachability</td>
+          </tr>
+          <tr>
+            <td><code>get-vault</code></td>
+            <td>Full vault state: caps, fees, share price, totals, per-adapter breakdown</td>
+          </tr>
+          <tr>
+            <td><code>get-balance</code></td>
+            <td>A user&rsquo;s rmUSDC balance and USDC-equivalent value</td>
+          </tr>
+          <tr>
+            <td><code>get-apy</code></td>
+            <td>Blended APY across Morpho, Aave, and Compound</td>
+          </tr>
+          <tr>
+            <td><code>get-basket-holdings</code></td>
+            <td>Per-token balances + USD values for the 6 agent tokens in the basket</td>
+          </tr>
+
+          <tr class="sk-table__group">
+            <th scope="rowgroup" colspan="2">Prepare</th>
+          </tr>
+          <tr>
+            <td><code>prepare-deposit</code></td>
+            <td>Unsigned calldata for vault leg (95%) + Uniswap basket leg (5%) &mdash; caller signs with their own wallet</td>
+          </tr>
+          <tr>
+            <td><code>prepare-redeem</code></td>
+            <td>Unsigned calldata for vault redeem + basket sell &mdash; interactive selection of how much basket to sell</td>
+          </tr>
+          <tr>
+            <td><code>prepare-withdraw</code></td>
+            <td>Unsigned withdrawal by target net USDC amount</td>
+          </tr>
+
+          <tr class="sk-table__group">
+            <th scope="rowgroup" colspan="2">Execute</th>
+          </tr>
+          <tr>
+            <td><code>execute-deposit</code></td>
+            <td>Sign + broadcast deposit (vault + basket) end-to-end via OWS</td>
+          </tr>
+          <tr>
+            <td><code>execute-redeem</code></td>
+            <td>Sign + broadcast redeem (vault + basket sell) end-to-end via OWS</td>
+          </tr>
+          <tr>
+            <td><code>execute-withdraw</code></td>
+            <td>Sign + broadcast a withdrawal end-to-end via OWS</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 04 / Mechanics -->
+  <div class="sk__section" id="mechanics">
+    <span class="sk__eyebrow">04 / Mechanics</span>
+    <h2 class="sk__section-title">Trustless, on-chain,<br>no operator in the hot path.</h2>
+    <p class="sk__sec-lede">
+      A single ERC-4626 vault on Base routes USDC across blue-chip lending protocols
+      and a Uniswap basket leg &mdash; fully on-chain pricing.
+    </p>
+
+    <div class="sk__mech">
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">ERC-4626 compliant</h3>
+        <p class="sk-mech__desc">One vault, one share token (rmUSDC). Works with any 4626-aware indexer or integration.</p>
       </div>
-      <div class="sk-group">
-        <span class="sk-group__label">Read</span>
-        <ul class="sk-group__list">
-          <li><code>health-check</code> &mdash; RPC connectivity and vault reachability</li>
-          <li><code>get-vault</code> &mdash; full vault state: caps, fees, share price, per-adapter breakdown</li>
-          <li><code>get-balance</code> &mdash; rmUSDC balance and USDC-equivalent value</li>
-          <li><code>get-apy</code> &mdash; blended APY across Morpho, Aave, and Compound</li>
-          <li><code>get-basket-holdings</code> &mdash; per-token balances + USD values for the 6 basket tokens</li>
-        </ul>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">Dynamic equal-weight routing</h3>
+        <p class="sk-mech__desc">Deposits split atomically across Morpho Gauntlet USDC Prime, Aave V3, and Compound V3 &mdash; no single protocol exposure.</p>
       </div>
-      <div class="sk-group">
-        <span class="sk-group__label">Prepare</span>
-        <ul class="sk-group__list">
-          <li><code>prepare-deposit</code> &mdash; unsigned calldata for the vault (95%) + basket (5%) legs</li>
-          <li><code>prepare-redeem</code> &mdash; unsigned calldata for vault redeem + basket sell</li>
-          <li><code>prepare-withdraw</code> &mdash; unsigned withdrawal by target net USDC amount</li>
-        </ul>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">Synchronous deposits + withdrawals</h3>
+        <p class="sk-mech__desc">No cooldowns, no locks &mdash; a single transaction each way. Redeem returns USDC immediately, minus exit fee.</p>
       </div>
-      <div class="sk-group">
-        <span class="sk-group__label">Execute</span>
-        <ul class="sk-group__list">
-          <li><code>execute-deposit</code> &mdash; sign + broadcast deposit end-to-end via OWS</li>
-          <li><code>execute-redeem</code> &mdash; sign + broadcast redeem (vault + basket sell)</li>
-          <li><code>execute-withdraw</code> &mdash; sign + broadcast a withdrawal end-to-end</li>
-        </ul>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">Exit fee: 0.25%</h3>
+        <p class="sk-mech__desc">Taken on withdraw or redeem. Fully on-chain, enforced in the contract.</p>
+      </div>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">Production caps</h3>
+        <p class="sk-mech__desc">$100,000 TVL cap, $5,000 per-deposit cap. Multisig-administered.</p>
+      </div>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">Live blended yield</h3>
+        <p class="sk-mech__desc">APY fetched from the three underlying protocols in real time via <code>get-apy</code>. No manual updates.</p>
+      </div>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">Agent-token basket leg</h3>
+        <p class="sk-mech__desc">5% of each deposit routes through Uniswap atomically into 6 agent tokens (VIRTUAL, ROBOTMONEY, BNKR, JUNO, ZYFAI, GIZA) &mdash; sent directly to your wallet.</p>
+      </div>
+      <div class="sk-mech">
+        <h3 class="sk-mech__title">No new contracts for the basket</h3>
+        <p class="sk-mech__desc">The basket leg uses Uniswap&rsquo;s UniversalRouter directly. No protocol fee, no API key, no aggregator middleman.</p>
       </div>
     </div>
   </div>
 
-  <footer class="sk__footer">
+  <!-- 05 / Contracts -->
+  <div class="sk__section" id="contracts">
+    <span class="sk__eyebrow">05 / Contracts</span>
+    <h2 class="sk__section-title">All on-chain.<br>All verified.</h2>
+    <p class="sk__sec-lede">
+      Every contract verified on BaseScan. Chain: Base (8453).
+    </p>
+
+    <div class="sk__table-wrap">
+      <table class="sk-table sk-table--addr">
+        <caption class="sk-table__caption">Protocol</caption>
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Address</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">RobotMoneyVault</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd" target="_blank" rel="noopener noreferrer">0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">MorphoAdapter</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9" target="_blank" rel="noopener noreferrer">0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">AaveV3Adapter</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea" target="_blank" rel="noopener noreferrer">0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">CompoundV3Adapter</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x8247da22a59fce074c102431048d0ce7294c2652" target="_blank" rel="noopener noreferrer">0x8247da22a59fce074c102431048d0ce7294c2652<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">Multisig (Admin)</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x88bA7364cC6cE5054981d571b33f8fb3E91475A0" target="_blank" rel="noopener noreferrer">0x88bA7364cC6cE5054981d571b33f8fb3E91475A0<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="sk__sub-title">Basket tokens</h3>
+    <p class="sk__sec-lede">
+      5% of each deposit routes through Uniswap directly into these 6 agent tokens.
+    </p>
+
+    <div class="sk__table-wrap">
+      <table class="sk-table sk-table--addr">
+        <caption class="sk-table__caption">Basket</caption>
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Address</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">VIRTUAL</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b" target="_blank" rel="noopener noreferrer">0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">ROBOTMONEY</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x65021a79aeef22b17cdc1b768f5e79a8618beba3" target="_blank" rel="noopener noreferrer">0x65021a79aeef22b17cdc1b768f5e79a8618beba3<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">BNKR</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b" target="_blank" rel="noopener noreferrer">0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">JUNO</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x4E6c9f48f73E54EE5F3AB7e2992B2d733D0d0b07" target="_blank" rel="noopener noreferrer">0x4E6c9f48f73E54EE5F3AB7e2992B2d733D0d0b07<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">ZYFAI</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0xd080ed3c74a20250a2c9821885203034acd2d5ae" target="_blank" rel="noopener noreferrer">0xd080ed3c74a20250a2c9821885203034acd2d5ae<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">GIZA</th>
+            <td>
+              <a class="sk-addr" href="https://basescan.org/address/0x590830dfdf9a3f68afcdde2694773debdf267774" target="_blank" rel="noopener noreferrer">0x590830dfdf9a3f68afcdde2694773debdf267774<span class="sk-addr__ext" aria-hidden="true">&#8599;</span></a>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 06 / About -->
+  <footer class="sk__footer" id="about">
+    <span class="sk__eyebrow">06 / About</span>
+    <h2 class="sk__section-title">Autonomous yield<br>for the agent economy.</h2>
     <p class="sk__footer-text">
-      Autonomous yield for the agent economy &mdash; permissionless on Base.
+      Once an agent has USDC and ETH on Base, the full deposit &rarr; yield + basket &rarr;
+      withdraw loop runs with no human in the loop &mdash; yield across Morpho, Aave, and
+      Compound, and a 5% basket leg into 6 curated agent tokens via Uniswap, in a single
+      prompt, fully permissionless.
     </p>
     <div class="sk__footer-links">
-      <a class="sk__footer-link sk__footer-link--primary" href="/docs">All documentation &rarr;</a>
       <a class="sk__footer-link" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">View on GitHub</a>
       <a class="sk__footer-link" href="https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd" target="_blank" rel="noopener noreferrer">Vault on BaseScan</a>
+      <a class="sk__footer-link" href="/skill.md">View SKILL.md</a>
     </div>
   </footer>
 </section>
@@ -128,6 +383,18 @@
   padding: 0 1.5rem 5rem;
   color: var(--color-text);
   font-family: var(--font-sans);
+}
+
+.sk-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Header — full-bleed headline band, matching the other nav pages */
@@ -179,7 +446,7 @@
   line-height: 1.65;
   color: var(--color-text-muted);
   max-width: 44rem;
-  margin: 0 0 2rem;
+  margin: 0;
 }
 
 /* Install card */
@@ -191,7 +458,6 @@
   padding: 1rem 1.25rem;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
 }
 
 .sk__install-label {
@@ -199,6 +465,12 @@
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+}
+
+.sk__install-prompt {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
   color: var(--color-text-dim);
 }
 
@@ -215,76 +487,56 @@
   margin: 0.75rem 0 0;
 }
 
-/* Card grid */
-.sk__grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1.25rem;
-  margin-bottom: 4rem;
-}
+.sk__install-cta { margin: 1.25rem 0 4rem; }
 
-.sk-card {
-  display: block;
-  padding: 1.75rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  text-decoration: none;
-  color: inherit;
-  transition: border-color 0.25s var(--ease-out-expo), transform 0.25s var(--ease-out-expo);
-}
-
-.sk-card:hover {
-  border-color: var(--color-accent);
-  transform: translateY(-2px);
-}
-
-.sk-card--feature {
-  border-color: var(--color-border-light);
-}
-
-.sk-card__num {
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.3em;
-  color: var(--color-text-dim);
-}
-
-.sk-card__title {
-  font-size: 1.35rem;
-  font-weight: 600;
-  margin: 0.75rem 0 0.6rem;
-}
-
-.sk-card:hover .sk-card__title { color: var(--color-accent); }
-
-.sk-card__desc {
-  font-size: 0.9rem;
-  line-height: 1.6;
-  color: var(--color-text-muted);
-  margin: 0 0 1rem;
-}
-
-.sk-card__desc code,
-.sk-group__list code {
-  font-family: var(--font-mono);
-  font-size: 0.8em;
-  color: var(--color-accent-dim);
-  background: var(--color-accent-glow);
-  padding: 0.1rem 0.35rem;
-  border-radius: 3px;
-}
-
-.sk-card__cta {
+.sk__cta {
+  display: inline-block;
+  padding: 0.85rem 1.75rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.15em;
+  border: 1px solid var(--color-accent);
+  color: var(--color-accent);
+  text-decoration: none;
+  transition: background-color 0.25s, color 0.25s;
+}
+
+.sk__cta:hover {
+  background: var(--color-surface-light);
   color: var(--color-accent);
 }
 
-/* Command groups */
+/* Card grid */
+
+
+
+
+
+
+
+
+
+/* Inline code: square, bordered, never a cyan mass */
+.sk code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--color-text);
+  background: var(--color-void);
+  border: 1px solid var(--color-border);
+  padding: 0.1rem 0.35rem;
+}
+
+.sk-table code { white-space: nowrap; }
+
+.sk .sk__install-cmd {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--color-accent);
+}
+
+/* Sections */
 .sk__section { margin-bottom: 4rem; }
 
 .sk__section-title {
@@ -293,66 +545,230 @@
   text-transform: uppercase;
   letter-spacing: -0.01em;
   font-size: 1.75rem;
-  margin: 0 0 1.75rem;
+  line-height: 1.1;
+  margin: 0 0 1rem;
 }
 
-.sk__groups {
+.sk__sub-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: 1.25rem;
+  margin: 2.5rem 0 0.75rem;
+}
+
+.sk__sec-lede {
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  max-width: 44rem;
+  margin: 0 0 2rem;
+}
+
+/* How it works: steps */
+.sk__steps {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+  margin-bottom: 2rem;
+}
+
+.sk-step {
+  padding: 1.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-accent);
+}
+
+.sk-step__num {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.3em;
+  color: var(--color-text-dim);
+}
+
+.sk-step__title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0.6rem 0 0.5rem;
+}
+
+.sk-step__desc {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.sk__checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 2rem;
+}
+
+.sk-check {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-text-muted);
+}
+
+.sk-check__mark {
+  color: var(--color-green);
+  margin-right: 0.5rem;
+}
+
+/* Tables */
+.sk__table-wrap {
+  margin: 0 0 0.75rem;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+}
+
+.sk-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  text-align: left;
+}
+
+.sk-table--paths { min-width: 40rem; }
+.sk-table--cmds { min-width: 36rem; }
+.sk-table--addr { min-width: 34rem; }
+
+.sk-table__caption {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.25em;
+  color: var(--color-accent);
+  text-align: left;
+  padding: 0.85rem 1rem 0;
+}
+
+.sk-table thead th {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-dim);
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: bottom;
+}
+
+.sk-table tbody th {
+  font-weight: 600;
+  color: var(--color-text);
+  padding: 0.85rem 1rem;
+  vertical-align: top;
+}
+
+.sk-table tbody td {
+  color: var(--color-text-muted);
+  line-height: 1.6;
+  padding: 0.85rem 1rem;
+  vertical-align: top;
+}
+
+.sk-table tbody tr { border-bottom: 1px solid var(--color-border); }
+.sk-table tbody tr:last-child { border-bottom: 0; }
+
+.sk-table__group th {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-accent);
+  background: var(--color-deep);
+  padding: 0.6rem 1rem;
+}
+
+.sk-table__sub {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--color-text-dim);
+  margin-top: 0.35rem;
+}
+
+.sk__table-note {
+  font-size: 0.8rem;
+  color: var(--color-text-dim);
+  margin: 0 0 0.5rem;
+}
+
+.sk-addr {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  word-break: break-all;
+  border-bottom: 1px solid var(--color-border);
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.sk-addr:hover {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent);
+}
+
+.sk-addr__ext {
+  margin-left: 0.4rem;
+  color: var(--color-text-dim);
+}
+
+/* Mechanics */
+.sk__mech {
   display: grid;
   grid-template-columns: 1fr;
   gap: 1.25rem;
 }
 
-.sk-group {
+.sk-mech {
   padding: 1.5rem;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
 }
 
-.sk-group__label {
-  display: inline-block;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--color-accent);
-  margin-bottom: 1rem;
+.sk-mech__title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
 }
 
-.sk-group__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
-}
-
-.sk-group__list li {
-  font-size: 0.875rem;
-  line-height: 1.5;
+.sk-mech__desc {
+  font-size: 0.85rem;
+  line-height: 1.6;
   color: var(--color-text-muted);
+  margin: 0;
 }
 
-/* Footer */
+/* Footer / About */
 .sk__footer {
   padding-top: 2.5rem;
   border-top: 1px solid var(--color-border);
-  text-align: center;
 }
 
 .sk__footer-text {
-  font-family: var(--font-serif);
-  font-style: italic;
-  font-size: 1.25rem;
-  color: var(--color-text);
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  max-width: 44rem;
   margin: 0 0 1.5rem;
 }
 
 .sk__footer-links {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.85rem;
 }
 
@@ -370,15 +786,25 @@
 
 .sk__footer-link--primary { color: var(--color-accent); }
 
+/* Keyboard focus stays visible everywhere on the page */
+.sk a:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
 @media (min-width: 700px) {
   .sk__title { font-size: 3.5rem; }
-  .sk__grid { grid-template-columns: 1fr 1fr; }
-  .sk-card--feature { grid-column: 1 / -1; }
-  .sk__groups { grid-template-columns: 1fr 1fr; }
-  .sk__footer-links { flex-direction: row; justify-content: center; }
+  .sk__section-title { font-size: 2.25rem; }
+  .sk__steps { grid-template-columns: repeat(3, 1fr); }
+  .sk__mech { grid-template-columns: 1fr 1fr; }
+  .sk__footer-links { flex-direction: row; flex-wrap: wrap; }
 }
 
 @media (min-width: 1024px) {
   .sk { padding: 0 2rem 6rem; }
+  .sk__mech { grid-template-columns: repeat(4, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
 }
 </style>

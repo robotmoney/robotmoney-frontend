@@ -98,6 +98,29 @@ const META = {
     title: "Robot Money Blog — Research & Vault Updates",
     description: "Research and announcements from Robot Money: market-regime signals, treasury-allocation backtests, smart-contract risk studies, and USDC vault updates on Base.",
   },
+  // The research pages below carried real titles on production and were
+  // inheriting the home page's here, so every one of them shared a title and a
+  // description in search results and link unfurls.
+  "/smart-contract-risks": {
+    title: "Smart Contract Risks — How DeFi Vaults Get Exploited",
+    description: "A field guide to DeFi vault exploits from 2020 to 2026: chronological case studies with the financial impact, the parties involved, and the precise technical attack vector for each.",
+  },
+  "/regime-detection": {
+    title: "Regime Detection — Prior Art, Methods and Data Sources",
+    description: "A model-agnostic survey of cross-asset regime detection: institutional prior art, quantitative methods, the indicator universe, data infrastructure, and a recommended starting architecture.",
+  },
+  "/regime/indicators": {
+    title: "The 26 Indicators Behind the Regime Classifier",
+    description: "Plain-language explanation of every indicator in the Robot Money regime composite: what each one is, how it is derived, and how to read it, with the numeric thresholds that matter.",
+  },
+  "/research/late-cycle-signals": {
+    title: "Late-Cycle Signals — How Late in the Rally Are We?",
+    description: "Four slow-moving gauges rebuilt from free data: index concentration, M&A activity, broker-dealer margin debt, and consumer sentiment, read against prior market peaks.",
+  },
+  "/research/channel-divergence": {
+    title: "Channel Divergence — Is the Macro-to-Crypto Channel Breaking?",
+    description: "Three transmission indicators that measure whether risk-on macro conditions are still reaching crypto: BTC beta to risk appetite, BTC/Nasdaq relative strength, and the stablecoin flow proxy.",
+  },
 };
 
 // Dynamic detail routes (/docs/*, /blog/*, /committee/*) inherit a base
