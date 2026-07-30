@@ -278,6 +278,8 @@ jobs:
       # is stripped and 0 against correct content. See docs/architecture.md §"Demo
       # readiness gate". The job id below stays `e2e` so branch protection's existing
       # required-status-check mapping is unaffected.
+      - name: Set up Blacksmith Docker builder
+        uses: useblacksmith/setup-docker-builder@v1
       - name: Full-stack demo (demo readiness gate)
         run: bun run scripts/demo.ts
         env:
