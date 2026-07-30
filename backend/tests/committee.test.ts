@@ -629,7 +629,6 @@ test("GET /api/committee/members/:id/takes: an unknown/never-submitted member ge
   expect(res?.status).toBe(200);
   expect((res!.body as { takes: any[] }).takes).toEqual([]);
 });
-
 test("GET /api/committee/members exposes rosterCap, seatsFilled, and seatsAvailable, updating on activate/deactivate", async () => {
   await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
 
@@ -675,3 +674,68 @@ test("GET /api/committee/members exposes rosterCap, seatsFilled, and seatsAvaila
   expect(afterDeactivate.seatsAvailable).toBe(ic.COMMITTEE_ROSTER_CAP);
 });
 
+test("POST /api/committee/signing-payload and submit reject unknown stances and unknown top-level fields with 400 and clear error string", async () => {
+  const m = await activeMember();
+
+  // signing-payload with unknown key `summary`
+  const reqUnknownKey = new Request(`http://test${ROUTES.committee.signingPayload}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      memberId: m.id, date: "2026-09-25", subjectId: "woon", nonce: "n1",
+      summary: "my analysis", stance: "bullish", confidence: 0.7,
+    }),
+  });
+  const resUnknownKey = await handleCommittee(reqUnknownKey, new URL(reqUnknownKey.url));
+  expect(resUnknownKey?.status).toBe(400);
+  expect((resUnknownKey?.body as { error: string }).error).toBe("unknown field: summary");
+
+  // signing-payload with unknown stance `wildly-bullish`
+  const reqUnknownStance = new Request(`http://test${ROUTES.committee.signingPayload}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      memberId: m.id, date: "2026-09-25", subjectId: "woon", nonce: "n1",
+      body: "my analysis", stance: "wildly-bullish", confidence: 0.7,
+    }),
+  });
+  const resUnknownStance = await handleCommittee(reqUnknownStance, new URL(reqUnknownStance.url));
+  expect(resUnknownStance?.status).toBe(400);
+  expect((resUnknownStance?.body as { error: string }).error).toBe(
+    "stance must be one of bearish, cautious, neutral, constructive, bullish",
+  );
+
+  // submit with unknown key `summary`
+  const reqSubmitUnknownKey = new Request(`http://test${ROUTES.committee.submit}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${m.token}`,
+    },
+    body: JSON.stringify({
+      memberId: m.id, date: "2026-09-25", subjectId: "woon", nonce: "n1",
+      summary: "my analysis", stance: "bullish", confidence: 0.7, signature: "sig",
+    }),
+  });
+  const resSubmitUnknownKey = await handleCommittee(reqSubmitUnknownKey, new URL(reqSubmitUnknownKey.url));
+  expect(resSubmitUnknownKey?.status).toBe(400);
+  expect((resSubmitUnknownKey?.body as { error: string }).error).toBe("unknown field: summary");
+
+  // submit with unknown stance `wildly-bullish`
+  const reqSubmitUnknownStance = new Request(`http://test${ROUTES.committee.submit}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${m.token}`,
+    },
+    body: JSON.stringify({
+      memberId: m.id, date: "2026-09-25", subjectId: "woon", nonce: "n1",
+      body: "my analysis", stance: "wildly-bullish", confidence: 0.7, signature: "sig",
+    }),
+  });
+  const resSubmitUnknownStance = await handleCommittee(reqSubmitUnknownStance, new URL(reqSubmitUnknownStance.url));
+  expect(resSubmitUnknownStance?.status).toBe(400);
+  expect((resSubmitUnknownStance?.body as { error: string }).error).toBe(
+    "stance must be one of bearish, cautious, neutral, constructive, bullish",
+  );
+});
