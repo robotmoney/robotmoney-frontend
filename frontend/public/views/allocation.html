@@ -294,6 +294,7 @@
         <div class="alloc-sleeve__head">
           <span class="alloc-sleeve__name" x-text="w.name"></span>
           <span class="alloc-sleeve__totalwrap">
+            <span class="alloc-sleeve__stale badge badge--stale" x-show="w.stale" x-text="sleeveStaleLabel(w)">stale</span>
             <span class="alloc-sleeve__total" x-text="fmtUsd(w.totalUsd)"></span>
             <span class="alloc-sleeve__type" x-text="w.type"></span>
           </span>

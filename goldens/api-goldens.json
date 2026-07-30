@@ -164101,32 +164101,38 @@
       "stale": false
     },
     "/api/dashboards/vault-economics": {
-      "asOf": "2026-07-10T16:07:35.521Z",
+      "asOf": "2026-07-30T16:20:21.316Z",
       "stale": false,
-      "source": "stub",
-      "tvlUsd": 84320.12,
-      "sharePrice": 1.0025869607996427,
-      "totalShares": 84102.55,
-      "idleUsdc": 1,
+      "source": "live",
+      "tvlUsd": 199.697519,
+      "sharePrice": 1.0119632313363411,
+      "totalShares": 197.336734,
+      "idleUsdc": 0,
       "apy7d": null,
       "adapters": [
         {
           "name": "Morpho",
           "address": "0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9",
           "configured": true,
-          "balanceUsd": 28000
+          "balanceUsd": 66.57913,
+          "balanceObservedAt": "2026-07-30T16:20:13.069Z",
+          "provenance": "live"
         },
         {
           "name": "Aave",
           "address": "0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea",
           "configured": true,
-          "balanceUsd": 28000
+          "balanceUsd": 66.557557,
+          "balanceObservedAt": "2026-07-30T16:20:13.069Z",
+          "provenance": "live"
         },
         {
           "name": "Compound",
           "address": "0x8247da22a59fce074c102431048d0ce7294c2652",
           "configured": true,
-          "balanceUsd": 28000
+          "balanceUsd": 66.560832,
+          "balanceObservedAt": "2026-07-30T16:20:13.069Z",
+          "provenance": "live"
         }
       ]
     },
@@ -165470,71 +165476,92 @@
           "name": "Bankr",
           "address": "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6",
           "type": "primary",
-          "totalUsd": 81,
+          "totalUsd": 21467.8,
+          "stale": false,
           "holdings": [
             {
               "symbol": "USDC",
-              "amount": 1,
+              "amount": 0,
               "priceUsd": 1,
-              "valueUsd": 1,
-              "provenance": "stub"
+              "valueUsd": 0,
+              "provenance": "live",
+              "observedAt": "2026-07-30T16:20:13.060Z"
             },
             {
               "symbol": "ROBOTMONEY",
-              "amount": 1e-12,
-              "priceUsd": 0.00001,
-              "valueUsd": 1e-17,
-              "provenance": "stub"
+              "amount": 6902600387.825797,
+              "priceUsd": 0.00000270803956814546,
+              "valueUsd": 18692.514973328456,
+              "provenance": "live",
+              "observedAt": "2026-07-30T16:20:13.061Z"
             },
             {
               "symbol": "WETH",
-              "amount": 1e-12,
-              "priceUsd": 1600,
-              "valueUsd": 1.6e-9,
-              "provenance": "stub"
+              "amount": 1.4367357192291206,
+              "priceUsd": 1921.39,
+              "valueUsd": 2760.52964356964,
+              "provenance": "live",
+              "observedAt": "2026-07-30T16:20:13.062Z"
             },
             {
               "symbol": "ETH",
-              "amount": 0.05,
-              "priceUsd": 1600,
-              "valueUsd": 80,
-              "provenance": "stub"
+              "amount": 0.003350260415518299,
+              "priceUsd": 1921.39,
+              "valueUsd": 6.4371568597727045,
+              "provenance": "live",
+              "observedAt": "2026-07-30T16:20:13.064Z"
+            },
+            {
+              "symbol": "BNKR",
+              "amount": 25081.308313267862,
+              "priceUsd": 0.00033170501029129,
+              "valueUsd": 8.319595632171534,
+              "provenance": "live",
+              "observedAt": "2026-07-30T16:20:13.065Z"
             }
-          ]
+          ],
+          "observedAt": "2026-07-30T16:20:13.065Z"
         },
         {
           "name": "Stablecoin Strategy 1",
           "address": "0x422c906083ca40b7e055b811d517f03bbbef8eee",
           "type": "strategy",
-          "totalUsd": 4500,
+          "totalUsd": 0,
+          "stale": false,
           "holdings": [
             {
               "symbol": "ZYFAI-SS1",
-              "amount": 4500,
+              "amount": 0.000044,
               "priceUsd": 1,
-              "valueUsd": 4500,
-              "provenance": "stub"
+              "valueUsd": 0.000044,
+              "provenance": "live",
+              "observedAt": "2026-07-30T16:20:13.065Z"
             }
-          ]
+          ],
+          "observedAt": "2026-07-30T16:20:13.065Z"
         },
         {
           "name": "Stablecoin Strategy 2",
           "address": "0x8d0c331e45beca4184b758f3049f8897aabb9442",
           "type": "strategy",
-          "totalUsd": 4500,
+          "totalUsd": 0,
+          "stale": false,
           "holdings": [
             {
               "symbol": "GIZA-SS1",
-              "amount": 4500,
+              "amount": 0,
               "priceUsd": 1,
-              "valueUsd": 4500,
-              "provenance": "stub"
+              "valueUsd": 0,
+              "provenance": "live",
+              "observedAt": "2026-07-30T16:20:13.066Z"
             }
-          ]
+          ],
+          "observedAt": "2026-07-30T16:20:13.066Z"
         }
       ],
-      "asOf": "2026-07-10T16:07:35.539Z",
-      "source": "stub"
+      "asOf": "2026-07-30T16:20:13.066Z",
+      "source": "live",
+      "stale": false
     },
     "/api/projects": {
       "projects": [

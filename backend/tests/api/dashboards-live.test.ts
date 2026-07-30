@@ -12,11 +12,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
-import { resolveVaultAdapters, isPlaceholderAddress, resolveBuybackConfig, resolveTrackedAssets } from "../../src/config.ts";
+import { resolveVaultAdapters, isPlaceholderAddress, resolveBuybackConfig, resolveTrackedAssets, resolvePropWallets } from "../../src/config.ts";
 import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } from "../../src/chain/base-rpc-client.ts";
 import { getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation } from "../../src/api/routes/dashboards.ts";
 import { _resetBuybackCacheForTests, indexBuybacks } from "../../src/chain/buyback-logs.ts";
 import { _resetTokenMetricsCacheForTests } from "../../src/chain/token-metrics.ts";
+import { sampleWalletSleeves } from "../../src/worker/handlers/wallet.ts";
 import {
   _resetWalletSleevesCacheForTests,
   getWalletSleeves as readWalletSleeves,
@@ -30,29 +31,22 @@ const word = (n: bigint): string => "0x" + n.toString(16).padStart(64, "0");
 
 const ENV_KEYS = ["BASE_RPC_SOURCE", "PRICE_SOURCE"] as const;
 
-function resetCaches() {
+async function resetCaches() {
   _resetBuybackCacheForTests();
   _resetTokenMetricsCacheForTests();
   _resetWalletSleevesCacheForTests();
   _resetAllocationFrameworkCacheForTests();
-  // The GeckoTerminal price cache in chain/token-prices.ts is a MODULE-LEVEL,
-  // process-wide cache (30s TTL) keyed by token address — it survives across
-  // test FILES, not just tests, because bun:test runs every file in one
-  // process. Several tests in this file and tests/api/wallet-balances.test.ts
-  // deliberately leave BNKR_ADDRESS unset to exercise the REAL default token
-  // address (issue #148's regression guard); without this reset, a price
-  // successfully cached for that real address by an earlier test/file (e.g.
-  // wallet-balances.test.ts's #148 test, which runs immediately before this
-  // file) silently answers a LATER test's `mockChain({ failPrice: true })`
-  // straight from cache — bypassing the forced-failure mock entirely and
-  // masking the exact degrade path issue #173 added tests for.
   _resetTokenPriceCacheForTests();
+  await sql`DELETE FROM wallet_sleeve_samples`;
+  await sql`DELETE FROM vault_adapter_samples`;
 }
 
-beforeEach(resetCaches);
-afterEach(() => {
+beforeEach(async () => {
+  await resetCaches();
+});
+afterEach(async () => {
   globalThis.fetch = realFetch;
-  resetCaches();
+  await resetCaches();
   for (const k of ENV_KEYS) delete process.env[k];
 });
 
@@ -218,20 +212,12 @@ test("wallet-sleeves: per-wallet holdings resolve in ≤2 batched eth_calls; tot
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
   const counter = mockChain();
+  await sampleWalletSleeves({});
   const r = await getWalletSleeves();
-  // Multicall3 batching (finding 007): ALL sleeves' chain legs (including each
-  // strategy account's idle-USDC + vault-share reads, issues #120/#145) land
-  // in round 1 — ONE aggregate3 eth_call, never a per-holding fan-out (mirrors
-  // the wallet-balances AC3-batch assertion). Round 2 (per-vault
-  // convertToAssets) only fires when a vault is configured (no
-  // STRATEGY_VAULT_*_ADDRESS is set here), so it stays at ONE.
   expect(counter.aggregateCalls).toBe(1);
   expect(r.source).toBe("stub");
   expect(r.wallets).toHaveLength(3);
   const bankr = r.wallets.find((w) => w.type === "primary")!;
-  // BNKR now carries its real, non-placeholder Base default address (#148) —
-  // it is a normal configured asset and resolves exactly like every other
-  // primary-wallet holding (was previously omitted as a placeholder).
   expect(isPlaceholderAddress(resolveTrackedAssets().find((a) => a.symbol === "BNKR")!.address)).toBe(false);
   expect(bankr.holdings.map((h) => h.symbol)).toEqual(["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"]);
   for (const w of r.wallets) {
@@ -242,32 +228,27 @@ test("wallet-sleeves: per-wallet holdings resolve in ≤2 batched eth_calls; tot
     const sum = Math.round(w.holdings.reduce((a, h) => a + (h.valueUsd ?? 0), 0) * 100) / 100;
     expect(w.totalUsd).toBeCloseTo(sum, 6);
   }
-  // strategy sleeves hold exactly their delegated ERC-4626 share.
   expect(r.wallets.filter((w) => w.type === "strategy").map((w) => w.holdings.map((h) => h.symbol))).toEqual([["ZYFAI-SS1"], ["GIZA-SS1"]]);
 });
 
 test("wallet-sleeves: ONE reverted sub-call degrades ONLY that holding to stale; every other leg stays valued (per-leg honesty in the batch)", async () => {
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
-  // Revert JUST the WETH balanceOf sub-call (an allowFailure success:false —
-  // the batched analogue of a single reverted eth_call).
   const weth = resolveTrackedAssets().find((a) => a.symbol === "WETH")!.address!;
   const counter = mockChain({ failBalanceOfTargets: [weth] });
+  await sampleWalletSleeves({});
   const r = await getWalletSleeves();
-  expect(counter.aggregateCalls).toBe(1); // the failure never falls back to per-leg calls
+  expect(counter.aggregateCalls).toBe(1);
   const bankr = r.wallets.find((w) => w.type === "primary")!;
   const wethHolding = bankr.holdings.find((h) => h.symbol === "WETH")!;
-  // The reverted leg is honestly degraded: null values, provenance 'stale'.
   expect(wethHolding.amount).toBeNull();
   expect(wethHolding.priceUsd).toBeNull();
   expect(wethHolding.valueUsd).toBeNull();
   expect(wethHolding.provenance).toBe("stale");
-  // Every OTHER holding (this sleeve and the strategy sleeves) stays valued.
   for (const h of r.wallets.flatMap((w) => w.holdings).filter((h) => h.symbol !== "WETH")) {
     expect(h.provenance).toBe("stub");
     expect(typeof h.valueUsd).toBe("number");
   }
-  // The stale flags roll up: the degraded sleeve + the top level, ONLY those.
   expect(bankr.stale).toBe(true);
   expect(r.stale).toBe(true);
   for (const w of r.wallets.filter((w) => w.type === "strategy")) expect(w.stale).toBe(false);
@@ -276,7 +257,9 @@ test("wallet-sleeves: ONE reverted sub-call degrades ONLY that holding to stale;
 test("wallet-sleeves: a THROWN batch (forced RPC failure) degrades every holding to value null + provenance 'stale' (never fabricated)", async () => {
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
+  await sql`DELETE FROM wallet_sleeve_samples`;
   mockChain({ failCall: true });
+  await sampleWalletSleeves({}).catch(() => {});
   const r = await getWalletSleeves();
   const holdings = r.wallets.flatMap((w) => w.holdings);
   expect(holdings.length).toBeGreaterThan(0);
@@ -292,19 +275,10 @@ test("wallet-sleeves (#173): a failed live price read falls back to a recent per
   process.env.PRICE_SOURCE = "live";
   mockChain({ failPrice: true });
 
-  const fresh = new Date(Date.now() - 60_000); // 1 minute old — inside the 5-minute limit
-  const tooOld = new Date(Date.now() - 6 * 60_000); // 6 minutes old — outside the limit
-  // Unconditional (whole-table), not scoped to WETH/ROBOTMONEY: this test's BNKR
-  // assertion below depends on NO persisted sample existing for BNKR, and that
-  // absence must be actively established, not inherited. tests/api/wallet-balances.test.ts
-  // (which bun:test can run immediately before this file, e.g. in CI's discovery
-  // order) writes real wallet_balance_samples rows for BNKR (and other symbols)
-  // in the same shared Postgres and does not always clean up its own last write —
-  // the next file's beforeEach in that file only guards *that* file's tests. A
-  // WHERE-scoped delete here left a fresh cross-file BNKR row in place, which was
-  // then read back as a valid persisted-price fallback instead of the "exhausted,
-  // honest null" path this test exists to cover.
+  const fresh = new Date(Date.now() - 60_000);
+  const tooOld = new Date(Date.now() - 6 * 60_000);
   await sql`DELETE FROM wallet_balance_samples`;
+  await sql`DELETE FROM wallet_sleeve_samples`;
   await sql`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES
@@ -312,25 +286,22 @@ test("wallet-sleeves (#173): a failed live price read falls back to a recent per
       (current_date - 1, 'ROBOTMONEY', 1, 0.00002, 0.00002, 'live', ${tooOld})
   `;
   try {
+    await sampleWalletSleeves({});
     const r = await getWalletSleeves();
     const bankr = r.wallets.find((w) => w.type === "primary")!;
 
     const weth = bankr.holdings.find((h) => h.symbol === "WETH")!;
-    expect(weth.priceUsd).toBe(2500); // recent persisted price used as the fallback
-    expect(weth.provenance).toBe("stale"); // never relabelled 'live'
-    expect(weth.amount).not.toBeNull(); // the AMOUNT is still the fresh chain read
+    expect(weth.priceUsd).toBe(2500);
+    expect(weth.provenance).toBe("stale");
+    expect(weth.amount).not.toBeNull();
     expect(weth.valueUsd).toBeCloseTo(weth.amount! * 2500, 6);
 
     const robotmoney = bankr.holdings.find((h) => h.symbol === "ROBOTMONEY")!;
-    // The only persisted ROBOTMONEY sample is 6 minutes old — over the 5-minute
-    // limit — so it is NOT eligible; the holding degrades honestly to null,
-    // exactly like a symbol with no persisted sample at all.
     expect(robotmoney.priceUsd).toBeNull();
     expect(robotmoney.valueUsd).toBeNull();
     expect(robotmoney.provenance).toBe("stale");
 
     const bnkr = bankr.holdings.find((h) => h.symbol === "BNKR")!;
-    // No persisted sample at all for BNKR → exhausted fallback, honest null/stale.
     expect(bnkr.priceUsd).toBeNull();
     expect(bnkr.valueUsd).toBeNull();
     expect(bnkr.provenance).toBe("stale");
@@ -338,51 +309,42 @@ test("wallet-sleeves (#173): a failed live price read falls back to a recent per
     expect(bankr.stale).toBe(true);
     expect(r.stale).toBe(true);
   } finally {
-    // Whole-table, matching the setup delete above — leave the table clean for
-    // whichever test/file runs next (see comment above on cross-file pollution).
     await sql`DELETE FROM wallet_balance_samples`;
+    await sql`DELETE FROM wallet_sleeve_samples`;
   }
 });
 
 test("wallet-sleeves seam: amount and price readers inject independently and persisted-price provenance reaches the unchanged DTO", async () => {
   process.env.BASE_RPC_SOURCE = "live";
   process.env.PRICE_SOURCE = "live";
-  const amountKeys: string[] = [];
-  const pricedSymbols: string[] = [];
-  const readers: WalletSleeveReaders = {
-    async readChainAmounts(reads) {
-      amountKeys.push(...reads.map((read) => read.key));
-      return new Map(reads.map((read) => [read.key, { ok: true as const, amount: 2 }]));
-    },
-    priceReader: {
-      async read(asset) {
-        pricedSymbols.push(asset.symbol);
-        if (asset.symbol === "ROBOTMONEY") {
-          return {
-            kind: "persisted" as const,
-            priceUsd: 3,
-            provenance: "stale" as const,
-            sampledAt: "2026-07-16T12:00:00.000Z",
-          };
-        }
-        return { kind: "provider" as const, priceUsd: 4, provenance: "live" as const };
-      },
-    },
-  };
+  await sql`DELETE FROM wallet_sleeve_samples`;
+  const sampledAt = new Date();
+  const sampleDate = sampledAt.toISOString().slice(0, 10);
+  const propWallets = resolvePropWallets();
 
-  const r = await readWalletSleeves(readers);
+  // Seed sample rows into Postgres
+  for (const w of propWallets) {
+    await sql`
+      INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+      VALUES
+        (${sampleDate}, ${w.toLowerCase()}, 'ROBOTMONEY', 2, 3, 6, 'stale', ${sampledAt}),
+        (${sampleDate}, ${w.toLowerCase()}, 'USDC', 2, 4, 8, 'live', ${sampledAt})
+      ON CONFLICT (sample_date, wallet_address, symbol) DO NOTHING
+    `;
+  }
+
+  const r = await getWalletSleeves();
   expect(Object.keys(r).sort()).toEqual(["asOf", "source", "stale", "wallets"]);
   expect(r.source).toBe("live");
-  expect(amountKeys).toHaveLength(7);
-  expect(pricedSymbols).toHaveLength(7);
 
   const robotmoney = r.wallets.find((wallet) => wallet.type === "primary")!.holdings.find((holding) => holding.symbol === "ROBOTMONEY")!;
-  expect(robotmoney).toEqual({ symbol: "ROBOTMONEY", amount: 2, priceUsd: 3, valueUsd: 6, provenance: "stale" });
+  expect(robotmoney).toEqual({ symbol: "ROBOTMONEY", amount: 2, priceUsd: 3, valueUsd: 6, provenance: "stale", observedAt: sampledAt.toISOString() });
   expect(r.wallets.find((wallet) => wallet.type === "primary")!.stale).toBe(true);
   expect(r.stale).toBe(true);
 
   const providerHolding = r.wallets.find((wallet) => wallet.type === "primary")!.holdings.find((holding) => holding.symbol === "USDC")!;
-  expect(providerHolding).toEqual({ symbol: "USDC", amount: 2, priceUsd: 4, valueUsd: 8, provenance: "live" });
+  expect(providerHolding).toEqual({ symbol: "USDC", amount: 2, priceUsd: 4, valueUsd: 8, provenance: "live", observedAt: sampledAt.toISOString() });
+  await sql`DELETE FROM wallet_sleeve_samples`;
 });
 
 // ── allocation ──────────────────────────────────────────────────────────────
@@ -460,4 +422,106 @@ test("buyback indexer advances a persisted scan cursor across empty windows and 
     await sql`DELETE FROM buyback_scan_state`;
     _resetBuybackCacheForTests();
   }
+});
+
+test("wallet-sleeves: getWalletSleeves performs ZERO RPC/price calls on request path when readers expect.unreachable()", async () => {
+  await sql`DELETE FROM wallet_sleeve_samples`;
+  const sampledAt = new Date();
+  const sampleDate = sampledAt.toISOString().slice(0, 10);
+  const wallets = resolvePropWallets();
+  const symbols = ["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR", "ZYFAI-SS1", "GIZA-SS1"];
+
+  for (const w of wallets) {
+    for (const s of symbols) {
+      await sql`
+        INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+        VALUES (${sampleDate}, ${w.toLowerCase()}, ${s}, 10, 2, 20, 'live', ${sampledAt})
+        ON CONFLICT (sample_date, wallet_address, symbol) DO NOTHING
+      `;
+    }
+  }
+
+  const unreachableReaders: WalletSleeveReaders = {
+    readChainAmounts() {
+      expect.unreachable();
+    },
+    priceReader: {
+      read() {
+        expect.unreachable();
+      },
+    },
+  };
+
+  _resetWalletSleevesCacheForTests();
+  const r = await readWalletSleeves(unreachableReaders);
+  expect(r.wallets.length).toBeGreaterThan(0);
+  for (const w of r.wallets) {
+    for (const h of w.holdings) {
+      expect(h.amount).toBe(10);
+      expect(h.priceUsd).toBe(2);
+      expect(h.valueUsd).toBe(20);
+      expect(h.provenance).toBe("live");
+    }
+  }
+  await sql`DELETE FROM wallet_sleeve_samples`;
+});
+
+test("wallet-sleeves: served provenance and observedAt pass-through persisted row's own value exactly", async () => {
+  await sql`DELETE FROM wallet_sleeve_samples`;
+  const fixedSampledAt = new Date("2026-07-25T10:00:00.000Z");
+  const sampleDate = "2026-07-25";
+  const wallet = "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6";
+
+  await sql`
+    INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+    VALUES (${sampleDate}, ${wallet.toLowerCase()}, 'USDC', 100, 1, 100, 'stale', ${fixedSampledAt})
+  `;
+
+  _resetWalletSleevesCacheForTests();
+  const r = await getWalletSleeves();
+  const bankr = r.wallets.find((w) => w.name === "Bankr")!;
+  const usdc = bankr.holdings.find((h) => h.symbol === "USDC")!;
+
+  expect(usdc.provenance).toBe("stale");
+  expect(usdc.observedAt).toBe(fixedSampledAt.toISOString());
+
+  await sql`DELETE FROM wallet_sleeve_samples`;
+});
+
+test("wallet-sleeves: freshness budget boundary pair (budget-1s -> stale false, budget+1s -> stale true)", async () => {
+  await sql`DELETE FROM wallet_sleeve_samples`;
+  const BUDGET_MS = 5 * 60_000;
+  const wallet = "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6";
+  const symbols = ["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"];
+
+  // 1) Budget - 1s (fresh)
+  const freshTime = new Date(Date.now() - (BUDGET_MS - 1000));
+  const dateFresh = freshTime.toISOString().slice(0, 10);
+  for (const s of symbols) {
+    await sql`
+      INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+      VALUES (${dateFresh}, ${wallet.toLowerCase()}, ${s}, 10, 1, 10, 'live', ${freshTime})
+    `;
+  }
+  _resetWalletSleevesCacheForTests();
+  const rFresh = await getWalletSleeves();
+  const bankrFresh = rFresh.wallets.find((w) => w.name === "Bankr")!;
+  expect(bankrFresh.stale).toBe(false);
+
+  // 2) Budget + 1s (stale)
+  await sql`DELETE FROM wallet_sleeve_samples`;
+  const staleTime = new Date(Date.now() - (BUDGET_MS + 1000));
+  const dateStale = staleTime.toISOString().slice(0, 10);
+  for (const s of symbols) {
+    await sql`
+      INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+      VALUES (${dateStale}, ${wallet.toLowerCase()}, ${s}, 10, 1, 10, 'live', ${staleTime})
+    `;
+  }
+  _resetWalletSleevesCacheForTests();
+  const rStale = await getWalletSleeves();
+  const bankrStale = rStale.wallets.find((w) => w.name === "Bankr")!;
+  expect(bankrStale.stale).toBe(true);
+
+  await sql`DELETE FROM wallet_sleeve_samples`;
 });

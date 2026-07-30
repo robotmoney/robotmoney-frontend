@@ -14,6 +14,20 @@
 // second pool would keep `bun run migrate` from ever exiting).
 import { sql } from "../../db/worker-client.ts";
 import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../../chain/wallet-balances.ts";
+import {
+  isPlaceholderAddress,
+  resolveBaseRpcSource,
+  resolvePriceSource,
+  resolvePropWallets,
+  resolveTrackedAssets,
+  type TrackedAsset,
+} from "../../config.ts";
+import {
+  persistedFallbackWalletPriceReader,
+  readChainAmountsBatched,
+  valueLeg,
+  type KeyedAssetRead,
+} from "../../chain/wallet-valuation.ts";
 
 export async function sampleWalletBalances(_payload: Record<string, unknown>): Promise<unknown> {
   // Fresh read (bypass the request cache) so the sampler records current chain
@@ -43,4 +57,76 @@ export async function sampleWalletBalances(_payload: Record<string, unknown>): P
   }
   return { sampleDate, persisted };
 }
+
+interface SleeveDef {
+  name: string;
+  type: string;
+  symbols: string[];
+}
+const SLEEVE_DEFS: SleeveDef[] = [
+  { name: "Bankr", type: "primary", symbols: ["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"] },
+  { name: "Stablecoin Strategy 1", type: "strategy", symbols: ["ZYFAI-SS1"] },
+  { name: "Stablecoin Strategy 2", type: "strategy", symbols: ["GIZA-SS1"] },
+];
+
+export async function sampleWalletSleeves(_payload: Record<string, unknown>): Promise<unknown> {
+  const source = resolveBaseRpcSource();
+  const priceSource = resolvePriceSource();
+  const wallets = resolvePropWallets();
+  const assets = resolveTrackedAssets();
+  const bySymbol = new Map(assets.map((a) => [a.symbol, a]));
+
+  const reads: KeyedAssetRead[] = [];
+  const readTargets: { walletAddress: string; asset: TrackedAsset; key: string }[] = [];
+
+  for (let i = 0; i < SLEEVE_DEFS.length && i < wallets.length; i++) {
+    const def = SLEEVE_DEFS[i]!;
+    const address = wallets[i]!;
+    const walletAssets = def.symbols
+      .map((s) => bySymbol.get(s))
+      .filter((a): a is TrackedAsset => a != null && (a.valuationKind === "native" || !isPlaceholderAddress(a.address)));
+    for (const a of walletAssets) {
+      const key = `${i}:${a.symbol}`;
+      reads.push({ key, asset: a, wallets: [address] });
+      readTargets.push({ walletAddress: address.toLowerCase(), asset: a, key });
+    }
+  }
+
+  const chainAmounts = await readChainAmountsBatched(reads, "sampleWalletSleeves");
+  const sampleDate = new Date().toISOString().slice(0, 10);
+  let persisted = 0;
+
+  for (const { walletAddress, asset, key } of readTargets) {
+    const chainAmount = chainAmounts.get(key);
+    if (!chainAmount || !chainAmount.ok) continue;
+
+    // Explicit persisted-fallback reader (issue #294): this sampler runs on the
+    // worker schedule, not the request path, so a live-price-provider hiccup
+    // should still degrade to a recent persisted per-symbol price rather than
+    // skipping the sample entirely. This must be passed explicitly here and
+    // NOT via valueLeg's default — wallet-balances.ts:133 (fetchWalletBalances,
+    // the out-of-scope /api/dashboards/wallet-balances request path) calls
+    // valueLeg with no reader argument and must keep inheriting
+    // providerWalletPriceReader's original ok:false-on-failure behavior.
+    const valued = await valueLeg(asset, chainAmount, source, priceSource, persistedFallbackWalletPriceReader);
+    if (!valued.ok) continue;
+
+    await sql`
+      INSERT INTO wallet_sleeve_samples
+        (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
+      VALUES
+        (${sampleDate}, ${walletAddress}, ${asset.symbol}, ${valued.amount}, ${valued.priceUsd}, ${valued.valueUsd}, ${valued.provenance}, now())
+      ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
+        amount     = EXCLUDED.amount,
+        price_usd  = EXCLUDED.price_usd,
+        value_usd  = EXCLUDED.value_usd,
+        provenance = EXCLUDED.provenance,
+        sampled_at = EXCLUDED.sampled_at
+    `;
+    persisted += 1;
+  }
+
+  return { sampleDate, persisted };
+}
+
 

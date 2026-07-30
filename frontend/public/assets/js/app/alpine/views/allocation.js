@@ -202,6 +202,14 @@ export function registerAllocationView(Alpine) {
     stratPct(i) { const s = this.allocationFw?.strategy?.[i]; return s == null ? "—" : Math.round(Number(s.targetPct)) + "%"; },
     // ── sleeves ───────────────────────────────────────────────────────────────
     sleeveWallets() { return this.sleeves?.wallets || []; },
+    sleeveStaleLabel(w) {
+      if (!w || !w.stale) return "";
+      if (!w.observedAt) return "stale";
+      const dateStr = new Date(w.observedAt).toLocaleString("en-US", {
+        month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "UTC",
+      }) + " UTC";
+      return `stale (${dateStr})`;
+    },
     walletCount() { return this.sleeveWallets().length; },
     // ── buybacks ──────────────────────────────────────────────────────────────
     buybackRows() { return this.buybacks?.rows || []; },

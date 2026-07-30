@@ -54,12 +54,16 @@ export interface AllocationFramework {
 export interface VaultEconomicsAdapter {
   name: string;
   address: string;
+  configured?: boolean;
   balanceUsd: number | null;
+  balanceObservedAt?: string | null;
+  provenance?: WalletHoldingProvenance;
 }
 
 export interface VaultEconomics {
   asOf: string; // ISO 8601
   stale: boolean;
+  source: "live" | "stub";
   tvlUsd: number | null;
   sharePrice: number | null;
   totalShares: number | null;
@@ -72,9 +76,34 @@ export interface VaultEconomics {
 // price valuation of the agent's PROP WALLETS. Replaces the baked
 // WALLET_SNAPSHOT_TOTAL_USD scalar (/allocation hero) and the 99-day
 // walletPerfView series (/performance). Per-holding `provenance` is one of
-// 'live' | 'stub' | 'stale' — a single failing leg degrades to its last
-// persisted sample marked 'stale', never a fabricated or falsely-live number.
-export type WalletHoldingProvenance = "live" | "stub" | "stale";
+// 'live' | 'stub' | 'stale' | 'seed'.
+export type WalletHoldingProvenance = "live" | "stub" | "stale" | "seed";
+
+export interface SleeveHolding {
+  symbol: string;
+  amount: number | null;
+  priceUsd: number | null;
+  valueUsd: number | null;
+  provenance: WalletHoldingProvenance;
+  observedAt?: string | null;
+}
+
+export interface WalletSleeve {
+  name: string;
+  address: string;
+  type: string;
+  totalUsd: number;
+  stale: boolean;
+  holdings: SleeveHolding[];
+  observedAt?: string | null;
+}
+
+export interface WalletSleeves {
+  wallets: WalletSleeve[];
+  asOf: string;
+  source: "live" | "stub";
+  stale: boolean;
+}
 
 export interface WalletHolding {
   symbol: string;

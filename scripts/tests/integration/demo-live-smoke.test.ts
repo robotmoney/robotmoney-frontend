@@ -54,7 +54,20 @@ function walletPayload(legOverrides: Record<string, string> = {}) {
     history: [{ date: "2026-07-14", byAsset: { WETH: 500 }, totalUsd: 500 }],
   };
 }
-const vaultPayload = (stale = false) => ({ source: "live", stale, tvlUsd: 100000, sharePriceUsd: 1.01 });
+const vaultPayload = (
+  stale = false,
+  adapterOverrides: Record<string, string> = {},
+) => ({
+  source: "live",
+  stale,
+  tvlUsd: 100000,
+  sharePriceUsd: 1.01,
+  adapters: ["MORPHO", "AAVE", "COMPOUND"].map((name) => ({
+    name,
+    configured: true,
+    provenance: adapterOverrides[name] ?? "live",
+  })),
+});
 const signalPayload = (key: string) => ({ signalKey: key, date: "2026-07-15", payload: { gauges: [] } });
 
 interface StubOverrides {
@@ -160,6 +173,31 @@ describe("demo-live-smoke (nightly LIVE gate self-test, issue #128)", () => {
       backend.stop(true);
     }
   }, 20_000);
+
+  // Issue #294: Postgres is now the indexer of record for vault-economics —
+  // stale is redefined as (age > freshness budget) OR (backing sample
+  // provenance !== 'live'), and the gate must not be weakened by that move.
+  test("stale vault-economics (age-expired sample) → exit non-zero naming allocation", async () => {
+    const backend = startStubBackend({ vault: vaultPayload(true) });
+    try {
+      const r = await runSmoke(backend);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.output).toContain("allocation: vault-economics is stale");
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
+
+  test("vault adapter with non-live provenance (no allowlist, #294) → exit non-zero naming the adapter", async () => {
+    const backend = startStubBackend({ vault: vaultPayload(false, { MORPHO: "seed" }) });
+    try {
+      const r = await runSmoke(backend);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.output).toContain("allocation: vault adapter MORPHO");
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
 });
 
 describe("pure evaluators (edge cases)", () => {
@@ -183,6 +221,35 @@ describe("pure evaluators (edge cases)", () => {
     expect(evaluateRegime(null).length).toBe(1);
     expect(evaluateWallet(null, () => {}).length).toBe(1);
     expect(evaluateVaultEconomics(null).length).toBe(1);
+  });
+
+  // Issue #294: the gate must not be weakened by moving vault-economics onto
+  // the Postgres indexer of record — pin both halves of the redefined stale
+  // semantics directly against the pure evaluator.
+  test("vault-economics stale:true fails even with a live top-level source", () => {
+    const failures = evaluateVaultEconomics({ source: "live", stale: true });
+    expect(failures.some((f) => f.includes("vault-economics is stale"))).toBe(true);
+  });
+
+  test("vault-economics adapter provenance !== 'live' fails even when top-level stale is false (no allowlist)", () => {
+    const failures = evaluateVaultEconomics({
+      source: "live",
+      stale: false,
+      adapters: [
+        { name: "MORPHO", configured: true, provenance: "live" },
+        { name: "AAVE", configured: true, provenance: "seed" },
+      ],
+    });
+    expect(failures.some((f) => f.includes("AAVE"))).toBe(true);
+  });
+
+  test("unconfigured vault adapters are exempt from the provenance check", () => {
+    const failures = evaluateVaultEconomics({
+      source: "live",
+      stale: false,
+      adapters: [{ name: "COMPOUND", configured: false, provenance: "stub" }],
+    });
+    expect(failures.length).toBe(0);
   });
 
   test("missing staleness object is a failure (cannot certify freshness)", () => {
