@@ -109,7 +109,26 @@ if [ ! -f "$registry" ]; then
   exit 1
 fi
 
-scan_paths=("$target_root/scripts" "$target_root/.github/workflows" "$evals_dir")
+# Roots relative to target_root that properties 1 and 2 (raw-model-id-literal,
+# retired-knob) scan. scripts/tests/unit/model-selection-guard.test.ts derives
+# this exact list from THIS array (its declaredRoots()) and plants one
+# violation per root — a root added here with no corresponding
+# planted-violation control in that suite goes red via its declared-roots
+# meta-assertion, the same shape check-no-test-imports-in-runtime.sh uses.
+scan_roots=(
+  "scripts"
+  ".github/workflows"
+  "evals"
+)
+
+scan_paths=()
+for rel in "${scan_roots[@]}"; do
+  scan_paths+=("$target_root/$rel")
+done
+# docker-compose*.yml is a root-level GLOB, not a directory, so it cannot live
+# in scan_roots above (that array assumes one path per entry); it is declared
+# and scanned separately, with its own planted-violation control in
+# model-selection-guard.test.ts.
 for f in "$target_root"/docker-compose*.yml; do [ -e "$f" ] && scan_paths+=("$f"); done
 
 # 1. Raw model-id literals outside the registry (D22 rule 1 as amended).
