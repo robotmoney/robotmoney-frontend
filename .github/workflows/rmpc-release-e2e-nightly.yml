@@ -48,7 +48,7 @@ on:
 
 jobs:
   rmpc-release-e2e:
-    runs-on: [self-hosted, robotmoney-self-hosted]
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +74,8 @@ jobs:
       # RMPC_RELEASE_E2E=1 additionally runs scripts/rmpc-release-e2e.ts against
       # that SAME booted stack before teardown, so there is no parallel stack
       # bring-up for this driver.
+      - name: Set up Blacksmith Docker builder
+        uses: useblacksmith/setup-docker-builder@v1
       - name: Boot demo stack + rmpc release e2e driver
         run: bun run scripts/demo.ts
         env:

@@ -63,7 +63,7 @@ jobs:
   # (scheduled/workflow_dispatch triggers are never fork PRs), so no
   # trust-context gating is needed.
   onboarding-real-inference-sweep:
-    runs-on: [self-hosted, robotmoney-self-hosted]
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -98,6 +98,8 @@ jobs:
       # block). Fails loudly (non-zero exit, no skip) if OPENCODE_API_KEY is
       # missing or unfunded, the rmpc binary can't be fetched/verified, or any swept
       # admission doesn't reach the active roster.
+      - name: Set up Blacksmith Docker builder
+        uses: useblacksmith/setup-docker-builder@v1
       - name: Boot demo stack + real-inference onboarding sweep
         run: bun run scripts/demo.ts
         env:

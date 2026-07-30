@@ -147,7 +147,7 @@ jobs:
     #      `real-eval` opt-in. Without this, `types: [..., labeled]` above would
     #      boot the full ~40-minute live stack every time anyone tagged a PR.
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.event.action != 'labeled' || github.event.label.name == 'real-eval') }}
-    runs-on: [self-hosted, robotmoney-self-hosted]
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     env:
       # Read by scripts/lib/rmpc-fetch.ts's fetchRmpc() for the real-inference
       # eval inside "Full-stack demo" below. The infra-rails check that used to
@@ -278,6 +278,8 @@ jobs:
       # is stripped and 0 against correct content. See docs/architecture.md §"Demo
       # readiness gate". The job id below stays `e2e` so branch protection's existing
       # required-status-check mapping is unaffected.
+      - name: Set up Blacksmith Docker builder
+        uses: useblacksmith/setup-docker-builder@v1
       - name: Full-stack demo (demo readiness gate)
         run: bun run scripts/demo.ts
         env:

@@ -59,7 +59,7 @@ on:
 
 jobs:
   demo-live-smoke:
-    runs-on: [self-hosted, robotmoney-self-hosted]
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -80,6 +80,8 @@ jobs:
       # unconditionally in CI (issue #147 removed DEMO_HERMETIC and the hermetic
       # opt-in it used to gate against), the exact same boot `.github/workflows/e2e.yml`
       # runs on every PR. This job's only distinguishing input is the schedule below.
+      - name: Set up Blacksmith Docker builder
+        uses: useblacksmith/setup-docker-builder@v1
       - name: Boot LIVE demo stack + LIVE smoke assertions
         run: bun run scripts/demo.ts
         env:

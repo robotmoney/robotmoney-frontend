@@ -62,7 +62,7 @@ jobs:
     # if it were a test.
     env:
       CI_CLASS: ignore
-    runs-on: [self-hosted, robotmoney-self-hosted]
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     permissions:
       contents: read
       pull-requests: read
@@ -82,7 +82,7 @@ jobs:
     needs: [changes]
     # Path-gated ONLY on pull_request: a push to main always runs regardless.
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true' }}
-    runs-on: [self-hosted, robotmoney-self-hosted]
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
