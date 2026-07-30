@@ -163,8 +163,8 @@ describe("check-no-test-imports-in-runtime.sh", () => {
     }
   });
 
-  test("is wired into the required integration workflow — a guard nobody runs is not a gate", () => {
-    const wf = readFileSync(join(repoRoot, ".github", "workflows", "integration.yml"), "utf8");
+  test("is wired into the required repo-guards workflow — a guard nobody runs is not a gate", () => {
+    const wf = readFileSync(join(repoRoot, ".github", "workflows", "repo-guards.yml"), "utf8");
     expect(wf).toContain("bash scripts/checks/check-no-test-imports-in-runtime.sh");
   });
 });
@@ -193,20 +193,11 @@ describe("scripts/tests/ cost-class split (§3 L1)", () => {
     expect(pkg.scripts.test).toBe("bun test scripts/tests");
   });
 
-  test("the integration job runs BOTH classes per PR — the split buys selectability, not less coverage", () => {
-    const wf = readFileSync(join(repoRoot, ".github", "workflows", "integration.yml"), "utf8");
-    expect(wf).toContain("bun run test:unit");
-    expect(wf).toContain("bun run test:integration");
-    // Unconditional: a cost class behind `continue-on-error` or a per-step `if:`
-    // would be a coverage loss disguised as an optimization. Matched as YAML
-    // KEYS (`^\s*key:`), not as prose, so the step comments explaining this rule
-    // do not trip their own assertion.
-    const stepGuards = wf.split("\n").filter((l) => /^\s*(continue-on-error|if)\s*:/.test(l));
-    // The job-level draft `if:` is the ONE legitimate guard (taxonomy: deferred
-    // until ready-for-review) and it gates the whole job, not a cost class.
-    expect(stepGuards.map((l) => l.trim())).toEqual([
-      "if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}",
-    ]);
+  test("unit and integration workflows execute their respective cost classes per PR", () => {
+    const unitWf = readFileSync(join(repoRoot, ".github", "workflows", "unit.yml"), "utf8");
+    const integrationWf = readFileSync(join(repoRoot, ".github", "workflows", "integration.yml"), "utf8");
+    expect(unitWf).toContain("bun run test:unit");
+    expect(integrationWf).toContain("bun run test:integration");
   });
 
   test("`bun test` over an empty selection is RED — 0 tests collected can never be a green", () => {

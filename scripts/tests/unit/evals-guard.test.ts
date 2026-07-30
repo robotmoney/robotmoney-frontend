@@ -56,11 +56,13 @@ describe("eval wiring keeps evals/ off the per-PR path", () => {
 
   test("the model-selection guard — not a keyless one — is what runs per PR now", () => {
     // The rescope in one assertion: the withdrawn guard is absent, its
-    // successor is present and wired.
+    // successor is present and wired. Post-split (#275) the guard step lives
+    // in repo-guards.yml, not integration.yml — same required-per-PR
+    // guarantee, different file.
     expect(existsSync(join(repoRoot, "scripts", "checks", "check-eval-keyless.sh"))).toBe(false);
-    const integration = readFileSync(join(repoRoot, ".github", "workflows", "integration.yml"), "utf8");
-    expect(integration).toContain("bash scripts/checks/check-model-selection.sh");
-    expect(integration).not.toContain("check-eval-keyless.sh");
+    const repoGuards = readFileSync(join(repoRoot, ".github", "workflows", "repo-guards.yml"), "utf8");
+    expect(repoGuards).toContain("bash scripts/checks/check-model-selection.sh");
+    expect(repoGuards).not.toContain("check-eval-keyless.sh");
   });
 });
 
