@@ -357,6 +357,17 @@ export async function seedDemoProjects(): Promise<void> {
       }));
       await tx`INSERT INTO agent_revenue_daily ${tx(revRows)}`;
 
+      // 4b) Trailing-30d daily agent snapshots (activity series for tokenless projects).
+      const agentSnaps = Array.from({ length: DAYS }, (_, d) => ({
+        agent_id: agentId as string,
+        snapshot_date: ymd(now, d),
+        x402_volume_usd: p.revenueSource === "x402" ? round2(wiggle(p.dailyRevenueBase, i + 3, d, 0.25)) : 0,
+        x402_txn_count: x?.txns ? Math.round(wiggle(x.txns / 30, i, d, 0.2)) : 0,
+        productivity_score: p.score ?? 0,
+      }));
+      await tx`INSERT INTO daily_agent_snapshots ${tx(agentSnaps)}`;
+
+
       // 5) Coin facets + a 30d price snapshot series per coin (draws the sparkline).
       for (let ci = 0; ci < p.coins.length; ci++) {
         const c = p.coins[ci];

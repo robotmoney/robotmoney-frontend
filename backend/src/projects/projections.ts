@@ -53,14 +53,21 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
   const coinIds = coins.map((c) => c.id as string);
   const cutoff = since30();
 
-  const [revenue, snaps] = await Promise.all([
+  const [revenue, snaps, agentSnaps] = await Promise.all([
     agentIds.length
-      ? sql`SELECT agent_id, revenue_usd FROM agent_revenue_daily
-            WHERE agent_id IN ${sql(agentIds)} AND revenue_date >= ${cutoff}`
+      ? sql`SELECT agent_id, revenue_usd, revenue_date::text AS revenue_date FROM agent_revenue_daily
+            WHERE agent_id IN ${sql(agentIds)} AND revenue_date >= ${cutoff}
+            ORDER BY revenue_date ASC`
       : Promise.resolve([] as Record<string, unknown>[]),
     coinIds.length
       ? sql`SELECT coin_id, price_usd FROM daily_coin_snapshots
             WHERE coin_id IN ${sql(coinIds)} AND snapshot_date >= ${cutoff}
+            ORDER BY snapshot_date ASC`
+      : Promise.resolve([] as Record<string, unknown>[]),
+    agentIds.length
+      ? sql`SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, x402_txn_count, productivity_score
+            FROM daily_agent_snapshots
+            WHERE agent_id IN ${sql(agentIds)} AND snapshot_date >= ${cutoff}
             ORDER BY snapshot_date ASC`
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
@@ -136,6 +143,38 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
     (sparksByCoin.get(cid) ?? sparksByCoin.set(cid, []).get(cid)!).push(num(s.price_usd) ?? 0);
   }
 
+  const agentSnapsByProjectDate = new Map<string, Map<string, number>>();
+  for (const s of agentSnaps) {
+    const agentId = s.agent_id as string;
+    const pid = agentToProject.get(agentId);
+    if (!pid) continue;
+    const date = s.snapshot_date as string;
+    const vol = num(s.x402_volume_usd) ?? 0;
+    const txns = num(s.x402_txn_count) ?? 0;
+    const prod = num(s.productivity_score) ?? 0;
+    const metricVal = vol > 0 ? vol : (txns > 0 ? txns : prod);
+    if (metricVal <= 0) continue;
+
+    if (!agentSnapsByProjectDate.has(pid)) agentSnapsByProjectDate.set(pid, new Map());
+    const dateMap = agentSnapsByProjectDate.get(pid)!;
+    dateMap.set(date, (dateMap.get(date) ?? 0) + metricVal);
+  }
+
+  const agentRevByProjectDate = new Map<string, Map<string, number>>();
+  for (const r of revenue) {
+    const agentId = r.agent_id as string;
+    const pid = agentToProject.get(agentId);
+    if (!pid) continue;
+    const date = r.revenue_date as string | undefined;
+    if (!date) continue;
+    const revVal = num(r.revenue_usd) ?? 0;
+    if (revVal <= 0) continue;
+
+    if (!agentRevByProjectDate.has(pid)) agentRevByProjectDate.set(pid, new Map());
+    const dateMap = agentRevByProjectDate.get(pid)!;
+    dateMap.set(date, (dateMap.get(date) ?? 0) + revVal);
+  }
+
   // ── Assemble DTO rows ──────────────────────────────────────────────────────
   const rows: (Project & { _maxMc: number })[] = projects.map((p) => {
     const pid = p.id as string;
@@ -146,7 +185,23 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
     const maxVolume24h = Math.max(0, ...pcoins.map((c) => c.volume24h ?? 0));
     const walletTotalUsd = pwallets.reduce((s, w) => s + (w.balanceUsd ?? 0), 0);
     const primaryCoinId = coinRawByProject.get(pid)?.[0]?.id;
-    const sparkline = (primaryCoinId && sparksByCoin.get(primaryCoinId)) || [];
+    let sparkline = (primaryCoinId && sparksByCoin.get(primaryCoinId)) || [];
+    if (sparkline.length === 0) {
+      const snapDates = agentSnapsByProjectDate.get(pid);
+      if (snapDates && snapDates.size > 0) {
+        sparkline = Array.from(snapDates.entries())
+          .sort(([d1], [d2]) => d1.localeCompare(d2))
+          .map(([, val]) => val);
+      } else {
+        const revDates = agentRevByProjectDate.get(pid);
+        if (revDates && revDates.size > 0) {
+          sparkline = Array.from(revDates.entries())
+            .sort(([d1], [d2]) => d1.localeCompare(d2))
+            .map(([, val]) => val);
+        }
+      }
+    }
+
 
     const facets = {
       // Trust facet-table presence over the stale has_agent column, matching the
