@@ -38,10 +38,14 @@ File and test-name filters are native Bun filters. A filter that selects no
 file or no test exits non-zero. Every selected file contains real inference;
 there is no listing or rehearsal mode under this directory.
 
-The current suite registers the integrated onboarding admission case. Support
-code in `evals/support/` provides validated definitions, sample planning,
-scoring, Bun registration, and suite artifacts. The real stack and agent logic
-remain shared machinery outside this directory:
+The committee-authoring eval registers through `evals/support/` (validated
+definitions, sample planning, scoring, Bun registration, and suite artifacts).
+The onboarding admission case (issue #280) is scored differently: it takes K
+samples with a fresh identity and container each and is scored by
+`evals/onboarding/support/scorecard.ts`, run nightly via its own workflow
+(`admission-eval-nightly.yml`, `bun run eval:onboarding:admission`) — see
+"The admission eval" below. The real stack and agent logic remain shared
+machinery outside this directory either way:
 
 | Piece | Where |
 |---|---|
@@ -63,6 +67,18 @@ The canonical local skill and participation guide are served from this
 checkout's `frontend/public/` tree by the existing stack. The development loop
 therefore tests uncommitted local instruction changes; publishing those assets
 to another repository is a separate release concern.
+
+### The admission eval: sampled onboarding sweep
+
+`evals/onboarding/admission.eval.test.ts` (issue #280) is the ONE integrated,
+server-observed measurement: does a vanilla, keyless-capable agent complete the
+WHOLE R4→R8 onboarding against a real `core` stack (postgres + api)? One
+sample is a coin flip reported as a verdict, so it takes `SAMPLE_COUNT`
+sequential samples, each with a fresh identity and a fresh container, and
+scores the sweep with `evals/onboarding/support/scorecard.ts` — the admission
+rate, per-outcome counts, and the floors in E4 below. Its own nightly workflow
+(`admission-eval-nightly.yml`, `bun run eval:onboarding:admission`) uploads the
+scorecard and every sample's run log on both green and red outcomes.
 
 ### The isolated claims: runtime, skill-install, toolchain, keygen-signing
 

@@ -207,6 +207,12 @@ export interface UnscannedFiles {
 // signature can never verify — while every human-readable rendering of F still
 // looks perfectly correct. `printf '%s'` (or writing without a trailing
 // newline) is the fix.
+//
+// The upstream fix belongs to the repo-owned committee-onboarding skill, not
+// here: the skill must state, in as many words, that the payload file is
+// signed EXACT BYTES, not a human-editable rendering — tracked as
+// robotmoney/robotmoney-core#1188, referenced only (cross-repo work gets
+// issues, never code edits, from this repo).
 export type PayloadDiskMatch = "none" | "byte-exact" | "trailing-whitespace-only" | "shaped-but-different";
 
 export interface PayloadOnDiskEvidence {

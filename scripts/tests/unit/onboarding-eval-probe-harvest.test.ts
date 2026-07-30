@@ -216,4 +216,93 @@ describe("harvestSignedApplication — end-to-end OFFLINE verification with a RE
       rmSync(hostDir, { recursive: true, force: true });
     }
   });
+
+  // ── No silent caps (issue #280) ────────────────────────────────────────────
+  // The candidate cap was once 25 per dimension, justified as unable to bite on
+  // a genuine run. A real signature-harvest run once produced 3 candidate
+  // public keys and 34 candidate SIGNATURES, so 9 signatures would have gone
+  // untested with no indication in the output — and if the agent's real
+  // signature had been among them, the harness would have reported a
+  // canonicalization drift that never happened. MAX_CANDIDATES is 500 now;
+  // these cases prove the cap is both ABOVE that observed shape and that a
+  // search that DOES exceed it says so rather than staying silent.
+  const B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  // 43 base64 chars + "=" — exactly a 32-byte ed25519 public-key shape. `i`
+  // selects a unique two-character prefix so every generated token is distinct
+  // (Set-deduplicated by scanBase64Candidates).
+  function fakePublicKeyLike(i: number): string {
+    const a = B64_CHARS[i % B64_CHARS.length];
+    const b = B64_CHARS[Math.floor(i / B64_CHARS.length) % B64_CHARS.length];
+    return `${a}${b}${"D".repeat(41)}=`;
+  }
+  // 86 base64 chars + "==" — exactly a 64-byte ed25519 signature shape.
+  function fakeSignatureLike(i: number): string {
+    const a = B64_CHARS[i % B64_CHARS.length];
+    const b = B64_CHARS[Math.floor(i / B64_CHARS.length) % B64_CHARS.length];
+    return `${a}${b}${"C".repeat(84)}==`;
+  }
+
+  test("the observed real-run shape (3 candidate keys, 34 candidate signatures) is asserted UN-TRUNCATED, and the real pair still verifies", async () => {
+    const { publicKeyB64, signatureB64, canonical } = await realKeypairAndSignature();
+    const hostDir = mkdtempSync(join(tmpdir(), "harvest-test-"));
+    try {
+      const decoyKeys = [fakePublicKeyLike(1), fakePublicKeyLike(2)]; // + the real key = 3
+      // + the real signature, placed LAST — the position an old, lower cap
+      // (25) would have discarded.
+      const decoySignatures = Array.from({ length: 33 }, (_, i) => fakeSignatureLike(i)); // + the real signature = 34
+      const transcript = [...decoyKeys, publicKeyB64, ...decoySignatures, signatureB64].join("\n");
+      const result = await harvestSignedApplication({ repoRoot, transcript, hostDir, application });
+      expect(result.diagnostics.candidatePublicKeys).toBe(3);
+      expect(result.diagnostics.candidateSignatures).toBe(34);
+      expect(result.diagnostics.truncatedCandidates).toBeUndefined();
+      expect(result.verified).not.toBeNull();
+      expect(result.verified?.signature).toBe(signatureB64);
+      expect(result.verified?.canonicalPayloadExpected).toBe(canonical);
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a search that DOES exceed MAX_CANDIDATES=500 reports the truncation instead of staying silent", async () => {
+    const hostDir = mkdtempSync(join(tmpdir(), "harvest-test-"));
+    try {
+      // 501 unique signature-shaped tokens: one over the cap. No real pair is
+      // present — this case is purely about the truncation REPORT, not
+      // verification.
+      const signatures = Array.from({ length: 501 }, (_, i) => fakeSignatureLike(i));
+      const transcript = [fakePublicKeyLike(0), ...signatures].join("\n");
+      const result = await harvestSignedApplication({ repoRoot, transcript, hostDir, application });
+      expect(result.diagnostics.candidateSignatures).toBe(501);
+      expect(result.diagnostics.truncatedCandidates).toEqual({ publicKeys: 0, signatures: 1 });
+      expect(explainTruncation(result.diagnostics.truncatedCandidates)).toMatch(/TRUNCATED.*1 signature\(s\).*NEVER TESTED/s);
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  test("an oversized file is skipped, not scanned — real material hidden solely inside it is never found, and the skip is counted", async () => {
+    const { publicKeyB64, signatureB64 } = await realKeypairAndSignature();
+    const hostDir = mkdtempSync(join(tmpdir(), "harvest-test-"));
+    try {
+      // The ONLY copy of the material sits inside a file just over the 2 MiB
+      // cap, so if the cap is honoured there is nothing left to verify.
+      writeFileSync(
+        join(hostDir, "huge.log"),
+        `${"x".repeat(2 * 1024 * 1024 + 1)}\npublicKey=${publicKeyB64}\nsignature=${signatureB64}\n`,
+      );
+      const result = await harvestSignedApplication({
+        repoRoot,
+        transcript: "no signature material in the transcript at all",
+        hostDir,
+        application,
+      });
+      expect(result.verified).toBeNull();
+      expect(result.diagnostics.filesScanned).toBe(0);
+      expect(result.diagnostics.candidatePublicKeys).toBe(0);
+      expect(result.diagnostics.unscannedFiles).toEqual({ oversized: 1, unreadable: 0 });
+      expect(explainUnscannedFiles(result.diagnostics.unscannedFiles)).toMatch(/DID NOT READ EVERY FILE.*1 file\(s\) exceeded/s);
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true });
+    }
+  });
 });
