@@ -48,11 +48,11 @@ on:
 jobs:
   # ── change detection ───────────────────────────────────────────────────────
   changes:
-    # Plumbing, not an assurance job itself (same reasoning as ci-gate.yml's
-    # own `changes` job) — it must run in EVERY context, including pr_draft,
-    # so the main job below has a filter output to gate on. Overriding the
-    # workflow-level CI_CLASS here keeps the taxonomy scanner from flagging
-    # this job as a system-correctness job that wrongly runs on drafts.
+    # Plumbing, not an assurance job itself — it must run in EVERY context,
+    # including pr_draft, so the main job below has a filter output to gate
+    # on. Overriding the workflow-level CI_CLASS here keeps the taxonomy
+    # scanner from flagging this job as a system-correctness job that
+    # wrongly runs on drafts.
     env:
       CI_CLASS: ignore
     runs-on: [self-hosted, robotmoney-self-hosted]

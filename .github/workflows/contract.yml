@@ -5,13 +5,19 @@
 #
 # CI taxonomy class: feature-correctness. Runs on every PR (draft AND ready) —
 # cheap, no Docker, no network. This workflow replaces the contract-specific
-# steps that previously lived in integration.yml (issue #275). It feeds the
-# ci-gate fan-in required check.
+# steps that previously lived in integration.yml (issue #275). It is directly
+# required in branch protection (issue #275 addendum: the ci-gate.yml/
+# ci-gate.ts fan-in mechanism this workflow used to feed was removed after a
+# production incident on PR #316; a structurally sounder fan-in replacement is
+# tracked in issue #348).
 #
 # Path-gated (issue #275 addendum): a `pull_request` run whose changed files
 # don't match `contract/**` skips the job body — a REAL dorny/paths-filter skip,
-# not a synthetic outcome. `push` to `main` is never path-filtered (see the job
-# `if:` below), so a merge to main always runs this in full.
+# not a synthetic outcome. Because it's a job-level `if:` skip (never
+# workflow-level `on.paths`), it reports a real `skipped` conclusion to the
+# Checks API, so requiring this workflow directly carries no deadlock risk.
+# `push` to `main` is never path-filtered (see the job `if:` below), so a
+# merge to main always runs this in full.
 name: contract
 env:
   CI_CLASS: feature-correctness
@@ -24,9 +30,9 @@ on:
 jobs:
   # ── change detection ───────────────────────────────────────────────────────
   changes:
-    # Plumbing, not an assurance job itself (same reasoning as ci-gate.yml's
-    # own `changes` job) — overriding the workflow-level CI_CLASS keeps the
-    # taxonomy scanner from grading this filter step as if it were a test.
+    # Plumbing, not an assurance job itself — overriding the workflow-level
+    # CI_CLASS keeps the taxonomy scanner from grading this filter step as
+    # if it were a test.
     env:
       CI_CLASS: ignore
     runs-on: [self-hosted, robotmoney-self-hosted]

@@ -1,17 +1,21 @@
 # Frontend tier: standalone, decoupled Playwright specs that don't need a live
 # backend or the full demo boot.
 #
-# Issue #275 addendum, critical-bug fix: ci-gate.ts's neededDomains() has
-# always required a `"frontend"`-named workflow run whenever `frontend/**`
-# changed, but no such workflow existed anywhere in this repo pre-addendum —
-# `ci-gate` was permanently unsatisfiable for any frontend-only PR. This
-# workflow is that genuine, dedicated `frontend` domain backing (`name:
-# frontend` below is what `gh run list` / ci-gate.ts's outcomesFromGitHub()
-# match on). It is not a substitute for the full LIVE-backed Playwright
-# coverage the `e2e` workflow's "Full-stack demo" step already runs
-# (`test:browser` there still runs the ENTIRE frontend/test/browser/ suite,
-# unchanged) — this workflow is strictly additive: a fast, cheap signal for
-# frontend-touching PRs that doesn't wait for the ~40+ minute LIVE demo boot.
+# Issue #275 addendum, critical-bug fix: this repo previously had a
+# ci-gate.yml/ci-gate.ts fan-in mechanism whose neededDomains() required a
+# `"frontend"`-named workflow run whenever `frontend/**` changed, but no such
+# workflow existed — that required check was permanently unsatisfiable for any
+# frontend-only PR. This workflow is that genuine, dedicated `frontend` domain
+# backing (`name: frontend` below). The fan-in mechanism itself was later
+# removed after an unrelated production incident (issue #275 addendum 2,
+# tracked for a sounder replacement in issue #348); this workflow's own value
+# — a real, fast frontend check — stands independent of that and is now
+# directly required in branch protection instead. It is not a substitute for
+# the full LIVE-backed Playwright coverage the `e2e` workflow's "Full-stack
+# demo" step already runs (`test:browser` there still runs the ENTIRE
+# frontend/test/browser/ suite, unchanged) — this workflow is strictly
+# additive: a fast, cheap signal for frontend-touching PRs that doesn't wait
+# for the ~40+ minute LIVE demo boot.
 #
 # Coordinator direction (mid-review, 2026-07-30): rather than special-casing
 # "HTML/CSS-only" as its own path category, this workflow runs whenever
@@ -36,9 +40,11 @@
 #
 # Path-gated (issue #275 addendum): a `pull_request` run whose changed files
 # don't match `frontend/**`/`playwright.config.ts` skips the job body — a REAL
-# dorny/paths-filter skip, not a synthetic outcome. `push` to `main` is never
-# path-filtered (see the job `if:` below), so a merge to main always runs this
-# in full.
+# dorny/paths-filter skip, not a synthetic outcome. Because it's a job-level
+# `if:` skip (never workflow-level `on.paths`), it reports a real `skipped`
+# conclusion to the Checks API, so requiring this workflow directly carries no
+# deadlock risk. `push` to `main` is never path-filtered (see the job `if:`
+# below), so a merge to main always runs this in full.
 name: frontend
 env:
   CI_CLASS: feature-correctness
@@ -51,9 +57,9 @@ on:
 jobs:
   # ── change detection ───────────────────────────────────────────────────────
   changes:
-    # Plumbing, not an assurance job itself (same reasoning as ci-gate.yml's
-    # own `changes` job) — overriding the workflow-level CI_CLASS keeps the
-    # taxonomy scanner from grading this filter step as if it were a test.
+    # Plumbing, not an assurance job itself — overriding the workflow-level
+    # CI_CLASS keeps the taxonomy scanner from grading this filter step as
+    # if it were a test.
     env:
       CI_CLASS: ignore
     runs-on: [self-hosted, robotmoney-self-hosted]

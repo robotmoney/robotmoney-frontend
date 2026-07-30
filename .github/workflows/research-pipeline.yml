@@ -30,10 +30,13 @@
 #
 # Path-gated (issue #275 addendum): a `pull_request` run whose changed files
 # don't match backend/src/analytics/**  or backend/src/chain/** skips the job
-# body — a REAL dorny/paths-filter skip, not a synthetic outcome (ci-gate.ts's
-# invariant 4 rejects a green fan-in from a domain skipped while its own paths
-# DID change). `push` to `main` is never path-filtered (see the job `if:`
-# below), so a merge to main always runs this in full.
+# body — a REAL dorny/paths-filter skip, not a synthetic outcome. Because it's
+# a job-level `if:` skip (never workflow-level `on.paths`), it reports a real
+# `skipped` conclusion to the Checks API, so requiring this workflow directly
+# in branch protection (issue #275 addendum 2 — see this repo's ci-gate.yml
+# removal history and issue #348) carries no deadlock risk. `push` to `main`
+# is never path-filtered (see the job `if:` below), so a merge to main always
+# runs this in full.
 name: research-pipeline
 env:
   CI_CLASS: system-correctness
@@ -46,11 +49,11 @@ on:
 jobs:
   # ── change detection ───────────────────────────────────────────────────────
   changes:
-    # Plumbing, not an assurance job itself (same reasoning as ci-gate.yml's
-    # own `changes` job) — it must run in EVERY context, including pr_draft,
-    # so the main job below has a filter output to gate on. Overriding the
-    # workflow-level CI_CLASS here keeps the taxonomy scanner from flagging
-    # this job as a system-correctness job that wrongly runs on drafts.
+    # Plumbing, not an assurance job itself — it must run in EVERY context,
+    # including pr_draft, so the main job below has a filter output to gate
+    # on. Overriding the workflow-level CI_CLASS here keeps the taxonomy
+    # scanner from flagging this job as a system-correctness job that
+    # wrongly runs on drafts.
     env:
       CI_CLASS: ignore
     runs-on: [self-hosted, robotmoney-self-hosted]

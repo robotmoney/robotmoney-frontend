@@ -8,8 +8,11 @@
 # paths-ignore: every code change must pass the unit suite.
 #
 # This workflow replaces the "Check root scripts" and "Unit cost class" steps
-# that previously lived in integration.yml (issue #275). It feeds the ci-gate
-# fan-in required check.
+# that previously lived in integration.yml (issue #275). It is directly
+# required in branch protection (issue #275 addendum: the ci-gate.yml/
+# ci-gate.ts fan-in mechanism this workflow used to feed was removed after a
+# production incident on PR #316; a structurally sounder fan-in replacement is
+# tracked in issue #348).
 name: unit
 env:
   CI_CLASS: feature-correctness

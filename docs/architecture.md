@@ -120,27 +120,50 @@ network, or a real model call never shares a directory with a pure unit test.
 **CI fan-in.** Per-PR assurance is split into one workflow per assurance domain
 (issue #275): `unit` (root typecheck and unit tests), `repo-guards`, `contract`,
 `integration` (the `scripts/tests/integration` cost class), `backend`,
-`research-pipeline`, `frontend`, `onboarding-eval-rails`, and `e2e`.
-`ci-gate.yml` is the single required context: its own `changes` job
-(`dorny/paths-filter`, SHA-pinned) detects changed path categories, its `gate`
-job (`if: always()`, logic in `scripts/checks/ci-gate.ts`) polls `gh run list`
-for the sibling workflows' conclusions on this SHA and rejects failures,
-cancellations, incorrect skips, or zero-test code changes. `ci-gate.yml` itself
-is NEVER path-filtered (`on.paths`/`paths-ignore` on a required workflow omits
-its check context entirely, which deadlocks branch protection) — only its
-in-workflow change-detection job is.
+`research-pipeline`, `frontend`, `onboarding-eval-rails`, and `e2e`. Each of
+these is **directly required** in branch protection — there is no fan-in/gate
+workflow aggregating them (see "No fan-in gate" below for why, and for what
+used to be here).
 
 Every domain besides `unit` and `repo-guards` narrows further by embedding its
-OWN `dorny/paths-filter` change-detection job (a standalone workflow file
-cannot read `ci-gate.yml`'s `changes` job outputs — `needs.*.outputs` is scoped
-to jobs within one workflow file) and gating its main job's `if:` on that
-job's own filter output — but ONLY on `pull_request` events
+OWN `dorny/paths-filter` change-detection job and gating its main job's `if:`
+on that job's own filter output — but ONLY on `pull_request` events
 (`github.event_name != 'pull_request' || (...)`), so a `push` to the default
 branch always runs every workflow in full regardless of what changed
 (asserted by `ci-workflows-structure.test.ts`). `unit.yml` and
 `repo-guards.yml` are the two deliberate exceptions: both are cheap enough
 (no Docker, no network) to run unconditionally on every PR, and both say so in
-their own header comments.
+their own header comments. Because every path-based skip is a **job-level**
+`if:` guard (never a workflow-level `on.paths`/`paths-ignore`), a legitimately
+skipped domain still reports a real `skipped` conclusion to the GitHub Checks
+API — the property that makes requiring these workflows directly, rather than
+through a fan-in aggregator, safe: branch protection sees a concluded check
+either way and never hangs waiting for a context that never arrives.
+
+**No fan-in gate (issue #275 addendum 2, 2026-07-30).** This design originally
+had a `ci-gate.yml`/`scripts/checks/ci-gate.ts` fan-in: a single required
+`gate` job that polled `gh run list` for every sibling workflow's conclusion on
+the current commit and enforced the test-coverage invariants (needed-domain
+success, failure/cancellation propagation, invariant-4 incorrect-skip
+rejection, invariant-2 zero-test rejection) centrally. It was removed after a
+production incident on PR #316: on a `pull_request` event, bare `github.sha`
+resolves to GitHub's synthetic PR merge commit, not the branch's real head
+commit every sibling workflow's run is recorded under, so `gh run list
+--commit $GITHUB_SHA` matched zero runs and the gate burned its entire polling
+budget before failing — even though every sibling workflow had already
+succeeded. That specific bug was fixed (resolving `GITHUB_SHA` from
+`github.event.pull_request.head.sha` on `pull_request` events), but the repo
+owner's final decision was to remove the fan-in mechanism entirely rather than
+keep a cross-workflow `gh run list`-polling design going forward, and to
+require each real-work workflow directly instead — accepted as safe per the
+job-level-skip property above. Issue #348 tracks investigating a structurally
+sounder fan-in replacement (likely `workflow_run`-based, avoiding the
+polling-for-an-external-commit class of bug entirely) for if/when one is
+needed again. Flipping the actual branch-protection required-check list to
+list these workflows individually (`unit`, `backend`, `contract`, `frontend`,
+`integration`, `e2e`, `repo-guards`, `research-pipeline`,
+`onboarding-eval-rails`, `docs-lint`) is an out-of-band administrative step in
+the GitHub UI, not something automatable from this repo.
 
 - `research-pipeline` (issue #275 addendum) narrows the coarse `backend`
   category to the GeckoTerminal/analytics-fetch surface specifically
@@ -169,15 +192,10 @@ their own header comments.
   model token) stays inside `e2e.yml`'s "Full-stack demo" step, unchanged — it
   deliberately reuses that already-booted LIVE stack rather than standing up a
   second one.
-- `frontend` (issue #275 addendum, critical-bug fix) is a genuine, dedicated
-  workflow (`.github/workflows/frontend.yml`, `name: frontend`) backing the
-  `frontend` domain `ci-gate.ts` has always required whenever `frontend/**`
-  changes. Before this addendum no such workflow existed anywhere in the repo,
-  so `ci-gate` was permanently unsatisfiable for any frontend-only PR — this
-  test-coverage regression is what `ci-workflows-structure.test.ts`'s
-  "every Domain in ci-gate.ts's Domain union is backed by a workflow whose
-  name: matches" test now prevents from recurring. It runs ONLY the Playwright
-  specs that don't need a live backend — today exactly
+- `frontend` (issue #275 addendum, critical-bug fix — see "No fan-in gate"
+  above for what backed this requirement before it was removed) is a genuine,
+  dedicated workflow (`.github/workflows/frontend.yml`, `name: frontend`). It
+  runs ONLY the Playwright specs that don't need a live backend — today exactly
   `frontend/test/browser/preview-smoke.spec.ts`, which spawns its own
   `scripts/preview-server.ts` (no `BACKEND_URL`, no Docker) — as a fast,
   feature-correctness-class addition, not a substitute: `e2e.yml`'s

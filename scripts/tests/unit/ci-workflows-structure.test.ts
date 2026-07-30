@@ -34,12 +34,17 @@ const PATHS_FILTER_SHA = "de90cc6fb38fc0963ad72b210f1f284cd68cea36";
 
 /**
  * Workflows expected to carry their OWN dorny/paths-filter change-detection
- * job (issue #275 addendum item 2/3/4: real per-workflow path-skip wiring,
- * since a standalone workflow file cannot read ci-gate.yml's `changes` job
- * outputs across files). repo-guards.yml and unit.yml are DELIBERATELY
- * excluded — both are documented (in their own headers) to run unconditionally
- * on every PR regardless of path, and ci-workflows-structure.test.ts already
- * pins repo-guards.yml's "no path filter" invariant above.
+ * job (issue #275 addendum item 2/3/4: real per-workflow path-skip wiring).
+ * Each of these is now directly required in branch protection (issue #275
+ * addendum: the ci-gate.yml/ci-gate.ts fan-in mechanism was removed —
+ * production incident on PR #316, tracked for a structurally sounder
+ * replacement in issue #348). A job-level `if:` skip (never workflow-level
+ * `on.paths`) reports a real `skipped` conclusion to the Checks API, so
+ * requiring these directly carries no deadlock risk. repo-guards.yml and
+ * unit.yml are DELIBERATELY excluded from this list — both are documented (in
+ * their own headers) to run unconditionally on every PR regardless of path,
+ * and ci-workflows-structure.test.ts already pins repo-guards.yml's "no path
+ * filter" invariant above.
  */
 const PATH_GATED_WORKFLOWS = [
   "backend.yml",
@@ -55,12 +60,6 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
     for (const file of allWorkflows()) {
       expect(read(file), `${file} declares CI_CLASS`).toMatch(/CI_CLASS:/);
     }
-  });
-
-  test("ci-gate.yml uses dorny/paths-filter, not on.paths", () => {
-    const gate = read("ci-gate.yml");
-    expect(gate).not.toMatch(/^\s+paths(?:-ignore)?:/m);
-    expect(gate).toContain("dorny/paths-filter@");
   });
 
   test("repo-guards.yml has no path filter and contains all guard commands", () => {
@@ -143,39 +142,13 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
     expect(backendYml).toMatch(/working-directory:\s*backend[\s\S]*?run:\s*bun run typecheck/);
   });
 
-  // ── issue #275 addendum: every Domain ci-gate.ts requires must have a real
-  // workflow backing it ────────────────────────────────────────────────────
-  //
-  // This is the mechanical regression guard for the critical bug the addendum
-  // found: ci-gate.ts's Domain type named `"frontend"` as a required assurance
-  // whenever frontend/** changed, but no workflow anywhere produced a
-  // GitHub-Actions run literally named `frontend` — ci-gate.ts's
-  // outcomesFromGitHub() can only ever see `missing` for it, so the required
-  // `ci-gate` check would fail FOREVER on any PR touching frontend/**. This
-  // test parses the Domain union directly out of ci-gate.ts's source (never
-  // hand-copies it — a hand-copied list would drift silently the next time a
-  // domain is added) and asserts a workflow whose `name:` equals that literal
-  // exists, so this exact class of bug cannot land again undetected.
-  test("every Domain in ci-gate.ts's Domain union is backed by a workflow whose name: matches", () => {
-    const gateSource = readFileSync(join(root, "scripts/checks/ci-gate.ts"), "utf8");
-    const domainBlock = gateSource.match(/export type Domain =\s*([\s\S]*?);/);
-    expect(domainBlock, "ci-gate.ts declares `export type Domain = ...;`").not.toBeNull();
-    const domains = [...domainBlock![1].matchAll(/"([a-z0-9-]+)"/g)].map((m) => m[1]!);
-    expect(domains.length, "at least one domain literal was extracted").toBeGreaterThan(0);
-
-    const workflowNames = allWorkflows().map((file) => parse(file).name).filter((n): n is string => Boolean(n));
-    for (const domain of domains) {
-      expect(workflowNames, `a workflow named "${domain}" backs Domain "${domain}"`).toContain(domain);
-    }
-  });
-
   // ── issue #275 addendum item 2/3/4: real per-workflow path-skip wiring ───
   describe("path-gated workflows carry real dorny/paths-filter wiring, never on.paths", () => {
     for (const file of PATH_GATED_WORKFLOWS) {
       test(`${file} has its own SHA-pinned dorny/paths-filter change-detection job`, () => {
         const text = read(file);
         expect(text, `${file} uses dorny/paths-filter, not on.paths/paths-ignore for gating`).not.toMatch(/^\s+paths(?:-ignore)?:/m);
-        expect(text, `${file} pins dorny/paths-filter to the same SHA as ci-gate.yml`).toContain(`dorny/paths-filter@${PATHS_FILTER_SHA}`);
+        expect(text, `${file} pins dorny/paths-filter to the repo-standard SHA`).toContain(`dorny/paths-filter@${PATHS_FILTER_SHA}`);
 
         const wf = parse(file);
         const jobs = Object.entries(wf.jobs ?? {});
@@ -213,28 +186,6 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
         expect(read(file), `${file} does not use dorny/paths-filter`).not.toContain("dorny/paths-filter@");
       }
     });
-  });
-
-  // ── production incident, PR #316 (2026-07-30): ci-gate.yml's gate step must
-  // never pass bare `github.sha` as GITHUB_SHA ────────────────────────────
-  //
-  // Root cause of the incident: on a `pull_request` event, `github.sha`
-  // resolves to GitHub's synthetic PR merge commit, NOT the branch's actual
-  // head commit every sibling workflow's run is recorded under. `gh run list
-  // --commit <sha>` filters by the real head_sha, so passing the merge-commit
-  // sha made ci-gate.ts's outcomesFromGitHub() match ZERO runs, forever — the
-  // gate burned its entire polling budget and failed even though every
-  // sibling workflow had already succeeded. This is a correctness bug, not a
-  // timing one: no polling budget fixes querying the wrong commit. This test
-  // pins the fix so it can't silently regress back to bare `github.sha`.
-  test("ci-gate.yml's gate step resolves GITHUB_SHA from the PR head commit on pull_request, not the synthetic merge commit", () => {
-    const gate = read("ci-gate.yml");
-    const envBlock = gate.match(/GITHUB_SHA:\s*(.+)/);
-    expect(envBlock, "ci-gate.yml sets GITHUB_SHA in the gate step's env").not.toBeNull();
-    const expr = envBlock![1]!.trim();
-    expect(expr, "GITHUB_SHA must not be the bare github.sha expression").not.toBe("${{ github.sha }}");
-    expect(expr, "GITHUB_SHA must branch on pull_request to use the real head commit").toContain("github.event.pull_request.head.sha");
-    expect(expr, "GITHUB_SHA must still fall back to github.sha for non-pull_request events (push)").toContain("github.sha");
   });
 
   // ── issue #275 addendum item 3: research_pipeline test-file wiring ───────
