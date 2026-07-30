@@ -135,7 +135,10 @@ export function evaluateWallet(
   return failures;
 }
 
-export function evaluateVaultEconomics(body: { source?: string; stale?: boolean } | null): string[] {
+interface VaultAdapterRow { name?: string; configured?: boolean; provenance?: string }
+export function evaluateVaultEconomics(
+  body: { source?: string; stale?: boolean; adapters?: VaultAdapterRow[] } | null,
+): string[] {
   if (!body) return ["allocation: GET /api/dashboards/vault-economics failed"];
   const failures: string[] = [];
   if (body.source !== "live") {
@@ -143,6 +146,21 @@ export function evaluateVaultEconomics(body: { source?: string; stale?: boolean 
   }
   if (body.stale !== false) {
     failures.push("allocation: vault-economics is stale — the live Base RPC eth_call reads did not succeed");
+  }
+  // Issue #294: stale is redefined as (age > freshness budget) OR (backing
+  // sample provenance !== 'live'). The top-level `stale` flag already folds
+  // that in server-side (backend/src/chain/vault-economics.ts), but this
+  // per-adapter check is a second, independent line of defense so a bug in
+  // that aggregation can't silently pass the gate. Unlike wallet legs there
+  // is NO allowlist here — every configured adapter must be 'live'; do not
+  // add one (ratified at intake, 2026-07-28: no new cold-start grace window).
+  for (const a of body.adapters ?? []) {
+    if (!a.configured) continue;
+    if (a.provenance === "live") continue;
+    failures.push(
+      `allocation: vault adapter ${a.name ?? "?"} provenance "${a.provenance}" (expected "live") — ` +
+        "NEW silent staleness on the LIVE path (no vault-adapter allowlist, issue #294)",
+    );
   }
   return failures;
 }
