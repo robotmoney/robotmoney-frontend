@@ -121,7 +121,20 @@ jobs:
           IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
           # Workflow run conclusions fetched by the gate script via gh CLI.
           GH_TOKEN: ${{ github.token }}
-          GITHUB_SHA: ${{ github.sha }}
+          # NOT bare `github.sha`: on a `pull_request` event that resolves to
+          # GitHub's synthetic PR merge commit, which is a DIFFERENT sha from
+          # the branch's actual head commit every sibling workflow's run is
+          # recorded under. `gh run list --commit <sha>` filters by the real
+          # head_sha, so passing the merge-commit sha here makes
+          # outcomesFromGitHub()'s `relevant` filter match ZERO runs forever —
+          # not a slow-runner problem, a wrong-commit problem: no amount of
+          # polling budget fixes it, since the loop is asking about a commit
+          # nothing runs under. Confirmed in production: PR #316 timed out
+          # here with every sibling workflow already green minutes earlier.
+          # `github.event.pull_request.head.sha` is the real branch head on a
+          # pull_request event; plain `github.sha` is already correct for
+          # `push` (no `pull_request` object exists there).
+          GITHUB_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: bun run scripts/checks/ci-gate.ts

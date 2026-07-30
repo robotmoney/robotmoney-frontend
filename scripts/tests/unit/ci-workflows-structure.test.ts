@@ -215,6 +215,28 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
     });
   });
 
+  // ── production incident, PR #316 (2026-07-30): ci-gate.yml's gate step must
+  // never pass bare `github.sha` as GITHUB_SHA ────────────────────────────
+  //
+  // Root cause of the incident: on a `pull_request` event, `github.sha`
+  // resolves to GitHub's synthetic PR merge commit, NOT the branch's actual
+  // head commit every sibling workflow's run is recorded under. `gh run list
+  // --commit <sha>` filters by the real head_sha, so passing the merge-commit
+  // sha made ci-gate.ts's outcomesFromGitHub() match ZERO runs, forever — the
+  // gate burned its entire polling budget and failed even though every
+  // sibling workflow had already succeeded. This is a correctness bug, not a
+  // timing one: no polling budget fixes querying the wrong commit. This test
+  // pins the fix so it can't silently regress back to bare `github.sha`.
+  test("ci-gate.yml's gate step resolves GITHUB_SHA from the PR head commit on pull_request, not the synthetic merge commit", () => {
+    const gate = read("ci-gate.yml");
+    const envBlock = gate.match(/GITHUB_SHA:\s*(.+)/);
+    expect(envBlock, "ci-gate.yml sets GITHUB_SHA in the gate step's env").not.toBeNull();
+    const expr = envBlock![1]!.trim();
+    expect(expr, "GITHUB_SHA must not be the bare github.sha expression").not.toBe("${{ github.sha }}");
+    expect(expr, "GITHUB_SHA must branch on pull_request to use the real head commit").toContain("github.event.pull_request.head.sha");
+    expect(expr, "GITHUB_SHA must still fall back to github.sha for non-pull_request events (push)").toContain("github.sha");
+  });
+
   // ── issue #275 addendum item 3: research_pipeline test-file wiring ───────
   test("backend.yml excludes exactly the two research-pipeline-owned test files, which research-pipeline.yml runs exclusively", () => {
     const backendYml = read("backend.yml");

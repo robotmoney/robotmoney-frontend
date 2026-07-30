@@ -91,7 +91,20 @@ function outcomesFromGitHub(): Partial<Record<Domain, Outcome>> {
     integration: "integration", contract: "contract", frontend: "frontend",
     "onboarding-eval-rails": "onboarding-eval-rails", e2e: "e2e",
   };
-  for (let attempt = 0; attempt < 30; attempt++) {
+  // Defense-in-depth budget (production incident, PR #316, 2026-07-30): this
+  // repo has exactly ONE self-hosted runner shared by every open PR, so jobs
+  // queue rather than run in parallel — e2e.yml's own worst case is 105
+  // minutes (see its header), and the `gate` job itself was observed starting
+  // ~35 minutes after its own `changes` dependency was ready, purely from
+  // runner backlog. The PRIMARY fix for that incident was GITHUB_SHA
+  // resolving to the wrong commit (ci-gate.yml now passes
+  // github.event.pull_request.head.sha on pull_request events, not the
+  // synthetic merge commit `github.sha` gives there) — this budget is a
+  // second, independent safety margin so a genuinely busy runner degrades to
+  // "slow" rather than "wrongly failed."
+  const POLL_INTERVAL_MS = 20_000;
+  const MAX_POLL_ATTEMPTS = 540; // 540 * 20s = 180 minutes
+  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
     const result = Bun.spawnSync(["gh", "run", "list", "--repo", process.env.GITHUB_REPOSITORY!, "--commit", sha, "--limit", "100", "--json", "name,status,conclusion"]);
     if (result.exitCode !== 0) throw new Error(new TextDecoder().decode(result.stderr));
     const runs = JSON.parse(new TextDecoder().decode(result.stdout)) as { name: string; status: string; conclusion: string | null }[];
@@ -99,7 +112,7 @@ function outcomesFromGitHub(): Partial<Record<Domain, Outcome>> {
     if (relevant.length > 0 && relevant.every((run) => run.status === "completed")) {
       return Object.fromEntries(relevant.map((run) => [domains[run.name]!, run.conclusion === "success" ? "success" : run.conclusion === "cancelled" ? "cancelled" : run.conclusion === "skipped" ? "skipped" : "failure"])) as Partial<Record<Domain, Outcome>>;
     }
-    Bun.sleepSync(10_000);
+    Bun.sleepSync(POLL_INTERVAL_MS);
   }
   throw new Error("timed out waiting for assurance workflow conclusions");
 }
