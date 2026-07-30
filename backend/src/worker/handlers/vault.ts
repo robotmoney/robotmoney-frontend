@@ -4,9 +4,11 @@
 // (vault_address, sample_hour) so a retried or overlapping run within the same
 // hour never duplicates a slot. This is what the seeded
 // `vault.sample_share_price` cron (db/seed.ts, hourly) fires.
-import { config } from "../../config.ts";
+import { config, resolveBaseRpcSource, resolveVaultAdapters } from "../../config.ts";
 import { sql } from "../../db/worker-client.ts";
 import { callTotalAssets, callTotalSupply } from "../../chain/base-rpc-client.ts";
+
+const USDC_SCALE = 1_000_000;
 
 export async function sampleSharePrice(_payload: Record<string, unknown>): Promise<unknown> {
   const opts = { rpcUrl: config.baseRpcUrl };
@@ -33,3 +35,56 @@ export async function sampleSharePrice(_payload: Record<string, unknown>): Promi
 
   return { vaultAddress: config.vault.address, sampleHour: sampleHour.toISOString(), sharePrice };
 }
+
+export async function sampleVaultAdapters(_payload: Record<string, unknown>): Promise<unknown> {
+  const opts = { rpcUrl: config.baseRpcUrl };
+  const source = resolveBaseRpcSource();
+  const adapters = resolveVaultAdapters();
+  const sampledAt = new Date();
+  const sampleHour = new Date(sampledAt);
+  sampleHour.setUTCMinutes(0, 0, 0);
+
+  let persisted = 0;
+
+  for (const a of adapters) {
+    if (!a.configured) {
+      await sql`
+        INSERT INTO vault_adapter_samples
+          (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
+        VALUES
+          (${config.vault.address.toLowerCase()}, ${a.address.toLowerCase()}, ${a.name}, ${sampleHour}, NULL, false, ${source}, ${sampledAt})
+        ON CONFLICT (vault_address, adapter_address, sample_hour) DO UPDATE SET
+          adapter_name = EXCLUDED.adapter_name,
+          balance_usd  = EXCLUDED.balance_usd,
+          configured   = EXCLUDED.configured,
+          provenance   = EXCLUDED.provenance,
+          sampled_at   = EXCLUDED.sampled_at
+      `;
+      persisted += 1;
+      continue;
+    }
+
+    try {
+      const totalAssets = await callTotalAssets(a.address, opts);
+      const balanceUsd = Number(totalAssets) / USDC_SCALE;
+      await sql`
+        INSERT INTO vault_adapter_samples
+          (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
+        VALUES
+          (${config.vault.address.toLowerCase()}, ${a.address.toLowerCase()}, ${a.name}, ${sampleHour}, ${balanceUsd}, true, ${source}, ${sampledAt})
+        ON CONFLICT (vault_address, adapter_address, sample_hour) DO UPDATE SET
+          adapter_name = EXCLUDED.adapter_name,
+          balance_usd  = EXCLUDED.balance_usd,
+          configured   = EXCLUDED.configured,
+          provenance   = EXCLUDED.provenance,
+          sampled_at   = EXCLUDED.sampled_at
+      `;
+      persisted += 1;
+    } catch (err) {
+      console.error(`sampleVaultAdapters: adapter ${a.name} RPC read failed, skipping insert:`, err);
+    }
+  }
+
+  return { vaultAddress: config.vault.address, sampleHour: sampleHour.toISOString(), persisted };
+}
+

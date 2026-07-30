@@ -108,9 +108,10 @@ async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number;
   `;
   const row = rows[0];
   if (!row || row.price_usd == null) return null;
-  const sampledAtMs = row.sampled_at.getTime();
+  const sampledAt = row.sampled_at instanceof Date ? row.sampled_at : new Date(row.sampled_at);
+  const sampledAtMs = sampledAt.getTime();
   if (Date.now() - sampledAtMs > MAX_PERSISTED_PRICE_AGE_MS) return null; // too old — not eligible
-  return { priceUsd: Number(row.price_usd), sampledAt: row.sampled_at.toISOString() };
+  return { priceUsd: Number(row.price_usd), sampledAt: sampledAt.toISOString() };
 }
 
 // Falls back to a recent persisted PER-SYMBOL price (wallet_balance_samples,
@@ -338,7 +339,7 @@ export async function valueLeg(
   chainAmount: ChainAmount,
   source: BaseRpcSource,
   priceSource: PriceSource,
-  priceReader: WalletPriceReader = providerWalletPriceReader,
+  priceReader: WalletPriceReader = persistedFallbackWalletPriceReader,
 ): Promise<LegValuation> {
   // The chain read failed (a reverted sub-call or a thrown batch) → degrade.
   if (!chainAmount.ok) return { ok: false, error: new Error(`${asset.symbol} chain read unavailable`) };

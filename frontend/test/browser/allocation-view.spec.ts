@@ -26,7 +26,7 @@ const vendorScripts = {
     "node_modules/p5/lib/p5.min.js",
 };
 
-interface VaultEconomicsAdapter { name: string; address: string; configured?: boolean; balanceUsd: number | null }
+interface VaultEconomicsAdapter { name: string; address: string; configured?: boolean; balanceUsd: number | null; balanceObservedAt?: string | null; provenance?: string }
 interface VaultEconomics {
   asOf: string; stale: boolean; source?: "live" | "stub"; tvlUsd: number | null; sharePrice: number | null;
   totalShares: number | null; idleUsdc: number | null; apy7d: number | null;
@@ -139,7 +139,7 @@ test("allocation view binds vault economics to the golden payload, and Total AUM
   const golden = loadVaultEconomicsGolden();
   const wallet = walletStub({ totalUsd: 55000, source: "live" });
   await stubEnvironment(page, golden, wallet);
-  await page.goto("/");
+  await page.goto("/index.html");
   await navigate(page, "/allocation");
 
   // Hero Total AUM == live wallet total + live tvlUsd (never the vault-only
@@ -191,7 +191,7 @@ test("allocation hero flags a non-live wallet feed when wallet-balances reports 
   const golden = loadVaultEconomicsGolden();
   const wallet = walletStub({ totalUsd: 40000, source: "stub" });
   await stubEnvironment(page, golden, wallet);
-  await page.goto("/");
+  await page.goto("/index.html");
   await navigate(page, "/allocation");
 
   // Stub wallet numbers must never be presented as live chain data.
@@ -208,7 +208,7 @@ test("allocation hero flags a stale wallet feed and renders '—' when a wallet 
   const wallet = walletStub({ source: "live" });
   wallet.holdings[3]!.provenance = "stale";
   await stubEnvironment(page, golden, wallet);
-  await page.goto("/");
+  await page.goto("/index.html");
   await navigate(page, "/allocation");
 
   await expect(page.locator(".alloc-wallet-stale")).toBeVisible();
@@ -227,7 +227,7 @@ test("a wallet feed that recovered from transient rate-limiting renders LIVE —
   // none stale). Distinct per-holding values so the DOM binding is unambiguous.
   wallet.holdings = wallet.holdings.map((h, i) => ({ ...h, provenance: "live", valueUsd: 1000 * (i + 1) }));
   await stubEnvironment(page, golden, wallet);
-  await page.goto("/");
+  await page.goto("/index.html");
   await navigate(page, "/allocation");
 
   // Recovered → fully live: neither the stale nor the non-live wallet badge shows.
@@ -256,7 +256,7 @@ test("allocation view renders the vault non-live indicator when vault-economics 
     ],
   };
   await stubEnvironment(page, stubPayload, walletStub());
-  await page.goto("/");
+  await page.goto("/index.html");
   await navigate(page, "/allocation");
 
   await expect(page.locator(".alloc-nonlive")).toBeVisible();
@@ -285,7 +285,7 @@ test("allocation view renders a stale badge and never fabricates numbers when va
   };
   const wallet = walletStub({ totalUsd: 55000, source: "live" });
   await stubEnvironment(page, degraded, wallet);
-  await page.goto("/");
+  await page.goto("/index.html");
   await navigate(page, "/allocation");
 
   await expect(page.locator(".alloc-stale")).toBeVisible();
@@ -323,7 +323,7 @@ test("allocation hero renders a partial Total AUM (never '—') when the wallet 
       contentType: "application/javascript",
     }));
   }
-  await page.goto("/");
+  await page.goto("/index.html");
   await navigate(page, "/allocation");
 
   await expect(page.locator(".alloc-aum__value")).toHaveText(fmtUsd(golden.tvlUsd));
@@ -344,7 +344,7 @@ test("Token Buybacks table rows + totals render FROM GET /api/dashboards/buyback
   let hit = false;
   await stubEnvironment(page, golden, walletStub());
   await stubJson(page, "**/api/dashboards/buybacks", buybacks, () => { hit = true; });
-  await page.goto("/");
+  await page.goto("/index.html");
   await navigate(page, "/allocation");
 
   // One data row (each carries a basescan tx link) per served buyback — the 10
@@ -372,7 +372,7 @@ test("per-wallet Sleeves tables render FROM GET /api/dashboards/wallet-sleeves g
   let hit = false;
   await stubEnvironment(page, golden, walletStub());
   await stubJson(page, "**/api/dashboards/wallet-sleeves", sleeves, () => { hit = true; });
-  await page.goto("/");
+  await page.goto("/index.html");
   await navigate(page, "/allocation");
 
   // Exactly one visible sleeve card per served wallet (the loading + empty
@@ -406,7 +406,7 @@ test("allocation strategy bucket weights derive FROM GET /api/dashboards/allocat
   let hit = false;
   await stubEnvironment(page, golden, walletStub());
   await stubJson(page, "**/api/dashboards/allocation", mutated, () => { hit = true; });
-  await page.goto("/");
+  await page.goto("/index.html");
   await navigate(page, "/allocation");
 
   const pcts = page.locator(".alloc-bucket__pct");
@@ -424,7 +424,7 @@ test("allocation strategy bucket weights match the committed golden weights", as
   let hit = false;
   await stubEnvironment(page, golden, walletStub());
   await stubJson(page, "**/api/dashboards/allocation", fw, () => { hit = true; });
-  await page.goto("/");
+  await page.goto("/index.html");
   await navigate(page, "/allocation");
 
   const pcts = page.locator(".alloc-bucket__pct");
@@ -434,3 +434,87 @@ test("allocation strategy bucket weights match the committed golden weights", as
   }
   expect(hit).toBe(true);
 });
+
+test("Vault TVL table and all three sleeve tables render numeric cells (zero '—' occurrences) for a goldens payload carrying persisted values", async ({ page }) => {
+  const golden = loadVaultEconomicsGolden();
+  const sleeves = loadGolden<WalletSleeves>("/api/dashboards/wallet-sleeves");
+  await stubEnvironment(page, golden, walletStub());
+  await stubJson(page, "**/api/dashboards/wallet-sleeves", sleeves);
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
+
+  // Vault table cells must contain numeric values for configured adapters
+  const vaultRows = page.locator(".alloc-tablecard").first().locator("tbody tr");
+  await expect(vaultRows).toHaveCount(3);
+  for (let i = 0; i < 3; i++) {
+    const cells = vaultRows.nth(i).locator("td");
+    const valText = await cells.nth(3).innerText();
+    expect(valText).not.toBe("—");
+  }
+
+  // All 3 sleeve tables must render numeric cells for their holdings
+  const sleeveCards = page.locator(".alloc-sleeve:visible");
+  await expect(sleeveCards).toHaveCount(3);
+  for (let i = 0; i < 3; i++) {
+    const card = sleeveCards.nth(i);
+    const rows = card.locator("tbody tr");
+    const count = await rows.count();
+    expect(count).toBeGreaterThan(0);
+    for (let r = 0; r < count; r++) {
+      const valCell = rows.nth(r).locator(".alloc-val");
+      const text = await valCell.innerText();
+      expect(text).not.toBe("—");
+    }
+  }
+});
+
+test("allocation view renders dated stale badges rather than blank cells for stale payloads", async ({ page }) => {
+  const staleVault: VaultEconomics = {
+    asOf: "2026-07-29T12:00:00.000Z",
+    stale: true,
+    source: "live",
+    tvlUsd: 84000,
+    sharePrice: 1.0,
+    totalShares: 84000,
+    idleUsdc: 0,
+    apy7d: null,
+    adapters: [
+      { name: "Morpho", address: "0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9", configured: true, balanceUsd: 28000, balanceObservedAt: "2026-07-29T12:00:00.000Z", provenance: "stale" },
+      { name: "Aave", address: "0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea", configured: true, balanceUsd: 28000, balanceObservedAt: "2026-07-29T12:00:00.000Z", provenance: "stale" },
+      { name: "Compound", address: "0x8247da22a59fce074c102431048d0ce7294c2652", configured: true, balanceUsd: 28000, balanceObservedAt: "2026-07-29T12:00:00.000Z", provenance: "stale" },
+    ],
+  };
+
+  const staleSleeves = {
+    asOf: "2026-07-29T12:00:00.000Z",
+    source: "live",
+    stale: true,
+    wallets: [
+      {
+        name: "Bankr",
+        address: "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6",
+        type: "primary",
+        totalUsd: 100,
+        stale: true,
+        observedAt: "2026-07-29T12:00:00.000Z",
+        holdings: [
+          { symbol: "USDC", amount: 100, priceUsd: 1, valueUsd: 100, provenance: "stale", observedAt: "2026-07-29T12:00:00.000Z" },
+        ],
+      },
+    ],
+  };
+
+  await stubEnvironment(page, staleVault, walletStub());
+  await stubJson(page, "**/api/dashboards/wallet-sleeves", staleSleeves);
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
+
+  // Vault stale badge is visible
+  await expect(page.locator(".alloc-stale")).toBeVisible();
+
+  // Sleeve stale badge is visible and dated
+  const sleeveStaleBadge = page.locator(".alloc-sleeve__stale");
+  await expect(sleeveStaleBadge).toBeVisible();
+  await expect(sleeveStaleBadge).toContainText("stale");
+});
+

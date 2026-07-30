@@ -5,8 +5,8 @@ import { makeAnalyticsHandlers } from "./analytics.ts";
 import { refreshBuybacks } from "./buybacks.ts";
 import * as committee from "./committee.ts";
 import * as projects from "./projects.ts";
-import { sampleSharePrice } from "./vault.ts";
-import { sampleWalletBalances } from "./wallet.ts";
+import { sampleSharePrice, sampleVaultAdapters } from "./vault.ts";
+import { sampleWalletBalances, sampleWalletSleeves } from "./wallet.ts";
 
 // `jobId` is the claimed job's row id (loop.ts passes `job.id`). It is optional
 // and source-compatible: existing handlers that only take `payload` remain
@@ -28,8 +28,10 @@ export const handlers: Record<string, JobHandler> = {
   "research.refresh": analytics.researchRefresh,
   // hourly vault share-price sample (feeds the 7-day APY calc)
   "vault.sample_share_price": sampleSharePrice,
+  "vault.sample_adapters": sampleVaultAdapters,
   // daily prop-wallet balance sample (feeds the /performance history + last-live fallback)
   "wallet.sample_balances": sampleWalletBalances,
+  "wallet.sample_sleeves": sampleWalletSleeves,
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,
   // committee session lifecycle

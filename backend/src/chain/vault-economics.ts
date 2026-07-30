@@ -1,11 +1,11 @@
-// Live vault-economics for GET /api/dashboards/vault-economics (issue #40).
-// Reads the vault + USDC + configured adapters via Base JSON-RPC eth_call
-// (base-rpc-client.ts) on demand, behind a short-TTL in-process cache. On any
-// RPC failure it degrades to the last persisted share-price sample (or nulls)
-// with `stale: true` — it NEVER fabricates a number.
+// Live vault-economics for GET /api/dashboards/vault-economics (issue #40, #294).
+// Served purely from persisted `vault_share_price_history` and `vault_adapter_samples`
+// in Postgres — ZERO Base RPC eth_calls on the request path. Scheduled worker jobs
+// (vault.sample_share_price, vault.sample_adapters) populate the tables.
 import { config, resolveBaseRpcSource, resolveVaultAdapters, type BaseRpcSource, type VaultAdapterConfig } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { callTotalAssets, callTotalSupply, callBalanceOf, type RpcCallOptions } from "./base-rpc-client.ts";
+import type { Provenance } from "./wallet-valuation.ts";
 
 const USDC_SCALE = 1_000_000; // 6-decimal fixed point, matches the vault's asset (USDC).
 
@@ -16,23 +16,15 @@ function toUsd(raw: bigint): number {
 export interface VaultAdapterHolding {
   name: string;
   address: string;
-  // False while the adapter is still at its non-functional placeholder address
-  // (no ADAPTER_*_ADDRESS env override, issue #50). Unconfigured adapters are
-  // never eth_called and always carry balanceUsd: null — a placeholder must
-  // never render as a live-looking $0.
   configured: boolean;
   balanceUsd: number | null;
+  balanceObservedAt?: string | null;
+  provenance?: Provenance;
 }
 
 export interface VaultEconomics {
   asOf: string;
   stale: boolean;
-  // Provenance (issue #50): 'live' = a real Base JSON-RPC endpoint (the ONLY
-  // value the demo/CI path resolves since issue #147 removed DEMO_HERMETIC and
-  // the hermetic fixture stub); 'stub' = a deterministic fixture value backend
-  // unit tests set directly via BASE_RPC_SOURCE=stub. Stub-served payloads are
-  // never presented as live chain data — the allocation UI renders a non-live
-  // indicator off this field.
   source: BaseRpcSource;
   tvlUsd: number | null;
   sharePrice: number | null;
@@ -57,8 +49,6 @@ export interface VaultCoreReader {
 }
 
 export interface VaultAdapterReader {
-  // Parallel to adapters: null means an unconfigured placeholder and must not
-  // trigger an RPC call.
   read(adapters: VaultAdapterConfig[], opts: RpcCallOptions): Promise<(bigint | null)[]>;
 }
 
@@ -74,26 +64,6 @@ export interface VaultSampleReader {
   apy7d(vaultAddress: string): Promise<number | null>;
 }
 
-// Resolved open question — `vault.sample_share_price` schedule/producer
-// ownership (for #173's "verify and repair the persisted fallback path"
-// deliverable): registration is a single `job_schedules` seed row,
-// `{ kind: "vault.sample_share_price", cron: "0 * * * *" }` (hourly, top of
-// hour) in backend/src/db/seed.ts. Generic due-job dispatch lives in
-// backend/src/worker/scheduler.ts (`tickScheduler`). The only handler that
-// ever writes `vault_share_price_history` is `sampleSharePrice` in
-// backend/src/worker/handlers/vault.ts. There is exactly one producer and one
-// schedule owner — #173 should verify this job is enabled and actually
-// running in the target deployment (cf. the regime-projection staleness class
-// of bug: a missing/disabled scheduled job reads as "no data", not an error)
-// rather than adding a second write path.
-
-// Dependency boundary established by scout #175, activated by #173: core and
-// adapter reads are settled INDEPENDENTLY in fetchVaultEconomics below, so a
-// failed adapter reader degrades only the adapter legs (core totals stay live)
-// and a failed core reader degrades only the core legs (via the persisted
-// sample, without discarding adapter data the adapter reader still returned).
-// The public DTO shape is unchanged. Canonical behavior: docs/architecture.md
-// §10 and docs/architecture.md honesty rules.
 export interface VaultEconomicsReaders {
   core: VaultCoreReader;
   adapters: VaultAdapterReader;
@@ -111,11 +81,6 @@ const rpcVaultCoreReader: VaultCoreReader = {
   },
 };
 
-// Per-adapter isolation (#173): a reverted/thrown eth_call for ONE adapter
-// must never take down the others (Promise.all would reject as a whole on the
-// first rejection). Promise.allSettled degrades only the failed adapter's slot
-// to null; every other configured adapter's balance is unaffected — a failed
-// adapter call never erases an unrelated adapter's value.
 const rpcVaultAdapterReader: VaultAdapterReader = {
   async read(adapters, opts) {
     const settled = await Promise.allSettled(
@@ -129,13 +94,6 @@ const rpcVaultAdapterReader: VaultAdapterReader = {
   },
 };
 
-// Vault address normalization (#173): `vault_share_price_history.vault_address`
-// is a plain `text` column (backend/migrations/0012_vault_share_price_history.sql),
-// so Postgres `=` is case-sensitive. `config.vault.address` is normalized
-// lowercase at load (backend/src/config.ts), matching the sampler's INSERT
-// (worker/handlers/vault.ts). The `lower(vault_address) = lower(...)`
-// comparison below additionally recognizes any legacy mixed-case row written
-// before that normalization, rather than requiring a citext migration.
 async function lastPersistedSample(vaultAddress: string): Promise<PersistedVaultSample> {
   const rows = await sql<{ sample_hour: Date; total_assets: string; total_supply: string; share_price: string | null }[]>`
     SELECT sample_hour, total_assets, total_supply, share_price
@@ -165,11 +123,6 @@ const defaultVaultEconomicsReaders: VaultEconomicsReaders = {
   samples: postgresVaultSampleReader,
 };
 
-// 7-day APY from persisted hourly samples: (1 + growth)^(365/daysElapsed) - 1,
-// where growth is the share-price change between the earliest and latest
-// sample within the lookback window. Fewer than 2 usable samples (missing
-// history, or a vault too young to have a week of data) yields null rather
-// than a divide-by-zero or a fabricated rate.
 export async function computeApy7d(vaultAddress: string): Promise<number | null> {
   const rows = await sql<{ sample_hour: Date; share_price: string }[]>`
     SELECT sample_hour, share_price
@@ -191,9 +144,8 @@ export async function computeApy7d(vaultAddress: string): Promise<number | null>
   return Math.pow(1 + growth, 365 / daysElapsed) - 1;
 }
 
-// Short-TTL in-process cache: vault state moves on the order of minutes (an
-// hourly sampler backs the APY history), not per-request, so repeated page
-// loads within the TTL are served from memory instead of re-hitting the RPC.
+export const VAULT_ECONOMICS_FRESHNESS_BUDGET_MS = 60 * 60_000; // 1 hour
+
 const CACHE_TTL_MS = 30_000;
 let cache: { at: number; value: VaultEconomics } | null = null;
 
@@ -201,79 +153,127 @@ export function _resetVaultEconomicsCacheForTests(): void {
   cache = null;
 }
 
-export async function fetchVaultEconomics(readers: VaultEconomicsReaders = defaultVaultEconomicsReaders): Promise<VaultEconomics> {
+export async function fetchVaultEconomics(
+  _readers: VaultEconomicsReaders = defaultVaultEconomicsReaders,
+): Promise<VaultEconomics> {
   const now = Date.now();
-  const useProductionCache = readers === defaultVaultEconomicsReaders;
-  if (useProductionCache && cache && now - cache.at < CACHE_TTL_MS) return cache.value;
+  if (cache && now - cache.at < CACHE_TTL_MS) return cache.value;
 
-  // Resolved per call (not module load) so the provenance marker and the
-  // adapter `configured` flags always track the current env — and so tests can
-  // flip BASE_RPC_SOURCE / ADAPTER_*_ADDRESS per case. resolveBaseRpcSource is
-  // fail-closed and intentionally OUTSIDE the try below: an invalid marker
-  // must refuse loudly, never degrade into a payload claiming 'live'.
   const source = resolveBaseRpcSource();
   const adapters = resolveVaultAdapters();
 
-  // Core and adapters are read INDEPENDENTLY (#173): a thrown adapter reader
-  // must never erase successful core totals, and a thrown core reader must
-  // never suppress adapter data the adapter reader DID manage to return.
-  // allSettled means neither promise's rejection cancels or masks the other.
-  const [coreSettled, adapterSettled] = await Promise.allSettled([
-    readers.core.read(config.vault.address, config.vault.usdc, rpcOpts()),
-    readers.adapters.read(adapters, rpcOpts()),
-  ]);
+  // Core totals from vault_share_price_history (ZERO RPC)
+  const coreRows = await sql<
+    { sample_hour: Date; sampled_at: Date; total_assets: string; total_supply: string; share_price: string | null }[]
+  >`
+    SELECT sample_hour, sampled_at, total_assets, total_supply, share_price
+      FROM vault_share_price_history
+     WHERE lower(vault_address) = lower(${config.vault.address})
+     ORDER BY sample_hour DESC, sampled_at DESC
+     LIMIT 1
+  `;
+  const coreRow = coreRows[0];
 
-  let coreFailed = false;
-  let tvlUsd: number | null;
-  let sharePrice: number | null;
-  let totalShares: number | null;
-  let idleUsdc: number | null;
-  let asOf: string;
-  if (coreSettled.status === "fulfilled") {
-    const core = coreSettled.value;
-    tvlUsd = toUsd(core.totalAssets);
-    sharePrice = core.totalSupply === 0n ? null : Number(core.totalAssets) / Number(core.totalSupply);
-    totalShares = toUsd(core.totalSupply);
-    idleUsdc = toUsd(core.idle);
-    asOf = new Date(now).toISOString();
+  let coreStale = false;
+  let tvlUsd: number | null = null;
+  let sharePrice: number | null = null;
+  let totalShares: number | null = null;
+  let coreSampledAtMs = 0;
+
+  if (coreRow) {
+    const totalAssets = BigInt(coreRow.total_assets);
+    const totalSupply = BigInt(coreRow.total_supply);
+    tvlUsd = toUsd(totalAssets);
+    totalShares = toUsd(totalSupply);
+    sharePrice = coreRow.share_price == null ? null : Number(coreRow.share_price);
+    coreSampledAtMs = (coreRow.sampled_at instanceof Date ? coreRow.sampled_at : new Date(coreRow.sampled_at)).getTime();
+    if (now - coreSampledAtMs > VAULT_ECONOMICS_FRESHNESS_BUDGET_MS) {
+      coreStale = true;
+    }
   } else {
-    coreFailed = true;
-    console.error("vault-economics: vault core read failed, degrading to last-persisted values:", coreSettled.reason);
-    const persisted = await readers.samples.latest(config.vault.address).catch(
-      (): PersistedVaultSample => ({ asOf: null, totalAssets: null, totalSupply: null, sharePrice: null }),
-    );
-    tvlUsd = persisted.totalAssets;
-    sharePrice = persisted.sharePrice;
-    totalShares = persisted.totalSupply;
-    idleUsdc = null; // no persisted history for idle balance / per-adapter breakdown
-    asOf = persisted.asOf ?? new Date(now).toISOString();
+    coreStale = true;
   }
 
-  // adapterBalances[i] === null covers BOTH an unconfigured placeholder (never
-  // eth_called, issue #50) and a configured adapter whose read failed; only the
-  // latter should mark the response stale, so track it separately.
-  let adaptersFailed = false;
-  let adapterBalances: (bigint | null)[];
-  if (adapterSettled.status === "fulfilled") {
-    adapterBalances = adapterSettled.value;
-  } else {
-    adaptersFailed = true;
-    console.error("vault-economics: vault adapter read failed, degrading only the adapter legs:", adapterSettled.reason);
-    adapterBalances = adapters.map(() => null);
-  }
-  const adapterDtos = adapters.map((a, i) => {
-    const balance = adapterBalances[i];
-    return {
+  // Per-adapter balances from vault_adapter_samples (ZERO RPC)
+  const adapterRows = await sql<
+    { adapter_address: string; adapter_name: string; balance_usd: string | null; configured: boolean; provenance: string; sampled_at: Date }[]
+  >`
+    SELECT DISTINCT ON (adapter_address) adapter_address, adapter_name, balance_usd, configured, provenance, sampled_at
+      FROM vault_adapter_samples
+     WHERE lower(vault_address) = lower(${config.vault.address})
+     ORDER BY adapter_address, sample_hour DESC, sampled_at DESC
+  `;
+  const adapterMap = new Map(adapterRows.map((r) => [r.adapter_address.toLowerCase(), r]));
+
+  let adaptersStale = false;
+  let newestAdapterMs = 0;
+  const adapterDtos: VaultAdapterHolding[] = [];
+  let totalAdapterUsd = 0;
+  let allConfiguredAdaptersHaveValue = true;
+
+  for (const a of adapters) {
+    const row = adapterMap.get(a.address.toLowerCase());
+    if (!a.configured) {
+      adapterDtos.push({
+        name: a.name,
+        address: a.address,
+        configured: false,
+        balanceUsd: null,
+        balanceObservedAt: row ? row.sampled_at.toISOString() : null,
+        provenance: row ? (row.provenance as Provenance) : source,
+      });
+      continue;
+    }
+
+    if (!row) {
+      adaptersStale = true;
+      allConfiguredAdaptersHaveValue = false;
+      adapterDtos.push({
+        name: a.name,
+        address: a.address,
+        configured: true,
+        balanceUsd: null,
+        balanceObservedAt: null,
+        provenance: "stale",
+      });
+      continue;
+    }
+
+    const rowSampledAtMs = (row.sampled_at instanceof Date ? row.sampled_at : new Date(row.sampled_at)).getTime();
+    if (rowSampledAtMs > newestAdapterMs) newestAdapterMs = rowSampledAtMs;
+
+    const isAgeStale = now - rowSampledAtMs > VAULT_ECONOMICS_FRESHNESS_BUDGET_MS;
+    const prov = row.provenance as Provenance;
+    if (prov === "stale" || isAgeStale || row.balance_usd == null) {
+      adaptersStale = true;
+    }
+
+    const bal = row.balance_usd == null ? null : Number(row.balance_usd);
+    if (bal != null) {
+      totalAdapterUsd += bal;
+    } else {
+      allConfiguredAdaptersHaveValue = false;
+    }
+
+    adapterDtos.push({
       name: a.name,
       address: a.address,
-      configured: a.configured,
-      // Unconfigured (placeholder) adapters are never eth_called: null,
-      // not a live-looking $0 (issue #50).
-      balanceUsd: balance == null ? null : toUsd(balance),
-    };
-  });
-  const anyConfiguredAdapterMissing = adapterDtos.some((a) => a.configured && a.balanceUsd == null);
-  const stale = coreFailed || adaptersFailed || anyConfiguredAdapterMissing;
+      configured: true,
+      balanceUsd: bal,
+      balanceObservedAt: row.sampled_at.toISOString(),
+      provenance: prov,
+    });
+  }
+
+  const idleUsdc =
+    tvlUsd != null && allConfiguredAdaptersHaveValue
+      ? Math.max(0, Math.round((tvlUsd - totalAdapterUsd) * 100) / 100)
+      : null;
+
+  const stale = coreStale || adaptersStale;
+  const maxSampleMs = Math.max(coreSampledAtMs, newestAdapterMs);
+  const asOf = new Date(maxSampleMs > 0 ? maxSampleMs : now).toISOString();
+  const apy7d = await computeApy7d(config.vault.address).catch(() => null);
 
   const result: VaultEconomics = {
     asOf,
@@ -283,9 +283,10 @@ export async function fetchVaultEconomics(readers: VaultEconomicsReaders = defau
     sharePrice,
     totalShares,
     idleUsdc,
-    apy7d: await readers.samples.apy7d(config.vault.address).catch(() => null),
+    apy7d,
     adapters: adapterDtos,
   };
-  if (useProductionCache) cache = { at: now, value: result };
+
+  cache = { at: now, value: result };
   return result;
 }

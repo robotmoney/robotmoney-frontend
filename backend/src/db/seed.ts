@@ -59,12 +59,14 @@ export const SCHEDULES: SeedSchedule[] = [
   // Hourly vault share-price sample (issue #40) — dense enough for a 7-day APY
   // lookback, cheap on RPC (3 eth_calls/hour). Handler: worker/handlers/vault.ts.
   { kind: "vault.sample_share_price", cron: "0 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "vault.sample_adapters", cron: "0 * * * *", payload: {}, timezone: "UTC", enabled: true },
   // Prop-wallet balance sample (issues #84/#118) — the ONLY place a chain read
   // happens for wallet balances now (the request path serves persisted data with
   // ZERO RPC). Runs EVERY MINUTE so the served payload is near-real-time; the
   // (sample_date, symbol) upsert refreshes today's row each tick (idempotent, no
   // row growth within a day). Handler: worker/handlers/wallet.ts.
   { kind: "wallet.sample_balances", cron: "* * * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "wallet.sample_sleeves", cron: "* * * * *", payload: {}, timezone: "UTC", enabled: true },
   // Buyback refresh (live-data contract §1) — eth_getLogs indexer that upserts
   // NEW WETH->ROBOTMONEY buyback swaps into buyback_swaps (keyed on tx_hash). No-op
   // under a non-live source; degrade-safe on RPC failure. Handler: handlers/buybacks.ts.
@@ -146,6 +148,7 @@ const SUPERSEDED_FAST_DEMO_SCHEDULES: { kind: string; cron: string }[] = [
 // byte-for-byte unchanged there.
 const SLOW_DEMO_SAMPLER_SCHEDULES: SeedSchedule[] = [
   { kind: "wallet.sample_balances", cron: "3 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "wallet.sample_sleeves", cron: "3 * * * *", payload: {}, timezone: "UTC", enabled: true },
 ];
 
 // Seeds the canonical job_schedules rows (+ retires the combined analytics.run
@@ -214,9 +217,9 @@ export async function seedJobSchedules(): Promise<void> {
   if (process.env.DEMO_MODE) {
     await sql`
       UPDATE job_schedules SET enabled = false
-       WHERE kind = 'wallet.sample_balances' AND cron = '* * * * *' AND enabled
+       WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron = '* * * * *' AND enabled
     `;
-    console.log("DEMO_MODE: disabled per-minute wallet.sample_balances (hourly demo cadence owns sampling)");
+    console.log("DEMO_MODE: disabled per-minute wallet samplers (hourly demo cadence owns sampling)");
 
     // Same one-directional treatment for the superseded ~2-minute demo
     // analytics rows (issue #287): the hourly (kind, cron) rows inserted above
@@ -265,7 +268,17 @@ export async function seed(): Promise<void> {
     VALUES ('wallet.sample_balances', ${sql.json(jsonValue({}))}, 'wallet.sample_balances:coldstart')
     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
   `;
-  console.log("enqueued cold-start wallet.sample_balances job (idempotent on dedupe_key)");
+  await sql`
+    INSERT INTO jobs (kind, payload, dedupe_key)
+    VALUES ('wallet.sample_sleeves', ${sql.json(jsonValue({}))}, 'wallet.sample_sleeves:coldstart')
+    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+  `;
+  await sql`
+    INSERT INTO jobs (kind, payload, dedupe_key)
+    VALUES ('vault.sample_adapters', ${sql.json(jsonValue({}))}, 'vault.sample_adapters:coldstart')
+    ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+  `;
+  console.log("enqueued cold-start sampler jobs (idempotent on dedupe_key)");
 
   // One-time prop-wallet history backfill (issue #84): seed the pre-launch
   // series carried forward from the baked views.js data so GET

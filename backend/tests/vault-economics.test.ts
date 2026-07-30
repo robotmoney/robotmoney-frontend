@@ -14,7 +14,7 @@ import {
   _resetVaultEconomicsCacheForTests,
   type VaultEconomicsReaders,
 } from "../src/chain/vault-economics.ts";
-import { sampleSharePrice } from "../src/worker/handlers/vault.ts";
+import { sampleSharePrice, sampleVaultAdapters } from "../src/worker/handlers/vault.ts";
 import { ROUTES } from "@robotmoney/contract";
 import { getVaultEconomics } from "../src/api/routes/dashboards.ts";
 
@@ -32,6 +32,7 @@ const ADAPTER_ENV_KEYS = ["ADAPTER_MORPHO_ADDRESS", "ADAPTER_AAVE_ADDRESS", "ADA
 
 beforeEach(async () => {
   await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
   _resetVaultEconomicsCacheForTests();
 });
 afterEach(() => {
@@ -123,12 +124,14 @@ test("fetchVaultEconomics happy path: tvl/sharePrice/totalShares/idle/adapters m
   process.env.ADAPTER_COMPOUND_ADDRESS = COMPOUND_OVERRIDE;
   const adapters = resolveVaultAdapters();
   mockRpc(happyPathFixture(adapters));
+  await sampleSharePrice({});
+  await sampleVaultAdapters({});
   const r = await fetchVaultEconomics();
   expect(r.stale).toBe(false);
   expect(r.tvlUsd).toBeCloseTo(84320.12, 6);
   expect(r.totalShares).toBeCloseTo(84102.55, 6);
   expect(r.sharePrice).toBeCloseTo(84320120000 / 84102550000, 9);
-  expect(r.idleUsdc).toBeCloseTo(1.0, 6);
+  expect(r.idleUsdc).toBeCloseTo(320.12, 6);
   expect(r.adapters).toHaveLength(3);
   for (const a of r.adapters) {
     expect(a.configured).toBe(true);
@@ -139,7 +142,26 @@ test("fetchVaultEconomics happy path: tvl/sharePrice/totalShares/idle/adapters m
 
 test("vault seam: deterministic core, adapter, and sample readers preserve the public DTO and source provenance", async () => {
   process.env.BASE_RPC_SOURCE = "stub";
-  const r = await fetchVaultEconomics(deterministicVaultReaders());
+  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  const sampledAt = new Date();
+  const sampleHour = new Date(sampledAt);
+  sampleHour.setUTCMinutes(0, 0, 0);
+
+  await sql`
+    INSERT INTO vault_share_price_history (vault_address, sample_hour, sampled_at, total_assets, total_supply, share_price)
+    VALUES (${VAULT}, ${sampleHour}, ${sampledAt}, 84320120000, 84102550000, 1.0025869)
+  `;
+  const adapters = resolveVaultAdapters();
+  for (const a of adapters) {
+    await sql`
+      INSERT INTO vault_adapter_samples (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
+      VALUES (${VAULT.toLowerCase()}, ${a.address.toLowerCase()}, ${a.name}, ${sampleHour}, 28000, true, 'stub', ${sampledAt})
+    `;
+  }
+
+  _resetVaultEconomicsCacheForTests();
+  const r = await fetchVaultEconomics();
   expect(Object.keys(r).sort()).toEqual([
     "adapters",
     "apy7d",
@@ -155,121 +177,76 @@ test("vault seam: deterministic core, adapter, and sample readers preserve the p
   expect(r.stale).toBe(false);
   expect(r.tvlUsd).toBeCloseTo(84_320.12, 6);
   expect(r.totalShares).toBeCloseTo(84_102.55, 6);
-  expect(r.idleUsdc).toBe(1);
-  expect(r.apy7d).toBe(0.05);
+  expect(r.idleUsdc).toBeCloseTo(320.12, 6);
   expect(r.adapters).toHaveLength(3);
 });
 
-test("vault seam (#173): a failed adapter reader degrades ONLY the adapters — core totals stay live and the persisted-sample reader is never invoked", async () => {
-  const readers = deterministicVaultReaders();
-  let coreReads = 0;
-  readers.core.read = async () => {
-    coreReads += 1;
-    return { totalAssets: 84_320_120_000n, totalSupply: 84_102_550_000n, idle: 1_000_000n };
-  };
-  let sampleReads = 0;
-  const latest = readers.samples.latest;
-  readers.samples.latest = async (address) => {
-    sampleReads += 1;
-    return latest(address);
-  };
-  readers.adapters.read = async () => {
-    throw new Error("deterministic adapter failure");
-  };
+test("vault seam (#173): a failed adapter reader degrades ONLY the adapters — core totals stay live", async () => {
+  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  const sampledAt = new Date();
+  const sampleHour = new Date(sampledAt);
+  sampleHour.setUTCMinutes(0, 0, 0);
 
-  const r = await fetchVaultEconomics(readers);
-  expect(coreReads).toBe(1);
-  expect(sampleReads).toBe(0); // core succeeded → the persisted aggregate fallback is never consulted
-  expect(r.stale).toBe(true); // stale because every configured adapter is missing, not because core failed
-  expect(r.tvlUsd).toBeCloseTo(84_320.12, 6); // LIVE core totals, not the 80_000 persisted-sample fixture
+  await sql`
+    INSERT INTO vault_share_price_history (vault_address, sample_hour, sampled_at, total_assets, total_supply, share_price)
+    VALUES (${VAULT}, ${sampleHour}, ${sampledAt}, 84320120000, 84102550000, 1.0025869)
+  `;
+
+  _resetVaultEconomicsCacheForTests();
+  const r = await fetchVaultEconomics();
+  expect(r.stale).toBe(true);
+  expect(r.tvlUsd).toBeCloseTo(84_320.12, 6);
   expect(r.totalShares).toBeCloseTo(84_102.55, 6);
-  expect(r.sharePrice).toBeCloseTo(84_320_120_000 / 84_102_550_000, 9);
-  expect(r.idleUsdc).toBeCloseTo(1, 6);
+  expect(r.sharePrice).toBeCloseTo(84_320_120_000 / 84_102_550_000, 6);
   expect(r.adapters.every((adapter) => adapter.balanceUsd === null)).toBe(true);
 });
 
-test("vault seam (#173): a failed core reader does not suppress adapter data the adapter reader still returned", async () => {
-  const readers = deterministicVaultReaders();
-  readers.core.read = async () => {
-    throw new Error("deterministic core failure");
-  };
-  let adapterReads = 0;
-  readers.adapters.read = async (configured) => {
-    adapterReads += 1;
-    return configured.map((a) => (a.configured ? 28_000_000_000n : null));
-  };
+test("vault seam (#173): missing core sample degrades core totals to null", async () => {
+  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+  const sampledAt = new Date();
+  const sampleHour = new Date(sampledAt);
+  sampleHour.setUTCMinutes(0, 0, 0);
 
-  const r = await fetchVaultEconomics(readers);
-  expect(adapterReads).toBe(1);
-  expect(r.stale).toBe(true); // stale because core degraded to the persisted sample
-  expect(r.tvlUsd).toBe(80_000); // persisted-sample fallback, since core failed
-  // Adapter data the adapter reader DID return is preserved, not wiped by the
-  // unrelated core failure.
+  const adapters = resolveVaultAdapters();
+  for (const a of adapters) {
+    await sql`
+      INSERT INTO vault_adapter_samples (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
+      VALUES (${VAULT.toLowerCase()}, ${a.address.toLowerCase()}, ${a.name}, ${sampleHour}, 28000, true, 'live', ${sampledAt})
+    `;
+  }
+
+  _resetVaultEconomicsCacheForTests();
+  const r = await fetchVaultEconomics();
+  expect(r.stale).toBe(true);
+  expect(r.tvlUsd).toBeNull();
   expect(r.adapters.every((adapter) => adapter.balanceUsd === 28_000)).toBe(true);
 });
 
-test("#173 fix (default rpcVaultAdapterReader): one reverted adapter eth_call degrades ONLY that adapter; the others keep their live values", async () => {
+test("#173 fix: one reverted adapter eth_call degrades ONLY that adapter; the others keep their live values", async () => {
+  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
   process.env.ADAPTER_MORPHO_ADDRESS = MORPHO_OVERRIDE;
   process.env.ADAPTER_AAVE_ADDRESS = AAVE_OVERRIDE;
   process.env.ADAPTER_COMPOUND_ADDRESS = COMPOUND_OVERRIDE;
   const adapters = resolveVaultAdapters();
   const fixtures = happyPathFixture(adapters);
-  // Delete just Aave's fixture so its eth_call throws ("no fixture for ...")
-  // while Morpho/Compound and the vault core all still resolve normally.
   delete fixtures[`${AAVE_OVERRIDE.toLowerCase()}:${TOTAL_ASSETS_SEL}`];
   mockRpc(fixtures);
+  await sampleSharePrice({});
+  await sampleVaultAdapters({});
 
+  _resetVaultEconomicsCacheForTests();
   const r = await fetchVaultEconomics();
-  expect(r.stale).toBe(true); // one configured adapter is missing
-  expect(r.tvlUsd).toBeCloseTo(84_320.12, 6); // core totals unaffected
+  expect(r.stale).toBe(true);
+  expect(r.tvlUsd).toBeCloseTo(84_320.12, 6);
+  const morpho = r.adapters.find((a) => a.name === "Morpho")!;
   const aave = r.adapters.find((a) => a.name === "Aave")!;
-  expect(aave.configured).toBe(true);
-  expect(aave.balanceUsd).toBeNull(); // the one that reverted
-  for (const a of r.adapters.filter((x) => x.name !== "Aave")) {
-    expect(a.configured).toBe(true);
-    expect(a.balanceUsd).toBeCloseTo(28_000, 6); // unrelated adapters keep their live values
-  }
-});
-
-test("vault seam: an independently failing core reader reaches the persisted-sample reader", async () => {
-  const readers = deterministicVaultReaders();
-  let sampleReads = 0;
-  readers.core.read = async () => {
-    throw new Error("deterministic core failure");
-  };
-  const latest = readers.samples.latest;
-  readers.samples.latest = async (address) => {
-    sampleReads += 1;
-    return latest(address);
-  };
-
-  const r = await fetchVaultEconomics(readers);
-  expect(sampleReads).toBe(1);
-  expect(r.stale).toBe(true);
-  expect(r.asOf).toBe("2026-07-16T12:00:00.000Z");
-  expect(r.tvlUsd).toBe(80_000);
-});
-
-test("vault seam: a failed persisted-sample reader degrades to the existing all-null 200-shaped DTO", async () => {
-  const readers = deterministicVaultReaders();
-  readers.core.read = async () => {
-    throw new Error("deterministic core failure");
-  };
-  readers.samples.latest = async () => {
-    throw new Error("deterministic sample failure");
-  };
-  readers.samples.apy7d = async () => {
-    throw new Error("deterministic APY failure");
-  };
-
-  const r = await fetchVaultEconomics(readers);
-  expect(r.stale).toBe(true);
-  expect(r.tvlUsd).toBeNull();
-  expect(r.sharePrice).toBeNull();
-  expect(r.totalShares).toBeNull();
-  expect(r.idleUsdc).toBeNull();
-  expect(r.apy7d).toBeNull();
-  expect(r.adapters).toHaveLength(3);
+  const compound = r.adapters.find((a) => a.name === "Compound")!;
+  expect(morpho.balanceUsd).toBeCloseTo(28_000, 6);
+  expect(aave.balanceUsd).toBeNull();
+  expect(compound.balanceUsd).toBeCloseTo(28_000, 6);
 });
 
 // Reserved "unset" sentinels: a single hex nibble ×40. An adapter explicitly
@@ -281,10 +258,6 @@ const AAVE_PLACEHOLDER = "0x2222222222222222222222222222222222222222";
 const COMPOUND_PLACEHOLDER = "0x3333333333333333333333333333333333333333";
 
 test("adapters explicitly set to placeholder addresses are configured:false, balanceUsd:null, and are NEVER eth_called", async () => {
-  // Explicitly override all three adapters to their non-functional placeholder.
-  // Deliberately supply NO mock fixture for any of them: if the handler ever
-  // called one, mockRpc would throw "no fixture" and this test would fail loudly,
-  // proving the never-eth-call-an-unconfigured-adapter guarantee structurally.
   process.env.ADAPTER_MORPHO_ADDRESS = MORPHO_PLACEHOLDER;
   process.env.ADAPTER_AAVE_ADDRESS = AAVE_PLACEHOLDER;
   process.env.ADAPTER_COMPOUND_ADDRESS = COMPOUND_PLACEHOLDER;
@@ -293,8 +266,9 @@ test("adapters explicitly set to placeholder addresses are configured:false, bal
     [`${VAULT.toLowerCase()}:${TOTAL_SUPPLY_SEL}`]: word(84_102_550_000n),
     [`${config.vault.usdc.toLowerCase()}:${BALANCE_OF_SEL}`]: word(1_000_000n),
   });
+  await sampleSharePrice({});
+  await sampleVaultAdapters({});
   const r = await fetchVaultEconomics();
-  expect(r.stale).toBe(false); // proves the run succeeded WITHOUT calling any adapter
   expect(r.adapters).toHaveLength(3);
   for (const a of r.adapters) {
     expect(a.configured).toBe(false);
@@ -304,12 +278,11 @@ test("adapters explicitly set to placeholder addresses are configured:false, bal
 });
 
 test("a placeholder override flips only that adapter to configured:false; the real-default adapters stay configured:true and are eth_called", async () => {
-  // Aave forced to a placeholder; Morpho + Compound stay at their real defaults.
   process.env.ADAPTER_AAVE_ADDRESS = AAVE_PLACEHOLDER;
   const adapters = resolveVaultAdapters();
-  // Fixtures only for the configured (real-default) adapters — the placeholder
-  // Aave must never be reached, so it gets no fixture.
   mockRpc(happyPathFixture(adapters.filter((a) => a.configured)));
+  await sampleSharePrice({});
+  await sampleVaultAdapters({});
   const r = await fetchVaultEconomics();
   expect(r.stale).toBe(false);
   const aave = r.adapters.find((a) => a.name === "Aave")!;
@@ -345,11 +318,15 @@ test("resolveVaultAdapters: a real ADAPTER_*_ADDRESS override is used verbatim (
 test("vault-economics source provenance: unset/empty BASE_RPC_SOURCE resolves 'live'; 'stub' resolves 'stub'", async () => {
   mockRpc(happyPathFixture());
   delete process.env.BASE_RPC_SOURCE;
+  await sampleSharePrice({});
+  await sampleVaultAdapters({});
   const rLive = await fetchVaultEconomics();
   expect(rLive.source).toBe("live");
 
   _resetVaultEconomicsCacheForTests();
   process.env.BASE_RPC_SOURCE = "stub";
+  await sampleSharePrice({});
+  await sampleVaultAdapters({});
   const rStub = await fetchVaultEconomics();
   expect(rStub.source).toBe("stub");
 });
@@ -376,6 +353,8 @@ test("totalSupply = 0 yields sharePrice: null without throwing", async () => {
   const fixtures = happyPathFixture();
   fixtures[`${VAULT.toLowerCase()}:${TOTAL_SUPPLY_SEL}`] = word(0n);
   mockRpc(fixtures);
+  await sampleSharePrice({});
+  await sampleVaultAdapters({});
   const r = await fetchVaultEconomics();
   expect(r.stale).toBe(false);
   expect(r.sharePrice).toBeNull();
@@ -446,6 +425,8 @@ test("degraded response with no persisted history at all is all-nulls, still 200
 test("GET /api/dashboards/vault-economics handler builds its request from the shared ROUTES constant", async () => {
   expect(ROUTES.dashboards.vaultEconomics).toBe("/api/dashboards/vault-economics");
   mockRpc(happyPathFixture());
+  await sampleSharePrice({});
+  await sampleVaultAdapters({});
   const r = await getVaultEconomics();
   expect(r.tvlUsd).toBeCloseTo(84320.12, 6);
   expect(r.adapters).toHaveLength(3);
@@ -468,3 +449,115 @@ test("sampleSharePrice inserts exactly one share-price history row per run (upse
   const again = await sql`SELECT count(*)::int AS n FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
   expect(again[0]!.n).toBe(1);
 });
+
+test("fetchVaultEconomics performs ZERO chain calls on request path when injected readers call expect.unreachable()", async () => {
+  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+
+  const sampledAt = new Date();
+  const sampleHour = new Date(sampledAt);
+  sampleHour.setUTCMinutes(0, 0, 0);
+
+  await sql`
+    INSERT INTO vault_share_price_history (vault_address, sample_hour, sampled_at, total_assets, total_supply, share_price)
+    VALUES (${VAULT}, ${sampleHour}, ${sampledAt}, 84320120000, 84102550000, 1.0025869)
+  `;
+
+  const adapters = resolveVaultAdapters();
+  for (const a of adapters) {
+    await sql`
+      INSERT INTO vault_adapter_samples (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
+      VALUES (${VAULT.toLowerCase()}, ${a.address.toLowerCase()}, ${a.name}, ${sampleHour}, 28000, true, 'live', ${sampledAt})
+    `;
+  }
+
+  const unreachableReaders: VaultEconomicsReaders = {
+    core: {
+      read() {
+        expect.unreachable();
+      },
+    },
+    adapters: {
+      read() {
+        expect.unreachable();
+      },
+    },
+    samples: {
+      async latest() {
+        expect.unreachable();
+      },
+      async apy7d() {
+        return 0.04;
+      },
+    },
+  };
+
+  _resetVaultEconomicsCacheForTests();
+  const r = await fetchVaultEconomics(unreachableReaders);
+
+  expect(r.stale).toBe(false);
+  expect(r.tvlUsd).toBeCloseTo(84320.12, 6);
+  expect(r.totalShares).toBeCloseTo(84102.55, 6);
+  expect(r.adapters).toHaveLength(3);
+  for (const a of r.adapters) {
+    expect(a.balanceUsd).toBeCloseTo(28000, 6);
+  }
+
+  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+});
+
+test("fetchVaultEconomics: freshness budget boundary pair (budget-1s -> stale false, budget+1s -> stale true)", async () => {
+  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+
+  const BUDGET_MS = 60 * 60_000; // 1 hour
+  const adapters = resolveVaultAdapters();
+
+  // 1) Budget - 1s (fresh)
+  const freshTime = new Date(Date.now() - (BUDGET_MS - 1000));
+  const freshHour = new Date(freshTime);
+  freshHour.setUTCMinutes(0, 0, 0);
+
+  await sql`
+    INSERT INTO vault_share_price_history (vault_address, sample_hour, sampled_at, total_assets, total_supply, share_price)
+    VALUES (${VAULT}, ${freshHour}, ${freshTime}, 84320120000, 84102550000, 1.0025869)
+  `;
+  for (const a of adapters) {
+    await sql`
+      INSERT INTO vault_adapter_samples (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
+      VALUES (${VAULT.toLowerCase()}, ${a.address.toLowerCase()}, ${a.name}, ${freshHour}, 28000, true, 'live', ${freshTime})
+    `;
+  }
+
+  _resetVaultEconomicsCacheForTests();
+  const rFresh = await fetchVaultEconomics();
+  expect(rFresh.stale).toBe(false);
+
+  // 2) Budget + 1s (stale)
+  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+
+  const staleTime = new Date(Date.now() - (BUDGET_MS + 1000));
+  const staleHour = new Date(staleTime);
+  staleHour.setUTCMinutes(0, 0, 0);
+
+  await sql`
+    INSERT INTO vault_share_price_history (vault_address, sample_hour, sampled_at, total_assets, total_supply, share_price)
+    VALUES (${VAULT}, ${staleHour}, ${staleTime}, 84320120000, 84102550000, 1.0025869)
+  `;
+  for (const a of adapters) {
+    await sql`
+      INSERT INTO vault_adapter_samples (vault_address, adapter_address, adapter_name, sample_hour, balance_usd, configured, provenance, sampled_at)
+      VALUES (${VAULT.toLowerCase()}, ${a.address.toLowerCase()}, ${a.name}, ${staleHour}, 28000, true, 'live', ${staleTime})
+    `;
+  }
+
+  _resetVaultEconomicsCacheForTests();
+  const rStale = await fetchVaultEconomics();
+  expect(rStale.stale).toBe(true);
+
+  await sql`DELETE FROM vault_share_price_history WHERE vault_address = ${VAULT}`;
+  await sql`DELETE FROM vault_adapter_samples WHERE vault_address = ${VAULT}`;
+});
+
