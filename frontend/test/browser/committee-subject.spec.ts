@@ -22,6 +22,18 @@ import { expect, test, type Page } from "@playwright/test";
 // per-date subjects/woon/*.json snapshots), which are the one dataset
 // guaranteed to carry non-empty wallets, nft_contracts, AND structural_notes.
 
+// The browser itself (not app code) logs a console error for every network
+// request that comes back non-2xx — one per failed resource load, regardless
+// of whether the app handled it gracefully. This spec deliberately forces
+// every /api/committee/** call to fail (503) so the page takes its archive
+// fallback, and the archive path itself makes best-effort lookups (e.g. a
+// snapshot file that legitimately doesn't exist for every date) that 404 and
+// are caught by the app. Both are expected, browser-generated noise — not
+// evidence of a page bug — so they are filtered out here rather than in
+// spa.spec.ts's failOnBrowserErrors/expectNoBrowserErrors, which never mocks
+// network failures and so never needs this exclusion.
+const EXPECTED_NETWORK_NOISE = /^console: Failed to load resource: the server responded with a status of \d+/;
+
 function failOnBrowserErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("console", (message) => {
@@ -33,7 +45,7 @@ function failOnBrowserErrors(page: Page): string[] {
 
 async function expectNoBrowserErrors(errors: string[]): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 100));
-  expect(errors).toEqual([]);
+  expect(errors.filter((e) => !EXPECTED_NETWORK_NOISE.test(e))).toEqual([]);
 }
 
 test("public subject profile renders holdings, wallets, NFT contracts, and structural notes from fetched (archive) data", async ({ page }) => {
