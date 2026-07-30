@@ -47,7 +47,7 @@ export async function runCommitteeAuthoringEvalCase(
     {
       repoRoot,
       project,
-      profile: "core",
+      profile: "full",
       composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
       credentials,
