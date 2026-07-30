@@ -1,6 +1,9 @@
 <!-- /blog/regime-eq-vs-base — static port of the Next.js page.tsx.
-     Numbers baked from public/data/regime-eq-comparison.json (asof 2026-05-30). -->
-<article class="blog-root">
+     Numbers baked from public/data/regime-eq-comparison.json (asof 2026-05-30).
+     The three charts below render from that same committed fixture via the
+     regimeEqCompareCharts() factory (alpine/views/blog-charts.js), registered
+     at boot in alpine/views.js — same pattern as views/regime.js's canvases. -->
+<article class="blog-root" x-data="regimeEqCompareCharts()" x-init="load()">
   <a href="/blog" class="blog-back">&larr; Back to Blog</a>
 
   <header class="blog-header">
@@ -95,6 +98,7 @@
     </p>
     <figure class="blog-figure">
       <div class="blog-figure-label">Equity curves &mdash; 3-panel /regime vs legacy 2-panel vs factor-alone</div>
+      <div class="blog-figure-chart"><canvas x-ref="equity"></canvas></div>
       <p class="blog-figure-caption">
         The augmented composite edges out the legacy base across the full
         8-year window; the standalone factor panel runs hottest of all. Live
@@ -117,6 +121,7 @@
     </p>
     <figure class="blog-figure">
       <div class="blog-figure-label">Sharpe by panel &mdash; macro / on-chain / factor / composites</div>
+      <div class="blog-figure-chart"><canvas x-ref="sharpe"></canvas></div>
       <p class="blog-figure-caption">
         The standalone factor panel posts the highest single-panel Sharpe in two of three
         portfolios &mdash; topping both composites on the Mixed sleeve (1.03 vs 0.89 / 0.90).
@@ -139,6 +144,7 @@
     </p>
     <figure class="blog-figure">
       <div class="blog-figure-label">Composite regime index over time &mdash; 3-panel vs 2-panel vs factor</div>
+      <div class="blog-figure-chart"><canvas x-ref="index"></canvas></div>
       <p class="blog-figure-caption">
         The two composites agree on ~80% of days; the factor panel index frequently
         leads the base composite into and out of risk-on territory at the inflection points.
@@ -614,6 +620,8 @@
     margin: 0 !important;
     line-height: 1.6;
   }
+  .blog-figure-chart { position: relative; height: 260px; margin: 0 0 0.75rem; }
+  .blog-figure-chart canvas { width: 100% !important; height: 100% !important; }
   .blog-table-wrap { margin: 1.5rem 0; overflow-x: auto; }
   .blog-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
   .blog-table-sm { font-size: 0.75rem; }
