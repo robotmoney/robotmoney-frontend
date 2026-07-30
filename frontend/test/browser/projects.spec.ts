@@ -108,6 +108,34 @@ test("routes to /projects and renders the directory table with a2 tokens", async
   await expect(alpha.locator("svg.pj-spark")).toBeVisible();
 });
 
+// Issue #346: ANALYTICS stays off site for the cutover, so all three places that
+// advertised the in-domain table have to agree. The nav is asserted here rather
+// than in spa.spec.ts because this spec already loads the shell and the route.
+test("ANALYTICS navigates off site and /projects is de-advertised", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+
+  // Desktop and mobile nav both leave the site, and neither still routes in-domain.
+  const analytics = page.locator('a.nav__link:has-text("Analytics"), a.nav__mlink:has-text("Analytics")');
+  await expect(analytics).toHaveCount(2);
+  for (const href of await analytics.evaluateAll((els) => els.map((e) => e.getAttribute("href")))) {
+    expect(href).toBe("https://analytics.robotmoney.net/projects");
+  }
+  await expect(page.locator('a[href="/projects"]')).toHaveCount(0);
+
+  // The route still resolves for anyone holding the URL, and says what backs it.
+  await navigate(page, "/projects");
+  await expect(page.locator(".pj-provenance")).toBeVisible();
+  await expect(page.locator(".pj-provenance")).toContainText("seeded for development");
+
+  // ...but it asks not to be indexed, and the directive is restored on the way out
+  // so a noindex route cannot leak onto the next one.
+  const robots = () => page.locator('meta[name="robots"]').getAttribute("content");
+  expect(await robots()).toBe("noindex, follow");
+  await navigate(page, "/regime");
+  expect(await robots()).toBe("index, follow, max-image-preview:large, max-snippet:-1");
+});
+
 test("sticky project pins first on load; clicking a header re-sorts and releases the pin", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");

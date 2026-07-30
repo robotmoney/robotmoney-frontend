@@ -124,7 +124,10 @@
             <a href="/performance" class="nav__link">Performance<span class="nav__underline"></span></a>
             <a href="/regime" class="nav__link">Regime<span class="nav__underline"></span></a>
             <a href="/committee" class="nav__link">Committee<span class="nav__underline"></span></a>
-            <a href="/projects" class="nav__link">Analytics<span class="nav__underline"></span></a>
+            <!-- ANALYTICS stays off site for the cutover (issue #346): the in-domain
+                 /projects table is backed by the development seed, so the nav keeps
+                 production's behaviour until it has a real source. -->
+            <a href="https://analytics.robotmoney.net/projects" target="_blank" rel="noopener noreferrer" class="nav__link">Analytics<span class="nav__underline"></span></a>
             <a href="/media" class="nav__link">Coverage<span class="nav__underline"></span></a>
           </div>
           <div class="nav__ctas">
@@ -145,7 +148,7 @@
           <a href="/performance" class="nav__mlink" @click="mobileOpen=false">Performance</a>
           <a href="/regime" class="nav__mlink" @click="mobileOpen=false">Regime</a>
           <a href="/committee" class="nav__mlink" @click="mobileOpen=false">Committee</a>
-          <a href="/projects" class="nav__mlink" @click="mobileOpen=false">Analytics</a>
+          <a href="https://analytics.robotmoney.net/projects" target="_blank" rel="noopener noreferrer" class="nav__mlink" @click="mobileOpen=false">Analytics</a>
           <a href="/media" class="nav__mlink" @click="mobileOpen=false">Coverage</a>
           <a href="/changelog" class="btn-primary nav__mobile-cta" @click="mobileOpen=false">Development</a>
         </div>
