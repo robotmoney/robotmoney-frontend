@@ -16,11 +16,23 @@
       <h1 class="a2-hero__title">Agentic Economy <span class="a2-grad">Ecosystem</span></h1>
       <p class="a2-hero__lede">
         Zero Human Companies, onchain AI agents, and other AI-native economics
-        experiments. Every metric maps to a concrete row in the backend and a
-        specific ingestion pipeline.
+        experiments. Market cap, FDV, revenue and wallet balances per project,
+        with the facets each one covers.
       </p>
     </div>
   </header>
+
+  <!-- Provenance (issue #346). The rows this table renders come from the
+       development seed (backend/src/projects/demo-seed.ts, behind
+       DEMO_SEED_PROJECTS), which synthesizes figures for real, named companies.
+       The published analytics surface is the analytics subdomain, which is where
+       ANALYTICS in the nav points. Remove this notice in the same change that
+       gives /api/projects a real source. -->
+  <p class="pj-status pj-provenance">
+    Development data. These figures are seeded for development and are not a
+    published record of any company. The live analytics surface is
+    <a href="https://analytics.robotmoney.net/projects" target="_blank" rel="noopener noreferrer">analytics.robotmoney.net</a>.
+  </p>
 
   <!-- States -->
   <p x-show="loading" class="pj-status">Loading…</p>
@@ -282,6 +294,17 @@
   color: var(--color-text-muted);
 }
 .pj-status--error { color: var(--color-warn); }
+/* Provenance notice (issue #346). Hairline box, no rail, no fill and no warm
+   accent: this is a standing statement of fact rather than an alert, so it reads
+   in the muted body colour the other pj-status lines use. */
+.pj-provenance {
+  border: 1px solid var(--color-border);
+  padding: 0.6rem 0.75rem;
+  margin: 0 0 1rem;
+  max-width: 72ch;
+  line-height: 1.6;
+}
+.pj-provenance a { color: var(--color-accent); }
 
 /* ── Table (a2 look) ─────────────────────────────────────────────────────── */
 .a2-table__scroll {

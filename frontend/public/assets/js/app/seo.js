@@ -17,6 +17,11 @@ const ORIGIN = "https://robotmoney.net";
 const SITE_NAME = "Robot Money";
 const OG_IMAGE = ORIGIN + "/assets/og-image.png";
 
+// The shell's own robots directive (index.html). A route may override it with a
+// `robots` key below; every other route is restored to this on navigation, so a
+// noindex route can never leak its directive onto the next one.
+const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
+
 // route -> { title, description }. Titles are unique and <= 60 chars; meta
 // descriptions are 120-155 chars, grounded in each page's real copy.
 const META = {
@@ -51,6 +56,12 @@ const META = {
   "/projects": {
     title: "Agentic Economy Ecosystem — Robot Money",
     description: "Track market cap, FDV, revenue, and wallet balances across onchain AI agent projects and Zero Human Companies in the agent economy on Base.",
+    // Kept out of the index while the table is backed by the development seed
+    // (issue #346). ANALYTICS in the nav points at analytics.robotmoney.net, and
+    // /projects is out of sitemap.xml, so this is the third of the three places
+    // that would otherwise still advertise it. `follow` so the page's own
+    // outbound links keep their value.
+    robots: "noindex, follow",
   },
   "/media": {
     title: "Media Coverage & Press — Robot Money",
@@ -144,6 +155,7 @@ export function applyRouteMeta(pathname) {
   document.title = m.title;
   upsert("meta", "name", "description", "content", m.description);
   upsert("link", "rel", "canonical", "href", url);
+  upsert("meta", "name", "robots", "content", m.robots || DEFAULT_ROBOTS);
 
   upsert("meta", "property", "og:title", "content", m.title);
   upsert("meta", "property", "og:description", "content", m.description);
