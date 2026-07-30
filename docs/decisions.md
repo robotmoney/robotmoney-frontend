@@ -1170,7 +1170,9 @@ status quo — each real-work workflow (`unit`, `repo-guards`, `contract`,
 protection — is already the structurally sounder replacement this issue was
 opened to look for, and it is already implemented and load-bearing today
 (every workflow's own header states it, e.g. `.github/workflows/unit.yml`,
-`.github/workflows/backend.yml`). This decision closes issue #348's
+`.github/workflows/backend.yml`, `.github/workflows/onboarding-eval-rails.yml`
+— the last of these was missing this line until this decision's compliance
+pass caught the gap and added it). This decision closes issue #348's
 investigation without writing any new CI code.
 
 **Why direct-required is sound on its own, without a gate.** Every
@@ -1183,6 +1185,38 @@ context a path filter silently ate, which was the entire deadlock risk a
 fan-in was originally shielding against. `unit.yml` and `repo-guards.yml`
 carry no path filter at all and run unconditionally. Nothing about this
 property depends on there being an aggregator in front of it.
+
+**Known exception, accepted rather than closed: `e2e.yml`'s workflow-level
+`paths-ignore`.** The claim above — job-level `if:`, never workflow-level
+`on.paths`/`paths-ignore` — is not quite universal: `e2e.yml` itself carries a
+workflow-level `paths-ignore: ['**.md', '**.txt']` on both `push` and
+`pull_request` (its own header discloses this as a deliberate docs-only
+bypass). This is a real, different mechanism from the job-level skips
+elsewhere in this document, and GitHub's actual platform behavior here is
+worse than a job-level skip: when a commit's entire diff matches an
+`on`-level `paths-ignore`, GitHub Actions never creates a run for that
+trigger at all, so no context is ever posted to the Checks API for it —
+not even a concluded `skipped` — and a required check with no posted
+context sits as "Expected — waiting for status to be reported" indefinitely
+rather than resolving (this is documented, longstanding GitHub platform
+behavior for `paths`/`paths-ignore` combined with required status checks,
+not a hypothetical). That is the exact deadlock class this whole
+direct-required design exists to avoid, so it is not fully avoided — it is
+narrowed to one specific diff shape: a PR whose changed files are **entirely**
+`.md`/`.txt` (no code, config, or test file touched at all). This is accepted
+as a known, narrow exception rather than closed, for three reasons: (1)
+`docs-lint.yml` has no such filter and always posts a concluded context for
+exactly this PR shape, so a genuinely docs-only PR is never left with zero
+signal, only `e2e`'s specific required context stuck pending; (2) in this
+repo's actual history, a PR touching only `.md`/`.txt` with nothing else is
+rare — most doc changes ship alongside a code, test, or config change that
+re-triggers `e2e` normally; and (3) the known workaround if this is ever hit
+— a trivial no-op touch to any non-ignored file, or an administrator merge
+override — is cheap enough that it does not on its own justify building a
+`workflow_run` gate. If this is ever observed to actually block a real PR,
+narrow the fix to converting `e2e.yml`'s `paths-ignore` into the same
+job-level `if:` pattern every other path-gated workflow already uses, rather
+than reopening this issue's broader fan-in question.
 
 **Tradeoff analysis: `workflow_run` vs. the retired polling gate vs. today's direct-required design.**
 

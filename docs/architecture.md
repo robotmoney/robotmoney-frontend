@@ -139,6 +139,12 @@ skipped domain still reports a real `skipped` conclusion to the GitHub Checks
 API — the property that makes requiring these workflows directly, rather than
 through a fan-in aggregator, safe: branch protection sees a concluded check
 either way and never hangs waiting for a context that never arrives.
+`e2e.yml` is a known, narrow exception to this: it carries a workflow-level
+`paths-ignore: ['**.md', '**.txt']` (disclosed in its own header) rather than
+a job-level `if:`, so a PR whose entire diff is `.md`/`.txt` never gets a
+run — and therefore never gets a concluded context — for `e2e` specifically.
+[Decision D25](./decisions.md#d25--no-workflow_run-fan-in-gate-for-now-per-workflow-required-checks-stand-closes-the-issue-348-investigation)
+records this as an accepted, deliberately narrow gap rather than a closed one.
 
 **No fan-in gate (issue #275 addendum 2, 2026-07-30).** This design originally
 had a `ci-gate.yml`/`scripts/checks/ci-gate.ts` fan-in: a single required
