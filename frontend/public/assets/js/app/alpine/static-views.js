@@ -73,7 +73,11 @@ function camelSession(raw) {
   };
 }
 
-function camelTake(raw) {
+// Exported so scripts/tests/unit/frontend-routes.test.ts can assert the
+// permalinkId contract directly: a take shaped like the member-scoped and
+// archive-scanned takes on the member profile (no `id`, only `member_id`)
+// must never mint a permalink out of the member id.
+export function camelTake(raw) {
   return {
     id: raw.id || raw.member_id || raw.memberId,
     // The permalink id is NOT the same thing as `id` above. `id` falls back to
@@ -205,6 +209,13 @@ function pickSnapshotFor(snapshots, date) {
   return normalizeSnapshot(chosen);
 }
 
+// Exported alongside camelTake so scripts/tests/unit/frontend-routes.test.ts
+// can assert the two together: only permalinkId (never a member id) ever
+// produces a /committee/takes/* href.
+export function takeHref(take) {
+  return take?.permalinkId ? path(ROUTES.committee.takePermalink, { id: take.permalinkId }) : null;
+}
+
 const helpers = {
   // Strip punctuation before taking initials. Operators name their agents
   // freely, and "woon (test)" was rendering as "W(" — the second word's first
@@ -279,9 +290,7 @@ const helpers = {
   fallbackMandate(member) {
     return `Evaluate each subject through the ${member?.lens || "committee"} lens and submit a signed stance with confidence and rationale.`;
   },
-  takeHref(take) {
-    return take?.permalinkId ? path(ROUTES.committee.takePermalink, { id: take.permalinkId }) : null;
-  },
+  takeHref,
   escapeHtml(text) {
     return String(text ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
   },
@@ -1072,7 +1081,10 @@ export function registerStaticViews(Alpine) {
         const res = await api.get(`${path(ROUTES.committee.memberTakes, { id: memberId })}?limit=50`);
         return (res.takes || []).map((r) => ({
           session: { date: r.sessionDate, subjectId: r.subjectId, subjectName: r.subjectName, state: r.sessionState },
-          take: r.take,
+          // camelTake, not the raw row: raw takes carry no `permalinkId`, only
+          // `id`/`member_id`, so takeHref() silently returned null for every
+          // take on this page and the "Verification receipt" link vanished.
+          take: camelTake(r.take),
           phase: this.takePhase(r.sessionState),
         }));
       } catch (_) {
@@ -1105,7 +1117,11 @@ export function registerStaticViews(Alpine) {
       }));
       return details
         .map((session) => {
-          const take = (session.takes || []).find((t) => t.memberId === this.member?.id);
+          // camelTake before matching: this is the fallback path for the
+          // pre-2026-07-01 static archive, whose takes are snake_case and
+          // carry no `permalinkId` until camelTake derives one from a real
+          // take `id` (never from `member_id`).
+          const take = (session.takes || []).map(camelTake).find((t) => t.memberId === this.member?.id);
           return take ? { session, take, phase: this.takePhase(session.state) } : null;
         })
         .filter(Boolean);

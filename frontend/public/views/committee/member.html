@@ -102,7 +102,7 @@
                     <button type="button" class="mp-more" x-show="expandable(row.take.body)"
                             @click="toggleTake(row.take.id)" :aria-expanded="isOpen(row.take.id)"
                             x-text="isOpen(row.take.id) ? 'Collapse ↑' : 'Read full take ↓'"></button>
-                    <a class="cv__memo-link" :href="takeHref(row.take)" data-take-permalink>Verification receipt →</a>
+                    <a class="cv__memo-link" x-show="takeHref(row.take)" :href="takeHref(row.take)" data-take-permalink>Verification receipt →</a>
                   </div>
                   <p class="mp-note" x-text="row.phase === 'live'
                     ? 'Take is in and signature-verified. The window is still collecting; it joins the track record below when the session publishes.'
@@ -188,7 +188,7 @@
                 <button type="button" class="mp-more" x-show="expandable(row.take.body)"
                         @click="toggleTake(row.take.id)" :aria-expanded="isOpen(row.take.id)"
                         x-text="isOpen(row.take.id) ? 'Collapse ↑' : 'Read full take ↓'"></button>
-                <a class="cv__memo-link" :href="takeHref(row.take)" data-take-permalink>Verification receipt →</a>
+                <a class="cv__memo-link" x-show="takeHref(row.take)" :href="takeHref(row.take)" data-take-permalink>Verification receipt →</a>
               </div>
             </article>
           </template>

@@ -9,10 +9,12 @@ import { viewFor } from "../../../frontend/public/assets/js/app/routes.js";
 // graph (review-maintainability-026) and has been deleted.
 import {
   camelSubject,
+  camelTake,
   loadArchiveMember,
   loadArchiveSession,
   loadArchiveSnapshot,
   structuralNotesOf,
+  takeHref,
 } from "../../../frontend/public/assets/js/app/alpine/static-views.js";
 
 const repoRoot = join(import.meta.dir, "../../..");
@@ -149,9 +151,14 @@ describe("frontend route resolution", () => {
     expect(detail.session.regimeSummary?.macroPercentile).toBeGreaterThan(0);
     expect(detail.session.synthesis).toContain("USDC into rmUSDC");
 
-    const takes = detail.takes as Array<{ memberId: string; stance: string }>;
+    const takes = detail.takes as Array<{ memberId: string; stance: string; permalinkId: string | null }>;
     expect(takes.map((take) => take.memberId)).toEqual(["athena", "robotmoney", "woon"]);
     expect(takes.find((take) => take.memberId === "woon")?.stance).toBe("constructive");
+    // The shipped archive carries no `id` field on its takes — only
+    // `member_id` — so every one of these must resolve to no permalink at
+    // all rather than /committee/takes/<member-slug> (issue #359 AC1).
+    expect(takes.every((take) => take.permalinkId == null)).toBe(true);
+    expect(takes.every((take) => takeHref(take) === null)).toBe(true);
 
     const rec = detail.session.committeeRecommendation as {
       actions: Array<{ action: string }>;
@@ -256,5 +263,50 @@ describe("frontend route resolution", () => {
 
     // No subject at all (still loading / not found) must not throw.
     expect(structuralNotesOf(null)).toEqual([]);
+  });
+
+  // issue #359: camelTake used to derive `id` with a member-id fallback
+  // (`raw.id || raw.member_id`) purely so x-for had something stable to key
+  // on, and takeHref() minted a permalink straight off that same `id`. Every
+  // archived take carries only `member_id`, so that produced dead links like
+  // /committee/takes/athena — 3 per session across 32 archived sessions.
+  // permalinkId is the fix: a field only a real take id ever populates.
+  test("camelTake never mints a permalink out of a member id", () => {
+    const memberIdOnly = camelTake({ member_id: "athena", stance: "cautious", confidence: 0.72, body: "..." });
+    // The keying fallback (`id`) is preserved for x-for — only the permalink
+    // must refuse the member-id fallback.
+    expect(memberIdOnly.id).toBe("athena");
+    expect(memberIdOnly.permalinkId).toBeNull();
+    expect(takeHref(memberIdOnly)).toBeNull();
+
+    const withRealId = camelTake({ id: "take-9f2c1e0a", member_id: "athena", stance: "bullish", confidence: 0.9 });
+    expect(withRealId.permalinkId).toBe("take-9f2c1e0a");
+    expect(takeHref(withRealId)).toBe("/committee/takes/take-9f2c1e0a");
+  });
+
+  // The member profile page (/committee/members/:id) builds its rows from two
+  // sources — the member-takes endpoint (loadRows) and, on failure, a scan of
+  // the sessions index (scanSessions) which also serves the archive. Both
+  // used to hand takeHref() the RAW api/archive take object (only
+  // `member_id`, never `permalinkId`), so `takeHref(row.take)` returned null
+  // for every row on that page and the "Verification receipt" link silently
+  // disappeared — never a dead /committee/takes/<slug> link there, just a
+  // permalink that could never appear even for a take with a real id. Routing
+  // the row's take through camelTake() (the fix) restores the working link
+  // when a real id exists, while still refusing the member-id fallback.
+  test("a take with no id, only member_id — the shape loadRows/scanSessions hand to the member view — never resolves to a dead permalink, and a real id still works once camelTake'd", () => {
+    const rawMemberViewRow = { member_id: "athena", memberId: "athena", stance: "cautious", confidence: 0.72, body: "...", verified: true };
+    // Un-normalized (the pre-fix bug): permalinkId is simply absent.
+    expect(takeHref(rawMemberViewRow)).toBeNull();
+    // Normalized via camelTake (the fix): still null, because there is no
+    // real take id to key a permalink on — not a member-slug link either.
+    expect(takeHref(camelTake(rawMemberViewRow))).toBeNull();
+
+    const rawWithRealId = { id: "take-real-1", member_id: "athena", memberId: "athena", stance: "cautious", confidence: 0.72 };
+    // Before the fix (raw, never camelTake'd) the link never appears even
+    // though a real id exists — takeHref only ever reads `.permalinkId`.
+    expect(takeHref(rawWithRealId)).toBeNull();
+    // After the fix, camelTake'ing the row restores it.
+    expect(takeHref(camelTake(rawWithRealId))).toBe("/committee/takes/take-real-1");
   });
 });
