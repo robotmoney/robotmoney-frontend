@@ -2437,6 +2437,19 @@ local-network note — in one clearly delimited block appended after the canonic
 text. It then observes only server-side state, preserving the black-box property
 where it matters most.
 
+Layers 0-3 (issue #279) are implemented, named by claim, under
+`evals/onboarding/isolated/`: `runtime.eval.test.ts`,
+`skill-install.eval.test.ts`, `toolchain.eval.test.ts`,
+`keygen-signing.eval.test.ts`, with shared support in
+`evals/onboarding/support/`. They run nightly and on-demand via
+`.github/workflows/onboarding-evals-nightly.yml` (`CI_CLASS: heavy`, schedule +
+`workflow_dispatch` only — never `pull_request`), through the single
+`bun run eval:onboarding:isolated` target. `runtime` gates the run: a red
+`runtime` reports `skill-install`/`toolchain`/`keygen-signing` as
+`not-measured`, never `failed` (`evals/onboarding/support/gating.ts`) — when
+`runtime` is green the three are mutually independent. Layer 4 (admission)
+remains where it already runs, in `committee-opencode-nightly.yml`.
+
 **E4 — Scored by sampling.** Layer 4 runs K samples with a fresh identity and
 container each. Every outcome is classified — `admitted`, `refused`,
 `rate-limited`, `timed-out`, `navigation-failure` — and the **admission rate is

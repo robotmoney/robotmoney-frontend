@@ -64,6 +64,35 @@ checkout's `frontend/public/` tree by the existing stack. The development loop
 therefore tests uncommitted local instruction changes; publishing those assets
 to another repository is a separate release concern.
 
+### The isolated claims: runtime, skill-install, toolchain, keygen-signing
+
+`evals/onboarding/isolated/` holds the four claim-named, serverless evals that
+bisect the onboarding funnel (issue #279) — named by what each one asserts,
+never by a layer number: `runtime.eval.test.ts`, `skill-install.eval.test.ts`,
+`toolchain.eval.test.ts`, `keygen-signing.eval.test.ts`. None of the four boot
+a server (§11.3 E3); support code shared across them lives in
+`evals/onboarding/support/` (`budget.ts`, `run.ts`, `tasks.ts`, `eval-stack.ts`,
+`probe.ts`, `signature-harvest.ts`, `gating.ts`).
+
+`runtime` GATES the other three: a red `runtime` means the container itself was
+never a fair test subject, so `skill-install`/`toolchain`/`keygen-signing`
+report `not-measured` — never `failed` (`evals/onboarding/support/gating.ts`).
+Bun does not serialise multiple test files given to one `bun test` invocation
+in argv order, so this ordering is enforced by running `runtime` to completion
+in its **own** `bun test` process first; only once that process has fully
+exited does a second process run the other three, reading runtime's outcome
+from a suite-scoped handoff file. Both processes are wrapped in the single
+target below, which is also the command `.github/workflows/onboarding-evals-
+nightly.yml`'s `heavy`, schedule-only job runs:
+
+```bash
+bun run eval:onboarding:isolated
+```
+
+Each is billed to the registry-selected, funded model exactly like the
+integrated admission case (E1 below) — there is no separate keyless mode for
+these four.
+
 ## Artifacts
 
 Each invocation receives a suite run id and writes owner-only files beneath:
