@@ -12,6 +12,7 @@
 // series literal no longer survives in the served view.
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
+import { navigate } from "./navigation.ts";
 
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
@@ -65,13 +66,6 @@ async function stubEnvironment(page: Page) {
   }
   await page.route("**/api/dashboards/wallet-balances", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(walletStub()) }));
-}
-
-async function navigate(page: Page, path: string) {
-  await page.evaluate((p) => {
-    history.pushState({}, "", p);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, path);
 }
 
 test("performance view draws the eight stacked series + Historical Data table from the wallet-balances history[] (issue #84)", async ({ page }) => {

@@ -6,6 +6,7 @@
 // tokens, facet pills, the inline sparkline, and interactive column sorting.
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
+import { navigate } from "./navigation.ts";
 
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
@@ -63,13 +64,6 @@ async function stubEnvironment(page: Page) {
   }
   await page.route("**/api/projects*", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(PROJECTS) }));
-}
-
-async function navigate(page: Page, path: string) {
-  await page.evaluate((p) => {
-    history.pushState({}, "", p);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, path);
 }
 
 const rowNames = (page: Page) => page.locator(".pj-table tbody tr .pj-name__text");

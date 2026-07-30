@@ -8,6 +8,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
+import { navigate } from "./navigation.ts";
 
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
@@ -45,13 +46,6 @@ async function stubEnvironment(page: Page, metrics: TokenMetrics, onHit?: () => 
     onHit?.();
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(metrics) });
   });
-}
-
-async function navigate(page: Page, path: string) {
-  await page.evaluate((p) => {
-    history.pushState({}, "", p);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, path);
 }
 
 test("tokenomics fee-split legend + breakdown cards render FROM GET /api/dashboards/token-metrics golden feeSplit", async ({ page }) => {
