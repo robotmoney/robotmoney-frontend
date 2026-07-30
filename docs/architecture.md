@@ -117,13 +117,78 @@ Status: target layout (D23). Two rules govern where things go.
 *without* the rest must have its own directory. A test that needs Docker, a real
 network, or a real model call never shares a directory with a pure unit test.
 
-**CI fan-in.** Per-PR assurance is split into `unit` (root typecheck and unit
-tests), `repo-guards`, `contract`, `integration`, `backend`, and `e2e` workflows.
-`ci-gate.yml` is the single required context: it detects changed domains inside
-the workflow (never with `on.paths`, which would omit required contexts), waits
-for relevant workflows, and rejects failures, cancellations, incorrect skips,
-or zero-test code changes. System-correctness workflows defer on draft PRs;
-unit and repository guards continue to execute there.
+**CI fan-in.** Per-PR assurance is split into one workflow per assurance domain
+(issue #275): `unit` (root typecheck and unit tests), `repo-guards`, `contract`,
+`integration` (the `scripts/tests/integration` cost class), `backend`,
+`research-pipeline`, `frontend`, `onboarding-eval-rails`, and `e2e`.
+`ci-gate.yml` is the single required context: its own `changes` job
+(`dorny/paths-filter`, SHA-pinned) detects changed path categories, its `gate`
+job (`if: always()`, logic in `scripts/checks/ci-gate.ts`) polls `gh run list`
+for the sibling workflows' conclusions on this SHA and rejects failures,
+cancellations, incorrect skips, or zero-test code changes. `ci-gate.yml` itself
+is NEVER path-filtered (`on.paths`/`paths-ignore` on a required workflow omits
+its check context entirely, which deadlocks branch protection) — only its
+in-workflow change-detection job is.
+
+Every domain besides `unit` and `repo-guards` narrows further by embedding its
+OWN `dorny/paths-filter` change-detection job (a standalone workflow file
+cannot read `ci-gate.yml`'s `changes` job outputs — `needs.*.outputs` is scoped
+to jobs within one workflow file) and gating its main job's `if:` on that
+job's own filter output — but ONLY on `pull_request` events
+(`github.event_name != 'pull_request' || (...)`), so a `push` to the default
+branch always runs every workflow in full regardless of what changed
+(asserted by `ci-workflows-structure.test.ts`). `unit.yml` and
+`repo-guards.yml` are the two deliberate exceptions: both are cheap enough
+(no Docker, no network) to run unconditionally on every PR, and both say so in
+their own header comments.
+
+- `research-pipeline` (issue #275 addendum) narrows the coarse `backend`
+  category to the GeckoTerminal/analytics-fetch surface specifically
+  (`backend/src/analytics/**`, `backend/src/chain/**`). It owns exactly the two
+  tests whose entire subject is that surface
+  (`backend/tests/geckoterminal-resilience.test.ts`,
+  `backend/tests/token-prices-resilience.test.ts`) — `backend.yml`'s own
+  `bun test` excludes them (`--path-ignore-patterns`) so an unrelated backend
+  change (committee, admin, chain-agnostic routes) no longer pays for them.
+  Broader tests that also happen to touch analytics/chain code but assert
+  API-route behavior outside that surface
+  (`backend/tests/api/wallet-balances.test.ts`,
+  `backend/tests/api/dashboards-live.test.ts`) stay in the general `backend`
+  suite, since narrowing them to this filter would regress their non-analytics
+  coverage.
+- `onboarding-eval-rails` (issue #275 addendum) is the inference-off
+  member-agent rails check
+  (`scripts/tests/integration/onboarding-eval-infra.test.ts`), split out of the
+  `e2e` monolith: it brings up its own minimal `core`-profile stack
+  (postgres + api only, via the shared `scripts/stack` module) and never needed
+  `e2e`'s full LIVE demo boot. It stays system-correctness (Docker-backed,
+  deferred on draft PRs), gated on the paths that surface actually depends on
+  (`evals/**`, `scripts/lib/member-agent/**`, `scripts/lib/rmpc-fetch.ts`,
+  `scripts/lib/onboarding-eval.ts`, `scripts/lib/committee/**`,
+  `backend/src/committee/**`). The REAL-inference eval (the one that spends a
+  model token) stays inside `e2e.yml`'s "Full-stack demo" step, unchanged — it
+  deliberately reuses that already-booted LIVE stack rather than standing up a
+  second one.
+- `frontend` (issue #275 addendum, critical-bug fix) is a genuine, dedicated
+  workflow (`.github/workflows/frontend.yml`, `name: frontend`) backing the
+  `frontend` domain `ci-gate.ts` has always required whenever `frontend/**`
+  changes. Before this addendum no such workflow existed anywhere in the repo,
+  so `ci-gate` was permanently unsatisfiable for any frontend-only PR — this
+  test-coverage regression is what `ci-workflows-structure.test.ts`'s
+  "every Domain in ci-gate.ts's Domain union is backed by a workflow whose
+  name: matches" test now prevents from recurring. It runs ONLY the Playwright
+  specs that don't need a live backend — today exactly
+  `frontend/test/browser/preview-smoke.spec.ts`, which spawns its own
+  `scripts/preview-server.ts` (no `BACKEND_URL`, no Docker) — as a fast,
+  feature-correctness-class addition, not a substitute: `e2e.yml`'s
+  `test:browser` step still runs the ENTIRE `frontend/test/browser/` suite,
+  including specs that need the live backend the full demo boot provides.
+
+System-correctness workflows (`backend`, `research-pipeline`, `integration`,
+`onboarding-eval-rails`, `e2e`) defer on draft PRs; the feature-correctness
+workflows (`unit`, `repo-guards`, `contract`, `frontend`) continue to execute
+there — cheap enough (no Docker, no live network) to gate early regardless of
+draft state.
 
 **L2 — Shared code is named for its domain, never for its consumer.** `stack/`,
 `agent/`, `toolchain/` state what belongs in them; `lib/`, `utils/`, `helpers/`
