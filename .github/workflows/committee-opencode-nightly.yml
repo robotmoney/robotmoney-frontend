@@ -74,6 +74,25 @@ jobs:
       - name: Install backend deps (for the host-side EDGAR seed bootstrap step)
         working-directory: backend
         run: bun install --frozen-lockfile
+      # Same requirement, same pinned release, as e2e.yml's identically-named
+      # step — see its comment. This job also boots scripts/demo.ts, which runs
+      # every committee session's HOST-SIDE opencode CLI spawn
+      # (scripts/lib/committee/inference.ts); keep the version/checksum below in
+      # lockstep with e2e.yml and scripts/lib/member-agent/Dockerfile.
+      - name: Install opencode CLI (committee takes require live inference)
+        env:
+          OPENCODE_VERSION: "1.18.1"
+          OPENCODE_LINUX_X64_SHA256: "9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b994816acf192159511"
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/opencode.tar.gz" \
+            "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz"
+          echo "${OPENCODE_LINUX_X64_SHA256}  $RUNNER_TEMP/opencode.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/opencode-bin"
+          tar -xzf "$RUNNER_TEMP/opencode.tar.gz" -C "$RUNNER_TEMP/opencode-bin"
+          rm "$RUNNER_TEMP/opencode.tar.gz"
+          echo "$RUNNER_TEMP/opencode-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/opencode-bin/opencode" --version
       # Cache the pinned rmpc release binary by tag — same rationale as e2e.yml.
       - name: Resolve pinned rmpc release version (cache key)
         id: rmpc-version

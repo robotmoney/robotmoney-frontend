@@ -41,7 +41,7 @@ const ACTIONS_ENV = {
   GITHUB_JOB: "e2e",
 };
 
-const ROLES: StackRole[] = ["stack", "eval", "infra", "pgtest"];
+const ROLES: StackRole[] = ["stack", "eval", "eval-committee", "infra", "pgtest"];
 
 describe("environment class", () => {
   test("GITHUB_ACTIONS === 'true' is CI; everything else is local", () => {
@@ -133,7 +133,7 @@ describe("project names", () => {
     expect(stackProjectName("pgtest", local)).toBe(`rm_demo_pgtest_${local.hash}`);
   });
 
-  test("all four families are distinguishable inside ONE ci job, where the hash is identical", () => {
+  test("all five families are distinguishable inside ONE ci job, where the hash is identical", () => {
     const names = ROLES.map((r) => stackProjectName(r, ci));
     expect(new Set(names).size).toBe(ROLES.length);
     for (const n of names) expect(n.startsWith(`${CI_PROJECT_PREFIX}_`)).toBe(true);
@@ -205,6 +205,7 @@ describe("the scheme is actually wired into every spawner", () => {
     const files = [
       ["scripts", "lib", "demo-main.ts"],
       ["scripts", "onboarding-eval-local.ts"],
+      ["scripts", "committee-eval-local.ts"],
       ["scripts", "tests", "integration", "onboarding-eval-infra.test.ts"],
       ["backend", "tests", "preload.ts"],
     ];

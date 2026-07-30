@@ -194,6 +194,31 @@ jobs:
       - name: Install backend deps (for the host-side EDGAR seed bootstrap step)
         working-directory: backend
         run: bun install --frozen-lockfile
+      # Needed BEFORE "Full-stack demo" (issue #301): scripts/lib/committee/
+      # inference.ts's runOpencode() Bun.spawn()s the bare `opencode` binary
+      # HOST-SIDE (scripts/lib/committee/session.ts runs as a runner subprocess,
+      # not inside a container) for every committee session the demo boots —
+      # there is no template fallback anymore, so a runner without this CLI on
+      # PATH fails the required gate loudly instead of degrading. This is a
+      # DIFFERENT consumer than scripts/lib/member-agent/Dockerfile's baked-in
+      # copy (that one is for the containerized onboarding member-agent); same
+      # pinned release + checksum, kept in lockstep with that Dockerfile's
+      # OPENCODE_VERSION / OPENCODE_LINUX_X64_SHA256 args on purpose — bump both
+      # together.
+      - name: Install opencode CLI (committee takes require live inference)
+        env:
+          OPENCODE_VERSION: "1.18.1"
+          OPENCODE_LINUX_X64_SHA256: "9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b994816acf192159511"
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/opencode.tar.gz" \
+            "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz"
+          echo "${OPENCODE_LINUX_X64_SHA256}  $RUNNER_TEMP/opencode.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/opencode-bin"
+          tar -xzf "$RUNNER_TEMP/opencode.tar.gz" -C "$RUNNER_TEMP/opencode-bin"
+          rm "$RUNNER_TEMP/opencode.tar.gz"
+          echo "$RUNNER_TEMP/opencode-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/opencode-bin/opencode" --version
 
       # === Onboarding eval (Stage 7, §11 R8) ===
       # The inference-off infra-rails check (Stage 5's test) that used to run
