@@ -23,19 +23,28 @@
 // tool") and `claude/sonnet-5` went off-format. deepseek, kimi, and gpt all
 // authored well-formed takes. Prefer those; see MODEL_FAMILIES notes.
 //
-// LOUD-SKIP CONTRACT: the real path depends on the opencode CLI + a reachable
-// model (an external resource). When the binary is unavailable or the run
-// produces an empty transcript, this module THROWS — it NEVER falls back to a
-// templated body. The required per-PR e2e keeps the deterministic `stanceFor()`
-// + `buildMemo()` (see agent.ts / memo.ts) hermetic default.
+// LOUD-SKIP CONTRACT: committee authorship depends on the opencode CLI + a
+// reachable model (external resources). When either is unavailable, this module
+// THROWS — it NEVER falls back to a templated body.
 import { STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
 import { extractAssistantText } from "../../agent/transcript.ts";
 import { DEFAULT_AGENT_MODEL, resolveAgentModel } from "../model-registry.ts";
 import { zenApiKey } from "../opencode-key.ts";
-import type { RegimeContext } from "./memo.ts";
-
-export type { RegimeContext };
+// Regime inputs passed to each live author. This used to live beside the retired
+// deterministic memo template; it belongs with the only remaining authoring
+// path so a future fallback cannot accidentally reappear through that module.
+export interface RegimeContext {
+  composite: number;
+  compositePercentile?: number | null;
+  regime?: string | null;
+  macroRegime?: string | null;
+  onchainRegime?: string | null;
+  factorRegime?: string | null;
+  macroPercentile?: number | null;
+  onchainPercentile?: number | null;
+  factorPercentile?: number | null;
+}
 
 export const DEFAULT_INFERENCE_MODEL = DEFAULT_AGENT_MODEL;
 // Resolved at call time (not module load) so an env override / test toggle

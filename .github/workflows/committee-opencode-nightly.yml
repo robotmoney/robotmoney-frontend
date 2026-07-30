@@ -1,4 +1,4 @@
-# Nightly REAL committee-member inference check (issue #77).
+# Nightly real-inference onboarding sweep.
 #
 # WHY THIS SUITE EXISTS
 # Real-inference onboarding — a vanilla OpenCode agent navigating our own docs
@@ -12,15 +12,9 @@
 # deleted that harness (scripts/opencode-committee-tools-test.ts, mcp/), so the
 # job is removed here — it tested a surface that no longer exists.
 #
-# COVERAGE GAP (honest): with that job gone, NO CI job currently exercises the
-# real-model committee-take authoring path (COMMITTEE_REAL_INFERENCE=1,
-# scripts/lib/committee/inference.ts) — every committee take in CI, including in
-# the demo boot below, takes the deterministic stanceFor()/buildMemo() template
-# path. Re-establishing that coverage — a job that sets COMMITTEE_REAL_INFERENCE=1
-# and loud-fails on the deterministic fallback, and/or drives an external
-# real-inference agent through the REST participation chain — is follow-up work,
-# not part of the retirement. What IS covered nightly below is real-inference
-# ONBOARDING (ONBOARDING_REAL_EVAL), a different surface.
+# Committee takes in every demo session are live-authored in
+# scripts/lib/committee/inference.ts; this workflow additionally sweeps the
+# distinct live-inference onboarding surface.
 #
 # CREDENTIAL
 # The sweep runs FUNDED models billed to the `OPENCODE_API_KEY` repo secret
@@ -80,6 +74,25 @@ jobs:
       - name: Install backend deps (for the host-side EDGAR seed bootstrap step)
         working-directory: backend
         run: bun install --frozen-lockfile
+      # Same requirement, same pinned release, as e2e.yml's identically-named
+      # step — see its comment. This job also boots scripts/demo.ts, which runs
+      # every committee session's HOST-SIDE opencode CLI spawn
+      # (scripts/lib/committee/inference.ts); keep the version/checksum below in
+      # lockstep with e2e.yml and scripts/lib/member-agent/Dockerfile.
+      - name: Install opencode CLI (committee takes require live inference)
+        env:
+          OPENCODE_VERSION: "1.18.1"
+          OPENCODE_LINUX_X64_SHA256: "9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b994816acf192159511"
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/opencode.tar.gz" \
+            "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz"
+          echo "${OPENCODE_LINUX_X64_SHA256}  $RUNNER_TEMP/opencode.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/opencode-bin"
+          tar -xzf "$RUNNER_TEMP/opencode.tar.gz" -C "$RUNNER_TEMP/opencode-bin"
+          rm "$RUNNER_TEMP/opencode.tar.gz"
+          echo "$RUNNER_TEMP/opencode-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/opencode-bin/opencode" --version
       # Cache the pinned rmpc release binary by tag — same rationale as e2e.yml.
       - name: Resolve pinned rmpc release version (cache key)
         id: rmpc-version

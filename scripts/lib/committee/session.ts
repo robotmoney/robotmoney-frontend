@@ -15,7 +15,9 @@ import { runAgent, enroll } from "./agent.ts";
 import type { ExistingCredentials, AgentStage } from "./agent.ts";
 import { generateKeyPair } from "./crypto.ts";
 
-const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
+export function backendUrl(): string {
+  return process.env.BACKEND_URL ?? "http://localhost:8787";
+}
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Whether this driver expects the backend's regime-write/admin gates to be OPEN
@@ -66,29 +68,20 @@ export async function mapSettledWithConcurrency<T, R>(
   return results;
 }
 
-// ── Real-inference take invariants (issue #77) ──────────────────────────────
+// ── Live-authored take invariants ───────────────────────────────────────────
 // Fingerprint of the deterministic buildMemo template: every templated REGIME
 // section carries this exact clause. A real keyless opencode-zen take will not
-// reproduce it verbatim, so under COMMITTEE_REAL_INFERENCE a body that still
-// matches means the templated path leaked back into the real path — fail loudly.
+// reproduce it verbatim, so a match means the retired templated path leaked
+// back into a live committee session — fail loudly.
 const OLD_TEMPLATE_RE = /the spread, not the composite, is where the signal lives/i;
 // Canonical stance vocabulary from the contract (finding 027) — never re-declared.
 const VALID_STANCES = new Set<string>(STANCES);
-
-// The authored-take structural assertions only apply to the REAL keyless
-// opencode path. The hermetic per-PR default deliberately uses the deterministic
-// buildMemo template (which DOES match OLD_TEMPLATE_RE), so the assertions run
-// ONLY when COMMITTEE_REAL_INFERENCE=1 (the nightly committee-opencode job). This
-// keeps the required per-PR e2e green and offline while still giving the nightly
-// a loud, executed-in-CI check that every present member's take was really
-// authored by a live model.
-const REAL_INFERENCE = process.env.COMMITTEE_REAL_INFERENCE === "1";
 
 // Post-publish structural assertions over every PRESENT member's authored take.
 // Throws on any failure so the standalone `bun run session.ts` entrypoint exits
 // non-zero (main() catches and process.exit(1)) — this is the required-CI signal
 // that each take was authored by a real inference call, not a template.
-function assertAuthoredTakes(tag: string, takes: any[]) {
+export function assertAuthoredTakes(tag: string, takes: any[], expectedMemberIds: readonly string[]) {
   // Present-member takes are the ones that actually posted a body; absent
   // no-shows enrolled but never submitted, so they carry no body.
   const authored = (takes ?? []).filter(
@@ -96,6 +89,12 @@ function assertAuthoredTakes(tag: string, takes: any[]) {
   );
   if (authored.length === 0) {
     throw new Error(`${tag}: no authored takes to assert on (expected ≥1 present member)`);
+  }
+  const authoredIds = new Set(authored.map((t) => String(t.memberId)));
+  for (const memberId of expectedMemberIds) {
+    if (!authoredIds.has(memberId)) {
+      throw new Error(`${tag}: present member ${memberId} has no live-authored take`);
+    }
   }
   const seenBodies = new Map<string, string>();
   for (const t of authored) {
@@ -147,9 +146,9 @@ export const SUBJECTS = [
 // (COMMITTEE_ROSTER_CAP) — the mirror this module used to carry is gone;
 // consumers (scripts/lib/demo-main.ts, backend domain) import the contract.
 
-const adminHeaders: Record<string, string> = process.env.ADMIN_TOKEN
-  ? { "X-Admin-Token": process.env.ADMIN_TOKEN }
-  : {};
+export function getAdminHeaders(): Record<string, string> {
+  return process.env.ADMIN_TOKEN ? { "X-Admin-Token": process.env.ADMIN_TOKEN } : {};
+}
 
 async function responseJson<T = any>(response: Response): Promise<T> {
   return await response.json() as T;
@@ -165,8 +164,8 @@ export type SessionEvent =
 export type SessionProgress = (ev: SessionEvent) => void;
 
 export async function admin(action: string, body: unknown = {}) {
-  const r = await fetch(`${BACKEND}${routePath(ROUTES.committee.admin.action, { action })}`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders }, body: JSON.stringify(body),
+  const r = await fetch(`${backendUrl()}${routePath(ROUTES.committee.admin.action, { action })}`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...getAdminHeaders() }, body: JSON.stringify(body),
   });
   return responseJson(r);
 }
@@ -184,8 +183,8 @@ export async function admin(action: string, body: unknown = {}) {
 // module-level BACKEND constant captures once at import time, which is unsafe
 // to mutate from a test file when other test files in the same run also touch
 // it. Real callers never pass this; they always get the real BACKEND.
-export async function activeMemberCount(backendUrl: string = BACKEND): Promise<number> {
-  const r = await fetch(`${backendUrl}${ROUTES.committee.members}`)
+export async function activeMemberCount(targetUrl: string = backendUrl()): Promise<number> {
+  const r = await fetch(`${targetUrl}${ROUTES.committee.members}`)
     .then(responseJson)
     .catch((err) => {
       console.error(`[e2e] activeMemberCount: GET ${ROUTES.committee.members} failed — assuming roster is FULL, not empty: ${err instanceof Error ? err.message : err}`);
@@ -201,7 +200,7 @@ export async function activeMemberCount(backendUrl: string = BACKEND): Promise<n
 export async function waitForSessionState(date: string, subject: string, expectedState: string, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const r = await fetch(`${BACKEND}${routePath(ROUTES.committee.session, { date, subject })}`);
+    const r = await fetch(`${backendUrl()}${routePath(ROUTES.committee.session, { date, subject })}`);
     if (r.ok) {
       const data = await responseJson(r);
       if (data.session?.state === expectedState) return data;
@@ -256,12 +255,10 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   await Promise.all(absent.map((m) => enroll(m)));
   for (const m of absent) onProgress?.({ type: "member", memberId: m.memberId, stage: "absent" });
   const present = MEMBERS.filter((m) => m.present);
-  // Settle (not all-or-nothing) so ONE member's throw/hang can't reject the whole
-  // batch and leave the session un-published. The hermetic default stays fully
-  // parallel (limit = Infinity) — identical behaviour/timing to the old
-  // Promise.all for the required e2e. Only the REAL keyless-inference path throttles
-  // to COMMITTEE_MAX_CONCURRENCY (default 4) to ease free-tier zen flakiness.
-  const limit = REAL_INFERENCE ? Number(process.env.COMMITTEE_MAX_CONCURRENCY ?? 4) : Infinity;
+  // Settle so one failed model call cannot freeze the session lifecycle. The
+  // unconditional post-publish assertion below still fails the run if any
+  // present member did not produce a live-authored take.
+  const limit = Number(process.env.COMMITTEE_MAX_CONCURRENCY ?? 4);
   const settled = await mapSettledWithConcurrency(present, limit, (m) => runAgent(
     { ...m, date, subjectId: subject.id, sessionId },
     existingCredentials?.get(m.memberId),
@@ -298,22 +295,21 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   await waitForSessionState(date, subject.id, "published");
   emitSession("published", sessionId);
 
-  const pub = await fetch(`${BACKEND}${routePath(ROUTES.committee.session, { date, subject: subject.id })}`).then(responseJson);
+  const pub = await fetch(`${backendUrl()}${routePath(ROUTES.committee.session, { date, subject: subject.id })}`).then(responseJson);
   console.log(`${tag} published: state=${pub.session.state}, takes=${pub.takes.length}`);
   console.log(`${tag} synthesis: ${pub.session.synthesis}`);
   console.log(`${tag} absent: ${JSON.stringify(pub.takes.filter((t: any) => t.verified === null || t.verified === false).map((t: any) => t.memberId))}`);
 
-  // Real-inference invariants (nightly only): every present member's published
-  // take must be a genuine keyless opencode-zen authoring (non-template body,
+  // Every present member's published take must be genuine live opencode
+  // authoring (non-template body,
   // REGIME/ALLOCATION/SUBJECT lead-ins, stance in the five-value set, confidence
-  // in [0,1], distinct across members). Throws → exit 1 on any failure. Skipped
-  // in the hermetic per-PR default (deterministic buildMemo template).
-  if (REAL_INFERENCE) assertAuthoredTakes(tag, pub.takes);
+  // in [0,1], distinct across members). Throws → exit 1 on any failure.
+  assertAuthoredTakes(tag, pub.takes, present.map((m) => m.memberId));
 
   // Verify memos
   for (const r of results) {
     if (!r.memoUrl) { console.log(`  ${r.memberId}: no memo`); continue; }
-    const memoRes = await fetch(`${BACKEND}${r.memoUrl}`);
+    const memoRes = await fetch(`${backendUrl()}${r.memoUrl}`);
     if (memoRes.ok) {
       const memo = await responseJson(memoRes);
       console.log(`  ${r.memberId}: memo verified (id=${memo.id})`);
@@ -352,8 +348,8 @@ async function main() {
   // script only needs a NEW member to seed session 2, the same non-onboarding
   // use `enroll()`/the cross-role-test registration below already make of it.
   const { publicKeyB64: eosPub, privateKey: eosPriv } = await generateKeyPair();
-  const eosReg = await fetch(`${BACKEND}${ROUTES.committee.register}`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
+  const eosReg = await fetch(`${backendUrl()}${ROUTES.committee.register}`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...getAdminHeaders() },
     body: JSON.stringify({ memberId: "eos", name: "Eos", lens: "newcomer", publicKey: eosPub }),
   }).then(responseJson) as { token?: string };
   console.log(`\n  new member eos: register → token=${eosReg.token ? "✓" : "✗"}`);
@@ -368,14 +364,14 @@ async function main() {
   // regardless of RM_ALLOW_INSECURE). The demo runs in insecure mode so role
   // gates on regime write (analyticsProvider) and admin lifecycle (privileged)
   // are open — the identity-layer submit checks are the universal enforcement.
-  const testReg = await fetch(`${BACKEND}${ROUTES.committee.register}`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...adminHeaders },
+  const testReg = await fetch(`${backendUrl()}${ROUTES.committee.register}`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...getAdminHeaders() },
     body: JSON.stringify({ memberId: "cross-role-test", name: "Cross Role Test", publicKey: (await generateKeyPair()).publicKeyB64 }),
   }).then(responseJson);
   const testToken: string = testReg.token;
 
   // 5a. Unknown token → 401 with "unknown member token"
-  const badTokenRes = await fetch(`${BACKEND}${ROUTES.committee.submit}`, {
+  const badTokenRes = await fetch(`${backendUrl()}${ROUTES.committee.submit}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer nonexistent" },
     body: JSON.stringify({ memberId: "cross-role-test", date: today, subjectId: SUBJECTS[0].id, nonce: crypto.randomUUID(), stance: "neutral", confidence: 0.5, signature: "bad" }),
   }).then(responseJson);
@@ -384,7 +380,7 @@ async function main() {
   if (!badTokenOk) throw new Error(`expected 401 unknown token, got ${badTokenRes.status}`);
 
   // 5b. Known token but wrong memberId in body → 403 with "token/member mismatch"
-  const mismatchRes = await fetch(`${BACKEND}${ROUTES.committee.submit}`, {
+  const mismatchRes = await fetch(`${backendUrl()}${ROUTES.committee.submit}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ memberId: "someone-else", date: today, subjectId: SUBJECTS[0].id, nonce: crypto.randomUUID(), stance: "neutral", confidence: 0.5, signature: "bad" }),
   }).then((r) => r.json());
@@ -395,7 +391,7 @@ async function main() {
   // 5c. Known member token calling regime write (would be 403 with
   // ANALYTICS_TOKEN set; in insecure mode the gate is open so we document
   // the expected behaviour rather than assert a specific status).
-  const regimeWriteRes = await fetch(`${BACKEND}${ROUTES.committee.regime}`, {
+  const regimeWriteRes = await fetch(`${backendUrl()}${ROUTES.committee.regime}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ asof: today }),
   });
@@ -403,7 +399,7 @@ async function main() {
   console.log(`  cross-role: member → regime write → ${regimeWriteRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
   // 5d. Known member token calling admin lifecycle (same insecure-mode caveat).
-  const adminCloseRes = await fetch(`${BACKEND}${ROUTES.committee.admin.close}`, {
+  const adminCloseRes = await fetch(`${backendUrl()}${ROUTES.committee.admin.close}`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
     body: JSON.stringify({ sessionId: -1 }),
   });
@@ -415,7 +411,7 @@ async function main() {
   await runSession(tomorrow, SUBJECTS[1], 2, s1.pub.session.synthesis, existingCreds);
 
   // Verify list_sessions returns both sessions
-  const all = await fetch(`${BACKEND}${ROUTES.committee.sessions}`).then((r) => r.json());
+  const all = await fetch(`${backendUrl()}${ROUTES.committee.sessions}`).then((r) => r.json());
   console.log(`\nsessions listed: ${all.sessions.length} total (expected ≥2)`);
 
   console.log("\n=== done ===\n");

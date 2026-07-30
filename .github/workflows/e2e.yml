@@ -194,6 +194,31 @@ jobs:
       - name: Install backend deps (for the host-side EDGAR seed bootstrap step)
         working-directory: backend
         run: bun install --frozen-lockfile
+      # Needed BEFORE "Full-stack demo" (issue #301): scripts/lib/committee/
+      # inference.ts's runOpencode() Bun.spawn()s the bare `opencode` binary
+      # HOST-SIDE (scripts/lib/committee/session.ts runs as a runner subprocess,
+      # not inside a container) for every committee session the demo boots —
+      # there is no template fallback anymore, so a runner without this CLI on
+      # PATH fails the required gate loudly instead of degrading. This is a
+      # DIFFERENT consumer than scripts/lib/member-agent/Dockerfile's baked-in
+      # copy (that one is for the containerized onboarding member-agent); same
+      # pinned release + checksum, kept in lockstep with that Dockerfile's
+      # OPENCODE_VERSION / OPENCODE_LINUX_X64_SHA256 args on purpose — bump both
+      # together.
+      - name: Install opencode CLI (committee takes require live inference)
+        env:
+          OPENCODE_VERSION: "1.18.1"
+          OPENCODE_LINUX_X64_SHA256: "9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b994816acf192159511"
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/opencode.tar.gz" \
+            "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz"
+          echo "${OPENCODE_LINUX_X64_SHA256}  $RUNNER_TEMP/opencode.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/opencode-bin"
+          tar -xzf "$RUNNER_TEMP/opencode.tar.gz" -C "$RUNNER_TEMP/opencode-bin"
+          rm "$RUNNER_TEMP/opencode.tar.gz"
+          echo "$RUNNER_TEMP/opencode-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/opencode-bin/opencode" --version
 
       # === Onboarding eval (Stage 7, §11 R8) ===
       # The inference-off infra-rails check (Stage 5's test) that used to run
@@ -247,17 +272,13 @@ jobs:
         run: |
           if [ "$REAL_EVAL_REQUESTED" = "1" ]; then
             if [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_ZEN_KEY" = "true" ]; then
-              echo "use_zen_key=1" >> "$GITHUB_OUTPUT"
               MSG="§11 R8 real-inference onboarding eval: RUNNING on the funded default model (trusted context, OPENCODE_API_KEY configured) as part of the Full-stack demo step below. Requested by: push to main, the 'real-eval' pull-request label, or workflow_dispatch with real_eval=true — whichever triggered this run."
             else
-              echo "use_zen_key=" >> "$GITHUB_OUTPUT"
               MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — the eval was requested for this run, but no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is funded (D22 as amended), so the eval will fail loudly rather than silently degrade. Configure the OPENCODE_API_KEY secret, or set AGENT_MODEL=free to run keyless."
             fi
           elif [ "$IS_PULL_REQUEST" = "true" ]; then
-            echo "use_zen_key=" >> "$GITHUB_OUTPUT"
             MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the single self-hosted runner this repo shares, on which per-PR evals cost minutes of exclusive runner time against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: .github/workflows/committee-opencode-nightly.yml — nightly 04:37 UTC (schedule '37 4 * * *') plus workflow_dispatch — which sweeps more models and more identities than this gate ever did; and on every push to main in this same workflow. What this PR run DID assert about that surface: the separate, inference-off .github/workflows/onboarding-eval-rails.yml workflow (issue #275 addendum), which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full whenever its own path filter matches."
           else
-            echo "use_zen_key=" >> "$GITHUB_OUTPUT"
             MSG="§11 R8 real-inference onboarding eval: NOT REQUESTED on this manual run — re-dispatch this workflow with real_eval=true to spend one. ZERO model tokens are spent here. The separate onboarding-eval-rails.yml workflow still covers the inference-off rails check."
           fi
           echo "$MSG"
@@ -305,17 +326,9 @@ jobs:
           # robotmoney.env=ci + robotmoney.env.hash labels from the helper, which
           # is the channel tooling should select on.
           DEMO_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
-          # This required e2e boots the LIVE data path (issue #147 — DEMO_HERMETIC
-          # removed): committee takes use the deterministic stanceFor() +
-          # buildMemo() template path (scripts/lib/committee/agent.ts, memo.ts) — no live model,
-          # NO secret. The REAL keyless opencode-zen committee-take authoring path
-          # (scripts/lib/committee/inference.ts, gated behind
-          # COMMITTEE_REAL_INFERENCE=1) is NOT currently exercised by any CI job
-          # after D21 removed the external-agent MCP-tools harness that used to
-          # drive it — see committee-opencode-nightly.yml's header; re-adding a
-          # job that sets COMMITTEE_REAL_INFERENCE=1 and loud-fails on the
-          # deterministic fallback is tracked follow-up. The committee-take
-          # path here stays on the deterministic template, so it needs no key.
+          # Committee takes are always live-authored through opencode. A missing
+          # credential, CLI, or model response fails this required gate loudly;
+          # there is no deterministic memo fallback.
           #
           # Every OTHER external dependency here IS live and keyless: public Base
           # mainnet JSON-RPC (vault-economics eth_call reads), and the keyless
@@ -354,7 +367,10 @@ jobs:
           # byte-identical, which
           # scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts asserts.
           ONBOARDING_REAL_EVAL: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
-          OPENCODE_API_KEY: ${{ steps.onboarding-gate.outputs.use_zen_key == '1' && secrets.OPENCODE_API_KEY || '' }}
+          # The committee session always requires live authoring. On an
+          # untrusted fork GitHub supplies an empty secret and the session fails
+          # loudly instead of fabricating a template take.
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
         # 40 min for the pre-existing checks + headroom for the onboarding eval
         # on the runs that spend one (push to main, a `real-eval`-labelled PR, a

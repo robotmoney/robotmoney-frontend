@@ -1014,10 +1014,9 @@ member agents, each identified by its own access-key hash and signing with its
 own key) and asserts: regime write lands and reads back; member signatures
 verify; a no-show renders **absent**, not fabricated; out-of-window POSTs
 are rejected; cross-role writes are denied; a published session renders the *real*
-takes. The demo is the same harness at scale. Hermetic: a missing dependency fails
-the run rather than silently skipping. Real-LLM member takes are a separate
-opt-in: `COMMITTEE_REAL_INFERENCE=1` swaps the templated take for a real
-opencode-zen call — the model `AGENT_MODEL` resolves against
+takes. The demo is the same harness at scale. Every present member authors a
+live opencode-zen take — a missing dependency fails the run rather than silently
+skipping or emitting a template. The model `AGENT_MODEL` resolves against
 `scripts/lib/model-registry.ts`, billed to `OPENCODE_API_KEY` (§11.3 E1) —
 that is **time-bounded**
 (`OPENCODE_TIMEOUT_MS`, default 120s — a hung inference kills the subprocess
@@ -1027,15 +1026,9 @@ instead of freezing the session), and member runs are settled rather than
 `mcp/src/e2e.ts` — is relocated out of the retired `mcp/` package as part of
 D21's follow-up code retirement).
 
-**Known coverage gap (stated, not papered over).** No CI job currently exercises
-the real-model committee-take authoring path: every committee take in CI —
-including in the demo boot — takes the deterministic `stanceFor()`/`buildMemo()`
-template path. D21 retired the job that previously covered a version of this (it
-drove the now-deleted MCP tools), and re-establishing the coverage — a job that
-sets `COMMITTEE_REAL_INFERENCE=1` and loud-fails on the deterministic fallback —
-is tracked follow-up work. What *is* covered nightly is real-inference
-**onboarding** (§11.3), a different surface; the two must not be conflated when
-reading the CI signal.
+The required `e2e` demo boot therefore executes and asserts live committee-take
+authorship on every run. The nightly workflow additionally measures
+real-inference **onboarding** (§11.3), a distinct surface.
 
 ### 9.8 Phase-5 build order & reconciliation
 
