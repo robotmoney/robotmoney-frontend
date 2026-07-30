@@ -535,7 +535,11 @@
 
 /* Hero — full-bleed (breaks out of the 840px .faq__container band) */
 .faq__hero {
-  text-align: center;
+  /* Left-aligned, like every other page header on the site (.stub__head and
+     the rv__/cv__ pages all set no text-align, i.e. left). This hero was the
+     only centered one left, which read as a page from a different site. The
+     art stays full-bleed; only the type moves. */
+  text-align: left;
   padding-bottom: 3.5rem;
   margin-bottom: 3.5rem;
   border-bottom: 1px solid var(--color-border);
@@ -632,8 +636,11 @@
   font-size: 1.05rem;
   line-height: 1.65;
   color: var(--color-text-muted);
-  max-width: 540px;
-  margin: 0 auto;
+  /* Was centered under a centered title. With the header left-aligned the auto
+     margins would strand it mid-column, so it sits left and takes a normal
+     reading measure rather than the narrow 540px a centered lede wanted. */
+  max-width: 62ch;
+  margin: 0;
 }
 
 /* Q&A list — open prose, every answer always visible */
