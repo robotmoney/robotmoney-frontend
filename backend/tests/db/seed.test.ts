@@ -11,7 +11,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { sql } from "../../src/db/client.ts";
 import { SCHEDULES, seed, seedJobSchedules } from "../../src/db/seed.ts";
-import { resolveCommitteeSchedules } from "../../src/config.ts";
+import { resolveSwarmSchedules } from "../../src/config.ts";
 
 // Every test in this file must leave the shared ephemeral Postgres on the
 // PRODUCTION baseline (later test files, e.g. tests/api/admin-surface.test.ts,
@@ -195,7 +195,7 @@ test("without DEMO_MODE the seeded row set is byte-for-byte SCHEDULES (+ the env
   const rows = plain(await sql<ScheduleRow[]>`SELECT kind, cron, enabled FROM job_schedules`);
   const expected = plain([
     ...SCHEDULES.map((s) => ({ kind: s.kind, cron: s.cron, enabled: s.enabled })),
-    ...resolveCommitteeSchedules().map((s) => ({ kind: s.kind, cron: s.cron, enabled: s.enabled })),
+    ...resolveSwarmSchedules().map((s) => ({ kind: s.kind, cron: s.cron, enabled: s.enabled })),
   ]);
   expect(rows).toEqual(expected);
 });

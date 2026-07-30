@@ -32,7 +32,7 @@ export interface AdminAuthConfig {
 }
 
 // PATCH the admin-managed overview text for a project by slug. PRIVILEGED with
-// the same guard committee routes use: if ADMIN_TOKEN is set, require it as
+// the same guard swarm routes use: if ADMIN_TOKEN is set, require it as
 // X-Admin-Token (constant-time compared); if unset, allow only outside prod
 // (config.allowInsecure). Fail-closed: prod with no token → 403.
 export async function updateProjectOverview(

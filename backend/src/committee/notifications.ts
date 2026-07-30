@@ -2,15 +2,15 @@ import { ROUTES } from "@robotmoney/contract";
 import { config } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 
-export interface CommitteeEmailMessage {
+export interface SwarmEmailMessage {
   from: string;
   to: string;
   subject: string;
   text: string;
 }
 
-export interface CommitteeEmailTransport {
-  send(message: CommitteeEmailMessage): Promise<void>;
+export interface SwarmEmailTransport {
+  send(message: SwarmEmailMessage): Promise<void>;
 }
 
 interface ActivationPayload {
@@ -18,16 +18,16 @@ interface ActivationPayload {
   text: string;
 }
 
-export function deploymentCommitteeEmailTransport(
+export function deploymentSwarmEmailTransport(
   env: Record<string, string | undefined> = process.env,
-): CommitteeEmailTransport {
+): SwarmEmailTransport {
   const endpoint = env.COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_URL;
   if (!endpoint) throw new Error("missing required env var: COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_URL");
   const token = env.COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_TOKEN;
   return {
     async send(message) {
       // Hard timeout so a hanging transport endpoint can't stall the single-process,
-      // sequential committee worker lane indefinitely (matches the fetch-timeout
+      // sequential swarm worker lane indefinitely (matches the fetch-timeout
       // convention used by chain/token-prices.ts and analytics/extract/http.ts).
       const response = await fetch(endpoint, {
         method: "POST",
@@ -39,7 +39,7 @@ export function deploymentCommitteeEmailTransport(
         signal: AbortSignal.timeout(8000),
       });
       if (!response.ok) {
-        throw new Error(`committee notification transport returned HTTP ${response.status}`);
+        throw new Error(`swarm notification transport returned HTTP ${response.status}`);
       }
     },
   };
@@ -54,9 +54,9 @@ export async function enqueueActivationNotification(
   const from = config.committeeNotificationEmailFrom;
   if (!from) throw new Error("missing required env var: COMMITTEE_NOTIFICATION_EMAIL_FROM");
   const payload: ActivationPayload = {
-    subject: "Your Robot Money committee application was approved",
+    subject: "Your Robot Money swarm application was approved",
     text: [
-      `Committee member ${memberId} is now active.`,
+      `Swarm member ${memberId} is now active.`,
       "Request a 10-minute signing challenge and claim your bearer token with the Ed25519 private key you kept at application time.",
       `Challenge endpoint: POST ${ROUTES.committee.claimChallenge}`,
       `Claim endpoint: POST ${ROUTES.committee.claimToken}`,
@@ -97,9 +97,9 @@ export async function enqueueSeatOpenNotifications(
   const outboxIds: string[] = [];
   for (const w of waitlist) {
     const payload = {
-      subject: "A seat has opened on the Robot Money Investment Committee",
+      subject: "A seat has opened on the Robot Money Investment Swarm",
       text: [
-        "A seat is now open on the Robot Money Investment Committee.",
+        "A seat is now open on the Robot Money Investment Swarm.",
         "Apply now at https://robotmoney.net/committee/apply",
       ].join("\n\n"),
       waitlistId: w.id,
@@ -126,9 +126,9 @@ export async function enqueueSeatOpenNotifications(
 }
 
 /** Send one persisted message. The queue retries thrown transport failures. */
-export async function deliverCommitteeNotification(
+export async function deliverSwarmNotification(
   outboxId: string,
-  transport: CommitteeEmailTransport = deploymentCommitteeEmailTransport(),
+  transport: SwarmEmailTransport = deploymentSwarmEmailTransport(),
 ): Promise<{ sent: boolean; idempotent?: boolean }> {
   const row = (await sql<{
     from_email: string;
@@ -138,7 +138,7 @@ export async function deliverCommitteeNotification(
   }[]>`
     SELECT from_email, to_email, payload, sent_at
     FROM committee_notification_outbox WHERE id = ${outboxId}`)[0];
-  if (!row) throw new Error(`committee notification outbox row not found: ${outboxId}`);
+  if (!row) throw new Error(`swarm notification outbox row not found: ${outboxId}`);
   if (row.sent_at) return { sent: false, idempotent: true };
 
   try {

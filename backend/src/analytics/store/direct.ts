@@ -1,6 +1,6 @@
 // Direct (SQL-backed) implementation of the AnalyticsPersistence port (issue
 // #106) — the API-owned domain service over the store writers. ONLY the API
-// process (its /api/analytics + committee regime routes), tests, and demo/e2e
+// process (its /api/analytics + swarm regime routes), tests, and demo/e2e
 // tooling that already holds DB credentials may use this; updater/worker
 // processes use analytics/api-client.ts instead. Enforced by
 // tests/analytics-api-boundary.test.ts.

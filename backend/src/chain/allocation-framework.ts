@@ -1,4 +1,4 @@
-// Admin/committee-managed allocation framework for GET /api/dashboards/allocation
+// Admin/swarm-managed allocation framework for GET /api/dashboards/allocation
 // (live-data contract §4). This is NOT a chain read and carries NO AI enrichment
 // (see the "projects overviews admin-managed" policy): it projects the single-row
 // allocation_framework table (migration 0001), which db/seed.ts seeds once from
@@ -33,7 +33,7 @@ export interface AllocationFramework {
 }
 
 // Raw bucket shape as stored in allocation_framework.buckets (faithful to the
-// committee source-of-truth allocation.json — weights are fractions in [0,1]).
+// swarm source-of-truth allocation.json — weights are fractions in [0,1]).
 interface RawItem {
   id: string;
   name: string;
@@ -52,10 +52,10 @@ interface FrameworkSeed {
 }
 
 // Seed copied verbatim from robotmoney-site/data/committee/allocation.json
-// (target_weight values only — the committee's authoritative policy). Exported so
+// (target_weight values only — the swarm's authoritative policy). Exported so
 // db/seed.ts inserts it ON CONFLICT DO NOTHING (never clobbering an admin edit)
 // and so getAllocationFramework can fall back to it if the row is somehow absent.
-// Do NOT invent weights the committee data does not carry.
+// Do NOT invent weights the swarm data does not carry.
 export const ALLOCATION_FRAMEWORK_SEED: FrameworkSeed = {
   asof: "2026-06-02",
   vault_contract: "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
@@ -121,7 +121,7 @@ function keyFor(id: string): string {
 }
 
 // Fraction [0,1] → percentage with 2dp precision (0.95 → 95, 0.1429 → 14.29) so
-// the committee's exact item weights are preserved, not rounded to a losing int.
+// the swarm's exact item weights are preserved, not rounded to a losing int.
 function pct(weight: number): number {
   return Math.round(weight * 10000) / 100;
 }
@@ -160,13 +160,13 @@ export async function getAllocationFramework(): Promise<AllocationFramework> {
       asof = row.asof;
       rawBuckets = row.buckets;
     } else {
-      // Row absent/empty: fall back to the committee seed default (managed data
+      // Row absent/empty: fall back to the swarm seed default (managed data
       // is intentionally static; this is not a degraded chain read).
       asof = ALLOCATION_FRAMEWORK_SEED.asof;
       rawBuckets = ALLOCATION_FRAMEWORK_SEED.buckets;
     }
   } catch (err) {
-    console.error("allocation-framework: table read failed, serving committee seed default:", err);
+    console.error("allocation-framework: table read failed, serving swarm seed default:", err);
     asof = ALLOCATION_FRAMEWORK_SEED.asof;
     rawBuckets = ALLOCATION_FRAMEWORK_SEED.buckets;
   }

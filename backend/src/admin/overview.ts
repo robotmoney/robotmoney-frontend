@@ -1,7 +1,7 @@
 // GET /api/admin/overview projection (issue #155, docs/architecture.md
 // US-A2). Composes queue counts, production-kind (regime.classify /
 // research.refresh) run health, regime + research staleness, enabled
-// analytics schedules, the next queued committee event, and an explicit
+// analytics schedules, the next queued swarm event, and an explicit
 // `alerts` feed distinguishing not_run/running/degraded/failed/dead/stale/
 // healthy — never guessed, always derived from the same columns the rest of
 // the admin surface reads.
@@ -156,7 +156,7 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
     nextRunAt: r.next_run_at ? new Date(r.next_run_at).toISOString() : null,
   }));
 
-  // ── Next committee event (derived from the queue only — committee session
+  // ── Next swarm event (derived from the queue only — swarm session
   // scheduling itself is out of this issue's scope) ─────────────────────
   const [committeeJob] = await sql`
     SELECT id, kind, run_after, scope_type, scope_id

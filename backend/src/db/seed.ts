@@ -11,7 +11,7 @@ import { sql, closeDb, jsonValue } from "./client.ts";
 import { seedDemoProjects } from "../projects/demo-seed.ts";
 import { walletHistorySeedRows } from "../chain/wallet-history-seed.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
-import { resolveCommitteeSchedules } from "../config.ts";
+import { resolveSwarmSchedules } from "../config.ts";
 
 interface SeedSchedule {
   kind: string;
@@ -24,8 +24,8 @@ interface SeedSchedule {
 // Keep this list small and harmless. Each kind MUST have a handler registered in
 // backend/src/worker/handlers/index.ts and be idempotent on natural keys.
 //
-// Committee lifecycle schedules are NOT in this list — they are seeded by
-// seedCommitteeSchedules() below, which is environment-configurable (issue
+// Swarm lifecycle schedules are NOT in this list — they are seeded by
+// seedSwarmSchedules() below, which is environment-configurable (issue
 // #208): COMMITTEE_SCHEDULES_ENABLED (disabled by default) switches the whole
 // committee.* cron sequence on/off, COMMITTEE_*_CRON / COMMITTEE_WINDOW_MINUTES
 // tune it, and changed values are applied to EXISTING job_schedules rows on
@@ -44,7 +44,7 @@ export const SCHEDULES: SeedSchedule[] = [
   { kind: "regime.classify", cron: "30 22 * * *", payload: {}, timezone: "UTC", enabled: true },
   // Daily 23:00 UTC: research-signals refresh (channel-divergence + late-cycle),
   // AFTER the regime job so the STABLES raw floor it reads is fresh. Runs in the
-  // research lane, so a slow fetch here can never starve committee/regime work.
+  // research lane, so a slow fetch here can never starve swarm/regime work.
   //
   // Seeded DISABLED (issue #108): a freshly-migrated database has no persisted
   // EDGAR/MNA history for the late-cycle input, so its first research run
@@ -71,9 +71,9 @@ export const SCHEDULES: SeedSchedule[] = [
   // NEW WETH->ROBOTMONEY buyback swaps into buyback_swaps (keyed on tx_hash). No-op
   // under a non-live source; degrade-safe on RPC failure. Handler: handlers/buybacks.ts.
   { kind: "buybacks.refresh", cron: "15 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
-  // Committee lifecycle rows are seeded SEPARATELY below (seedCommitteeSchedules)
+  // Swarm lifecycle rows are seeded SEPARATELY below (seedSwarmSchedules)
   // — issue #208 made their enabled/cron/window environment-configurable via
-  // resolveCommitteeSchedules(), and (unlike every other row here) their
+  // resolveSwarmSchedules(), and (unlike every other row here) their
   // enabled/cron ARE overwritten on every seed run so a changed
   // COMMITTEE_*_CRON / COMMITTEE_SCHEDULES_ENABLED is actually applied to an
   // existing deployment, not just a fresh database.
@@ -159,9 +159,9 @@ const SLOW_DEMO_SAMPLER_SCHEDULES: SeedSchedule[] = [
 // baseline for later test files sharing the same ephemeral Postgres, instead
 // of every truncating file needing to know the full seed() cost (e.g. the
 // wallet_balance_samples backfill loop).
-// Committee lifecycle schedule rows (issue #208): a DELIBERATE exception to
+// Swarm lifecycle schedule rows (issue #208): a DELIBERATE exception to
 // the "never touch enabled/cron on an existing row" rule below. Their
-// enabled/cron/window are environment-configuration (resolveCommitteeSchedules,
+// enabled/cron/window are environment-configuration (resolveSwarmSchedules,
 // backend/src/config.ts), not operator-toggled state — an operator changing
 // COMMITTEE_OPEN_SESSION_CRON (or flipping COMMITTEE_SCHEDULES_ENABLED) and
 // re-running the migrate/seed step must see that value actually applied to the
@@ -169,8 +169,8 @@ const SLOW_DEMO_SAMPLER_SCHEDULES: SeedSchedule[] = [
 // (kind, cron) natural key the general loop above uses — the cron itself is
 // exactly what may change here, so conflicting on it would leave a stale
 // duplicate row under the old cron instead of updating in place).
-export async function seedCommitteeSchedules(): Promise<void> {
-  for (const s of resolveCommitteeSchedules()) {
+export async function seedSwarmSchedules(): Promise<void> {
+  for (const s of resolveSwarmSchedules()) {
     const updated = await sql`
       UPDATE job_schedules
          SET cron = ${s.cron}, enabled = ${s.enabled}, payload = ${sql.json(jsonValue(s.payload))}, timezone = ${s.timezone}
@@ -201,7 +201,7 @@ export async function seedJobSchedules(): Promise<void> {
     `;
   }
   console.log(`seeded job_schedules (${schedules.length} definition(s), idempotent)`);
-  await seedCommitteeSchedules();
+  await seedSwarmSchedules();
 
   // DEMO_MODE also disables the per-minute wallet-sampler baseline: inserting
   // the hourly (kind, cron) row above only makes it COEXIST with "* * * * *" —
@@ -293,8 +293,8 @@ export async function seed(): Promise<void> {
   const backfilled = await backfillWalletHistory();
   console.log(`seeded wallet_balance_samples backfill (${backfilled} row candidate(s), idempotent)`);
 
-  // Allocation framework (live-data contract §4): seed the single admin/committee
-  // -managed row (id=1) from the committee source-of-truth (allocation.json,
+  // Allocation framework (live-data contract §4): seed the single admin/swarm
+  // -managed row (id=1) from the swarm source-of-truth (allocation.json,
   // copied into ALLOCATION_FRAMEWORK_SEED). ON CONFLICT DO NOTHING so a later
   // admin rewrite is NEVER clobbered by a re-boot ("projects overviews
   // admin-managed" policy) — this seed only fills an empty table.

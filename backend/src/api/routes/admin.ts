@@ -5,7 +5,7 @@
 // per-run logs; `jobs.scope_type/scope_id/requested_by/audit_request_id` and
 // the extended `audit_log` columns are migration 0017's additions.
 //
-// PRIVILEGED with the same guard the committee/projects admin routes use: if
+// PRIVILEGED with the same guard the swarm/projects admin routes use: if
 // ADMIN_TOKEN is set, require it as X-Admin-Token (constant-time compared, works
 // in every env incl. a public box); if unset, allow only outside prod
 // (config.allowInsecure — demo/ephemeral convenience). Fail-closed: prod with no
@@ -187,7 +187,7 @@ export async function handleAdmin(
   // GET /api/admin/overview — health cards + explicit alert feed (issue #155,
   // US-A2). Queue counts, production-kind (regime.classify/research.refresh)
   // run health, regime + research staleness, enabled analytics schedules, the
-  // next queued committee event, and a not_run/running/degraded/failed/dead/
+  // next queued swarm event, and a not_run/running/degraded/failed/dead/
   // stale/healthy alert feed.
   if (m === "GET" && p === "/api/admin/overview") {
     if (!requireAdmin(req, cfg)) return FORBIDDEN;
@@ -379,7 +379,7 @@ export async function handleAdmin(
           return {
             status: 409,
             body: {
-              error: "legacy/demo committee schedule — not product scheduling; cannot be toggled",
+              error: "legacy/demo swarm schedule — not product scheduling; cannot be toggled",
               code: "invalid_transition",
             },
           };

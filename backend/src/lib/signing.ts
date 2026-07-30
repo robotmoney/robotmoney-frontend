@@ -1,4 +1,4 @@
-// Ed25519 authorship verification for committee submissions. Members sign the
+// Ed25519 authorship verification for swarm submissions. Members sign the
 // canonical payload (from @robotmoney/contract) in their own environment; the
 // server only ever verifies — it never holds a private key. Web Crypto Ed25519
 // (supported by Bun). Keys/signatures are exchanged as base64 of raw bytes.
@@ -38,7 +38,7 @@ export async function verifySubmissionSignature(
 }
 
 /**
- * Import the exact public-key representation accepted by committee signature
+ * Import the exact public-key representation accepted by swarm signature
  * verification: canonical base64 containing one 32-byte raw Ed25519 key.
  * Apply-time validation and every verification path share this function so a
  * key cannot be accepted during onboarding and rejected later at duty time.

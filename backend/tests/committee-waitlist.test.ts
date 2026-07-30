@@ -3,7 +3,7 @@ import { handleCommittee } from "../src/api/routes/committee.ts";
 import * as ic from "../src/committee/domain.ts";
 import { COMMITTEE_ROSTER_CAP, getRosterCapacityStatus } from "../src/committee/domain.ts";
 import * as admin from "../src/committee/admin.ts";
-import { deliverCommitteeNotification, type CommitteeEmailTransport, type CommitteeEmailMessage } from "../src/committee/notifications.ts";
+import { deliverSwarmNotification, type SwarmEmailTransport, type SwarmEmailMessage } from "../src/committee/notifications.ts";
 import { sql } from "../src/db/client.ts";
 import { canonicalizeApplication } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -131,15 +131,15 @@ test("notify-on-seat-open — enqueues outbox + worker jobs on member deactivati
   expect(queuedWaitlistRows.every((row) => row.notified_at === null)).toBe(true);
 
   // Deliver notifications using test transport
-  const sentMessages: CommitteeEmailMessage[] = [];
-  const fakeTransport: CommitteeEmailTransport = {
+  const sentMessages: SwarmEmailMessage[] = [];
+  const fakeTransport: SwarmEmailTransport = {
     async send(msg) {
       sentMessages.push(msg);
     },
   };
 
   for (const o of outboxRows) {
-    const result = await deliverCommitteeNotification(o.id, fakeTransport);
+    const result = await deliverSwarmNotification(o.id, fakeTransport);
     expect(result.sent).toBe(true);
   }
 

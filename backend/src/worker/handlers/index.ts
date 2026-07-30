@@ -34,7 +34,7 @@ export const handlers: Record<string, JobHandler> = {
   "wallet.sample_sleeves": sampleWalletSleeves,
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,
-  // committee session lifecycle
+  // swarm session lifecycle
   "committee.open_session": committee.openSession,
   "committee.publish_brief": committee.publishBrief,
   "committee.close_window": committee.closeWindow,

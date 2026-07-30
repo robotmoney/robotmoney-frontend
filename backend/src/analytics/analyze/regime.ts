@@ -8,7 +8,7 @@ import { percentileInWindow, applySign } from "../transform/math.ts";
 
 // The regime thresholds/label rule live in @robotmoney/contract (contract/src/
 // regime.js) — this classifier is the canon they encode (0.33/0.67), and the
-// committee domain layer + MCP memo builder consume the same module so labels
+// swarm domain layer + MCP memo builder consume the same module so labels
 // can never diverge again. Re-exported here so analytics-side callers/tests can
 // keep importing the label rule from the classifier.
 export { classifyRegime, REGIME_RISK_OFF, REGIME_RISK_ON } from "@robotmoney/contract";
