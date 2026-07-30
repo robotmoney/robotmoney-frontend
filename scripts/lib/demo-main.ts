@@ -16,6 +16,7 @@ import {
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./demo-newcomers.ts";
+import { memberHomeVolumeName } from "../agent/member-agent.ts";
 import {
   assertStageWebPortFree,
   createStack,
@@ -359,14 +360,16 @@ interface ResearchEntry { id: number; kind: string; state: "queued" | "running" 
 interface MemberState { stage: "connect" | "fetch" | "thinking" | "reporting" | "waiting" | "done" | "absent"; stance?: string; confidence?: number; }
 // Local structural mirrors of the committee session driver's types
 // (scripts/lib/committee/session.ts SessionProgress / agent.ts
-// ExistingCredentials). The driver is loaded via a dynamic import() (untyped)
+// OnboardedMemberHome). The driver is loaded via a dynamic import() (untyped)
 // so the driver's module-load reads BACKEND_URL AFTER it is set below; these
 // local aliases keep our annotations decoupled from that dynamic boundary.
 type SessionProgress = (ev:
   | { type: "session"; state: string; sessionId?: number; subject: string; date?: string }
   | { type: "member"; memberId: string; stage: MemberState["stage"]; stance?: string; confidence?: number }
 ) => void;
-type ExistingCredentials = { token: string; privateKey: CryptoKey };
+// A real-onboarded member's persistent container HOME (its rmpc keystore +
+// stored token) and the owner-held keystore passphrase (issue #361 Phase 3).
+type OnboardedMemberHome = { volume: string; passphrase?: string };
 // Per-subject committee pane. Each subject (woon, mav, …) runs on its OWN schedule
 // and gets its OWN pane, so the TUI shows them side by side.
 interface CommitteeState {
@@ -1275,13 +1278,20 @@ async function main(): Promise<void> {
     console.log("\n[demo] running committee session…");
     // RM_ALLOW_INSECURE=1: docker-compose.demo.yml runs the api container with
     // this flag, so the backend's regime-write/admin gates ARE open here. The
-    // host-run REST session driver is secure-by-default
+    // session driver is secure-by-default
     // (scripts/lib/committee/session.ts regimeWriteInsecure — opt-IN, mirroring
     // backend config.ts allowInsecure), so tell it explicitly that this stack
     // is insecure, keeping its 5c/5d cross-role log annotations truthful ("gate
     // open").
+    //
+    // The stack's exact compose env (stack.spawnEnv) + COMPOSE_FILE ride along
+    // because the session driver now launches one member-agent CONTAINER per
+    // present member (issue #361 Phase 2, scripts/lib/committee/agent.ts
+    // railFromEnv) — its `docker compose run` children must re-resolve the
+    // same compose model this boot created, or the volume-hash check prompts
+    // to recreate live data (see scripts/agent/member-agent.ts).
     await run(["bun", "run", "scripts/lib/committee/session.ts"], repoRoot,
-      { ...process.env, BACKEND_URL: backendUrl, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "committee session");
+      { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "committee session");
 
     // Issue #209: exercise the repo-native single-member starter against this
     // required per-PR live stack. Its --e2e mode only provisions isolated
@@ -1488,9 +1498,13 @@ async function main(): Promise<void> {
   const e2e = await import(join(repoRoot, "scripts", "lib", "committee", "session.ts"));
 
   // One-time setup: reset once (clears any prior demo history) + seed regime.
+  // The regime snapshot is the PRODUCER's own regime.classify job (issue #361
+  // Phase 4) — enqueued by the platform, computed and submitted by the
+  // worker-analytics lane under its own credential; the removed
+  // admin("regime") classifier path no longer exists.
   await e2e.admin("reset");
   const today = new Date().toISOString().slice(0, 10);
-  await e2e.admin("regime", { asof: today });
+  await e2e.runRegimeClassify(today);
 
   // Self-heal: verify the boot regime run actually landed a FRESH snapshot before
   // handing off to the worker's recurring cron. A transient live-fetch failure (or
@@ -1512,7 +1526,7 @@ async function main(): Promise<void> {
     log(decision.message);
     if (decision.action === "fresh") break;
     if (decision.action === "rerun") {
-      await e2e.admin("regime", { asof: today }).catch((err: unknown) => log(`regime re-run failed: ${err instanceof Error ? err.message : err}`));
+      await e2e.runRegimeClassify(today).catch((err: unknown) => log(`regime re-run failed: ${err instanceof Error ? err.message : err}`));
     }
   }
 
@@ -1536,15 +1550,27 @@ async function main(): Promise<void> {
     };
   }
 
-  // Credentials for members onboarded at runtime, passed to every runSession so a
-  // member with a KNOWN key signs its own takes. §11 R3 means this process never
-  // holds a real-eval-onboarded member's private key, so this map now stays
-  // empty in practice — runAgent's existing "no credentials" self-enroll path
-  // (a fresh demo-only simulation key via the privileged register shortcut)
-  // covers ongoing session participation for every onboarded member instead.
-  // Kept as a live parameter (not deleted) so a future credential-preserving
-  // design can populate it without touching runSession's signature.
-  const onboardedCreds = new Map<string, ExistingCredentials>();
+  // Real-onboarded members' persistent homes (issue #361 Phase 3): the eval
+  // container that onboarded a newcomer ran with a persistent HOME volume, so
+  // its rmpc keystore + claimed token survive it. This map hands the session
+  // rail that volume (plus the owner-held passphrase), so the identity that
+  // onboarded is the identity that signs every subsequent take. The retired
+  // alternative — re-enrolling the newcomer with a fresh "demo-only simulation
+  // key" through the privileged register shortcut — no longer exists.
+  const onboardedHomes = new Map<string, OnboardedMemberHome>();
+
+  // The member-container rail for this stack (issue #361 Phase 2): every
+  // present member participates from its OWN container via the shared
+  // runMemberAgent() primitive; this process only opens/closes session windows
+  // and observes. resolveModelConfig() was already validated at boot.
+  const sessionRail = {
+    repoRoot,
+    composeProject: project,
+    composeFiles: composeFilesRun.split(":"),
+    composeSpawnEnv: stack.spawnEnv,
+    modelConfig: resolveModelConfig(process.env),
+    onboardedHomes,
+  };
 
   async function committeeDriver(): Promise<void> {
     for (;;) {
@@ -1561,7 +1587,10 @@ async function main(): Promise<void> {
       c.members = {};
       c.nextAt = 0; // running now → pane shows "running…"
       try {
-        const res = await e2e.runSession(date, subject, due.runs + 1, undefined, onboardedCreds, tuiActive ? committeeProgress(subject.id) : undefined);
+        const res = await e2e.runSession(date, subject, due.runs + 1, {
+          rail: sessionRail,
+          onProgress: tuiActive ? committeeProgress(subject.id) : undefined,
+        });
         c.publishedCount++;
         const synth: string = res?.pub?.session?.synthesis ?? "";
         c.history.push({ date, synthesis: synth });
@@ -1589,12 +1618,15 @@ async function main(): Promise<void> {
   // after 10s via the same admin API a human uses.
   //
   // The eval harness never hands this process the member's private key (§11
-  // R3 — Robot Money never sees one), so a freshly-onboarded member is added
-  // to e2e.MEMBERS WITHOUT credentials, exactly like the pre-existing
-  // "already-active member reused across a resumed demo" path — runAgent
-  // self-enrolls it (a fresh, demo-only simulation key, privileged register
-  // shortcut) for ongoing SESSION PARTICIPATION only, never for the
-  // onboarding admission itself, which already completed for real above.
+  // R3 — Robot Money never sees one). IDENTITY CONTINUITY (issue #361 Phase
+  // 3): each candidate's container HOME is a persistent named volume, so an
+  // admitted member's own rmpc keystore + claimed token survive the eval
+  // container; ongoing SESSION PARTICIPATION mounts that same volume on the
+  // member-container rail and signs with the SAME key that onboarded. The
+  // owner-held keystore passphrase is generated here (this process plays the
+  // owner, §11.3 E7) and retained for the member's lifetime in this demo. The
+  // former re-enrollment path — a fresh "demo-only simulation key" via the
+  // privileged register shortcut — is retired.
   //
   // RETRY POLICY (classified, not blanket — scripts/agent/classify-outcome.ts):
   // this driver rides runOnboardingEvalWithRetry, so an attempt classified
@@ -1660,6 +1692,10 @@ async function main(): Promise<void> {
       }
       startOnboarding(identity.runId, identity.name); // append to the persistent pane + drop from upcoming
       setOnboardStep(identity.runId, "connect", "running"); // container is about to launch
+      // Owner-held for this member's LIFETIME in this demo (issue #361 Phase
+      // 3): the same passphrase must unlock the keystore in every later
+      // session run. Never logged; redacted from transcripts at the source.
+      const keystorePassphrase = crypto.randomUUID();
       try {
         const result: OnboardingEvalResult = await runOnboardingEvalWithRetry({
           repoRoot,
@@ -1669,6 +1705,11 @@ async function main(): Promise<void> {
           adminToken: adminPassword,
           composeSpawnEnv: stack.spawnEnv,
           identity,
+          // Identity continuity (Phase 3): persistent per-attempt HOME volume
+          // + a retained owner passphrase, so the admitted identity keeps
+          // signing in later sessions.
+          homeVolumeFor: (attemptIdentity) => memberHomeVolumeName(project, attemptIdentity.runId),
+          keystorePassphrase,
           onEvent: (msg) => log(`onboarding-eval[${identity.runId}]: ${msg}`),
         });
 
@@ -1719,10 +1760,14 @@ async function main(): Promise<void> {
         }
 
         // Admitted for real (§11 R6 verified, R2 id minted). This driver never
-        // held the member's private key (R3), so it joins e2e.MEMBERS WITHOUT
-        // creds — the same "reused member" path runAgent already self-enrolls
-        // (demo-only participation simulation, not onboarding) for ongoing
-        // session participation.
+        // held the member's private key (R3): the member's rmpc keystore +
+        // claimed token live in ITS persistent HOME volume, which the session
+        // rail mounts for every later participation run — the identity that
+        // onboarded is the identity that signs (issue #361 Phase 3).
+        onboardedHomes.set(result.memberId!, {
+          volume: result.homeVolume ?? memberHomeVolumeName(project, result.identity.runId),
+          passphrase: keystorePassphrase,
+        });
         e2e.MEMBERS.push({ memberId: result.memberId!, name: identity.name, lens, bias, present: true });
         setOnboardStep(entryId, "session", "running");
         // Classified on the success path too, so every admission attempt leaves

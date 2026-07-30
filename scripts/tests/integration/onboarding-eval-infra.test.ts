@@ -46,6 +46,13 @@ import {
   LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH,
 } from "../../lib/onboarding-eval.ts";
 import {
+  ensureMemberVolume,
+  memberHomeVolumeName,
+  runMemberAgent,
+  type MemberAgentModel,
+} from "../../agent/member-agent.ts";
+import { ensureMemberIdentity } from "../../lib/committee/agent.ts";
+import {
   createStack,
   DEFAULT_COMPOSE_FILES,
   DEFAULT_STACK_DATABASE,
@@ -153,6 +160,19 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     try {
       purgeDemoEvalContainers(makeDockerRunner(stack.spawnEnv), { project: stack.config.project });
     } catch {}
+    // The session-rail check's member home volume is created OUTSIDE the
+    // compose model (docker volume create), so `down --volumes` does not know
+    // it — remove it explicitly, loudly on failure.
+    const volumeCleanup = Bun.spawnSync(
+      ["docker", "volume", "rm", "-f", memberHomeVolumeName(stack.config.project, "rails-check")],
+      { env: stack.spawnEnv, stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+    );
+    if (volumeCleanup.exitCode !== 0) {
+      console.error(
+        `[onboarding-eval-infra] member home volume cleanup failed (exit ${volumeCleanup.exitCode}): ` +
+          new TextDecoder().decode(volumeCleanup.stderr as Uint8Array),
+      );
+    }
     const r = stack.down({ removeVolumes: true, removeOrphans: true });
     if (r.exitCode !== 0) {
       // Never mask an earlier test failure by throwing here — but a failed
@@ -363,5 +383,95 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
       }
     },
     TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "SESSION RAIL (issue #361): a member container enrolls with a container-held key, the harness registers only the public key, and identity + credential persist across container runs",
+    async () => {
+      // Inference-OFF proof of the member-container session rail's enrollment
+      // half: the client runs under the image's own bun from the read-only
+      // repo mount, generates its ed25519 key INSIDE the container (persisted
+      // in a labeled named volume), and the harness's only privileged act is
+      // registering the PUBLIC key. The authoring/submission half (a real
+      // model call) is executed and asserted by the required e2e demo gate's
+      // committee sessions (assertAuthoredTakes).
+      const memberId = "rails-check";
+      const volume = memberHomeVolumeName(stack!.config.project, memberId);
+      ensureMemberVolume(volume, stack!.config.project, stack!.spawnEnv);
+      const keyless: MemberAgentModel = { model: "opencode/unused-by-enroll", apiKeyEnv: null, apiKey: null };
+      const enrollRun = (ownerEnv?: Record<string, string>) =>
+        runMemberAgent({
+          repoRoot,
+          composeProject: stack!.config.project,
+          composeFiles: DEFAULT_COMPOSE_FILES,
+          runId: `${memberId}-${crypto.randomUUID().slice(0, 6)}`,
+          entrypoint: "bun",
+          command: ["/rm/scripts/agent/member-session-client.ts", "enroll"],
+          mounts: [
+            { source: repoRoot, target: "/rm", readonly: true },
+            { source: volume, target: "/home/agent" },
+          ],
+          extraEnv: { RM_API_URL: "http://api:8787", RM_MEMBER_ID: memberId },
+          ownerEnv,
+          modelConfig: keyless,
+          composeSpawnEnv: stack!.spawnEnv,
+          timeoutMs: TEST_TIMEOUT_MS,
+        });
+      const parseEnroll = (stdout: string) => {
+        const line = stdout.split("\n").find((l) => l.trim().startsWith("RM_ENROLL "));
+        expect(line, `no RM_ENROLL in client stdout: ${stdout.slice(-400)}`).toBeDefined();
+        return JSON.parse(line!.trim().slice("RM_ENROLL ".length));
+      };
+
+      // Run 1: fresh volume → the client GENERATES its key in-container.
+      const run1 = await enrollRun();
+      expect(run1.exitCode).toBe(0);
+      const enroll1 = parseEnroll(run1.stdout);
+      expect(enroll1.keystore).toBe("client");
+      expect(enroll1.tokenValid).toBe(false);
+      expect(typeof enroll1.publicKey).toBe("string");
+
+      // Run 2 (a separate container, same volume): SAME key — continuity.
+      const run2 = await enrollRun();
+      expect(run2.exitCode).toBe(0);
+      expect(parseEnroll(run2.stdout).publicKey).toBe(enroll1.publicKey);
+
+      // The harness's one privileged act: register the container's PUBLIC key
+      // (the private key never left the volume) — this is what
+      // ensureMemberIdentity does for a roster member with no working token.
+      const rail = {
+        repoRoot,
+        composeProject: stack!.config.project,
+        composeFiles: [...DEFAULT_COMPOSE_FILES],
+        composeSpawnEnv: stack!.spawnEnv,
+        modelConfig: keyless,
+        backendUrl: stack!.backendUrl,
+        adminToken: stackCredentials!.adminToken,
+      };
+      const identity = await ensureMemberIdentity(rail, { memberId, name: "Rails Check", lens: "infra" });
+      expect(typeof identity.freshToken).toBe("string");
+      // The minted token authenticates as this member.
+      const verify = await fetch(`${stack!.backendUrl}${ROUTES.committee.verifyToken}`, {
+        headers: { Authorization: `Bearer ${identity.freshToken}` },
+      });
+      expect(verify.status).toBe(200);
+      expect(await verify.json()).toMatchObject({ memberId });
+
+      // Run 3: hand the token over ONCE (ownerEnv, redacted) — the client
+      // persists it in its own keystore and reports it valid.
+      const run3 = await enrollRun({ RM_MEMBER_TOKEN: identity.freshToken! });
+      expect(run3.exitCode).toBe(0);
+      expect(parseEnroll(run3.stdout)).toMatchObject({ tokenValid: true, memberId });
+      // …and the token was REDACTED from the transcript at the source.
+      expect(run3.transcript).not.toContain(identity.freshToken!);
+
+      // Run 4: nothing handed over — the stored credential alone works.
+      const run4 = await enrollRun();
+      expect(run4.exitCode).toBe(0);
+      expect(parseEnroll(run4.stdout)).toMatchObject({ tokenValid: true, memberId });
+    },
+    // Four container runs + one registration; each run is seconds, but a cold
+    // loaded daemon can be slow.
+    SETUP_TIMEOUT_MS,
   );
 });

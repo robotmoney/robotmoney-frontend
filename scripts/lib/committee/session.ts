@@ -11,8 +11,8 @@
 // driven over the REST admin API; only the per-member participation (./agent.ts)
 // and the standalone main()'s former MCP-OAuth assertions changed.
 import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
-import { runAgent, enroll } from "./agent.ts";
-import type { ExistingCredentials, AgentStage } from "./agent.ts";
+import { runAgent, enroll, railFromEnv } from "./agent.ts";
+import type { AgentStage, SessionRail } from "./agent.ts";
 import { generateKeyPair } from "./crypto.ts";
 
 export function backendUrl(): string {
@@ -20,21 +20,12 @@ export function backendUrl(): string {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Whether this driver expects the backend's regime-write/admin gates to be OPEN
-// (insecure) — used only to annotate the 5c/5d cross-role log lines truthfully.
-// MUST mirror backend/src/config.ts allowInsecure's opt-IN polarity: insecure
-// ONLY on an explicit RM_ALLOW_INSECURE === "1", and never when ANALYTICS_TOKEN
-// is set (a configured analytics credential closes the regime-write gate in
-// every env). SECURE BY DEFAULT — unset means "enforced". The demo harness
-// (scripts/lib/demo-main.ts) passes RM_ALLOW_INSECURE=1 explicitly to this
-// host-run driver, matching the api container docker-compose.demo.yml runs.
-// Exported + env-injectable so the polarity is unit-testable hermetically,
-// with no process env mutation and no backend running.
-export function regimeWriteInsecure(
-  env: Record<string, string | undefined> = process.env,
-): boolean {
-  return env.RM_ALLOW_INSECURE === "1" && !env.ANALYTICS_TOKEN;
-}
+// The 5c/5d cross-role log lines below used to be annotated by an env-mirror
+// helper (regimeWriteInsecure) that required this HARNESS process to hold the
+// producer credential just to describe the stack's posture. Retired (issue
+// #361 Phase 4): the annotations now derive from the server's OBSERVED
+// response status — strictly more truthful, and the analytics credential never
+// reaches this driver at all (it belongs to the producer and its verifier).
 
 // Run `fn` over `items` with at most `limit` invocations in flight, returning
 // results in INPUT order as PromiseSettledResult — like Promise.allSettled but
@@ -219,7 +210,47 @@ export async function enqueueLifecycleJob(action: string, payload: Record<string
   return result;
 }
 
-export async function runSession(date: string, subject: typeof SUBJECTS[0], sessionIndex: number, prevOutcome?: string, existingCredentials?: Map<string, ExistingCredentials>, onProgress?: SessionProgress) {
+// Ask the PRODUCER to land a regime snapshot for `asof`, then wait until it is
+// served (issue #361 Phase 4). The former `admin("regime")` action ran the
+// classifier INSIDE the api process under the admin token; that path is
+// removed — the platform now only SCHEDULES the producer's own `regime.classify`
+// job, which the worker-analytics lane computes and submits back through the
+// authenticated analytics boundary under the provider credential. Waiting on
+// the PUBLIC read keeps this a black-box observation: the snapshot is "landed"
+// when the site would serve it.
+export async function runRegimeClassify(asof: string, timeoutMs = 300_000) {
+  await enqueueLifecycleJob("regime_classify", { asof });
+  const deadline = Date.now() + timeoutMs;
+  let last: any = null;
+  while (Date.now() < deadline) {
+    last = await fetch(`${backendUrl()}${ROUTES.dashboards.regimeSnapshots}?range=1`)
+      .then(responseJson)
+      .catch(() => null);
+    const servedAsof: string | null = last?.staleness?.asof ?? null;
+    if (servedAsof && servedAsof >= asof) return last;
+    await sleep(2000);
+  }
+  throw new Error(
+    `regime.classify for ${asof} did not land within ${timeoutMs}ms ` +
+      `(served asof: ${last?.staleness?.asof ?? "none"}) — is the worker-analytics lane running?`,
+  );
+}
+
+// The member-container rail (issue #361 Phase 2): every present member runs in
+// its OWN container via the shared runMemberAgent() primitive; this driver
+// only drives the session lifecycle and observes. `rail` carries the compose
+// coordinates of the already-running stack; when omitted it is resolved from
+// this process's environment (the standalone CI entry point receives the
+// demo's exact compose env).
+export async function runSession(
+  date: string,
+  subject: typeof SUBJECTS[0],
+  sessionIndex: number,
+  opts?: { prevOutcome?: string; rail?: SessionRail; onProgress?: SessionProgress },
+) {
+  const prevOutcome = opts?.prevOutcome;
+  const onProgress = opts?.onProgress;
+  const rail = opts?.rail ?? railFromEnv();
   const tag = `[session ${sessionIndex}: ${date}/${subject.id}]`;
   console.log(`\n${tag}`);
   // Session-lifecycle emitter — one call per real state transition below.
@@ -229,7 +260,7 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   // Ensure subject exists; regime is already seeded by the first session.
   if (sessionIndex > 0) {
     await admin("subject", subject);
-    await admin("regime", { asof: date });
+    await runRegimeClassify(date);
   }
 
   // Seed the reference-shaped subject fixtures (subject row + subject snapshot the
@@ -249,19 +280,26 @@ export async function runSession(date: string, subject: typeof SUBJECTS[0], sess
   emitSession("collecting", sessionId);
   console.log(`${tag} session ${sessionId}: brief published, window open`);
 
-  // Enroll the no-show, then run present agents (some may have externally-
-  // provisioned credentials from the public apply → activate path).
+  // Enroll the no-show (own container + persistent keystore — the harness
+  // never generates a key for it), then run present members, each in its OWN
+  // container on the member-agent rail.
   const absent = MEMBERS.filter((m) => !m.present);
-  await Promise.all(absent.map((m) => enroll(m)));
+  await Promise.all(absent.map((m) => enroll(rail, m).catch((err) => {
+    // A failed no-show enrollment must not sink the session: absence is
+    // already this member's outcome either way. Logged, never fatal.
+    console.log(`  ${m.memberId}: no-show enrollment failed (absent regardless) — ${err instanceof Error ? err.message : err}`);
+  })));
   for (const m of absent) onProgress?.({ type: "member", memberId: m.memberId, stage: "absent" });
   const present = MEMBERS.filter((m) => m.present);
-  // Settle so one failed model call cannot freeze the session lifecycle. The
-  // unconditional post-publish assertion below still fails the run if any
-  // present member did not produce a live-authored take.
+  // Settle so one failed member container cannot freeze the session lifecycle
+  // (#122). Concurrency is preserved at the CONTAINER level: at most
+  // COMMITTEE_MAX_CONCURRENCY member containers in flight. The unconditional
+  // post-publish assertion below still fails the run if any present member did
+  // not produce a live-authored take.
   const limit = Number(process.env.COMMITTEE_MAX_CONCURRENCY ?? 4);
   const settled = await mapSettledWithConcurrency(present, limit, (m) => runAgent(
+    rail,
     { ...m, date, subjectId: subject.id, sessionId },
-    existingCredentials?.get(m.memberId),
     onProgress && ((stage, info) => onProgress({ type: "member", memberId: m.memberId, stage, ...info })),
   ));
   // Partition: fulfilled takes flow downstream; each rejected member is logged and
@@ -328,36 +366,31 @@ async function main() {
   const tomorrow = new Date(Date.now() + 86400_000).toISOString().slice(0, 10);
   console.log(`\n=== Committee REST E2E (${today} → ${tomorrow}) ===`);
 
-  // Setup (direct admin calls — not lifecycle state machine)
+  // The member-container rail for this stack (issue #361 Phase 2), resolved
+  // once from this process's environment — the demo readiness gate hands this
+  // entry point the stack's exact compose env.
+  const rail = railFromEnv();
+
+  // Setup (reset + subject are direct admin calls; the regime snapshot is the
+  // PRODUCER's own job — issue #361 Phase 4)
   await admin("reset");
-  await admin("regime", { asof: today });
+  await runRegimeClassify(today);
   await admin("subject", SUBJECTS[0]);
 
   // Session 1: today's subject
-  const s1 = await runSession(today, SUBJECTS[0], 1);
+  const s1 = await runSession(today, SUBJECTS[0], 1, { rail });
 
   // ── New member added mid-run ──────────────────────────────────────────────
   // Demonstrates a member added AFTER session 1, participating in session 2
-  // alongside the original roster (cross-session rotation awareness). This is
-  // deliberately the PRIVILEGED register shortcut, not the real §11 public
-  // apply→approve→claim onboarding flow: that flow requires an `rmpc`-signed
-  // application from the applicant's own agent (R3/R6) — the real-inference
-  // eval harness (scripts/lib/onboarding-eval.ts, driven by
-  // scripts/lib/demo-main.ts) and the no-inference proof
-  // (scripts/rmpc-release-e2e.ts) exercise that path; this standalone e2e
-  // script only needs a NEW member to seed session 2, the same non-onboarding
-  // use `enroll()`/the cross-role-test registration below already make of it.
-  const { publicKeyB64: eosPub, privateKey: eosPriv } = await generateKeyPair();
-  const eosReg = await fetch(`${backendUrl()}${ROUTES.committee.register}`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...getAdminHeaders() },
-    body: JSON.stringify({ memberId: "eos", name: "Eos", lens: "newcomer", publicKey: eosPub }),
-  }).then(responseJson) as { token?: string };
-  console.log(`\n  new member eos: register → token=${eosReg.token ? "✓" : "✗"}`);
-  if (!eosReg.token) throw new Error(`register failed for eos: ${JSON.stringify(eosReg)}`);
-
-  const eosCreds: ExistingCredentials = { token: eosReg.token, privateKey: eosPriv };
-  const existingCreds = new Map<string, ExistingCredentials>([["eos", eosCreds]]);
+  // alongside the original roster (cross-session rotation awareness). Pushed
+  // WITHOUT any host-held credential: eos enrolls on the container rail at its
+  // first session — its key is generated inside its own container, the
+  // harness registers only the PUBLIC key (the RM-operator half of seeding a
+  // demo roster; the real §11 public apply→approve→claim flow is exercised by
+  // the real-inference eval harness in scripts/lib/onboarding-eval.ts and the
+  // no-inference proof in scripts/rmpc-release-e2e.ts).
   MEMBERS.push({ memberId: "eos", name: "Eos", lens: "newcomer", bias: 0.05, present: true });
+  console.log(`\n  new member eos: joins the roster — enrolls in its own container at session 2`);
 
   // ── Cross-role denial assertions ─────────────────────────────────────────
   // Register a test member and verify identity-layer checks (always enforced
@@ -406,9 +439,9 @@ async function main() {
   console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
   // Session 2: next day, different subject (demonstrates rotation + cross-session
-  // awareness). Eos (registered mid-run above) participates alongside the
-  // original members.
-  await runSession(tomorrow, SUBJECTS[1], 2, s1.pub.session.synthesis, existingCreds);
+  // awareness). Eos (added to the roster mid-run above) enrolls and
+  // participates in its own container alongside the original members.
+  await runSession(tomorrow, SUBJECTS[1], 2, { prevOutcome: s1.pub.session.synthesis, rail });
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${backendUrl()}${ROUTES.committee.sessions}`).then((r) => r.json());

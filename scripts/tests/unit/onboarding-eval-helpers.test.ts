@@ -520,6 +520,7 @@ describe("runOnboardingEvalWithRetry", () => {
       containerExitCode: 1,
       containerLaunched: true,
       observerError: null,
+      homeVolume: null,
       ...overrides,
     };
   }

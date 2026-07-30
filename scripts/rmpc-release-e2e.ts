@@ -35,7 +35,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalizeApplication, canonicalizeClaimChallenge, canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { fetchRmpc, runRmpcJson, RMPC_VERSION, resolveRmpcAsset, missingCommitteeIdentitySubcommands } from "./lib/rmpc-fetch.ts";
-import { admin, enqueueLifecycleJob, waitForSessionState } from "./lib/committee/session.ts";
+import { admin, enqueueLifecycleJob, runRegimeClassify, waitForSessionState } from "./lib/committee/session.ts";
 
 // Re-exported so scripts/tests/unit/rmpc-release-e2e.test.ts (this script's own
 // unit tests) can keep importing the pure asset/subcommand helpers from
@@ -177,7 +177,9 @@ async function main(): Promise<void> {
   await admin("subject", { id: SUBJECT_ID, name: "RMPC Release E2E Subject" });
   // Idempotent, matches runSession()'s own pre-session regime seed — makes this
   // script self-sufficient even if run before any other regime seed exists.
-  await admin("regime", { asof: TODAY });
+  // The snapshot is the PRODUCER's own regime.classify job (issue #361 Phase
+  // 4); the removed admin("regime") classifier path no longer exists.
+  await runRegimeClassify(TODAY);
 
   await enqueueLifecycleJob("open_session", { date: TODAY, subjectId: SUBJECT_ID });
   const scheduled = await waitForSessionState(TODAY, SUBJECT_ID, "scheduled");

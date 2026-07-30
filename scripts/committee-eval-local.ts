@@ -2,7 +2,7 @@
 // against a stack core profile with real model inference.
 import { ROUTES } from "@robotmoney/contract";
 import { resolveAdmissionEvalModelConfig } from "./onboarding-eval-local.ts";
-import { admin, MEMBERS, runSession, SUBJECTS } from "./lib/committee/session.ts";
+import { admin, MEMBERS, runRegimeClassify, runSession, SUBJECTS } from "./lib/committee/session.ts";
 import {
   createStack,
   DEFAULT_COMPOSE_FILES,
@@ -75,10 +75,21 @@ export async function runCommitteeAuthoringEvalCase(
 
     const today = new Date().toISOString().slice(0, 10);
     await admin("reset");
-    await admin("regime", { asof: today });
+    // Producer-computed (issue #361 Phase 4): enqueue regime.classify and wait
+    // for the worker-analytics lane's submitted snapshot to be served.
+    await runRegimeClassify(today);
     await admin("subject", SUBJECTS[0]);
 
-    const sessionRun = await runSession(today, SUBJECTS[0], 1);
+    // Member-container rail (issue #361 Phase 2): the session's members run in
+    // their own containers against this eval stack.
+    const rail = {
+      repoRoot,
+      composeProject: project,
+      composeFiles: DEFAULT_COMPOSE_FILES,
+      composeSpawnEnv: stack.spawnEnv,
+      modelConfig,
+    };
+    const sessionRun = await runSession(today, SUBJECTS[0], 1, { rail });
     sessionState = sessionRun.pub?.session?.state ?? null;
     const presentMembers = MEMBERS.filter((m) => m.present);
     authoredCount = sessionRun.pub?.takes?.filter((t: any) => typeof t?.body === "string" && t.body.trim().length > 0).length ?? 0;

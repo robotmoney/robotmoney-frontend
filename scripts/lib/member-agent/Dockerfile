@@ -18,11 +18,23 @@
 # upstream release asset.
 ARG OPENCODE_VERSION=1.18.1
 ARG OPENCODE_LINUX_X64_SHA256=9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b994816acf192159511
+# Pinned Bun runtime + checksum (issue #361 Phase 2). Bun is a GENERIC
+# JavaScript runtime, in the same "bare tools any agent's machine would have"
+# class as curl/git/jq above — it carries no Robot Money knowledge. It exists
+# here because a SITTING committee member's container runs the member's own
+# deterministic session client (scripts/agent/member-session-client.ts,
+# mounted read-only at launch by the member's owner — exactly like an operator
+# installing the published starter client on their own machine), and that
+# client is TypeScript. The onboarding EVAL's vanilla-ness is unchanged: the
+# eval still injects only the canonical prompt, and nothing Robot-Money-
+# specific is baked in.
+ARG BUN_VERSION=1.3.5
+ARG BUN_LINUX_X64_SHA256=7051d86a924aefea3e0b96213b5fd8f79c0793f9cae6534233e627e5c3db4669
 
 FROM ubuntu:24.04
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl tar git jq bash \
+    && apt-get install -y --no-install-recommends ca-certificates curl tar git jq bash unzip \
     && rm -rf /var/lib/apt/lists/*
 
 ARG OPENCODE_VERSION
@@ -32,6 +44,15 @@ RUN curl -fsSLo /tmp/opencode.tar.gz \
     && echo "${OPENCODE_LINUX_X64_SHA256}  /tmp/opencode.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin \
     && rm /tmp/opencode.tar.gz
+
+ARG BUN_VERSION
+ARG BUN_LINUX_X64_SHA256
+RUN curl -fsSLo /tmp/bun.zip \
+      "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" \
+    && echo "${BUN_LINUX_X64_SHA256}  /tmp/bun.zip" | sha256sum -c - \
+    && unzip -j -q /tmp/bun.zip -d /usr/local/bin bun-linux-x64/bun \
+    && chmod 755 /usr/local/bin/bun \
+    && rm /tmp/bun.zip
 
 # rmpc is installed by the AGENT itself at runtime (the "toolchain" step of
 # docs/architecture.md §11.2) via GitHub Releases egress — never by this image.

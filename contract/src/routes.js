@@ -66,7 +66,7 @@ export const ROUTES = {
     claimChallenge: "/api/committee/token-claim/challenge", // POST — opaque 10-minute key-proof challenge
     claimToken: "/api/committee/token-claim", // POST — first valid key proof returns the sole bearer token
     register: "/api/committee/register", // POST (privileged) — apply+activate shortcut for demo/E2E
-    regime: "/api/committee/regime", // POST (analytics-provider bearer) — persist the regime
+    regime: "/api/committee/regime", // POST (analytics-provider bearer) — provider SUBMITS computed snapshots ({ snapshots }); never a server-side recompute
     submit: "/api/committee/submit", // POST (member bearer, ed25519-signed)
     // Admin lifecycle (X-Admin-Token). The backend registers ONE dispatcher at
     // admin.action; the named entries below enumerate the verbs it accepts so
@@ -75,7 +75,10 @@ export const ROUTES = {
       action: "/api/committee/admin/:action", // POST — generic lifecycle dispatch
       activate: "/api/committee/admin/activate", // POST — flip applied→active, mint bearer token
       reset: "/api/committee/admin/reset", // POST — wipe session data (dev/demo)
-      regime: "/api/committee/admin/regime", // POST — recompute the regime composite
+      // (the former admin `regime` action — the ADMIN_TOKEN classifier path —
+      // was removed by issue #361 Phase 4: regime data only arrives as a
+      // provider submission; the platform schedules the producer's own
+      // regime.classify job via enqueue-job instead)
       subject: "/api/committee/admin/subject", // POST — ensure a subject row
       subjectFixtures: "/api/committee/admin/subject_fixtures", // POST — seed reference-shaped demo fixtures
       open: "/api/committee/admin/open", // POST — open a session
