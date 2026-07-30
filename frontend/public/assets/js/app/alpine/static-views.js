@@ -107,7 +107,13 @@ function camelMember(raw) {
   };
 }
 
-function camelSubject(raw) {
+// Exported (alongside the loadArchive* loaders below) so
+// scripts/tests/unit/frontend-routes.test.ts can assert the raw->camel field
+// mapping directly, in particular nft_contracts -> nftContracts: the subject
+// endpoint has always returned that field, but nothing mapped it before the
+// public subject profile, so every consumer saw `undefined` and rendered
+// nothing.
+export function camelSubject(raw) {
   if (!raw) return null;
   return {
     id: raw.id,
@@ -119,13 +125,22 @@ function camelSubject(raw) {
     thesisBlurb: raw.thesis_blurb || raw.thesisBlurb,
     wallets: raw.wallets || [],
     structuralNotes: raw.structural_notes || raw.structuralNotes || [],
-    // The subject endpoint has always returned these; nothing mapped them, so
-    // every consumer saw `undefined` and rendered nothing. The public subject
-    // profile is the first surface that shows them.
     nftContracts: raw.nft_contracts || raw.nftContracts || [],
     recommendationType: raw.recommendation_type || raw.recommendationType,
     linkedMemberId: raw.linked_member_id || raw.linkedMemberId,
   };
+}
+
+// Tolerates both shapes the field arrives in: a list of notes, or a single
+// paragraph from an older manifest. Exported (and used by subjectProfile's
+// structuralNotes() below) so scripts/tests/unit/frontend-routes.test.ts can
+// assert the gate is on .length, not truthiness — camelSubject defaults a
+// missing field to [], which is itself truthy, so a plain `x-show` on the
+// raw value would render an empty panel on every subject that has none.
+export function structuralNotesOf(subject) {
+  const raw = subject?.structuralNotes;
+  if (Array.isArray(raw)) return raw.filter(Boolean);
+  return raw ? [raw] : [];
 }
 
 function normalizeSnapshot(raw) {
@@ -997,12 +1012,8 @@ export function registerStaticViews(Alpine) {
         chain: n.chain || "",
       }));
     },
-    // Tolerates both shapes the field arrives in: a list of notes, or a single
-    // paragraph from an older manifest.
     structuralNotes() {
-      const raw = this.subject?.structuralNotes;
-      if (Array.isArray(raw)) return raw.filter(Boolean);
-      return raw ? [raw] : [];
+      return structuralNotesOf(this.subject);
     },
     takeCountLabel(s) {
       const n = Number(s?.takes || 0);

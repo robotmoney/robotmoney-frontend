@@ -8,9 +8,11 @@ import { viewFor } from "../../../frontend/public/assets/js/app/routes.js";
 // to import was a dead duplicate normalizer never loaded by main.js's import
 // graph (review-maintainability-026) and has been deleted.
 import {
+  camelSubject,
   loadArchiveMember,
   loadArchiveSession,
   loadArchiveSnapshot,
+  structuralNotesOf,
 } from "../../../frontend/public/assets/js/app/alpine/static-views.js";
 
 const repoRoot = join(import.meta.dir, "../../..");
@@ -69,6 +71,16 @@ describe("frontend route resolution", () => {
     expect(viewFor("/committee/takes/4e9991de-0501-44f5-b21d-254acecd15a8")).toBe("/views/committee/take.html");
     expect(viewFor("/committee/2026-07-01/woon")).toBe("/views/committee/session.html");
     expect(viewFor("/committee/2026-06-25/woon")).toBe("/views/committee/session.html");
+  });
+
+  // Public subject profile (/committee/subjects/:id, issue #159's reader-facing
+  // counterpart). Same dedicated-fragment pattern as /committee/members/:id
+  // above and /admin/committee/subjects/:id below — PR #327 shipped the route
+  // without a test asserting it (issue #340).
+  test("resolves the public subject profile route to its own fragment", () => {
+    expect(viewFor("/committee/subjects/robotmoney-vault")).toBe("/views/committee/subject.html");
+    expect(viewFor("/committee/subjects/woon")).toBe("/views/committee/subject.html");
+    expect(viewFor("/committee/subjects/robotmoney-vault/")).toBe("/views/committee/subject.html");
   });
 
   // Public application-status page (docs/architecture.md §11 R2) — a
@@ -190,5 +202,59 @@ describe("frontend route resolution", () => {
     // Missing snapshots degrade to null (the view hides the portfolio panel)
     // rather than failing the whole session render.
     expect(await loadArchiveSnapshot("woon", "1999-01-01")).toBeNull();
+  });
+
+  // camelSubject backs both the live /api/committee/subjects/:id response and
+  // the archive manifest loader. The subject endpoint has always returned
+  // nft_contracts, but nothing mapped it into camelCase before the public
+  // subject profile (issue #340 / PR #327) — the field arrived as
+  // `undefined` and every consumer silently rendered nothing.
+  test("camelSubject maps nft_contracts to nftContracts", () => {
+    const raw = {
+      id: "woon",
+      name: "Woon",
+      nft_contracts: [{ address: "0xf184bdef428148ed4cbb9fab6c3b8bbd9cc3cfbd", chain: "peaq", label: "RoboFarm" }],
+    };
+    const subject = camelSubject(raw);
+    // camelSubject(raw) only returns null for a nullish raw payload; assert-and-
+    // narrow so the remaining assertions typecheck against the non-null shape
+    // (same pattern as the archive session test above).
+    if (!subject) throw new Error("camelSubject(raw) unexpectedly returned null");
+    expect(subject.nftContracts).toEqual(raw.nft_contracts);
+    expect(subject).not.toHaveProperty("nft_contracts");
+
+    // Tolerates an already-camelCase source too (the live API projects
+    // nftContracts directly — see backend/src/committee/projections.ts).
+    const alreadyCamel = camelSubject({ id: "x", nftContracts: [{ address: "0xabc" }] });
+    if (!alreadyCamel) throw new Error("camelSubject unexpectedly returned null");
+    expect(alreadyCamel.nftContracts).toEqual([{ address: "0xabc" }]);
+
+    // A subject manifest with no NFT contracts declared maps to [], not undefined.
+    const noNft = camelSubject({ id: "robotmoney-vault" });
+    if (!noNft) throw new Error("camelSubject unexpectedly returned null");
+    expect(noNft.nftContracts).toEqual([]);
+  });
+
+  // subject.html gates the "Structural notes" panel on `x-show="structuralNotes().length"`,
+  // not on the raw field's truthiness. camelSubject defaults a missing
+  // structural_notes field to `[]`, which is itself truthy in JS — a plain
+  // `x-show="subject.structuralNotes"` would render an empty panel on every
+  // subject that declares none. structuralNotesOf must gate on .length.
+  test("structuralNotesOf gates on .length, not truthiness of the raw field", () => {
+    expect(structuralNotesOf({ structuralNotes: [] })).toEqual([]);
+    expect(structuralNotesOf({ structuralNotes: [] }).length).toBe(0);
+    expect(structuralNotesOf(camelSubject({ id: "robotmoney-vault" }))).toEqual([]);
+
+    // A real list of notes passes through, filtered of any falsy entries.
+    expect(structuralNotesOf({ structuralNotes: ["a", "", "b", null] })).toEqual(["a", "b"]);
+
+    // Older manifests carry a single paragraph instead of a list; that still
+    // renders as one note rather than being dropped.
+    expect(structuralNotesOf({ structuralNotes: "a single paragraph note" })).toEqual([
+      "a single paragraph note",
+    ]);
+
+    // No subject at all (still loading / not found) must not throw.
+    expect(structuralNotesOf(null)).toEqual([]);
   });
 });
