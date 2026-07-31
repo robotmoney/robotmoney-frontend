@@ -75,6 +75,30 @@ test("a snapshot frozen >3 days back yields staleness.stale === true with the re
   expect(r.staleness.ageDays).toBe(10);
 });
 
+test("a future-dated row never shadows the real latest — fetchRegimeSnapshots enforces date <= today", async () => {
+  // Regression for #382: a future-dated row (demo/seed bug, manual insert, or
+  // clock skew on whatever produced it) sorts FIRST under `ORDER BY date DESC`
+  // and, without the `date <= today` boundary, would be served as `latest` —
+  // shadowing the real current snapshot and reading falsely fresh. Planted
+  // violation control: with the boundary removed this test fails (latest.date
+  // would be the future row, and it would appear in history), proving the
+  // assertion is not vacuous.
+  await saveRegimeSnapshots([snapRow(today()), snapRow(daysAgo(-5))]);
+  const r = await fetchRegimeSnapshots(30);
+  expect(r.latest?.date).toBe(today());
+  expect(r.history.map((h) => h.date)).not.toContain(daysAgo(-5));
+  expect(r.staleness.stale).toBe(false);
+  expect(r.staleness.asof).toBe(today());
+});
+
+test("GET regime-snapshots response body also excludes a future-dated row from latest/history", async () => {
+  await saveRegimeSnapshots([snapRow(today()), snapRow(daysAgo(-5))]);
+  const url = new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}?range=30`);
+  const body = JSON.parse(JSON.stringify(await getRegimeSnapshots(url)));
+  expect(body.latest.date).toBe(today());
+  expect(body.history.map((h: { date: string }) => h.date)).not.toContain(daysAgo(-5));
+});
+
 test("an empty regime_snapshots table yields staleness.stale === true with asof === null", async () => {
   const r = await fetchRegimeSnapshots(30);
   expect(r.latest).toBeNull();
