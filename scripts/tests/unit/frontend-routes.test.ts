@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { viewFor } from "../../../frontend/public/assets/js/app/routes.js";
+import { DASH_LAYOUT_VIEW, routeMetaFor, viewFor } from "../../../frontend/public/assets/js/app/routes.js";
 // These are the PRODUCTION archive loaders: the same functions the browser
 // runs for pre-2026-07-01 committee sessions (static-views.js is a plain ES
 // module, so Bun executes the real code path — not a test double). The old
@@ -66,6 +66,64 @@ describe("frontend route resolution", () => {
     // "resolves admin committee operations routes" below.
     expect(viewFor("/admin/audit")).toBe("/views/admin.html");
     expect(viewFor("/admin/")).toBe("/views/admin.html");
+  });
+
+  // Analytics dashboard router extension (issue #380, P0.3/P0.4 —
+  // docs/bot-analytics-ui-port-plan.md §4.1/§5.0): every nav-wired dashboard
+  // route resolves to the shared placeholder fragment today and carries
+  // `layout: DASH_LAYOUT_VIEW` + `gated: true` metadata for router.js's
+  // layout composition + dash-shell.js's gate, EXCEPT /submit — linked
+  // directly off the gate screen itself, so it must be reachable pre-auth.
+  test("resolves every static dashboard route to the shared placeholder, gated, under the dash layout", () => {
+    const gatedPaths = [
+      "/list", "/list2", "/list3", "/market", "/dashboard", "/agents",
+      "/lobster", "/vaults", "/wallets", "/methodology", "/about", "/ask-mr-roboto",
+    ];
+    for (const p of gatedPaths) {
+      expect(viewFor(p)).toBe("/views/dash/coming-soon.html");
+      expect(routeMetaFor(p)).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+    }
+    // /market and /dashboard alias the same fragment (the original's own
+    // aliasing, §4.1) — same view, same metadata.
+    expect(viewFor("/market")).toBe(viewFor("/dashboard"));
+  });
+
+  test("/submit is public (reachable off the gate screen itself) even though it shares the dash layout", () => {
+    expect(viewFor("/submit")).toBe("/views/dash/coming-soon.html");
+    expect(routeMetaFor("/submit")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: false });
+  });
+
+  test("dashboard param routes (:id/:slug) resolve to the placeholder with the right gate", () => {
+    const gatedParamPaths = ["/agents/clawd", "/lobster/xyz-coin", "/vaults/1", "/wallets/0xabc"];
+    for (const p of gatedParamPaths) {
+      expect(viewFor(p)).toBe("/views/dash/coming-soon.html");
+      expect(routeMetaFor(p)).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+    }
+    // /projects/:slug is the one param route the plan (§5.5) explicitly
+    // marks public — /projects (the list) is already a live, ungated page,
+    // and gating its own profile sub-route would regress that.
+    expect(viewFor("/projects/robotmoney-vault")).toBe("/views/dash/coming-soon.html");
+    expect(routeMetaFor("/projects/robotmoney-vault")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: false });
+    // Trailing slash tolerated, same as every other param regex in this file.
+    expect(routeMetaFor("/agents/clawd/")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+  });
+
+  test("routeMetaFor returns null for every non-dashboard route — a strict addition, not a behavior change", () => {
+    expect(routeMetaFor("/")).toBeNull();
+    expect(routeMetaFor("/allocation")).toBeNull();
+    expect(routeMetaFor("/admin")).toBeNull();
+    expect(routeMetaFor("/projects")).toBeNull();
+    expect(routeMetaFor("/committee/members/athena")).toBeNull();
+  });
+
+  test("every dashboard route fragment referenced by the router exists on disk", async () => {
+    const paths = ["/list", "/submit", "/agents/clawd", "/projects/robotmoney-vault"];
+    for (const p of paths) {
+      const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));
+      expect(await file.exists()).toBe(true);
+    }
+    const layoutFile = Bun.file(join(repoRoot, "frontend/public", `.${DASH_LAYOUT_VIEW}`));
+    expect(await layoutFile.exists()).toBe(true);
   });
 
   test("resolves dynamic committee routes to reusable fragments", () => {

@@ -1,0 +1,14 @@
+<!-- Shared placeholder for every dashboard route routes.js wires up in issue
+     #380 (P0.3/P0.4, docs/bot-analytics-ui-port-plan.md §4.1/§8) ahead of its
+     own phase issue (P2.x/P3.x/P4.x/P5.x) shipping real content. Rendered
+     inside views/dash/_layout.html's `[data-outlet]`, so it never carries the
+     `.a3` root class itself (the layout already has it) or any x-data — it
+     is intentionally inert, just enough to prove the route/layout/gate wiring
+     end to end without inventing page content this issue does not own. A
+     later issue replaces the DASH_COMING_SOON_VIEW mapping for its own route
+     in routes.js with its real fragment; this file is not deleted until no
+     route references it any more. -->
+<div class="a3-coming-soon" data-dash-coming-soon>
+  <h2>Coming soon</h2>
+  <p class="data-label">This dashboard page is not built yet — its route, layout, and access gate are already wired (issue #380).</p>
+</div>

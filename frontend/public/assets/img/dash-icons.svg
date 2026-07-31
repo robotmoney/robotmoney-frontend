@@ -49,4 +49,8 @@
   <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/></symbol>
   <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 2.5 15 9l7 1-5 4.9L18.2 22 12 18.3 5.8 22 7 14.9 2 10l7-1Z"/></symbol>
+  <!-- Added by issue #380 (P0.3, docs/bot-analytics-ui-port-plan.md §5.0): the
+       sidebar's hamburger SidebarTrigger — not in #379's own glyph list since
+       that issue never built the shell that needed it. -->
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
 </svg>

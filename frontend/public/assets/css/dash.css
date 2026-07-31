@@ -427,3 +427,162 @@
    <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-name"/></svg>) */
 .a3 .a3-icon { width: 1rem; height: 1rem; display: inline-block; vertical-align: -0.15em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .a3 .a3-icon--lg { width: 1.5rem; height: 1.5rem; }
+
+/* ══ Dashboard shell — sidebar + topbar + outlet (P0.3, issue #380) ════════
+   views/dash/_layout.html + alpine/views/dash-shell.js, §5.0. Pixel targets:
+   8×8 (2rem) cyan-tinted logo box in the sidebar header, 16×16 nav icons,
+   text-xs mono uppercase nav labels, h-12 topbar, collapse-to-icon-rail. */
+/* The sitewide nav (components.css .nav) is position:fixed, height 4rem,
+   across every route including the dashboard — this shell sits BELOW it
+   (not underneath) rather than losing its own top strip's clicks to the
+   nav's overlapping hit area, the same clearance problem the P0.1 styleguide
+   fixture solved with top padding on its own single-column layout. */
+.a3-shell { display: flex; min-height: calc(100vh - 4rem); margin-top: 4rem; }
+.a3-shell__sidebar {
+  width: 15rem;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: hsl(var(--card));
+  border-right: 1px solid hsl(var(--border));
+  transition: width 0.15s ease;
+  overflow: hidden;
+}
+.a3-shell--collapsed .a3-shell__sidebar { width: 4rem; }
+
+.a3-shell__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.9rem;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.a3-shell__logo {
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  background: hsl(var(--primary) / 0.1);
+  border: 1px solid hsl(var(--primary) / 0.2);
+  color: hsl(var(--primary));
+}
+.a3-shell__brand-text { display: flex; flex-direction: column; line-height: 1.2; overflow: hidden; white-space: nowrap; }
+.a3-shell--collapsed .a3-shell__brand-text { display: none; }
+.a3-shell__brand-name { font-family: 'JetBrains Mono', monospace; font-weight: 800; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.a3-shell__brand-sub { font-family: 'JetBrains Mono', monospace; font-size: 0.625rem; color: hsl(var(--muted-foreground)); text-transform: uppercase; letter-spacing: 0.1em; }
+
+.a3-shell__nav { flex: 1; overflow-y: auto; padding: 0.5rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.a3-shell__tools { border-top: 1px solid hsl(var(--border)); padding: 0.5rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.a3-shell__nav-link,
+.a3-shell__signout {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.a3-shell__nav-link:hover, .a3-shell__signout:hover { background: hsl(var(--muted) / 0.5); }
+.a3-shell__nav-link.is-active { background: hsl(var(--primary) / 0.1); color: hsl(var(--primary)); font-weight: 600; }
+.a3-shell__nav-icon { width: 1rem; height: 1rem; flex: none; }
+.a3-shell--collapsed .a3-shell__nav-label { display: none; }
+
+.a3-shell__frame { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.a3-shell__topbar {
+  height: 3rem;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.a3-shell__hamburger { display: inline-flex; align-items: center; justify-content: center; background: transparent; border: none; color: hsl(var(--muted-foreground)); cursor: pointer; padding: 0.25rem; }
+.a3-shell__hamburger:hover { color: hsl(var(--foreground)); }
+.a3-shell__title { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; font-weight: 600; color: hsl(var(--muted-foreground)); text-transform: uppercase; letter-spacing: 0.08em; }
+.a3-shell__main { flex: 1; padding: 1.5rem; overflow: auto; }
+
+@media (max-width: 768px) {
+  .a3-shell__sidebar { position: fixed; inset: 0 auto 0 0; z-index: 50; transform: translateX(-100%); }
+  .a3-shell:not(.a3-shell--collapsed) .a3-shell__sidebar { transform: translateX(0); }
+}
+
+/* ══ Dashboard gate — full-screen centered login (P0.4, issue #380) ═══════
+   alpine/views/dash-gate.js + views/dash/_layout.html, §5.0. */
+.a3-gate { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
+.a3-gate__card { width: 100%; max-width: 24rem; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 1rem; }
+.a3-gate__logo {
+  width: 3.5rem;
+  height: 3.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  background: hsl(var(--primary) / 0.1);
+  border: 1px solid hsl(var(--primary) / 0.2);
+  color: hsl(var(--primary));
+}
+.a3-gate__title { font-family: 'JetBrains Mono', monospace; font-weight: 800; font-size: 1.25rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.a3-gate__subtitle { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: hsl(var(--muted-foreground)); text-transform: uppercase; letter-spacing: 0.14em; }
+.a3-gate__alert {
+  width: 100%;
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius);
+  border: 1px solid hsl(var(--destructive) / 0.4);
+  background: hsl(var(--destructive) / 0.08);
+  color: hsl(var(--destructive));
+  font-size: 0.8rem;
+  text-align: left;
+}
+.a3-gate__form { width: 100%; display: flex; flex-direction: column; gap: 0.75rem; }
+.a3-gate__field { position: relative; display: flex; align-items: center; }
+.a3-gate__field-icon { position: absolute; left: 0.75rem; color: hsl(var(--muted-foreground)); pointer-events: none; }
+.a3-gate__input {
+  width: 100%;
+  padding: 0.55rem 2.25rem 0.55rem 2.25rem;
+  border-radius: var(--radius);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+}
+.a3-gate__toggle { position: absolute; right: 0.6rem; display: inline-flex; background: transparent; border: none; color: hsl(var(--muted-foreground)); cursor: pointer; padding: 0; }
+.a3-gate__toggle:hover { color: hsl(var(--foreground)); }
+.a3-gate__submit {
+  width: 100%;
+  padding: 0.65rem;
+  border-radius: var(--radius);
+  border: none;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.a3-gate__submit:disabled { opacity: 0.5; cursor: not-allowed; }
+.a3-gate__link { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
+.a3-gate__link:hover { color: hsl(var(--primary)); }
+
+/* Shared "coming soon" placeholder (views/dash/coming-soon.html) — every
+   nav-wired dashboard route (issue #380) points here until its own phase
+   issue (§8) lands real content. */
+.a3-coming-soon { display: flex; flex-direction: column; gap: 0.5rem; padding: 3rem 0; text-align: center; color: hsl(var(--muted-foreground)); }
