@@ -413,6 +413,31 @@ export function resolveSwarmSchedules(
   ];
 }
 
+// --- Committee public base URL ----------------------------------------------
+// The absolute origin the committee notification emails link back to. Every
+// other surface in this codebase can get away with a root-relative path because
+// it renders inside a browser that already has an origin; an email does not. It
+// is read in a mail client, so a link that is not absolute is not a link at all.
+// That matters more here than it looks: the application status page at
+// /committee/apply/<memberId> is reachable ONLY by its opaque id, nothing on the
+// site links to it, and the operator is handed the URL exactly once by their own
+// coding agent in a chat transcript. The email is the durable copy, so the URL
+// inside it has to be complete and it has to point at the deployment the
+// operator actually applied to (staging applicants must not be sent to
+// production, where their member id does not exist).
+//
+// Defaults to the public production site: an unconfigured real deployment still
+// emits a link that works for a real operator, which is the failure mode we can
+// live with. Trailing slashes are stripped at resolution so every call site can
+// concatenate a leading-slash path without minting "https://host//committee/...".
+// Resolved at module load like the other single-value knobs below; the committee
+// tests that need a different origin set the env before importing config.
+export function resolveCommitteePublicBaseUrl(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return (env.COMMITTEE_PUBLIC_BASE_URL || "https://robotmoney.net").replace(/\/+$/, "");
+}
+
 // Fail-closed: default to "prod" when RM_ENV is unset, and REFUSE to start on an
 // unrecognized value (so a typo like "production" can never silently open the
 // privileged surface). The unauthenticated convenience path is opt-in: it is
@@ -451,6 +476,8 @@ export const config = {
   committeeNotificationEmailFrom: process.env.COMMITTEE_NOTIFICATION_EMAIL_FROM || null,
   committeeNotificationEmailTransportUrl: process.env.COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_URL || null,
   committeeNotificationEmailTransportToken: process.env.COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_TOKEN || null,
+  // Origin every link inside those emails is built from (see the resolver above).
+  committeePublicBaseUrl: resolveCommitteePublicBaseUrl(),
   // NOTE: the analytics pipeline (analytics/index.ts runAnalytics) selects its
   // data source SOLELY via `ANALYTICS_SOURCE` (unset|live → real fetchers,
   // hermetic → seeded/offline) — see analytics/index.ts::resolveAnalyticsSource.
