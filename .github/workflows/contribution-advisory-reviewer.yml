@@ -14,8 +14,6 @@ on:
   # mirror of what a merge runs. The `reviewed-head` dedupe below keys on "not
   # a manual dispatch" rather than on `schedule` specifically, so a push run
   # re-reviews only the PRs whose head actually moved.
-  push:
-    branches: [main]
   schedule:
     - cron: "19 5 * * *"
   workflow_dispatch:

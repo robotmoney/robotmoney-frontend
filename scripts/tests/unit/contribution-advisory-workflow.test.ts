@@ -20,16 +20,13 @@ const job = workflow.jobs["advisory-review"];
 const runScripts = job.steps.map((step) => step.run ?? "").join("\n");
 
 describe("contribution advisory workflow security contract", () => {
-  // Issue #373 folded this workflow into the merge-to-main set: nightly is now
-  // a MIRROR of what a merge runs, so a `schedule:` without a matching
-  // `push: branches: [main]` is itself a defect
-  // (scripts/tests/unit/nightly-mirrors-merge-set.test.ts). What has NOT
+  // Issue #377 reversed #373: this workflow is NOT in the merge-to-main set. It
+  // is an isolated PR-review bot with an exempted schedule. What has NOT
   // changed, and is the security contract this file exists for, is that no
   // `pull_request` trigger may appear here: every trigger below runs
   // default-branch code in a trusted context.
-  test("parsed triggers are the merge-set mirror plus manual — never pull_request", () => {
-    expect(Object.keys(workflow.on).sort()).toEqual(["push", "schedule", "workflow_dispatch"]);
-    expect((workflow.on.push as { branches: string[] }).branches).toEqual(["main"]);
+  test("parsed triggers are schedule plus manual — never pull_request", () => {
+    expect(Object.keys(workflow.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
     expect(workflow.on.schedule).toBeArray();
     expect(workflow.on.workflow_dispatch).toBeObject();
     expect(Object.keys(workflow.on)).not.toContain("pull_request");

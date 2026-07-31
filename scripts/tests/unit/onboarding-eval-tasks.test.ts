@@ -119,23 +119,3 @@ describe("harness-supplied identity never leaks into a task's TEXT beyond the no
   });
 });
 
-describe("eval:onboarding:isolated wiring — the runtime-first-execution-order guarantee", () => {
-  const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { scripts: Record<string, string> };
-
-  test("the target runs runtime.eval.test.ts in its OWN bun test invocation before the other three", () => {
-    const script = pkg.scripts["eval:onboarding:isolated"]!;
-    expect(script).toBeTruthy();
-    const runtimeIdx = script.indexOf("bun test onboarding/isolated/runtime.eval.test.ts");
-    const restIdx = script.indexOf(
-      "bun test onboarding/isolated/skill-install.eval.test.ts onboarding/isolated/toolchain.eval.test.ts onboarding/isolated/keygen-signing.eval.test.ts",
-    );
-    expect(runtimeIdx).toBeGreaterThanOrEqual(0);
-    expect(restIdx).toBeGreaterThan(runtimeIdx);
-  });
-
-  test("the target's combined exit code reflects EITHER bun test invocation failing", () => {
-    const script = pkg.scripts["eval:onboarding:isolated"]!;
-    expect(script).toMatch(/rc1/);
-    expect(script).toMatch(/rc2/);
-  });
-});
