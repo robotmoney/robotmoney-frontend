@@ -374,10 +374,60 @@ test("telemetry: DTO validation rejects malformed run/stage/warning/artifact pay
     ] } }, // duplicate sequence
     { run: { ...(good as any).run, warnings: [{ stage: "access", message: "" }] } }, // empty message
     { run: { ...(good as any).run, artifacts: [{ stage: "access", kind: "x", checksum: null, preview: "x".repeat(30_000) }] } }, // oversized preview
+    { run: { ...(good as any).run, jobId: "not-a-number" } }, // garbage jobId string still rejected
+    { run: { ...(good as any).run, jobId: "12.5" } }, // non-integer jobId string still rejected
+    { run: { ...(good as any).run, jobId: 12.5 } }, // non-integer jobId number still rejected
   ];
   for (const body of badBodies) {
     expect((await call(req("POST", A.telemetry, body, TOKEN)))?.status).toBe(400);
   }
   const [{ n: after }] = await sql`SELECT COUNT(*)::int AS n FROM research_pipeline_runs`;
   expect(after).toBe(before);
+});
+
+// Issue #383 — `jobs.id` is a Postgres `bigint` (bigserial), and postgres.js
+// decodes bigint columns as JS strings by default (it never silently narrows
+// a value that might exceed Number.MAX_SAFE_INTEGER). A job-triggered
+// telemetry submission's `jobId` therefore arrives at this HTTP boundary as a
+// numeric STRING, not a `number` — before this fix `parseTelemetryRun`
+// rejected it with 400 "run.jobId must be an integer or null", so every
+// job-linked telemetry submission was silently dropped (submission failures
+// are non-fatal by design — see analytics/telemetry.ts submitTelemetrySafely
+// — which is exactly how this went uncaught).
+test("telemetry: accepts a real bigint-as-string jobId (postgres.js's actual runtime representation) and persists it exactly, without precision loss", async () => {
+  prodAuth();
+
+  // Prove the root cause against a REAL row, not an assumption: postgres.js
+  // decodes `jobs.id bigserial` as a string.
+  const [{ id: jobId }] = await sql`INSERT INTO jobs (kind) VALUES ('regime.classify') RETURNING id`;
+  expect(typeof jobId).toBe("string");
+
+  const body = validTelemetryBody() as { run: Record<string, unknown> };
+  body.run.jobId = jobId; // exactly what telemetryHttpSink's JSON.stringify+POST sends
+  const res = await call(req("POST", A.telemetry, body, TOKEN));
+  expect(res?.status).toBe(200);
+  const { runId } = res!.body as { runId: number };
+  const [run] = await sql`SELECT job_id::text AS job_id FROM research_pipeline_runs WHERE id = ${runId}`;
+  expect(run.job_id).toBe(jobId);
+
+  // A bigint near int8's max is unrepresentable exactly as a JS `number` —
+  // coercing the string to `number` here would silently corrupt it. Assert
+  // the full round-trip is lossless.
+  const bigJobId = "9223372036854775000";
+  const body2 = validTelemetryBody() as { run: Record<string, unknown> };
+  body2.run.jobId = bigJobId;
+  const res2 = await call(req("POST", A.telemetry, body2, TOKEN));
+  expect(res2?.status).toBe(200);
+  const { runId: runId2 } = res2!.body as { runId: number };
+  const [run2] = await sql`SELECT job_id::text AS job_id FROM research_pipeline_runs WHERE id = ${runId2}`;
+  expect(run2.job_id).toBe(bigJobId);
+
+  // A plain integer `number` jobId (the common small-id case) still works.
+  const body3 = validTelemetryBody() as { run: Record<string, unknown> };
+  body3.run.jobId = 42;
+  const res3 = await call(req("POST", A.telemetry, body3, TOKEN));
+  expect(res3?.status).toBe(200);
+  const { runId: runId3 } = res3!.body as { runId: number };
+  const [run3] = await sql`SELECT job_id::text AS job_id FROM research_pipeline_runs WHERE id = ${runId3}`;
+  expect(run3.job_id).toBe("42");
 });

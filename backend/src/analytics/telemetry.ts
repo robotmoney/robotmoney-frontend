@@ -54,7 +54,15 @@ export interface TelemetryRunSubmission {
   stages: TelemetryStage[];
   warnings: TelemetryWarning[];
   artifacts: TelemetryArtifact[];
-  jobId: number | null;
+  // `jobs.id` is a Postgres `bigint` (bigserial) — postgres.js returns bigint
+  // columns as JS strings by default (it never silently narrows a value that
+  // may exceed Number.MAX_SAFE_INTEGER), so a job-linked submission's id is a
+  // numeric string at runtime even though small ids also fit `number`. The
+  // ingestion boundary (api/routes/analytics.ts parseTelemetryRun) accepts
+  // either form and never coerces string -> number (issue #383): coercing
+  // would reintroduce exactly the precision loss postgres.js's string
+  // serialization exists to avoid.
+  jobId: number | string | null;
 }
 
 export interface TelemetrySubmitResult {
