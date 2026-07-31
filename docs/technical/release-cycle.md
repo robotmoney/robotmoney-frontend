@@ -96,35 +96,70 @@ tiers, same as D13's frame, with two significant changes: both frontends
 move to Cloudflare's edge, and the compute tier becomes a single-node
 Kubernetes (k3s) cluster instead of docker-compose.
 
-### 3.1 Static tier — Cloudflare edge, for both frontends
+### 3.1 Static tier — Cloudflare edge, for both frontends; API on its own subdomain
 
 Marketing **and** the committee/dashboard SPA are buildless static trees
 (D2), and both get served from **Cloudflare's edge network**. Whether that
 is Cloudflare Pages or R2 behind the CDN is a minor open question (§8) —
-either way the properties that matter are the same:
+either way the properties that matter are the same. The API is **not** on
+those hostnames: it lives on its **own subdomain** (`api.`), reached
+directly, exactly the way D13 already routes each surface to its own host.
+There is no `/api/*` path on the static hostnames.
 
 - **The SPA gets its own independent release path.** This breaks the
   `STATIC_DIR` version-lock described in §2(b)/§4(d): the SPA is no longer
   co-served by the API process, so pushing frontend assets no longer means
   deploying the API, and vice versa. (This resolves the first draft's open
   question of whether the SPA gets its own deploy path — yes.)
-- **`/api/*` is a proxied path on the same hostname.** Cloudflare routes
-  `/api/*` on the SPA's hostname through to the origin (the compute tier,
-  §3.2), so the SPA stays same-origin with the API — no CORS surface, no
-  preflight, no second hostname for the frontend to configure.
+- **The SPA is cross-origin to the API, so the API grows a CORS surface.**
+  The Bun API needs an **origin allowlist**, a real `OPTIONS` preflight
+  handler, and `Access-Control-Allow-Credentials` if/when auth requires it
+  — roughly 20–30 lines. (Today `backend/src/api/index.ts` answers every
+  `OPTIONS` with a bare `204` and emits no `Access-Control-*` headers at
+  all, because same-origin has always been assumed.) The honest trade:
+  that code lives **in the repo**, is testable in CI, and is portable to
+  any host, whereas an edge path-routing rule lives in vendor dashboard
+  configuration outside git and is Cloudflare-specific. Twenty lines of
+  reviewable, tested code is preferred over untracked vendor config.
+- **Cookies still work — this is cross-origin but same-site.** The SPA
+  hostname and `api.` share a registrable domain, so `SameSite=Lax`
+  cookies flow between them unchanged: CORS response headers are required,
+  `SameSite=None` is **not**. That only changes if the API ever moves to a
+  different registrable domain.
+- **Cleaner cache posture.** The static zone can be cached aggressively
+  while `api.` is simply never cached — a property of the hostname rather
+  than a path-exclusion rule someone can misconfigure.
+- **`api.` is a DNS-level lever.** It can be repointed at staging, or later
+  at DOKS (§3.2), with a single DNS change that the static tier never
+  notices.
 - **Edge-cached-SPA-vs-API skew becomes an everyday scenario.** Once the
   SPA is cached at the edge on its own cadence, a cached SPA calling a
   newer or older API is no longer a theoretical browser-tab corner case
   (§4d) — it is the normal state between any two deploys. That upgrades
   §5.3's additive-only API contract discipline from aspirational to
   **mandatory**.
-- **This amends D13.**
+- **Rejected alternative: same-hostname `/api/*` path-prefix proxying.**
+  Serving the API as a proxied path on the SPA's own hostname would keep
+  everything same-origin and avoid CORS entirely — that is the *only*
+  thing it buys. It was rejected because it requires edge routing software
+  (a Cloudflare Worker, a Pages Function, or a routing rule), which D13
+  explicitly rejected, and because it moves deploy-relevant configuration
+  into a vendor dashboard instead of git.
+- **This amends D13, narrowly.**
   [decisions.md D13](../decisions.md#d13--vendor-split-tiered-topology-cloudflare-dnsobservability--do-computestorage-surfaces-on-subdomains)
-  specifies marketing served from **DO Spaces CDN** and confines Cloudflare
-  to DNS + observability; this design moves static serving (both surfaces)
-  and `/api/*` path-proxying to Cloudflare. **decisions.md needs a new
-  entry recording this amendment** — this doc flags it but deliberately
-  does not write it.
+  specifies marketing served from a **DO Spaces CDN** on the apex/`www`,
+  with Cloudflare confined to DNS + observability. The amendment is just
+  that: **static hosting for both frontends moves from DO Spaces CDN to
+  Cloudflare's edge.** D13 separately rejected "Cloudflare caching
+  marketing" — but on the stated grounds that it would double-CDN *in
+  front of* the DO Spaces CDN, and with Spaces gone there is no second CDN
+  to stack, so that rejection's rationale no longer applies; the vendor
+  choice for static delivery still changes and should be recorded. Nothing
+  else in D13 is disturbed: putting the API on `api.` is D13's own
+  subdomain-per-surface framing, and with the path proxy rejected there is
+  still **no routing software anywhere**. **decisions.md needs a new entry
+  recording this amendment** — this doc flags it but deliberately does not
+  write it.
 
 ### 3.2 Compute tier — k3s on a single DO droplet
 
@@ -497,6 +532,19 @@ New questions raised by the §3/§6 design:
 - **GHCR vs DO Container Registry.** GHCR keeps images next to CI with no
   extra credentials in GitHub; DOCR keeps pulls inside DO's network next
   to the droplet. Either works with §6's SHA-tagged immutable images.
+- **How the buildless SPA learns its API base URL.** Today
+  `frontend/public/assets/js/app/lib/api.js` reads
+  `window.RM_CONFIG.API_BASE_URL`, set by `frontend/public/config.js`,
+  which is committed with `""` — meaning "same origin, the API serves this
+  page" — and is documented as a file the host substitutes at deploy time.
+  With the API on `api.` (§3.1) that value stops being an implicit empty
+  relative base and becomes **explicit, per-environment configuration**,
+  and because there is no bundler (D2) there is no build-time env
+  substitution to do it. Candidate mechanisms: keep `config.js` but have
+  the static deploy emit the right one per environment, move the value to
+  a `<meta>` tag in the HTML, or derive it at runtime from the page's own
+  hostname. No option is chosen here. (Routes themselves are unaffected —
+  `contract/src/routes.js` holds only paths, never an origin.)
 - **Manifests in this repo vs a separate deploy repo.** In-repo keeps code
   and deploy state reviewable together but means CI's tag-bump commits land
   in the main history; a deploy repo isolates that churn at the cost of a
