@@ -146,6 +146,47 @@ test("the skills hero pairs the headline with the install card and runs the tree
   await expectNoBrowserErrors(errors);
 });
 
+// Every nav page's hero headline is the same type in the same place, so it does
+// not jump as you navigate. Before the shared rules this asserted, the nav pages
+// rendered at five different sizes (56 / 57.6 / 60 / 64px), /media was set in a
+// different typeface with no uppercase, and the headline top varied by 55px.
+// Asserted as an invariant across pages rather than as a pinned pixel value, so
+// the design can change without this needing a rewrite — only divergence fails.
+const HERO_ROUTES = [
+  "/skills", "/regime", "/tokenomics", "/allocation",
+  "/performance", "/projects", "/media", "/changelog", "/committee",
+];
+
+test("every hero headline shares one size, one typeface and one offset", async ({ page }) => {
+  await page.goto("/");
+
+  const seen: Record<string, { size: string; family: string; transform: string; top: number }> = {};
+  for (const route of HERO_ROUTES) {
+    await navigate(page, route);
+    const h1 = page.locator("#view h1").first();
+    await expect(h1).toBeVisible();
+    seen[route] = await h1.evaluate((el) => {
+      const c = getComputedStyle(el);
+      return {
+        size: c.fontSize,
+        family: c.fontFamily,
+        transform: c.textTransform,
+        top: Math.round(el.getBoundingClientRect().top),
+      };
+    });
+  }
+
+  const first = seen[HERO_ROUTES[0]];
+  for (const route of HERO_ROUTES) {
+    expect(seen[route].size, `${route} font-size`).toBe(first.size);
+    expect(seen[route].family, `${route} font-family`).toBe(first.family);
+    expect(seen[route].transform, `${route} text-transform`).toBe(first.transform);
+    // Same offset from the top of the band on every page, which is what stops
+    // the headline moving as you navigate.
+    expect(seen[route].top, `${route} headline top`).toBe(first.top);
+  }
+});
+
 test("latest navigation wins when an earlier fragment response is delayed", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await page.goto("/");
