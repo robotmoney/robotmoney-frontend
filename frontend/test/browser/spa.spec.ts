@@ -88,6 +88,64 @@ test("renders allocation and dynamic committee routes through Alpine", async ({ 
   await expectNoBrowserErrors(errors);
 });
 
+// The router injects the route fragment into #view after boot. Without the
+// reserved height, the footer paints directly under the nav on a cold load and
+// is shoved down when the fragment lands: measured CLS 0.53 on /skills, against
+// Google's 0.1 "good" threshold. These assert the mechanism rather than the
+// score, because a score needs a real network profile to be meaningful.
+test("an empty #view reserves a viewport of height, and stops doing so once routed", async ({ page }) => {
+  await page.goto("/");
+
+  const reserved = await page.evaluate(() => {
+    const view = document.querySelector("#view");
+    if (!view) return null;
+    const previous = view.innerHTML;
+    view.innerHTML = "";
+    const empty = view.getBoundingClientRect().height;
+    view.innerHTML = "<p style=\"margin:0\">short</p>";
+    const filled = view.getBoundingClientRect().height;
+    view.innerHTML = previous;
+    return { empty, filled, viewport: window.innerHeight };
+  });
+
+  expect(reserved).not.toBeNull();
+  // Empty: at least a viewport tall, so the footer starts below the fold.
+  expect(reserved!.empty).toBeGreaterThanOrEqual(reserved!.viewport);
+  // Routed: the reservation is gone, so a short route is not padded to 100vh.
+  expect(reserved!.filled).toBeLessThan(reserved!.viewport);
+});
+
+test("the skills hero pairs the headline with the install card and runs the tree canvas", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await page.goto("/");
+  await navigate(page, "/skills");
+
+  // The install command is the call to action on this page, so it belongs in
+  // the hero beside the headline rather than in a block further down.
+  const hero = page.locator(".sk__head");
+  await expect(hero.locator(".sk__title")).toContainText("Agent");
+  await expect(hero.locator(".sk__install-cmd")).toContainText("npx skills add");
+  await expect(hero.locator(".sk__cta")).toBeVisible();
+
+  // Two columns above the breakpoint: the card sits to the right of the copy,
+  // not under it.
+  const copyBox = await hero.locator(".sk__head-copy").boundingBox();
+  const cardBox = await hero.locator(".sk__install-card").boundingBox();
+  expect(cardBox!.x).toBeGreaterThan(copyBox!.x + copyBox!.width / 2);
+
+  // treeHero() mounted and produced a canvas rather than failing silently.
+  await expect(hero.locator(".sk__head-viz canvas")).toHaveCount(1);
+
+  // Copy button writes the exact command.
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await hero.locator(".sk__install-copy").click();
+  await expect(hero.locator(".sk__install-copy")).toHaveClass(/is-copied/);
+  const clip = await page.evaluate(() => navigator.clipboard.readText());
+  expect(clip).toBe("npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli");
+
+  await expectNoBrowserErrors(errors);
+});
+
 test("latest navigation wins when an earlier fragment response is delayed", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await page.goto("/");

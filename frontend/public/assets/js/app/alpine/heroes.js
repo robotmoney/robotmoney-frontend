@@ -1486,4 +1486,110 @@ export function registerHeroes(Alpine) {
       this._p5 = new p5Constructor(sketch, container);
     },
   }));
+
+  // Bare branching trees for the /skills hero band.
+  //
+  // Drawn as hairline strokes and nothing else: the palette rule is that cyan
+  // is a LINE and never a mass, and a leafless tree is literally that, so this
+  // hero carries no fill, no glow and no gradient. Alpha stays low enough that
+  // the headline beside it is always the brightest thing in the band.
+  //
+  // The structure is built once in setup() and only the sway angles are
+  // recomputed per frame, which keeps a ~1,500-segment canvas cheap under the
+  // 30fps cap p5Lifecycle applies.
+  Alpine.data("treeHero", () => ({
+    ...p5Lifecycle(),
+    _start(container) {
+      const p5Constructor = window.p5;
+
+      const DEPTH = 8;
+      const TIP_SWAY = 0.06; // radians of lean at the outermost twigs
+      const STROKE = [70, 132, 138]; // desaturated teal, well below --color-accent
+
+      const sketch = (p) => {
+        let W, H;
+        let trees = [];
+
+        // One node per branch segment. `angle` is relative to its parent, so a
+        // parent's sway carries down the whole limb rather than each twig
+        // wobbling on its own.
+        function makeBranch(depth, len) {
+          const node = { len, angle: 0, phase: p.random(p.TWO_PI), kids: [] };
+          if (depth <= 0) return node;
+          const forks = p.random() < 0.18 ? 3 : 2;
+          const spread = p.random(0.42, 0.72);
+          for (let i = 0; i < forks; i++) {
+            // Prune a few inner forks so the silhouettes are not all identical.
+            if (depth < DEPTH - 2 && p.random() < 0.1) continue;
+            const t = forks === 1 ? 0 : (i / (forks - 1)) * 2 - 1;
+            const kid = makeBranch(depth - 1, len * p.random(0.62, 0.78));
+            kid.angle = t * spread + p.random(-0.08, 0.08);
+            node.kids.push(kid);
+          }
+          return node;
+        }
+
+        function plant() {
+          trees = [];
+          // Roughly one tree per 180px, so the band fills at any width without
+          // crowding on a phone.
+          const count = Math.max(3, Math.round(W / 180));
+          for (let i = 0; i < count; i++) {
+            const x = ((i + 0.5) / count) * W + p.random(-30, 30);
+            trees.push({
+              x,
+              // Root length is a fraction of the band height, and the branch
+              // decay roughly doubles it, so a whole tree lands inside the band
+              // instead of cropping into an abstract mesh on a short viewport.
+              root: makeBranch(DEPTH, H * p.random(0.18, 0.26)),
+              lean: p.random(-0.12, 0.12),
+              rate: p.random(0.24, 0.42),
+            });
+          }
+        }
+
+        function drawBranch(node, depth, t) {
+          // Tips lean the most, the trunk barely moves.
+          const sway = Math.sin(t + node.phase) * TIP_SWAY * (1 - depth / DEPTH);
+          p.rotate(node.angle + sway);
+          p.strokeWeight(Math.max(0.5, depth * 0.34));
+          p.stroke(STROKE[0], STROKE[1], STROKE[2], 24 + depth * 9);
+          p.line(0, 0, 0, -node.len);
+          p.translate(0, -node.len);
+          for (const kid of node.kids) {
+            p.push();
+            drawBranch(kid, depth - 1, t);
+            p.pop();
+          }
+        }
+
+        p.setup = function () {
+          W = container.offsetWidth;
+          H = container.offsetHeight;
+          p.createCanvas(W, H).style("display", "block");
+          plant();
+        };
+
+        p.windowResized = function () {
+          W = container.offsetWidth;
+          H = container.offsetHeight;
+          p.resizeCanvas(W, H);
+          plant();
+        };
+
+        p.draw = function () {
+          p.clear();
+          const t = p.millis() / 1000;
+          for (const tree of trees) {
+            p.push();
+            p.translate(tree.x, H);
+            p.rotate(tree.lean);
+            drawBranch(tree.root, DEPTH, t * tree.rate);
+            p.pop();
+          }
+        };
+      };
+      this._p5 = new p5Constructor(sketch, container);
+    },
+  }));
 }

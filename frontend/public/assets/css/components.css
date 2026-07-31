@@ -4,6 +4,20 @@
 
 [x-cloak] { display: none !important; }
 
+/* ── Boot layout shift ──
+   The router fetches the route fragment and injects it into #view after boot,
+   so on a hard reload the shell paints with #view at zero height and the footer
+   lands directly under the nav, near the top of the viewport. When the fragment
+   arrives the footer is shoved down the page, which is a large and very visible
+   layout shift on every cold load.
+
+   Reserving a viewport of height WHILE #view is empty holds the footer below
+   the fold until there is something to sit under. The selector stops matching
+   the moment the fragment is injected, so no rendered route inherits a
+   min-height it did not ask for, and a route that legitimately renders short
+   content is unaffected. */
+#view:empty { min-height: 100vh; }
+
 /* pulse (was Tailwind animate-pulse) */
 @keyframes rmPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 .rm-pulse { animation: rmPulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
