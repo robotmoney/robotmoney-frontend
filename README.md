@@ -88,6 +88,54 @@ bun run demo:status
 bun run demo:down
 ```
 
+### Use a managed Postgres instead of the ephemeral container
+
+By default the demo runs its own throwaway `postgres` container and a
+fresh-per-run `pgdata` volume. `--external-pg` runs it against a managed server
+instead, and starts **no postgres container at all** — no service, no volume, no
+published pg port:
+
+```bash
+bun run demo -- --external-pg
+```
+
+The connection details come from **`.env`**, which the flag reads directly (not
+from the ambient environment — a stray exported `host` must never decide which
+database a demo writes to). `DATABASE_URL` wins when present; otherwise the
+discrete keys DigitalOcean's connection panel prints are assembled into one, so
+a pasted panel works unedited:
+
+```ini
+# either this…
+DATABASE_URL=postgres://user:password@host:25060/defaultdb?sslmode=require
+
+# …or exactly what DigitalOcean's "Connection details" panel gives you
+username = doadmin
+password = …
+host     = private-dbaas-….g.db.ondigitalocean.com
+port     = 25060
+database = defaultdb
+sslmode  = require
+```
+
+The **switch** stays a CLI argument (same hard rule as `--pg-data` and
+`--stage`): pointing a demo at a persistent database is a property of one
+deliberate invocation, never of a shell that happens to have something exported.
+`.env` only supplies the address.
+
+**This writes to a real database.** The boot runs migrations and seeds against
+that server, and the workers write to it for as long as the demo runs.
+`demo:down` and `demo:clean` cannot undo any of it — they only ever touch
+containers and Docker volumes, and there are none here. `demo:status` reports
+`pg=EXTERNAL` rather than a port, and the state file records only a
+password-redacted URL.
+
+Refusals are loud, never a silent fall back to the throwaway container: a
+missing `.env`, an unparseable or non-`postgres://` URL, or a URL pointing at
+`postgres`/`localhost` (which inside a container means the container itself)
+each fail the boot with the reason. `--external-pg` and `--pg-data` are mutually
+exclusive.
+
 ### Attach a prospective agent
 
 Give the external agent the API URL the running demo printed (the port is
@@ -192,6 +240,7 @@ bun run demo:clean           # delete stopped demos' pg data volumes (label robo
 bun run demo:reap -- --dry-run          # SHOW errant containers a sweep would remove (changes nothing)
 bun run demo:reap -- --older-than 6h    # …then actually reap them (labels only, never name matching)
 bun run demo -- --pg-data <host-dir>   # resumable demo: bind postgres data to <host-dir>
+bun run demo -- --external-pg          # run against the MANAGED Postgres in .env (no pg container)
 bun run preview              # serve the SPA with /api/* mocked from goldens (random port) — root
 bun run goldens:update       # recapture goldens from a running backend (BACKEND_URL) — root
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)

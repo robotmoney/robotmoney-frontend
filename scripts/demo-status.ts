@@ -39,6 +39,11 @@ interface DemoState {
   envClass?: string;
   envHash?: string;
   composeFiles: string;
+  // For an --external-pg boot these four are REDACTED placeholders, not
+  // credentials: the real ones live in .env and must never be copied into a file
+  // inside the checkout. `externalPg` is the flag to branch on — optional
+  // because state files written before the flag existed have no such field.
+  externalPg?: boolean;
   databaseUrl: string;
   dbUser: string;
   dbPassword: string;
@@ -92,11 +97,16 @@ function livePort(service: string, containerPort: number): number | undefined {
   }
 }
 const liveApiPort = livePort("api", API_CONTAINER_PORT);
-const livePgPort = livePort("postgres", POSTGRES_CONTAINER_PORT);
+// An --external-pg boot has no postgres service, so asking the daemon for its
+// published port is not a question with an answer — skip it rather than let the
+// "not running" branch imply a container that ought to be up.
+const livePgPort = s.externalPg ? undefined : livePort("postgres", POSTGRES_CONTAINER_PORT);
 // `?? undefined` on the recorded pgPort keeps an old state file (no pgPort
 // field) from printing "undefined" as if it were a number.
 const shownApi = liveApiPort !== undefined ? `:${liveApiPort} (live)` : `:${s.apiPort} (from state file — NOT RUNNING)`;
-const shownPg = livePgPort !== undefined ? `:${livePgPort} (live)` : s.pgPort !== undefined ? `:${s.pgPort} (from state file — NOT RUNNING)` : "unknown";
+const shownPg = s.externalPg
+  ? "EXTERNAL (managed — from .env; no container)"
+  : livePgPort !== undefined ? `:${livePgPort} (live)` : s.pgPort !== undefined ? `:${s.pgPort} (from state file — NOT RUNNING)` : "unknown";
 
 console.log(`[demo:status] project=${s.project}  api=${shownApi}  pg=${shownPg}  (created ${s.createdAt})`);
 if (s.envClass || s.envHash) {
@@ -113,7 +123,10 @@ if (liveApiPort !== undefined && liveApiPort !== s.apiPort) {
 if (liveApiPort !== undefined) console.log(`[demo:status]   Site:      http://127.0.0.1:${liveApiPort}/`);
 console.log(`[demo:status]   state file: ${stateFile}`);
 if (s.logFile) console.log(`[demo:status]   log file:   ${s.logFile}`);
-if (s.pgDataDir) {
+if (s.externalPg) {
+  console.log(`[demo:status]   pg data:    EXTERNAL managed server ${s.databaseUrl} — owned by that server, NOT by this demo.`);
+  console.log(`[demo:status]               demo:down and demo:clean cannot touch it; this boot's writes are permanent.`);
+} else if (s.pgDataDir) {
   console.log(`[demo:status]   pg data:    --pg-data ${s.pgDataDir}  (bind; resume: bun run demo -- --pg-data ${s.pgDataDir})`);
 } else {
   console.log(`[demo:status]   pg data:    volume ${s.pgVolume ?? `${s.project}_pgdata`}  (kept on teardown; reclaim: bun run demo:clean)`);

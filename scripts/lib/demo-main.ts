@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, visibleLen, type Tui } from "./tui.ts";
 import { resolveDemoEnv } from "./demo-env.ts";
+import { EXTERNAL_PG_FLAG, externalPgOverlayYaml, resolveExternalPg } from "./demo-external-pg.ts";
 import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "./demo-volumes.ts";
 import { provisionDemoAnalyticsTokenAfterPreflight, removeDemoAnalyticsToken } from "./demo-secret.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
@@ -144,11 +145,46 @@ async function stagePreflight(): Promise<void> {
 }
 if (stageMode) await stagePreflight();
 
+// --- Optional external/managed Postgres (--external-pg) ---------------------
+// `bun run demo -- --external-pg` runs the stack against the managed Postgres
+// whose details live in `.env`, and starts NO postgres container: no service, no
+// pgdata volume, no published pg host port. Resolved HERE, before any credential
+// is minted or any container is created, so a missing/blank DATABASE_URL fails
+// on an untouched host rather than half-way through a bring-up. See
+// scripts/lib/demo-external-pg.ts for why it is a CLI argument whose value comes
+// from a file rather than an env var.
+//
+// CONSEQUENCE, stated once and loudly at boot: a demo pointed at a real database
+// MIGRATES AND SEEDS IT, and its workers write to it for as long as it runs.
+// That is the point of the flag, but it is not something to discover afterwards.
+let externalPg: ReturnType<typeof resolveExternalPg>;
+try {
+  externalPg = resolveExternalPg(process.argv, { envFilePath: join(repoRoot, ".env") });
+} catch (err) {
+  console.error(`[demo] FATAL: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+if (externalPg.enabled) {
+  console.warn(
+    `[demo] ############################################################\n` +
+      `[demo] # ${EXTERNAL_PG_FLAG}: NO postgres container will be started.\n` +
+      `[demo] # target: ${externalPg.redactedUrl}\n` +
+      `[demo] # source: .env (${externalPg.source})\n` +
+      `[demo] # This boot RUNS MIGRATIONS AND SEEDS against that server, and\n` +
+      `[demo] # its workers write to it until the demo is stopped. Nothing in\n` +
+      `[demo] # demo:down or demo:clean can undo that — those only ever touch\n` +
+      `[demo] # containers and Docker volumes, and there are none here.\n` +
+      `[demo] ############################################################`,
+  );
+}
+
 // Filled in from `docker compose port` once the containers exist — see
 // applyHostPorts() below. They are 0 until then, and nothing may publish a URL
 // built from them before that: a number nobody assigned is worse than no number.
+// pgPort stays NULL for an --external-pg boot: no container, so no published
+// port ever exists (distinct from 0, which would read as "not discovered yet").
 let apiPort = 0;
-let pgPort = 0;
+let pgPort: number | null = 0;
 let backendUrl = "";
 
 // WHICH ENVIRONMENT this boot belongs to (scripts/stack/naming.ts): `ci` under
@@ -169,7 +205,13 @@ const project = process.env.DEMO_PROJECT?.trim() || stackProjectName("stack", st
 // the shared stack config (scripts/stack/config.ts), which carries the
 // "127.0.0.1, never localhost" rationale for backendUrl. DB_USER/DB_PASSWORD/
 // DB_NAME stay as local aliases for writeStateFile() and the psql polls.
-const database = DEFAULT_STACK_DATABASE;
+// With --external-pg the managed URL is carried on the database config, which is
+// what makes internalDatabaseUrl() hand containers that URL and what makes
+// scripts/stack drop the postgres service. Without it, today's baked-in
+// throwaway credentials are unchanged.
+const database = externalPg.enabled
+  ? { ...DEFAULT_STACK_DATABASE, url: externalPg.url }
+  : DEFAULT_STACK_DATABASE;
 const DB_USER = database.user;
 const DB_PASSWORD = database.password;
 const DB_NAME = database.name;
@@ -184,6 +226,21 @@ const databaseUrl = internalDatabaseUrl(database);
 const composeFilesBase = ["docker-compose.yml", "docker-compose.demo.yml", ...(stageMode ? [STAGE_COMPOSE_FILE] : [])]
   .join(":");
 let composeFilesRun = composeFilesBase;
+
+// The --external-pg overlay, generated the same way (and for the same reason) as
+// the --pg-data bind overlay below: a GENERATED file appended LAST, never a
+// committed one, because it encodes one invocation's choice rather than a
+// property of the repo. It removes the postgres service and the pgdata volume
+// and drops every `depends_on: postgres`, so `docker compose up` cannot pull the
+// container back in through a dependency edge. Run-only (like --pg-data):
+// demo:down / demo:status stop and inspect BY PROJECT, and learn that this boot
+// had no postgres from the state file's externalPg flag instead.
+if (externalPg.enabled) {
+  const overrideFile = join(repoRoot, ".agents", `demo-${project}-external-pg.yml`);
+  mkdirSync(dirname(overrideFile), { recursive: true });
+  writeFileSync(overrideFile, externalPgOverlayYaml(externalPg.redactedUrl!));
+  composeFilesRun = `${composeFilesBase}:${overrideFile}`;
+}
 const researchKeys = ["channel-divergence", "late-cycle-signals"];
 
 // --- Optional resumable postgres data (issue: demo persistent volumes) --------
@@ -211,6 +268,18 @@ function parsePgDataArg(): string | undefined {
   return v && v.trim() ? v.trim() : undefined;
 }
 const rawPgData = parsePgDataArg();
+// Mutually exclusive by construction, not by precedence: --pg-data bind-mounts
+// the data directory OF the ephemeral postgres container, and --external-pg
+// means there is no such container. Silently honouring one would leave the
+// operator believing a durable data location took effect when it did not.
+if (rawPgData && externalPg.enabled) {
+  console.error(
+    `[demo] FATAL: --pg-data and ${EXTERNAL_PG_FLAG} are mutually exclusive. --pg-data binds the data directory of ` +
+      `the ephemeral postgres container; ${EXTERNAL_PG_FLAG} starts no such container (the managed server owns its ` +
+      `own storage). Pass one or the other.`,
+  );
+  process.exit(1);
+}
 const pgDataDir = rawPgData ? resolve(rawPgData) : undefined;
 if (pgDataDir) {
   mkdirSync(pgDataDir, { recursive: true }); // created if absent; same value across runs = same data
@@ -228,7 +297,7 @@ if (pgDataDir) {
       `# Safe to delete when no demo is using this dir.\n` +
       `services:\n  postgres:\n    volumes:\n      - ${pgDataDir}:/var/lib/postgresql/data\n`,
   );
-  composeFilesRun = `${composeFilesBase}:${overrideFile}`;
+  composeFilesRun = `${composeFilesRun}:${overrideFile}`;
 }
 
 // Admin dashboard password (/admin — the task-queue jobs dashboard, guarded by
@@ -563,7 +632,10 @@ function applyHostPorts(ports: StackHostPorts): void {
   pgPort = ports.pgPort;
   backendUrl = hostBackendUrl(apiPort);
   state.services = serviceRoutes(backendUrl);
-  log(`host ports (Docker-assigned): api=:${apiPort}${stageMode ? " (STAGE-PINNED — cloudflared origin)" : ""}  pg=:${pgPort}`);
+  log(
+    `host ports (Docker-assigned): api=:${apiPort}${stageMode ? " (STAGE-PINNED — cloudflared origin)" : ""}  ` +
+      `pg=${pgPort === null ? `EXTERNAL (${externalPg.redactedUrl}) — no container, no published port` : `:${pgPort}`}`,
+  );
   if (!stageMode && apiPort === STAGE_WEB_PORT) {
     // Possible but rare: Docker draws from the host's ephemeral range, which
     // CONTAINS 48787 — it can only happen while no stage demo holds it. Not
@@ -689,10 +761,17 @@ function writeStateFile(): void {
     envClass: stackEnvironment.class,
     envHash: stackEnvironment.hash,
     composeFiles: composeFilesBase,
-    databaseUrl,
-    dbUser: DB_USER,
-    dbPassword: DB_PASSWORD,
-    dbName: DB_NAME,
+    // REDACTED for an --external-pg boot. The baked-in demo credentials below
+    // are deliberately recorded (they are not secrets — a throwaway container
+    // owns them, and demo:down/status need them to reach it), but a managed
+    // server's password is a real credential and this file lives inside the
+    // checkout. `externalPg` is what demo:down / demo:status branch on; the
+    // redacted URL is provenance for a human reading the file.
+    externalPg: externalPg.enabled,
+    databaseUrl: externalPg.enabled ? externalPg.redactedUrl : databaseUrl,
+    dbUser: externalPg.enabled ? "(external — see .env)" : DB_USER,
+    dbPassword: externalPg.enabled ? "(external — see .env)" : DB_PASSWORD,
+    dbName: externalPg.enabled ? "(external — see .env)" : DB_NAME,
     // Path only (never the bearer value), so demo:down can remove the external
     // per-session secret directory after it has successfully stopped Compose.
     analyticsTokenFile,
@@ -700,7 +779,10 @@ function writeStateFile(): void {
     // Data location (issue: demo persistent volumes). Exactly one is set:
     //   pgDataDir → a `--pg-data` host bind dir (resume with the same flag);
     //   pgVolume  → the fresh-per-run named volume (survives; reclaim via demo:clean).
-    ...(pgDataDir ? { pgDataDir } : { pgVolume: `${project}_pgdata` }),
+    // NEITHER is set for --external-pg: this stack created no volume and bound no
+    // host dir, and naming one would send demo:clean after storage that does not
+    // exist while implying the managed server's data is this demo's to reclaim.
+    ...(externalPg.enabled ? {} : pgDataDir ? { pgDataDir } : { pgVolume: `${project}_pgdata` }),
     createdAt: new Date().toISOString(),
   };
   writeFileSync(stateFile, JSON.stringify(state, null, 2));
@@ -709,6 +791,11 @@ function writeStateFile(): void {
 // After a signal teardown, tell the operator their data survived and how to resume
 // or reclaim it (issue: demo persistent volumes — teardown keeps the data now).
 function printResumeHint(): void {
+  if (externalPg.enabled) {
+    console.log(`[demo] the database was EXTERNAL (${externalPg.redactedUrl}) — its data was never this demo's to keep or reclaim.`);
+    console.log(`[demo]   resume:  bun run demo -- ${EXTERNAL_PG_FLAG}`);
+    return;
+  }
   if (pgDataDir) {
     console.log(`[demo] postgres data kept in --pg-data dir ${pgDataDir}.`);
     console.log(`[demo]   resume:  bun run demo -- --pg-data ${pgDataDir}`);
@@ -788,6 +875,23 @@ function secsUntilNext(kind: string): number | null {
   if (!nr) return null;
   return Math.max(0, Math.round(nr.secondsUntil - (Date.now() - nr.fetchedAt) / 1000));
 }
+// Both legacy polls below read the queue tables directly. With the ephemeral
+// container that is `docker compose exec -T postgres psql`; with --external-pg
+// there is no container to exec into, so a one-shot postgres:17-alpine client
+// is run instead (the same image the ephemeral service uses, so it is usually
+// already local; the first poll pulls it if not, and these polls are defensive
+// — a failure is logged and skipped either way).
+//
+// The URL crosses into the container by `-e DATABASE_URL` with NO value, i.e.
+// inherited from dockerEnv, so the managed server's password never appears in
+// this host's process list the way `-e DATABASE_URL=<url>` would put it there.
+function psqlQuery(q: string): Bun.SyncSubprocess {
+  const argv = externalPg.enabled
+    ? ["docker", "run", "--rm", "-e", "DATABASE_URL", "postgres:17-alpine", "sh", "-c",
+       `psql "$DATABASE_URL" -tAF'|' -c ${JSON.stringify(q)}`]
+    : ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", DB_USER, "-d", DB_NAME, "-tAF", "|", "-c", q];
+  return Bun.spawnSync(argv, { cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe" });
+}
 function mapJobState(status: string): ResearchEntry["state"] {
   if (status === "pending") return "queued";
   if (status === "running") return "running";
@@ -820,10 +924,7 @@ async function pollResearch(): Promise<void> {
     "COALESCE(jr.error,'') " +
     "FROM jobs j LEFT JOIN job_runs jr ON jr.job_id = j.id " +
     "WHERE j.kind IN ('regime.classify','research.refresh') ORDER BY j.id DESC LIMIT 8";
-  const r = Bun.spawnSync(
-    ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", DB_USER, "-d", DB_NAME, "-tAF", "|", "-c", q],
-    { cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe" },
-  );
+  const r = psqlQuery(q);
   if (r.exitCode !== 0) { log(`research poll query failed (exit ${r.exitCode})`); return; }
   const rows = new TextDecoder().decode(r.stdout).trim().split("\n").filter(Boolean);
   const entries: ResearchEntry[] = [];
@@ -851,10 +952,7 @@ async function pollNextRuns(): Promise<void> {
     "SELECT kind, MIN(GREATEST(0, EXTRACT(EPOCH FROM (next_run_at - now()))))::int " +
     "FROM job_schedules WHERE enabled AND next_run_at IS NOT NULL " +
     "AND kind IN ('regime.classify','research.refresh') GROUP BY kind";
-  const r = Bun.spawnSync(
-    ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", DB_USER, "-d", DB_NAME, "-tAF", "|", "-c", q],
-    { cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe" },
-  );
+  const r = psqlQuery(q);
   if (r.exitCode !== 0) { log(`next-run poll query failed (exit ${r.exitCode})`); return; }
   const rows = new TextDecoder().decode(r.stdout).trim().split("\n").filter(Boolean);
   for (const row of rows) {

@@ -45,6 +45,11 @@ interface DemoState {
   envClass?: string;
   envHash?: string;
   composeFiles: string;
+  // True when the boot ran against a managed Postgres (`--external-pg`): there
+  // is no postgres container to stop and no volume to keep, and the four fields
+  // below are redacted placeholders rather than usable credentials. Optional —
+  // state files written before the flag existed have no such field.
+  externalPg?: boolean;
   databaseUrl: string;
   dbUser: string;
   dbPassword: string;
@@ -75,7 +80,11 @@ const s: DemoState = JSON.parse(readFileSync(stateFile, "utf8"));
 // port input at all. One less thing a stale state file can get wrong.
 const dockerEnv = buildDemoLifecycleComposeEnv(s, process.env);
 
-console.log(`[demo:down] tearing down project=${s.project} (created ${s.createdAt}) — keeping postgres data…`);
+console.log(
+  s.externalPg
+    ? `[demo:down] tearing down project=${s.project} (created ${s.createdAt}) — its database is EXTERNAL and is not touched…`
+    : `[demo:down] tearing down project=${s.project} (created ${s.createdAt}) — keeping postgres data…`,
+);
 if (s.stage) {
   // Worth saying out loud: this is the demo the tunnel points at, so tearing it
   // down takes stage.robotmoney-labs.dev offline until a `--stage` boot returns.
@@ -110,10 +119,18 @@ if (s.analyticsTokenFile) {
   }
 }
 
-const where = s.pgDataDir ? `--pg-data dir ${s.pgDataDir}` : `volume ${s.pgVolume ?? `${s.project}_pgdata`}`;
-console.log(`[demo:down] containers + network removed for ${s.project}; postgres data kept (${where})`);
-if (s.pgDataDir) {
-  console.log(`[demo:down]   resume:  bun run demo -- --pg-data ${s.pgDataDir}`);
+if (s.externalPg) {
+  // No volume, no bind dir, nothing kept — because nothing here ever owned the
+  // data. Say which server the (now stopped) stack was writing to so the
+  // operator knows where its rows actually went.
+  console.log(`[demo:down] containers + network removed for ${s.project}; the EXTERNAL database is untouched (${s.databaseUrl})`);
+  console.log(`[demo:down]   resume:  bun run demo -- --external-pg   (same server; migrate + seed are idempotent)`);
+} else {
+  const where = s.pgDataDir ? `--pg-data dir ${s.pgDataDir}` : `volume ${s.pgVolume ?? `${s.project}_pgdata`}`;
+  console.log(`[demo:down] containers + network removed for ${s.project}; postgres data kept (${where})`);
+  if (s.pgDataDir) {
+    console.log(`[demo:down]   resume:  bun run demo -- --pg-data ${s.pgDataDir}`);
+  }
+  console.log(`[demo:down]   reclaim demo volumes when done: bun run demo:clean`);
 }
-console.log(`[demo:down]   reclaim demo volumes when done: bun run demo:clean`);
 console.log(`[demo:down] state file kept (points to the surviving data): ${stateFile}`);

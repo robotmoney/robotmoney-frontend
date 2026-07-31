@@ -146,7 +146,11 @@ export function createStack(
   // `undefined` is the honest state before that: this module has no other way
   // to know a number Docker has not yet chosen.
   let discovered: StackHostPorts | undefined;
-  const services = servicesFor(cfg.profile);
+  // An external managed Postgres (cfg.database.url) means there is no postgres
+  // container in this stack at all: it is not in `services`, it is not started,
+  // it is not waited on, and it publishes no host port.
+  const externalPostgres = Boolean(cfg.database.url);
+  const services = servicesFor(cfg.profile, { externalPostgres });
   const prefix = composeArgs(cfg.project, cfg.composeFiles);
 
   // NON-INTERACTIVE, ALWAYS. `docker compose` has questions it will ask on a
@@ -264,7 +268,9 @@ export function createStack(
     if (discovered) return discovered;
     discovered = {
       apiPort: publishedPort("api", API_CONTAINER_PORT),
-      pgPort: publishedPort("postgres", POSTGRES_CONTAINER_PORT),
+      // No container, no publish, no number to ask the daemon for. Asking anyway
+      // would fail with a "no such service" that reads like a broken stack.
+      pgPort: externalPostgres ? null : publishedPort("postgres", POSTGRES_CONTAINER_PORT),
     };
     return discovered;
   }
@@ -285,9 +291,17 @@ export function createStack(
     await build();
 
     emit({ phase: "postgres", status: "start" });
-    await composeAsync(upArgs(["postgres"]), "start postgres");
-    await waitForPostgres(upOpts.pgTimeoutMs);
-    emit({ phase: "postgres", status: "done" });
+    if (externalPostgres) {
+      // Nothing to start and nothing to poll: the server is somebody else's,
+      // already running. Reachability is proven a moment later by migrate(),
+      // which fails loudly with the driver's own connection error — a better
+      // diagnostic than anything a pre-flight ping here could synthesize.
+      emit({ phase: "postgres", status: "done", detail: "external (managed) — no container started" });
+    } else {
+      await composeAsync(upArgs(["postgres"]), "start postgres");
+      await waitForPostgres(upOpts.pgTimeoutMs);
+      emit({ phase: "postgres", status: "done" });
+    }
 
     await migrate(upOpts.migrateEnv);
 
@@ -304,7 +318,11 @@ export function createStack(
     // and it learned it from the daemon.
     emit({ phase: "ports", status: "start" });
     const ports = hostPorts();
-    emit({ phase: "ports", status: "done", detail: `api=:${ports.apiPort} pg=:${ports.pgPort}` });
+    emit({
+      phase: "ports",
+      status: "done",
+      detail: `api=:${ports.apiPort} pg=${ports.pgPort === null ? "external" : `:${ports.pgPort}`}`,
+    });
 
     emit({ phase: "health", status: "start" });
     await waitForHttp(`${hostBackendUrl(ports.apiPort)}/health`, upOpts.healthTimeoutMs ?? 60_000);
