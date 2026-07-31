@@ -1341,3 +1341,68 @@ semantics — the very "required reading" this decision exists to remove.
 tooling repo and currently specifies that only `heavy`/`sanity-meta` carry
 `schedule:`. This decision makes non-heavy classes carry it too, so the rubric
 needs a matching change — filed there as an issue, never edited from this repo.
+
+---
+
+## D27 — Cutover data gate (issue #344): NOT YET RUN, blocked on production access
+
+**Decision recorded, not a pass or fail.** Issue #344 asked this gate to be
+executed against the production database and its outcome logged here, pass or
+fail, with the date and the session count actually observed. As of
+**2026-07-31**, the live checks in the issue's Scope §1/§2 have not been
+executed and no session count has been observed, because the two credentials
+they require — a read-only production `DATABASE_URL` (a DigitalOcean Managed
+Postgres HA credential, D13) and the deployment's `ADMIN_TOKEN` — are, by
+design, never available outside a human operator's own environment
+(`scripts/gitops-credentials.ts` marks the equivalent DO token
+"local-only... never uploaded to GitHub"). Recording that absence here rather
+than fabricating a result is the point of this entry.
+
+**What was confirmed instead, read-only, on 2026-07-31:**
+- `https://stage.robotmoney-labs.dev` returned `502` — the stage stack was not
+  running at the time (nothing bound to the tunnel's `localhost:48787` origin),
+  so even the misconfigured-data symptoms in the issue could not be
+  re-observed live.
+- `https://robotmoney.net` (and its `https://www.robotmoney.net` redirect
+  target) still serves the pre-D1 Next.js production site, not this rebuild —
+  confirming the DNS cutover for this codebase has not reached the apex
+  domain, independent of this issue's data question.
+- No production or staging database credential, and no admin token for either
+  host, exists anywhere in this worktree, this repo's GitHub secrets (`gh
+  secret list` shows only `OPENCODE_API_KEY`), or the CI environment.
+
+**Step 1 methodology is corrected per the issue's own review comment** before
+any run is attempted: the original `job_schedules`/`jobs` join cannot answer
+the question post-D25/#366, because `regime.classify`/`research.refresh` are
+seeded `enabled: false` compatibility markers now (`backend/src/db/seed.ts`)
+and would false-confirm the stopped-producer hypothesis. The corrected check
+reads producer-freshness straight off `GET /api/admin/overview`'s `regime` and
+`research[]` fields, which are computed directly from `regime_snapshots` /
+`research_signals` (`backend/src/admin/overview.ts`) — the tables the
+independent producer actually writes.
+
+**Tooling shipped so the gate is a command, not a manual transcription of the
+issue's curl snippet:** `scripts/verify-cutover-data-gate.ts` (self-tested by
+`scripts/tests/integration/verify-cutover-data-gate.test.ts` against a stub
+backend, covering the healthy pass path and every failure mode named in the
+issue — a broken session, the 7-member demo-seed roster, a future-dated regime
+`asOf`, an AUM history gap, and a stale producer signal — plus the
+no-admin-token skip path). It is deliberately **not** wired into any CI
+workflow: it is a one-shot operator script requiring exactly the two secrets
+above, run by hand:
+
+```bash
+ADMIN_TOKEN=<deployment admin token> \
+  bun scripts/verify-cutover-data-gate.ts --base https://<host pointed at the production database>
+```
+
+**Next action, for whoever holds the credentials:** boot the stage stack (or a
+throwaway backend) against a read-only production `DATABASE_URL`, run the
+command above, and replace this entry's status with the actual pass/fail and
+session count — this decision does not close the gate, it un-blocks it.
+
+**Not in scope (unchanged from issue #344).** The frontend follow-up (deleting
+or re-scoping the committed archive under
+`frontend/public/data/committee/sessions/` and
+`ARCHIVE_LAST_DATE`/`static-views.js`) is explicitly deferred to whoever runs
+the gate to a real pass or fail — doing it now would be guessing the outcome.
