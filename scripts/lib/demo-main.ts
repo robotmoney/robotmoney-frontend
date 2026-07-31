@@ -1630,7 +1630,8 @@ async function main(): Promise<void> {
       const c = state.committees[subject.id];
       // Rotate the date per THIS subject's own run count so sessions accumulate
       // without colliding on UNIQUE(date, subject_id) — the rule itself is the
-      // pure sessionDateFor() in demo-schedule.ts, unchanged in behaviour.
+      // pure sessionDateFor() in demo-schedule.ts. Walks backward from "now"
+      // (issue #345) so a long-lived stack can never mint a future-dated row.
       const date = sessionDateFor(Date.now(), due.runs);
       log(`committee → ${date}/${subject.id}`);
       c.members = {};

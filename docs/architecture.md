@@ -1897,8 +1897,14 @@ the only thing that injects `PRODUCER_*_CRON` into compose (through
   rotating (date, subject) so sessions accumulate. The timetable itself is the
   pure `planSubjectSchedules` / `plannedRunAt` pair in
   `scripts/lib/demo-schedule.ts` — the driver keeps only the I/O — and the
-  synthetic date rotation (one calendar day per completed run for that subject,
-  so `UNIQUE(date, subject_id)` cannot be violated) is the pure `sessionDateFor`.
+  synthetic date rotation (roughly one calendar day EARLIER per completed run
+  for that subject, so `UNIQUE(date, subject_id)` cannot be violated) is the
+  pure `sessionDateFor`. It walks backward from the wall clock rather than
+  forward (issue #345): a standing demo never tears down, so an unbounded
+  `runs` count with any forward offset eventually mints a session/regime date
+  in the real future (observed on stage: ~9 months ahead) — walking backward
+  instead guarantees every generated date stays `<=` today no matter how long
+  the demo has been running.
   It does **not** reset between ticks. It reuses the `runSession` runner exported
   from `scripts/lib/committee/session.ts` (whose entry-point `main()` is guarded
   so importing it does not trigger the reset-heavy standalone flow).

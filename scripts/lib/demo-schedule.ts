@@ -186,13 +186,48 @@ export function plannedRunAt(plan: SubjectCadencePlan, runs: number): number {
 }
 
 /**
- * The demo's synthetic session date: one calendar day per completed run for THIS
- * subject, so sessions accumulate without colliding on the backend's
- * UNIQUE(date, subject_id). Behaviour is unchanged from the inline expression it
- * replaces — the 2027-dated-session question belongs to issue #345, not here.
+ * Safety-margin day step for {@link sessionDateFor}: strictly more than
+ * ONE calendar day, so that even in the worst case where a run's own real
+ * elapsed time (bounded by `committeeIntervalMs`, always well under 24 h for
+ * every cadence profile) happens to tip `nowMs` over a midnight boundary, the
+ * net movement is still a decrease — see that function's doc for why exactly
+ * one day is NOT safe here.
+ */
+const SESSION_DATE_STEP_MS = 2 * 86_400_000;
+
+/**
+ * The demo's synthetic session date: roughly one calendar day EARLIER per
+ * completed run for THIS subject, so sessions accumulate without colliding on
+ * the backend's UNIQUE(date, subject_id).
+ *
+ * Issue #345: the previous expression walked FORWARD from the wall clock
+ * (`nowMs + runs * day`). `nowMs` is itself the real clock at the moment of the
+ * call, which already advances with every steady-state run — under the
+ * REALISTIC profile (a run every 6 h) that meant every run's own elapsed real
+ * time was compounding with a full synthetic day on TOP of it, so the standing
+ * stage demo's committee/regime dates ran away into the future (observed: ~9
+ * months ahead after a couple of months of uptime — read as broken on
+ * /committee and /regime, which is the opposite of the separate cutover-data
+ * gate's "too old" failure). A demo that never tears down has no bound on
+ * `runs`, so ANY forward offset here eventually crosses into the future.
+ *
+ * Walking BACKWARD from `nowMs` instead removes the failure mode entirely: for
+ * every `runs >= 0` the result is `<= nowMs`'s calendar day BY CONSTRUCTION, so
+ * it can never read as "from the future" no matter how long the demo has been
+ * running — a long-lived subject simply reads as a longer-established
+ * committee history, which is the harmless direction to be wrong in.
+ *
+ * The step is a full TWO days (not one): `nowMs` at run `runs` already
+ * reflects that run's own real elapsed time since run 0, so a plain `-1 day`
+ * per run can net to LESS than a full day once that real drift is folded back
+ * in — occasionally landing two runs on the same calendar day (an actual
+ * collision on the very constraint this function exists to satisfy). Doubling
+ * the step keeps the net movement negative by a comfortable margin for any
+ * cadence well under 24 h (every profile in demo-schedule.ts qualifies),
+ * guaranteeing a distinct, strictly decreasing date every run.
  */
 export function sessionDateFor(nowMs: number, runs: number): string {
-  return new Date(nowMs + runs * 86_400_000).toISOString().slice(0, 10);
+  return new Date(nowMs - runs * SESSION_DATE_STEP_MS).toISOString().slice(0, 10);
 }
 
 /** `120000 → "2 min"`, `21600000 → "6 h"` — the READY line's duration words. */

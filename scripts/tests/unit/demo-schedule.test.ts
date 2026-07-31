@@ -190,17 +190,22 @@ describe("sessionDateFor — UNIQUE(date, subject_id) can never be violated", ()
 
   for (const stage of [false, true]) {
     const label = stage ? "stage" : "fast";
-    test(`[${label}] 20 runs per subject: dates strictly increase and no (date, subjectId) repeats`, () => {
+    test(`[${label}] 20 runs per subject: dates strictly decrease (never future) and no (date, subjectId) repeats`, () => {
       const cadence = resolveDemoCadence({ stage });
       const plans = planSubjectSchedules(SUBJECT_IDS.length, cadence, NOW);
       const seen = new Set<string>();
       plans.forEach((plan, i) => {
         let prev = "";
         for (let runs = 0; runs < 20; runs++) {
-          // Exactly what the driver computes: the wall clock at the run, plus
-          // one calendar day per completed run for THIS subject.
-          const date = sessionDateFor(plannedRunAt(plan, runs), runs);
-          expect(date > prev).toBe(true);
+          // Exactly what the driver computes: the wall clock at the run, minus
+          // a two-calendar-day step per completed run for THIS subject (issue
+          // #345 — walking backward from "now" is what keeps every date <=
+          // today; the doubled step is what keeps it collision-free even after
+          // that run's own real elapsed time has nudged "now" forward).
+          const at = plannedRunAt(plan, runs);
+          const date = sessionDateFor(at, runs);
+          expect(date <= new Date(at).toISOString().slice(0, 10)).toBe(true);
+          if (prev !== "") expect(date < prev).toBe(true);
           prev = date;
           const key = `${date}|${SUBJECT_IDS[i]}`;
           expect(seen.has(key)).toBe(false);
@@ -211,11 +216,30 @@ describe("sessionDateFor — UNIQUE(date, subject_id) can never be violated", ()
     });
   }
 
-  test("the rotation itself is unchanged: one calendar day per completed run", () => {
+  test("the rotation walks BACKWARD: a two-calendar-day step earlier per completed run", () => {
     const base = Date.UTC(2026, 6, 30, 12, 0, 0);
     expect(sessionDateFor(base, 0)).toBe("2026-07-30");
-    expect(sessionDateFor(base, 1)).toBe("2026-07-31");
-    expect(sessionDateFor(base, 3)).toBe("2026-08-02");
+    expect(sessionDateFor(base, 1)).toBe("2026-07-28");
+    expect(sessionDateFor(base, 3)).toBe("2026-07-24");
+  });
+
+  test("issue #345: no run count — however large, i.e. however long the demo has been up — ever produces a date after nowMs's own calendar day", () => {
+    const base = Date.UTC(2026, 6, 30, 9, 0, 0);
+    const today = new Date(base).toISOString().slice(0, 10);
+    // 5,000 runs is years of steady-state history under EITHER profile (far
+    // beyond the ~9-month drift actually observed on stage) — the property
+    // must hold no matter how long a standing demo has been running.
+    for (const runs of [0, 1, 2, 20, 365, 1000, 5000]) {
+      expect(sessionDateFor(base, runs) <= today).toBe(true);
+    }
+  });
+
+  test("red control: the retired forward-walking formula WOULD have produced a future date — proves the guard above is not vacuous", () => {
+    const base = Date.UTC(2026, 6, 30, 9, 0, 0);
+    const today = new Date(base).toISOString().slice(0, 10);
+    const brokenForward = (nowMs: number, runs: number) =>
+      new Date(nowMs + runs * 86_400_000).toISOString().slice(0, 10);
+    expect(brokenForward(base, 1) > today).toBe(true);
   });
 });
 
