@@ -16,6 +16,11 @@ test-results/
 # Cloudflare Pages deploy dir assembled by scripts/cloudflare-statics.sh.
 _site/
 
+# The real-inference admission record a CI/demo run renders (issue #373). A CI
+# ARTIFACT, never source: scripts/lib/demo-main.ts writes it and e2e.yml folds
+# it into the job summary and uploads it.
+onboarding-admission-record.md
+
 # Agent/loop runtime state only — demo state files, logs, caches, plan backups.
 # Never source, never committed, so the whole directory is ignored.
 .agents/

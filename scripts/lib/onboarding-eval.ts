@@ -125,12 +125,16 @@ export {
   classifyOutcome,
   explainOutcome,
   formatOutcomeEvidence,
+  HARNESS_PERMISSION_REJECTION,
+  harnessFaultOf,
   livenessOf,
   looksRateLimited,
   looksRefusal,
   shouldRetry,
 } from "../agent/classify-outcome.ts";
-export type { ClassifiableRun, OnboardingOutcome, OutcomeExplanation } from "../agent/classify-outcome.ts";
+export type { ClassifiableRun, HarnessFault, OnboardingOutcome, OutcomeBranch, OutcomeExplanation, TranscriptLiveness } from "../agent/classify-outcome.ts";
+import type { HarnessFault, OnboardingOutcome, OutcomeBranch, TranscriptLiveness } from "../agent/classify-outcome.ts";
+import { explainOutcome } from "../agent/classify-outcome.ts";
 export { assistantTextParts, extractAssistantText, finalAssistantText } from "../agent/transcript.ts";
 // The committee REST API the member-agent container reaches over the compose
 // network — the `api` service on its internal port. D21 retired the `mcp`
@@ -711,7 +715,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 //      scripts/agent/classify-outcome.ts for the three-conjunct evidence a
 //      refusal must show before it earns a retry.
 //   3. `timed-out` — on ANY tier. This used to be restricted to the KEYLESS
-//      tier, on committee-opencode-nightly.yml's documented experience that a
+//      tier, on the retired committee-opencode-nightly.yml's documented experience that a
 //      free-tier "call can take minutes and occasionally returns nothing",
 //      with the corollary that a FUNDED model is fast/reliable enough for a
 //      timeout to keep meaning what it always meant. Measurement retired that
@@ -820,4 +824,122 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
     await Bun.sleep(delayMs);
   }
   return last!;
+}
+
+// ── The admission RECORD (issue #373) ───────────────────────────────────────
+// Reporting rides on the admission that already runs. `.github/workflows/e2e.yml`
+// spends exactly one real admission on a push to main and — since #373 made
+// nightly a mirror of the merge-to-main set — exactly one more on its nightly
+// `schedule` run. Thirty nights is thirty samples, a larger denominator than
+// the bespoke K=5 sweep #280/#367 proposed, at no additional cost and read off
+// run history rather than a scorecard module. NOTHING BELOW SAMPLES, RETRIES,
+// SCORES, OR BOOTS ANYTHING: it renders a run that already happened.
+//
+// Pure and env-free, exactly like the classifier it reads (§11.3 E1): given a
+// finished OnboardingEvalResult and the wall-clock it took, it returns a
+// structured record and a markdown rendering of it. That is what makes it
+// unit-testable with a synthetic result, no Docker and no inference — which is
+// the only way a reporting path gets executed-in-CI coverage at all.
+/**
+ * Repo-root-relative path the demo writes the rendered record to. ONE
+ * definition: scripts/lib/demo-main.ts writes it, `.github/workflows/e2e.yml`
+ * reads and uploads it, and scripts/tests/unit/admission-record.test.ts pins
+ * that the workflow names this exact path.
+ */
+export const ADMISSION_RECORD_FILE = "onboarding-admission-record.md";
+
+export interface AdmissionRecord {
+  /** The AGENT_MODEL selector this admission resolved and ran with. */
+  model: string;
+  /** The fresh identity's run id — the join key back to the CI log. */
+  runId: string;
+  outcome: OnboardingOutcome;
+  /** Which rung of the classifier ladder decided it, and why. */
+  branch: OutcomeBranch;
+  reason: string;
+  /** The minted member row, or null when the run never reached the roster. */
+  memberId: string | null;
+  durationMs: number;
+  /** Agent-liveness counts off the same NDJSON stream the classifier reads. */
+  liveness: TranscriptLiveness;
+  /** Non-null ONLY for `harness-error` — OUR failure, never the product's. */
+  harnessFault: HarnessFault | null;
+  /**
+   * Does this sample belong in the admission-rate denominator? A
+   * `harness-error` measured nothing about the product (see
+   * scripts/agent/classify-outcome.ts), so counting it would report our own
+   * broken harness as a product refusal rate.
+   */
+  scored: boolean;
+}
+
+export function admissionRecord(model: string, result: OnboardingEvalResult, durationMs: number): AdmissionRecord {
+  const x = explainOutcome(result);
+  return {
+    model,
+    runId: result.identity.runId,
+    outcome: x.outcome,
+    branch: x.branch,
+    reason: x.reason,
+    memberId: result.memberId,
+    durationMs,
+    liveness: x.liveness,
+    harnessFault: x.harnessFault,
+    scored: x.outcome !== "harness-error",
+  };
+}
+
+/**
+ * One admission as a markdown block for `$GITHUB_STEP_SUMMARY`.
+ *
+ * `harness-error` renders DISTINCTLY from every other outcome, `refused`
+ * included: it names the harness fault, says the run measured nothing about the
+ * product, and states that it is excluded from the denominator. A refusal is
+ * the opposite — a real, scored measurement of what a vanilla agent does with
+ * our onboarding instructions — and says so.
+ */
+export function formatAdmissionRecord(r: AdmissionRecord): string {
+  const seconds = (r.durationMs / 1000).toFixed(1);
+  const l = r.liveness;
+  const lines = [
+    `### onboarding admission — \`${r.outcome}\``,
+    "",
+    `- outcome: \`${r.outcome}\` (decided by \`${r.branch}\` — ${r.reason})`,
+    `- model: \`${r.model}\``,
+    `- run id: \`${r.runId}\``,
+    `- member id: ${r.memberId === null ? "_none minted_" : `\`${r.memberId}\``}`,
+    `- duration: ${seconds}s`,
+    `- liveness: ${l.eventLines} agent event line(s), ${l.textParts} text part(s), ${l.toolEvents} tool event(s), ` +
+      `final text ${l.finalTextEmpty ? "EMPTY" : `${l.finalTextChars} chars`}, transcript ${l.transcriptChars} chars`,
+  ];
+  if (r.harnessFault) {
+    lines.push(
+      `- **HARNESS ERROR [${r.harnessFault.kind}]** — the harness stopped this run: ${r.harnessFault.detail}`,
+      "- **NOT a measurement of the product**, and EXCLUDED from the admission-rate denominator.",
+    );
+  } else if (r.outcome === "refused") {
+    lines.push(
+      "- the model DECLINED the onboarding prompt with a safety rationale — a real, scored measurement of the product, counted in the admission-rate denominator.",
+    );
+  } else {
+    lines.push(`- counted in the admission-rate denominator: ${r.scored ? "yes" : "no"}.`);
+  }
+  return lines.join("\n");
+}
+
+/** Every admission this run produced, as one job-summary section. */
+export function formatAdmissionRecords(records: AdmissionRecord[]): string {
+  const scored = records.filter((r) => r.scored);
+  const admitted = scored.filter((r) => r.outcome === "admitted");
+  const header = [
+    "## Real-inference onboarding admission record",
+    "",
+    records.length === 0
+      ? "_no admission ran on this event_"
+      : `${admitted.length}/${scored.length} scored admission(s) reached the active roster` +
+        (records.length === scored.length ? "" : `; ${records.length - scored.length} excluded as harness errors`) +
+        ".",
+    "",
+  ].join("\n");
+  return [header, ...records.map(formatAdmissionRecord)].join("\n");
 }

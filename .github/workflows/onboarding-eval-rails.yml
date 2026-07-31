@@ -42,6 +42,14 @@ env:
 on:
   push:
     branches: [main]
+  # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
+  # runs on `push: branches: [main]` also runs on a nightly schedule, and
+  # nothing else does — so a red nightly means exactly what a red merge would
+  # have meant, with no required reading. Cron minutes are staggered across the
+  # ten mirrors. The invariant is enforced mechanically by
+  # scripts/tests/unit/nightly-mirrors-merge-set.test.ts, not by convention.
+  schedule:
+    - cron: "51 3 * * *"
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 

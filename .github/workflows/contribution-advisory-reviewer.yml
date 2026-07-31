@@ -7,6 +7,15 @@ env:
   OPENCODE_LINUX_X64_SHA256: "9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b994816acf192159511"
 
 on:
+  # DISPOSITION (issue #373): FOLDED into the merge-to-main set. Nothing else
+  # reviews contribution-governance judgment on open PRs, so this is not a
+  # duplicate of anything the merge set already runs, and a merge is exactly
+  # when every open PR's diff has changed underneath it. Nightly is now the
+  # mirror of what a merge runs. The `reviewed-head` dedupe below keys on "not
+  # a manual dispatch" rather than on `schedule` specifically, so a push run
+  # re-reviews only the PRs whose head actually moved.
+  push:
+    branches: [main]
   schedule:
     - cron: "19 5 * * *"
   workflow_dispatch:
@@ -84,7 +93,7 @@ jobs:
 
             existing="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${pr_number}/comments?per_page=100" \
               --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${marker}\"))) | [.id, .body] | @base64" | sed -n '1p')"
-            if [[ "${GITHUB_EVENT_NAME}" == "schedule" && -n "${existing}" ]]; then
+            if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" && -n "${existing}" ]]; then
               existing_body="$(base64 -d <<<"${existing}" | jq -r '.[1]')"
               if grep -Fq "<!-- reviewed-head: ${head_sha} -->" <<<"${existing_body}"; then
                 echo "PR #${pr_number} already reviewed at ${head_sha}; skipping"

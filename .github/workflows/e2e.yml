@@ -20,10 +20,13 @@
 #     ready re-triggers the workflow (default PR types would not).
 #   - the job `if:` guard skips the run while the PR is still a draft.
 #   - `paths-ignore: ['**.md','**.txt']` bypasses this code check on docs-only PRs.
-# A nightly sweep is intentionally NOT added here: demo-live-smoke-nightly.yml
-# already runs the same LIVE boot on a schedule (independent of PR cadence) so
-# an external-provider outage is caught even on a quiet day; adding a second
-# nightly sweep of the identical assertions would be pure duplication.
+# A NIGHTLY SCHEDULE IS ADDED HERE (issue #373), and demo-live-smoke-nightly.yml
+# is retired. That nightly booted the same LIVE stack and ran the same
+# scripts/demo-live-smoke.ts assertions this job does; its own header said its
+# "only distinguishing input is the schedule". Now that this workflow carries
+# that schedule, keeping it would have been the pure duplication it was written
+# to avoid. Nightly is a MIRROR of the merge-to-main set, not a second set —
+# scripts/tests/unit/nightly-mirrors-merge-set.test.ts enforces the equality.
 #
 # Stage 7 (docs/plans/onboarding-ic-workflow.md, §11 R8) + issue #289: this job
 # carries the onboarding eval's REAL-INFERENCE half, but it does NOT spend a
@@ -48,12 +51,15 @@
 #     file, so this route only works once this change is on main; the label
 #     route works from a PR head immediately, which is why the label — not the
 #     dispatch input — is the primary mechanism.)
-#   - The real-inference measurement's SCHEDULED HOME is
-#     .github/workflows/committee-opencode-nightly.yml (`schedule: 37 4 * * *`
-#     — nightly 04:37 UTC — plus `workflow_dispatch`), which already sets
-#     ONBOARDING_REAL_EVAL=1 and sweeps WIDER than this job ever did (multiple
-#     models × multiple fresh identities). Dropping the per-PR eval therefore
-#     removed a duplicate measurement, not the only coverage of this surface.
+#   - NIGHTLY (issue #373): the real-inference measurement's SCHEDULED HOME is
+#     now THIS workflow's own `schedule: 37 4 * * *` (nightly 04:37 UTC) — the
+#     slot the retired .github/workflows/committee-opencode-nightly.yml held.
+#     ONBOARDING_REAL_EVAL resolves to "1" on `schedule` exactly as it does on
+#     `push`, so a nightly run spends one real admission. That is a SMALLER
+#     per-night sweep than the retired nightly's models × identities, and a
+#     LARGER denominator over time: one admission a night is thirty samples a
+#     month, read off run history via the admission record below, rather than
+#     four samples on one night read off a bespoke scorecard.
 #
 # OPTING ONE PR IN — add the label `real-eval` to the pull request. That is the
 # whole procedure: `pull_request.types` below includes `labeled`, so adding it
@@ -118,6 +124,23 @@ on:
   push:
     branches: [main]
     paths-ignore: ['**.md', '**.txt']
+  # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
+  # runs on `push: branches: [main]` also runs on a nightly schedule, and
+  # nothing else does — so a red nightly means exactly what a red merge would
+  # have meant, with no required reading. Cron minutes are staggered across the
+  # ten mirrors. The invariant is enforced mechanically by
+  # scripts/tests/unit/nightly-mirrors-merge-set.test.ts, not by convention.
+  #
+  # This one keeps 04:37 UTC, the slot the retired committee-opencode-nightly.yml
+  # held: a `schedule` run of THIS workflow is now the real-inference
+  # onboarding admission's scheduled home (ONBOARDING_REAL_EVAL resolves to "1"
+  # on `schedule` exactly as it does on `push`, below). One admission a night,
+  # read off run history, is a larger denominator than the bespoke K=5 sweep
+  # #280/#367 proposed — at no extra cost. `paths-ignore` is deliberately absent
+  # here: a schedule event carries no file list, so a docs-only day still gets a
+  # full mirror run.
+  schedule:
+    - cron: "37 4 * * *"
   pull_request:
     # `labeled` is here ONLY so that adding the `real-eval` opt-in label
     # re-triggers this workflow on an already-open PR (see the "OPTING ONE PR
@@ -249,12 +272,13 @@ jobs:
           key: rmpc-${{ steps.rmpc-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
       # Resolves — and RECORDS — what the real-inference eval does on this run.
       # On an ordinary `pull_request` run it does not run at all (issue #289 +
-      # the single-runner cost above; the nightly committee-opencode-nightly.yml
-      # already measures this surface wider). Withholding a runtime assertion
+      # the runner cost above; this workflow's own nightly `schedule` mirror
+      # measures the same surface once a night). Withholding a runtime assertion
       # from a REQUIRED gate must never be silent, so the PR branch below writes
       # that fact, how to opt THIS PR in, and the eval's real home, to the job
       # summary — loudly — on every such run. When the eval IS on (push to main,
-      # `real-eval` label, or a dispatch that asked for it) this step keeps its
+      # the nightly schedule, the `real-eval` label, or a dispatch that asked
+      # for it) this step keeps its
       # original job: resolve whether the funded key is reachable, and say so.
       #
       # REAL_EVAL_REQUESTED below MUST stay textually identical to
@@ -266,7 +290,7 @@ jobs:
         id: onboarding-gate
         env:
           IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
-          REAL_EVAL_REQUESTED: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
+          REAL_EVAL_REQUESTED: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
           TRUSTED_CONTEXT: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           HAS_ZEN_KEY: ${{ secrets.OPENCODE_API_KEY != '' }}
         run: |
@@ -277,7 +301,7 @@ jobs:
               MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — the eval was requested for this run, but no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is funded (D22 as amended), so the eval will fail loudly rather than silently degrade. Configure the OPENCODE_API_KEY secret, or set AGENT_MODEL=free to run keyless."
             fi
           elif [ "$IS_PULL_REQUEST" = "true" ]; then
-            MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the single self-hosted runner this repo shares, on which per-PR evals cost minutes of exclusive runner time against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: .github/workflows/committee-opencode-nightly.yml — nightly 04:37 UTC (schedule '37 4 * * *') plus workflow_dispatch — which sweeps more models and more identities than this gate ever did; and on every push to main in this same workflow. What this PR run DID assert about that surface: the separate, inference-off .github/workflows/onboarding-eval-rails.yml workflow (issue #275 addendum), which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full whenever its own path filter matches."
+            MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the exclusive runner time per-PR evals cost against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: THIS SAME WORKFLOW, on every push to main and on its nightly schedule mirror at 04:37 UTC (cron '37 4 * * *'), plus workflow_dispatch with real_eval=true. Issue #373 retired .github/workflows/committee-opencode-nightly.yml, which used to hold that slot: each of those runs now spends exactly one real admission and writes an admission record to the job summary and an uploaded artifact, so the admission rate over time is read off run history — thirty nights is thirty samples. What this PR run DID assert about that surface: the separate, inference-off .github/workflows/onboarding-eval-rails.yml workflow (issue #275 addendum), which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full whenever its own path filter matches."
           else
             MSG="§11 R8 real-inference onboarding eval: NOT REQUESTED on this manual run — re-dispatch this workflow with real_eval=true to spend one. ZERO model tokens are spent here. The separate onboarding-eval-rails.yml workflow still covers the inference-off rails check."
           fi
@@ -348,9 +372,10 @@ jobs:
           # empty string otherwise, so an ordinary PR run spends no model call.
           # Add the `real-eval` label to a PR to opt it in; remove it to opt out
           # (full rationale in this file's header, "OPTING ONE PR IN"). The
-          # nightly committee-opencode-nightly.yml (04:37 UTC +
-          # workflow_dispatch) still owns the trend measurement and sweeps wider
-          # than this gate ever did. demo-main.ts reads ONBOARDING_REAL_EVAL ===
+          # nightly `schedule` mirror of THIS workflow (04:37 UTC — issue #373
+          # retired committee-opencode-nightly.yml, which used to hold that
+          # slot) owns the trend measurement, one admission a night, recorded to
+          # the job summary and an artifact. demo-main.ts reads ONBOARDING_REAL_EVAL ===
           # "1"; empty is simply "off". When it IS on, it runs the funded
           # default model (D22 as amended). OPENCODE_API_KEY below is injected
           # ONLY into the short-lived member-agent container
@@ -366,7 +391,7 @@ jobs:
           # summary always describes what actually happened; the two must stay
           # byte-identical, which
           # scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts asserts.
-          ONBOARDING_REAL_EVAL: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
+          ONBOARDING_REAL_EVAL: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
           # The committee session always requires live authoring. On an
           # untrusted fork GitHub supplies an empty secret and the session fails
           # loudly instead of fabricating a template take.
@@ -417,6 +442,37 @@ jobs:
       # numbers only have to exist — same trick scripts/demo-down.ts uses. The
       # `|| true` is deliberate: a compose-down failure must not skip the
       # demo-clean verdict below, which is the step's actual gate.
+      # ── The admission RECORD (issue #373) ─────────────────────────────────
+      # Reporting on the admission that ALREADY ran — no new harness, no
+      # sampling loop, no second stack bring-up. scripts/lib/demo-main.ts
+      # classifies the run with the existing scripts/agent/classify-outcome.ts
+      # and writes onboarding-admission-record.md (outcome, resolved model id,
+      # duration, member id, agent-liveness counts) BEFORE it throws, so a RED
+      # admission records exactly as much as a green one. Both steps are
+      # `if: always()` for the same reason. The admission rate over time is then
+      # derivable from run history: one record per push to main, plus one per
+      # nightly `schedule` mirror above.
+      #
+      # A run that spent no eval (an unlabelled pull_request) writes no file;
+      # both steps below are no-ops there rather than a failure.
+      - name: Record the real-inference onboarding admission
+        if: always()
+        run: |
+          set -u
+          if [ -f onboarding-admission-record.md ]; then
+            cat onboarding-admission-record.md >> "$GITHUB_STEP_SUMMARY"
+            cat onboarding-admission-record.md
+          else
+            echo "no admission record on this run (no real-inference eval was spent)"
+          fi
+      - name: Upload the admission record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-admission-record-${{ github.run_id }}-${{ github.run_attempt }}
+          path: onboarding-admission-record.md
+          if-no-files-found: ignore
+          retention-days: 90
       - name: Tear down this run's demo stack (no leaks on the shared runner)
         if: always()
         run: |

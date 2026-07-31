@@ -15,11 +15,15 @@ import {
   type SubjectCadencePlan,
 } from "./demo-schedule.ts";
 import {
+  admissionRecord,
+  ADMISSION_RECORD_FILE,
   classifyOutcome,
   explainOutcome,
+  formatAdmissionRecords,
   formatOutcomeEvidence,
   resolveModelConfig,
   runOnboardingEvalWithRetry,
+  type AdmissionRecord,
   type OnboardingIdentity,
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
@@ -1168,9 +1172,10 @@ async function main(): Promise<void> {
   // run only when it's running the real-inference onboarding eval (Stage 7,
   // ONBOARDING_REAL_EVAL=1 — see the CI branch below): fail before spending
   // minutes standing up the stack, not ~20 minutes later at the eval step
-  // itself. Which CI runs set it (issue #289): the nightly sweep in
-  // .github/workflows/committee-opencode-nightly.yml, and e2e.yml on a push to
-  // main, on a `pull_request` whose PR carries the `real-eval` opt-in label, or
+  // itself. Which CI runs set it (issue #289, #373): .github/workflows/e2e.yml,
+  // on a push to main, on its nightly `schedule` mirror of that push (04:37 UTC
+  // — the slot the retired committee-opencode-nightly.yml held), on a
+  // `pull_request` whose PR carries the `real-eval` opt-in label, or
   // on a `workflow_dispatch` started with real_eval=true. An ORDINARY PR run
   // therefore leaves ONBOARDING_REAL_EVAL empty and skips this resolve, which
   // is correct: it has no eval to fail early for.
@@ -1364,8 +1369,8 @@ async function main(): Promise<void> {
 
     // Additive, env-gated (issue #104): the rmpc-release-e2e nightly reuses this
     // EXACT boot instead of standing up a parallel stack. Only runs when
-    // RMPC_RELEASE_E2E=1 — unset (and therefore a no-op) in e2e.yml and
-    // committee-opencode-nightly.yml, so this is zero behaviour change there.
+    // RMPC_RELEASE_E2E=1 — unset (and therefore a no-op) in e2e.yml, so this
+    // is zero behaviour change there.
     if (process.env.RMPC_RELEASE_E2E === "1") {
       console.log("\n[demo] running rmpc release e2e driver…");
       await run(["bun", "run", "scripts/rmpc-release-e2e.ts"], repoRoot,
@@ -1376,11 +1381,11 @@ async function main(): Promise<void> {
     // the REAL-INFERENCE onboarding admission sweep reuses this EXACT
     // already-booted stack instead of standing up a parallel one — same
     // pattern as RMPC_RELEASE_E2E above. Only runs when ONBOARDING_REAL_EVAL=1.
-    // Which CI runs set it (issue #289): the nightly sweep in
-    // .github/workflows/committee-opencode-nightly.yml, and
-    // .github/workflows/e2e.yml on exactly three events — a push to main, a
-    // `pull_request` whose PR carries the `real-eval` OPT-IN LABEL, and a
-    // `workflow_dispatch` started with real_eval=true. It is off by default on
+    // Which CI runs set it (issue #289, #373): .github/workflows/e2e.yml on
+    // exactly four events — a push to main, its NIGHTLY `schedule` mirror of
+    // that push (04:37 UTC, the slot the retired committee-opencode-nightly.yml
+    // held), a `pull_request` whose PR carries the `real-eval` OPT-IN LABEL, and
+    // a `workflow_dispatch` started with real_eval=true. It is off by default on
     // pull requests: that gating dates from the free-tier default whose quota
     // one eval per PR exhausted, and survives the funded default (D22 as
     // amended) because this repo has one self-hosted runner and an eval per PR
@@ -1426,8 +1431,10 @@ async function main(): Promise<void> {
           `${sweepModels.length} model(s) [${sweepModels.join(", ")}], ${identitiesPerModel} identit${identitiesPerModel === 1 ? "y" : "ies"} each…`,
       );
       const sweepResults: Array<{ model: string; result: OnboardingEvalResult }> = [];
+      const records: AdmissionRecord[] = [];
       for (const model of sweepModels) {
         for (let i = 0; i < identitiesPerModel; i++) {
+          const startedAt = Date.now();
           const result = await runOnboardingEvalWithRetry({
             repoRoot,
             composeProject: project,
@@ -1439,8 +1446,17 @@ async function main(): Promise<void> {
             onEvent: (msg) => console.log(`[demo] onboarding-real-eval[${model}]: ${msg}`),
           });
           sweepResults.push({ model, result });
+          records.push(admissionRecord(model, result, Date.now() - startedAt));
         }
       }
+      // Reporting on the admission that already ran (issue #373) — no sampling
+      // loop, no scorecard module, no second stack bring-up. Written BEFORE the
+      // throw below so a RED run records exactly as much as a green one does;
+      // .github/workflows/e2e.yml folds this file into $GITHUB_STEP_SUMMARY and
+      // uploads it with `if: always()`, and the admission rate over time is
+      // read off run history rather than a bespoke metric.
+      writeFileSync(join(repoRoot, ADMISSION_RECORD_FILE), `${formatAdmissionRecords(records)}\n`);
+      console.log(`[demo] wrote onboarding admission record to ${ADMISSION_RECORD_FILE}`);
       const failed = sweepResults.filter((r) => !r.result.admitted);
       for (const f of failed) if (f.result.transcript) console.log(`[demo] onboarding real-eval (${f.model}, ${f.result.identity.runId}) container transcript:\n${f.result.transcript}`);
       if (failed.length > 0) {

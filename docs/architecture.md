@@ -1929,7 +1929,7 @@ running (e.g. started in the background, or its process was killed with SIGKILL)
 once and then tears down. Because keep-by-default would leak a volume on a runner shared
 with the standing stage demo, the CI path also reclaims **its own run's** volume (scoped
 by the `robotmoney.demo.project` label) on success and failure, and both
-`.github/workflows/e2e.yml` and `committee-opencode-nightly.yml` carry an `if: always()`
+`.github/workflows/e2e.yml` carries an `if: always()`
 backstop for a killed/cancelled/timed-out boot. That backstop has **three parts, in this
 order**, and the order is the fix:
 
@@ -2104,9 +2104,11 @@ and runs the loud-failure guards that keep broken demos off main:
   ≥2 published committee sessions (the #101 starvation guard), a fresh regime
   snapshot, wallet + vault-economics provenance `live` (only the documented
   #120 ZYFAI/GIZA degrades tolerated, loud-logged), and both research signals
-  landed. This is the SAME script + assertions the nightly
-  `demo-live-smoke-nightly.yml` sweep runs — reused as-is, not re-authored, so
-  the required gate and the nightly sweep can never drift apart.
+  landed. The required gate, the push-to-`main` run and the nightly `schedule`
+  mirror all run this one script off the same boot, so they cannot drift apart.
+  Issue #373 retired the separate `demo-live-smoke-nightly.yml`: it booted the
+  same stack and ran these same assertions, and once `e2e.yml` carried the
+  nightly schedule it was pure duplication.
 
 The core-surface detector's own loud-failure path is **self-tested**, not assumed:
 `scripts/tests/integration/demo-frontend-check.test.ts` (run in the required `integration` job via
@@ -2508,13 +2510,15 @@ Layers 0-3 (issue #279) are implemented, named by claim, under
 `skill-install.eval.test.ts`, `toolchain.eval.test.ts`,
 `keygen-signing.eval.test.ts`, with shared support in
 `evals/onboarding/support/`. They run nightly and on-demand via
-`.github/workflows/onboarding-evals-nightly.yml` (`CI_CLASS: heavy`, schedule +
-`workflow_dispatch` only — never `pull_request`), through the single
+`.github/workflows/onboarding-evals-nightly.yml` (`CI_CLASS: heavy`; push to
+`main` + its nightly `schedule` mirror + `workflow_dispatch` — never
+`pull_request`), through the single
 `bun run eval:onboarding:isolated` target. `runtime` gates the run: a red
 `runtime` reports `skill-install`/`toolchain`/`keygen-signing` as
 `not-measured`, never `failed` (`evals/onboarding/support/gating.ts`) — when
-`runtime` is green the three are mutually independent. Layer 4 (admission)
-remains where it already runs, in `committee-opencode-nightly.yml`.
+`runtime` is green the three are mutually independent. Layer 4 (admission) runs
+in `.github/workflows/e2e.yml`, on every push to `main` and on that workflow's
+nightly `schedule` mirror of it (E6).
 
 **E4 — Scored by sampling.** Layer 4 runs K samples with a fresh identity and
 container each. Every outcome is classified — `admitted`, `refused`,
@@ -2540,23 +2544,50 @@ path with fewer services booted. Three components are shared by construction:
   scorecard. A refusal is retryable under this classifier, which is why the demo
   no longer forfeits a finite roster seat to one unlucky sample.
 
-**E6 — CI placement.** The eval is `CI_CLASS: heavy` — sweep-only, therefore no
-`pull_request` trigger — and runs in the existing
-`committee-opencode-nightly.yml` on `[self-hosted, robotmoney-self-hosted]`, the
-runner **every** workflow in this repo uses. (It was pinned to `ubuntu-latest`
-because the self-hosted host shares its IP with the standing `rm_demo_*` stack
-and free-tier models rate-limit per IP. Funded models bill the workspace, not an
-IP quota, so that exception retired with D22 rule 1's amendment.) No new workflow
-is added.
+**E6 — CI placement: nightly mirrors the merge-to-main set.** The invariant
+(issue #373, D26) is an *equality of sets*: **every** workflow that runs on
+`push: branches: [main]` also runs on a nightly `schedule:`, and **nothing else
+runs on a nightly schedule**. A red nightly therefore means exactly one thing —
+the code on `main`, release code, is broken by an input that changed while
+nobody was watching. No required reading, no "which suite was that and what are
+its pass semantics".
 
-Because it is heavy and sweep-only, a run of this eval is **never** an acceptance
-criterion or test-plan item on a pull request: it runs on a schedule against
-`main`, so requiring it before merge would gate a change on a job that only
-exists after that change lands. It is post-merge monitoring — a model beginning
-to refuse, a key running dry — and a PR asserts the same surface through the
-per-PR checks below. The per-PR signal stays what it is today: the inference-off
-rails, plus the single real-inference admission the `e2e` job performs off its
-own demo boot.
+The relationship is enforced mechanically, not by convention:
+`scripts/tests/unit/nightly-mirrors-merge-set.test.ts` runs in the required
+`unit` job, asserts the equality in **both** directions, names any workflow on
+one side only, and additionally fails on any job or step gated with
+`github.event_name == 'schedule'` — nightly must run the merge set's work, not
+extra work. Cron minutes are staggered so the mirrors do not all start at once.
+
+The real-inference admission's scheduled home is therefore
+`.github/workflows/e2e.yml` itself, on the `schedule: 37 4 * * *` slot the
+retired `committee-opencode-nightly.yml` used to hold: `ONBOARDING_REAL_EVAL`
+resolves to `"1"` on a `schedule` event exactly as it does on a `push`, so a
+nightly spends **one** real admission. That is a smaller per-night sweep than the
+retired nightly's models × identities, and a **larger denominator over time** —
+thirty nights is thirty samples, read off run history rather than a bespoke
+scorecard. The accepted tradeoff is time-to-detection: a shift in the admission
+rate surfaces over about a week rather than in one night.
+
+**Reporting rides on the admission that already runs.** No sampling loop, no
+scorecard module, no second stack bring-up. `scripts/lib/demo-main.ts`
+classifies the run with the existing `scripts/agent/classify-outcome.ts` and
+renders a small structured record — outcome, resolved model id, duration, member
+id, agent-liveness counts, and whether the sample belongs in the admission-rate
+denominator — which `e2e.yml` folds into `$GITHUB_STEP_SUMMARY` and uploads as an
+artifact with `if: always()`, on green and red runs alike. A `harness-error`
+renders **distinctly** from a `refused` and is excluded from the denominator: it
+measured nothing about the product. The renderer is pure and is unit-tested from
+synthetic results in the required `unit` job
+(`scripts/tests/unit/admission-record.test.ts`) — zero inference, no Docker.
+
+A run of this eval is still **never** an acceptance criterion or test-plan item
+on a pull request. It runs against `main`, so requiring it before merge would
+gate a change on a job that only exists after that change lands; and a stochastic
+measurement cannot gate a merge at all (D22 rule 4 — a single sample is a coin
+flip reported as a verdict). It is post-merge monitoring — a model beginning to
+refuse, a key running dry. The per-PR signal stays what it is: the inference-off
+rails, plus the opt-in `real-eval` label for the one PR that needs an admission.
 
 The `e2e` job's real-inference admission is **off by default on pull requests
 and opt-in per PR** (D22 amendment "E6 (2026-07-28)"): add the label `real-eval`

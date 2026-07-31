@@ -83,8 +83,9 @@ leak, and the surviving api container held `:48787` for over an hour. Nothing
 reaped prior runs' orphans either, so the host had accumulated containers up to
 four days old.
 
-Three fixes, all in `.github/workflows/e2e.yml` and
-`committee-opencode-nightly.yml`:
+Three fixes, in `.github/workflows/e2e.yml` (they were also in
+`committee-opencode-nightly.yml`, which issue #373 retired — `e2e.yml` now
+carries that workflow's nightly slot as well as its push-to-`main` run):
 
 1. the always() step runs `docker compose -p "$DEMO_PROJECT" down -v
    --remove-orphans` **before** `demo:clean`;

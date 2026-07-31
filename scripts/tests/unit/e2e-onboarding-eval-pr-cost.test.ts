@@ -16,6 +16,10 @@
 //     debugging escape hatch — without it a change to this gate cannot be
 //     exercised before merge, and only breaks `main` afterwards);
 //   - a push to the default branch runs it;
+//   - the NIGHTLY `schedule` mirror of this same workflow runs it (issue #373:
+//     committee-opencode-nightly.yml, which used to be the eval's scheduled
+//     home, is retired — nightly is now a mirror of the merge-to-main set, so
+//     the schedule route must spend exactly what the push route spends);
 //   - a `workflow_dispatch` runs it only when the `real_eval` input asked;
 //   - labelling a PR with anything ELSE does not boot the ~40-minute live
 //     stack (the job `if:` drops that event before a runner is allocated);
@@ -36,7 +40,7 @@
 // no network, no model. Nothing here can skip; every test below runs on every
 // invocation of `bun test scripts/tests/unit` (a required job).
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dir, "../../..");
@@ -45,10 +49,6 @@ const e2eYml = readFileSync(join(repoRoot, ".github/workflows/e2e.yml"), "utf8")
 // into its own workflow (it never needed the full LIVE demo boot).
 const onboardingRailsYml = readFileSync(
   join(repoRoot, ".github/workflows/onboarding-eval-rails.yml"),
-  "utf8",
-);
-const nightlyYml = readFileSync(
-  join(repoRoot, ".github/workflows/committee-opencode-nightly.yml"),
   "utf8",
 );
 
@@ -361,6 +361,7 @@ function prContext(opts: {
 
 const CTX = {
   push: { github: { event_name: "push", repository: "org/repo", event: {} }, inputs: {} } as Ctx,
+  schedule: { github: { event_name: "schedule", repository: "org/repo", event: {} }, inputs: {} } as Ctx,
   prPlain: prContext({ labels: [] }),
   prOtherLabels: prContext({ labels: ["documentation", "phase-3"] }),
   prOptedIn: prContext({ labels: [OPT_IN_LABEL] }),
@@ -397,6 +398,7 @@ export function realEvalSpendIsOptIn(expr: string): string | null {
     [`a pull_request labelled '${OPT_IN_LABEL}'`, CTX.prOptedIn, "1"],
     [`a labeled event adding '${OPT_IN_LABEL}'`, CTX.prLabeledOptIn, "1"],
     ["a push to the default branch", CTX.push, "1"],
+    ["the nightly schedule mirror", CTX.schedule, "1"],
     ["a workflow_dispatch with real_eval=true", CTX.dispatchOn, "1"],
   ];
   for (const [what, ctx, want] of cases) {
@@ -422,6 +424,7 @@ export function realEvalSpendIsOptIn(expr: string): string | null {
 export function jobGuardIsLabelNarrowed(expr: string): string | null {
   const cases: Array<[string, Ctx, boolean]> = [
     ["a push to the default branch", CTX.push, true],
+    ["the nightly schedule mirror", CTX.schedule, true],
     ["a non-draft pull_request", CTX.prPlain, true],
     ["a draft pull_request", CTX.prDraft, false],
     [`adding the '${OPT_IN_LABEL}' label`, CTX.prLabeledOptIn, true],
@@ -463,8 +466,10 @@ export function prSummaryNamesTheNightly(workflow: string): string | null {
   const marker = /\[\s*"\$IS_PULL_REQUEST"\s*=\s*"true"\s*\]/.exec(step);
   if (!marker) return "the summary step never tests $IS_PULL_REQUEST in its shell body";
   const prBranch = step.slice(marker.index);
-  if (!prBranch.includes("committee-opencode-nightly.yml")) {
-    return "the PR-run summary does not name committee-opencode-nightly.yml as the eval's home";
+  // Issue #373: the eval's scheduled home is this workflow's OWN nightly
+  // schedule, so the notice has to name that cron rather than a separate file.
+  if (!/nightly schedule mirror/i.test(prBranch) || !prBranch.includes("37 4 * * *")) {
+    return "the PR-run summary does not name this workflow's own nightly schedule mirror (cron '37 4 * * *') as the eval's scheduled home";
   }
   if (!prBranch.includes("workflow_dispatch")) {
     return "the PR-run summary does not name workflow_dispatch as the eval's other trigger";
@@ -724,12 +729,25 @@ describe("the coverage that replaces the per-PR eval is really there", () => {
     expect(onboardingRailsYml).toMatch(/github\.event\.pull_request\.draft == false/);
   });
 
-  test("the nightly still sets ONBOARDING_REAL_EVAL=1 on schedule + workflow_dispatch", () => {
-    expect(nightlyYml).toContain('ONBOARDING_REAL_EVAL: "1"');
-    expect(nightlyYml).toContain('cron: "37 4 * * *"');
-    expect(nightlyYml).toContain("workflow_dispatch:");
-    // Heavy sweep-only class: a `pull_request` trigger here would re-import the
-    // exact per-PR spend #289 removed.
-    expect(nightlyYml).not.toMatch(/^\s{2}pull_request:/m);
+  // Issue #373 retired committee-opencode-nightly.yml. Its measurement was the
+  // SAME real-inference admission this workflow already spent on a push to
+  // main, so the nightly it held became this workflow's own `schedule:` — and
+  // the coverage that replaces the per-PR eval must therefore be found HERE, in
+  // e2e.yml, or it is nowhere.
+  test("this workflow itself carries the retired nightly's 04:37 slot", () => {
+    const on = (Bun.YAML.parse(e2eYml) as { on?: unknown; true?: unknown });
+    const triggers = (on.on ?? on.true) as Record<string, unknown>;
+    expect(Object.keys(triggers)).toContain("schedule");
+    expect(JSON.stringify(triggers.schedule)).toContain("37 4 * * *");
+    // Nightly must reproduce the merge signal, which means a schedule run
+    // spends the admission a push spends — asserted by CTX.schedule above.
+    expect(realEvalSpendIsOptIn(unwrap(soleMappingValue(e2eYml, "ONBOARDING_REAL_EVAL"), "ONBOARDING_REAL_EVAL"))).toBeNull();
+  });
+
+  test("the retired nightly is gone, and nothing still points at it", () => {
+    expect(existsSync(join(repoRoot, ".github/workflows/committee-opencode-nightly.yml"))).toBe(false);
+    // The workflow may EXPLAIN the retirement in prose; what it must not do is
+    // cite it as a live home for the measurement.
+    expect(e2eYml).not.toMatch(/SCHEDULED HOME is\s*\n?#?\s*\.github\/workflows\/committee-opencode-nightly\.yml/);
   });
 });
