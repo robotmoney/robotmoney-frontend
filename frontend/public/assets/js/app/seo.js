@@ -118,6 +118,16 @@ const META = {
     title: "Channel Divergence — Is the Macro-to-Crypto Channel Breaking?",
     description: "Three transmission indicators that measure whether risk-on macro conditions are still reaching crypto: BTC beta to risk appetite, BTC/Nasdaq relative strength, and the stablecoin flow proxy.",
   },
+  // Dev/test fixture only (issue #379's dash.css/dash-ui.js styleguide),
+  // unlinked from nav and out of sitemap.xml — noindexed like every other
+  // analytics-dashboard route ahead of the go-live cutover
+  // (docs/bot-analytics-ui-port-plan.md §4.1), and `nofollow` since it links
+  // nowhere a crawler should treat as real content.
+  "/dash/_styleguide": {
+    title: "Dash UI Styleguide (internal) — Robot Money",
+    description: "Internal component styleguide for the analytics dashboard UI primitives. Not a public page.",
+    robots: "noindex, nofollow",
+  },
 };
 
 // Dynamic detail routes (/docs/*, /blog/*, /committee/*) inherit a base

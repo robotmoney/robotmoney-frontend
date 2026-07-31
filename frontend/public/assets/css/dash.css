@@ -1,0 +1,429 @@
+/* Analytics dashboard theme scope — issue #379, docs/bot-analytics-ui-port-plan.md §2.
+   Faithful port of the retired robotmoney-bot-analytics app's shadcn/Tailwind
+   design system (src/index.css) into a single stylesheet, scoped ENTIRELY
+   under `.a3` so nothing here can leak onto marketing pages and no marketing
+   rule can leak in. Every dashboard fragment puts `class="a3"` on its own
+   root element (never on <body> or the shell shared with marketing).
+
+   Two brand-covenant conflicts force this dedicated scope instead of reusing
+   tokens.css directly (see the plan §2 for the full rationale):
+     1. Radius: repo-wide --radius is 2px; the dashboard needs 0.25rem (lg),
+        with -2px/-4px md/sm steps, matching the original's tailwind.config.
+     2. tokens.css declares cyan a LINE-only accent and retires --color-purple;
+        the dashboard look uses cyan FILLS (chips, active nav) and purple
+        throughout, so it re-derives its own local HSL tokens rather than
+        reference the marketing palette vars.
+
+   Class names for PORTED components (.metric-card, .glow-cyan/.glow-purple,
+   .status-active/.status-inactive, .data-label/.data-value,
+   .hide-x-scrollbar/.scrollbar-thin/.no-scrollbar) are the ORIGINAL's own
+   class names verbatim (src/index.css) — fidelity, not a naming choice, so a
+   later ported fragment can be pasted in without a rename. Hand-rolled UI
+   PRIMITIVES that have no original class name (they were unnamed shadcn/
+   Tailwind utility soup in the source) use an `a3-` prefix so they read as
+   "primitive I built for this scope" and never collide with a ported name. */
+
+.a3 {
+  /* Re-derived shadcn HSL tokens (src/index.css :root), scoped locally so they
+     never read as (or overwrite) the marketing tokens.css set. */
+  --background: 222 33% 4%;      /* #06080c void, matches --color-void */
+  --foreground: 230 15% 90%;     /* #e2e4ec, matches --color-text */
+  --card: 218 28% 9%;            /* #10141c surface, matches --color-surface */
+  --popover: 218 28% 9%;
+  --primary: 186 100% 50%;       /* cyan #00e5ff */
+  --primary-foreground: 222 33% 4%;
+  --accent: 186 100% 50%;
+  --ring: 186 100% 50%;
+  --secondary: 270 60% 55%;      /* purple — retired in tokens.css, live here */
+  --secondary-foreground: 0 0% 100%;
+  --muted: 218 25% 12%;
+  --muted-foreground: 220 12% 60%;
+  --destructive: 0 65% 55%;
+  --border: 216 24% 18%;         /* #222a38 */
+  --input: 216 24% 18%;
+  /* Ad-hoc hues the original used as raw hsl() literals throughout pages
+     rather than tokens — tokenized here so every ported fragment references
+     one source instead of re-guessing the literal. */
+  --success: 142 70% 45%;
+  --amber: 38 90% 55%;
+  /* Chart.js dash theme (P0.5) draws from these five, matching the
+     original's --chart-1..5. Declared here (P0.1 scope) since they are
+     tokens, not chart wiring. */
+  --chart-1: 186 100% 50%;
+  --chart-2: 270 60% 55%;
+  --chart-3: 142 70% 45%;
+  --chart-4: 38 90% 55%;
+  --chart-5: 340 75% 55%;
+
+  --radius: 0.25rem;
+  --radius-md: calc(var(--radius) - 0.125rem);
+  --radius-sm: calc(var(--radius) - 0.25rem);
+
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.a3 *, .a3 *::before, .a3 *::after { box-sizing: border-box; }
+.a3 a { color: inherit; text-decoration: none; }
+.a3 button { font: inherit; color: inherit; }
+
+/* ── Typography ──────────────────────────────────────────────────────────
+   "all h1-h6 = JetBrains Mono 700" (src/index.css base layer) — the one
+   deliberate exception is AgentProfile's dossier name heading (non-mono,
+   §5.8), handled locally by that fragment, not here. */
+.a3 h1, .a3 h2, .a3 h3, .a3 h4, .a3 h5, .a3 h6 {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-weight: 700;
+  margin: 0;
+}
+.a3 code, .a3 .font-mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+/* ── Ported component classes (verbatim names, src/index.css) ───────────── */
+.a3 .metric-card {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  padding: 1.25rem;
+}
+.a3 .glow-cyan { box-shadow: 0 0 20px hsl(187 100% 45% / 0.15); }
+.a3 .glow-purple { box-shadow: 0 0 20px hsl(270 60% 55% / 0.15); }
+
+.a3 .status-active,
+.a3 .status-inactive {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 9999px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid transparent;
+}
+.a3 .status-active {
+  color: hsl(var(--success));
+  background: hsl(var(--success) / 0.12);
+  border-color: hsl(var(--success) / 0.25);
+}
+.a3 .status-inactive {
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted) / 0.5);
+  border-color: hsl(var(--border));
+}
+
+.a3 .data-label {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.a3 .data-value {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: hsl(var(--foreground));
+}
+
+/* Scrollbar utilities (src/index.css). .hide-x-scrollbar hides ONLY the
+   horizontal webkit scrollbar (used by the Projects dual-scroll, P2.8);
+   .no-scrollbar/.scrollbar-thin cover the general table-shell cases here. */
+.a3 .hide-x-scrollbar::-webkit-scrollbar:horizontal { display: none; }
+.a3 .hide-x-scrollbar { scrollbar-width: none; }
+.a3 .no-scrollbar::-webkit-scrollbar { display: none; }
+.a3 .no-scrollbar { scrollbar-width: none; }
+.a3 .scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.a3 .scrollbar-thin::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 9999px; }
+.a3 .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.a3 .scrollbar-thin { scrollbar-width: thin; scrollbar-color: hsl(var(--border)) transparent; }
+
+/* ── Table shell (every list page reuses this: sticky header, tinted sort
+   column, mono uppercase header cells) ──────────────────────────────────── */
+.a3 .a3-table-wrap { overflow-x: auto; border: 1px solid hsl(var(--border)); border-radius: var(--radius); }
+.a3 .a3-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.a3 .a3-table thead { background: hsl(var(--muted) / 0.3); position: sticky; top: 0; z-index: 1; }
+.a3 .a3-table th {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: hsl(var(--muted-foreground));
+  text-align: left;
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid hsl(var(--border));
+  white-space: nowrap;
+}
+.a3 .a3-table th[aria-sort] { cursor: pointer; user-select: none; }
+.a3 .a3-table td {
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid hsl(var(--border) / 0.6);
+  vertical-align: middle;
+}
+.a3 .a3-table tbody tr:last-child td { border-bottom: none; }
+.a3 .a3-table tbody tr:hover { background: hsl(var(--muted) / 0.2); }
+/* Sorted column gets a subtle tint on both header + cells (§5.1). */
+.a3 .a3-table th.is-sorted, .a3 .a3-table td.is-sorted { background: hsl(var(--primary) / 0.05); }
+
+/* ── Badge / pill variants (protocol/type badges throughout list pages) ── */
+.a3 .a3-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--border));
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: hsl(var(--muted-foreground));
+  background: transparent;
+}
+.a3 .a3-badge--solid { background: hsl(var(--muted)); }
+.a3 .a3-badge--cyan { color: hsl(var(--primary)); border-color: hsl(var(--primary) / 0.4); }
+.a3 .a3-badge--purple { color: hsl(var(--secondary)); border-color: hsl(var(--secondary) / 0.4); }
+.a3 .a3-badge--green { color: hsl(var(--success)); border-color: hsl(var(--success) / 0.4); }
+.a3 .a3-badge--amber { color: hsl(var(--amber)); border-color: hsl(var(--amber) / 0.4); }
+.a3 .a3-badge--destructive { color: hsl(var(--destructive)); border-color: hsl(var(--destructive) / 0.4); }
+.a3 .a3-badge--muted { color: hsl(var(--muted-foreground)); }
+
+/* ── Animations (src/index.css keyframes, renamed a3* to avoid any global
+   @keyframes collision — @keyframes cannot itself be class-scoped) ──────── */
+@keyframes a3FadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes a3FadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes a3Pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+@keyframes a3Shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+@keyframes a3SlideInRight { from { transform: translateX(1rem); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes a3SheetInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }
+
+.a3 .a3-fade-in { animation: a3FadeIn 0.5s ease-out both; }
+.a3 .a3-fade-in-up { animation: a3FadeInUp 0.5s ease-out both; }
+.a3 .a3-pulse { animation: a3Pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+/* ══ UI primitives (P0.2, alpine/dash-ui.js) ═══════════════════════════════
+   Hand-rolled equivalents of the ~13 shadcn primitives actually imported by
+   the original (D1, docs/bot-analytics-ui-port-plan.md §8): buildless, no
+   Radix — Alpine supplies the behavior, these classes supply the pixels. */
+
+/* Tabs / pills (Tabs primitive + the filter-pill pattern used on /list etc.) */
+.a3 .a3-tabs { display: inline-flex; gap: 0.25rem; padding: 0.2rem; background: hsl(var(--muted) / 0.4); border-radius: var(--radius); }
+.a3 .a3-tab {
+  padding: 0.35rem 0.85rem;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.a3 .a3-tab:hover { background: hsl(var(--muted) / 0.6); }
+.a3 .a3-tab.is-active { background: hsl(var(--primary) / 0.12); color: hsl(var(--primary)); font-weight: 600; }
+
+/* Tooltip (hover + rich content) — bubble is appended to <body> by the
+   x-a3-tooltip directive, so it is NOT a `.a3` descendant; style it globally
+   under its own a3- prefix instead, one exception the directive's doc comment
+   explains. */
+.a3-tooltip-bubble {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  z-index: 80;
+  max-width: 18rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius-sm, 2px);
+  border: 1px solid hsl(216 24% 18%);
+  background: hsl(218 28% 9%);
+  color: hsl(230 15% 90%);
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+/* Dialog (centered modal) + Sheet (right slide-over, sm:max-w-xl / -md) */
+.a3 .a3-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(6, 8, 12, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+.a3 .a3-dialog {
+  width: 100%;
+  max-width: 32rem;
+  max-height: 85vh;
+  overflow: auto;
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  animation: a3FadeInUp 0.2s ease-out both;
+}
+.a3 .a3-sheet-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(6, 8, 12, 0.7); display: flex; justify-content: flex-end; }
+.a3 .a3-sheet {
+  height: 100%;
+  width: 100%;
+  max-width: 24rem; /* sm:max-w-md */
+  overflow: auto;
+  background: hsl(var(--card));
+  border-left: 1px solid hsl(var(--border));
+  padding: 1.5rem;
+  animation: a3SheetInRight 0.25s ease-out both;
+}
+.a3 .a3-sheet--xl { max-width: 36rem; } /* sm:max-w-xl */
+.a3 .a3-dialog-close, .a3 .a3-sheet-close {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--border));
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+.a3 .a3-dialog-close:hover, .a3 .a3-sheet-close:hover { background: hsl(var(--muted)); color: hsl(var(--foreground)); }
+
+/* Select (custom listbox) */
+.a3 .a3-select { position: relative; display: inline-block; }
+.a3 .a3-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 2rem;
+  padding: 0 0.65rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius-sm);
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  font-size: 0.8rem;
+  cursor: pointer;
+  min-width: 8.75rem; /* h-8 w-[140px] (§5.7) */
+  justify-content: space-between;
+}
+.a3 .a3-select-list {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  min-width: 100%;
+  z-index: 40;
+  background: hsl(var(--popover));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius-sm);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.a3 .a3-select-option { display: block; width: 100%; text-align: left; padding: 0.45rem 0.75rem; background: transparent; border: none; color: hsl(var(--foreground)); font-size: 0.8rem; cursor: pointer; }
+.a3 .a3-select-option:hover, .a3 .a3-select-option.is-active { background: hsl(var(--primary) / 0.1); color: hsl(var(--primary)); }
+
+/* Switch */
+.a3 .a3-switch { display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+.a3 .a3-switch-track {
+  width: 2.25rem;
+  height: 1.25rem;
+  border-radius: 9999px;
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  position: relative;
+  transition: background 0.15s ease;
+  flex: none;
+}
+.a3 .a3-switch-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 9999px;
+  background: hsl(var(--foreground));
+  transition: transform 0.15s ease;
+}
+.a3 .a3-switch.is-on .a3-switch-track { background: hsl(var(--primary) / 0.5); }
+.a3 .a3-switch.is-on .a3-switch-thumb { transform: translateX(1rem); background: hsl(var(--primary-foreground)); }
+.a3 .a3-switch-label { font-size: 0.8rem; color: hsl(var(--muted-foreground)); }
+
+/* Toggle group (segmented control — period pickers, 30D/90D/1Y etc.) */
+.a3 .a3-toggle-group { display: inline-flex; border: 1px solid hsl(var(--border)); border-radius: var(--radius-sm); overflow: hidden; }
+.a3 .a3-toggle {
+  padding: 0.3rem 0.75rem;
+  background: transparent;
+  border: none;
+  border-right: 1px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+.a3 .a3-toggle:last-child { border-right: none; }
+.a3 .a3-toggle.is-active { background: hsl(var(--primary) / 0.12); color: hsl(var(--primary)); }
+
+/* Progress */
+.a3 .a3-progress { width: 100%; height: 0.4rem; border-radius: 9999px; background: hsl(var(--muted)); overflow: hidden; }
+.a3 .a3-progress-bar { height: 100%; background: hsl(var(--primary)); border-radius: 9999px; transition: width 0.2s ease; }
+
+/* Skeleton (loading placeholder) */
+.a3 .a3-skeleton {
+  display: block;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, hsl(var(--muted)) 25%, hsl(var(--muted) / 0.6) 37%, hsl(var(--muted)) 63%);
+  background-size: 400% 100%;
+  animation: a3Shimmer 1.4s ease infinite;
+}
+
+/* Scroll area (styled overflow container — reuses .scrollbar-thin above) */
+.a3 .a3-scroll-area { overflow: auto; }
+
+/* Toast (sonner-look stack, bottom-right) */
+.a3 .a3-toast-viewport { position: fixed; right: 1rem; bottom: 1rem; z-index: 90; display: flex; flex-direction: column; gap: 0.5rem; width: 21rem; max-width: calc(100vw - 2rem); }
+.a3 .a3-toast {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem;
+  font-size: 0.82rem;
+  color: hsl(var(--foreground));
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  animation: a3SlideInRight 0.2s ease-out both;
+}
+.a3 .a3-toast--success { border-color: hsl(var(--success) / 0.4); }
+.a3 .a3-toast--destructive { border-color: hsl(var(--destructive) / 0.4); }
+
+/* Copy button — reuses the SITE-WIDE data-copy handler already wired in
+   main.js (no new JS needed here); this only supplies the dashboard's own
+   pixels for that same element. */
+.a3 .a3-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid hsl(var(--border));
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  border-radius: var(--radius-sm);
+  padding: 0.2rem 0.5rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+.a3 .a3-copy-btn:hover { color: hsl(var(--foreground)); background: hsl(var(--muted)); }
+.a3 .a3-copy-btn.is-copied { color: hsl(var(--success)); border-color: hsl(var(--success) / 0.4); }
+
+/* Icon sprite sizing helper (assets/img/dash-icons.svg, referenced via
+   <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-name"/></svg>) */
+.a3 .a3-icon { width: 1rem; height: 1rem; display: inline-block; vertical-align: -0.15em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.a3 .a3-icon--lg { width: 1.5rem; height: 1.5rem; }

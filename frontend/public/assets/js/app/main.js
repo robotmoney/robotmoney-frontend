@@ -6,6 +6,7 @@ import { registerSubstrate } from "./alpine/substrate.js";
 import { registerViews } from "./alpine/views.js";
 import { registerHeroes } from "./alpine/heroes.js";
 import { registerStaticViews } from "./alpine/static-views.js";
+import { registerDashUi } from "./alpine/dash-ui.js";
 import { applyChartDefaults } from "./lib/chart-theme.js";
 import { start } from "./router.js";
 import { api, ROUTES } from "./lib/api.js";
@@ -88,6 +89,10 @@ document.addEventListener("alpine:init", () => {
   registerViews(Alpine);
   registerHeroes(Alpine);
   registerStaticViews(Alpine);
+  // Dashboard (.a3 scope) UI primitives — issue #379. Registered once here,
+  // like the other alpine/* helpers, so every future dashboard fragment can
+  // use a3Tabs/a3Dialog/a3Sheet/etc. without its own registration step.
+  registerDashUi(Alpine);
 });
 
 // Boot the router once the document is parsed. The router renders the current
