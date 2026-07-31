@@ -24,6 +24,7 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 
 // route -> { title, description }. Titles are unique and <= 60 chars; meta
 // descriptions are 120-155 chars, grounded in each page's real copy.
+/** @type {Record<string, { title: string; description: string; robots?: string }>} */
 const META = {
   "/": {
     title: "Robot Money — Autonomous Treasury for the Agent Economy",
@@ -86,10 +87,6 @@ const META = {
     title: "Legal Disclaimers — Robot Money",
     description: "Read the legal disclaimers for the Robot Money protocol on Base: experimental DeFi software with smart contract, regulatory, and market risks.",
   },
-  "/smart-contract-risks": {
-    title: "Smart Contract Risks — Robot Money",
-    description: "Review the smart contract risks for the Robot Money USDC vault on Base: audit status, upgrade authority, and the non-custodial caveats you assume onchain.",
-  },
   "/visualizations": {
     title: "Robot Money Visualizations — Live Vault Data",
     description: "Robot Money's visualizations hub links to live views: the regime classifier, USDC vault allocation, and the AI Investment Committee, updating on Base.",
@@ -132,6 +129,10 @@ const SECTIONS = [
   { prefix: "/committee", suffix: "Robot Money Investment Committee" },
 ];
 
+/**
+ * @param {string} segment
+ * @returns {string}
+ */
 function titleize(segment) {
   return String(segment || "")
     .replace(/[-_]+/g, " ")
@@ -139,18 +140,26 @@ function titleize(segment) {
     .trim();
 }
 
+/**
+ * @param {string} pathname
+ * @returns {string}
+ */
 function normalize(pathname) {
   if (!pathname || pathname === "/") return "/";
   return pathname.replace(/\/+$/, "") || "/";
 }
 
+/**
+ * @param {string} pathname
+ * @returns {{ title: string; description: string; robots?: string }}
+ */
 export function metaFor(pathname) {
   const p = normalize(pathname);
   if (META[p]) return META[p];
   for (const { prefix, suffix } of SECTIONS) {
     if (p === prefix || p.startsWith(prefix + "/")) {
       const seg = p.split("/").filter(Boolean).pop();
-      const name = titleize(seg);
+      const name = titleize(seg || "");
       return {
         title: name ? `${name} — ${suffix}` : suffix,
         description: (META[prefix] || META["/"]).description,
@@ -160,8 +169,13 @@ export function metaFor(pathname) {
   return META["/"];
 }
 
-// Create-or-update a <meta>/<link> tag identified by (attr=key). Reuses the
-// static tag the shell already shipped when present, so we never duplicate.
+/**
+ * @param {string} tag
+ * @param {string} attr
+ * @param {string} key
+ * @param {string} valueAttr
+ * @param {string} value
+ */
 function upsert(tag, attr, key, valueAttr, value) {
   let el = document.head.querySelector(`${tag}[${attr}="${key}"]`);
   if (!el) {
@@ -172,6 +186,9 @@ function upsert(tag, attr, key, valueAttr, value) {
   el.setAttribute(valueAttr, value);
 }
 
+/**
+ * @param {string} pathname
+ */
 export function applyRouteMeta(pathname) {
   if (typeof document === "undefined") return;
   const p = normalize(pathname);

@@ -39,7 +39,7 @@ import { fetchRmpc, runRmpcJson, RMPC_VERSION, resolveRmpcAsset, missingCommitte
 import { admin, enqueueLifecycleJob, runRegimeClassify, waitForSessionState } from "./lib/committee/session.ts";
 import { DEFAULT_COMPOSE_FILES } from "./stack/config.ts";
 
-// Re-exported so scripts/tests/unit/rmpc-release-e2e.test.ts (this script's own
+// Re-exported so this script's own boot logic can be tested in isolation.
 // unit tests) can keep importing the pure asset/subcommand helpers from
 // here; the implementations now live in scripts/lib/rmpc-fetch.ts (Stage 3),
 // shared with scripts/tests/integration/rmpc-canonical-apply.test.ts.
