@@ -456,7 +456,9 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: 2rem;
-  align-items: center;
+  /* start, not center: centring the copy against a taller facing card
+     drops the headline below the offset every other hero pins it to. */
+  align-items: start;
 }
 @media (min-width: 60rem) {
   /* Sized so the truncated address, its Copy control and the two explorer

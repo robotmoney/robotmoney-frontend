@@ -209,7 +209,10 @@
 .a2 {
   max-width: 80rem;
   margin: 0 auto;
-  padding: 2.5rem 1.5rem 5rem;
+  /* No top padding: the hero below is full-bleed, so container padding
+     above it pushes the whole band down and the headline lands 48px lower
+     than every other page. Matches /allocation and /performance. */
+  padding: 0 1.5rem 5rem;
   color: var(--color-text);
 }
 .a2-eyebrow {
@@ -439,7 +442,7 @@
 .pj-spark-empty { color: var(--color-text-dim); }
 
 @media (min-width: 768px) {
-  .a2 { padding: 3rem 2rem 5rem; }
+  .a2 { padding: 0 2rem 5rem; }
   .a2-hero__inner { padding: 2.5rem 2rem; }
   .a2-hero__title { font-size: 3.25rem; }
 }

@@ -445,7 +445,9 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: 2rem;
-  align-items: center;
+  /* start, not center: centring the copy against a taller facing card
+     drops the headline below the offset every other hero pins it to. */
+  align-items: start;
 }
 @media (max-width: 59.99rem) {
   .sk__install-cmd { white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
