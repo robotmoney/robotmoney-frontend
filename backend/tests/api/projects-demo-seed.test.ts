@@ -47,6 +47,11 @@ test("seedDemoProjects populates a gated, faceted, sparkline-bearing directory",
   expect(withSpark[0].sparkline.length).toBe(30);
   expect(projects.some((p) => p.revenue30d > 0)).toBe(true);
 
+  // Tokenless x402 project has a sparkline length 30 from activity.
+  const x402Coinless = projects.find((p) => p.slug === "coinbase-x402-facilitator");
+  expect(x402Coinless).toBeDefined();
+  expect(x402Coinless!.sparkline.length).toBe(30);
+
   // Coin-bearing projects carry numeric market cap; wallet totals sum > 0 somewhere.
   const withCoin = projects.find((p) => p.coins.length > 0);
   expect(withCoin).toBeDefined();

@@ -91,6 +91,14 @@ test("fetchProjects aggregates facets, revenue, sparkline and returns the DTO sh
 
   // Sparkline = only the 3 in-window snapshots, chronological (old 99 excluded).
   expect(p.sparkline).toEqual([1.0, 1.2, 1.5]);
+
+  // Tokenless project with NO activity series.
+  const pidEmpty = await insertProject({ display_name: "Empty Co" });
+  await sql`INSERT INTO openclaw_agents ${sql({ project_id: pidEmpty, name: "EmptyAg", protocol_standard: "x402" })}`;
+  
+  const pEmpty = (await fetchProjects()).projects.find((x) => x.id === pidEmpty);
+  expect(pEmpty).toBeDefined();
+  expect(pEmpty!.sparkline.length).toBe(0);
 });
 
 test("fetchProjects excludes inactive/low-score projects and sorts sticky-first then by max market cap", async () => {
@@ -138,7 +146,7 @@ test("GET /api/projects serves the populated additive-superset DTO after the pip
   // The route handler is a thin adapter over fetchProjects — exercise it directly.
   const res = await getProjects();
   const mine = res.projects.filter((p) => p.slug.startsWith(prefix));
-  expect(mine.length).toBe(3);
+  expect(mine.length).toBe(4);
 
   const virtuals = mine.find((p) => p.slug === `${prefix}-virtuals-protocol`)!;
   // Market data.
@@ -151,6 +159,19 @@ test("GET /api/projects serves the populated additive-superset DTO after the pip
   // Additive-superset aggregates (issue #87).
   expect(virtuals.volume24h).toBe(50_000_000);
   expect(virtuals.tvlUsd).toBe(1_000_000);
+
+  // Tokenless project WITH activity series from fixture.
+  const x402 = mine.find((p) => p.slug === `${prefix}-coinbase-x402-facilitator`)!;
+  expect(x402.sparkline.length).toBeGreaterThan(0);
+  
+  // Coin-backed projects still return the coin-price 30-point series unchanged, asserted as a regression.
+  expect(virtuals.sparkline.length).toBeGreaterThan(0);
+
+  // Tokenless project WITHOUT activity series returns empty sparkline (length 0).
+  const tokenlessNoAct = mine.find((p) => p.slug === `${prefix}-tokenless-no-activity`);
+  if (tokenlessNoAct) {
+    expect(tokenlessNoAct.sparkline.length).toBe(0);
+  }
 
   // Every #70 field still present and typed (contract not reshaped).
   for (const p of mine) {

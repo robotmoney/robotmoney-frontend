@@ -77,7 +77,7 @@ test("the full pipeline upserts fixture-derived rows; discovery is idempotent", 
   const d = await discover({}, src);
   expect(d.ok).toBe(true);
   const ids = await projectIds(prefix);
-  expect(ids.length).toBe(3);
+  expect(ids.length).toBe(4);
 
   await refreshCoins({}, src);
   await refreshWallets({}, src);
@@ -104,7 +104,7 @@ test("the full pipeline upserts fixture-derived rows; discovery is idempotent", 
 
   const [{ scored }] = await sql<{ scored: number }[]>`
     SELECT count(*)::int AS scored FROM projects WHERE id IN ${sql(ids)} AND data_coverage_score IS NOT NULL`;
-  expect(scored).toBe(3);
+  expect(scored).toBe(4);
 
   // Idempotent discovery: re-run leaves facet row counts unchanged (upsert, not
   // duplicate) so FK-linked snapshot/revenue rows survive.
