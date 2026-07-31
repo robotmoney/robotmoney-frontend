@@ -31,13 +31,15 @@
              content rather than as the page's own identity. -->
         <div class="tok__hero-actions">
           <div class="tok__contract">
-            <span class="tok__contract-label">Contract</span>
-            <code class="tok__contract-addr">0x65021a79AeEF...8618bEbA3</code>
+            <span class="tok__contract-label">Contract address</span>
+            <!-- The address is its own link to the explorer, which is what a
+                 reader would click it expecting to do, so the separate BaseScan
+                 button is redundant and is gone. -->
+            <a class="tok__contract-addr" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">0x65021a79AeEF...8618bEbA3</a>
             <button type="button" class="tok__copy" data-copy="0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" data-copied-text="Copied!"><span data-copy-label>Copy</span></button>
           </div>
           <div class="tok__hero-links">
-            <a class="tok__btn tok__btn--solid" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
-            <a class="tok__btn tok__btn--ghost" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">BaseScan</a>
+            <a class="tok__btn tok__btn--ghost" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
           </div>
         </div>
       </div>
@@ -524,14 +526,23 @@
   letter-spacing: 0.2em;
   color: var(--color-text-dim);
 }
+/* Plain text, not accent, matching the install command on /skills: cyan is the
+   house colour and it is already carrying the nav and the DexScreener button in
+   this band. The underline on hover is what marks it as the link, rather than
+   spending the accent on the longest string in the card. */
 .tok__contract-addr {
   font-family: var(--font-mono);
   font-size: 0.85rem;
-  color: var(--color-accent);
+  color: var(--color-text);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s;
   /* The address is already elided in the markup, so it never needs to break;
      break-all shattered it one character per line in the narrower column. */
   white-space: nowrap;
 }
+.tok__contract-addr:hover { border-bottom-color: var(--color-text-dim); }
+.tok__contract-addr:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 .tok__copy {
   flex-shrink: 0; margin-left: auto;
   padding: 0.5rem 1rem;
