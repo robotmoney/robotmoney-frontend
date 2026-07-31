@@ -1,9 +1,12 @@
 // LIVE-path steady-state smoke assertions (issue #128 — originally closed the
 // #101 CI gap in the nightly-only lane; issue #147 later removed DEMO_HERMETIC
 // and the hermetic demo path entirely, so this script now runs on EVERY demo
-// boot in CI — the required per-PR `e2e` gate AND the nightly
-// demo-live-smoke-nightly.yml sweep both invoke it via the same
-// scripts/lib/demo-main.ts CI path; no logic is duplicated between them).
+// boot in CI — the required per-PR `e2e` gate, its push-to-main run, and its
+// nightly `schedule` mirror all invoke it via the same
+// scripts/lib/demo-main.ts CI path. Issue #373 retired the separate
+// demo-live-smoke-nightly.yml: it booted the same stack and ran these same
+// assertions, so once e2e.yml carried the nightly schedule it was pure
+// duplication.)
 //
 // WHY THIS EXISTS
 // Worker-lane starvation (#101), a dead external feed blocking a factor (#127),

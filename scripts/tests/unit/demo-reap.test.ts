@@ -460,8 +460,12 @@ describe("executeReap", () => {
 // The reaper and the fixed teardown only matter if they are actually WIRED into
 // the workflows. None of that is reachable from a unit test any other way (each
 // needs Docker and a runner), so it is asserted against the real files.
-describe("the fix is wired into both workflows", () => {
-  const workflows = ["e2e.yml", "committee-opencode-nightly.yml"];
+describe("the fix is wired into every workflow that boots a demo stack", () => {
+  // Issue #373 retired committee-opencode-nightly.yml — the same real-inference
+  // admission e2e.yml already spends on a push to main, and e2e.yml now also
+  // holds the nightly `schedule` that workflow used to. e2e.yml is the only
+  // workflow left that boots a demo stack.
+  const workflows = ["e2e.yml"];
   const workflow = (w: string) => readFileSync(join(repoRoot, ".github", "workflows", w), "utf8");
 
   test("every always() teardown brings the compose project DOWN before reclaiming volumes", () => {

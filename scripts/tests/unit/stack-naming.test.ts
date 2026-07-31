@@ -231,7 +231,12 @@ describe("the scheme is actually wired into every spawner", () => {
   });
 
   test("every workflow-pinned DEMO_PROJECT carries the CI prefix", () => {
-    const workflows = ["e2e.yml", "committee-opencode-nightly.yml"];
+    // Issue #373 retired committee-opencode-nightly.yml: its real-inference
+    // admission is the SAME measurement e2e.yml already spends on a push to
+    // main, and e2e.yml now also runs on the nightly `schedule` that workflow
+    // used to hold. e2e.yml is therefore the only workflow left that pins a
+    // DEMO_PROJECT.
+    const workflows = ["e2e.yml"];
     let seen = 0;
     for (const w of workflows) {
       const src = readFileSync(join(repoRoot, ".github", "workflows", w), "utf8");
@@ -244,7 +249,7 @@ describe("the scheme is actually wired into every spawner", () => {
         expect({ workflow: w, value: m[1]!.startsWith(`${CI_PROJECT_PREFIX}_`) }).toEqual({ workflow: w, value: true });
       }
     }
-    // Both steps in both workflows — boot + always() teardown.
-    expect(seen).toBe(4);
+    // Both steps in the one remaining workflow — boot + always() teardown.
+    expect(seen).toBe(2);
   });
 });

@@ -23,12 +23,20 @@ describe("onboarding-evals-nightly.yml — CI taxonomy and triggers", () => {
     expect(parsed.env?.CI_CLASS).toBe("heavy");
   });
 
-  test("triggers are EXACTLY schedule and workflow_dispatch — no pull_request", () => {
+  // Issue #373 FOLDED this workflow into the merge-to-main set: the four
+  // isolated claims bisect the onboarding funnel that e2e.yml's single
+  // end-to-end admission reports as one opaque red, so nothing in the merge set
+  // duplicates them and they belong in BOTH places. Nightly is a MIRROR of what
+  // a merge runs (scripts/tests/unit/nightly-mirrors-merge-set.test.ts). The
+  // property that has not moved: NO `pull_request` trigger — hours of real
+  // model inference must never land on the per-PR graph (D22 rule 2).
+  test("triggers are EXACTLY push-to-main, schedule and workflow_dispatch — no pull_request", () => {
     // YAML 1.1 folds the bare key `on` to boolean true; Bun.YAML keeps it a
     // string — accept either so this can never quietly observe zero triggers.
     const on = (parsed.on ?? parsed.true) as Record<string, unknown> | undefined;
     expect(on).toBeTruthy();
-    expect(Object.keys(on!).sort()).toEqual(["schedule", "workflow_dispatch"]);
+    expect(Object.keys(on!).sort()).toEqual(["push", "schedule", "workflow_dispatch"]);
+    expect((on!.push as { branches: string[] }).branches).toEqual(["main"]);
   });
 
   test("runs the eval:onboarding:isolated package target", () => {

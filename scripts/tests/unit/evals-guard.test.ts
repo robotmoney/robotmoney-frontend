@@ -70,7 +70,7 @@ describe("eval wiring keeps evals/ off the per-PR path", () => {
 // Everything above reads package.json, tsconfig.json, and the filesystem. None
 // of it reads a workflow's TRIGGERS, so the one edit that actually puts real
 // model inference (hours of wall clock, and now real spend) on every PR — a
-// `pull_request:` trigger on committee-opencode-nightly.yml, or `bun test
+// `pull_request:` trigger on a scheduled eval workflow, or `bun test
 // evals/...` wired into e2e.yml — would land with every guard above still
 // green. That is the "a guard that proves one thing and is assumed to prove
 // another" class exactly. This closes it (D22 rule 2 / §11.3 E2).

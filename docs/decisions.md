@@ -945,10 +945,12 @@ a model other than the one it was asked for — the property rule 1's "in-code
 constant" was actually protecting.
 
 **Consequences.**
-- `.github/workflows/e2e.yml` and `committee-opencode-nightly.yml` supply
-  `OPENCODE_API_KEY`; the retired `ANTHROPIC_API_KEY` + `ONBOARDING_EVAL_MODEL`
-  opt-in is removed rather than preserved.
-- The nightly sweeps `deepseek:kimi` (families, not raw ids).
+- `.github/workflows/e2e.yml` supplies `OPENCODE_API_KEY`; the retired
+  `ANTHROPIC_API_KEY` + `ONBOARDING_EVAL_MODEL` opt-in is removed rather than
+  preserved. (`committee-opencode-nightly.yml` did too, until D26 retired it.)
+- ~~The nightly sweeps `deepseek:kimi` (families, not raw ids).~~ **Superseded
+  by D26:** the multi-model sweep retired with that workflow; the nightly is
+  now one admission on the registry default.
 - Fork PRs cannot reach the secret. The eval fails loudly there rather than
   silently degrading; `AGENT_MODEL=free` is the documented fork-safe path.
 - Re-enabling the per-PR eval that #289 removed is now affordable, but is
@@ -977,8 +979,12 @@ on three routes instead of one:
 3. a `workflow_dispatch` started with the `real_eval` input set true.
 
 Everything else is unchanged: an ordinary PR run still spends **zero** model
-tokens, the nightly `committee-opencode-nightly.yml` still owns the trend
-sweep, and the inference-off rails check still runs on every PR.
+tokens, the nightly owns the trend sweep, and the inference-off rails check
+still runs on every PR. ~~That nightly is
+`committee-opencode-nightly.yml`.~~ **Superseded by D26 (issue #373):** that
+workflow is retired and the scheduled home of the measurement is `e2e.yml`'s own
+nightly `schedule` mirror of its push-to-`main` run, which adds a fourth route
+(`github.event_name == 'schedule'`) to the three listed above.
 
 **Why.** #289's arrangement made the eval reachable only *after* merge. A PR
 that changes the eval — its model selection, its prompt, its stack — therefore
@@ -1261,3 +1267,77 @@ shape rather than prompt discipline.
 - **Mocks, templates, and inference-off substitutes in behavioral gates.** A
   missing external resource fails loudly, and the gate must prove that at least
   one real actor execution crossed the REST boundary.
+
+## D26 — Nightly is a mirror of the merge-to-main set (issue #373; supersedes #280/PR #367)
+
+**Decision.** Nightly CI is **isomorphic** to the merge-to-main set. Every
+workflow that runs on `push: branches: [main]` also runs on a nightly
+`schedule:`, and **nothing else runs on a nightly schedule**. The relationship is
+enforced mechanically by `scripts/tests/unit/nightly-mirrors-merge-set.test.ts`
+in the required `unit` job — the equality is asserted in both directions, any
+workflow on one side only is named in the failure text, and a job or step gated
+on `github.event_name == 'schedule'` is itself a failure, because nightly must
+run the merge set's work rather than extra work.
+
+**Why.** A nightly that runs a *different* set of tests from merge-to-main
+requires required reading to interpret. When it goes red you must first work out
+which suite it was, what its pass semantics are, and whether the failure is a
+product regression or a provider outage — before you know whether release code
+is broken. That interpretation cost is paid every time, by whoever is on call.
+
+Before this decision the two sets were not merely different, they were **fully
+disjoint**: ten workflows carried `push: branches: [main]`, zero of the six
+nightlies did. Nightly was *defined* as everything merge does not run. With the
+sets equal, a red nightly means exactly one thing: the code on `main` — release
+code — is broken, by an input that changed while nobody was watching.
+
+**Disposition of the six pre-existing scheduled workflows.** The rule applied
+was: **retire iff the merge set already runs the same assertions; fold in
+otherwise.** Cost is a consequence of that rule, never the criterion.
+
+| Workflow | Disposition | Reason |
+| --- | --- | --- |
+| `committee-opencode-nightly.yml` | **Retired** | Its real-inference admission is the same measurement `e2e.yml` already spends on a push to `main`. `e2e.yml` now also carries the `37 4 * * *` slot it held. |
+| `demo-live-smoke-nightly.yml` | **Retired** | It booted the same LIVE stack and ran the same `scripts/demo-live-smoke.ts` assertions as `e2e.yml`; its own header said its "only distinguishing input is the schedule". |
+| `onboarding-evals-nightly.yml` | **Folded** (`push: branches: [main]` added) | The four isolated claims bisect the funnel `e2e.yml`'s single admission reports as one opaque red. Nothing in the merge set duplicates them. |
+| `rmpc-release-e2e-nightly.yml` | **Folded** | Nothing else proves a *released* rmpc binary drives the documented flow. Its "not every PR" rationale is about release-CDN flake on a **required PR gate**; push-to-`main` is not one. |
+| `nightly-fetchers.yml` | **Folded** | The per-PR suites for these surfaces are fully offline/mocked, so the live sweep is not duplicated. Same PR-only rationale as above. |
+| `contribution-advisory-reviewer.yml` | **Folded** | Nothing else reviews contribution-governance judgment on open PRs, and a merge is exactly when every open PR's diff has changed underneath it. Its `reviewed-head` dedupe now keys on "not a manual dispatch" so a push run re-reviews only PRs whose head moved. |
+
+`admission-eval-nightly.yml` (a seventh heavy schedule running a bespoke K=5
+sampled sweep) was **never created**: this decision supersedes #280, and PR #367
+is closed in its favour.
+
+**The admission rate comes free.** `e2e.yml` already spent one real admission on
+a push to `main` (`ONBOARDING_REAL_EVAL` resolves to `"1"` there). Its nightly
+mirror spends one more per night, so thirty nights is thirty samples — a **larger
+denominator than K=5**, at zero additional cost, read off run history rather than
+a bespoke scorecard. Reporting is added to the test that already exists: the run
+is classified with the existing `scripts/agent/classify-outcome.ts` and rendered
+as a small structured record (outcome, resolved model id, duration, member id,
+agent-liveness counts, denominator membership) into `$GITHUB_STEP_SUMMARY` and an
+uploaded artifact, on green and red runs alike. A `harness-error` renders
+distinctly from a `refused` and is excluded from the denominator — it measured
+nothing about the product. **No new test suite, eval, scorecard module, or
+sampling loop is created in order to produce a report.**
+
+**The tradeoff, accepted deliberately.** Time-to-detection. One sample a night
+surfaces a shift in the admission rate over about **a week**, not in one night.
+That is the price of not standing up a second measurement stack, and it is
+cheaper than the alternative: the four-samples-in-one-night sweep answered
+faster but required its own workflow, its own scorecard, and its own pass
+semantics — the very "required reading" this decision exists to remove.
+
+**Not in scope.**
+- **Making any real-inference measurement a required branch-protection check.**
+  A stochastic measurement cannot gate a merge: at the observed refusal rate a
+  single-sample gate blocks roughly one merge in five at random (D22 rule 4 — "a
+  single sample is a coin flip reported as a verdict"). Nightly parity is about
+  *signal isomorphism*, never about promoting these to gates.
+- **A release/promotion gate distinct from merge.** A real gap, and a separate
+  decision.
+
+**Cross-repo consequence.** The CI taxonomy rubric lives in the agent-prompts
+tooling repo and currently specifies that only `heavy`/`sanity-meta` carry
+`schedule:`. This decision makes non-heavy classes carry it too, so the rubric
+needs a matching change — filed there as an issue, never edited from this repo.

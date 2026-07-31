@@ -157,9 +157,13 @@ Per the test-coverage invariants (loud-skip only, executed-in-CI assertions):
   quota flake) is handled with retry/backoff around the model call, not by
   dropping inference from the gate. Because the eval is keyless (D22) there is
   no secret to withhold and therefore **no fork/same-repo distinction**: every
-  PR, forked or not, runs the identical eval. `committee-opencode-nightly.yml`
+  PR, forked or not, runs the identical eval. ~~`committee-opencode-nightly.yml`
   is repointed at the layered eval (§11.3) on a `core` stack — sampling and
-  layer diagnostics live there; the PR gate keeps the single admission.
+  layer diagnostics live there; the PR gate keeps the single admission.~~
+  **Superseded by D26 (issue #373):** that workflow is retired. Layer diagnostics
+  live in `onboarding-evals-nightly.yml`, and the single admission runs in
+  `e2e.yml` on a push to `main` and on that workflow's nightly `schedule` mirror
+  of it.
 - `rmpc-release-e2e-nightly.yml` / `scripts/rmpc-release-e2e.ts`: currently
   drives the pre-#205 `apply → activate` chain with client-supplied id over
   MCP's OAuth `client_credentials` flow — that flow no longer exists (D21);

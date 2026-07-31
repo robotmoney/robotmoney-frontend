@@ -1,6 +1,8 @@
 // Self-test for the LIVE-path smoke gate (issue #128; issue #147 made this the
-// unconditional assertion every CI demo boot runs — required per-PR `e2e.yml`
-// AND the nightly demo-live-smoke-nightly.yml sweep). scripts/demo-live-smoke.ts
+// unconditional assertion every CI demo boot runs — the required per-PR
+// `e2e.yml` gate, its push-to-main run, and its nightly `schedule` mirror;
+// issue #373 retired the duplicate demo-live-smoke-nightly.yml).
+// scripts/demo-live-smoke.ts
 // is the assertion driver. Its whole value is the loud-failure guarantee —
 // starvation, a dead feed, or a LIVE-only provenance regression must turn the
 // job red — so this suite proves BOTH directions (test-coverage policy: exit 0

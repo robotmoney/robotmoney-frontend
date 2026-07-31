@@ -45,6 +45,13 @@ name: nightly-fetchers
 env:
   CI_CLASS: heavy
 on:
+  # DISPOSITION (issue #373): FOLDED into the merge-to-main set. The per-PR
+  # suites for these surfaces are fully offline/mocked, so nothing in the merge
+  # set duplicates this live sweep. As above, the "not on PRs" rationale is
+  # about PULL REQUESTS only; push-to-main is not a required gate. Nightly is
+  # now the mirror of what a merge runs.
+  push:
+    branches: [main]
   schedule:
     - cron: "0 8 * * *" # daily 08:00 UTC
   workflow_dispatch: {}
