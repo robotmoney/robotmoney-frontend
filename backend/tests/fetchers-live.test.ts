@@ -35,7 +35,7 @@ const t = LIVE ? test : test.skip;
 // (in the workflow or here), LIVE resolves false while EXPECT_LIVE=1 — every
 // live test would silently become a skip and the run would stay green while
 // validating nothing. Refuse loudly instead: a module-load throw fails
-// `bun test` non-zero. Asserted present by scripts/tests/unit/nightly-fetchers-guard.test.ts.
+// `bun test` non-zero.
 if (process.env.EXPECT_LIVE === "1" && !LIVE) {
   throw new Error(
     "[fetchers-live] EXPECT_LIVE=1 but the RUN_LIVE_FETCHERS gate is OFF — " +
