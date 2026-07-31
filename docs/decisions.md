@@ -1341,3 +1341,72 @@ semantics — the very "required reading" this decision exists to remove.
 tooling repo and currently specifies that only `heavy`/`sanity-meta` carry
 `schedule:`. This decision makes non-heavy classes carry it too, so the rubric
 needs a matching change — filed there as an issue, never edited from this repo.
+
+---
+
+## D27 — PR-body compliance rule relaxed to "starts with" a closing reference; scoped to open PRs (issue #343)
+
+**Decision.** `audit-prs.sh`'s `body-must-be-single-closing-reference` check
+now passes any open PR whose body **starts with** `Closes|Fixes|Resolves #N`
+on its own line, rather than requiring the entire body to contain **only**
+that line. The check (and the sibling `missing-linked-issue` check) is also
+now scoped to `state == OPEN` PRs — merged and closed history is immutable
+and was previously re-flagged forever, growing the violation count
+monotonically regardless of how disciplined future PRs were.
+
+**Where implemented.** `scripts/replan/audit-prs.sh` and
+`scripts/replan/collect-open-prs.sh` do not live in this repo
+(`robotmoney-frontend`) — they belong to the separate Superfield tooling
+install (`SUPERFIELD_AGENTS`, checked out locally at
+`/drive2/home/lucas/superfield/prompts`). The fix is commit `9305e43`
+("patch pr scripts") on that repo's `main`, already pushed to
+`origin/main` before this decision was recorded here:
+
+```
+--- a/scripts/replan/audit-prs.sh
+-  if [[ ! "$body" =~ ^(Closes|Fixes|Resolves)\ #[0-9]+$ ]]; then
++  if [[ "$state" == "OPEN" ]]; then
++    if [[ ! "$body" =~ ^(Closes|Fixes|Resolves)\ #[0-9]+ ]]; then   # trailing $ dropped: prefix match
+```
+
+`scripts/replan/normalize-pr-body.sh` (the mechanical fix that rewrites a
+whole PR body down to just `Closes #N`) is unchanged and remains
+destructive if invoked — but it no longer needs to be invoked for a
+compliant PR, since the audit itself now accepts a leading closing
+reference followed by a substantive writeup. Option (b) from the issue
+(move descriptions into a comment so the body can be rewritten losslessly)
+was not needed once (a) was chosen.
+
+**Why (a) over (b).** This repo's own convention — visible in
+essentially every PR body, e.g. #374, #368, #406, #407, #408, #410 — is
+already "`Closes #N` on line 1, then a full engineering writeup." Relaxing
+the rule to match that existing convention required no PR authors to
+change behavior; moving descriptions to a comment would have.
+
+**Evidence the residue no longer reproduces.** The two PRs the blocker
+named as live violators, #374 and #368, have since merged. Re-running
+`audit-prs.sh` against this repo's current 6 open PRs (#404, #406, #407,
+#408, #409, #410) after the tooling fix returns exactly one violation,
+and it is not a residue of the old all-or-nothing rule — #409 is a
+docs-only adhoc PR with no `Closes`/issue reference at all:
+
+```json
+{
+  "ok": false,
+  "violations": [
+    {
+      "number": 409,
+      "title": "docs(release-cycle): production topology and release-cycle proposal",
+      "url": "https://github.com/robotmoney/robotmoney-frontend/pull/409",
+      "state": "OPEN",
+      "reasons": ["body-must-be-single-closing-reference", "missing-linked-issue"]
+    }
+  ]
+}
+```
+
+Every other open PR, including this decision's own #404, passes cleanly.
+
+**Not in scope.** Fixing PR #409's missing issue link — that is a genuine,
+unrelated violation the audit is correctly designed to catch, tracked on
+its own PR, not a recurrence of the `replan-audit-residue` blocker.
