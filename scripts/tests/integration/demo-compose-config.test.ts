@@ -20,6 +20,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { resolveDemoEnv } from "../../demo.ts";
+import { COMMITTED_REGIME_CRON, COMMITTED_RESEARCH_CRON, resolveDemoCadence } from "../../lib/demo-schedule.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 
@@ -41,6 +42,9 @@ function baseEnv(): Record<string, string> {
     if ([
       "BASE_RPC_URL", "BASE_RPC_SOURCE", "ANALYTICS_SOURCE", "ANALYTICS_FLOOR_SEED",
       "ANALYTICS_TOKEN", "ANALYTICS_TOKEN_FILE_HOST", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME",
+      // Cadence knobs (issue #371): only resolveDemoEnv's stage path may set
+      // these, so an ambient value must never leak into a case's resolution.
+      "PRODUCER_REGIME_CRON", "PRODUCER_RESEARCH_CRON",
     ].includes(k)) continue;
     env[k] = v;
   }
@@ -133,6 +137,52 @@ describe("docker compose config — demo data path resolution", () => {
     for (const svc of RPC_CONSUMERS) {
       expect(serviceEnv(cfg, svc).BASE_RPC_URL ?? "").not.toContain("mainnet.base.org");
     }
+  });
+});
+
+// Issue #371: the demo's cadence PROFILE reaches the analytics-producer through
+// resolveDemoEnv's composeEnv, so committee cadence and research cadence are
+// stated in one file (scripts/lib/demo-schedule.ts). These cases run the real
+// `docker compose config` interpolation, which is the only thing that proves the
+// container would actually receive those cron strings.
+describe("analytics-producer cron resolution — the demo cadence profile (issue #371)", () => {
+  test("the STAGE path resolves the realistic profile's 3-hourly research/regime timers", () => {
+    const stage = resolveDemoCadence({ stage: true });
+    const resolution = resolveDemoEnv({}, { stage: true });
+    // The resolver emits them…
+    expect(resolution.composeEnv.PRODUCER_RESEARCH_CRON).toBe(stage.researchCron);
+    expect(resolution.composeEnv.PRODUCER_REGIME_CRON).toBe(stage.regimeCron);
+    // …and compose resolves the producer service to exactly those values.
+    const env = serviceEnv(composeConfig(resolution.composeEnv), "analytics-producer");
+    expect(env.PRODUCER_RESEARCH_CRON).toBe("0 */3 * * *");
+    expect(env.PRODUCER_REGIME_CRON).toBe("30 */3 * * *");
+    expect(env.PRODUCER_RESEARCH_CRON).toBe(stage.researchCron);
+    expect(env.PRODUCER_REGIME_CRON).toBe(stage.regimeCron);
+  });
+
+  test("the NON-STAGE path injects nothing and resolves the committed production defaults", () => {
+    const resolution = resolveDemoEnv({}, { stage: false });
+    expect("PRODUCER_RESEARCH_CRON" in resolution.composeEnv).toBe(false);
+    expect("PRODUCER_REGIME_CRON" in resolution.composeEnv).toBe(false);
+    const env = serviceEnv(composeConfig(resolution.composeEnv), "analytics-producer");
+    expect(env.PRODUCER_RESEARCH_CRON).toBe("0 23 * * *");
+    expect(env.PRODUCER_REGIME_CRON).toBe("30 22 * * *");
+    // Same strings the fast profile states, so the single-source claim holds.
+    expect(env.PRODUCER_RESEARCH_CRON).toBe(COMMITTED_RESEARCH_CRON);
+    expect(env.PRODUCER_REGIME_CRON).toBe(COMMITTED_REGIME_CRON);
+  });
+
+  test("omitting the option entirely is the non-stage path — CI can never opt in by accident", () => {
+    const env = serviceEnv(composeConfig(resolveDemoEnv({}).composeEnv), "analytics-producer");
+    expect(env.PRODUCER_RESEARCH_CRON).toBe(COMMITTED_RESEARCH_CRON);
+    expect(env.PRODUCER_REGIME_CRON).toBe(COMMITTED_REGIME_CRON);
+  });
+
+  test("the two paths really do resolve DIFFERENT producer schedules", () => {
+    const stage = serviceEnv(composeConfig(resolveDemoEnv({}, { stage: true }).composeEnv), "analytics-producer");
+    const plain = serviceEnv(composeConfig(resolveDemoEnv({}, { stage: false }).composeEnv), "analytics-producer");
+    expect(stage.PRODUCER_RESEARCH_CRON).not.toBe(plain.PRODUCER_RESEARCH_CRON);
+    expect(stage.PRODUCER_REGIME_CRON).not.toBe(plain.PRODUCER_REGIME_CRON);
   });
 });
 

@@ -1730,10 +1730,10 @@ flowchart TB
         N1["Helios → ~1min"]
         N2["Selene → ~6min"]
         N3["Rhea → ~11min"]
-        NX["… every 5min"]
+        NX["… every 5min fast / every 6h --stage"]
     end
 
-    subgraph Session["📋 Committee Session (per subject, ~2min cadence)"]
+    subgraph Session["📋 Committee Session (per subject, cadence profile: ~2min fast / 6h --stage)"]
         direction LR
         S1["scheduled"] --> S2["collecting"] --> S3["window_closed"] --> S4["aggregated"] --> S5["published"]
     end
@@ -1826,11 +1826,39 @@ verified working on the Linux CI host — postgres:17-alpine chowns the bind dir
 container user and inits/resumes cleanly — so the named-volume fallback was not needed.)
 
 **(b) Staggered scheduled actions.** The demo continuously produces
-fresh activity, driven two ways (hybrid):
+fresh activity, driven two ways (hybrid).
+
+**Cadence is a PROFILE, selected by the `--stage` argument** (never an env var —
+same hard rule as `--pg-data` and the port pin), and every value for every
+profile is stated once in `scripts/lib/demo-schedule.ts`:
+
+| | `bun run demo` / CI (**fast**) | `bun run demo -- --stage` (**realistic**) |
+|---|---|---|
+| Committee session, per subject | ~2 min | 6 h |
+| Subjects (2) phase offset → a session lands | ~1 min | ~3 h |
+| Research (`PRODUCER_RESEARCH_CRON`) | `0 23 * * *` | `0 */3 * * *` |
+| Regime (`PRODUCER_REGIME_CRON`) | `30 22 * * *` | `30 */3 * * *` |
+| Newcomer admissions | first ~1 min, then every 5 min | first ~1 min, then every 6 h |
+
+A real investment committee does not sit every two minutes, so the standing
+public demo reads as a plausibly-paced record rather than a toy — and it stops
+burning ~30 sessions/hour/subject of provider quota on a host that shares its
+per-IP limits with CI. **Bring-up is prompt under both profiles**: every
+subject's first session is scheduled within 120 s of boot (`planSubjectSchedules`
+in `scripts/lib/demo-schedule.ts`, executed in
+`scripts/tests/unit/demo-schedule.test.ts`), so the site is never empty on first
+load; the slow profile governs only steady state. The fast profile is what CI
+runs and is pinned to today's values — the nightly LIVE smoke derives its poll
+deadline from the **fast** profile explicitly (`scripts/demo-live-smoke.ts`), so
+a 6 h committee interval can never become a 12 h poll budget. A `--stage` boot is
+the only thing that injects `PRODUCER_*_CRON` into compose (through
+`resolveDemoEnv`'s `composeEnv`); every other boot resolves the committed
+`docker-compose.yml` defaults untouched.
 
 - **Regime + research** — driven by `analytics-producer`'s own
   `PRODUCER_REGIME_CRON` / `PRODUCER_RESEARCH_CRON` timers, never the consumer
-  queue. On boot its finite `seed` command ingests the EDGAR floor and performs
+  queue; their values come from the cadence profile above. On boot its finite
+  `seed` command ingests the EDGAR floor and performs
   an immediate producer-owned research refresh before readiness checks. Legacy
   `regime.classify` / `research.refresh` rows (including the old fast-demo
   cadences) are forced disabled and pending/running jobs dead-lettered; no
@@ -1842,13 +1870,17 @@ fresh activity, driven two ways (hybrid):
   sampling exhausts the per-IP quotas (hourly token prices are an accepted demo
   tradeoff; the seed's cold-start enqueue still lands a live sample at boot).
 - **Committee opinions** — driven by a loop inside `scripts/demo.ts`, because a
-  committee session needs live MCP agents to sign + submit takes. After a one-time
-  reset + setup, it runs one full session (open → brief → collect → agents →
-  close → aggregate → publish) roughly every 120 s (recursive `setTimeout`, offset
-  from the analytics ticks), rotating (date, subject) so sessions accumulate. It does
-  **not** reset between ticks. It reuses the `runSession` runner exported from
-  `mcp/src/e2e.ts` (whose entry-point `main()` is guarded so importing it does not
-  trigger the reset-heavy standalone flow).
+  committee session needs live member agents to sign + submit takes. After a
+  one-time reset + setup, it runs one full session (open → brief → collect →
+  agents → close → aggregate → publish) on the profile's committee interval,
+  rotating (date, subject) so sessions accumulate. The timetable itself is the
+  pure `planSubjectSchedules` / `plannedRunAt` pair in
+  `scripts/lib/demo-schedule.ts` — the driver keeps only the I/O — and the
+  synthetic date rotation (one calendar day per completed run for that subject,
+  so `UNIQUE(date, subject_id)` cannot be violated) is the pure `sessionDateFor`.
+  It does **not** reset between ticks. It reuses the `runSession` runner exported
+  from `scripts/lib/committee/session.ts` (whose entry-point `main()` is guarded
+  so importing it does not trigger the reset-heavy standalone flow).
 
 One immediate tick of each runs at startup so the site has data on first load; the
 one-shot frontend check (`scripts/demo-frontend-check.ts`) also runs once,
@@ -2258,9 +2290,17 @@ scheduled action as it fires.
   State file: .agents/demo-state.json
   Log file:   .agents/demo-<project>.log
   PG data:    volume <project>_pgdata (fresh-per-run; kept on teardown)
-  Demo actions run on a ~2-min staggered cadence.
+  Demo actions: a committee session per subject every ~2 min (2 subjects staggered → one lands about every ~1 min); research daily at 23:00, regime daily at 22:30.
   Ctrl-C / SIGTERM tears down the stack (containers + network; postgres data kept).
   Reclaim stopped demos' data volumes with: bun run demo:clean
+```
+
+The cadence line is **rendered from the resolved profile** (`renderCadenceLine`
+in `scripts/lib/demo-schedule.ts`), never hardcoded, so it always states the
+cadence actually in force. The same boot with `--stage` prints:
+
+```
+  Demo actions: a committee session per subject every ~6 h (2 subjects staggered → one lands about every ~3 h); research every 3h at :00, regime every 3h at :30.
 ```
 
 ## 11. Member onboarding (normative spec)

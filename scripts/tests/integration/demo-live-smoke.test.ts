@@ -18,6 +18,7 @@
 // The deadline is shortened via DEMO_LIVE_SMOKE_DEADLINE_MS (test-only hook) so
 // the red paths don't poll for the full schedule-derived budget.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROUTES, path as routePath } from "@robotmoney/contract";
 import {
@@ -26,8 +27,10 @@ import {
   evaluateSessions,
   evaluateVaultEconomics,
   evaluateWallet,
+  LIVE_SMOKE_DEADLINE_MS,
   RESEARCH_KEYS,
 } from "../../demo-live-smoke.ts";
+import { resolveDemoCadence } from "../../lib/demo-schedule.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 
@@ -198,6 +201,34 @@ describe("demo-live-smoke (nightly LIVE gate self-test, issue #128)", () => {
       backend.stop(true);
     }
   }, 20_000);
+});
+
+// Issue #371 — the single most dangerous coupling in the cadence change. This
+// gate's poll deadline is derived (issue #128) rather than a magic number; when
+// the standing demo moved to a 6 h committee interval, deriving from "the
+// resolved cadence" would have given the nightly LIVE smoke a 12 h poll budget
+// against a 40-minute job timeout: the gate would die by timeout instead of
+// failing. The deadline must track the FAST profile and stay bounded.
+describe("LIVE_SMOKE_DEADLINE_MS is bounded and pinned to the fast/CI profile", () => {
+  test("it is two fast committee cadences, and at most 10 minutes", () => {
+    const fast = resolveDemoCadence({ stage: false });
+    expect(LIVE_SMOKE_DEADLINE_MS).toBe(2 * fast.committeeIntervalMs);
+    expect(LIVE_SMOKE_DEADLINE_MS).toBe(240_000);
+    expect(LIVE_SMOKE_DEADLINE_MS).toBeLessThanOrEqual(600_000);
+  });
+
+  test("constructing the STAGE profile leaves the exported deadline unchanged", () => {
+    const stage = resolveDemoCadence({ stage: true });
+    expect(stage.committeeIntervalMs).toBe(21_600_000); // the 6 h standing cadence exists…
+    expect(LIVE_SMOKE_DEADLINE_MS).toBe(240_000);       // …and this gate never sees it.
+    expect(LIVE_SMOKE_DEADLINE_MS).toBeLessThan(2 * stage.committeeIntervalMs);
+  });
+
+  test("the script itself carries no cadence literal — it derives, per issue #128", () => {
+    const src = readFileSync(join(repoRoot, "scripts", "demo-live-smoke.ts"), "utf8");
+    expect(src).toContain('resolveDemoCadence({ stage: false })');
+    expect(src).not.toMatch(/(?<![\w_])(120_?000|240_?000|21_?600_?000)(?![\w_])/);
+  });
 });
 
 describe("pure evaluators (edge cases)", () => {
