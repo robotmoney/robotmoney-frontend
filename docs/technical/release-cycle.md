@@ -2,11 +2,11 @@
 
 > **Status: draft, second pass.** Still a proposal, not a ratified spec —
 > there is no accepted decision in [decisions.md](../decisions.md) behind it
-> yet. Since the first draft, however, the topology (§3) and the rollout
-> mechanics (§6) have been **decided in discussion**: those two sections
-> describe a chosen direction with rejected alternatives recorded, not an
-> open survey. The "Open questions" section at the end remains the live
-> agenda for everything else.
+> yet. Since the first draft, however, the topology (§3), the four ordering
+> rules (§5.1), and the rollout mechanics (§6) have been **decided in
+> discussion**: those sections describe a chosen direction with rejected
+> alternatives recorded, not an open survey. The "Open questions" section
+> at the end remains the live agenda for everything else.
 
 ## 1. Purpose
 
@@ -136,7 +136,7 @@ There is no `/api/*` path on the static hostnames.
   SPA is cached at the edge on its own cadence, a cached SPA calling a
   newer or older API is no longer a theoretical browser-tab corner case
   (§4d) — it is the normal state between any two deploys. That upgrades
-  §5.3's additive-only API contract discipline from aspirational to
+  §5.5's additive-only API contract discipline from aspirational to
   **mandatory**.
 - **Rejected alternative: same-hostname `/api/*` path-prefix proxying.**
   Serving the API as a proxied path on the SPA's own hostname would keep
@@ -169,14 +169,27 @@ instead of etcd) — on **one DigitalOcean droplet**, replacing
 docker-compose as the production runtime. The rationale is that the release
 goals this doc defines — independent per-component cadence (§4), N-1
 compatibility windows (§7), zero-downtime deploys, and migration/code
-decoupling (§5.1) — effectively require an orchestrator, and k3s delivers
+decoupling (§5.2) — effectively require an orchestrator, and k3s delivers
 one at single-droplet cost.
 
-- **Five independent Deployments**: `api`, `worker-committee`,
-  `worker-analytics`, `worker-research`, and `analytics-producer`. Five
-  images, five independent rollout cadences — the per-component release
-  independence §4 calls "low today" becomes the deployment unit structure
-  itself.
+- **One image, five Deployments**: `api`, `worker-committee`,
+  `worker-analytics`, `worker-research`, and `analytics-producer`. All five
+  are built from the single `backend/Dockerfile` today and differ only by
+  `command:` (`src/api/index.ts`, `src/worker/index.ts`,
+  `src/producer/index.ts`) and, for the lanes, `WORKER_LANE` — see
+  `docker-compose.yml`. That carries straight over to Kubernetes: five
+  Deployments, five independent *rollout* cadences, one image repository.
+  **The consequence is worth stating plainly**: a backend commit produces
+  **one** image SHA that all five Deployments *could* move to at once,
+  which quietly reintroduces exactly the lockstep this doc argues against.
+  Independent cadence is still achievable — each Deployment pins its own
+  tag from the same image repo — but it is now a decision someone has to
+  make rather than a property of the build, and this doc has not made it
+  (§8).
+  The flip side is a genuine upside: the migration Job runs
+  `src/db/migrate.ts` from that **same** image, so pinning the Job to a
+  newer tag than the `api` Deployment *is* the expand/contract posture
+  (schema at N+1, code at N) at no extra build cost.
 - **Zero-downtime API deploys on a single node.** The `api` Deployment uses
   rolling updates with `maxSurge: 1, maxUnavailable: 0` and readiness
   probes: the new replica must pass readiness before the old one is
@@ -187,7 +200,7 @@ one at single-droplet cost.
   replica rolling, that races, and it couples schema deploys to code
   deploys. Instead, a migration Job runs and **completes before** the API
   rollout proceeds (gating mechanics in §6). This is the mechanical
-  enforcement of the expand/contract pattern (§5.1): schema ships first,
+  enforcement of the expand/contract pattern (§5.2): schema ships first,
   additively; code follows. In-cluster/production, migrate-on-boot is
   disabled.
 - **Ingress via `cloudflared` in-cluster.** A `cloudflared` Deployment
@@ -237,7 +250,8 @@ Unchanged in kind from D13, sharpened in detail:
   before the API code that depends on it. Compatibility risk: if the DB is
   *behind* what the newest API code expects, queries against
   not-yet-existent columns/tables fail outright — there is currently no
-  guard against this. If the DB is *ahead* (migration applied, but the API
+  guard against this, and §5.1's answer is to make it unreachable by
+  ordering (R4) rather than to add one. If the DB is *ahead* (migration applied, but the API
   build that uses it hasn't rolled out to every instance yet — relevant the
   moment there is more than one API process), older API code should be
   fine only if the migration was additive.
@@ -258,8 +272,8 @@ Unchanged in kind from D13, sharpened in detail:
   the API's compatibility surface rather than the DB's directly — it is,
   today, the one component already isolated from raw schema drift.
   Realistic independence: workers can deploy independently of the API code
-  path (separate containers, separate images) but not of the DB schema
-  their handlers assume.
+  path (separate containers, separate `command:` entrypoints — though, per
+  §3.2, the *same image*) but not of the DB schema their handlers assume.
 - **(d) Frontend.** Triggered by `frontend/public/**` changes. Marketing
   (DO Spaces CDN) is fully decoupled and can ship any time. The
   committee/dashboard SPA is currently bundled into the API's deploy via
@@ -273,9 +287,66 @@ Unchanged in kind from D13, sharpened in detail:
 
 ## 5. Compatibility strategy
 
-### 5.1 Expand/contract for DB migrations
+### 5.1 The four rules
 
-Adopt the standard **expand/contract** (a.k.a. parallel-change) pattern for
+The minimal approach, chosen in discussion. The governing insight is that
+**ordering discipline makes runtime detection unnecessary — you don't need
+to detect a mismatch you have made impossible.** These four rules are *the*
+operational contract; everything else in §5 is either the pattern that
+implements them (§5.2) or an option deliberately deferred because they hold
+(§5.4).
+
+- **R1 — Every migration is additive.** New tables, columns, and indexes
+  only. Nullable or defaulted, never `NOT NULL` without a default. No
+  renames, no drops, no type narrowing. *Consequence: the DB can always be
+  safely ahead of the code.*
+- **R2 — Destructive changes wait a full release cycle.** A drop or rename
+  ships in a **later PR** than the code that stopped using the old shape,
+  never the same one. This is expand/contract's contract step (§5.2),
+  enforced by calendar rather than by machinery.
+- **R3 — API responses only gain fields.** Never remove, rename, or change
+  the type or meaning of a field. JSON clients ignore unknown fields
+  natively, so an old SPA calling a new API just works.
+- **R4 — Deploy in dependency order: DB → backend → frontend.** Combined
+  with R1 and R3, the only skew that can arise is "the lower layer is
+  ahead," which is safe by construction.
+
+**What this covers**, without a line of detection code: rolling API
+replicas (both versions work against an additive DB — R1); a worker
+mid-rollout (same reason); an edge-cached SPA against a newer API (R3);
+and rollback, since old code still works against a forward DB (R1 again).
+
+**Enforcement**, kept as light as the rules themselves:
+
+- **R1** — a CI grep over changed files under `backend/migrations/` for
+  `DROP` / `RENAME` / `ALTER ... TYPE`, failing the PR unless it carries an
+  explicit contract-migration label. Roughly ten lines; not built yet.
+- **R3** — **not enforced today, and the existing gate is narrower than it
+  looks.** The goldens-drift gate (D14) is
+  `scripts/tests/unit/goldens-drift.test.ts`, and what it actually asserts
+  is that the committed `goldens/api-goldens.json` is non-empty, that its
+  route set is populated, and that a few key routes have plausible shapes.
+  The goldens themselves are *captured* from a running backend by
+  `scripts/update-goldens.ts`, so they do track real response shapes — but
+  the gate compares goldens to the current code, not a new response shape
+  to the **previous** one. It is a freshness check on the preview mock
+  layer, not an additive-only check on the API contract. Enforcing R3
+  mechanically would mean diffing response shapes across versions; that
+  gate does not exist.
+- **R4** — already free. §6's reconciler gates the migration Job ahead of
+  the rollout, and the SPA is a separate Cloudflare deploy sequenced after
+  the backend.
+
+**The explicit limit.** All four rules rest on being able to guarantee
+deploy order. If you ever need to ship API code *before* its migration, R4
+breaks and nothing here protects you — you would need real feature
+detection (§5.4). Plainly: don't do that.
+
+### 5.2 Expand/contract for DB migrations
+
+Expand/contract is the pattern R1 and R2 implement; it is spelled out here
+because the middle step is the part the rules don't state. Adopt the
+standard **expand/contract** (a.k.a. parallel-change) pattern for
 every schema change that a running API/worker depends on:
 
 1. **Expand** — add the new column/table/index additively; nothing reads it
@@ -297,29 +368,81 @@ today they usually do (§4), and that's the main thing this pattern would
 change in practice — §3.2's pre-deploy migration Job is the mechanism that
 makes the split real, and §6 the rollout gate that enforces the ordering.
 
-### 5.2 API/DB version skew tolerance
+### 5.3 Migration hygiene gaps against a live database
 
-The API should not assume the schema is at exactly the migration count its
-own build was compiled against — `migrate()` running as a precondition of
-boot masks this today (a single API instance always sees a fully-migrated
-DB at the moment it starts), but it stops being true the moment there is
-more than one API instance, or migrations and API deploys are decoupled
-(§5.1) — both of which §3.2 now makes the production baseline (rolling
-replicas, migrate-on-boot disabled). The right posture is **capability negotiation / feature detection**
-rather than hard version pinning: instead of the API asserting "schema must
-be exactly N," a query path should check for the concrete thing it needs
-(does this column exist, is this table populated) and degrade — return a
-partial payload, a `501`, or fall back to the pre-migration behavior —
-rather than throwing an unhandled SQL error. This repo already has one real
-example of the right shape to generalize: the regime DTO's explicit
-staleness block (`{ asof, serverDate, ageDays, stale, thresholdDays }`,
+Every environment we run today migrates a **fresh or short-lived** database
+(§1). Three properties of `backend/migrations/` + `backend/src/db/migrate.ts`
+are benign under that assumption and stop being benign the moment migrations
+are a gated pre-deploy step (§3.2) against a live Managed Postgres with real
+data and real concurrent traffic. None of these is decided here; they are
+recorded as gaps.
+
+- **Numeric prefixes are not unique, and nothing checks.** Two collisions
+  already exist on main: `0014_projects_pipelines.sql` /
+  `0014_wallet_balance_samples.sql`, and `0021_chain_indexer_samples.sql` /
+  `0021_committee_waitlist.sql`. `migrate.ts` sorts by *filename*, so
+  ordering is deterministic (the suffix breaks the tie) — but the prefixes
+  are not unique and not truly sequential, and nothing catches a collision
+  at merge time. Harmless when a single boot applies everything to a fresh
+  DB; a real ordering hazard once expand/contract sequencing has to hold
+  across branches that merge concurrently.
+- **`migrate()` calls `seed()`.** The runner ends with `await seed()` —
+  inserting `job_schedules` rows and similar required state. Under §3.2 the
+  pre-deploy migration Job would therefore **re-seed production on every
+  deploy**. `seed()` is written to be idempotent, and re-seeding a fresh
+  demo DB is exactly what it is for, but re-seeding a live production DB on
+  every deploy is a different risk posture. Whether the production migration
+  Job runs seed at all is open (§8).
+- **No lock or timeout discipline.** There is no `lock_timeout`, no
+  `statement_timeout`, and no `CREATE INDEX CONCURRENTLY` anywhere in
+  `backend/migrations/`. Against a live database, an `ALTER TABLE` that
+  takes an ACCESS EXCLUSIVE lock behind a long-running query queues — and
+  everything behind *it* queues too, stalling traffic on a table that was
+  never being altered. That risk simply does not exist against the fresh
+  DBs every current environment uses. Note the structural conflict:
+  `CONCURRENTLY` cannot run inside a transaction, and `migrate.ts` wraps
+  each file in `sql.begin(...)`, so a concurrent-index migration needs a
+  carve-out in the runner, not just a different SQL file.
+
+### 5.4 API/DB version skew: why runtime detection is deferred
+
+R1–R4 (§5.1) make runtime version detection unnecessary: if the DB is only
+ever additive and only ever ahead, there is no mismatch left to detect. So
+the API does **not** need to negotiate capabilities today, and this doc does
+not propose that it should.
+
+Worth recording precisely because it constrains any future attempt: there is
+no schema version to pin to. `schema_migrations` (see
+`backend/src/db/migrate.ts`) is `name text PRIMARY KEY` — a **set of applied
+migration filenames**, not an ordered version counter. "The DB is at version
+N" is not a value anything can read; hard version pinning isn't merely
+undesirable here, it isn't implementable without inventing a new version
+concept.
+
+**Considered and deferred: a published schema-version / capability
+descriptor** — recorded the same way as Flux (§6) and Kustomize (§6):
+
+- A version **integer** was rejected outright. The filename set is strictly
+  richer information, and collapsing it to an ordinal is lossy — especially
+  given that the prefixes are not linearly ordered (§5.3).
+- If adopted, the shape would be **two layers**: fine-grained *schema*
+  capabilities internal to the API and workers (probed with `to_regclass` /
+  `information_schema` and cached at boot), and coarse *feature*
+  capabilities published to clients (the AND of schema-supports-it,
+  flag-is-on, config-present). The split matters: DB shape never leaks into
+  the client contract.
+- **Adoption trigger**: when deploy ordering can no longer be guaranteed —
+  multiple independent operators, or customer-managed deployments. One
+  operator and one cluster (§3.2) is not that.
+
+The degraded-state instinct this repo already has stays relevant regardless:
+the regime DTO's explicit staleness block
+(`{ asof, serverDate, ageDays, stale, thresholdDays }`,
 [architecture.md §7.1](../architecture.md#71-analytics-suite-six-stage-pipeline))
-lets the frontend render a clearly-marked degraded state instead of the API
-silently returning wrong or absent data. The same "declare the degraded
-state explicitly in the payload" instinct is what should apply to a
-DB-ahead/DB-behind mismatch, not a raw 500.
+declares a degraded state in the payload instead of failing opaquely — the
+right shape for any mismatch that does reach a client.
 
-### 5.3 API versioning for the frontend and workers as consumers
+### 5.5 API versioning for the frontend and workers as consumers
 
 There is no versioning scheme in the API today — routes are flat paths in
 `contract/src/routes.js`, shared as literal source between frontend and
@@ -334,11 +457,11 @@ the goldens-drift gate already enforces for the preview mock layer,
 [decisions.md D14](../decisions.md#d14--preview-mode-goldens-backed-over-the-baked-frozen-single-file)),
 and reserve an actual path-prefix version (`/api/v2/...`) for the rare
 breaking change, with the old prefix kept alive for a declared deprecation
-window (§5.5) rather than deleted the day the new one ships. Workers/producer
+window (§5.7) rather than deleted the day the new one ships. Workers/producer
 should follow the same additive-fields discipline since the producer is
 already an API consumer over authenticated HTTP (§2c).
 
-### 5.4 Feature flags
+### 5.6 Feature flags
 
 No feature-flag infrastructure exists in this codebase today (confirmed —
 no `FEATURE_*` env convention, no flag service, no flag table). For a
@@ -356,8 +479,13 @@ avoid a second source of truth. Workers reading flags would need the same
 API-mediated (or DB-row-mediated) source rather than their own env-var copy,
 to avoid a lane running stale flag state after a flip. None of this is
 built; §8 flags the storage/source-of-truth question as explicitly open.
+If the two-layer capability descriptor of §5.4 is ever adopted, its coarse
+*feature* layer — the AND of schema-supports-it, flag-is-on,
+config-present — is the natural home for exactly this: one published
+answer to "is X available," with the flag as one input. Noted as a
+connection, not a commitment; both remain deferred.
 
-### 5.5 Deprecation policy
+### 5.7 Deprecation policy
 
 No deprecation policy exists today because nothing has ever needed to
 outlive a replacement — every environment redeploys everything at once. Once
@@ -366,7 +494,7 @@ components decouple, an old endpoint/field shape needs to stay live for
 running it** — for the frontend that means "at least until a browser tab
 open at deploy time would have naturally reloaded," for a worker lane that
 means "until every worker container has been redeployed," and for the DB
-that means the expand/contract window (§5.1). Communicating a deprecation
+that means the expand/contract window (§5.2). Communicating a deprecation
 today has no established channel — no changelog, no deprecation-header
 convention in the API responses. The concrete window length and the
 communication mechanism are both left open (§8).
@@ -408,7 +536,7 @@ is declarative, in git, and reviewable — while the machinery is a script:
 - **Migration gating lives in the reconciler.** It applies the migration
   Job first, `kubectl wait --for=condition=complete`, and only then
   applies the rest. A failed migration **halts the rollout with the old
-  code still serving** — the mechanical guarantee behind §5.1's
+  code still serving** — the mechanical guarantee behind R4 and §5.2's
   schema-first ordering.
 - **Rollback is `git revert`** of the tag-bump commit. The reconciler
   converges to whatever the repo says; because images are SHA-tagged and
@@ -467,14 +595,22 @@ reinvented ad hoc:
   A cross-component feature (schema + API + frontend all need to agree it's
   "on") is a **release toggle** in Fowler's terms, and those are explicitly
   meant to be short-lived and removed once the feature is fully rolled out
-  — relevant to §5.5's deprecation discipline too, since a flag that never
+  — relevant to §5.7's deprecation discipline too, since a flag that never
   gets removed is its own form of permanent tech debt.
 - **Capability negotiation / feature detection** — the general pattern (used
   by browsers detecting API support, by HTTP content negotiation, by
   protocol version handshakes) of asking "can you do X" rather than
-  asserting "you must be version Y." Directly informs §5.2: the API
+  asserting "you must be version Y." Directly informs §5.4: the API
   checking for a column/table's existence (or a value in it) rather than
   trusting its own build's expected migration count.
+- **Diagnostic version vs. branchable capability** — the specific split
+  §5.4 would need if it were ever adopted, and Postgres itself is the
+  cleanest example: `server_version_num` exists for diagnostics and
+  reporting, while `information_schema` is what you actually branch on.
+  Kubernetes API discovery (the server publishes the resources and versions
+  it serves; clients adapt) and HTTP content negotiation are the same shape
+  — the server declares what it supports, the client adapts, and nobody
+  compares ordinals.
 - **Blue-green and canary deploys** — running two versions of a component
   side-by-side (blue-green: instant cutover between two full environments;
   canary: a small percentage of traffic on the new version first) to
@@ -556,3 +692,32 @@ New questions raised by the §3/§6 design:
   plain YAML files would start duplicating. Note the existing stage tunnel
   pins its origin to `localhost:48787` today — whatever shape staging
   takes has to either preserve or deliberately replace that arrangement.
+- **Does CI bump all five Deployments on every backend commit, or only the
+  affected ones?** One image (§3.2) means one SHA that *all five* could
+  move to at once — which is lockstep by default, the thing this doc argues
+  against. The alternative is path-scoped bumps: `src/api/**` → `api`,
+  `src/worker/**` → the three lanes, `src/producer/**` →
+  `analytics-producer`, and shared code (`src/db/**`) → everything.
+  Cheaper to implement than it sounds, but it has to be chosen; nothing
+  decides it by default.
+- **Does the production migration Job run `seed()` at all?** `migrate()`
+  ends by calling it (§5.3), so as written the pre-deploy Job re-seeds
+  production on every deploy. Options: run it (idempotent, keeps required
+  rows present), split `seed()` out of `migrate()` so the Job can run
+  schema-only, or gate it on an env flag.
+
+Image and registry questions, noted as unaddressed rather than decided:
+
+- **Base-image and Bun version pinning cadence.** `backend/Dockerfile`
+  pins `oven/bun:1.3.5` today; nothing says when or how that moves, or who
+  notices a base-image CVE.
+- **Build architecture.** Images built on the CI runner and pulled by the
+  droplet, or built on the droplet? Affects registry choice, arch
+  matching, and how much the droplet needs installed.
+- **Image retention / GC.** SHA-tagged images accumulate one per merge
+  forever; no retention policy is proposed.
+- **Do PRs build images at all**, or only merges to main? Building on PRs
+  catches Dockerfile breakage early and multiplies stored images.
+- **Provenance and signing.** SBOM generation, `cosign` signatures, and
+  whether the reconciler should verify anything before applying. Nothing
+  in §6 currently does.
