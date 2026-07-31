@@ -1288,3 +1288,53 @@ export async function getMemo(id: number) {
   if (!r) return null;
   return toMemo(r);
 }
+
+// ── Self-service profile (issue #325) ───────────────────────────────────────
+// The apply payload (§11 R6, D21) is deliberately minimal —
+// {name, contact, lens?, publicKey} — so an API-created member is admitted
+// with no tagline/mandate/biases/voice/mode/operator/avatar and no route ever
+// gives it one; only the three manifest-seeded members carry real values for
+// these. This is the fill-in-after-admission route the issue recommends
+// (option B over extending apply): the same actor as submitRecommendation/
+// postMemo (bearer-token authenticated, so only a member that has completed
+// apply → activate → claim can call it), writing its OWN row only — the path
+// :id must match the token's member id, exactly like submitRecommendation's
+// memberId/token check. Partial: only fields present in `patch` are changed;
+// omitted fields are left untouched (not nulled).
+export interface MemberProfilePatch {
+  tagline?: string;
+  mandate?: string;
+  biases?: string[];
+  voiceMd?: string;
+  mode?: string;
+  operator?: string;
+  avatar?: unknown;
+}
+
+export async function updateMemberProfile(token: string, memberId: string, patch: MemberProfilePatch) {
+  const tokenMemberId = await memberIdForToken(token);
+  if (!tokenMemberId) return { ok: false, status: 401, error: "unknown member token" };
+  if (tokenMemberId !== memberId) return { ok: false, status: 403, error: "token/member mismatch" };
+
+  const row = (await sql`SELECT * FROM committee_members WHERE id = ${memberId}`)[0];
+  if (!row) return { ok: false, status: 404, error: "member not found" };
+
+  const merged = {
+    tagline: patch.tagline !== undefined ? patch.tagline : row.tagline,
+    mandate: patch.mandate !== undefined ? patch.mandate : row.mandate,
+    biases: patch.biases !== undefined ? patch.biases : row.biases,
+    voice_md: patch.voiceMd !== undefined ? patch.voiceMd : row.voice_md,
+    mode: patch.mode !== undefined ? patch.mode : row.mode,
+    operator: patch.operator !== undefined ? patch.operator : row.operator,
+    avatar: patch.avatar !== undefined ? patch.avatar : row.avatar,
+  };
+  const updated = await sql`
+    UPDATE committee_members SET
+      tagline = ${merged.tagline}, mandate = ${merged.mandate}, biases = ${sql.json(merged.biases as any)},
+      voice_md = ${merged.voice_md}, mode = ${merged.mode}, operator = ${merged.operator},
+      avatar = ${sql.json(merged.avatar as any)}, updated_at = now()
+    WHERE id = ${memberId}
+    RETURNING *`;
+  await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'update_profile', ${sql.json({ memberId } as any)})`;
+  return { ok: true, status: 200, member: toMember(updated[0]) };
+}

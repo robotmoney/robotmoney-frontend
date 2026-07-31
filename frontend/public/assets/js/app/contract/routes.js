@@ -44,6 +44,13 @@ export const ROUTES = {
     waitlist: "/api/committee/waitlist", // POST — capture interest when roster is full
     member: "/api/committee/members/:id", // GET
     memberTakes: "/api/committee/members/:id/takes", // GET ?limit= — this member's takes across sessions (issue #243), newest first, in-progress included
+    // POST (member bearer) — issue #325: the apply payload is deliberately
+    // minimal ({name, contact, lens?, publicKey}, D21), so this is the ONLY
+    // path by which an admitted member ever acquires tagline/mandate/biases/
+    // voiceMd/mode/operator/avatar. Partial write: only the fields present in
+    // the body are changed. The path :id must match the bearer token's own
+    // member id — this can never write another member's profile.
+    memberProfile: "/api/committee/members/:id/profile",
     subject: "/api/committee/subjects/:id", // GET
     subjectSnapshots: "/api/committee/subjects/:id/snapshots", // GET
     // GET ?state=&limit=&cursor= — light index rows (no regimeSummary/synthesis/

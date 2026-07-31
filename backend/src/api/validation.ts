@@ -1,4 +1,4 @@
-import type { ApplyInput, SubmissionInput } from "../committee/domain.ts";
+import type { ApplyInput, MemberProfilePatch, SubmissionInput } from "../committee/domain.ts";
 import { STANCES, type canonicalizeSubmission } from "@robotmoney/contract";
 
 export type JsonObject = Record<string, unknown>;
@@ -317,4 +317,90 @@ export function parseSessionCreate(body: JsonObject | null): {
   const publishAt = requiredString(body, "publishAt", 40);
   if (!date || !subjectId || !briefOpensAt || !windowClosesAt || !publishAt) return null;
   return { date, subjectId, briefOpensAt, windowClosesAt, publishAt };
+}
+
+// ── Self-service member profile (issue #325) ────────────────────────────────
+const PROFILE_KEYS = new Set(["tagline", "mandate", "biases", "voiceMd", "mode", "operator", "avatar"]);
+const MAX_BIASES = 20;
+
+function optionalBiases(body: JsonObject): string[] | null | undefined {
+  if (body.biases === undefined) return undefined;
+  if (!Array.isArray(body.biases) || body.biases.length === 0 || body.biases.length > MAX_BIASES) return null;
+  const biases: string[] = [];
+  for (const entry of body.biases) {
+    if (typeof entry !== "string") return null;
+    const normalized = entry.trim();
+    if (!normalized || normalized.length > 200) return null;
+    biases.push(normalized);
+  }
+  return biases;
+}
+
+// avatar is stored as opaque jsonb (no canonical schema beyond the
+// manifest-observed {path, source_url, credit} shape) — accept any bounded
+// plain JSON object rather than hardcoding its keys.
+function optionalAvatar(body: JsonObject): Record<string, unknown> | null | undefined {
+  if (body.avatar === undefined) return undefined;
+  const v = body.avatar;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return null;
+  if (JSON.stringify(v).length > 5000) return null;
+  return v as Record<string, unknown>;
+}
+
+// Partial write: every field is optional, but at least one must be present,
+// and every key must be a known profile field (an unknown key is far more
+// likely a caller typo — e.g. "lens" or "name", both of which are NOT
+// self-service, lens is set at apply time and name/contact never change
+// here — than an intentional no-op, so it's rejected rather than ignored).
+export function validateMemberProfile(body: JsonObject | null): ValidationResult<MemberProfilePatch> {
+  if (!body) return { ok: false, error: "invalid profile" };
+
+  const unknown = Object.keys(body).filter((k) => !PROFILE_KEYS.has(k));
+  if (unknown.length) return { ok: false, error: `unknown field: ${unknown.join(", ")}` };
+  if (Object.keys(body).length === 0) return { ok: false, error: "at least one profile field required" };
+
+  const patch: MemberProfilePatch = {};
+
+  if (body.tagline !== undefined) {
+    const v = requiredString(body, "tagline", 300);
+    if (!v) return { ok: false, error: "tagline must be a non-empty string up to 300 chars" };
+    patch.tagline = v;
+  }
+  if (body.mandate !== undefined) {
+    const v = requiredString(body, "mandate", 4000);
+    if (!v) return { ok: false, error: "mandate must be a non-empty string up to 4000 chars" };
+    patch.mandate = v;
+  }
+  if (body.voiceMd !== undefined) {
+    const v = requiredString(body, "voiceMd", 20_000);
+    if (!v) return { ok: false, error: "voiceMd must be a non-empty string up to 20000 chars" };
+    patch.voiceMd = v;
+  }
+  if (body.mode !== undefined) {
+    const v = requiredString(body, "mode", 100);
+    if (!v) return { ok: false, error: "mode must be a non-empty string up to 100 chars" };
+    patch.mode = v;
+  }
+  if (body.operator !== undefined) {
+    const v = requiredString(body, "operator", 200);
+    if (!v) return { ok: false, error: "operator must be a non-empty string up to 200 chars" };
+    patch.operator = v;
+  }
+  if (body.biases !== undefined) {
+    const biases = optionalBiases(body);
+    if (!biases) return { ok: false, error: `biases must be an array of 1-${MAX_BIASES} non-empty strings (each <=200 chars)` };
+    patch.biases = biases;
+  }
+  if (body.avatar !== undefined) {
+    const avatar = optionalAvatar(body);
+    if (avatar === null) return { ok: false, error: "avatar must be a JSON object (<=5000 serialized chars)" };
+    patch.avatar = avatar;
+  }
+
+  return { ok: true, data: patch };
+}
+
+export function parseMemberProfile(body: JsonObject | null): MemberProfilePatch | null {
+  const res = validateMemberProfile(body);
+  return res.ok ? res.data : null;
 }
