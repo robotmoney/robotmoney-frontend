@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "review": "review-data-integrity",
+  "repository": "git@github.com:robotmoney/robotmoney-frontend.git",
+  "branch": "adhoc/20260731-014957-data-integrity-review",
+  "commit": "06b260f000e5ce5ac356e93da70727a0340bcae8",
+  "reviewed_at": "2026-07-31",
+  "scope": [
+    "backend/src/analytics/** (extract, transform, store, report, index)",
+    "backend/src/projects/** (access, fixtures, transforms, projections, demo-seed)",
+    "backend/src/worker/handlers/** and samplers",
+    "backend/src/api/routes/analytics.ts and dashboard projection read paths",
+    "frontend regime/performance/research/projects/committee views",
+    "live demo stack runtime evidence (rm_demo_stack_d2b89936a0, stage.robotmoney-labs.dev origin)"
+  ],
+  "verdict": "Analytics is live and honest (all 27 indicators fetching real data over a vendored real floor; synthetic source provably unreachable) but can silently freeze behind forward-fill; the projects live path DOES serve fixture metric literals that compound into fabricated revenue history (critical); and the concrete missing-data root cause on stage is ~140 future-dated demo-session regime snapshots shadowing real current rows at an unbounded newest-N projection (resolves the mechanism behind open issue #345).",
+  "findings": [
+    {
+      "id": "review-data-integrity-001",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_PROVENANCE",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/migrations/0009_analytics_v2.sql:29-36 (no source/provenance column on raw_indicator_history or regime_snapshots)",
+        "backend/src/analytics/transform/math.ts:336-341 (mergeSeries is fetched-wins on overlap)",
+        "backend/src/analytics/store/raw-history-store.ts:59-61 (ON CONFLICT DO UPDATE upsert)",
+        "backend/src/analytics/index.ts:69-76 (hermetic source writes through the same port)",
+        "backend/src/demo/e2e.ts:92 (e2e driver selects hermetic source explicitly)",
+        "backend/src/analytics/store/floor-seed.ts:21-42 (seed path is gap-fill only; cannot repair a contaminated row)"
+      ],
+      "impact": "One process holding the analytics credential running with ANALYTICS_SOURCE=hermetic (or demo/e2e.ts against a live DATABASE_URL) merges seeded LCG walks over every overlapping real floor date and overwrites ~3.1k snapshot rows. Nothing marks the rows and the seed/repopulate path leaves differing existing values standing, so contamination is permanent without manual range deletion.",
+      "recommendation": "Add a source (live|seed|hermetic) column or run-id FK to floor and snapshot rows; make the API boundary refuse hermetic-labelled submissions outside ephemeral environments; give demo/e2e a dedicated database guard.",
+      "owner": "code",
+      "related_findings": ["W1:DI-001"]
+    },
+    {
+      "id": "review-data-integrity-002",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_PROVENANCE",
+      "severity": "low",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/src/analytics/access/hermetic-source.ts:3-9 (comment claims the demo forbids external fetch and uses the seeded provider — retired design)",
+        "scripts/lib/demo-env.ts:5-10 (issue #147/#163: demo is always live; contradicts the above)",
+        "backend/src/analytics/transform/grid.ts:10-13 (\"fall back to seeded\" comment on a function with no caller)",
+        "backend/src/analytics/extract/http.ts:2-3 (same stale fallback comment)",
+        "frontend/public/views/regime.html:248 (claims composite = mean of all three panels; code uses 2-panel mean, backend/src/analytics/analyze/indicators.ts:464)"
+      ],
+      "impact": "Stale comments describing the retired synthetic-demo design make the live pipeline read as faked on inspection — likely fuel for the product owner's corrupt-or-faked perception — and the regime page misstates its own composite methodology.",
+      "recommendation": "Rewrite the three stale hermetic comments to match the live-only demo reality, delete the dead shapeDaily path, and fix the regime.html composite bullet to the 2-panel mean.",
+      "owner": "code",
+      "related_findings": ["W1:DI-007", "review-docs-011 (2026-07-23)"]
+    },
+    {
+      "id": "review-data-integrity-003",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_MISSING_DATA",
+      "severity": "low",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/src/analytics/extract/floor-seed.ts:18-21 (vendored floor is the cold-boot seed)",
+        "backend/tests/fixtures/regime/raw-indicator-history.csv.gz (contains 25 of 26 registry ids; zero BTC_MVRV rows — verified by decompressed count)",
+        "backend/tests/regime-fidelity.test.ts:11-14 (fixture predates the #127 Coinmetrics repoint)"
+      ],
+      "impact": "On a cold live boot BTC_MVRV history depends entirely on the live Coinmetrics fetch; if that leg fails the indicator is silently excluded (weight 0) with no UI difference beyond a blank row. Observed mitigated on the running stage stack (live fetch backfilled 3,132 BTC_MVRV rows), so severity is bounded to cold-boot windows.",
+      "recommendation": "Regenerate the vendored floor to include BTC_MVRV; assert at boot that every registry id has floor or fetched coverage; surface the excluded-indicator set on the admin surface.",
+      "owner": "data",
+      "related_findings": ["W1:DI-006"]
+    },
+    {
+      "id": "review-data-integrity-004",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_SILENT_DEGRADATION",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/src/analytics/extract/sources.ts:96-118 (fetch failure degrades to [] with console error only)",
+        "backend/src/analytics/index.ts:167-190 (degrade-to-persisted-floor warnings land in stdout + telemetry only)",
+        "backend/src/analytics/index.ts:353-370 (telemetry submission is best-effort-never-throws)",
+        "backend/src/analytics/transform/math.ts:206-211 (weights only zero out below 60 finite obs over the whole axis, which forward-fill guarantees never happens after the first observation)"
+      ],
+      "impact": "The claimed loud degradation is container stdout plus an admin-only telemetry table with no alerting and no public-UI signal. Forward-fill is uncapped: an indicator dead for a year still contributes ranks from its last value at full weight. Observed on stage: XLU_SPY degraded to the persisted floor on 2026-07-30 with exactly one warning row and no surfaced signal.",
+      "recommendation": "Alert on telemetry degraded status; cap forward-fill contribution or decay indicator weight with observation age.",
+      "owner": "code",
+      "related_findings": ["W1:DI-005"]
+    },
+    {
+      "id": "review-data-integrity-005",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_FAKED_DATA",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/src/analytics/index.ts:69-76 (single ANALYTICS_SOURCE knob; unset/live -> live, hermetic -> seeded walks, anything else throws)",
+        "scripts/lib/demo-env.ts:63 (demo passes the invoking shell's value through)",
+        "docker-compose.yml:209 and docker-compose.demo.yml:49 (env pass-through to containers)",
+        "backend/src/analytics/index.ts:133 (source label lands only in telemetry, never on a DTO)"
+      ],
+      "impact": "Reachability, not an active leak: a stage boot from a shell exporting ANALYTICS_SOURCE=hermetic would serve deterministic fake series with zero UI indication. Verified NOT the case on the running stack (observed ANALYTICS_SOURCE=live in all four app containers) and unreachable by default everywhere live-facing.",
+      "recommendation": "Surface pipeline source on the regime/research DTOs and render a provenance badge; alert when telemetry source != live outside CI.",
+      "owner": "code",
+      "related_findings": ["W1:DI-002", "review-data-integrity-001"]
+    },
+    {
+      "id": "review-data-integrity-006",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_STALE_READ",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/src/analytics/index.ts:199-207 (every run forward-fills the axis to asof=today, so snapshot dates are fresh whenever the producer runs)",
+        "backend/src/analytics/report/regime-projection.ts:121-133 (staleness looks only at the newest snapshot date, threshold 3 days)",
+        "backend/src/analytics/transform/math.ts:278-290 (indefinite carry-forward after first observation)",
+        "backend/src/analytics/index.ts:460-461 (per-indicator raw_date is the only real freshness signal reaching the UI, unhighlighted)"
+      ],
+      "impact": "The staleness contract measures producer liveness, not data freshness. If some or all fetchers fail, the UI shows a current-dated, fresh-looking chart whose tail is frozen carry-forward and the staleness banner never fires — the most likely mechanical cause of 'expected data missing' on any deployment where the shadowing of finding 008 does not apply. This is silent freezing, not fabrication.",
+      "recommendation": "Extend staleness to max(raw_date) per panel: flag any indicator whose last real observation lags more than N days, flag the composite when more than k indicators lag, and color stale Last cells on the regime page.",
+      "owner": "code",
+      "related_findings": ["W1:DI-003", "review-data-integrity-004"]
+    },
+    {
+      "id": "review-data-integrity-007",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_STALE_READ",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/src/analytics/report/projections.ts:12-18 (latest research signal returned with no staleness field)",
+        "frontend/public/assets/js/app/alpine/views/research.js:14-24 (frontend never reads the row date)",
+        "frontend/public/views/research/channel-divergence.html:25-26 (asof printed as plain text only)",
+        "backend/src/analytics/index.ts:314-327 (degraded EDGAR refresh correctly skips publishing — which then serves an arbitrarily old signal as current)"
+      ],
+      "impact": "A stopped producer or perpetually-degraded EDGAR refresh serves an arbitrarily old research signal indistinguishable from current; the late-cycle page displays no data date at all.",
+      "recommendation": "Mirror the regime staleness object on the research-signal endpoint and render the banner; always display the signal date.",
+      "owner": "code",
+      "related_findings": ["W1:DI-004"]
+    },
+    {
+      "id": "review-data-integrity-008",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_PROVENANCE",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/src/analytics/report/projections.ts:25-37 (fetchRegimeSnapshots: ORDER BY date DESC LIMIT range, no date <= current_date bound)",
+        "scripts/lib/demo-schedule.ts:194 (sessionDateFor advances one virtual day per demo session)",
+        "scripts/lib/committee/session.ts:294-297 (every session with index > 0 runs runRegimeClassify with the future session date as asof, submitting real computed snapshots stamped with future dates through the authenticated analytics boundary into the shared regime_snapshots table)",
+        "backend/src/analytics/report/regime-projection.ts:109-133 (staleness ageDays goes negative for future asof; observed ageDays=-141, stale:false)",
+        "runtime (observed 2026-07-31, stack rm_demo_stack_d2b89936a0): 140 regime_snapshots rows dated 2026-08-01..2026-12-18, growing +1 per demo session; GET /api/dashboards/regime-snapshots?range=30 returned a window entirely of future dates with latest 2026-12-19; GET /api/committee/open-session returned date 2026-12-20"
+      ],
+      "impact": "Root cause of the reported missing data on stage: ~140 future-dated demo-cadence snapshots shadow all real current rows in every newest-N window (the genuine 2026-07-31 row sits ~141 rows deep), the regime badge shows a Dec-2026 synthetic neutral reading, and the staleness guard passes because future data is 'not stale'. Same mechanism dates committee sessions months ahead. This resolves the open-question in issue #345: it is the generator (candidate 2 — reproduces on every fresh demo), not clock skew, and the fast demo cadence (~1 session/76s) accumulated 5 months of virtual dates in 6 hours.",
+      "recommendation": "Bound fetchRegimeSnapshots (and staleness asof) to date <= server date; stop demo committee sessions writing future-asof classifications into the shared regime_snapshots table (isolate the virtual-date rail or clamp asof); add the no-future-rows guard test issue #345 specifies; clean the future-dated rows on the stage database.",
+      "owner": "code",
+      "related_findings": ["W3 root cause", "issue #345", "review-docs-005 (2026-07-23)", "review-maintainability-009 (2026-07-14)"]
+    },
+    {
+      "id": "review-data-integrity-009",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_MISSING_DATA",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/src/api/routes/analytics.ts:254 (jobId must be an integer or null)",
+        "backend/src/worker/loop.ts:112 (handler receives job.id from postgres.js, which returns BIGINT as a JS string)",
+        "runtime (observed): every worker-lane telemetry POST fails HTTP 400 'run.jobId must be an integer or null'; research_pipeline_runs holds only the 284 producer-rail runs (job_id NULL on all), zero worker-lane runs recorded despite 15 successful regime.classify/research.refresh jobs"
+      ],
+      "impact": "The entire worker-lane telemetry lineage is silently lost (submission is best-effort by design), so the admin research-runs surface under-reports and degradation warnings from worker-lane runs never persist. Canonical data rows still land.",
+      "recommendation": "Coerce or accept the bigint-as-string job id at the boundary (Number(jobId) with integer check, or a custom postgres.js bigint parser); add a test posting telemetry with a string jobId.",
+      "owner": "code",
+      "related_findings": ["W3 telemetry bug"]
+    },
+    {
+      "id": "review-data-integrity-010",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_DERIVED_STATE_CLOBBER",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/src/db/seed.ts:73-79 (projects.* schedules enabled in every environment including demo; nothing in the demo cadence sets disables them)",
+        "backend/src/worker/handlers/projects.ts:330-397 (recompute_coverage runs unscoped over ALL projects from facet columns the demo seed never populates)",
+        "backend/src/projects/demo-seed.ts:345-385 (seeded rows lack price_usd, coingecko_id, address, tvl_usd, cumulative_revenue_usd, enriched_at)",
+        "backend/src/projects/projections.ts:13,35 (MIN_SCORE=55 gate hides recomputed rows)",
+        "backend/src/projects/fixtures/dataset.ts:23,56,77 (fixture slugs collide with demo slugs; discover overwrites description, sets fake cdn.example logo URLs, injects fixture metrics)",
+        "backend/tests/api/projects-demo-seed.test.ts:28-32 (scores asserted >= 55 at seed time only; no test executes seed -> discover -> recompute -> fetchProjects)"
+      ],
+      "impact": "On any standing demo/stage stack that passes 02:00/03:00 UTC, recomputed coverage drops several seeded projects below the MIN_SCORE gate (hand-computed: luna, ai16z, x402rs, degenspartan ~54; bankr, olas in the first week — inference on exact scores, mechanism observed) so the /projects directory silently shrinks from ~11 to ~6-7 rows, remaining colliding slugs get broken logos and flat fabricated x402 revenue. A direct candidate for 'expected data missing from the UI'.",
+      "recommendation": "Under DEMO_SEED_PROJECTS/DEMO_MODE disable the projects.* schedule rows (matching the existing FAST_DEMO pattern) or make the demo seed populate every column recompute_coverage reads; remove the slug collision between fixtures/dataset.ts and demo-seed.ts; add a test covering seed -> discover -> recompute -> fetchProjects.",
+      "owner": "code",
+      "related_findings": ["W2:DI-W2-002", "review-data-integrity-011"]
+    },
+    {
+      "id": "review-data-integrity-011",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_FAKED_DATA",
+      "severity": "critical",
+      "confidence": "high",
+      "requirement": "backend/src/worker/handlers/projects.ts:16 (stated invariant: nothing on the path is fabricated); backend/src/projects/access/select.ts:21-23",
+      "evidence": [
+        "backend/src/projects/access/live-source.ts:69-71 (discoverProjects returns structuredClone(DISCOVERY_DATASET) — the fixture file — even in live mode)",
+        "backend/src/projects/fixtures/dataset.ts:26-32,58-65,79-94 (metric literals: x402_score 98, x402_txn_count 128400, x402_volume_usd 15000, productivity_score 72/80/88, source_confidence 'high', synthetic 0xgame/0xvault/0xwallet addresses)",
+        "backend/src/worker/handlers/projects.ts:81-93 (discover upserts all of it with enriched_at=now())",
+        "backend/src/worker/handlers/projects.ts:254-268 (snapshot_daily persists the literal into daily_agent_snapshots)",
+        "backend/src/worker/handlers/projects.ts:218-228 (sync_revenue rolls the literal into agent_revenue_daily source='x402' for every snapshot day)",
+        "backend/src/projects/projections.ts:109-115,126-131,179 (served as revenue30d and an X402 facet pill)"
+      ],
+      "impact": "With PROJECTS_SOURCE=live (mandated for prod by .env.example, docs/runbooks/deployment.md, docker-compose.yml:128-130 — the pipelines throw otherwise), the daily job chain compounds a hardcoded $15,000/day literal into agent_revenue_daily forever: the prod UI presents ~$450,000 revenue30d and high-confidence x402 metrics that never existed, and seeds unresolvable synthetic addresses into prod facet tables (feeds finding 013). Directly contradicts the module's own stated no-fabrication invariant. Whether prod currently runs this is deployment state (not inspected); the code path is observed.",
+      "recommendation": "Make live discoverProjects serve identity + facet keys only (strip metric fields from DiscoveredAgent on the live path, or split the roster into identity-only seed vs test-only metrics) until a real x402 metrics fetcher exists. Repair: delete agent_revenue_daily source='x402' rows carrying the dataset literals, null the fixture-originated metric columns, delete matching daily_agent_snapshots rows.",
+      "owner": "code",
+      "related_findings": ["W2:DI-W2-001", "review-maintainability-016 (2026-07-14)"]
+    },
+    {
+      "id": "review-data-integrity-012",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_SENTINEL_ZERO",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/src/projects/transforms.ts:174-185 (coinSnapshotRow coerces Number(null) || 0 and writes the row anyway)",
+        "backend/src/worker/handlers/projects.ts:257-262,274,283 (same coercion for agent/wallet/vault snapshots)",
+        "backend/src/worker/handlers/projects.ts:353-355 (zero rows count toward the 7-row history coverage bonus)",
+        "frontend/public/assets/js/app/alpine/views/projects.js:117-131 (min/max-normalized sparkline renders the zero plunge)"
+      ],
+      "impact": "Any coin never refreshed (no coingecko_id/contract_address, DexScreener liquidity-floor skip, or degraded refresh) gets a 0-price snapshot appended daily: the #295 sparkline renders a plunge to zero — data that looks corrupt because it is — and the fabricated zeros raise the coverage 'activity' evidence. On the standing demo every seeded coin except the 3 colliding slugs is in this state.",
+      "recommendation": "Skip snapshot rows whose source column is NULL instead of coercing to 0; delete existing zero-run snapshot rows where the facet column was NULL at snapshot time.",
+      "owner": "code",
+      "related_findings": ["W2:DI-W2-003"]
+    },
+    {
+      "id": "review-data-integrity-013",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_FAIL_TOGETHER_STALENESS",
+      "severity": "medium",
+      "confidence": "medium",
+      "requirement": null,
+      "evidence": [
+        "backend/src/worker/handlers/projects.ts:136-153 (refresh_coins extracts all coins in one try/catch; one thrown fetch discards already-fetched updates and degrades the whole run)",
+        "backend/src/worker/handlers/projects.ts:175-183 and :303-311 (same fail-together shape in refresh_wallets and fetch_vaults)",
+        "backend/src/projects/fixtures/dataset.ts (synthetic 0xgame/0xvault addresses that live discovery seeds — see finding 011)"
+      ],
+      "impact": "A provider that throws on a garbage fixture address (inference — depends on provider behavior; a 200 with pairs:null is skipped harmlessly) degrades the entire hourly refresh repeatably, so prod coin prices/TVL may never populate while the handler reports degraded every hour — permanent staleness caused by fixture-seeded facet rows.",
+      "recommendation": "Degrade per item (record per-coin status, persist successful updates); removing synthetic addresses from live-seedable data is subsumed by finding 011's fix.",
+      "owner": "code",
+      "related_findings": ["W2:DI-W2-005", "review-data-integrity-011"]
+    },
+    {
+      "id": "review-data-integrity-014",
+      "review": "review-data-integrity",
+      "classification": "DATA_INTEGRITY_MISSING_WRITER",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/src/worker/handlers/projects.ts:341,351 (coverage reads cumulative_revenue_usd and yield_apy)",
+        "backend/migrations/0014_projects_pipelines.sql:33,52 (columns exist in schema; zero writers in backend/src)",
+        "backend/src/projects/access/live-source.ts:100-105 (walletBalanceUsd always throws — documented deferral)",
+        "backend/src/projects/projections.ts:147 (walletTotalUsd rendered with ?? 0)"
+      ],
+      "impact": "revenueSignal can only fire via x402_txn_count and hasApy is permanently false — systematic coverage under-scoring that interacts with the MIN_SCORE cliff of finding 010. In prod, tracked_wallets.balance_usd stays NULL forever and the projection renders missing data as a $0 balance.",
+      "recommendation": "Either write the columns (roll up agent_revenue_daily into the cumulative column; port the balance fetch) or stop scoring/rendering them as populated — distinguish unknown from 0 in the DTO.",
+      "owner": "code",
+      "related_findings": ["W2:DI-W2-004", "review-data-integrity-010"]
+    },
+    {
+      "id": "review-data-integrity-015",
+      "review": "review-data-integrity",
+      "classification": "TEST_COVERAGE_MISSING",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": null,
+      "evidence": [
+        "backend/tests/prod-honesty.test.ts:27-123 (analytics live import graph proven never to reach seeded data — static walk + behavioral spy; no projects equivalent exists)",
+        "backend/src/projects/access/live-source.ts:16 (live source imports fixtures/dataset.ts and no test objects — the guard would fail today if ported)"
+      ],
+      "impact": "Exactly the regression class the analytics prod-honesty guard exists to catch went undetected on the projects path (finding 011). The rest of the projects suite is honest: fidelity replay against vendored ground truth, real ephemeral Postgres, loud-skip + EXPECT_LIVE drift guard on the nightly live suite — no silent skips found in scope.",
+      "recommendation": "Add an import-graph/behavioral assertion that the projects live path serves no fixture-derived values (with an explicit carve-out if an identity-only seed is retained per finding 011's fix).",
+      "owner": "tests",
+      "related_findings": ["W2:DI-W2-006", "review-data-integrity-011"]
+    }
+  ],
+  "clean_areas": [
+    "Analytics ingestion boundary: whole-payload validation before any transaction, non-finite rejected not skipped, duplicate keys rejected, single-transaction writes, idempotent natural keys — no silent-drop path found (backend/src/api/routes/analytics.ts:49-94,332-390)",
+    "seededProvider unreachability on the analytics live path, proven statically and behaviorally (backend/tests/prod-honesty.test.ts:27-123) and confirmed at runtime (ANALYTICS_SOURCE=live in all four stage containers)",
+    "Runtime data presence and freshness: all 27 indicators fetch ok live; no indicator missing or more than 7 days behind (weekly/lagged series at normal shape); research_signals fresh at 2026-07-31; every job kind except the deliberately-unconfigured demo email notification succeeded within the last 2 hours (observed)",
+    "Cold-boot floor is vendored REAL history, spot-verified against market facts (VIX 2020-03-16 = 82.69; T10Y2Y Oct-2022 inversion); EDGAR last-good invariant holds and is tested over the real API boundary",
+    "Committee/research UI is API-first with a labeled, date-bounded archive fallback; permalink receipts gated on source === 'api'; no frontend baked-data-as-live path found beyond dead unread briefs/today files",
+    "Projects sparkline is real sampled daily_coin_snapshots history, nothing synthesized client-side; samplers hit the real Base chain with per-row live|stub|stale|seed provenance; demo mode changes cadence, not values",
+    "Test-suite honesty where audited: no silent resource-missing skips in the analytics or projects suites; nightly live suites carry anti-false-green EXPECT_LIVE guards; deterministic suites pin committed goldens of the original pipeline",
+    "Cache behavior post-5b9245d: SPA shell no-cache, static max-age=300, API JSON uncached — API reflects the database exactly (observed)"
+  ],
+  "unresolved_decisions": [
+    "Whether demo virtual-date committee sessions should run regime classification at all, versus isolating a demo-only snapshot rail or clamping asof to the real date (product/architecture decision behind finding 008 and issue #345)",
+    "Whether the fixture roster identities (minus metric literals) are a legitimate live discovery seed or live discovery should be a real fetcher only (shapes finding 011's fix and finding 015's guard carve-out)"
+  ],
+  "limitations": [
+    "Runtime evidence comes from the demo/stage stack rm_demo_stack_d2b89936a0 only (SELECT-only DB access, API spot-checks, container logs); no production database or deployment was inspected — prod-path findings 011/013/014 are code-path observations whose prod materialization depends on deployment state",
+    "Per-project recomputed coverage scores in finding 010 were hand-computed (reviewer inference); the clobber mechanism itself is observed code",
+    "Provider behavior for garbage addresses in finding 013 is inference; both throw and 200-null shapes were considered",
+    "This synthesis consolidates three worker reports (analytics lineage, projects/committee lineage, runtime census) whose full working notes are session scratchpad artifacts not committed to the repository",
+    "regime_snapshots grew during the census (3,140 -> +1 rows; committee_sessions 282 -> 284) — counts are as-of collection time 2026-07-31 ~01:52-01:58 UTC"
+  ],
+  "unreviewed_surfaces": [
+    "Committee domain/lifecycle logic beyond data lineage (state machine, deadlines, memos content) — see the 2026-07-23 review-docs artifact for adjacent findings",
+    "Buyback indexer correctness (only its from-block-0 boot warning was observed)",
+    "Wallet/vault sampler numeric correctness against chain state (provenance mechanism verified, values not reconciled)",
+    "Authentication/authorization posture beyond the analytics token boundary",
+    "Frontend views other than regime, research, projects, and committee",
+    "Production deployment environment and database"
+  ]
+}
