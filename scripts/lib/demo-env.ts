@@ -24,6 +24,14 @@
 //
 // This module is imported by scripts/demo.ts (which re-exports it for the
 // unit tests in scripts/tests/unit/demo-env.test.ts) and MUST stay side-effect free.
+//
+// It is ALSO where the demo's cadence profile reaches the analytics-producer:
+// a `--stage` boot injects the realistic profile's PRODUCER_REGIME_CRON /
+// PRODUCER_RESEARCH_CRON (scripts/lib/demo-schedule.ts) so research cadence and
+// committee cadence are stated in ONE file. A non-stage boot injects neither, so
+// compose resolves the COMMITTED production defaults untouched and the CI demo
+// path is byte-for-byte unaffected.
+import { resolveDemoCadence } from "./demo-schedule.ts";
 
 export interface DemoEnvResolution {
   /**
@@ -48,6 +56,7 @@ export interface DemoEnvResolution {
 
 export function resolveDemoEnv(
   env: Record<string, string | undefined> = process.env,
+  opts: { stage?: boolean } = {},
 ): DemoEnvResolution {
   const baseRpcUrl = env.BASE_RPC_URL || undefined;
   const baseRpcSource: "live" = "live";
@@ -56,11 +65,20 @@ export function resolveDemoEnv(
   // years of history (idempotent; no-op once warm).
   const analyticsFloorSeed = env.ANALYTICS_FLOOR_SEED || "1";
 
+  // Cadence → analytics-producer. ONLY the realistic (`--stage`) profile
+  // injects timers; the fast profile deliberately emits nothing so compose's
+  // committed `${PRODUCER_*_CRON:-…}` defaults resolve exactly as they do today.
+  const cadence = resolveDemoCadence({ stage: opts.stage === true });
+  const producerCronEnv: Record<string, string> = opts.stage === true
+    ? { PRODUCER_REGIME_CRON: cadence.regimeCron, PRODUCER_RESEARCH_CRON: cadence.researchCron }
+    : {};
+
   const composeEnv: Record<string, string> = {
     ...(baseRpcUrl !== undefined ? { BASE_RPC_URL: baseRpcUrl } : {}),
     BASE_RPC_SOURCE: baseRpcSource,
     ANALYTICS_SOURCE: analyticsSource,
     ANALYTICS_FLOOR_SEED: analyticsFloorSeed,
+    ...producerCronEnv,
   };
 
   return { baseRpcUrl, baseRpcSource, analyticsSource, analyticsFloorSeed, composeEnv };

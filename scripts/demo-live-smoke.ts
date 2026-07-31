@@ -41,11 +41,11 @@
 // hourly under DEMO_MODE, per-IP quota protection, so boot freshness
 // rides on that one immediate enqueue), so the checks POLL until they all
 // pass or the deadline lapses; the deadline derives from the demo's own
-// schedule constants (scripts/lib/demo-schedule.ts), not magic numbers.
+// cadence profile (scripts/lib/demo-schedule.ts), not magic numbers.
 // DEMO_LIVE_SMOKE_DEADLINE_MS overrides it ONLY so the unit self-test
 // (scripts/tests/integration/demo-live-smoke.test.ts) can prove the red paths quickly.
 import { ROUTES, path as routePath } from "@robotmoney/contract";
-import { COMMITTEE_INTERVAL_MS } from "./lib/demo-schedule.ts";
+import { resolveDemoCadence } from "./lib/demo-schedule.ts";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 
@@ -68,11 +68,17 @@ const ALLOWED_DEGRADES = new Set(["stale", "seed"]);
 export const RESEARCH_KEYS = ["channel-divergence", "late-cycle-signals"] as const;
 
 /**
- * Overall poll deadline: two full committee cadences. The driver has already
- * published its sessions by the time this runs, so the budget is really for the
- * eventually-consistent LIVE legs (first successful scheduled wallet sample etc.).
+ * Overall poll deadline: two full committee cadences of the FAST (CI) profile.
+ *
+ * This gate only ever runs against a CI / `bun run demo` stack, which is always
+ * the fast profile — so it is pinned to that profile explicitly and NEVER to
+ * whatever cadence the caller happens to be running. The standing demo's
+ * realistic profile convenes every 6 h; deriving from "the resolved cadence"
+ * would silently give the nightly LIVE smoke a 12 h poll budget against a
+ * 40-minute job timeout, and the gate would die by timeout instead of failing.
+ * The issue #128 single-source property is kept (no magic number here), bounded.
  */
-export const LIVE_SMOKE_DEADLINE_MS = 2 * COMMITTEE_INTERVAL_MS;
+export const LIVE_SMOKE_DEADLINE_MS = 2 * resolveDemoCadence({ stage: false }).committeeIntervalMs;
 
 // ── Pure evaluators ─────────────────────────────────────────────────────────
 // Each takes the parsed API payload (null ⇒ the fetch failed / non-2xx) and

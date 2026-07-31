@@ -71,6 +71,25 @@ export function logsClassifiedOutcome(body: string): string | null {
   return null;
 }
 
+/**
+ * null when the admission delays come from the cadence profile; a reason
+ * otherwise. Issue #371 moved the driver off its own 60_000 / 300_000 literals
+ * so a `--stage` boot admits one newcomer per committee interval (6 h) instead
+ * of one every five minutes, while plain `bun run demo` is unchanged.
+ */
+export function admissionDelaysComeFromProfile(body: string): string | null {
+  const literals = ["60_000", "60000", "300_000", "300000"].filter((lit) =>
+    new RegExp(`(?<![\\w_])${lit}(?![\\w_])`).test(body),
+  );
+  if (literals.length > 0) {
+    return `onboardingDriver() still hardcodes admission timing (${literals.join(", ")}) instead of reading the cadence profile`;
+  }
+  const missing = ["cadence.onboardingFirstMs", "cadence.onboardingIntervalMs"].filter((ref) => !body.includes(ref));
+  return missing.length === 0
+    ? null
+    : `onboardingDriver() never reads ${missing.join(" / ")} — its cadence is not profile-driven`;
+}
+
 /** Every demo admission must reuse the exact environment of its live stack. */
 export function retryCallsReuseStackEnvironment(src: string): string | null {
   const calls = [...src.matchAll(/await\s+runOnboardingEvalWithRetry\(\{[\s\S]*?\n\s*\}\);/g)].map((m) => m[0]);
@@ -118,6 +137,13 @@ describe("the demo's onboarding driver (scripts/lib/demo-main.ts)", () => {
 
   test("both the CI sweep and standing driver reuse the running stack's exact Compose environment", () => {
     expect(retryCallsReuseStackEnvironment(demoMain)).toBeNull();
+  });
+
+  test("its admission delays come from the cadence profile, not from 60_000 / 300_000 literals", () => {
+    // Issue #371: under `--stage` an admission must land once per committee
+    // interval (6 h). A surviving literal here would keep newcomers arriving
+    // every five minutes on the public demo regardless of the profile.
+    expect(admissionDelaysComeFromProfile(body)).toBeNull();
   });
 });
 
@@ -189,5 +215,34 @@ describe("red control: the 2026-07-25 driver, which lost a seat to one refusal",
   test("the stack-environment guard reports a call site that drops composeSpawnEnv", () => {
     const broken = demoMain.replaceAll("composeSpawnEnv: stack.spawnEnv,", "");
     expect(retryCallsReuseStackEnvironment(broken)).toContain("2/2");
+  });
+
+  // Issue #371 controls. The pre-#371 driver read its delays from two constants
+  // it declared itself; the grader must report BOTH failure shapes, or "no
+  // literals" would pass on a driver that reads nothing at all.
+  const PRE_371_DELAYS = `const FIRST_ONBOARD_MS = 60_000;
+  const ONBOARD_INTERVAL_MS = 300_000;
+  const delay = n === 0 ? FIRST_ONBOARD_MS : ONBOARD_INTERVAL_MS;`;
+
+  test("admissionDelaysComeFromProfile REPORTS the hardcoded 60_000 / 300_000 driver", () => {
+    const reason = admissionDelaysComeFromProfile(PRE_371_DELAYS);
+    expect(reason).not.toBeNull();
+    expect(reason).toContain("60_000");
+    expect(reason).toContain("300_000");
+  });
+
+  test("admissionDelaysComeFromProfile REPORTS a driver with no literals that reads no profile either", () => {
+    const reason = admissionDelaysComeFromProfile("const delay = someOtherThing;");
+    expect(reason).toContain("cadence.onboardingFirstMs");
+  });
+
+  test("admissionDelaysComeFromProfile REPORTS a driver that reads only half the profile", () => {
+    const half = "const delay = n === 0 ? cadence.onboardingFirstMs : 300000;";
+    expect(admissionDelaysComeFromProfile(half)).toContain("300000");
+  });
+
+  test("re-inlining the interval into the REAL driver body is caught", () => {
+    const broken = onboardingDriverBody(demoMain).replaceAll("cadence.onboardingIntervalMs", "300_000");
+    expect(admissionDelaysComeFromProfile(broken)).toContain("300_000");
   });
 });

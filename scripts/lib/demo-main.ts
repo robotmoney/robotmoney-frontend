@@ -6,7 +6,14 @@ import { resolveDemoEnv } from "./demo-env.ts";
 import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "./demo-volumes.ts";
 import { provisionDemoAnalyticsTokenAfterPreflight, removeDemoAnalyticsToken } from "./demo-secret.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
-import { COMMITTEE_INTERVAL_MS, COMMITTEE_STAGGER_MS } from "./demo-schedule.ts";
+import {
+  plannedRunAt,
+  planSubjectSchedules,
+  renderCadenceLine,
+  resolveDemoCadence,
+  sessionDateFor,
+  type SubjectCadencePlan,
+} from "./demo-schedule.ts";
 import {
   classifyOutcome,
   explainOutcome,
@@ -78,6 +85,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // because cloudflared routes 48787 and nothing else: a fallback would produce a
 // green boot serving a 502. Postgres stays Docker-assigned even under --stage.
 const stageMode = process.argv.includes("--stage");
+
+// …and the same argument selects the demo's CADENCE PROFILE (issue #371). A
+// `--stage` boot is the standing/public demo, so it convenes each subject every
+// 6 h with the subjects phase-offset by 3 h and puts the analytics-producer on a
+// 3-hourly research beat; every other boot (including CI) keeps today's fast
+// ~2-min values. Every number lives in scripts/lib/demo-schedule.ts — this file
+// carries no cadence literal of its own.
+const cadence = resolveDemoCadence({ stage: stageMode });
 
 // Loud, never silent. A stale `.env` (or an exported shell var) carrying
 // WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
@@ -242,7 +257,7 @@ const analyticsToken = credentials.analyticsToken;
 // Resolve every model/data-path preflight before provisioning a bearer file.
 // A typo or missing funded model key must not leak a temp credential directory
 // for a stack that never reached creation.
-const demoEnv = resolveDemoEnv(process.env);
+const demoEnv = resolveDemoEnv(process.env, { stage: stageMode });
 const analyticsTokenFile = provisionDemoAnalyticsTokenAfterPreflight(project, analyticsToken, () => {
   if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
     resolveModelConfig(process.env);
@@ -1468,7 +1483,9 @@ async function main(): Promise<void> {
     console.log(`  Log file:   ${logFile}`);
     console.log(`  PG data:    ${pgDataDir ? `--pg-data ${pgDataDir} (bind; resumable)` : `volume ${project}_pgdata (fresh-per-run; kept on teardown)`}`);
     console.log("");
-    console.log("  Demo actions run on a ~2-min staggered cadence.");
+    // Rendered from the RESOLVED profile, never hardcoded — the banner must
+    // state the cadence actually in force for this invocation.
+    console.log(`  ${renderCadenceLine(cadence)}`);
     console.log("  Ctrl-C / SIGTERM tears down the stack (containers + network; postgres data kept).");
     console.log("  Reclaim stopped demos' data volumes with: bun run demo:clean");
     console.log("");
@@ -1488,13 +1505,15 @@ async function main(): Promise<void> {
     .catch((err) => log(`frontend checks failed (stack still running): ${err instanceof Error ? err.message : err}`));
 
   // ── Phase B: staggered demo actions ──────────────────────────────────────
-  // Analytics (regime + research) is driven by the WORKER's own scheduler via the
-  // demo schedules seeded above — regime hourly at :07, research hourly at :37, so
-  // those two action types are already staggered from each other (see seed.ts).
+  // Analytics (regime + research) is driven by the analytics-producer's OWN cron
+  // timers (D25 / issue #361 Phase 4), never the consumer queue. Their schedules
+  // come from this invocation's cadence profile via resolveDemoEnv's composeEnv
+  // (PRODUCER_REGIME_CRON / PRODUCER_RESEARCH_CRON), so regime and research stay
+  // offset from each other and from the committee beat.
   //
   // The committee session drives live agents to submit takes over REST, so it
-  // runs from a loop HERE. It fires immediately (data on first load) then every
-  // ~2 min.
+  // runs from a loop HERE. It fires immediately (data on first load) then on the
+  // profile's committee interval.
   //
   // The session driver captures BACKEND_URL at module load, so set it BEFORE
   // the dynamic import. main()'s reset-heavy flow is guarded by import.meta.url,
@@ -1548,11 +1567,15 @@ async function main(): Promise<void> {
   // sessions never run concurrently and race on the shared member roster. runSession
   // with sessionIndex>0 self-seeds the (subject, regime) for its date, so no subject
   // needs pre-seeding here.
-  // Cadence constants live in scripts/lib/demo-schedule.ts (shared with the
-  // nightly LIVE smoke, which derives its deadlines from them — issue #128).
-  interface SubjectSchedule { subject: { id: string; name: string }; intervalMs: number; nextAt: number; runs: number; }
+  // The TIMETABLE is decided by the pure planner in scripts/lib/demo-schedule.ts
+  // (unit-tested in scripts/tests/unit/demo-schedule.test.ts; also the source of
+  // the nightly LIVE smoke's deadline — issue #128). This loop keeps only the
+  // I/O: every subject's first session lands promptly under BOTH profiles, and
+  // later runs walk that subject's phase-offset steady-state grid.
+  interface SubjectSchedule { subject: { id: string; name: string }; plan: SubjectCadencePlan; nextAt: number; runs: number; }
+  const plans = planSubjectSchedules(e2e.SUBJECTS.length, cadence, Date.now());
   const schedules: SubjectSchedule[] = e2e.SUBJECTS.map((s: { id: string; name: string }, i: number) => ({
-    subject: s, intervalMs: COMMITTEE_INTERVAL_MS, nextAt: Date.now() + i * COMMITTEE_STAGGER_MS, runs: 0,
+    subject: s, plan: plans[i], nextAt: plans[i].firstAt, runs: 0,
   }));
   // Populate the per-subject panes and seed their countdowns.
   for (const sch of schedules) {
@@ -1590,8 +1613,9 @@ async function main(): Promise<void> {
       const subject = due.subject;
       const c = state.committees[subject.id];
       // Rotate the date per THIS subject's own run count so sessions accumulate
-      // without colliding on UNIQUE(date, subject_id).
-      const date = new Date(Date.now() + due.runs * 86400_000).toISOString().slice(0, 10);
+      // without colliding on UNIQUE(date, subject_id) — the rule itself is the
+      // pure sessionDateFor() in demo-schedule.ts, unchanged in behaviour.
+      const date = sessionDateFor(Date.now(), due.runs);
       log(`committee → ${date}/${subject.id}`);
       c.members = {};
       c.nextAt = 0; // running now → pane shows "running…"
@@ -1609,7 +1633,10 @@ async function main(): Promise<void> {
         log(`committee session failed (stack still running): ${err instanceof Error ? err.message : err}`);
       }
       due.runs++;
-      due.nextAt = Date.now() + due.intervalMs;
+      // Next slot comes from the PLAN (self-correcting, no drift), never from a
+      // literal here; clamped to "not in the past" so a session that overran its
+      // slot reschedules immediately instead of firing a backlog.
+      due.nextAt = Math.max(plannedRunAt(due.plan, due.runs), Date.now());
       c.nextAt = due.nextAt;
     }
   }
@@ -1653,8 +1680,10 @@ async function main(): Promise<void> {
   // order, and never more — no generated fallback name once the list is
   // exhausted, and the driver loop terminates once they're all attempted
   // rather than running forever.
-  const FIRST_ONBOARD_MS = 60_000;     // first admission ~1 min in (after the base committee shows)
-  const ONBOARD_INTERVAL_MS = 300_000; // then a new admission starts every 5 min (real eval duration is additive)
+  // ADMISSION CADENCE comes from the profile (scripts/lib/demo-schedule.ts), not
+  // from literals here: the first admission stays prompt under both profiles
+  // (after the base committee shows), and later admissions ride the fast
+  // profile's 5-min beat or, under `--stage`, the realistic committee interval.
   // Adapt the shared finite-roster planner (demo-newcomers.ts) to the
   // real-inference driver's identity shape. `identity.runId` is a LOCAL slug
   // only (this driver's bookkeeping key + the container's --title); the real
@@ -1672,14 +1701,14 @@ async function main(): Promise<void> {
   }
   async function onboardingDriver(): Promise<void> {
     for (let n = 0; n < NEWCOMER_NAMES.length; n++) {
-      const delay = n === 0 ? FIRST_ONBOARD_MS : ONBOARD_INTERVAL_MS;
+      const delay = n === 0 ? cadence.onboardingFirstMs : cadence.onboardingIntervalMs;
       const dueAt = Date.now() + delay;
       // Preview the next few admissions (this one + its successors, if any are
       // left in the fixed list) with countdowns.
       const upcoming: UpcomingMember[] = [];
       for (const k of [0, 1, 2]) {
         const p = plannedNewcomer(n + k);
-        if (p) upcoming.push({ memberId: p.identity.runId, name: p.identity.name, at: dueAt + k * ONBOARD_INTERVAL_MS });
+        if (p) upcoming.push({ memberId: p.identity.runId, name: p.identity.name, at: dueAt + k * cadence.onboardingIntervalMs });
       }
       state.upcoming = upcoming;
       await sleep(delay);
