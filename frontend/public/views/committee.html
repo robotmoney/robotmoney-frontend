@@ -99,7 +99,13 @@
                silently, while the surrounding counts still read correctly. That
                is exactly how this list went blank while the chips said "4". -->
           <template x-for="s in visibleSessions()" :key="s.id">
-            <a class="cv__session-card mp-take" :href="`/committee/${s.date}/${s.subjectId}`"
+            <!-- Link by SESSION ID, falling back to the dated URL for archive
+                 rows that have none. Two rows of the same (date, subject) are
+                 two different sessions; the dated URL resolves to the later of
+                 them, so linking by it would leave the earlier one unreachable
+                 and make the pair look like a duplicate of one page. -->
+            <a class="cv__session-card mp-take"
+               :href="sessionHref(s)"
                :style="`--mp-subject:${subjectDot(s.subjectId)}`">
               <div class="cv__session-top">
                 <div class="cv__session-titleline">

@@ -26,6 +26,7 @@ export const ROUTES: {
     subjectSnapshots: string;
     sessions: string;
     session: string;
+    sessionById: string;
     take: string;
     takePermalink: string;
     openSession: string;

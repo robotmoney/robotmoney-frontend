@@ -1232,6 +1232,31 @@ export function registerStaticViews(Alpine) {
     takes: [],
     members: [],
     async init() {
+      // TWO addressing forms reach this view:
+      //   /committee/sessions/<uuid>  — one exact session, the only form that can
+      //                                 reach an earlier session of a day on which
+      //                                 the subject convened more than once.
+      //   /committee/<date>/<subject> — the latest session that day. Kept because
+      //                                 every published link, the prerenderer and
+      //                                 the static archive use it.
+      // The id form resolves first and then continues down the SAME path as the
+      // dated form, using the date/subject the server reported, so the subject,
+      // snapshot, brief and archive fallbacks all behave identically.
+      const byId = location.pathname.match(
+        /^\/committee\/sessions\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i,
+      );
+      if (byId) {
+        try {
+          const detail = await api.get(path(ROUTES.committee.sessionById, { id: byId[1] }));
+          const s = camelSession(detail.session);
+          await this.loadApi(s.date, s.subjectId, detail);
+        } catch (_) {
+          this.error = "Session not found";
+        } finally {
+          this.loading = false;
+        }
+        return;
+      }
       const match = location.pathname.match(/^\/committee\/(\d{4}-\d{2}-\d{2})\/([^/]+)/);
       if (!match) {
         this.error = "Session not found";
@@ -1265,13 +1290,17 @@ export function registerStaticViews(Alpine) {
       this.members = members.filter(Boolean);
       this.brief = await fetchJson(`/data/committee/briefs/${date}-${subject}.json`).catch(() => null);
     },
-    async loadApi(date, subject) {
+    // `preloaded` is the already-fetched session when the caller resolved it by
+    // id; without it this fetches the latest session for (date, subject) exactly
+    // as before. Everything after the fetch is shared, so the two addressing
+    // forms cannot drift into rendering different pages.
+    async loadApi(date, subject, preloaded = null) {
       // Fetch subject + snapshots alongside the session so the live/API path
       // renders the SAME reference experience as the archive path (charts +
       // portfolio). Each side-fetch is independently guarded so a missing
       // subject/snapshot never breaks the takes/session render.
       const [detail, memberData, brief, subjectData, snapshotData] = await Promise.all([
-        api.get(path(ROUTES.committee.session, { date, subject })),
+        preloaded ?? api.get(path(ROUTES.committee.session, { date, subject })),
         api.get(ROUTES.committee.members),
         api.get(ROUTES.committee.brief, { date, subject }).catch(() => null),
         api.get(path(ROUTES.committee.subject, { id: subject })).catch(() => null),

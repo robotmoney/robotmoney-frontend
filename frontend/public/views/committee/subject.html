@@ -150,7 +150,12 @@
                 <div class="cv__session-top">
                   <div class="cv__session-titleline">
                     <span class="cv__date" x-text="formatDate(s.date, 'short')"></span>
-                    <a class="cv__session-title" :href="`/committee/${s.date}/${encodeURIComponent(s.subjectId)}`"
+                    <!-- Same reason as the /committee list: link the exact
+                         session by id when the row has one (live API), and fall
+                         back to the dated URL for static-archive rows, whose
+                         synthetic id is the `${date}-${subjectId}` composite. -->
+                    <a class="cv__session-title"
+                       :href="s.id && s.id !== `${s.date}-${s.subjectId}` ? `/committee/sessions/${encodeURIComponent(s.id)}` : `/committee/${s.date}/${encodeURIComponent(s.subjectId)}`"
                        x-text="takeCountLabel(s)"></a>
                   </div>
                 </div>

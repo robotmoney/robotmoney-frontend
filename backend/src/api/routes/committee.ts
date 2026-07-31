@@ -40,6 +40,10 @@ const RE_SUBJECT_SNAPSHOTS = templateRe(C.subjectSnapshots); // /api/committee/s
 const RE_SUBJECT = templateRe(C.subject); // /api/committee/subjects/:id
 const RE_MEMBER_TAKES = templateRe(C.memberTakes); // /api/committee/members/:id/takes — checked before the plain member-detail route below, same reason as RE_SUBJECT_SNAPSHOTS vs RE_SUBJECT
 const RE_SESSION = templateRe(C.session); // /api/committee/sessions/:date/:subject
+// /api/committee/sessions/:id — ONE segment, so it cannot overlap the
+// two-segment date/subject form above; the order of the two tests below is
+// therefore incidental rather than load-bearing.
+const RE_SESSION_BY_ID = templateRe(C.sessionById);
 const RE_MEMO = templateRe(C.memo, { id: "\\d+" }); // /api/committee/memos/:id (numeric only, as before)
 const ADMIN_PREFIX = C.admin.action.replace(":action", ""); // /api/committee/admin/
 
@@ -89,6 +93,11 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     }
   }
   if (m === "GET" && p === C.openSession) return { status: 200, body: await ic.getOpenSession() };
+  if (m === "GET" && RE_SESSION_BY_ID.test(p)) {
+    const id = p.split("/").pop() ?? "";
+    const r = await ic.getSessionById(decodeURIComponent(id));
+    return { status: r ? 200 : 404, body: r ?? { error: "not found" } };
+  }
   if (m === "GET" && RE_SESSION.test(p)) {
     const [, , , , date, subject] = p.split("/");
     const r = await ic.getSession(decodeURIComponent(date), decodeURIComponent(subject));

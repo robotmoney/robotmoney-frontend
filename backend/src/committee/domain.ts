@@ -267,6 +267,29 @@ export async function getSession(
                        WHERE date = ${date} AND subject_id = ${subjectId}
                        ORDER BY convened_at DESC LIMIT 1`)[0];
   if (!s) return null;
+  return withTakes(s);
+}
+
+/**
+ * One session BY ITS OWN ID — the unambiguous handle. `getSession(date, subject)`
+ * can only ever return the latest session of a day, so every earlier session of a
+ * multi-session day is unreachable through it; this is how a list row links to
+ * the exact session it is describing.
+ */
+export async function getSessionById(
+  id: string,
+): Promise<{ session: ReturnType<typeof toSession>; takes: Awaited<ReturnType<typeof toVerifiedTake>>[] } | null> {
+  // `id` is a uuid column, so a non-uuid path segment would make Postgres throw
+  // rather than miss. Treat anything unparseable as simply not found — this is a
+  // public GET and a 404 is the honest answer for "no session with that handle".
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+  const s = (await sql`SELECT * FROM committee_sessions WHERE id = ${id}`)[0];
+  if (!s) return null;
+  return withTakes(s);
+}
+
+// The shared body of both lookups above: a session row plus its verified takes.
+async function withTakes(s: Record<string, unknown>) {
   const takes = await sql`
     SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
            r.memo_url, r.payload, r.signature, r.received_at,
@@ -275,7 +298,7 @@ export async function getSession(
             ORDER BY k.created_at DESC LIMIT 1) AS public_key
     FROM committee_recommendations r
     JOIN committee_members m ON m.id = r.member_id
-    WHERE r.session_id = ${s.id} ORDER BY r.received_at`;
+    WHERE r.session_id = ${s.id as string} ORDER BY r.received_at`;
   return { session: toSession(s), takes: await Promise.all(takes.map(toVerifiedTake)) };
 }
 

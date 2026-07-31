@@ -761,3 +761,44 @@ test("POST /api/committee/signing-payload and submit reject unknown stances and 
     "stance must be one of bearish, cautious, neutral, constructive, bullish",
   );
 });
+
+// ── Addressing a session by its own id (post-0022) ──────────────────────────
+// A subject may convene more than once a day, so (date, subject) addresses only
+// the LATEST session of that day and every earlier one is unreachable through
+// it. The id route is the unambiguous handle the session lists link by.
+test("two sessions for one subject on one day: the dated route returns the LATEST, the id route returns each", async () => {
+  const subj = rid("twice");
+  await ic.ensureSubject(subj, "Twice In A Day");
+
+  const first = await ic.openSession(subj);
+  // Publishing is what frees the subject to convene again — openSession is
+  // idempotent while a session is still scheduled/collecting.
+  await ic.publishBrief(first.id, 60);
+  await ic.closeWindow(first.id);
+  await ic.aggregateSession(first.id);
+  await ic.publishSession(first.id);
+  const second = await ic.openSession(subj);
+
+  expect(second.id).not.toBe(first.id);
+  const date = sessionDate(first);
+  // Same calendar day — the whole point. If this ever fails the run straddled
+  // midnight UTC, not a regression in the code under test.
+  expect(sessionDate(second)).toBe(date);
+
+  // Dated route: the later session wins.
+  const dated = await ic.getSession(date, subj);
+  expect(dated?.session.id).toBe(second.id);
+
+  // Id route: each session is reachable, exactly.
+  expect((await ic.getSessionById(first.id))?.session.id).toBe(first.id);
+  expect((await ic.getSessionById(second.id))?.session.id).toBe(second.id);
+
+  // …and over HTTP, including the not-found shapes that must never 500.
+  const get = async (p: string) => await handleCommittee(new Request(`http://test${p}`), new URL(`http://test${p}`));
+  expect((await get(routePath(ROUTES.committee.sessionById, { id: first.id })))?.status).toBe(200);
+  expect((await get(routePath(ROUTES.committee.sessionById, { id: crypto.randomUUID() })))?.status).toBe(404);
+  // A non-uuid segment must 404 rather than reaching Postgres and throwing.
+  expect((await get("/api/committee/sessions/not-a-uuid"))?.status).toBe(404);
+  // The two-segment dated form still resolves — one route never shadows the other.
+  expect((await get(routePath(ROUTES.committee.session, { date, subject: subj })))?.status).toBe(200);
+});

@@ -76,6 +76,15 @@ export function viewFor(pathname) {
   if (/^\/committee\/\d{4}-\d{2}-\d{2}\/[^/]+\/?$/.test(pathname)) {
     return `${VIEW_DIR}/committee/session.html`;
   }
+  // /committee/sessions/<uuid> — one session by its own id, the same fragment as
+  // the dated form above. A subject may convene more than once a day (migration
+  // 0022), so the dated URL can only ever reach the LAST session of a day; this
+  // is how a list row links to the exact session it describes. The uuid shape is
+  // matched explicitly so this can never swallow some future
+  // /committee/sessions/<word> page.
+  if (/^\/committee\/sessions\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/?$/i.test(pathname)) {
+    return `${VIEW_DIR}/committee/session.html`;
+  }
   const clean = pathname.replace(/\/+$/, "");
   return `${VIEW_DIR}${clean}.html`;
 }

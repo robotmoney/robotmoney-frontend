@@ -51,7 +51,13 @@ export const ROUTES = {
     // ?full=1 reproduces the pre-#243 unpaginated/unprojected response for
     // callers (e.g. the admin sessions views) that still need every field.
     sessions: "/api/committee/sessions",
-    session: "/api/committee/sessions/:date/:subject", // GET
+    session: "/api/committee/sessions/:date/:subject", // GET — the LATEST session that day for that subject
+    // GET one session by its own id. Since migration 0022 a subject may convene
+    // more than once a day, so (date, subject) addresses "the latest one that
+    // day" and cannot reach the earlier ones; this is the unambiguous handle.
+    // One path segment, so it can never be confused with the two-segment
+    // date/subject form above.
+    sessionById: "/api/committee/sessions/:id",
     take: "/api/committee/takes/:id", // GET — public read-time-verified receipt
     takePermalink: "/committee/takes/:id", // rendered public verification receipt
     openSession: "/api/committee/open-session", // GET → session currently collecting, if any
