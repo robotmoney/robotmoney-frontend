@@ -19,19 +19,31 @@ const shortAddr = (a) => `${a.slice(0, 6)}...${a.slice(-4)}`;
 // LIVE allocation framework (GET /api/dashboards/allocation) — never a baked
 // 33/33/33 — and are omitted entirely if the feed is unavailable rather than
 // fabricated. Delays are staggered so the log types out over ~7s.
+// `beat` is the pause BEFORE each line, in milliseconds, and it is deliberately
+// uneven: a real shell waits while it works, rattles through its successes in a
+// burst, and takes a breath before reporting final state. The previous flat
+// 600ms cadence was the main reason the log read as a metronome rather than as a
+// machine doing work. The accumulated `delay` is handed to CSS as a per-row
+// animation-delay, so the browser owns the reveal and no JS timer is involved.
 function buildTerminalLines(bucketLines) {
   const lines = [
-    { text: "$ robot-money init --chain base --vault erc4626" },
-    { text: "  Deploying vault contract..." },
-    { text: `  ✓ Vault deployed at ${shortAddr(VAULT_ADDRESS)}` },
-    ...bucketLines.map((b) => ({ text: `  ✓ ${b}` })),
-    { text: "  Launching $ROBOTMONEY on Base..." },
-    { text: "  ✓ LP locked until 2100" },
-    { text: "  ✓ Prop wallet initialized" },
-    { text: "" },
-    { text: "  Ready. Accepting deposits." },
+    { text: "$ robot-money init --chain base --vault erc4626", beat: 400 },
+    { text: "  Deploying vault contract...", beat: 700 },
+    { text: `  ✓ Vault deployed at ${shortAddr(VAULT_ADDRESS)}`, beat: 900 },
+    // The bucket split lands as one quick burst: it is a single fact, and
+    // spacing its parts out invites the reader to weigh them separately.
+    ...bucketLines.map((b) => ({ text: `  ✓ ${b}`, beat: 260 })),
+    { text: "  Launching $ROBOTMONEY on Base...", beat: 560 },
+    { text: "  ✓ LP locked until 2100", beat: 820 },
+    { text: "  ✓ Prop wallet initialized", beat: 260 },
+    { text: "", beat: 200 },
+    { text: "  Ready. Accepting deposits.", beat: 650 },
   ];
-  return lines.map((l, i) => ({ ...l, delay: i === 0 ? 0 : 600 + i * 600 }));
+  let at = 0;
+  return lines.map((l) => {
+    at += l.beat;
+    return { ...l, delay: at };
+  });
 }
 
 // Register every Alpine.data factory the views need, before Alpine starts.
@@ -44,8 +56,6 @@ document.addEventListener("alpine:init", () => {
 
   Alpine.data("terminalBoot", () => ({
     lines: [],
-    visible: 0,
-    timers: [],
     async start() {
       // Pull the real bucket target weights from the allocation framework; on
       // any failure, omit the split lines (honest — no fabricated 33/33/33).
@@ -58,16 +68,11 @@ document.addEventListener("alpine:init", () => {
       } catch (e) {
         bucketLines = [];
       }
+      // Every line is rendered at once and revealed by its own CSS animation
+      // delay. That replaces one setTimeout per line, and it means a row
+      // animates exactly once, when it is created, instead of the whole list
+      // re-rendering on each tick and risking re-animating rows already shown.
       this.lines = buildTerminalLines(bucketLines);
-      this.timers = this.lines.map((line, i) =>
-        setTimeout(() => {
-          this.visible = i + 1;
-        }, line.delay + 500),
-      );
-    },
-    destroy() {
-      this.timers.forEach(clearTimeout);
-      this.timers = [];
     },
     lineClass(line) {
       const t = line.text;

@@ -44,8 +44,8 @@
               <span class="terminal__title">robot-money — vault deployment</span>
             </div>
             <div class="terminal__body">
-              <template x-for="(line, i) in lines.slice(0, visible)" :key="i">
-                <div :class="lineClass(line)"><span x-text="line.text"></span><span class="terminal__cursor" x-show="i === visible - 1 && line.text"></span></div>
+              <template x-for="(line, i) in lines" :key="i">
+                <div :class="lineClass(line)" :style="`--d:${line.delay}ms`"><span x-text="line.text"></span><span class="terminal__cursor" x-show="i === lines.length - 1"></span></div>
               </template>
             </div>
           </div>
