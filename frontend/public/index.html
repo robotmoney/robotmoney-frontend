@@ -97,6 +97,12 @@
     <link rel="stylesheet" href="/assets/css/views.css" />
     <link rel="stylesheet" href="/assets/css/docs-shell.css" />
 
+    <!-- Analytics dashboard theme scope (issue #379): every rule inside
+         dash.css is scoped under `.a3`, so it never affects marketing pages
+         (which never carry that class). See docs/bot-analytics-ui-port-plan.md
+         §2 for why this is a dedicated file rather than reusing tokens.css. -->
+    <link rel="stylesheet" href="/assets/css/dash.css" />
+
     <!-- Per-environment public config (API origin). No secrets. -->
     <script src="/config.js"></script>
 

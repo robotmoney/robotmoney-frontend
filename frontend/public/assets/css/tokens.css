@@ -2,7 +2,13 @@
    ROBOT MONEY design system: the Beam/Pool/Beacon covenant.
    Beam (cyan) = a LINE only; Pool (green) = value masses; Beacon (orange) = a POINT for loss/attention. */
 
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&display=swap');
+/* Weights 300 (Space Grotesk) and 300/600 (JetBrains Mono) added for the
+   analytics dashboard scope (.a3, assets/css/dash.css, issue #379) — the
+   original bot-analytics app imported both families 300-700
+   (docs/bot-analytics-ui-port/inventory-original.md §4). Purely additive: no
+   existing rule references these weights, so no other page's rendering
+   changes. */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
 
 :root {
   /* fonts (were Tailwind @theme vars) */
