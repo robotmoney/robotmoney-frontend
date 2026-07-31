@@ -19,7 +19,8 @@ const vendorScripts = {
 
 // Deterministic /api/projects payload (matches the @robotmoney/contract Project DTO
 // the projectsView() factory consumes). Alpha leads on the default fdv-desc sort;
-// Zeta has the higher 30d revenue; Sticky is pinned first on load despite 0 mcap.
+// Zeta has the higher wallet balance; Sticky is pinned first on load despite 0 mcap.
+// (issue #346: revenue30d is no longer part of the DTO — dropped here too.)
 const PROJECTS = {
   projects: [
     {
@@ -27,7 +28,7 @@ const PROJECTS = {
       description: "pinned on first load", websiteUrl: null, twitterHandle: null,
       dataCoverageScore: 60, isSticky: true,
       facets: { agent: true, x402: false, coin: false, wallet: false, vault: false },
-      coins: [], wallets: [], walletTotalUsd: 0, revenue30d: 0,
+      coins: [], wallets: [], walletTotalUsd: 0,
       maxMarketCap: 0, maxFdv: 0, sparkline: [],
     },
     {
@@ -36,9 +37,9 @@ const PROJECTS = {
       websiteUrl: "https://alpha.example/", twitterHandle: "@alpha",
       dataCoverageScore: 92, isSticky: false,
       facets: { agent: true, x402: true, coin: true, wallet: true, vault: true },
-      coins: [{ id: "c-alp", ticker: "ALP", name: "Alpha", marketCap: 12_000_000, fdv: 40_000_000, percentChange24h: 4.2, priceUsd: 1.5, volume24h: 800_000 }],
-      wallets: [{ id: "w1", label: "Treasury", chain: "base", balanceUsd: 1500 }],
-      walletTotalUsd: 1500, revenue30d: 350,
+      coins: [{ id: "c-alp", ticker: "ALP", name: "Alpha", marketCap: 12_000_000, fdv: 40_000_000, percentChange24h: 4.2, priceUsd: 1.5, volume24h: 800_000, refreshedAt: null, stale: true }],
+      wallets: [{ id: "w1", label: "Treasury", chain: "base", balanceUsd: 1500, refreshedAt: null, stale: true }],
+      walletTotalUsd: 1500,
       maxMarketCap: 12_000_000, maxFdv: 40_000_000, sparkline: [1.0, 1.1, 1.3, 1.5],
       volume24h: 800_000, tvlUsd: 1_000_000,
     },
@@ -47,9 +48,10 @@ const PROJECTS = {
       logoUrl: null, description: "zeta blurb",
       websiteUrl: null, twitterHandle: null,
       dataCoverageScore: 70, isSticky: false,
-      facets: { agent: false, x402: false, coin: true, wallet: false, vault: false },
-      coins: [{ id: "c-zet", ticker: "ZET", name: "Zeta", marketCap: 3_000_000, fdv: 6_000_000, percentChange24h: -2.1 }],
-      wallets: [], walletTotalUsd: 0, revenue30d: 9000,
+      facets: { agent: false, x402: false, coin: true, wallet: true, vault: false },
+      coins: [{ id: "c-zet", ticker: "ZET", name: "Zeta", marketCap: 3_000_000, fdv: 6_000_000, percentChange24h: -2.1, priceUsd: null, volume24h: null, refreshedAt: null, stale: true }],
+      wallets: [{ id: "w-zet", label: "Zeta Treasury", chain: "base", balanceUsd: 9000, refreshedAt: null, stale: true }],
+      walletTotalUsd: 9000,
       maxMarketCap: 3_000_000, maxFdv: 6_000_000, sparkline: [2.0, 1.8, 1.6],
     },
     {
@@ -58,7 +60,7 @@ const PROJECTS = {
       websiteUrl: null, twitterHandle: null,
       dataCoverageScore: 60, isSticky: false,
       facets: { agent: true, x402: true, coin: false, wallet: false, vault: false },
-      coins: [], wallets: [], walletTotalUsd: 0, revenue30d: 500,
+      coins: [], wallets: [], walletTotalUsd: 0,
       maxMarketCap: 0, maxFdv: 0, sparkline: [100, 200, 300],
     },
     {
@@ -67,7 +69,7 @@ const PROJECTS = {
       websiteUrl: null, twitterHandle: null,
       dataCoverageScore: 60, isSticky: false,
       facets: { agent: true, x402: true, coin: false, wallet: false, vault: false },
-      coins: [], wallets: [], walletTotalUsd: 0, revenue30d: 0,
+      coins: [], wallets: [], walletTotalUsd: 0,
       maxMarketCap: 0, maxFdv: 0, sparkline: [],
     }
   ],
@@ -102,12 +104,12 @@ test("routes to /projects and renders the directory table with a2 tokens", async
   await expect(page.locator(".pj-table tbody tr")).toHaveCount(5);
 
   // Alpha's row surfaces its aggregated numbers — every metric comes from the
-  // /api/projects DTO the pipelines populate (market cap, 24h change, revenue).
+  // /api/projects DTO the pipelines populate (market cap, 24h change, wallet).
   const alpha = page.locator(".pj-table tbody tr", { hasText: "Alpha Labs" });
   await expect(alpha).toContainText("$12.00M"); // max market cap
   await expect(alpha).toContainText("$40.00M"); // max fdv
   await expect(alpha).toContainText("+4.20%");  // 24h change
-  await expect(alpha).toContainText("$350");    // trailing-30d revenue
+  await expect(alpha).toContainText("$1.5K");   // wallet balance (no revenue column, issue #346)
   await expect(alpha.locator(".pj-link", { hasText: "alpha.example" })).toBeVisible();
   await expect(alpha.locator(".pj-link", { hasText: "@alpha" })).toBeVisible();
 
@@ -204,11 +206,11 @@ test("sticky project pins first on load; clicking a header re-sorts and releases
   // First load: sticky pinned first, then market cap desc (Alpha > Zeta > Tokenless...).
   await expect(rowNames(page)).toHaveText(["Sticky Co", "Alpha Labs", "Zeta Systems", "Tokenless Active", "Tokenless Empty"]);
 
-  // Sort by Revenue 30d desc → Zeta (9000) leads, sticky pin released.
-  await page.locator(".pj-table thead .pj-sort", { hasText: "Revenue 30d" }).click();
-  await expect(rowNames(page)).toHaveText(["Zeta Systems", "Tokenless Active", "Alpha Labs", "Sticky Co", "Tokenless Empty"]);
+  // Sort by Wallet Balance desc → Zeta (9000) leads, sticky pin released.
+  await page.locator(".pj-table thead .pj-sort", { hasText: "Wallet Balance" }).click();
+  await expect(rowNames(page)).toHaveText(["Zeta Systems", "Alpha Labs", "Sticky Co", "Tokenless Active", "Tokenless Empty"]);
 
-  // Toggle to ascending → order reverses.
-  await page.locator(".pj-table thead .pj-sort", { hasText: "Revenue 30d" }).click();
-  await expect(rowNames(page)).toHaveText(["Sticky Co", "Tokenless Empty", "Alpha Labs", "Tokenless Active", "Zeta Systems"]);
+  // Toggle to ascending → order reverses (ties keep their original relative order).
+  await page.locator(".pj-table thead .pj-sort", { hasText: "Wallet Balance" }).click();
+  await expect(rowNames(page)).toHaveText(["Sticky Co", "Tokenless Active", "Tokenless Empty", "Alpha Labs", "Zeta Systems"]);
 });

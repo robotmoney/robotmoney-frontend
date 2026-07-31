@@ -16,8 +16,8 @@
       <h1 class="a2-hero__title">Agentic Economy <span class="a2-grad">Ecosystem</span></h1>
       <p class="a2-hero__lede">
         Zero Human Companies, onchain AI agents, and other AI-native economics
-        experiments. Market cap, FDV, revenue and wallet balances per project,
-        with the facets each one covers.
+        experiments. Market cap, FDV, and wallet balances per project, with the
+        facets each one covers.
       </p>
     </div>
   </header>
@@ -79,11 +79,6 @@
           <th class="pj-l">
             <button type="button" class="pj-sort" :class="isSort('facets') && 'pj-sort--active'" @click="sortBy('facets')">
               Facets <span class="pj-sort__i" x-text="sortIcon('facets')"></span>
-            </button>
-          </th>
-          <th>
-            <button type="button" class="pj-sort" :class="isSort('revenue') && 'pj-sort--active'" @click="sortBy('revenue')">
-              Revenue 30d <span class="pj-sort__i" x-text="sortIcon('revenue')"></span>
             </button>
           </th>
           <th>
@@ -181,9 +176,6 @@
                 </template>
               </div>
             </td>
-
-            <!-- Revenue 30d -->
-            <td class="a2-r" x-text="fmtUsd(row.p.revenue30d)"></td>
 
             <!-- Wallet balance -->
             <td class="a2-r">

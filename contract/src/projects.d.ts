@@ -13,6 +13,13 @@ export interface ProjectCoin {
   // market-refresh pipeline (CoinGecko / DexScreener). Null until first refresh.
   priceUsd: number | null;
   volume24h: number | null;
+  // Issue #346 (the D24 pattern applied to the coin facet): the real timestamp
+  // of the last successful projects.refresh_coins sample for this row, and
+  // whether it is older than the freshness budget (or has never been
+  // refreshed). Never a boolean alone — a consumer can always see how old a
+  // served value is.
+  refreshedAt: string | null;
+  stale: boolean;
 }
 
 export interface ProjectWallet {
@@ -20,6 +27,11 @@ export interface ProjectWallet {
   label: string;
   chain: string | null;
   balanceUsd: number | null;
+  // Issue #346: the real timestamp of the last successful
+  // projects.refresh_wallets sample for this wallet, and whether it is older
+  // than the freshness budget (or has never been refreshed).
+  refreshedAt: string | null;
+  stale: boolean;
 }
 
 // Live-recomputed facet presence (agent / x402 / coin / wallet / vault), ignoring
@@ -46,7 +58,10 @@ export interface Project {
   coins: ProjectCoin[];
   wallets: ProjectWallet[];
   walletTotalUsd: number;
-  revenue30d: number;
+  // revenue30d intentionally removed (issue #346): no persisted, non-fabricated
+  // revenue source exists for the directory as a whole (only a subset of
+  // Virtuals-protocol agents have one) — the honest move is to drop the column
+  // rather than serve a partly-real, partly-empty figure as if it were uniform.
   maxMarketCap: number;
   maxFdv: number;
   sparkline: number[]; // 30d primary-coin price series (chronological)

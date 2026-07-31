@@ -127,7 +127,6 @@ test("full pipeline reproduces the ground-truth directory aggregates end to end"
   expect(virtuals!.maxFdv).toBe(2_000_000_000);
   expect(virtuals!.volume24h).toBe(50_000_000); // max coin 24h volume
   expect(virtuals!.tvlUsd).toBe(1_000_000); // ERC-4626 vault TVL
-  expect(virtuals!.revenue30d).toBe(60_000); // 10,000,000 × 0.006
   expect(virtuals!.facets).toEqual({ agent: true, x402: false, coin: true, wallet: true, vault: true });
   expect(virtuals!.dataCoverageScore).toBe(86);
   expect(virtuals!.sparkline).toEqual([1.5]); // primary coin VIRTUAL, one snapshot @ 1.5
@@ -135,12 +134,25 @@ test("full pipeline reproduces the ground-truth directory aggregates end to end"
   const aixbt = bySlug("aixbt");
   expect(aixbt!.maxMarketCap).toBe(320_000_000);
   expect(aixbt!.maxFdv).toBe(320_000_000); // fdv fell back to market_cap
-  expect(aixbt!.revenue30d).toBe(30_000); // 5,000,000 × 0.006
   expect(aixbt!.facets).toEqual({ agent: true, x402: false, coin: true, wallet: true, vault: false });
   expect(aixbt!.dataCoverageScore).toBe(79);
 
   const x402 = bySlug("coinbase-x402-facilitator");
-  expect(x402!.revenue30d).toBe(15_000); // x402 volume rollup
   expect(x402!.facets).toEqual({ agent: true, x402: true, coin: false, wallet: true, vault: false });
   expect(x402!.dataCoverageScore).toBe(78);
+
+  // Issue #346: revenue30d is no longer a DTO field, but the pipeline still
+  // persists the SAME ground-truth revenue figures into agent_revenue_daily —
+  // assert those directly so the fidelity coverage (virtuals'
+  // 10,000,000 × 0.006, aixbt's 5,000,000 × 0.006, x402's volume rollup) is
+  // unchanged in substance, just read from the table rather than the DTO.
+  async function revenueFor(pid: string): Promise<number> {
+    const [{ rev }] = await sql<{ rev: number }[]>`
+      SELECT COALESCE(sum(r.revenue_usd), 0)::float8 AS rev FROM agent_revenue_daily r
+      JOIN openclaw_agents a ON a.id = r.agent_id WHERE a.project_id = ${pid}`;
+    return rev;
+  }
+  expect(await revenueFor(virtuals!.id)).toBe(60_000);
+  expect(await revenueFor(aixbt!.id)).toBe(30_000);
+  expect(await revenueFor(x402!.id)).toBe(15_000);
 });
