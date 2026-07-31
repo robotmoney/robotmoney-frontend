@@ -57,7 +57,7 @@ export function registerSubstrate(Alpine) {
       // spawning, so 8 initial cracks spent the first seconds doing nothing
       // visible. More seeds and more steps reach a legible network in ~3s and
       // then settle into the same stasis-and-fade cycle as before.
-      const intensity = 45, speed = 11.0, fadeSec = 4, lineW = 1.1, dotSize = 36;
+      const intensity = 45, speed = 16.0, fadeSec = 4, lineW = 1.1, dotSize = 36;
       const seedCracks = 26;
       const ACCENT = [0, 229, 255], BG = [10, 10, 15];
 

@@ -16,26 +16,32 @@
     <header class="tok__hero">
       <div class="tok__hero-art" x-data="tokHero()"></div>
       <div class="tok__hero-inner">
-        <h1 class="tok__h1">
-          Token <span class="tok__grad">Economics</span>
-        </h1>
-        <p class="tok__lede">
-          $ROBOTMONEY directs vault allocation. Fair launch via Bankr on Base, 0% premine.
-        </p>
+        <div class="tok__hero-copy">
+          <h1 class="tok__h1">
+            Token <span class="tok__grad">Economics</span>
+          </h1>
+          <p class="tok__lede">
+            $ROBOTMONEY directs vault allocation. Fair launch via Bankr on Base, 0% premine.
+          </p>
+        </div>
+
+        <!-- The contract address and the two explorer links belong beside the
+             headline, not in a strip under the hero. They are what a reader
+             comes to this page for first, and below the band they read as page
+             content rather than as the page's own identity. -->
+        <div class="tok__hero-actions">
+          <div class="tok__contract">
+            <span class="tok__contract-label">Contract</span>
+            <code class="tok__contract-addr">0x65021a79AeEF...8618bEbA3</code>
+            <button type="button" class="tok__copy" data-copy="0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" data-copied-text="Copied!"><span data-copy-label>Copy</span></button>
+          </div>
+          <div class="tok__hero-links">
+            <a class="tok__btn tok__btn--solid" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
+            <a class="tok__btn tok__btn--ghost" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">BaseScan</a>
+          </div>
+        </div>
       </div>
     </header>
-
-    <div class="tok__hero-actions">
-      <div class="tok__contract">
-        <span class="tok__contract-label">Contract</span>
-        <code class="tok__contract-addr">0x65021a79AeEF...8618bEbA3</code>
-        <button type="button" class="tok__copy" data-copy="0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" data-copied-text="Copied!"><span data-copy-label>Copy</span></button>
-      </div>
-      <div class="tok__hero-links">
-        <a class="tok__btn tok__btn--solid" href="https://dexscreener.com/base/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">DexScreener</a>
-        <a class="tok__btn tok__btn--ghost" href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer">BaseScan</a>
-      </div>
-    </div>
 
     <!-- 02 / Utility -->
     <div class="tok__section" id="what-it-does">
@@ -445,7 +451,17 @@
   max-width: 80rem;
   margin-inline: auto;
   padding: 2.5rem 1.5rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+  align-items: center;
 }
+@media (min-width: 60rem) {
+  /* Sized so the truncated address, its Copy control and the two explorer
+     buttons all sit on their own rows without wrapping. */
+  .tok__hero-inner { grid-template-columns: minmax(0, 1fr) minmax(0, 30rem); gap: 3rem; }
+}
+.tok__hero-copy { min-width: 0; }
 .tok__hero::after {
   content: "";
   position: absolute;
@@ -512,7 +528,9 @@
   font-family: var(--font-mono);
   font-size: 0.85rem;
   color: var(--color-accent);
-  word-break: break-all;
+  /* The address is already elided in the markup, so it never needs to break;
+     break-all shattered it one character per line in the narrower column. */
+  white-space: nowrap;
 }
 .tok__copy {
   flex-shrink: 0; margin-left: auto;
@@ -938,7 +956,9 @@
 }
 
 /* Responsive */
-@media (min-width: 640px) {
+/* Only below the two-column breakpoint. Above it the actions block is the
+   hero's right-hand column and has to stay stacked. */
+@media (min-width: 640px) and (max-width: 59.99rem) {
   .tok__hero-actions { flex-direction: row; align-items: center; justify-content: space-between; }
   .tok__hero-links { flex: 0 0 auto; }
 }

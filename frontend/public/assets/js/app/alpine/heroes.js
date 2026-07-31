@@ -168,9 +168,10 @@ export function registerHeroes(Alpine) {
         const NUM_BOIDS = 200;
         let frameNum = 0;
 
-        let predator = { x: 0, y: 0, angle: 0, speed: 1.2 };
+        let predator = { x: 0, y: 0, angle: 0, speed: 0.6 };
 
-        const MAX_SPEED = 3.5;
+        // Halved: the flock read as agitated behind a headline rather than ambient.
+        const MAX_SPEED = 1.75;
         const MAX_FORCE = 0.08;
         const PERCEPTION = 60;
         const SEPARATION_DIST = 25;
@@ -823,7 +824,9 @@ export function registerHeroes(Alpine) {
     ...p5Lifecycle(),
     _start(container) {
       const p5Constructor = window.p5;
-      const COUNT = 8, FILL_HEIGHT = 0.7, SPEED = 0.003, TRAIL_LENGTH = 120;
+      // SPEED halved from 0.003: the orbit trails swept fast enough to pull the
+      // eye off the headline they sit behind.
+      const COUNT = 8, FILL_HEIGHT = 0.7, SPEED = 0.0015, TRAIL_LENGTH = 120;
       const PALETTE = [
         [0, 229, 255], [0, 210, 255], [0, 255, 240], [0, 200, 255],
         [0, 255, 220], [0, 190, 255], [0, 230, 250], [0, 220, 240],
@@ -1107,7 +1110,9 @@ export function registerHeroes(Alpine) {
       let paused = false;
       const reduce =
         typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    const spd = 1.1, windSpd = 0.8, numCircles = 15, numWedges = 7, wedgeScl = 1.0;
+    // spd/windSpd halved: this hero sits behind the performance headline and was
+    // the busiest of the set.
+    const spd = 0.55, windSpd = 0.4, numCircles = 15, numWedges = 7, wedgeScl = 1.0;
     const BG = [10, 10, 15], AC = [0, 229, 255];
     let W = container.offsetWidth, H = container.offsetHeight;
 
@@ -1562,7 +1567,7 @@ export function registerHeroes(Alpine) {
               // Each tree samples its own lane of the noise field, so no two
               // gust at the same moment.
               seed: p.random(1000),
-              rate: p.random(0.28, 0.5),
+              rate: p.random(0.5, 0.8),
             });
           }
           // Depth sort: smaller trees draw first and sit behind the larger ones.

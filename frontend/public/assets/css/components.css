@@ -488,20 +488,21 @@
    !important is used deliberately: the per-page inline <style> is injected
    after this shared sheet and would otherwise win the cascade. */
 .a2-hero, .cv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head {
-  align-items: flex-start !important;
-  /* Capped rather than viewport-relative. At 52vh these bands ran past 600px on
-     a tall monitor and pushed the page's actual content below the fold on every
-     nav page. 400px is enough for a headline, a three-line lede and the genart
-     to read as genart. Content taller than that still expands the band, so this
-     is a floor-and-intent, not a clamp that clips anything. */
-  min-height: 400px !important;
+  /* Centred rather than pinned to an 8rem top offset. The offset was there to
+     land every headline in the same place as you navigate, and centring keeps
+     that guarantee for free because all seven bands are the same height, while
+     also stopping the copy from sitting high with a large empty space beneath
+     it. The band starts at the top of the page, so its centre clears the fixed
+     nav with room to spare. */
+  align-items: center !important;
   position: relative;
 }
 .a2-hero__inner, .cv__hero-inner, .rv__hero-inner, .tok__hero-inner,
 .md-hero__inner, .cl__hero-inner, .sk__head-inner {
-  /* Was 8rem, which no longer fits inside a 400px band. 6rem still clears the
-     80px fixed nav, and keeps every hero's headline on the same offset. */
-  padding-top: 6rem !important;
+  /* Enough to clear the fixed nav if a hero's own content ever grows past the
+     band, symmetric otherwise so the centring is not skewed. */
+  padding-top: 5rem !important;
+  padding-bottom: 2.5rem !important;
   position: relative;
   z-index: 1;
 }
@@ -521,8 +522,12 @@
 .md-hero__art, .cl__hero-art, .sk__head-viz {
   z-index: 0;
 }
-.a2-hero::after, .cv__hero::after, .rv__hero::after, .tok__hero::after,
-.md-hero::after, .cl__hero::after, .sk__head::after {
+/* ::before, not ::after. Four of these heroes already define their own ::after
+   for a bottom fade, and the per-page inline <style> is injected after this
+   sheet, so an ::after veil here loses the cascade on exactly the pages whose
+   art is busiest. No hero defines a ::before. */
+.a2-hero::before, .cv__hero::before, .rv__hero::before, .tok__hero::before,
+.md-hero::before, .cl__hero::before, .sk__head::before {
   content: "";
   position: absolute;
   inset: 0;
