@@ -160,7 +160,8 @@ one at single-droplet cost.
   practice — so there is no DO Load Balancer and no directly-exposed
   origin. (D13 called a Tunnel "optional hardening"; here it is the
   ingress.)
-- **Honest costs.** The team maintains manifests (Kustomize) and owns k3s
+- **Honest costs.** The team maintains the manifests (plain Kubernetes
+  YAML, §6) and owns k3s
   version upgrades. And a single-node cluster gives zero-downtime
   *deploys*, not high availability — the droplet is still a SPOF for
   compute.
@@ -346,18 +347,26 @@ GitOps *principle* from
 [`docs/runbooks/deployment.md`](../runbooks/deployment.md) — deploy state
 is declarative, in git, and reviewable — while the machinery is a script:
 
-- **Manifests in git.** A Kustomize base plus a prod overlay — roughly ten
-  small YAML files covering the five Deployments (§3.2), the migration
-  Job, Services, and `cloudflared`. Whether they live in this repo or a
-  separate deploy repo is open (§8).
+- **Manifests in git.** Plain Kubernetes YAML files in a `deploy/`
+  directory — roughly ten small files covering the five Deployments
+  (§3.2), the migration Job, Services, and `cloudflared`. No templating,
+  no base/overlay structure: **Kustomize was considered and deferred** by
+  the same minimalism logic that deferred Flux — with exactly one
+  environment there is nothing to overlay, so a layering tool only adds
+  indirection. The upgrade trigger, recorded now exactly as for Flux:
+  adopt Kustomize the day a second environment (staging, §8) would
+  otherwise mean duplicating the YAML files; until then, one environment =
+  plain files. Whether the files live in this repo or a separate deploy
+  repo is open (§8).
 - **CI builds and bumps.** On merge, CI builds the component's image,
   pushes it to a registry tagged with the **immutable git SHA** (registry
   choice — GHCR vs DO Container Registry — is a minor open question, §8),
-  and commits a one-line image-tag bump to the manifest. CI's write access
+  and commits a one-line edit of the `image:` field in the plain YAML
+  (`yq`/`sed`-level tooling, nothing manifest-aware). CI's write access
   ends at git; it never touches the cluster.
 - **A pull-based reconciler on the droplet.** A systemd timer (~every
   minute) runs a ~20-line script: `git fetch` with a **read-only deploy
-  key**; if the manifest ref moved, `kubectl apply -k` the overlay, then
+  key**; if the manifest ref moved, `kubectl apply -f deploy/`, then
   `kubectl rollout status`, and log the result. Pull-based means: no
   inbound access to the droplet, no cluster credentials in GitHub, and no
   in-cluster controllers to run or upgrade.
@@ -494,6 +503,8 @@ New questions raised by the §3/§6 design:
   second repo to keep in sync.
 - **Staging environment shape under k3s.** A second namespace on the same
   node (cheap, shares the SPOF and the k3s version) or a second droplet
-  (isolated, doubles the cost)? Note the existing stage tunnel pins its
-  origin to `localhost:48787` today — whatever shape staging takes has to
-  either preserve or deliberately replace that arrangement.
+  (isolated, doubles the cost)? Either way, committing to a second
+  environment is also §6's recorded Kustomize trigger — the point where
+  plain YAML files would start duplicating. Note the existing stage tunnel
+  pins its origin to `localhost:48787` today — whatever shape staging
+  takes has to either preserve or deliberately replace that arrangement.
