@@ -33,7 +33,7 @@ on vendor repo-watching:
 |---|---|
 | Cloudflare — DNS + observability | Cloudflare API token (DNS + Health Checks, §3.1) |
 | Static — marketing → DO Spaces CDN | DO Spaces keys + DO API token (CDN + custom-domain cert), §4.1–4.2 |
-| API — droplets | SSH key **or** container registry + app secrets + Cloudflare **Origin CA cert** + DO Cloud Firewall, §4.4 / §3.3 |
+| API — droplets | SSH key **or** container registry + app secrets + Cloudflare **Origin CA cert** + DO Cloud Firewall, §4.4 / §3.4 |
 | Data — Managed Postgres HA | `DATABASE_URL` (§4.3) |
 
 ---
@@ -86,7 +86,39 @@ Worker, and marketing is reached DNS-only so Cloudflare does not cache it.)
 
 - **`CF_ACCOUNT_ID`**, **`CF_ZONE_ID`** — required by the API / IaC.
 
-### 3.3 Origin CA certificate (for the proxied app subdomains)
+### 3.3 Cloudflare Tunnel (optional — not the default)
+
+There is **no tunnel by default** (§1) — the default is proxied DNS + DO Cloud
+Firewall. A host may nonetheless opt into a `cloudflared` connector as the
+zero-public-ingress hardening ARCHITECTURE §4 describes, and one does today:
+`site.robotmoney.net`.
+
+Because the connector is **host-side software with no presence in
+`docker-compose*.yml`**, its configuration is checked in as
+[`cloudflared.config.example.yml`](../../cloudflared.config.example.yml) at the
+repository root — otherwise the only description of what a public hostname
+resolves to lives on one droplet's filesystem, reviewable by nobody. Copy it to
+`/etc/cloudflared/config.yml` and fill in the tunnel UUID; **never** commit the
+credentials JSON `cloudflared tunnel create` writes to `~/.cloudflared/`.
+
+Two properties the template documents at length and a reviewer should not have
+to rediscover:
+
+- **The origin port is `48787` and cannot be anything else** — the single fixed
+  host port in the system (`scripts/stack/ports.ts:39`), pinned by
+  `bun run demo -- --stage`, which fails rather than falls back because the
+  tunnel routes that port and nothing else.
+- **The tunnel does not close the direct path.** Compose publishes `48787` on
+  `0.0.0.0`, so the droplet's public IP answers there too, bypassing Cloudflare.
+  Zero public ingress additionally requires a DO Cloud Firewall rule or an
+  iptables `DOCKER-USER` rule; `ufw` will not do it, since `docker-proxy`
+  publishes past it.
+
+Note also that a `--stage` origin serves a **demo** stack (`RM_ALLOW_INSECURE=1`,
+`DEMO_MODE=1`, fixture-backed `/projects`), not a production one — see §5 for
+what a production deployment requires instead.
+
+### 3.4 Origin CA certificate (for the proxied app subdomains)
 
 The `committee.`/`app.` droplets are Cloudflare-proxied, so each serves a
 **Cloudflare Origin CA certificate** (a long-lived cert Cloudflare issues for
