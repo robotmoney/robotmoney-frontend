@@ -52,6 +52,24 @@ const PROJECTS = {
       wallets: [], walletTotalUsd: 0, revenue30d: 9000,
       maxMarketCap: 3_000_000, maxFdv: 6_000_000, sparkline: [2.0, 1.8, 1.6],
     },
+    {
+      id: "p-tokenless-active", slug: "tokenless-active", displayName: "Tokenless Active",
+      logoUrl: null, description: "x402 with activity",
+      websiteUrl: null, twitterHandle: null,
+      dataCoverageScore: 60, isSticky: false,
+      facets: { agent: true, x402: true, coin: false, wallet: false, vault: false },
+      coins: [], wallets: [], walletTotalUsd: 0, revenue30d: 500,
+      maxMarketCap: 0, maxFdv: 0, sparkline: [100, 200, 300],
+    },
+    {
+      id: "p-tokenless-empty", slug: "tokenless-empty", displayName: "Tokenless Empty",
+      logoUrl: null, description: "x402 no activity",
+      websiteUrl: null, twitterHandle: null,
+      dataCoverageScore: 60, isSticky: false,
+      facets: { agent: true, x402: true, coin: false, wallet: false, vault: false },
+      coins: [], wallets: [], walletTotalUsd: 0, revenue30d: 0,
+      maxMarketCap: 0, maxFdv: 0, sparkline: [],
+    }
   ],
 };
 
@@ -81,7 +99,7 @@ test("routes to /projects and renders the directory table with a2 tokens", async
   await expect(page.locator(".pj-status", { hasText: "No projects yet" })).toBeHidden();
 
   // One row per project in the stub.
-  await expect(page.locator(".pj-table tbody tr")).toHaveCount(3);
+  await expect(page.locator(".pj-table tbody tr")).toHaveCount(5);
 
   // Alpha's row surfaces its aggregated numbers — every metric comes from the
   // /api/projects DTO the pipelines populate (market cap, 24h change, revenue).
@@ -100,6 +118,13 @@ test("routes to /projects and renders the directory table with a2 tokens", async
 
   // Inline sparkline SVG renders for a project with a price series.
   await expect(alpha.locator("svg.pj-spark")).toBeVisible();
+
+  // Tokenless x402 row renders sparkline <polyline> when activity exists, em-dash when absent.
+  const tokenlessAct = page.locator(".pj-table tbody tr", { hasText: "Tokenless Active" });
+  await expect(tokenlessAct.locator("svg.pj-spark polyline")).toBeVisible();
+
+  const tokenlessEmp = page.locator(".pj-table tbody tr", { hasText: "Tokenless Empty" });
+  await expect(tokenlessEmp.locator(".pj-spark-empty")).toBeVisible();
 });
 
 // Issue #346: ANALYTICS stays off site for the cutover, so all three places that
@@ -175,15 +200,15 @@ test("sticky project pins first on load; clicking a header re-sorts and releases
   await page.goto("/");
   await navigate(page, "/projects");
 
-  await expect(rowNames(page)).toHaveCount(3);
-  // First load: sticky pinned first, then market cap desc (Alpha > Zeta).
-  await expect(rowNames(page)).toHaveText(["Sticky Co", "Alpha Labs", "Zeta Systems"]);
+  await expect(rowNames(page)).toHaveCount(5);
+  // First load: sticky pinned first, then market cap desc (Alpha > Zeta > Tokenless...).
+  await expect(rowNames(page)).toHaveText(["Sticky Co", "Alpha Labs", "Zeta Systems", "Tokenless Active", "Tokenless Empty"]);
 
   // Sort by Revenue 30d desc → Zeta (9000) leads, sticky pin released.
   await page.locator(".pj-table thead .pj-sort", { hasText: "Revenue 30d" }).click();
-  await expect(rowNames(page)).toHaveText(["Zeta Systems", "Alpha Labs", "Sticky Co"]);
+  await expect(rowNames(page)).toHaveText(["Zeta Systems", "Tokenless Active", "Alpha Labs", "Sticky Co", "Tokenless Empty"]);
 
   // Toggle to ascending → order reverses.
   await page.locator(".pj-table thead .pj-sort", { hasText: "Revenue 30d" }).click();
-  await expect(rowNames(page)).toHaveText(["Sticky Co", "Alpha Labs", "Zeta Systems"]);
+  await expect(rowNames(page)).toHaveText(["Sticky Co", "Tokenless Empty", "Alpha Labs", "Tokenless Active", "Zeta Systems"]);
 });

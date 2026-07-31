@@ -92,6 +92,34 @@ export const DISCOVERY_DATASET: DiscoveredProject[] = [
     wallets: [{ label: "Coinbase x402 Facilitator Wallet", chain: "base", address: "0xwallet0000000000000000000000000000000ccc" }],
     vaults: [],
   },
+  {
+    slug: "tokenless-no-activity",
+    display_name: "Tokenless No Activity",
+    description: "No activity tokenless.",
+    website_url: "https://no-activity.org/",
+    twitter_handle: "@noactivity",
+    logo_url: "https://cdn.example/noactivity.png",
+    is_sticky: false,
+    agents: [
+      {
+        name: "No Activity Agent",
+        protocol_standard: "x402",
+        source_confidence: "high",
+      },
+    ],
+    coins: [],
+    wallets: [{ label: "No Activity Wallet", chain: "base", address: "0xwallet0000000000000000000000000000000ddd" }],
+    vaults: [
+      {
+        name: "No Activity Vault",
+        vault_address: "0xvault0000000000000000000000000000000bbb",
+        chain: "base",
+        strategy_type: "erc4626",
+        protocol: "morpho",
+        data_source: "live",
+      },
+    ],
+  },
 ];
 
 // ── Market bucket: CoinGecko /coins/markets rows, keyed by coingecko_id ───────
@@ -174,6 +202,7 @@ export const DEXSCREENER_TOKENS: Record<string, DexPayload> = {
 export const VAULT_READS: Record<string, { totalAssetsRaw: string; decimals: number; assetPriceUsd: number }> = {
   // 1e12 raw / 1e6 (USDC decimals) = 1,000,000 units × $1 = $1,000,000 TVL.
   "0xvault0000000000000000000000000000000aaa": { totalAssetsRaw: "1000000000000", decimals: 6, assetPriceUsd: 1 },
+  "0xvault0000000000000000000000000000000bbb": { totalAssetsRaw: "10000000", decimals: 6, assetPriceUsd: 1 },
 };
 
 // ── Wallet bucket: USD balances keyed by address ─────────────────────────────
@@ -181,4 +210,5 @@ export const WALLET_BALANCES: Record<string, number> = {
   "0xwallet0000000000000000000000000000000aaa": 4_200_000,
   "0xwallet0000000000000000000000000000000bbb": 980_000,
   "0xwallet0000000000000000000000000000000ccc": 3_100_000,
+  "0xwallet0000000000000000000000000000000ddd": 1_000,
 };

@@ -109,7 +109,7 @@ test("full pipeline reproduces the ground-truth directory aggregates end to end"
   await discover({}, src);
   const projRows = await sql<{ id: string; slug: string }[]>`SELECT id, slug FROM projects WHERE slug LIKE ${prefix + "-%"}`;
   const ids = projRows.map((r) => r.id);
-  expect(ids.length).toBe(3);
+  expect(ids.length).toBe(4);
 
   await refreshCoins({}, src);
   await refreshWallets({}, src);
