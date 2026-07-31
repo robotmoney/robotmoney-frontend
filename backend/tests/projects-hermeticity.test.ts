@@ -48,5 +48,5 @@ test("the full pipeline completes with global fetch disabled (no live socket)", 
   await syncRevenue({}, src);
   const res = await recomputeCoverage({ project_ids: ids });
   expect(res.ok).toBe(true);
-  expect(ids.length).toBe(3);
+  expect(ids.length).toBe(4);
 });
