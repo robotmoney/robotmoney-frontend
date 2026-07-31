@@ -488,23 +488,43 @@
    !important is used deliberately: the per-page inline <style> is injected
    after this shared sheet and would otherwise win the cascade. */
 .a2-hero, .cv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head {
-  /* Centred rather than pinned to an 8rem top offset. The offset was there to
-     land every headline in the same place as you navigate, and centring keeps
-     that guarantee for free because all seven bands are the same height, while
-     also stopping the copy from sitting high with a large empty space beneath
-     it. The band starts at the top of the page, so its centre clears the fixed
-     nav with room to spare. */
-  align-items: center !important;
+  /* Top-aligned, not centred. Centring looks right on any one page but breaks
+     the thing this rule exists for: these blocks are different heights (a lede
+     wraps to one line on /tokenomics and three on /projects), so centring made
+     the headline land in a different place on every page, varying by 55px.
+     Pinning the top is what keeps the headline still as you navigate. */
+  align-items: flex-start !important;
   position: relative;
 }
 .a2-hero__inner, .cv__hero-inner, .rv__hero-inner, .tok__hero-inner,
 .md-hero__inner, .cl__hero-inner, .sk__head-inner {
-  /* Enough to clear the fixed nav if a hero's own content ever grows past the
-     band, symmetric otherwise so the centring is not skewed. */
-  padding-top: 5rem !important;
+  /* 10rem rather than the original 8rem: it sits a typical block near the
+     middle of the band instead of high in it, which was the complaint, while
+     keeping every headline on the identical offset. */
+  padding-top: 10rem !important;
   padding-bottom: 2.5rem !important;
   position: relative;
   z-index: 1;
+}
+
+/* ── One headline, everywhere ──
+   Measured across the nav pages before this rule: five different sizes (56,
+   57.6, 60 and 64px), and /media set in Space Grotesk with no uppercase while
+   every other hero used the condensed display face. Navigating between pages
+   made the headline change size and typeface. !important for the same reason
+   the rules above use it: each page's inline <style> is injected after this
+   sheet and would otherwise win. */
+.sk__title, .rv__title, .tok__h1, .a2-hero__title,
+.md-hero__title, .cl__h1, .cv__title {
+  font-family: var(--font-display) !important;
+  font-weight: 700 !important;
+  font-size: clamp(2.5rem, 4.2vw, 3.75rem) !important;
+  line-height: 1.05 !important;
+  letter-spacing: -0.01em !important;
+  text-transform: uppercase !important;
+  /* /regime and /committee carried an 8px top margin, which is enough to read
+     as a jump when the headline is otherwise pinned to the same offset. */
+  margin-top: 0 !important;
 }
 
 /* ── Hero legibility ──
