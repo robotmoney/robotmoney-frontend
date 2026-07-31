@@ -1,16 +1,40 @@
 // Projects directory projection (issue #70). Ports the aggregation that
 // robotmoney-bot-analytics src/pages/Projects.tsx ran client-side against Supabase
 // onto the new Postgres backend: one identity row per project, enriched live from
-// its facet tables (agent / coin / wallet / vault), trailing 30d revenue, and a
-// 30d primary-coin price sparkline. This is the single read/projection layer; the
-// HTTP route (api/routes/projects.ts) is a thin adapter over it, and the frontend
-// stays a consumer over the HTTP boundary.
+// its facet tables (agent / coin / wallet / vault) and a 30d primary-coin price
+// sparkline (falling back to trailing 30d agent activity/revenue for tokenless
+// projects, #338). This is the single read/projection layer; the HTTP route
+// (api/routes/projects.ts) is a thin adapter over it, and the frontend stays a
+// consumer over the HTTP boundary.
+//
+// Issue #346: the coin and wallet facets now carry per-row `refreshedAt`/`stale`
+// (the D24 "sample on a worker schedule, serve persisted rows on the request
+// path, never fabricate on failure" pattern applied here) and the DTO no longer
+// exposes a directory-wide revenue30d total — no persisted, non-fabricated
+// revenue source covers the whole directory, only a subset of Virtuals-protocol
+// agents (see worker/handlers/projects.ts syncRevenue).
 import { sql } from "../db/client.ts";
 import type { Project, ProjectCoin, ProjectWallet, ProjectsResponse } from "@robotmoney/contract";
 
 // Directory floor: only projects in the top coverage tier are listed (matches the
 // source MIN_SCORE gate). Kept identical so parity holds across the port.
 const MIN_SCORE = 55;
+
+// Freshness budgets (issue #346, the D24 pattern applied to the coin/wallet
+// facets): a row is 'stale' when it has never been refreshed OR its last
+// successful sample is older than a small multiple of the sampler's own cron
+// cadence — the same "~3-5x cadence" rule wallet-valuation.ts documents for
+// MAX_PERSISTED_PRICE_AGE_MS. projects.refresh_coins runs hourly
+// ("10 * * * *", db/seed.ts); projects.refresh_wallets runs every 6h
+// ("20 */6 * * *"). A generous multiple absorbs one missed/late tick without
+// ever letting a request-time read look fresher than it is.
+const COIN_REFRESH_FRESHNESS_BUDGET_MS = 3 * 60 * 60_000; // 3h (~3x the hourly cadence)
+const WALLET_REFRESH_FRESHNESS_BUDGET_MS = 18 * 60 * 60_000; // 18h (~3x the 6h cadence)
+
+function isStale(refreshedAt: Date | null, budgetMs: number): boolean {
+  if (!refreshedAt) return true; // never refreshed — honestly stale, not fabricated as fresh
+  return Date.now() - refreshedAt.getTime() > budgetMs;
+}
 
 // postgres.js returns numeric/decimal columns as strings; coerce to a finite
 // number or null so DTO consumers never see a stringified figure.
@@ -40,9 +64,9 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
   const ids = projects.map((p) => p.id as string);
 
   const [coins, wallets, agents, vaults] = await Promise.all([
-    sql`SELECT id, project_id, name, ticker, market_cap, fdv, percent_change_24h, price_usd, volume_24h
+    sql`SELECT id, project_id, name, ticker, market_cap, fdv, percent_change_24h, price_usd, volume_24h, refreshed_at
         FROM lobster_coins WHERE project_id IN ${sql(ids)} AND is_active = true`,
-    sql`SELECT id, project_id, label, balance_usd, chain
+    sql`SELECT id, project_id, label, balance_usd, chain, refreshed_at
         FROM tracked_wallets WHERE project_id IN ${sql(ids)} AND is_active = true`,
     sql`SELECT id, project_id, protocol_standard, x402_score, x402_txn_count, x402_resources_count
         FROM openclaw_agents WHERE project_id IN ${sql(ids)} AND is_active = true`,
@@ -78,6 +102,7 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
   for (const c of coins) {
     const pid = c.project_id as string | null;
     if (!pid) continue;
+    const refreshedAt = c.refreshed_at ? new Date(c.refreshed_at as string | Date) : null;
     (coinsByProject.get(pid) ?? coinsByProject.set(pid, []).get(pid)!).push({
       id: c.id as string,
       ticker: (c.ticker as string | null) ?? null,
@@ -87,6 +112,8 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
       percentChange24h: num(c.percent_change_24h),
       priceUsd: num(c.price_usd),
       volume24h: num(c.volume_24h),
+      refreshedAt: refreshedAt ? refreshedAt.toISOString() : null,
+      stale: isStale(refreshedAt, COIN_REFRESH_FRESHNESS_BUDGET_MS),
     });
     (coinRawByProject.get(pid) ?? coinRawByProject.set(pid, []).get(pid)!).push({ id: c.id as string });
   }
@@ -95,11 +122,14 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
   for (const w of wallets) {
     const pid = w.project_id as string | null;
     if (!pid) continue;
+    const refreshedAt = w.refreshed_at ? new Date(w.refreshed_at as string | Date) : null;
     (walletsByProject.get(pid) ?? walletsByProject.set(pid, []).get(pid)!).push({
       id: w.id as string,
       label: (w.label as string) ?? "",
       chain: (w.chain as string | null) ?? null,
       balanceUsd: num(w.balance_usd),
+      refreshedAt: refreshedAt ? refreshedAt.toISOString() : null,
+      stale: isStale(refreshedAt, WALLET_REFRESH_FRESHNESS_BUDGET_MS),
     });
   }
 
@@ -130,12 +160,9 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
     tvlByProject.set(pid, (tvlByProject.get(pid) ?? 0) + (num(v.tvl_usd) ?? 0));
   }
 
-  const revenueByProject = new Map<string, number>();
-  for (const r of revenue) {
-    const pid = agentToProject.get(r.agent_id as string);
-    if (!pid) continue;
-    revenueByProject.set(pid, (revenueByProject.get(pid) ?? 0) + (num(r.revenue_usd) ?? 0));
-  }
+  // Note: no project-level revenue total is kept here (issue #346 drops the
+  // revenue30d DTO field); agentRevByProjectDate below still derives its own
+  // per-day totals straight from `revenue` for the sparkline fallback.
 
   const sparksByCoin = new Map<string, number[]>();
   for (const s of snaps) {
@@ -231,7 +258,7 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
       coins: pcoins,
       wallets: pwallets,
       walletTotalUsd,
-      revenue30d: revenueByProject.get(pid) ?? 0,
+      // revenue30d intentionally not returned (issue #346, see the note above).
       maxMarketCap,
       maxFdv,
       sparkline,

@@ -2,8 +2,8 @@
 // the preload provisions + migrates (tests/preload.ts) — a real DB, never a mock.
 // Seeds projects + their facet rows and asserts fetchProjects() aggregates them
 // into the /api/projects DTO exactly like the ported Projects.tsx did: live facet
-// flags, max mcap/fdv, trailing-30d revenue, 30d sparkline, min-score gate, and
-// the sticky-first / mcap-desc default sort.
+// flags, max mcap/fdv, 30d sparkline, min-score gate, the sticky-first /
+// mcap-desc default sort, and (issue #346) per-row coin/wallet refreshedAt/stale.
 import { test, expect } from "bun:test";
 import { sql } from "../../src/db/client.ts";
 import { fetchProjects } from "../../src/projects/projections.ts";
@@ -80,8 +80,14 @@ test("fetchProjects aggregates facets, revenue, sparkline and returns the DTO sh
   expect(p.coins.length).toBe(2);
   expect(typeof p.coins[0].marketCap).toBe("number");
 
-  // Trailing-30d revenue = 100 + 250 (the 45d-old 9999 is excluded).
-  expect(p.revenue30d).toBe(350);
+  // agent_revenue_daily's trailing-30d window still trims the 45d-old row
+  // (100 + 250, the 9999 excluded) — no longer surfaced on the DTO (issue
+  // #346), but the underlying persisted data/window logic is unchanged and
+  // still feeds the tokenless-project sparkline fallback, so assert it directly.
+  const [{ rev }] = await sql<{ rev: number }[]>`
+    SELECT COALESCE(sum(revenue_usd), 0)::float8 AS rev FROM agent_revenue_daily
+    WHERE agent_id = ${agent.id} AND revenue_date >= ${dayAgo(30)}`;
+  expect(rev).toBe(350);
 
   // Wallet total summed; description falls back to overview_short.
   expect(p.walletTotalUsd).toBe(1500);
@@ -91,6 +97,18 @@ test("fetchProjects aggregates facets, revenue, sparkline and returns the DTO sh
 
   // Sparkline = only the 3 in-window snapshots, chronological (old 99 excluded).
   expect(p.sparkline).toEqual([1.0, 1.2, 1.5]);
+
+  // Issue #346: neither coin nor wallet has ever been through a
+  // projects.refresh_coins/refresh_wallets pass in this test, so both are
+  // honestly reported as never-refreshed/stale — never fabricated as fresh.
+  expect(p.coins[0].refreshedAt).toBeNull();
+  expect(p.coins[0].stale).toBe(true);
+  expect(p.wallets[0].refreshedAt).toBeNull();
+  expect(p.wallets[0].stale).toBe(true);
+
+  // Issue #346: revenue30d is no longer part of the DTO at all (no directory-
+  // wide non-fabricated revenue source exists yet).
+  expect((p as unknown as Record<string, unknown>).revenue30d).toBeUndefined();
 
   // Tokenless project with NO activity series.
   const pidEmpty = await insertProject({ display_name: "Empty Co" });
@@ -152,13 +170,27 @@ test("GET /api/projects serves the populated additive-superset DTO after the pip
   // Market data.
   expect(virtuals.maxMarketCap).toBe(1_500_000_000);
   expect(virtuals.coins.some((c) => (c.priceUsd ?? 0) > 0)).toBe(true);
-  // Revenue aggregate.
-  expect(virtuals.revenue30d).toBe(60_000);
+  // Revenue aggregate is no longer on the DTO (issue #346) — the underlying
+  // pipeline computation is still exercised end to end via syncRevenue above;
+  // verified directly against the persisted table in the fidelity suite.
+  expect((virtuals as unknown as Record<string, unknown>).revenue30d).toBeUndefined();
   // Snapshot series.
   expect(virtuals.sparkline.length).toBeGreaterThan(0);
   // Additive-superset aggregates (issue #87).
   expect(virtuals.volume24h).toBe(50_000_000);
   expect(virtuals.tvlUsd).toBe(1_000_000);
+
+  // Issue #346: refreshCoins/refreshWallets ran above (against the fixture
+  // live source), so every coin/wallet row now carries a fresh refreshedAt
+  // and is not stale.
+  for (const c of virtuals.coins) {
+    expect(c.refreshedAt).not.toBeNull();
+    expect(c.stale).toBe(false);
+  }
+  for (const w of virtuals.wallets) {
+    expect(w.refreshedAt).not.toBeNull();
+    expect(w.stale).toBe(false);
+  }
 
   // Tokenless project WITH activity series from fixture.
   const x402 = mine.find((p) => p.slug === `${prefix}-coinbase-x402-facilitator`)!;

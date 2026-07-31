@@ -9,8 +9,14 @@
 // the volatile metrics (market cap / FDV / 24h / revenue / TVL) are all fetched
 // live here. Fully-autonomous multi-source discovery (the legacy 1963-line
 // discover-agents crawler) is a tracked follow-up — see the issue open_questions.
-import { config } from "../../config.ts";
+import { config, resolveBaseRpcSource, resolvePriceSource, resolveTrackedAssets } from "../../config.ts";
 import { callAsset, callDecimals, callTotalAssets, type RpcCallOptions } from "../../chain/base-rpc-client.ts";
+import {
+  persistedFallbackWalletPriceReader,
+  readChainAmountsBatched,
+  valueLeg,
+  type KeyedAssetRead,
+} from "../../chain/wallet-valuation.ts";
 import type { CoinGeckoMarketRow, DexPayload } from "../transforms.ts";
 import type { DiscoveredProject, Erc4626Read, ProjectsDataSource } from "./data-source.ts";
 import { DISCOVERY_DATASET } from "../fixtures/dataset.ts";
@@ -97,10 +103,35 @@ export const liveProjectsDataSource: ProjectsDataSource = {
     return { totalAssetsRaw: totalAssets.toString(), decimals, assetPriceUsd };
   },
 
-  async walletBalanceUsd(): Promise<number> {
-    // The legacy refresh-wallet-balances Alchemy port (token balances × prices)
-    // is a tracked follow-up; live wallet-balance refresh is not yet wired, so
-    // the handler degrades to the last-persisted balance (loud log) until then.
-    throw new Error("live wallet-balance provider not yet ported (Alchemy) — deferred");
+  // Issue #346: reuses the SAME batched-Multicall3 + keyless-price + persisted-
+  // fallback valuation machinery the prop-wallet feeds share
+  // (chain/wallet-valuation.ts) instead of the never-built legacy Alchemy
+  // token-balance-scan port. Scope is deliberately narrow — native-ETH balance
+  // on Base only, matching the "smallest first step" the issue asks for: the
+  // discovery roster's wallets that are NOT on "base" (a handful of Ethereum/
+  // Solana treasuries) have no live RPC wired at all in this codebase yet, so
+  // this throws for them rather than fabricate a number; the caller (
+  // worker/handlers/projects.ts refreshWallets) degrades that ONE wallet to
+  // its last-persisted balance_usd, never the whole run.
+  async walletBalanceUsd(address: string, chain: string): Promise<number> {
+    if (chain !== "base") {
+      throw new Error(
+        `live wallet-balance provider only covers chain "base" (got "${chain}") for ${address} — ` +
+          "no RPC/pricing path exists for other chains yet",
+      );
+    }
+    const ethAsset = resolveTrackedAssets().find((a) => a.symbol === "ETH");
+    if (!ethAsset) throw new Error("native ETH tracked asset is not configured (resolveTrackedAssets)");
+    const reads: KeyedAssetRead[] = [{ key: address, asset: ethAsset, wallets: [address] }];
+    const chainAmounts = await readChainAmountsBatched(reads, "projects.walletBalanceUsd");
+    const valued = await valueLeg(
+      ethAsset,
+      chainAmounts.get(address) ?? { ok: false },
+      resolveBaseRpcSource(),
+      resolvePriceSource(),
+      persistedFallbackWalletPriceReader,
+    );
+    if (!valued.ok) throw valued.error instanceof Error ? valued.error : new Error(String(valued.error));
+    return valued.valueUsd;
   },
 };

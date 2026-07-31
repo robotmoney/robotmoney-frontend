@@ -165,6 +165,53 @@ test("a forced extractor failure leaves last-persisted rows intact and reports n
   expect(after).toBe(before); // last-persisted value untouched
 });
 
+// ── Issue #346: per-wallet degrade (never a whole-run abort) ─────────────────
+// Before #346, ONE wallet's walletBalanceUsd throw aborted the entire
+// refreshWallets run — every wallet, including ones whose read would have
+// succeeded, stayed frozen at its last-persisted balance. Now a failing
+// wallet degrades ALONE: the others still update, and nothing is fabricated
+// for the one that failed.
+test("refreshWallets degrades only the failing wallet — other wallets in the same run still update", async () => {
+  const prefix = `wkwallet_${crypto.randomUUID().slice(0, 8)}`;
+  const src = uniqueSlugSource(prefix);
+
+  await discover({}, src);
+  const [{ id: projectId }] = await sql<{ id: string }[]>`
+    SELECT id FROM projects WHERE slug = ${prefix + "-virtuals-protocol"}`;
+
+  // A second wallet on the same project whose address has no fixture entry —
+  // walletBalanceUsd throws for it ("fixture wallet balance missing").
+  const badAddress = "0xwalletbadbadbadbadbadbadbadbadbadbadbad";
+  const [{ id: badWalletId }] = await sql<{ id: string }[]>`
+    INSERT INTO tracked_wallets (project_id, label, chain, address, is_active, balance_usd)
+    VALUES (${projectId}, 'No Fixture Wallet', 'base', ${badAddress}, true, 111)
+    RETURNING id`;
+
+  // refreshWallets scans EVERY active tracked_wallets row, not just this
+  // test's project (no project_ids scoping on this handler), so other tests'
+  // wallets sharing the DB contribute to the totals — assert on failed/ok/
+  // status (which our forced-bad wallet guarantees) rather than an exact
+  // global `updated` count, and confirm the specific rows below.
+  const res = await refreshWallets({}, src);
+  expect(res.ok).toBe(true); // at least one wallet succeeded
+  expect(res.status).toBe("degraded"); // but the run as a whole is non-clean
+  expect(res.failed as number).toBeGreaterThanOrEqual(1);
+  expect(res.updated as number).toBeGreaterThanOrEqual(1);
+
+  // The known wallet (discovered, has a fixture) got a fresh balance + refreshed_at.
+  const [{ balance_usd: goodBalance, refreshed_at: goodRefreshedAt }] = await sql<{ balance_usd: string; refreshed_at: Date | null }[]>`
+    SELECT balance_usd, refreshed_at FROM tracked_wallets WHERE project_id = ${projectId} AND label != 'No Fixture Wallet'`;
+  expect(Number(goodBalance)).toBeGreaterThan(0);
+  expect(goodRefreshedAt).not.toBeNull();
+
+  // The failing wallet's balance and refreshed_at are UNTOUCHED — never
+  // fabricated, never silently zeroed.
+  const [{ balance_usd: badBalance, refreshed_at: badRefreshedAt }] = await sql<{ balance_usd: string; refreshed_at: Date | null }[]>`
+    SELECT balance_usd, refreshed_at FROM tracked_wallets WHERE id = ${badWalletId}`;
+  expect(Number(badBalance)).toBe(111);
+  expect(badRefreshedAt).toBeNull();
+});
+
 // ── Issue #95: live-fetch timeout ────────────────────────────────────────────
 // A stalled (not errored) provider socket must abort at the hard timeout so the
 // handler fails FAST and degrades to last-persisted — never hangs, pinning the

@@ -5,8 +5,8 @@ import { api, ROUTES } from "../../lib/api.js";
 export function registerProjectsView(Alpine) {
   // ── Projects directory ("Agentic Economy Ecosystem") ─────────────────────
   // Ported from robotmoney-bot-analytics src/pages/Projects.tsx. The backend now
-  // does the facet aggregation (revenue, sparkline, max mcap/fdv); this factory
-  // handles interactive sorting + formatting over the /api/projects DTO.
+  // does the facet aggregation (sparkline, max mcap/fdv); this factory handles
+  // interactive sorting + formatting over the /api/projects DTO.
   Alpine.data("projectsView", () => ({
     loading: true,
     error: null,
@@ -59,7 +59,6 @@ export function registerProjectsView(Alpine) {
           case "mcap":    av = a.p.maxMarketCap; bv = b.p.maxMarketCap; break;
           case "fdv":     av = a.p.maxFdv; bv = b.p.maxFdv; break;
           case "pct24h":  av = a.maxPct ?? -Infinity; bv = b.maxPct ?? -Infinity; break;
-          case "revenue": av = a.p.revenue30d; bv = b.p.revenue30d; break;
           case "wallet":  av = a.p.walletTotalUsd; bv = b.p.walletTotalUsd; break;
           case "score":   av = a.p.dataCoverageScore ?? 0; bv = b.p.dataCoverageScore ?? 0; break;
           case "facets":  av = a.facetCount; bv = b.facetCount; break;
