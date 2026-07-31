@@ -1,10 +1,32 @@
 <!-- Blog post: regime-conservative-aggressive
      Ported from robotmoney-site/src/app/blog/regime-conservative-aggressive/page.tsx
      Numbers are computed at render time from public/data/regime-snapshot.json
-     (asof 2026-06-25); they are baked here from that snapshot. Interactive
-     <RegimeBandsCharts/> and <RuleComparisonChart/> become static notes. -->
+     (asof 2026-06-25); they are baked here from that snapshot.
 
-<article class="blog-research">
+     #350 (2026-07-31): the two charts below (RegimeBandsCharts, RuleComparisonChart)
+     ARE restored, backed by the committed public/data/regime-conservative-aggressive.json
+     fixture via the regimeRuleCompareCharts() factory (alpine/views/blog-charts.js),
+     registered at boot in alpine/views.js — same pattern as views/regime.js's canvases.
+     An earlier pass on this issue tried reconstructing the data by replaying
+     backend/src/analytics/analyze/{compute,backtest}.ts over this repo's own
+     backend fixtures and found a gap (no frozen lockout on regime recompute,
+     so replayed history absorbs indicator corrections that landed after this
+     post's asof). That was the wrong source to replay from: the real frozen
+     data already exists as a git-committed artifact one level up the fork
+     chain. robotmoney-site's own daily cron commits public/data/regime-snapshot.json
+     to git on every update, so the exact snapshot this post was written
+     against is retrievable by date rather than needing to be recomputed.
+     Commit robotmoney/robotmoney-site@e64a211e2166040285e32f876fb5b21eba2f4e00
+     ("Daily regime update: 2026-06-25", the last update of that day) reproduces
+     this page's table to the displayed precision: conservative 5.90x/+24.5%/
+     0.71/-59.1%/122, aggressive 5.35x/+23.0%/0.66/-64.8%/131, composite
+     13.73x/+38.1%/0.85/-64.7%/56, eth_hodl 2.03x/+8.7%/0.52/-94.0%,
+     stables_only 1.24x/+2.6%/26.86/0.0%. The fixture carries that commit's
+     backtest.eth (equity curves for the five strategies above) and daily
+     history (ETH price + per-panel regime labels, 2018-05-15..2026-06-25)
+     needed to paint the regime bands. -->
+
+<article class="blog-research" x-data="regimeRuleCompareCharts()" x-init="load()">
   <header class="blog-research__head">
     <div class="blog-research__meta">
       <span class="blog-research__tag">Research</span>
@@ -77,10 +99,31 @@
 
     <h2>When does each rule say off?</h2>
     <p>Before looking at returns, it is worth knowing when each rule calls <em>risk-off</em> against the same ETH price history. Only the rule changes between the three, and the difference is in where each one sits out. The conservative rule spends longer in risk-off around 2018 and 2022, because it bails earlier and stays out longer. The aggressive rule spends far more of the window in risk-on, because one panel saying &quot;on&quot; is enough to override a neutral reading on the other.</p>
-    <div class="blog-research__chartnote">The ETH price and regime bands for all three rules are not drawn on this page. The live rendered version is at <a href="/regime">/regime</a>.</div>
+    <div class="blog-research__figure">
+      <div class="blog-research__figure-label">ETH price (log) with regime bands, all three rules</div>
+      <div class="blog-research__bandswrap">
+        <div class="blog-research__band">
+          <div class="blog-research__band-title">Composite (current default)</div>
+          <div class="blog-research__band-chart"><canvas x-ref="bandsComposite"></canvas></div>
+        </div>
+        <div class="blog-research__band">
+          <div class="blog-research__band-title">Conservative (both must agree)</div>
+          <div class="blog-research__band-chart"><canvas x-ref="bandsConservative"></canvas></div>
+        </div>
+        <div class="blog-research__band">
+          <div class="blog-research__band-title">Aggressive (either can trigger)</div>
+          <div class="blog-research__band-chart"><canvas x-ref="bandsAggressive"></canvas></div>
+        </div>
+      </div>
+      <p class="blog-research__figure-caption">Cyan band = risk-on, amber band = risk-off, bare = neutral. Same ETH price line on all three; only the rule painting the bands changes.</p>
+    </div>
 
     <h2>Results</h2>
-    <div class="blog-research__chartnote">The rule-comparison equity curves are not drawn on this page either. The numbers below carry the same result.</div>
+    <div class="blog-research__figure">
+      <div class="blog-research__figure-label">Rule-comparison equity curves — $1 starting capital, log scale</div>
+      <div class="blog-research__figure-chart"><canvas x-ref="rules"></canvas></div>
+      <p class="blog-research__figure-caption">10 bps transaction cost on bucket flips. Dashed lines are the ETH HODL and cash baselines; the numbers below carry the same result.</p>
+    </div>
 
     <h2>Results, the numbers</h2>
     <div class="blog-research__scroll">
@@ -415,6 +458,39 @@
   font-size: 0.8rem;
   color: var(--color-text-muted);
 }
+.blog-research__figure {
+  margin: 1.5rem 0;
+  padding: 1.25rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: 8px;
+}
+.blog-research__figure-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-dim);
+  margin-bottom: 0.75rem;
+}
+.blog-research__figure-chart { position: relative; height: 280px; margin: 0 0 0.75rem; }
+.blog-research__figure-chart canvas { width: 100% !important; height: 100% !important; }
+.blog-research__figure-caption {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1.6;
+  color: var(--color-text-dim);
+  margin: 0;
+}
+.blog-research__bandswrap { display: grid; gap: 0.75rem; margin-bottom: 0.75rem; }
+.blog-research__band-title {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  margin-bottom: 0.35rem;
+}
+.blog-research__band-chart { position: relative; height: 150px; }
+.blog-research__band-chart canvas { width: 100% !important; height: 100% !important; }
 .blog-research__longdisc {
   margin-top: 3rem;
   padding: 1.5rem;

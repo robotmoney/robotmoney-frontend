@@ -1,6 +1,9 @@
 <!-- /blog/honest-backtesting-weights — static port of the Next.js page.tsx.
-     Numbers baked from public/data/weighting-comparison.json (asof 2026-05-14). -->
-<article class="blog-root">
+     Numbers baked from public/data/weighting-comparison.json (asof 2026-05-14).
+     The figure below renders from that same committed fixture via the
+     weightingCompareChart() factory (alpine/views/blog-charts.js), registered
+     at boot in alpine/views.js — same pattern as views/regime.js's canvases. -->
+<article class="blog-root" x-data="weightingCompareChart()" x-init="load()">
   <a href="/blog" class="blog-back">&larr; Back to Blog</a>
 
   <header class="blog-header">
@@ -72,6 +75,7 @@
     <h2>The comparison</h2>
     <figure class="blog-figure">
       <div class="blog-figure-label">Equity curves &mdash; static vs equal vs walk-forward weighting</div>
+      <div class="blog-figure-chart"><canvas x-ref="chart"></canvas></div>
       <p class="blog-figure-caption">
         The three weighting methods produce nearly indistinguishable composite equity curves;
         the static method&rsquo;s edge concentrates in the conservative variant, which fades
@@ -401,6 +405,8 @@
     margin: 0 !important;
     line-height: 1.6;
   }
+  .blog-figure-chart { position: relative; height: 260px; margin: 0 0 0.75rem; }
+  .blog-figure-chart canvas { width: 100% !important; height: 100% !important; }
   .blog-table-wrap { margin: 1.5rem 0; overflow-x: auto; }
   .blog-table {
     width: 100%;
