@@ -1,31 +1,32 @@
 <!-- Blog post: treasury-allocation
-     Ported from robotmoney-site/src/app/blog/treasury-allocation/page.tsx
-     Interactive <BacktestChart/> and <AttributionChart/> are replaced with
-     static notes (no <script>/<canvas> in injected fragments). Table values
-     are static in the source and reproduced verbatim.
+     Ported from robotmoney-site/src/app/blog/treasury-allocation/page.tsx.
 
-     #350 (2026-07-30): investigated regenerating these two charts from
-     backend/src/analytics/analyze/{compute,backtest}.ts replayed over the
-     committed backend/tests/fixtures/regime/{raw-indicator-history,
-     regime-extras}.json.gz, truncated to this post's 2026-05-12 asof. The
-     pure asset baselines (100% ETH HODL, 100% SP500 HODL, 100% cash)
-     reproduce this page's table numbers exactly (CAGR/Sharpe/MaxDD match to
-     the displayed precision) — but the "Regime-based 3-state" composite row
-     this article is actually about does not: recomputed CAGR 29.9% /
-     Sharpe 0.99 / MaxDD -36.4% vs. the published +25.0% / 0.88 / -44%. Root
-     cause is documented in-repo (regime-versions.ts, CURRENT_REGIME_VERSION
-     "v3"): the regime pipeline has "no frozen lockout" — every replay
-     recomputes past regime labels on best-available raw data, and this
-     fixture's raw history already includes indicator corrections landed
-     after 2026-05-12 (Shiller/HY_OAS/BTC_ACTIVE fixes). Charting that
-     recompute would visibly contradict this page's own composite-row
-     numbers, so the static note stays. Closing this gap for real needs
-     either the exact frozen input vintage from 2026-05-12 (not present in
-     this repo) or a deliberate decision to rewrite this article's numbers to
-     a fresh vintage — the latter is a content change, out of scope for a
-     chart-wiring pass. -->
+     #350 (2026-07-31): the two charts below (BacktestChart, AttributionChart)
+     ARE restored, backed by the committed public/data/treasury-allocation.json
+     fixture via the treasuryAllocationCharts() factory (alpine/views/blog-charts.js),
+     registered at boot in alpine/views.js — same pattern as views/regime.js's
+     canvases. An earlier pass on this issue tried reconstructing the data by
+     replaying backend/src/analytics/analyze/{compute,backtest}.ts over this
+     repo's own backend fixtures and found a gap on the composite row (no
+     frozen lockout on regime recompute). That was the wrong source to replay
+     from: the real frozen data already exists as a git-committed artifact one
+     level up the fork chain. robotmoney-site's own daily cron commits
+     public/data/regime-snapshot.json to git on every update, so the exact
+     snapshot this post was written against is retrievable by date rather
+     than needing to be recomputed. Commit
+     robotmoney/robotmoney-site@e340ddbab7c66935396b3664770a59dc60025485
+     (2026-05-12T13:36:42Z, the intraday update on this post's own asof date)
+     reproduces this page's table to the displayed precision: composite
+     +25.0%/0.88/-44%, 50/50 ETH+SP500 HODL +22.1%/0.67/-73%, 100% ETH HODL
+     +13.8%/0.58/-94%, 100% SP500 HODL +12.8%/0.72/-34%, cash +2.6%. The
+     fixture carries that commit's mixed/eth/sp500 backtest slices (equity
+     curves for the five series above) needed to paint both charts. The
+     AttributionChart's original design (production) stacked cyan as a
+     filled mass — the anti-pattern #327 already flagged. This restores it
+     as a 3-stroke ladder (cash → diversified HODL → regime composite)
+     instead; see the factory's comment for why. -->
 
-<article class="blog-research">
+<article class="blog-research" x-data="treasuryAllocationCharts()" x-init="load()">
   <header class="blog-research__head">
     <div class="blog-research__meta">
       <span class="blog-research__tag">Research</span>
@@ -108,7 +109,11 @@
 
     <h2>Eight years, same terms</h2>
     <p>Same starting capital ($1), same end date (May 2026), and the figures below are the compounded result for each strategy over that window.</p>
-    <div class="blog-research__chartnote">The equity curves are not drawn on this page. The live rendered backtests are at <a href="/regime">/regime</a>.</div>
+    <div class="blog-research__figure">
+      <div class="blog-research__figure-label">Backtest equity curves — $1 starting capital, log scale</div>
+      <div class="blog-research__figure-chart"><canvas x-ref="backtest"></canvas></div>
+      <p class="blog-research__figure-caption">Regime-based 3-state (ETH+SP500+cash) vs the four baselines in the table above. Monthly-sampled, daily-rebalanced backtest.</p>
+    </div>
 
     <h2>What the backtest actually shows</h2>
     <p>Three things are worth naming explicitly:</p>
@@ -120,7 +125,11 @@
 
     <h2>The return-attribution view</h2>
     <p>The headline 25% CAGR comes from two stacked effects, and a treasury reader benefits from knowing where each one is doing the work. Attributing the regime composite&apos;s growth back to those two sources splits it as follows.</p>
-    <div class="blog-research__chartnote">The attribution is not drawn on this page. The live rendered version is at <a href="/regime">/regime</a>.</div>
+    <div class="blog-research__figure">
+      <div class="blog-research__figure-label">Return attribution — cash → diversified HODL → regime composite</div>
+      <div class="blog-research__figure-chart"><canvas x-ref="attribution"></canvas></div>
+      <p class="blog-research__figure-caption">Three strokes, log scale, same $1 starting capital. The gap between cash and the 50/50 HODL line is the diversification value-add; the gap between the HODL line and the composite line is the regime overlay's value-add. Where a gap is wide, that effect is paying off; where it narrows, it isn&apos;t.</p>
+    </div>
 
     <p><strong>Diversification is the first effect.</strong> It is the return you get from holding a balanced 50/50 ETH+SP500 portfolio instead of pure cash, before any timing or tactical decisions. It grows steadily over the whole window because risky assets compound. It dips in 2022 when both ETH and SP500 fell together, but it never goes away.</p>
     <p><strong>The regime overlay is the second.</strong> It is the additional return earned by tactically moving to cash during risk-off regime calls, and its behaviour over time is the real story: negligible in calm periods, largest during the 2022 drawdown (the regime kept capital in cash while HODL fell), then shrinking steadily as HODL catches up during the recovery. What remains today is the lead the overlay still has, currently +17% over straight HODL, down from a peak of +136% at the end of 2022.</p>
@@ -395,6 +404,30 @@
   font-family: var(--font-mono);
   font-size: 0.8rem;
   color: var(--color-text-muted);
+}
+.blog-research__figure {
+  margin: 1.5rem 0;
+  padding: 1.25rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: 8px;
+}
+.blog-research__figure-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-dim);
+  margin-bottom: 0.75rem;
+}
+.blog-research__figure-chart { position: relative; height: 320px; margin: 0 0 0.75rem; }
+.blog-research__figure-chart canvas { width: 100% !important; height: 100% !important; }
+.blog-research__figure-caption {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1.6;
+  color: var(--color-text-dim);
+  margin: 0;
 }
 .blog-research__longdisc {
   margin-top: 3rem;

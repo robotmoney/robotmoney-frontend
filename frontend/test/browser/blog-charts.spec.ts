@@ -3,11 +3,12 @@
 // fragment never executes. This spec exercises the restored REAL render path —
 // the alpine/views/blog-charts.js factories registered at boot — against the
 // REAL committed data fixtures (frontend/public/data/{regime-eq-comparison,
-// weighting-comparison}.json), served by the live backend's static file
-// route exactly as production would serve them. No route stubbing of the
-// data fetch: this is the same "exercise the shipped archive fixture, not a
-// mock" pattern committee-subject.spec.ts established for the committee
-// static-archive fallback.
+// weighting-comparison,treasury-allocation,regime-conservative-aggressive}.json),
+// served by the live backend's static file route exactly as production would
+// serve them. No route stubbing of the data fetch: this is the same
+// "exercise the shipped archive fixture, not a mock" pattern
+// committee-subject.spec.ts established for the committee static-archive
+// fallback.
 //
 // Chart.js v4 exposes a static Chart.getChart(canvas) registry lookup, so the
 // assertions below check an actual chart INSTANCE with the expected dataset
@@ -77,4 +78,49 @@ test("honest-backtesting-weights renders its restored equity-curve chart from th
 
   const chart = await chartInfo(page, "chart");
   expect(chart).toEqual({ type: "line", datasets: 3 });
+});
+
+test("treasury-allocation renders its restored backtest + attribution charts from the committed treasury-allocation.json fixture", async ({ page }) => {
+  await stubVendorScripts(page);
+  await page.goto("/");
+  await navigate(page, "/blog/treasury-allocation");
+
+  await expect(page.locator(".blog-research__figure-chart canvas")).toHaveCount(2);
+
+  const backtest = await chartInfo(page, "backtest");
+  expect(backtest).toEqual({ type: "line", datasets: 5 });
+
+  // The attribution chart is the one issue #350's notes flag: production drew
+  // it as two stacked cyan fills (the anti-pattern #327 already hit). This
+  // restores it as three plain strokes instead — assert no dataset here
+  // carries a `fill` truthy value, so a future edit can't silently reintroduce
+  // a filled mass on the composite line.
+  const attributionFills = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas[x-ref="attribution"]') as HTMLCanvasElement | null;
+    const chart = canvas && (window as any).Chart?.getChart(canvas);
+    return chart ? chart.data.datasets.map((d: any) => !!d.fill) : null;
+  });
+  expect(attributionFills).toEqual([false, false, false]);
+
+  const attribution = await chartInfo(page, "attribution");
+  expect(attribution).toEqual({ type: "line", datasets: 3 });
+});
+
+test("regime-conservative-aggressive renders its restored regime-band panels + rule-comparison chart from the committed regime-conservative-aggressive.json fixture", async ({ page }) => {
+  await stubVendorScripts(page);
+  await page.goto("/");
+  await navigate(page, "/blog/regime-conservative-aggressive");
+
+  await expect(page.locator(".blog-research__band-chart canvas")).toHaveCount(3);
+  await expect(page.locator(".blog-research__figure-chart canvas")).toHaveCount(1);
+
+  const bandsComposite = await chartInfo(page, "bandsComposite");
+  expect(bandsComposite).toEqual({ type: "line", datasets: 1 });
+  const bandsConservative = await chartInfo(page, "bandsConservative");
+  expect(bandsConservative).toEqual({ type: "line", datasets: 1 });
+  const bandsAggressive = await chartInfo(page, "bandsAggressive");
+  expect(bandsAggressive).toEqual({ type: "line", datasets: 1 });
+
+  const rules = await chartInfo(page, "rules");
+  expect(rules).toEqual({ type: "line", datasets: 5 });
 });
