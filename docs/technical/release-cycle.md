@@ -5,8 +5,12 @@
 > yet. Since the first draft, however, the topology (§3), the four ordering
 > rules (§5.1), and the rollout mechanics (§6) have been **decided in
 > discussion**: those sections describe a chosen direction with rejected
-> alternatives recorded, not an open survey. The "Open questions" section
-> at the end remains the live agenda for everything else.
+> alternatives recorded, not an open survey. The mechanics have since been
+> hardened against an adversarial review (per-SHA migration Jobs, the
+> reconciler owning the static publish, the drift-check dead-man's switch),
+> and the small code changes the design requires are collected in §6.1.
+> The "Open questions" section at the end remains the live agenda for
+> everything else.
 
 ## 1. Purpose
 
@@ -99,18 +103,30 @@ Kubernetes (k3s) cluster instead of docker-compose.
 ### 3.1 Static tier — Cloudflare edge, for both frontends; API on its own subdomain
 
 Marketing **and** the committee/dashboard SPA are buildless static trees
-(D2), and both get served from **Cloudflare's edge network**. Whether that
-is Cloudflare Pages or R2 behind the CDN is a minor open question (§8) —
-either way the properties that matter are the same. The API is **not** on
+(D2), and both get served from **Cloudflare Pages**. The API is **not** on
 those hostnames: it lives on its **own subdomain** (`api.`), reached
 directly, exactly the way D13 already routes each surface to its own host.
 There is no `/api/*` path on the static hostnames.
 
-- **The SPA gets its own independent release path.** This breaks the
-  `STATIC_DIR` version-lock described in §2(b)/§4(d): the SPA is no longer
-  co-served by the API process, so pushing frontend assets no longer means
-  deploying the API, and vice versa. (This resolves the first draft's open
-  question of whether the SPA gets its own deploy path — yes.)
+- **The SPA gets its own release path.** This breaks the `STATIC_DIR`
+  version-lock described in §2(b)/§4(d): the SPA is no longer co-served by
+  the API process, so a frontend change no longer means deploying the API,
+  and vice versa. (This resolves the first draft's open question of
+  whether the SPA gets its own deploy path — yes.) One deliberate caveat:
+  the SPA's *publish* is executed by §6's reconciler as the final step of
+  the deploy sequence, after the backend has converged — independence from
+  the API process, not from the deploy ordering R4 requires.
+- **Chosen: Cloudflare Pages. Rejected: R2 behind the CDN.** This started
+  as a minor open question; it isn't one, because the frontend is
+  buildless: with no bundler there are no content-hashed asset filenames —
+  `assets/js/...` paths are **stable URLs** whose contents change across
+  deploys. A mutable R2 bucket therefore has no atomic-deploy story and no
+  invalidation story: mid-deploy readers can get a mixed tree, and a
+  cached stale asset has no fingerprint to age it out. Pages gives atomic
+  versioned deployments (a deploy is a new immutable version, switched
+  whole) and a conservative default cache posture that fits unfingerprinted
+  files: HTML effectively uncached, assets revalidated by ETag. Pages is
+  also already in use here — preview mode deploys on it (D19/D20).
 - **The SPA is cross-origin to the API, so the API grows a CORS surface.**
   The Bun API needs an **origin allowlist**, a real `OPTIONS` preflight
   handler, and `Access-Control-Allow-Credentials` if/when auth requires it
@@ -126,9 +142,14 @@ There is no `/api/*` path on the static hostnames.
   cookies flow between them unchanged: CORS response headers are required,
   `SameSite=None` is **not**. That only changes if the API ever moves to a
   different registrable domain.
-- **Cleaner cache posture.** The static zone can be cached aggressively
-  while `api.` is simply never cached — a property of the hostname rather
-  than a path-exclusion rule someone can misconfigure.
+- **Cache posture, stated honestly.** Splitting hostnames means `api.` is
+  simply never cached — a property of the hostname rather than a
+  path-exclusion rule someone can misconfigure. But the static side cannot
+  be "cached aggressively": long-TTL asset caching requires fingerprinted
+  filenames, and buildless (D2) means there are none. Pages' default
+  posture — uncached HTML, ETag-revalidated assets — is the **ceiling**,
+  and it is accepted as such. (A stale-while-revalidate window on assets is
+  the most that could be layered on later.)
 - **`api.` is a DNS-level lever.** It can be repointed at staging, or later
   at DOKS (§3.2), with a single DNS change that the static tier never
   notices.
@@ -180,12 +201,11 @@ one at single-droplet cost.
   `docker-compose.yml`. That carries straight over to Kubernetes: five
   Deployments, five independent *rollout* cadences, one image repository.
   **The consequence is worth stating plainly**: a backend commit produces
-  **one** image SHA that all five Deployments *could* move to at once,
-  which quietly reintroduces exactly the lockstep this doc argues against.
-  Independent cadence is still achievable — each Deployment pins its own
-  tag from the same image repo — but it is now a decision someone has to
-  make rather than a property of the build, and this doc has not made it
-  (§8).
+  **one** image SHA, so all five Deployments move together by default —
+  and §6 decides that deliberately (CI bumps all five to the same SHA;
+  per-Deployment pinning is reserved for exceptional cases like a staged
+  worker rollout or a single-lane rollback). Independence is preserved as
+  a *capability* of the manifests, not everyday practice.
   The flip side is a genuine upside: the migration Job runs
   `src/db/migrate.ts` from that **same** image, so pinning the Job to a
   newer tag than the `api` Deployment *is* the expand/contract posture
@@ -230,13 +250,23 @@ Unchanged in kind from D13, sharpened in detail:
   over **private networking only** — no public DB endpoint.
 - **PgBouncer** (built into DO Managed Postgres) fronts connections —
   connection count multiplies across five Deployments, so pooling stops
-  being optional.
+  being optional. Decided: **transaction-mode pooling**, which has a real
+  client-side consequence: `postgres.js` uses named prepared statements by
+  default, and those break when consecutive statements land on different
+  server connections. `backend/src/db/client.ts` sets no `prepare` option
+  today, so the client must pass `prepare: false` when running behind the
+  pooler (env-gated, e.g. `PGBOUNCER=true`) — a required code change
+  (§6.1).
 - **One credential per Deployment**, continuing the per-component
   least-privilege role pattern that `rm_worker` (migration
   `0016_worker_role.sql`, §2c) started.
 - **The cluster holds no state.** Postgres is the only stateful thing in
   the topology, and it is managed — the droplet and everything on it is
-  disposable/rebuildable from git (§6).
+  disposable/rebuildable from git, made concrete by the idempotent
+  `deploy/bootstrap.sh` this design requires (§6.1). The data itself rests
+  on Managed PG backups/PITR — and because migrations are forward-fix only
+  (§4a), restore is the genuine last resort, which is why §8 asks for a
+  periodic restore drill rather than assuming backups work.
 
 ## 4. Per-component release cadence
 
@@ -299,28 +329,57 @@ implements them (§5.2) or an option deliberately deferred because they hold
 - **R1 — Every migration is additive.** New tables, columns, and indexes
   only. Nullable or defaulted, never `NOT NULL` without a default. No
   renames, no drops, no type narrowing. *Consequence: the DB can always be
-  safely ahead of the code.*
-- **R2 — Destructive changes wait a full release cycle.** A drop or rename
+  safely ahead of the code.* Schema-additive is not automatically
+  *semantics*-safe, though: until every **writer** has rolled, rows keep
+  arriving with the new column NULL/absent — so readers must treat
+  NULL/missing as the legacy state for the whole transition. That is not
+  an extra rule; it is the dual-read phase of expand/contract (§5.2),
+  stated explicitly.
+- **R2 — Destructive changes wait until provably safe.** A drop or rename
   ships in a **later PR** than the code that stopped using the old shape,
-  never the same one. This is expand/contract's contract step (§5.2),
-  enforced by calendar rather than by machinery.
-- **R3 — API responses only gain fields.** Never remove, rename, or change
-  the type or meaning of a field. JSON clients ignore unknown fields
-  natively, so an old SPA calling a new API just works.
-- **R4 — Deploy in dependency order: DB → backend → frontend.** Combined
-  with R1 and R3, the only skew that can arise is "the lower layer is
-  ahead," which is safe by construction.
+  never the same one. "Later" is defined operationally, not by calendar
+  feel — a destructive migration may merge only when **both** hold:
+  1. the drift check (§6) confirms all five Deployments **and** the Pages
+     deploy are on SHAs at or past the commit that removed the last use of
+     the old shape;
+  2. a browser-tab grace window has elapsed since that deploy — proposed
+     default **7 days**; the exact number is the one parameter left open
+     (§8).
+- **R3 — API responses only gain fields, and consumers don't lead with
+  requests.** Never remove, rename, or change the type or meaning of a
+  response field: JSON clients ignore unknown fields natively, so an old
+  SPA calling a new API just works. The corollary in the request
+  direction: a consumer (SPA, producer, worker) must not **send** a new
+  request field until the API that accepts it is deployed — R3 makes old
+  clients safe against new servers, and this corollary keeps new clients
+  from outrunning old servers.
+- **R4 — Deploy provider before consumer.** The DB deploys before its
+  readers (API, worker lanes); the API deploys before its callers (SPA,
+  analytics-producer). "DB → backend → frontend" is the common case, but
+  the rule is the dependency direction, not the list. Combined with R1 and
+  R3, the only skew that can arise is "the provider is ahead," which is
+  safe by construction.
 
 **What this covers**, without a line of detection code: rolling API
 replicas (both versions work against an additive DB — R1); a worker
-mid-rollout (same reason); an edge-cached SPA against a newer API (R3);
-and rollback, since old code still works against a forward DB (R1 again).
+mid-rollout (same reason); a lagging writer against a new reader (R1's
+dual-read clause); an edge-cached SPA against a newer API (R3); a
+rolled-ahead producer (R3's request corollary plus R4); and rollback,
+since old code still works against a forward DB (R1 again). Within the
+backend itself, §6's bump-all-five policy means api/worker/producer skew
+exists only inside a single rolling window, not as a persistent state.
 
 **Enforcement**, kept as light as the rules themselves:
 
 - **R1** — a CI grep over changed files under `backend/migrations/` for
   `DROP` / `RENAME` / `ALTER ... TYPE`, failing the PR unless it carries an
-  explicit contract-migration label. Roughly ten lines; not built yet.
+  explicit contract-migration label. The same gate flags a bare
+  `CREATE INDEX`: on a live database a non-concurrent index build blocks
+  writes for its duration while being perfectly "additive," so an index
+  migration must use `CREATE INDEX CONCURRENTLY` (with the
+  `-- no-transaction` runner support, §5.3) or carry an explicit
+  small-table override label. Roughly ten lines either way; not built yet
+  (§6.1).
 - **R3** — **not enforced today, and the existing gate is narrower than it
   looks.** The goldens-drift gate (D14) is
   `scripts/tests/unit/goldens-drift.test.ts`, and what it actually asserts
@@ -333,9 +392,14 @@ and rollback, since old code still works against a forward DB (R1 again).
   layer, not an additive-only check on the API contract. Enforcing R3
   mechanically would mean diffing response shapes across versions; that
   gate does not exist.
-- **R4** — already free. §6's reconciler gates the migration Job ahead of
-  the rollout, and the SPA is a separate Cloudflare deploy sequenced after
-  the backend.
+- **R4** — enforced by making one sequencer own the whole order. §6's
+  reconciler runs migration Job → backend rollout → static publish as one
+  sequence on one machine, so "provider before consumer" is the only order
+  that can happen. (An earlier draft called this "already free" with the
+  SPA on its own CI-triggered deploy — wrong: nothing would have stopped a
+  new SPA going live seconds after merge against a backend that converges
+  minutes later. The fix is that the reconciler deploys the static tier
+  too; see §6.)
 
 **The explicit limit.** All four rules rest on being able to guarantee
 deploy order. If you ever need to ship API code *before* its migration, R4
@@ -353,7 +417,11 @@ every schema change that a running API/worker depends on:
    yet, nothing existing breaks.
 2. **Migrate readers** — ship API/worker code that can read *both* old and
    new shapes, then code that writes the new shape (backfilling old rows as
-   needed).
+   needed). "Both shapes" explicitly includes rows a not-yet-rolled writer
+   is still producing with the new column NULL/absent — a reader must
+   treat NULL/missing as the legacy state until *every* writer (API and
+   all lanes) is confirmed on the new code, not merely until its own
+   deploy lands.
 3. **Contract** — once every consumer (API instances, all three worker
    lanes, the analytics-producer) is confirmed on code that no longer
    reads/writes the old shape, drop the old column/table in its own
@@ -374,8 +442,9 @@ Every environment we run today migrates a **fresh or short-lived** database
 (§1). Three properties of `backend/migrations/` + `backend/src/db/migrate.ts`
 are benign under that assumption and stop being benign the moment migrations
 are a gated pre-deploy step (§3.2) against a live Managed Postgres with real
-data and real concurrent traffic. None of these is decided here; they are
-recorded as gaps.
+data and real concurrent traffic. The first remains an open gap; the second
+and third are now **resolved by prescribed runner changes** (collected in
+§6.1).
 
 - **Numeric prefixes are not unique, and nothing checks.** Two collisions
   already exist on main: `0014_projects_pipelines.sql` /
@@ -386,23 +455,31 @@ recorded as gaps.
   at merge time. Harmless when a single boot applies everything to a fresh
   DB; a real ordering hazard once expand/contract sequencing has to hold
   across branches that merge concurrently.
-- **`migrate()` calls `seed()`.** The runner ends with `await seed()` —
-  inserting `job_schedules` rows and similar required state. Under §3.2 the
-  pre-deploy migration Job would therefore **re-seed production on every
-  deploy**. `seed()` is written to be idempotent, and re-seeding a fresh
-  demo DB is exactly what it is for, but re-seeding a live production DB on
-  every deploy is a different risk posture. Whether the production migration
-  Job runs seed at all is open (§8).
-- **No lock or timeout discipline.** There is no `lock_timeout`, no
+- **`migrate()` calls `seed()` — resolved: split them.** The runner ends
+  with `await seed()` — inserting `job_schedules` rows and similar
+  required state. Left alone, §3.2's pre-deploy migration Job would
+  **re-seed production on every deploy**; `seed()` is idempotent, and
+  re-seeding a fresh demo DB is exactly what it is for, but a live
+  production DB is a different risk posture. Decided: **the production
+  migration Job runs schema-only** — seeding is split out of `migrate()`
+  behind a flag or separate entrypoint, demo/CI keep today's combined
+  behavior, and production seeds deliberately (at bootstrap, or on
+  explicit operator action), never implicitly per deploy (§6.1).
+- **No lock or timeout discipline — resolved: runner defaults plus a
+  transaction carve-out.** There is no `lock_timeout`, no
   `statement_timeout`, and no `CREATE INDEX CONCURRENTLY` anywhere in
   `backend/migrations/`. Against a live database, an `ALTER TABLE` that
   takes an ACCESS EXCLUSIVE lock behind a long-running query queues — and
   everything behind *it* queues too, stalling traffic on a table that was
   never being altered. That risk simply does not exist against the fresh
-  DBs every current environment uses. Note the structural conflict:
-  `CONCURRENTLY` cannot run inside a transaction, and `migrate.ts` wraps
-  each file in `sql.begin(...)`, so a concurrent-index migration needs a
-  carve-out in the runner, not just a different SQL file.
+  DBs every current environment uses. And there is a structural conflict:
+  `CONCURRENTLY` cannot run inside a transaction, while `migrate.ts` wraps
+  each file in `sql.begin(...)`. Prescribed (§6.1): the runner sets
+  `lock_timeout` and `statement_timeout` defaults for every migration, and
+  honors a `-- no-transaction` header comment that runs that file outside
+  `sql.begin`, making `CREATE INDEX CONCURRENTLY` expressible; §5.1's R1
+  gate then rejects bare `CREATE INDEX` so the safe form is the default
+  form.
 
 ### 5.4 API/DB version skew: why runtime detection is deferred
 
@@ -521,32 +598,88 @@ is declarative, in git, and reviewable — while the machinery is a script:
   otherwise mean duplicating the YAML files; until then, one environment =
   plain files. Whether the files live in this repo or a separate deploy
   repo is open (§8).
-- **CI builds and bumps.** On merge, CI builds the component's image,
-  pushes it to a registry tagged with the **immutable git SHA** (registry
-  choice — GHCR vs DO Container Registry — is a minor open question, §8),
-  and commits a one-line edit of the `image:` field in the plain YAML
-  (`yq`/`sed`-level tooling, nothing manifest-aware). CI's write access
-  ends at git; it never touches the cluster.
+- **CI builds and bumps — all five Deployments, one SHA.** On merge, CI
+  builds the image, pushes it to a registry tagged with the **immutable
+  git SHA** (registry choice — GHCR vs DO Container Registry — is a minor
+  open question, §8), and commits an edit of the `image:` field in the
+  plain YAML (`yq`/`sed`-level tooling, nothing manifest-aware). Decided:
+  on any `backend/**` or `contract/**` change, the bump moves **all five
+  Deployments to the same SHA**. They are one image (§3.2) — the code was
+  built and tested together, and R1–R4 make rolling all five safe — so
+  lockstep *within the backend* is embraced rather than fought.
+  Per-Deployment pinning stays available as an exceptional capability
+  (staged rollout of a risky worker change, single-lane rollback), not
+  everyday practice. **Rejected: path-filtered bumps** (`src/api/**` →
+  `api`, etc.) — the filter map is a hand-maintained dependency graph, and
+  the day it misses a shared dependency (`src/db/**`, `contract/**`) a
+  Deployment silently keeps running code that no longer matches its
+  siblings' assumptions. CI's write access still ends at git; it never
+  touches the cluster.
 - **A pull-based reconciler on the droplet.** A systemd timer (~every
-  minute) runs a ~20-line script: `git fetch` with a **read-only deploy
-  key**; if the manifest ref moved, `kubectl apply -f deploy/`, then
-  `kubectl rollout status`, and log the result. Pull-based means: no
-  inbound access to the droplet, no cluster credentials in GitHub, and no
-  in-cluster controllers to run or upgrade.
-- **Migration gating lives in the reconciler.** It applies the migration
-  Job first, `kubectl wait --for=condition=complete`, and only then
-  applies the rest. A failed migration **halts the rollout with the old
-  code still serving** — the mechanical guarantee behind R4 and §5.2's
-  schema-first ordering.
-- **Rollback is `git revert`** of the tag-bump commit. The reconciler
+  minute) runs a small script (`set -euo pipefail` — any failing step
+  aborts the run): `git fetch` with a **read-only deploy key**; if the
+  manifest ref moved, run the deploy sequence below and log the result.
+  Pull-based means: no inbound access to the droplet, no cluster
+  credentials in GitHub, and no in-cluster controllers to run or upgrade.
+- **Migration gating: a per-SHA Job, because Jobs are immutable.** A
+  Kubernetes Job's `spec.template` cannot be updated in place — naively
+  re-applying "the" migration Job with a bumped image errors, and a
+  reconciler that shrugged that off would then `kubectl wait` against the
+  *old* completed Job and roll out code ahead of schema: precisely the
+  state R4 exists to prevent. So each deploy creates a **fresh Job named
+  for the image SHA** (`migrate-<sha>`), the reconciler waits on **that
+  exact name** with `kubectl wait --for=condition=complete`, and finished
+  Jobs clean themselves up via `ttlSecondsAfterFinished`. A failed or
+  timed-out migration aborts the run **with the old code still serving** —
+  the mechanical guarantee behind R4 and §5.2's schema-first ordering.
+- **The reconciler deploys the static tier too, as the last step.** After
+  `kubectl rollout status` confirms the backend converged, the reconciler
+  publishes `frontend/public/` **from the same checked-out commit** to
+  Cloudflare Pages (`wrangler pages deploy`). This is what makes R4's
+  backend-before-frontend ordering real: CI's write access ends at git and
+  nothing else knows when the backend converged, so a CI-triggered Pages
+  deploy could go live seconds after merge against a backend still minutes
+  from converging. One sequencer, one source of truth. Honest costs: a
+  Cloudflare API token now lives on the droplet, and a frontend-only
+  change rides the reconciler's cadence (~a minute, plus backend
+  convergence when there is one) instead of landing in seconds.
+- **Rollback is `git revert`** of the bump commit. The reconciler
   converges to whatever the repo says; because images are SHA-tagged and
-  immutable, reverting the manifest reverts the running code exactly.
-  (Schema rollback remains forward-fix only, per §4a — this loop doesn't
-  change that.)
+  immutable, reverting the manifest reverts the running code exactly — and
+  because the static publish is the reconciler's last step, the same
+  revert republishes the previous SPA *after* the backend has rolled back:
+  both tiers restored, in the right order, from one commit. (Schema
+  rollback remains forward-fix only, per §4a — this loop doesn't change
+  that.)
+- **Failure visibility — a dead-man's switch, git-native.** A halted
+  rollout writes a log on the droplet, which nobody reads; worse, a *dead*
+  reconciler (rotated deploy key, full disk, wedged timer) means deploys
+  silently stop forever while CI stays green. Three mitigations, no new
+  vendors: (a) the API exposes its **build SHA** — `/health` today returns
+  only `{ status, env, db }`, so this is a small code change (§6.1); (b) a
+  **scheduled GitHub Action** fetches the deployed SHA and compares it to
+  the manifest's expected SHA, going red when they diverge for more than N
+  minutes — one check that catches failed rollouts *and* a dead
+  reconciler, because either way the SHAs stop converging; (c) the
+  reconciler itself, best-effort, comments via `gh` or opens an issue on
+  hard failure. Accepted limitation, recorded rather than designed away:
+  the single manifest apply means a failed migration **head-of-line
+  blocks all five components'** deploys until fixed forward — with one
+  operator, being loudly blocked is preferred over partial-deploy states.
 - **Upgrade trigger, recorded now.** The day the reconciler script needs
   real features — multi-env promotion, health-gated progressive delivery,
-  deploy notifications — is the signal to adopt **Flux**. The manifests
-  carry over unchanged; only the ~20-line script is discarded.
+  deploy notifications beyond the dead-man's switch — is the signal to
+  adopt **Flux**. The manifests carry over unchanged; only the script is
+  discarded.
+- **Secrets: created once at bootstrap, never in git.** Kubernetes
+  Secrets (`DATABASE_URL`, `ADMIN_TOKEN`, `ANALYTICS_TOKEN`, the
+  Cloudflare token, …) are created by the operator at bootstrap time
+  (`kubectl create secret` from a local env file) and live only in the
+  cluster. Manifests reference them by name; the repo never contains a
+  secret value. **Considered and deferred: SOPS / sealed-secrets** —
+  encrypted-secrets-in-git buys auditability and multi-operator handoff,
+  which one operator on one cluster doesn't need; adoption trigger is a
+  second operator or a second environment.
 - **Rejected extra-minimal variant:** k3s's
   `/var/lib/rancher/k3s/server/manifests/` auto-apply directory. Rejected
   because it is k3s-specific (doesn't port to DOKS, breaking §3.2's growth
@@ -556,6 +689,43 @@ This also resolves the first draft's "where does the actual deploy pipeline
 live?" question: the pipeline is designed to satisfy this doc's constraints
 (independent per-component triggers, migration-first ordering, reviewable
 deploy state) rather than the doc waiting on a pipeline to exist.
+
+### 6.1 Required implementation changes
+
+The proposal is docs-only, but it *prescribes* a small set of code and CI
+changes. They are collected here — one visible list, each a future issue —
+rather than scattered through the sections that motivate them:
+
+1. **`migrate.ts`: `-- no-transaction` header support** — a migration file
+   carrying that header runs outside `sql.begin`, enabling
+   `CREATE INDEX CONCURRENTLY` (§5.3).
+2. **`migrate.ts`: `lock_timeout` / `statement_timeout` defaults** applied
+   to every migration, so a blocked DDL fails fast instead of queueing
+   traffic behind it (§5.3).
+3. **`migrate.ts`: split `seed()` out of `migrate()`** — flag or separate
+   entrypoint; demo/CI keep the combined behavior, the production
+   migration Job runs schema-only (§5.3).
+4. **Disable migrate-on-boot in-cluster** — env-gated, so the API no
+   longer runs `migrate()` as a boot precondition in production (§3.2).
+5. **`client.ts`: `prepare: false` behind PgBouncer** — env-gated for
+   transaction-mode pooling (§3.3).
+6. **API CORS layer** — origin allowlist, real `OPTIONS` preflight,
+   `Access-Control-Allow-Credentials` as needed (§3.1).
+7. **Build SHA on `/health`** (or a `/version` route) — it currently
+   returns only `{ status, env, db }`; the drift check needs the deployed
+   SHA to be readable (§6).
+8. **CI migration gate** — the R1 grep: `DROP` / `RENAME` /
+   `ALTER ... TYPE` / bare `CREATE INDEX` over changed
+   `backend/migrations/` files, with the contract-migration and
+   small-table override labels (§5.1).
+9. **Scheduled drift-check workflow** — the dead-man's switch comparing
+   deployed SHA to manifest SHA (§6).
+10. **`deploy/` manifests + reconciler script + CI build/bump workflow** —
+    the pipeline itself (§6).
+11. **`deploy/bootstrap.sh`** — idempotent droplet bootstrap: k3s install,
+    deploy key, systemd timer + reconciler script, `cloudflared`, and
+    prompted secret creation (§6). This is what makes "rebuildable from
+    git" (§3.3) a tested property instead of a hope.
 
 ## 7. Prior art
 
@@ -628,19 +798,23 @@ reinvented ad hoc:
 
 ## 8. Open questions
 
-Two of the first draft's questions are now **answered** and have moved into
-the body as decided positions: *does the committee/dashboard SPA get its own
-deploy path?* — yes, Cloudflare edge (§3.1); and *where does the actual
-deploy pipeline live?* — the minimal GitOps loop of §6, designed to satisfy
-this doc's constraints rather than waiting for one to exist. What follows is
-still genuinely open.
+Questions answered in earlier passes have moved into the body as decided
+positions: the SPA's own deploy path (yes — Cloudflare Pages, §3.1), where
+the deploy pipeline lives (the minimal GitOps loop, §6), Pages vs R2
+(Pages, R2 rejected — §3.1), whether CI bumps all five Deployments or a
+path-filtered subset (all five, path-filtering rejected — §6), and whether
+the production migration Job runs `seed()` (no — schema-only, seeding split
+out, §5.3/§6.1). What follows is still genuinely open.
 
 Carried over from the first draft:
 
-- **Deprecation window length.** How long does an old endpoint shape,
-  field, or DB column stay live after its replacement ships? A fixed
-  duration (e.g. two release cycles), or tied to an observable signal (e.g.
-  "until traffic against the old shape drops to zero")?
+- **Grace-window length for destructive changes.** R2 (§5.1) now defines
+  the contract step by two checkable conditions — drift-check confirmation
+  that every Deployment and the Pages deploy are past the last old-shape
+  usage, plus a browser-tab grace window. The remaining open parameter is
+  that window's length: **7 days is the proposed default**, unratified.
+  The same number is the natural default for API-shape deprecations
+  (§5.7), unless traffic observation ("old shape at zero") replaces it.
 - **Do workers talk to the DB directly, or only through the API?** Today
   the queue-consuming lanes hit Postgres directly with a restricted role;
   the analytics-producer talks only to the API over HTTP. Should the
@@ -661,10 +835,6 @@ Carried over from the first draft:
 
 New questions raised by the §3/§6 design:
 
-- **Cloudflare Pages vs R2 + CDN for the static tier.** Both serve a
-  buildless tree from the edge; Pages brings per-branch previews and
-  atomic deploys (and is already used for preview mode, D19/D20), R2+CDN
-  is a plainer bucket. Minor, but it decides the static deploy tooling.
 - **GHCR vs DO Container Registry.** GHCR keeps images next to CI with no
   extra credentials in GitHub; DOCR keeps pulls inside DO's network next
   to the droplet. Either works with §6's SHA-tagged immutable images.
@@ -692,19 +862,16 @@ New questions raised by the §3/§6 design:
   plain YAML files would start duplicating. Note the existing stage tunnel
   pins its origin to `localhost:48787` today — whatever shape staging
   takes has to either preserve or deliberately replace that arrangement.
-- **Does CI bump all five Deployments on every backend commit, or only the
-  affected ones?** One image (§3.2) means one SHA that *all five* could
-  move to at once — which is lockstep by default, the thing this doc argues
-  against. The alternative is path-scoped bumps: `src/api/**` → `api`,
-  `src/worker/**` → the three lanes, `src/producer/**` →
-  `analytics-producer`, and shared code (`src/db/**`) → everything.
-  Cheaper to implement than it sounds, but it has to be chosen; nothing
-  decides it by default.
-- **Does the production migration Job run `seed()` at all?** `migrate()`
-  ends by calling it (§5.3), so as written the pre-deploy Job re-seeds
-  production on every deploy. Options: run it (idempotent, keeps required
-  rows present), split `seed()` out of `migrate()` so the Job can run
-  schema-only, or gate it on an env flag.
+- **Recovery objectives and a restore drill.** The design leans on Managed
+  PG backups/PITR as the last resort (§3.3), and forward-fix-only
+  migrations mean a bad-enough day ends in a restore. What RTO/RPO is
+  actually acceptable, and on what cadence is a **restore drill** run
+  (restore a backup into a scratch cluster, boot the stack against it,
+  verify)? An untested restore is not a restore.
+- **Drift-check threshold.** The dead-man's switch (§6) goes red when
+  deployed SHA and manifest SHA diverge for more than N minutes; N has to
+  be long enough to tolerate a slow image pull and short enough to matter.
+  Unset here.
 
 Image and registry questions, noted as unaddressed rather than decided:
 
