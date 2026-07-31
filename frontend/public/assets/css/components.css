@@ -489,8 +489,48 @@
    after this shared sheet and would otherwise win the cascade. */
 .a2-hero, .cv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head {
   align-items: flex-start !important;
+  /* Capped rather than viewport-relative. At 52vh these bands ran past 600px on
+     a tall monitor and pushed the page's actual content below the fold on every
+     nav page. 400px is enough for a headline, a three-line lede and the genart
+     to read as genart. Content taller than that still expands the band, so this
+     is a floor-and-intent, not a clamp that clips anything. */
+  min-height: 400px !important;
+  position: relative;
 }
 .a2-hero__inner, .cv__hero-inner, .rv__hero-inner, .tok__hero-inner,
 .md-hero__inner, .cl__hero-inner, .sk__head-inner {
-  padding-top: 8rem !important;
+  /* Was 8rem, which no longer fits inside a 400px band. 6rem still clears the
+     80px fixed nav, and keeps every hero's headline on the same offset. */
+  padding-top: 6rem !important;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Hero legibility ──
+   Every hero lede is set over a live canvas, and measured against the composited
+   art the muted text colour was 3.76:1 on /media, 5.05:1 on /skills and 5.07:1
+   on /regime. WCAG AA for body text is 4.5:1, so one page failed outright and
+   the others cleared it only on average — a bright stroke passing directly
+   behind a glyph is worse than the mean.
+
+   Two flat changes, no gradient and no shadow. A uniform veil sits over the art
+   and under the content, and the lede steps up to the brighter reading grey the
+   apply page already defines for long copy. Together they take /media to about
+   7.9:1 while leaving the art plainly visible. */
+.a2-hero__viz, .cv__hero-field, .rv__hero-art, .tok__hero-art,
+.md-hero__art, .cl__hero-art, .sk__head-viz {
+  z-index: 0;
+}
+.a2-hero::after, .cv__hero::after, .rv__hero::after, .tok__hero::after,
+.md-hero::after, .cl__hero::after, .sk__head::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 8, 12, 0.35);
+  pointer-events: none;
+  z-index: 0;
+}
+.a2-hero__lede, .cv__lede, .rv__hero-sub, .tok__lede,
+.md-hero__lede, .cl__lede, .sk__lede {
+  color: #aeb6c6 !important;
 }

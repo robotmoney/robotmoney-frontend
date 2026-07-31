@@ -1510,7 +1510,12 @@ export function registerHeroes(Alpine) {
       const p5Constructor = window.p5;
 
       const DEPTH = 8;
-      const TIP_SWAY = 0.16; // radians of lean at the outermost twigs, at full gust
+      // Radians of lean at the outermost twigs at full gust. The other heroes on
+      // the site move continuously (orbits travel, the mesh scatters), so a
+      // gentle sway reads as a still image beside them; this is tuned to be
+      // legible as motion at a glance without becoming a distraction behind a
+      // headline.
+      const TIP_SWAY = 0.3;
       const TRUNK = [104, 110, 120]; // grey at the base
       const TIP = [64, 148, 150]; // muted teal at the twigs
 
@@ -1557,7 +1562,7 @@ export function registerHeroes(Alpine) {
               // Each tree samples its own lane of the noise field, so no two
               // gust at the same moment.
               seed: p.random(1000),
-              rate: p.random(0.16, 0.3),
+              rate: p.random(0.28, 0.5),
             });
           }
           // Depth sort: smaller trees draw first and sit behind the larger ones.
