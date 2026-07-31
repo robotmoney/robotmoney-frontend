@@ -1847,6 +1847,30 @@ async function main(): Promise<void> {
       const planned = plannedNewcomer(n);
       if (!planned) break; // exhausted the fixed roster — stop, no generated fallback
       const { identity, lens, bias } = planned;
+      // ALREADY ON THE ROSTER? The newcomer list is indexed by a counter that
+      // restarts with this process, so against a persistent database every boot
+      // would re-admit Helios and the roster would grow one duplicate per
+      // restart (four Helios rows were observed on the standing demo — two
+      // active, two stranded in `applied`). The database is the authority on who
+      // has already joined; this loop only decides who is NEXT.
+      //
+      // Checked here, immediately before admitting, rather than once at start-up:
+      // an admission takes minutes, and a name can be taken by an operator (or by
+      // a second stack) in the meantime.
+      const takenNames = await e2e.existingMemberNames();
+      if (takenNames === null) {
+        // Conservative, like the roster-cap read below: an unreadable roster
+        // cannot prove the name is free, and a duplicate member is worse than a
+        // delayed one.
+        state.upcoming = [];
+        log(`onboarding ${identity.name} skipped — roster is unreadable, refusing to risk a duplicate`);
+        continue;
+      }
+      if (takenNames.has(identity.name.trim().toLowerCase())) {
+        state.upcoming = [];
+        log(`onboarding ${identity.name} skipped — already on the roster (this database has been onboarded before)`);
+        continue;
+      }
       // Roster cap: once the active committee reaches the contract's
       // COMMITTEE_ROSTER_CAP, stop admitting — the same finite-roster bound
       // above already stops the demo from growing forever, but this stays as

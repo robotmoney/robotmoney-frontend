@@ -191,6 +191,41 @@ export async function activeMemberCount(targetUrl: string = backendUrl()): Promi
   return Array.isArray(r.members) ? r.members.length : Number.POSITIVE_INFINITY;
 }
 
+/**
+ * Every member NAME already on the roster, in ANY status, lower-cased.
+ *
+ * The demo admits a FIXED, finite list of named newcomers (Helios, Selene, …)
+ * indexed by a counter that starts at 0 in each process. Against a throwaway
+ * database that was right; against a persistent one it re-admits Helios on every
+ * boot, and the roster grows a duplicate Helios per restart (four of them were
+ * observed on the standing demo — two active, two stuck in `applied`).
+ *
+ * Names are the identity here because the SERVER mints the member id: the demo
+ * cannot look up "did I already admit this one" by id, only by who they are.
+ * The admin route is used because it lists every status — a newcomer stuck at
+ * `applied` still owns its name, and re-admitting it just makes a second stuck
+ * row.
+ *
+ * FAILS CONSERVATIVELY: an unreadable roster returns null, and the caller must
+ * treat that as "cannot prove this name is free" and skip, exactly as
+ * activeMemberCount() assumes FULL rather than empty.
+ */
+export async function existingMemberNames(targetUrl: string = backendUrl()): Promise<Set<string> | null> {
+  try {
+    const r = await fetch(`${targetUrl}${ROUTES.committee.admin.members}`, { headers: getAdminHeaders() });
+    if (!r.ok) throw new Error(`GET ${ROUTES.committee.admin.members} -> ${r.status}`);
+    const body = await responseJson(r) as { members?: { name?: string }[] };
+    if (!Array.isArray(body.members)) throw new Error("admin members response has no members array");
+    return new Set(body.members.map((m) => String(m?.name ?? "").trim().toLowerCase()).filter(Boolean));
+  } catch (err) {
+    console.error(
+      `[e2e] existingMemberNames: ${err instanceof Error ? err.message : err} — ` +
+        `cannot prove a newcomer name is unused; the caller must SKIP rather than risk a duplicate`,
+    );
+    return null;
+  }
+}
+
 // Exported (in addition to standalone-main use) so scripts/rmpc-release-e2e.ts
 // (issue #104) can drive the SAME proven job-queue session lifecycle this file's
 // own runSession() uses, instead of hand-rolling a second one.
