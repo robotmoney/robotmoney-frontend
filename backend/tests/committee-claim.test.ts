@@ -8,6 +8,7 @@ import {
   deliverSwarmNotification,
   type SwarmEmailMessage,
 } from "../src/committee/notifications.ts";
+import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 
@@ -38,7 +39,7 @@ async function applyAndActivate(prefix: string) {
   const activated = await ic.activateMember(memberId);
   expect(activated.status).toBe(200);
   expect(activated).not.toHaveProperty("token");
-  return { memberId, contact: application.contact, ...keypair, activated };
+  return { memberId, name: application.name, contact: application.contact, ...keypair, activated };
 }
 
 async function challengeFor(memberId: string) {
@@ -48,7 +49,9 @@ async function challengeFor(memberId: string) {
 }
 
 beforeEach(async () => {
-  await sql`DELETE FROM jobs WHERE kind = 'committee.send_activation_notification'`;
+  await sql`DELETE FROM jobs WHERE kind IN (
+    'committee.send_application_received_notification',
+    'committee.send_activation_notification')`;
   await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
 });
 
@@ -56,8 +59,12 @@ test("activation persists an email outbox and the executed fake transport delive
   const applicant = await applyAndActivate("notify");
   expect((applicant.activated as any).notificationQueued).toBe(true);
 
+  // Filtered by kind: applying also writes an 'application_received' row for
+  // this same member, so an unfiltered read here would return two rows in
+  // arbitrary order and pick the wrong one roughly half the time.
   const outbox = (await sql<{ id: string; sent_at: Date | null }[]>`
-    SELECT id, sent_at FROM committee_notification_outbox WHERE member_id = ${applicant.memberId}`)[0];
+    SELECT id, sent_at FROM committee_notification_outbox
+    WHERE member_id = ${applicant.memberId} AND kind = 'activation_approved'`)[0];
   expect(outbox).toBeTruthy();
   expect(outbox.sent_at).toBeNull();
   const jobs = await sql`
@@ -74,10 +81,82 @@ test("activation persists an email outbox and the executed fake transport delive
     from: "committee-test@robotmoney.invalid",
     to: applicant.contact,
   });
-  expect(delivered[0].text).toContain(ROUTES.committee.claimChallenge);
-  expect(delivered[0].text).toContain(ROUTES.committee.claimToken);
+  // The approval mail is read by an operator and by nobody else, so it is judged
+  // on what a person can do with it. The name leads (nobody recognises a member
+  // by UUID, and one operator may run several), the id survives only as a
+  // reference line, and the raw claim endpoints are gone: the agent already holds
+  // the id and the claim flow, and it never reads this inbox.
+  expect(delivered[0].subject).toContain(applicant.name);
+  expect(delivered[0].text).toContain(applicant.name);
+  expect(delivered[0].text).not.toContain(ROUTES.committee.claimChallenge);
+  expect(delivered[0].text).not.toContain(ROUTES.committee.claimToken);
+  expect(delivered[0].text).toContain(applicant.memberId);
+  // Four links, all built from the configured public origin, all real routes in
+  // frontend/public/assets/js/app/routes.js. The committee link carries its
+  // paragraph break so the assertion cannot be satisfied by the /committee prefix
+  // of the two per-member URLs above.
+  expect(delivered[0].text).toContain(`${config.committeePublicBaseUrl}/committee/members/${applicant.memberId}`);
+  expect(delivered[0].text).toContain(`${config.committeePublicBaseUrl}/committee/apply/${applicant.memberId}`);
+  expect(delivered[0].text).toContain(`${config.committeePublicBaseUrl}/committee\n`);
+  expect(delivered[0].text).toContain(`${config.committeePublicBaseUrl}/docs/investment-committee/how-it-works`);
   expect(await deliverSwarmNotification(outbox.id, fakeTransport)).toEqual({ sent: false, idempotent: true });
   expect(delivered).toHaveLength(1);
+});
+
+// The status page URL reaches an operator exactly once, printed by their own
+// agent into a chat transcript, and nothing on the site links to it. This email
+// is the only durable copy, so its existence and its contents are both load
+// bearing, and so is the re-send on the recovery path.
+test("applying persists an application-received email carrying the status page URL", async () => {
+  const label = rid("receipt");
+  const keypair = await generateKeyPair();
+  const application = { name: `Applicant ${label}`, contact: `${label}@example.test`, publicKey: keypair.publicKeyB64 };
+  const signature = await signMessage(canonicalizeApplication(application), keypair.privateKey);
+  const applied = await post(ROUTES.committee.apply, { ...application, signature });
+  expect(applied?.status).toBe(201);
+  const memberId = (applied!.body as { memberId: string }).memberId;
+
+  const outbox = (await sql<{ id: string; to_email: string; sent_at: Date | null }[]>`
+    SELECT id, to_email, sent_at FROM committee_notification_outbox
+    WHERE member_id = ${memberId} AND kind = 'application_received'`)[0];
+  expect(outbox).toBeTruthy();
+  expect(outbox.to_email).toBe(application.contact);
+  // Queued, not sent: the outbox write is complete at commit and owes nothing to
+  // a reachable transport.
+  expect(outbox.sent_at).toBeNull();
+  expect(await sql`
+    SELECT id FROM jobs
+    WHERE kind = 'committee.send_application_received_notification'
+      AND payload->>'outboxId' = ${outbox.id}`).toHaveLength(1);
+
+  const delivered: SwarmEmailMessage[] = [];
+  const fakeTransport = { send: async (message: SwarmEmailMessage) => { delivered.push(message); } };
+  expect(await deliverSwarmNotification(outbox.id, fakeTransport)).toEqual({ sent: true });
+  expect(delivered[0].to).toBe(application.contact);
+  expect(delivered[0].text).toContain(`${config.committeePublicBaseUrl}/committee/apply/${memberId}`);
+  // Same name-first rule as the approval mail: two receipts separated only by
+  // UUID are two indistinguishable emails to the operator holding both.
+  expect(delivered[0].subject).toContain(application.name);
+  expect(delivered[0].text).toContain(application.name);
+
+  // Re-applying with the same key is the operator recovering a lost id, so it
+  // re-arms the one permitted row (UNIQUE (kind, member_id)) and enqueues a
+  // fresh job under a new send generation rather than silently no-oping.
+  const reapplied = await post(ROUTES.committee.apply, { ...application, signature });
+  expect(reapplied?.status).toBe(201);
+  expect((reapplied!.body as { memberId: string }).memberId).toBe(memberId);
+  const rearmed = await sql<{ id: string; sent_at: Date | null }[]>`
+    SELECT id, sent_at FROM committee_notification_outbox
+    WHERE member_id = ${memberId} AND kind = 'application_received'`;
+  expect(rearmed).toHaveLength(1);
+  expect(rearmed[0].id).toBe(outbox.id);
+  expect(rearmed[0].sent_at).toBeNull();
+  expect((await sql`
+    SELECT id FROM jobs
+    WHERE kind = 'committee.send_application_received_notification'
+      AND payload->>'outboxId' = ${outbox.id}`).length).toBeGreaterThan(1);
+  expect(await deliverSwarmNotification(outbox.id, fakeTransport)).toEqual({ sent: true });
+  expect(delivered).toHaveLength(2);
 });
 
 test("challenge issuance is indistinguishable and keeps one live 10-minute challenge per active member", async () => {
