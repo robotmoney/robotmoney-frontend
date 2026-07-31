@@ -95,7 +95,10 @@ async function main() {
   console.log(`regime: composite=${composite.toFixed(3)} (${regime.regime})`);
 
   const identities = await seed();
-  const session = await ic.openSession(today, SUBJECT.id);
+  // No date argument: Postgres stamps convened_at and derives the date from it
+  // (migration 0022). `today` above is still this script's own regime/analytics
+  // as-of day, which is a different thing from when a session convened.
+  const session = await ic.openSession(SUBJECT.id);
   await ic.publishBrief(session.id, 60);
   console.log(`session ${session.id} → brief published, window open`);
 

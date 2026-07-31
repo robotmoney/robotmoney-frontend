@@ -387,7 +387,12 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
   if (!subject) return err(404, "subject not found");
   if (subject.status !== "active") return err(409, "topic is not active");
 
-  const existing = (await sql`SELECT id, state FROM committee_sessions WHERE date = ${input.date} AND subject_id = ${input.subjectId}`)[0] as
+  // Newest first: a subject may now have several sessions on one date
+  // (migration 0022 dropped UNIQUE(date, subject_id)), and it is the most recent
+  // one that decides whether this create is a re-schedule or a conflict.
+  const existing = (await sql`SELECT id, state FROM committee_sessions
+                              WHERE date = ${input.date} AND subject_id = ${input.subjectId}
+                              ORDER BY convened_at DESC LIMIT 1`)[0] as
     | { id: string; state: string }
     | undefined;
   if (existing && existing.state !== "scheduled") return err(409, "a session already exists for this date/topic");
@@ -400,8 +405,14 @@ export async function createSessionAdmin(input: SessionCreateInput, actor: Actor
           WHERE id = ${existing.id}
           RETURNING id, date, subject_id, subject_name, state, version`
       : await tx`
-          INSERT INTO committee_sessions (date, subject_id, subject_name, state, brief_opens_at, window_closes_at, publish_at)
-          VALUES (${input.date}, ${input.subjectId}, ${subject.name}, 'scheduled', ${briefOpensAt}, ${windowClosesAt}, ${publishAt})
+          -- No date column here: since migration 0022 it is generated from
+          -- convened_at. An admin-scheduled session convenes at briefOpensAt, so
+          -- that instant IS its convened_at, and the derived date necessarily
+          -- equals the input.date already validated to agree with it above.
+          -- The admin still chooses WHEN a session sits; nobody chooses a date
+          -- that disagrees with when it sat.
+          INSERT INTO committee_sessions (convened_at, subject_id, subject_name, state, brief_opens_at, window_closes_at, publish_at)
+          VALUES (${briefOpensAt}, ${input.subjectId}, ${subject.name}, 'scheduled', ${briefOpensAt}, ${windowClosesAt}, ${publishAt})
           RETURNING id, date, subject_id, subject_name, state, version`;
     const session = rows[0];
     const sessionId = session.id as string;

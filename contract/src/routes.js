@@ -74,7 +74,10 @@ export const ROUTES = {
     admin: {
       action: "/api/committee/admin/:action", // POST — generic lifecycle dispatch
       activate: "/api/committee/admin/activate", // POST — flip applied→active, mint bearer token
-      reset: "/api/committee/admin/reset", // POST — wipe session data (dev/demo)
+      // The former `reset` action (POST — wipe session data) is REMOVED: it
+      // TRUNCATEd published session/brief/recommendation/memo history so a demo
+      // could reuse today's date, which is data loss against any database that
+      // outlives its stack.
       // The former admin `regime` action and analytics queue action were
       // removed by issue #361: producer data only arrives as a submission,
       // and the independent producer owns its own cadence.

@@ -210,6 +210,35 @@ export async function waitForSessionState(date: string, subject: string, expecte
   );
 }
 
+/**
+ * Wait for a subject's NEWEST session to reach a state, WITHOUT knowing its date.
+ *
+ * This is the bootstrap half of waitForSessionState: after `open_session` is
+ * enqueued nobody knows the date yet, because Postgres has not stamped
+ * convened_at. Polling the sessions list by subject is the only honest way to
+ * learn it — the alternative is guessing a date locally, which is exactly the
+ * habit migration 0022 removed. Once this returns, the caller has the real date
+ * and every later poll can use the cheaper date-addressed route.
+ */
+export async function waitForSubjectSession(subject: string, expectedState: string, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const r = await fetch(`${backendUrl()}${ROUTES.committee.sessions}`);
+    if (r.ok) {
+      const data = await responseJson(r);
+      // The list is newest-first, so the first row for this subject is the one
+      // just convened. Matching on subject alone (not date) is the whole point.
+      const s = (data.sessions ?? []).find((x: { subjectId?: string }) => x.subjectId === subject);
+      if (s?.state === expectedState) return { session: s };
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `no session for subject '${subject}' reached '${expectedState}' within ${timeoutMs}ms ` +
+      `(the worker may still be draining an earlier job — check 'bun run demo:status' or the worker container logs)`,
+  );
+}
+
 export async function enqueueLifecycleJob(action: string, payload: Record<string, unknown> = {}) {
   const result = await admin("enqueue-job", { action, ...payload });
   console.log(`  enqueued ${result.kind} (job #${result.jobId})`);
@@ -277,7 +306,6 @@ export async function runRegimeClassify(
 // this process's environment (the standalone CI entry point receives the
 // demo's exact compose env).
 export async function runSession(
-  date: string,
   subject: typeof SUBJECTS[0],
   sessionIndex: number,
   opts?: { prevOutcome?: string; rail?: SessionRail; onProgress?: SessionProgress },
@@ -285,28 +313,39 @@ export async function runSession(
   const prevOutcome = opts?.prevOutcome;
   const onProgress = opts?.onProgress;
   const rail = opts?.rail ?? railFromEnv();
+
+  // THE DATE IS NOT AN INPUT. It used to be — the demo passed `today + N days`
+  // so repeat runs would not collide on the old UNIQUE(date, subject_id), and
+  // wiped session history when it wanted today back. Now the session is opened
+  // first and its date is READ BACK from the row Postgres created (convened_at,
+  // migration 0022). Everything downstream — fixtures, regime as-of, the
+  // members' signed payloads, the state polls — uses that value, so there is
+  // exactly one clock in the system and it is the database's.
+  await enqueueLifecycleJob("open_session", { subjectId: subject.id });
+  const opened = await waitForSubjectSession(subject.id, "scheduled");
+  const date: string = opened.session.date;
+  const sessionId = opened.session.id;
   const tag = `[session ${sessionIndex}: ${date}/${subject.id}]`;
   console.log(`\n${tag}`);
   // Session-lifecycle emitter — one call per real state transition below.
-  const emitSession = (state: string, sessionId?: number) =>
-    onProgress?.({ type: "session", state, sessionId, subject: subject.id, date });
+  const emitSession = (state: string, sid?: number) =>
+    onProgress?.({ type: "session", state, sessionId: sid, subject: subject.id, date });
 
-  // Ensure subject exists; regime is already seeded by the first session.
+  // Ensure subject exists; regime is already seeded by the first session. Both
+  // are now dated by the SESSION's own date rather than by this process's clock.
   if (sessionIndex > 0) {
     await admin("subject", subject);
     await runRegimeClassify(date, rail);
   }
 
   // Seed the reference-shaped subject fixtures (subject row + subject snapshot the
-  // portfolio donut reads + trailing regime history for the sparkline) BEFORE the
-  // session opens, so the subject/snapshot routes return data for the session date
-  // and the memo page renders full charts. Idempotent; dated at the session date.
+  // portfolio donut reads + trailing regime history for the sparkline) so the
+  // subject/snapshot routes return data for the session date and the memo page
+  // renders full charts. Idempotent; dated at the session date. This now runs
+  // just AFTER the session row exists, because that row is what says what the
+  // date is; the brief (which reads these fixtures) is still published after.
   await admin("subject_fixtures", { id: subject.id, name: subject.name, date });
 
-  // Lifecycle through worker job queue.
-  await enqueueLifecycleJob("open_session", { date, subjectId: subject.id });
-  const sd = await waitForSessionState(date, subject.id, "scheduled");
-  const sessionId = sd.session.id;
   emitSession("scheduled", sessionId);
 
   await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes: 60, prevOutcome });
@@ -405,14 +444,16 @@ async function main() {
   // entry point the stack's exact compose env.
   const rail = railFromEnv();
 
-  // Setup (reset + subject are direct admin calls; the regime snapshot is the
-  // PRODUCER's own job — issue #361 Phase 4)
-  await admin("reset");
+  // Setup (subject is a direct admin call; the regime snapshot is the
+  // PRODUCER's own job — issue #361 Phase 4). NOTHING IS WIPED: the
+  // session-wiping admin("reset") that used to open this entry point is gone
+  // along with the endpoint behind it — an ephemeral database is deleted or
+  // inspected whole, and no bring-up may TRUNCATE rows it did not create.
   await runRegimeClassify(today, rail);
   await admin("subject", SUBJECTS[0]);
 
   // Session 1: today's subject
-  const s1 = await runSession(today, SUBJECTS[0], 1, { rail });
+  const s1 = await runSession(SUBJECTS[0], 1, { rail });
 
   // ── New member added mid-run ──────────────────────────────────────────────
   // Demonstrates a member added AFTER session 1, participating in session 2
@@ -480,7 +521,7 @@ async function main() {
   // Session 2: next day, different subject (demonstrates rotation + cross-session
   // awareness). Eos (added to the roster mid-run above) enrolls and
   // participates in its own container alongside the original members.
-  await runSession(tomorrow, SUBJECTS[1], 2, { prevOutcome: s1.pub.session.synthesis, rail });
+  await runSession(SUBJECTS[1], 2, { prevOutcome: s1.pub.session.synthesis, rail });
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${backendUrl()}${ROUTES.committee.sessions}`).then((r) => r.json());

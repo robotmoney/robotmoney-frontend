@@ -12,7 +12,6 @@ import {
   planSubjectSchedules,
   renderCadenceLine,
   resolveDemoCadence,
-  sessionDateFor,
   type SubjectCadencePlan,
 } from "./demo-schedule.ts";
 import {
@@ -1646,12 +1645,22 @@ async function main(): Promise<void> {
     backendUrl,
   };
 
-  // One-time setup: reset once (clears any prior demo history) + seed regime.
+  // One-time setup: seed regime. NOTHING IS WIPED HERE.
+  //
+  // This used to begin with `admin("reset")`, a TRUNCATE of every committee
+  // session, brief, recommendation and (by CASCADE) memo. That was invisible
+  // while each boot got a throwaway postgres volume — there was never anything
+  // to destroy — and became data loss the moment the database outlived the
+  // stack: an --external-pg boot silently erased every previously published
+  // memo, and RESTART IDENTITY made the next boot reuse those memo ids for
+  // different memos. An ephemeral database is deleted or inspected as a whole;
+  // no bring-up may TRUNCATE rows it did not create. The endpoint behind this
+  // call is gone too, so there is no way back to the wiping behaviour.
+  //
   // The regime snapshot is the PRODUCER's own regime.classify command (issue
   // #361 Phase 4), launched against this explicit stack rail and submitted
   // through the analytics HTTP boundary under the producer's credential; the
   // removed admin("regime") classifier path no longer exists.
-  await e2e.admin("reset");
   const today = new Date().toISOString().slice(0, 10);
   await e2e.runRegimeClassify(today, producerRail);
 
@@ -1730,20 +1739,25 @@ async function main(): Promise<void> {
       if (wait > 0) await sleep(wait);
       const subject = due.subject;
       const c = state.committees[subject.id];
-      // Rotate the date per THIS subject's own run count so sessions accumulate
-      // without colliding on UNIQUE(date, subject_id) — the rule itself is the
-      // pure sessionDateFor() in demo-schedule.ts, unchanged in behaviour.
-      const date = sessionDateFor(Date.now(), due.runs);
-      log(`committee → ${date}/${subject.id}`);
+      // NO DATE IS COMPUTED HERE. This used to be
+      // `sessionDateFor(Date.now(), due.runs)` — today plus one synthetic day
+      // per run — invented so repeat sessions would not collide on the old
+      // UNIQUE(date, subject_id), and propped up by a boot-time TRUNCATE of all
+      // session history whenever the demo wanted "today" back. Both are gone:
+      // runSession() opens the session first and reads its date back from the
+      // row Postgres stamped (convened_at, migration 0022), so the only clock
+      // that dates a session is the database's.
+      log(`committee → ${subject.id} (convening; the database dates the session)`);
       c.members = {};
       c.nextAt = 0; // running now → pane shows "running…"
       try {
-        const res = await e2e.runSession(date, subject, due.runs + 1, {
+        const res = await e2e.runSession(subject, due.runs + 1, {
           rail: sessionRail,
           onProgress: tuiActive ? committeeProgress(subject.id) : undefined,
         });
         c.publishedCount++;
         const synth: string = res?.pub?.session?.synthesis ?? "";
+        const date: string = res?.pub?.session?.date ?? "(unknown)";
         c.history.push({ date, synthesis: synth });
         if (c.history.length > 4) c.history.shift();
         log(`committee published ${date}/${subject.id}`);

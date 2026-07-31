@@ -2,9 +2,13 @@ import * as ic from "../../committee/domain.ts";
 import { deliverSwarmNotification } from "../../committee/notifications.ts";
 
 export async function openSession(payload: Record<string, unknown>): Promise<unknown> {
-  const date = String(payload.date ?? new Date().toISOString().slice(0, 10));
+  // `payload.date` is deliberately IGNORED (and no longer defaulted from this
+  // process's clock): since migration 0022 the session's date is derived from
+  // the convened_at that Postgres stamps on insert. A queued job that has sat
+  // in the queue across midnight must file its session under the day it
+  // actually ran, not the day it was enqueued.
   const subjectId = String(payload.subjectId ?? "");
-  return await ic.openSession(date, subjectId);
+  return await ic.openSession(subjectId);
 }
 
 export async function publishBrief(payload: Record<string, unknown>): Promise<unknown> {

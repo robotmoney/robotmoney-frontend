@@ -5,6 +5,12 @@ import { canonicalizeApplication, canonicalizeSubmission, path as routePath, ROU
 import { sql } from "../src/db/client.ts";
 import { handleCommittee } from "../src/api/routes/committee.ts";
 
+// A session's date is whatever the DATABASE derived from convened_at
+// (migration 0022). postgres returns it as a Date; normalise to the YYYY-MM-DD
+// the API and the signing payload use. Tests read this — they never choose it.
+const sessionDate = (s: { date: unknown }): string =>
+  s.date instanceof Date ? s.date.toISOString().slice(0, 10) : String(s.date).slice(0, 10);
+
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
 // §11 R6 — build a validly-signed apply payload the way an rmpc-equipped agent
@@ -112,8 +118,10 @@ test("apply → activate approves without minting; re-activate finds no pending 
 test("submit: signature verify/reject, window, duplicate", async () => {
   const subj = rid("s");
   await ic.ensureSubject(subj, "S");
-  const date = "2026-06-30";
-  const session = await ic.openSession(date, subj);
+  const session = await ic.openSession(subj);
+  // The DATABASE dates the session (migration 0022) — read it back rather
+  // than asserting a date this test chose.
+  const date = sessionDate(session);
   await ic.publishBrief(session.id, 60);
 
   const m = await activeMember();
@@ -212,8 +220,10 @@ const memoBody = (subj: string) => [
 test("full open→brief→submit→aggregate cycle enriches the session (regime_summary, recommendation, synthesis, memo body)", async () => {
   const subj = rid("sub");
   await ic.ensureDemoSubjectFixtures(subj, "Woon Treasury", "2026-07-05");
-  const date = "2026-07-05";
-  const session = await ic.openSession(date, subj);
+  const session = await ic.openSession(subj);
+  // The DATABASE dates the session (migration 0022) — read it back rather
+  // than asserting a date this test chose.
+  const date = sessionDate(session);
   const publishedBrief = await ic.publishBrief(session.id, 60);
   const brief = await ic.getBrief(date, subj);
   expect(brief?.body?.prompt.system).toContain("Author only your own analysis");
@@ -293,10 +303,12 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
 
 test("bucket aggregation computes the normalized unweighted mean and attributes only stored non-empty bodies", async () => {
   const subjectId = rid("weighted");
-  const date = "2026-07-06";
   await ic.ensureSubject(subjectId, "Weighted Subject");
   const members = await Promise.all([activeMember(), activeMember(), activeMember()]);
-  const session = await ic.openSession(date, subjectId);
+  const session = await ic.openSession(subjectId);
+  // The DATABASE dates the session (migration 0022) — read it back rather
+  // than asserting a date this test chose.
+  const date = sessionDate(session);
   for (const member of members) {
     await sql`INSERT INTO committee_session_members (session_id, member_id, member_name, status)
               VALUES (${session.id}, ${member.id}, ${member.id}, 'expected')`;
@@ -378,10 +390,12 @@ test("aggregation omits invented prose and weights when no eligible body or vali
   // comment), and this test's single activeMember() call must never 409.
   await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
   const subjectId = rid("empty");
-  const date = "2026-07-07";
   await ic.ensureSubject(subjectId, "Empty Body Subject");
   const member = await activeMember();
-  const session = await ic.openSession(date, subjectId);
+  const session = await ic.openSession(subjectId);
+  // The DATABASE dates the session (migration 0022) — read it back rather
+  // than asserting a date this test chose.
+  const date = sessionDate(session);
   await sql`INSERT INTO committee_session_members (session_id, member_id, member_name, status)
             VALUES (${session.id}, ${member.id}, ${member.id}, 'expected')`;
   await ic.publishBrief(session.id, 60);
@@ -407,12 +421,14 @@ test("restart-safety (issue #208): re-opening the same session is idempotent (on
   await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
   const subj = rid("restart");
   await ic.ensureSubject(subj, "Restart Subject");
-  const date = "2026-07-08";
 
   // A worker restart (or an at-most-once cron retry) may call openSession twice
   // for the same (date, subject_id) — this must never create a second session row.
-  const first = await ic.openSession(date, subj);
-  const second = await ic.openSession(date, subj);
+  const first = await ic.openSession(subj);
+  const second = await ic.openSession(subj);
+  // The DATABASE dates the session (migration 0022) — read it back rather than
+  // asserting a date this test chose.
+  const date = sessionDate(first);
   expect(second.id).toBe(first.id);
   const sessionRows = await sql`SELECT id FROM committee_sessions WHERE date = ${date} AND subject_id = ${subj}`;
   expect(sessionRows.length).toBe(1);
@@ -470,10 +486,12 @@ test("GET /api/committee/sessions default: light-projected + cursor-paginated (n
   const created: { id: string; date: string; subjectId: string }[] = [];
   for (let i = 0; i < n; i++) {
     const subj = rid(`pagsubj${i}`);
-    const date = `2031-01-${String(10 + i).padStart(2, "0")}`;
     await ic.ensureSubject(subj, `Pagination Subject ${i}`);
-    const row = await ic.openSession(date, subj); // leaves state = 'scheduled'
-    created.push({ id: row.id, date, subjectId: subj });
+    // Distinct SUBJECTS, one session each, all dated by the database — the old
+    // spread of invented 2031 dates is no longer expressible (and never needed
+    // to be: the cursor invariant under test is about rows, not calendars).
+    const row = await ic.openSession(subj); // leaves state = 'scheduled'
+    created.push({ id: row.id, date: sessionDate(row), subjectId: subj });
   }
 
   // The `scheduled` bucket is shared with other test files against the one
@@ -505,9 +523,11 @@ test("GET /api/committee/sessions default: light-projected + cursor-paginated (n
 
 test("GET /api/committee/sessions?full=1 reproduces the pre-#243 unpaginated/unprojected shape; the light default omits its big fields", async () => {
   const subj = rid("fullproj");
-  const date = "2031-02-01";
   await ic.ensureSubject(subj, "Full Projection Subject");
-  const session = await ic.openSession(date, subj);
+  const session = await ic.openSession(subj);
+  // The DATABASE dates the session (migration 0022) — read it back rather
+  // than asserting a date this test chose.
+  const date = sessionDate(session);
   await ic.publishBrief(session.id, 60);
   const m = await activeMember();
   const sub = {
@@ -571,14 +591,16 @@ test("GET /api/committee/sessions: malformed cursor and out-of-range limit are 4
 test("GET /api/committee/members/:id/takes (#243B): collapses list+N-detail into one call — newest first, in-progress states included, doesn't collide with the plain member-detail route", async () => {
   const subjOlder = rid("takesA");
   const subjNewer = rid("takesB");
-  const dateOlder = "2031-03-01";
-  const dateNewer = "2031-03-02";
   await ic.ensureSubject(subjOlder, "Takes Subject A");
   await ic.ensureSubject(subjNewer, "Takes Subject B");
   const m = await activeMember();
 
-  const submitOnce = async (date: string, subjectId: string, stance: string) => {
-    const session = await ic.openSession(date, subjectId);
+  // No date parameter: the caller cannot choose one any more. The two sessions
+  // are told apart by SUBJECT and by lifecycle state, which is what this test
+  // actually cares about (older published, newer still collecting).
+  const submitOnce = async (subjectId: string, stance: string) => {
+    const session = await ic.openSession(subjectId);
+    const date = sessionDate(session);
     await ic.publishBrief(session.id, 60);
     const sub = { memberId: m.id, date, subjectId, nonce: rid("n"), stance, confidence: 0.5, body: "y".repeat(80) };
     const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
@@ -588,11 +610,11 @@ test("GET /api/committee/members/:id/takes (#243B): collapses list+N-detail into
 
   // Older session goes all the way to published; newer stays "collecting"
   // (in-progress) — the member-takes endpoint must surface BOTH.
-  const olderSession = await submitOnce(dateOlder, subjOlder, "bearish");
+  const olderSession = await submitOnce(subjOlder, "bearish");
   await ic.closeWindow(olderSession.id);
   await ic.aggregateSession(olderSession.id);
   await ic.publishSession(olderSession.id);
-  await submitOnce(dateNewer, subjNewer, "bullish"); // left in "collecting"
+  const newerSession = await submitOnce(subjNewer, "bullish"); // left in "collecting"
 
   // Route disambiguation: the plain member-detail route must still resolve —
   // /members/:id/takes must never be swallowed by /members/:id's `.startsWith`.
@@ -610,14 +632,14 @@ test("GET /api/committee/members/:id/takes (#243B): collapses list+N-detail into
 
   // Newest session first.
   expect(mine[0].subjectId).toBe(subjNewer);
-  expect(mine[0].sessionDate).toBe(dateNewer);
+  expect(mine[0].sessionDate).toBe(sessionDate(newerSession));
   expect(mine[0].sessionState).toBe("collecting"); // in-progress, included
   expect(mine[0].take.stance).toBe("bullish");
   expect(mine[0].take.verified).toBe(true);
   expect(mine[0].take.memberId).toBe(m.id);
 
   expect(mine[1].subjectId).toBe(subjOlder);
-  expect(mine[1].sessionDate).toBe(dateOlder);
+  expect(mine[1].sessionDate).toBe(sessionDate(olderSession));
   expect(mine[1].sessionState).toBe("published");
   expect(mine[1].take.stance).toBe("bearish");
   expect(mine[1].take.verified).toBe(true);

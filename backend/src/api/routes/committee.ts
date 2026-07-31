@@ -246,7 +246,13 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
         const res = await ic.activateMember(memberId);
         return { status: res.status, body: res };
       }
-      case "reset": return { status: 200, body: await ic.resetSessions() };
+      // The former `reset` action — a TRUNCATE of committee_sessions,
+      // committee_briefs and committee_recommendations (with memos following by
+      // CASCADE) — is REMOVED. It existed so a demo could re-run "today's"
+      // session on a throwaway database, and it destroyed real published
+      // history the moment a stack was pointed at a persistent one. An
+      // ephemeral database is deleted or inspected as a whole; no endpoint
+      // wipes rows.
       // The former `regime` action — the ADMIN_TOKEN classifier path that ran
       // runAnalytics inside the API process — is REMOVED (issue #361 Phase 4):
       // docs/architecture.md's authz model says admin credentials never
@@ -276,11 +282,15 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
           : { status: 400, body: { error: "id and name required" } };
       }
       case "open": {
-        const date = requiredString(b, "date", 10);
+        // No `date` input. The session's date is derived from the convened_at
+        // Postgres stamps (migration 0022); a caller-supplied date is exactly
+        // the affordance the demo used to invent synthetic days. A body that
+        // still carries one is accepted and ignored rather than rejected, so an
+        // older client keeps working.
         const subjectId = requiredString(b, "subjectId", 100);
-        return date && subjectId
-          ? { status: 200, body: await ic.openSession(date, subjectId) }
-          : { status: 400, body: { error: "date and subjectId required" } };
+        return subjectId
+          ? { status: 200, body: await ic.openSession(subjectId) }
+          : { status: 400, body: { error: "subjectId required" } };
       }
       case "brief":
       case "close":

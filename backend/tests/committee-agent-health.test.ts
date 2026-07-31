@@ -13,6 +13,12 @@ import { canonicalizeSubmission } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleCommitteeAdmin } from "../src/api/routes/committee-admin.ts";
 
+// A session's date is whatever the DATABASE derived from convened_at
+// (migration 0022). postgres returns it as a Date; normalise to the YYYY-MM-DD
+// the API and the signing payload use. Tests read this — they never choose it.
+const sessionDate = (s: { date: unknown }): string =>
+  s.date instanceof Date ? s.date.toISOString().slice(0, 10) : String(s.date).slice(0, 10);
+
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
 // All committee test files share ONE ephemeral Postgres (tests/preload.ts).
@@ -47,10 +53,12 @@ async function getAgentHealth(query: string) {
 test("closeWindow records exactly one absent event per missing expected roster member; queryable by session/member and counted", async () => {
   const subj = rid("s");
   await ic.ensureSubject(subj, "S");
-  const date = "2026-07-10";
   const present = await activeMember();
   const absent = await activeMember();
-  const session = await ic.openSession(date, subj);
+  const session = await ic.openSession(subj);
+  // The DATABASE dates the session (migration 0022) — read it back rather
+  // than asserting a date this test chose.
+  const date = sessionDate(session);
   for (const m of [present, absent]) {
     await sql`INSERT INTO committee_session_members (session_id, member_id, member_name, status)
               VALUES (${session.id}, ${m.id}, ${m.id}, 'expected')`;
@@ -105,9 +113,11 @@ test("closeWindow records exactly one absent event per missing expected roster m
 test("a wrong-key/tampered submission is rejected 400 and recorded to the durable rejected-signature surface", async () => {
   const subj = rid("s2");
   await ic.ensureSubject(subj, "S2");
-  const date = "2026-07-11";
   const m = await activeMember();
-  const session = await ic.openSession(date, subj);
+  const session = await ic.openSession(subj);
+  // The DATABASE dates the session (migration 0022) — read it back rather
+  // than asserting a date this test chose.
+  const date = sessionDate(session);
   await sql`INSERT INTO committee_session_members (session_id, member_id, member_name, status)
             VALUES (${session.id}, ${m.id}, ${m.id}, 'expected')`;
   await ic.publishBrief(session.id, 60);
