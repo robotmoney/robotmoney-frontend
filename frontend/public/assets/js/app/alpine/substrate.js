@@ -48,12 +48,27 @@ export function registerSubstrate(Alpine) {
     },
     _start(container, overlay) {
       const p5Constructor = window.p5;
-      const intensity = 45, speed = 3.0, fadeSec = 4, lineW = 1.1, dotSize = 36;
+      // `speed` is crack-steps per frame and each step advances a crack 0.42px,
+      // so at the old value of 3 a crack grew ~38px/second under the 30fps hero
+      // cap. On a 1440px hero that meant the network was still half a dozen
+      // lines after ten seconds, and a visitor who scrolled past never saw the
+      // effect at all — the hero read as an empty black band. The seeding was
+      // the other half: growth only compounds once cracks start colliding and
+      // spawning, so 8 initial cracks spent the first seconds doing nothing
+      // visible. More seeds and more steps reach a legible network in ~3s and
+      // then settle into the same stasis-and-fade cycle as before.
+      const intensity = 45, speed = 16.0, fadeSec = 4, lineW = 1.1, dotSize = 36;
+      const seedCracks = 26;
       const ACCENT = [0, 229, 255], BG = [10, 10, 15];
+
+      // Opening burst: how many frames run at the accelerated rate, and that
+      // rate. 20 frames under the 30fps hero cap is roughly the first 0.7s.
+      const bootSpeed = 55, bootFramesInit = 20;
 
       const sketch = (p) => {
         let W, H, cgrid, cracks = [], numCracks = 0, maxCracks;
         let phase = 0, fadeTimer = 0, generation = 0, stasisFrames = 0, crackLayer;
+        let bootFrames = bootFramesInit;
 
         function Crack() {
           this.x = 0; this.y = 0; this.t = 0; this.alive = true;
@@ -104,6 +119,10 @@ export function registerSubstrate(Alpine) {
         function initGeneration() {
           cgrid = new Int32Array(W * H).fill(10001);
           cracks = []; numCracks = 0; stasisFrames = 0;
+          // Every generation gets the opening burst, not just the first: after
+          // the fade the band is empty again, and a slow rebuild mid-session is
+          // the same dead-hero problem a visitor saw on load.
+          bootFrames = bootFramesInit;
           maxCracks = Math.min(700, Math.max(5, Math.round(W * (intensity / 100))));
           let seeds = Math.max(3, Math.round(maxCracks * 0.1));
           for (let k = 0; k < seeds; k++) {
@@ -111,7 +130,7 @@ export function registerSubstrate(Alpine) {
             let py = Math.floor(p.random(H));
             cgrid[py * W + px] = Math.floor(p.random(360));
           }
-          for (let k = 0; k < Math.min(8, maxCracks); k++) spawnCrack();
+          for (let k = 0; k < Math.min(seedCracks, maxCracks); k++) spawnCrack();
           generation++;
         }
         p.setup = function () {
@@ -139,7 +158,15 @@ export function registerSubstrate(Alpine) {
           p.background(BG[0], BG[1], BG[2]);
           p.image(crackLayer, 0, 0);
           if (phase === 0) {
-            let steps = Math.max(1, Math.round(speed));
+            // Front-loaded growth. At the steady rate the hero spends its first
+            // seconds as a near-empty band, because the network only compounds
+            // once cracks start colliding and spawning. Running many more steps
+            // for the opening ~0.7s gets a legible structure on screen almost
+            // immediately, then settles to the steady rate. Ramped across frames
+            // rather than pre-warmed in setup() so there is no synchronous hitch
+            // at boot, which would trade one visible problem for another.
+            let steps = Math.max(1, Math.round(bootFrames > 0 ? bootSpeed : speed));
+            if (bootFrames > 0) bootFrames--;
             for (let s = 0; s < steps; s++) {
               let moved = 0;
               for (let n = 0; n < numCracks; n++) {

@@ -4,6 +4,20 @@
 
 [x-cloak] { display: none !important; }
 
+/* ── Boot layout shift ──
+   The router fetches the route fragment and injects it into #view after boot,
+   so on a hard reload the shell paints with #view at zero height and the footer
+   lands directly under the nav, near the top of the viewport. When the fragment
+   arrives the footer is shoved down the page, which is a large and very visible
+   layout shift on every cold load.
+
+   Reserving a viewport of height WHILE #view is empty holds the footer below
+   the fold until there is something to sit under. The selector stops matching
+   the moment the fragment is injected, so no rendered route inherits a
+   min-height it did not ask for, and a route that legitimately renders short
+   content is unaffected. */
+#view:empty { min-height: 100vh; }
+
 /* pulse (was Tailwind animate-pulse) */
 @keyframes rmPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 .rm-pulse { animation: rmPulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
@@ -170,7 +184,22 @@
 .terminal__title { font-size: 10px; font-family: var(--font-mono); color: var(--color-text-dim); margin-left: 0.5rem; }
 .terminal__body { padding: 1.25rem; font-family: var(--font-mono); font-size: 13px; line-height: 1.625; min-height: 340px; }
 
-.term-line { white-space: pre-wrap; }
+/* Boot reveal. Each row carries its own --d (accumulated in buildTerminalLines),
+   so the browser owns the easing on the compositor and there is no per-line JS
+   timer. A row animates once, when it is created. The movement is 3px on
+   purpose: a terminal line should settle, not fly in. */
+.term-line {
+  white-space: pre-wrap;
+  animation: termLineIn 260ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+@keyframes termLineIn {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .term-line { animation: none; opacity: 1; transform: none; }
+}
 .term-line--cmd { color: var(--color-text); }
 .term-line--accent { color: var(--color-accent); }
 .term-line--ready { color: #fff; font-weight: 700; }
@@ -474,9 +503,74 @@
    !important is used deliberately: the per-page inline <style> is injected
    after this shared sheet and would otherwise win the cascade. */
 .a2-hero, .cv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head {
+  /* Top-aligned, not centred. Centring looks right on any one page but breaks
+     the thing this rule exists for: these blocks are different heights (a lede
+     wraps to one line on /tokenomics and three on /projects), so centring made
+     the headline land in a different place on every page, varying by 55px.
+     Pinning the top is what keeps the headline still as you navigate. */
   align-items: flex-start !important;
+  position: relative;
 }
 .a2-hero__inner, .cv__hero-inner, .rv__hero-inner, .tok__hero-inner,
 .md-hero__inner, .cl__hero-inner, .sk__head-inner {
-  padding-top: 8rem !important;
+  /* 10rem rather than the original 8rem: it sits a typical block near the
+     middle of the band instead of high in it, which was the complaint, while
+     keeping every headline on the identical offset. */
+  padding-top: 10rem !important;
+  padding-bottom: 2.5rem !important;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── One headline, everywhere ──
+   Measured across the nav pages before this rule: five different sizes (56,
+   57.6, 60 and 64px), and /media set in Space Grotesk with no uppercase while
+   every other hero used the condensed display face. Navigating between pages
+   made the headline change size and typeface. !important for the same reason
+   the rules above use it: each page's inline <style> is injected after this
+   sheet and would otherwise win. */
+.sk__title, .rv__title, .tok__h1, .a2-hero__title,
+.md-hero__title, .cl__h1, .cv__title {
+  font-family: var(--font-display) !important;
+  font-weight: 700 !important;
+  font-size: clamp(2.5rem, 4.2vw, 3.75rem) !important;
+  line-height: 1.05 !important;
+  letter-spacing: -0.01em !important;
+  text-transform: uppercase !important;
+  /* /regime and /committee carried an 8px top margin, which is enough to read
+     as a jump when the headline is otherwise pinned to the same offset. */
+  margin-top: 0 !important;
+}
+
+/* ── Hero legibility ──
+   Every hero lede is set over a live canvas, and measured against the composited
+   art the muted text colour was 3.76:1 on /media, 5.05:1 on /skills and 5.07:1
+   on /regime. WCAG AA for body text is 4.5:1, so one page failed outright and
+   the others cleared it only on average — a bright stroke passing directly
+   behind a glyph is worse than the mean.
+
+   Two flat changes, no gradient and no shadow. A uniform veil sits over the art
+   and under the content, and the lede steps up to the brighter reading grey the
+   apply page already defines for long copy. Together they take /media to about
+   7.9:1 while leaving the art plainly visible. */
+.a2-hero__viz, .cv__hero-field, .rv__hero-art, .tok__hero-art,
+.md-hero__art, .cl__hero-art, .sk__head-viz {
+  z-index: 0;
+}
+/* ::before, not ::after. Four of these heroes already define their own ::after
+   for a bottom fade, and the per-page inline <style> is injected after this
+   sheet, so an ::after veil here loses the cascade on exactly the pages whose
+   art is busiest. No hero defines a ::before. */
+.a2-hero::before, .cv__hero::before, .rv__hero::before, .tok__hero::before,
+.md-hero::before, .cl__hero::before, .sk__head::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 8, 12, 0.35);
+  pointer-events: none;
+  z-index: 0;
+}
+.a2-hero__lede, .cv__lede, .rv__hero-sub, .tok__lede,
+.md-hero__lede, .cl__lede, .sk__lede {
+  color: #aeb6c6 !important;
 }

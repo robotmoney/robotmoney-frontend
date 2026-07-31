@@ -168,9 +168,10 @@ export function registerHeroes(Alpine) {
         const NUM_BOIDS = 200;
         let frameNum = 0;
 
-        let predator = { x: 0, y: 0, angle: 0, speed: 1.2 };
+        let predator = { x: 0, y: 0, angle: 0, speed: 0.6 };
 
-        const MAX_SPEED = 3.5;
+        // Halved: the flock read as agitated behind a headline rather than ambient.
+        const MAX_SPEED = 1.75;
         const MAX_FORCE = 0.08;
         const PERCEPTION = 60;
         const SEPARATION_DIST = 25;
@@ -823,7 +824,9 @@ export function registerHeroes(Alpine) {
     ...p5Lifecycle(),
     _start(container) {
       const p5Constructor = window.p5;
-      const COUNT = 8, FILL_HEIGHT = 0.7, SPEED = 0.003, TRAIL_LENGTH = 120;
+      // SPEED halved from 0.003: the orbit trails swept fast enough to pull the
+      // eye off the headline they sit behind.
+      const COUNT = 8, FILL_HEIGHT = 0.7, SPEED = 0.0015, TRAIL_LENGTH = 120;
       const PALETTE = [
         [0, 229, 255], [0, 210, 255], [0, 255, 240], [0, 200, 255],
         [0, 255, 220], [0, 190, 255], [0, 230, 250], [0, 220, 240],
@@ -1107,7 +1110,9 @@ export function registerHeroes(Alpine) {
       let paused = false;
       const reduce =
         typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    const spd = 1.1, windSpd = 0.8, numCircles = 15, numWedges = 7, wedgeScl = 1.0;
+    // spd/windSpd halved: this hero sits behind the performance headline and was
+    // the busiest of the set.
+    const spd = 0.55, windSpd = 0.4, numCircles = 15, numWedges = 7, wedgeScl = 1.0;
     const BG = [10, 10, 15], AC = [0, 229, 255];
     let W = container.offsetWidth, H = container.offsetHeight;
 
@@ -1481,6 +1486,142 @@ export function registerHeroes(Alpine) {
             }
           }
           p.updatePixels();
+        };
+      };
+      this._p5 = new p5Constructor(sketch, container);
+    },
+  }));
+
+  // Bare branching trees for the /skills hero band.
+  //
+  // Follows the same recipe as the /tree effect on the production site:
+  // recursive three-way branching, per-tree Perlin-noise wind so each one sways
+  // independently rather than to a shared metronome, and depth sorting so the
+  // smaller trees render behind the larger ones.
+  //
+  // Drawn as hairline strokes and nothing else: the palette rule is that cyan
+  // is a LINE and never a mass, so this hero carries no fill, no glow and no
+  // gradient. The stroke ramps from grey at the trunk to a muted teal at the
+  // tips, which is what gives the canopy its depth without spending accent on
+  // a background. Alpha stays low enough that the headline beside it is always
+  // the brightest thing in the band.
+  //
+  // The structure is built once in setup() and only the wind is sampled per
+  // frame, which keeps a ~1,500-segment canvas cheap under the 30fps cap
+  // p5Lifecycle applies.
+  Alpine.data("treeHero", () => ({
+    ...p5Lifecycle(),
+    _start(container) {
+      const p5Constructor = window.p5;
+
+      const DEPTH = 8;
+      // Radians of lean at the outermost twigs at full gust. The other heroes on
+      // the site move continuously (orbits travel, the mesh scatters), so a
+      // gentle sway reads as a still image beside them; this is tuned to be
+      // legible as motion at a glance without becoming a distraction behind a
+      // headline.
+      const TIP_SWAY = 0.3;
+      const TRUNK = [104, 110, 120]; // grey at the base
+      const TIP = [64, 148, 150]; // muted teal at the twigs
+
+      const sketch = (p) => {
+        let W, H;
+        let trees = [];
+
+        // One node per branch segment. `angle` is relative to its parent, so a
+        // parent's sway carries down the whole limb rather than each twig
+        // wobbling on its own.
+        function makeBranch(depth, len) {
+          const node = { len, angle: 0, kids: [] };
+          if (depth <= 0) return node;
+          // Three-way as the norm, which is what gives the silhouette its
+          // density; an occasional two-way keeps them from looking stamped.
+          const forks = p.random() < 0.72 ? 3 : 2;
+          const spread = p.random(0.44, 0.78);
+          for (let i = 0; i < forks; i++) {
+            // Prune a few inner forks so the silhouettes are not all identical.
+            if (depth < DEPTH - 2 && p.random() < 0.12) continue;
+            const t = forks === 1 ? 0 : (i / (forks - 1)) * 2 - 1;
+            const kid = makeBranch(depth - 1, len * p.random(0.6, 0.76));
+            kid.angle = t * spread + p.random(-0.1, 0.1);
+            node.kids.push(kid);
+          }
+          return node;
+        }
+
+        function plant() {
+          trees = [];
+          // Roughly one tree per 150px, so the band fills at any width without
+          // crowding on a phone.
+          const count = Math.max(3, Math.round(W / 150));
+          for (let i = 0; i < count; i++) {
+            // Root length is a fraction of the band height, and the branch
+            // decay roughly doubles it, so a whole tree lands inside the band
+            // instead of cropping into an abstract mesh on a short viewport.
+            const scale = p.random(0.15, 0.26);
+            trees.push({
+              x: ((i + 0.5) / count) * W + p.random(-34, 34),
+              scale,
+              root: makeBranch(DEPTH, H * scale),
+              lean: p.random(-0.12, 0.12),
+              // Each tree samples its own lane of the noise field, so no two
+              // gust at the same moment.
+              seed: p.random(1000),
+              rate: p.random(0.5, 0.8),
+            });
+          }
+          // Depth sort: smaller trees draw first and sit behind the larger ones.
+          trees.sort((a, b) => a.scale - b.scale);
+        }
+
+        function drawBranch(node, depth, gust) {
+          // Tips lean the most, the trunk barely moves.
+          const reach = 1 - depth / DEPTH;
+          p.rotate(node.angle + gust * TIP_SWAY * reach * reach);
+          p.strokeWeight(Math.max(0.5, depth * 0.34));
+          p.stroke(
+            TRUNK[0] + (TIP[0] - TRUNK[0]) * reach,
+            TRUNK[1] + (TIP[1] - TRUNK[1]) * reach,
+            TRUNK[2] + (TIP[2] - TRUNK[2]) * reach,
+            26 + depth * 9,
+          );
+          p.line(0, 0, 0, -node.len);
+          p.translate(0, -node.len);
+          for (const kid of node.kids) {
+            p.push();
+            drawBranch(kid, depth - 1, gust);
+            p.pop();
+          }
+        }
+
+        p.setup = function () {
+          W = container.offsetWidth;
+          H = container.offsetHeight;
+          p.createCanvas(W, H).style("display", "block");
+          plant();
+        };
+
+        p.windowResized = function () {
+          W = container.offsetWidth;
+          H = container.offsetHeight;
+          p.resizeCanvas(W, H);
+          plant();
+        };
+
+        p.draw = function () {
+          p.clear();
+          const t = p.millis() / 1000;
+          for (const tree of trees) {
+            // Perlin noise re-centred to [-1, 1]: the wind eases through calm
+            // and gust instead of oscillating, which is what reads as weather
+            // rather than as an animation loop.
+            const gust = (p.noise(tree.seed, t * tree.rate) - 0.5) * 2;
+            p.push();
+            p.translate(tree.x, H);
+            p.rotate(tree.lean);
+            drawBranch(tree.root, DEPTH, gust);
+            p.pop();
+          }
         };
       };
       this._p5 = new p5Constructor(sketch, container);

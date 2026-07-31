@@ -7,28 +7,50 @@
 
 <section class="sk container">
   <header class="sk__head">
+    <div class="sk__head-viz" x-data="treeHero()" aria-hidden="true"></div>
     <div class="sk__head-inner">
-      <h1 class="sk__title">
-        Agent <span class="sk__title-accent">Skill</span>
-      </h1>
-      <p class="sk__lede">
-        One deposit splits 95% into a multi-protocol USDC yield vault and 5% into a
-        curated basket of 6 agent tokens.
-      </p>
+      <div class="sk__head-copy">
+        <h1 class="sk__title">
+          Agent <span class="sk__title-accent">Skill</span>
+        </h1>
+        <p class="sk__lede">
+          One deposit splits 95% into a multi-protocol USDC yield vault and 5% into a
+          curated basket of 6 agent tokens.
+        </p>
+      </div>
+
+      <!-- The install card sits beside the headline rather than below it: the
+           command IS the call to action on this page, so it belongs in the first
+           screen, not after a scroll. -->
+      <div class="sk__install-card" x-data="{ copied: false }">
+        <div class="sk__install-head">
+          <span class="sk__install-label">install</span>
+        </div>
+        <div class="sk__install-body">
+          <span class="sk__install-prompt" aria-hidden="true">$</span>
+          <code class="sk__install-cmd">npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli</code>
+          <!-- Icon only: the label cost the width the command needs to stay on
+               one line. aria-label carries the meaning, and it flips to a tick
+               on success so the state is not colour-only. -->
+          <button type="button" class="sk__install-copy" :class="copied && 'is-copied'"
+            @click="navigator.clipboard.writeText('npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli'); copied = true; setTimeout(() => copied = false, 2000)"
+            :aria-label="copied ? 'Command copied' : 'Copy the install command'">
+            <svg x-show="!copied" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="5.5" y="5.5" width="9" height="9" stroke="currentColor" />
+              <path d="M11 3.5H2.5v8.5" stroke="currentColor" />
+            </svg>
+            <svg x-show="copied" x-cloak width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2.5 8.5l4 4 7-9" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+          </button>
+        </div>
+        <p class="sk__install-note">
+          Works with Claude Code, Cursor, Codex, and any MCP-compatible agent runtime.
+        </p>
+        <a class="sk__cta" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">Install Skill &rarr;</a>
+      </div>
     </div>
   </header>
-
-  <div class="sk__install">
-    <span class="sk__install-label">install</span>
-    <span class="sk__install-prompt">$</span>
-    <code class="sk__install-cmd">npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli</code>
-  </div>
-  <p class="sk__install-note">
-    Works with Claude Code, Cursor, Codex, and any MCP-compatible agent runtime.
-  </p>
-  <p class="sk__install-cta">
-    <a class="sk__cta" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">Install Skill &rarr;</a>
-  </p>
 
   <!-- 01 / How it Works -->
   <div class="sk__section" id="how-it-works">
@@ -399,6 +421,7 @@
 
 /* Header — full-bleed headline band, matching the other nav pages */
 .sk__head {
+  position: relative;
   width: 100vw;
   margin-left: calc(50% - 50vw);
   margin-right: calc(50% - 50vw);
@@ -410,7 +433,30 @@
   background: var(--color-void);
   margin-bottom: 3rem;
 }
-.sk__head-inner { width: 100%; max-width: 80rem; margin-inline: auto; padding: 2.5rem 1.5rem; }
+/* Canvas host for treeHero(). Behind the content and never interactive, so a
+   click anywhere in the band still lands on the copy or install control. */
+.sk__head-viz { position: absolute; inset: 0; pointer-events: none; }
+.sk__head-inner {
+  position: relative;
+  width: 100%;
+  max-width: 80rem;
+  margin-inline: auto;
+  padding: 2.5rem 1.5rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+  /* start, not center: centring the copy against a taller facing card
+     drops the headline below the offset every other hero pins it to. */
+  align-items: start;
+}
+@media (max-width: 59.99rem) {
+  .sk__install-cmd { white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
+}
+@media (min-width: 60rem) {
+  /* Wide enough that the 62-character install command sits on one line. */
+  .sk__head-inner { grid-template-columns: minmax(0, 1fr) minmax(0, 42rem); gap: 2.5rem; }
+}
+.sk__head-copy { min-width: 0; }
 
 .sk__eyebrow {
   display: inline-block;
@@ -449,15 +495,23 @@
   margin: 0;
 }
 
-/* Install card */
-.sk__install {
-  display: flex;
-  align-items: center;
-  gap: 0.85rem;
-  flex-wrap: wrap;
-  padding: 1rem 1.25rem;
+/* Install card — the terminal block beside the headline */
+.sk__install-card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
+  min-width: 0;
+}
+
+.sk__install-head {
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sk__install-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 1rem;
 }
 
 .sk__install-label {
@@ -472,25 +526,55 @@
   font-family: var(--font-mono);
   font-size: 0.85rem;
   color: var(--color-text-dim);
+  flex-shrink: 0;
 }
 
+/* The command reads in plain text, not accent. Cyan is the house colour and it
+   is already carrying the prompt, the CTA and the nav on this page; spending it
+   again on the longest string in the hero is what makes the band feel washed. */
 .sk__install-cmd {
   font-family: var(--font-mono);
   font-size: 0.85rem;
-  color: var(--color-accent);
-  word-break: break-all;
+  line-height: 1.5;
+  color: var(--color-text);
+  /* One line at desktop, where the card is sized for it. Below the breakpoint
+     the card is whatever the phone allows, so wrapping is re-enabled there
+     rather than forcing a sideways scroll. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
 }
+
+.sk__install-copy {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  background: none;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-dim);
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+.sk__install-copy:hover { color: var(--color-text); border-color: var(--color-text-dim); }
+.sk__install-copy.is-copied { color: var(--color-accent); border-color: var(--color-accent); }
 
 .sk__install-note {
-  font-size: 0.85rem;
+  font-size: 0.8rem;
+  line-height: 1.55;
   color: var(--color-text-dim);
-  margin: 0.75rem 0 0;
+  margin: 0;
+  padding: 0 1rem 1rem;
 }
 
-.sk__install-cta { margin: 1.25rem 0 4rem; }
-
 .sk__cta {
-  display: inline-block;
+  display: block;
+  margin: 0 1rem 1rem;
+  text-align: center;
   padding: 0.85rem 1.75rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
@@ -529,11 +613,14 @@
 
 .sk-table code { white-space: nowrap; }
 
+/* Wins over the generic `.sk code` styling, which would otherwise draw the
+   command as an inline code chip. Colour is deliberately plain text, see
+   .sk__install-cmd above. */
 .sk .sk__install-cmd {
   border: 0;
   background: none;
   padding: 0;
-  color: var(--color-accent);
+  color: var(--color-text);
 }
 
 /* Sections */
