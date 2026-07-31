@@ -193,8 +193,14 @@ test("refreshWallets degrades only the failing wallet — other wallets in the s
   // status (which our forced-bad wallet guarantees) rather than an exact
   // global `updated` count, and confirm the specific rows below.
   const res = await refreshWallets({}, src);
-  expect(res.ok).toBe(true); // at least one wallet succeeded
-  expect(res.status).toBe("degraded"); // but the run as a whole is non-clean
+  // `ok` reflects ANY per-wallet failure, not "did at least one succeed" —
+  // it must line up with status:"degraded" the same way every other handler's
+  // ok<->status pairing does, because loop.ts's isDegradedResult gate (retry/
+  // backoff/admin-visibility) keys purely off `ok === false` (issue #346
+  // review finding: a partial failure that reported ok:true fell through to
+  // the ordinary success path and was invisible to that machinery).
+  expect(res.ok).toBe(false);
+  expect(res.status).toBe("degraded"); // the run as a whole is non-clean
   expect(res.failed as number).toBeGreaterThanOrEqual(1);
   expect(res.updated as number).toBeGreaterThanOrEqual(1);
 
@@ -210,6 +216,63 @@ test("refreshWallets degrades only the failing wallet — other wallets in the s
     SELECT balance_usd, refreshed_at FROM tracked_wallets WHERE id = ${badWalletId}`;
   expect(Number(badBalance)).toBe(111);
   expect(badRefreshedAt).toBeNull();
+});
+
+// ── Issue #346 (review finding): partial wallet failure must be visible to
+// the REAL dispatch path, not just to a direct refreshWallets() call ─────────
+// A `refreshWallets()` unit call proved the handler's return shape, but never
+// exercised loop.ts's isDegradedResult gate — the only place that decides
+// whether a partial failure gets retried, keeps a truthful last_error, and
+// shows up in job_runs/GET /api/admin/runs?status=degraded. Drive this
+// through processOneJob() (temporarily rebinding the real
+// "projects.refresh_wallets" registry entry to a fixture source with one bad
+// wallet) so the assertion covers the actual production wiring, not a proxy.
+test("processOneJob routes a partial-wallet-failure refresh_wallets run to job_runs.status='degraded' with a populated last_error and a scheduled backoff retry", async () => {
+  const prefix = `wkjob_${crypto.randomUUID().slice(0, 8)}`;
+  const src = uniqueSlugSource(prefix);
+
+  await discover({}, src);
+  const [{ id: projectId }] = await sql<{ id: string }[]>`
+    SELECT id FROM projects WHERE slug = ${prefix + "-virtuals-protocol"}`;
+  const badAddress = "0xwalletbadbadbadbadbadbadbadbadbadbadjob";
+  await sql`
+    INSERT INTO tracked_wallets (project_id, label, chain, address, is_active, balance_usd)
+    VALUES (${projectId}, 'No Fixture Wallet (job)', 'base', ${badAddress}, true, 222)`;
+
+  const kind = "projects.refresh_wallets";
+  const original = handlers[kind];
+  handlers[kind] = (payload) => refreshWallets(payload, src);
+  const jobIds: number[] = [];
+  try {
+    const [{ id: jobId }] = await sql<{ id: number }[]>`
+      INSERT INTO jobs (kind, priority, max_attempts) VALUES (${kind}, 1000000, 5) RETURNING id`;
+    jobIds.push(jobId);
+
+    expect(await processOneJob()).toBe(true);
+
+    const [job] = await sql<{ status: string; attempts: number; due: boolean; last_error: string | null }[]>`
+      SELECT status, attempts, run_after > now() AS due, last_error FROM jobs WHERE id = ${jobId}`;
+    // Retryable (attempts=1 < max_attempts=5): re-queued as 'pending' with a
+    // future run_after (backoff engaged) — NEVER 'succeeded' with a cleared
+    // last_error, which is exactly what a wrongly-`ok:true` degraded result
+    // used to produce (the gap the reviewer found invisible to CI).
+    expect(job.status).toBe("pending");
+    expect(job.status).not.toBe("succeeded");
+    expect(job.attempts).toBe(1);
+    expect(job.due).toBe(true); // backoff retry scheduled
+    expect(job.last_error).toBeTruthy(); // last_error populated, not cleared
+
+    const [run] = await sql<{ status: string }[]>`
+      SELECT status FROM job_runs WHERE job_id = ${jobId} ORDER BY id DESC LIMIT 1`;
+    expect(run.status).toBe("degraded");
+    expect(run.status).not.toBe("succeeded");
+  } finally {
+    handlers[kind] = original;
+    if (jobIds.length) {
+      await sql`DELETE FROM job_runs WHERE job_id IN ${sql(jobIds)}`;
+      await sql`DELETE FROM jobs WHERE id IN ${sql(jobIds)}`;
+    }
+  }
 });
 
 // ── Issue #95: live-fetch timeout ────────────────────────────────────────────

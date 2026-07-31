@@ -201,9 +201,16 @@ export async function refreshWallets(
   }
 
   if (failed === 0) return { ok: true, status: "ok", updated: updates.length, failed: 0 };
-  // Some (or all) wallets degraded — the run itself is a non-success signal
-  // (status: "degraded") even though every succeeding wallet's write landed.
-  return { ok: updates.length > 0, status: "degraded", updated: updates.length, failed };
+  // Some (or all) wallets degraded. `ok` must reflect ANY per-wallet failure
+  // (not "did at least one wallet succeed") so it stays consistent with every
+  // other handler's ok<->status:"degraded" pairing and with loop.ts's
+  // isDegradedResult gate, which keys retry/backoff/admin-visibility purely
+  // off `ok === false`. A partial failure that also reported ok:true here
+  // fell through to the ordinary success path (status='succeeded', last_error
+  // cleared, no backoff, invisible to GET /api/admin/runs?status=degraded) —
+  // and for wallets whose chain has no live RPC path wired yet (see
+  // projects/access/live-source.ts), that failure is permanent, not transient.
+  return { ok: false, status: "degraded", updated: updates.length, failed };
 }
 
 // ── Revenue sync (virtuals fee revenue + x402 volume rollup) ─────────────────
