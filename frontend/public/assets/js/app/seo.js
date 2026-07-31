@@ -24,7 +24,7 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 
 // route -> { title, description }. Titles are unique and <= 60 chars; meta
 // descriptions are 120-155 chars, grounded in each page's real copy.
-/** @type {Record<string, { title: string; description: string }>} */
+/** @type {Record<string, { title: string; description: string; robots?: string }>} */
 const META = {
   "/": {
     title: "Robot Money — Autonomous Treasury for the Agent Economy",
@@ -86,10 +86,6 @@ const META = {
   "/disclaimer": {
     title: "Legal Disclaimers — Robot Money",
     description: "Read the legal disclaimers for the Robot Money protocol on Base: experimental DeFi software with smart contract, regulatory, and market risks.",
-  },
-  "/smart-contract-risks": {
-    title: "Smart Contract Risks — Robot Money",
-    description: "Review the smart contract risks for the Robot Money USDC vault on Base: audit status, upgrade authority, and the non-custodial caveats you assume onchain.",
   },
   "/visualizations": {
     title: "Robot Money Visualizations — Live Vault Data",
@@ -155,7 +151,7 @@ function normalize(pathname) {
 
 /**
  * @param {string} pathname
- * @returns {{ title: string; description: string }}
+ * @returns {{ title: string; description: string; robots?: string }}
  */
 export function metaFor(pathname) {
   const p = normalize(pathname);
