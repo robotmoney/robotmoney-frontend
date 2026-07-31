@@ -1489,22 +1489,30 @@ export function registerHeroes(Alpine) {
 
   // Bare branching trees for the /skills hero band.
   //
-  // Drawn as hairline strokes and nothing else: the palette rule is that cyan
-  // is a LINE and never a mass, and a leafless tree is literally that, so this
-  // hero carries no fill, no glow and no gradient. Alpha stays low enough that
-  // the headline beside it is always the brightest thing in the band.
+  // Follows the same recipe as the /tree effect on the production site:
+  // recursive three-way branching, per-tree Perlin-noise wind so each one sways
+  // independently rather than to a shared metronome, and depth sorting so the
+  // smaller trees render behind the larger ones.
   //
-  // The structure is built once in setup() and only the sway angles are
-  // recomputed per frame, which keeps a ~1,500-segment canvas cheap under the
-  // 30fps cap p5Lifecycle applies.
+  // Drawn as hairline strokes and nothing else: the palette rule is that cyan
+  // is a LINE and never a mass, so this hero carries no fill, no glow and no
+  // gradient. The stroke ramps from grey at the trunk to a muted teal at the
+  // tips, which is what gives the canopy its depth without spending accent on
+  // a background. Alpha stays low enough that the headline beside it is always
+  // the brightest thing in the band.
+  //
+  // The structure is built once in setup() and only the wind is sampled per
+  // frame, which keeps a ~1,500-segment canvas cheap under the 30fps cap
+  // p5Lifecycle applies.
   Alpine.data("treeHero", () => ({
     ...p5Lifecycle(),
     _start(container) {
       const p5Constructor = window.p5;
 
       const DEPTH = 8;
-      const TIP_SWAY = 0.06; // radians of lean at the outermost twigs
-      const STROKE = [70, 132, 138]; // desaturated teal, well below --color-accent
+      const TIP_SWAY = 0.16; // radians of lean at the outermost twigs, at full gust
+      const TRUNK = [104, 110, 120]; // grey at the base
+      const TIP = [64, 148, 150]; // muted teal at the twigs
 
       const sketch = (p) => {
         let W, H;
@@ -1514,16 +1522,18 @@ export function registerHeroes(Alpine) {
         // parent's sway carries down the whole limb rather than each twig
         // wobbling on its own.
         function makeBranch(depth, len) {
-          const node = { len, angle: 0, phase: p.random(p.TWO_PI), kids: [] };
+          const node = { len, angle: 0, kids: [] };
           if (depth <= 0) return node;
-          const forks = p.random() < 0.18 ? 3 : 2;
-          const spread = p.random(0.42, 0.72);
+          // Three-way as the norm, which is what gives the silhouette its
+          // density; an occasional two-way keeps them from looking stamped.
+          const forks = p.random() < 0.72 ? 3 : 2;
+          const spread = p.random(0.44, 0.78);
           for (let i = 0; i < forks; i++) {
             // Prune a few inner forks so the silhouettes are not all identical.
-            if (depth < DEPTH - 2 && p.random() < 0.1) continue;
+            if (depth < DEPTH - 2 && p.random() < 0.12) continue;
             const t = forks === 1 ? 0 : (i / (forks - 1)) * 2 - 1;
-            const kid = makeBranch(depth - 1, len * p.random(0.62, 0.78));
-            kid.angle = t * spread + p.random(-0.08, 0.08);
+            const kid = makeBranch(depth - 1, len * p.random(0.6, 0.76));
+            kid.angle = t * spread + p.random(-0.1, 0.1);
             node.kids.push(kid);
           }
           return node;
@@ -1531,34 +1541,45 @@ export function registerHeroes(Alpine) {
 
         function plant() {
           trees = [];
-          // Roughly one tree per 180px, so the band fills at any width without
+          // Roughly one tree per 150px, so the band fills at any width without
           // crowding on a phone.
-          const count = Math.max(3, Math.round(W / 180));
+          const count = Math.max(3, Math.round(W / 150));
           for (let i = 0; i < count; i++) {
-            const x = ((i + 0.5) / count) * W + p.random(-30, 30);
+            // Root length is a fraction of the band height, and the branch
+            // decay roughly doubles it, so a whole tree lands inside the band
+            // instead of cropping into an abstract mesh on a short viewport.
+            const scale = p.random(0.15, 0.26);
             trees.push({
-              x,
-              // Root length is a fraction of the band height, and the branch
-              // decay roughly doubles it, so a whole tree lands inside the band
-              // instead of cropping into an abstract mesh on a short viewport.
-              root: makeBranch(DEPTH, H * p.random(0.18, 0.26)),
+              x: ((i + 0.5) / count) * W + p.random(-34, 34),
+              scale,
+              root: makeBranch(DEPTH, H * scale),
               lean: p.random(-0.12, 0.12),
-              rate: p.random(0.24, 0.42),
+              // Each tree samples its own lane of the noise field, so no two
+              // gust at the same moment.
+              seed: p.random(1000),
+              rate: p.random(0.16, 0.3),
             });
           }
+          // Depth sort: smaller trees draw first and sit behind the larger ones.
+          trees.sort((a, b) => a.scale - b.scale);
         }
 
-        function drawBranch(node, depth, t) {
+        function drawBranch(node, depth, gust) {
           // Tips lean the most, the trunk barely moves.
-          const sway = Math.sin(t + node.phase) * TIP_SWAY * (1 - depth / DEPTH);
-          p.rotate(node.angle + sway);
+          const reach = 1 - depth / DEPTH;
+          p.rotate(node.angle + gust * TIP_SWAY * reach * reach);
           p.strokeWeight(Math.max(0.5, depth * 0.34));
-          p.stroke(STROKE[0], STROKE[1], STROKE[2], 24 + depth * 9);
+          p.stroke(
+            TRUNK[0] + (TIP[0] - TRUNK[0]) * reach,
+            TRUNK[1] + (TIP[1] - TRUNK[1]) * reach,
+            TRUNK[2] + (TIP[2] - TRUNK[2]) * reach,
+            26 + depth * 9,
+          );
           p.line(0, 0, 0, -node.len);
           p.translate(0, -node.len);
           for (const kid of node.kids) {
             p.push();
-            drawBranch(kid, depth - 1, t);
+            drawBranch(kid, depth - 1, gust);
             p.pop();
           }
         }
@@ -1581,10 +1602,14 @@ export function registerHeroes(Alpine) {
           p.clear();
           const t = p.millis() / 1000;
           for (const tree of trees) {
+            // Perlin noise re-centred to [-1, 1]: the wind eases through calm
+            // and gust instead of oscillating, which is what reads as weather
+            // rather than as an animation loop.
+            const gust = (p.noise(tree.seed, t * tree.rate) - 0.5) * 2;
             p.push();
             p.translate(tree.x, H);
             p.rotate(tree.lean);
-            drawBranch(tree.root, DEPTH, t * tree.rate);
+            drawBranch(tree.root, DEPTH, gust);
             p.pop();
           }
         };

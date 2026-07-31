@@ -48,7 +48,17 @@ export function registerSubstrate(Alpine) {
     },
     _start(container, overlay) {
       const p5Constructor = window.p5;
-      const intensity = 45, speed = 3.0, fadeSec = 4, lineW = 1.1, dotSize = 36;
+      // `speed` is crack-steps per frame and each step advances a crack 0.42px,
+      // so at the old value of 3 a crack grew ~38px/second under the 30fps hero
+      // cap. On a 1440px hero that meant the network was still half a dozen
+      // lines after ten seconds, and a visitor who scrolled past never saw the
+      // effect at all — the hero read as an empty black band. The seeding was
+      // the other half: growth only compounds once cracks start colliding and
+      // spawning, so 8 initial cracks spent the first seconds doing nothing
+      // visible. More seeds and more steps reach a legible network in ~3s and
+      // then settle into the same stasis-and-fade cycle as before.
+      const intensity = 45, speed = 11.0, fadeSec = 4, lineW = 1.1, dotSize = 36;
+      const seedCracks = 26;
       const ACCENT = [0, 229, 255], BG = [10, 10, 15];
 
       const sketch = (p) => {
@@ -111,7 +121,7 @@ export function registerSubstrate(Alpine) {
             let py = Math.floor(p.random(H));
             cgrid[py * W + px] = Math.floor(p.random(360));
           }
-          for (let k = 0; k < Math.min(8, maxCracks); k++) spawnCrack();
+          for (let k = 0; k < Math.min(seedCracks, maxCracks); k++) spawnCrack();
           generation++;
         }
         p.setup = function () {

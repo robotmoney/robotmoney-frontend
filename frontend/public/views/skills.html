@@ -440,7 +440,7 @@
   align-items: center;
 }
 @media (min-width: 60rem) {
-  .sk__head-inner { grid-template-columns: minmax(0, 1fr) minmax(0, 26rem); gap: 3rem; }
+  .sk__head-inner { grid-template-columns: minmax(0, 1fr) minmax(0, 36rem); gap: 3rem; }
 }
 .sk__head-copy { min-width: 0; }
 
@@ -515,12 +515,18 @@
   flex-shrink: 0;
 }
 
+/* The command reads in plain text, not accent. Cyan is the house colour and it
+   is already carrying the prompt, the CTA and the nav on this page; spending it
+   again on the longest string in the hero is what makes the band feel washed. */
 .sk__install-cmd {
   font-family: var(--font-mono);
   font-size: 0.85rem;
   line-height: 1.5;
-  color: var(--color-accent);
-  word-break: break-all;
+  color: var(--color-text);
+  /* Break between the command's own words rather than mid-token, so a narrow
+     card never splits `robotmoney-cli` across two lines. */
+  word-break: normal;
+  overflow-wrap: break-word;
   flex: 1;
   min-width: 0;
 }
@@ -591,11 +597,14 @@
 
 .sk-table code { white-space: nowrap; }
 
+/* Wins over the generic `.sk code` styling, which would otherwise draw the
+   command as an inline code chip. Colour is deliberately plain text, see
+   .sk__install-cmd above. */
 .sk .sk__install-cmd {
   border: 0;
   background: none;
   padding: 0;
-  color: var(--color-accent);
+  color: var(--color-text);
 }
 
 /* Sections */
