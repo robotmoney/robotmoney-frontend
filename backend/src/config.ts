@@ -438,6 +438,21 @@ export function resolveCommitteePublicBaseUrl(
   return (env.COMMITTEE_PUBLIC_BASE_URL || "https://robotmoney.net").replace(/\/+$/, "");
 }
 
+// --- Committee notification sender (issue #322) ------------------------------
+// Resolved the same call-time way as resolveCommitteePublicBaseUrl above rather
+// than only baked into the `config` singleton below: applyMember's receipt is
+// the one caller (domain.ts::sendApplicationReceipt) that must observe an
+// unset sender WITHOUT throwing — every other notification path (activation,
+// seat-open) is fine treating the frozen-at-load `config.committeeNotificationEmailFrom`
+// as authoritative, since a real deployment's env does not change mid-process.
+// A call-time resolver is what lets a test flip this one input per-call, in the
+// same process, without reloading the config module.
+export function resolveCommitteeNotificationEmailFrom(
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  return env.COMMITTEE_NOTIFICATION_EMAIL_FROM || null;
+}
+
 // Fail-closed: default to "prod" when RM_ENV is unset, and REFUSE to start on an
 // unrecognized value (so a typo like "production" can never silently open the
 // privileged surface). The unauthenticated convenience path is opt-in: it is
@@ -473,7 +488,7 @@ export const config = {
   // Swarm activation email uses a durable outbox + swarm worker job.
   // The sender is persisted with the message; the deployment transport is an
   // HTTP email adapter invoked only by that worker (tests inject a fake).
-  committeeNotificationEmailFrom: process.env.COMMITTEE_NOTIFICATION_EMAIL_FROM || null,
+  committeeNotificationEmailFrom: resolveCommitteeNotificationEmailFrom(),
   committeeNotificationEmailTransportUrl: process.env.COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_URL || null,
   committeeNotificationEmailTransportToken: process.env.COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_TOKEN || null,
   // Origin every link inside those emails is built from (see the resolver above).

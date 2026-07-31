@@ -2,7 +2,7 @@
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
 import { canonicalizeApplication, classifyRegime, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
-import { config } from "../config.ts";
+import { config, resolveCommitteeNotificationEmailFrom } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import {
@@ -505,8 +505,17 @@ export async function applyMember(input: ApplyInput) {
 // from the row we just wrote: it is the same value either way, and parseApply has
 // already trimmed it and refused an empty one, so there is nothing a re-select
 // would add except a query.
+//
+// Reads resolveCommitteeNotificationEmailFrom() live rather than the frozen
+// `config.committeeNotificationEmailFrom` singleton: config is computed once at
+// module load and shared by the whole process, so a test-process value set
+// before any import ever runs can never be observed as unset later. Reading the
+// env at call time is what lets a test exercise this skip branch by clearing
+// COMMITTEE_NOTIFICATION_EMAIL_FROM around a single request, in-process, with no
+// module reload — real deployments never mutate this env after boot, so the
+// call-time read is behaviorally identical to the frozen one there.
 async function sendApplicationReceipt(tx: DbHandle, memberId: string, memberName: string, recipient: string): Promise<void> {
-  if (!config.committeeNotificationEmailFrom) return;
+  if (!resolveCommitteeNotificationEmailFrom()) return;
   await enqueueApplicationReceivedNotification(tx, memberId, memberName, recipient);
 }
 

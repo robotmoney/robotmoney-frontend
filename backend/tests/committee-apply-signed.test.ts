@@ -247,3 +247,38 @@ test("full chain: signed apply -> admin/activate -> challenge -> claim -> token;
   expect(JSON.stringify(finalStatus!.body)).not.toContain(contact);
   expect(JSON.stringify(finalStatus!.body)).not.toContain(publicKeyB64);
 });
+
+// domain.ts::sendApplicationReceipt reads resolveCommitteeNotificationEmailFrom()
+// (config.ts) live at call time rather than the frozen `config` singleton
+// specifically so this branch is reachable from a running test process: the
+// suite's preload.ts sets COMMITTEE_NOTIFICATION_EMAIL_FROM before any file
+// ever imports config.ts, so a check against the frozen value could never
+// observe "unset" here. Clearing the live env var around a single call and
+// restoring it after is what actually exercises the skip path apply's own
+// doc comment describes: an unconfigured sender must not fail the application,
+// only its receipt email.
+test("apply with COMMITTEE_NOTIFICATION_EMAIL_FROM unset: still 201, the receipt is skipped rather than thrown", async () => {
+  const original = process.env.COMMITTEE_NOTIFICATION_EMAIL_FROM;
+  delete process.env.COMMITTEE_NOTIFICATION_EMAIL_FROM;
+  try {
+    const { body } = await buildSignedApply({ name: "No Sender Desk", contact: `${rid("nosender")}@example.test` });
+    const res = await post(ROUTES.committee.apply, body);
+    expect(res?.status).toBe(201);
+    const memberId = (res!.body as { memberId: string }).memberId;
+
+    // The application itself is fully recorded — only the receipt email is
+    // skipped, per the AC ("applying still succeeds — the receipt is
+    // skipped, not thrown").
+    const member = (await sql<{ status: string }[]>`
+      SELECT status FROM committee_members WHERE id = ${memberId}`)[0];
+    expect(member.status).toBe("applied");
+
+    const outbox = await sql`
+      SELECT id FROM committee_notification_outbox
+      WHERE member_id = ${memberId} AND kind = 'application_received'`;
+    expect(outbox).toHaveLength(0);
+  } finally {
+    if (original === undefined) delete process.env.COMMITTEE_NOTIFICATION_EMAIL_FROM;
+    else process.env.COMMITTEE_NOTIFICATION_EMAIL_FROM = original;
+  }
+});
