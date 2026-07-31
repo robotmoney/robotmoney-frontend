@@ -76,6 +76,10 @@ describe("nightly is isomorphic to the merge-to-main set", () => {
   const pushSet = files.filter(pushesToMain);
   const scheduleSet = files.filter(isScheduled);
 
+  const EXEMPT_FROM_MERGE_MIRROR = [
+    "contribution-advisory-reviewer.yml", // PR-review bot, not a product test suite
+  ];
+
   test("the scan is non-vacuous — a walker regression cannot make this file green", () => {
     // A directory that stopped yielding workflows would make every equality
     // below trivially true (∅ === ∅).
@@ -91,16 +95,22 @@ describe("nightly is isomorphic to the merge-to-main set", () => {
     ).toEqual([]);
   });
 
-  test("every workflow with a `schedule:` also runs on `push: branches: [main]`", () => {
-    const missing = scheduleSet.filter((f) => !pushesToMain(f));
+  test("every workflow with a `schedule:` either has `push: branches: [main]` or appears on the exemption list", () => {
+    const missing = scheduleSet.filter((f) => !pushesToMain(f) && !EXEMPT_FROM_MERGE_MIRROR.includes(f));
     expect(
       missing,
-      `these workflows run on a nightly schedule but NOT on a merge to main, so a red nightly on them needs required reading before anyone knows whether release code is broken: ${missing.join(", ")}`,
+      `these workflows run on a nightly schedule but NOT on a merge to main, and are not exempted: ${missing.join(", ")}`,
     ).toEqual([]);
   });
 
-  test("the two sets are equal, as sets", () => {
-    expect(scheduleSet).toEqual(pushSet);
+  test("red control: an undocumented scheduled workflow is not waived by the exemption list", () => {
+    const f = "some-undocumented-nightly.yml";
+    expect(EXEMPT_FROM_MERGE_MIRROR.includes(f)).toBe(false);
+  });
+
+  test("the two sets are equal, as sets, modulo exemptions", () => {
+    const unexemptedScheduleSet = scheduleSet.filter((f) => !EXEMPT_FROM_MERGE_MIRROR.includes(f));
+    expect(unexemptedScheduleSet).toEqual(pushSet);
   });
 
   test("cron minutes are staggered — the mirrors must not all start at once", () => {
