@@ -1,10 +1,12 @@
 # Release cycle & topology compatibility
 
-> **Status: first draft, open for discussion.** This is a proposal, not a
-> ratified spec — there is no accepted decision in
-> [decisions.md](../decisions.md) behind any of it yet. Treat the "Open
-> questions" section at the end as the actual agenda; everything above it is
-> a starting position meant to be argued with.
+> **Status: draft, second pass.** Still a proposal, not a ratified spec —
+> there is no accepted decision in [decisions.md](../decisions.md) behind it
+> yet. Since the first draft, however, the topology (§3) and the rollout
+> mechanics (§6) have been **decided in discussion**: those two sections
+> describe a chosen direction with rejected alternatives recorded, not an
+> open survey. The "Open questions" section at the end remains the live
+> agenda for everything else.
 
 ## 1. Purpose
 
@@ -82,7 +84,112 @@ however, is still co-served by the API process (`STATIC_DIR`) — so today
 that slice of the frontend is version-locked to whatever API build is on the
 droplet, while marketing is not.
 
-## 3. Per-component release cadence
+That is the topology as D13 defines it today. §3 below records the
+production topology now chosen in discussion, which amends parts of D13's
+detail.
+
+## 3. Proposed production topology
+
+This section records the topology **decided in discussion** — the direction
+is chosen; the remaining choices inside it are minor and listed in §8. Three
+tiers, same as D13's frame, with two significant changes: both frontends
+move to Cloudflare's edge, and the compute tier becomes a single-node
+Kubernetes (k3s) cluster instead of docker-compose.
+
+### 3.1 Static tier — Cloudflare edge, for both frontends
+
+Marketing **and** the committee/dashboard SPA are buildless static trees
+(D2), and both get served from **Cloudflare's edge network**. Whether that
+is Cloudflare Pages or R2 behind the CDN is a minor open question (§8) —
+either way the properties that matter are the same:
+
+- **The SPA gets its own independent release path.** This breaks the
+  `STATIC_DIR` version-lock described in §2(b)/§4(d): the SPA is no longer
+  co-served by the API process, so pushing frontend assets no longer means
+  deploying the API, and vice versa. (This resolves the first draft's open
+  question of whether the SPA gets its own deploy path — yes.)
+- **`/api/*` is a proxied path on the same hostname.** Cloudflare routes
+  `/api/*` on the SPA's hostname through to the origin (the compute tier,
+  §3.2), so the SPA stays same-origin with the API — no CORS surface, no
+  preflight, no second hostname for the frontend to configure.
+- **Edge-cached-SPA-vs-API skew becomes an everyday scenario.** Once the
+  SPA is cached at the edge on its own cadence, a cached SPA calling a
+  newer or older API is no longer a theoretical browser-tab corner case
+  (§4d) — it is the normal state between any two deploys. That upgrades
+  §5.3's additive-only API contract discipline from aspirational to
+  **mandatory**.
+- **This amends D13.**
+  [decisions.md D13](../decisions.md#d13--vendor-split-tiered-topology-cloudflare-dnsobservability--do-computestorage-surfaces-on-subdomains)
+  specifies marketing served from **DO Spaces CDN** and confines Cloudflare
+  to DNS + observability; this design moves static serving (both surfaces)
+  and `/api/*` path-proxying to Cloudflare. **decisions.md needs a new
+  entry recording this amendment** — this doc flags it but deliberately
+  does not write it.
+
+### 3.2 Compute tier — k3s on a single DO droplet
+
+The production runtime for the API and workers is **k3s** — the certified
+single-binary Kubernetes distribution (~512 MB overhead, SQLite datastore
+instead of etcd) — on **one DigitalOcean droplet**, replacing
+docker-compose as the production runtime. The rationale is that the release
+goals this doc defines — independent per-component cadence (§4), N-1
+compatibility windows (§7), zero-downtime deploys, and migration/code
+decoupling (§5.1) — effectively require an orchestrator, and k3s delivers
+one at single-droplet cost.
+
+- **Five independent Deployments**: `api`, `worker-committee`,
+  `worker-analytics`, `worker-research`, and `analytics-producer`. Five
+  images, five independent rollout cadences — the per-component release
+  independence §4 calls "low today" becomes the deployment unit structure
+  itself.
+- **Zero-downtime API deploys on a single node.** The `api` Deployment uses
+  rolling updates with `maxSurge: 1, maxUnavailable: 0` and readiness
+  probes: the new replica must pass readiness before the old one is
+  terminated, so there is never a moment with zero ready API pods —
+  something docker-compose cannot express.
+- **Migrations move out of API boot into a pre-deploy Kubernetes Job.**
+  Today `migrate()` runs on every API boot (§2a); with more than one
+  replica rolling, that races, and it couples schema deploys to code
+  deploys. Instead, a migration Job runs and **completes before** the API
+  rollout proceeds (gating mechanics in §6). This is the mechanical
+  enforcement of the expand/contract pattern (§5.1): schema ships first,
+  additively; code follows. In-cluster/production, migrate-on-boot is
+  disabled.
+- **Ingress via `cloudflared` in-cluster.** A `cloudflared` Deployment
+  points at the API Service — matching the team's existing stage-tunnel
+  practice — so there is no DO Load Balancer and no directly-exposed
+  origin. (D13 called a Tunnel "optional hardening"; here it is the
+  ingress.)
+- **Honest costs.** The team maintains manifests (Kustomize) and owns k3s
+  version upgrades. And a single-node cluster gives zero-downtime
+  *deploys*, not high availability — the droplet is still a SPOF for
+  compute.
+- **Growth path: DOKS.** The manifests are plain Kubernetes — if the
+  droplet is outgrown, the same YAML moves to DOKS (managed control plane)
+  unchanged. DOKS is the explicit growth path, not a rewrite.
+- **Rejected alternative: docker-compose plus a deploy-runner script.**
+  Rejected because compose has no rolling updates — every API deploy is a
+  stop/start, i.e. per-deploy downtime — and its migration gating is
+  whatever a shell script remembers to do, with none of the
+  Job/readiness-probe machinery above.
+
+### 3.3 Data tier — DO Managed Postgres
+
+Unchanged in kind from D13, sharpened in detail:
+
+- **DO Managed Postgres** in the **same VPC** as the droplet, reachable
+  over **private networking only** — no public DB endpoint.
+- **PgBouncer** (built into DO Managed Postgres) fronts connections —
+  connection count multiplies across five Deployments, so pooling stops
+  being optional.
+- **One credential per Deployment**, continuing the per-component
+  least-privilege role pattern that `rm_worker` (migration
+  `0016_worker_role.sql`, §2c) started.
+- **The cluster holds no state.** Postgres is the only stateful thing in
+  the topology, and it is managed — the droplet and everything on it is
+  disposable/rebuildable from git (§6).
+
+## 4. Per-component release cadence
 
 - **(a) Database.** Triggered by a merged migration file. Because
   `migrate()` runs on every API boot and there's no rollback path, a bad
@@ -128,9 +235,9 @@ droplet, while marketing is not.
   moment the SPA gets its own CDN and stops being version-locked to the API
   process serving it.
 
-## 4. Compatibility strategy
+## 5. Compatibility strategy
 
-### 4.1 Expand/contract for DB migrations
+### 5.1 Expand/contract for DB migrations
 
 Adopt the standard **expand/contract** (a.k.a. parallel-change) pattern for
 every schema change that a running API/worker depends on:
@@ -150,17 +257,19 @@ rollback, the "contract" step is the *only* place a schema change is allowed
 to be destructive — every other migration in a feature's rollout should be
 additive by construction. This also means a migration file should never be
 required to land in the same deploy as the API code that depends on it;
-today they usually do (§3), and that's the main thing this pattern would
-change in practice.
+today they usually do (§4), and that's the main thing this pattern would
+change in practice — §3.2's pre-deploy migration Job is the mechanism that
+makes the split real, and §6 the rollout gate that enforces the ordering.
 
-### 4.2 API/DB version skew tolerance
+### 5.2 API/DB version skew tolerance
 
 The API should not assume the schema is at exactly the migration count its
 own build was compiled against — `migrate()` running as a precondition of
 boot masks this today (a single API instance always sees a fully-migrated
 DB at the moment it starts), but it stops being true the moment there is
 more than one API instance, or migrations and API deploys are decoupled
-(§4.1). The right posture is **capability negotiation / feature detection**
+(§5.1) — both of which §3.2 now makes the production baseline (rolling
+replicas, migrate-on-boot disabled). The right posture is **capability negotiation / feature detection**
 rather than hard version pinning: instead of the API asserting "schema must
 be exactly N," a query path should check for the concrete thing it needs
 (does this column exist, is this table populated) and degrade — return a
@@ -174,25 +283,26 @@ silently returning wrong or absent data. The same "declare the degraded
 state explicitly in the payload" instinct is what should apply to a
 DB-ahead/DB-behind mismatch, not a raw 500.
 
-### 4.3 API versioning for the frontend and workers as consumers
+### 5.3 API versioning for the frontend and workers as consumers
 
 There is no versioning scheme in the API today — routes are flat paths in
 `contract/src/routes.js`, shared as literal source between frontend and
 backend, not as a semver'd artifact. That's fine as long as frontend and API
-are deployed together (today's reality per §2), but the moment the SPA gets
-an independent CDN deploy path (§3d), a stale browser tab can call an API
-that has moved on. The lightest-weight approach consistent with this
+are deployed together (today's reality per §2), but §3.1 commits the SPA to
+an independent edge deploy path — so an edge-cached SPA (or a stale browser
+tab) calling an API that has moved on is the normal state between deploys,
+not a corner case. The lightest-weight approach consistent with this
 project's minimalism: keep endpoint **shapes** additive-only (new optional
 fields, never repurposing or removing a field in place — the same discipline
 the goldens-drift gate already enforces for the preview mock layer,
 [decisions.md D14](../decisions.md#d14--preview-mode-goldens-backed-over-the-baked-frozen-single-file)),
 and reserve an actual path-prefix version (`/api/v2/...`) for the rare
 breaking change, with the old prefix kept alive for a declared deprecation
-window (§4.5) rather than deleted the day the new one ships. Workers/producer
+window (§5.5) rather than deleted the day the new one ships. Workers/producer
 should follow the same additive-fields discipline since the producer is
 already an API consumer over authenticated HTTP (§2c).
 
-### 4.4 Feature flags
+### 5.4 Feature flags
 
 No feature-flag infrastructure exists in this codebase today (confirmed —
 no `FEATURE_*` env convention, no flag service, no flag table). For a
@@ -209,9 +319,9 @@ small dedicated endpoint) rather than maintaining its own flag source, to
 avoid a second source of truth. Workers reading flags would need the same
 API-mediated (or DB-row-mediated) source rather than their own env-var copy,
 to avoid a lane running stale flag state after a flip. None of this is
-built; §6 flags the storage/source-of-truth question as explicitly open.
+built; §8 flags the storage/source-of-truth question as explicitly open.
 
-### 4.5 Deprecation policy
+### 5.5 Deprecation policy
 
 No deprecation policy exists today because nothing has ever needed to
 outlive a replacement — every environment redeploys everything at once. Once
@@ -220,12 +330,62 @@ components decouple, an old endpoint/field shape needs to stay live for
 running it** — for the frontend that means "at least until a browser tab
 open at deploy time would have naturally reloaded," for a worker lane that
 means "until every worker container has been redeployed," and for the DB
-that means the expand/contract window (§4.1). Communicating a deprecation
+that means the expand/contract window (§5.1). Communicating a deprecation
 today has no established channel — no changelog, no deprecation-header
 convention in the API responses. The concrete window length and the
-communication mechanism are both left open (§6).
+communication mechanism are both left open (§8).
 
-## 5. Prior art
+## 6. Rollout mechanics (GitOps)
+
+Decided in discussion alongside §3: the rollout loop is **GitOps,
+deliberately minimal**. **Flux and Argo CD were considered and rejected**
+for now — their headline features (continuous drift correction, image
+automation, dashboards, multi-cluster sync) don't pay for themselves with
+one node, five Deployments, and one operator. The chosen loop keeps the
+GitOps *principle* from
+[`docs/runbooks/deployment.md`](../runbooks/deployment.md) — deploy state
+is declarative, in git, and reviewable — while the machinery is a script:
+
+- **Manifests in git.** A Kustomize base plus a prod overlay — roughly ten
+  small YAML files covering the five Deployments (§3.2), the migration
+  Job, Services, and `cloudflared`. Whether they live in this repo or a
+  separate deploy repo is open (§8).
+- **CI builds and bumps.** On merge, CI builds the component's image,
+  pushes it to a registry tagged with the **immutable git SHA** (registry
+  choice — GHCR vs DO Container Registry — is a minor open question, §8),
+  and commits a one-line image-tag bump to the manifest. CI's write access
+  ends at git; it never touches the cluster.
+- **A pull-based reconciler on the droplet.** A systemd timer (~every
+  minute) runs a ~20-line script: `git fetch` with a **read-only deploy
+  key**; if the manifest ref moved, `kubectl apply -k` the overlay, then
+  `kubectl rollout status`, and log the result. Pull-based means: no
+  inbound access to the droplet, no cluster credentials in GitHub, and no
+  in-cluster controllers to run or upgrade.
+- **Migration gating lives in the reconciler.** It applies the migration
+  Job first, `kubectl wait --for=condition=complete`, and only then
+  applies the rest. A failed migration **halts the rollout with the old
+  code still serving** — the mechanical guarantee behind §5.1's
+  schema-first ordering.
+- **Rollback is `git revert`** of the tag-bump commit. The reconciler
+  converges to whatever the repo says; because images are SHA-tagged and
+  immutable, reverting the manifest reverts the running code exactly.
+  (Schema rollback remains forward-fix only, per §4a — this loop doesn't
+  change that.)
+- **Upgrade trigger, recorded now.** The day the reconciler script needs
+  real features — multi-env promotion, health-gated progressive delivery,
+  deploy notifications — is the signal to adopt **Flux**. The manifests
+  carry over unchanged; only the ~20-line script is discarded.
+- **Rejected extra-minimal variant:** k3s's
+  `/var/lib/rancher/k3s/server/manifests/` auto-apply directory. Rejected
+  because it is k3s-specific (doesn't port to DOKS, breaking §3.2's growth
+  path) and handles deletions poorly.
+
+This also resolves the first draft's "where does the actual deploy pipeline
+live?" question: the pipeline is designed to satisfy this doc's constraints
+(independent per-component triggers, migration-first ordering, reviewable
+deploy state) rather than the doc waiting on a pipeline to exist.
+
+## 7. Prior art
 
 These are established, real patterns from the wider industry — named here
 so any of them can be adopted (or explicitly rejected) rather than
@@ -263,12 +423,12 @@ reinvented ad hoc:
   A cross-component feature (schema + API + frontend all need to agree it's
   "on") is a **release toggle** in Fowler's terms, and those are explicitly
   meant to be short-lived and removed once the feature is fully rolled out
-  — relevant to §4.5's deprecation discipline too, since a flag that never
+  — relevant to §5.5's deprecation discipline too, since a flag that never
   gets removed is its own form of permanent tech debt.
 - **Capability negotiation / feature detection** — the general pattern (used
   by browsers detecting API support, by HTTP content negotiation, by
   protocol version handshakes) of asking "can you do X" rather than
-  asserting "you must be version Y." Directly informs §4.2: the API
+  asserting "you must be version Y." Directly informs §5.2: the API
   checking for a column/table's existence (or a value in it) rather than
   trusting its own build's expected migration count.
 - **Blue-green and canary deploys** — running two versions of a component
@@ -278,15 +438,24 @@ reinvented ad hoc:
   serving traffic. This is the deploy-mechanics counterpart to N-1/N+1
   compatibility (previous bullet) — it's *why* two adjacent versions need to
   interoperate at all. Most directly applicable to the **API tier** droplet
-  once it's more than one instance; less obviously applicable to the
+  once it's more than one instance — §3.2's rolling update
+  (`maxSurge: 1, maxUnavailable: 0`) is the small-scale member of this
+  family; less obviously applicable to the
   **data tier** (a Postgres HA cluster's failover is not the same problem as
   blue-green app deploys) or to the buildless **frontend** (a CDN swap is
   closer to blue-green than canary, since there's no meaningful
   "percentage of traffic" concept for static files).
 
-## 6. Open questions
+## 8. Open questions
 
-This section is deliberately unresolved — the point of a first draft.
+Two of the first draft's questions are now **answered** and have moved into
+the body as decided positions: *does the committee/dashboard SPA get its own
+deploy path?* — yes, Cloudflare edge (§3.1); and *where does the actual
+deploy pipeline live?* — the minimal GitOps loop of §6, designed to satisfy
+this doc's constraints rather than waiting for one to exist. What follows is
+still genuinely open.
+
+Carried over from the first draft:
 
 - **Deprecation window length.** How long does an old endpoint shape,
   field, or DB column stay live after its replacement ships? A fixed
@@ -298,23 +467,33 @@ This section is deliberately unresolved — the point of a first draft.
   direct-DB lanes move toward the producer's model (API-mediated, gaining
   capability negotiation for free) or is direct DB access with a
   capability-aware worker (checking schema shape itself) an acceptable
-  permanent split?
+  permanent split? (§3.3's one-credential-per-Deployment pattern works
+  either way, so the topology doesn't force this.)
 - **Feature-flag storage and source of truth.** A DB table read by the API
   (and exposed to the frontend/workers via API-mediated reads), a
   dedicated env-var convention like `COMMITTEE_SCHEDULES_ENABLED`, or a
   third-party flag service? No decision has been made and none is implied
   by anything in this doc.
-- **Does the committee/dashboard SPA get its own deploy path?** Right now
-  it's version-locked to the API via `STATIC_DIR` co-serving. Splitting it
-  onto its own CDN target (like marketing already is) is what would make
-  §3(d)'s "independent frontend cadence" real rather than theoretical — is
-  that worth doing, and on what timeline?
-- **Where does the actual deploy pipeline live?** `docs/runbooks/deployment.md`
-  describes an intended GitOps CI pipeline that isn't built yet. Should
-  this doc's release-cadence assumptions wait for that pipeline to exist,
-  or should the pipeline be designed to satisfy this doc's constraints
-  (independent per-component triggers, environment promotion) from the
-  start?
 - **API version-prefix threshold.** What actually counts as a "breaking
   enough" change to warrant a new `/api/v2/` prefix versus just an additive
-  field? No threshold is proposed here.
+  field? No threshold is proposed here — and §3.1 makes the question more
+  pressing, since edge-cached SPA skew is now the everyday case.
+
+New questions raised by the §3/§6 design:
+
+- **Cloudflare Pages vs R2 + CDN for the static tier.** Both serve a
+  buildless tree from the edge; Pages brings per-branch previews and
+  atomic deploys (and is already used for preview mode, D19/D20), R2+CDN
+  is a plainer bucket. Minor, but it decides the static deploy tooling.
+- **GHCR vs DO Container Registry.** GHCR keeps images next to CI with no
+  extra credentials in GitHub; DOCR keeps pulls inside DO's network next
+  to the droplet. Either works with §6's SHA-tagged immutable images.
+- **Manifests in this repo vs a separate deploy repo.** In-repo keeps code
+  and deploy state reviewable together but means CI's tag-bump commits land
+  in the main history; a deploy repo isolates that churn at the cost of a
+  second repo to keep in sync.
+- **Staging environment shape under k3s.** A second namespace on the same
+  node (cheap, shares the SPOF and the k3s version) or a second droplet
+  (isolated, doubles the cost)? Note the existing stage tunnel pins its
+  origin to `localhost:48787` today — whatever shape staging takes has to
+  either preserve or deliberately replace that arrangement.
