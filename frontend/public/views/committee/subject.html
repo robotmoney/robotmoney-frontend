@@ -143,7 +143,9 @@
           </p>
 
           <div class="cv__session-list cv__session-list--compact">
-            <template x-for="s in sessions" :key="`${s.date}-${s.subjectId}`">
+            <!-- Keyed on the SESSION id: a subject may convene more than once
+                 a day, so (date, subjectId) is no longer unique. -->
+            <template x-for="s in sessions" :key="s.id">
               <article class="cv__session-card" :style="`--mp-subject:${subjectDot(s.subjectId)}`">
                 <div class="cv__session-top">
                   <div class="cv__session-titleline">

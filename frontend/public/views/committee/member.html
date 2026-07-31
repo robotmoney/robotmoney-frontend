@@ -66,7 +66,10 @@
               <p class="cv__panel-label"><span x-text="inProgressTakes().length > 1 ? 'These sessions' : 'This session'"></span> <span class="mp-live-dot" aria-hidden="true"></span></p>
             </div>
             <div class="cv__session-list cv__session-list--compact">
-              <template x-for="row in inProgressTakes()" :key="`ip-${row.session.date}-${row.session.subjectId}`">
+              <!-- Keyed on the TAKE id: (date, subjectId) collides now that a
+                   subject can convene more than once a day, and Alpine renders
+                   nothing at all for a duplicate key. -->
+              <template x-for="row in inProgressTakes()" :key="`ip-${row.take.id}`">
                 <article class="cv__session-card mp-take mp-card--live"
                          :style="`--mp-subject:${subjectDot(row.session.subjectId)}`">
                   <div class="cv__session-top">
@@ -156,7 +159,8 @@
           No published takes for this subject yet.
         </p>
         <div class="cv__session-list cv__session-list--compact">
-          <template x-for="row in visibleTakes().slice(0, 20)" :key="`${row.session.date}-${row.session.subjectId}`">
+          <!-- Keyed on the TAKE id, for the same reason as the in-progress list above. -->
+          <template x-for="row in visibleTakes().slice(0, 20)" :key="row.take.id">
             <article class="cv__session-card mp-take" :style="`--mp-subject:${subjectDot(row.session.subjectId)}`">
               <div class="cv__session-top">
                 <div class="cv__session-titleline">

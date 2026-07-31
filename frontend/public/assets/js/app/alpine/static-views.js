@@ -901,7 +901,17 @@ export function registerStaticViews(Alpine) {
         .filter((s) => (s.subjectId ?? s.subject_id) === id && s.state === "published")
         .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
         .slice(0, 20)
-        .map((s) => ({ date: s.date, subjectId: s.subjectId ?? s.subject_id, subjectName: s.subjectName ?? s.subject_name }));
+        // `id` is carried through because it is now the ONLY unique handle on a
+        // session: a subject may convene more than once a day, so the template
+        // cannot key rows on (date, subjectId) without colliding — and a
+        // duplicate key makes Alpine render the whole list as nothing. The
+        // static archive has no ids, so fall back to the old composite there.
+        .map((s) => ({
+          id: s.id ?? `${s.date}-${s.subjectId ?? s.subject_id}`,
+          date: s.date,
+          subjectId: s.subjectId ?? s.subject_id,
+          subjectName: s.subjectName ?? s.subject_name,
+        }));
       let index = [];
       try {
         index = pick((await api.get(ROUTES.committee.sessions)).sessions || []);
