@@ -124,7 +124,11 @@ if (s.externalPg) {
   // data. Say which server the (now stopped) stack was writing to so the
   // operator knows where its rows actually went.
   console.log(`[demo:down] containers + network removed for ${s.project}; the EXTERNAL database is untouched (${s.databaseUrl})`);
-  console.log(`[demo:down]   resume:  bun run demo -- --external-pg   (same server; migrate + seed are idempotent)`);
+  // Reproduce EVERY flag the stopped boot ran with. Both are CLI-only by design
+  // (nothing is inferred from the state file at boot), so a hint that dropped
+  // --stage would bring the demo back on a Docker-assigned port with the tunnel
+  // still routed at :48787.
+  console.log(`[demo:down]   resume:  bun run demo --${s.stage ? " --stage" : ""} --external-pg   (same server; migrate + seed are idempotent)`);
 } else {
   const where = s.pgDataDir ? `--pg-data dir ${s.pgDataDir}` : `volume ${s.pgVolume ?? `${s.project}_pgdata`}`;
   console.log(`[demo:down] containers + network removed for ${s.project}; postgres data kept (${where})`);

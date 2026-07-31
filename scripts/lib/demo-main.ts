@@ -793,7 +793,11 @@ function writeStateFile(): void {
 function printResumeHint(): void {
   if (externalPg.enabled) {
     console.log(`[demo] the database was EXTERNAL (${externalPg.redactedUrl}) — its data was never this demo's to keep or reclaim.`);
-    console.log(`[demo]   resume:  bun run demo -- ${EXTERNAL_PG_FLAG}`);
+    // EVERY flag this boot ran with, not just the pg one: both are CLI-only by
+    // design, so nothing about the next boot is inferred from state. A hint that
+    // dropped --stage would resume the demo on a Docker-assigned port, leaving
+    // the tunnel pointing at nothing.
+    console.log(`[demo]   resume:  bun run demo --${stageMode ? " --stage" : ""} ${EXTERNAL_PG_FLAG}`);
     return;
   }
   if (pgDataDir) {
