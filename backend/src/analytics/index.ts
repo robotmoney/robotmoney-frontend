@@ -16,10 +16,17 @@
 // by inverseCorrelationWeights' minValidObs) and logged loudly. The seededProvider
 // is retained ONLY for the hermetic unit-test tools (analyze/regime.ts etc.) and is
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
-import { INDICATORS } from "./analyze/indicators.ts";
+import { INDICATORS, PANELS } from "./analyze/indicators.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { applyTransform } from "./transform/transforms.ts";
-import { buildDateAxis, alignDailyForwardFill, alignDailyZeroFill, mergeSeries } from "./transform/math.ts";
+import {
+  buildDateAxis,
+  alignDailyForwardFill,
+  alignDailyZeroFill,
+  forwardFillAge,
+  MAX_FORWARD_FILL_DAYS,
+  mergeSeries,
+} from "./transform/math.ts";
 import { loadRawFloorSeed } from "./extract/floor-seed.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { AnalyticsPersistence } from "./persistence.ts";
@@ -199,17 +206,24 @@ export async function runAnalytics(
     const dateAxis = buildDateAxis(BACKFILL_START, asof);
     const transformed: Record<string, number[]> = {};
     const lastRaw: Record<string, { date: string; value: number } | null> = {};
+    // #402: forward-fill age per indicator (days since the last REAL observation).
+    // zero_fill indicators aren't forward-filled — a gap there is a real "no flow"
+    // 0, not a carried-forward stale value — so they're left out of `ages` entirely
+    // and computeRegime never caps them.
+    const ages: Record<string, number[]> = {};
     for (const ind of INDICATORS) {
       const s = merged[ind.id] ?? [];
       lastRaw[ind.id] = s.length ? s[s.length - 1] : null;
-      const aligner = ind.align === "zero_fill" ? alignDailyZeroFill : alignDailyForwardFill;
+      const isZeroFill = ind.align === "zero_fill";
+      const aligner = isZeroFill ? alignDailyZeroFill : alignDailyForwardFill;
       transformed[ind.id] = applyTransform(ind.transform, aligner(s, dateAxis));
+      if (!isZeroFill) ages[ind.id] = forwardFillAge(s, dateAxis);
     }
     collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${INDICATORS.length} indicator(s)`, t0);
 
     t0 = new Date();
-    const r2 = computeRegime(transformed, dateAxis); // [macro, onchain]
-    const r3 = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"]); // +factor
+    const r2 = computeRegime(transformed, dateAxis, PANELS, ages); // [macro, onchain]
+    const r3 = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], ages); // +factor
 
     // Predictive correlations + regime backtest — computed from the SAME 2-panel
     // composite the original main snapshot uses, over the chart-overlay extras
@@ -242,7 +256,7 @@ export async function runAnalytics(
     });
 
     t0 = new Date();
-    const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, backtest, correlations);
+    const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, ages, backtest, correlations);
     collector.stage("report", "ok", `built ${rows.length} snapshot row(s) for persistence`, t0);
 
     t0 = new Date();
@@ -381,6 +395,7 @@ function buildSnapshotRows(
   r3: RegimeComputeResult,
   transformed: Record<string, number[]>,
   lastRaw: Record<string, { date: string; value: number } | null>,
+  ages: Record<string, number[]> = {},
   backtest: BacktestPayload | null = null,
   correlations: CorrelationsPayload | null = null,
 ): RegimeSnapshotRow[] {
@@ -402,7 +417,7 @@ function buildSnapshotRows(
     // latest refresh (computeRegime exposes weights for the final refresh only).
     // Historical rows carry the numeric columns + percentiles map, matching the
     // original (regime-history.csv is per-date; regime-snapshot.json is asof-only).
-    const indicators = isLatest ? buildRichIndicators(i, r2, r3, transformed, lastRaw, dateAxis) : [];
+    const indicators = isLatest ? buildRichIndicators(i, r2, r3, transformed, lastRaw, dateAxis, ages) : [];
     const panelWeights = isLatest
       ? { macro: r2.weightsByPanel.macro, onchain: r2.weightsByPanel.onchain, factor: r3.weightsByPanel.factor }
       : null;
@@ -445,10 +460,17 @@ function buildRichIndicators(
   transformed: Record<string, number[]>,
   lastRaw: Record<string, { date: string; value: number } | null>,
   dateAxis: string[],
+  ages: Record<string, number[]> = {},
 ) {
   return INDICATORS.map((ind) => {
     const weight =
       ind.panel === "factor" ? r3.weightsByPanel.factor?.[ind.id] : r2.weightsByPanel[ind.panel]?.[ind.id];
+    // #402: surface the forward-fill age/expiry alongside the existing raw_date
+    // provenance so an indicator whose contribution has been capped reads as
+    // visibly degraded — not silently dropped — in the same snapshot payload the
+    // dashboard already renders raw_value/raw_date from.
+    const ageDays = ages[ind.id]?.[i];
+    const forwardFillExpired = Number.isFinite(ageDays) && (ageDays as number) > MAX_FORWARD_FILL_DAYS;
     return {
       id: ind.id,
       name: ind.name,
@@ -463,6 +485,8 @@ function buildRichIndicators(
       percentile: nn(r2.ranks[ind.id]?.[i]),
       signed_percentile: nn(r2.signed[ind.id]?.[i]),
       panel_weight: weight ?? null,
+      forward_fill_age_days: Number.isFinite(ageDays) ? ageDays : null,
+      forward_fill_expired: forwardFillExpired,
       sparkline: monthlySparkline(r2.signed[ind.id], dateAxis, 24),
     };
   });

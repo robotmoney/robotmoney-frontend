@@ -21,7 +21,11 @@ import {
   type Indicator,
   type Panel,
 } from "./indicators.ts";
-import { rollingPercentileRank, inverseCorrelationWeights } from "../transform/math.ts";
+import {
+  rollingPercentileRank,
+  inverseCorrelationWeights,
+  MAX_FORWARD_FILL_DAYS,
+} from "../transform/math.ts";
 
 export interface RegimeComputeResult {
   dateAxis: string[];
@@ -51,12 +55,29 @@ export function computeRegime(
   panelData: Record<string, number[]>,
   dateAxis: string[],
   panels: Panel[] = PANELS,
+  // #402: per-indicator forward-fill age (days since the last REAL observation;
+  // see transform/math.ts forwardFillAge), OPTIONAL and additive. When omitted
+  // (every existing call site, incl. the regime-fidelity byte-identical-replay
+  // tests), behaviour is exactly unchanged. When supplied, any day whose age
+  // exceeds `maxForwardFillDays` is treated as missing (NaN) for that indicator
+  // BEFORE percentile ranking — it drops out of its own rank series, the sign-
+  // aligned panel weighting (weightedMeanOnDay skips non-finite weight/value),
+  // and — once persistently dead — inverseCorrelationWeights' minValidObs floor,
+  // so a long-dead indicator's weight decays to 0 rather than dragging its last
+  // real value forward forever. A resumed real observation resets age to 0 on
+  // that date, so the indicator re-enters normally with no special-casing.
+  ages?: Record<string, number[]>,
+  maxForwardFillDays: number = MAX_FORWARD_FILL_DAYS,
 ): RegimeComputeResult {
   const ranks: Record<string, number[]> = {};
   const signed: Record<string, number[]> = {};
   for (const ind of INDICATORS) {
-    const xs = panelData[ind.id];
-    if (!xs) throw new Error(`Missing series for ${ind.id}`);
+    const raw = panelData[ind.id];
+    if (!raw) throw new Error(`Missing series for ${ind.id}`);
+    const age = ages?.[ind.id];
+    const xs = age
+      ? raw.map((v, i) => (Number.isFinite(age[i]) && age[i] > maxForwardFillDays ? NaN : v))
+      : raw;
     const r = rollingPercentileRank(xs, ROLLING_WINDOW_DAYS);
     ranks[ind.id] = r;
     signed[ind.id] = r.map((v) => (Number.isFinite(v) ? (ind.sign >= 0 ? v : 1 - v) : NaN));
