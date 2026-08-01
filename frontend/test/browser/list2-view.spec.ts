@@ -6,6 +6,18 @@
 // stubbed with a deterministic DTO so tab switching, per-tab column
 // presence/formats, sort defaults, and explorer hrefs are network-free and
 // reproducible.
+//
+// Visual golden (issue #396): /list2 is not one of §7's 7 designated
+// pixel-QA reference-fidelity shots (gate screen, /list, /list3 drawer,
+// /projects mid-scroll, /agents/:id dossier, /dashboard terminal,
+// /wallets/:id drawer), but it IS a shipped view like every sibling list
+// page (list-view.spec.ts, agents-view.spec.ts, dash-lobster.spec.ts,
+// dash-vaults.spec.ts, dash-wallets.spec.ts all carry one) — this was the
+// one shipped Analytics Surface list view missing its own self-regression
+// CSS-drift baseline; added here to close that gap, same convention.
+//
+// Generate/refresh the baseline with:
+//   bun run test:browser -- --update-snapshots list2-view
 import { expect, test, type Page } from "@playwright/test";
 import { mockVendorScripts } from "./vendor-scripts.ts";
 import { navigate } from "./navigation.ts";
@@ -157,4 +169,17 @@ test("an empty tab renders the empty-state card, not an empty table", async ({ p
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ agents: [], coins: [], vaults: [], wallets: [] }) }));
   await login(page);
   await expect(page.locator("[data-list2-empty]")).toBeVisible();
+});
+
+test("full page visual golden at 1440x900 (self-regression baseline, not a §7 reference-fidelity shot)", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await login(page);
+  await page.evaluate(() => (document as any).fonts?.ready);
+  await page.waitForTimeout(300);
+
+  await expect(page).toHaveScreenshot("list2-full.png", {
+    fullPage: true,
+    animations: "disabled",
+    maxDiffPixelRatio: 0.01,
+  });
 });
