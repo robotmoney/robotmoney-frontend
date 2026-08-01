@@ -214,10 +214,15 @@ export interface CommitteeSession {
 }
 
 // Light index row served by GET /api/committee/sessions (default, unless
-// ?full=1) — issue #243. Deliberately omits regimeSummary, synthesis, and
+// ?full=1) — issue #243. Deliberately omits regimeSummary and
 // subjectSnapshotTotalValueUsd (the large fields responsible for the
 // ~8.3MB unpaginated payload); everything else a session list consumer
 // needs (id, state, timestamps, the committeeRecommendation rollup) stays.
+// synthesis rejoined the projection in issue #358: since #323 rebuilt it as a
+// short deterministic sentence (never the concatenated take bodies that made
+// it "large" in the first place), it is cheap enough to carry on every list
+// row so the directory preview (synthesisPreview() in committee.js) has
+// something to render.
 export interface CommitteeSessionListItem {
   id: string;
   date: string;
@@ -226,6 +231,7 @@ export interface CommitteeSessionListItem {
   state: CommitteeSession["state"];
   windowClosesAt: string | null;
   publishedAt: string | null;
+  synthesis: string | null;
   committeeRecommendation: CommitteeRecommendation | null;
   socialDraftId: string | null;
   generatedAt: string;

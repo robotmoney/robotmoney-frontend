@@ -548,10 +548,14 @@ test("GET /api/committee/sessions default: light-projected + cursor-paginated (n
     expect(smallLimitPages.has(c.id)).toBe(true);
     const s = smallLimitPages.get(c.id);
     expect(s.state).toBe("scheduled");
-    // Light projection: the big fields are absent entirely (not just null).
+    // Light projection: the still-big fields are absent entirely (not just null).
     expect("regimeSummary" in s).toBe(false);
-    expect("synthesis" in s).toBe(false);
     expect("subjectSnapshotTotalValueUsd" in s).toBe(false);
+    // synthesis rejoined the light projection in issue #358 — present (even
+    // though null pre-aggregation, as these scheduled-only rows are), never
+    // dropped like the fields above.
+    expect("synthesis" in s).toBe(true);
+    expect(s.synthesis).toBeNull();
     // Everything a list consumer (committee.js / committee-overview.js) reads is kept.
     expect(s.id).toBe(c.id);
     expect(s.date).toBe(c.date);
@@ -561,7 +565,7 @@ test("GET /api/committee/sessions default: light-projected + cursor-paginated (n
   }
 });
 
-test("GET /api/committee/sessions?full=1 reproduces the pre-#243 unpaginated/unprojected shape; the light default omits its big fields", async () => {
+test("GET /api/committee/sessions?full=1 reproduces the pre-#243 unpaginated/unprojected shape; the light default omits regimeSummary but carries synthesis (issue #358)", async () => {
   const subj = rid("fullproj");
   await ic.ensureSubject(subj, "Full Projection Subject");
   const session = await ic.openSession(subj);
@@ -592,8 +596,10 @@ test("GET /api/committee/sessions?full=1 reproduces the pre-#243 unpaginated/unp
   expect(fullItem.synthesis.length).toBeGreaterThan(0);
 
   // The light default (paged through until this session's id is found or the
-  // cursor is exhausted) carries the same id/state/committeeRecommendation but
-  // no regimeSummary/synthesis key at all.
+  // cursor is exhausted) carries the same id/state/committeeRecommendation,
+  // still omits regimeSummary entirely, but — issue #358 — now carries the
+  // same synthesis value as the full projection (it's short enough post-#323
+  // to no longer need dropping from the light row).
   let lightItem: any = null;
   let cursor: string | undefined;
   for (let page = 0; page < 50 && !lightItem; page++) {
@@ -608,8 +614,16 @@ test("GET /api/committee/sessions?full=1 reproduces the pre-#243 unpaginated/unp
   expect(lightItem).toBeTruthy();
   expect(lightItem.state).toBe("published");
   expect("regimeSummary" in lightItem).toBe(false);
-  expect("synthesis" in lightItem).toBe(false);
   expect(lightItem.committeeRecommendation).toBeTruthy();
+
+  // issue #358 AC/test-plan: non-empty synthesis on the list row, identical to
+  // the full projection's value (well under the 500-char bound so no
+  // truncation applies here), and — the echo regression guard — never
+  // byte-identical to committeeRecommendation.rationale.
+  expect(typeof lightItem.synthesis).toBe("string");
+  expect(lightItem.synthesis.length).toBeGreaterThan(0);
+  expect(lightItem.synthesis).toBe(fullItem.synthesis);
+  expect(lightItem.synthesis).not.toBe(lightItem.committeeRecommendation.rationale);
 });
 
 test("GET /api/committee/sessions: malformed cursor and out-of-range limit are 400s (never a 500 or a silent fallback)", async () => {

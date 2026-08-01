@@ -130,7 +130,10 @@ export async function getSubjectSnapshots(id: string) {
 // at ~8.3MB on staging). Default response is now a light index row (see
 // projections.toSessionListItem) plus an opaque nextCursor; ?full=1 keeps the
 // pre-#243 unpaginated/unprojected shape reachable for callers (the admin
-// sessions views) that still need every field.
+// sessions views) that still need every field. synthesis rejoined the light
+// row in issue #358 (bounded, see projections.ts) once #323 made it a short
+// sentence rather than a take-body dump; regimeSummary/
+// subjectSnapshotTotalValueUsd stay full-only.
 const SESSIONS_LIST_DEFAULT_LIMIT = 20;
 const SESSIONS_LIST_MAX_LIMIT = 100;
 

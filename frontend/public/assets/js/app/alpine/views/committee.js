@@ -1,3 +1,12 @@
+// @ts-nocheck — buildless browser JS predating the root tsconfig's checkJs
+// coverage; issue #358 is the first thing to import this module from a
+// typechecked .ts file (scripts/tests/unit/committee-synthesis-preview.test.ts),
+// which pulls the whole file into the root TS program transitively and
+// surfaces a pile of pre-existing implicit-any errors unrelated to this
+// change (same situation as static-views.js's and apply-form.js's identical
+// pragmas). This preserves the status quo rather than fixing unrelated
+// coverage as a drive-by; JSDoc-typing this file is a worthwhile follow-up.
+//
 // Alpine factory for the /committee directory view. Moved verbatim from the
 // monolithic views.js (finding 025).
 import { api, ROUTES } from "../../lib/api.js";
