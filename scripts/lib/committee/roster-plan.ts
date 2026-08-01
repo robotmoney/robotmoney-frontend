@@ -15,6 +15,23 @@
 //
 // Consumed by scripts/lib/demo-main.ts's onboarding and committee drivers.
 
+/**
+ * How long to wait before the NEXT admission attempt.
+ *
+ * The interval paces real admissions, so it is counted from admissions that
+ * actually happened — not from names the driver skipped. The loop used to sleep
+ * before deciding, which meant a persona already in the database cost a full
+ * interval to say "no" to: on the standing demo (6 h interval) a restart with
+ * four known personas would idle a full DAY before admitting the first genuinely
+ * new character. A skip is a no-op and must cost nothing.
+ *
+ * The FIRST admission of a boot still uses the prompt delay, so a visitor sees
+ * onboarding shortly after load however many personas were skipped to get there.
+ */
+export function admissionDelayMs(admittedSoFar: number, firstMs: number, intervalMs: number): number {
+  return admittedSoFar === 0 ? firstMs : intervalMs;
+}
+
 /** One roster row as the admin members route reports it. */
 export interface RosterRow {
   id: string;

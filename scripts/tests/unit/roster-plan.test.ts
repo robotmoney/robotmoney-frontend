@@ -17,6 +17,7 @@
 //      property "idempotent" actually means, exercised over several boots.
 import { describe, expect, test } from "bun:test";
 import {
+  admissionDelayMs,
   decideAdmission,
   planAdoptions,
   takenNamesFrom,
@@ -178,5 +179,47 @@ describe("committed persona identities back every character the demo can seat", 
 
   test("lookup is case- and whitespace-insensitive, matching how names arrive from the API", () => {
     expect(personaIdentity("  HELIOS ")?.publicKeyB64).toBe(personaIdentity("helios")?.publicKeyB64);
+  });
+});
+
+describe("admissionDelayMs — a skipped name costs nothing", () => {
+  const FIRST = 60_000;
+  const INTERVAL = 6 * 3_600_000; // the --stage profile
+
+  test("the first admission of a boot is prompt", () => {
+    expect(admissionDelayMs(0, FIRST, INTERVAL)).toBe(FIRST);
+  });
+
+  test("later admissions ride the steady interval", () => {
+    expect(admissionDelayMs(1, FIRST, INTERVAL)).toBe(INTERVAL);
+    expect(admissionDelayMs(4, FIRST, INTERVAL)).toBe(INTERVAL);
+  });
+
+  test("skips do not advance the counter, so a restarted demo still admits promptly", () => {
+    // Four personas already in the database: the driver passes over all four
+    // without spending an interval on any of them, and the FIRST real admission
+    // (the fifth name) is still the prompt one. Counting loop passes instead of
+    // admissions would have made this 4 x 6h = a full day of idling.
+    const taken = new Set(["helios", "selene", "rhea", "nyx"]);
+    let admitted = 0;
+    let waited = 0;
+    for (const name of NEWCOMER_NAMES) {
+      if (!decideAdmission(name, taken).admit) continue; // costs nothing
+      waited += admissionDelayMs(admitted, FIRST, INTERVAL);
+      admitted++;
+    }
+    expect(admitted).toBe(1); // only Eos was new
+    expect(waited).toBe(FIRST); // …and it arrived on the prompt delay
+  });
+
+  test("a fresh database still paces admissions: prompt, then one interval each", () => {
+    let admitted = 0;
+    const waits: number[] = [];
+    for (const name of NEWCOMER_NAMES) {
+      if (!decideAdmission(name, new Set()).admit) continue;
+      waits.push(admissionDelayMs(admitted, FIRST, INTERVAL));
+      admitted++;
+    }
+    expect(waits).toEqual([FIRST, INTERVAL, INTERVAL, INTERVAL, INTERVAL]);
   });
 });

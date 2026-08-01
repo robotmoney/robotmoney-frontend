@@ -29,7 +29,7 @@ import {
 } from "./onboarding-eval.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./demo-newcomers.ts";
 import { personaIdentity } from "./committee/persona-keys.ts";
-import { decideAdmission, planAdoptions } from "./committee/roster-plan.ts";
+import { admissionDelayMs, decideAdmission, planAdoptions } from "./committee/roster-plan.ts";
 import { memberHomeVolumeName } from "../agent/member-agent.ts";
 import {
   assertStageWebPortFree,
@@ -1868,8 +1868,23 @@ async function main(): Promise<void> {
     };
   }
   async function onboardingDriver(): Promise<void> {
+    let admitted = 0;
     for (let n = 0; n < NEWCOMER_NAMES.length; n++) {
-      const delay = n === 0 ? cadence.onboardingFirstMs : cadence.onboardingIntervalMs;
+      // PRE-FILTER, before the wait. A persona this database already holds costs
+      // nothing to pass over: the interval paces real admissions, and sleeping
+      // 6 h to say "no" to a name would idle a restarted standing demo for a
+      // full day before it reached the first genuinely new character. The
+      // authoritative check still happens after the wait (below) — a name can be
+      // taken while this one sleeps — so this only ever skips work early, never
+      // admits anything it should not.
+      const upNext = plannedNewcomer(n);
+      if (upNext && !decideAdmission(upNext.identity.name, await e2e.existingMemberNames()).admit) {
+        log(`onboarding ${upNext.identity.name} skipped — already on the roster (this database has been onboarded before)`);
+        continue;
+      }
+      // Counted from ADMISSIONS, not from loop passes, so the first character
+      // this boot actually admits still arrives promptly.
+      const delay = admissionDelayMs(admitted, cadence.onboardingFirstMs, cadence.onboardingIntervalMs);
       const dueAt = Date.now() + delay;
       // Preview the next few admissions (this one + its successors, if any are
       // left in the fixed list) with countdowns.
@@ -1995,6 +2010,7 @@ async function main(): Promise<void> {
           passphrase: keystorePassphrase,
         });
         e2e.MEMBERS.push({ memberId: result.memberId!, name: identity.name, lens, bias, present: true });
+        admitted++; // paces the NEXT wait — skipped names must not count
         setOnboardStep(entryId, "session", "running");
         // Classified on the success path too, so every admission attempt leaves
         // the SAME outcome vocabulary in the log — a run that reads "admitted"
