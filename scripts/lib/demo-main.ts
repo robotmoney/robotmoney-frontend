@@ -1466,10 +1466,11 @@ async function main(): Promise<void> {
   //
   // adminToken (issue #456): threaded explicitly instead of relying on the
   // now-removed process.env.ADMIN_TOKEN mutation. session.ts's runSession()
-  // and agent.ts's enroll()/getAdminHeaders() both read rail.adminToken
-  // before falling back to process.env, so this is what makes the
-  // dynamically-imported (same-process) committee session driver still
-  // authenticate correctly.
+  // (via getAdminHeaders(adminToken)) and agent.ts's enroll() (via
+  // rail.adminToken directly — issue #461 retired agent.ts's own
+  // env-reading getAdminHeaders()) both take this token as an explicit
+  // parameter, so this is what makes the dynamically-imported (same-process)
+  // committee session driver still authenticate correctly.
   const sessionRail = {
     ...producerRail,
     modelConfig: resolveModelConfig(process.env),
