@@ -72,8 +72,8 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
       const { history } = await call<{ history: RawIndicatorHistory }>("GET", ROUTES.analytics.rawHistory);
       return history;
     },
-    async saveRawHistory(byIndicator) {
-      await call("POST", ROUTES.analytics.rawHistory, { history: byIndicator });
+    async saveRawHistory(byIndicator, source) {
+      await call("POST", ROUTES.analytics.rawHistory, { history: byIndicator, source });
     },
     async seedRawHistory(byIndicator) {
       return await call<FloorSeedResult>("POST", ROUTES.analytics.rawHistorySeed, { history: byIndicator });

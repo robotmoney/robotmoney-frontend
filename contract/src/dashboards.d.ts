@@ -134,6 +134,17 @@ export interface WalletBalances {
   history: WalletHistoryPoint[];
 }
 
+// Row-level provenance for the analytics pipeline (issue #397): which data
+// source actually wrote this row, mirroring the honesty-contract enum other
+// dashboard DTOs already use (VaultEconomics.source, WalletHoldingProvenance).
+// 'live' = the production orchestrator's real keyless fetchers; 'hermetic' =
+// the deterministic seeded source (CI/demo default); 'fixture' = a
+// test-injected source; 'seed' = raw_indicator_history's vendored floor-seed
+// gap-fill / regime_snapshots' reference-snapshot import — real historical
+// data, not computed this run. Pre-migration rows have no recorded
+// provenance: `null`, never fabricated.
+export type AnalyticsProvenance = "live" | "hermetic" | "fixture" | "seed";
+
 // One enriched per-indicator object inside a RegimeSnapshot (asof row). Ported
 // from the original's regime-snapshot.json indicator shape. Historical rows carry
 // an empty `indicators` array + the `percentiles` map only.
@@ -212,6 +223,9 @@ export interface RegimeSnapshot {
   factorPercentile?: number | null;
   panelWeights?: Record<string, Record<string, number>> | null;
   version?: string | null;
+  // Row-level provenance (issue #397): which data source produced this row.
+  // `null` on every pre-migration row — genuinely unknown, never fabricated.
+  source?: AnalyticsProvenance | null;
   percentiles: Record<string, number>;
   // Rich per-indicator objects on the asof row; [] on historical rows. Kept
   // permissive (legacy rows may carry a differently-shaped object).

@@ -38,7 +38,14 @@
             <span class="rv__eyebrow rv__eyebrow--accent">Live Composite</span>
             <h2 class="rv__dash-title">Daily regime classification</h2>
           </div>
-          <span class="rv__asof">As of <span x-text="latest.date"></span></span>
+          <div class="rv__asof-wrap">
+            <span class="rv__asof">As of <span x-text="latest.date"></span></span>
+            <!-- Row-level provenance badge (issue #397): which data source produced
+                 this snapshot — 'live' | 'hermetic' | 'fixture' | 'seed'. Only shown
+                 when the backend actually reports one (pre-migration rows are null,
+                 honestly unlabeled rather than assumed live). -->
+            <span class="rv__prov" :class="'rv__prov--' + latest.source" x-show="latest.source" x-cloak x-text="provenanceLabel(latest.source)"></span>
+          </div>
         </div>
 
         <!-- Summary cards: top-line regime + one index card per panel -->

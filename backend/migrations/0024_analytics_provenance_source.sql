@@ -1,0 +1,22 @@
+-- Row-level provenance for the analytics pipeline (issue #397): record WHICH
+-- data source actually wrote a given raw_indicator_history / regime_snapshots
+-- row, so the honesty contract (docs/architecture.md provenance convention:
+-- "live" | "hermetic" | "fixture" | "seed") extends to this pipeline too.
+--
+-- Additive, nullable, forward-only. Pre-migration rows carry NO recorded
+-- provenance and stay NULL — genuinely unknown history is represented
+-- honestly, never backfilled with a fabricated guess.
+--
+-- Values written going forward:
+--   'live'     — the production orchestrator's real keyless fetchers
+--                (analytics/index.ts, source = liveDataSource).
+--   'hermetic' — the deterministic seeded source (CI/demo default,
+--                source = hermeticDataSource).
+--   'fixture'  — a test-injected AnalyticsDataSource.
+--   'seed'     — raw_indicator_history: the vendored floor-seed gap-fill
+--                (extract/floor-seed.ts → store/floor-seed.ts) or the EDGAR
+--                seed loader — real historical data, not fetched this run.
+--                regime_snapshots: the reference-snapshot import
+--                (db/import-regime-eq.ts via report/regime-eq-map.ts).
+ALTER TABLE raw_indicator_history ADD COLUMN IF NOT EXISTS source text;
+ALTER TABLE regime_snapshots      ADD COLUMN IF NOT EXISTS source text;

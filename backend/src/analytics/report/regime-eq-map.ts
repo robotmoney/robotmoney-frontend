@@ -78,6 +78,9 @@ function historyRow(h: EqHistoryRow): RegimeSnapshotRow {
     macroIndex: h.macro,
     onchainIndex: h.onchain,
     factorIndex: h.factor,
+    // Provenance (issue #397): this whole snapshot comes from the vendored
+    // reference-screenshot fixture, not a live/hermetic run — 'seed'.
+    source: "seed",
     percentiles: {},
     indicators: [],
   };
@@ -106,6 +109,7 @@ function asofRow(snap: EqSnapshot): RegimeSnapshotRow {
     factorPercentile: snap.factor_percentile,
     panelWeights: snap.panel_weights ?? null,
     version: snap.version ?? "v3",
+    source: "seed",
     percentiles,
     indicators: snap.indicators as unknown as RegimeSnapshotRow["indicators"],
     panels: snap.panels ?? null,
@@ -143,6 +147,7 @@ function toDbRow(r: RegimeSnapshotRow): Record<string, unknown> {
     factor_percentile: r.factorPercentile ?? null,
     panel_weights: r.panelWeights ?? null,
     version: r.version ?? null,
+    source: r.source ?? null,
     percentiles: r.percentiles,
     indicators: r.indicators,
     panels: r.panels ?? null,

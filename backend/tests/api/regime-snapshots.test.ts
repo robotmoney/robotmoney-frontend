@@ -63,6 +63,7 @@ const snapRow = (date: string, indicators: unknown[] = freshIndicators(date)) =>
   macroRegime: "neutral",
   onchainRegime: null,
   factorRegime: null,
+  source: "live",
   percentiles: { test_indicator: 61 },
   indicators,
 });
@@ -87,6 +88,8 @@ test("a today-dated snapshot row with current indicator observations yields stal
   expect(r.staleness.ageDays).toBe(0);
   expect(r.staleness.thresholdDays).toBe(REGIME_STALE_THRESHOLD_DAYS);
   expect(r.staleness.panelObservationDates).toEqual({ macro: today(), onchain: today() });
+  // Row-level provenance (issue #397) reaches the served DTO unchanged.
+  expect(r.latest?.source).toBe("live");
 });
 
 test("a snapshot whose indicator observations are frozen >3 days back yields staleness.stale === true with the real age", async () => {

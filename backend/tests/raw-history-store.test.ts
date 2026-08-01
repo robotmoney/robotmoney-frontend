@@ -72,6 +72,28 @@ test("saveRawIndicatorHistory: upsert overwrites on (date, indicator) conflict, 
   await cleanup();
 });
 
+test("saveRawIndicatorHistory: tags rows with the provenance `source` (issue #397); defaults to 'live'", async () => {
+  await cleanup();
+  // Default (no third arg): 'live' — the production merge path's implicit tag.
+  await saveRawIndicatorHistory({ [A]: [{ date: "2020-04-01", value: 1 }] });
+  const [defaulted] = await sql`SELECT source FROM raw_indicator_history WHERE indicator = ${A} AND date = '2020-04-01'`;
+  expect(defaulted.source).toBe("live");
+
+  // Explicit source override.
+  await saveRawIndicatorHistory({ [B]: [{ date: "2020-04-01", value: 2 }] }, undefined, "hermetic");
+  const [tagged] = await sql`SELECT source FROM raw_indicator_history WHERE indicator = ${B} AND date = '2020-04-01'`;
+  expect(tagged.source).toBe("hermetic");
+
+  // A later write with a DIFFERENT source overwrites provenance too (not
+  // sticky to the first-ever write) — matches "fetched wins on overlap".
+  await saveRawIndicatorHistory({ [B]: [{ date: "2020-04-01", value: 3 }] }, undefined, "live");
+  const [overwritten] = await sql`SELECT value, source FROM raw_indicator_history WHERE indicator = ${B} AND date = '2020-04-01'`;
+  expect(Number(overwritten.value)).toBe(3);
+  expect(overwritten.source).toBe("live");
+
+  await cleanup();
+});
+
 test("saveRawIndicatorHistory: skips non-finite values and no-ops on empty input", async () => {
   await cleanup();
   await saveRawIndicatorHistory({}); // no-op, must not throw

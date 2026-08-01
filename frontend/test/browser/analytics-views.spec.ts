@@ -284,3 +284,36 @@ test("regime dashboard hides the staleness banner when data is fresh", async ({ 
   await expect(page.locator(".rv__dash-title")).toBeVisible();
   await expect(page.locator(".rv__stale")).toBeHidden();
 });
+
+// Row-level provenance badge (issue #397): the served snapshot's `source`
+// ('live' | 'hermetic' | 'fixture' | 'seed') renders as a small badge next to
+// the as-of label, distinct from the per-indicator upstream-vendor label
+// (FRED/Yahoo/…) already shown in each panel row. `null`/absent hides it
+// entirely — a pre-migration row is honestly unlabeled, never assumed live.
+test("regime dashboard renders the provenance badge when the API reports a data source", async ({ page }) => {
+  await stubEnvironment(page);
+  const hermetic = { ...loadRegimeStub() };
+  hermetic.latest = { ...hermetic.latest!, source: "hermetic" };
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(hermetic) }));
+  await page.goto("/");
+  await navigate(page, "/regime");
+
+  const badge = page.locator(".rv__prov");
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveText("Demo data (hermetic)");
+  await expect(badge).toHaveClass(/rv__prov--hermetic/);
+});
+
+test("regime dashboard hides the provenance badge when the API reports no source (pre-migration row)", async ({ page }) => {
+  await stubEnvironment(page);
+  const noSource = { ...loadRegimeStub() };
+  noSource.latest = { ...noSource.latest!, source: null };
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(noSource) }));
+  await page.goto("/");
+  await navigate(page, "/regime");
+
+  await expect(page.locator(".rv__dash-title")).toBeVisible();
+  await expect(page.locator(".rv__prov")).toBeHidden();
+});

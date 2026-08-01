@@ -173,6 +173,39 @@ test("DTO validation rejects malformed/oversized/duplicate-conflicting/non-finit
   expect(await tableCounts()).toEqual(before); // every rejection left zero row changes
 });
 
+test("raw-history + regime-snapshots: accept an optional provenance `source`, reject a garbage value (issue #397)", async () => {
+  prodAuth();
+  const ind = rid();
+  const before = await tableCounts();
+
+  // Garbage `source` values are rejected with zero row changes.
+  const badSource = { history: { [ind]: [{ date: "2020-01-01", value: 1 }] }, source: "not-a-real-source" };
+  expect((await call(req("POST", A.rawHistory, badSource, TOKEN)))?.status).toBe(400);
+  expect(await tableCounts()).toEqual(before);
+
+  // A recognized value is accepted and persisted on every row in the batch.
+  const goodSource = { history: { [ind]: [{ date: "2020-01-01", value: 1 }, { date: "2020-01-02", value: 2 }] }, source: "hermetic" };
+  expect((await call(req("POST", A.rawHistory, goodSource, TOKEN)))?.status).toBe(200);
+  const rows = await sql`SELECT source FROM raw_indicator_history WHERE indicator = ${ind} ORDER BY date`;
+  expect(rows.map((r: any) => r.source)).toEqual(["hermetic", "hermetic"]);
+
+  // Omitting `source` entirely still works (back-compat) and defaults to 'live'.
+  const ind2 = rid();
+  expect((await call(req("POST", A.rawHistory, { history: { [ind2]: [{ date: "2020-01-01", value: 1 }] } }, TOKEN)))?.status).toBe(200);
+  const [defaulted] = await sql`SELECT source FROM raw_indicator_history WHERE indicator = ${ind2}`;
+  expect(defaulted.source).toBe("live");
+
+  // Same validation on the regime-snapshots batch: garbage rejected, valid value persisted.
+  const date = "1997-03-04";
+  await sql`DELETE FROM regime_snapshots WHERE date = ${date}`;
+  const badSnap = { snapshots: [{ date, percentiles: {}, indicators: [], source: "not-a-real-source" }] };
+  expect((await call(req("POST", A.regimeSnapshots, badSnap, TOKEN)))?.status).toBe(400);
+  const goodSnap = { snapshots: [{ date, percentiles: {}, indicators: [], source: "seed" }] };
+  expect((await call(req("POST", A.regimeSnapshots, goodSnap, TOKEN)))?.status).toBe(200);
+  const [snapRow] = await sql`SELECT source FROM regime_snapshots WHERE date = ${date}`;
+  expect(snapRow.source).toBe("seed");
+});
+
 test("raw-history: persists atomically, idempotent upsert on (date, indicator)", async () => {
   prodAuth();
   const ind = rid();

@@ -37,6 +37,8 @@ export async function applyRawFloorSeed(
     }
   }
 
-  await saveRawIndicatorHistory(toWrite, db);
+  // Tag every gap-fill row 'seed' (issue #397): this is vendored real history,
+  // not a fresh live/hermetic/fixture fetch from THIS run.
+  await saveRawIndicatorHistory(toWrite, db, "seed");
   return { seededPoints, existingPoints, indicators: Object.keys(toWrite).length };
 }
