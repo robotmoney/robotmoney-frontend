@@ -87,22 +87,28 @@ describe("admin-live.spec.ts is wired into the required e2e job's live-stack boo
     expect(config).toContain('testDir: "./frontend/test/browser"');
   });
 
-  test("scripts/lib/demo-main.ts's 'browser checks' step runs the real `test:browser` script with BACKEND_URL exported, after ADMIN_TOKEN is set on process.env", () => {
+  test("scripts/lib/demo-main.ts's 'browser checks' step runs the real `test:browser` script with BACKEND_URL and ADMIN_TOKEN exported explicitly", () => {
     const src = readFileSync(join(repoRoot, "scripts/lib/demo-main.ts"), "utf8");
 
-    const tokenAssignIdx = src.indexOf('process.env.ADMIN_TOKEN = adminPassword');
-    expect(tokenAssignIdx).toBeGreaterThan(-1);
+    // Issue #456: demo-main.ts no longer mutates process.env.ADMIN_TOKEN
+    // globally (the 2026-07-14 maintainability review's flagged
+    // module-level-mutable-state shape) — every child process that needs the
+    // admin token, including this one, now gets it as an explicit
+    // `ADMIN_TOKEN: adminPassword` entry in its OWN spawn env instead of
+    // inheriting it off a prior same-process mutation via `...process.env`.
+    expect(src).not.toContain("process.env.ADMIN_TOKEN =");
 
     const browserStepIdx = src.indexOf('"browser checks"');
     expect(browserStepIdx).toBeGreaterThan(-1);
-    expect(browserStepIdx).toBeGreaterThan(tokenAssignIdx);
 
     // The step block itself: `run(["bun", "run", "test:browser"], repoRoot,
-    // { ...process.env, BACKEND_URL: backendUrl } ..., "browser checks")`.
+    // { ...process.env, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword }
+    // ..., "browser checks")`.
     const stepStart = src.lastIndexOf("await run(", browserStepIdx);
     const stepBlock = src.slice(stepStart, browserStepIdx + '"browser checks"'.length);
     expect(stepBlock).toContain('"test:browser"');
     expect(stepBlock).toContain("BACKEND_URL: backendUrl");
+    expect(stepBlock).toContain("ADMIN_TOKEN: adminPassword");
     expect(stepBlock).toContain("...process.env");
   });
 });

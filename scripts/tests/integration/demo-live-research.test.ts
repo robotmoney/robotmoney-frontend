@@ -75,6 +75,9 @@ describe("demo lane topology (issue #107)", () => {
 
 describe("demo TUI is lane-aware (issue #107)", async () => {
   const src = await Bun.file(join(repoRoot, "scripts/lib/demo-main.ts")).text();
+  // Issue #456: the readiness-probe polling (including these SQL kind
+  // clauses) moved out of demo-main.ts into its own module.
+  const pollingSrc = await Bun.file(join(repoRoot, "scripts/lib/demo-readiness-polling.ts")).text();
 
   test("startup pane names each worker lane container", () => {
     for (const svc of Object.keys(WORKER_LANE_SERVICES)) {
@@ -83,8 +86,9 @@ describe("demo TUI is lane-aware (issue #107)", async () => {
   });
 
   test("research pane polls the two distinct kinds and never the retired analytics.run", () => {
-    expect(src).toContain("j.kind IN ('regime.classify','research.refresh')");
-    expect(src).toContain("kind IN ('regime.classify','research.refresh')");
+    expect(pollingSrc).toContain("j.kind IN ('regime.classify','research.refresh')");
+    expect(pollingSrc).toContain("kind IN ('regime.classify','research.refresh')");
+    expect(pollingSrc).not.toContain("analytics.run");
     expect(src).not.toContain("analytics.run");
   });
 

@@ -143,8 +143,17 @@ export const SUBJECTS = [
 // (COMMITTEE_ROSTER_CAP) — the mirror this module used to carry is gone;
 // consumers (scripts/lib/demo-main.ts, backend domain) import the contract.
 
-export function getAdminHeaders(): Record<string, string> {
-  return process.env.ADMIN_TOKEN ? { "X-Admin-Token": process.env.ADMIN_TOKEN } : {};
+// Issue #456: `token` lets an in-process caller (the demo's dynamically
+// imported committee driver) pass its admin credential explicitly instead of
+// relying on a process.env.ADMIN_TOKEN mutation shared across the same
+// process. The process.env fallback stays for this module's own standalone
+// entry point (main(), below), which genuinely runs as its own child process
+// with ADMIN_TOKEN set on its own environment at spawn time — reading that is
+// normal env inheritance, not the global-mutation antipattern the token
+// parameter replaces.
+export function getAdminHeaders(token?: string): Record<string, string> {
+  const t = token ?? process.env.ADMIN_TOKEN;
+  return t ? { "X-Admin-Token": t } : {};
 }
 
 async function responseJson<T = any>(response: Response): Promise<T> {
@@ -160,9 +169,9 @@ export type SessionEvent =
   | { type: "member"; memberId: string; stage: AgentStage | "absent"; stance?: string; confidence?: number };
 export type SessionProgress = (ev: SessionEvent) => void;
 
-export async function admin(action: string, body: unknown = {}) {
+export async function admin(action: string, body: unknown = {}, adminToken?: string) {
   const r = await fetch(`${backendUrl()}${routePath(ROUTES.committee.admin.action, { action })}`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...getAdminHeaders() }, body: JSON.stringify(body),
+    method: "POST", headers: { "Content-Type": "application/json", ...getAdminHeaders(adminToken) }, body: JSON.stringify(body),
   });
   return responseJson(r);
 }
@@ -218,9 +227,9 @@ export interface RosterMember {
 }
 
 /** The full roster (every status), or null when it cannot be read. */
-export async function rosterMembers(targetUrl: string = backendUrl()): Promise<RosterMember[] | null> {
+export async function rosterMembers(targetUrl: string = backendUrl(), adminToken?: string): Promise<RosterMember[] | null> {
   try {
-    const r = await fetch(`${targetUrl}${ROUTES.committee.admin.members}`, { headers: getAdminHeaders() });
+    const r = await fetch(`${targetUrl}${ROUTES.committee.admin.members}`, { headers: getAdminHeaders(adminToken) });
     if (!r.ok) throw new Error(`GET ${ROUTES.committee.admin.members} -> ${r.status}`);
     const body = await responseJson(r) as { members?: { id?: string; name?: string; lens?: string | null; status?: string }[] };
     if (!Array.isArray(body.members)) throw new Error("admin members response has no members array");
@@ -234,8 +243,8 @@ export async function rosterMembers(targetUrl: string = backendUrl()): Promise<R
 }
 
 /** Lower-cased names on the roster, or null when the roster cannot be read. */
-export async function existingMemberNames(targetUrl: string = backendUrl()): Promise<Set<string> | null> {
-  const members = await rosterMembers(targetUrl);
+export async function existingMemberNames(targetUrl: string = backendUrl(), adminToken?: string): Promise<Set<string> | null> {
+  const members = await rosterMembers(targetUrl, adminToken);
   if (members === null) {
     console.error(
       "[e2e] existingMemberNames: roster unreadable — cannot prove a newcomer name is unused; " +
@@ -294,8 +303,8 @@ export async function waitForSubjectSession(subject: string, expectedState: stri
   );
 }
 
-export async function enqueueLifecycleJob(action: string, payload: Record<string, unknown> = {}) {
-  const result = await admin("enqueue-job", { action, ...payload });
+export async function enqueueLifecycleJob(action: string, payload: Record<string, unknown> = {}, adminToken?: string) {
+  const result = await admin("enqueue-job", { action, ...payload }, adminToken);
   console.log(`  enqueued ${result.kind} (job #${result.jobId})`);
   return result;
 }
@@ -393,8 +402,8 @@ export async function runSession(
   // cannot run until the session exists. Ordering them the other way round is
   // what made a clean database fail its first two sessions with a foreign-key
   // violation while the boot still reported READY.
-  await admin("subject", subject);
-  await enqueueLifecycleJob("open_session", { subjectId: subject.id });
+  await admin("subject", subject, rail.adminToken);
+  await enqueueLifecycleJob("open_session", { subjectId: subject.id }, rail.adminToken);
   const opened = await waitForSubjectSession(subject.id, "scheduled");
   const date: string = opened.session.date;
   const sessionId = opened.session.id;
@@ -430,11 +439,11 @@ export async function runSession(
   // renders full charts. Idempotent; dated at the session date. This now runs
   // just AFTER the session row exists, because that row is what says what the
   // date is; the brief (which reads these fixtures) is still published after.
-  await admin("subject_fixtures", { id: subject.id, name: subject.name, date });
+  await admin("subject_fixtures", { id: subject.id, name: subject.name, date }, rail.adminToken);
 
   emitSession("scheduled", sessionId);
 
-  await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes: 60, prevOutcome });
+  await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes: 60, prevOutcome }, rail.adminToken);
   await waitForSessionState(date, subject.id, "collecting");
   emitSession("collecting", sessionId);
   console.log(`${tag} session ${sessionId}: brief published, window open`);
@@ -480,15 +489,15 @@ export async function runSession(
     console.log(`  ${r.memberId}: ${r.stance} c=${r.confidence} → ${ok}${memo}`);
   }
 
-  await enqueueLifecycleJob("close_window", { sessionId });
+  await enqueueLifecycleJob("close_window", { sessionId }, rail.adminToken);
   await waitForSessionState(date, subject.id, "window_closed");
   emitSession("window_closed", sessionId);
 
-  await enqueueLifecycleJob("aggregate", { sessionId });
+  await enqueueLifecycleJob("aggregate", { sessionId }, rail.adminToken);
   await waitForSessionState(date, subject.id, "aggregated");
   emitSession("aggregated", sessionId);
 
-  await enqueueLifecycleJob("publish", { sessionId });
+  await enqueueLifecycleJob("publish", { sessionId }, rail.adminToken);
   await waitForSessionState(date, subject.id, "published");
   emitSession("published", sessionId);
 
@@ -540,7 +549,7 @@ async function main() {
   // along with the endpoint behind it — an ephemeral database is deleted or
   // inspected whole, and no bring-up may TRUNCATE rows it did not create.
   await runRegimeClassify(today, rail);
-  await admin("subject", SUBJECTS[0]);
+  await admin("subject", SUBJECTS[0], rail.adminToken);
 
   // Session 1: today's subject
   const s1 = await runSession(SUBJECTS[0], 1, { rail });

@@ -1,7 +1,7 @@
 import { mkdirSync, openSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createTui, color, hr, truncate, spinner, visibleLen, type Tui } from "./tui.ts";
+import { createTui, color, hr, truncate, spinner, type Tui } from "./tui.ts";
 import { resolveDemoEnv } from "./demo-env.ts";
 import { EXTERNAL_PG_FLAG, externalPgOverlayYaml, resolveExternalPg } from "./demo-external-pg.ts";
 import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "./demo-volumes.ts";
@@ -53,7 +53,27 @@ import {
   type StackEvent,
   type StackHostPorts,
 } from "../stack/index.ts";
-import { COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
+import { COMMITTEE_ROSTER_CAP, ROUTES } from "@robotmoney/contract";
+import {
+  columns,
+  columnWidth,
+  committeeProgress,
+  fmtCountdown,
+  fmtDuration,
+  memberGlyph,
+  onboardGlyph,
+  phaseGlyph,
+  setContainer,
+  setOnboardStep,
+  setStep,
+  STAGE_COLOR,
+  startOnboarding,
+  stepGlyph,
+  ticks,
+  type DemoState,
+  type UpcomingMember,
+} from "./demo-tui-view.ts";
+import { createReadinessPolling } from "./demo-readiness-polling.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..");
@@ -318,20 +338,27 @@ if (pgDataDir) {
 }
 
 // Admin dashboard password (/admin — the task-queue jobs dashboard, guarded by
-// ADMIN_TOKEN). A FRESH random secret every launch, set on the environment HERE —
-// before dockerEnv/compose interpolation and before any child process or the
-// dynamically-imported committee session driver reads it — so the api container
-// and every internal admin caller (the session driver's admin(), onboarding
-// activate, rmpc-release-e2e) authenticate with the SAME value. It is printed
-// ONLY to the interactive TUI
-// (see render()): never passed to log(), never serialized by writeStateFile()
-// (demo-state.json), and never printed in the plain non-TUI READY block.
-// Both secrets are minted by the shared stack config's
-// generateStackCredentials() (a FUNCTION, never executed on import) so the demo
-// and every other consumer of the stack mint them identically.
+// ADMIN_TOKEN). A FRESH random secret every launch. Issue #456: this used to
+// be published by mutating process.env.ADMIN_TOKEN on THIS process, so every
+// same-process reader (the dynamically-imported committee session driver's
+// admin()/rosterMembers()/existingMemberNames(), agent.ts's enroll()) picked
+// it up implicitly off the global — the exact "module-level or process.env
+// global mutable state" shape the 2026-07-14 maintainability review flagged.
+// It is now threaded EXPLICITLY instead: every in-process consumer takes an
+// `adminToken` parameter (sessionRail.adminToken below, and the two
+// runOnboardingEvalWithRetry call sites), and every genuine CHILD PROCESS
+// that needs it (the CI committee-session driver, the browser checks, the
+// rmpc-release-e2e driver, the starter-committee-agent exerciser) gets it as
+// an explicit `ADMIN_TOKEN: adminPassword` entry in that spawn's own env
+// object — never via `...process.env` inheriting a value this process
+// happened to have mutated onto itself. It is printed ONLY to the
+// interactive TUI (see render()): never passed to log(), never serialized by
+// writeStateFile() (demo-state.json), and never printed in the plain non-TUI
+// READY block. Both secrets are minted by the shared stack config's
+// generateStackCredentials() (a FUNCTION, never executed on import) so the
+// demo and every other consumer of the stack mint them identically.
 const credentials = generateStackCredentials();
 const adminPassword = credentials.adminToken;
-process.env.ADMIN_TOKEN = adminPassword;
 
 // Analytics-provider bearer credential (issue #106). The worker's analytics
 // updater jobs submit computed outputs through the authenticated
@@ -473,52 +500,14 @@ const startTime = Date.now();
 const ts = () => new Date().toISOString();
 
 // --- DemoState (drives the TUI panes) -------------------------------------
-type Phase = "pending" | "building" | "starting" | "healthy" | "failed";
-type StepStatus = "pending" | "running" | "done" | "failed";
-interface ResearchEntry { id: number; kind: string; state: "queued" | "running" | "done"; asof?: string; at?: string; note: string; }
-interface MemberState { stage: "connect" | "fetch" | "thinking" | "reporting" | "waiting" | "done" | "absent"; stance?: string; confidence?: number; }
-// Local structural mirrors of the committee session driver's types
-// (scripts/lib/committee/session.ts SessionProgress / agent.ts
-// OnboardedMemberHome). The driver is loaded via a dynamic import() (untyped)
-// so the driver's module-load reads BACKEND_URL AFTER it is set below; these
-// local aliases keep our annotations decoupled from that dynamic boundary.
-type SessionProgress = (ev:
-  | { type: "session"; state: string; sessionId?: number; subject: string; date?: string }
-  | { type: "member"; memberId: string; stage: MemberState["stage"]; stance?: string; confidence?: number }
-) => void;
-// A real-onboarded member's persistent container HOME (its rmpc keystore +
-// stored token) and the owner-held keystore passphrase (issue #361 Phase 3).
+// The state shape, its transitions, and the pure display helpers now live in
+// ./demo-tui-view.ts (issue #456) — this file just owns the ONE instance for
+// this boot and threads it through. Local structural mirror of the committee
+// session driver's OnboardedMemberHome (agent.ts). The driver is loaded via a
+// dynamic import() (untyped) so the driver's module-load reads BACKEND_URL
+// AFTER it is set below; this local alias keeps our annotations decoupled
+// from that dynamic boundary.
 type OnboardedMemberHome = { volume: string; passphrase?: string };
-// Per-subject committee pane. Each subject (woon, mav, …) runs on its OWN schedule
-// and gets its OWN pane, so the TUI shows them side by side.
-interface CommitteeState {
-  subjectName: string;
-  sessionState: string;
-  sessionId?: number;
-  members: Record<string, MemberState>;
-  publishedCount: number;
-  history: { date: string; synthesis: string }[];
-  nextAt: number; // epoch-ms of this subject's next session; 0 = running now
-}
-// Prospective committee-member onboarding, shown as a full-width checklist strip.
-// The steps mirror the real join gates; session/memo/admitted flip to done when the
-// new member is observed participating (take + memo) in a live session.
-type OnboardStepStatus = "pending" | "running" | "done" | "failed";
-interface OnboardStep { key: string; status: OnboardStepStatus; }
-interface OnboardState { memberId: string; name: string; steps: OnboardStep[]; }
-// A member scheduled to be admitted in the future, with the epoch-ms of its admission
-// so the TUI can render a live countdown.
-interface UpcomingMember { memberId: string; name: string; at: number; }
-interface DemoState {
-  services: { name: string; url: string }[];
-  containers: { name: string; phase: Phase; detail?: string }[];
-  steps: { name: string; status: StepStatus }[];
-  research: ResearchEntry[];
-  committees: Record<string, CommitteeState>; // keyed by subject id; populated once SUBJECTS is imported
-  onboarded: OnboardState[]; // every prospective member that has entered onboarding — kept in the pane with its live status checks
-  upcoming: UpcomingMember[]; // scheduled future admissions, each with a countdown to its turn
-  messages: string[];
-}
 // The route table, rebuilt once the api's host port is known. Before that the
 // base is "" and every row says so rather than rendering a link to a port
 // nobody has been given — Docker assigns it when the container starts, which is
@@ -560,39 +549,15 @@ const state: DemoState = {
   messages: [],
 };
 
-function setContainer(name: string, phase: Phase, detail?: string): void {
-  const c = state.containers.find((x) => x.name === name);
-  if (c) { c.phase = phase; if (detail !== undefined) c.detail = detail; }
-}
-function setStep(name: string, status: StepStatus): void {
-  const s = state.steps.find((x) => x.name === name);
-  if (s) s.status = status;
-}
-// The prospective-member join checklist, in order — tracks docs/architecture.md
-// §11.2 exactly. connect→claim are driven by the real-inference eval harness's
-// observed step-state record (scripts/lib/onboarding-eval.ts): a vanilla
-// OpenCode agent container works these out for itself from the canonical
-// prompt with real inference, no scripting (§11 R8). session/memo/admitted
-// flip when the newly-admitted member is separately observed submitting a
-// signed take + posting a memo in a live committee session (via
-// committeeProgress) — the SAME mechanism that already drives these three for
-// the long-standing hardcoded roster, since the eval's observe-only design has
-// no visibility into ongoing session participation (see onboarding-eval.ts's
-// module doc comment).
-const ONBOARD_STEPS = ["connect", "discover", "toolchain", "apply", "approve", "claim", "session", "memo", "admitted"];
-// Begin (or resume) a member's join checklist. The member is appended to the persistent
-// onboarded list so its status checks stay in the pane after admission, and it is dropped
-// from the upcoming queue now that its turn has arrived.
-function startOnboarding(memberId: string, name: string): void {
-  if (!state.onboarded.some((o) => o.memberId === memberId)) {
-    state.onboarded.push({ memberId, name, steps: ONBOARD_STEPS.map((key) => ({ key, status: "pending" as OnboardStepStatus })) });
-  }
-  state.upcoming = state.upcoming.filter((u) => u.memberId !== memberId);
-}
-function setOnboardStep(memberId: string, key: string, status: OnboardStepStatus): void {
-  const step = state.onboarded.find((o) => o.memberId === memberId)?.steps.find((s) => s.key === key);
-  if (step) step.status = status;
-}
+// setContainer / setStep / startOnboarding / setOnboardStep (and the
+// ONBOARD_STEPS checklist they drive) now live in ./demo-tui-view.ts — every
+// call site below passes `state` explicitly (e.g.
+// `setContainer(state, "postgres", "healthy")`). The checklist tracks
+// docs/architecture.md §11.2 exactly: connect→claim are driven by the
+// real-inference eval harness's observed step-state record
+// (scripts/lib/onboarding-eval.ts), and session/memo/admitted flip when the
+// newly-admitted member is separately observed submitting a signed take +
+// posting a memo in a live committee session (via committeeProgress).
 
 // --- Logging --------------------------------------------------------------
 // Orchestrator narration: always append a timestamped line to the log file; in
@@ -874,260 +839,46 @@ async function expectRunFailure(cmd: string[], cwd: string, env: Record<string, 
   if (code === 0) throw new Error(`${label} unexpectedly exited 0`);
 }
 
-// --- Legacy research-queue polling (observability cleanup debt) ------------
-// D25 moved regime/research cadence to the independent analytics-producer.
-// These polls still read retired regime.classify/research.refresh queue rows for
-// historical TUI compatibility; they neither observe nor control producer runs.
-// Producer-native run/cadence telemetry must replace this view. We poll over
-// `docker compose exec -T postgres psql`. The `jobs` table carries the
-// honest lifecycle state (pending→running→succeeded/failed); `job_runs` only ever
-// holds terminal rows (see worker/loop.ts), so we read state from `jobs` and join
-// job_runs for the finished timestamp/error. Notes for finished runs are fetched
-// once from the dashboard API (what actually landed). Fully defensive: any query
-// failure is logged and skipped — it never crashes the TUI.
-const researchNotes = new Map<number, string>();
-// Legacy countdown state. All consumer analytics schedules are now forced
-// disabled, so this normally stays empty; it must not be described as the
-// producer's next fire time.
-interface NextRun { secondsUntil: number; fetchedAt: number; }
-const nextRuns: Record<string, NextRun> = {};
-function secsUntilNext(kind: string): number | null {
-  const nr = nextRuns[kind];
-  if (!nr) return null;
-  return Math.max(0, Math.round(nr.secondsUntil - (Date.now() - nr.fetchedAt) / 1000));
-}
-// Both legacy polls below read the queue tables directly. With the ephemeral
-// container that is `docker compose exec -T postgres psql`; with --external-pg
-// there is no container to exec into, so a one-shot postgres:17-alpine client
-// is run instead (the same image the ephemeral service uses, so it is usually
-// already local; the first poll pulls it if not, and these polls are defensive
-// — a failure is logged and skipped either way).
-//
-// The URL crosses into the container by `-e DATABASE_URL` with NO value, i.e.
-// inherited from dockerEnv, so the managed server's password never appears in
-// this host's process list the way `-e DATABASE_URL=<url>` would put it there.
-function psqlQuery(q: string): Bun.SyncSubprocess {
-  const argv = externalPg.enabled
-    ? ["docker", "run", "--rm", "-e", "DATABASE_URL", "postgres:17-alpine", "sh", "-c",
-       `psql "$DATABASE_URL" -tAF'|' -c ${JSON.stringify(q)}`]
-    : ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", DB_USER, "-d", DB_NAME, "-tAF", "|", "-c", q];
-  return Bun.spawnSync(argv, { cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe" });
-}
-function mapJobState(status: string): ResearchEntry["state"] {
-  if (status === "pending") return "queued";
-  if (status === "running") return "running";
-  return "done"; // succeeded | failed | dead
-}
-async function fetchResearchNote(id: number, kind: string, failed: boolean, err: string): Promise<void> {
-  if (failed) { researchNotes.set(id, `failed: ${err.split("\n")[0] || "error"}`); return; }
-  try {
-    // Historical kind-scoped summary for a terminal legacy queue row.
-    let note = "updated";
-    if (kind === "regime.classify") {
-      const snap = await fetch(`${backendUrl}${ROUTES.dashboards.regimeSnapshots}?range=1`).then((r) => (r.ok ? r.json() : null));
-      const latest = snap?.latest;
-      note = latest
-        ? `regime → ${latest.regime ?? "?"}${latest.composite != null ? ` ${Number(latest.composite).toFixed(2)}` : ""}`
-        : "regime updated";
-    } else if (kind === "research.refresh") {
-      const sig = await fetch(`${backendUrl}${routePath(ROUTES.dashboards.researchSignal, { key: researchKeys[0] })}`).then((r) => (r.ok ? r.json() : null));
-      note = sig?.signalKey ? `research: ${sig.signalKey}` : "research updated";
-    }
-    researchNotes.set(id, `${note} (report written)`);
-  } catch (e) {
-    log(`research note fetch failed for job ${id}: ${e instanceof Error ? e.message : e}`);
-  }
-}
-async function pollResearch(): Promise<void> {
-  const q =
-    "SELECT j.id, j.kind, j.status, " +
-    "COALESCE(to_char(jr.finished_at,'HH24:MI:SS'), to_char(j.run_after,'HH24:MI:SS')), " +
-    "COALESCE(jr.error,'') " +
-    "FROM jobs j LEFT JOIN job_runs jr ON jr.job_id = j.id " +
-    "WHERE j.kind IN ('regime.classify','research.refresh') ORDER BY j.id DESC LIMIT 8";
-  const r = psqlQuery(q);
-  if (r.exitCode !== 0) { log(`research poll query failed (exit ${r.exitCode})`); return; }
-  const rows = new TextDecoder().decode(r.stdout).trim().split("\n").filter(Boolean);
-  const entries: ResearchEntry[] = [];
-  for (const row of rows) {
-    const [idStr, kind, status, at, err] = row.split("|");
-    const id = Number(idStr);
-    if (!Number.isFinite(id)) continue;
-    const st = mapJobState(status);
-    const failed = status === "failed" || status === "dead";
-    // First time we see a finished run, fetch its one-line summary from the API.
-    if (st === "done" && !researchNotes.has(id)) {
-      researchNotes.set(id, failed ? "failed" : "done — fetching summary…");
-      void fetchResearchNote(id, kind, failed, err);
-    }
-    const note = st === "done" ? (researchNotes.get(id) ?? "done") : st === "running" ? "running…" : "queued";
-    entries.push({ id, kind, state: st, at, note });
-  }
-  state.research = entries;
-}
-// Poll retired consumer schedule rows for backward-compatible display only.
-// This is not producer-native cadence telemetry. Defensive: any failure is
-// logged and skipped.
-async function pollNextRuns(): Promise<void> {
-  const q =
-    "SELECT kind, MIN(GREATEST(0, EXTRACT(EPOCH FROM (next_run_at - now()))))::int " +
-    "FROM job_schedules WHERE enabled AND next_run_at IS NOT NULL " +
-    "AND kind IN ('regime.classify','research.refresh') GROUP BY kind";
-  const r = psqlQuery(q);
-  if (r.exitCode !== 0) { log(`next-run poll query failed (exit ${r.exitCode})`); return; }
-  const rows = new TextDecoder().decode(r.stdout).trim().split("\n").filter(Boolean);
-  for (const row of rows) {
-    const [kind, secs] = row.split("|");
-    const n = Number(secs);
-    if (kind && Number.isFinite(n)) nextRuns[kind] = { secondsUntil: n, fetchedAt: Date.now() };
-  }
-}
-let researchTimer: ReturnType<typeof setTimeout> | null = null;
-function startResearchPolling(): void {
-  const tick = async () => {
-    try { await pollResearch(); } catch (e) { log(`research poll error: ${e instanceof Error ? e.message : e}`); }
-    try { await pollNextRuns(); } catch (e) { log(`next-run poll error: ${e instanceof Error ? e.message : e}`); }
-    researchTimer = setTimeout(() => void tick(), 4000);
-  };
-  void tick();
-}
-
-// --- Container health polling ---------------------------------------------
-// Actively check the REAL docker container status (not just the HTTP /health
-// endpoints) so a crash / restart-loop / unhealthy Docker healthcheck surfaces in
-// the Startup pane. Polls `docker compose ps` and maps each service's State+Health
-// to a pane phase: ✓ healthy · ✗ errored · spinner while starting/checking. Only
-// postgres declares a Docker healthcheck; for api/worker the signal is process
-// state (running vs exited/restarting) — i.e. the "absence of errors". Fully
-// defensive: any failure is logged and skipped, never crashing the TUI.
-interface PsEntry { Service?: string; Name?: string; State?: string; Health?: string; ExitCode?: number; }
-function classifyContainer(e: PsEntry): { phase: Phase; detail?: string } {
-  const st = (e.State ?? "").toLowerCase();
-  const h = (e.Health ?? "").toLowerCase();
-  if (st === "running") {
-    if (h === "starting") return { phase: "starting", detail: "health: starting" };
-    if (h === "unhealthy") return { phase: "failed", detail: "unhealthy" };
-    return { phase: "healthy", detail: h || undefined }; // healthy, or no healthcheck defined
-  }
-  if (st === "restarting") return { phase: "failed", detail: "restarting" };
-  if (st === "exited" || st === "dead") return { phase: "failed", detail: `exited${e.ExitCode != null ? ` ${e.ExitCode}` : ""}` };
-  if (st === "created" || st === "paused") return { phase: "starting", detail: st };
-  return { phase: "starting", detail: st || "checking" };
-}
-async function pollContainerHealth(): Promise<void> {
-  healthChecking = true;
-  try {
-    // Async spawn (not spawnSync) so the render loop keeps animating the refresh
-    // spinner while docker runs. `-a` includes stopped/exited containers.
-    const proc = Bun.spawn(["docker", "compose", "ps", "-a", "--format", "json"], {
-      cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe",
-    });
-    const out = await new Response(proc.stdout).text();
-    await proc.exited;
-    if (proc.exitCode !== 0) { log(`container health poll failed (exit ${proc.exitCode})`); return; }
-    // Compose emits either NDJSON (one object per line, v2.21+) or a JSON array.
-    const entries: PsEntry[] = [];
-    const trimmed = out.trim();
-    if (trimmed.startsWith("[")) {
-      try { entries.push(...(JSON.parse(trimmed) as PsEntry[])); } catch { /* skip */ }
-    } else {
-      for (const line of trimmed.split("\n").filter(Boolean)) {
-        try { entries.push(JSON.parse(line) as PsEntry); } catch { /* skip malformed line */ }
-      }
-    }
-    for (const c of state.containers) {
-      const e = entries.find((x) => x.Service === c.name || x.Name?.includes(`-${c.name}-`) || x.Name?.includes(`_${c.name}_`));
-      if (!e) { setContainer(c.name, "failed", "not found"); continue; }
-      const { phase, detail } = classifyContainer(e);
-      setContainer(c.name, phase, detail ?? "");
-    }
-  } catch (e) {
-    log(`container health poll error: ${e instanceof Error ? e.message : e}`);
-  } finally {
-    healthChecking = false;
-  }
-}
-let healthTimer: ReturnType<typeof setTimeout> | null = null;
-function startHealthPolling(): void {
-  const tick = async () => {
-    await pollContainerHealth();
-    healthTimer = setTimeout(() => void tick(), 3000);
-  };
-  void tick();
-}
+// --- Readiness-probe polling (research queue + container health) ----------
+// Moved to ./demo-readiness-polling.ts (issue #456): legacy research-queue
+// polling (D25 moved regime/research cadence to the independent
+// analytics-producer; these polls still read the retired
+// regime.classify/research.refresh queue rows for historical TUI
+// compatibility) and container health polling (the REAL docker container
+// status, not just the HTTP /health endpoint). One instance per boot, created
+// here once every dependency it needs (dockerEnv, the DB credentials, the
+// live backendUrl) is in scope; getBackendUrl is a getter (not a snapshot)
+// because backendUrl is not resolved until applyHostPorts() runs, later in
+// main().
+const readinessPolling = createReadinessPolling({
+  repoRoot,
+  dockerEnv,
+  externalPgEnabled: externalPg.enabled,
+  dbUser: DB_USER,
+  dbName: DB_NAME,
+  researchKeys,
+  getBackendUrl: () => backendUrl,
+  state,
+  log,
+});
 
 // --- TUI render -----------------------------------------------------------
 let tui: Tui | undefined;
 let frame = 0;
-let healthChecking = false; // true while a docker-container health poll is in flight
+// readinessPolling.isHealthChecking() replaces the old module-level
+// healthChecking flag — true while a docker-container health poll is in flight.
 
-function fmtDuration(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
-}
-// Seconds → "m:ss" for the pane countdowns; "—" when unknown (not yet polled).
-const fmtCountdown = (secs: number | null): string => (secs == null ? "—" : fmtDuration(secs * 1000));
-
-function phaseGlyph(p: Phase): string {
-  if (p === "building") return color("33", spinner(frame));
-  if (p === "starting") return color("36", spinner(frame));
-  if (p === "healthy") return color("32", "✓");
-  if (p === "failed") return color("31", "✗");
-  return color("2", "·"); // pending
-}
-function stepGlyph(s: StepStatus): string {
-  return s === "done" ? color("32", "✓") : s === "failed" ? color("31", "✗") : s === "running" ? color("33", spinner(frame)) : color("2", "·");
-}
-function onboardGlyph(s: OnboardStepStatus): string {
-  return s === "done" ? color("32", "✓") : s === "failed" ? color("31", "✗") : s === "running" ? color("33", spinner(frame)) : color("2", "·");
-}
-// Three ticks that advance ONLY on the observable queued→running→done job states.
-// They are NOT fabricated fetch/process/report sub-steps — the comment and labels
-// stay honest about that granularity (we only observe the queue transitions).
-function ticks(st: ResearchEntry["state"]): string {
-  const on = color("32", "●"), off = color("2", "○");
-  const n = st === "queued" ? 1 : st === "running" ? 2 : 3;
-  return [0, 1, 2].map((i) => (i < n ? on : off)).join("");
-}
-const STAGE_COLOR: Record<MemberState["stage"], string> = {
-  connect: "36", fetch: "34", thinking: "33", reporting: "35", waiting: "36", done: "32", absent: "2",
-};
-function memberGlyph(m: MemberState): string {
-  if (m.stage === "done") return color("32", "✓");
-  if (m.stage === "absent") return color("2", "✗");
-  if (m.stage === "waiting") return color("36", "◔");
-  return color(STAGE_COLOR[m.stage], spinner(frame));
-}
+// fmtDuration / fmtCountdown / phaseGlyph / stepGlyph / onboardGlyph / ticks /
+// STAGE_COLOR / memberGlyph / columnWidth / columns now live in
+// ./demo-tui-view.ts (issue #456) — imported above. The glyph functions take
+// `frame` explicitly (this module's own spinner-frame counter) instead of
+// closing over it.
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
-// Equal-width column width for k side-by-side panes (accounting for " │ " gaps).
-function columnWidth(width: number, k: number): number {
-  return Math.floor((width - 3 * (k - 1)) / k);
-}
-// N side-by-side columns, joined by vertical rules; each cell truncated/padded to
-// an equal width. Rows past a column's content are blank.
-function columns(panes: string[][], width: number): string[] {
-  const k = panes.length;
-  const gap = " │ ";
-  const colW = Math.max(12, columnWidth(width, k));
-  const n = Math.max(0, ...panes.map((p) => p.length));
-  const out: string[] = [];
-  for (let i = 0; i < n; i++) {
-    const cells = panes.map((p) => {
-      const cell = truncate(p[i] ?? "", colW);
-      return cell + " ".repeat(Math.max(0, colW - visibleLen(cell)));
-    });
-    out.push(cells.join(gap));
-  }
-  return out;
-}
 
 function renderResearch(height: number): string[] {
   const out = [
     color("1", "Research") +
-      color("2", `  next regime ${fmtCountdown(secsUntilNext("regime.classify"))} · research ${fmtCountdown(secsUntilNext("research.refresh"))}`),
+      color("2", `  next regime ${fmtCountdown(readinessPolling.secsUntilNext("regime.classify"))} · research ${fmtCountdown(readinessPolling.secsUntilNext("research.refresh"))}`),
   ];
   out.push(color("2", "kind                 state    detail"));
   for (const e of state.research.slice(0, Math.max(0, height - 2))) {
@@ -1149,7 +900,7 @@ function renderCommittee(subjectId: string, height: number): string[] {
   for (const id of ids) {
     const m = c.members[id];
     const stance = m.stance ? color(STAGE_COLOR[m.stage] || "37", ` ${m.stance}${m.confidence != null ? ` c=${m.confidence}` : ""}`) : "";
-    out.push(`${memberGlyph(m)} ${cap(id).padEnd(9)} ${m.stage.padEnd(9)}${stance}`);
+    out.push(`${memberGlyph(m, frame)} ${cap(id).padEnd(9)} ${m.stage.padEnd(9)}${stance}`);
   }
   if (ids.length === 0) out.push(color("2", "  (waiting…)"));
   if (c.history.length) {
@@ -1180,9 +931,9 @@ function render(): string[] {
   lines.push(`  ${color("33", "Admin pass".padEnd(10))} ${color("1;33", adminPassword)}`);
 
   // Startup pane
-  lines.push(hr(W, healthChecking ? `Startup ${spinner(frame)}` : "Startup"));
-  lines.push("  " + state.containers.map((c) => `${phaseGlyph(c.phase)} ${c.name}${c.detail ? color("2", `(${c.detail})`) : ""}`).join("   "));
-  lines.push("  " + state.steps.map((s) => `${stepGlyph(s.status)} ${s.name}`).join("   "));
+  lines.push(hr(W, readinessPolling.isHealthChecking() ? `Startup ${spinner(frame)}` : "Startup"));
+  lines.push("  " + state.containers.map((c) => `${phaseGlyph(c.phase, frame)} ${c.name}${c.detail ? color("2", `(${c.detail})`) : ""}`).join("   "));
+  lines.push("  " + state.steps.map((s) => `${stepGlyph(s.status, frame)} ${s.name}`).join("   "));
 
   // Onboarding strip (full width): every prospective member keeps its join checklist
   // after admission (status checks stay visible), plus a queue of upcoming members with
@@ -1195,7 +946,7 @@ function render(): string[] {
     const hidden = state.onboarded.length - MAX_SHOWN;
     if (hidden > 0) lines.push(color("2", `  (+${hidden} earlier admitted — checks retained)`));
     for (const ob of state.onboarded.slice(-MAX_SHOWN)) {
-      const cells = ob.steps.map((s) => `${onboardGlyph(s.status)} ${s.key}`).join("  ");
+      const cells = ob.steps.map((s) => `${onboardGlyph(s.status, frame)} ${s.key}`).join("  ");
       lines.push(truncate(`  ${color("36", ob.name.padEnd(10))} ${color("2", `(${ob.memberId})`)}  ${cells}`, W));
     }
   }
@@ -1241,40 +992,9 @@ function render(): string[] {
   return [...lines, ...footer];
 }
 
-// --- Committee session progress → DemoState -------------------------------
-// Maps the additive runSession/runAgent callback events onto committee state and
-// logs milestones. All member stages here are REAL pipeline events emitted by the
-// agent (connect/fetch/thinking/reporting/done) — no fabricated sub-steps.
-function committeeProgress(subjectId: string): SessionProgress {
-  return (ev) => {
-    const c = state.committees[subjectId];
-    if (!c) return;
-    if (ev.type === "session") {
-      c.sessionState = ev.state;
-      if (ev.sessionId) c.sessionId = ev.sessionId;
-      // Window closed → present members have submitted and now wait for synthesis.
-      if (ev.state === "window_closed") {
-        for (const id of Object.keys(c.members)) if (c.members[id].stage === "done") c.members[id].stage = "waiting";
-      }
-      log(`committee ${subjectId}: ${ev.state}`);
-    } else {
-      c.members[ev.memberId] = { stage: ev.stage, stance: ev.stance, confidence: ev.confidence };
-      // If this is an onboarding prospect, reflect its first live participation
-      // (submitting a take + posting a memo) in that member's join checklist.
-      const ob = state.onboarded.find((o) => o.memberId === ev.memberId);
-      if (ob && ev.stage !== "absent") {
-        if (ev.stage === "done") {
-          setOnboardStep(ob.memberId, "session", "done");
-          setOnboardStep(ob.memberId, "memo", "done");
-          setOnboardStep(ob.memberId, "admitted", "done");
-          log(`onboarding ${ev.memberId}: admitted — participated + pushed memo`);
-        } else {
-          setOnboardStep(ob.memberId, "session", "running");
-        }
-      }
-    }
-  };
-}
+// committeeProgress (maps the additive runSession/runAgent callback events
+// onto committee state) now lives in ./demo-tui-view.ts — every call site
+// passes `state` and `log` explicitly: `committeeProgress(state, subject.id, log)`.
 
 // --- Orchestration --------------------------------------------------------
 async function main(): Promise<void> {
@@ -1319,33 +1039,33 @@ async function main(): Promise<void> {
     if (phase === "build") {
       if (status === "start") {
         log("building compose images…");
-        for (const c of state.containers) setContainer(c.name, "building");
+        for (const c of state.containers) setContainer(state, c.name, "building");
       } else {
-        for (const c of state.containers) setContainer(c.name, "pending");
+        for (const c of state.containers) setContainer(state, c.name, "pending");
       }
     } else if (phase === "postgres") {
       if (status === "start") {
         log("starting postgres…");
-        setContainer("postgres", "starting");
+        setContainer(state, "postgres", "starting");
       } else {
-        setContainer("postgres", "healthy");
+        setContainer(state, "postgres", "healthy");
         log("postgres healthy");
       }
     } else if (phase === "migrate") {
       if (status === "start") {
         log("running migrations…");
-        setStep("migrate", "running");
+        setStep(state, "migrate", "running");
       } else {
-        setStep("migrate", "done");
+        setStep(state, "migrate", "done");
       }
     } else if (phase === "services") {
       if (status === "start") {
         log("starting api, worker lanes (committee/analytics/research)…");
-        for (const n of ["api", ...WORKER_LANES]) setContainer(n, "starting");
+        for (const n of ["api", ...WORKER_LANES]) setContainer(state, n, "starting");
       } else {
         // No /health endpoint on a lane — `up` ⇒ running (unchanged semantics).
-        for (const n of WORKER_LANES) setContainer(n, "healthy", "running");
-        setStep("api /health", "running");
+        for (const n of WORKER_LANES) setContainer(state, n, "healthy", "running");
+        setStep(state, "api /health", "running");
       }
     } else if (phase === "ports" && status === "done") {
       // The daemon has been asked what it published (`docker compose port`).
@@ -1353,8 +1073,8 @@ async function main(): Promise<void> {
       // on the health check — a distinction that is invisible otherwise.
       log(`host ports discovered: ${e.detail ?? "?"}`);
     } else if (phase === "health" && status === "done") {
-      setContainer("api", "healthy");
-      setStep("api /health", "done");
+      setContainer(state, "api", "healthy");
+      setStep(state, "api /health", "done");
       log("api healthy");
     }
   };
@@ -1407,14 +1127,14 @@ async function main(): Promise<void> {
   // refresh. It never enables or enqueues a consumer research job. A failure
   // throws because the seed + immediate research result are a required boot
   // step, not best effort.
-  setStep("edgar seed", "running");
+  setStep(state, "edgar seed", "running");
   log("ingesting EDGAR/MNA seed + enabling the research schedule…");
   await stack.composeAsync(
     ["run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "seed"],
     "edgar seed bootstrap (independent producer)",
     { stdout: outFd, stderr: errFd },
   );
-  setStep("edgar seed", "done");
+  setStep(state, "edgar seed", "done");
   log("EDGAR/MNA seed ingested — research.refresh is now eligible");
 
   if (process.env.CI) {
@@ -1435,7 +1155,7 @@ async function main(): Promise<void> {
     // same compose model this boot created, or the volume-hash check prompts
     // to recreate live data (see scripts/agent/member-agent.ts).
     await run(["bun", "run", "scripts/lib/committee/session.ts"], repoRoot,
-      { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "committee session");
+      { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "committee session");
 
     // Issue #209: exercise the repo-native single-member starter against this
     // required per-PR live stack. Its --e2e mode only provisions isolated
@@ -1475,7 +1195,7 @@ async function main(): Promise<void> {
 
     console.log("[demo] running browser checks…");
     await run(["bun", "run", "test:browser"], repoRoot,
-      { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "browser checks");
+      { ...process.env, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword } as Record<string, string>, "browser checks");
 
     // LIVE steady-state smoke (issue #128, now the ONLY CI path since issue #147
     // removed DEMO_HERMETIC and the hermetic RPC guard): assert >=2 published
@@ -1493,7 +1213,7 @@ async function main(): Promise<void> {
     if (process.env.RMPC_RELEASE_E2E === "1") {
       console.log("\n[demo] running rmpc release e2e driver…");
       await run(["bun", "run", "scripts/rmpc-release-e2e.ts"], repoRoot,
-        { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl } as Record<string, string>, "rmpc release e2e");
+        { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword } as Record<string, string>, "rmpc release e2e");
     }
 
     // Additive, env-gated (Stage 7, §11 R8, docs/plans/onboarding-ic-workflow.md):
@@ -1628,9 +1348,9 @@ async function main(): Promise<void> {
   log(`READY — Site ${backendUrl}/  ·  state ${stateFile}`);
 
   // Research pane: begin polling the worker's real job queue (TUI mode only).
-  if (tuiActive) startResearchPolling();
+  if (tuiActive) readinessPolling.startResearchPolling();
   // Startup pane: begin live-checking the real docker container status (TUI only).
-  if (tuiActive) startHealthPolling();
+  if (tuiActive) readinessPolling.startHealthPolling();
 
   // Frontend check — ONCE at startup, non-fatal (unchanged behaviour). Runs in a
   // child process, so its process.exit on failure can't take the demo down.
@@ -1743,10 +1463,18 @@ async function main(): Promise<void> {
   // present member participates from its OWN container via the shared
   // runMemberAgent() primitive; this process only opens/closes session windows
   // and observes. resolveModelConfig() was already validated at boot.
+  //
+  // adminToken (issue #456): threaded explicitly instead of relying on the
+  // now-removed process.env.ADMIN_TOKEN mutation. session.ts's runSession()
+  // and agent.ts's enroll()/getAdminHeaders() both read rail.adminToken
+  // before falling back to process.env, so this is what makes the
+  // dynamically-imported (same-process) committee session driver still
+  // authenticate correctly.
   const sessionRail = {
     ...producerRail,
     modelConfig: resolveModelConfig(process.env),
     onboardedHomes,
+    adminToken: adminPassword,
   };
 
   // ── Adopt the personas this database already knows ────────────────────────
@@ -1767,7 +1495,7 @@ async function main(): Promise<void> {
   // Only demo characters are adopted: a member with no committed identity is
   // somebody else's, and inventing a key for them is exactly the duplicate-making
   // behaviour this replaces.
-  const dbRoster = await e2e.rosterMembers();
+  const dbRoster = await e2e.rosterMembers(undefined, adminPassword);
   if (dbRoster === null) {
     log("roster unreadable at boot — continuing with the built-in members only (no personas adopted)");
   } else {
@@ -1805,7 +1533,7 @@ async function main(): Promise<void> {
       try {
         const res = await e2e.runSession(subject, due.runs + 1, {
           rail: sessionRail,
-          onProgress: tuiActive ? committeeProgress(subject.id) : undefined,
+          onProgress: tuiActive ? committeeProgress(state, subject.id, log) : undefined,
         });
         c.publishedCount++;
         const synth: string = res?.pub?.session?.synthesis ?? "";
@@ -1894,7 +1622,7 @@ async function main(): Promise<void> {
       // taken while this one sleeps — so this only ever skips work early, never
       // admits anything it should not.
       const upNext = plannedNewcomer(n);
-      if (upNext && !decideAdmission(upNext.identity.name, await e2e.existingMemberNames()).admit) {
+      if (upNext && !decideAdmission(upNext.identity.name, await e2e.existingMemberNames(undefined, adminPassword)).admit) {
         log(`onboarding ${upNext.identity.name} skipped — already on the roster (this database has been onboarded before)`);
         continue;
       }
@@ -1924,7 +1652,7 @@ async function main(): Promise<void> {
       // Checked here, immediately before admitting, rather than once at start-up:
       // an admission takes minutes, and a name can be taken by an operator (or by
       // a second stack) in the meantime.
-      const decision = decideAdmission(identity.name, await e2e.existingMemberNames());
+      const decision = decideAdmission(identity.name, await e2e.existingMemberNames(undefined, adminPassword));
       if (!decision.admit) {
         state.upcoming = [];
         log(
@@ -1947,8 +1675,8 @@ async function main(): Promise<void> {
         log(`onboarding ${identity.name} skipped — roster full (${active}/${COMMITTEE_ROSTER_CAP})`);
         continue;
       }
-      startOnboarding(identity.runId, identity.name); // append to the persistent pane + drop from upcoming
-      setOnboardStep(identity.runId, "connect", "running"); // container is about to launch
+      startOnboarding(state, identity.runId, identity.name); // append to the persistent pane + drop from upcoming
+      setOnboardStep(state, identity.runId, "connect", "running"); // container is about to launch
       // Owner-held for this member's LIFETIME in this demo (issue #361 Phase
       // 3): the same passphrase must unlock the keystore in every later
       // session run. Never logged; redacted from transcripts at the source.
@@ -2000,7 +1728,7 @@ async function main(): Promise<void> {
         // session/memo/admitted tail tracks real committee participation.
         for (const s of result.steps) {
           if (s.step === "session") continue;
-          setOnboardStep(entryId, s.step, s.status === "done" ? "done" : "pending");
+          setOnboardStep(state, entryId, s.step, s.status === "done" ? "done" : "pending");
         }
 
         if (!result.admitted) {
@@ -2011,7 +1739,7 @@ async function main(): Promise<void> {
           // all-green with nothing visibly red.
           const stalledOb = state.onboarded.find((o) => o.memberId === entryId);
           const stalledAt = stalledOb?.steps.find((s) => s.status !== "done");
-          if (stalledAt) setOnboardStep(entryId, stalledAt.key, "failed");
+          if (stalledAt) setOnboardStep(state, entryId, stalledAt.key, "failed");
           // Which KIND of failure this was is the whole point (§11.3 E4): a
           // refusal and a navigation failure look identical in the step strip
           // but mean opposite things about our own instructions. Any attempt
@@ -2044,7 +1772,7 @@ async function main(): Promise<void> {
         });
         e2e.MEMBERS.push({ memberId: result.memberId!, name: identity.name, lens, bias, present: true });
         admitted++; // paces the NEXT wait — skipped names must not count
-        setOnboardStep(entryId, "session", "running");
+        setOnboardStep(state, entryId, "session", "running");
         // Classified on the success path too, so every admission attempt leaves
         // the SAME outcome vocabulary in the log — a run that reads "admitted"
         // and one that reads "refused" are then directly comparable.
@@ -2068,7 +1796,7 @@ main().catch((err) => {
   if (tui) tui.stop();        // restore terminal FIRST (never leave escape junk)
   unpatchConsole();
   if (logFd !== undefined) { try { writeSync(logFd, `[${ts()}] startup failed: ${em}\n`); } catch {} }
-  for (const c of state.containers) if (c.phase === "starting" || c.phase === "building") setContainer(c.name, "failed");
+  for (const c of state.containers) if (c.phase === "starting" || c.phase === "building") setContainer(state, c.name, "failed");
   console.error("[demo] startup failed:", em);
   if (!cleaned) dumpDiagnostics();
   // CI tears down on failure; LOCAL never does — leave containers up for
