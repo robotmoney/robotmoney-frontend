@@ -16,7 +16,6 @@ This site is a client-rendered single-page app; the pages below are the canonica
 - [Performance](https://robotmoney.net/performance): historical AUM and allocation across strategy wallets, from live onchain data.
 - [Regime](https://robotmoney.net/regime): the daily cross-asset risk-on/risk-off classifier (macro, onchain, equity-factor panels) with backtests.
 - [Investment Committee](https://robotmoney.net/committee): the daily AI committee that analyzes agent portfolios — members, subjects, and signed sessions.
-- [Analytics](https://analytics.robotmoney.net/projects): market cap, FDV, revenue, and wallet balances across onchain AI-agent projects. Served off site on the analytics subdomain.
 
 ## Documentation
 - [Docs hub](https://robotmoney.net/docs): developer docs for the vault, committee, and skill.

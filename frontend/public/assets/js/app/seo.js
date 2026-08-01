@@ -61,10 +61,10 @@ const META = {
     title: "Agentic Economy Ecosystem — Robot Money",
     description: "Track market cap, FDV, revenue, and wallet balances across onchain AI agent projects and Zero Human Companies in the agent economy on Base.",
     // Kept out of the index while the table is backed by the development seed
-    // (issue #346). ANALYTICS in the nav points at analytics.robotmoney.net, and
-    // /projects is out of sitemap.xml, so this is the third of the three places
-    // that would otherwise still advertise it. `follow` so the page's own
-    // outbound links keep their value.
+    // (issue #346). /projects is also out of sitemap.xml, so this is the second
+    // of the two places that would otherwise advertise it. `follow` so the
+    // page's own outbound links keep their value. (The third was the ANALYTICS
+    // nav item, removed until that surface actually serves.)
     robots: "noindex, follow",
   },
   "/media": {

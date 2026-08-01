@@ -25,13 +25,16 @@
   <!-- Provenance (issue #346). The rows this table renders come from the
        development seed (backend/src/projects/demo-seed.ts, behind
        DEMO_SEED_PROJECTS), which synthesizes figures for real, named companies.
-       The published analytics surface is the analytics subdomain, which is where
-       ANALYTICS in the nav points. Remove this notice in the same change that
-       gives /api/projects a real source. -->
+       Remove this notice in the same change that gives /api/projects a real
+       source.
+
+       The pointer to analytics.robotmoney.net is GONE along with the nav item
+       it referred to: that surface does not serve yet, and sending a reader who
+       has just been told this data is synthetic to a dead link is the worst of
+       both. Restore both together when analytics is released. -->
   <p class="pj-status pj-provenance">
     Development data. These figures are seeded for development and are not a
-    published record of any company. The live analytics surface is
-    <a href="https://analytics.robotmoney.net/projects" target="_blank" rel="noopener noreferrer">analytics.robotmoney.net</a>.
+    published record of any company.
   </p>
 
   <!-- States -->
