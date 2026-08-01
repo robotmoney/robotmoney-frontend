@@ -26,12 +26,12 @@ import { mockVendorScripts } from "./vendor-scripts.ts";
 
 // ── Loud-skip guard (test-coverage-policy.md invariant 1) ──────────────────
 // scripts/lib/demo-main.ts always exports BACKEND_URL + ADMIN_TOKEN into the
-// environment before invoking `bun run test:browser` (the required e2e job's
-// "browser checks" step) — see lines ~111 (process.env.ADMIN_TOKEN = …) and
-// ~951-952 (run(["bun","run","test:browser"], …, { ...process.env,
-// BACKEND_URL: backendUrl }, …)). If either is missing here, this spec must
-// fail loudly at module load — never silently skip every test in this file
-// (which would print a false "0 failed" green while asserting nothing).
+// spawn env of `bun run test:browser` (the required e2e job's "browser
+// checks" step) — see its `run(["bun","run","test:browser"], …,
+// { ...process.env, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword }, …)`
+// call. If either is missing here, this spec must fail loudly at module load
+// — never silently skip every test in this file (which would print a false
+// "0 failed" green while asserting nothing).
 const BACKEND_URL = process.env.BACKEND_URL;
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 if (!BACKEND_URL || !ADMIN_TOKEN) {
