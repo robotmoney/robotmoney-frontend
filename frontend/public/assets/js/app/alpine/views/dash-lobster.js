@@ -3,6 +3,7 @@
 // GET /api/dashboards/coins feed and handles interactive sorting/formatting —
 // the backend (dash/lists.ts) already applies the default mcap-desc sort.
 import { api, ROUTES } from "../../lib/api.js";
+import { fmtUsdCompact } from "../lib/dash-format.js";
 
 export function registerDashLobsterView(Alpine) {
   Alpine.data("dashLobster", () => ({
@@ -66,12 +67,10 @@ export function registerDashLobsterView(Alpine) {
     },
 
     // ── formatting ──────────────────────────────────────────────────────
+    // issue #449: was `n >= 1e9` (raw signed value) — negative market caps
+    // in the B/M/K range fell through to the plain, unscaled branch.
     fmtUsd(n) {
-      if (n == null || !isFinite(n)) return "—";
-      if (n >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
-      if (n >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
-      if (n >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
-      return "$" + n.toFixed(0);
+      return fmtUsdCompact(n, { baseDecimals: 0 });
     },
     // Smart price precision (§5.9): more decimals the smaller the price gets,
     // so a sub-cent token still shows a meaningful figure.

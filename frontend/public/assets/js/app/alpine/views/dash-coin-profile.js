@@ -18,6 +18,7 @@
 // finer-grained series).
 import { api, ROUTES, path } from "../../lib/api.js";
 import { applyDashChartDefaults, dashChartOptions, dashLineDatasetDefaults } from "../lib/chart-theme.js";
+import { fmtUsdCompact } from "../lib/dash-format.js";
 
 const PERIODS = [
   { id: "7d", label: "7D", days: 7 },
@@ -104,16 +105,12 @@ export function registerCoinProfileView(Alpine) {
     },
 
     // ── formatting ──────────────────────────────────────────────────────────
+    // Doubles as this view's price formatter (used for both market cap/FDV/
+    // volume AND profile.priceUsd, which can be sub-cent) — smallPrecision
+    // preserves the >=1 -> 4dp / <1 -> 6dp smart precision (§5.9) a fixed
+    // 2dp base would round to "$0.00".
     fmtUsd(n) {
-      if (n == null || !isFinite(n)) return "—";
-      const abs = Math.abs(n);
-      if (abs >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
-      if (abs >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
-      if (abs >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
-      // Smart precision (§5.9): >=1 -> 4dp, else 6dp — a coin's price can be
-      // sub-cent, and a fixed 2dp would round it to "$0.00".
-      if (abs >= 1) return "$" + n.toFixed(4);
-      return "$" + n.toFixed(6);
+      return fmtUsdCompact(n, { smallPrecision: true });
     },
     fmtPct(n) {
       if (n == null || !isFinite(n)) return "—";

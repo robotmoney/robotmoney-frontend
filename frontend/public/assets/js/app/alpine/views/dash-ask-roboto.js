@@ -25,6 +25,7 @@
 // nothing). Every match, filter explanation, and comparison cell below is a
 // real field off a real tracked-agent row — never fabricated.
 import { api, ROUTES } from "../../lib/api.js";
+import { fmtUsdCompact } from "../lib/dash-format.js";
 
 // Recognized protocol_standard values (mirrors PROTOCOL_BADGE in
 // dash-agents.js) — a query token equal to one of these narrows the pool to
@@ -223,12 +224,7 @@ export function registerAskRobotoView(Alpine) {
 
     // ── formatting (same conventions as dash-agents.js) ──────────────────────
     fmtUsd(n) {
-      if (n == null || !isFinite(n)) return "—";
-      const abs = Math.abs(n);
-      if (abs >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
-      if (abs >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
-      if (abs >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
-      return "$" + n.toFixed(2);
+      return fmtUsdCompact(n);
     },
     fmtScore(n) {
       return n == null || !isFinite(n) ? "—" : n.toFixed(1);

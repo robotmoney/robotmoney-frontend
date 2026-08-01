@@ -4,6 +4,7 @@
 // server-side, dash/lists.ts) and handles the two toggle chips, the
 // chain-column auto-hide, and per-row explorer/copy affordances.
 import { api, ROUTES } from "../../lib/api.js";
+import { fmtUsdCompact } from "../lib/dash-format.js";
 
 // A small, honest set of known chains → explorer base URL. Anything else
 // renders no explorer link rather than guessing a wrong one.
@@ -105,11 +106,9 @@ export function registerDashWalletsView(Alpine) {
 
     // ── formatting ──────────────────────────────────────────────────────
     fmtUsd(n) {
-      if (n == null || !isFinite(n)) return "—";
-      if (n >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
-      if (n >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
-      if (n >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
-      return "$" + n.toFixed(0);
+      // issue #449: was `n >= 1e9` (raw signed value) — negative balances
+      // in the B/M/K range fell through to the plain, unscaled branch.
+      return fmtUsdCompact(n, { baseDecimals: 0 });
     },
     shortAddr(a) { return a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "—"; },
     fmtLastActive(iso) {

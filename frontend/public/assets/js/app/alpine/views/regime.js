@@ -2,6 +2,7 @@
 // from the monolithic views.js (finding 025); its chart/data helper tables
 // live in ./shared.js.
 import { api, ROUTES } from "../../lib/api.js";
+import { fmtUsdCompact } from "../lib/dash-format.js";
 import { PALETTE, SERIES, MONO_FONT, rgba, monoAxis } from "../../lib/chart-theme.js";
 import {
   regimeBandsPlugin,
@@ -118,13 +119,12 @@ export function registerRegimeView(Alpine) {
       if (u === "count") return Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(2) + "M" : Math.round(v).toLocaleString();
       if (u === "ratio2") return v.toFixed(2);
       if (u === "ratio4") return v.toFixed(4);
-      if (u === "usd") {
-        const a = Math.abs(v);
-        if (a >= 1e12) return "$" + (v / 1e12).toFixed(2) + "T";
-        if (a >= 1e9) return "$" + (v / 1e9).toFixed(2) + "B";
-        if (a >= 1e6) return "$" + (v / 1e6).toFixed(2) + "M";
-        return "$" + Math.round(v).toLocaleString();
-      }
+      // issue #449: this is the one view with a trillion tier (macro-scale
+      // indicators), no K tier at all (anything below $1M falls to the
+      // rounded/comma-grouped base case), and that base case is rounded
+      // instead of toFixed(2) — preserved via {trillion, skipKTier,
+      // baseInteger} rather than silently dropped in the consolidation.
+      if (u === "usd") return fmtUsdCompact(v, { trillion: true, skipKTier: true, baseInteger: true });
       return v.toFixed(2);
     },
     fmtSigned(v) { return v == null ? "—" : Math.round(v * 100).toString(); },

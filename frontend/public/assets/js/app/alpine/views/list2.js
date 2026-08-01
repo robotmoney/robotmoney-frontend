@@ -10,6 +10,7 @@
 // view (issue #384) — the shared alpine/lib/sparkline.js (P0.5, issue #381)
 // has not landed yet; this view should switch to that import once it does.
 import { api, ROUTES } from "../../lib/api.js";
+import { fmtUsdCompact } from "../lib/dash-format.js";
 
 const TABS = [
   { id: "agents", label: "Agents", icon: "bot" },
@@ -98,14 +99,9 @@ export function registerList2View(Alpine) {
       return this.sortDir === "asc" ? "▲" : "▼";
     },
 
-    // ── formatting (page-local until dash-format.js/#381 lands) ─────────────
+    // ── formatting (fmtUsd shared via alpine/lib/dash-format.js, issue #449) ─
     fmtUsd(n) {
-      if (n == null || !isFinite(n)) return "—";
-      const abs = Math.abs(n);
-      if (abs >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
-      if (abs >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
-      if (abs >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
-      return "$" + n.toFixed(2);
+      return fmtUsdCompact(n);
     },
     fmtInt(n) {
       return n == null || !isFinite(n) ? "—" : Math.round(n).toLocaleString();

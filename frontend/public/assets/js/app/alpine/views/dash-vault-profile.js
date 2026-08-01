@@ -18,6 +18,7 @@
 // view renders the chart frame + toggle group but always shows the honest
 // empty state, never a synthetic series.
 import { api, ROUTES, path } from "../../lib/api.js";
+import { fmtUsdCompact } from "../lib/dash-format.js";
 import { applyDashChartDefaults, dashChartOptions, dashLineDatasetDefaults } from "../lib/chart-theme.js";
 
 const PERIODS = [
@@ -103,12 +104,7 @@ export function registerVaultProfileView(Alpine) {
 
     // ── formatting ──────────────────────────────────────────────────────────
     fmtUsd(n) {
-      if (n == null || !isFinite(n)) return "—";
-      const abs = Math.abs(n);
-      if (abs >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
-      if (abs >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
-      if (abs >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
-      return "$" + n.toFixed(2);
+      return fmtUsdCompact(n);
     },
     fmtApy(n) {
       if (n == null || !isFinite(n)) return "—";

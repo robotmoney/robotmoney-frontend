@@ -3,6 +3,7 @@
 // read-only GET /api/dashboards/vaults feed (already sorted tvl-desc server-side)
 // and handles interactive sorting/formatting + the three summary cards.
 import { api, ROUTES } from "../../lib/api.js";
+import { fmtUsdCompact } from "../lib/dash-format.js";
 
 export function registerDashVaultsView(Alpine) {
   Alpine.data("dashVaults", () => ({
@@ -67,12 +68,13 @@ export function registerDashVaultsView(Alpine) {
     },
 
     // ── formatting ──────────────────────────────────────────────────────
+    // issue #449: was `n >= 1e9` (raw signed value) instead of `Math.abs(n)`,
+    // so negative TVL in the B/M/K range fell through to the plain branch
+    // and rendered unscaled (e.g. "$-500" for -$500M). Shared helper fixes
+    // the sign handling; baseDecimals:0 preserves this view's existing
+    // (already-correct) sub-$1K precision.
     fmtUsd(n) {
-      if (n == null || !isFinite(n)) return "—";
-      if (n >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
-      if (n >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
-      if (n >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
-      return "$" + n.toFixed(0);
+      return fmtUsdCompact(n, { baseDecimals: 0 });
     },
     fmtApy(n) { return n == null ? "—" : n.toFixed(2) + "%"; },
     // TVL/APY are dashed out when the row has never gone through a live/
