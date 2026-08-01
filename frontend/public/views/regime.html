@@ -13,7 +13,7 @@
     <div class="rv__hero-fade rv__hero-fade--bottom" aria-hidden="true"></div>
     <div class="rv__hero-inner">
       <h1 class="rv__title">Regime <span class="text-gradient">Classifier</span></h1>
-      <p class="rv__hero-sub">Daily cross-asset risk-on / risk-off composite. Three independent panels — macro, on-chain, and an equity factor panel — recomputed every 24 hours from open data with point-in-time inverse-correlation weights.</p>
+      <p class="rv__hero-sub">Daily cross-asset risk-on / risk-off composite — an arithmetic mean of the macro and on-chain panels. A third, equity factor panel is computed and shown alongside them for context but is not part of the composite. All panels recompute every 24 hours from open data with point-in-time inverse-correlation weights.</p>
     </div>
   </div>
 
@@ -242,20 +242,20 @@
           <ul class="rv__method-list">
             <li><strong>Macro panel (8):</strong> 10y–2y curve, real 10y, 5y breakeven, HY OAS, DXY, initial jobless claims, VIX, copper/gold — sources: FRED &amp; Yahoo.</li>
             <li><strong>On-chain panel (10):</strong> DeFi TVL (level + 90d growth), stablecoin float (level + 90d growth), BTC/ETH active addresses, BTC MVRV, BTC/ETH ratio, ETH 50d/200d trend, new DEX pools per 24h — sources: DefiLlama, blockchain.com, Coinmetrics, Yahoo, GeckoTerminal.</li>
-            <li><strong>Equity factor panel (8):</strong> high-beta vs low-vol (SPHB/SPLV), momentum (MTUM/SPY), growth vs value (IWF/IWD), utilities leadership (XLU/SPY), staples vs discretionary (XLP/XLY), S&amp;P 500 50d/200d trend, IWM/SPY breadth, Shiller CAPE — sources: Yahoo Finance and the Shiller spreadsheet mirror. Sign-stable equity risk-appetite + style + valuation signals.</li>
+            <li><strong>Equity factor panel (8):</strong> high-beta vs low-vol (SPHB/SPLV), momentum (MTUM/SPY), growth vs value (IWF/IWD), utilities leadership (XLU/SPY), staples vs discretionary (XLP/XLY), S&amp;P 500 50d/200d trend, IWM/SPY breadth, Shiller CAPE — sources: Yahoo Finance and the Shiller spreadsheet mirror. Sign-stable equity risk-appetite + style + valuation signals. Computed and shown for context; not included in the composite (see below).</li>
             <li><strong>Normalization:</strong> rolling 3-year percentile rank per indicator, sign-aligned so +1 always means risk-on.</li>
             <li><strong>Within-panel weighting:</strong> point-in-time inverse-correlation. Each day's weights use only the trailing 3-year window — no look-ahead. Redundant inputs get auto-discounted without manual sub-grouping. 25% per-indicator cap.</li>
-            <li><strong>Composite:</strong> arithmetic mean of all three panel indices, then 3y rolling percentile, bucketed at 0.33 / 0.67.</li>
+            <li><strong>Composite:</strong> arithmetic mean of the macro and on-chain panel indices only — the equity factor panel above is computed and displayed but excluded from the composite — then 3y rolling percentile, bucketed at 0.33 / 0.67.</li>
             <li><strong>Smoothing:</strong> the published regime label requires <strong>5 consecutive trading days</strong> in the new bucket before switching, OR a single-day move in composite percentile exceeding <strong>2σ</strong> of its trailing 1y daily-change distribution (with direction consistent with the new bucket). Filters out boundary-noise flips while still responding quickly to legitimate fast regime shifts.</li>
             <li><strong>Storage:</strong> long-format history persisted daily; current snapshot served from the analytics store.</li>
           </ul>
         </div>
         <div class="rv__method-card">
-          <h3 class="rv__method-title">Why three panels</h3>
-          <p>The macro panel reads upstream causes — monetary policy, credit conditions, the labor market. The on-chain panel reads crypto-native flows and network health. The equity factor panel reads the behavioral response of price-setters who have already digested the upstream inputs and are committing capital. Three independent viewpoints on the same risk regime, blended into one composite. Walk through the comparison and per-panel attribution in the <a href="/blog/regime-eq-vs-base" class="rv__link">research write-up</a>.</p>
+          <h3 class="rv__method-title">Two panels, plus a third for context</h3>
+          <p>The macro panel reads upstream causes — monetary policy, credit conditions, the labor market. The on-chain panel reads crypto-native flows and network health. Together, these two independent viewpoints are averaged into the composite. The equity factor panel reads the behavioral response of price-setters who have already digested the upstream inputs and are committing capital — it is computed and displayed alongside the composite, but is not blended into it. Walk through the comparison and per-panel attribution in the <a href="/blog/regime-eq-vs-base" class="rv__link">research write-up</a>.</p>
         </div>
       </div>
-      <p class="rv__method-note">For the original two-panel classifier (macro + on-chain only, kept as a reference) see <a href="/regime_2panel" class="rv__link">/regime_2panel</a>. For a plain-language walkthrough of every indicator in the composite &mdash; what it is, how it is derived and how to read it &mdash; see <a href="/regime/indicators" class="rv__link">the 26 indicators</a>. For the full prior-art survey and design-space mapping, see the <a href="/regime-detection" class="rv__link">Regime Detection research brief</a>.</p>
+      <p class="rv__method-note">For the original two-panel classifier (macro + on-chain only, kept as a reference) see <a href="/regime_2panel" class="rv__link">/regime_2panel</a>. For a plain-language walkthrough of every indicator behind the regime classifier &mdash; what it is, how it is derived and how to read it &mdash; see <a href="/regime/indicators" class="rv__link">the 26 indicators</a>. For the full prior-art survey and design-space mapping, see the <a href="/regime-detection" class="rv__link">Regime Detection research brief</a>.</p>
     </div>
   </div>
 </section>
