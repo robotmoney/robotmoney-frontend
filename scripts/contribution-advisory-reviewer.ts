@@ -107,15 +107,35 @@ export async function reviewContributionDiff(
   const bin = options.opencodeBin ?? process.env.OPENCODE_BIN ?? "opencode";
   const model = options.model ?? CONTRIBUTION_REVIEW_MODEL;
   const timeoutMs = options.timeoutMs ?? defaultTimeoutMs();
-  // OpenCode receives no repository working tree at all. Even if an untrusted
-  // diff persuades the model to request a tool, there is no PR or trusted repo
-  // code in its isolated working directory to execute.
+  // OpenCode receives no repository working tree at all (there is no PR or
+  // trusted repo code in its isolated tmpdir to execute), AND no inherited
+  // process environment. Those are two distinct controls: an empty working
+  // directory does not stop a tool call from reading `$GH_TOKEN`, `env`, or
+  // `printenv` out of the environment, so the child's environment is an
+  // explicit allowlist rather than Bun.spawn's default of inheriting the
+  // parent's — including `GH_TOKEN`, which the workflow step sets for the
+  // `gh` calls that surround this spawn, not for the model it invokes.
+  const childEnv: Record<string, string> = {};
+  // PATH: required to resolve and execute the OpenCode binary itself (and,
+  // for a script-shim binary such as the test fixture, its shebang
+  // interpreter).
+  if (process.env.PATH !== undefined) childEnv.PATH = process.env.PATH;
+  // HOME: OpenCode reads/writes its own config and cache under the user home
+  // directory; without it the CLI cannot start.
+  if (process.env.HOME !== undefined) childEnv.HOME = process.env.HOME;
+  // Deliberately NOT allowlisted: GH_TOKEN (this job's repo credential),
+  // OPENCODE_API_KEY (never set on this keyless job), and OPENCODE_BIN /
+  // OPENCODE_TIMEOUT_MS (already resolved above, into `bin` and `timeoutMs`,
+  // before this child is spawned — the child has no use for either var
+  // itself). Anything a future workflow revision adds to the step `env:`
+  // block must be added here explicitly to reach this child; it does not
+  // reach it by default.
   const isolatedWorkingDirectory = await mkdtemp(join(tmpdir(), "contribution-advisory-review-"));
   let processHandle: ReturnType<typeof Bun.spawn>;
   try {
     processHandle = Bun.spawn(
       [bin, "run", prompt, "--model", model, "--format", "json", "--auto"],
-      { cwd: isolatedWorkingDirectory, stdout: "pipe", stderr: "pipe" },
+      { cwd: isolatedWorkingDirectory, stdout: "pipe", stderr: "pipe", env: childEnv },
     );
   } catch (error) {
     await rm(isolatedWorkingDirectory, { recursive: true, force: true });
