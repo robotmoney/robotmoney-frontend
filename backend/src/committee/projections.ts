@@ -77,11 +77,26 @@ export function toSession(row: Row): CommitteeSession {
   };
 }
 
+// Bound on the list projection's synthesis field (issue #358). Post-#323,
+// synthesis is a single deterministic sentence — typically well under this —
+// so the bound is a defensive ceiling against a future aggregator regression
+// re-inflating it, not a truncation this content is expected to hit day to day.
+const SESSION_LIST_SYNTHESIS_MAX_CHARS = 500;
+function synthesisExcerpt(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  return value.length > SESSION_LIST_SYNTHESIS_MAX_CHARS
+    ? `${value.slice(0, SESSION_LIST_SYNTHESIS_MAX_CHARS - 1)}…`
+    : value;
+}
+
 // Light index-row projection for the default (unpaginated-no-more) GET
 // /api/committee/sessions response (issue #243). Deliberately drops
-// regimeSummary/synthesis/subjectSnapshotTotalValueUsd — the large fields
-// behind the ~8.3MB unprojected payload — keeping everything else a list
-// consumer (directory page, admin overview) already reads off a session row.
+// regimeSummary/subjectSnapshotTotalValueUsd — the large fields behind the
+// ~8.3MB unprojected payload — keeping everything else a list consumer
+// (directory page, admin overview) already reads off a session row.
+// synthesis rejoined this projection in issue #358 (see synthesisExcerpt()
+// above): #323 made it a short deterministic sentence, so it no longer
+// carries the concatenated-take-body weight that got it dropped originally.
 export function toSessionListItem(row: Row): CommitteeSessionListItem {
   return {
     id: row.id,
@@ -91,6 +106,7 @@ export function toSessionListItem(row: Row): CommitteeSessionListItem {
     state: row.state,
     windowClosesAt: instant(row.window_closes_at),
     publishedAt: instant(row.published_at),
+    synthesis: synthesisExcerpt(row.synthesis),
     committeeRecommendation: row.committee_recommendation ?? null,
     socialDraftId: row.social_draft_id ?? null,
     generatedAt: instant(row.generated_at) ?? "",
