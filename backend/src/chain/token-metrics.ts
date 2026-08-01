@@ -26,6 +26,7 @@ import {
 } from "../config.ts";
 import { callTotalSupply, type RpcCallOptions } from "./base-rpc-client.ts";
 import { fetchAssetPriceUsd } from "./token-prices.ts";
+import { ttlCached } from "./ttl-cache.ts";
 
 const WEI_18 = 1e18;
 
@@ -57,15 +58,9 @@ function rpcOpts(): RpcCallOptions {
 }
 
 const CACHE_TTL_MS = 30_000;
-let cache: { at: number; value: TokenMetrics } | null = null;
 
-export function _resetTokenMetricsCacheForTests(): void {
-  cache = null;
-}
-
-export async function getTokenMetrics(): Promise<TokenMetrics> {
+async function computeTokenMetrics(): Promise<TokenMetrics> {
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_TTL_MS) return cache.value;
 
   // Resolved per call (not module load) so provenance tracks the current env.
   // Fail-closed resolvers stay OUTSIDE the leg try/catches below: an invalid
@@ -105,13 +100,17 @@ export async function getTokenMetrics(): Promise<TokenMetrics> {
   const marketCapUsd =
     priceUsd != null && totalSupply != null ? Math.round(priceUsd * totalSupply * 100) / 100 : null;
 
-  const value: TokenMetrics = {
+  return {
     robotmoney: { priceUsd, totalSupply, marketCapUsd },
     feeSplit: FEE_SPLIT,
     asOf: new Date(now).toISOString(),
     source,
     stale,
   };
-  cache = { at: now, value };
-  return value;
+}
+
+export const getTokenMetrics = ttlCached(computeTokenMetrics, CACHE_TTL_MS);
+
+export function _resetTokenMetricsCacheForTests(): void {
+  getTokenMetrics._resetForTests();
 }

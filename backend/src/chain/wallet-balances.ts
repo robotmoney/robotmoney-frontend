@@ -28,6 +28,7 @@ import {
   type KeyedAssetRead,
   type Provenance,
 } from "./wallet-valuation.ts";
+import { ttlCached } from "./ttl-cache.ts";
 
 // Provenance ('seed' = a pre-launch backfilled history row, never a live chain
 // read — migration 0014 honesty invariant) is defined once in the shared
@@ -174,15 +175,9 @@ async function loadHistory(): Promise<WalletHistoryPoint[]> {
 }
 
 const CACHE_TTL_MS = 30_000;
-let cache: { at: number; value: WalletBalances } | null = null;
 
-export function _resetWalletBalancesCacheForTests(): void {
-  cache = null;
-}
-
-export async function fetchWalletBalances(): Promise<WalletBalances> {
+async function computeWalletBalances(): Promise<WalletBalances> {
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_TTL_MS) return cache.value;
 
   // Resolved per call (not module load) so tests can flip the env per case and
   // so provenance always tracks the current source. Fail-closed resolvers are
@@ -202,7 +197,7 @@ export async function fetchWalletBalances(): Promise<WalletBalances> {
   const totalUsd = holdings.reduce((sum, h) => sum + (h.valueUsd ?? 0), 0);
   const history = await loadHistory().catch(() => [] as WalletHistoryPoint[]);
 
-  const value: WalletBalances = {
+  return {
     asOf: new Date(now).toISOString(),
     totalUsd,
     source,
@@ -210,8 +205,12 @@ export async function fetchWalletBalances(): Promise<WalletBalances> {
     holdings,
     history,
   };
-  cache = { at: now, value };
-  return value;
+}
+
+export const fetchWalletBalances = ttlCached(computeWalletBalances, CACHE_TTL_MS);
+
+export function _resetWalletBalancesCacheForTests(): void {
+  fetchWalletBalances._resetForTests();
 }
 
 // REQUEST-PATH reader (issue #118): serve the /api/dashboards/wallet-balances

@@ -18,6 +18,7 @@ import {
   type Provenance,
   type WalletPriceReader,
 } from "./wallet-valuation.ts";
+import { ttlCached } from "./ttl-cache.ts";
 
 export type { Provenance };
 
@@ -71,17 +72,11 @@ const SLEEVE_DEFS: SleeveDef[] = [
 export const WALLET_SLEEVES_FRESHNESS_BUDGET_MS = 5 * 60_000;
 
 const CACHE_TTL_MS = 30_000;
-let cache: { at: number; value: WalletSleeves } | null = null;
 
-export function _resetWalletSleevesCacheForTests(): void {
-  cache = null;
-}
-
-export async function getWalletSleeves(
+async function computeWalletSleeves(
   _readers: WalletSleeveReaders = defaultWalletSleeveReaders,
 ): Promise<WalletSleeves> {
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_TTL_MS) return cache.value;
 
   const source = resolveBaseRpcSource();
   const wallets = resolvePropWallets();
@@ -164,13 +159,16 @@ export async function getWalletSleeves(
 
   const asOf = new Date(newestSampleTime > 0 ? newestSampleTime : now).toISOString();
 
-  const value: WalletSleeves = {
+  return {
     wallets: sleeves,
     asOf,
     source,
     stale: overallStale || sleeves.length === 0,
   };
+}
 
-  cache = { at: now, value };
-  return value;
+export const getWalletSleeves = ttlCached(computeWalletSleeves, CACHE_TTL_MS);
+
+export function _resetWalletSleevesCacheForTests(): void {
+  getWalletSleeves._resetForTests();
 }
