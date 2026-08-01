@@ -75,6 +75,13 @@ export const ROUTES = {
     coins: "/api/dashboards/coins", // GET → lobster-coin directory (/lobster)
     vaults: "/api/dashboards/vaults", // GET → agent-managed vault directory (/vaults)
     wallets: "/api/dashboards/wallets", // GET → tracked + agent-derived wallet directory (/wallets)
+    // Issue #391 (/lobster/:id, /vaults/:id, /wallets/:id detail dossiers):
+    // same public, unauthenticated dashboards.* namespace as the LIST feeds
+    // directly above (issue #386) — a distinct :id sub-path per facet, never
+    // colliding with the exact-match LIST route.
+    coinDetail: "/api/dashboards/coins/:id", // GET → CoinProfile dossier
+    vaultDetail: "/api/dashboards/vaults/:id", // GET → VaultProfile dossier
+    walletDetail: "/api/dashboards/wallets/:id", // GET → WalletProfile dossier
   },
 
   projects: {
