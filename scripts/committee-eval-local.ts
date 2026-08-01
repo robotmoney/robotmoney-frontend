@@ -158,6 +158,14 @@ export async function runCommitteeAuthoringEvalCase(
       composeSpawnEnv: stack.spawnEnv,
       backendUrl: stack.backendUrl,
       modelConfig,
+      // Threaded explicitly (issue #461 finding): agent.ts's enroll() reads
+      // rail.adminToken directly now that its own env-reading
+      // getAdminHeaders() fallback is retired. Without this, the
+      // X-Admin-Token header this eval's registration call sends is silently
+      // empty even though process.env.ADMIN_TOKEN is set above — that env
+      // var is for session.ts's standalone child-process entry point, not
+      // this in-process rail.
+      adminToken: credentials.adminToken,
     };
     // No admin("reset") here either: the endpoint is gone. This eval runs on a
     // stack it created, so there is no prior history to clear — and if it is

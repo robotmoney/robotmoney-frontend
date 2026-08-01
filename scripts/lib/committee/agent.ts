@@ -97,10 +97,6 @@ function backendUrl(): string {
   return process.env.BACKEND_URL ?? "http://localhost:8787";
 }
 
-export function getAdminHeaders(): Record<string, string> {
-  return process.env.ADMIN_TOKEN ? { "X-Admin-Token": process.env.ADMIN_TOKEN } : {};
-}
-
 // ── Rail configuration ──────────────────────────────────────────────────────
 /** A real-onboarded member's persistent machine + owner-held keystore secret. */
 export interface OnboardedMemberHome {
@@ -123,7 +119,13 @@ export interface SessionRail {
   /** REST base the HARNESS reaches for the one-time public-key registration
    *  (default: BACKEND_URL env, then http://localhost:8787). */
   backendUrl?: string;
-  /** Admin token for that registration (default: ADMIN_TOKEN env). */
+  /** Admin token for that registration. The in-process demo driver
+   *  (scripts/lib/demo-main.ts) threads its own adminPassword explicitly here
+   *  (issue #456); railFromEnv() below is the only legitimate place this
+   *  still falls back to reading ADMIN_TOKEN off process.env, for the
+   *  standalone session.ts entry point that genuinely runs as its own
+   *  child process with ADMIN_TOKEN set on its own environment at spawn
+   *  time. */
   adminToken?: string;
   /** Per-member homes for members onboarded through the real §11 flow. */
   onboardedHomes?: Map<string, OnboardedMemberHome>;
@@ -152,6 +154,14 @@ export function railFromEnv(env: Record<string, string | undefined> = process.en
     composeFiles: env.COMPOSE_FILE ? env.COMPOSE_FILE.split(":") : [...DEFAULT_COMPOSE_FILES],
     composeSpawnEnv,
     modelConfig: resolveModelConfig(env),
+    // Issue #461: this is the ONE place agent.ts still reads ADMIN_TOKEN from
+    // an environment object rather than taking it as an explicit argument —
+    // and it is legitimate env inheritance, not the retired global-mutation
+    // antipattern: railFromEnv() is only ever called by (or defaulted for)
+    // the standalone session.ts entry point, which runs as its own child
+    // process with ADMIN_TOKEN set on its own spawn env. Every other rail
+    // (e.g. demo-main.ts's in-process sessionRail) sets adminToken directly.
+    adminToken: env.ADMIN_TOKEN,
   };
 }
 
@@ -317,10 +327,13 @@ async function ensureMemberIdentityUncached(
 
   // The ONE privileged step, performed by the harness AS the RM operator
   // seeding the demo roster: register the container-generated PUBLIC key.
-  // The private key never left the member's volume.
+  // The private key never left the member's volume. rail.adminToken is the
+  // only source (issue #461) — no local env-reading fallback lives here;
+  // the legitimate standalone-entry-point fallback already happened once,
+  // at railFromEnv() construction time, above.
   const adminHeaders: Record<string, string> = rail.adminToken
     ? { "X-Admin-Token": rail.adminToken }
-    : getAdminHeaders();
+    : {};
   const res = await fetch(`${rail.backendUrl ?? backendUrl()}${ROUTES.committee.register}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...adminHeaders },
