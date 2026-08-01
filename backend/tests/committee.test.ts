@@ -548,14 +548,15 @@ test("GET /api/committee/sessions default: light-projected + cursor-paginated (n
     expect(smallLimitPages.has(c.id)).toBe(true);
     const s = smallLimitPages.get(c.id);
     expect(s.state).toBe("scheduled");
-    // Light projection: the still-big fields are absent entirely (not just null).
-    expect("regimeSummary" in s).toBe(false);
-    expect("subjectSnapshotTotalValueUsd" in s).toBe(false);
-    // synthesis rejoined the light projection in issue #358 — present (even
-    // though null pre-aggregation, as these scheduled-only rows are), never
-    // dropped like the fields above.
+    // Light projection: subjectSnapshotTotalValueUsd is absent entirely (not
+    // just null) — it never rides along. regimeSummary (issue #357) and
+    // synthesis (issue #358) DO ride along, but a freshly-opened (never
+    // aggregated) session has no regime_summary/synthesis yet, so both
+    // project to null rather than being dropped as keys.
+    expect(s.regimeSummary).toBeNull();
     expect("synthesis" in s).toBe(true);
     expect(s.synthesis).toBeNull();
+    expect("subjectSnapshotTotalValueUsd" in s).toBe(false);
     // Everything a list consumer (committee.js / committee-overview.js) reads is kept.
     expect(s.id).toBe(c.id);
     expect(s.date).toBe(c.date);
@@ -565,7 +566,7 @@ test("GET /api/committee/sessions default: light-projected + cursor-paginated (n
   }
 });
 
-test("GET /api/committee/sessions?full=1 reproduces the pre-#243 unpaginated/unprojected shape; the light default omits regimeSummary but carries synthesis (issue #358)", async () => {
+test("GET /api/committee/sessions?full=1 reproduces the pre-#243 unpaginated/unprojected shape; the light default carries both regimeSummary (issue #357) and synthesis (issue #358)", async () => {
   const subj = rid("fullproj");
   await ic.ensureSubject(subj, "Full Projection Subject");
   const session = await ic.openSession(subj);
@@ -592,14 +593,17 @@ test("GET /api/committee/sessions?full=1 reproduces the pre-#243 unpaginated/unp
   const fullItem = fullBody.sessions.find((s: any) => s.id === session.id);
   expect(fullItem).toBeTruthy();
   expect(fullItem.regimeSummary).toBeTruthy();
+  expect(Array.isArray(fullItem.regimeSummary.history)).toBe(true);
+  expect(fullItem.regimeSummary.history.length).toBeGreaterThan(0);
   expect(typeof fullItem.synthesis).toBe("string");
   expect(fullItem.synthesis.length).toBeGreaterThan(0);
 
   // The light default (paged through until this session's id is found or the
   // cursor is exhausted) carries the same id/state/committeeRecommendation,
-  // still omits regimeSummary entirely, but — issue #358 — now carries the
-  // same synthesis value as the full projection (it's short enough post-#323
-  // to no longer need dropping from the light row).
+  // and now carries BOTH a regimeSummary (issue #357, minus the trailing
+  // history array) AND a synthesis value (issue #358, identical to the full
+  // projection's — it's short enough post-#323 to no longer need dropping
+  // from the light row).
   let lightItem: any = null;
   let cursor: string | undefined;
   for (let page = 0; page < 50 && !lightItem; page++) {
@@ -613,7 +617,6 @@ test("GET /api/committee/sessions?full=1 reproduces the pre-#243 unpaginated/unp
   }
   expect(lightItem).toBeTruthy();
   expect(lightItem.state).toBe("published");
-  expect("regimeSummary" in lightItem).toBe(false);
   expect(lightItem.committeeRecommendation).toBeTruthy();
 
   // issue #358 AC/test-plan: non-empty synthesis on the list row, identical to
@@ -624,6 +627,17 @@ test("GET /api/committee/sessions?full=1 reproduces the pre-#243 unpaginated/unp
   expect(lightItem.synthesis.length).toBeGreaterThan(0);
   expect(lightItem.synthesis).toBe(fullItem.synthesis);
   expect(lightItem.synthesis).not.toBe(lightItem.committeeRecommendation.rationale);
+
+  // regimeSummary AC (issue #357): the list's regimeSummary carries the same
+  // regime/composite (and every other field) the detail endpoint serializes
+  // for this exact session, EXCEPT the 14-day history array, which stays
+  // detail-only to bound the list payload.
+  expect(lightItem.regimeSummary).toBeTruthy();
+  expect(lightItem.regimeSummary.regime).toBe(fullItem.regimeSummary.regime);
+  expect(lightItem.regimeSummary.composite).toBe(fullItem.regimeSummary.composite);
+  const { history: _fullHistory, ...fullRegimeSummaryWithoutHistory } = fullItem.regimeSummary;
+  expect(lightItem.regimeSummary).toEqual(fullRegimeSummaryWithoutHistory);
+  expect("history" in lightItem.regimeSummary).toBe(false);
 });
 
 test("GET /api/committee/sessions: malformed cursor and out-of-range limit are 400s (never a 500 or a silent fallback)", async () => {
