@@ -280,7 +280,7 @@ export async function runSession(
   date: string,
   subject: typeof SUBJECTS[0],
   sessionIndex: number,
-  opts?: { prevOutcome?: string; rail?: SessionRail; onProgress?: SessionProgress },
+  opts?: { prevOutcome?: string; rail?: SessionRail; onProgress?: SessionProgress; regimeAsof?: string },
 ) {
   const prevOutcome = opts?.prevOutcome;
   const onProgress = opts?.onProgress;
@@ -292,9 +292,19 @@ export async function runSession(
     onProgress?.({ type: "session", state, sessionId, subject: subject.id, date });
 
   // Ensure subject exists; regime is already seeded by the first session.
+  //
+  // `regimeAsof` (defaults to the session's own `date`) is deliberately a
+  // SEPARATE knob from the committee session's business `date`: a session can
+  // legitimately be labelled with any demo-narrative date (including one ahead
+  // of real wall-clock time, to simulate day-over-day rotation without waiting
+  // a day in CI), but a regime SNAPSHOT is a classification of real market
+  // indicators and can never legitimately be produced for a date that has not
+  // happened yet — fetchRegimeSnapshots (backend/src/analytics/report/
+  // projections.ts, issue #382) now enforces `date <= today` precisely so such
+  // a row can never be served, so requesting one here would just time out.
   if (sessionIndex > 0) {
     await admin("subject", subject);
-    await runRegimeClassify(date, rail);
+    await runRegimeClassify(opts?.regimeAsof ?? date, rail);
   }
 
   // Seed the reference-shaped subject fixtures (subject row + subject snapshot the
@@ -480,7 +490,14 @@ async function main() {
   // Session 2: next day, different subject (demonstrates rotation + cross-session
   // awareness). Eos (added to the roster mid-run above) enrolls and
   // participates in its own container alongside the original members.
-  await runSession(tomorrow, SUBJECTS[1], 2, { prevOutcome: s1.pub.session.synthesis, rail });
+  //
+  // The session's own business `date` is still `tomorrow` (proving committee
+  // infra handles a session dated ahead of session 1 without literally waiting
+  // a day), but `regimeAsof` pins the regime classification to the REAL
+  // `today` — a regime snapshot dated `tomorrow` can never be served post-#382
+  // (fetchRegimeSnapshots enforces `date <= today`), so asking for one here
+  // would just time out against a boundary that is doing exactly its job.
+  await runSession(tomorrow, SUBJECTS[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, regimeAsof: today });
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${backendUrl()}${ROUTES.committee.sessions}`).then((r) => r.json());
