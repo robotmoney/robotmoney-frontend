@@ -80,9 +80,17 @@ test("fetchList2 projects coin/vault/wallet tabs with their own real columns", a
     market_cap: 800_000, volume_24h: 12_000, contract_address: "0xabc", is_active: true,
   })} RETURNING id`;
 
+  // data_source deliberately NOT 'live': worker/handlers/projects.ts's
+  // fetchVaults() sweeps every `data_source = 'live' AND vault_address IS
+  // NOT NULL` row in the WHOLE table (no project scoping) whenever any test
+  // in this same run calls it, and throws for an address its fixture data
+  // doesn't recognize — a live-tagged fixture row here would nondeterminis-
+  // tically break projects.test.ts's own vault-refresh assertions depending
+  // on file execution order. 'static' still exercises the real, unmodified
+  // dataSource/vault_address pass-through this test checks.
   const [vault] = await sql`INSERT INTO agent_vaults ${sql({
     name: `${tag}-vault`, protocol: "aave", strategy_type: "erc4626", chain: "base",
-    tvl_usd: 900_000, yield_apy: 0.07, data_source: "live", vault_address: "0xvault",
+    tvl_usd: 900_000, yield_apy: 0.07, data_source: "static", vault_address: `0x${tag}vault`,
     last_rebalance_at: new Date().toISOString(), is_active: true,
   })} RETURNING id`;
 
@@ -103,7 +111,7 @@ test("fetchList2 projects coin/vault/wallet tabs with their own real columns", a
   const v = vaults.find((r) => r.id === vault.id)!;
   expect(v.protocol).toBe("aave");
   expect(v.strategyType).toBe("erc4626");
-  expect(v.dataSource).toBe("live");
+  expect(v.dataSource).toBe("static");
   expect(v.lastRebalanceAt).not.toBeNull();
   expect(v.href).toBe(`/vaults/${vault.id}`);
 
