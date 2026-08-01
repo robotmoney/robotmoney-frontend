@@ -961,3 +961,58 @@
   .a3 .a3-profile__score { border-left: none; border-top: 1px solid hsl(var(--border)); padding-left: 0; padding-top: 1rem; }
   .a3 .a3-profile__charts { grid-template-columns: 1fr; }
 }
+
+/* ── Coin/Vault/Wallet detail dossiers (issue #391, §5.10/§5.12/§5.14,
+   P3.3/P3.4/P3.5) — shared across coin-profile.html/vault-profile.html/
+   wallet-profile.html. Generic (not page-specific) so all three reuse the
+   same handful of classes rather than three near-duplicate sets.
+   `.a3-back-link` is reused as-is from the /agents/:id dossier above (issue
+   #390/#429) — identical rule, no need for a second copy. `.a3-dossier-
+   identity` below is renamed to `-compact` because #390/#429 already claimed
+   the base name for AgentProfile's own (differently-laid-out) identity block
+   — same selector, different intended styles, so this set needs its own
+   name to avoid one silently overriding the other in the shared stylesheet. */
+
+.a3 .a3-dossier-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+.a3 .a3-dossier-identity-compact { display: flex; align-items: center; gap: 1rem; min-width: 0; }
+.a3 .a3-dossier-icon {
+  width: 3.5rem; height: 3.5rem; flex: none; border-radius: 9999px;
+  background: hsl(var(--primary) / 0.1); border: 1px solid hsl(var(--primary) / 0.25);
+  display: flex; align-items: center; justify-content: center; color: hsl(var(--primary));
+  overflow: hidden;
+}
+.a3 .a3-dossier-icon img { width: 100%; height: 100%; object-fit: cover; }
+.a3 .a3-dossier-title { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 1.1rem; margin: 0; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.a3 .a3-dossier-subtitle { color: hsl(var(--muted-foreground)); font-size: 0.8rem; margin: 0.25rem 0 0; }
+.a3 .a3-dossier-price { text-align: right; font-family: 'JetBrains Mono', monospace; }
+.a3 .a3-dossier-price-value { font-size: 1.5rem; font-weight: 700; }
+.a3 .a3-dossier-price-change { font-size: 0.85rem; }
+.a3 .a3-dossier-price-change--up { color: hsl(var(--success)); }
+.a3 .a3-dossier-price-change--down { color: hsl(var(--destructive)); }
+
+.a3 .a3-dossier-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.a3 .a3-dossier-stat-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: hsl(var(--muted-foreground)); margin: 0 0 0.35rem; }
+.a3 .a3-dossier-stat-value { font-family: 'JetBrains Mono', monospace; font-size: 1.1rem; font-weight: 600; }
+
+.a3 .a3-dossier-chart-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.75rem; }
+.a3 .a3-dossier-chip-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.a3 .a3-dossier-chip {
+  display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.65rem;
+  border: 1px solid hsl(var(--border)); border-radius: 9999px; font-size: 0.75rem;
+  color: hsl(var(--foreground));
+}
+.a3 .a3-dossier-chip:hover { border-color: hsl(var(--primary) / 0.5); color: hsl(var(--primary)); }
+
+/* Honest "not available yet" / staleness banner — reused for every P1.6/P1.7
+   dependency gap and the D14 stale-wallet-balance notice (never a fabricated
+   fallback value). */
+.a3 .a3-notice {
+  display: flex; align-items: flex-start; gap: 0.6rem;
+  border: 1px solid hsl(var(--amber) / 0.35); background: hsl(var(--amber) / 0.06);
+  border-radius: var(--radius); padding: 0.75rem 1rem; font-size: 0.8rem;
+  color: hsl(var(--muted-foreground)); margin-bottom: 1.25rem;
+}
+.a3 .a3-notice .a3-icon { color: hsl(var(--amber)); flex: none; margin-top: 0.1rem; }
+
+.a3 .a3-dossier-empty { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 3rem 0; text-align: center; color: hsl(var(--muted-foreground)); }
+.a3 .a3-dossier-badges-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.35rem; }

@@ -5,7 +5,7 @@ import { ROUTES } from "@robotmoney/contract";
 import { config, assertNoVaultAddressCollision } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { createComment, listComments } from "./routes/comments.ts";
-import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList } from "./routes/dashboards.ts";
+import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
 import { getProjectDetail, getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleCommittee } from "./routes/committee.ts";
@@ -156,6 +156,29 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname === ROUTES.dashboards.wallets && req.method === "GET") {
       return json(await getWalletsList());
+    }
+
+    // Coin/vault/wallet detail dossiers (issue #391, §5.10/§5.12/§5.14). Same
+    // startsWith + trailing-segment pattern as research-signals above; a
+    // fetch* returning null (not found or a malformed id) is a clean 404.
+    // Checked AFTER the exact-match LIST routes directly above so a bare
+    // "/api/dashboards/coins" (no trailing segment) never falls through here.
+    if (pathname.startsWith("/api/dashboards/coins/") && req.method === "GET") {
+      const id = decodeURIComponent(pathname.slice("/api/dashboards/coins/".length));
+      const r = await getCoinProfile(id);
+      return json(r ?? { error: "not found" }, r ? 200 : 404);
+    }
+
+    if (pathname.startsWith("/api/dashboards/vaults/") && req.method === "GET") {
+      const id = decodeURIComponent(pathname.slice("/api/dashboards/vaults/".length));
+      const r = await getVaultProfile(id);
+      return json(r ?? { error: "not found" }, r ? 200 : 404);
+    }
+
+    if (pathname.startsWith("/api/dashboards/wallets/") && req.method === "GET") {
+      const id = decodeURIComponent(pathname.slice("/api/dashboards/wallets/".length));
+      const r = await getWalletProfile(id);
+      return json(r ?? { error: "not found" }, r ? 200 : 404);
     }
 
     if (pathname === ROUTES.projects.list && req.method === "GET") {

@@ -181,10 +181,13 @@ describe("frontend route resolution", () => {
   });
 
   test("dashboard param routes (:id/:slug) resolve to the placeholder with the right gate", () => {
-    // /agents/:id (issue #390) ships its own real fragment now — see its
-    // dedicated test above; the rest of these param routes still point at
-    // the shared coming-soon placeholder until their own phase issue lands.
-    const gatedParamPaths = ["/lobster/xyz-coin", "/vaults/1", "/wallets/0xabc"];
+    // /agents/:id (issue #390) and /lobster/:id, /vaults/:id, /wallets/:id
+    // (issue #391) all ship their own real fragments now — see their
+    // dedicated tests above/below. That accounts for 4 of the plan's "5 param
+    // regexes"; only /projects/:slug (handled separately below, ungated) is
+    // left, so there are no remaining dashboard-namespaced param routes still
+    // pointing at the shared coming-soon placeholder.
+    const gatedParamPaths: string[] = [];
     for (const p of gatedParamPaths) {
       expect(viewFor(p)).toBe("/views/dash/coming-soon.html");
       expect(routeMetaFor(p)).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
@@ -202,6 +205,22 @@ describe("frontend route resolution", () => {
     expect(routeMetaFor("/projects/robotmoney-vault/")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: false });
   });
 
+  // /lobster/:id, /vaults/:id, /wallets/:id detail dossiers (issue #391,
+  // §5.10/§5.12/§5.14, P3.3/P3.4/P3.5) — the first PARAM routes to ship real
+  // content ahead of the shared placeholder (§4.1's "5 param regexes"). The
+  // LIST routes (/lobster, /vaults, /wallets, issue #386) are unaffected —
+  // still the shared placeholder per the test above.
+  test("/lobster/:id, /vaults/:id, /wallets/:id (issue #391) resolve to their own real fragments, still gated under the dash layout", () => {
+    expect(viewFor("/lobster/xyz-coin")).toBe("/views/dash/coin-profile.html");
+    expect(routeMetaFor("/lobster/xyz-coin")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+    expect(viewFor("/vaults/1")).toBe("/views/dash/vault-profile.html");
+    expect(routeMetaFor("/vaults/1")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+    expect(viewFor("/wallets/0xabc")).toBe("/views/dash/wallet-profile.html");
+    expect(routeMetaFor("/wallets/0xabc")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+    // Trailing slash tolerated, same as every other param regex in this file.
+    expect(viewFor("/lobster/xyz-coin/")).toBe("/views/dash/coin-profile.html");
+  });
+
   test("routeMetaFor returns null for every non-dashboard route — a strict addition, not a behavior change", () => {
     expect(routeMetaFor("/")).toBeNull();
     expect(routeMetaFor("/allocation")).toBeNull();
@@ -216,6 +235,9 @@ describe("frontend route resolution", () => {
       "/submit",
       "/agents",
       "/agents/clawd",
+      "/lobster/xyz-coin",
+      "/vaults/1",
+      "/wallets/0xabc",
       "/projects/robotmoney-vault",
       "/dashboard",
       "/market",

@@ -66,6 +66,12 @@ const ASK_ROBOTO_VIEW = `${VIEW_DIR}/dash/ask-roboto.html`;
 // first PARAM route (DASH_PARAM_ROUTES below, not DASH_ROUTES) to ship real
 // content ahead of the coming-soon placeholder.
 const PROJECT_PROFILE_VIEW = `${VIEW_DIR}/dash/project-profile.html`;
+// /lobster/:id, /vaults/:id, /wallets/:id detail dossiers (issue #391, §5.10/
+// §5.12/§5.14, P3.3/P3.4/P3.5) — the first PARAM routes to ship real content
+// ahead of the coming-soon placeholder (§4.1's "5 param regexes").
+const COIN_PROFILE_VIEW = `${VIEW_DIR}/dash/coin-profile.html`;
+const VAULT_PROFILE_VIEW = `${VIEW_DIR}/dash/vault-profile.html`;
+const WALLET_PROFILE_VIEW = `${VIEW_DIR}/dash/wallet-profile.html`;
 
 // Static dashboard routes (§4.1's list) that render inside DASH_LAYOUT_VIEW.
 // `gated: true` means dash-shell.js's gate must pass before the outlet
@@ -103,9 +109,9 @@ const DASH_ROUTES = {
 /** @type {Array<{ test: RegExp; route: DashRoute }>} */
 const DASH_PARAM_ROUTES = [
   { test: /^\/agents\/[^/]+\/?$/, route: { view: AGENT_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
-  { test: /^\/lobster\/[^/]+\/?$/, route: { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
-  { test: /^\/vaults\/[^/]+\/?$/, route: { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
-  { test: /^\/wallets\/[^/]+\/?$/, route: { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
+  { test: /^\/lobster\/[^/]+\/?$/, route: { view: COIN_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
+  { test: /^\/vaults\/[^/]+\/?$/, route: { view: VAULT_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
+  { test: /^\/wallets\/[^/]+\/?$/, route: { view: WALLET_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/projects\/[^/]+\/?$/, route: { view: PROJECT_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: false } },
 ];
 

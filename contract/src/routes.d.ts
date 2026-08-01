@@ -23,6 +23,9 @@ export const ROUTES: {
     coins: string;
     vaults: string;
     wallets: string;
+    coinDetail: string;
+    vaultDetail: string;
+    walletDetail: string;
   };
   projects: {
     list: string;

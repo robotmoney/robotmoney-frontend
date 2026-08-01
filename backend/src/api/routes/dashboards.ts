@@ -24,6 +24,9 @@ import { fetchAgentDetail } from "../../projects/agent-detail-projections.ts";
 // is the bearer-gated analytics-PROVIDER ingestion boundary from issue #106,
 // the wrong home for a public GET).
 import { fetchCoinsList, fetchVaultsList, fetchWalletsList } from "../../projects/coins-vaults-wallets-projections.ts";
+// Coin/vault/wallet detail dossiers (issue #391) — same dashboards.* public-
+// read namespace, sibling projection module to the LIST feeds above.
+import { fetchCoinProfile, fetchVaultProfile, fetchWalletProfile } from "../../projects/dossier-projections.ts";
 
 // GET /api/dashboards/research-signals/:key → latest research signal payload
 export async function getResearchSignal(key: string) {
@@ -153,4 +156,21 @@ export async function getVaultsList() {
 // GET /api/dashboards/wallets → /wallets directory (issue #386, §5.13).
 export async function getWalletsList() {
   return fetchWalletsList();
+}
+
+// GET /api/dashboards/coins/:id, /vaults/:id, /wallets/:id (issue #391,
+// docs/bot-analytics-ui-port-plan.md §5.10/§5.12/§5.14, P3.3/P3.4/P3.5): the
+// coin/vault/wallet detail dossiers. Never synthetic: an unknown/malformed
+// id resolves to `null` (the route handler turns that into a 404), never a
+// fabricated row.
+export async function getCoinProfile(id: string) {
+  return fetchCoinProfile(id);
+}
+
+export async function getVaultProfile(id: string) {
+  return fetchVaultProfile(id);
+}
+
+export async function getWalletProfile(id: string) {
+  return fetchWalletProfile(id);
 }

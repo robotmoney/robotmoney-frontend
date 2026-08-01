@@ -1,0 +1,118 @@
+<!-- /lobster/:id — CoinProfile "coin dossier" (issue #391,
+     docs/bot-analytics-ui-port-plan.md §5.10, P3.3). Renders inside
+     views/dash/_layout.html's [data-outlet]; the ancestor `.a3` shell (issue
+     #379) already supplies the scoped theme, so nothing here repeats that
+     class. Real, non-fabricated data only (issue #98/#346 honesty contract)
+     — About/rank/liquidity/ExtLinks depend on P1.7 (not yet landed), so this
+     page shows an honest notice instead of fabricating that content. -->
+<div x-data="coinProfileView" data-coin-profile-view>
+  <a href="/lobster" class="a3-back-link" data-coin-profile-back-link>← Back to Lobster Coins</a>
+
+  <template x-if="loading">
+    <p class="data-label" data-coin-profile-loading>Loading …</p>
+  </template>
+  <template x-if="error">
+    <p class="a3-badge a3-badge--destructive" data-coin-profile-error x-text="error"></p>
+  </template>
+  <template x-if="notFound">
+    <div class="a3-dossier-empty" data-coin-profile-not-found>
+      <svg class="a3-icon a3-icon--lg"><use href="/assets/img/dash-icons.svg#i-coins"></use></svg>
+      <span class="data-label">Coin not found.</span>
+    </div>
+  </template>
+
+  <template x-if="!loading && !error && !notFound && profile">
+    <div>
+      <div class="a3-dossier-header">
+        <div class="a3-dossier-identity-compact">
+          <div class="a3-dossier-icon">
+            <template x-if="profile.logoUrl">
+              <img :src="profile.logoUrl" :alt="profile.name" />
+            </template>
+            <template x-if="!profile.logoUrl">
+              <svg class="a3-icon a3-icon--lg"><use href="/assets/img/dash-icons.svg#i-coins"></use></svg>
+            </template>
+          </div>
+          <div>
+            <h1 class="a3-dossier-title" data-coin-profile-name>
+              <span x-text="profile.name"></span>
+              <span class="data-label" x-text="profile.ticker" data-coin-profile-ticker></span>
+            </h1>
+            <p class="a3-dossier-subtitle">
+              <span x-show="profile.chain" x-text="(profile.chain || '').toUpperCase()" data-coin-profile-chain></span>
+            </p>
+          </div>
+        </div>
+        <div class="a3-dossier-price">
+          <div class="a3-dossier-price-value" data-coin-profile-price x-text="fmtUsd(profile.priceUsd)"></div>
+          <div
+            class="a3-dossier-price-change"
+            :class="(profile.percentChange24h || 0) >= 0 ? 'a3-dossier-price-change--up' : 'a3-dossier-price-change--down'"
+            data-coin-profile-change
+            x-text="fmtPct(profile.percentChange24h)"
+          ></div>
+        </div>
+      </div>
+
+      <template x-if="profile.stale">
+        <div class="a3-notice" data-coin-profile-stale-notice>
+          <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-alert-circle"></use></svg>
+          <span>Market data hasn't refreshed recently — figures below may be out of date.</span>
+        </div>
+      </template>
+
+      <div class="a3-dossier-stats" data-coin-profile-stats>
+        <div class="metric-card">
+          <p class="a3-dossier-stat-label">Market Cap</p>
+          <p class="a3-dossier-stat-value" x-text="fmtUsd(profile.marketCapUsd)"></p>
+        </div>
+        <div class="metric-card">
+          <p class="a3-dossier-stat-label">FDV</p>
+          <p class="a3-dossier-stat-value" x-text="fmtUsd(profile.fdvUsd)"></p>
+        </div>
+        <div class="metric-card">
+          <p class="a3-dossier-stat-label">24H Volume</p>
+          <p class="a3-dossier-stat-value" x-text="fmtUsd(profile.volume24hUsd)"></p>
+        </div>
+        <div class="metric-card">
+          <p class="a3-dossier-stat-label">Contract</p>
+          <p class="a3-dossier-stat-value" style="font-size:0.85rem;" x-text="fmtAddr(profile.contractAddress)"></p>
+        </div>
+      </div>
+
+      <div class="a3-card">
+        <div class="a3-dossier-chart-toolbar">
+          <h2 class="a3-card-title">Performance</h2>
+          <div class="a3-toggle-group" data-coin-profile-period>
+            <template x-for="p in periods" :key="p.id">
+              <button type="button" class="a3-toggle" :class="isPeriod(p.id) ? 'is-active' : ''" @click="setPeriod(p.id)" :data-period="p.id" x-text="p.label"></button>
+            </template>
+          </div>
+        </div>
+        <template x-if="filteredHistory.length === 0">
+          <p class="data-label" data-coin-profile-chart-empty>No price history yet.</p>
+        </template>
+        <div style="height:14rem;" x-show="filteredHistory.length > 0">
+          <canvas x-ref="priceChart" data-coin-profile-chart-canvas></canvas>
+        </div>
+      </div>
+
+      <div class="a3-card">
+        <h2 class="a3-card-title">Linked Agents</h2>
+        <template x-if="profile.linkedAgents.length === 0">
+          <p class="data-label">No linked agents.</p>
+        </template>
+        <div class="a3-dossier-chip-row" data-coin-profile-linked-agents>
+          <template x-for="a in profile.linkedAgents" :key="a.id">
+            <a class="a3-dossier-chip" :href="a.href" x-text="a.name" data-linked-agent-chip></a>
+          </template>
+        </div>
+      </div>
+
+      <div class="a3-notice" data-coin-profile-enrichment-notice>
+        <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-info"></use></svg>
+        <span>About, rank/liquidity stats, and external links (CoinGecko/DexScreener) aren't available yet — they depend on a proxy endpoint this repo hasn't shipped.</span>
+      </div>
+    </div>
+  </template>
+</div>

@@ -735,3 +735,130 @@ export interface AgentDetail {
   vaults: AgentVaultSummary[];
   wallets: AgentWalletSummary[];
 }
+
+// GET /api/dashboards/coins/:id, /vaults/:id, /wallets/:id (issue #391,
+// docs/bot-analytics-ui-port-plan.md §5.10/§5.12/§5.14, P3.3/P3.4/P3.5) — the
+// coin/vault/wallet detail dossiers. Distinct from the LIST DTOs directly
+// above (issue #386): a detail dossier carries history series + linked-
+// entity lists a table row does not, so this is its own DTO set rather than
+// a reshape of CoinListItem/VaultListItem/WalletListItem (same reasoning
+// list2-projections.ts documents for List2*Row vs EntityRow).
+//
+// Every field is a real column/aggregate over the SAME facet + snapshot
+// tables list2-projections.ts (#387) and entities-projections.ts (#384)
+// already read (lobster_coins/agent_vaults/tracked_wallets + their daily_*_
+// snapshots, migrations 0013/0014) — no new tables, no new writers. Two
+// upstream dependencies have NOT landed as of this issue, so the fields they
+// would have fed are simply absent rather than fabricated:
+//   - P1.7 (CoinGecko/DexScreener/Blockscout proxy endpoints): CoinProfile's
+//     About/rank/liquidity/ATH stats and ExtLink row, VaultProfile/
+//     WalletProfile's on-chain tx summaries.
+//   - P1.6 (wallet_holdings table + activity-log writer — the plan's OWN
+//     documented data caveat at §5.14): WalletProfile's TokenHoldingsCard,
+//     TokenDetailsDrawer, TransactionsCard/TxTransfersDialog, Recent Activity.
+// Each interface below only carries what's actually backed today.
+
+export interface CoinProfileLinkedAgent {
+  id: string;
+  name: string;
+  href: string; // /agents/:id
+}
+
+export interface CoinProfilePricePoint {
+  date: string; // YYYY-MM-DD, daily_coin_snapshots.snapshot_date
+  priceUsd: number | null;
+  marketCapUsd: number | null;
+  volume24hUsd: number | null;
+}
+
+export interface CoinProfile {
+  id: string;
+  name: string;
+  ticker: string | null;
+  chain: string | null;
+  logoUrl: string | null;
+  contractAddress: string | null;
+  priceUsd: number | null;
+  percentChange24h: number | null;
+  marketCapUsd: number | null;
+  fdvUsd: number | null;
+  volume24hUsd: number | null;
+  stale: boolean; // isStale(refreshedAt, COIN_REFRESH_FRESHNESS_BUDGET_MS) — same D24 rule as every other coin facet read
+  refreshedAt: string | null;
+  priceHistory: CoinProfilePricePoint[]; // ascending by date, up to 365d of daily_coin_snapshots
+  linkedAgents: CoinProfileLinkedAgent[]; // same project_id, is_active agents
+}
+
+export interface VaultProfileLinkedAgent {
+  id: string;
+  name: string;
+  href: string; // /agents/:id
+}
+
+export interface VaultProfileWallet {
+  id: string;
+  label: string;
+  address: string | null;
+  chain: string | null;
+  balanceUsd: number | null;
+  href: string; // /wallets/:id
+}
+
+export interface VaultProfileTvlPoint {
+  date: string; // YYYY-MM-DD, daily_tvl_snapshots.snapshot_date
+  tvlUsd: number | null;
+}
+
+export interface VaultProfileYieldPoint {
+  date: string;
+  apy: number | null;
+}
+
+export interface VaultProfile {
+  id: string;
+  name: string;
+  protocol: string | null;
+  strategyType: string | null;
+  chain: string | null;
+  vaultAddress: string | null;
+  dataSource: string | null; // 'live' | 'static' | null — same domain list2/list3 already render (no SIMULATED/UPCOMING value exists in this schema; see dash-vault-profile.js)
+  tvlUsd: number | null;
+  apy: number | null;
+  lastRebalanceAt: string | null;
+  createdAt: string | null;
+  stale: boolean; // isStale(refreshedAt, VAULT_REFRESH_FRESHNESS_BUDGET_MS)
+  refreshedAt: string | null;
+  tvlHistory: VaultProfileTvlPoint[]; // ascending by date, up to 365d of daily_tvl_snapshots
+  // Always [] today (D11): this repo never fabricates the original's seeded
+  // random-walk yield chart. Port the chart frame + toggle, feed the empty
+  // state, until a real per-vault APY history table/writer exists.
+  yieldHistory: VaultProfileYieldPoint[];
+  linkedAgents: VaultProfileLinkedAgent[]; // best-effort project_id join — agent_vaults has no direct managing-agent FK
+  linkedWallets: VaultProfileWallet[]; // best-effort project_id join, same caveat
+}
+
+export interface WalletProfileLinkedAgent {
+  id: string;
+  name: string;
+  href: string; // /agents/:id
+}
+
+export interface WalletProfileBalancePoint {
+  date: string; // YYYY-MM-DD, daily_wallet_snapshots.snapshot_date
+  balanceUsd: number | null;
+}
+
+export interface WalletProfile {
+  id: string;
+  label: string;
+  category: string | null;
+  chain: string | null;
+  address: string | null;
+  balanceUsd: number | null;
+  balance30dAgoUsd: number | null; // last snapshot at/before 30d ago, for the +/-30d delta
+  lastTxAt: string | null;
+  refreshedAt: string | null;
+  stale: boolean; // isStale(refreshedAt, WALLET_REFRESH_FRESHNESS_BUDGET_MS) — D14: wallet refresh is unimplemented, so this is near-always true today, honestly
+  balanceHistory: WalletProfileBalancePoint[]; // ascending by date, up to 365d of daily_wallet_snapshots
+  linkedAgent: WalletProfileLinkedAgent | null; // wallet_address match (lowercased) first, else same project_id
+}
