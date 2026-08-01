@@ -12,6 +12,7 @@
 // when an agent has no revenue history, matching the original's own
 // "all-zero placeholders, normally hidden" behavior for that column.
 import { api, ROUTES } from "../../lib/api.js";
+import { fmtUsdCompact } from "../lib/dash-format.js";
 
 export function registerList3View(Alpine) {
   Alpine.data("list3View", () => ({
@@ -104,14 +105,9 @@ export function registerList3View(Alpine) {
       return status === "healthy" ? "a3-badge--green" : status === "partial" ? "a3-badge--amber" : "a3-badge--destructive";
     },
 
-    // ── formatting (page-local until dash-format.js/#381 lands) ─────────────
+    // ── formatting (fmtUsd shared via alpine/lib/dash-format.js, issue #449) ─
     fmtUsd(n) {
-      if (n == null || !isFinite(n)) return "—";
-      const abs = Math.abs(n);
-      if (abs >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
-      if (abs >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
-      if (abs >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
-      return "$" + n.toFixed(2);
+      return fmtUsdCompact(n);
     },
     fmtInt(n) {
       return n == null || !isFinite(n) ? "—" : Math.round(n).toLocaleString();

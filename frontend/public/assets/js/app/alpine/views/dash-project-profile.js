@@ -13,8 +13,7 @@
 // (no buyer/holder column anywhere in this schema). Both are omissions, not
 // hidden-but-fetched sections — the DTO itself carries no such field.
 //
-// Formatting helpers are page-local (dash-format.js, P0.6, has not landed
-// yet) — same documented deviation as list2.js/dash-agents.js. Chart
+// fmtUsd is now shared via alpine/lib/dash-format.js (issue #449). Chart
 // rendering reuses the shared dash Chart.js theme (alpine/lib/chart-theme.js,
 // issue #381) and the shared Sparkline lib (alpine/lib/sparkline.js) — both
 // landed since #385/#387 shipped their own hand-rolled sparkline helpers, so
@@ -23,6 +22,7 @@
 import { api, path, ROUTES } from "../../lib/api.js";
 import { dashChartOptions, dashLineDatasetDefaults } from "../lib/chart-theme.js";
 import { renderRowSparkline, renderSparkline } from "../lib/sparkline.js";
+import { fmtUsdCompact } from "../lib/dash-format.js";
 
 // §5.5's four ScoreBars, in display order. Each sub-score is 0..100
 // (backend/src/projects/transforms.ts::computeCoverage) — same scale as
@@ -152,15 +152,13 @@ export function registerProjectProfileView(Alpine) {
       return renderRowSparkline(coin.sparkline90d || [], { width: 90 });
     },
 
-    // ── formatting (page-local until dash-format.js/#381's follow-up lands) ──
+    // ── formatting (fmtUsd shared via alpine/lib/dash-format.js, issue #449) ─
+    // issue #449: this was the one view that put the sign BEFORE the "$"
+    // ("-$2.00B") instead of leaving it on the number ("$-2.00B") the way
+    // the other 10+ views already did — converged onto the majority shape;
+    // non-negative output is unchanged either way.
     fmtUsd(n) {
-      if (n == null || !isFinite(n)) return "—";
-      const abs = Math.abs(n);
-      const sign = n < 0 ? "-" : "";
-      if (abs >= 1e9) return sign + "$" + (abs / 1e9).toFixed(2) + "B";
-      if (abs >= 1e6) return sign + "$" + (abs / 1e6).toFixed(2) + "M";
-      if (abs >= 1e3) return sign + "$" + (abs / 1e3).toFixed(1) + "K";
-      return sign + "$" + abs.toFixed(2);
+      return fmtUsdCompact(n);
     },
     fmtNum(n) {
       return n == null || !isFinite(n) ? "—" : n.toFixed(1);

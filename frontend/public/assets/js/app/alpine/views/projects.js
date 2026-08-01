@@ -1,6 +1,7 @@
 // Alpine factory for the /projects directory view ("Agentic Economy
 // Ecosystem"). Moved verbatim from the monolithic views.js (finding 025).
 import { api, ROUTES } from "../../lib/api.js";
+import { fmtUsdCompact } from "../lib/dash-format.js";
 
 // Fidelity upgrades (issue #388, docs/bot-analytics-ui-port-plan.md §5.4/P2.8):
 // column widths persist under the same key the original app used
@@ -167,12 +168,12 @@ export function registerProjectsView(Alpine) {
     sortIcon(key) { return this.sortKey === key ? (this.sortDir === "asc" ? "▲" : "▼") : "↕"; },
 
     // ── formatting ────────────────────────────────────────────────────────
+    // issue #449: was `n >= 1e9` (raw signed value) — negative values in the
+    // B/M/K range fell through to the plain, unscaled branch. zeroDash
+    // preserves this view's own n===0 -> "—" special case (its siblings
+    // render "$0.00"/"$0" for exact zero instead).
     fmtUsd(n) {
-      if (n == null || !isFinite(n) || n === 0) return "—";
-      if (n >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
-      if (n >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
-      if (n >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
-      return "$" + n.toFixed(0);
+      return fmtUsdCompact(n, { baseDecimals: 0, zeroDash: true });
     },
     mcFdvPct(p) {
       return p.maxFdv > 0 && p.maxMarketCap > 0 ? ((p.maxMarketCap / p.maxFdv) * 100).toFixed(1) + "%" : "—";

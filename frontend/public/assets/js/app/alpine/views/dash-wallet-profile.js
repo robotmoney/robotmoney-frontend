@@ -19,6 +19,7 @@
 // "Sparkline library" demo section labels it "(large 800x120,
 // WalletProfile)"), so this view is that helper's first real call site.
 import { api, ROUTES, path } from "../../lib/api.js";
+import { fmtUsdCompact } from "../lib/dash-format.js";
 import { renderSparkline } from "../lib/sparkline.js";
 
 export function registerWalletProfileView(Alpine) {
@@ -63,12 +64,7 @@ export function registerWalletProfileView(Alpine) {
 
     // ── formatting ──────────────────────────────────────────────────────────
     fmtUsd(n) {
-      if (n == null || !isFinite(n)) return "—";
-      const abs = Math.abs(n);
-      if (abs >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
-      if (abs >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
-      if (abs >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
-      return "$" + n.toFixed(2);
+      return fmtUsdCompact(n);
     },
     fmtDelta(n) {
       if (n == null || !isFinite(n)) return "—";
