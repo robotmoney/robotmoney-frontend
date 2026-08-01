@@ -376,6 +376,14 @@ export async function runSession(
   // migration 0022). Everything downstream — fixtures, regime as-of, the
   // members' signed payloads, the state polls — uses that value, so there is
   // exactly one clock in the system and it is the database's.
+  // The SUBJECT must exist before a session can reference it
+  // (committee_sessions_subject_fk). This is deliberately separate from the
+  // dated `subject_fixtures` call further down: creating the subject needs no
+  // date, while the fixtures are filed under the session's date and therefore
+  // cannot run until the session exists. Ordering them the other way round is
+  // what made a clean database fail its first two sessions with a foreign-key
+  // violation while the boot still reported READY.
+  await admin("subject", subject);
   await enqueueLifecycleJob("open_session", { subjectId: subject.id });
   const opened = await waitForSubjectSession(subject.id, "scheduled");
   const date: string = opened.session.date;
@@ -386,10 +394,11 @@ export async function runSession(
   const emitSession = (state: string, sid?: number) =>
     onProgress?.({ type: "session", state, sessionId: sid, subject: subject.id, date });
 
-  // Ensure subject exists; regime is already seeded by the first session. Both
-  // are now dated by the SESSION's own date rather than by this process's clock.
+  // Regime is already seeded by the first session; later ones self-seed for
+  // their own date — which is now the SESSION's date, read back from the
+  // database, rather than one this process picked. (The subject itself is
+  // ensured above, before the session that references it.)
   if (sessionIndex > 0) {
-    await admin("subject", subject);
     await runRegimeClassify(date, rail);
   }
 
