@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyRawFloorSeed } from "../src/analytics/store/floor-seed.ts";
-import { loadRawFloorSeed } from "../src/analytics/extract/floor-seed.ts";
+import { loadRawFloorSeed, DEFAULT_FLOOR_SEED_PATH } from "../src/analytics/extract/floor-seed.ts";
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
 import { sql } from "../src/db/client.ts";
 
@@ -102,4 +102,73 @@ test("append-only floor: pre-existing DB rows win on overlap; seed only fills ga
   } finally {
     rmSync(join(path, ".."), { recursive: true, force: true });
   }
+});
+
+// ── Issue #400: the ACTUAL committed vendored gzip carries real BTC_MVRV ──────
+// history (regenerated via `bun run floor-seed:regenerate`, #127's Coinmetrics
+// CapMVRVCur repoint) — not the tiny synthetic seed above. These tests load the
+// real ~580 KB fixture directly so a future regeneration that drops/corrupts
+// BTC_MVRV fails loudly here, not just in the full regime-fidelity replay.
+beforeEach(async () => {
+  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'BTC_MVRV'`;
+});
+
+test("committed vendored floor seed contains finite, ordered BTC_MVRV observations", async () => {
+  const seed = await loadRawFloorSeed(DEFAULT_FLOOR_SEED_PATH);
+  const mvrv = seed.BTC_MVRV;
+  expect(mvrv).toBeDefined();
+  // Multi-year daily history, not a token/placeholder handful of rows.
+  expect(mvrv.length).toBeGreaterThan(2000);
+  for (const p of mvrv) {
+    expect(Number.isFinite(p.value), `BTC_MVRV@${p.date} must be finite`).toBe(true);
+  }
+  for (let i = 1; i < mvrv.length; i++) {
+    expect(mvrv[i].date > mvrv[i - 1].date, `BTC_MVRV must be strictly date-ordered ascending`).toBe(true);
+  }
+  // MVRV is a market-cap/realized-cap ratio: sane historical bound (all-time
+  // range is roughly 0.4-4.7), a loose sanity check against a corrupted regen.
+  for (const p of mvrv) {
+    expect(p.value, `BTC_MVRV@${p.date} outside plausible MVRV range`).toBeGreaterThan(0);
+    expect(p.value, `BTC_MVRV@${p.date} outside plausible MVRV range`).toBeLessThan(20);
+  }
+});
+
+test("cold DB: the committed floor seeds BTC_MVRV once; a second run is a no-op (idempotent)", async () => {
+  const seed = await loadRawFloorSeed(DEFAULT_FLOOR_SEED_PATH);
+  const mvrvSeed = seed.BTC_MVRV;
+  expect(mvrvSeed.length).toBeGreaterThan(2000);
+
+  const first = await applyRawFloorSeed(seed);
+  expect(first.seededPoints).toBeGreaterThan(0);
+
+  const [{ n: afterFirst }] = await sql`
+    SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'BTC_MVRV'`;
+  expect(afterFirst).toBe(mvrvSeed.length);
+
+  // Idempotent: every (date, BTC_MVRV) is now present → the second run adds none.
+  await applyRawFloorSeed(seed);
+  const [{ n: afterSecond }] = await sql`
+    SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'BTC_MVRV'`;
+  expect(afterSecond).toBe(mvrvSeed.length);
+  expect(afterSecond).toBe(afterFirst);
+});
+
+test("append-only floor: an existing real BTC_MVRV DB value is never overwritten by the seed", async () => {
+  const seed = await loadRawFloorSeed(DEFAULT_FLOOR_SEED_PATH);
+  const mvrvSeed = seed.BTC_MVRV;
+  const overlapDate = mvrvSeed[0].date;
+  const realValue = 9.87654321; // a distinguishable "already fetched live" value
+
+  await saveRawIndicatorHistory({ BTC_MVRV: [{ date: overlapDate, value: realValue }] });
+
+  const res = await applyRawFloorSeed(seed);
+  // Every BTC_MVRV date except the one pre-seeded overlap is newly written.
+  expect(res.seededPoints).toBeGreaterThanOrEqual(mvrvSeed.length - 1);
+
+  const [{ value }] = await sql`
+    SELECT value FROM raw_indicator_history WHERE indicator = 'BTC_MVRV' AND date = ${overlapDate}`;
+  expect(Number(value)).toBeCloseTo(realValue, 6);
+
+  const [{ n }] = await sql`SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'BTC_MVRV'`;
+  expect(n).toBe(mvrvSeed.length);
 });
