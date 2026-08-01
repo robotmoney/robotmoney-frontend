@@ -4031,6 +4031,13 @@ These documents describe current product and system commitments:
 - Architecture (this document) — system boundaries, runtime components,
   data flows, and deployment shape.
 - [Decisions](./decisions.md) — accepted architecture decision records (ADRs).
+- [Bot-analytics UI port plan](./bot-analytics-ui-port-plan.md) — the
+  canonical spec for the Analytics Surface dashboard port (issues #379-#402
+  and siblings), with its companion
+  [original-app](./bot-analytics-ui-port/inventory-original.md) and
+  [current-repo](./bot-analytics-ui-port/inventory-current.md) inventories.
+  A working plan, not a decision record — status markers reflect the point
+  it was written, not necessarily current state.
 - [Deployment](./runbooks/deployment.md) — GitOps environments, credentials, and
   operational setup.
 - The demo, live-data, admin-surface, and topology specifications are
