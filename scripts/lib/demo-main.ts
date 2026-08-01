@@ -27,6 +27,7 @@ import {
   type OnboardingIdentity,
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
+import { startProspectTranscript } from "./demo-prospect-transcript.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./demo-newcomers.ts";
 import { personaIdentity } from "./committee/persona-keys.ts";
 import { admissionDelayMs, decideAdmission, planAdoptions } from "./committee/roster-plan.ts";
@@ -1952,6 +1953,18 @@ async function main(): Promise<void> {
       // 3): the same passphrase must unlock the keystore in every later
       // session run. Never logged; redacted from transcripts at the source.
       const keystorePassphrase = crypto.randomUUID();
+      // Retained, tailable, secret-redacted per-prospect transcript (issue
+      // #317): every admission attempt, successful, failed, or still running,
+      // gets a discoverable host-side record that survives the member-agent
+      // container's own teardown — see scripts/lib/demo-prospect-transcript.ts.
+      const attemptStartedAt = Date.now();
+      const transcript = startProspectTranscript({
+        repoRoot,
+        composeProject: project,
+        identity,
+        model: resolveModelConfig(process.env).model,
+      });
+      log(`onboarding ${identity.name} transcript: ${transcript.directory} (tail -f ${join(transcript.directory, "events.ndjson")} while in progress)`);
       try {
         const result: OnboardingEvalResult = await runOnboardingEvalWithRetry({
           repoRoot,
@@ -1967,7 +1980,12 @@ async function main(): Promise<void> {
           homeVolumeFor: (attemptIdentity) => memberHomeVolumeName(project, attemptIdentity.runId),
           keystorePassphrase,
           onEvent: (msg) => log(`onboarding-eval[${identity.runId}]: ${msg}`),
+          // See startProspectTranscript's doc comment: a SINK, never `telemetry`
+          // — each retry attempt still tags its own events with its own
+          // attempt number, and all of them land in the one directory above.
+          onStructuredEvent: transcript.sink,
         });
+        transcript.finish(result, Date.now() - attemptStartedAt);
 
         // Rekey the pane entry to the server-minted memberId (§11 R2) as soon as
         // it's known, so committeeProgress's later ev.memberId lookups match.
@@ -2034,6 +2052,7 @@ async function main(): Promise<void> {
         log(`onboarded ${identity.name} (#${n + 1}/${NEWCOMER_NAMES.length}) memberId=${result.memberId} — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
       } catch (err) {
         log(`onboarding ${identity.name} eval threw (stack still running): ${err instanceof Error ? err.message : err}`);
+        transcript.finishThrew(err, Date.now() - attemptStartedAt);
       }
     }
     state.upcoming = [];

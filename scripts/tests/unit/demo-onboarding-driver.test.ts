@@ -102,6 +102,36 @@ export function retryCallsReuseStackEnvironment(src: string): string | null {
     : `${missing.length}/${calls.length} demo retry-wrapper call site(s) re-resolve Compose without stack.spawnEnv`;
 }
 
+/**
+ * Issue #317: every admission attempt must get a retained, tailable,
+ * per-prospect transcript (scripts/lib/demo-prospect-transcript.ts) — not
+ * only a console line the shared demo log prints on failure. null when the
+ * driver wires it correctly (started before the attempt, wired as the retry
+ * wrapper's SINK, and closed out on every exit path — admitted, failed, and
+ * thrown); a reason string otherwise.
+ */
+export function retainsProspectTranscript(body: string): string | null {
+  if (!/startProspectTranscript\(/.test(body)) {
+    return "onboardingDriver() never calls startProspectTranscript — no per-prospect transcript is retained";
+  }
+  if (!/onStructuredEvent:\s*transcript\.sink/.test(body)) {
+    return "onboardingDriver() does not wire transcript.sink as onStructuredEvent — retry-wrapper events never reach the retained transcript";
+  }
+  // Must NOT wire a shared `telemetry:` option instead — see
+  // scripts/lib/demo-prospect-transcript.ts's doc comment: that would freeze
+  // every later retry attempt's `attempt` tag at the first attempt's value.
+  if (/telemetry:\s*transcript/.test(body)) {
+    return "onboardingDriver() wires transcript as a shared `telemetry:` option instead of `onStructuredEvent` — later retry attempts would misreport their attempt number";
+  }
+  if (!/transcript\.finish\(result,/.test(body)) {
+    return "onboardingDriver() never calls transcript.finish(result, …) — admitted and failed outcomes are never durably recorded";
+  }
+  if (!/transcript\.finishThrew\(/.test(body)) {
+    return "onboardingDriver() never calls transcript.finishThrew(...) in its catch block — a harness throw leaves the transcript looking permanently in-progress";
+  }
+  return null;
+}
+
 describe("the demo's onboarding driver (scripts/lib/demo-main.ts)", () => {
   const body = onboardingDriverBody(demoMain);
 
@@ -137,6 +167,14 @@ describe("the demo's onboarding driver (scripts/lib/demo-main.ts)", () => {
 
   test("both the CI sweep and standing driver reuse the running stack's exact Compose environment", () => {
     expect(retryCallsReuseStackEnvironment(demoMain)).toBeNull();
+  });
+
+  test("it retains a discoverable, tailable per-prospect transcript for every admission attempt (issue #317)", () => {
+    expect(retainsProspectTranscript(body)).toBeNull();
+  });
+
+  test("the driver imports startProspectTranscript from its dedicated module", () => {
+    expect(demoMain).toContain('import { startProspectTranscript } from "./demo-prospect-transcript.ts"');
   });
 
   test("its admission delays come from the cadence profile, not from 60_000 / 300_000 literals", () => {
@@ -215,6 +253,50 @@ describe("red control: the 2026-07-25 driver, which lost a seat to one refusal",
   test("the stack-environment guard reports a call site that drops composeSpawnEnv", () => {
     const broken = demoMain.replaceAll("composeSpawnEnv: stack.spawnEnv,", "");
     expect(retryCallsReuseStackEnvironment(broken)).toContain("2/2");
+  });
+
+  // Issue #317 controls: a driver that launches the eval but never retains a
+  // per-prospect transcript, or wires it wrong, must be REPORTED.
+  test("retainsProspectTranscript REPORTS a driver that never calls startProspectTranscript", () => {
+    const reason = retainsProspectTranscript("await runOnboardingEvalWithRetry({ identity });\n");
+    expect(reason).toContain("startProspectTranscript");
+  });
+
+  test("retainsProspectTranscript REPORTS a driver that starts the transcript but never wires its sink", () => {
+    const reason = retainsProspectTranscript(
+      "const transcript = startProspectTranscript({ identity });\nawait runOnboardingEvalWithRetry({ identity });\n",
+    );
+    expect(reason).toContain("onStructuredEvent");
+  });
+
+  test("retainsProspectTranscript REPORTS a driver that wires a shared `telemetry:` option instead of the sink", () => {
+    const reason = retainsProspectTranscript(
+      "const transcript = startProspectTranscript({ identity });\n" +
+        "await runOnboardingEvalWithRetry({ identity, onStructuredEvent: transcript.sink, telemetry: transcript.telemetry });\n" +
+        "transcript.finish(result, 0);\ntranscript.finishThrew(err, 0);\n",
+    );
+    expect(reason).toContain("telemetry:");
+  });
+
+  test("retainsProspectTranscript REPORTS a driver that never closes out a finished attempt", () => {
+    const reason = retainsProspectTranscript(
+      "const transcript = startProspectTranscript({ identity });\n" +
+        "await runOnboardingEvalWithRetry({ identity, onStructuredEvent: transcript.sink });\n",
+    );
+    expect(reason).toContain("transcript.finish(result");
+  });
+
+  test("retainsProspectTranscript REPORTS a driver whose catch block never calls finishThrew", () => {
+    const reason = retainsProspectTranscript(
+      "const transcript = startProspectTranscript({ identity });\n" +
+        "await runOnboardingEvalWithRetry({ identity, onStructuredEvent: transcript.sink });\n" +
+        "transcript.finish(result, 0);\n",
+    );
+    expect(reason).toContain("finishThrew");
+  });
+
+  test("retainsProspectTranscript accepts the real driver's wiring", () => {
+    expect(retainsProspectTranscript(onboardingDriverBody(demoMain))).toBeNull();
   });
 
   // Issue #371 controls. The pre-#371 driver read its delays from two constants
