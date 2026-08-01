@@ -189,11 +189,17 @@ describe("frontend route resolution", () => {
       expect(viewFor(p)).toBe("/views/dash/coming-soon.html");
       expect(routeMetaFor(p)).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
     }
-    // /projects/:slug is the one param route the plan (§5.5) explicitly
-    // marks public — /projects (the list) is already a live, ungated page,
-    // and gating its own profile sub-route would regress that.
-    expect(viewFor("/projects/robotmoney-vault")).toBe("/views/dash/coming-soon.html");
+  });
+
+  // Issue #389 (§5.5, P3.1): the one param route the plan explicitly marks
+  // public — /projects (the list) is already a live, ungated page, and
+  // gating its own profile sub-route would regress that. Graduates off the
+  // shared coming-soon placeholder onto its own real fragment (the first
+  // param route to do so).
+  test("/projects/:slug (issue #389) resolves to its own real fragment, public (ungated) under the dash layout", () => {
+    expect(viewFor("/projects/robotmoney-vault")).toBe("/views/dash/project-profile.html");
     expect(routeMetaFor("/projects/robotmoney-vault")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: false });
+    expect(routeMetaFor("/projects/robotmoney-vault/")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: false });
   });
 
   test("routeMetaFor returns null for every non-dashboard route — a strict addition, not a behavior change", () => {

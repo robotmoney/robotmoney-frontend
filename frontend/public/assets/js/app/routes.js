@@ -62,6 +62,10 @@ const ABOUT_VIEW = `${VIEW_DIR}/dash/about.html`;
 // ahead of the coming-soon placeholder above; see dash-ask-roboto.js for why
 // this is a deterministic rule-based matcher, never an LLM call.
 const ASK_ROBOTO_VIEW = `${VIEW_DIR}/dash/ask-roboto.html`;
+// /projects/:slug "ProjectProfile" dossier (issue #389, §5.5, P3.1) — the
+// first PARAM route (DASH_PARAM_ROUTES below, not DASH_ROUTES) to ship real
+// content ahead of the coming-soon placeholder.
+const PROJECT_PROFILE_VIEW = `${VIEW_DIR}/dash/project-profile.html`;
 
 // Static dashboard routes (§4.1's list) that render inside DASH_LAYOUT_VIEW.
 // `gated: true` means dash-shell.js's gate must pass before the outlet
@@ -93,14 +97,16 @@ const DASH_ROUTES = {
 // odd one out: its header in the plan (§5.5) explicitly marks ProjectProfile
 // "— public" (unlike its siblings) because /projects (the list) is already a
 // live, ungated page in this repo (INV-C §4) — gating its own profile
-// sub-route would be a product regression this issue does not own.
+// sub-route would be a product regression this issue does not own. Issue
+// #389 (P3.1) graduates it off the shared placeholder onto its own real
+// fragment — the first param route to do so; the other four are unchanged.
 /** @type {Array<{ test: RegExp; route: DashRoute }>} */
 const DASH_PARAM_ROUTES = [
   { test: /^\/agents\/[^/]+\/?$/, route: { view: AGENT_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/lobster\/[^/]+\/?$/, route: { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/vaults\/[^/]+\/?$/, route: { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/wallets\/[^/]+\/?$/, route: { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
-  { test: /^\/projects\/[^/]+\/?$/, route: { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: false } },
+  { test: /^\/projects\/[^/]+\/?$/, route: { view: PROJECT_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: false } },
 ];
 
 /** @param {string} pathname @returns {DashRoute | null} */
