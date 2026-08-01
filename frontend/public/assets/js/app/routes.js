@@ -42,6 +42,10 @@ const ACTIVITY_VIEW = `${VIEW_DIR}/dash/activity.html`;
 // directory page to ship real content ahead of the coming-soon placeholder
 // above.
 const AGENTS_VIEW = `${VIEW_DIR}/dash/agents.html`;
+// /agents/:id "Money-agent dossier" AgentProfile (issue #390, §5.8, P3.2) —
+// the first param-route dashboard page to ship real content ahead of the
+// coming-soon placeholder every other `:id`/`:slug` route still points at.
+const AGENT_PROFILE_VIEW = `${VIEW_DIR}/dash/agent-profile.html`;
 // Real fragments (issue #386, §5.9/§5.11/§5.13, P2.3/P2.4/P2.5) — the first
 // three DASH_ROUTES entries to graduate off DASH_COMING_SOON_VIEW.
 const LOBSTER_VIEW = `${VIEW_DIR}/dash/lobster.html`;
@@ -92,7 +96,7 @@ const DASH_ROUTES = {
 // sub-route would be a product regression this issue does not own.
 /** @type {Array<{ test: RegExp; route: DashRoute }>} */
 const DASH_PARAM_ROUTES = [
-  { test: /^\/agents\/[^/]+\/?$/, route: { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
+  { test: /^\/agents\/[^/]+\/?$/, route: { view: AGENT_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/lobster\/[^/]+\/?$/, route: { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/vaults\/[^/]+\/?$/, route: { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/wallets\/[^/]+\/?$/, route: { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },

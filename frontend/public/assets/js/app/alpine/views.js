@@ -33,6 +33,7 @@ import { registerList3View } from "./views/list3.js";
 import { registerSubmitView } from "./views/submit.js";
 import { registerActivityView } from "./views/activity.js";
 import { registerAgentsView } from "./views/dash-agents.js";
+import { registerAgentProfileView } from "./views/dash-agent-profile.js";
 import { registerDashLobsterView } from "./views/dash-lobster.js";
 import { registerDashVaultsView } from "./views/dash-vaults.js";
 import { registerDashWalletsView } from "./views/dash-wallets.js";
@@ -63,6 +64,7 @@ export function registerViews(Alpine) {
   registerSubmitView(Alpine);
   registerActivityView(Alpine);
   registerAgentsView(Alpine);
+  registerAgentProfileView(Alpine);
   registerDashLobsterView(Alpine);
   registerDashVaultsView(Alpine);
   registerDashWalletsView(Alpine);

@@ -1,0 +1,227 @@
+<!-- /agents/:id — "Money-agent dossier" AgentProfile (issue #390, docs/bot-
+     analytics-ui-port-plan.md §5.8, P3.2). Renders inside views/dash/
+     _layout.html's [data-outlet]; the ancestor `.a3` shell (issue #379)
+     already supplies the scoped theme, so nothing here repeats that class.
+     Real, non-fabricated data only (issue #98/#346 honesty contract) — an
+     unknown id renders the honest not-found state, never a stub row.
+
+     Voting & Reputation and Recent Transactions (both described in §5.8)
+     are intentionally NOT on this page yet — see dash-agent-profile.js's
+     header comment: both need backing (P1.6 agent_score_votes / P1.7
+     onchain proxy) that doesn't exist in this repo. -->
+<div x-data="agentProfileView" data-agent-profile-view>
+  <a href="/list" class="a3-back-link" data-agent-back-link>← Back to List</a>
+
+  <template x-if="loading">
+    <p class="data-label" data-agent-loading>Loading …</p>
+  </template>
+  <template x-if="error">
+    <p class="a3-badge a3-badge--destructive" data-agent-error x-text="error"></p>
+  </template>
+
+  <template x-if="!loading && !error && agent">
+    <div>
+      <!-- DossierHeader (§5.8) -->
+      <header class="a3-dossier-head glow-cyan" data-dossier-header>
+        <div class="a3-dossier-identity">
+          <div class="a3-dossier-avatar" aria-hidden="true" x-text="(agent.name || '?').charAt(0).toUpperCase()"></div>
+          <div>
+            <div class="a3-dossier-eyebrow">
+              <span>Money-agent dossier</span>
+              <span :class="agent.active ? 'status-active' : 'status-inactive'" x-text="agent.active ? 'Active' : 'Inactive'" data-dossier-status></span>
+              <span class="a3-badge a3-badge--cyan" x-text="(agent.protocol || 'other').toUpperCase()" data-dossier-protocol></span>
+              <template x-if="agent.confidence">
+                <span class="a3-badge" :class="agent.confidence === 'high' ? 'a3-badge--green' : agent.confidence === 'medium' ? 'a3-badge--amber' : 'a3-badge--muted'" x-text="agent.confidence.toUpperCase() + ' CONFIDENCE'" data-dossier-confidence></span>
+              </template>
+            </div>
+            <h1 class="a3-dossier-name" x-text="agent.name" data-dossier-name></h1>
+            <template x-if="agent.description">
+              <p class="a3-dossier-desc" x-text="agent.description" data-dossier-desc></p>
+            </template>
+            <div class="a3-dossier-chips">
+              <span class="a3-badge" data-dossier-seen>seen · <span x-text="fmtDate(agent.createdAt)"></span></span>
+              <template x-if="!agent.description">
+                <span class="a3-badge a3-badge--muted">auto-generated summary unavailable</span>
+              </template>
+            </div>
+          </div>
+        </div>
+        <div class="a3-dossier-actions">
+          <template x-if="agent.websiteUrl">
+            <a :href="agent.websiteUrl" target="_blank" rel="noopener" class="a3-dossier-pill" data-dossier-website>
+              <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-globe"></use></svg> Website
+            </a>
+          </template>
+          <template x-if="agent.twitterHandle">
+            <a :href="'https://twitter.com/' + agent.twitterHandle" target="_blank" rel="noopener" class="a3-dossier-pill" data-dossier-twitter>
+              <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-twitter"></use></svg> <span x-text="'@' + agent.twitterHandle"></span>
+            </a>
+          </template>
+          <template x-if="agent.walletAddress">
+            <div class="a3-dossier-pill" data-dossier-wallet-chip>
+              <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-wallet"></use></svg>
+              <span x-text="shortAddr(agent.walletAddress)"></span>
+              <button type="button" class="a3-copy-btn a3-copy-wallet" :class="copied && 'is-copied'" @click="copyWallet()" data-copy-wallet-btn>
+                <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-copy"></use></svg>
+              </button>
+              <a :href="walletExplorerUrl()" target="_blank" rel="noopener" data-dossier-wallet-explorer>
+                <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-external-link"></use></svg>
+              </a>
+            </div>
+          </template>
+        </div>
+      </header>
+
+      <!-- MoneyStrip (§5.8) -->
+      <div class="a3-money-strip" data-money-strip>
+        <div class="metric-card" data-money-revenue30d>
+          <span class="data-label">30D Money In</span>
+          <span class="data-value" x-text="fmtUsd(agent.revenue30dUsd)"></span>
+        </div>
+        <div class="metric-card" data-money-wallet-status>
+          <span class="data-label">Wallet Status</span>
+          <span class="data-value" style="font-size:1rem;" x-text="walletStatusLabel"></span>
+        </div>
+        <div class="metric-card" data-money-x402>
+          <span class="data-label">x402 Flow</span>
+          <span class="data-value" x-text="fmtUsd(agent.x402VolumeUsd)"></span>
+          <span class="data-label" x-text="agent.x402Txns + ' txns'"></span>
+        </div>
+        <div class="metric-card" data-money-freshness>
+          <span class="data-label">Freshness</span>
+          <span class="data-value" style="font-size:1rem;" x-text="agent.enrichedAt ? fmtDate(agent.enrichedAt) : 'Unknown'"></span>
+        </div>
+        <div class="metric-card" data-money-score>
+          <span class="data-label">Evidence Score</span>
+          <span class="data-value" x-text="fmtScore(agent.score)"></span>
+        </div>
+      </div>
+
+      <!-- EvidenceRail + DataQualityPanel (§5.8) -->
+      <div class="a3-evidence-layout">
+        <div class="metric-card" data-evidence-rail>
+          <p class="a3-card-title" style="margin-bottom:0.75rem;">Evidence Rail</p>
+          <template x-for="key in ['wallet', 'moneyIn', 'x402', 'identity', 'freshness']" :key="key">
+            <div class="a3-evidence-row" :data-evidence-row="key">
+              <span x-text="{wallet:'Wallet evidence', moneyIn:'Money-in proof', x402:'x402 proof', identity:'Identity proof', freshness:'Freshness'}[key]"></span>
+              <span class="a3-badge" :class="evidenceClass(agent.evidence[key])" x-text="evidenceLabel(agent.evidence[key])"></span>
+            </div>
+          </template>
+        </div>
+        <div class="metric-card a3-card--purple" data-quality-panel>
+          <p class="a3-card-title" style="margin-bottom:0.75rem;">Why included</p>
+          <ul class="a3-why-list" data-why-list>
+            <template x-for="(item, i) in agent.whyIncluded" :key="i">
+              <li x-text="item"></li>
+            </template>
+            <template x-if="agent.whyIncluded.length === 0">
+              <li>No positive evidence recorded yet.</li>
+            </template>
+          </ul>
+          <p class="a3-card-title" style="margin: 1rem 0 0.75rem;">Open gaps</p>
+          <ul class="a3-gap-list" data-gap-list>
+            <template x-for="(item, i) in agent.openGaps" :key="i">
+              <li x-text="item"></li>
+            </template>
+            <template x-if="agent.openGaps.length === 0">
+              <li>No open gaps — every evidence leg is verified.</li>
+            </template>
+          </ul>
+        </div>
+      </div>
+
+      <!-- RankImprovementPanel (§5.8) — derived 1:1 from openGaps above. -->
+      <template x-if="agent.openGaps.length > 0">
+        <div class="a3-lever-grid" data-lever-panel>
+          <template x-for="(gap, i) in agent.openGaps.slice(0, 3)" :key="i">
+            <div class="metric-card a3-lever-card">
+              <span class="data-label">Lever <span x-text="i + 1"></span></span>
+              <p class="a3-lever-next">Next: <span x-text="gap"></span></p>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <!-- PerformanceChart (§5.8) -->
+      <template x-if="hasX402History">
+        <div class="metric-card a3-chart-card" data-perf-chart-card>
+          <canvas x-ref="perfChart"></canvas>
+        </div>
+      </template>
+      <template x-if="!hasX402History">
+        <div class="a3-chart-placeholder" data-perf-chart-placeholder>No attributed x402 payment history yet.</div>
+      </template>
+
+      <!-- x402 Usage Metrics (§5.8) — "unique buyers" is dropped: no schema
+           column backs it (openclaw_agents/daily_agent_snapshots carry
+           score/txns/volume/resources only, never a buyer count). -->
+      <div class="a3-usage-grid" data-usage-metrics>
+        <div class="metric-card" data-usage-score>
+          <span class="data-label">Score</span>
+          <span class="data-value" x-text="fmtScore(agent.x402Score)"></span>
+        </div>
+        <div class="metric-card" data-usage-txns>
+          <span class="data-label">Transactions</span>
+          <span class="data-value" x-text="agent.x402Txns"></span>
+        </div>
+        <div class="metric-card" data-usage-volume>
+          <span class="data-label">Volume</span>
+          <span class="data-value" x-text="fmtUsd(agent.x402VolumeUsd)"></span>
+        </div>
+        <div class="metric-card" data-usage-resources>
+          <span class="data-label">Resources</span>
+          <span class="data-value" x-text="agent.x402Resources"></span>
+        </div>
+      </div>
+
+      <!-- Linked Assets (§5.8): Managed Vaults + Tracked Wallets, joined at
+           the agent's PROJECT level (openclaw_agents has no per-agent FK on
+           either table — see agent-detail-projections.ts header). -->
+      <h2 style="margin: 1.5rem 0 0.75rem;">Managed Vaults</h2>
+      <template x-if="agent.vaults.length === 0">
+        <p class="data-label" data-vaults-empty>No vaults linked yet.</p>
+      </template>
+      <template x-if="agent.vaults.length > 0">
+        <div class="a3-table-wrap hide-x-scrollbar">
+          <table class="a3-table" data-vaults-table>
+            <thead><tr><th>NAME</th><th>STRATEGY</th><th>TVL</th><th>APY</th></tr></thead>
+            <tbody>
+              <template x-for="v in agent.vaults" :key="v.id">
+                <tr>
+                  <td x-text="v.name"></td>
+                  <td x-text="v.strategyType || '—'"></td>
+                  <td x-text="fmtUsd(v.tvlUsd)"></td>
+                  <td x-text="v.apy != null ? v.apy.toFixed(2) + '%' : '—'"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <h2 style="margin: 1.5rem 0 0.75rem;">Tracked Wallets</h2>
+      <template x-if="agent.wallets.length === 0">
+        <p class="data-label" data-wallets-empty>No wallets linked yet.</p>
+      </template>
+      <template x-if="agent.wallets.length > 0">
+        <div class="a3-table-wrap hide-x-scrollbar">
+          <table class="a3-table" data-wallets-table>
+            <thead><tr><th>LABEL</th><th>ADDRESS</th><th>CHAIN</th><th>BALANCE</th></tr></thead>
+            <tbody>
+              <template x-for="w in agent.wallets" :key="w.id">
+                <tr :class="w.isAgentWallet ? 'is-sorted' : ''">
+                  <td x-text="w.label"></td>
+                  <td>
+                    <a :href="explorerUrl(w.chain, w.address)" target="_blank" rel="noopener" x-text="shortAddr(w.address)"></a>
+                  </td>
+                  <td x-text="w.chain || '—'"></td>
+                  <td x-text="fmtUsd(w.balanceUsd)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
+  </template>
+</div>

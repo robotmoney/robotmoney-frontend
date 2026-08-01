@@ -85,6 +85,13 @@ async function main(): Promise<void> {
     routes[expand(ROUTES.committee.subject, { id })] = await get(expand(ROUTES.committee.subject, { id }));
     routes[expand(ROUTES.committee.subjectSnapshots, { id })] = await get(expand(ROUTES.committee.subjectSnapshots, { id }));
   }
+  // /agents/:id "Money-agent dossier" (issue #390, §5.8, P3.2), discovered
+  // from the agents directory list just captured above.
+  const agentIds = ((routes[ROUTES.dashboards.agents] as { agents?: { id: string }[] })?.agents) ?? [];
+  for (const a of agentIds) {
+    const p = expand(ROUTES.dashboards.agentDetail, { id: a.id });
+    routes[p] = await get(p);
+  }
 
   const ordered: Record<string, unknown> = {};
   for (const k of Object.keys(routes).sort()) ordered[k] = routes[k];
