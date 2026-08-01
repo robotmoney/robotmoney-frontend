@@ -289,6 +289,37 @@ export function alignDailyForwardFill(
   return out;
 }
 
+// #402: the single documented maximum age (in days) a forward-filled value may
+// be carried before it is considered "dead" and must stop contributing to panel
+// weights / the composite. Chosen to comfortably clear the slowest legitimate
+// registry cadence (SHILLER_CAPE is monthly, ~30-35d between real prints, plus
+// scrape/holiday slack) while still catching an indicator whose upstream feed
+// has actually gone dark for multiple reporting cycles. Consumed by
+// computeRegime (compute.ts) via the `ages` it receives from forwardFillAge —
+// alignDailyForwardFill itself is intentionally left unchanged above so the
+// regime-fidelity byte-identical-replay tests keep reproducing the original
+// (uncapped) JS pipeline exactly.
+export const MAX_FORWARD_FILL_DAYS = 120;
+
+// Companion to alignDailyForwardFill: for each date in `allDates`, the number of
+// days since the value being carried forward was last a REAL observation (0 on
+// a day with a real print; NaN before the first observation ever seen). A
+// resumed real observation resets the age to 0 immediately — recovery is not a
+// separate code path, just the next date where age is 0 again.
+export function forwardFillAge(
+  series: { date: string; value: number }[],
+  allDates: string[],
+): number[] {
+  const dates = new Set(series.map((p) => p.date));
+  const out: number[] = [];
+  let lastRealIdx = -1;
+  for (let i = 0; i < allDates.length; i++) {
+    if (dates.has(allDates[i])) lastRealIdx = i;
+    out.push(lastRealIdx === -1 ? NaN : i - lastRealIdx);
+  }
+  return out;
+}
+
 // Days between observations count as 0 (no flow); pre-history stays NaN.
 export function alignDailyZeroFill(
   series: { date: string; value: number }[],
