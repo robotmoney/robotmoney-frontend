@@ -740,3 +740,67 @@
 .a3 .a3-agents-summary strong { color: hsl(var(--primary)); font-weight: 600; }
 .a3 .a3-agents-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin: 1.5rem 0 1rem; }
 
+
+/* ── List-page shell (issue #386, §5.9/§5.11/§5.13): every directory list
+   page — /lobster, /vaults, /wallets and future siblings (/agents, /list,
+   /list2) — reuses this same page header / outline-button / empty-state /
+   summary-line / filter-chip set, matching the precedent §2's comment sets
+   for `.a3-table`. ─────────────────────────────────────────────────────── */
+.a3 .a3-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
+.a3 .a3-page-title { font-family: 'JetBrains Mono', monospace; font-size: 1.4rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.02em; margin: 0; }
+.a3 .a3-page-subtitle { margin: 0.25rem 0 0; font-size: 0.85rem; color: hsl(var(--muted-foreground)); }
+.a3 .a3-page-header-actions { display: flex; align-items: center; gap: 0.6rem; }
+
+/* Outline button (Refresh / Scan now / Retry) — same visual family as
+   .a3-copy-btn, just a touch larger for a primary page action. */
+.a3 .a3-outline-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid hsl(var(--border));
+  background: transparent;
+  color: hsl(var(--foreground));
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.75rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.a3 .a3-outline-btn:hover:not(:disabled) { background: hsl(var(--muted)); }
+.a3 .a3-outline-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.a3 .a3-summary-line { font-size: 0.8rem; color: hsl(var(--muted-foreground)); margin: 0 0 0.85rem; }
+.a3 .a3-summary-line strong { color: hsl(var(--foreground)); font-weight: 600; }
+
+.a3 .a3-empty-state { display: flex; flex-direction: column; align-items: center; gap: 0.6rem; padding: 3rem 0; text-align: center; color: hsl(var(--muted-foreground)); }
+.a3 .a3-empty-state .a3-icon { width: 2rem; height: 2rem; opacity: 0.5; }
+
+.a3 .a3-pct-up { color: hsl(var(--success)); }
+.a3 .a3-pct-down { color: hsl(var(--destructive)); }
+
+/* Filter/toggle chips (wallets §5.13 "X402 only" / "Hide empty"). Reuses the
+   .a3-tab pill look with an on/off dot rather than inventing a new control. */
+.a3 .a3-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid hsl(var(--border));
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  border-radius: 9999px;
+  padding: 0.3rem 0.7rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.a3 .a3-chip.is-on { color: hsl(var(--primary)); border-color: hsl(var(--primary) / 0.4); }
+.a3 .a3-chip-dot { width: 0.4rem; height: 0.4rem; border-radius: 9999px; background: currentColor; opacity: 0.5; }
+.a3 .a3-chip.is-on .a3-chip-dot { opacity: 1; }
+
+/* Hover-revealed row action buttons (wallets §5.13 copy/explorer icons). */
+.a3 .a3-row-actions { display: inline-flex; gap: 0.3rem; opacity: 0; transition: opacity 0.1s ease; }
+.a3 .a3-table tbody tr:hover .a3-row-actions { opacity: 1; }

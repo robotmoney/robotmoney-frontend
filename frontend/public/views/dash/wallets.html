@@ -1,0 +1,94 @@
+<!-- /wallets — "Tracked Wallets" directory (issue #386, docs/bot-analytics-
+     ui-port-plan.md §5.13, P2.5). Driven by dashWallets() (alpine/views.js)
+     over GET /api/dash/wallets (dash/lists.ts), which merges tracked_wallets
+     with agent-derived wallets (openclaw_agents.wallet_address) server-side
+     — no fabricated categories: TYPE reflects the row's real source
+     (tracked vs agent-derived), not an invented finer taxonomy the schema
+     has no column for. -->
+<div x-data="dashWallets()" x-init="init()" data-dash-wallets>
+
+  <header class="a3-page-header">
+    <div>
+      <h1 class="a3-page-title">Tracked Wallets</h1>
+      <p class="a3-page-subtitle">Wallets tracked by the analytics dashboard, merged with agent-linked wallets.</p>
+    </div>
+    <div class="a3-page-header-actions">
+      <!-- D10 (§5.13): no wallet-scan pipeline exists yet — render disabled
+           rather than wiring a fake trigger. -->
+      <button
+        type="button"
+        class="a3-outline-btn"
+        disabled
+        title="No wallet-scan pipeline is wired up yet."
+        data-dash-scan
+      >
+        <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-radar"></use></svg>
+        Scan now
+      </button>
+    </div>
+  </header>
+
+  <p x-show="loading" class="data-label" data-dash-loading>Loading…</p>
+  <p x-show="error" x-text="error" class="a3-badge a3-badge--destructive" x-cloak data-dash-error></p>
+
+  <div x-show="!loading && !error" x-cloak style="display:flex; gap:0.6rem; margin-bottom:0.85rem; flex-wrap:wrap;">
+    <button type="button" class="a3-chip" :class="x402Only && 'is-on'" @click="x402Only = !x402Only" data-dash-chip="x402">
+      <span class="a3-chip-dot"></span> X402 only
+    </button>
+    <button type="button" class="a3-chip" :class="hideEmpty && 'is-on'" @click="hideEmpty = !hideEmpty" data-dash-chip="hideEmpty">
+      <span class="a3-chip-dot"></span> Hide empty
+    </button>
+  </div>
+
+  <p x-show="!loading && !error" x-cloak class="a3-summary-line" data-dash-summary>
+    <strong x-text="summary.total"></strong> wallets tracked ·
+    <strong x-text="summary.withBalance"></strong> with balance ·
+    Total: <strong x-text="fmtUsd(summary.totalUsd)"></strong>
+  </p>
+
+  <div x-show="!loading && !error && sortedRows.length === 0" x-cloak class="a3-empty-state" data-dash-empty>
+    <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-wallet"></use></svg>
+    <p>No wallets found</p>
+  </div>
+
+  <div x-show="!loading && !error && sortedRows.length > 0" x-cloak class="a3-table-wrap">
+    <table class="a3-table" data-dash-wallets-table>
+      <thead>
+        <tr>
+          <th @click="sortBy('label')" data-sort="label">Label <span x-text="sortArrow('label')"></span></th>
+          <th @click="sortBy('source')" data-sort="source">Type <span x-text="sortArrow('source')"></span></th>
+          <th @click="sortBy('protocol')" data-sort="protocol">Protocol <span x-text="sortArrow('protocol')"></span></th>
+          <th>Address</th>
+          <th @click="sortBy('balanceUsd')" data-sort="balanceUsd">Balance <span x-text="sortArrow('balanceUsd')"></span></th>
+          <th x-show="showChainColumn" data-dash-chain-col>Chain</th>
+          <th @click="sortBy('lastTxAt')" data-sort="lastTxAt">Last Active <span x-text="sortArrow('lastTxAt')"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="row in sortedRows" :key="row.id">
+          <tr @click="location.href = href(row)" style="cursor:pointer;" data-dash-row>
+            <td x-text="row.label"></td>
+            <td>
+              <span class="a3-badge" :class="row.source === 'agent' ? 'a3-badge--cyan' : 'a3-badge--muted'" x-text="row.source"></span>
+            </td>
+            <td x-text="row.protocol || '—'"></td>
+            <td>
+              <code x-text="shortAddr(row.address)"></code>
+              <span class="a3-row-actions" @click.stop>
+                <button type="button" class="a3-copy-btn" :data-copy="row.address" x-show="row.address">
+                  <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-copy"></use></svg>
+                </button>
+                <a class="a3-copy-btn" :href="explorerUrl(row)" x-show="explorerUrl(row)" target="_blank" rel="noopener noreferrer">
+                  <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-external-link"></use></svg>
+                </a>
+              </span>
+            </td>
+            <td x-text="fmtUsd(row.balanceUsd)"></td>
+            <td x-show="showChainColumn" x-text="(row.chain || '—').toUpperCase()"></td>
+            <td class="data-label" x-text="fmtLastActive(row.lastTxAt)"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</div>

@@ -75,14 +75,13 @@ describe("frontend route resolution", () => {
   // layout composition + dash-shell.js's gate, EXCEPT /submit — linked
   // directly off the gate screen itself, so it must be reachable pre-auth.
   // /list (issue #384, P2.1), /list2 + /list3 (issue #387), /market +
-  // /dashboard (issue #392, P4.1), and /agents (issue #385, P2.2) are the
+  // /dashboard (issue #392, P4.1), /agents (issue #385, P2.2), and
+  // /lobster + /vaults + /wallets (issue #386, P2.3/P2.4/P2.5) are the
   // first of these routes to ship real content — each resolves to its own
   // fragment now, everything else still points at the shared coming-soon
   // placeholder.
   test("resolves every static dashboard route to the shared placeholder, gated, under the dash layout", () => {
-    const gatedPaths = [
-      "/lobster", "/vaults", "/wallets", "/methodology", "/about", "/ask-mr-roboto",
-    ];
+    const gatedPaths = ["/methodology", "/about", "/ask-mr-roboto"];
     for (const p of gatedPaths) {
       expect(viewFor(p)).toBe("/views/dash/coming-soon.html");
       expect(routeMetaFor(p)).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
@@ -116,6 +115,21 @@ describe("frontend route resolution", () => {
   test("/agents (issue #385) resolves to its own real fragment, still gated under the dash layout", () => {
     expect(viewFor("/agents")).toBe("/views/dash/agents.html");
     expect(routeMetaFor("/agents")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+  });
+
+  // Issue #386 (§5.9/§5.11/§5.13, P2.3/P2.4/P2.5): the first three
+  // DASH_ROUTES entries to graduate off the shared placeholder onto their
+  // own real fragment, still gated + under the shared dash layout.
+  test("resolves /lobster, /vaults, /wallets to their own real fragments, gated, under the dash layout", () => {
+    const realPaths = {
+      "/lobster": "/views/dash/lobster.html",
+      "/vaults": "/views/dash/vaults.html",
+      "/wallets": "/views/dash/wallets.html",
+    };
+    for (const [p, view] of Object.entries(realPaths)) {
+      expect(viewFor(p)).toBe(view);
+      expect(routeMetaFor(p)).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+    }
   });
 
   test("/submit is public (reachable off the gate screen itself) even though it shares the dash layout", () => {
@@ -157,6 +171,9 @@ describe("frontend route resolution", () => {
       "/projects/robotmoney-vault",
       "/dashboard",
       "/market",
+      "/lobster",
+      "/vaults",
+      "/wallets",
     ];
     for (const p of paths) {
       const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));
