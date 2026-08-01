@@ -15,15 +15,28 @@
 // ORIGINAL JS over the SAME raw fixture; the committed snapshot is asserted to
 // TRACK within the documented vintage drift.
 //
-// Reference (regime-backtest-correlations-reference.json.gz) was produced by running
-// update.js computeBacktest (stripped) + computeCorrelations VERBATIM over:
+// Reference (regime-backtest-correlations-reference.json.gz) was originally
+// produced by running update.js computeBacktest (stripped) + computeCorrelations
+// VERBATIM over:
 //   • result: reconstructed from regime-compute-reference.json.gz (original JS
 //     2-panel computeRegime over the vendored raw fixture — which our TS port
 //     reproduces to <1e-12, proven in regime-fidelity.test.ts)
 //   • extras: real Yahoo ^GSPC / ETH-USD + FRED DTB3, truncated to <= asof, vendored
 //     as regime-extras.json.gz.
-// Regenerate both with the out-of-repo generator (scratchpad/gen-fixtures.js in the
-// PR that added this test).
+// via the out-of-repo generator (scratchpad/gen-fixtures.js in the PR that added
+// this test).
+//
+// Issue #400: adding real BTC_MVRV to the floor makes the composite (and every
+// downstream backtest/correlations number) change, so this reference — like
+// regime-compute-reference.json.gz — was regenerated together with the other
+// regime goldens via `bun run scripts/regime-goldens-regenerate.ts`: the SAME
+// already-proven-faithful in-repo TS pipeline (computeBacktest/computeCorrelations
+// over a fresh v3 computeRegime), NOT the out-of-repo original-JS generator
+// (unavailable to this repo). From this regeneration forward this file is
+// in-repo self-consistent, not an independent cross-implementation check —
+// the STRICT test below now guards against the replay diverging between call
+// sites / across a future regeneration, not independent algorithm-port
+// fidelity (that proof stands on the historical record predating #400).
 import { test, expect } from "bun:test";
 import {
   loadRawIndicatorHistory,

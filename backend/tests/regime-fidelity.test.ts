@@ -8,26 +8,43 @@
 //   → align each registry indicator (forward-fill; zero-fill if align==='zero_fill')
 //   → applyTransform(ind.transform, aligned)
 //   → computeRegime(transformed, dateAxis)
-// Registry indicators absent from the fixture (e.g. BTC_MVRV — the fixture was
-// captured while blockchain.com's mvrv chart was dead, before the #127 repoint
-// to Coinmetrics CapMVRVCur) are fed an all-NaN series so they are excluded via
-// minValidObs, never throw.
+//
+// Issue #400: BTC_MVRV was previously absent from the RAW fixture (captured
+// while blockchain.com's mvrv chart was dead, pre-#127) and fed an all-NaN
+// series so it was excluded entirely via minValidObs (weight 0), never
+// throw. The floor now carries real BTC_MVRV history (Coinmetrics
+// CapMVRVCur, regenerated via `bun run floor-seed:regenerate` — see
+// backend/scripts/floor-seed-regenerate.ts), so BTC_MVRV is admitted with a
+// real nonzero onchain-panel weight like every other indicator.
 //
 // ── Why the historical rows can't be matched to <1e-6, and why that is correct ──
-// update.js's normal cron path calls mergeFrozenIntoResult(): every PAST row is
+// update.js's ORIGINAL cron path calls mergeFrozenIntoResult(): every PAST row is
 // kept FROZEN from the regime-history.csv baseline (locked against the raw data
 // vintage available when that day was first computed), and only the `asof` day is
-// recomputed fresh. Meanwhile raw-indicator-history.csv keeps being revised
-// (append-only mergeSeries; "fetched wins on overlap"). So a fresh recompute from
-// the *committed* raw will NOT reproduce frozen historical rows that were computed
-// from an *earlier* raw vintage. We verified the original JS itself reproduces its
-// own committed regime-history.csv only to maxCompositeDiff≈0.0725 / 9 label rows —
-// i.e. the residual is inherent data vintage, not a port defect. Our TS port was
-// separately confirmed BYTE-IDENTICAL to the original JS compute (maxDiff = 0 over
-// all 2968 rows). Therefore the strict proof of methodology fidelity is the exact
-// reproduction of the FRESH artifacts (the `asof` row + the live regime-snapshot.json
-// last day, all weights/percentiles), and the historical rows are asserted to TRACK
-// the committed baseline within the inherent drift bound.
+// recomputed fresh. Our TS port's CURRENT_REGIME_VERSION "v3" methodology instead
+// recomputes the FULL history fresh on every run (no frozen lockout — see
+// analyze/regime-versions.ts) — the historical vintage divergence this comment
+// used to describe is the residual between those two DIFFERENT methodologies
+// over the SAME (pre-BTC_MVRV) raw data, not a port defect (the original JS
+// itself reproduces its own committed regime-history.csv only to
+// maxCompositeDiff≈0.0725 / 9 label rows on that basis).
+//
+// Because a v3 full-history recompute is already what production does, adding
+// BTC_MVRV to the floor makes regime-history.csv.gz, regime-snapshot.json.gz,
+// and regime-compute-reference.json.gz all STALE the same way (every
+// onchain-panel-derived number changes) — they were regenerated together via
+// `bun run scripts/regime-goldens-regenerate.ts`, a single fresh v3 replay
+// over the BTC_MVRV-inclusive floor, using this SAME already-proven-faithful
+// TS pipeline. That means regime-compute-reference.json.gz is no longer an
+// INDEPENDENT cross-implementation reference (the original out-of-repo
+// agentjuno/robotmoney generator is unavailable to this repo) — it is
+// in-repo self-consistent from this regeneration forward. The STRICT
+// multi-day test below therefore now proves internal consistency of the
+// replay (dateAxis/output shape, no accidental divergence between the two
+// call sites), not independent algorithm-port fidelity; that independent
+// proof stands on the historical record (this suite passed it before #400
+// touched the floor). The TRACKING test's tolerances are unchanged and still
+// provide real regression protection going forward.
 import { test, expect } from "bun:test";
 import {
   loadRawIndicatorHistory,
@@ -142,24 +159,29 @@ test("regime fidelity (STRICT): full last-day pipeline matches the committed reg
 });
 
 // ── STRICT multi-day proof of ALGORITHM-PORT fidelity (option B) ──────────────
-// The committed regime-history.csv can only be matched to <1e-9 on the single
-// freshly-recomputed `asof` row (see the two STRICT tests above): every earlier
-// row is FROZEN from an earlier raw-data vintage, so a fresh recompute from the
-// committed raw legitimately diverges (empirically: 2nd-most-recent row already
-// ~1.7e-2, historical rows up to ~0.27). That divergence is a data-vintage
-// artifact, NOT a port defect — so to prove multi-day methodology fidelity we
-// compare against a REFERENCE computed by the ORIGINAL JS pipeline over the SAME
-// vendored raw fixture.
-//
-// regime-compute-reference.json.gz (≈127 KB gz, 3102 rows) was produced by
-// driving agentjuno/robotmoney scripts/regime end-to-end — lib/utils
+// Historically: the committed regime-history.csv could only be matched to
+// <1e-9 on the single freshly-recomputed `asof` row (see the two STRICT tests
+// above) because the ORIGINAL update.js froze every earlier row at an earlier
+// raw-data vintage, so a fresh recompute from the committed raw legitimately
+// diverged. That divergence was a data-vintage artifact, NOT a port defect —
+// so to prove multi-day methodology fidelity this test compared against a
+// REFERENCE computed by the ORIGINAL JS pipeline over the SAME vendored raw
+// fixture (regime-compute-reference.json.gz, produced by driving
+// agentjuno/robotmoney scripts/regime end-to-end — lib/utils
 // (buildDateAxis + alignDailyForwardFill/ZeroFill) → lib/transforms.applyTransform
-// → compute.js computeRegime (2-panel [macro, onchain] default) — over
-// raw-indicator-history.csv.gz, i.e. the identical align+transform+compute path
-// update.js uses. Our TS port must reproduce it BYTE-IDENTICALLY (<1e-12) across
-// EVERY axis row plus exact regime/macro/onchain labels. A regression in the
-// ported math (rank, sign-align, inverse-correlation weights, composite,
-// smoothing) fails here even though the frozen-CSV tracking test would still pass.
+// → compute.js computeRegime, 2-panel [macro, onchain] default).
+//
+// Issue #400 (see the file-header note): this repo's OWN CURRENT_REGIME_VERSION
+// "v3" methodology already recomputes the full history fresh on every run (no
+// frozen lockout), and regime-history.csv.gz / regime-compute-reference.json.gz
+// are now BOTH regenerated together, from the SAME in-repo v3 replay, via
+// `bun run scripts/regime-goldens-regenerate.ts` — the out-of-repo original-JS
+// generator is unavailable to this repo. This test therefore no longer proves
+// independent cross-implementation fidelity (that proof stands on the
+// historical record predating #400); it now guards against the replay ever
+// silently diverging between call sites / across a future regeneration. A
+// regression in the ported math (rank, sign-align, inverse-correlation
+// weights, composite, smoothing) still fails here.
 test("regime fidelity (STRICT, multi-day): our TS computeRegime reproduces the ORIGINAL JS pipeline to <1e-12 across ALL rows + exact labels", async () => {
   const { result, dateAxis } = await replay();
   const ref = await loadRegimeComputeReference();
@@ -253,9 +275,14 @@ test("regime fidelity (TRACKING): full history tracks the frozen regime-history.
     `[regime-fidelity] tracking: compared=${compared} composite<1e-3=${(100 * pctWithin).toFixed(2)}% ` +
       `regimeLabelMatch=${(100 * pctLabel).toFixed(2)}% maxCompositeDiff=${maxComposite}`,
   );
-  // These bounds reflect the frozen-baseline data vintage (the original JS shows
-  // the identical residual against its own committed CSV). A regression in the
-  // methodology would blow past them.
+  // Historically these bounds reflected the frozen-baseline data vintage (the
+  // original JS showed the identical residual against its own committed CSV).
+  // Since #400, regime-history.csv.gz is regenerated from the SAME fresh v3
+  // replay this test performs (see the file-header note), so today the
+  // observed residual is ~0 and these bounds hold with wide margin — kept
+  // loose rather than retightened so a genuine future methodology regression
+  // still fails here without the test being fragile to routine floor-seed
+  // regenerations.
   expect(compared).toBeGreaterThan(2900);
   expect(pctWithin).toBeGreaterThan(0.94); // ≈95.5% of rows track within 1e-3
   expect(pctLabel).toBeGreaterThan(0.995); // ≈99.7% regime-label agreement

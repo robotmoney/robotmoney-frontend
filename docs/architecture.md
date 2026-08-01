@@ -761,6 +761,39 @@ rows past the pinned as-of) live in
   what's expected and that the diff is additive (new trailing months), never a
   silent revision of historical counts.
 
+**Regime raw floor seed (issue #400).** The same convention applies to
+`raw-indicator-history.csv.gz` (a `date,indicator,value` CSV, gzipped, the
+combined floor for all 26 registry indicators): `bun run floor-seed:regenerate
+--indicator <ID> --asset <a> --metric <m>` (`extract/floor-seed-generator.ts` →
+`backend/scripts/floor-seed-regenerate.ts`) fetches one indicator's live
+history (default: `BTC_MVRV` via Coinmetrics `CapMVRVCur`, #127's repoint off
+the dead blockchain.com mvrv chart), additively merges it into the existing
+committed floor (`mergeSeries` — fetched wins on overlap), caps the fetched
+range to the floor's own existing max date across every OTHER indicator by
+default (so one indicator's regeneration never silently drags every other
+indicator's vintage forward), and atomically replaces the committed gzip.
+Because every registry indicator feeds the SAME onchain/macro composite,
+adding real history for a previously all-NaN (weight-0) indicator changes the
+computed composite/percentile/regime for the affected panel across the whole
+history — so the downstream regime-fidelity golden fixtures
+(`regime-history.csv.gz`, `regime-snapshot.json.gz`,
+`regime-compute-reference.json.gz`, `regime-backtest-correlations-reference.json.gz`)
+must be regenerated together via `bun run scripts/regime-goldens-regenerate.ts`,
+which re-runs the SAME in-repo, already-fidelity-proven TS pipeline
+(`computeRegime`/`computeBacktest`/`computeCorrelations`) over the updated
+floor — CURRENT_REGIME_VERSION `v3` already means "recompute the full history
+fresh on every run" (see `analyze/regime-versions.ts`), so this is the same
+methodology production already runs, not a new one. The two fixtures that were
+historically produced by an out-of-repo original-JS generator
+(`regime-compute-reference.json.gz`, `regime-backtest-correlations-reference.json.gz`)
+become in-repo self-consistent from such a regeneration forward, since that
+external generator is unavailable to this repo — see the file-header comments
+in `tests/regime-fidelity.test.ts` / `tests/backtest-correlations-fidelity.test.ts`
+for what each STRICT test proves before vs. after. **Review expectations:**
+same as the EDGAR seed — review as a data change, confirm the new indicator's
+values are finite/plausible and the regeneration command used is recorded in
+the PR.
+
 The independent producer runs regime and research on **distinct timers**:
 `regime` daily at **22:30 UTC** (after US market close, so fetched raw data is
 settled end-of-day) and `research` (both research signals, never the regime
