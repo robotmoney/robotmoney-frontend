@@ -5,7 +5,7 @@ import { ROUTES } from "@robotmoney/contract";
 import { config, assertNoVaultAddressCollision } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { createComment, listComments } from "./routes/comments.ts";
-import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog } from "./routes/dashboards.ts";
+import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
 import { getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleCommittee } from "./routes/committee.ts";
@@ -128,6 +128,10 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname === ROUTES.dashboards.activity && req.method === "GET") {
       return json(await getActivityLog());
+    }
+
+    if (pathname === ROUTES.dashboards.agents && req.method === "GET") {
+      return json(await getAgentsDirectory());
     }
 
 

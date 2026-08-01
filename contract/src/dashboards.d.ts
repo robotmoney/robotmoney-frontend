@@ -546,3 +546,35 @@ export interface ActivityLogEntry {
 export interface ActivityLogResponse {
   entries: ActivityLogEntry[]; // newest first, zero-score noise filtered, up to 50
 }
+
+// GET /api/dashboards/agents (issue #385, /agents "OpenClaw Agents" P2.2,
+// docs/bot-analytics-ui-port-plan.md §5.7) — one row per tracked agent. Each
+// row carries all three selectable 26-week sparkline series up front (score/
+// x402/balance) so the frontend's metric selector re-renders instantly
+// instead of re-fetching.
+export interface AgentDirectoryRow {
+  id: string;
+  name: string;
+  protocol: string | null; // protocol_standard (x402/acp/virtuals/olas/bankr/eliza/facilitator/other/null)
+  isFacilitator: boolean; // protocol === 'facilitator'
+  active: boolean;
+  score: number; // composite: max(x402Score, productivityScore, min(100, log10(rev30d+1)*25))
+  x402Txns: number;
+  x402VolumeUsd: number;
+  balanceUsd: number | null; // matched tracked_wallets row by lowercased address, else null
+  walletAddress: string | null;
+  sparkline: { score: number[]; x402: number[]; balance: number[] }; // up to 26 weekly buckets, chronological
+}
+
+export interface AgentsDirectorySummary {
+  active: number;
+  idle: number;
+  x402Txns: number;
+  x402VolumeUsd: number;
+  totalBalanceUsd: number;
+}
+
+export interface AgentsDirectoryResponse {
+  agents: AgentDirectoryRow[];
+  summary: AgentsDirectorySummary;
+}

@@ -16,6 +16,7 @@ import { fetchEntities, fetchMarketOverview } from "../../projects/entities-proj
 import { fetchList2 } from "../../projects/list2-projections.ts";
 import { fetchLeaderboard } from "../../projects/leaderboard-projections.ts";
 import { fetchActivityLog } from "../../projects/activity-log-projections.ts";
+import { fetchAgentsDirectory } from "../../projects/agents-projections.ts";
 
 // GET /api/dashboards/research-signals/:key → latest research signal payload
 export async function getResearchSignal(key: string) {
@@ -111,4 +112,14 @@ export async function getLeaderboard() {
 // returns `{ entries: [] }` until a pipeline writer lands (P1.6).
 export async function getActivityLog() {
   return fetchActivityLog();
+}
+
+// GET /api/dashboards/agents → the /agents "OpenClaw Agents" directory feed
+// (issue #385, docs/bot-analytics-ui-port-plan.md §5.7, P2.2): one row per
+// tracked agent with all three selectable sparkline series precomputed, plus
+// the summary strip (active/idle counts, x402 txns/volume, total balance).
+// Never synthetic: a fresh DB with an empty openclaw_agents table returns
+// `{ agents: [], summary: { active: 0, idle: 0, x402Txns: 0, x402VolumeUsd: 0, totalBalanceUsd: 0 } }`.
+export async function getAgentsDirectory() {
+  return fetchAgentsDirectory();
 }

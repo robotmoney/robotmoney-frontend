@@ -18,6 +18,7 @@ export const ROUTES: {
     leaderboard: string;
     submissions: string;
     activity: string;
+    agents: string;
   };
   projects: {
     list: string;
