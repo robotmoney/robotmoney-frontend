@@ -6,7 +6,7 @@ import { sql } from "../../db/client.ts";
 import type { RegimeSnapshot } from "@robotmoney/contract";
 // The row→DTO projection lives in a pure, DB-free module so the offline
 // eq-snapshot mapper can reuse the EXACT same projection (see regime-projection.ts).
-import { rowToSnapshot, computeRegimeStaleness, type RegimeStaleness } from "./regime-projection.ts";
+import { rowToSnapshot, computeRegimeSnapshotStaleness, type RegimeStaleness } from "./regime-projection.ts";
 
 // Latest research-signal payload for a key (or null).
 export async function fetchLatestResearchSignal(key: string) {
@@ -30,6 +30,12 @@ export async function fetchLatestResearchSignal(key: string) {
 // as fresh (`stale: false`) when the deployment's actual data may be stale or
 // absent. This holds regardless of whether the row's producer is itself
 // well-behaved, so it is not redundant with any upstream generator fix.
+//
+// `staleness` is derived from `latest.indicators[].raw_date` (the REAL
+// per-panel observation dates), never from `latest.date` — the pipeline
+// forward-fills that column to today on every run regardless of whether the
+// underlying sources actually refreshed, so it can't detect a frozen source
+// (issue #398). See computeRegimeSnapshotStaleness.
 export async function fetchRegimeSnapshots(
   range: number,
 ): Promise<{ latest: RegimeSnapshot | null; history: RegimeSnapshot[]; staleness: RegimeStaleness }> {
@@ -42,6 +48,6 @@ export async function fetchRegimeSnapshots(
   `;
   const history = rows.map(rowToSnapshot).reverse(); // chronological
   const latest = history.length ? history[history.length - 1] : null;
-  const staleness = computeRegimeStaleness(latest?.date ?? null, today);
+  const staleness = computeRegimeSnapshotStaleness(latest?.indicators ?? null, today);
   return { latest, history, staleness };
 }

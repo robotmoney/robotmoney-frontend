@@ -6,7 +6,7 @@
 // healthy — never guessed, always derived from the same columns the rest of
 // the admin surface reads.
 import { sql } from "../db/client.ts";
-import { computeRegimeStaleness, type RegimeStaleness } from "../analytics/report/regime-projection.ts";
+import { computeRegimeSnapshotStaleness, type RegimeStaleness } from "../analytics/report/regime-projection.ts";
 
 // Research signals are considered stale after this many UTC calendar days
 // without a new row — named per docs/architecture.md US-A2 ("Use a
@@ -112,11 +112,12 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   }
 
   // ── Regime staleness ───────────────────────────────────────────────────
-  const [regimeRow] = await sql`SELECT date FROM regime_snapshots ORDER BY date DESC LIMIT 1`;
-  const regimeDate = regimeRow?.date
-    ? typeof regimeRow.date === "string" ? regimeRow.date : new Date(regimeRow.date).toISOString().slice(0, 10)
-    : null;
-  const regime = computeRegimeStaleness(regimeDate, serverDate);
+  // Derived from the latest row's real per-indicator `raw_date`s (issue
+  // #398), never from its `date` column — that column is forward-filled to
+  // today on every pipeline run regardless of whether the underlying sources
+  // actually refreshed, so it can never surface a frozen data source.
+  const [regimeRow] = await sql`SELECT indicators FROM regime_snapshots ORDER BY date DESC LIMIT 1`;
+  const regime = computeRegimeSnapshotStaleness(regimeRow?.indicators ?? null, serverDate);
   if (regime.stale) alerts.push({ level: "stale", source: "regime", message: "regime snapshot is stale" });
   else alerts.push({ level: "healthy", source: "regime", message: "regime snapshot is fresh" });
 

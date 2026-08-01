@@ -107,21 +107,57 @@ test("overview: production-kind alert distinctions (dead, running-too-long, heal
 test("overview: regime + research freshness (RESEARCH_STALE_DAYS)", async () => {
   expect(RESEARCH_STALE_DAYS).toBe(2);
   const today = new Date().toISOString().slice(0, 10);
-  await sql`INSERT INTO regime_snapshots (date) VALUES (${today}) ON CONFLICT (date) DO NOTHING`;
+  // #398: regime freshness is derived from the real per-indicator `raw_date`
+  // observations in `indicators`, never from the row's own `date` column (the
+  // pipeline forward-fills that to today on every run regardless of whether
+  // the underlying sources refreshed) — so the seeded row must carry current
+  // indicator observations to read as fresh here.
+  const indicators = jsonValue([
+    { id: "T10Y2Y", panel: "macro", raw_date: today },
+    { id: "DEFI_TVL", panel: "onchain", raw_date: today },
+  ]);
+  await sql`
+    INSERT INTO regime_snapshots (date, indicators) VALUES (${today}, ${sql.json(indicators)})
+    ON CONFLICT (date) DO UPDATE SET indicators = EXCLUDED.indicators`;
   await sql`INSERT INTO research_signals (signal_key, date, payload) VALUES ('channel-divergence', ${today}, ${sql.json(jsonValue({}))}) ON CONFLICT (signal_key, date) DO NOTHING`;
   await sql`INSERT INTO research_signals (signal_key, date, payload) VALUES ('late-cycle-signals', ${today}, ${sql.json(jsonValue({}))}) ON CONFLICT (signal_key, date) DO NOTHING`;
 
   const res = await call(req("GET", "/api/admin/overview", PROD.adminToken));
   const body = res?.body as {
-    regime: { asof: string | null; stale: boolean; ageDays: number | null };
+    regime: { asof: string | null; stale: boolean; ageDays: number | null; panelObservationDates: Record<string, string | null> };
     research: Array<{ signalKey: string; stale: boolean; ageDays: number | null }>;
   };
   expect(body.regime.asof).toBe(today);
   expect(body.regime.stale).toBe(false);
   expect(body.regime.ageDays).toBe(0);
+  expect(body.regime.panelObservationDates).toEqual({ macro: today, onchain: today });
   const cd = body.research.find((r) => r.signalKey === "channel-divergence")!;
   expect(cd.stale).toBe(false);
   expect(cd.ageDays).toBe(0);
+});
+
+test("overview: #398 regression — a today-dated regime_snapshots row with STALE indicator observations reports regime.stale === true", async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const old = new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10);
+  const indicators = jsonValue([
+    { id: "T10Y2Y", panel: "macro", raw_date: old },
+    { id: "DEFI_TVL", panel: "onchain", raw_date: old },
+  ]);
+  // The row's own `date` (today) mirrors the pipeline's forward-fill; only
+  // the embedded indicators' raw_date is old. Pre-fix, this read as fresh.
+  await sql`
+    INSERT INTO regime_snapshots (date, indicators) VALUES (${today}, ${sql.json(indicators)})
+    ON CONFLICT (date) DO UPDATE SET indicators = EXCLUDED.indicators`;
+
+  const res = await call(req("GET", "/api/admin/overview", PROD.adminToken));
+  const body = res?.body as {
+    regime: { asof: string | null; stale: boolean; ageDays: number | null };
+    alerts: Array<{ level: string; source: string }>;
+  };
+  expect(body.regime.stale).toBe(true);
+  expect(body.regime.asof).toBe(old);
+  expect(body.regime.ageDays).toBe(10);
+  expect(body.alerts.some((a) => a.source === "regime" && a.level === "stale")).toBe(true);
 });
 
 test("overview: enabled analytics schedules + next committee event + alert shape", async () => {
