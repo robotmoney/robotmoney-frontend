@@ -7,7 +7,7 @@ import { sql } from "../db/client.ts";
 import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
-import { getProjects, updateProjectOverview } from "./routes/projects.ts";
+import { getProjectDetail, getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleCommittee } from "./routes/committee.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
@@ -167,6 +167,16 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
       const slug = decodeURIComponent(pathname.slice("/api/projects/admin/".length));
       const r = await updateProjectOverview(req, slug);
       return json(r.body, r.status);
+    }
+
+    // ProjectProfile dossier (issue #389, §5.5, P3.1) — GET /api/projects/:slug.
+    // Checked after the admin-write prefix above (which is also under
+    // /api/projects/) so a POST to .../admin/<slug> never falls through here.
+    if (pathname.startsWith("/api/projects/") && req.method === "GET") {
+      const slug = decodeURIComponent(pathname.slice("/api/projects/".length));
+      const project = await getProjectDetail(slug);
+      if (!project) return json({ error: "project not found" }, 404);
+      return json({ project });
     }
 
     if (pathname.startsWith("/api/dashboards/research-signals/") && req.method === "GET") {

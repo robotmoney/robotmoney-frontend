@@ -10,10 +10,20 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { config as globalConfig } from "../../config.ts";
 import { sql } from "../../db/client.ts";
 import { fetchProjects } from "../../projects/projections.ts";
+import { fetchProjectDetail } from "../../projects/profile-projections.ts";
 import { optionalString, readJsonObject } from "../validation.ts";
 
 export async function getProjects() {
   return fetchProjects();
+}
+
+// GET /api/projects/:slug (issue #389) — the ProjectProfile dossier for one
+// project. Thin adapter, same discipline as getProjects() above: all
+// query/aggregation/DTO logic lives in projects/profile-projections.ts. Null
+// (unknown or inactive slug) maps to a 404 at the call site (backend/src/
+// api/index.ts), never a 200 with a null body.
+export async function getProjectDetail(slug: string) {
+  return fetchProjectDetail(slug);
 }
 
 // Constant-time secret comparison (over fixed-length sha256 hashes so lengths
