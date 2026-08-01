@@ -5,6 +5,7 @@ import type {
   CommitteeSessionListItem,
   CommitteeSubject,
   CommitteeTake,
+  RegimeSummaryListItem,
   SubjectSnapshot,
 } from "@robotmoney/contract";
 import { verifyStoredSubmissionSignature } from "../lib/signing.ts";
@@ -89,14 +90,28 @@ function synthesisExcerpt(value: unknown): string | null {
     : value;
 }
 
+// The list endpoint's regimeSummary (issue #357): the exact same stored
+// regime_summary object the detail endpoint serializes, minus the
+// >=8-point trailing `history` array — the one field big enough to matter
+// across an 18+ row list payload. No separate computation path; this only
+// ever strips a key off the value toSession() also reads.
+function toRegimeSummaryListItem(regimeSummary: Row["regime_summary"]): RegimeSummaryListItem | null {
+  if (!regimeSummary) return null;
+  const { history: _history, ...rest } = regimeSummary;
+  return rest;
+}
+
 // Light index-row projection for the default (unpaginated-no-more) GET
 // /api/committee/sessions response (issue #243). Deliberately drops
-// regimeSummary/subjectSnapshotTotalValueUsd — the large fields behind the
+// subjectSnapshotTotalValueUsd — the large field behind the
 // ~8.3MB unprojected payload — keeping everything else a list consumer
 // (directory page, admin overview) already reads off a session row.
 // synthesis rejoined this projection in issue #358 (see synthesisExcerpt()
 // above): #323 made it a short deterministic sentence, so it no longer
 // carries the concatenated-take-body weight that got it dropped originally.
+// regimeSummary (issue #357) rides along in slim form (see
+// toRegimeSummaryListItem) so the committee index can render the regime
+// label per row instead of falling back to session state.
 export function toSessionListItem(row: Row): CommitteeSessionListItem {
   return {
     id: row.id,
@@ -106,6 +121,7 @@ export function toSessionListItem(row: Row): CommitteeSessionListItem {
     state: row.state,
     windowClosesAt: instant(row.window_closes_at),
     publishedAt: instant(row.published_at),
+    regimeSummary: toRegimeSummaryListItem(row.regime_summary),
     synthesis: synthesisExcerpt(row.synthesis),
     committeeRecommendation: row.committee_recommendation ?? null,
     socialDraftId: row.social_draft_id ?? null,

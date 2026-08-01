@@ -145,6 +145,13 @@ export interface RegimeSummary {
   history: RegimeHistoryPoint[];
 }
 
+// The list endpoint's slim regimeSummary (issue #357): every field the detail
+// endpoint's RegimeSummary carries EXCEPT the >=8-point trailing history
+// array — the one field big enough to matter across an 18+ row list payload.
+// Sourced from the exact same stored regime_summary the detail endpoint
+// serializes; no separate computation.
+export type RegimeSummaryListItem = Omit<RegimeSummary, "history">;
+
 // Aggregation rollup counts: how many active members, how many submitted, how
 // many were absent, and submitted/active as a fraction.
 export interface CommitteeQuorum {
@@ -214,8 +221,8 @@ export interface CommitteeSession {
 }
 
 // Light index row served by GET /api/committee/sessions (default, unless
-// ?full=1) — issue #243. Deliberately omits regimeSummary and
-// subjectSnapshotTotalValueUsd (the large fields responsible for the
+// ?full=1) — issue #243. Deliberately omits
+// subjectSnapshotTotalValueUsd (the large field responsible for the
 // ~8.3MB unpaginated payload); everything else a session list consumer
 // needs (id, state, timestamps, the committeeRecommendation rollup) stays.
 // synthesis rejoined the projection in issue #358: since #323 rebuilt it as a
@@ -223,6 +230,10 @@ export interface CommitteeSession {
 // it "large" in the first place), it is cheap enough to carry on every list
 // row so the directory preview (synthesisPreview() in committee.js) has
 // something to render.
+// regimeSummary (issue #357) also rides along: a slim projection (see
+// RegimeSummaryListItem) so the committee index can render the regime label
+// per row instead of falling back to session state — the >=8-point history
+// array stays detail-only to keep the list small.
 export interface CommitteeSessionListItem {
   id: string;
   date: string;
@@ -231,6 +242,7 @@ export interface CommitteeSessionListItem {
   state: CommitteeSession["state"];
   windowClosesAt: string | null;
   publishedAt: string | null;
+  regimeSummary: RegimeSummaryListItem | null;
   synthesis: string | null;
   committeeRecommendation: CommitteeRecommendation | null;
   socialDraftId: string | null;
