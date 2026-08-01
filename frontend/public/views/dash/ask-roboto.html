@@ -1,0 +1,142 @@
+<!-- /ask-mr-roboto — "Ask Mr. Roboto" AI recommendation assistant + side-by-
+     side comparison tool (issue #394, docs/bot-analytics-ui-port-plan.md
+     §5.18, P5.1). Renders inside views/dash/_layout.html's [data-outlet] —
+     the ancestor `.a3` shell (issue #379) already supplies the scoped theme,
+     so nothing here repeats that class. dash-ask-roboto.js's matchAgents()
+     is a deterministic, real-data rule matcher — never an LLM call, never a
+     fabricated response (this issue's own out-of-scope list bans both LLMs
+     and synthetic mock data; docs/architecture.md §11 bans LLM/AI calls on
+     this path outright). -->
+<div class="a3-roboto" x-data="askRobotoView" data-ask-roboto-view>
+  <div class="a3-roboto__header">
+    <div class="a3-roboto__logo"><svg class="a3-icon a3-icon--lg"><use href="/assets/img/dash-icons.svg#i-bot"></use></svg></div>
+    <div>
+      <h1>Ask Mr. Roboto</h1>
+      <p class="data-label" style="margin-top: 0.35rem; text-transform: none; letter-spacing: normal;">
+        Describe what you need — Mr. Roboto matches it against real tracked agents using a deterministic rule-based matcher. No LLM, no simulated answers.
+      </p>
+    </div>
+  </div>
+
+  <template x-if="loading">
+    <p class="data-label" data-ask-roboto-loading>Loading …</p>
+  </template>
+  <template x-if="error">
+    <p class="a3-badge a3-badge--destructive" data-ask-roboto-error x-text="error"></p>
+  </template>
+
+  <template x-if="!loading && !error">
+    <div>
+      <template x-if="agents.length === 0">
+        <p class="data-label" data-ask-roboto-empty style="text-transform: none; letter-spacing: normal; margin-bottom: 1rem;">No agents tracked yet — nothing to match against.</p>
+      </template>
+
+      <div class="a3-card a3-roboto__chat" data-ask-roboto-chat>
+        <template x-if="log.length === 0">
+          <div class="a3-roboto__pills" data-ask-roboto-pills>
+            <template x-for="s in suggestions" :key="s">
+              <button type="button" class="a3-tab" data-ask-roboto-pill @click="askSuggestion(s)" x-text="s"></button>
+            </template>
+          </div>
+        </template>
+
+        <div class="a3-roboto__log a3-scroll-area scrollbar-thin" data-ask-roboto-log>
+          <template x-for="msg in log" :key="msg.id">
+            <div class="a3-roboto__msg" :class="'a3-roboto__msg--' + msg.role" data-ask-roboto-message :data-role="msg.role">
+              <template x-if="msg.role === 'user'">
+                <p class="a3-roboto__bubble a3-roboto__bubble--user" data-ask-roboto-user-text x-text="msg.text"></p>
+              </template>
+              <template x-if="msg.role === 'roboto'">
+                <div class="a3-roboto__bubble a3-roboto__bubble--roboto">
+                  <span class="a3-badge a3-badge--cyan">MR. ROBOTO</span>
+                  <p data-ask-roboto-response-text x-text="msg.text"></p>
+                  <template x-if="msg.matches && msg.matches.length">
+                    <div class="a3-roboto__matches">
+                      <template x-for="agent in msg.matches" :key="agent.id">
+                        <div class="a3-card a3-roboto__match" data-ask-roboto-match :data-agent-id="agent.id">
+                          <div class="a3-roboto__match-head">
+                            <a :href="'/agents/' + agent.id" x-text="agent.name" data-ask-roboto-match-link></a>
+                            <span class="a3-badge" :class="agent.isFacilitator ? 'a3-badge--cyan' : ''" x-text="protocolLabel(agent)"></span>
+                          </div>
+                          <div class="a3-roboto__match-metrics">
+                            <span><span class="data-label">Score</span><span class="data-value" x-text="fmtScore(agent.score)"></span></span>
+                            <span><span class="data-label">x402 Vol</span><span class="data-value" x-text="fmtUsd(agent.x402VolumeUsd)"></span></span>
+                            <span><span class="data-label">Balance</span><span class="data-value" x-text="fmtUsd(agent.balanceUsd)"></span></span>
+                          </div>
+                          <label class="a3-switch" :class="isComparing(agent.id) ? 'is-on' : ''" @click="toggleCompare(agent.id)" data-ask-roboto-compare-toggle :data-agent-id="agent.id">
+                            <span class="a3-switch-track"><span class="a3-switch-thumb"></span></span>
+                            <span class="a3-switch-label">Compare</span>
+                          </label>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+
+        <form class="a3-roboto__input-row" @submit.prevent="submitAsk()">
+          <input class="a3-input" type="text" x-model="query" placeholder="e.g. Find an active x402 agent" data-ask-roboto-input>
+          <button type="submit" class="a3-btn a3-btn--primary" data-ask-roboto-send>
+            <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-send"></use></svg>
+            Ask
+          </button>
+        </form>
+      </div>
+
+      <template x-if="compareIds.length >= 2">
+        <div class="a3-card" data-ask-roboto-compare>
+          <div class="a3-card-title">
+            <span>Compare</span>
+            <button type="button" class="a3-btn a3-btn--outline" style="margin-left: auto;" @click="clearCompare()" data-ask-roboto-compare-clear>Clear</button>
+          </div>
+          <div class="a3-table-wrap">
+            <table class="a3-table" data-ask-roboto-compare-table>
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  <template x-for="agent in compareRows" :key="agent.id">
+                    <th data-ask-roboto-compare-col :data-agent-id="agent.id">
+                      <a :href="'/agents/' + agent.id" x-text="agent.name"></a>
+                      <button type="button" class="a3-copy-btn" @click="toggleCompare(agent.id)" data-ask-roboto-compare-remove :data-agent-id="agent.id" aria-label="Remove from comparison">×</button>
+                    </th>
+                  </template>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Protocol</td>
+                  <template x-for="agent in compareRows" :key="agent.id"><td x-text="protocolLabel(agent)"></td></template>
+                </tr>
+                <tr>
+                  <td>Status</td>
+                  <template x-for="agent in compareRows" :key="agent.id">
+                    <td><span :class="agent.active ? 'status-active' : 'status-inactive'" x-text="agent.active ? 'Active' : 'Inactive'"></span></td>
+                  </template>
+                </tr>
+                <tr>
+                  <td>Score</td>
+                  <template x-for="agent in compareRows" :key="agent.id"><td x-text="fmtScore(agent.score)"></td></template>
+                </tr>
+                <tr>
+                  <td>x402 Volume</td>
+                  <template x-for="agent in compareRows" :key="agent.id"><td x-text="fmtUsd(agent.x402VolumeUsd)"></td></template>
+                </tr>
+                <tr>
+                  <td>x402 Txns</td>
+                  <template x-for="agent in compareRows" :key="agent.id"><td x-text="agent.x402Txns"></td></template>
+                </tr>
+                <tr>
+                  <td>Balance</td>
+                  <template x-for="agent in compareRows" :key="agent.id"><td x-text="fmtUsd(agent.balanceUsd)"></td></template>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+    </div>
+  </template>
+</div>

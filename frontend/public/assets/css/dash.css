@@ -815,3 +815,30 @@
 .a3 .a3-about__entity--coin { border-left: 3px solid hsl(var(--secondary)); }
 .a3 .a3-about__entity--vault { border-left: 3px solid hsl(var(--success)); }
 .a3 .a3-about__entity--wallet { border-left: 3px solid hsl(var(--amber)); }
+
+/* ── /ask-mr-roboto — AI recommendation assistant + comparison tool (issue
+   #394, docs/bot-analytics-ui-port-plan.md §5.18, P5.1). Chat-styled shell
+   over dash-ask-roboto.js's deterministic rule-based matcher — no LLM, no
+   fabricated negotiation/payment theater. Card/table/badge/switch/tab
+   primitives above are reused as-is; only the chat-specific layout is new. */
+.a3-roboto { max-width: 48rem; margin: 0 auto; }
+.a3-roboto__header { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 1.5rem; }
+.a3-roboto__logo {
+  width: 3rem; height: 3rem; flex: none; border-radius: var(--radius);
+  background: hsl(var(--primary) / 0.1); border: 1px solid hsl(var(--primary) / 0.2);
+  display: flex; align-items: center; justify-content: center; color: hsl(var(--primary));
+}
+.a3 .a3-roboto__chat { display: flex; flex-direction: column; gap: 1rem; }
+.a3-roboto__pills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.a3-roboto__log { display: flex; flex-direction: column; gap: 0.85rem; max-height: 26rem; overflow-y: auto; padding-right: 0.25rem; }
+.a3-roboto__msg--user { display: flex; justify-content: flex-end; }
+.a3-roboto__msg--roboto { display: flex; justify-content: flex-start; }
+.a3-roboto__bubble { max-width: 32rem; border-radius: var(--radius); padding: 0.65rem 0.9rem; font-size: 0.85rem; }
+.a3-roboto__bubble--user { background: hsl(var(--primary) / 0.12); border: 1px solid hsl(var(--primary) / 0.3); }
+.a3-roboto__bubble--roboto { background: hsl(var(--muted) / 0.3); border: 1px solid hsl(var(--border)); display: flex; flex-direction: column; gap: 0.5rem; }
+.a3-roboto__matches { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0.75rem; }
+.a3 .a3-roboto__match { margin-bottom: 0; padding: 0.85rem; }
+.a3-roboto__match-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 0.85rem; }
+.a3-roboto__match-metrics { display: flex; gap: 1rem; margin-bottom: 0.5rem; }
+.a3-roboto__input-row { display: flex; gap: 0.5rem; }
+.a3-roboto__input-row .a3-input { flex: 1; }

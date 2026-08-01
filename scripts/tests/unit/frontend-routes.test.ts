@@ -76,13 +76,13 @@ describe("frontend route resolution", () => {
   // directly off the gate screen itself, so it must be reachable pre-auth.
   // /list (issue #384, P2.1), /list2 + /list3 (issue #387), /market +
   // /dashboard (issue #392, P4.1), /agents (issue #385, P2.2),
-  // /lobster + /vaults + /wallets (issue #386, P2.3/P2.4/P2.5), and
-  // /methodology + /about (issue #395, P4.2/P4.3) have all shipped real
-  // content — each resolves to its own fragment now. /ask-mr-roboto is the
-  // last nav-wired route still on the shared coming-soon placeholder (it is
-  // route-flagged behind the LLM-ban decision, P5.1).
+  // /lobster + /vaults + /wallets (issue #386, P2.3/P2.4/P2.5),
+  // /methodology + /about (issue #395, P4.2/P4.3), and /ask-mr-roboto
+  // (issue #394, P5.1) have all shipped real content — each resolves to its
+  // own fragment now. None of the nav-wired dashboard routes still point at
+  // the shared coming-soon placeholder.
   test("resolves every static dashboard route to the shared placeholder, gated, under the dash layout", () => {
-    const gatedPaths = ["/ask-mr-roboto"];
+    const gatedPaths: string[] = [];
     for (const p of gatedPaths) {
       expect(viewFor(p)).toBe("/views/dash/coming-soon.html");
       expect(routeMetaFor(p)).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
@@ -155,6 +155,12 @@ describe("frontend route resolution", () => {
     }
   });
 
+  test("/ask-mr-roboto (issue #394) resolves to its own real fragment, still gated under the dash layout", () => {
+    expect(viewFor("/ask-mr-roboto")).toBe("/views/dash/ask-roboto.html");
+    expect(routeMetaFor("/ask-mr-roboto")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+  });
+
+
   test("/submit is public (reachable off the gate screen itself) even though it shares the dash layout", () => {
     // /submit (issue #393, P4.4) is the second dashboard route to ship real
     // content ahead of the coming-soon placeholder — see the /list case above.
@@ -199,6 +205,7 @@ describe("frontend route resolution", () => {
       "/wallets",
       "/methodology",
       "/about",
+      "/ask-mr-roboto",
     ];
     for (const p of paths) {
       const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));
