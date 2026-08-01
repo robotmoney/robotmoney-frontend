@@ -264,3 +264,61 @@ export interface ResearchSignal {
   date: string;
   payload: ResearchSignalPayload | unknown;
 }
+
+// GET /api/dashboards/entities (issue #384, /list "Total Market" P2.1) — one
+// row per tracked agent/coin/vault/wallet. `stale`/`refreshedAt` follow the
+// same D24 honesty pattern as ProjectCoin/ProjectWallet (issue #346):
+// never a fabricated fresher-than-real timestamp.
+export type EntityType = "agent" | "coin" | "vault" | "wallet";
+
+export interface EntityRow {
+  id: string;
+  type: EntityType;
+  name: string;
+  ticker: string | null;
+  category: string | null;
+  href: string;
+  contextual: number | null; // agent: x402 score; coin: market cap; vault: APY
+  lastTxAt: string | null; // wallets only
+  revenue: number | null; // agent: trailing-30d revenue; coin: 24h volume
+  balance: number | null; // vault: TVL; wallet: balance
+  change24h: number | null; // coins only
+  sparkline: number[]; // up to 26 weekly buckets, chronological
+  pending: boolean;
+  refreshedAt: string | null;
+  stale: boolean;
+}
+
+export interface EntitiesResponse {
+  entities: EntityRow[];
+}
+
+export interface MarketLeader {
+  type: EntityType;
+  id: string;
+  name: string;
+  href: string;
+  value: number;
+}
+
+// GET /api/dashboards/overview (issue #384) — TotalMarketOverview summary:
+// counts, vault TVL + 7d sparkline, total AUM, per-type leaders, avg agent
+// productivity, and the ROBOTMONEY ticker (same getTokenMetrics() feed
+// /allocation already uses — no new price source).
+export interface MarketOverview {
+  counts: { agents: number; coins: number; vaults: number; wallets: number };
+  pendingAgents: number;
+  vaultTvlUsd: number;
+  vaultTvlSparkline7d: number[];
+  totalAumUsd: number;
+  leaders: { agent: MarketLeader | null; coin: MarketLeader | null; vault: MarketLeader | null };
+  avgProductivityScore: number | null;
+  robotmoney: {
+    priceUsd: number | null;
+    marketCapUsd: number | null;
+    totalSupply: number | null;
+    stale: boolean;
+    source: string;
+  };
+  asOf: string;
+}

@@ -2,6 +2,17 @@
 // Ecosystem"). Moved verbatim from the monolithic views.js (finding 025).
 import { api, ROUTES } from "../../lib/api.js";
 
+// Fidelity upgrades (issue #388, docs/bot-analytics-ui-port-plan.md §5.4/P2.8):
+// column widths persist under the same key the original app used
+// (`localStorage['projects-col-widths-v2']`, §4.4) so column order/keys below
+// match the <colgroup> in projects.html 1:1.
+const COL_WIDTHS_KEY = "projects-col-widths-v2";
+const MIN_COL_WIDTH = 60;
+const DEFAULT_COL_WIDTHS = {
+  name: 220, mcap: 130, fdv: 130, mcfdv: 90, pct24h: 90, spark: 110,
+  score: 110, desc: 260, website: 160, social: 140, facets: 170, wallet: 160,
+};
+
 export function registerProjectsView(Alpine) {
   // ── Projects directory ("Agentic Economy Ecosystem") ─────────────────────
   // Ported from robotmoney-bot-analytics src/pages/Projects.tsx. The backend now
@@ -17,6 +28,19 @@ export function registerProjectsView(Alpine) {
     // releases the pin for the session (matches the source page).
     stickyActive: true,
 
+    // ── Column resizing (§5.4 item 3) ────────────────────────────────────────
+    colWidths: { ...DEFAULT_COL_WIDTHS },
+    _resizeMove: null,
+    _resizeUp: null,
+
+    // ── Definitions dialog (§5.4 item 1; D9 keeps it regardless of the
+    // BrandHeader chrome decision) ────────────────────────────────────────────
+    defsOpen: false,
+
+    init() {
+      this._loadColWidths();
+    },
+
     async load() {
       try {
         const data = await api.get(ROUTES.projects.list);
@@ -26,6 +50,67 @@ export function registerProjectsView(Alpine) {
         this.error = e.message;
         this.loading = false;
       }
+    },
+
+    _loadColWidths() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(COL_WIDTHS_KEY) || "null");
+        if (saved && typeof saved === "object") {
+          for (const key of Object.keys(DEFAULT_COL_WIDTHS)) {
+            const v = saved[key];
+            if (typeof v === "number" && isFinite(v)) this.colWidths[key] = Math.max(MIN_COL_WIDTH, v);
+          }
+        }
+      } catch {
+        // Corrupt/unavailable storage: fall back to defaults silently.
+      }
+    },
+    _persistColWidths() {
+      try {
+        localStorage.setItem(COL_WIDTHS_KEY, JSON.stringify(this.colWidths));
+      } catch {
+        // Storage unavailable (private mode/quota) — resizing still works for
+        // the session, it just won't survive a reload.
+      }
+    },
+    // Drag handle mousedown handler: `key` is the column's DEFAULT_COL_WIDTHS key.
+    startResize(key, ev) {
+      ev.preventDefault();
+      const startX = ev.clientX;
+      const startWidth = this.colWidths[key];
+      this._resizeMove = (e) => {
+        this.colWidths[key] = Math.max(MIN_COL_WIDTH, startWidth + (e.clientX - startX));
+      };
+      this._resizeUp = () => {
+        window.removeEventListener("mousemove", this._resizeMove);
+        window.removeEventListener("mouseup", this._resizeUp);
+        this._resizeMove = null;
+        this._resizeUp = null;
+        this._persistColWidths();
+      };
+      window.addEventListener("mousemove", this._resizeMove);
+      window.addEventListener("mouseup", this._resizeUp);
+    },
+    get tableWidth() {
+      return Object.values(this.colWidths).reduce((a, b) => a + b, 0);
+    },
+
+    // ── Dual synced horizontal scrollbars (§5.4 item 2) ──────────────────────
+    // The thin top mirror bar and the main scroll container share one scroll
+    // position; a re-entrancy guard stops the mirrored `scroll` events from
+    // bouncing back and forth.
+    _syncingScroll: false,
+    onMainScroll(e) {
+      if (this._syncingScroll) return;
+      this._syncingScroll = true;
+      this.$refs.scrollMirror.scrollLeft = e.target.scrollLeft;
+      this._syncingScroll = false;
+    },
+    onMirrorScroll(e) {
+      if (this._syncingScroll) return;
+      this._syncingScroll = true;
+      this.$refs.scrollMain.scrollLeft = e.target.scrollLeft;
+      this._syncingScroll = false;
     },
 
     // Per-row derived metrics used only for sorting/display (the API supplies the
@@ -110,6 +195,12 @@ export function registerProjectsView(Alpine) {
     twitterLabel(h) { return "@" + String(h).replace(/^@/, ""); },
     cleanUrl(u) { return String(u).replace(/^https?:\/\//, "").replace(/\/$/, ""); },
     initials(name) { return String(name || "").slice(0, 2).toUpperCase() || "?"; },
+    // §5.4 item 5: row name → /projects/:slug. The route already exists
+    // (routes.js, issue #380) and resolves ungated to a "coming soon"
+    // placeholder until the ProjectProfile page ships (P3.1) — the plan calls
+    // for the link to land in this item regardless (§5.4: "profile page in
+    // P3.1").
+    profileHref(p) { return "/projects/" + encodeURIComponent(p.slug); },
 
     // Inline-SVG price sparkline (normalized to the window min/max); cyan when the
     // window closes up, amber when down.

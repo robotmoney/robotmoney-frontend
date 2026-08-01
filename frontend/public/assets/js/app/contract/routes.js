@@ -32,6 +32,13 @@ export const ROUTES = {
     tokenMetrics: "/api/dashboards/token-metrics", // GET → ROBOTMONEY price/supply/marketCap + fee split
     walletSleeves: "/api/dashboards/wallet-sleeves", // GET → per-prop-wallet holdings breakdown
     allocation: "/api/dashboards/allocation", // GET → admin/committee-managed strategy+bucket target weights
+    // Issue #384 (/list "Total Market"): unified agent/coin/vault/wallet table
+    // feed + the TotalMarketOverview summary (counts, vault TVL, leaders, RM
+    // token). Namespaced under dashboards (public, unauthenticated reads) —
+    // NOT analytics.* below, which is the analytics-provider bearer-gated
+    // ingestion boundary and would be the wrong home for a public GET.
+    entities: "/api/dashboards/entities", // GET → unified /list table rows
+    overview: "/api/dashboards/overview", // GET → TotalMarketOverview summary
   },
 
   projects: {

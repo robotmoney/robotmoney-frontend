@@ -1,0 +1,172 @@
+<!-- /list — "Total Market" (issue #384, docs/bot-analytics-ui-port-plan.md
+     §5.1, P2.1): the flagship page of the bot-analytics UI port. Renders
+     inside views/dash/_layout.html's [data-outlet]; the ancestor `.a3` shell
+     (issue #379) already supplies the scoped theme, so nothing here repeats
+     that class. Real, non-fabricated data only (issue #98/#346 honesty
+     contract) — an empty deploy renders empty states, never seed rows. -->
+<div x-data="listView" data-list-view>
+  <h1>Total Market</h1>
+  <p class="data-label" style="margin: 0.25rem 0 1.5rem;">Aggregate view across every tracked agent, coin, vault, and wallet.</p>
+
+  <template x-if="loading">
+    <p class="data-label" data-list-loading>Loading …</p>
+  </template>
+  <template x-if="error">
+    <p class="a3-badge a3-badge--destructive" data-list-error x-text="error"></p>
+  </template>
+
+  <template x-if="!loading && !error">
+    <div>
+      <!-- TotalMarketOverview -->
+      <section data-list-overview>
+        <!-- $ROBOTMONEY ticker row-card -->
+        <div class="a3-ticker-card" x-data="a3Dialog()" @click="show()" data-rm-ticker>
+          <div style="display:flex; align-items:center; gap:0.75rem;">
+            <span class="a3-badge a3-badge--cyan">$ROBOTMONEY</span>
+            <span class="data-value" x-text="fmtUsd(overview?.robotmoney?.priceUsd)" data-rm-price></span>
+          </div>
+          <span class="data-label" x-text="overview?.robotmoney?.stale ? 'stale' : overview?.robotmoney?.source"></span>
+
+          <div class="a3-overlay" x-show="open" x-cloak @click.self="hide()" @keydown.escape.window="hide()">
+            <div class="a3-dialog" role="dialog" aria-modal="true" data-rm-dialog @click.stop>
+              <button type="button" class="a3-dialog-close" @click="hide()" aria-label="Close">×</button>
+              <h3>$ROBOTMONEY</h3>
+              <p class="data-label">Price</p>
+              <p class="data-value" x-text="fmtUsd(overview?.robotmoney?.priceUsd)"></p>
+              <p class="data-label" style="margin-top:0.75rem;">Market cap</p>
+              <p class="data-value" x-text="fmtUsd(overview?.robotmoney?.marketCapUsd)"></p>
+              <p style="margin-top:1rem; display:flex; gap:1rem;">
+                <a href="https://www.coingecko.com/en/coins/robotmoney" target="_blank" rel="noopener" data-rm-coingecko-link>
+                  <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-external-link"></use></svg> CoinGecko
+                </a>
+                <a href="https://basescan.org/token/0x4f835c9F54Bcf17DaF9040f60Cb72951CCbB49dD" target="_blank" rel="noopener" data-rm-basescan-link>
+                  <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-external-link"></use></svg> Basescan
+                </a>
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5 metric cards -->
+        <div class="a3-overview-grid" data-list-metric-cards>
+          <div class="metric-card glow-cyan">
+            <span class="data-label">OpenClaw Agents</span>
+            <span class="data-value" x-text="overview?.counts?.agents ?? 0"></span>
+            <span class="data-label" x-show="overview?.pendingAgents" x-text="overview?.pendingAgents + ' pending review'"></span>
+          </div>
+          <div class="metric-card glow-purple">
+            <span class="data-label">Lobster Coins</span>
+            <span class="data-value" x-text="overview?.counts?.coins ?? 0"></span>
+          </div>
+          <div class="metric-card glow-cyan">
+            <span class="data-label">Vault TVL</span>
+            <span class="data-value" x-text="fmtUsd(overview?.vaultTvlUsd)"></span>
+            <span x-html="sparkSvg(overview?.vaultTvlSparkline7d)"></span>
+          </div>
+          <div class="metric-card">
+            <span class="data-label">Tracked Wallets</span>
+            <span class="data-value" x-text="overview?.counts?.wallets ?? 0"></span>
+          </div>
+          <div class="metric-card glow-cyan">
+            <span class="data-label">Total AUM</span>
+            <span class="data-value" x-text="fmtUsd(overview?.totalAumUsd)"></span>
+          </div>
+        </div>
+
+        <!-- 4 leader cards -->
+        <div class="a3-leader-grid" data-list-leader-cards>
+          <a :href="overview?.leaders?.agent?.href || '#'" class="metric-card" data-leader-agent>
+            <span class="data-label">Top Agent</span>
+            <span class="data-value" x-text="overview?.leaders?.agent?.name || '—'"></span>
+          </a>
+          <a :href="overview?.leaders?.coin?.href || '#'" class="metric-card" data-leader-coin>
+            <span class="data-label">Top Coin</span>
+            <span class="data-value" x-text="overview?.leaders?.coin?.name || '—'"></span>
+          </a>
+          <a :href="overview?.leaders?.vault?.href || '#'" class="metric-card" data-leader-vault>
+            <span class="data-label">Top Vault</span>
+            <span class="data-value" x-text="overview?.leaders?.vault?.name || '—'"></span>
+          </a>
+          <a href="/methodology" class="metric-card" data-leader-productivity>
+            <span class="data-label">Avg P / Revenue</span>
+            <span class="data-value" x-text="fmtScore(overview?.avgProductivityScore)"></span>
+          </a>
+        </div>
+      </section>
+
+      <hr style="border-color: hsl(var(--border)); margin: 1.5rem 0;" />
+
+      <!-- All Tracked Entities -->
+      <section data-list-table-section>
+        <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+          <h2 style="margin:0;">All Tracked Entities</h2>
+          <span class="data-label" data-list-sorted-by x-text="'Sorted by: ' + sortLabel() + ' ' + (sortDir === 'asc' ? '↑' : '↓')"></span>
+          <a href="/about" class="data-label" data-list-help-link style="display:inline-flex; align-items:center; gap:0.3rem;">
+            <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-help-circle"></use></svg> What am I looking at?
+          </a>
+        </div>
+
+        <div class="a3-filter-row">
+          <div class="a3-tabs" role="tablist" data-list-tabs>
+            <template x-for="t in tabs" :key="t.id">
+              <button type="button" class="a3-tab" :class="isTab(t.id) ? 'is-active' : ''" @click="selectTab(t.id)" :data-tab="t.id">
+                <span x-text="t.label"></span> (<span x-text="tabCount(t.id)"></span>)
+              </button>
+            </template>
+          </div>
+          <label class="a3-switch" :class="showUnverified ? 'is-on' : ''" @click="toggleUnverified()" data-list-unverified-switch>
+            <span class="a3-switch-track"><span class="a3-switch-thumb"></span></span>
+            <span class="a3-switch-label" x-text="'Show unverified (' + entities.filter(e => e.pending).length + ')'"></span>
+          </label>
+        </div>
+
+        <template x-if="sortedRows.length === 0">
+          <div class="metric-card" data-list-empty>
+            <span class="data-label">No entries.</span>
+          </div>
+        </template>
+
+        <template x-if="sortedRows.length > 0">
+          <div class="a3-table-wrap hide-x-scrollbar">
+            <table class="a3-table" data-list-table>
+              <thead>
+                <tr>
+                  <th @click="sortBy('name')" :class="isSort('name') ? 'is-sorted' : ''" aria-sort="none">NAME <span x-text="sortIcon('name')"></span></th>
+                  <th @click="sortBy('type')" :class="isSort('type') ? 'is-sorted' : ''">TYPE <span x-text="sortIcon('type')"></span></th>
+                  <th @click="sortBy('category')" :class="isSort('category') ? 'is-sorted' : ''">CATEGORY <span x-text="sortIcon('category')"></span></th>
+                  <th @click="sortBy('contextual')" :class="isSort('contextual') ? 'is-sorted' : ''" x-text="contextualLabel(activeType) + ' ' + sortIcon('contextual')"></th>
+                  <th @click="sortBy('revenue')" :class="isSort('revenue') ? 'is-sorted' : ''" x-text="revenueLabel(activeType) + ' ' + sortIcon('revenue')"></th>
+                  <th @click="sortBy('balance')" :class="isSort('balance') ? 'is-sorted' : ''">BALANCE / TVL <span x-text="sortIcon('balance')"></span></th>
+                  <th>6M</th>
+                  <th @click="sortBy('change24h')" :class="isSort('change24h') ? 'is-sorted' : ''">24H % <span x-text="sortIcon('change24h')"></span></th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="row in sortedRows" :key="rowKey(row)">
+                  <tr :class="row.pending ? 'opacity-60' : ''" :data-row-key="rowKey(row)" data-list-row>
+                    <td :class="isSort('name') ? 'is-sorted' : ''">
+                      <a :href="row.href" @click="recordViewed(row)" data-row-link>
+                        <span x-text="row.name"></span>
+                        <span x-show="row.ticker" class="a3-badge a3-badge--muted" x-text="row.ticker"></span>
+                      </a>
+                    </td>
+                    <td>
+                      <span class="a3-badge" :class="typeBadgeClass(row.type)" x-text="row.type.toUpperCase()"></span>
+                      <span x-show="row.pending" class="a3-badge a3-badge--amber">Pending</span>
+                    </td>
+                    <td :class="isSort('category') ? 'is-sorted' : ''" x-text="titleCase(row.category)" style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></td>
+                    <td :class="isSort('contextual') ? 'is-sorted' : ''" x-text="fmtContextual(row)"></td>
+                    <td :class="isSort('revenue') ? 'is-sorted' : ''" x-text="fmtUsd(row.revenue)"></td>
+                    <td :class="isSort('balance') ? 'is-sorted' : ''" x-text="fmtUsd(row.balance)"></td>
+                    <td x-html="sparkSvg(row.sparkline)"></td>
+                    <td :class="isSort('change24h') ? 'is-sorted' : ''" :style="'color:' + pctColor(row.change24h)" x-text="fmtPct(row.change24h)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </section>
+    </div>
+  </template>
+</div>

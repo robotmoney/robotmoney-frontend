@@ -28,17 +28,26 @@ const MIN_SCORE = 55;
 // ("10 * * * *", db/seed.ts); projects.refresh_wallets runs every 6h
 // ("20 */6 * * *"). A generous multiple absorbs one missed/late tick without
 // ever letting a request-time read look fresher than it is.
-const COIN_REFRESH_FRESHNESS_BUDGET_MS = 3 * 60 * 60_000; // 3h (~3x the hourly cadence)
-const WALLET_REFRESH_FRESHNESS_BUDGET_MS = 18 * 60 * 60_000; // 18h (~3x the 6h cadence)
+// Exported (issue #384): the /list unified-entities projection applies the
+// SAME budgets to the same facet tables (coins/wallets/vaults all refresh on
+// worker/handlers/projects.ts schedules, db/seed.ts) rather than re-deriving
+// its own numbers.
+export const COIN_REFRESH_FRESHNESS_BUDGET_MS = 3 * 60 * 60_000; // 3h (~3x the hourly cadence)
+export const WALLET_REFRESH_FRESHNESS_BUDGET_MS = 18 * 60 * 60_000; // 18h (~3x the 6h cadence)
+// Vaults refresh on the same 6h cadence as wallets (db/seed.ts "30 */6 * * *").
+export const VAULT_REFRESH_FRESHNESS_BUDGET_MS = 18 * 60 * 60_000; // 18h (~3x the 6h cadence)
 
-function isStale(refreshedAt: Date | null, budgetMs: number): boolean {
+// Exported (issue #384) so the /list unified-entities projection
+// (entities-projections.ts) applies the SAME staleness rule to the same four
+// facet tables instead of re-deriving it.
+export function isStale(refreshedAt: Date | null, budgetMs: number): boolean {
   if (!refreshedAt) return true; // never refreshed — honestly stale, not fabricated as fresh
   return Date.now() - refreshedAt.getTime() > budgetMs;
 }
 
 // postgres.js returns numeric/decimal columns as strings; coerce to a finite
 // number or null so DTO consumers never see a stringified figure.
-function num(v: unknown): number | null {
+export function num(v: unknown): number | null {
   if (v == null) return null;
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : null;

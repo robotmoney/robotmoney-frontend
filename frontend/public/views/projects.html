@@ -44,67 +44,159 @@
     No projects yet.
   </p>
 
+  <!-- Table toolbar: Definitions dialog trigger (§5.4 item 1; D9 keeps the
+       dialog regardless of the BrandHeader-chrome decision, which is
+       deferred to the P5.3 pixel-QA sweep). -->
+  <div class="pj-toolbar" x-show="!loading && rows.length > 0" x-cloak>
+    <button type="button" class="pj-defs-trigger" @click="defsOpen = true" aria-haspopup="dialog">
+      <span aria-hidden="true">?</span> What am I looking at?
+    </button>
+  </div>
+
+  <!-- Definitions dialog: one <dt>/<dd> per column, matching this table's
+       actual columns (the original's "Revenue 30d" term is replaced by
+       "Social" here — issue #346 already dropped the revenue column for
+       lacking a non-fabricated source; documenting a term for a column that
+       does not exist would not be fidelity). -->
+  <div
+    class="pj-dialog-overlay"
+    x-show="defsOpen"
+    x-cloak
+    @click.self="defsOpen = false"
+    @keydown.escape.window="defsOpen = false"
+  >
+    <div class="pj-dialog" role="dialog" aria-modal="true" aria-labelledby="pj-defs-title">
+      <div class="pj-dialog__head">
+        <h2 id="pj-defs-title">Column definitions</h2>
+        <button type="button" class="pj-dialog__close" @click="defsOpen = false" aria-label="Close">×</button>
+      </div>
+      <dl class="pj-defs">
+        <div class="pj-defs__item"><dt>Project</dt><dd>The tracked company or protocol this row aggregates.</dd></div>
+        <div class="pj-defs__item"><dt>Market Cap</dt><dd>Largest market cap across the project's coins.</dd></div>
+        <div class="pj-defs__item"><dt>FDV</dt><dd>Fully-diluted valuation at max total supply, per coin.</dd></div>
+        <div class="pj-defs__item"><dt>MC/FDV</dt><dd>Market cap as a percentage of FDV — how much supply is circulating.</dd></div>
+        <div class="pj-defs__item"><dt>24h %</dt><dd>Largest-magnitude 24-hour price move across the project's coins.</dd></div>
+        <div class="pj-defs__item"><dt>30d</dt><dd>30-day price trend sparkline for the project's primary coin.</dd></div>
+        <div class="pj-defs__item"><dt>Data Quality</dt><dd>Coverage score reflecting how complete this project's tracked data is.</dd></div>
+        <div class="pj-defs__item"><dt>Description</dt><dd>Short overview of what the project does.</dd></div>
+        <div class="pj-defs__item"><dt>Website</dt><dd>The project's official website, if known.</dd></div>
+        <div class="pj-defs__item"><dt>Social</dt><dd>The project's X/Twitter handle, if known.</dd></div>
+        <div class="pj-defs__item"><dt>Facets</dt><dd>Which economic roles the project covers: agent, x402, coin, wallet, vault.</dd></div>
+        <div class="pj-defs__item"><dt>Wallet Balance</dt><dd>Summed USD balance across the project's tracked wallets.</dd></div>
+        <div class="pj-defs__item"><dt>Caveats</dt><dd>Figures come from the source noted above the table — see that notice for what backs this page today.</dd></div>
+      </dl>
+    </div>
+  </div>
+
+  <!-- Synced top scrollbar mirror (§5.4 item 2): a thin bar above the table
+       whose scrollLeft stays in lockstep with the main scroll container, so a
+       wide table can be scrolled from a bar that is always visible even when
+       the table body itself is tall. -->
+  <div
+    class="pj-scroll-mirror hide-x-scrollbar-visual"
+    x-ref="scrollMirror"
+    @scroll="onMirrorScroll($event)"
+    x-show="!loading && rows.length > 0"
+    x-cloak
+  >
+    <div :style="{ width: tableWidth + 'px' }"></div>
+  </div>
+
   <!-- Directory table -->
-  <div class="a2-table__scroll pj-scroll" x-show="!loading && rows.length > 0" x-cloak>
-    <table class="a2-table pj-table">
+  <div class="a2-table__scroll pj-scroll hide-x-scrollbar-visual" x-ref="scrollMain" @scroll="onMainScroll($event)" x-show="!loading && rows.length > 0" x-cloak>
+    <table class="a2-table pj-table" :style="{ tableLayout: 'fixed', width: tableWidth + 'px' }">
+      <colgroup>
+        <col :style="{ width: colWidths.name + 'px' }">
+        <col :style="{ width: colWidths.mcap + 'px' }">
+        <col :style="{ width: colWidths.fdv + 'px' }">
+        <col :style="{ width: colWidths.mcfdv + 'px' }">
+        <col :style="{ width: colWidths.pct24h + 'px' }">
+        <col :style="{ width: colWidths.spark + 'px' }">
+        <col :style="{ width: colWidths.score + 'px' }">
+        <col :style="{ width: colWidths.desc + 'px' }">
+        <col :style="{ width: colWidths.website + 'px' }">
+        <col :style="{ width: colWidths.social + 'px' }">
+        <col :style="{ width: colWidths.facets + 'px' }">
+        <col :style="{ width: colWidths.wallet + 'px' }">
+      </colgroup>
       <thead>
         <tr>
-          <th class="a2-sticky">
+          <th class="a2-sticky pj-resizable">
             <button type="button" class="pj-sort" :class="isSort('name') && 'pj-sort--active'" @click="sortBy('name')">
               Project <span class="pj-sort__i" x-text="sortIcon('name')"></span>
             </button>
+            <span class="pj-resize-handle" @mousedown="startResize('name', $event)" data-col-resize="name"></span>
           </th>
-          <th>
+          <th class="pj-resizable">
             <button type="button" class="pj-sort" :class="isSort('mcap') && 'pj-sort--active'" @click="sortBy('mcap')">
               Market Cap <span class="pj-sort__i" x-text="sortIcon('mcap')"></span>
             </button>
+            <span class="pj-resize-handle" @mousedown="startResize('mcap', $event)" data-col-resize="mcap"></span>
           </th>
-          <th>
+          <th class="pj-resizable">
             <button type="button" class="pj-sort" :class="isSort('fdv') && 'pj-sort--active'" @click="sortBy('fdv')">
               FDV <span class="pj-sort__i" x-text="sortIcon('fdv')"></span>
             </button>
+            <span class="pj-resize-handle" @mousedown="startResize('fdv', $event)" data-col-resize="fdv"></span>
           </th>
-          <th>MC/FDV</th>
-          <th>
+          <th class="pj-resizable">MC/FDV
+            <span class="pj-resize-handle" @mousedown="startResize('mcfdv', $event)" data-col-resize="mcfdv"></span>
+          </th>
+          <th class="pj-resizable">
             <button type="button" class="pj-sort" :class="isSort('pct24h') && 'pj-sort--active'" @click="sortBy('pct24h')">
               24h % <span class="pj-sort__i" x-text="sortIcon('pct24h')"></span>
             </button>
+            <span class="pj-resize-handle" @mousedown="startResize('pct24h', $event)" data-col-resize="pct24h"></span>
           </th>
-          <th>30d</th>
-          <th>
+          <th class="pj-resizable">30d
+            <span class="pj-resize-handle" @mousedown="startResize('spark', $event)" data-col-resize="spark"></span>
+          </th>
+          <th class="pj-resizable">
             <button type="button" class="pj-sort" :class="isSort('score') && 'pj-sort--active'" @click="sortBy('score')">
               Data Quality <span class="pj-sort__i" x-text="sortIcon('score')"></span>
             </button>
+            <span class="pj-resize-handle" @mousedown="startResize('score', $event)" data-col-resize="score"></span>
           </th>
-          <th class="pj-l">Description</th>
-          <th class="pj-l">Website</th>
-          <th class="pj-l">Social</th>
-          <th class="pj-l">
+          <th class="pj-l pj-resizable">Description
+            <span class="pj-resize-handle" @mousedown="startResize('desc', $event)" data-col-resize="desc"></span>
+          </th>
+          <th class="pj-l pj-resizable">Website
+            <span class="pj-resize-handle" @mousedown="startResize('website', $event)" data-col-resize="website"></span>
+          </th>
+          <th class="pj-l pj-resizable">Social
+            <span class="pj-resize-handle" @mousedown="startResize('social', $event)" data-col-resize="social"></span>
+          </th>
+          <th class="pj-l pj-resizable">
             <button type="button" class="pj-sort" :class="isSort('facets') && 'pj-sort--active'" @click="sortBy('facets')">
               Facets <span class="pj-sort__i" x-text="sortIcon('facets')"></span>
             </button>
+            <span class="pj-resize-handle" @mousedown="startResize('facets', $event)" data-col-resize="facets"></span>
           </th>
-          <th>
+          <th class="pj-resizable">
             <button type="button" class="pj-sort" :class="isSort('wallet') && 'pj-sort--active'" @click="sortBy('wallet')">
               Wallet Balance <span class="pj-sort__i" x-text="sortIcon('wallet')"></span>
             </button>
+            <span class="pj-resize-handle" @mousedown="startResize('wallet', $event)" data-col-resize="wallet"></span>
           </th>
         </tr>
       </thead>
       <tbody>
         <template x-for="row in sortedRows" :key="row.p.id">
           <tr>
-            <!-- Project -->
+            <!-- Project — links to the profile route (§5.4 item 5; routes.js
+                 already wires /projects/:slug ungated, issue #380). -->
             <td class="a2-sticky pj-name">
-              <div class="pj-name__inner">
-                <template x-if="row.p.logoUrl">
-                  <img :src="row.p.logoUrl" alt="" class="pj-logo" loading="lazy" />
-                </template>
-                <template x-if="!row.p.logoUrl">
-                  <span class="pj-logo pj-logo--fallback" x-text="initials(row.p.displayName)"></span>
-                </template>
-                <span class="pj-name__text" x-text="row.p.displayName"></span>
-              </div>
+              <a class="pj-name__link" :href="profileHref(row.p)">
+                <div class="pj-name__inner">
+                  <template x-if="row.p.logoUrl">
+                    <img :src="row.p.logoUrl" alt="" class="pj-logo" loading="lazy" />
+                  </template>
+                  <template x-if="!row.p.logoUrl">
+                    <span class="pj-logo pj-logo--fallback" x-text="initials(row.p.displayName)"></span>
+                  </template>
+                  <span class="pj-name__text" x-text="row.p.displayName"></span>
+                </div>
+              </a>
             </td>
 
             <!-- Market Cap (per coin) -->
@@ -375,7 +467,9 @@
 .pj-sort__i { opacity: 0.55; font-size: 0.7em; }
 .pj-sort--active .pj-sort__i { opacity: 1; }
 
-/* Project name cell */
+/* Project name cell — link wraps the logo + name (§5.4 item 5). */
+.pj-name__link { display: block; color: inherit; text-decoration: none; }
+.pj-name__link:hover .pj-name__text { text-decoration: underline; }
 .pj-name__inner { display: flex; align-items: center; gap: 0.55rem; }
 .pj-logo {
   width: 26px; height: 26px;
@@ -435,6 +529,121 @@
 /* Sparkline */
 .pj-spark { display: inline-block; vertical-align: middle; }
 .pj-spark-empty { color: var(--color-text-dim); }
+
+/* ── Definitions dialog (§5.4 item 1) ───────────────────────────────────── */
+.pj-toolbar { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
+.pj-defs-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.35rem 0.7rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.pj-defs-trigger:hover { color: var(--color-accent); border-color: var(--color-accent); }
+.pj-defs-trigger span { opacity: 0.7; }
+.pj-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+.pj-dialog {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  max-width: 40rem;
+  width: 100%;
+  max-height: min(80vh, 640px);
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+.pj-dialog__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+.pj-dialog__head h2 {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+.pj-dialog__close {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1rem 0.4rem;
+}
+.pj-dialog__close:hover { color: var(--color-text); }
+.pj-defs { margin: 0; }
+.pj-defs__item {
+  border-left: 2px solid color-mix(in srgb, var(--color-accent) 40%, transparent);
+  padding: 0.35rem 0 0.35rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.pj-defs__item:last-child { margin-bottom: 0; }
+.pj-defs__item dt {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-accent);
+}
+.pj-defs__item dd {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+/* ── Dual synced horizontal scrollbars (§5.4 item 2) ────────────────────── */
+.pj-scroll-mirror {
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 14px;
+  border: 1px solid var(--color-border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+}
+.pj-scroll-mirror > div { height: 1px; }
+/* Hides the browser scrollbar chrome while keeping the element scrollable —
+   the mirror bar (or the top-edge sliver of it) is the only visible track;
+   the main container's own x-scrollbar is likewise hidden (§2/§5.4 item 2:
+   "main container hides its x-scrollbar via .hide-x-scrollbar"). */
+.hide-x-scrollbar-visual { scrollbar-width: thin; }
+.hide-x-scrollbar-visual::-webkit-scrollbar { height: 6px; }
+.a2-table__scroll.pj-scroll { border-top: none; border-radius: 0 0 8px 8px; }
+
+/* ── Column resizing (§5.4 item 3) ──────────────────────────────────────── */
+.pj-resizable { position: relative; }
+.pj-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+}
+.pj-resize-handle:hover,
+.pj-resize-handle:active { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
 
 @media (min-width: 768px) {
   .a2 { padding: 0 2rem 5rem; }

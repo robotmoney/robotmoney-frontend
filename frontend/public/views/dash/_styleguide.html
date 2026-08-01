@@ -191,6 +191,51 @@
     </div>
   </section>
 
+  <!-- Chart.js dash theme demo (issue #381, plan §4.2) -->
+  <section data-sg="chart-theme" style="margin-bottom:2.5rem; max-width:28rem;">
+    <h2>Chart.js dash theme</h2>
+    <p style="color: hsl(var(--muted-foreground)); font-size:0.8rem; margin:0 0 0.75rem;">
+      <code>applyDashChartDefaults(chart)</code> applied to a plain line chart — colors read
+      live from this scope's <code>--chart-1..5</code>/<code>--border</code> tokens, not redeclared.
+    </p>
+    <div style="height:12rem;">
+      <canvas x-ref="dashChartDemo" data-sg-chart-canvas></canvas>
+    </div>
+  </section>
+
+  <!-- Sparkline library demo (issue #381, plan §4.3) -->
+  <section data-sg="sparklines" style="margin-bottom:2.5rem;">
+    <h2>Sparkline library</h2>
+    <div style="display:flex; flex-wrap:wrap; gap:1.5rem; align-items:flex-end; margin-bottom:1rem;">
+      <div>
+        <p class="data-label">Sparkline (default 80x24)</p>
+        <div data-sg-sparkline-default x-html="sparklineSvg(rowSparklineSamples.up)"></div>
+      </div>
+      <div>
+        <p class="data-label">Sparkline (large 800x120, WalletProfile)</p>
+        <div data-sg-sparkline-large style="width:20rem; overflow:hidden;" x-html="sparklineSvg(rowSparklineSamples.up, {width:800,height:120})"></div>
+      </div>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:1.5rem; align-items:flex-end;">
+      <div>
+        <p class="data-label">RowSparkline — up</p>
+        <div data-sg-row-sparkline="up" x-html="rowSparklineSvg(rowSparklineSamples.up)"></div>
+      </div>
+      <div>
+        <p class="data-label">RowSparkline — down</p>
+        <div data-sg-row-sparkline="down" x-html="rowSparklineSvg(rowSparklineSamples.down)"></div>
+      </div>
+      <div>
+        <p class="data-label">RowSparkline — flat</p>
+        <div data-sg-row-sparkline="flat" x-html="rowSparklineSvg(rowSparklineSamples.flat)"></div>
+      </div>
+      <div>
+        <p class="data-label">RowSparkline — &lt;4 points</p>
+        <div data-sg-row-sparkline="short" x-text="rowSparklineSvg(rowSparklineSamples.short)"></div>
+      </div>
+    </div>
+  </section>
+
   <!-- Icon sprite -->
   <section data-sg="icons" style="display:flex; flex-wrap:wrap; gap:0.75rem;">
     <h2 style="width:100%;">Icon sprite</h2>

@@ -12,6 +12,7 @@ import { getBuybacks as fetchBuybacks } from "../../chain/buyback-logs.ts";
 import { getTokenMetrics as fetchTokenMetrics } from "../../chain/token-metrics.ts";
 import { getWalletSleeves as fetchWalletSleeves } from "../../chain/wallet-sleeves.ts";
 import { getAllocationFramework } from "../../chain/allocation-framework.ts";
+import { fetchEntities, fetchMarketOverview } from "../../projects/entities-projections.ts";
 
 // GET /api/dashboards/research-signals/:key → latest research signal payload
 export async function getResearchSignal(key: string) {
@@ -67,4 +68,21 @@ export async function getWalletSleeves() {
 // read, no AI enrichment). Static until an admin rewrites the row.
 export async function getAllocation() {
   return getAllocationFramework();
+}
+
+// GET /api/dashboards/entities → the /list "Total Market" unified table feed
+// (issue #384, docs/bot-analytics-ui-port-plan.md §5.1): one row per tracked
+// agent/coin/vault/wallet, spanning every project (not the /projects
+// directory's MIN_SCORE gate — see entities-projections.ts header). Never
+// synthetic: a fresh DB with empty facet tables returns `{ entities: [] }`.
+export async function getEntities() {
+  return fetchEntities();
+}
+
+// GET /api/dashboards/overview → /list's TotalMarketOverview summary (counts,
+// vault TVL + 7d sparkline, total AUM, per-type leaders, avg agent
+// productivity, and the ROBOTMONEY ticker card sourced from the same
+// getTokenMetrics() as /allocation — no new price feed).
+export async function getMarketOverview() {
+  return fetchMarketOverview();
 }

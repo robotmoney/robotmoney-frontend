@@ -57,6 +57,8 @@ async function main(): Promise<void> {
   routes[ROUTES.dashboards.tokenMetrics] = await get(ROUTES.dashboards.tokenMetrics);
   routes[ROUTES.dashboards.walletSleeves] = await get(ROUTES.dashboards.walletSleeves);
   routes[ROUTES.dashboards.allocation] = await get(ROUTES.dashboards.allocation);
+  routes[ROUTES.dashboards.entities] = await get(ROUTES.dashboards.entities);
+  routes[ROUTES.dashboards.overview] = await get(ROUTES.dashboards.overview);
   routes[ROUTES.projects.list] = await get(ROUTES.projects.list);
   for (const key of RESEARCH_KEYS) {
     const p = expand(ROUTES.dashboards.researchSignal, { key });
