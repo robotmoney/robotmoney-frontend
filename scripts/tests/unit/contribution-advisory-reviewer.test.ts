@@ -17,18 +17,23 @@ const expectedConcerns = [
 
 let fakeDir = "";
 let fakeOpenCode = "";
+let harnessScript = "";
 let capturedPrompt = "";
 let capturedArgv = "";
+let capturedEnv = "";
 
 beforeAll(async () => {
   fakeDir = await mkdtemp(join(tmpdir(), "contribution-reviewer-"));
   fakeOpenCode = join(fakeDir, "opencode");
+  harnessScript = join(fakeDir, "harness.ts");
   capturedPrompt = join(fakeDir, "captured-prompt.txt");
   capturedArgv = join(fakeDir, "captured-argv.json");
+  capturedEnv = join(fakeDir, "captured-env.json");
   await writeFile(fakeOpenCode, `#!/usr/bin/env bun
 const prompt = Bun.argv[3] ?? "";
 await Bun.write(${JSON.stringify(capturedPrompt)}, prompt);
 await Bun.write(${JSON.stringify(capturedArgv)}, JSON.stringify(Bun.argv.slice(2)));
+await Bun.write(${JSON.stringify(capturedEnv)}, JSON.stringify(process.env));
 const text = prompt.includes("docs/brand-direction.md")
   ? ${JSON.stringify(expectedConcerns)}
   : ${JSON.stringify(CLEAN_CONTRIBUTION_REVIEW)};
@@ -36,6 +41,26 @@ console.log(JSON.stringify({ type: "step_start", part: {} }));
 console.log(JSON.stringify({ type: "text", part: { type: "text", text } }));
 `);
   await chmod(fakeOpenCode, 0o755);
+  // Bun.spawn's default (no explicit `env`) inherits the OS-level environment
+  // a process was started with, not later in-process mutations of
+  // `process.env` -- so a real GH_TOKEN-leak repro needs a genuinely fresh
+  // child process that starts with GH_TOKEN already set, exactly like the
+  // real workflow step does for `bun scripts/contribution-advisory-reviewer.ts`.
+  // This harness is that fresh process: it calls reviewContributionDiff the
+  // same way the CLI entrypoint does, from a process whose own environment
+  // (set by the caller) is what a default, unallowlisted Bun.spawn would
+  // forward downstream.
+  await writeFile(harnessScript, `import { readFile } from "node:fs/promises";
+import { reviewContributionDiff } from ${JSON.stringify(join(repoRoot, "scripts/contribution-advisory-reviewer.ts"))};
+
+const [, , diffPath, promptPath, contributingPath, opencodeBin] = process.argv;
+const [diff, trustedPrompt, contributing] = await Promise.all([
+  readFile(diffPath, "utf8"),
+  readFile(promptPath, "utf8"),
+  readFile(contributingPath, "utf8"),
+]);
+await reviewContributionDiff(diff, trustedPrompt, contributing, { opencodeBin });
+`);
 });
 
 afterAll(async () => {
@@ -85,6 +110,37 @@ describe("contribution advisory reviewer fixture contract", () => {
     const argv = JSON.parse(await readFile(capturedArgv, "utf8")) as string[];
     expect(argv).toContain("--auto");
     expect(argv).not.toContain("--dangerously-skip-permissions");
+  });
+
+  test("the OpenCode child process does not inherit GH_TOKEN from the parent", async () => {
+    // Load-bearing: the sentinel is set on a genuinely fresh harness process
+    // (see beforeAll) rather than mutated on this test's own `process.env`.
+    // Bun.spawn's default env-inherit reflects the environment a process
+    // started with, not later JS-side mutations to `process.env` -- mutating
+    // it here would make the assertion pass vacuously and never go red
+    // against pre-fix code. Confirmed empirically while authoring this test:
+    // pre-fix code leaked this exact sentinel through the harness, and does
+    // not after the `env: childEnv` allowlist fix.
+    const sentinel = "contribution-reviewer-test-sentinel-gh-token";
+    const diffPath = join(fixtures, "contribution-reviewer-clean.diff");
+    const promptPath = join(repoRoot, "scripts/prompts/contribution-advisory-reviewer.md");
+    const contributingPath = join(repoRoot, "CONTRIBUTING.md");
+
+    const harness = Bun.spawn(
+      ["bun", "run", harnessScript, diffPath, promptPath, contributingPath, fakeOpenCode],
+      { env: { ...process.env, GH_TOKEN: sentinel }, stdout: "pipe", stderr: "pipe" },
+    );
+    const [stderr, exitCode] = await Promise.all([
+      new Response(harness.stderr as ReadableStream).text(),
+      harness.exited,
+    ]);
+    if (exitCode !== 0) throw new Error(`harness failed (exit ${exitCode}): ${stderr}`);
+
+    const childEnv = JSON.parse(await readFile(capturedEnv, "utf8")) as Record<string, string>;
+    expect(childEnv.GH_TOKEN).toBeUndefined();
+    expect(Object.values(childEnv)).not.toContain(sentinel);
+    // The allowlist still has to let the child actually run.
+    expect(childEnv.PATH).toBeDefined();
   });
 
   test("an unavailable OpenCode dependency fails loudly with no clean fallback", async () => {
