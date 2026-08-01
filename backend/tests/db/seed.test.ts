@@ -12,6 +12,7 @@ import { afterEach, expect, test } from "bun:test";
 import { sql } from "../../src/db/client.ts";
 import { SCHEDULES, seed, seedJobSchedules } from "../../src/db/seed.ts";
 import { resolveSwarmSchedules } from "../../src/config.ts";
+import { tickScheduler } from "../../src/worker/scheduler.ts";
 
 // Every test in this file must leave the shared ephemeral Postgres on the
 // PRODUCTION baseline (later test files, e.g. tests/api/admin-surface.test.ts,
@@ -27,6 +28,11 @@ afterEach(async () => {
     DELETE FROM job_schedules
      WHERE kind IN ('regime.classify', 'research.refresh')
        AND cron NOT IN ('30 22 * * *', '0 23 * * *')`;
+  // Issue #399: DEMO_MODE disables projects.recompute_coverage in place (no
+  // second demo-cadence row, unlike wallet.sample_balances above) — re-arm it
+  // so later test files sharing this ephemeral Postgres see the production
+  // baseline enabled.
+  await sql`UPDATE job_schedules SET enabled = true WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *'`;
 });
 
 test("cadence (#118): seed registers wallet.sample_balances at the every-minute cron '* * * * *'", async () => {
@@ -184,6 +190,75 @@ test("demo analytics cadence (#287): the disable is one-directional — an opera
     SELECT enabled FROM job_schedules WHERE kind = 'regime.classify' AND cron = '7 * * * *'`;
   expect(rows).toHaveLength(1);
   expect(rows[0]!.enabled).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// projects.recompute_coverage demo guard (issue #399). The handler recomputes
+// data_coverage_score from live inputs, which would collapse
+// seedDemoProjects()'s deliberately incomplete demo rows back below the
+// /projects directory's MIN_SCORE gate (projects/projections.ts) — hiding
+// them and defeating the point of seeding curated demo data. Guarded the same
+// way as the wallet-sampler baseline above: a one-directional, idempotent
+// UPDATE, not a second schedule row.
+// ---------------------------------------------------------------------------
+
+const recomputeCoverageRow = async (): Promise<{ enabled: boolean } | undefined> =>
+  (
+    await sql<{ enabled: boolean }[]>`
+      SELECT enabled FROM job_schedules WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *'
+    `
+  )[0];
+
+test("demo guard (#399): DEMO_MODE disables the canonical projects.recompute_coverage schedule on a fresh seed", async () => {
+  delete process.env.DEMO_MODE;
+  await sql`DELETE FROM job_schedules WHERE kind = 'projects.recompute_coverage'`;
+  process.env.DEMO_MODE = "1";
+  await seedJobSchedules(); // fresh insert (ON CONFLICT DO NOTHING) then the demo-gated disable
+  const row = await recomputeCoverageRow();
+  expect(row?.enabled).toBe(false);
+});
+
+test("demo guard (#399): re-seeding an EXISTING demo database disables a row left enabled by an older deployment (upgrade case)", async () => {
+  delete process.env.DEMO_MODE;
+  await seedJobSchedules(); // production baseline: row exists and enabled
+  const before = await recomputeCoverageRow();
+  expect(before?.enabled).toBe(true);
+
+  process.env.DEMO_MODE = "1";
+  await seedJobSchedules(); // simulates re-running seed against a pre-existing demo DB
+  const after = await recomputeCoverageRow();
+  expect(after?.enabled).toBe(false);
+
+  await seedJobSchedules(); // idempotent: a later boot must not change the outcome
+  expect((await recomputeCoverageRow())?.enabled).toBe(false);
+});
+
+test("demo guard (#399): idempotent — an operator-disabled row stays disabled across repeated seed runs", async () => {
+  process.env.DEMO_MODE = "1";
+  await seedJobSchedules();
+  expect((await recomputeCoverageRow())?.enabled).toBe(false);
+  await seedJobSchedules(); // every boot re-runs this; the `AND enabled` guard makes it a no-op
+  await seedJobSchedules();
+  expect((await recomputeCoverageRow())?.enabled).toBe(false);
+});
+
+test("demo guard (#399): with DEMO_MODE unset the production schedule remains enabled and unchanged", async () => {
+  delete process.env.DEMO_MODE;
+  await seedJobSchedules();
+  const row = await recomputeCoverageRow();
+  expect(row?.enabled).toBe(true);
+});
+
+test("demo guard (#399): a disabled schedule is never picked up by the scheduler (tickScheduler filters WHERE enabled)", async () => {
+  process.env.DEMO_MODE = "1";
+  await seedJobSchedules();
+  expect((await recomputeCoverageRow())?.enabled).toBe(false);
+  await sql`UPDATE job_schedules SET next_run_at = now() - interval '1 day' WHERE kind = 'projects.recompute_coverage'`;
+  await tickScheduler();
+  const jobs = await sql<{ c: number }[]>`
+    SELECT count(*)::int AS c FROM jobs WHERE kind = 'projects.recompute_coverage'
+  `;
+  expect(jobs[0]!.c).toBe(0); // disabled row is never enqueued, so the handler never fires and demo scores stay untouched
 });
 
 test("without DEMO_MODE the seeded row set is byte-for-byte SCHEDULES (+ the env-configured committee rows) — no demo cadence leaks into prod/CI", async () => {
