@@ -6,6 +6,7 @@ import { config, assertNoVaultAddressCollision } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard } from "./routes/dashboards.ts";
+import { createSubmission } from "./routes/submissions.ts";
 import { getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleCommittee } from "./routes/committee.ts";
 import { handleAdmin } from "./routes/admin.ts";
@@ -118,6 +119,12 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
       return json(await getLeaderboard());
     }
 
+    // Public /submit intake (issue #393, §5.17) — anonymous, rate-limited per ip.
+    if (pathname === ROUTES.dashboards.submissions && req.method === "POST") {
+      const body = await req.json().catch(() => null);
+      const r = await createSubmission(body, clientIp);
+      return json(r.body, r.status);
+    }
 
     if (pathname === ROUTES.projects.list && req.method === "GET") {
       return json(await getProjects());

@@ -16,6 +16,7 @@ export const ROUTES: {
     overview: string;
     list2: string;
     leaderboard: string;
+    submissions: string;
   };
   projects: {
     list: string;

@@ -46,6 +46,12 @@ export const ROUTES = {
     // for a public GET).
     list2: "/api/dashboards/list2", // GET → List v2 per-facet-tab table feed
     leaderboard: "/api/dashboards/leaderboard", // GET → List v3 money-agent leaderboard + evidence
+    // Issue #393 (/submit, docs/bot-analytics-ui-port-plan.md §5.17): public
+    // agent-onboarding/community-commit intake. Same public-GET-adjacent
+    // dashboards namespace as entities/overview above (not analytics.* —
+    // that boundary is the bearer-gated PRODUCER ingestion surface; this is
+    // an anonymous public submission, moderated later from /admin).
+    submissions: "/api/dashboards/submissions", // POST → create a pending submission
   },
 
   projects: {
