@@ -162,6 +162,13 @@ export interface RegimeIndicator {
   percentile: number | null;
   signed_percentile: number | null;
   panel_weight: number | null;
+  // #402: forward-fill provenance — how many days the last real print has been
+  // carried forward (null before any real observation exists) and whether that
+  // age has exceeded MAX_FORWARD_FILL_DAYS, excluding the indicator from that
+  // day's percentile/panel-weight contribution. Computed by buildRichIndicators
+  // in backend/src/analytics/index.ts on every latest-snapshot indicator.
+  forward_fill_age_days: number | null;
+  forward_fill_expired: boolean;
   sparkline: (number | null)[];
 }
 

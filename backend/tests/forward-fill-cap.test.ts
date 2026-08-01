@@ -15,6 +15,7 @@
 //      day"), and a resumed real observation re-enters normally with no
 //      special-casing (age resets to 0 the moment a real print lands).
 import { test, expect } from "bun:test";
+import type { RegimeIndicator } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { computeRegime } from "../src/analytics/analyze/compute.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
@@ -213,28 +214,41 @@ test(
 
     const [row] = await sql`SELECT indicators FROM regime_snapshots WHERE date = ${asof}`;
     expect(row).toBeTruthy();
-    const inds = row.indicators as any[];
-    const stale = inds.find((i) => i.id === STALE_ID);
+    // #450: type the persisted payload as the contract's RegimeIndicator[] (not
+    // `any[]`) so every property access below is checked against the declared
+    // interface — if forward_fill_age_days/forward_fill_expired were ever
+    // dropped from contract/src/dashboards.d.ts, this file would fail
+    // `bun run typecheck`, not just this runtime assertion.
+    const inds = row.indicators as RegimeIndicator[];
+    const stale: RegimeIndicator | undefined = inds.find((i) => i.id === STALE_ID);
     expect(stale).toBeTruthy();
+    const staleIndicator = stale as RegimeIndicator;
 
     // Existing provenance is preserved verbatim — not hidden.
-    expect(stale.raw_value).toBe(0.32);
-    expect(stale.raw_date).toBe(lastRealDate);
+    expect(staleIndicator.raw_value).toBe(0.32);
+    expect(staleIndicator.raw_date).toBe(lastRealDate);
 
     // New #402 provenance: visibly flagged as expired, with the real age.
-    expect(stale.forward_fill_age_days).toBe(expectedAge);
-    expect(stale.forward_fill_expired).toBe(true);
+    // Asserting on the typed field (RegimeIndicator['forward_fill_age_days'] is
+    // `number | null`, ['forward_fill_expired'] is `boolean`) is the type-shape
+    // proof that the runtime object satisfies the declared contract, not just
+    // that these ad hoc property reads happen to succeed.
+    const ageDays: RegimeIndicator["forward_fill_age_days"] = staleIndicator.forward_fill_age_days;
+    const expired: RegimeIndicator["forward_fill_expired"] = staleIndicator.forward_fill_expired;
+    expect(ageDays).toBe(expectedAge);
+    expect(expired).toBe(true);
 
     // And actually excluded from that day's contribution (AC1), not merely
     // labeled — the rich object's own percentile/signed_percentile read null —
     // while the healthy indicator kept the panel alive and classifiable.
-    expect(stale.percentile).toBeNull();
-    expect(stale.signed_percentile).toBeNull();
+    expect(staleIndicator.percentile).toBeNull();
+    expect(staleIndicator.signed_percentile).toBeNull();
 
     const healthy = inds.find((i) => i.id === HEALTHY_ID);
     expect(healthy).toBeTruthy();
-    expect(healthy.forward_fill_expired).toBe(false);
-    expect(healthy.percentile).not.toBeNull();
+    const healthyIndicator = healthy as RegimeIndicator;
+    expect(healthyIndicator.forward_fill_expired).toBe(false);
+    expect(healthyIndicator.percentile).not.toBeNull();
   },
   { timeout: 120_000 },
 );
