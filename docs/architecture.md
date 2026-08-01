@@ -2295,8 +2295,11 @@ the TUI shows only distilled state. Layout:
   API and the admin roster (§11 R8). `session`/`memo`/`admitted` flip the same
   way as before: when the newly-admitted member is separately observed
   submitting a signed take + posting a memo in a live committee session. A
-  failed or timed-out admission renders red and its container transcript is
-  logged — a real eval result, never retried. Admitted members **retain their
+  failed or timed-out admission renders red — a real eval result, never
+  retried — and, whether the prospect is admitted, fails, or is still
+  in-progress, its secret-redacted transcript is retained in a discoverable,
+  tailable per-prospect artifact directory that survives the member-agent
+  container's own teardown (§11.3 E8). Admitted members **retain their
   checklist** in the pane (most recent shown, with a `(+N earlier admitted)`
   note), and an `upcoming → Name in m:ss …` line **counts down** to the next
   scheduled admissions. See §11.
@@ -2693,6 +2696,55 @@ eval flake, and are reported as results**: a *refusal* (the agent declines the
 task — the measured refusals that shaped `ONBOARDING_PROMPT`'s opening bounds)
 and a *stall* (the agent correctly waits on an owner who cannot answer). Both
 mean the published instructions do not stand on their own.
+
+**E8 — Retained, tailable, per-prospect transcripts (issue #317).** The
+member-agent primitive already redacts and returns a transcript for every run
+(`scripts/agent/member-agent.ts`), but until #317 the demo's onboarding driver
+only ever wrote it to the shared `.agents/demo-<project>.log`, and only when
+the prospect FAILED — a successful or still-running prospect left no
+discoverable record, and the container's own filesystem is removed at
+teardown (`--rm`). Rather than a second persistence mechanism, the standing
+driver now wires in the SAME artifact primitive the local eval entrypoint
+already used (`createOnboardingArtifactWriter` /
+`scripts/lib/demo-prospect-transcript.ts`), so both converge on one directory
+per prospect:
+
+```text
+.agents/onboarding-evals/<composeProject>/<runId>/
+  manifest.json         — candidate display name, demo run, model, limits
+  events.ndjson         — the consolidated lifecycle timeline: launch,
+                          container-observed ("ready"), every redacted
+                          agent/API/Postgres line, exit, cleanup
+  agent.stdout.ndjson   — the agent's own redacted NDJSON, live-appended
+  agent.stderr.log      — the agent's redacted stderr, live-appended
+  services.log          — followed API/Postgres Compose lines
+  result.json           — the classified outcome (§11.3 E4): branch, reason,
+                           liveness/error evidence, memberId, steps, exit code
+```
+
+Every file is appended to synchronously as events arrive, so it is
+**tail-able while the prospect's container is still running** and **remains
+inspectable after the container is removed** — both live on the host, not
+inside the container. `<composeProject>` is the demo's own project name
+(shown in the TUI header and `bun run demo:status`); `<runId>` is the
+candidate's slug, printed in the log line `onboarding <name> transcript: …`
+the driver emits the moment it starts an attempt. **Operator workflow:**
+
+```bash
+# while a prospect is in progress
+tail -f .agents/onboarding-evals/<project>/<runId>/events.ndjson
+
+# after success, failure, or container teardown
+cat .agents/onboarding-evals/<project>/<runId>/result.json
+```
+
+A retried attempt (a `refused` or `rate-limited` first try —
+`runOnboardingEvalWithRetry`) still lands in this ONE directory: the writer is
+keyed by the prospect's base identity, and each attempt tags its own events
+with its own attempt number, so a retried admission reads as one continuous
+record rather than fragmenting across two. This directory is git-ignored
+runtime state (`.agents/`), identical in that respect to the demo log file and
+the local eval's own artifacts (docs/reports/2026-07-29-local-onboarding-eval-assets.md).
 
 ---
 

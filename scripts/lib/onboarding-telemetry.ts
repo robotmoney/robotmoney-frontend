@@ -234,6 +234,15 @@ export interface OnboardingArtifactManifestInput {
   suiteRunId?: string;
   evalId?: string;
   sampleId?: string;
+  /**
+   * The candidate's PUBLIC display name (issue #317) — safe to persist
+   * unredacted: it is the same name the demo's onboarding pane and, once
+   * admitted, the committee roster already show. Never the contact (already
+   * hashed below) and never a secret. Written into the manifest at creation
+   * time, so it is discoverable from the very start of a still-running
+   * attempt, not only once `finish()` writes `result.json`.
+   */
+  candidateName?: string;
 }
 
 export interface OnboardingArtifactWriter {
@@ -268,6 +277,7 @@ export function createOnboardingArtifactWriter(input: OnboardingArtifactManifest
         ...(input.suiteRunId ? { suiteRunId: input.suiteRunId } : {}),
         ...(input.evalId ? { evalId: input.evalId } : {}),
         ...(input.sampleId ? { sampleId: input.sampleId } : {}),
+        ...(input.candidateName ? { candidateName: input.candidateName } : {}),
         attempt: input.attempt ?? 1,
         model: input.model,
         startedAt: new Date().toISOString(),
