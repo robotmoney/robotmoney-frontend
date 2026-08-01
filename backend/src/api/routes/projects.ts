@@ -6,12 +6,12 @@
 // (issue #93): there is NO AI/LLM enrichment anywhere on this path. The only
 // supported write is the privileged admin route below; the scheduled discovery
 // pipeline never clobbers admin-authored overview text.
-import { createHash, timingSafeEqual } from "node:crypto";
 import { config as globalConfig } from "../../config.ts";
 import { sql } from "../../db/client.ts";
 import { fetchProjects } from "../../projects/projections.ts";
 import { fetchProjectDetail } from "../../projects/profile-projections.ts";
 import { optionalString, readJsonObject } from "../validation.ts";
+import { secretEq } from "../auth.ts";
 
 export async function getProjects() {
   return fetchProjects();
@@ -24,14 +24,6 @@ export async function getProjects() {
 // api/index.ts), never a 200 with a null body.
 export async function getProjectDetail(slug: string) {
   return fetchProjectDetail(slug);
-}
-
-// Constant-time secret comparison (over fixed-length sha256 hashes so lengths
-// always match and timing doesn't leak the secret) — mirrors committee.ts.
-function secretEq(presented: string | null, expected: string): boolean {
-  const a = createHash("sha256").update(presented ?? "").digest();
-  const b = createHash("sha256").update(expected).digest();
-  return timingSafeEqual(a, b);
 }
 
 // Auth surface for the admin write. Injectable so tests can exercise a prod-mode
