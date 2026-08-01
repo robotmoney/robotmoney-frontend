@@ -1,0 +1,80 @@
+<!-- /lobster — "Lobster Coins" directory (issue #386, docs/bot-analytics-ui-
+     port-plan.md §5.9, P2.3). Injected into views/dash/_layout.html's
+     [data-outlet] (already carrying the single `.a3` root), so this fragment
+     stays unscoped itself. Driven by the boot-registered dashLobster()
+     factory (alpine/views.js) over GET /api/dashboards/coins (coins-vaults-wallets-projections.ts) — a
+     real, non-fabricated read over the existing lobster_coins table (#70). -->
+<div x-data="dashLobster()" x-init="init()" data-dash-lobster>
+
+  <header class="a3-page-header">
+    <div>
+      <h1 class="a3-page-title">Lobster Coins</h1>
+      <p class="a3-page-subtitle">Sub-$10M market cap tokens in agentic ecosystems.</p>
+    </div>
+    <div class="a3-page-header-actions">
+      <span class="data-label" data-dash-lobster-refreshed x-text="'Last refreshed: ' + lastRefreshedLabel"></span>
+      <!-- D10 (§5.9): no on-demand coin-refresh trigger exists yet — render
+           disabled rather than wiring a fake button. -->
+      <button
+        type="button"
+        class="a3-outline-btn"
+        disabled
+        title="On-demand refresh isn't wired up yet — coins refresh hourly on a schedule."
+        data-dash-refresh
+      >
+        <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-refresh-cw"></use></svg>
+        Refresh
+      </button>
+    </div>
+  </header>
+
+  <p x-show="loading" class="data-label" data-dash-loading>Loading…</p>
+  <p x-show="error" x-text="error" class="a3-badge a3-badge--destructive" x-cloak data-dash-error></p>
+
+  <div x-show="!loading && !error && sortedRows.length === 0" x-cloak class="a3-empty-state" data-dash-empty>
+    <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-coins"></use></svg>
+    <p>No lobster coins found</p>
+  </div>
+
+  <div x-show="!loading && !error && sortedRows.length > 0" x-cloak class="a3-table-wrap">
+    <table class="a3-table" data-dash-lobster-table>
+      <thead>
+        <tr>
+          <th :aria-sort="isSort('name') ? sortDir : null" :class="isSort('name') && 'is-sorted'" @click="sortBy('name')" data-sort="name">
+            Token <span x-show="isSort('name')" x-text="sortIcon('name')"></span>
+          </th>
+          <th :aria-sort="isSort('priceUsd') ? sortDir : null" :class="isSort('priceUsd') && 'is-sorted'" @click="sortBy('priceUsd')" data-sort="priceUsd">
+            Price <span x-show="isSort('priceUsd')" x-text="sortIcon('priceUsd')"></span>
+          </th>
+          <th :aria-sort="isSort('marketCap') ? sortDir : null" :class="isSort('marketCap') && 'is-sorted'" @click="sortBy('marketCap')" data-sort="marketCap">
+            Mcap <span x-show="isSort('marketCap')" x-text="sortIcon('marketCap')"></span>
+          </th>
+          <th :aria-sort="isSort('volume24h') ? sortDir : null" :class="isSort('volume24h') && 'is-sorted'" @click="sortBy('volume24h')" data-sort="volume24h">
+            24h Vol <span x-show="isSort('volume24h')" x-text="sortIcon('volume24h')"></span>
+          </th>
+          <th :aria-sort="isSort('percentChange24h') ? sortDir : null" :class="isSort('percentChange24h') && 'is-sorted'" @click="sortBy('percentChange24h')" data-sort="percentChange24h">
+            24h % <span x-show="isSort('percentChange24h')" x-text="sortIcon('percentChange24h')"></span>
+          </th>
+          <th :aria-sort="isSort('chain') ? sortDir : null" :class="isSort('chain') && 'is-sorted'" @click="sortBy('chain')" data-sort="chain">
+            Chain <span x-show="isSort('chain')" x-text="sortIcon('chain')"></span>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="row in sortedRows" :key="row.id">
+          <tr @click="location.href = '/lobster/' + row.id" style="cursor:pointer;" data-dash-row>
+            <td>
+              <span x-text="row.name"></span>
+              <span class="data-label" x-show="row.ticker" x-text="row.ticker"></span>
+            </td>
+            <td :class="isSort('priceUsd') && 'is-sorted'" x-text="fmtPrice(row.priceUsd)"></td>
+            <td :class="isSort('marketCap') && 'is-sorted'" x-text="fmtUsd(row.marketCap)"></td>
+            <td :class="isSort('volume24h') && 'is-sorted'" x-text="fmtUsd(row.volume24h)"></td>
+            <td :class="[isSort('percentChange24h') && 'is-sorted', pctClass(row.percentChange24h)]" x-text="pctText(row.percentChange24h)"></td>
+            <td :class="isSort('chain') && 'is-sorted'" class="a3-badge a3-badge--muted" x-text="(row.chain || '—').toUpperCase()"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</div>

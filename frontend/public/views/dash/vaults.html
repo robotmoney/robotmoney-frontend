@@ -1,0 +1,77 @@
+<!-- /vaults — "Agent-Managed Vaults" directory (issue #386, docs/bot-
+     analytics-ui-port-plan.md §5.11, P2.4). Driven by dashVaults()
+     (alpine/views.js) over GET /api/dashboards/vaults (coins-vaults-wallets-projections.ts), a real read
+     over the existing agent_vaults table (#70/#87) — no fabricated columns:
+     TVL/APY are dashed out for a not-yet-live vault (data_source==='upcoming')
+     rather than showing a fake number. -->
+<div x-data="dashVaults()" x-init="init()" data-dash-vaults>
+
+  <header class="a3-page-header">
+    <div>
+      <h1 class="a3-page-title">Agent-Managed Vaults</h1>
+      <p class="a3-page-subtitle">Vaults managed by tracked agents, with TVL, APY, and refresh recency.</p>
+    </div>
+  </header>
+
+  <p x-show="loading" class="data-label" data-dash-loading>Loading…</p>
+  <p x-show="error" x-text="error" class="a3-badge a3-badge--destructive" x-cloak data-dash-error></p>
+
+  <div x-show="!loading && !error" x-cloak style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:1rem; margin-bottom:1.5rem;" data-dash-vaults-summary>
+    <div class="metric-card glow-cyan">
+      <span class="data-label">Total TVL</span>
+      <span class="data-value" x-text="fmtUsd(totalTvl)"></span>
+    </div>
+    <div class="metric-card glow-purple">
+      <span class="data-label">Avg APY</span>
+      <span class="data-value" x-text="fmtApy(avgApy)"></span>
+    </div>
+    <div class="metric-card">
+      <span class="data-label">Active Vaults</span>
+      <span class="data-value" x-text="activeVaultCount"></span>
+    </div>
+  </div>
+
+  <div x-show="!loading && !error && sortedRows.length === 0" x-cloak class="a3-empty-state" data-dash-empty>
+    <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-vault"></use></svg>
+    <p>No vaults found</p>
+  </div>
+
+  <div x-show="!loading && !error && sortedRows.length > 0" x-cloak class="a3-table-wrap">
+    <table class="a3-table" data-dash-vaults-table>
+      <thead>
+        <tr>
+          <th :aria-sort="isSort('name') ? sortDir : null" :class="isSort('name') && 'is-sorted'" @click="sortBy('name')" data-sort="name">
+            Vault <span x-text="sortIcon('name')"></span>
+          </th>
+          <th :aria-sort="isSort('strategyType') ? sortDir : null" :class="isSort('strategyType') && 'is-sorted'" @click="sortBy('strategyType')" data-sort="strategyType">
+            Strategy <span x-text="sortIcon('strategyType')"></span>
+          </th>
+          <th :aria-sort="isSort('tvlUsd') ? sortDir : null" :class="isSort('tvlUsd') && 'is-sorted'" @click="sortBy('tvlUsd')" data-sort="tvlUsd">
+            TVL <span x-text="sortIcon('tvlUsd')"></span>
+          </th>
+          <th :aria-sort="isSort('yieldApy') ? sortDir : null" :class="isSort('yieldApy') && 'is-sorted'" @click="sortBy('yieldApy')" data-sort="yieldApy">
+            APY <span x-text="sortIcon('yieldApy')"></span>
+          </th>
+          <th>Managing Agent</th>
+          <th :aria-sort="isSort('chain') ? sortDir : null" :class="isSort('chain') && 'is-sorted'" @click="sortBy('chain')" data-sort="chain">
+            Chain <span x-text="sortIcon('chain')"></span>
+          </th>
+          <th>Refreshed</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="row in sortedRows" :key="row.id">
+          <tr @click="location.href = '/vaults/' + row.id" style="cursor:pointer;" data-dash-row>
+            <td class="a3-badge a3-badge--cyan" x-text="row.name"></td>
+            <td :class="isSort('strategyType') && 'is-sorted'" x-text="row.strategyType || '—'"></td>
+            <td :class="isSort('tvlUsd') && 'is-sorted'" x-text="fmtTvlCell(row)"></td>
+            <td :class="[isSort('yieldApy') && 'is-sorted', 'a3-pct-up']" x-text="fmtApyCell(row)"></td>
+            <td x-text="row.managingAgentName || '—'"></td>
+            <td :class="isSort('chain') && 'is-sorted'" x-text="(row.chain || '—').toUpperCase()"></td>
+            <td class="data-label" x-text="fmtRefreshed(row.refreshedAt)"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</div>

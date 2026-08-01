@@ -19,6 +19,9 @@ export const ROUTES: {
     submissions: string;
     activity: string;
     agents: string;
+    coins: string;
+    vaults: string;
+    wallets: string;
   };
   projects: {
     list: string;

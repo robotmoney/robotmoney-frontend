@@ -42,6 +42,11 @@ const ACTIVITY_VIEW = `${VIEW_DIR}/dash/activity.html`;
 // directory page to ship real content ahead of the coming-soon placeholder
 // above.
 const AGENTS_VIEW = `${VIEW_DIR}/dash/agents.html`;
+// Real fragments (issue #386, §5.9/§5.11/§5.13, P2.3/P2.4/P2.5) — the first
+// three DASH_ROUTES entries to graduate off DASH_COMING_SOON_VIEW.
+const LOBSTER_VIEW = `${VIEW_DIR}/dash/lobster.html`;
+const VAULTS_VIEW = `${VIEW_DIR}/dash/vaults.html`;
+const WALLETS_VIEW = `${VIEW_DIR}/dash/wallets.html`;
 
 // Static dashboard routes (§4.1's list) that render inside DASH_LAYOUT_VIEW.
 // `gated: true` means dash-shell.js's gate must pass before the outlet
@@ -60,9 +65,9 @@ const DASH_ROUTES = {
   "/market": { view: ACTIVITY_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/dashboard": { view: ACTIVITY_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/agents": { view: AGENTS_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
-  "/lobster": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
-  "/vaults": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
-  "/wallets": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
+  "/lobster": { view: LOBSTER_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
+  "/vaults": { view: VAULTS_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
+  "/wallets": { view: WALLETS_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/methodology": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/about": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/ask-mr-roboto": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },

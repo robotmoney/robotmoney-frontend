@@ -63,6 +63,14 @@ export const ROUTES = {
     // analytics.* below, which is the analytics-provider bearer-gated
     // ingestion boundary and would be the wrong home for a public GET.
     agents: "/api/dashboards/agents", // GET → tracked-agent directory rows + summary
+    // Analytics-dashboard directory list feeds (issue #386, docs/bot-
+    // analytics-ui-port-plan.md §5.9/§5.11/§5.13). A distinct feature area
+    // from the treasury-dashboard entries above, sharing only this route
+    // namespace — NOT `analytics.*` below (the bearer-gated analytics-
+    // PROVIDER ingestion boundary, issue #106; precedent set by #384/#385).
+    coins: "/api/dashboards/coins", // GET → lobster-coin directory (/lobster)
+    vaults: "/api/dashboards/vaults", // GET → agent-managed vault directory (/vaults)
+    wallets: "/api/dashboards/wallets", // GET → tracked + agent-derived wallet directory (/wallets)
   },
 
   projects: {

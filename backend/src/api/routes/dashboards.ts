@@ -17,6 +17,12 @@ import { fetchList2 } from "../../projects/list2-projections.ts";
 import { fetchLeaderboard } from "../../projects/leaderboard-projections.ts";
 import { fetchActivityLog } from "../../projects/activity-log-projections.ts";
 import { fetchAgentsDirectory } from "../../projects/agents-projections.ts";
+// Analytics-dashboard directory list feeds (issue #386) — a distinct feature
+// area from the treasury-dashboard surfaces above, sharing only the
+// `dashboards.*` route namespace (precedent set by #384/#385: `analytics.*`
+// is the bearer-gated analytics-PROVIDER ingestion boundary from issue #106,
+// the wrong home for a public GET).
+import { fetchCoinsList, fetchVaultsList, fetchWalletsList } from "../../projects/coins-vaults-wallets-projections.ts";
 
 // GET /api/dashboards/research-signals/:key → latest research signal payload
 export async function getResearchSignal(key: string) {
@@ -122,4 +128,19 @@ export async function getActivityLog() {
 // `{ agents: [], summary: { active: 0, idle: 0, x402Txns: 0, x402VolumeUsd: 0, totalBalanceUsd: 0 } }`.
 export async function getAgentsDirectory() {
   return fetchAgentsDirectory();
+}
+
+// GET /api/dashboards/coins → /lobster directory (issue #386, §5.9).
+export async function getCoinsList() {
+  return fetchCoinsList();
+}
+
+// GET /api/dashboards/vaults → /vaults directory (issue #386, §5.11).
+export async function getVaultsList() {
+  return fetchVaultsList();
+}
+
+// GET /api/dashboards/wallets → /wallets directory (issue #386, §5.13).
+export async function getWalletsList() {
+  return fetchWalletsList();
 }
