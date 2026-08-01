@@ -140,6 +140,18 @@ describe("frontend route resolution", () => {
     expect(routeMetaFor("/agents")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
   });
 
+  // /agents/:id "Money-agent dossier" AgentProfile (issue #390, §5.8, P3.2) —
+  // the first param-route dashboard page to ship real content; every other
+  // `:id`/`:slug` route still points at the shared coming-soon placeholder
+  // (see the gated-param-paths case below, which no longer includes /agents/*).
+  test("/agents/:id (issue #390) resolves to its own real fragment, still gated under the dash layout", () => {
+    expect(viewFor("/agents/clawd")).toBe("/views/dash/agent-profile.html");
+    expect(routeMetaFor("/agents/clawd")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+    // Trailing slash tolerated, same as every other param regex in this file.
+    expect(viewFor("/agents/clawd/")).toBe("/views/dash/agent-profile.html");
+    expect(routeMetaFor("/agents/clawd/")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+  });
+
   // Issue #386 (§5.9/§5.11/§5.13, P2.3/P2.4/P2.5): the first three
   // DASH_ROUTES entries to graduate off the shared placeholder onto their
   // own real fragment, still gated + under the shared dash layout.
@@ -169,7 +181,10 @@ describe("frontend route resolution", () => {
   });
 
   test("dashboard param routes (:id/:slug) resolve to the placeholder with the right gate", () => {
-    const gatedParamPaths = ["/agents/clawd", "/lobster/xyz-coin", "/vaults/1", "/wallets/0xabc"];
+    // /agents/:id (issue #390) ships its own real fragment now — see its
+    // dedicated test above; the rest of these param routes still point at
+    // the shared coming-soon placeholder until their own phase issue lands.
+    const gatedParamPaths = ["/lobster/xyz-coin", "/vaults/1", "/wallets/0xabc"];
     for (const p of gatedParamPaths) {
       expect(viewFor(p)).toBe("/views/dash/coming-soon.html");
       expect(routeMetaFor(p)).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
@@ -179,8 +194,6 @@ describe("frontend route resolution", () => {
     // and gating its own profile sub-route would regress that.
     expect(viewFor("/projects/robotmoney-vault")).toBe("/views/dash/coming-soon.html");
     expect(routeMetaFor("/projects/robotmoney-vault")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: false });
-    // Trailing slash tolerated, same as every other param regex in this file.
-    expect(routeMetaFor("/agents/clawd/")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
   });
 
   test("routeMetaFor returns null for every non-dashboard route — a strict addition, not a behavior change", () => {

@@ -842,3 +842,69 @@
 .a3-roboto__match-metrics { display: flex; gap: 1rem; margin-bottom: 0.5rem; }
 .a3-roboto__input-row { display: flex; gap: 0.5rem; }
 .a3-roboto__input-row .a3-input { flex: 1; }
+
+/* ── /agents/:id "Money-agent dossier" AgentProfile (issue #390, §5.8, P3.2) ──
+   DossierHeader is the one deliberate non-mono heading in the whole app
+   (`.a3-dossier-name`, §5.8) — pixel-QA hotspot, kept exact: sans-serif,
+   negative tracking, weight 500. Everything else here composes existing
+   P0.1/P0.2 primitives (.metric-card, .a3-badge, .a3-progress, .a3-table). */
+.a3 .a3-back-link { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); margin-bottom: 1rem; }
+.a3 .a3-back-link:hover { color: hsl(var(--primary)); }
+
+.a3 .a3-dossier-head {
+  display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 1.5rem;
+  background: linear-gradient(180deg, hsl(var(--card)), hsl(var(--muted) / 0.2));
+  border: 1px solid hsl(var(--border)); border-radius: var(--radius);
+  padding: 1.5rem; margin-bottom: 1.5rem;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.22);
+}
+.a3 .a3-dossier-eyebrow { font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; letter-spacing: 0.28em; text-transform: uppercase; color: hsl(var(--muted-foreground)); display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem; }
+.a3 .a3-dossier-identity { display: flex; align-items: flex-start; gap: 1rem; flex: 1; min-width: 16rem; }
+.a3 .a3-dossier-avatar {
+  width: 3.5rem; height: 3.5rem; flex: none; border-radius: 9999px;
+  background: hsl(var(--primary) / 0.12); border: 1px solid hsl(var(--primary) / 0.3); color: hsl(var(--primary));
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 1.25rem;
+}
+/* The one deliberate non-mono heading in the app (§5.8's pixel-QA note). */
+.a3 .a3-dossier-name {
+  font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  font-size: clamp(1.5rem, 2vw, 2.25rem);
+  margin: 0 0 0.35rem;
+}
+.a3 .a3-dossier-desc { color: hsl(var(--muted-foreground)); font-size: 0.85rem; max-width: 40rem; margin: 0 0 0.6rem; }
+.a3 .a3-dossier-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.a3 .a3-dossier-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem; }
+.a3 .a3-dossier-pill {
+  display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.75rem;
+  border-radius: 9999px; border: 1px solid hsl(var(--border)); background: hsl(var(--muted) / 0.3);
+  color: hsl(var(--foreground)); font-size: 0.75rem;
+}
+.a3 .a3-dossier-pill:hover { border-color: hsl(var(--primary) / 0.4); color: hsl(var(--primary)); }
+
+.a3 .a3-money-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.a3 .a3-money-strip .metric-card { display: flex; flex-direction: column; gap: 0.3rem; border-radius: 1rem; }
+
+.a3 .a3-evidence-layout { display: grid; grid-template-columns: 1.35fr 0.9fr; gap: 1rem; margin-bottom: 1.5rem; }
+@media (max-width: 900px) { .a3 .a3-evidence-layout { grid-template-columns: 1fr; } }
+.a3 .a3-evidence-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid hsl(var(--border) / 0.6); font-size: 0.85rem; }
+.a3 .a3-evidence-row:last-child { border-bottom: none; }
+.a3 .a3-gap-list, .a3 .a3-why-list { margin: 0; padding-left: 1.1rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); }
+.a3 .a3-gap-list li, .a3 .a3-why-list li { margin-bottom: 0.35rem; }
+
+.a3 .a3-lever-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.a3 .a3-lever-card .data-label { margin-bottom: 0.4rem; }
+.a3 .a3-lever-next { font-size: 0.8rem; color: hsl(var(--primary)); margin-top: 0.5rem; }
+
+.a3 .a3-chart-card { height: 12rem; margin-bottom: 1.5rem; }
+.a3 .a3-chart-placeholder {
+  height: 12rem; display: flex; align-items: center; justify-content: center;
+  border: 1px dashed hsl(var(--border)); border-radius: var(--radius); color: hsl(var(--muted-foreground));
+  font-size: 0.85rem; margin-bottom: 1.5rem;
+}
+
+.a3 .a3-usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; text-align: center; }
+
+.a3 .a3-copy-wallet.is-copied { color: hsl(var(--success)); border-color: hsl(var(--success) / 0.4); }
