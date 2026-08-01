@@ -519,6 +519,21 @@ test("GET /api/committee/sessions default: light-projected + cursor-paginated (n
     created.push({ id: row.id, date: sessionDate(row), subjectId: subj });
   }
 
+  // Put these rows at the front of today's scheduled bucket with distinct
+  // PostgreSQL microseconds inside one JavaScript millisecond.  A cursor that
+  // round-trips generated_at through Date loses that distinction and skips
+  // the rows after the first page.  One transaction keeps now() identical for
+  // every update, making this a deterministic precision regression test.
+  await sql.begin(async (tx) => {
+    for (let i = 0; i < created.length; i++) {
+      await tx`
+        UPDATE committee_sessions
+        SET generated_at = date_trunc('second', now()) + interval '1 hour'
+          + ${i + 1} * interval '100 microseconds'
+        WHERE id = ${created[i].id}`;
+    }
+  });
+
   // The `scheduled` bucket is shared with other test files against the one
   // ephemeral Postgres, so page counts/totals can't be asserted exactly — the
   // invariant that DOES hold regardless of what else is in that bucket: a

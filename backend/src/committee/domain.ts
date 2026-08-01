@@ -141,7 +141,16 @@ interface SessionsCursor { d: string; g: string; i: string }
 // columns the query orders and filters by, so decoding never has to guess at
 // a numeric offset that would drift as new sessions are inserted.
 function encodeSessionsCursor(row: Record<string, any>): string {
-  const cursor: SessionsCursor = { d: day(row.date), g: instant(row.generated_at) ?? "", i: String(row.id) };
+  // postgres.js decodes timestamptz as a JavaScript Date, which truncates
+  // PostgreSQL's microseconds to milliseconds.  The cursor must retain the
+  // database's full ordering precision or same-date rows generated within one
+  // millisecond can fall between pages.  The paginated query selects the exact
+  // timestamp text for this purpose; keep the fallback for callers/tests that
+  // provide a plain session row.
+  const generatedAt = row.cursor_generated_at == null
+    ? instant(row.generated_at) ?? ""
+    : String(row.cursor_generated_at);
+  const cursor: SessionsCursor = { d: day(row.date), g: generatedAt, i: String(row.id) };
   return Buffer.from(JSON.stringify(cursor)).toString("base64url");
 }
 // Throws on a non-empty-but-malformed cursor (mirrors admin/cursor.ts's
@@ -197,7 +206,10 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   const conds = [];
   if (opts.state) conds.push(sql`state = ${opts.state}`);
   const cur = decodeSessionsCursor(opts.cursor);
-  if (cur) conds.push(sql`(date, generated_at, id) < (${cur.d}::date, ${cur.g}::timestamptz, ${cur.i}::uuid)`);
+  // Bind the timestamp as text before casting on the server.  If postgres.js
+  // infers a timestamptz parameter directly it serializes the string through a
+  // JavaScript Date first, undoing the microsecond precision retained above.
+  if (cur) conds.push(sql`(date, generated_at, id) < (${cur.d}::date, ${cur.g}::text::timestamptz, ${cur.i}::uuid)`);
   const where = conds.length ? sql`WHERE ${conds.reduce((a, b) => sql`${a} AND ${b}`)}` : sql``;
 
   // Fetch one extra row to detect "is there a next page" without a second
@@ -205,7 +217,8 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   // the cursor's row-comparison predicate, so pages are stable even as new
   // sessions are inserted between requests.
   const rows = await sql`
-    SELECT * FROM committee_sessions ${where}
+    SELECT *, generated_at::text AS cursor_generated_at
+    FROM committee_sessions ${where}
     ORDER BY date DESC, generated_at DESC, id DESC
     LIMIT ${limit + 1}`;
   const hasMore = rows.length > limit;
