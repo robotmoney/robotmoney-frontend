@@ -58,6 +58,11 @@ export const ROUTES = {
     // ingestion). Backed by agent_activity_log (migration 0023); returns
     // `{ entries: [] }` honestly until a pipeline writer lands (P1.6).
     activity: "/api/dashboards/activity", // GET → agent activity log feed
+    // Issue #385 (/agents "OpenClaw Agents"): tracked-agent directory feed.
+    // Namespaced under dashboards (public, unauthenticated reads) — NOT
+    // analytics.* below, which is the analytics-provider bearer-gated
+    // ingestion boundary and would be the wrong home for a public GET.
+    agents: "/api/dashboards/agents", // GET → tracked-agent directory rows + summary
   },
 
   projects: {

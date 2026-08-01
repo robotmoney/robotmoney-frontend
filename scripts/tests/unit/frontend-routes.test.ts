@@ -74,13 +74,13 @@ describe("frontend route resolution", () => {
   // `layout: DASH_LAYOUT_VIEW` + `gated: true` metadata for router.js's
   // layout composition + dash-shell.js's gate, EXCEPT /submit — linked
   // directly off the gate screen itself, so it must be reachable pre-auth.
-  // /list (issue #384, P2.1), /list2 + /list3 (issue #387), and /market +
-  // /dashboard (issue #392, P4.1) are the first of these routes to ship real
-  // content — they resolve to their own fragments now, everything else still
-  // points at the shared coming-soon placeholder.
+  // /list (issue #384, P2.1), /list2 + /list3 (issue #387), /market +
+  // /dashboard (issue #392, P4.1), and /agents (issue #385, P2.2) are the
+  // first of these routes to ship real content — each resolves to its own
+  // fragment now, everything else still points at the shared coming-soon
+  // placeholder.
   test("resolves every static dashboard route to the shared placeholder, gated, under the dash layout", () => {
     const gatedPaths = [
-      "/agents",
       "/lobster", "/vaults", "/wallets", "/methodology", "/about", "/ask-mr-roboto",
     ];
     for (const p of gatedPaths) {
@@ -111,6 +111,11 @@ describe("frontend route resolution", () => {
     // /market and /dashboard alias the same fragment (the original's own
     // aliasing, §4.1) — same view, same metadata.
     expect(viewFor("/market")).toBe(viewFor("/dashboard"));
+  });
+
+  test("/agents (issue #385) resolves to its own real fragment, still gated under the dash layout", () => {
+    expect(viewFor("/agents")).toBe("/views/dash/agents.html");
+    expect(routeMetaFor("/agents")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
   });
 
   test("/submit is public (reachable off the gate screen itself) even though it shares the dash layout", () => {
@@ -144,7 +149,15 @@ describe("frontend route resolution", () => {
   });
 
   test("every dashboard route fragment referenced by the router exists on disk", async () => {
-    const paths = ["/list", "/submit", "/agents/clawd", "/projects/robotmoney-vault", "/dashboard", "/market"];
+    const paths = [
+      "/list",
+      "/submit",
+      "/agents",
+      "/agents/clawd",
+      "/projects/robotmoney-vault",
+      "/dashboard",
+      "/market",
+    ];
     for (const p of paths) {
       const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));
       expect(await file.exists()).toBe(true);

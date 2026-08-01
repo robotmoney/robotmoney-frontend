@@ -1,0 +1,109 @@
+<!-- /agents — "OpenClaw Agents" (issue #385, docs/bot-analytics-ui-port-plan.md
+     §5.7, P2.2). Renders inside views/dash/_layout.html's [data-outlet]; the
+     ancestor `.a3` shell (issue #379) already supplies the scoped theme, so
+     nothing here repeats that class. Real, non-fabricated data only (issue
+     #98/#346 honesty contract) — an empty deploy renders the empty state,
+     never seed rows.
+
+     The Sparkline metric selector reuses the `.a3-select` CSS from #379's
+     dash-ui.js `a3Select` factory, but tracks open/value state directly on
+     this view's own `agentsView` component (not a nested `x-data="a3Select"`
+     scope) — the selected metric also drives which sparkline array the table
+     renders, so it has to live where the table's `x-for` can read it. -->
+<div x-data="agentsView" data-agents-view>
+  <h1>OpenClaw Agents</h1>
+  <p class="data-label" style="margin: 0.25rem 0 1rem;">Tracked agents across every project, protocol, and revenue source.</p>
+
+  <template x-if="loading">
+    <p class="data-label" data-agents-loading>Loading …</p>
+  </template>
+  <template x-if="error">
+    <p class="a3-badge a3-badge--destructive" data-agents-error x-text="error"></p>
+  </template>
+
+  <template x-if="!loading && !error">
+    <div>
+      <div class="a3-agents-toolbar">
+        <div class="a3-tabs" role="tablist" data-agents-tabs>
+          <template x-for="t in tabs" :key="t.id">
+            <button type="button" class="a3-tab" :class="isTab(t.id) ? 'is-active' : ''" @click="selectTab(t.id)" :data-tab="t.id">
+              <span x-text="t.label"></span> (<span x-text="tabCount(t.id)"></span>)
+            </button>
+          </template>
+        </div>
+
+        <div style="display:flex; align-items:center; gap:0.5rem; position:relative;" data-agents-spark-select>
+          <span class="data-label">Sparkline</span>
+          <div class="a3-select">
+            <button type="button" class="a3-select-trigger" data-spark-select-trigger @click="sparkOpen = !sparkOpen" @keydown.escape="sparkOpen = false">
+              <span x-text="sparkLabel()"></span>
+              <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-arrow-up-down"></use></svg>
+            </button>
+            <div class="a3-select-list" data-spark-select-list x-show="sparkOpen" x-cloak @click.outside="sparkOpen = false">
+              <template x-for="opt in sparkOptions" :key="opt.value">
+                <button
+                  type="button"
+                  class="a3-select-option"
+                  :class="opt.value === sparkMetric ? 'is-active' : ''"
+                  :data-spark-option="opt.value"
+                  @click="sparkMetric = opt.value; sparkOpen = false"
+                  x-text="opt.label"
+                ></button>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="a3-agents-summary" data-agents-summary>
+        <strong data-agents-active-count x-text="summary.active"></strong> active /
+        <strong data-agents-idle-count x-text="summary.idle"></strong> idle ·
+        x402 txns: <strong data-agents-x402-txns x-text="summary.x402Txns"></strong> ·
+        x402 vol: <strong data-agents-x402-vol x-text="fmtUsd(summary.x402VolumeUsd)"></strong> ·
+        Total balance: <strong data-agents-total-balance x-text="fmtUsd(summary.totalBalanceUsd)"></strong>
+      </div>
+
+      <template x-if="sortedRows.length === 0">
+        <div class="metric-card" data-agents-empty>
+          <svg class="a3-icon a3-icon--lg"><use href="/assets/img/dash-icons.svg#i-bot"></use></svg>
+          <span class="data-label">No agents tracked yet</span>
+        </div>
+      </template>
+
+      <template x-if="sortedRows.length > 0">
+        <div class="a3-table-wrap hide-x-scrollbar">
+          <table class="a3-table" data-agents-table>
+            <thead>
+              <tr>
+                <th @click="sortBy('name')" :class="isSort('name') ? 'is-sorted' : ''">NAME <span x-text="sortIcon('name')"></span></th>
+                <th @click="sortBy('protocol')" :class="isSort('protocol') ? 'is-sorted' : ''">PROTOCOL <span x-text="sortIcon('protocol')"></span></th>
+                <th @click="sortBy('active')" :class="isSort('active') ? 'is-sorted' : ''">STATUS <span x-text="sortIcon('active')"></span></th>
+                <th @click="sortBy('score')" :class="isSort('score') ? 'is-sorted' : ''">SCORE <span x-text="sortIcon('score')"></span></th>
+                <th @click="sortBy('x402Txns')" :class="isSort('x402Txns') ? 'is-sorted' : ''">x402 TXNS <span x-text="sortIcon('x402Txns')"></span></th>
+                <th @click="sortBy('x402VolumeUsd')" :class="isSort('x402VolumeUsd') ? 'is-sorted' : ''">x402 VOL <span x-text="sortIcon('x402VolumeUsd')"></span></th>
+                <th @click="sortBy('balanceUsd')" :class="isSort('balanceUsd') ? 'is-sorted' : ''">BALANCE <span x-text="sortIcon('balanceUsd')"></span></th>
+                <th>WALLET</th>
+                <th>6M</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in sortedRows" :key="row.id">
+                <tr :data-row-key="row.id" data-agents-row>
+                  <td><a :href="'/agents/' + row.id" x-text="row.name" data-row-link></a></td>
+                  <td><span class="a3-badge" :class="protocolBadgeClass(row)" x-text="(row.protocol || 'other').toUpperCase()"></span></td>
+                  <td><span :class="row.active ? 'status-active' : 'status-inactive'" x-text="row.active ? 'Active' : 'Inactive'"></span></td>
+                  <td x-text="fmtScore(row.score)"></td>
+                  <td x-text="row.x402Txns"></td>
+                  <td x-text="fmtUsd(row.x402VolumeUsd)"></td>
+                  <td x-text="fmtUsd(row.balanceUsd)"></td>
+                  <td x-text="fmtWallet(row.walletAddress)"></td>
+                  <td x-html="sparkSvg(row.sparkline[sparkMetric])"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
+  </template>
+</div>
