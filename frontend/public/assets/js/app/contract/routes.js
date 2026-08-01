@@ -39,6 +39,13 @@ export const ROUTES = {
     // ingestion boundary and would be the wrong home for a public GET.
     entities: "/api/dashboards/entities", // GET → unified /list table rows
     overview: "/api/dashboards/overview", // GET → TotalMarketOverview summary
+    // Issue #387 (/list2, /list3): public, unauthenticated reads over the
+    // same facet tables /list (#384) and /projects (#70) already read.
+    // Namespaced under dashboards, NOT analytics.* below (the
+    // analytics-provider bearer-gated ingestion boundary — the wrong home
+    // for a public GET).
+    list2: "/api/dashboards/list2", // GET → List v2 per-facet-tab table feed
+    leaderboard: "/api/dashboards/leaderboard", // GET → List v3 money-agent leaderboard + evidence
   },
 
   projects: {

@@ -322,3 +322,152 @@ export interface MarketOverview {
   };
   asOf: string;
 }
+
+// GET /api/dashboards/list2 (issue #387, docs/bot-analytics-ui-port-plan.md
+// §5.2, P2.6) — "List v2 (WIP)": one wide, per-type projection per tab (not
+// the unified /list `EntityRow` shape — list2's columns are per-facet-
+// specific, e.g. agents carry 30d earned/x402/wallet/token-mcap columns no
+// other facet has). Every numeric/timestamp field is `null` rather than a
+// fabricated value when the backing pipeline hasn't written it yet (issue
+// #98/#346 honesty contract) — the UI renders "—" for a null.
+export interface List2AgentRow {
+  id: string;
+  name: string;
+  href: string;
+  protocol: string | null;
+  // Trailing-30d agent_revenue_daily sum, split by source (issue #387: only
+  // `source = 'x402'` has a real writer today, worker/handlers/projects.ts
+  // syncRevenue — see backend/src/projects/list2-projections.ts header for
+  // the documented derivation). `earned30d` is the x402/olas operating
+  // revenue slice; `tokenTax30d` is any non-x402 slice (0 honestly, not
+  // fabricated, until a token-tax writer exists); `inflow30d` is the sum of
+  // both (the whole 30d agent_revenue_daily total).
+  earned30d: number | null;
+  tokenTax30d: number | null;
+  inflow30d: number | null;
+  x402Volume30d: number | null;
+  x402Txns30d: number | null;
+  walletAddress: string | null;
+  walletBalanceUsd: number | null;
+  tokenTicker: string | null;
+  tokenMarketCapUsd: number | null;
+  lastActiveAt: string | null;
+  priceSparkline: number[]; // up to 26 weekly buckets of the linked coin's price
+}
+
+export interface List2CoinRow {
+  id: string;
+  name: string;
+  href: string;
+  ticker: string | null;
+  chain: string | null;
+  priceUsd: number | null;
+  percentChange24h: number | null;
+  marketCapUsd: number | null;
+  volume24hUsd: number | null;
+  contractAddress: string | null;
+  priceSparkline: number[];
+}
+
+export interface List2VaultRow {
+  id: string;
+  name: string;
+  href: string;
+  protocol: string | null;
+  strategyType: string | null;
+  chain: string | null;
+  tvlUsd: number | null;
+  apy: number | null;
+  dataSource: string | null; // 'live' | 'static' | null
+  contractAddress: string | null;
+  lastRebalanceAt: string | null;
+  tvlSparkline: number[];
+}
+
+export interface List2WalletRow {
+  id: string;
+  label: string;
+  href: string;
+  category: string | null;
+  chain: string | null;
+  balanceUsd: number | null;
+  address: string | null;
+  lastTxAt: string | null;
+  refreshedAt: string | null;
+  balanceSparkline: number[];
+}
+
+export interface List2Response {
+  agents: List2AgentRow[];
+  coins: List2CoinRow[];
+  vaults: List2VaultRow[];
+  wallets: List2WalletRow[];
+}
+
+// GET /api/dashboards/leaderboard (issue #387, docs/bot-analytics-ui-port-
+// plan.md §5.3, P2.7) — "List v3 · Money Agents". Server-side port of the
+// original's `list3Evidence.ts` fallback path (D8: no materialized view /
+// pg_cron here, computed per-request over the same facet tables). The exact
+// original scoring/confidence algorithm is not available in this repo (the
+// source app is deprecated); `backend/src/projects/leaderboard-projections.ts`
+// documents the formula this port uses (matches the plan's §5.3 formula
+// verbatim for signalScore; confidence/evidence status are a documented,
+// deterministic approximation over real columns only — never fabricated).
+export type EvidenceStatus = "verified" | "partial" | "missing";
+export type ConfidenceLabel = "High" | "Medium" | "Low";
+
+export interface LeaderboardEvidence {
+  wallet: EvidenceStatus;
+  moneyIn: EvidenceStatus;
+  x402: EvidenceStatus;
+  token: EvidenceStatus;
+  identity: EvidenceStatus;
+  freshness: EvidenceStatus;
+}
+
+export interface LeaderboardRow {
+  id: string;
+  rank: number;
+  name: string;
+  href: string;
+  protocol: string | null;
+  sourceBadge: string | null; // set only when it differs from `protocol` (§5.3)
+  revenue30dUsd: number | null;
+  walletBalanceUsd: number | null;
+  walletAddress: string | null;
+  x402VolumeUsd: number | null;
+  x402Txns: number | null;
+  tokenTicker: string | null;
+  tokenMarketCapUsd: number | null;
+  lastObservedAt: string | null;
+  moneyTrailSparkline: number[]; // 26-week momentum; [] when no history (original: all-zero placeholder, hidden)
+  signalScore: number;
+  confidence: ConfidenceLabel;
+  evidence: LeaderboardEvidence;
+}
+
+// "Leaderboard health (debug)" collapsible + the 4 header StatCards (§5.3).
+export interface LeaderboardSourceHealth {
+  name: string; // e.g. "openclaw_agents", "tracked_wallets"
+  role: string; // short description of what this source backs
+  status: "healthy" | "partial" | "stale" | "empty";
+  freshCount: number;
+  totalCount: number;
+  latestRefreshAt: string | null;
+}
+
+export interface LeaderboardResponse {
+  rows: LeaderboardRow[];
+  stats: {
+    listedAgents: number;
+    verifiedWalletBalanceUsd: number;
+    moneyIn30dUsd: number;
+    highConfidenceCount: number;
+  };
+  debug: {
+    rowCount: number;
+    lastRefreshAt: string;
+    sources: LeaderboardSourceHealth[];
+  };
+  asOf: string;
+}

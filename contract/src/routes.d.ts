@@ -14,6 +14,8 @@ export const ROUTES: {
     allocation: string;
     entities: string;
     overview: string;
+    list2: string;
+    leaderboard: string;
   };
   projects: {
     list: string;

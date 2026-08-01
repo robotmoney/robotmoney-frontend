@@ -79,7 +79,7 @@ describe("frontend route resolution", () => {
   // points at the shared coming-soon placeholder.
   test("resolves every static dashboard route to the shared placeholder, gated, under the dash layout", () => {
     const gatedPaths = [
-      "/list2", "/list3", "/market", "/dashboard", "/agents",
+      "/market", "/dashboard", "/agents",
       "/lobster", "/vaults", "/wallets", "/methodology", "/about", "/ask-mr-roboto",
     ];
     for (const p of gatedPaths) {
@@ -95,6 +95,16 @@ describe("frontend route resolution", () => {
     expect(viewFor("/list")).toBe("/views/dash/list.html");
     expect(routeMetaFor("/list")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
   });
+
+  // /list2 and /list3 (issue #387, P2.6/P2.7) ship real content — they
+  // resolve to their own fragments now, still gated under the dash layout.
+  test("/list2 and /list3 (issue #387) resolve to their own real fragments, still gated under the dash layout", () => {
+    expect(viewFor("/list2")).toBe("/views/dash/list2.html");
+    expect(routeMetaFor("/list2")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+    expect(viewFor("/list3")).toBe("/views/dash/list3.html");
+    expect(routeMetaFor("/list3")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+  });
+
 
   test("/submit is public (reachable off the gate screen itself) even though it shares the dash layout", () => {
     expect(viewFor("/submit")).toBe("/views/dash/coming-soon.html");

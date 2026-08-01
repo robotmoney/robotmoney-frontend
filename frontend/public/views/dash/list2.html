@@ -1,0 +1,213 @@
+<!-- /list2 — "List v2 (WIP)" (issue #387, docs/bot-analytics-ui-port-plan.md
+     §5.2, P2.6). Renders inside views/dash/_layout.html's [data-outlet]; the
+     ancestor `.a3` shell (issue #379) already supplies the scoped theme, so
+     nothing here repeats that class. Real, non-fabricated data only (issue
+     #98/#346 honesty contract) — an empty deploy renders empty states, never
+     seed rows. -->
+<div x-data="list2View" data-list2-view style="max-width: 84rem; margin: 0 auto;">
+  <div style="display:flex; align-items:baseline; gap:0.6rem;">
+    <h1 style="margin:0;">List <span style="color: hsl(var(--muted-foreground));">v2</span></h1>
+    <span class="a3-badge a3-badge--muted" data-list2-wip-badge>WIP</span>
+  </div>
+  <p class="data-label" style="margin: 0.25rem 0 1.5rem;">Per-entity detail tables — Agents, Coins, Vaults, and Wallets.</p>
+
+  <template x-if="loading">
+    <p class="data-label" data-list2-loading>Loading …</p>
+  </template>
+  <template x-if="error">
+    <p class="a3-badge a3-badge--destructive" data-list2-error x-text="error"></p>
+  </template>
+
+  <template x-if="!loading && !error">
+    <div>
+      <div class="a3-tabs" role="tablist" data-list2-tabs style="margin-bottom: 1rem;">
+        <template x-for="t in tabs" :key="t.id">
+          <button type="button" class="a3-tab" :class="isTab(t.id) ? 'is-active' : ''" @click="selectTab(t.id)" :data-tab="t.id">
+            <svg class="a3-icon"><use :href="'/assets/img/dash-icons.svg#i-' + t.icon"></use></svg>
+            <span x-text="t.label"></span> · <span x-text="tabCount(t.id)"></span>
+          </button>
+        </template>
+      </div>
+
+      <!-- Agents tab -->
+      <template x-if="tab === 'agents'">
+        <div class="a3-table-wrap hide-x-scrollbar" data-list2-table="agents">
+          <template x-if="sortedRows.length === 0">
+            <div class="metric-card" data-list2-empty><span class="data-label">No entries.</span></div>
+          </template>
+          <table class="a3-table" x-show="sortedRows.length > 0">
+            <thead>
+              <tr>
+                <th>AGENT</th>
+                <th>PROTOCOL</th>
+                <th @click="sortBy('earned30d')" :class="isSort('earned30d') ? 'is-sorted' : ''" x-a3-tooltip="'Operating revenue: x402 endpoint sales + Olas service rewards'">30D EARNED <span x-text="sortIcon('earned30d')"></span></th>
+                <th @click="sortBy('tokenTax30d')" :class="isSort('tokenTax30d') ? 'is-sorted' : ''" x-a3-tooltip="'~0.6% of round-trip volume'">30D TOKEN TAX <span x-text="sortIcon('tokenTax30d')"></span></th>
+                <th @click="sortBy('inflow30d')" :class="isSort('inflow30d') ? 'is-sorted' : ''" x-a3-tooltip="'Total 30d money inflow across sources'">30D INFLOW <span x-text="sortIcon('inflow30d')"></span></th>
+                <th @click="sortBy('x402Volume30d')" :class="isSort('x402Volume30d') ? 'is-sorted' : ''">X402 VOL <span x-text="sortIcon('x402Volume30d')"></span></th>
+                <th @click="sortBy('x402Txns30d')" :class="isSort('x402Txns30d') ? 'is-sorted' : ''">X402 TXNS <span x-text="sortIcon('x402Txns30d')"></span></th>
+                <th>WALLET BAL</th>
+                <th @click="sortBy('tokenMarketCapUsd')" :class="isSort('tokenMarketCapUsd') ? 'is-sorted' : ''">TOKEN MCAP <span x-text="sortIcon('tokenMarketCapUsd')"></span></th>
+                <th @click="sortBy('lastActiveAt')" :class="isSort('lastActiveAt') ? 'is-sorted' : ''">LAST ACTIVE <span x-text="sortIcon('lastActiveAt')"></span></th>
+                <th x-a3-tooltip="'26-week token price ($TICKER)'">6M PRICE</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in sortedRows" :key="row.id">
+                <tr data-list2-row>
+                  <td><a :href="row.href" data-row-link><span x-text="row.name"></span></a></td>
+                  <td><span class="a3-badge a3-badge--cyan" x-text="(row.protocol || '—').toUpperCase()"></span></td>
+                  <td x-text="fmtUsd(row.earned30d)"></td>
+                  <td x-text="fmtUsd(row.tokenTax30d)"></td>
+                  <td x-text="fmtUsd(row.inflow30d)"></td>
+                  <td x-text="fmtUsd(row.x402Volume30d)"></td>
+                  <td x-text="fmtInt(row.x402Txns30d)"></td>
+                  <td>
+                    <a x-show="row.walletAddress" :href="explorerUrl(null, row.walletAddress)" target="_blank" rel="noopener" data-wallet-link>
+                      <span x-text="fmtUsd(row.walletBalanceUsd)"></span>
+                      <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-external-link"></use></svg>
+                    </a>
+                    <span x-show="!row.walletAddress">—</span>
+                  </td>
+                  <td>
+                    <span x-show="row.tokenTicker" x-text="row.tokenTicker"></span>
+                    <span x-text="fmtUsd(row.tokenMarketCapUsd)"></span>
+                  </td>
+                  <td x-text="fmtRel(row.lastActiveAt)"></td>
+                  <td x-html="sparkSvg(row.priceSparkline)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <!-- Coins tab -->
+      <template x-if="tab === 'coins'">
+        <div class="a3-table-wrap hide-x-scrollbar" data-list2-table="coins">
+          <template x-if="sortedRows.length === 0">
+            <div class="metric-card" data-list2-empty><span class="data-label">No entries.</span></div>
+          </template>
+          <table class="a3-table" x-show="sortedRows.length > 0">
+            <thead>
+              <tr>
+                <th>COIN</th>
+                <th>TICKER</th>
+                <th>CHAIN</th>
+                <th @click="sortBy('priceUsd')" :class="isSort('priceUsd') ? 'is-sorted' : ''">PRICE <span x-text="sortIcon('priceUsd')"></span></th>
+                <th @click="sortBy('percentChange24h')" :class="isSort('percentChange24h') ? 'is-sorted' : ''">24H % <span x-text="sortIcon('percentChange24h')"></span></th>
+                <th @click="sortBy('marketCapUsd')" :class="isSort('marketCapUsd') ? 'is-sorted' : ''">MARKET CAP <span x-text="sortIcon('marketCapUsd')"></span></th>
+                <th @click="sortBy('volume24hUsd')" :class="isSort('volume24hUsd') ? 'is-sorted' : ''">24H VOLUME <span x-text="sortIcon('volume24hUsd')"></span></th>
+                <th>CONTRACT</th>
+                <th>6M PRICE</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in sortedRows" :key="row.id">
+                <tr data-list2-row>
+                  <td><a :href="row.href" data-row-link x-text="row.name"></a></td>
+                  <td><span class="a3-badge a3-badge--purple" x-text="row.ticker || '—'"></span></td>
+                  <td x-text="(row.chain || '—').toUpperCase()"></td>
+                  <td x-text="fmtUsd(row.priceUsd)"></td>
+                  <td :style="'color:' + pctColor(row.percentChange24h)" x-text="fmtPct(row.percentChange24h)"></td>
+                  <td x-text="fmtUsd(row.marketCapUsd)"></td>
+                  <td x-text="fmtUsd(row.volume24hUsd)"></td>
+                  <td>
+                    <a x-show="row.contractAddress" :href="explorerUrl(row.chain, row.contractAddress)" target="_blank" rel="noopener" x-text="shortAddr(row.contractAddress)" data-contract-link></a>
+                    <span x-show="!row.contractAddress">—</span>
+                  </td>
+                  <td x-html="sparkSvg(row.priceSparkline)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <!-- Vaults tab -->
+      <template x-if="tab === 'vaults'">
+        <div class="a3-table-wrap hide-x-scrollbar" data-list2-table="vaults">
+          <template x-if="sortedRows.length === 0">
+            <div class="metric-card" data-list2-empty><span class="data-label">No entries.</span></div>
+          </template>
+          <table class="a3-table" x-show="sortedRows.length > 0">
+            <thead>
+              <tr>
+                <th>VAULT</th>
+                <th>PROTOCOL</th>
+                <th>STRATEGY</th>
+                <th>CHAIN</th>
+                <th @click="sortBy('tvlUsd')" :class="isSort('tvlUsd') ? 'is-sorted' : ''">TVL <span x-text="sortIcon('tvlUsd')"></span></th>
+                <th @click="sortBy('apy')" :class="isSort('apy') ? 'is-sorted' : ''">APY <span x-text="sortIcon('apy')"></span></th>
+                <th>SOURCE</th>
+                <th>CONTRACT</th>
+                <th @click="sortBy('lastRebalanceAt')" :class="isSort('lastRebalanceAt') ? 'is-sorted' : ''">REBALANCED <span x-text="sortIcon('lastRebalanceAt')"></span></th>
+                <th>6M TVL</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in sortedRows" :key="row.id">
+                <tr data-list2-row>
+                  <td><a :href="row.href" data-row-link x-text="row.name"></a></td>
+                  <td x-text="row.protocol || '—'"></td>
+                  <td><span class="a3-badge a3-badge--muted" x-text="row.strategyType || '—'"></span></td>
+                  <td x-text="(row.chain || '—').toUpperCase()"></td>
+                  <td x-text="fmtUsd(row.tvlUsd)"></td>
+                  <td style="color: hsl(var(--success));" x-text="fmtApy(row.apy)"></td>
+                  <td>
+                    <span class="a3-badge" :class="row.dataSource === 'live' ? 'a3-badge--solid a3-badge--green' : 'a3-badge--muted'" x-text="(row.dataSource || 'unknown').toUpperCase()"></span>
+                  </td>
+                  <td>
+                    <a x-show="row.contractAddress" :href="explorerUrl(row.chain, row.contractAddress)" target="_blank" rel="noopener" x-text="shortAddr(row.contractAddress)" data-contract-link></a>
+                    <span x-show="!row.contractAddress">—</span>
+                  </td>
+                  <td x-text="fmtRel(row.lastRebalanceAt)"></td>
+                  <td x-html="sparkSvg(row.tvlSparkline)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <!-- Wallets tab -->
+      <template x-if="tab === 'wallets'">
+        <div class="a3-table-wrap hide-x-scrollbar" data-list2-table="wallets">
+          <template x-if="sortedRows.length === 0">
+            <div class="metric-card" data-list2-empty><span class="data-label">No entries.</span></div>
+          </template>
+          <table class="a3-table" x-show="sortedRows.length > 0">
+            <thead>
+              <tr>
+                <th>WALLET</th>
+                <th>CATEGORY</th>
+                <th>CHAIN</th>
+                <th @click="sortBy('balanceUsd')" :class="isSort('balanceUsd') ? 'is-sorted' : ''">BALANCE <span x-text="sortIcon('balanceUsd')"></span></th>
+                <th>ADDRESS</th>
+                <th @click="sortBy('lastTxAt')" :class="isSort('lastTxAt') ? 'is-sorted' : ''">LAST TX <span x-text="sortIcon('lastTxAt')"></span></th>
+                <th @click="sortBy('refreshedAt')" :class="isSort('refreshedAt') ? 'is-sorted' : ''">SYNCED <span x-text="sortIcon('refreshedAt')"></span></th>
+                <th>6M BAL</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in sortedRows" :key="row.id">
+                <tr data-list2-row>
+                  <td><a :href="row.href" data-row-link x-text="row.label"></a></td>
+                  <td x-text="row.category || '—'"></td>
+                  <td x-text="(row.chain || '—').toUpperCase()"></td>
+                  <td x-text="fmtUsd(row.balanceUsd)"></td>
+                  <td>
+                    <a x-show="row.address" :href="explorerUrl(row.chain, row.address)" target="_blank" rel="noopener" x-text="shortAddr(row.address)" data-address-link></a>
+                    <span x-show="!row.address">—</span>
+                  </td>
+                  <td x-text="fmtRel(row.lastTxAt)"></td>
+                  <td x-text="fmtRel(row.refreshedAt)"></td>
+                  <td x-html="sparkSvg(row.balanceSparkline)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
+  </template>
+</div>
