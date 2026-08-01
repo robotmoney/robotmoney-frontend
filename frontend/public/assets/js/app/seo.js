@@ -87,6 +87,18 @@ const META = {
     title: "Legal Disclaimers — Robot Money",
     description: "Read the legal disclaimers for the Robot Money protocol on Base: experimental DeFi software with smart contract, regulatory, and market risks.",
   },
+  // Static site policy pages (issue #395) — general marketing pages, not part
+  // of the bot-analytics UI port (that plan's 20 routes are all analytics-
+  // dashboard pages, see the dashboard entries further below). Indexable
+  // like /disclaimer above; no `robots` override needed.
+  "/terms": {
+    title: "Terms of Service — Robot Money",
+    description: "The Terms of Service governing your use of the Robot Money website and analytics dashboard on Base.",
+  },
+  "/privacy": {
+    title: "Privacy Policy — Robot Money",
+    description: "What data the Robot Money website collects, what it does not, and how onchain data is treated as public.",
+  },
   "/visualizations": {
     title: "Robot Money Visualizations — Live Vault Data",
     description: "Robot Money's visualizations hub links to live views: the regime classifier, USDC vault allocation, and the AI Investment Committee, updating on Base.",

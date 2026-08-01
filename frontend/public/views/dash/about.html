@@ -1,0 +1,87 @@
+<!-- /about — "About" (issue #395, docs/bot-analytics-ui-port-plan.md §5.16,
+     P4.2). Renders inside views/dash/_layout.html's [data-outlet]; the
+     ancestor `.a3` shell (issue #379) already supplies the scoped theme, so
+     nothing here repeats that class. Fully static content — no API calls
+     (§6: "static" backing).
+
+     §5.16 asks for a "How Discovery Works" section reworded from the
+     original's "daily scan / review queue / daily snapshots" copy to this
+     repo's actual pipeline reality: discovery here is a curated roster
+     (INV-C §5), not a fully automated scanner, and the review queue/
+     PendingReviewPanel this original copy implied does not exist (§4.5 D10).
+     The three rows below describe what this repo's pipeline actually does. -->
+<div class="a3-about" data-about-view>
+  <h1>About Robot Money Analytics</h1>
+
+  <div class="a3-card" data-about-intro>
+    <h2 class="a3-card-title">What is RobotMoney Analytics?</h2>
+    <p style="font-size: 0.9rem; line-height: 1.7; color: hsl(var(--muted-foreground)); margin: 0;">
+      RobotMoney Analytics tracks the emerging economy of autonomous AI agents that hold wallets, earn revenue, and manage onchain capital. It aggregates four kinds of tracked entities — agents, agent tokens, agent-managed vaults, and tracked wallets — into one dashboard, so anyone can see which agents are actually transacting, earning, and holding value on Base.
+    </p>
+  </div>
+
+  <div class="a3-card" data-about-entities>
+    <h2 class="a3-card-title">The Four Entity Types</h2>
+    <div class="a3-overview-grid">
+      <div class="metric-card a3-about__entity--agent" data-about-entity="agent">
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+          <svg class="a3-icon" style="color: hsl(var(--primary));"><use href="/assets/img/dash-icons.svg#i-bot"></use></svg>
+          <span class="data-label" style="margin: 0;">Agent</span>
+        </div>
+        <p style="font-size: 0.82rem; color: hsl(var(--muted-foreground)); margin: 0;">An autonomous program with its own wallet that transacts, earns revenue, and is scored on productivity and consensus.</p>
+      </div>
+      <div class="metric-card a3-about__entity--coin" data-about-entity="coin">
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+          <svg class="a3-icon" style="color: hsl(var(--secondary));"><use href="/assets/img/dash-icons.svg#i-coins"></use></svg>
+          <span class="data-label" style="margin: 0;">Lobster Coin</span>
+        </div>
+        <p style="font-size: 0.82rem; color: hsl(var(--muted-foreground)); margin: 0;">A sub-$10M market cap token native to an agentic ecosystem, tracked for price, volume, and liquidity.</p>
+      </div>
+      <div class="metric-card a3-about__entity--vault" data-about-entity="vault">
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+          <svg class="a3-icon" style="color: hsl(var(--success));"><use href="/assets/img/dash-icons.svg#i-vault"></use></svg>
+          <span class="data-label" style="margin: 0;">Vault</span>
+        </div>
+        <p style="font-size: 0.82rem; color: hsl(var(--muted-foreground)); margin: 0;">A yield-bearing vault managed by a tracked agent, measured by TVL, APY, and rebalance history.</p>
+      </div>
+      <div class="metric-card a3-about__entity--wallet" data-about-entity="wallet">
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+          <svg class="a3-icon" style="color: hsl(var(--amber));"><use href="/assets/img/dash-icons.svg#i-wallet"></use></svg>
+          <span class="data-label" style="margin: 0;">Wallet</span>
+        </div>
+        <p style="font-size: 0.82rem; color: hsl(var(--muted-foreground)); margin: 0;">A wallet tracked independently of any single agent — treasuries, multisigs, or addresses submitted for coverage.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="a3-card" data-about-discovery>
+    <h2 class="a3-card-title">
+      <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-search"></use></svg>
+      How Discovery Works
+    </h2>
+    <div style="display: flex; flex-direction: column; gap: 1rem;">
+      <div style="display: flex; gap: 0.75rem;" data-about-discovery-row="roster">
+        <svg class="a3-icon" style="flex-shrink: 0; margin-top: 0.15rem;"><use href="/assets/img/dash-icons.svg#i-clipboard-list"></use></svg>
+        <p style="font-size: 0.85rem; color: hsl(var(--muted-foreground)); margin: 0;"><strong style="color: hsl(var(--foreground));">Curated roster.</strong> Tracked agents, coins, vaults, and wallets are added and reviewed by the Robot Money team — this is not yet a fully automated discovery scanner.</p>
+      </div>
+      <div style="display: flex; gap: 0.75rem;" data-about-discovery-row="snapshots">
+        <svg class="a3-icon" style="flex-shrink: 0; margin-top: 0.15rem;"><use href="/assets/img/dash-icons.svg#i-clock"></use></svg>
+        <p style="font-size: 0.85rem; color: hsl(var(--muted-foreground)); margin: 0;"><strong style="color: hsl(var(--foreground));">Daily snapshots.</strong> Balances, prices, revenue, and TVL are refreshed on a daily cadence from onchain reads and market data sources, not fabricated between refreshes.</p>
+      </div>
+      <div style="display: flex; gap: 0.75rem;" data-about-discovery-row="submissions">
+        <svg class="a3-icon" style="flex-shrink: 0; margin-top: 0.15rem;"><use href="/assets/img/dash-icons.svg#i-send"></use></svg>
+        <p style="font-size: 0.85rem; color: hsl(var(--muted-foreground)); margin: 0;"><strong style="color: hsl(var(--foreground));">Community submissions.</strong> Anyone can propose a new agent, coin, vault, or wallet for inclusion — see <a href="/submit" style="color: hsl(var(--primary));">Submit a community commit</a>.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="a3-card" data-about-criteria>
+    <h2 class="a3-card-title">Inclusion Criteria</h2>
+    <p style="font-size: 0.85rem; line-height: 1.7; color: hsl(var(--muted-foreground)); margin: 0 0 0.75rem;">
+      An entity is added to the roster once it has a verifiable onchain presence — a wallet address, a deployed token contract, or a vault contract — and at least some observable activity or balance. Entities with no verifiable onchain footprint are not tracked, regardless of claims made about them.
+    </p>
+    <p style="font-size: 0.85rem; line-height: 1.7; color: hsl(var(--muted-foreground)); margin: 0;">
+      Coverage is best-effort and expands over time as new agents, tokens, vaults, and wallets are identified or submitted. See the full directory at <a href="/list" style="color: hsl(var(--primary));">Total Market</a>.
+    </p>
+  </div>
+</div>
