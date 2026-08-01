@@ -1,0 +1,241 @@
+<!-- Privacy Policy (issue #395) — a new static marketing page, not part of
+     the bot-analytics UI port (docs/bot-analytics-ui-port-plan.md's 20
+     routes are all analytics-dashboard pages; this and terms.html are
+     general site policy pages). Same structure and scoping convention as
+     views/disclaimer.html: plain fragment, page-scoped class prefix, inline
+     <style>, no Alpine data (fully static content, nothing to react to).
+-->
+
+<section class="pp">
+  <header class="pp__hero">
+    <div class="pp__eyebrow">Legal</div>
+    <h1 class="pp__h1">Privacy <span class="pp__grad">Policy</span></h1>
+    <p class="pp__lede">What data the Robot Money website collects, and what it does not</p>
+  </header>
+
+  <article class="pp__article">
+    <div class="pp__body">
+
+      <section class="pp__sec">
+        <h2 class="pp__h2">1. Overview</h2>
+        <p class="pp__p">
+          Robot Money is a permissionless, non-custodial interface to a public blockchain protocol. We intentionally minimize the personal data this Site collects: we do not require an account, an email address, or KYC information to browse the Site or view the analytics dashboard.
+        </p>
+      </section>
+
+      <section class="pp__sec">
+        <h2 class="pp__h2">2. Onchain Data Is Public</h2>
+        <p class="pp__p">
+          Wallet addresses, transaction history, token balances, and other data displayed by the analytics dashboard are read from public blockchains and public third-party APIs (block explorers, market-data providers). This data is public by the nature of the blockchain itself — Robot Money does not create, sell, or exclusively control it, and displaying it on the Site does not make it any more or less public than it already is onchain.
+        </p>
+      </section>
+
+      <section class="pp__sec">
+        <h2 class="pp__h2">3. Information We Collect</h2>
+        <p class="pp__p">
+          <strong>Usage data.</strong> Like most websites, we may collect basic technical information — pages visited, referring URL, browser type, and approximate location derived from IP address — through standard web server logs and privacy-respecting analytics, used only to understand aggregate traffic and improve the Site.
+        </p>
+        <p class="pp__p">
+          <strong>Local storage.</strong> The Site uses your browser's session and local storage to remember UI state — for example, table sort order, column widths, and dashboard access tokens — entirely on your device. This data is never transmitted to us as "personal data" beyond what your browser sends with any ordinary web request.
+        </p>
+        <p class="pp__p">
+          <strong>Voluntary submissions.</strong> If you use a form on the Site (for example, to submit an agent, coin, vault, or wallet for tracking, or to apply to a program), we collect exactly the information you choose to enter into that form.
+        </p>
+      </section>
+
+      <section class="pp__sec">
+        <h2 class="pp__h2">4. What We Do Not Collect</h2>
+        <p class="pp__p">
+          We do not require wallet-signature-based login, do not ask for private keys or seed phrases (never enter these anywhere), and do not link your onchain activity to an offchain identity unless you voluntarily provide that link through a submission form.
+        </p>
+      </section>
+
+      <section class="pp__sec">
+        <h2 class="pp__h2">5. Cookies and Similar Technologies</h2>
+        <p class="pp__p">
+          The Site may use essential cookies or local storage required for the Site to function (such as remembering dashboard access state) and, where used, privacy-respecting analytics that do not build cross-site advertising profiles. The Site does not use third-party advertising trackers.
+        </p>
+      </section>
+
+      <section class="pp__sec">
+        <h2 class="pp__h2">6. Third-Party Services</h2>
+        <p class="pp__p">
+          The Site fetches data from third-party providers server-side (for example, block explorers and market-data APIs) to render dashboard pages. Your browser's requests to the Site do not go directly to those third parties for this data; where a page links out to a third party (for example, an explorer or a project's own site), that third party's own privacy policy governs your interaction with it.
+        </p>
+      </section>
+
+      <section class="pp__sec">
+        <h2 class="pp__h2">7. Data Retention</h2>
+        <p class="pp__p">
+          Voluntary submissions and any associated moderation records are retained for as long as needed to operate the Site's review and tracking pipeline. Usage/analytics data is retained only as long as needed for aggregate traffic analysis and is not sold to third parties.
+        </p>
+      </section>
+
+      <section class="pp__sec">
+        <h2 class="pp__h2">8. Changes to This Policy</h2>
+        <p class="pp__p">
+          This Privacy Policy may be updated from time to time. Material changes will be reflected by an updated "Last Updated" date below. Continued use of the Site after a change constitutes acceptance of the revised policy.
+        </p>
+      </section>
+
+      <section class="pp__sec">
+        <h2 class="pp__h2">9. Contact</h2>
+        <p class="pp__p">
+          Questions about this policy can be raised through any of the community channels linked from the Site's <a class="pp__link" href="/">home page</a>.
+        </p>
+      </section>
+
+    </div>
+
+    <div class="pp__updated">
+      <p class="pp__updated-text">Last Updated: August 2026</p>
+      <p class="pp__related">
+        See also: <a class="pp__link" href="/terms">Terms of Service</a> &middot;
+        <a class="pp__link" href="/disclaimer">Legal Disclaimer</a>
+      </p>
+    </div>
+
+    <div class="pp__back">
+      <a class="pp__back-link" href="/">&larr; Back to Home</a>
+    </div>
+  </article>
+</section>
+
+<style>
+.pp {
+  min-height: 100vh;
+  padding: 8rem 1.5rem 5rem;
+  background: var(--color-void);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+.pp__hero {
+  max-width: 720px;
+  margin: 0 auto 3rem;
+  text-align: center;
+}
+
+.pp__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+
+.pp__h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: 2.5rem;
+  line-height: 1.05;
+  margin: 0;
+}
+
+.pp__grad {
+  font-family: var(--font-display);
+  font-style: normal;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.pp__lede {
+  color: var(--color-text-muted);
+  max-width: 540px;
+  margin: 1.25rem auto 0;
+  line-height: 1.6;
+}
+
+.pp__article {
+  max-width: 768px;
+  margin: 0 auto;
+}
+
+.pp__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+}
+
+.pp__sec {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.pp__h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.pp__p {
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.pp__p strong {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.pp__link {
+  color: var(--color-accent);
+}
+
+.pp__updated {
+  margin-top: 4rem;
+  padding-top: 3rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.pp__updated-text {
+  font-size: 0.75rem;
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  margin: 0;
+}
+
+.pp__related {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  margin: 0.75rem 0 0;
+}
+
+.pp__back {
+  margin-top: 2rem;
+}
+
+.pp__back-link {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: border-color 0.3s, color 0.3s;
+}
+
+.pp__back-link:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+@media (min-width: 1024px) {
+  .pp {
+    padding: 10rem 2rem 6rem;
+  }
+  .pp__h1 { font-size: 3.5rem; }
+}
+</style>

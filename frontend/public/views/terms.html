@@ -1,0 +1,223 @@
+<!-- Terms of Service (issue #395) — a new static marketing page, not part of
+     the bot-analytics UI port (docs/bot-analytics-ui-port-plan.md's 20
+     routes are all analytics-dashboard pages; this and privacy.html are
+     general site policy pages). Same structure and scoping convention as
+     views/disclaimer.html: plain fragment, page-scoped class prefix, inline
+     <style>, no Alpine data (fully static content, nothing to react to).
+-->
+
+<section class="tos">
+  <header class="tos__hero">
+    <div class="tos__eyebrow">Legal</div>
+    <h1 class="tos__h1">Terms of <span class="tos__grad">Service</span></h1>
+    <p class="tos__lede">The terms governing your use of the Robot Money website and dashboard</p>
+  </header>
+
+  <article class="tos__article">
+    <div class="tos__body">
+
+      <section class="tos__sec">
+        <h2 class="tos__h2">1. Acceptance of Terms</h2>
+        <p class="tos__p">
+          By accessing or using robotmoney.net (the "Site"), including its analytics dashboard, you agree to be bound by these Terms of Service. If you do not agree, do not use the Site. These Terms govern your use of the Site only — they do not govern your interaction with the Robot Money protocol's onchain smart contracts, which is addressed separately in the <a class="tos__link" href="/disclaimer">Legal Disclaimers</a>.
+        </p>
+      </section>
+
+      <section class="tos__sec">
+        <h2 class="tos__h2">2. What the Site Provides</h2>
+        <p class="tos__p">
+          The Site is an informational and analytics interface: it displays protocol data, market data, and third-party data about onchain agents, tokens, vaults, and wallets. The Site does not custody funds, execute trades, or act as an intermediary in any transaction. Any onchain action you take is executed directly by your own wallet against public smart contracts, entirely outside the Site's control.
+        </p>
+      </section>
+
+      <section class="tos__sec">
+        <h2 class="tos__h2">3. Acceptable Use</h2>
+        <p class="tos__p">
+          You agree not to: (a) interfere with or disrupt the Site or its infrastructure; (b) attempt to gain unauthorized access to any gated area, account, or system; (c) scrape or bulk-extract data from the Site in a manner that degrades service for others; (d) submit false, misleading, or fraudulent information through any submission or intake form; or (e) use the Site for any unlawful purpose.
+        </p>
+      </section>
+
+      <section class="tos__sec">
+        <h2 class="tos__h2">4. Community Submissions</h2>
+        <p class="tos__p">
+          Where the Site accepts community submissions (for example, proposing an agent, coin, vault, or wallet for tracking), you represent that the information you submit is accurate to the best of your knowledge. Submissions are reviewed before publication and may be rejected, edited, or removed at any time without notice.
+        </p>
+      </section>
+
+      <section class="tos__sec">
+        <h2 class="tos__h2">5. Third-Party Data and Links</h2>
+        <p class="tos__p">
+          The Site displays data sourced from onchain reads and third-party providers (including block explorers and market-data services) and links to third-party sites. Robot Money does not control and is not responsible for the accuracy, availability, or content of third-party data or sites. Data displayed on the Site may be delayed, incomplete, or stale — see each page's provenance notice where one is shown.
+        </p>
+      </section>
+
+      <section class="tos__sec">
+        <h2 class="tos__h2">6. No Warranties</h2>
+        <p class="tos__p">
+          THE SITE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT. WE DO NOT WARRANT THAT THE SITE WILL BE UNINTERRUPTED, ERROR-FREE, OR SECURE.
+        </p>
+      </section>
+
+      <section class="tos__sec">
+        <h2 class="tos__h2">7. Limitation of Liability</h2>
+        <p class="tos__p">
+          TO THE MAXIMUM EXTENT PERMITTED BY LAW, ROBOT MONEY'S CONTRIBUTORS AND OPERATORS SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES ARISING FROM YOUR USE OF THE SITE, INCLUDING RELIANCE ON ANY DATA DISPLAYED ON IT.
+        </p>
+      </section>
+
+      <section class="tos__sec">
+        <h2 class="tos__h2">8. Changes to These Terms</h2>
+        <p class="tos__p">
+          These Terms may be updated from time to time. Material changes will be reflected by an updated "Last Updated" date below. Continued use of the Site after a change constitutes acceptance of the revised Terms.
+        </p>
+      </section>
+
+    </div>
+
+    <div class="tos__updated">
+      <p class="tos__updated-text">Last Updated: August 2026</p>
+      <p class="tos__related">
+        See also: <a class="tos__link" href="/privacy">Privacy Policy</a> &middot;
+        <a class="tos__link" href="/disclaimer">Legal Disclaimer</a>
+      </p>
+    </div>
+
+    <div class="tos__back">
+      <a class="tos__back-link" href="/">&larr; Back to Home</a>
+    </div>
+  </article>
+</section>
+
+<style>
+.tos {
+  min-height: 100vh;
+  padding: 8rem 1.5rem 5rem;
+  background: var(--color-void);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+.tos__hero {
+  max-width: 720px;
+  margin: 0 auto 3rem;
+  text-align: center;
+}
+
+.tos__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+
+.tos__h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: 2.5rem;
+  line-height: 1.05;
+  margin: 0;
+}
+
+.tos__grad {
+  font-family: var(--font-display);
+  font-style: normal;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.tos__lede {
+  color: var(--color-text-muted);
+  max-width: 540px;
+  margin: 1.25rem auto 0;
+  line-height: 1.6;
+}
+
+.tos__article {
+  max-width: 768px;
+  margin: 0 auto;
+}
+
+.tos__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+}
+
+.tos__sec {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.tos__h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tos__p {
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.tos__link {
+  color: var(--color-accent);
+}
+
+.tos__updated {
+  margin-top: 4rem;
+  padding-top: 3rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.tos__updated-text {
+  font-size: 0.75rem;
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  margin: 0;
+}
+
+.tos__related {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  margin: 0.75rem 0 0;
+}
+
+.tos__back {
+  margin-top: 2rem;
+}
+
+.tos__back-link {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: border-color 0.3s, color 0.3s;
+}
+
+.tos__back-link:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+@media (min-width: 1024px) {
+  .tos {
+    padding: 10rem 2rem 6rem;
+  }
+  .tos__h1 { font-size: 3.5rem; }
+}
+</style>

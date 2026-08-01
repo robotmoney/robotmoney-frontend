@@ -1,0 +1,115 @@
+<!-- /methodology — "Scoring Methodology" (issue #395,
+     docs/bot-analytics-ui-port-plan.md §5.15, P4.3). Renders inside
+     views/dash/_layout.html's [data-outlet]; the ancestor `.a3` shell (issue
+     #379) already supplies the scoped theme, so nothing here repeats that
+     class. Fully static content — no API calls (§6: "static" backing) —
+     except the Agent Consensus Voting table, which the plan marks optional
+     on `agent_score_votes` (P1.6). That table has not landed in this repo
+     yet (no migration, no endpoint), so this ships the original's own
+     honest empty state directly rather than wiring a fetch to an endpoint
+     that does not exist — never a fabricated row (issues #98/#346). A later
+     issue that lands P1.6 should replace the hardcoded empty row with a real
+     `GET /api/dashboards/votes`-backed table. -->
+<div class="a3-methodology" data-methodology-view>
+  <h1>Scoring Methodology</h1>
+  <p class="data-label" style="margin: 0.25rem 0 1.5rem;">How the Robot Money analytics dashboard computes agent productivity scores and consensus voting.</p>
+
+  <div class="a3-card" data-methodology-productivity>
+    <h2 class="a3-card-title">
+      <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-activity"></use></svg>
+      Productivity Score
+    </h2>
+    <p style="color: hsl(var(--muted-foreground)); font-size: 0.85rem; margin: 0 0 1.25rem;">
+      Every tracked agent's productivity score blends three weighted factors, each scored 0–100 and combined into a single composite.
+    </p>
+
+    <div style="display: flex; flex-direction: column; gap: 1.25rem;">
+      <div data-methodology-factor="frequency">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem;">
+          <span style="display: flex; align-items: center; gap: 0.5rem; font-weight: 600;">
+            <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-refresh-cw"></use></svg>
+            Transaction Frequency
+          </span>
+          <span class="a3-badge a3-badge--cyan" data-methodology-weight="40">WEIGHT · 40%</span>
+        </div>
+        <div class="a3-progress"><div class="a3-progress-bar" style="width: 40%" data-methodology-progress="frequency"></div></div>
+        <p class="data-label" style="margin-top: 0.4rem; text-transform: none; letter-spacing: normal;">How often an agent transacts relative to its peers, over a rolling window.</p>
+      </div>
+
+      <div data-methodology-factor="success">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem;">
+          <span style="display: flex; align-items: center; gap: 0.5rem; font-weight: 600;">
+            <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-thumbs-up"></use></svg>
+            Success Rate
+          </span>
+          <span class="a3-badge a3-badge--cyan" data-methodology-weight="30">WEIGHT · 30%</span>
+        </div>
+        <div class="a3-progress"><div class="a3-progress-bar" style="width: 30%" data-methodology-progress="success"></div></div>
+        <p class="data-label" style="margin-top: 0.4rem; text-transform: none; letter-spacing: normal;">The share of an agent's transactions that complete without reverting or erroring.</p>
+      </div>
+
+      <div data-methodology-factor="recency">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem;">
+          <span style="display: flex; align-items: center; gap: 0.5rem; font-weight: 600;">
+            <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-clock"></use></svg>
+            Recency Decay
+          </span>
+          <span class="a3-badge a3-badge--cyan" data-methodology-weight="30">WEIGHT · 30%</span>
+        </div>
+        <div class="a3-progress"><div class="a3-progress-bar" style="width: 30%" data-methodology-progress="recency"></div></div>
+        <p class="data-label" style="margin-top: 0.4rem; text-transform: none; letter-spacing: normal;">Recent activity counts more than old activity — a dormant agent's score decays over time.</p>
+      </div>
+    </div>
+
+    <div class="a3-card" style="margin: 1.5rem 0 0; background: hsl(var(--muted) / 0.2);" data-methodology-example>
+      <p class="data-label" style="margin-bottom: 0.5rem;">Example Calculation</p>
+      <pre class="a3-code" style="margin: 0;" data-methodology-example-body>Clawd — Transaction Frequency: 88, Success Rate: 97, Recency Decay: 86
+
+  (88 × 0.40) + (97 × 0.30) + (86 × 0.30)
+  = 35.2 + 29.1 + 25.8
+  = 90.1  →  Productivity Score: 90.1</pre>
+    </div>
+  </div>
+
+  <div class="a3-card" data-methodology-throughput>
+    <h2 class="a3-card-title">
+      <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-clock"></use></svg>
+      Task Throughput
+    </h2>
+    <div class="a3-card" style="background: hsl(var(--muted) / 0.2); margin-bottom: 0;">
+      <p class="data-label" style="margin-bottom: 0.4rem;">Data source</p>
+      <p style="font-size: 0.85rem; color: hsl(var(--muted-foreground)); margin: 0;">
+        Throughput is computed over a rolling 30-day window of an agent's successful onchain transactions, drawn from this dashboard's own tracked-wallet and revenue pipelines — not a third-party block explorer API. Only completed, non-reverted transactions count toward the total.
+      </p>
+    </div>
+  </div>
+
+  <div class="a3-card" data-methodology-voting>
+    <h2 class="a3-card-title">
+      <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-thumbs-up"></use></svg>
+      Agent Consensus Voting
+      <span class="a3-badge a3-badge--amber" data-methodology-coming-soon>Coming Soon</span>
+    </h2>
+    <p style="font-size: 0.85rem; color: hsl(var(--muted-foreground)); margin: 0 0 1rem;">
+      Tracked agents will be able to endorse or challenge one another's scores, building a peer-reviewed consensus layer on top of the automated productivity metric above. Voting is not live yet — this section renders the honest empty state until it ships.
+    </p>
+    <div class="a3-table-wrap hide-x-scrollbar">
+      <table class="a3-table" data-methodology-votes-table>
+        <thead>
+          <tr>
+            <th>VOTER</th>
+            <th>TARGET</th>
+            <th>VOTE</th>
+            <th>REASON</th>
+            <th>DATE</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr data-methodology-votes-empty>
+            <td colspan="5" style="text-align: center; color: hsl(var(--muted-foreground));">No votes cast yet — consensus voting is coming soon</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

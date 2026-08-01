@@ -75,17 +75,40 @@ describe("frontend route resolution", () => {
   // layout composition + dash-shell.js's gate, EXCEPT /submit — linked
   // directly off the gate screen itself, so it must be reachable pre-auth.
   // /list (issue #384, P2.1), /list2 + /list3 (issue #387), /market +
-  // /dashboard (issue #392, P4.1), /agents (issue #385, P2.2), and
-  // /lobster + /vaults + /wallets (issue #386, P2.3/P2.4/P2.5) are the
-  // first of these routes to ship real content — each resolves to its own
-  // fragment now, everything else still points at the shared coming-soon
-  // placeholder.
+  // /dashboard (issue #392, P4.1), /agents (issue #385, P2.2),
+  // /lobster + /vaults + /wallets (issue #386, P2.3/P2.4/P2.5), and
+  // /methodology + /about (issue #395, P4.2/P4.3) have all shipped real
+  // content — each resolves to its own fragment now. /ask-mr-roboto is the
+  // last nav-wired route still on the shared coming-soon placeholder (it is
+  // route-flagged behind the LLM-ban decision, P5.1).
   test("resolves every static dashboard route to the shared placeholder, gated, under the dash layout", () => {
-    const gatedPaths = ["/methodology", "/about", "/ask-mr-roboto"];
+    const gatedPaths = ["/ask-mr-roboto"];
     for (const p of gatedPaths) {
       expect(viewFor(p)).toBe("/views/dash/coming-soon.html");
       expect(routeMetaFor(p)).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
     }
+  });
+
+  // /methodology and /about (issue #395, P4.2/P4.3) ship real, static content
+  // — they resolve to their own fragments now, still gated under the dash
+  // layout (§4.1's noindex rule applies regardless of content status, see
+  // seo.js).
+  test("/methodology and /about (issue #395) resolve to their own real fragments, still gated under the dash layout", () => {
+    expect(viewFor("/methodology")).toBe("/views/dash/methodology.html");
+    expect(routeMetaFor("/methodology")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+    expect(viewFor("/about")).toBe("/views/dash/about.html");
+    expect(routeMetaFor("/about")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+  });
+
+  // /terms and /privacy (issue #395) are new static site-policy pages, NOT
+  // part of the bot-analytics UI port (they are not among the plan's 20
+  // dashboard routes) — public, ungated, no dash layout, resolved by the
+  // generic catch-all exactly like /disclaimer already is.
+  test("/terms and /privacy (issue #395) are public static pages, not part of the dash layout", () => {
+    expect(viewFor("/terms")).toBe("/views/terms.html");
+    expect(routeMetaFor("/terms")).toBeNull();
+    expect(viewFor("/privacy")).toBe("/views/privacy.html");
+    expect(routeMetaFor("/privacy")).toBeNull();
   });
 
   test("/list (issue #384) resolves to its own real fragment, still gated under the dash layout", () => {
@@ -174,6 +197,8 @@ describe("frontend route resolution", () => {
       "/lobster",
       "/vaults",
       "/wallets",
+      "/methodology",
+      "/about",
     ];
     for (const p of paths) {
       const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));
@@ -181,6 +206,13 @@ describe("frontend route resolution", () => {
     }
     const layoutFile = Bun.file(join(repoRoot, "frontend/public", `.${DASH_LAYOUT_VIEW}`));
     expect(await layoutFile.exists()).toBe(true);
+  });
+
+  test("the /terms and /privacy fragments referenced by the catch-all exist on disk", async () => {
+    for (const p of ["/terms", "/privacy"]) {
+      const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));
+      expect(await file.exists()).toBe(true);
+    }
   });
 
   test("resolves dynamic committee routes to reusable fragments", () => {

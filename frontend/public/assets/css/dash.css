@@ -740,7 +740,6 @@
 .a3 .a3-agents-summary strong { color: hsl(var(--primary)); font-weight: 600; }
 .a3 .a3-agents-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin: 1.5rem 0 1rem; }
 
-
 /* ── List-page shell (issue #386, §5.9/§5.11/§5.13): every directory list
    page — /lobster, /vaults, /wallets and future siblings (/agents, /list,
    /list2) — reuses this same page header / outline-button / empty-state /
@@ -804,3 +803,15 @@
 /* Hover-revealed row action buttons (wallets §5.13 copy/explorer icons). */
 .a3 .a3-row-actions { display: inline-flex; gap: 0.3rem; opacity: 0; transition: opacity 0.1s ease; }
 .a3 .a3-table tbody tr:hover .a3-row-actions { opacity: 1; }
+
+/* ── /methodology + /about (issue #395, P4.2/P4.3) ────────────────────────
+   Both are static content pages (no API): page-scoped max-width wrappers
+   (same convention as .a3-submit above) and the four entity-type left-border
+   accents §5.16 calls for on /about's metric-cards (Agent cyan / Lobster
+   Coin purple / Vault green / Wallet amber). */
+.a3-methodology { max-width: 56rem; margin: 0 auto; }
+.a3-about { max-width: 48rem; margin: 0 auto; }
+.a3 .a3-about__entity--agent { border-left: 3px solid hsl(var(--primary)); }
+.a3 .a3-about__entity--coin { border-left: 3px solid hsl(var(--secondary)); }
+.a3 .a3-about__entity--vault { border-left: 3px solid hsl(var(--success)); }
+.a3 .a3-about__entity--wallet { border-left: 3px solid hsl(var(--amber)); }
