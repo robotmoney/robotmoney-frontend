@@ -657,3 +657,81 @@ export interface WalletListItem {
 export interface WalletsListResponse {
   wallets: WalletListItem[];
 }
+
+// GET /api/dashboards/agents/:id (issue #390, docs/bot-analytics-ui-port-
+// plan.md §5.8, P3.2) — the "Money-agent dossier" AgentProfile detail. Fields
+// beyond the directory row above (§5.7) come from three real joins, never
+// fabricated:
+//   - `description`/`websiteUrl`/`twitterHandle` are the agent's PROJECT
+//     row's overview_short/website_url/twitter_handle (openclaw_agents has no
+//     socials/description columns of its own — projects does); null when the
+//     agent has no project_id.
+//   - `vaults`/`wallets` are every agent_vaults/tracked_wallets row sharing
+//     the agent's project_id (the schema has no per-agent FK on either
+//     table — both are project-scoped) — a real, coarser-grained join, not a
+//     literal "vaults this agent manages" relation. `wallets` always
+//     includes the agent's own wallet_address match (if any) plus any other
+//     tracked wallet on the same project.
+//   - `evidence`/`whyIncluded`/`openGaps` are computed deterministically from
+//     the fields above (wallet presence/balance, 30d revenue, x402 activity,
+//     identity links, enrichedAt recency) — see
+//     backend/src/projects/agent-detail-projections.ts for the exact rules.
+// `confidence` is the existing openclaw_agents.source_confidence column
+// (high|medium|low), not re-derived.
+export interface AgentVaultSummary {
+  id: string;
+  name: string;
+  strategyType: string | null;
+  tvlUsd: number | null;
+  apy: number | null;
+}
+
+export interface AgentWalletSummary {
+  id: string;
+  label: string;
+  address: string | null;
+  chain: string | null;
+  balanceUsd: number | null;
+  isAgentWallet: boolean; // true for the row matched by the agent's own wallet_address
+}
+
+// Reuses the same verified/partial/missing vocabulary as
+// LeaderboardEvidence (§5.3) — no `token` leg here (AgentProfile has no
+// linked-coin evidence row in the plan, unlike the leaderboard).
+export interface AgentEvidence {
+  wallet: EvidenceStatus;
+  moneyIn: EvidenceStatus;
+  x402: EvidenceStatus;
+  identity: EvidenceStatus;
+  freshness: EvidenceStatus;
+}
+
+export interface AgentDetail {
+  id: string;
+  name: string;
+  protocol: string | null;
+  isFacilitator: boolean;
+  active: boolean;
+  description: string | null;
+  websiteUrl: string | null;
+  twitterHandle: string | null;
+  walletAddress: string | null;
+  walletBalanceUsd: number | null;
+  createdAt: string; // ISO 8601 — "seen · date" chip
+  enrichedAt: string | null; // ISO 8601 — freshness reference
+  confidence: "high" | "medium" | "low" | null;
+  score: number; // composite, same formula as AgentDirectoryRow.score
+  x402Score: number | null;
+  x402Txns: number;
+  x402VolumeUsd: number;
+  x402Resources: number;
+  revenue30dUsd: number;
+  cumulativeRevenueUsd: number | null;
+  productivityScore: number | null;
+  x402Sparkline: number[]; // up to 26 weekly-summed buckets, chronological — PerformanceChart series
+  evidence: AgentEvidence;
+  whyIncluded: string[];
+  openGaps: string[];
+  vaults: AgentVaultSummary[];
+  wallets: AgentWalletSummary[];
+}

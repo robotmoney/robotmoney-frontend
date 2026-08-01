@@ -17,6 +17,7 @@ import { fetchList2 } from "../../projects/list2-projections.ts";
 import { fetchLeaderboard } from "../../projects/leaderboard-projections.ts";
 import { fetchActivityLog } from "../../projects/activity-log-projections.ts";
 import { fetchAgentsDirectory } from "../../projects/agents-projections.ts";
+import { fetchAgentDetail } from "../../projects/agent-detail-projections.ts";
 // Analytics-dashboard directory list feeds (issue #386) — a distinct feature
 // area from the treasury-dashboard surfaces above, sharing only the
 // `dashboards.*` route namespace (precedent set by #384/#385: `analytics.*`
@@ -128,6 +129,15 @@ export async function getActivityLog() {
 // `{ agents: [], summary: { active: 0, idle: 0, x402Txns: 0, x402VolumeUsd: 0, totalBalanceUsd: 0 } }`.
 export async function getAgentsDirectory() {
   return fetchAgentsDirectory();
+}
+
+// GET /api/dashboards/agents/:id → the "Money-agent dossier" AgentProfile
+// detail (issue #390, docs/bot-analytics-ui-port-plan.md §5.8, P3.2): one
+// agent's trust-evidence rail, money strip inputs, x402 weekly series, and
+// its project's vaults/wallets. Returns `null` for an unknown id (the
+// caller in api/index.ts turns that into a 404) — never a fabricated row.
+export async function getAgentDetail(id: string) {
+  return fetchAgentDetail(id);
 }
 
 // GET /api/dashboards/coins → /lobster directory (issue #386, §5.9).

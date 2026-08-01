@@ -63,6 +63,10 @@ export const ROUTES = {
     // analytics.* below, which is the analytics-provider bearer-gated
     // ingestion boundary and would be the wrong home for a public GET.
     agents: "/api/dashboards/agents", // GET → tracked-agent directory rows + summary
+    // Issue #390 (/agents/:id "Money-agent dossier" AgentProfile, P3.2): one
+    // agent's full dossier (trust breakdown, managing vaults, tracked
+    // wallets). Same public-dashboards-namespace reasoning as agents above.
+    agentDetail: "/api/dashboards/agents/:id", // GET → AgentDetail, 404 when the id doesn't exist
     // Analytics-dashboard directory list feeds (issue #386, docs/bot-
     // analytics-ui-port-plan.md §5.9/§5.11/§5.13). A distinct feature area
     // from the treasury-dashboard entries above, sharing only this route

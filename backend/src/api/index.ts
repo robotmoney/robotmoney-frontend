@@ -5,7 +5,7 @@ import { ROUTES } from "@robotmoney/contract";
 import { config, assertNoVaultAddressCollision } from "../config.ts";
 import { sql } from "../db/client.ts";
 import { createComment, listComments } from "./routes/comments.ts";
-import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getCoinsList, getVaultsList, getWalletsList } from "./routes/dashboards.ts";
+import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
 import { getProjects, updateProjectOverview } from "./routes/projects.ts";
 import { handleCommittee } from "./routes/committee.ts";
@@ -132,6 +132,15 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname === ROUTES.dashboards.agents && req.method === "GET") {
       return json(await getAgentsDirectory());
+    }
+
+    // /agents/:id "Money-agent dossier" (issue #390, §5.8, P3.2). Checked
+    // after the exact-match /agents directory route above so it only ever
+    // catches a genuine sub-path segment.
+    if (pathname.startsWith("/api/dashboards/agents/") && req.method === "GET") {
+      const id = decodeURIComponent(pathname.slice("/api/dashboards/agents/".length));
+      const detail = await getAgentDetail(id);
+      return json(detail ?? { error: "not found" }, detail ? 200 : 404);
     }
 
     // Analytics-dashboard directory list feeds (issue #386) — a distinct

@@ -19,6 +19,7 @@ export const ROUTES: {
     submissions: string;
     activity: string;
     agents: string;
+    agentDetail: string;
     coins: string;
     vaults: string;
     wallets: string;
