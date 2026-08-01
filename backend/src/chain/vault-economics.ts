@@ -6,6 +6,7 @@ import { config, resolveBaseRpcSource, resolveVaultAdapters, type BaseRpcSource,
 import { sql } from "../db/client.ts";
 import { callTotalAssets, callTotalSupply, callBalanceOf, type RpcCallOptions } from "./base-rpc-client.ts";
 import type { Provenance } from "./wallet-valuation.ts";
+import { ttlCached } from "./ttl-cache.ts";
 
 const USDC_SCALE = 1_000_000; // 6-decimal fixed point, matches the vault's asset (USDC).
 
@@ -147,17 +148,11 @@ export async function computeApy7d(vaultAddress: string): Promise<number | null>
 export const VAULT_ECONOMICS_FRESHNESS_BUDGET_MS = 60 * 60_000; // 1 hour
 
 const CACHE_TTL_MS = 30_000;
-let cache: { at: number; value: VaultEconomics } | null = null;
 
-export function _resetVaultEconomicsCacheForTests(): void {
-  cache = null;
-}
-
-export async function fetchVaultEconomics(
+async function computeVaultEconomics(
   _readers: VaultEconomicsReaders = defaultVaultEconomicsReaders,
 ): Promise<VaultEconomics> {
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_TTL_MS) return cache.value;
 
   const source = resolveBaseRpcSource();
   const adapters = resolveVaultAdapters();
@@ -275,7 +270,7 @@ export async function fetchVaultEconomics(
   const asOf = new Date(maxSampleMs > 0 ? maxSampleMs : now).toISOString();
   const apy7d = await computeApy7d(config.vault.address).catch(() => null);
 
-  const result: VaultEconomics = {
+  return {
     asOf,
     stale,
     source,
@@ -286,7 +281,10 @@ export async function fetchVaultEconomics(
     apy7d,
     adapters: adapterDtos,
   };
+}
 
-  cache = { at: now, value: result };
-  return result;
+export const fetchVaultEconomics = ttlCached(computeVaultEconomics, CACHE_TTL_MS);
+
+export function _resetVaultEconomicsCacheForTests(): void {
+  fetchVaultEconomics._resetForTests();
 }

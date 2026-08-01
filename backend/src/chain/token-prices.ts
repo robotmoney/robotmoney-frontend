@@ -18,6 +18,7 @@ import { resolveSp500 } from "../config.ts";
 import { UA } from "../analytics/extract/http.ts";
 import { withFetchCache } from "../analytics/extract/fetch-cache.ts";
 import { fetchYahoo } from "../analytics/extract/yahoo.ts";
+import { TtlCache } from "./ttl-cache.ts";
 
 const GECKOTERMINAL_BASE = "https://api.geckoterminal.com/api/v2";
 const GECKO_TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
@@ -68,7 +69,13 @@ function geckoRetryBaseMs(): number {
 let geckoInFlight = false;
 const geckoWaiters: Array<() => void> = [];
 const geckoPending = new Map<string, Promise<number>>();
-const geckoPriceCache = new Map<string, { at: number; value: number }>();
+// The shared keyed TTL-cache primitive (chain/ttl-cache.ts, issue #455), keyed
+// per lowercased token address. ttlMs is passed as a resolver function (not a
+// constant) so the DEMO_MODE-aware window above is read at call time, exactly
+// as geckoPriceCacheTtlMs() always has been — this file's two-TTL-constant
+// variant is intentionally NOT folded into the single-value ttlCached() shape
+// the other six chain/ modules use (see issue #455 scope).
+const geckoPriceCache = new TtlCache<string, number>(geckoPriceCacheTtlMs);
 
 // The batch currently accepting joiners (null when none). It stays open until
 // its runner actually HOLDS the serializer slot (>= 1 microtask even when the
@@ -117,7 +124,7 @@ export function _resetTokenPriceCacheForTests(): void {
   geckoInFlight = false;
   geckoWaiters.length = 0;
   geckoPending.clear();
-  geckoPriceCache.clear();
+  geckoPriceCache.reset();
   geckoOpenBatch = null;
 }
 
@@ -208,7 +215,7 @@ async function runGeckoBatch(batch: GeckoBatch): Promise<void> {
     for (const [lc, waiter] of batch.waiters) {
       const n = prices[lc] == null ? NaN : Number(prices[lc]);
       if (Number.isFinite(n)) {
-        geckoPriceCache.set(lc, { at, value: n });
+        geckoPriceCache.set(lc, n, at);
         waiter.resolve(n);
       } else {
         waiter.reject(new Error(`geckoterminal: no USD price for ${lc}`));
@@ -228,7 +235,7 @@ async function runGeckoBatch(batch: GeckoBatch): Promise<void> {
 export async function fetchGeckoTokenPriceUsd(address: string, timeoutMs = 8000): Promise<number> {
   const lc = address.toLowerCase();
   const cached = geckoPriceCache.get(lc);
-  if (cached && Date.now() - cached.at < geckoPriceCacheTtlMs()) return cached.value;
+  if (cached !== undefined) return cached;
   const pending = geckoPending.get(lc);
   if (pending) return pending;
 

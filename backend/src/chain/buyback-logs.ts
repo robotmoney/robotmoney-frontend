@@ -22,6 +22,7 @@ import {
   type RpcCallOptions,
 } from "./base-rpc-client.ts";
 import { fetchGeckoTokenPriceUsd } from "./token-prices.ts";
+import { ttlCached } from "./ttl-cache.ts";
 
 // keccak256("Transfer(address,address,uint256)") — the standard ERC-20 Transfer
 // event topic0 (widely published; not computed here).
@@ -82,15 +83,9 @@ async function readRows(): Promise<DbRow[]> {
 }
 
 const CACHE_TTL_MS = 30_000;
-let cache: { at: number; value: Buybacks } | null = null;
 
-export function _resetBuybackCacheForTests(): void {
-  cache = null;
-}
-
-export async function getBuybacks(): Promise<Buybacks> {
+async function computeBuybacks(): Promise<Buybacks> {
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_TTL_MS) return cache.value;
 
   // Resolved per call (not module load) so provenance always tracks the current
   // env and tests can flip BASE_RPC_SOURCE per case.
@@ -134,9 +129,13 @@ export async function getBuybacks(): Promise<Buybacks> {
   totals.wethSpent = Math.round(totals.wethSpent * 1e6) / 1e6;
   totals.valueUsd = Math.round(totals.valueUsd * 100) / 100;
 
-  const value: Buybacks = { asOf: new Date(now).toISOString(), source, stale, rows, totals };
-  cache = { at: now, value };
-  return value;
+  return { asOf: new Date(now).toISOString(), source, stale, rows, totals };
+}
+
+export const getBuybacks = ttlCached(computeBuybacks, CACHE_TTL_MS);
+
+export function _resetBuybackCacheForTests(): void {
+  getBuybacks._resetForTests();
 }
 
 // --- Live indexer (worker/handlers/buybacks.ts) ------------------------------
@@ -297,6 +296,6 @@ export async function indexBuybacks(): Promise<IndexResult> {
   } catch (err) {
     console.error("buyback-logs: live index failed, leaving persisted rows in place:", err);
   }
-  if (indexed > 0) cache = null; // invalidate the read cache so the new rows surface
+  if (indexed > 0) getBuybacks.invalidate(); // invalidate the read cache so the new rows surface
   return { indexed, skipped: null, scannedToBlock };
 }

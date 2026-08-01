@@ -10,6 +10,7 @@
 // until an admin rewrites the row; there is no chain 'stale' concept here.
 import { resolveBaseRpcSource, type BaseRpcSource } from "../config.ts";
 import { sql } from "../db/client.ts";
+import { ttlCached } from "./ttl-cache.ts";
 
 export interface AllocationStrategy {
   label: string;
@@ -139,15 +140,9 @@ interface Row {
 }
 
 const CACHE_TTL_MS = 30_000;
-let cache: { at: number; value: AllocationFramework } | null = null;
 
-export function _resetAllocationFrameworkCacheForTests(): void {
-  cache = null;
-}
-
-export async function getAllocationFramework(): Promise<AllocationFramework> {
+async function computeAllocationFramework(): Promise<AllocationFramework> {
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_TTL_MS) return cache.value;
 
   const source = resolveBaseRpcSource();
 
@@ -178,7 +173,11 @@ export async function getAllocationFramework(): Promise<AllocationFramework> {
     items: (b.items ?? []).map((i) => ({ label: i.name, targetPct: pct(i.target_weight) })),
   }));
 
-  const value: AllocationFramework = { strategy, buckets, asOf: toIsoDay(asof), source, managed: true };
-  cache = { at: now, value };
-  return value;
+  return { strategy, buckets, asOf: toIsoDay(asof), source, managed: true };
+}
+
+export const getAllocationFramework = ttlCached(computeAllocationFramework, CACHE_TTL_MS);
+
+export function _resetAllocationFrameworkCacheForTests(): void {
+  getAllocationFramework._resetForTests();
 }
