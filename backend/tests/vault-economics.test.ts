@@ -62,7 +62,7 @@ function mockRpc(byToSelector: Record<string, string>) {
     const result = byToSelector[key];
     if (result === undefined) throw new Error(`mockRpc: no fixture for ${key}`);
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 }
 
 const TOTAL_ASSETS_SEL = "0x01e1d114";
@@ -335,7 +335,7 @@ test("a degraded (stale) response still carries the correct source provenance", 
   process.env.BASE_RPC_SOURCE = "stub";
   globalThis.fetch = (async () => {
     throw new Error("fetch failed: connection refused");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   const r = await fetchVaultEconomics();
   expect(r.stale).toBe(true);
   expect(r.source).toBe("stub");
@@ -397,7 +397,7 @@ test("a failing mocked RPC transport degrades to stale:true with last-persisted 
   `;
   globalThis.fetch = (async () => {
     throw new Error("fetch failed: connection refused");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const r = await fetchVaultEconomics();
   expect(r.stale).toBe(true);
@@ -411,7 +411,7 @@ test("a failing mocked RPC transport degrades to stale:true with last-persisted 
 test("degraded response with no persisted history at all is all-nulls, still 200-shaped, never fabricated", async () => {
   globalThis.fetch = (async () => {
     throw new Error("fetch failed: connection refused");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   const r = await fetchVaultEconomics();
   expect(r.stale).toBe(true);
   expect(r.tvlUsd).toBeNull();

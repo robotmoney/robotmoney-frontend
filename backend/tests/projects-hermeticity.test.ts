@@ -33,7 +33,7 @@ test("selectProjectsDataSource is hermetic under CI even when PROJECTS_SOURCE=li
 test("the full pipeline completes with global fetch disabled (no live socket)", async () => {
   globalThis.fetch = (() => {
     throw new Error("hermeticity violation: a projects test opened a live network connection");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const prefix = `herm_${crypto.randomUUID().slice(0, 8)}`;
   const src = uniqueSlugSource(prefix);

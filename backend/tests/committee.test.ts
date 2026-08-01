@@ -8,7 +8,7 @@ import { handleCommittee } from "../src/api/routes/committee.ts";
 // A session's date is whatever the DATABASE derived from convened_at
 // (migration 0022). postgres returns it as a Date; normalise to the YYYY-MM-DD
 // the API and the signing payload use. Tests read this — they never choose it.
-const sessionDate = (s: { date: unknown }): string =>
+const sessionDate = (s: Record<string, unknown>): string =>
   s.date instanceof Date ? s.date.toISOString().slice(0, 10) : String(s.date).slice(0, 10);
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
@@ -234,7 +234,7 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(brief?.body?.takeSchema.weights.optional).toBe(true);
   expect(brief?.body?.windowClosesAt).toBe(publishedBrief.windowClosesAt);
   expect(brief?.body?.windowClosesAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-  expect(new Date(brief!.body!.windowClosesAt).toISOString()).toBe(brief?.body?.windowClosesAt);
+  expect(new Date(brief!.body!.windowClosesAt).toISOString()).toBe(brief!.body!.windowClosesAt);
 
   // Two members with DISTINCT stances so a disagreement is synthesized.
   const submit = async (stance: string, confidence: number) => {

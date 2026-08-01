@@ -130,7 +130,7 @@ function mockPersistent429Transport(): { gecko: number; yahoo: number } {
       }
     }
     throw new Error(`mock transport: unexpected RPC method ${body.method}`);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   return counters;
 }
 

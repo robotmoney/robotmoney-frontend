@@ -72,7 +72,7 @@ test("(a) a 429 with Retry-After on a vault read is retried by the shared transp
     if (calls === 1) return new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } });
     const body = JSON.parse(String(init?.body)) as { params: [{ data: string }, string] };
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: answer(body.params[0].data) }), { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const read = await liveProjectsDataSource.vaultErc4626Read(VAULT, "base");
   expect(read).toEqual({ totalAssetsRaw: "1234000000", decimals: 6, assetPriceUsd: 1 });
@@ -85,7 +85,7 @@ test("(b) every vault-read RPC request carries the transport's User-Agent and a 
     const body = JSON.parse(String(init?.body)) as SeenRequest["body"] & { params: [{ to: string; data: string }, string] };
     seen.push({ url: String(url), userAgent: new Headers(init?.headers).get("user-agent"), body });
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: answer(body.params[0].data) }), { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   await liveProjectsDataSource.vaultErc4626Read(VAULT, "base");
   expect(seen).toHaveLength(3); // totalAssets → asset → decimals, in order
@@ -119,7 +119,7 @@ test("(c) with BASE_RPC_MAX_CONCURRENCY=1 concurrent vault reads are serialized 
     const body = JSON.parse(String(init?.body)) as { params: [{ data: string }, string] };
     live--;
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: answer(body.params[0].data) }), { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const vaults = ["0x" + "a1".repeat(20), "0x" + "b2".repeat(20), "0x" + "c3".repeat(20), "0x" + "d4".repeat(20)];
   const reads = await Promise.all(vaults.map((v) => liveProjectsDataSource.vaultErc4626Read(v, "base")));
@@ -159,7 +159,7 @@ function mockEthBalanceAndPrice(nativeWei: bigint, priceUsd: number): { rpcCalls
       return { success: true, returnData: word(nativeWei) };
     });
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: encodeAggregate3Result(results) }), { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   return counter;
 }
 
@@ -179,7 +179,7 @@ test("(e) walletBalanceUsd rejects (never fabricates a value) when the price rea
     const calls = decodeAggregate3Calls(body.params[0].data);
     const results: Aggregate3Result[] = calls.map(() => ({ success: true, returnData: word(1_000_000_000_000_000_000n) }));
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: encodeAggregate3Result(results) }), { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   process.env.GECKO_PRICE_MAX_RETRIES = "0";
   await expect(liveProjectsDataSource.walletBalanceUsd(WALLET, "base")).rejects.toThrow();
   delete process.env.GECKO_PRICE_MAX_RETRIES;
@@ -190,7 +190,7 @@ test("(f) walletBalanceUsd refuses a non-'base' chain without ever opening a soc
   globalThis.fetch = (async () => {
     calls++;
     throw new Error("must not fetch");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   await expect(liveProjectsDataSource.walletBalanceUsd(WALLET, "ethereum")).rejects.toThrow(/only covers chain "base"/);
   await expect(liveProjectsDataSource.walletBalanceUsd(WALLET, "solana")).rejects.toThrow(/only covers chain "base"/);
   expect(calls).toBe(0);

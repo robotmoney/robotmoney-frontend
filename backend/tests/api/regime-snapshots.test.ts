@@ -29,7 +29,7 @@ import { sql } from "../../src/db/client.ts";
 import { fetchRegimeSnapshots } from "../../src/analytics/report/projections.ts";
 import { getRegimeSnapshots } from "../../src/api/routes/dashboards.ts";
 import { saveRegimeSnapshots } from "../../src/analytics/store/regime-store.ts";
-import { REGIME_STALE_THRESHOLD_DAYS } from "../../src/analytics/report/regime-projection.ts";
+import { REGIME_STALE_THRESHOLD_DAYS, type JsonValue } from "../../src/analytics/report/regime-projection.ts";
 
 // fetchRegimeSnapshots measures freshness against the real server clock (UTC
 // today), so seed dates are computed relative to that same clock.
@@ -44,7 +44,7 @@ const today = () => daysAgo(0);
 // so the shape matches production; the test never persists to
 // raw_indicator_history itself since staleness is computed purely from this
 // embedded `indicators` array, not by re-querying that table on the read path.
-const freshIndicators = (rawDate: string) => [
+const freshIndicators = (rawDate: string): JsonValue[] => [
   { id: "T10Y2Y", panel: "macro", raw_date: rawDate },
   { id: "DEFI_TVL", panel: "onchain", raw_date: rawDate },
 ];
@@ -55,7 +55,7 @@ const freshIndicators = (rawDate: string) => [
 // two fresh (same-date) indicators so tests that don't care about staleness
 // mechanics get an unsurprising "fresh" row; staleness-focused tests below
 // override it to exercise forward-fill / missing / invalid observation dates.
-const snapRow = (date: string, indicators: unknown[] = freshIndicators(date)) => ({
+const snapRow = (date: string, indicators: readonly JsonValue[] = freshIndicators(date)) => ({
   date,
   composite: 0.42,
   compositePercentile: 61,

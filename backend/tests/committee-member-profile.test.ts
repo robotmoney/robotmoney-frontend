@@ -28,8 +28,12 @@ beforeAll(async () => {
 // same end state `apply → admin activate → claim` produces for a real member.
 async function activeMember() {
   const id = rid("m");
-  const { token } = await ic.registerMember({ memberId: id, name: id, publicKey: `pk_${id}` });
-  return { id, token };
+  const r = await ic.registerMember({ memberId: id, name: id, publicKey: `pk_${id}` });
+  // registerMember returns {ok:false, status, error} (not a token) when the
+  // roster cap is hit — fail loudly here rather than let a bogus token flow
+  // downstream to a confusing auth failure far from the real cause.
+  if (!("token" in r) || !r.token) throw new Error(`activeMember(): registerMember failed for ${id}: ${JSON.stringify(r)}`);
+  return { id, token: r.token };
 }
 
 function postProfile(id: string, token: string | null, body: unknown) {
