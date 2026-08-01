@@ -12,6 +12,8 @@ export const ROUTES: {
     tokenMetrics: string;
     walletSleeves: string;
     allocation: string;
+    entities: string;
+    overview: string;
   };
   projects: {
     list: string;

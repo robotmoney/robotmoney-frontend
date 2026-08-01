@@ -27,6 +27,7 @@ import { registerAdminCommitteeMember } from "./views/admin/committee-member.js"
 import { registerAdminCommitteeSession } from "./views/admin/committee-session.js";
 import { registerDashStyleguideView } from "./views/dash-styleguide.js";
 import { registerDashShellView } from "./views/dash-shell.js";
+import { registerListView } from "./views/list.js";
 
 export function registerViews(Alpine) {
   registerProjectsView(Alpine);
@@ -47,4 +48,5 @@ export function registerViews(Alpine) {
   registerAdminCommitteeSession(Alpine);
   registerDashStyleguideView(Alpine);
   registerDashShellView(Alpine);
+  registerListView(Alpine);
 }

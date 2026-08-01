@@ -21,6 +21,10 @@ export const DASH_LAYOUT_VIEW = `${VIEW_DIR}/dash/_layout.html`;
 // state are all real and testable today without inventing per-page content
 // this issue does not own.
 const DASH_COMING_SOON_VIEW = `${VIEW_DIR}/dash/coming-soon.html`;
+// /list "Total Market" (issue #384, §5.1, P2.1) — the flagship page, the
+// first dashboard route to ship real content ahead of the coming-soon
+// placeholder above.
+const LIST_VIEW = `${VIEW_DIR}/dash/list.html`;
 
 // Static dashboard routes (§4.1's list) that render inside DASH_LAYOUT_VIEW.
 // `gated: true` means dash-shell.js's gate must pass before the outlet
@@ -33,7 +37,7 @@ const DASH_COMING_SOON_VIEW = `${VIEW_DIR}/dash/coming-soon.html`;
 /** @typedef {{ view: string; layout?: string; gated?: boolean }} DashRoute */
 /** @type {Record<string, DashRoute>} */
 const DASH_ROUTES = {
-  "/list": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
+  "/list": { view: LIST_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/list2": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/list3": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/market": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
