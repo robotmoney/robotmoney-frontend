@@ -16,7 +16,7 @@ import { handleCommitteeAdmin } from "../src/api/routes/committee-admin.ts";
 // A session's date is whatever the DATABASE derived from convened_at
 // (migration 0022). postgres returns it as a Date; normalise to the YYYY-MM-DD
 // the API and the signing payload use. Tests read this — they never choose it.
-const sessionDate = (s: { date: unknown }): string =>
+const sessionDate = (s: Record<string, unknown>): string =>
   s.date instanceof Date ? s.date.toISOString().slice(0, 10) : String(s.date).slice(0, 10);
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
@@ -41,7 +41,7 @@ async function activeMember() {
   // never quietly flow into a committee_session_members insert for a
   // memberId that was never actually created (a confusing downstream FK
   // violation instead of a clear assertion failure at the actual cause).
-  if (!r.token) throw new Error(`activeMember() setup failed for ${id}: ${JSON.stringify(r)}`);
+  if (!("token" in r) || !r.token) throw new Error(`activeMember() setup failed for ${id}: ${JSON.stringify(r)}`);
   return { id, token: r.token, privateKey };
 }
 

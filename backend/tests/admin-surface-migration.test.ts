@@ -388,7 +388,7 @@ test("session roster/event backfill: submitted members are expected, incomplete 
   // legacy-member-1 submitted (step 1); only one more active member exists
   // globally (legacy-member-3) to fill the recorded quorum of 3 (step 2), so
   // exactly 2 rows land — the target of 3 cannot be reached.
-  expect(roster).toEqual([
+  expect([...roster]).toEqual([
     { member_id: "legacy-member-1", status: "expected" },
     { member_id: "legacy-member-3", status: "expected" },
   ]);
@@ -416,7 +416,7 @@ test("session roster/event backfill: submitted members are expected, incomplete 
 test("orphan subject_id references get inactive placeholders and unknown statuses are normalized, before constraints are enforced", async () => {
   const placeholders = await db<{ id: string; status: string }[]>`
     SELECT id, status FROM committee_subjects WHERE id IN ('orphan-subject-1', 'orphan-subject-2') ORDER BY id`;
-  expect(placeholders).toEqual([
+  expect([...placeholders]).toEqual([
     { id: "orphan-subject-1", status: "inactive" },
     { id: "orphan-subject-2", status: "inactive" },
   ]);

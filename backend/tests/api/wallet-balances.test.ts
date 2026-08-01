@@ -221,7 +221,7 @@ function mockChain(fx: ChainFixtures): MockCounter {
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: word(fx.native) }), { status: 200 });
     }
     throw new Error(`mockChain: unexpected method ${body.method}`);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   return counter;
 }
 
@@ -571,7 +571,7 @@ test("AC8 (issue #118): the request path serves PERSISTED samples and makes ZERO
   globalThis.fetch = (async (...args: unknown[]) => {
     fetchCalls++;
     throw new Error(`request path must not fetch — was called with ${String(args[0])}`);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const r = await fetchPersistedWalletBalances();
   expect(fetchCalls).toBe(0); // ZERO RPC / price fetches on the request path

@@ -22,9 +22,9 @@ test("seededProvider is asof-stable: a calendar date's value is identical across
   expect(da!.value).toBeCloseTo(db!.value, 9);
 });
 
-test("regime classifier produces valid, bounded snapshots", () => {
+test("regime classifier produces valid, bounded snapshots", async () => {
   const ctx = { asof: "2026-06-30", provider: seededProvider, dep: () => undefined };
-  const { snapshots } = regimeTool.compute(ctx as any);
+  const { snapshots } = await regimeTool.compute(ctx as any);
   expect(snapshots.length).toBe(120);
   for (const s of snapshots) {
     expect(s.composite).toBeGreaterThanOrEqual(0);
@@ -33,7 +33,7 @@ test("regime classifier produces valid, bounded snapshots", () => {
     expect(s.indicators.length).toBe(11);
   }
   // determinism across two computes for the same asof
-  const again = regimeTool.compute(ctx as any).snapshots.at(-1)!;
+  const again = (await regimeTool.compute(ctx as any)).snapshots.at(-1)!;
   expect(again.composite).toBe(snapshots.at(-1)!.composite);
 });
 

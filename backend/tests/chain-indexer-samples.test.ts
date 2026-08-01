@@ -72,7 +72,7 @@ function mockRpc(failAdapters: string[] = [], failAll = false) {
     }
 
     throw new Error(`mockRpc: unhandled call to ${body.method}`);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 }
 
 beforeEach(async () => {

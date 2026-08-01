@@ -196,7 +196,7 @@ test("committee_session_members and committee_session_events round-trip a real s
 
   const events = await sql<{ action: string; to_state: string }[]>`
     SELECT action, to_state FROM committee_session_events WHERE session_id = ${session.id}`;
-  expect(events).toEqual([{ action: "create", to_state: "scheduled" }]);
+  expect([...events]).toEqual([{ action: "create", to_state: "scheduled" }]);
 
   // ON DELETE CASCADE: removing the session removes its roster/event rows too.
   await sql`DELETE FROM committee_sessions WHERE id = ${session.id}`;

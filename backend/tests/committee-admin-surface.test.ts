@@ -43,7 +43,11 @@ async function activeMember(name = "member") {
   const id = rid("m");
   const { publicKeyB64, privateKey } = await generateKeyPair();
   const r = await ic.registerMember({ memberId: id, name, publicKey: publicKeyB64 });
-  return { id, token: r.token!, privateKey };
+  // registerMember returns {ok:false, status, error} (not a token) when the
+  // roster cap is hit — fail loudly here rather than let a bogus token flow
+  // downstream to a confusing auth failure far from the real cause.
+  if (!("token" in r) || !r.token) throw new Error(`activeMember(): registerMember failed for ${id}: ${JSON.stringify(r)}`);
+  return { id, token: r.token, privateKey };
 }
 
 async function activeSubject() {
@@ -148,6 +152,15 @@ test("members: manual add mints a one-time credential; deactivate revokes keys; 
   expect(await ic.memberIdForToken(token2)).toBeNull();
   const activeKeys = await sql`SELECT id FROM committee_member_keys WHERE member_id = ${memberId} AND active = true`;
   expect(activeKeys.length).toBe(1);
+
+  // Free the roster slot this test claimed: the reactivate above (version 2 ->
+  // 3) left `memberId` ACTIVE, and rotate (version 3 -> 4) doesn't touch
+  // status, so nothing later deactivates it. Left active, it silently eats
+  // one seat of COMMITTEE_ROSTER_CAP (10) for the rest of this file's 10
+  // activeMember() admissions — see the matching comment in "members:
+  // application review approve/reject" above for the full 409 story that a
+  // non-null-asserted `r.token!` was masking before issue #454.
+  expect((await admin.deactivateMemberAdmin(memberId, 4)).status).toBe(200);
 });
 
 test("members: application review approve/reject", async () => {
@@ -170,6 +183,16 @@ test("members: application review approve/reject", async () => {
   expect(rejectedMember!.status).toBe("inactive");
   const apps = await admin.listApplicationsAdmin("rejected");
   expect(apps.some((a: any) => a.member_id === memberId2)).toBe(true);
+
+  // Free the roster slot this test claimed: `memberId` is left ACTIVE by the
+  // approve above (version bumped 1 -> 2 by activateMember) with nothing later
+  // depending on it staying active. Left active, it silently eats one seat of
+  // COMMITTEE_ROSTER_CAP (10) for the rest of this file's 10 activeMember()
+  // admissions — exactly enough to 409 the very last one. That 409 was masked
+  // for a long time by `activeMember()`'s non-null-asserted `r.token!`
+  // (undefined, not thrown) until the typecheck widening (issue #454) forced a
+  // real `"token" in r` narrowing that fails loudly instead.
+  expect((await admin.deactivateMemberAdmin(memberId, 2)).status).toBe(200);
 });
 
 // ── AC4 (session creation): UTC validation, roster snapshot, 4 dedup jobs ──
@@ -178,7 +201,7 @@ test("session creation: rejects bad date, timestamp ordering, date/briefOpensAt 
   const m1 = await activeMember("m1");
   const m2 = await activeMember("m2");
 
-  expect((await admin.createSessionAdmin({ ...sessionTimes("2026-08-01"), date: "not-a-date" })).status).toBe(400);
+  expect((await admin.createSessionAdmin({ ...sessionTimes("2026-08-01"), subjectId, date: "not-a-date" })).status).toBe(400);
   expect(
     (await admin.createSessionAdmin({ date: "2026-08-01", subjectId, briefOpensAt: "2026-08-02T09:00:00Z", windowClosesAt: "2026-08-01T10:00:00Z", publishAt: "2026-08-01T10:05:00Z" }))
       .status,

@@ -11,7 +11,7 @@
 // every DB assertion below is genuine coverage under the test-coverage policy.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
-import { sql } from "../../src/db/client.ts";
+import { jsonValue, sql } from "../../src/db/client.ts";
 import { resolveVaultAdapters, isPlaceholderAddress, resolveBuybackConfig, resolveTrackedAssets, resolvePropWallets } from "../../src/config.ts";
 import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } from "../../src/chain/base-rpc-client.ts";
 import { getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation } from "../../src/api/routes/dashboards.ts";
@@ -103,7 +103,7 @@ function mockChain(opts: { totalSupply?: bigint; failPrice?: boolean; failCall?:
       if (sel === CONVERT_TO_ASSETS) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: word(4_500_000_000n) }), { status: 200 });
     }
     throw new Error(`mockChain: unexpected ${body.method}`);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   return counter;
 }
 
@@ -375,7 +375,7 @@ test("allocation: with the row absent, getAllocation falls back to the committee
     await sql`
       INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
       VALUES (1, ${ALLOCATION_FRAMEWORK_SEED.asof}, ${ALLOCATION_FRAMEWORK_SEED.vault_contract},
-              ${sql.json(ALLOCATION_FRAMEWORK_SEED.buckets as unknown as object)})
+              ${sql.json(jsonValue(ALLOCATION_FRAMEWORK_SEED.buckets))})
       ON CONFLICT (id) DO NOTHING
     `;
     resetCaches();
@@ -403,7 +403,7 @@ test("buyback indexer advances a persisted scan cursor across empty windows and 
     if (body.method === "eth_blockNumber") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x" + LATEST.toString(16) }), { status: 200 });
     if (body.method === "eth_getLogs") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] }), { status: 200 });
     throw new Error(`unexpected ${body.method}`);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     await sql`DELETE FROM buyback_scan_state`;
     const r1 = await indexBuybacks();

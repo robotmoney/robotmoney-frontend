@@ -39,7 +39,7 @@ test("a transient GeckoTerminal 429 is retried and recovers", async () => {
   globalThis.fetch = (async () => {
     calls++;
     return calls === 1 ? new Response("limited", { status: 429, headers: { "Retry-After": "0" } }) : price(1900);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   expect(await fetchGeckoTokenPriceUsd(ADDRESS)).toBe(1900);
   expect(calls).toBe(2);
@@ -51,7 +51,7 @@ test("persistent GeckoTerminal 429 exhausts bounded retries and throws", async (
   globalThis.fetch = (async () => {
     calls++;
     return new Response("limited", { status: 429 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   await expect(fetchGeckoTokenPriceUsd(ADDRESS)).rejects.toThrow(/429/);
   expect(calls).toBe(3);
@@ -63,7 +63,7 @@ test("same-address concurrent and cached reads make one upstream request", async
     calls++;
     await new Promise((resolve) => setTimeout(resolve, 2));
     return price(1900);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   expect(await Promise.all([fetchGeckoTokenPriceUsd(ADDRESS), fetchGeckoTokenPriceUsd(ADDRESS)])).toEqual([1900, 1900]);
   expect(await fetchGeckoTokenPriceUsd(ADDRESS)).toBe(1900);
@@ -75,7 +75,7 @@ test("a hard GeckoTerminal 400 is not retried", async () => {
   globalThis.fetch = (async () => {
     calls++;
     return new Response("bad request", { status: 400 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   await expect(fetchGeckoTokenPriceUsd(ADDRESS)).rejects.toThrow(/400/);
   expect(calls).toBe(1);
@@ -89,7 +89,7 @@ test("concurrent distinct-address reads coalesce into ONE batched request with a
     urls.push(String(url));
     await new Promise((resolve) => setTimeout(resolve, 2));
     return batchPrice({ [ADDRESS]: 1900, [ROBOTMONEY]: 0.00001, [BNKR]: 0.0005 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   // The sampler's exact shape: a same-tick Promise.all fan-out over the legs.
   // ROBOTMONEY is passed checksummed to pin the lowercase URL normalization.
@@ -116,7 +116,7 @@ test("callers arriving while a request holds the serializer slot coalesce into O
     await new Promise((resolve) => setTimeout(resolve, 5));
     const requested = String(url).split("/token_price/")[1]!.split(",");
     return batchPrice(Object.fromEntries(requested.map((a) => [a, book[a]!])));
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const first = fetchGeckoTokenPriceUsd(ADDRESS);
   await new Promise((resolve) => setTimeout(resolve, 1)); // WETH's request now holds the slot
@@ -133,7 +133,7 @@ test("an address absent from a successful batch response rejects ONLY that addre
     calls++;
     await new Promise((resolve) => setTimeout(resolve, 2));
     return batchPrice({ [ADDRESS]: 1900, [BNKR]: 0.0005 }); // ROBOTMONEY missing
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const [weth, robot, bnkr] = await Promise.allSettled([
     fetchGeckoTokenPriceUsd(ADDRESS),
@@ -153,7 +153,7 @@ test("a failed batch request rejects EVERY address in it (equivalent to the old 
     calls++;
     await new Promise((resolve) => setTimeout(resolve, 2));
     return new Response("bad request", { status: 400 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const results = await Promise.allSettled([
     fetchGeckoTokenPriceUsd(ADDRESS),
@@ -175,7 +175,7 @@ test("DEMO_MODE selects the 1h demo cache window at call time: a 60s-old price i
   globalThis.fetch = (async () => {
     calls++;
     return price(1900 + calls); // distinct price per upstream call → provenance of each serve is observable
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     expect(await fetchGeckoTokenPriceUsd(ADDRESS)).toBe(1901); // cache written at t0
     Date.now = () => realNow() + 60_000; // 60s later: PAST the 30s default window, INSIDE the 1h demo window

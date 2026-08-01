@@ -57,7 +57,7 @@ test("a 429-then-200 sequence retries and ultimately returns the result", async 
   globalThis.fetch = (async () => {
     calls++;
     return calls === 1 ? status(429) : okResult("0xabc");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const out = await rpcRequest<string>("eth_call", [{}, "latest"], OK);
   expect(out).toBe("0xabc");
@@ -71,7 +71,7 @@ test("all three transient statuses (429/502/503/504) recover before returning", 
     globalThis.fetch = (async () => {
       calls++;
       return calls === 1 ? status(code) : okResult("0x1");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     const out = await rpcRequest<string>("eth_blockNumber", [], OK);
     expect(out).toBe("0x1");
     expect(calls).toBe(2);
@@ -86,7 +86,7 @@ test("Retry-After header (delta-seconds) is honored: the retry waits ~that long"
   globalThis.fetch = (async () => {
     calls++;
     return calls === 1 ? status(429, { "Retry-After": "0" }) : okResult("0xfeed");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const out = await rpcRequest<string>("eth_call", [{}, "latest"], OK);
   expect(out).toBe("0xfeed");
@@ -101,7 +101,7 @@ test("Retry-After as an HTTP-date in the past yields an immediate (0ms) retry", 
   globalThis.fetch = (async () => {
     calls++;
     return calls === 1 ? status(429, { "Retry-After": past }) : okResult("0x2");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   const out = await rpcRequest<string>("eth_call", [{}, "latest"], OK);
   expect(out).toBe("0x2");
   expect(calls).toBe(2);
@@ -113,7 +113,7 @@ test("persistent 429 with retries EXHAUSTED still THROWS (caller degrades to sta
   globalThis.fetch = (async () => {
     calls++;
     return status(429);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   await expect(rpcRequest<string>("eth_call", [{}, "latest"], OK)).rejects.toThrow(/Base RPC HTTP 429/);
   expect(calls).toBe(3); // initial attempt + 2 retries, then throw
@@ -125,7 +125,7 @@ test("BASE_RPC_MAX_RETRIES=0 disables retry: a single 429 throws immediately", a
   globalThis.fetch = (async () => {
     calls++;
     return status(429);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   await expect(rpcRequest<string>("eth_call", [{}, "latest"], OK)).rejects.toThrow(/Base RPC HTTP 429/);
   expect(calls).toBe(1);
 });
@@ -135,7 +135,7 @@ test("Base JSON-RPC -32016 over-rate-limit then success retries and returns the 
   globalThis.fetch = (async () => {
     calls++;
     return calls === 1 ? rpcError(-32016, "over rate limit") : okResult("0xabc");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const out = await rpcRequest<string>("eth_call", [{}, "latest"], OK);
   expect(out).toBe("0xabc");
@@ -148,7 +148,7 @@ test("persistent Base JSON-RPC -32016 exhausts retries and still throws", async 
   globalThis.fetch = (async () => {
     calls++;
     return rpcError(-32016, "over rate limit");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   await expect(rpcRequest<string>("eth_call", [{}, "latest"], OK)).rejects.toThrow(/-32016.*over rate limit/);
   expect(calls).toBe(3);
@@ -159,7 +159,7 @@ test("a non-transient HTTP status (400) throws IMMEDIATELY with no retry", async
   globalThis.fetch = (async () => {
     calls++;
     return status(400);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   await expect(rpcRequest<string>("eth_call", [{}, "latest"], OK)).rejects.toThrow(/Base RPC HTTP 400/);
   expect(calls).toBe(1); // no retry on a hard error
 });
@@ -169,7 +169,7 @@ test("HTTP 500 is treated as non-transient: throws immediately, no retry", async
   globalThis.fetch = (async () => {
     calls++;
     return status(500);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   await expect(rpcRequest<string>("eth_call", [{}, "latest"], OK)).rejects.toThrow(/Base RPC HTTP 500/);
   expect(calls).toBe(1);
 });
@@ -179,7 +179,7 @@ test("a hard JSON-RPC contract error throws IMMEDIATELY with no retry", async ()
   globalThis.fetch = (async () => {
     calls++;
     return rpcError(3, "execution reverted");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   await expect(rpcRequest<string>("eth_call", [{}, "latest"], OK)).rejects.toThrow(/execution reverted/);
   expect(calls).toBe(1);
 });
@@ -189,7 +189,7 @@ test("a 200 with a missing `result` throws IMMEDIATELY with no retry", async () 
   globalThis.fetch = (async () => {
     calls++;
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1 }), { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   await expect(rpcRequest<string>("eth_call", [{}, "latest"], OK)).rejects.toThrow(/missing result/);
   expect(calls).toBe(1);
 });
@@ -207,7 +207,7 @@ test("the concurrency cap bounds simultaneous in-flight fetches", async () => {
     await new Promise((r) => setTimeout(r, 5));
     live--;
     return okResult("0x0");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   // Launch far more requests than the cap all at once.
   await Promise.all(Array.from({ length: 24 }, () => rpcRequest<string>("eth_call", [{}, "latest"], OK)));
@@ -226,7 +226,7 @@ test("a lower concurrency cap is respected too (serialization proof, cap=1)", as
     await new Promise((r) => setTimeout(r, 2));
     live--;
     return okResult("0x0");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   await Promise.all(Array.from({ length: 8 }, () => rpcRequest<string>("eth_call", [{}, "latest"], OK)));
   expect(peak).toBe(1);
 });
@@ -241,7 +241,7 @@ test("the request timeout aborts an in-flight retry loop and throws (bounded wor
     // Respect the abort signal like real fetch: reject if already aborted.
     if (init?.signal?.aborted) throw new Error("aborted");
     return status(429);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   await expect(rpcRequest<string>("eth_call", [{}, "latest"], { rpcUrl: RPC, timeoutMs: 60 })).rejects.toThrow();
 });
 
@@ -319,7 +319,7 @@ test("multicall3Aggregate3 issues exactly ONE eth_call for a many-call batch and
     // Answer each sub-call with its index so ordering is verifiable.
     const results: Aggregate3Result[] = decoded.map((_c, i) => ({ success: true, returnData: word(BigInt(i)) }));
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: encodeAggregate3Result(results) }), { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const out = await multicall3Aggregate3(calls, { rpcUrl: RPC, timeoutMs: 5000 });
   expect(ethCalls).toBe(1); // twelve reads → ONE eth_call (the whole point)
@@ -333,7 +333,7 @@ test("multicall3Aggregate3 with no calls makes zero network requests", async () 
   globalThis.fetch = (async () => {
     ethCalls++;
     return okResult("0x");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   const out = await multicall3Aggregate3([], { rpcUrl: RPC });
   expect(out).toEqual([]);
   expect(ethCalls).toBe(0);

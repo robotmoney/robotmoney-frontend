@@ -66,13 +66,13 @@ describe("decodeUint256 (byte-exact fixtures)", () => {
 describe("ethCall transport", () => {
   test("returns the JSON-RPC result on success", async () => {
     globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x2a" }), { status: 200 })) as typeof fetch;
+      new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x2a" }), { status: 200 })) as unknown as typeof fetch;
     const result = await ethCall("0xabc", "0x18160ddd", { rpcUrl: "https://example.invalid" });
     expect(result).toBe("0x2a");
   });
 
   test("throws on a non-2xx HTTP status", async () => {
-    globalThis.fetch = (async () => new Response("bad gateway", { status: 502 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response("bad gateway", { status: 502 })) as unknown as typeof fetch;
     await expect(ethCall("0xabc", "0x18160ddd", { rpcUrl: "https://example.invalid" })).rejects.toThrow(/502/);
   });
 
@@ -80,19 +80,19 @@ describe("ethCall transport", () => {
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "execution reverted" } }), {
         status: 200,
-      })) as typeof fetch;
+      })) as unknown as typeof fetch;
     await expect(ethCall("0xabc", "0x18160ddd", { rpcUrl: "https://example.invalid" })).rejects.toThrow(/execution reverted/);
   });
 
   test("throws on a transport failure (network unreachable)", async () => {
     globalThis.fetch = (async () => {
       throw new Error("fetch failed: getaddrinfo ENOTFOUND");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     await expect(ethCall("0xabc", "0x18160ddd", { rpcUrl: "https://example.invalid" })).rejects.toThrow();
   });
 
   test("throws when the response carries no result", async () => {
-    globalThis.fetch = (async () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1 }), { status: 200 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1 }), { status: 200 })) as unknown as typeof fetch;
     await expect(ethCall("0xabc", "0x18160ddd", { rpcUrl: "https://example.invalid" })).rejects.toThrow(/missing result/);
   });
 });
