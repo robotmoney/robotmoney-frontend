@@ -74,9 +74,12 @@ describe("frontend route resolution", () => {
   // `layout: DASH_LAYOUT_VIEW` + `gated: true` metadata for router.js's
   // layout composition + dash-shell.js's gate, EXCEPT /submit — linked
   // directly off the gate screen itself, so it must be reachable pre-auth.
+  // /list (issue #384, P2.1) is the first of these routes to ship real
+  // content — it resolves to its own fragment now, everything else still
+  // points at the shared coming-soon placeholder.
   test("resolves every static dashboard route to the shared placeholder, gated, under the dash layout", () => {
     const gatedPaths = [
-      "/list", "/list2", "/list3", "/market", "/dashboard", "/agents",
+      "/list2", "/list3", "/market", "/dashboard", "/agents",
       "/lobster", "/vaults", "/wallets", "/methodology", "/about", "/ask-mr-roboto",
     ];
     for (const p of gatedPaths) {
@@ -86,6 +89,11 @@ describe("frontend route resolution", () => {
     // /market and /dashboard alias the same fragment (the original's own
     // aliasing, §4.1) — same view, same metadata.
     expect(viewFor("/market")).toBe(viewFor("/dashboard"));
+  });
+
+  test("/list (issue #384) resolves to its own real fragment, still gated under the dash layout", () => {
+    expect(viewFor("/list")).toBe("/views/dash/list.html");
+    expect(routeMetaFor("/list")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
   });
 
   test("/submit is public (reachable off the gate screen itself) even though it shares the dash layout", () => {
