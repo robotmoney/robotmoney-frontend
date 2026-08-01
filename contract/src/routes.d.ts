@@ -22,6 +22,7 @@ export const ROUTES: {
     waitlist: string;
     member: string;
     memberTakes: string;
+    memberProfile: string;
     subject: string;
     subjectSnapshots: string;
     sessions: string;

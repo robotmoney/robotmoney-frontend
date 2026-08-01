@@ -4,6 +4,7 @@ import * as ic from "../src/committee/domain.ts";
 import { COMMITTEE_ROSTER_CAP, getRosterCapacityStatus } from "../src/committee/domain.ts";
 import * as admin from "../src/committee/admin.ts";
 import { deliverSwarmNotification, type SwarmEmailTransport, type SwarmEmailMessage } from "../src/committee/notifications.ts";
+import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
 import { canonicalizeApplication } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -145,6 +146,10 @@ test("notify-on-seat-open — enqueues outbox + worker jobs on member deactivati
 
   expect(sentMessages.length).toBe(2);
   expect(sentMessages[0].subject).toContain("seat has opened");
+  // The apply link is built from the configured public origin (issue #322),
+  // not a hardcoded production URL — a staging/local waitlist notice must
+  // point back at the deployment that issued it, not always robotmoney.net.
+  expect(sentMessages[0].text).toContain(`${config.committeePublicBaseUrl}/committee/apply`);
 
   // Verify notified_at is stamped on waitlist rows
   const waitlistRows = await sql<{ email: string; notified_at: Date | null }[]>`

@@ -106,7 +106,7 @@ to rediscover:
 
 - **The origin port is `48787` and cannot be anything else** — the single fixed
   host port in the system (`scripts/stack/ports.ts:39`), pinned by
-  `bun run demo -- --stage`, which fails rather than falls back because the
+  `bun run demo:stage`, which fails rather than falls back because the
   tunnel routes that port and nothing else.
 - **The tunnel does not close the direct path.** Compose publishes `48787` on
   `0.0.0.0`, so the droplet's public IP answers there too, bypassing Cloudflare.
@@ -114,7 +114,7 @@ to rediscover:
   iptables `DOCKER-USER` rule; `ufw` will not do it, since `docker-proxy`
   publishes past it.
 
-Note also that a `--stage` origin serves a **demo** stack (`RM_ALLOW_INSECURE=1`,
+Note also that a pinned-port origin serves a **demo** stack (`RM_ALLOW_INSECURE=1`,
 `DEMO_MODE=1`, fixture-backed `/projects`), not a production one — see §5 for
 what a production deployment requires instead.
 

@@ -12,11 +12,15 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { config } from "../src/config.ts";
 import { liveProjectsDataSource } from "../src/projects/access/live-source.ts";
-import { _resetRpcConcurrencyForTests } from "../src/chain/base-rpc-client.ts";
+import { _resetRpcConcurrencyForTests, decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } from "../src/chain/base-rpc-client.ts";
+import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
 
 const realFetch = globalThis.fetch;
 
-const KNOBS = ["BASE_RPC_MAX_CONCURRENCY", "BASE_RPC_MAX_RETRIES", "BASE_RPC_RETRY_BASE_MS", "LIVE_FETCH_TIMEOUT_MS"] as const;
+const KNOBS = [
+  "BASE_RPC_MAX_CONCURRENCY", "BASE_RPC_MAX_RETRIES", "BASE_RPC_RETRY_BASE_MS", "LIVE_FETCH_TIMEOUT_MS",
+  "BASE_RPC_SOURCE", "PRICE_SOURCE", "WETH_ADDRESS", "WETH_POOL_ID",
+] as const;
 
 const VAULT = "0x" + "aa".repeat(20);
 // Base USDC — a STABLES member, so the underlying is pinned $1 and the read
@@ -49,11 +53,13 @@ interface SeenRequest {
 beforeEach(() => {
   process.env.BASE_RPC_RETRY_BASE_MS = "1"; // keep any backoff ~instant
   _resetRpcConcurrencyForTests();
+  _resetTokenPriceCacheForTests();
 });
 afterEach(() => {
   globalThis.fetch = realFetch;
   for (const k of KNOBS) delete process.env[k];
   _resetRpcConcurrencyForTests();
+  _resetTokenPriceCacheForTests();
 });
 
 test("(a) a 429 with Retry-After on a vault read is retried by the shared transport and the read succeeds", async () => {
@@ -119,6 +125,75 @@ test("(c) with BASE_RPC_MAX_CONCURRENCY=1 concurrent vault reads are serialized 
   const reads = await Promise.all(vaults.map((v) => liveProjectsDataSource.vaultErc4626Read(v, "base")));
   for (const r of reads) expect(r).toEqual({ totalAssetsRaw: "1234000000", decimals: 6, assetPriceUsd: 1 });
   expect(peak).toBe(1); // the module-level gate serialized 4×3 = 12 eth_calls
+});
+
+// ── walletBalanceUsd (issue #346) ────────────────────────────────────────────
+// Same discipline: fetch mocked only at the process boundary; the real
+// chain/wallet-valuation.ts machinery (Multicall3 getEthBalance + GeckoTerminal
+// token_price) executes, proving the projects wallet-balance read genuinely
+// reuses the shared prop-wallet valuation transport rather than a bespoke one.
+const AGGREGATE3 = "0x82ad56cb";
+const GET_ETH_BALANCE = "0x4d2301cc";
+const WALLET = "0x" + "cd".repeat(20);
+
+function mockEthBalanceAndPrice(nativeWei: bigint, priceUsd: number): { rpcCalls: number; geckoCalls: number } {
+  const counter = { rpcCalls: 0, geckoCalls: 0 };
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("geckoterminal.com")) {
+      counter.geckoCalls += 1;
+      const addrs = u.split("/token_price/")[1]!.toLowerCase().split(",");
+      const token_prices: Record<string, string> = {};
+      for (const addr of addrs) token_prices[addr] = String(priceUsd);
+      return new Response(JSON.stringify({ data: { attributes: { token_prices } } }), { status: 200 });
+    }
+    const body = JSON.parse(String(init?.body)) as { id?: number; method: string; params: [{ to: string; data: string }, string] };
+    expect(body.method).toBe("eth_call");
+    const { to, data } = body.params[0];
+    expect(to).toBe("0xcA11bde05977b3631167028862bE2a173976CA11"); // Multicall3
+    expect(data.slice(0, 10)).toBe(AGGREGATE3);
+    counter.rpcCalls += 1;
+    const calls = decodeAggregate3Calls(data);
+    const results: Aggregate3Result[] = calls.map((c) => {
+      expect(c.callData.slice(0, 10)).toBe(GET_ETH_BALANCE);
+      return { success: true, returnData: word(nativeWei) };
+    });
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: encodeAggregate3Result(results) }), { status: 200 });
+  }) as typeof fetch;
+  return counter;
+}
+
+test("(d) walletBalanceUsd(chain='base') reads native ETH via the shared Multicall3 transport, priced via GeckoTerminal", async () => {
+  const counter = mockEthBalanceAndPrice(2_000_000_000_000_000_000n, 2500); // 2 ETH @ $2500
+  const usd = await liveProjectsDataSource.walletBalanceUsd(WALLET, "base");
+  expect(usd).toBe(5000);
+  expect(counter.rpcCalls).toBe(1);
+  expect(counter.geckoCalls).toBe(1);
+});
+
+test("(e) walletBalanceUsd rejects (never fabricates a value) when the price read fails and no persisted fallback price exists", async () => {
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("geckoterminal.com")) return new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } });
+    const body = JSON.parse(String(init?.body)) as { id?: number; params: [{ data: string }, string] };
+    const calls = decodeAggregate3Calls(body.params[0].data);
+    const results: Aggregate3Result[] = calls.map(() => ({ success: true, returnData: word(1_000_000_000_000_000_000n) }));
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: encodeAggregate3Result(results) }), { status: 200 });
+  }) as typeof fetch;
+  process.env.GECKO_PRICE_MAX_RETRIES = "0";
+  await expect(liveProjectsDataSource.walletBalanceUsd(WALLET, "base")).rejects.toThrow();
+  delete process.env.GECKO_PRICE_MAX_RETRIES;
+});
+
+test("(f) walletBalanceUsd refuses a non-'base' chain without ever opening a socket (no live RPC/pricing path exists yet)", async () => {
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    throw new Error("must not fetch");
+  }) as typeof fetch;
+  await expect(liveProjectsDataSource.walletBalanceUsd(WALLET, "ethereum")).rejects.toThrow(/only covers chain "base"/);
+  await expect(liveProjectsDataSource.walletBalanceUsd(WALLET, "solana")).rejects.toThrow(/only covers chain "base"/);
+  expect(calls).toBe(0);
 });
 
 // CI grep (AC): the live source contains ZERO hand-rolled RPC construction —

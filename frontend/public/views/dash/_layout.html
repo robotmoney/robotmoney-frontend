@@ -1,0 +1,128 @@
+<!-- Analytics dashboard shell — issue #380 (P0.3/P0.4, docs/bot-analytics-ui-
+     port-plan.md §5.0): the DashboardLayout + PasswordGate composition every
+     gated dashboard route (frontend/public/assets/js/app/routes.js's
+     DASH_ROUTES) renders through. The router (router.js) fetches this
+     fragment ONCE per `layout: DASH_LAYOUT_VIEW` route and reuses it across
+     same-layout navigations — only `[data-outlet]` below is swapped, so this
+     component's own state (sidebar collapse, gate session) survives a route
+     change. Behavior lives in alpine/views/dash-shell.js (registered
+     "dashShell", composing in alpine/views/dash-gate.js's gate state) —
+     nothing here executes a fragment-local <script> (the router injects via
+     innerHTML, so inline scripts are dead; this is the same convention every
+     other buildless view follows).
+     class="a3" goes on this ONE root element, never <body> — dash.css is
+     entirely scoped under .a3 (issue #379, §2). -->
+<section class="a3 a3-shell" :class="collapsed && 'a3-shell--collapsed'" x-data="dashShell" x-init="init()" data-dash-shell>
+
+  <!-- Re-verifying a stored session token on mount (dash-gate.js's
+       initGate()) — render NOTHING until it resolves so a returning visitor
+       never sees a login-form flash before their session is confirmed
+       (§5.0 "session restore without flash"). x-show (not x-if/template) for
+       all three top-level states below: router.js's layout composition
+       synchronously queries `[data-outlet]` right after mounting this
+       fragment, and a `<template x-if>`'s content lives in an inert document
+       fragment until Alpine's own (microtask-deferred) processing clones it
+       out — that query would find nothing yet. x-show keeps every branch's
+       markup, including the outlet, in the real light DOM at all times. -->
+  <div class="a3-gate" x-show="verifying" data-dash-verifying>
+    <p class="data-label">Verifying…</p>
+  </div>
+
+  <!-- Gate: shown when the CURRENT route is gated and no valid session
+       exists yet. `gated` is re-derived per navigation by dashShell from
+       routeMetaFor() (routes.js), so an ungated route like /submit renders
+       the shell below even while unauthenticated. -->
+  <div class="a3-gate" x-show="!verifying && gated && !authed" x-cloak data-dash-gate>
+      <div class="a3-gate__card">
+        <div class="a3-gate__logo glow-cyan">
+          <svg class="a3-icon a3-icon--lg"><use href="/assets/img/dash-icons.svg#i-triangle"></use></svg>
+        </div>
+        <h1 class="a3-gate__title">RobotMoney</h1>
+        <p class="a3-gate__subtitle">Analytics Platform</p>
+
+        <p class="a3-gate__alert" x-show="loginError" x-cloak x-text="loginError" data-dash-login-error></p>
+
+        <form class="a3-gate__form" @submit.prevent="login()">
+          <div class="a3-gate__field">
+            <svg class="a3-gate__field-icon a3-icon"><use href="/assets/img/dash-icons.svg#i-lock"></use></svg>
+            <input
+              :type="showPassword ? 'text' : 'password'"
+              x-model="password"
+              class="a3-gate__input"
+              placeholder="Enter access key"
+              autocomplete="current-password"
+              autofocus
+              aria-label="Access key"
+              data-dash-password-input
+            />
+            <button
+              type="button"
+              class="a3-gate__toggle"
+              @click="togglePasswordVisible()"
+              :aria-label="showPassword ? 'Hide access key' : 'Show access key'"
+              data-dash-toggle-password
+            >
+              <svg class="a3-icon" x-show="!showPassword"><use href="/assets/img/dash-icons.svg#i-eye"></use></svg>
+              <svg class="a3-icon" x-show="showPassword" x-cloak><use href="/assets/img/dash-icons.svg#i-eye-off"></use></svg>
+            </button>
+          </div>
+          <button type="submit" class="a3-gate__submit" :disabled="!password.trim() || verifying" data-dash-submit>
+            <span x-text="verifying ? 'VERIFYING...' : 'ACCESS DASHBOARD'"></span>
+          </button>
+        </form>
+
+        <a href="/submit" class="a3-gate__link" data-dash-submit-link>
+          <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-send"></use></svg>
+          Submit a community commit
+        </a>
+      </div>
+  </div>
+
+  <!-- Shell: sidebar + topbar + outlet, shown once the current route needs
+       no gate, or the gate has passed. -->
+  <div style="display: flex; width: 100%;" x-show="!verifying && (!gated || authed)" x-cloak data-dash-frame>
+      <aside class="a3-shell__sidebar" data-dash-sidebar>
+        <div class="a3-shell__brand">
+          <div class="a3-shell__logo">
+            <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-triangle"></use></svg>
+          </div>
+          <div class="a3-shell__brand-text">
+            <span class="a3-shell__brand-name">RobotMoney</span>
+            <span class="a3-shell__brand-sub">Analytics</span>
+          </div>
+        </div>
+
+        <nav class="a3-shell__nav" aria-label="Dashboard">
+          <template x-for="item in navItems" :key="item.href">
+            <a :href="item.href" class="a3-shell__nav-link" :class="isActive(item.href) && 'is-active'" data-dash-nav-link>
+              <svg class="a3-icon a3-shell__nav-icon"><use :href="'/assets/img/dash-icons.svg#i-' + item.icon"></use></svg>
+              <span class="a3-shell__nav-label" x-text="item.label"></span>
+            </a>
+          </template>
+        </nav>
+
+        <div class="a3-shell__tools">
+          <template x-for="item in toolsItems" :key="item.href">
+            <a :href="item.href" class="a3-shell__nav-link" :class="isActive(item.href) && 'is-active'" data-dash-nav-link>
+              <svg class="a3-icon a3-shell__nav-icon"><use :href="'/assets/img/dash-icons.svg#i-' + item.icon"></use></svg>
+              <span class="a3-shell__nav-label" x-text="item.label"></span>
+            </a>
+          </template>
+          <button type="button" class="a3-shell__signout" @click="signOut()" data-dash-signout>
+            <svg class="a3-icon a3-shell__nav-icon"><use href="/assets/img/dash-icons.svg#i-log-out"></use></svg>
+            <span class="a3-shell__nav-label">Sign Out</span>
+          </button>
+        </div>
+      </aside>
+
+      <div class="a3-shell__frame">
+        <header class="a3-shell__topbar">
+          <button type="button" class="a3-shell__hamburger" @click="toggleCollapsed()" aria-label="Toggle sidebar" data-dash-collapse-toggle>
+            <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-menu"></use></svg>
+          </button>
+          <span class="a3-shell__title" x-text="pageTitle()" data-dash-topbar-title></span>
+        </header>
+        <main class="a3-shell__main" data-outlet></main>
+      </div>
+    </div>
+</section>

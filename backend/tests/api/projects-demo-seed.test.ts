@@ -41,11 +41,16 @@ test("seedDemoProjects populates a gated, faceted, sparkline-bearing directory",
   expect(projects.some((p) => p.facets.vault)).toBe(true);
   expect(projects.some((p) => p.facets.x402)).toBe(true);
 
-  // At least one project draws a 30d sparkline and one earns non-zero 30d revenue.
+  // At least one project draws a 30d sparkline.
   const withSpark = projects.filter((p) => p.sparkline.length > 0);
   expect(withSpark.length).toBeGreaterThan(0);
   expect(withSpark[0].sparkline.length).toBe(30);
-  expect(projects.some((p) => p.revenue30d > 0)).toBe(true);
+
+  // Revenue is no longer surfaced on the DTO (issue #346), but the demo seed
+  // still writes real agent_revenue_daily rows (feeding the sparkline
+  // fallback for tokenless projects) — assert that directly against the table.
+  const [{ n: revenueRows }] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM agent_revenue_daily WHERE revenue_usd > 0`;
+  expect(revenueRows).toBeGreaterThan(0);
 
   // Tokenless x402 project has a sparkline length 30 from activity.
   const x402Coinless = projects.find((p) => p.slug === "coinbase-x402-facilitator");

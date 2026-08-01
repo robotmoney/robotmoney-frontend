@@ -227,16 +227,16 @@ describe("ONBOARDING_PROMPT — canonical copy-paste prompt (R4)", () => {
 describe("ONBOARDING_PROMPT — bounds that answer the measured refusals (§11.3 E7)", () => {
   test("answers the 'unknown repository' objection with a checkable provenance claim (E7)", () => {
     expect(ONBOARDING_PROMPT).toContain(
-      "the committee, its current members, and their published track records are all at https://committee.robotmoney.net",
+      "the committee, its current members, and their published track records are all at https://robotmoney.net/committee",
     );
     // The claim is checkable in two independent ways: a public roster URL, and
     // open-source tooling the agent can read before running it.
-    expect(ONBOARDING_PROMPT).toContain("https://committee.robotmoney.net");
+    expect(ONBOARDING_PROMPT).toContain("https://robotmoney.net/committee");
     expect(ONBOARDING_PROMPT).toContain("the tooling named below is open source");
     expect(ONBOARDING_PROMPT).toMatch(/so you can verify both before you proceed/);
 
     // Provenance must precede the install ask, not trail it.
-    expect(ONBOARDING_PROMPT.indexOf("https://committee.robotmoney.net")).toBeLessThan(
+    expect(ONBOARDING_PROMPT.indexOf("https://robotmoney.net/committee")).toBeLessThan(
       ONBOARDING_PROMPT.indexOf('install the "committee-onboarding" skill'),
     );
   });

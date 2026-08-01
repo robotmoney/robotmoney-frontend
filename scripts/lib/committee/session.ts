@@ -363,7 +363,7 @@ export async function runRegimeClassify(
 export async function runSession(
   subject: typeof SUBJECTS[0],
   sessionIndex: number,
-  opts?: { prevOutcome?: string; rail?: SessionRail; onProgress?: SessionProgress },
+  opts?: { prevOutcome?: string; rail?: SessionRail; onProgress?: SessionProgress; regimeAsof?: string },
 ) {
   const prevOutcome = opts?.prevOutcome;
   const onProgress = opts?.onProgress;
@@ -394,12 +394,24 @@ export async function runSession(
   const emitSession = (state: string, sid?: number) =>
     onProgress?.({ type: "session", state, sessionId: sid, subject: subject.id, date });
 
-  // Regime is already seeded by the first session; later ones self-seed for
-  // their own date — which is now the SESSION's date, read back from the
-  // database, rather than one this process picked. (The subject itself is
-  // ensured above, before the session that references it.)
+  // Regime is already seeded by the first session; later ones self-seed. The
+  // subject itself is ensured ABOVE, before the session that references it —
+  // moving it here would reintroduce the foreign-key failure a clean database
+  // hits on its first session.
+  //
+  // `regimeAsof` (defaulting to the session's own date) stays a SEPARATE knob
+  // from the session date, and is still worth having after 0022 even though the
+  // reason it was introduced is gone. A regime SNAPSHOT classifies real market
+  // indicators, so it can never be produced for a date that has not happened —
+  // fetchRegimeSnapshots enforces `date <= today` (issue #382). It used to be
+  // possible to violate that from here, because a session could be LABELLED
+  // with any demo-narrative date, including tomorrow. It no longer can be:
+  // Postgres stamps convened_at and derives the date, so a session date is
+  // always "now" and can never run ahead of the boundary. What survives is the
+  // ability to pin a classification to a different day than the sitting — e.g.
+  // a session convened just after midnight UTC reading yesterday's snapshot.
   if (sessionIndex > 0) {
-    await runRegimeClassify(date, rail);
+    await runRegimeClassify(opts?.regimeAsof ?? date, rail);
   }
 
   // Seed the reference-shaped subject fixtures (subject row + subject snapshot the
@@ -499,9 +511,13 @@ export async function runSession(
 }
 
 async function main() {
+  // `today` is this run's regime as-of day, NOT a session date — the database
+  // dates sessions (0022). The banner used to read `today → tomorrow` because
+  // session 2 was labelled a day ahead; it no longer is, and printing a date
+  // range the run cannot produce would be the first thing to mislead a reader
+  // of the log.
   const today = new Date().toISOString().slice(0, 10);
-  const tomorrow = new Date(Date.now() + 86400_000).toISOString().slice(0, 10);
-  console.log(`\n=== Committee REST E2E (${today} → ${tomorrow}) ===`);
+  console.log(`\n=== Committee REST E2E (regime as-of ${today}; sessions dated by the database) ===`);
 
   // The member-container rail for this stack (issue #361 Phase 2), resolved
   // once from this process's environment — the demo readiness gate hands this
@@ -582,9 +598,17 @@ async function main() {
   });
   console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
-  // Session 2: next day, different subject (demonstrates rotation + cross-session
-  // awareness). Eos (added to the roster mid-run above) enrolls and
+  // Session 2: a SECOND sitting, different subject (demonstrates rotation +
+  // cross-session awareness). Eos (added to the roster mid-run above) enrolls and
   // participates in its own container alongside the original members.
+  //
+  // It used to be dated `tomorrow` to prove the infra handles a session dated
+  // ahead of session 1, with `regimeAsof: today` pinning the classification back
+  // to a real day (a snapshot dated tomorrow can never be served — #382 enforces
+  // `date <= today`). Neither is expressible now, and neither is needed: since
+  // 0022 the DATABASE dates a session, so two sittings on one day are simply two
+  // rows with different convened_at rather than one row relabelled to a day that
+  // has not happened. The rotation this proves is the real one.
   await runSession(SUBJECTS[1], 2, { prevOutcome: s1.pub.session.synthesis, rail });
 
   // Verify list_sessions returns both sessions

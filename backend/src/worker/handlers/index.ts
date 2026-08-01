@@ -40,6 +40,12 @@ export const handlers: Record<string, JobHandler> = {
   "committee.close_window": committee.closeWindow,
   "committee.aggregate": committee.aggregateSession,
   "committee.publish": committee.publishSession,
+  // Three notification kinds, one delivery body. They stay separate registry
+  // entries rather than collapsing into a shared "committee.send_notification"
+  // because `kind` is what an operator greps in `jobs`/`job_runs` when a mail
+  // did not arrive, and "the receipt lane is backed up" is a different incident
+  // from "approvals are not going out".
+  "committee.send_application_received_notification": committee.sendApplicationReceivedNotification,
   "committee.send_activation_notification": committee.sendActivationNotification,
   "committee.send_seat_open_notification": committee.sendSeatOpenNotification,
   // projects "Agentic Economy Ecosystem" data pipelines (issue #87). Ported from

@@ -164,30 +164,53 @@ export async function refreshCoins(
 }
 
 // ── Wallet refresh ───────────────────────────────────────────────────────────
+// Issue #346: each wallet degrades INDEPENDENTLY. Previously a single wallet's
+// read failure (e.g. an unsupported chain, or a transient RPC error) caught at
+// the loop level and aborted the WHOLE run — every other wallet's balance,
+// including ones on a chain with a real live path, stayed stuck at its last
+// value even though nothing was wrong with it. Now a failing wallet keeps its
+// last-persisted balance_usd (nothing fabricated) while every wallet whose
+// read succeeded still updates.
 export async function refreshWallets(
   _payload: Record<string, unknown> = {},
   source: ProjectsDataSource = selectProjectsDataSource(),
 ): Promise<HandlerResult> {
   const wallets = await sql<{ id: string; address: string | null; chain: string | null }[]>`
     SELECT id, address, chain FROM tracked_wallets WHERE is_active = true AND address IS NOT NULL`;
-  if (!wallets.length) return { ok: true, status: "ok", updated: 0 };
+  if (!wallets.length) return { ok: true, status: "ok", updated: 0, failed: 0 };
 
   const updates: { id: string; balance: number }[] = [];
-  try {
-    for (const w of wallets) {
+  let failed = 0;
+  for (const w of wallets) {
+    try {
       const balance = await source.walletBalanceUsd(w.address as string, w.chain ?? "base");
       updates.push({ id: w.id, balance });
+    } catch (err) {
+      failed += 1;
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[projects.refresh_wallets] wallet ${w.id} live read failed, keeping last-persisted balance (degraded):`, message);
     }
-  } catch (err) {
-    return degraded("refresh_wallets", err, { updated: 0 });
   }
 
-  await sql.begin(async (tx) => {
-    for (const u of updates) {
-      await tx`UPDATE tracked_wallets SET balance_usd = ${u.balance}, last_tx_at = now(), refreshed_at = now() WHERE id = ${u.id}`;
-    }
-  });
-  return { ok: true, status: "ok", updated: updates.length };
+  if (updates.length) {
+    await sql.begin(async (tx) => {
+      for (const u of updates) {
+        await tx`UPDATE tracked_wallets SET balance_usd = ${u.balance}, last_tx_at = now(), refreshed_at = now() WHERE id = ${u.id}`;
+      }
+    });
+  }
+
+  if (failed === 0) return { ok: true, status: "ok", updated: updates.length, failed: 0 };
+  // Some (or all) wallets degraded. `ok` must reflect ANY per-wallet failure
+  // (not "did at least one wallet succeed") so it stays consistent with every
+  // other handler's ok<->status:"degraded" pairing and with loop.ts's
+  // isDegradedResult gate, which keys retry/backoff/admin-visibility purely
+  // off `ok === false`. A partial failure that also reported ok:true here
+  // fell through to the ordinary success path (status='succeeded', last_error
+  // cleared, no backoff, invisible to GET /api/admin/runs?status=degraded) —
+  // and for wallets whose chain has no live RPC path wired yet (see
+  // projects/access/live-source.ts), that failure is permanent, not transient.
+  return { ok: false, status: "degraded", updated: updates.length, failed };
 }
 
 // ── Revenue sync (virtuals fee revenue + x402 volume rollup) ─────────────────

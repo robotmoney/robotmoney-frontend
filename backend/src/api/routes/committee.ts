@@ -18,6 +18,7 @@ import {
   parseSubmission,
   readJsonObject,
   requiredString,
+  validateMemberProfile,
   validateSigningDraft,
   validateSubmission,
 } from "../validation.ts";
@@ -39,6 +40,7 @@ function templateRe(template: string, paramRe: Record<string, string> = {}): Reg
 const RE_SUBJECT_SNAPSHOTS = templateRe(C.subjectSnapshots); // /api/committee/subjects/:id/snapshots
 const RE_SUBJECT = templateRe(C.subject); // /api/committee/subjects/:id
 const RE_MEMBER_TAKES = templateRe(C.memberTakes); // /api/committee/members/:id/takes — checked before the plain member-detail route below, same reason as RE_SUBJECT_SNAPSHOTS vs RE_SUBJECT
+const RE_MEMBER_PROFILE = templateRe(C.memberProfile); // /api/committee/members/:id/profile — POST only, so no ordering conflict with the GET member-detail dispatcher below
 const RE_SESSION = templateRe(C.session); // /api/committee/sessions/:date/:subject
 // /api/committee/sessions/:id — ONE segment, so it cannot overlap the
 // two-segment date/subject form above; the order of the two tests below is
@@ -135,6 +137,23 @@ export async function handleCommittee(req: Request, url: URL): Promise<{ status:
     const id = Number(p.split("/").pop());
     const memo = await ic.getMemo(id);
     return { status: memo ? 200 : 404, body: memo ?? { error: "not found" } };
+  }
+
+  // Self-service profile fill-in (issue #325): apply only ever collects
+  // {name, contact, lens?, publicKey} (§11 R6, deliberately minimal — D21), so
+  // this is the only path by which an admitted member acquires a
+  // tagline/mandate/biases/voiceMd/mode/operator/avatar. Bearer-authenticated,
+  // same actor as memos/submit above; the path :id must be the token's OWN
+  // member id (checked in the domain layer) — it can never write another
+  // member's profile. Partial: only the fields present in the body change.
+  if (m === "POST" && RE_MEMBER_PROFILE.test(p)) {
+    const token = bearer(req);
+    if (!token) return { status: 401, body: { error: "missing bearer token" } };
+    const id = decodeURIComponent(p.split("/")[4] ?? "");
+    const res = validateMemberProfile(await readJsonObject(req));
+    if (!res.ok) return { status: 400, body: { error: res.error } };
+    const updated = await ic.updateMemberProfile(token, id, res.data);
+    return { status: updated.status, body: updated };
   }
 
   // Token verification (used by the MCP OAuth token endpoint to validate

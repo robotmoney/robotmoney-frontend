@@ -1,0 +1,201 @@
+<!-- Dash UI styleguide fixture — issue #379 (docs/bot-analytics-ui-port-plan.md
+     §2, work items P0.1/P0.2). NOT a real dashboard page: a single control
+     surface that renders every dash.css component class + every alpine/
+     dash-ui.js primitive, per the plan's own P0.1/P0.2 test plan ("Style-guide
+     fixture fragment renders all classes; visual golden" / "Each primitive
+     demonstrated on the styleguide fixture; keyboard/esc close on
+     dialog/sheet"). Noindexed (seo.js) and unlinked from nav — a dev/test
+     fixture, not a route a real user reaches. Every `data-sg-*` attribute
+     below is a stable hook for frontend/test/browser/dash-styleguide.spec.ts;
+     it carries no styling. -->
+<!-- Top padding matches the sitewide non-hero convention (.rv/.cv in
+     views.css: `padding: 9rem 1.5rem 6rem`) — the shared nav is
+     `position: fixed` (components.css), so any view without its own hero
+     needs this much clearance or its heading renders behind the nav bar. -->
+<section class="a3" data-sg-root x-data="dashStyleguide()"
+  style="padding: 9rem 1.5rem 6rem; max-width: 72rem; margin: 0 auto;">
+  <h1>Dash UI styleguide</h1>
+  <p style="color: hsl(var(--muted-foreground)); margin: 0.25rem 0 2rem;">
+    Every <code>.a3</code>-scoped component + primitive in one fixture — P0.1/P0.2 (issue #379).
+  </p>
+
+  <!-- Typography -->
+  <section data-sg="typography" style="margin-bottom: 2.5rem;">
+    <h2>Typography</h2>
+    <h3>Heading (JetBrains Mono 700)</h3>
+    <p class="data-label">Data label</p>
+    <p class="data-value">$1,234.56</p>
+  </section>
+
+  <!-- Metric cards + glows -->
+  <section data-sg="metric-cards" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:1rem; margin-bottom:2.5rem;">
+    <div class="metric-card glow-cyan">
+      <span class="data-label">OpenClaw Agents</span>
+      <span class="data-value">128</span>
+    </div>
+    <div class="metric-card glow-purple">
+      <span class="data-label">Lobster Coins</span>
+      <span class="data-value">42</span>
+    </div>
+    <div class="metric-card">
+      <span class="data-label">Vault TVL</span>
+      <span class="data-value">$4.2M</span>
+    </div>
+  </section>
+
+  <!-- Status + badges -->
+  <section data-sg="status" style="display:flex; flex-wrap:wrap; gap:0.75rem; align-items:center; margin-bottom:2.5rem;">
+    <h2 style="width:100%;">Status + badges</h2>
+    <span class="status-active">Active</span>
+    <span class="status-inactive">Inactive</span>
+    <span class="a3-badge a3-badge--cyan">Agent</span>
+    <span class="a3-badge a3-badge--purple">Coin</span>
+    <span class="a3-badge a3-badge--green">Vault</span>
+    <span class="a3-badge a3-badge--amber">Pending</span>
+    <span class="a3-badge a3-badge--destructive">Error</span>
+  </section>
+
+  <!-- Tabs -->
+  <section data-sg="tabs" x-data="a3Tabs('all')" style="margin-bottom:2.5rem;">
+    <h2>Tabs</h2>
+    <div class="a3-tabs" role="tablist">
+      <button type="button" class="a3-tab" :class="isActive('all') ? 'is-active' : ''" @click="select('all')">All</button>
+      <button type="button" class="a3-tab" :class="isActive('agents') ? 'is-active' : ''" @click="select('agents')">Agents</button>
+      <button type="button" class="a3-tab" :class="isActive('coins') ? 'is-active' : ''" @click="select('coins')">Coins</button>
+    </div>
+    <p data-sg-active-tab x-text="active" style="margin-top:0.5rem; color: hsl(var(--muted-foreground)); font-size:0.8rem;"></p>
+  </section>
+
+  <!-- Toggle group -->
+  <section data-sg="toggle-group" x-data="a3ToggleGroup('30d')" style="margin-bottom:2.5rem;">
+    <h2>Toggle group</h2>
+    <div class="a3-toggle-group">
+      <button type="button" class="a3-toggle" :class="isActive('30d') ? 'is-active' : ''" @click="select('30d')">30D</button>
+      <button type="button" class="a3-toggle" :class="isActive('90d') ? 'is-active' : ''" @click="select('90d')">90D</button>
+      <button type="button" class="a3-toggle" :class="isActive('1y') ? 'is-active' : ''" @click="select('1y')">1Y</button>
+    </div>
+  </section>
+
+  <!-- Switch -->
+  <section data-sg="switch" x-data="a3Switch(true)" style="margin-bottom:2.5rem;">
+    <h2>Switch</h2>
+    <label class="a3-switch" :class="checked ? 'is-on' : ''" data-sg-switch @click="toggle()">
+      <span class="a3-switch-track"><span class="a3-switch-thumb"></span></span>
+      <span class="a3-switch-label" data-sg-switch-label x-text="checked ? 'Show unverified (on)' : 'Show unverified (off)'"></span>
+    </label>
+  </section>
+
+  <!-- Select -->
+  <section data-sg="select"
+    x-data="a3Select([{value:'score',label:'Score'},{value:'x402',label:'x402 Vol'},{value:'balance',label:'Balance'}], 'score')"
+    style="margin-bottom:2.5rem; position:relative;">
+    <h2>Select</h2>
+    <div class="a3-select">
+      <button type="button" class="a3-select-trigger" data-sg-select-trigger @click="toggle()" @keydown.escape="close()">
+        <span data-sg-select-label x-text="label()"></span>
+        <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-arrow-up-down"></use></svg>
+      </button>
+      <div class="a3-select-list" data-sg-select-list x-show="open" x-cloak @click.outside="close()">
+        <template x-for="opt in options" :key="opt.value">
+          <button type="button" class="a3-select-option" :class="opt.value === value ? 'is-active' : ''" @click="choose(opt.value)" x-text="opt.label"></button>
+        </template>
+      </div>
+    </div>
+  </section>
+
+  <!-- Progress + skeleton -->
+  <section data-sg="progress-skeleton" style="margin-bottom:2.5rem; display:flex; flex-direction:column; gap:0.75rem; max-width:20rem;">
+    <h2>Progress + skeleton</h2>
+    <div class="a3-progress" data-sg-progress><div class="a3-progress-bar" style="width:64%"></div></div>
+    <div class="a3-skeleton" data-sg-skeleton style="height:0.85rem; width:70%"></div>
+    <div class="a3-skeleton" style="height:0.85rem; width:45%"></div>
+  </section>
+
+  <!-- Tooltip -->
+  <section data-sg="tooltip" style="margin-bottom:2.5rem;">
+    <h2>Tooltip</h2>
+    <span x-a3-tooltip="'26-week token price trend'" data-sg-tooltip-trigger
+      style="border-bottom:1px dotted hsl(var(--muted-foreground)); cursor:help;">Hover / focus me</span>
+  </section>
+
+  <!-- Dialog -->
+  <section data-sg="dialog" x-data="a3Dialog()" style="margin-bottom:2.5rem;">
+    <h2>Dialog</h2>
+    <button type="button" class="a3-toggle" data-sg-open-dialog @click="show()">Open dialog</button>
+    <div class="a3-overlay" data-sg-dialog-overlay x-show="open" x-cloak @click.self="hide()" @keydown.escape.window="hide()">
+      <div class="a3-dialog" role="dialog" aria-modal="true" data-sg-dialog>
+        <button type="button" class="a3-dialog-close" data-sg-close-dialog @click="hide()" aria-label="Close">×</button>
+        <h3>$ROBOTMONEY</h3>
+        <p class="data-label">Price</p>
+        <p class="data-value">$0.042</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Sheet -->
+  <section data-sg="sheet" x-data="a3Sheet('xl')" style="margin-bottom:2.5rem;">
+    <h2>Sheet</h2>
+    <button type="button" class="a3-toggle" data-sg-open-sheet @click="show()">Open sheet</button>
+    <div class="a3-sheet-overlay" data-sg-sheet-overlay x-show="open" x-cloak @click.self="hide()" @keydown.escape.window="hide()">
+      <div class="a3-sheet a3-sheet--xl" data-sg-sheet>
+        <button type="button" class="a3-sheet-close" data-sg-close-sheet @click="hide()" aria-label="Close">×</button>
+        <h3>Evidence</h3>
+        <p class="data-label">Wallet proof</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Toast -->
+  <section data-sg="toast" style="margin-bottom:2.5rem;">
+    <h2>Toast</h2>
+    <button type="button" class="a3-toggle" data-sg-fire-toast @click="$store.a3Toast.push('Copied to clipboard', 'success')">Fire toast</button>
+  </section>
+  <div class="a3-toast-viewport" data-sg-toast-viewport>
+    <template x-for="t in $store.a3Toast.items" :key="t.id">
+      <div class="a3-toast" :class="t.tone === 'success' ? 'a3-toast--success' : ''" x-text="t.message"></div>
+    </template>
+  </div>
+
+  <!-- Copy button (reuses the site-wide data-copy handler, main.js) -->
+  <section data-sg="copy-button" style="margin-bottom:2.5rem;">
+    <h2>Copy button</h2>
+    <button type="button" class="a3-copy-btn" data-sg-copy-button data-copy="0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd">
+      <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-copy"></use></svg>
+      <span data-copy-label>0x4f83…b49dd</span>
+    </button>
+  </section>
+
+  <!-- Table shell -->
+  <section data-sg="table" style="margin-bottom:2.5rem;">
+    <h2>Table shell</h2>
+    <div class="a3-table-wrap">
+      <table class="a3-table">
+        <thead><tr>
+          <th aria-sort="descending" class="is-sorted">Name</th>
+          <th>Type</th>
+          <th>Balance</th>
+        </tr></thead>
+        <tbody>
+          <tr><td class="is-sorted">agent-01</td><td><span class="a3-badge a3-badge--cyan">Agent</span></td><td>$12,400</td></tr>
+          <tr><td class="is-sorted">agent-02</td><td><span class="a3-badge a3-badge--cyan">Agent</span></td><td>$8,220</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Scroll area -->
+  <section data-sg="scroll-area" style="margin-bottom:2.5rem;">
+    <h2>Scroll area</h2>
+    <div class="a3-scroll-area scrollbar-thin" data-sg-scroll-area style="max-height:6rem; border:1px solid hsl(var(--border)); border-radius:var(--radius); padding:0.5rem;">
+      <p>Row one</p><p>Row two</p><p>Row three</p><p>Row four</p><p>Row five</p><p>Row six</p>
+    </div>
+  </section>
+
+  <!-- Icon sprite -->
+  <section data-sg="icons" style="display:flex; flex-wrap:wrap; gap:0.75rem;">
+    <h2 style="width:100%;">Icon sprite</h2>
+    <template x-for="name in iconNames" :key="name">
+      <svg class="a3-icon a3-icon--lg" data-sg-icon><use :href="`/assets/img/dash-icons.svg#i-${name}`"></use></svg>
+    </template>
+  </section>
+</section>

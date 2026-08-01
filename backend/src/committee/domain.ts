@@ -2,7 +2,7 @@
 // enforcement, signature verification, aggregation). The REST handlers, the MCP
 // server, the worker, and the dev driver all call these; they never diverge.
 import { canonicalizeApplication, classifyRegime, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
-import { config } from "../config.ts";
+import { config, resolveCommitteeNotificationEmailFrom } from "../config.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { hashKey } from "../lib/keys.ts";
 import {
@@ -11,7 +11,7 @@ import {
   verifyClaimChallengeSignature,
   verifySubmissionSignature,
 } from "../lib/signing.ts";
-import { enqueueActivationNotification } from "./notifications.ts";
+import { enqueueActivationNotification, enqueueApplicationReceivedNotification } from "./notifications.ts";
 import {
   day,
   instant,
@@ -518,6 +518,12 @@ export async function applyMember(input: ApplyInput) {
         SET payload = ${tx.json(input as any)}, status = 'pending', reviewed_at = NULL
         WHERE member_id = ${memberId}`;
       await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('public:apply', 'apply_refresh', ${tx.json({ memberId })})`;
+      // Re-apply gets the receipt too, and that is the case it matters most for:
+      // the usual reason an operator runs the skill a second time with the same
+      // key is that the first run's member id is gone from their terminal. See
+      // enqueueApplicationReceivedNotification for how the re-send is armed
+      // against the UNIQUE (kind, member_id) row that already exists.
+      await sendApplicationReceipt(tx, memberId, input.name, input.contact);
       return { ok: true, status: 201, memberId, memberStatus: "applied" as const };
     }
 
@@ -528,8 +534,43 @@ export async function applyMember(input: ApplyInput) {
     await tx`INSERT INTO committee_applications (member_id, payload, status) VALUES (${memberId}, ${tx.json(input as any)}, 'pending')`;
     // actor is the request source, NOT the self-asserted body identity.
     await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('public:apply', 'apply', ${tx.json({ memberId })})`;
+    await sendApplicationReceipt(tx, memberId, input.name, input.contact);
     return { ok: true, status: 201, memberId, memberStatus: "applied" as const };
   });
+}
+
+// Queue the apply-time receipt carrying the status-page URL, on the same
+// transaction as the application itself so the row can never exist without its
+// email (or the email without the row). Delivery is the worker's problem: the
+// outbox write is complete the moment this transaction commits, so an unreachable
+// or unconfigured mail transport costs a retry, never an application.
+//
+// The one thing this will not do is fail the application. Every other caller of
+// the notification module throws on an unset COMMITTEE_NOTIFICATION_EMAIL_FROM,
+// which is right for them: activate is an admin action and seat-open runs behind
+// one, so a loud failure lands in front of someone who can fix the env. Apply is
+// the public front door. Turning a sender misconfiguration into a 500 on every
+// inbound application would cost us the applicants themselves, which is a strictly
+// worse outcome than a missing receipt, so we check the sender first and skip
+// rather than throw. The route already refuses applications without a contact
+// email, so `recipient` is a real address by the time we get here.
+//
+// `memberName` comes straight off the application rather than being read back
+// from the row we just wrote: it is the same value either way, and parseApply has
+// already trimmed it and refused an empty one, so there is nothing a re-select
+// would add except a query.
+//
+// Reads resolveCommitteeNotificationEmailFrom() live rather than the frozen
+// `config.committeeNotificationEmailFrom` singleton: config is computed once at
+// module load and shared by the whole process, so a test-process value set
+// before any import ever runs can never be observed as unset later. Reading the
+// env at call time is what lets a test exercise this skip branch by clearing
+// COMMITTEE_NOTIFICATION_EMAIL_FROM around a single request, in-process, with no
+// module reload — real deployments never mutate this env after boot, so the
+// call-time read is behaviorally identical to the frozen one there.
+async function sendApplicationReceipt(tx: DbHandle, memberId: string, memberName: string, recipient: string): Promise<void> {
+  if (!resolveCommitteeNotificationEmailFrom()) return;
+  await enqueueApplicationReceivedNotification(tx, memberId, memberName, recipient);
 }
 
 // Public, privacy-safe application-status projection (Issue #237).
@@ -604,9 +645,14 @@ export async function getApplyStatus(memberId: string): Promise<ApplicationStatu
 // a token hash.
 export async function activateMember(memberId: string) {
   return await sql.begin(async (tx) => {
+    // `name` rides along on the row we are already locking, because the approval
+    // email leads with it: an operator running several members recognises the name
+    // they chose and nothing else, least of all a UUID. Adding the column here
+    // beats a second select inside the notification module, which would have to
+    // re-find a row this transaction is already holding.
     const existing = (await tx`
-      SELECT id, contact_email FROM committee_members WHERE id = ${memberId} FOR UPDATE`)[0] as
-      | { id: string; contact_email: string | null }
+      SELECT id, name, contact_email FROM committee_members WHERE id = ${memberId} FOR UPDATE`)[0] as
+      | { id: string; name: string; contact_email: string | null }
       | undefined;
     if (!existing) return { ok: false, status: 404, error: "no such applicant" };
     const key = (await tx`SELECT id FROM committee_member_keys WHERE member_id = ${memberId} AND active = false ORDER BY created_at DESC LIMIT 1 FOR UPDATE`)[0] as { id: number } | undefined;
@@ -626,7 +672,7 @@ export async function activateMember(memberId: string) {
     await tx`UPDATE committee_applications SET status = 'approved', reviewed_at = now() WHERE member_id = ${memberId} AND status = 'pending'`;
     await tx`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'activate_member', ${tx.json({ memberId })})`;
     const notificationOutboxId = existing.contact_email
-      ? await enqueueActivationNotification(tx, memberId, existing.contact_email)
+      ? await enqueueActivationNotification(tx, memberId, existing.name, existing.contact_email)
       : null;
     return {
       ok: true,
@@ -1225,6 +1271,78 @@ function meanTakeWeights(takes: any[]): { bucket: string; weight: number }[] | u
   return result;
 }
 
+// ── Deterministic aggregation prose (issue #323, NO LLM) ────────────────────
+// rationale / synthesis / consensus / disagreement topic+what_settles must each
+// carry genuinely distinct content. Pre-#323 they were built by concatenating
+// or re-quoting member take bodies, which made rationale and synthesis
+// byte-identical and blew consensus/disagreement entries out to full take
+// bodies — the frontend's synthesisIsEcho()/consensusItems()/isEcho() exist
+// only to hide that duplication. The functions below never read a take's
+// `body` string; they derive short, true statements from the takes'
+// STRUCTURED data (stance, confidence, quorum, regime), so nothing here can
+// echo a take and nothing here invents a fact the data doesn't support.
+function stanceBreakdown(byStance: Record<string, number>): string {
+  return Object.entries(byStance)
+    .sort((a, b) => b[1] - a[1] || (STANCES as readonly string[]).indexOf(a[0]) - (STANCES as readonly string[]).indexOf(b[0]))
+    .map(([stance, count]) => `${count} ${stance}`)
+    .join(", ");
+}
+
+function majorityStance(byStance: Record<string, number>): { stance: string; count: number } | null {
+  const entries = Object.entries(byStance);
+  if (!entries.length) return null;
+  const [stance, count] = entries.reduce((best, cur) => (cur[1] > best[1] ? cur : best));
+  return { stance, count };
+}
+
+// Discrete, one-line points of agreement: quorum, stance split, mean
+// confidence, and (when available) the regime backdrop. Always true of the
+// data actually submitted; never exceeds a sentence, never a take body.
+function buildConsensus(
+  active: number, submitted: number, participation: number,
+  byStance: Record<string, number>, meanConfidence: number | null,
+  regimeSummary: { composite_percentile?: number; regime?: string } | null,
+): string[] {
+  if (submitted === 0) return [];
+  const points: string[] = [`${submitted} of ${active} members submitted (${Math.round(participation * 100)}% participation).`];
+  const breakdown = stanceBreakdown(byStance);
+  if (breakdown) points.push(`Stance split: ${breakdown}.`);
+  if (meanConfidence != null) points.push(`Mean confidence ${meanConfidence.toFixed(2)} across submitted takes.`);
+  if (regimeSummary?.composite_percentile != null) {
+    points.push(`Regime composite at the ${Math.round(regimeSummary.composite_percentile * 100)}th percentile (${regimeSummary.regime ?? "unclassified"}).`);
+  }
+  return points;
+}
+
+// Recommendation-voiced "why": leads with the majority stance actually
+// submitted. Deliberately a different shape from buildSynthesis() below so
+// the two can never collide (cheap check: rationale !== synthesis).
+function buildRationale(
+  subjectLabel: string, byStance: Record<string, number>, submitted: number,
+  meanConfidence: number | null, regimeSummary: { composite_percentile?: number } | null,
+): string {
+  const majority = majorityStance(byStance);
+  const parts: string[] = [];
+  if (majority) parts.push(`Majority stance is ${majority.stance} (${majority.count} of ${submitted} submitted takes)`);
+  if (meanConfidence != null) parts.push(`mean confidence ${meanConfidence.toFixed(2)}`);
+  if (regimeSummary?.composite_percentile != null) parts.push(`regime composite at the ${Math.round(regimeSummary.composite_percentile * 100)}th percentile`);
+  return `${parts.length ? parts.join(", ") : "No stance data available"} on ${subjectLabel}.`;
+}
+
+// Session-voiced narrative: participation + stance shape + whether a
+// disagreement was recorded, so it reads as an overview rather than a
+// restatement of buildRationale()'s recommendation-specific reasoning.
+function buildSynthesis(
+  subjectLabel: string, active: number, submitted: number, participation: number,
+  byStance: Record<string, number>, disagreementTopic?: string,
+): string {
+  const breakdown = stanceBreakdown(byStance);
+  const tail = disagreementTopic
+    ? ` The committee is split: ${disagreementTopic}.`
+    : " No material disagreement was recorded among submitted takes.";
+  return `${submitted} of ${active} members (${Math.round(participation * 100)}% participation) reviewed ${subjectLabel}. Stance split: ${breakdown}.${tail}`;
+}
+
 export async function aggregateSession(sessionId: string) {
   const s = (await sql`SELECT * FROM committee_sessions WHERE id = ${sessionId}`)[0];
   const takeRows = await sql`
@@ -1275,27 +1393,40 @@ export async function aggregateSession(sessionId: string) {
   const recType = subjectRow?.recommendation_type === "bucket_weights" ? "bucket_weights" : "position_actions";
 
   const authoredTakes = takes.filter((take: any) => typeof take.body === "string" && take.body.trim().length > 0);
-  const consensus = authoredTakes.map((take: any) => take.body as string);
+  const subjectLabel = s.subject_name ?? s.subject_id;
+
+  // Consensus: discrete one-line points derived from quorum/stance/confidence/
+  // regime data — never a take body (issue #323).
+  const consensus = buildConsensus(activeMembers.length, takes.length, participation, byStance, meanConfidence, regimeSummary);
 
   // Disagreements: synthesize from the stance spread. When at least two distinct
   // stances were submitted, contrast the most- and least-constructive members.
   // The ascending ladder is the canonical contract vocabulary (finding 027).
+  // `topic` names the actual stances in conflict (not a generic placeholder)
+  // and `what_settles` is an objective, trackable test rather than "" (#323).
   const rank = (st: string) => { const i = (STANCES as readonly string[]).indexOf(st); return i < 0 ? 2 : i; };
   const sortedTakes = authoredTakes.slice().sort((a: any, b: any) => rank(a.stance) - rank(b.stance));
   const disagreements: any[] = [];
   if (sortedTakes.length >= 2 && new Set(sortedTakes.map((t: any) => t.stance)).size >= 2) {
     const low = sortedTakes[0], high = sortedTakes[sortedTakes.length - 1];
     disagreements.push({
-      topic: `Submitted views on ${s.subject_name ?? s.subject_id}`,
+      topic: `${high.stance} vs ${low.stance} stance on ${subjectLabel}`,
       positions: [
         { member_id: high.member_id, view: high.body },
         { member_id: low.member_id, view: low.body },
       ],
-      what_settles: "",
+      what_settles: `Whether the next regime snapshot's composite percentile moves toward the ${high.stance} or the ${low.stance} read for ${subjectLabel}.`,
     });
   }
 
-  const rationale = authoredTakes.length ? authoredTakes.map((take: any) => take.body as string).join("\n\n") : undefined;
+  // rationale (recommendation-voiced "why") and synthesis (session-voiced
+  // narrative) are built by two different functions so they can never be
+  // byte-identical (#323 cheap check). Both stay absent/null when no member
+  // authored a body — same gate as before, no editorial prose is invented
+  // when there is nothing to report on.
+  const rationale = authoredTakes.length
+    ? buildRationale(subjectLabel, byStance, takes.length, meanConfidence, regimeSummary)
+    : undefined;
   const actions = recType === "position_actions" ? [
     { token: "USDC", action: "rotate", rationale: "Route the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor." },
     { token: "rmUSDC", action: "add", rationale: "Vault receipt is the Agent Tokens exposure — top up to the mandated 5% floor." },
@@ -1316,10 +1447,8 @@ export async function aggregateSession(sessionId: string) {
   if (actions) rec.actions = actions;
   if (weights) rec.weights = weights;
 
-  // Never invent editorial prose: synthesis is composed only of the exact
-  // stored member-authored bodies, and is absent when every submitted body is empty.
   const synthesis = authoredTakes.length
-    ? authoredTakes.map((take: any) => take.body as string).join("\n\n")
+    ? buildSynthesis(subjectLabel, activeMembers.length, takes.length, participation, byStance, disagreements[0]?.topic)
     : null;
 
   await sql`UPDATE committee_sessions SET
@@ -1362,4 +1491,54 @@ export async function getMemo(id: number) {
                        FROM committee_memos WHERE id = ${id}`)[0] ?? null;
   if (!r) return null;
   return toMemo(r);
+}
+
+// ── Self-service profile (issue #325) ───────────────────────────────────────
+// The apply payload (§11 R6, D21) is deliberately minimal —
+// {name, contact, lens?, publicKey} — so an API-created member is admitted
+// with no tagline/mandate/biases/voice/mode/operator/avatar and no route ever
+// gives it one; only the three manifest-seeded members carry real values for
+// these. This is the fill-in-after-admission route the issue recommends
+// (option B over extending apply): the same actor as submitRecommendation/
+// postMemo (bearer-token authenticated, so only a member that has completed
+// apply → activate → claim can call it), writing its OWN row only — the path
+// :id must match the token's member id, exactly like submitRecommendation's
+// memberId/token check. Partial: only fields present in `patch` are changed;
+// omitted fields are left untouched (not nulled).
+export interface MemberProfilePatch {
+  tagline?: string;
+  mandate?: string;
+  biases?: string[];
+  voiceMd?: string;
+  mode?: string;
+  operator?: string;
+  avatar?: unknown;
+}
+
+export async function updateMemberProfile(token: string, memberId: string, patch: MemberProfilePatch) {
+  const tokenMemberId = await memberIdForToken(token);
+  if (!tokenMemberId) return { ok: false, status: 401, error: "unknown member token" };
+  if (tokenMemberId !== memberId) return { ok: false, status: 403, error: "token/member mismatch" };
+
+  const row = (await sql`SELECT * FROM committee_members WHERE id = ${memberId}`)[0];
+  if (!row) return { ok: false, status: 404, error: "member not found" };
+
+  const merged = {
+    tagline: patch.tagline !== undefined ? patch.tagline : row.tagline,
+    mandate: patch.mandate !== undefined ? patch.mandate : row.mandate,
+    biases: patch.biases !== undefined ? patch.biases : row.biases,
+    voice_md: patch.voiceMd !== undefined ? patch.voiceMd : row.voice_md,
+    mode: patch.mode !== undefined ? patch.mode : row.mode,
+    operator: patch.operator !== undefined ? patch.operator : row.operator,
+    avatar: patch.avatar !== undefined ? patch.avatar : row.avatar,
+  };
+  const updated = await sql`
+    UPDATE committee_members SET
+      tagline = ${merged.tagline}, mandate = ${merged.mandate}, biases = ${sql.json(merged.biases as any)},
+      voice_md = ${merged.voice_md}, mode = ${merged.mode}, operator = ${merged.operator},
+      avatar = ${sql.json(merged.avatar as any)}, updated_at = now()
+    WHERE id = ${memberId}
+    RETURNING *`;
+  await sql`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, 'update_profile', ${sql.json({ memberId } as any)})`;
+  return { ok: true, status: 200, member: toMember(updated[0]) };
 }
