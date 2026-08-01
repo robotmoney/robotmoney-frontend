@@ -112,6 +112,53 @@ test("icon sprite exposes every glyph in the plan's §3 list via <use>", async (
   }
 });
 
+test("Chart.js dash theme (applyDashChartDefaults) draws with dash.css tokens, not defaults", async ({ page }) => {
+  await page.goto("/");
+  await navigate(page, "/dash/_styleguide");
+
+  const canvas = page.locator("[data-sg-chart-canvas]");
+  await expect(canvas).toBeVisible();
+  // Chart.js draws to <canvas>, so assert the theme was actually applied by
+  // reading back the live Chart instance's resolved options rather than
+  // pixels — proves applyDashChartDefaults ran, not just that Chart.js booted.
+  const chartOptions = await page.evaluate(() => {
+    const canvas = document.querySelector("[data-sg-chart-canvas]") as HTMLCanvasElement;
+    const c = (window as any).Chart.getChart(canvas);
+    return {
+      xDisplay: c.options.scales.x.display,
+      gridDash: c.options.scales.y.grid.borderDash,
+      fontFamily: c.options.font.family,
+      pointRadius: c.data.datasets[0].pointRadius,
+      borderWidth: c.data.datasets[0].borderWidth,
+    };
+  });
+  expect(chartOptions.xDisplay).toBe(false);
+  expect(chartOptions.gridDash).toEqual([3, 3]);
+  expect(chartOptions.fontFamily).toBe("JetBrains Mono");
+  expect(chartOptions.pointRadius).toBe(0);
+  expect(chartOptions.borderWidth).toBe(2);
+});
+
+test("sparkline library: default/large Sparkline render SVG, RowSparkline auto-colors and short-series dash", async ({ page }) => {
+  await page.goto("/");
+  await navigate(page, "/dash/_styleguide");
+
+  await expect(page.locator("[data-sg-sparkline-default] svg")).toHaveCount(1);
+  await expect(page.locator("[data-sg-sparkline-default] svg")).toHaveAttribute("viewBox", "0 0 80 24");
+  await expect(page.locator("[data-sg-sparkline-large] svg")).toHaveAttribute("viewBox", "0 0 800 120");
+
+  const up = page.locator('[data-sg-row-sparkline="up"] svg polyline');
+  const down = page.locator('[data-sg-row-sparkline="down"] svg polyline');
+  const flat = page.locator('[data-sg-row-sparkline="flat"] svg polyline');
+  await expect(up).toHaveAttribute("stroke", "#22c35d");
+  await expect(down).toHaveAttribute("stroke", "#d74242");
+  await expect(flat).toHaveAttribute("stroke", "#8d95a5");
+
+  // Fewer than 4 finite points renders the literal em-dash, never SVG.
+  await expect(page.locator('[data-sg-row-sparkline="short"] svg')).toHaveCount(0);
+  await expect(page.locator('[data-sg-row-sparkline="short"]')).toHaveText("—");
+});
+
 test("a3Tabs switches the active pill", async ({ page }) => {
   await page.goto("/");
   await navigate(page, "/dash/_styleguide");
