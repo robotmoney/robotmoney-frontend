@@ -281,10 +281,14 @@ export async function fetchEntities(): Promise<EntitiesResponse> {
 // applies to the summary cards above it.
 export async function fetchMarketOverview(): Promise<MarketOverview> {
   const [agents, coins, vaults, wallets] = await Promise.all([
-    sql`SELECT id, name, x402_score, productivity_score, is_active FROM openclaw_agents`,
-    sql`SELECT id, name, market_cap, is_active FROM lobster_coins`,
-    sql`SELECT id, name, tvl_usd, is_active FROM agent_vaults`,
-    sql`SELECT id, label, balance_usd, is_active FROM tracked_wallets`,
+    sql<{ id: string; name: string | null; x402_score: string | null; productivity_score: string | null; is_active: boolean }[]>`
+      SELECT id, name, x402_score, productivity_score, is_active FROM openclaw_agents`,
+    sql<{ id: string; name: string | null; market_cap: string | null; is_active: boolean }[]>`
+      SELECT id, name, market_cap, is_active FROM lobster_coins`,
+    sql<{ id: string; name: string | null; tvl_usd: string | null; is_active: boolean }[]>`
+      SELECT id, name, tvl_usd, is_active FROM agent_vaults`,
+    sql<{ id: string; label: string | null; balance_usd: string | null; is_active: boolean }[]>`
+      SELECT id, label, balance_usd, is_active FROM tracked_wallets`,
   ]);
 
   const activeAgents = agents.filter((a) => a.is_active);
@@ -325,9 +329,9 @@ export async function fetchMarketOverview(): Promise<MarketOverview> {
   }
 
   const leaders = {
-    agent: topOf(activeAgents, (a) => num(a.x402_score), (a) => (a.name as string) ?? "", "agent", "/agents"),
-    coin: topOf(activeCoins, (c) => num(c.market_cap), (c) => (c.name as string) ?? "", "coin", "/lobster"),
-    vault: topOf(activeVaults, (v) => num(v.tvl_usd), (v) => (v.name as string) ?? "", "vault", "/vaults"),
+    agent: topOf(activeAgents, (a) => num(a.x402_score), (a) => a.name ?? "", "agent", "/agents"),
+    coin: topOf(activeCoins, (c) => num(c.market_cap), (c) => c.name ?? "", "coin", "/lobster"),
+    vault: topOf(activeVaults, (v) => num(v.tvl_usd), (v) => v.name ?? "", "vault", "/vaults"),
   };
 
   const prodScores = activeAgents.map((a) => num(a.productivity_score)).filter((v): v is number => v != null);
