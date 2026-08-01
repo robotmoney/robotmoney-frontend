@@ -191,6 +191,25 @@ export function externalPgOverlayYaml(redactedUrl: string): string {
  * operator asked for the managed one would be the worst possible outcome — the
  * demo would look healthy while writing to nothing that persists.
  */
+/**
+ * Is a managed Postgres CONFIGURED in `.env`? Answers the question without
+ * requiring the flag, and without throwing — used by `bun run demo:stage`, which
+ * chooses a data path rather than being told one.
+ *
+ * Deliberately separate from resolveExternalPg: that function's contract is
+ * "the operator asked for external Postgres, so a broken .env is a FATAL
+ * misconfiguration". Here an absent or unusable .env is simply a "no", because
+ * nobody asked for anything yet. A wrapper that used the throwing version to
+ * probe would turn "you have no .env" into a failed boot.
+ */
+export function detectEnvPostgres(envFilePath: string): ExternalPgResolution {
+  try {
+    return resolveExternalPg([EXTERNAL_PG_FLAG], { envFilePath });
+  } catch {
+    return { enabled: false };
+  }
+}
+
 export function resolveExternalPg(
   argv: string[],
   opts: { envFilePath: string } = { envFilePath: ".env" },

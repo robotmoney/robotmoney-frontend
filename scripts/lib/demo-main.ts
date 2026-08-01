@@ -82,38 +82,53 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // (D21 retired the member-facing MCP server — there is no longer an `mcp`
 // container or host port; members reach the committee REST API on the api port.)
 //
-// THE ONE EXCEPTION: `bun run demo -- --stage` appends docker-compose.stage.yml,
+// THE ONE EXCEPTION: `bun run demo -- --static-port` appends docker-compose.stage.yml,
 // which pins the api's host port (only) to 48787, the tunnel origin. It is a
 // CLI ARGUMENT, never an env var — the same hard rule `--pg-data` follows (no
 // per-property env config) — because pinning the tunnel port is a property of
 // one deliberate invocation, never of a shell that happens to have something
 // exported. It FAILS LOUDLY when the port is held rather than falling back,
 // because cloudflared routes 48787 and nothing else: a fallback would produce a
-// green boot serving a 502. Postgres stays Docker-assigned even under --stage.
-const stageMode = process.argv.includes("--stage");
+// green boot serving a 502. Postgres stays Docker-assigned even when pinned.
+// `--static-port` says what the flag DOES: it pins the web/api host port to the
+// one fixed number in the system instead of letting Docker assign one. The old
+// name, `--stage`, described an environment rather than an effect, which made it
+// read like "boot the staging environment" — it never did that; it only pinned a
+// port. Still accepted, with a warning, so a committed cloudflared runbook or an
+// operator's muscle memory keeps working.
+const STATIC_PORT_FLAG = "--static-port";
+const LEGACY_STAGE_FLAG = "--stage";
+const usedLegacyStageFlag = process.argv.includes(LEGACY_STAGE_FLAG);
+const staticPortMode = process.argv.includes(STATIC_PORT_FLAG) || usedLegacyStageFlag;
+if (usedLegacyStageFlag) {
+  console.warn(
+    `[demo] ${LEGACY_STAGE_FLAG} is DEPRECATED and now means ${STATIC_PORT_FLAG} — same behaviour, clearer name ` +
+      `(it pins the host port; it never selected an environment). Update your invocation.`,
+  );
+}
 
 // …and the same argument selects the demo's CADENCE PROFILE (issue #371). A
-// `--stage` boot is the standing/public demo, so it convenes each subject every
+// `--static-port` boot is the standing/public demo, so it convenes each subject every
 // 6 h with the subjects phase-offset by 3 h and puts the analytics-producer on a
 // 3-hourly research beat; every other boot (including CI) keeps today's fast
 // ~2-min values. Every number lives in scripts/lib/demo-schedule.ts — this file
 // carries no cadence literal of its own.
-const cadence = resolveDemoCadence({ stage: stageMode });
+const cadence = resolveDemoCadence({ stage: staticPortMode });
 
 // Loud, never silent. A stale `.env` (or an exported shell var) carrying
 // WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
 // rather than letting an operator believe a pin took effect.
 for (const warning of stalePortEnvWarnings(process.env)) console.warn(`[demo] ${warning}`);
 
-if (stageMode) {
+if (staticPortMode) {
   console.warn(
     `[demo] ############################################################\n` +
-      `[demo] # --stage: the web/api host port is PINNED to ${STAGE_WEB_PORT}.\n` +
+      `[demo] # --static-port: the web/api host port is PINNED to ${STAGE_WEB_PORT}.\n` +
       `[demo] # This is the ONE fixed port in the system — cloudflared routes\n` +
       `[demo] # stage.robotmoney-labs.dev to it and to nothing else. Only one\n` +
-      `[demo] # stack can hold it at a time, so do not run --stage alongside\n` +
-      `[demo] # another --stage boot or CI's demo. Postgres (and every other\n` +
-      `[demo] # published port) is still DOCKER-ASSIGNED under --stage.\n` +
+      `[demo] # stack can hold it at a time, so do not run --static-port\n` +
+      `[demo] # alongside another pinned boot or CI's demo. Postgres (and every\n` +
+      `[demo] # other published port) is still DOCKER-ASSIGNED.\n` +
       `[demo] ############################################################`,
   );
 }
@@ -136,7 +151,7 @@ async function stagePreflight(): Promise<void> {
       console.error(
         `[demo] NOT falling back to another port: cloudflared routes only :${STAGE_WEB_PORT}, so a\n` +
           `[demo] fallback would boot green and serve a 502 to every visitor. Free the port\n` +
-          `[demo] (e.g. \`bun run demo:down\` for a standing demo) and re-run, or drop --stage\n` +
+          `[demo] (e.g. \`bun run demo:down\` for a standing demo) and re-run, or drop --static-port\n` +
           `[demo] to boot on a Docker-assigned port with no tunnel.`,
       );
       process.exit(1);
@@ -144,7 +159,7 @@ async function stagePreflight(): Promise<void> {
     throw err;
   }
 }
-if (stageMode) await stagePreflight();
+if (staticPortMode) await stagePreflight();
 
 // --- Optional external/managed Postgres (--external-pg) ---------------------
 // `bun run demo -- --external-pg` runs the stack against the managed Postgres
@@ -224,7 +239,7 @@ const databaseUrl = internalDatabaseUrl(database);
 // The --stage overlay belongs to the BASE list, not to the run-only extension:
 // it is the one file that names a host port, so demo:status must resolve the
 // same topology when it asks `docker compose port` what is actually published.
-const composeFilesBase = ["docker-compose.yml", "docker-compose.demo.yml", ...(stageMode ? [STAGE_COMPOSE_FILE] : [])]
+const composeFilesBase = ["docker-compose.yml", "docker-compose.demo.yml", ...(staticPortMode ? [STAGE_COMPOSE_FILE] : [])]
   .join(":");
 let composeFilesRun = composeFilesBase;
 
@@ -331,7 +346,7 @@ const analyticsToken = credentials.analyticsToken;
 // Resolve every model/data-path preflight before provisioning a bearer file.
 // A typo or missing funded model key must not leak a temp credential directory
 // for a stack that never reached creation.
-const demoEnv = resolveDemoEnv(process.env, { stage: stageMode });
+const demoEnv = resolveDemoEnv(process.env, { stage: staticPortMode });
 const analyticsTokenFile = provisionDemoAnalyticsTokenAfterPreflight(project, analyticsToken, () => {
   if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
     resolveModelConfig(process.env);
@@ -621,7 +636,7 @@ const fx = (isFixed: boolean) => (isFixed ? " (fixed)" : "");
 log(
   `project=${project}${fx(Boolean(process.env.DEMO_PROJECT?.trim()))}  ` +
     `env=${stackEnvironment.class}/${stackEnvironment.hash}  ` +
-    `host ports=(assigned by Docker at start${stageMode ? "; api PINNED to :" + STAGE_WEB_PORT + " by --stage" : ""})`,
+    `host ports=(assigned by Docker at start${staticPortMode ? "; api PINNED to :" + STAGE_WEB_PORT + " by --stage" : ""})`,
 );
 
 // The single point at which this process learns its host ports. Everything
@@ -634,10 +649,10 @@ function applyHostPorts(ports: StackHostPorts): void {
   backendUrl = hostBackendUrl(apiPort);
   state.services = serviceRoutes(backendUrl);
   log(
-    `host ports (Docker-assigned): api=:${apiPort}${stageMode ? " (STAGE-PINNED — cloudflared origin)" : ""}  ` +
+    `host ports (Docker-assigned): api=:${apiPort}${staticPortMode ? " (STAGE-PINNED — cloudflared origin)" : ""}  ` +
       `pg=${pgPort === null ? `EXTERNAL (${externalPg.redactedUrl}) — no container, no published port` : `:${pgPort}`}`,
   );
-  if (!stageMode && apiPort === STAGE_WEB_PORT) {
+  if (!staticPortMode && apiPort === STAGE_WEB_PORT) {
     // Possible but rare: Docker draws from the host's ephemeral range, which
     // CONTAINS 48787 — it can only happen while no stage demo holds it. Not
     // fatal (nothing is broken; cloudflared would simply route the stage
@@ -756,7 +771,7 @@ function writeStateFile(): void {
     // reconstruct the same compose topology, and so `demo:status` can say out
     // loud that this demo is the one the tunnel points at. Provenance only —
     // the port itself is whatever the daemon reports.
-    stage: stageMode,
+    stage: staticPortMode,
     // The environment this boot belongs to, so the container/volume labels
     // demo:down and demo:status interpolate match the ones `up` stamped.
     envClass: stackEnvironment.class,
@@ -798,7 +813,7 @@ function printResumeHint(): void {
     // design, so nothing about the next boot is inferred from state. A hint that
     // dropped --stage would resume the demo on a Docker-assigned port, leaving
     // the tunnel pointing at nothing.
-    console.log(`[demo]   resume:  bun run demo --${stageMode ? " --stage" : ""} ${EXTERNAL_PG_FLAG}`);
+    console.log(`[demo]   resume:  bun run demo --${staticPortMode ? " --stage" : ""} ${EXTERNAL_PG_FLAG}`);
     return;
   }
   if (pgDataDir) {

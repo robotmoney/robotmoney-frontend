@@ -48,7 +48,7 @@ BACKEND_URL=http://127.0.0.1:<demo api port> bun run goldens:update
 ```bash
 cp .env.example .env                      # set DATABASE_URL
 # Host ports are REQUIRED inputs to raw compose now — there is no default
-# (see "Ports: always random, except --stage"). Pick any free port:
+# (see "Ports: always random, except --static-port"). Pick any free port:
 POSTGRES_PORT=5433 docker compose up -d postgres   # local Postgres
 
 cd backend
@@ -78,7 +78,7 @@ bun run demo         # provisions the stack and stays up
 
 Every published host port is drawn **free at boot, on every run** — there is no
 fixed default, and `WEB_PORT` / `POSTGRES_PORT` are no longer inputs (see
-[Ports](#ports-always-random-except---stage) below). The demo prints the port it
+[Ports](#ports-always-random-except---static-port) below). The demo prints the port it
 picked; open `http://127.0.0.1:<that port>/committee`. The demo writes its run
 state to `.agents/demo-state.json`. Stop it with Ctrl-C, or manage a
 backgrounded/stale run from that state file:
@@ -87,6 +87,27 @@ backgrounded/stale run from that state file:
 bun run demo:status
 bun run demo:down
 ```
+
+### `bun run demo:stage` — the standing/public demo in one command
+
+```bash
+bun run demo:stage
+```
+
+A thin wrapper that decides two flags and then runs the ordinary demo, printing
+the equivalent `bun run demo -- …` so the choice is always reproducible by hand:
+
+- **`--static-port` always** — this is the boot a tunnel points at, so it takes
+  the fixed host port rather than whatever Docker hands out.
+- **`--external-pg` when `.env` describes a Postgres** — otherwise the demo's own
+  ephemeral container, exactly as a plain `bun run demo` would use. An `.env`
+  that is missing, has no database, or has an unusable one falls back quietly;
+  nothing about probing may fail a boot.
+
+This is the one command allowed to *infer* a data path, because inferring is its
+documented job and it announces the choice before anything starts. `bun run demo
+-- …` stays fully explicit. Extra flags pass through: `bun run demo:stage --
+--no-tui`.
 
 ### Use a managed Postgres instead of the ephemeral container
 
@@ -119,7 +140,7 @@ sslmode  = require
 ```
 
 The **switch** stays a CLI argument (same hard rule as `--pg-data` and
-`--stage`): pointing a demo at a persistent database is a property of one
+`--static-port`): pointing a demo at a persistent database is a property of one
 deliberate invocation, never of a shell that happens to have something exported.
 `.env` only supplies the address.
 
@@ -175,7 +196,7 @@ The built-in demo agents and the built-in onboarding loop keep running at the sa
 time. A separately prompted agent proves that a non-demo member can join through
 the public apply → activation → claim → `rmpc`-signed REST submission path.
 
-### Ports: always random, except `--stage`
+### Ports: always random, except `--static-port`
 
 Every published host port (api **and** postgres) is drawn free at boot, on every
 run. There is no fixed default anywhere: `docker-compose.yml` requires
@@ -191,11 +212,14 @@ locally), while CI — which has no `.env` — took the preferred-48787 path and
 raced the standing stage demo for the exact port `cloudflared` routes
 `stage.robotmoney-labs.dev` to. That was a real outage.
 
-The single exception is the stage boot:
+The single exception is the pinned boot:
 
 ```bash
-bun run demo -- --stage
+bun run demo -- --static-port
 ```
+
+(Previously spelled `--stage`. That name described an environment when the flag
+only ever pinned a port; `--stage` still works and prints a deprecation warning.)
 
 - Pins **only** the web/api host port to `48787`, the tunnel origin. Postgres
   (and anything else published) stays random.

@@ -32,13 +32,13 @@ ingress:
   #
   # WHY 48787 AND NOTHING ELSE. This is the single fixed host port in the whole
   # system (scripts/stack/ports.ts:39). Every other published port — including
-  # postgres — is drawn free at boot on every run. `bun run demo -- --stage` is
+  # postgres — is drawn free at boot on every run. `bun run demo -- --static-port` is
   # the one sanctioned pin, and it FAILS rather than falling back when something
   # already holds the port (scripts/lib/demo-main.ts:135), precisely because
   # cloudflared routes 48787 and nothing else: a fallback would boot green and
   # serve a tunnel that reaches nothing.
   #
-  # Bring the origin up with:  AGENT_MODEL=free bun run demo -- --stage
+  # Bring the origin up with:  bun run demo:stage
   # Confirm it with:           bun run demo:status
   - hostname: site.robotmoney.net
     service: http://127.0.0.1:48787
@@ -50,7 +50,7 @@ ingress:
 
 # ── Operational notes ───────────────────────────────────────────────────────
 #
-# WHAT IS BEHIND THIS HOSTNAME IS A DEMO STACK, NOT A PROD STACK. The --stage
+# WHAT IS BEHIND THIS HOSTNAME IS A DEMO STACK, NOT A PROD STACK. The pinned
 # boot runs docker-compose.demo.yml, which pins RM_ALLOW_INSECURE=1 (privileged
 # admin / onboarding / analytics endpoints answer with NO token — .env.example
 # says of that flag: "NEVER on a reachable box"), pins DEMO_MODE=1 (1h provider
@@ -73,6 +73,6 @@ ingress:
 #     cloudflared tunnel route dns <name> site.robotmoney.net
 #     cloudflared service install                 # systemd unit, enabled at boot
 #
-# The origin does NOT survive a reboot on its own — `bun run demo -- --stage` is
+# The origin does NOT survive a reboot on its own — `bun run demo:stage` is
 # a foreground process, so the tunnel comes back up pointing at nothing until it
 # is restarted.

@@ -18,6 +18,7 @@
     "prerender": "bun scripts/prerender.ts",
     "goldens:update": "bun scripts/update-goldens.ts",
     "demo": "bun scripts/demo.ts",
+    "demo:stage": "bun scripts/demo-stage.ts",
     "eval": "cd evals && EVAL_SUITE_RUN_ID=\"${EVAL_SUITE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}\" bun test",
     "onboarding-eval": "bun scripts/onboarding-eval-local.ts",
     "demo:down": "bun scripts/demo-down.ts",
