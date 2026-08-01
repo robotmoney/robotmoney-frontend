@@ -36,6 +36,7 @@ import { registerAgentsView } from "./views/dash-agents.js";
 import { registerDashLobsterView } from "./views/dash-lobster.js";
 import { registerDashVaultsView } from "./views/dash-vaults.js";
 import { registerDashWalletsView } from "./views/dash-wallets.js";
+import { registerAskRobotoView } from "./views/dash-ask-roboto.js";
 
 export function registerViews(Alpine) {
   registerProjectsView(Alpine);
@@ -65,4 +66,5 @@ export function registerViews(Alpine) {
   registerDashLobsterView(Alpine);
   registerDashVaultsView(Alpine);
   registerDashWalletsView(Alpine);
+  registerAskRobotoView(Alpine);
 }

@@ -53,6 +53,11 @@ const WALLETS_VIEW = `${VIEW_DIR}/dash/wallets.html`;
 // the coming-soon placeholder above.
 const METHODOLOGY_VIEW = `${VIEW_DIR}/dash/methodology.html`;
 const ABOUT_VIEW = `${VIEW_DIR}/dash/about.html`;
+// /ask-mr-roboto "Ask Mr. Roboto" (issue #394, §5.18, P5.1) — AI
+// recommendation assistant + side-by-side comparison tool. Ships real content
+// ahead of the coming-soon placeholder above; see dash-ask-roboto.js for why
+// this is a deterministic rule-based matcher, never an LLM call.
+const ASK_ROBOTO_VIEW = `${VIEW_DIR}/dash/ask-roboto.html`;
 
 // Static dashboard routes (§4.1's list) that render inside DASH_LAYOUT_VIEW.
 // `gated: true` means dash-shell.js's gate must pass before the outlet
@@ -76,7 +81,7 @@ const DASH_ROUTES = {
   "/wallets": { view: WALLETS_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/methodology": { view: METHODOLOGY_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/about": { view: ABOUT_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
-  "/ask-mr-roboto": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
+  "/ask-mr-roboto": { view: ASK_ROBOTO_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/submit": { view: SUBMIT_VIEW, layout: DASH_LAYOUT_VIEW, gated: false },
 };
 
