@@ -8,6 +8,7 @@ import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
 import { getProjects, updateProjectOverview } from "./routes/projects.ts";
+import { getCoinsList, getVaultsList, getWalletsList } from "./routes/dash-lists.ts";
 import { handleCommittee } from "./routes/committee.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
@@ -137,6 +138,18 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname === ROUTES.projects.list && req.method === "GET") {
       return json(await getProjects());
+    }
+
+    if (pathname === ROUTES.dash.coins && req.method === "GET") {
+      return json(await getCoinsList());
+    }
+
+    if (pathname === ROUTES.dash.vaults && req.method === "GET") {
+      return json(await getVaultsList());
+    }
+
+    if (pathname === ROUTES.dash.wallets && req.method === "GET") {
+      return json(await getWalletsList());
     }
 
     // Admin-managed overview write (issue #93). Privileged; no AI enrichment.

@@ -24,6 +24,11 @@ export const ROUTES: {
     list: string;
     adminUpdate: string;
   };
+  dash: {
+    coins: string;
+    vaults: string;
+    wallets: string;
+  };
   committee: {
     members: string;
     waitlist: string;

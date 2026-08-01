@@ -70,6 +70,19 @@ export const ROUTES = {
     adminUpdate: "/api/projects/admin/:slug", // POST — admin-managed overview write (#93)
   },
 
+  // Analytics-dashboard directory list feeds (issue #386, docs/bot-analytics-
+  // ui-port-plan.md §5.9/§5.11/§5.13). Public reads over the existing #70/#87
+  // facet tables — distinct from `analytics.*` below (the bearer-gated
+  // analytics-PROVIDER ingestion boundary, issue #106) and from
+  // `dashboards.*` (the unrelated treasury/regime feature); named `dash` to
+  // match the frontend's own dash.css/dash-shell.js/views/dash/* naming for
+  // this feature area.
+  dash: {
+    coins: "/api/dash/coins", // GET → lobster-coin directory (/lobster)
+    vaults: "/api/dash/vaults", // GET → agent-managed vault directory (/vaults)
+    wallets: "/api/dash/wallets", // GET → tracked + agent-derived wallet directory (/wallets)
+  },
+
   committee: {
     members: "/api/committee/members", // GET
     waitlist: "/api/committee/waitlist", // POST — capture interest when roster is full
