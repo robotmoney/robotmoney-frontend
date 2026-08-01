@@ -1,0 +1,71 @@
+<!-- /market + /dashboard — "Agent Activity Log" (issue #392,
+     docs/bot-analytics-ui-port-plan.md §5.6, P4.1): the bot-analytics UI
+     port's TerminalFeed. Both routes alias this SAME fragment (routes.js's
+     own aliasing, §4.1) — renders inside views/dash/_layout.html's
+     [data-outlet]; the ancestor `.a3` shell (issue #379) already supplies
+     the scoped theme, so nothing here repeats that class. Real,
+     non-fabricated data only (issue #98/#346 honesty contract): an empty
+     GET /api/dashboards/activity renders an honest empty terminal line,
+     never seed rows. Admin-only review-queue block (original's
+     PendingReviewPanel + 3 discovery-scan buttons) is explicitly NOT ported
+     here per D10 — this repo has no discovery scanner/review pipeline yet;
+     tracked as a follow-up issue, not silently dropped. -->
+<div x-data="activityView" data-activity-view>
+  <h1>Agent Activity Log</h1>
+  <p class="data-label" style="margin: 0.25rem 0 1.5rem;">Live feed of every tracked agent action across the network.</p>
+
+  <template x-if="loading">
+    <p class="data-label" data-activity-loading>Loading …</p>
+  </template>
+  <template x-if="error">
+    <p class="a3-badge a3-badge--destructive" data-activity-error x-text="error"></p>
+  </template>
+
+  <template x-if="!loading && !error">
+    <div class="a3-terminal" data-activity-terminal>
+      <div class="a3-terminal__titlebar">
+        <span class="a3-terminal__dots">
+          <span class="a3-terminal__dot a3-terminal__dot--red"></span>
+          <span class="a3-terminal__dot a3-terminal__dot--amber"></span>
+          <span class="a3-terminal__dot a3-terminal__dot--green"></span>
+        </span>
+        <span class="a3-terminal__title">openclaw — activity.log</span>
+      </div>
+      <div class="a3-terminal__body scrollbar-thin" data-activity-body>
+        <p class="a3-terminal__prompt">$ tail -f /var/log/openclaw/activity.log</p>
+
+        <template x-if="entries.length === 0">
+          <p class="a3-terminal__empty" data-activity-empty>No activity recorded yet.</p>
+        </template>
+
+        <template x-for="entry in entries" :key="entry.id">
+          <span class="a3-terminal__entry" data-activity-entry>
+            <span class="a3-terminal__ts" x-text="'[' + fmtTs(entry.occurredAt) + ']'"></span>
+            <span :class="'a3-terminal__status--' + entry.status" x-text="statusGlyph(entry.status)" data-activity-status></span>
+            <span>
+              agent:
+              <template x-if="entry.agentHref">
+                <a class="a3-terminal__agent" :href="entry.agentHref" x-text="entry.agentName" data-activity-agent-link></a>
+              </template>
+              <template x-if="!entry.agentHref">
+                <span x-text="entry.agentName || 'unknown'"></span>
+              </template>
+            </span>
+            <span class="a3-badge a3-badge--muted" x-text="entry.actionType"></span>
+            <template x-if="entry.commitSummary">
+              <span> commit: <span x-text="entry.commitSummary"></span></span>
+            </template>
+            <template x-if="entry.submittedBy">
+              <span class="a3-terminal__meta" x-text="'submitted by: ' + entry.submittedBy"></span>
+            </template>
+            <template x-if="entry.approvedBy">
+              <span class="a3-terminal__meta" x-text="'approved by: ' + entry.approvedBy"></span>
+            </template>
+          </span>
+        </template>
+
+        <span class="a3-terminal__cursor" data-activity-cursor></span>
+      </div>
+    </div>
+  </template>
+</div>
