@@ -26,6 +26,15 @@ export function registerCommitteeView(Alpine) {
       }
     },
     publishedSessions() { return this.sessions.filter((s) => s.state === "published"); },
+    // Link by SESSION ID. Two rows sharing a (date, subject) are two different
+    // sessions — a subject may convene more than once a day — and the dated URL
+    // resolves to the later of them, so linking by it would leave the earlier
+    // session unreachable and make the pair look like one page listed twice.
+    // The dated form remains the fallback for any row without an id (the static
+    // archive), and remains valid as a URL in its own right.
+    sessionHref(s) {
+      return s?.id ? `/committee/sessions/${encodeURIComponent(s.id)}` : `/committee/${s.date}/${s.subjectId}`;
+    },
     // Subject encoding + filter, identical in behaviour to the member profile's
     // track record — the roster is the same problem at larger scale (every
     // subject interleaved by date), and the two lists must not teach different

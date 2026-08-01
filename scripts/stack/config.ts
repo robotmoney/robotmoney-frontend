@@ -40,8 +40,15 @@ export const FULL_SERVICES = [...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PROD
 
 // Services are always named EXPLICITLY (never a bare `docker compose up -d`),
 // so a compose service added in the future can never leak into `core`.
-export function servicesFor(profile: StackProfile): string[] {
-  return profile === "core" ? [...CORE_SERVICES] : [...FULL_SERVICES];
+//
+// `externalPostgres` drops the `postgres` service from either profile: with
+// `bun run demo -- --external-pg` the stack talks to a managed server and the
+// ephemeral container is not started at all (scripts/lib/demo-external-pg.ts).
+// Naming it here — rather than filtering at the call site — keeps "which
+// services does this stack consist of" answerable in one place.
+export function servicesFor(profile: StackProfile, opts: { externalPostgres?: boolean } = {}): string[] {
+  const all = profile === "core" ? [...CORE_SERVICES] : [...FULL_SERVICES];
+  return opts.externalPostgres ? all.filter((s) => s !== "postgres") : all;
 }
 
 // The compose file list every consumer of this module defaults to. The demo
@@ -67,9 +74,14 @@ export const API_CONTAINER_PORT = 8787;
 export const POSTGRES_CONTAINER_PORT = 5432;
 
 // The host ports Docker assigned to one running stack, read back after `up`.
+// `pgPort` is NULL — not 0, not absent — when the stack runs against an external
+// managed Postgres: there is no postgres container, so no host port was ever
+// published. Null says "there is deliberately no number here"; a 0 would read as
+// a number nobody assigned, which this module is at pains elsewhere never to
+// hand back.
 export interface StackHostPorts {
   apiPort: number;
-  pgPort: number;
+  pgPort: number | null;
 }
 
 // ── Database ────────────────────────────────────────────────────────────────
@@ -77,6 +89,18 @@ export interface StackDatabase {
   user: string;
   password: string;
   name: string;
+  /**
+   * An EXTERNAL/managed Postgres URL. When set, this stack starts no postgres
+   * container: `url` is what every container connects with, `servicesFor` drops
+   * the service, and the caller appends the generated overlay that removes it
+   * from the compose model (scripts/lib/demo-external-pg.ts). The three fields
+   * above stay as they are — they interpolate POSTGRES_* for a compose model
+   * that no longer contains the service, so they are inert, not authoritative.
+   *
+   * NEVER log or serialize this: unlike the baked-in demo credentials it is a
+   * real secret. Print `redactPostgresUrl()` instead.
+   */
+  url?: string;
 }
 
 // The baked-in demo credentials (previously spelled out in demo-main.ts). They
@@ -89,9 +113,11 @@ export const DEFAULT_STACK_DATABASE: StackDatabase = {
 };
 
 // The URL a CONTAINER uses: the `postgres` compose service on its internal
-// port, never a host port.
+// port, never a host port — unless the stack was given an external managed URL,
+// which is passed through verbatim (that server is reached over the network like
+// any other external dependency, so there is no compose-internal form of it).
 export function internalDatabaseUrl(db: StackDatabase): string {
-  return `postgres://${db.user}:${db.password}@postgres:5432/${db.name}`;
+  return db.url ?? `postgres://${db.user}:${db.password}@postgres:5432/${db.name}`;
 }
 
 // Use 127.0.0.1, NOT localhost: Docker publishes the container ports on IPv4

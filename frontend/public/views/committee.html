@@ -92,8 +92,20 @@
 
         <div class="cv__empty" x-show="publishedSessions().length === 0" x-cloak>No sessions yet. The first one publishes once the daily workflow runs.</div>
         <div class="cv__session-list">
-          <template x-for="s in visibleSessions()" :key="`${s.date}-${s.subjectId}`">
-            <a class="cv__session-card mp-take" :href="`/committee/${s.date}/${s.subjectId}`"
+          <!-- KEY ON THE SESSION ID, never on (date, subjectId). A subject may
+               convene more than once a day (migration 0022 made convened_at the
+               identity and dropped UNIQUE(date, subject_id)), so a date+subject
+               key COLLIDES — and Alpine renders NOTHING for a duplicate key,
+               silently, while the surrounding counts still read correctly. That
+               is exactly how this list went blank while the chips said "4". -->
+          <template x-for="s in visibleSessions()" :key="s.id">
+            <!-- Link by SESSION ID, falling back to the dated URL for archive
+                 rows that have none. Two rows of the same (date, subject) are
+                 two different sessions; the dated URL resolves to the later of
+                 them, so linking by it would leave the earlier one unreachable
+                 and make the pair look like a duplicate of one page. -->
+            <a class="cv__session-card mp-take"
+               :href="sessionHref(s)"
                :style="`--mp-subject:${subjectDot(s.subjectId)}`">
               <div class="cv__session-top">
                 <div class="cv__session-titleline">

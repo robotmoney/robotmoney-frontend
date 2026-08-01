@@ -191,6 +191,61 @@ export async function activeMemberCount(targetUrl: string = backendUrl()): Promi
   return Array.isArray(r.members) ? r.members.length : Number.POSITIVE_INFINITY;
 }
 
+/**
+ * Every member NAME already on the roster, in ANY status, lower-cased.
+ *
+ * The demo admits a FIXED, finite list of named newcomers (Helios, Selene, …)
+ * indexed by a counter that starts at 0 in each process. Against a throwaway
+ * database that was right; against a persistent one it re-admits Helios on every
+ * boot, and the roster grows a duplicate Helios per restart (four of them were
+ * observed on the standing demo — two active, two stuck in `applied`).
+ *
+ * Names are the identity here because the SERVER mints the member id: the demo
+ * cannot look up "did I already admit this one" by id, only by who they are.
+ * The admin route is used because it lists every status — a newcomer stuck at
+ * `applied` still owns its name, and re-admitting it just makes a second stuck
+ * row.
+ *
+ * FAILS CONSERVATIVELY: an unreadable roster returns null, and the caller must
+ * treat that as "cannot prove this name is free" and skip, exactly as
+ * activeMemberCount() assumes FULL rather than empty.
+ */
+export interface RosterMember {
+  id: string;
+  name: string;
+  lens: string | null;
+  status: string;
+}
+
+/** The full roster (every status), or null when it cannot be read. */
+export async function rosterMembers(targetUrl: string = backendUrl()): Promise<RosterMember[] | null> {
+  try {
+    const r = await fetch(`${targetUrl}${ROUTES.committee.admin.members}`, { headers: getAdminHeaders() });
+    if (!r.ok) throw new Error(`GET ${ROUTES.committee.admin.members} -> ${r.status}`);
+    const body = await responseJson(r) as { members?: { id?: string; name?: string; lens?: string | null; status?: string }[] };
+    if (!Array.isArray(body.members)) throw new Error("admin members response has no members array");
+    return body.members
+      .filter((m) => m?.id && m?.name)
+      .map((m) => ({ id: String(m.id), name: String(m.name), lens: m.lens ?? null, status: String(m.status ?? "") }));
+  } catch (err) {
+    console.error(`[e2e] rosterMembers: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
+/** Lower-cased names on the roster, or null when the roster cannot be read. */
+export async function existingMemberNames(targetUrl: string = backendUrl()): Promise<Set<string> | null> {
+  const members = await rosterMembers(targetUrl);
+  if (members === null) {
+    console.error(
+      "[e2e] existingMemberNames: roster unreadable — cannot prove a newcomer name is unused; " +
+        "the caller must SKIP rather than risk a duplicate",
+    );
+    return null;
+  }
+  return new Set(members.map((m) => m.name.trim().toLowerCase()).filter(Boolean));
+}
+
 // Exported (in addition to standalone-main use) so scripts/rmpc-release-e2e.ts
 // (issue #104) can drive the SAME proven job-queue session lifecycle this file's
 // own runSession() uses, instead of hand-rolling a second one.
@@ -206,6 +261,35 @@ export async function waitForSessionState(date: string, subject: string, expecte
   }
   throw new Error(
     `session ${date}/${subject} did not reach '${expectedState}' within ${timeoutMs}ms ` +
+      `(the worker may still be draining an earlier job — check 'bun run demo:status' or the worker container logs)`,
+  );
+}
+
+/**
+ * Wait for a subject's NEWEST session to reach a state, WITHOUT knowing its date.
+ *
+ * This is the bootstrap half of waitForSessionState: after `open_session` is
+ * enqueued nobody knows the date yet, because Postgres has not stamped
+ * convened_at. Polling the sessions list by subject is the only honest way to
+ * learn it — the alternative is guessing a date locally, which is exactly the
+ * habit migration 0022 removed. Once this returns, the caller has the real date
+ * and every later poll can use the cheaper date-addressed route.
+ */
+export async function waitForSubjectSession(subject: string, expectedState: string, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const r = await fetch(`${backendUrl()}${ROUTES.committee.sessions}`);
+    if (r.ok) {
+      const data = await responseJson(r);
+      // The list is newest-first, so the first row for this subject is the one
+      // just convened. Matching on subject alone (not date) is the whole point.
+      const s = (data.sessions ?? []).find((x: { subjectId?: string }) => x.subjectId === subject);
+      if (s?.state === expectedState) return { session: s };
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `no session for subject '${subject}' reached '${expectedState}' within ${timeoutMs}ms ` +
       `(the worker may still be draining an earlier job — check 'bun run demo:status' or the worker container logs)`,
   );
 }
@@ -277,7 +361,6 @@ export async function runRegimeClassify(
 // this process's environment (the standalone CI entry point receives the
 // demo's exact compose env).
 export async function runSession(
-  date: string,
   subject: typeof SUBJECTS[0],
   sessionIndex: number,
   opts?: { prevOutcome?: string; rail?: SessionRail; onProgress?: SessionProgress; regimeAsof?: string },
@@ -285,38 +368,60 @@ export async function runSession(
   const prevOutcome = opts?.prevOutcome;
   const onProgress = opts?.onProgress;
   const rail = opts?.rail ?? railFromEnv();
+
+  // THE DATE IS NOT AN INPUT. It used to be — the demo passed `today + N days`
+  // so repeat runs would not collide on the old UNIQUE(date, subject_id), and
+  // wiped session history when it wanted today back. Now the session is opened
+  // first and its date is READ BACK from the row Postgres created (convened_at,
+  // migration 0022). Everything downstream — fixtures, regime as-of, the
+  // members' signed payloads, the state polls — uses that value, so there is
+  // exactly one clock in the system and it is the database's.
+  // The SUBJECT must exist before a session can reference it
+  // (committee_sessions_subject_fk). This is deliberately separate from the
+  // dated `subject_fixtures` call further down: creating the subject needs no
+  // date, while the fixtures are filed under the session's date and therefore
+  // cannot run until the session exists. Ordering them the other way round is
+  // what made a clean database fail its first two sessions with a foreign-key
+  // violation while the boot still reported READY.
+  await admin("subject", subject);
+  await enqueueLifecycleJob("open_session", { subjectId: subject.id });
+  const opened = await waitForSubjectSession(subject.id, "scheduled");
+  const date: string = opened.session.date;
+  const sessionId = opened.session.id;
   const tag = `[session ${sessionIndex}: ${date}/${subject.id}]`;
   console.log(`\n${tag}`);
   // Session-lifecycle emitter — one call per real state transition below.
-  const emitSession = (state: string, sessionId?: number) =>
-    onProgress?.({ type: "session", state, sessionId, subject: subject.id, date });
+  const emitSession = (state: string, sid?: number) =>
+    onProgress?.({ type: "session", state, sessionId: sid, subject: subject.id, date });
 
-  // Ensure subject exists; regime is already seeded by the first session.
+  // Regime is already seeded by the first session; later ones self-seed. The
+  // subject itself is ensured ABOVE, before the session that references it —
+  // moving it here would reintroduce the foreign-key failure a clean database
+  // hits on its first session.
   //
-  // `regimeAsof` (defaults to the session's own `date`) is deliberately a
-  // SEPARATE knob from the committee session's business `date`: a session can
-  // legitimately be labelled with any demo-narrative date (including one ahead
-  // of real wall-clock time, to simulate day-over-day rotation without waiting
-  // a day in CI), but a regime SNAPSHOT is a classification of real market
-  // indicators and can never legitimately be produced for a date that has not
-  // happened yet — fetchRegimeSnapshots (backend/src/analytics/report/
-  // projections.ts, issue #382) now enforces `date <= today` precisely so such
-  // a row can never be served, so requesting one here would just time out.
+  // `regimeAsof` (defaulting to the session's own date) stays a SEPARATE knob
+  // from the session date, and is still worth having after 0022 even though the
+  // reason it was introduced is gone. A regime SNAPSHOT classifies real market
+  // indicators, so it can never be produced for a date that has not happened —
+  // fetchRegimeSnapshots enforces `date <= today` (issue #382). It used to be
+  // possible to violate that from here, because a session could be LABELLED
+  // with any demo-narrative date, including tomorrow. It no longer can be:
+  // Postgres stamps convened_at and derives the date, so a session date is
+  // always "now" and can never run ahead of the boundary. What survives is the
+  // ability to pin a classification to a different day than the sitting — e.g.
+  // a session convened just after midnight UTC reading yesterday's snapshot.
   if (sessionIndex > 0) {
-    await admin("subject", subject);
     await runRegimeClassify(opts?.regimeAsof ?? date, rail);
   }
 
   // Seed the reference-shaped subject fixtures (subject row + subject snapshot the
-  // portfolio donut reads + trailing regime history for the sparkline) BEFORE the
-  // session opens, so the subject/snapshot routes return data for the session date
-  // and the memo page renders full charts. Idempotent; dated at the session date.
+  // portfolio donut reads + trailing regime history for the sparkline) so the
+  // subject/snapshot routes return data for the session date and the memo page
+  // renders full charts. Idempotent; dated at the session date. This now runs
+  // just AFTER the session row exists, because that row is what says what the
+  // date is; the brief (which reads these fixtures) is still published after.
   await admin("subject_fixtures", { id: subject.id, name: subject.name, date });
 
-  // Lifecycle through worker job queue.
-  await enqueueLifecycleJob("open_session", { date, subjectId: subject.id });
-  const sd = await waitForSessionState(date, subject.id, "scheduled");
-  const sessionId = sd.session.id;
   emitSession("scheduled", sessionId);
 
   await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes: 60, prevOutcome });
@@ -406,23 +511,29 @@ export async function runSession(
 }
 
 async function main() {
+  // `today` is this run's regime as-of day, NOT a session date — the database
+  // dates sessions (0022). The banner used to read `today → tomorrow` because
+  // session 2 was labelled a day ahead; it no longer is, and printing a date
+  // range the run cannot produce would be the first thing to mislead a reader
+  // of the log.
   const today = new Date().toISOString().slice(0, 10);
-  const tomorrow = new Date(Date.now() + 86400_000).toISOString().slice(0, 10);
-  console.log(`\n=== Committee REST E2E (${today} → ${tomorrow}) ===`);
+  console.log(`\n=== Committee REST E2E (regime as-of ${today}; sessions dated by the database) ===`);
 
   // The member-container rail for this stack (issue #361 Phase 2), resolved
   // once from this process's environment — the demo readiness gate hands this
   // entry point the stack's exact compose env.
   const rail = railFromEnv();
 
-  // Setup (reset + subject are direct admin calls; the regime snapshot is the
-  // PRODUCER's own job — issue #361 Phase 4)
-  await admin("reset");
+  // Setup (subject is a direct admin call; the regime snapshot is the
+  // PRODUCER's own job — issue #361 Phase 4). NOTHING IS WIPED: the
+  // session-wiping admin("reset") that used to open this entry point is gone
+  // along with the endpoint behind it — an ephemeral database is deleted or
+  // inspected whole, and no bring-up may TRUNCATE rows it did not create.
   await runRegimeClassify(today, rail);
   await admin("subject", SUBJECTS[0]);
 
   // Session 1: today's subject
-  const s1 = await runSession(today, SUBJECTS[0], 1, { rail });
+  const s1 = await runSession(SUBJECTS[0], 1, { rail });
 
   // ── New member added mid-run ──────────────────────────────────────────────
   // Demonstrates a member added AFTER session 1, participating in session 2
@@ -487,17 +598,18 @@ async function main() {
   });
   console.log(`  cross-role: member → admin close → ${adminCloseRes.status}${regimeGateOpen ? " (insecure mode — gate open)" : " (enforced)"}`);
 
-  // Session 2: next day, different subject (demonstrates rotation + cross-session
-  // awareness). Eos (added to the roster mid-run above) enrolls and
+  // Session 2: a SECOND sitting, different subject (demonstrates rotation +
+  // cross-session awareness). Eos (added to the roster mid-run above) enrolls and
   // participates in its own container alongside the original members.
   //
-  // The session's own business `date` is still `tomorrow` (proving committee
-  // infra handles a session dated ahead of session 1 without literally waiting
-  // a day), but `regimeAsof` pins the regime classification to the REAL
-  // `today` — a regime snapshot dated `tomorrow` can never be served post-#382
-  // (fetchRegimeSnapshots enforces `date <= today`), so asking for one here
-  // would just time out against a boundary that is doing exactly its job.
-  await runSession(tomorrow, SUBJECTS[1], 2, { prevOutcome: s1.pub.session.synthesis, rail, regimeAsof: today });
+  // It used to be dated `tomorrow` to prove the infra handles a session dated
+  // ahead of session 1, with `regimeAsof: today` pinning the classification back
+  // to a real day (a snapshot dated tomorrow can never be served — #382 enforces
+  // `date <= today`). Neither is expressible now, and neither is needed: since
+  // 0022 the DATABASE dates a session, so two sittings on one day are simply two
+  // rows with different convened_at rather than one row relabelled to a day that
+  // has not happened. The rotation this proves is the real one.
+  await runSession(SUBJECTS[1], 2, { prevOutcome: s1.pub.session.synthesis, rail });
 
   // Verify list_sessions returns both sessions
   const all = await fetch(`${backendUrl()}${ROUTES.committee.sessions}`).then((r) => r.json());

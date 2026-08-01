@@ -6,6 +6,17 @@
 // compose at module load, so it is only imported when this file is executed
 // directly.
 export { resolveDemoEnv, type DemoEnvResolution } from "./lib/demo-env.ts";
+// Same reason: the --external-pg resolver (scripts/lib/demo-external-pg.ts) is
+// importable by scripts/tests/unit/demo-external-pg.test.ts without dragging in
+// demo-main's side-effectful bring-up.
+export {
+  externalPgOverlayYaml,
+  parseEnvFile,
+  redactPostgresUrl,
+  resolveExternalPg,
+  urlFromDiscreteKeys,
+  type ExternalPgResolution,
+} from "./lib/demo-external-pg.ts";
 
 if (import.meta.main) {
   await import("./lib/demo-main.ts");

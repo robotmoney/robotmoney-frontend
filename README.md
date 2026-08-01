@@ -48,7 +48,7 @@ BACKEND_URL=http://127.0.0.1:<demo api port> bun run goldens:update
 ```bash
 cp .env.example .env                      # set DATABASE_URL
 # Host ports are REQUIRED inputs to raw compose now — there is no default
-# (see "Ports: always random, except --stage"). Pick any free port:
+# (see "Ports: always random, except --static-port"). Pick any free port:
 POSTGRES_PORT=5433 docker compose up -d postgres   # local Postgres
 
 cd backend
@@ -78,7 +78,7 @@ bun run demo         # provisions the stack and stays up
 
 Every published host port is drawn **free at boot, on every run** — there is no
 fixed default, and `WEB_PORT` / `POSTGRES_PORT` are no longer inputs (see
-[Ports](#ports-always-random-except---stage) below). The demo prints the port it
+[Ports](#ports-always-random-except---static-port) below). The demo prints the port it
 picked; open `http://127.0.0.1:<that port>/committee`. The demo writes its run
 state to `.agents/demo-state.json`. Stop it with Ctrl-C, or manage a
 backgrounded/stale run from that state file:
@@ -87,6 +87,75 @@ backgrounded/stale run from that state file:
 bun run demo:status
 bun run demo:down
 ```
+
+### `bun run demo:stage` — the standing/public demo in one command
+
+```bash
+bun run demo:stage
+```
+
+A thin wrapper that decides two flags and then runs the ordinary demo, printing
+the equivalent `bun run demo -- …` so the choice is always reproducible by hand:
+
+- **`--static-port` always** — this is the boot a tunnel points at, so it takes
+  the fixed host port rather than whatever Docker hands out.
+- **`--external-pg` when `.env` describes a Postgres** — otherwise the demo's own
+  ephemeral container, exactly as a plain `bun run demo` would use. An `.env`
+  that is missing, has no database, or has an unusable one falls back quietly;
+  nothing about probing may fail a boot.
+
+This is the one command allowed to *infer* a data path, because inferring is its
+documented job and it announces the choice before anything starts. `bun run demo
+-- …` stays fully explicit. Extra flags pass through: `bun run demo:stage --
+--no-tui`.
+
+### Use a managed Postgres instead of the ephemeral container
+
+By default the demo runs its own throwaway `postgres` container and a
+fresh-per-run `pgdata` volume. `--external-pg` runs it against a managed server
+instead, and starts **no postgres container at all** — no service, no volume, no
+published pg port:
+
+```bash
+bun run demo -- --external-pg
+```
+
+The connection details come from **`.env`**, which the flag reads directly (not
+from the ambient environment — a stray exported `host` must never decide which
+database a demo writes to). `DATABASE_URL` wins when present; otherwise the
+discrete keys DigitalOcean's connection panel prints are assembled into one, so
+a pasted panel works unedited:
+
+```ini
+# either this…
+DATABASE_URL=postgres://user:password@host:25060/defaultdb?sslmode=require
+
+# …or exactly what DigitalOcean's "Connection details" panel gives you
+username = doadmin
+password = …
+host     = private-dbaas-….g.db.ondigitalocean.com
+port     = 25060
+database = defaultdb
+sslmode  = require
+```
+
+The **switch** stays a CLI argument (same hard rule as `--pg-data` and
+`--static-port`): pointing a demo at a persistent database is a property of one
+deliberate invocation, never of a shell that happens to have something exported.
+`.env` only supplies the address.
+
+**This writes to a real database.** The boot runs migrations and seeds against
+that server, and the workers write to it for as long as the demo runs.
+`demo:down` and `demo:clean` cannot undo any of it — they only ever touch
+containers and Docker volumes, and there are none here. `demo:status` reports
+`pg=EXTERNAL` rather than a port, and the state file records only a
+password-redacted URL.
+
+Refusals are loud, never a silent fall back to the throwaway container: a
+missing `.env`, an unparseable or non-`postgres://` URL, or a URL pointing at
+`postgres`/`localhost` (which inside a container means the container itself)
+each fail the boot with the reason. `--external-pg` and `--pg-data` are mutually
+exclusive.
 
 ### Attach a prospective agent
 
@@ -127,7 +196,7 @@ The built-in demo agents and the built-in onboarding loop keep running at the sa
 time. A separately prompted agent proves that a non-demo member can join through
 the public apply → activation → claim → `rmpc`-signed REST submission path.
 
-### Ports: always random, except `--stage`
+### Ports: always random, except `--static-port`
 
 Every published host port (api **and** postgres) is drawn free at boot, on every
 run. There is no fixed default anywhere: `docker-compose.yml` requires
@@ -143,11 +212,14 @@ locally), while CI — which has no `.env` — took the preferred-48787 path and
 raced the standing stage demo for the exact port `cloudflared` routes
 `stage.robotmoney-labs.dev` to. That was a real outage.
 
-The single exception is the stage boot:
+The single exception is the pinned boot:
 
 ```bash
-bun run demo -- --stage
+bun run demo -- --static-port
 ```
+
+(Previously spelled `--stage`. That name described an environment when the flag
+only ever pinned a port; `--stage` still works and prints a deprecation warning.)
 
 - Pins **only** the web/api host port to `48787`, the tunnel origin. Postgres
   (and anything else published) stays random.
@@ -192,6 +264,7 @@ bun run demo:clean           # delete stopped demos' pg data volumes (label robo
 bun run demo:reap -- --dry-run          # SHOW errant containers a sweep would remove (changes nothing)
 bun run demo:reap -- --older-than 6h    # …then actually reap them (labels only, never name matching)
 bun run demo -- --pg-data <host-dir>   # resumable demo: bind postgres data to <host-dir>
+bun run demo -- --external-pg          # run against the MANAGED Postgres in .env (no pg container)
 bun run preview              # serve the SPA with /api/* mocked from goldens (random port) — root
 bun run goldens:update       # recapture goldens from a running backend (BACKEND_URL) — root
 docker compose down -v       # tear down + wipe the db volume (ephemeral reset)

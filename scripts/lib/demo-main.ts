@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTui, color, hr, truncate, spinner, visibleLen, type Tui } from "./tui.ts";
 import { resolveDemoEnv } from "./demo-env.ts";
+import { EXTERNAL_PG_FLAG, externalPgOverlayYaml, resolveExternalPg } from "./demo-external-pg.ts";
 import { listDemoVolumes, makeDockerRunner, purgeDemoEvalContainers, removeDemoVolumes } from "./demo-volumes.ts";
 import { provisionDemoAnalyticsTokenAfterPreflight, removeDemoAnalyticsToken } from "./demo-secret.ts";
 import { decideRegimeBootAction, REGIME_BOOT_MAX_ATTEMPTS, type RegimeBootStaleness } from "./regime-boot.ts";
@@ -11,7 +12,6 @@ import {
   planSubjectSchedules,
   renderCadenceLine,
   resolveDemoCadence,
-  sessionDateFor,
   type SubjectCadencePlan,
 } from "./demo-schedule.ts";
 import {
@@ -28,6 +28,8 @@ import {
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./demo-newcomers.ts";
+import { personaIdentity } from "./committee/persona-keys.ts";
+import { admissionDelayMs, decideAdmission, planAdoptions } from "./committee/roster-plan.ts";
 import { memberHomeVolumeName } from "../agent/member-agent.ts";
 import {
   assertStageWebPortFree,
@@ -80,38 +82,53 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // (D21 retired the member-facing MCP server — there is no longer an `mcp`
 // container or host port; members reach the committee REST API on the api port.)
 //
-// THE ONE EXCEPTION: `bun run demo -- --stage` appends docker-compose.stage.yml,
+// THE ONE EXCEPTION: `bun run demo -- --static-port` appends docker-compose.stage.yml,
 // which pins the api's host port (only) to 48787, the tunnel origin. It is a
 // CLI ARGUMENT, never an env var — the same hard rule `--pg-data` follows (no
 // per-property env config) — because pinning the tunnel port is a property of
 // one deliberate invocation, never of a shell that happens to have something
 // exported. It FAILS LOUDLY when the port is held rather than falling back,
 // because cloudflared routes 48787 and nothing else: a fallback would produce a
-// green boot serving a 502. Postgres stays Docker-assigned even under --stage.
-const stageMode = process.argv.includes("--stage");
+// green boot serving a 502. Postgres stays Docker-assigned even when pinned.
+// `--static-port` says what the flag DOES: it pins the web/api host port to the
+// one fixed number in the system instead of letting Docker assign one. The old
+// name, `--stage`, described an environment rather than an effect, which made it
+// read like "boot the staging environment" — it never did that; it only pinned a
+// port. Still accepted, with a warning, so a committed cloudflared runbook or an
+// operator's muscle memory keeps working.
+const STATIC_PORT_FLAG = "--static-port";
+const LEGACY_STAGE_FLAG = "--stage";
+const usedLegacyStageFlag = process.argv.includes(LEGACY_STAGE_FLAG);
+const staticPortMode = process.argv.includes(STATIC_PORT_FLAG) || usedLegacyStageFlag;
+if (usedLegacyStageFlag) {
+  console.warn(
+    `[demo] ${LEGACY_STAGE_FLAG} is DEPRECATED and now means ${STATIC_PORT_FLAG} — same behaviour, clearer name ` +
+      `(it pins the host port; it never selected an environment). Update your invocation.`,
+  );
+}
 
 // …and the same argument selects the demo's CADENCE PROFILE (issue #371). A
-// `--stage` boot is the standing/public demo, so it convenes each subject every
+// `--static-port` boot is the standing/public demo, so it convenes each subject every
 // 6 h with the subjects phase-offset by 3 h and puts the analytics-producer on a
 // 3-hourly research beat; every other boot (including CI) keeps today's fast
 // ~2-min values. Every number lives in scripts/lib/demo-schedule.ts — this file
 // carries no cadence literal of its own.
-const cadence = resolveDemoCadence({ stage: stageMode });
+const cadence = resolveDemoCadence({ stage: staticPortMode });
 
 // Loud, never silent. A stale `.env` (or an exported shell var) carrying
 // WEB_PORT/POSTGRES_PORT no longer influences anything; say so with the reason
 // rather than letting an operator believe a pin took effect.
 for (const warning of stalePortEnvWarnings(process.env)) console.warn(`[demo] ${warning}`);
 
-if (stageMode) {
+if (staticPortMode) {
   console.warn(
     `[demo] ############################################################\n` +
-      `[demo] # --stage: the web/api host port is PINNED to ${STAGE_WEB_PORT}.\n` +
+      `[demo] # --static-port: the web/api host port is PINNED to ${STAGE_WEB_PORT}.\n` +
       `[demo] # This is the ONE fixed port in the system — cloudflared routes\n` +
       `[demo] # stage.robotmoney-labs.dev to it and to nothing else. Only one\n` +
-      `[demo] # stack can hold it at a time, so do not run --stage alongside\n` +
-      `[demo] # another --stage boot or CI's demo. Postgres (and every other\n` +
-      `[demo] # published port) is still DOCKER-ASSIGNED under --stage.\n` +
+      `[demo] # stack can hold it at a time, so do not run --static-port\n` +
+      `[demo] # alongside another pinned boot or CI's demo. Postgres (and every\n` +
+      `[demo] # other published port) is still DOCKER-ASSIGNED.\n` +
       `[demo] ############################################################`,
   );
 }
@@ -134,7 +151,7 @@ async function stagePreflight(): Promise<void> {
       console.error(
         `[demo] NOT falling back to another port: cloudflared routes only :${STAGE_WEB_PORT}, so a\n` +
           `[demo] fallback would boot green and serve a 502 to every visitor. Free the port\n` +
-          `[demo] (e.g. \`bun run demo:down\` for a standing demo) and re-run, or drop --stage\n` +
+          `[demo] (e.g. \`bun run demo:down\` for a standing demo) and re-run, or drop --static-port\n` +
           `[demo] to boot on a Docker-assigned port with no tunnel.`,
       );
       process.exit(1);
@@ -142,13 +159,48 @@ async function stagePreflight(): Promise<void> {
     throw err;
   }
 }
-if (stageMode) await stagePreflight();
+if (staticPortMode) await stagePreflight();
+
+// --- Optional external/managed Postgres (--external-pg) ---------------------
+// `bun run demo -- --external-pg` runs the stack against the managed Postgres
+// whose details live in `.env`, and starts NO postgres container: no service, no
+// pgdata volume, no published pg host port. Resolved HERE, before any credential
+// is minted or any container is created, so a missing/blank DATABASE_URL fails
+// on an untouched host rather than half-way through a bring-up. See
+// scripts/lib/demo-external-pg.ts for why it is a CLI argument whose value comes
+// from a file rather than an env var.
+//
+// CONSEQUENCE, stated once and loudly at boot: a demo pointed at a real database
+// MIGRATES AND SEEDS IT, and its workers write to it for as long as it runs.
+// That is the point of the flag, but it is not something to discover afterwards.
+let externalPg: ReturnType<typeof resolveExternalPg>;
+try {
+  externalPg = resolveExternalPg(process.argv, { envFilePath: join(repoRoot, ".env") });
+} catch (err) {
+  console.error(`[demo] FATAL: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+if (externalPg.enabled) {
+  console.warn(
+    `[demo] ############################################################\n` +
+      `[demo] # ${EXTERNAL_PG_FLAG}: NO postgres container will be started.\n` +
+      `[demo] # target: ${externalPg.redactedUrl}\n` +
+      `[demo] # source: .env (${externalPg.source})\n` +
+      `[demo] # This boot RUNS MIGRATIONS AND SEEDS against that server, and\n` +
+      `[demo] # its workers write to it until the demo is stopped. Nothing in\n` +
+      `[demo] # demo:down or demo:clean can undo that — those only ever touch\n` +
+      `[demo] # containers and Docker volumes, and there are none here.\n` +
+      `[demo] ############################################################`,
+  );
+}
 
 // Filled in from `docker compose port` once the containers exist — see
 // applyHostPorts() below. They are 0 until then, and nothing may publish a URL
 // built from them before that: a number nobody assigned is worse than no number.
+// pgPort stays NULL for an --external-pg boot: no container, so no published
+// port ever exists (distinct from 0, which would read as "not discovered yet").
 let apiPort = 0;
-let pgPort = 0;
+let pgPort: number | null = 0;
 let backendUrl = "";
 
 // WHICH ENVIRONMENT this boot belongs to (scripts/stack/naming.ts): `ci` under
@@ -169,7 +221,13 @@ const project = process.env.DEMO_PROJECT?.trim() || stackProjectName("stack", st
 // the shared stack config (scripts/stack/config.ts), which carries the
 // "127.0.0.1, never localhost" rationale for backendUrl. DB_USER/DB_PASSWORD/
 // DB_NAME stay as local aliases for writeStateFile() and the psql polls.
-const database = DEFAULT_STACK_DATABASE;
+// With --external-pg the managed URL is carried on the database config, which is
+// what makes internalDatabaseUrl() hand containers that URL and what makes
+// scripts/stack drop the postgres service. Without it, today's baked-in
+// throwaway credentials are unchanged.
+const database = externalPg.enabled
+  ? { ...DEFAULT_STACK_DATABASE, url: externalPg.url }
+  : DEFAULT_STACK_DATABASE;
 const DB_USER = database.user;
 const DB_PASSWORD = database.password;
 const DB_NAME = database.name;
@@ -181,9 +239,24 @@ const databaseUrl = internalDatabaseUrl(database);
 // The --stage overlay belongs to the BASE list, not to the run-only extension:
 // it is the one file that names a host port, so demo:status must resolve the
 // same topology when it asks `docker compose port` what is actually published.
-const composeFilesBase = ["docker-compose.yml", "docker-compose.demo.yml", ...(stageMode ? [STAGE_COMPOSE_FILE] : [])]
+const composeFilesBase = ["docker-compose.yml", "docker-compose.demo.yml", ...(staticPortMode ? [STAGE_COMPOSE_FILE] : [])]
   .join(":");
 let composeFilesRun = composeFilesBase;
+
+// The --external-pg overlay, generated the same way (and for the same reason) as
+// the --pg-data bind overlay below: a GENERATED file appended LAST, never a
+// committed one, because it encodes one invocation's choice rather than a
+// property of the repo. It removes the postgres service and the pgdata volume
+// and drops every `depends_on: postgres`, so `docker compose up` cannot pull the
+// container back in through a dependency edge. Run-only (like --pg-data):
+// demo:down / demo:status stop and inspect BY PROJECT, and learn that this boot
+// had no postgres from the state file's externalPg flag instead.
+if (externalPg.enabled) {
+  const overrideFile = join(repoRoot, ".agents", `demo-${project}-external-pg.yml`);
+  mkdirSync(dirname(overrideFile), { recursive: true });
+  writeFileSync(overrideFile, externalPgOverlayYaml(externalPg.redactedUrl!));
+  composeFilesRun = `${composeFilesBase}:${overrideFile}`;
+}
 const researchKeys = ["channel-divergence", "late-cycle-signals"];
 
 // --- Optional resumable postgres data (issue: demo persistent volumes) --------
@@ -211,6 +284,18 @@ function parsePgDataArg(): string | undefined {
   return v && v.trim() ? v.trim() : undefined;
 }
 const rawPgData = parsePgDataArg();
+// Mutually exclusive by construction, not by precedence: --pg-data bind-mounts
+// the data directory OF the ephemeral postgres container, and --external-pg
+// means there is no such container. Silently honouring one would leave the
+// operator believing a durable data location took effect when it did not.
+if (rawPgData && externalPg.enabled) {
+  console.error(
+    `[demo] FATAL: --pg-data and ${EXTERNAL_PG_FLAG} are mutually exclusive. --pg-data binds the data directory of ` +
+      `the ephemeral postgres container; ${EXTERNAL_PG_FLAG} starts no such container (the managed server owns its ` +
+      `own storage). Pass one or the other.`,
+  );
+  process.exit(1);
+}
 const pgDataDir = rawPgData ? resolve(rawPgData) : undefined;
 if (pgDataDir) {
   mkdirSync(pgDataDir, { recursive: true }); // created if absent; same value across runs = same data
@@ -228,7 +313,7 @@ if (pgDataDir) {
       `# Safe to delete when no demo is using this dir.\n` +
       `services:\n  postgres:\n    volumes:\n      - ${pgDataDir}:/var/lib/postgresql/data\n`,
   );
-  composeFilesRun = `${composeFilesBase}:${overrideFile}`;
+  composeFilesRun = `${composeFilesRun}:${overrideFile}`;
 }
 
 // Admin dashboard password (/admin — the task-queue jobs dashboard, guarded by
@@ -261,7 +346,7 @@ const analyticsToken = credentials.analyticsToken;
 // Resolve every model/data-path preflight before provisioning a bearer file.
 // A typo or missing funded model key must not leak a temp credential directory
 // for a stack that never reached creation.
-const demoEnv = resolveDemoEnv(process.env, { stage: stageMode });
+const demoEnv = resolveDemoEnv(process.env, { stage: staticPortMode });
 const analyticsTokenFile = provisionDemoAnalyticsTokenAfterPreflight(project, analyticsToken, () => {
   if (!process.env.CI || process.env.ONBOARDING_REAL_EVAL === "1") {
     resolveModelConfig(process.env);
@@ -551,7 +636,7 @@ const fx = (isFixed: boolean) => (isFixed ? " (fixed)" : "");
 log(
   `project=${project}${fx(Boolean(process.env.DEMO_PROJECT?.trim()))}  ` +
     `env=${stackEnvironment.class}/${stackEnvironment.hash}  ` +
-    `host ports=(assigned by Docker at start${stageMode ? "; api PINNED to :" + STAGE_WEB_PORT + " by --stage" : ""})`,
+    `host ports=(assigned by Docker at start${staticPortMode ? "; api PINNED to :" + STAGE_WEB_PORT + " by --stage" : ""})`,
 );
 
 // The single point at which this process learns its host ports. Everything
@@ -563,8 +648,11 @@ function applyHostPorts(ports: StackHostPorts): void {
   pgPort = ports.pgPort;
   backendUrl = hostBackendUrl(apiPort);
   state.services = serviceRoutes(backendUrl);
-  log(`host ports (Docker-assigned): api=:${apiPort}${stageMode ? " (STAGE-PINNED — cloudflared origin)" : ""}  pg=:${pgPort}`);
-  if (!stageMode && apiPort === STAGE_WEB_PORT) {
+  log(
+    `host ports (Docker-assigned): api=:${apiPort}${staticPortMode ? " (STAGE-PINNED — cloudflared origin)" : ""}  ` +
+      `pg=${pgPort === null ? `EXTERNAL (${externalPg.redactedUrl}) — no container, no published port` : `:${pgPort}`}`,
+  );
+  if (!staticPortMode && apiPort === STAGE_WEB_PORT) {
     // Possible but rare: Docker draws from the host's ephemeral range, which
     // CONTAINS 48787 — it can only happen while no stage demo holds it. Not
     // fatal (nothing is broken; cloudflared would simply route the stage
@@ -683,16 +771,23 @@ function writeStateFile(): void {
     // reconstruct the same compose topology, and so `demo:status` can say out
     // loud that this demo is the one the tunnel points at. Provenance only —
     // the port itself is whatever the daemon reports.
-    stage: stageMode,
+    stage: staticPortMode,
     // The environment this boot belongs to, so the container/volume labels
     // demo:down and demo:status interpolate match the ones `up` stamped.
     envClass: stackEnvironment.class,
     envHash: stackEnvironment.hash,
     composeFiles: composeFilesBase,
-    databaseUrl,
-    dbUser: DB_USER,
-    dbPassword: DB_PASSWORD,
-    dbName: DB_NAME,
+    // REDACTED for an --external-pg boot. The baked-in demo credentials below
+    // are deliberately recorded (they are not secrets — a throwaway container
+    // owns them, and demo:down/status need them to reach it), but a managed
+    // server's password is a real credential and this file lives inside the
+    // checkout. `externalPg` is what demo:down / demo:status branch on; the
+    // redacted URL is provenance for a human reading the file.
+    externalPg: externalPg.enabled,
+    databaseUrl: externalPg.enabled ? externalPg.redactedUrl : databaseUrl,
+    dbUser: externalPg.enabled ? "(external — see .env)" : DB_USER,
+    dbPassword: externalPg.enabled ? "(external — see .env)" : DB_PASSWORD,
+    dbName: externalPg.enabled ? "(external — see .env)" : DB_NAME,
     // Path only (never the bearer value), so demo:down can remove the external
     // per-session secret directory after it has successfully stopped Compose.
     analyticsTokenFile,
@@ -700,7 +795,10 @@ function writeStateFile(): void {
     // Data location (issue: demo persistent volumes). Exactly one is set:
     //   pgDataDir → a `--pg-data` host bind dir (resume with the same flag);
     //   pgVolume  → the fresh-per-run named volume (survives; reclaim via demo:clean).
-    ...(pgDataDir ? { pgDataDir } : { pgVolume: `${project}_pgdata` }),
+    // NEITHER is set for --external-pg: this stack created no volume and bound no
+    // host dir, and naming one would send demo:clean after storage that does not
+    // exist while implying the managed server's data is this demo's to reclaim.
+    ...(externalPg.enabled ? {} : pgDataDir ? { pgDataDir } : { pgVolume: `${project}_pgdata` }),
     createdAt: new Date().toISOString(),
   };
   writeFileSync(stateFile, JSON.stringify(state, null, 2));
@@ -709,6 +807,15 @@ function writeStateFile(): void {
 // After a signal teardown, tell the operator their data survived and how to resume
 // or reclaim it (issue: demo persistent volumes — teardown keeps the data now).
 function printResumeHint(): void {
+  if (externalPg.enabled) {
+    console.log(`[demo] the database was EXTERNAL (${externalPg.redactedUrl}) — its data was never this demo's to keep or reclaim.`);
+    // EVERY flag this boot ran with, not just the pg one: both are CLI-only by
+    // design, so nothing about the next boot is inferred from state. A hint that
+    // dropped --stage would resume the demo on a Docker-assigned port, leaving
+    // the tunnel pointing at nothing.
+    console.log(`[demo]   resume:  bun run demo --${staticPortMode ? " --stage" : ""} ${EXTERNAL_PG_FLAG}`);
+    return;
+  }
   if (pgDataDir) {
     console.log(`[demo] postgres data kept in --pg-data dir ${pgDataDir}.`);
     console.log(`[demo]   resume:  bun run demo -- --pg-data ${pgDataDir}`);
@@ -788,6 +895,23 @@ function secsUntilNext(kind: string): number | null {
   if (!nr) return null;
   return Math.max(0, Math.round(nr.secondsUntil - (Date.now() - nr.fetchedAt) / 1000));
 }
+// Both legacy polls below read the queue tables directly. With the ephemeral
+// container that is `docker compose exec -T postgres psql`; with --external-pg
+// there is no container to exec into, so a one-shot postgres:17-alpine client
+// is run instead (the same image the ephemeral service uses, so it is usually
+// already local; the first poll pulls it if not, and these polls are defensive
+// — a failure is logged and skipped either way).
+//
+// The URL crosses into the container by `-e DATABASE_URL` with NO value, i.e.
+// inherited from dockerEnv, so the managed server's password never appears in
+// this host's process list the way `-e DATABASE_URL=<url>` would put it there.
+function psqlQuery(q: string): Bun.SyncSubprocess {
+  const argv = externalPg.enabled
+    ? ["docker", "run", "--rm", "-e", "DATABASE_URL", "postgres:17-alpine", "sh", "-c",
+       `psql "$DATABASE_URL" -tAF'|' -c ${JSON.stringify(q)}`]
+    : ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", DB_USER, "-d", DB_NAME, "-tAF", "|", "-c", q];
+  return Bun.spawnSync(argv, { cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe" });
+}
 function mapJobState(status: string): ResearchEntry["state"] {
   if (status === "pending") return "queued";
   if (status === "running") return "running";
@@ -820,10 +944,7 @@ async function pollResearch(): Promise<void> {
     "COALESCE(jr.error,'') " +
     "FROM jobs j LEFT JOIN job_runs jr ON jr.job_id = j.id " +
     "WHERE j.kind IN ('regime.classify','research.refresh') ORDER BY j.id DESC LIMIT 8";
-  const r = Bun.spawnSync(
-    ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", DB_USER, "-d", DB_NAME, "-tAF", "|", "-c", q],
-    { cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe" },
-  );
+  const r = psqlQuery(q);
   if (r.exitCode !== 0) { log(`research poll query failed (exit ${r.exitCode})`); return; }
   const rows = new TextDecoder().decode(r.stdout).trim().split("\n").filter(Boolean);
   const entries: ResearchEntry[] = [];
@@ -851,10 +972,7 @@ async function pollNextRuns(): Promise<void> {
     "SELECT kind, MIN(GREATEST(0, EXTRACT(EPOCH FROM (next_run_at - now()))))::int " +
     "FROM job_schedules WHERE enabled AND next_run_at IS NOT NULL " +
     "AND kind IN ('regime.classify','research.refresh') GROUP BY kind";
-  const r = Bun.spawnSync(
-    ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", DB_USER, "-d", DB_NAME, "-tAF", "|", "-c", q],
-    { cwd: repoRoot, env: dockerEnv, stdout: "pipe", stderr: "pipe" },
-  );
+  const r = psqlQuery(q);
   if (r.exitCode !== 0) { log(`next-run poll query failed (exit ${r.exitCode})`); return; }
   const rows = new TextDecoder().decode(r.stdout).trim().split("\n").filter(Boolean);
   for (const row of rows) {
@@ -1544,12 +1662,22 @@ async function main(): Promise<void> {
     backendUrl,
   };
 
-  // One-time setup: reset once (clears any prior demo history) + seed regime.
+  // One-time setup: seed regime. NOTHING IS WIPED HERE.
+  //
+  // This used to begin with `admin("reset")`, a TRUNCATE of every committee
+  // session, brief, recommendation and (by CASCADE) memo. That was invisible
+  // while each boot got a throwaway postgres volume — there was never anything
+  // to destroy — and became data loss the moment the database outlived the
+  // stack: an --external-pg boot silently erased every previously published
+  // memo, and RESTART IDENTITY made the next boot reuse those memo ids for
+  // different memos. An ephemeral database is deleted or inspected as a whole;
+  // no bring-up may TRUNCATE rows it did not create. The endpoint behind this
+  // call is gone too, so there is no way back to the wiping behaviour.
+  //
   // The regime snapshot is the PRODUCER's own regime.classify command (issue
   // #361 Phase 4), launched against this explicit stack rail and submitted
   // through the analytics HTTP boundary under the producer's credential; the
   // removed admin("regime") classifier path no longer exists.
-  await e2e.admin("reset");
   const today = new Date().toISOString().slice(0, 10);
   await e2e.runRegimeClassify(today, producerRail);
 
@@ -1620,6 +1748,40 @@ async function main(): Promise<void> {
     onboardedHomes,
   };
 
+  // ── Adopt the personas this database already knows ────────────────────────
+  // A persistent database outlives the stack, so by the second boot the roster
+  // already holds personas this process never admitted. Without this they sat on
+  // the roster as historical members and never filed another take — the standing
+  // demo ran three-member sessions while claiming six seats — because their
+  // signing key lived in a per-boot volume and their passphrase only in the
+  // previous process's memory.
+  //
+  // Adoption is possible because a persona's key is COMMITTED
+  // (scripts/lib/committee/fixtures/persona-keys.json): the enroll run below
+  // seeds the container keystore with the known key and re-registers it against
+  // the member id the database already has (registerMember is idempotent by id —
+  // it rebinds the key, mints a token, and the roster cap exempts an existing
+  // member). The persona keeps its id, its name and every take it has filed.
+  //
+  // Only demo characters are adopted: a member with no committed identity is
+  // somebody else's, and inventing a key for them is exactly the duplicate-making
+  // behaviour this replaces.
+  const dbRoster = await e2e.rosterMembers();
+  if (dbRoster === null) {
+    log("roster unreadable at boot — continuing with the built-in members only (no personas adopted)");
+  } else {
+    const seatedIds = new Set<string>(e2e.MEMBERS.map((m: { memberId: string }) => m.memberId));
+    const plan = planAdoptions(dbRoster, seatedIds, (name) => Boolean(personaIdentity(name)));
+    for (const m of plan.duplicates) {
+      log(`persona ${m.name}: ignoring duplicate roster row ${m.id.slice(0, 8)} — one seat per character`);
+    }
+    for (const m of plan.adopt) {
+      e2e.MEMBERS.push({ memberId: m.id, name: m.name, lens: m.lens ?? "returning member", bias: 0, present: true });
+      log(`adopted ${m.name} (${m.id.slice(0, 8)}) from the database — signing with the committed persona key`);
+    }
+    if (plan.adopt.length > 0) log(`committee now ${e2e.MEMBERS.length} seats (${plan.adopt.length} adopted from the database)`);
+  }
+
   async function committeeDriver(): Promise<void> {
     for (;;) {
       // Pick the earliest-due subject and wait until its slot.
@@ -1628,20 +1790,25 @@ async function main(): Promise<void> {
       if (wait > 0) await sleep(wait);
       const subject = due.subject;
       const c = state.committees[subject.id];
-      // Rotate the date per THIS subject's own run count so sessions accumulate
-      // without colliding on UNIQUE(date, subject_id) — the rule itself is the
-      // pure sessionDateFor() in demo-schedule.ts, unchanged in behaviour.
-      const date = sessionDateFor(Date.now(), due.runs);
-      log(`committee → ${date}/${subject.id}`);
+      // NO DATE IS COMPUTED HERE. This used to be
+      // `sessionDateFor(Date.now(), due.runs)` — today plus one synthetic day
+      // per run — invented so repeat sessions would not collide on the old
+      // UNIQUE(date, subject_id), and propped up by a boot-time TRUNCATE of all
+      // session history whenever the demo wanted "today" back. Both are gone:
+      // runSession() opens the session first and reads its date back from the
+      // row Postgres stamped (convened_at, migration 0022), so the only clock
+      // that dates a session is the database's.
+      log(`committee → ${subject.id} (convening; the database dates the session)`);
       c.members = {};
       c.nextAt = 0; // running now → pane shows "running…"
       try {
-        const res = await e2e.runSession(date, subject, due.runs + 1, {
+        const res = await e2e.runSession(subject, due.runs + 1, {
           rail: sessionRail,
           onProgress: tuiActive ? committeeProgress(subject.id) : undefined,
         });
         c.publishedCount++;
         const synth: string = res?.pub?.session?.synthesis ?? "";
+        const date: string = res?.pub?.session?.date ?? "(unknown)";
         c.history.push({ date, synthesis: synth });
         if (c.history.length > 4) c.history.shift();
         log(`committee published ${date}/${subject.id}`);
@@ -1716,8 +1883,23 @@ async function main(): Promise<void> {
     };
   }
   async function onboardingDriver(): Promise<void> {
+    let admitted = 0;
     for (let n = 0; n < NEWCOMER_NAMES.length; n++) {
-      const delay = n === 0 ? cadence.onboardingFirstMs : cadence.onboardingIntervalMs;
+      // PRE-FILTER, before the wait. A persona this database already holds costs
+      // nothing to pass over: the interval paces real admissions, and sleeping
+      // 6 h to say "no" to a name would idle a restarted standing demo for a
+      // full day before it reached the first genuinely new character. The
+      // authoritative check still happens after the wait (below) — a name can be
+      // taken while this one sleeps — so this only ever skips work early, never
+      // admits anything it should not.
+      const upNext = plannedNewcomer(n);
+      if (upNext && !decideAdmission(upNext.identity.name, await e2e.existingMemberNames()).admit) {
+        log(`onboarding ${upNext.identity.name} skipped — already on the roster (this database has been onboarded before)`);
+        continue;
+      }
+      // Counted from ADMISSIONS, not from loop passes, so the first character
+      // this boot actually admits still arrives promptly.
+      const delay = admissionDelayMs(admitted, cadence.onboardingFirstMs, cadence.onboardingIntervalMs);
       const dueAt = Date.now() + delay;
       // Preview the next few admissions (this one + its successors, if any are
       // left in the fixed list) with countdowns.
@@ -1731,6 +1913,26 @@ async function main(): Promise<void> {
       const planned = plannedNewcomer(n);
       if (!planned) break; // exhausted the fixed roster — stop, no generated fallback
       const { identity, lens, bias } = planned;
+      // ALREADY ON THE ROSTER? The newcomer list is indexed by a counter that
+      // restarts with this process, so against a persistent database every boot
+      // would re-admit Helios and the roster would grow one duplicate per
+      // restart (four Helios rows were observed on the standing demo — two
+      // active, two stranded in `applied`). The database is the authority on who
+      // has already joined; this loop only decides who is NEXT.
+      //
+      // Checked here, immediately before admitting, rather than once at start-up:
+      // an admission takes minutes, and a name can be taken by an operator (or by
+      // a second stack) in the meantime.
+      const decision = decideAdmission(identity.name, await e2e.existingMemberNames());
+      if (!decision.admit) {
+        state.upcoming = [];
+        log(
+          decision.reason === "roster-unreadable"
+            ? `onboarding ${identity.name} skipped — roster is unreadable, refusing to risk a duplicate`
+            : `onboarding ${identity.name} skipped — already on the roster (this database has been onboarded before)`,
+        );
+        continue;
+      }
       // Roster cap: once the active committee reaches the contract's
       // COMMITTEE_ROSTER_CAP, stop admitting — the same finite-roster bound
       // above already stops the demo from growing forever, but this stays as
@@ -1823,6 +2025,7 @@ async function main(): Promise<void> {
           passphrase: keystorePassphrase,
         });
         e2e.MEMBERS.push({ memberId: result.memberId!, name: identity.name, lens, bias, present: true });
+        admitted++; // paces the NEXT wait — skipped names must not count
         setOnboardStep(entryId, "session", "running");
         // Classified on the success path too, so every admission attempt leaves
         // the SAME outcome vocabulary in the log — a run that reads "admitted"

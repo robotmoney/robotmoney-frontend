@@ -132,19 +132,16 @@ test("routes to /projects and renders the directory table with a2 tokens", async
   await expect(tokenlessEmp.locator(".pj-spark-empty")).toBeVisible();
 });
 
-// Issue #346: ANALYTICS stays off site for the cutover, so all three places that
-// advertised the in-domain table have to agree. The nav is asserted here rather
-// than in spa.spec.ts because this spec already loads the shell and the route.
-test("ANALYTICS navigates off site and /projects is de-advertised", async ({ page }) => {
+// ANALYTICS is unpublished: neither the dead external destination nor the
+// development-only in-domain table may be advertised in the shell.
+test("ANALYTICS is absent and /projects is de-advertised", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");
 
-  // Desktop and mobile nav both leave the site, and neither still routes in-domain.
+  // Desktop and mobile nav omit the item, and no link retains either destination.
   const analytics = page.locator('a.nav__link:has-text("Analytics"), a.nav__mlink:has-text("Analytics")');
-  await expect(analytics).toHaveCount(2);
-  for (const href of await analytics.evaluateAll((els) => els.map((e) => e.getAttribute("href")))) {
-    expect(href).toBe("https://analytics.robotmoney.net/projects");
-  }
+  await expect(analytics).toHaveCount(0);
+  await expect(page.locator('a[href="https://analytics.robotmoney.net/projects"]')).toHaveCount(0);
   await expect(page.locator('a[href="/projects"]')).toHaveCount(0);
 
   // The route still resolves for anyone holding the URL, and says what backs it.

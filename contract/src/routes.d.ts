@@ -29,6 +29,7 @@ export const ROUTES: {
     subjectSnapshots: string;
     sessions: string;
     session: string;
+    sessionById: string;
     take: string;
     takePermalink: string;
     openSession: string;
@@ -48,7 +49,7 @@ export const ROUTES: {
     admin: {
       action: string;
       activate: string;
-      reset: string;
+      /** `reset` removed — it wiped published session history (see routes.js). */
       regime: string;
       subject: string;
       subjectFixtures: string;

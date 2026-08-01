@@ -141,7 +141,16 @@ interface SessionsCursor { d: string; g: string; i: string }
 // columns the query orders and filters by, so decoding never has to guess at
 // a numeric offset that would drift as new sessions are inserted.
 function encodeSessionsCursor(row: Record<string, any>): string {
-  const cursor: SessionsCursor = { d: day(row.date), g: instant(row.generated_at) ?? "", i: String(row.id) };
+  // postgres.js decodes timestamptz as a JavaScript Date, which truncates
+  // PostgreSQL's microseconds to milliseconds.  The cursor must retain the
+  // database's full ordering precision or same-date rows generated within one
+  // millisecond can fall between pages.  The paginated query selects the exact
+  // timestamp text for this purpose; keep the fallback for callers/tests that
+  // provide a plain session row.
+  const generatedAt = row.cursor_generated_at == null
+    ? instant(row.generated_at) ?? ""
+    : String(row.cursor_generated_at);
+  const cursor: SessionsCursor = { d: day(row.date), g: generatedAt, i: String(row.id) };
   return Buffer.from(JSON.stringify(cursor)).toString("base64url");
 }
 // Throws on a non-empty-but-malformed cursor (mirrors admin/cursor.ts's
@@ -197,7 +206,10 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   const conds = [];
   if (opts.state) conds.push(sql`state = ${opts.state}`);
   const cur = decodeSessionsCursor(opts.cursor);
-  if (cur) conds.push(sql`(date, generated_at, id) < (${cur.d}::date, ${cur.g}::timestamptz, ${cur.i}::uuid)`);
+  // Bind the timestamp as text before casting on the server.  If postgres.js
+  // infers a timestamptz parameter directly it serializes the string through a
+  // JavaScript Date first, undoing the microsecond precision retained above.
+  if (cur) conds.push(sql`(date, generated_at, id) < (${cur.d}::date, ${cur.g}::text::timestamptz, ${cur.i}::uuid)`);
   const where = conds.length ? sql`WHERE ${conds.reduce((a, b) => sql`${a} AND ${b}`)}` : sql``;
 
   // Fetch one extra row to detect "is there a next page" without a second
@@ -205,7 +217,8 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
   // the cursor's row-comparison predicate, so pages are stable even as new
   // sessions are inserted between requests.
   const rows = await sql`
-    SELECT * FROM committee_sessions ${where}
+    SELECT *, generated_at::text AS cursor_generated_at
+    FROM committee_sessions ${where}
     ORDER BY date DESC, generated_at DESC, id DESC
     LIMIT ${limit + 1}`;
   const hasMore = rows.length > limit;
@@ -258,8 +271,38 @@ export async function getSession(
   date: string,
   subjectId: string,
 ): Promise<{ session: ReturnType<typeof toSession>; takes: Awaited<ReturnType<typeof toVerifiedTake>>[] } | null> {
-  const s = (await sql`SELECT * FROM committee_sessions WHERE date = ${date} AND subject_id = ${subjectId}`)[0];
+  // A date no longer identifies ONE session (migration 0022 — a subject may
+  // convene several times a day), so this public route resolves to the LATEST
+  // session that day. That keeps every existing link and the frontend's
+  // (date, subject) fetches working, and is the answer a reader wants: the most
+  // recent word on that subject for that day.
+  const s = (await sql`SELECT * FROM committee_sessions
+                       WHERE date = ${date} AND subject_id = ${subjectId}
+                       ORDER BY convened_at DESC LIMIT 1`)[0];
   if (!s) return null;
+  return withTakes(s);
+}
+
+/**
+ * One session BY ITS OWN ID — the unambiguous handle. `getSession(date, subject)`
+ * can only ever return the latest session of a day, so every earlier session of a
+ * multi-session day is unreachable through it; this is how a list row links to
+ * the exact session it is describing.
+ */
+export async function getSessionById(
+  id: string,
+): Promise<{ session: ReturnType<typeof toSession>; takes: Awaited<ReturnType<typeof toVerifiedTake>>[] } | null> {
+  // `id` is a uuid column, so a non-uuid path segment would make Postgres throw
+  // rather than miss. Treat anything unparseable as simply not found — this is a
+  // public GET and a 404 is the honest answer for "no session with that handle".
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+  const s = (await sql`SELECT * FROM committee_sessions WHERE id = ${id}`)[0];
+  if (!s) return null;
+  return withTakes(s);
+}
+
+// The shared body of both lookups above: a session row plus its verified takes.
+async function withTakes(s: Record<string, unknown>) {
   const takes = await sql`
     SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
            r.memo_url, r.payload, r.signature, r.received_at,
@@ -268,7 +311,7 @@ export async function getSession(
             ORDER BY k.created_at DESC LIMIT 1) AS public_key
     FROM committee_recommendations r
     JOIN committee_members m ON m.id = r.member_id
-    WHERE r.session_id = ${s.id} ORDER BY r.received_at`;
+    WHERE r.session_id = ${s.id as string} ORDER BY r.received_at`;
   return { session: toSession(s), takes: await Promise.all(takes.map(toVerifiedTake)) };
 }
 
@@ -329,10 +372,34 @@ export async function submitRecommendation(token: string, sub: SubmissionInput) 
   if (!memberId) return { ok: false, status: 401, error: "unknown member token" };
   if (memberId !== sub.memberId) return { ok: false, status: 403, error: "token/member mismatch" };
 
+  // Resolve the session by WHICH ONE IS COLLECTING for this subject, not by the
+  // date the member signed. Since migration 0022 a subject may convene several
+  // times a day, so a date no longer identifies a session — but at most one of
+  // them is ever open for submissions, which is what makes this unambiguous.
+  //
+  // The signed date is still CHECKED (below), so the payload members sign is
+  // unchanged and a submission aimed at a different day is still refused; it
+  // just is not the lookup key any more.
+  // The subject's MOST RECENT session, whatever state it is in — not "the
+  // collecting one". Filtering to collecting here would turn "you are too late,
+  // the window closed" (409) into "no such session" (404), which tells an agent
+  // to retry rather than to stop. openSession() will not convene a second
+  // session while one is scheduled/collecting, so the newest row is the only
+  // candidate and this stays unambiguous.
   const session = (await sql`SELECT * FROM committee_sessions
-                             WHERE date = ${sub.date} AND subject_id = ${sub.subjectId}`)[0];
-  if (!session) return { ok: false, status: 404, error: "no session for date/subject" };
+                             WHERE subject_id = ${sub.subjectId}
+                             ORDER BY convened_at DESC LIMIT 1`)[0];
+  if (!session) return { ok: false, status: 404, error: "no session for subject" };
   if (session.state !== "collecting") return { ok: false, status: 409, error: `submission window not open (state=${session.state})` };
+  // Signed-date agreement. A stale agent that woke with yesterday's brief must
+  // not have its take filed against today's session.
+  if (sub.date && day(session.date) !== sub.date) {
+    return {
+      ok: false,
+      status: 409,
+      error: `signed date ${sub.date} does not match the open session for ${sub.subjectId} (${day(session.date)})`,
+    };
+  }
   if (session.window_closes_at && new Date(session.window_closes_at).getTime() < Date.now())
     return { ok: false, status: 409, error: "submission window closed" };
 
@@ -761,11 +828,15 @@ export async function registerMember(input: { memberId: string; name: string; le
   });
 }
 
-// Dev-only: wipe session data so a demo can be re-run for today's subject.
-export async function resetSessions() {
-  await sql`TRUNCATE committee_recommendations, committee_briefs, committee_sessions RESTART IDENTITY CASCADE`;
-  return { reset: true };
-}
+// resetSessions() is REMOVED. It was a dev-only
+// `TRUNCATE committee_recommendations, committee_briefs, committee_sessions
+//  RESTART IDENTITY CASCADE`
+// so a demo could re-run today's subject on a throwaway database. Two things
+// made it indefensible once a stack could point at a persistent server: CASCADE
+// took every published memo with it, and RESTART IDENTITY handed the reused ids
+// to different memos, so an external link to /api/committee/memos/5 silently
+// resolved to someone else's text. Nothing wipes rows any more; an ephemeral
+// database is dropped or inspected as a whole.
 
 export async function ensureSubject(id: string, name: string) {
   await sql`INSERT INTO committee_subjects (id, status, name, recommendation_type)
@@ -943,13 +1014,30 @@ export async function ensureDemoSubjectFixtures(subjectId: string, name: string,
 }
 
 // ── Lifecycle (also callable by worker handlers + dev driver) ───────────────
-export async function openSession(date: string, subjectId: string) {
+/**
+ * Convene a session for a subject. THE DATABASE decides when it happened: the
+ * caller passes no date, `convened_at` defaults to now(), and `date` is derived
+ * from it (migration 0022). A client-supplied date is what let the demo invent
+ * synthetic future days and then TRUNCATE history to reuse them.
+ *
+ * Idempotent per OPEN session, not per day. An already-scheduled/collecting
+ * session for this subject is returned as-is, so a retried `committee.open_session`
+ * job cannot convene a second one — but once that session publishes, the next
+ * call correctly convenes a new one, however soon after. That is what allows a
+ * cadence faster than daily without a session ever overwriting another.
+ */
+export async function openSession(subjectId: string) {
   const subject = await getSubject(subjectId);
+  const existing = (await sql`
+    SELECT id, date, convened_at, subject_id, subject_name, state
+      FROM committee_sessions
+     WHERE subject_id = ${subjectId} AND state IN ('scheduled', 'collecting')
+     ORDER BY convened_at DESC LIMIT 1`)[0];
+  if (existing) return existing;
   const r = (await sql`
-    INSERT INTO committee_sessions (date, subject_id, subject_name, state)
-    VALUES (${date}, ${subjectId}, ${subject?.name ?? subjectId}, 'scheduled')
-    ON CONFLICT (date, subject_id) DO UPDATE SET state = 'scheduled'
-    RETURNING id, date, subject_id, subject_name, state`)[0];
+    INSERT INTO committee_sessions (subject_id, subject_name, state)
+    VALUES (${subjectId}, ${subject?.name ?? subjectId}, 'scheduled')
+    RETURNING id, date, convened_at, subject_id, subject_name, state`)[0];
   return r;
 }
 

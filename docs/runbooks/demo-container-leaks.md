@@ -11,7 +11,7 @@ compose networks, and on this host that is a live-site outage.
 
 | Symptom | First move |
 |---|---|
-| `stage.robotmoney-labs.dev` 502s, or `bun run demo -- --stage` refuses to start because `:48787` is held | `docker ps --filter publish=48787` — read the container's `robotmoney.env` label |
+| `stage.robotmoney-labs.dev` 502s, or `bun run demo -- --static-port` refuses to start because `:48787` is held | `docker ps --filter publish=48787` — read the container's `robotmoney.env` label |
 | A CI teardown step failed with `TEARDOWN INCOMPLETE` | run the three commands that step printed, in order |
 | `docker ps -a` shows old `rm_ci_*` containers | `bun run demo:reap -- --env-class ci --dry-run` |
 

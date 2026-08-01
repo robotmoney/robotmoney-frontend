@@ -57,6 +57,20 @@ function since30(): string {
   return new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
 }
 
+// Multi-token projects have no schema-level `primary` flag. Use the same market
+// signal that orders the directory: the highest-cap active coin owns the
+// sparkline. UUID is a stable tie-break, so Postgres row order can never change
+// which series is shown.
+export function selectPrimaryCoinId(coins: Pick<ProjectCoin, "id" | "marketCap">[]): string | undefined {
+  return coins.reduce<(typeof coins)[number] | undefined>((best, coin) => {
+    if (!best) return coin;
+    const coinMarketCap = coin.marketCap ?? Number.NEGATIVE_INFINITY;
+    const bestMarketCap = best.marketCap ?? Number.NEGATIVE_INFINITY;
+    if (coinMarketCap > bestMarketCap || (coinMarketCap === bestMarketCap && coin.id.localeCompare(best.id) < 0)) return coin;
+    return best;
+  }, undefined)?.id;
+}
+
 // The aggregated projects directory, sorted the way the source page loads it:
 // first-load sticky pins lead, then by max coin market cap desc, then coverage
 // score desc. Interactive re-sorting is a client concern (the Alpine view).
@@ -107,7 +121,6 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
 
   // ── Group facets by project ────────────────────────────────────────────────
   const coinsByProject = new Map<string, ProjectCoin[]>();
-  const coinRawByProject = new Map<string, { id: string }[]>();
   for (const c of coins) {
     const pid = c.project_id as string | null;
     if (!pid) continue;
@@ -124,7 +137,6 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
       refreshedAt: refreshedAt ? refreshedAt.toISOString() : null,
       stale: isStale(refreshedAt, COIN_REFRESH_FRESHNESS_BUDGET_MS),
     });
-    (coinRawByProject.get(pid) ?? coinRawByProject.set(pid, []).get(pid)!).push({ id: c.id as string });
   }
 
   const walletsByProject = new Map<string, ProjectWallet[]>();
@@ -220,7 +232,7 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
     const maxFdv = Math.max(0, ...pcoins.map((c) => c.fdv ?? 0));
     const maxVolume24h = Math.max(0, ...pcoins.map((c) => c.volume24h ?? 0));
     const walletTotalUsd = pwallets.reduce((s, w) => s + (w.balanceUsd ?? 0), 0);
-    const primaryCoinId = coinRawByProject.get(pid)?.[0]?.id;
+    const primaryCoinId = selectPrimaryCoinId(pcoins);
     let sparkline = (primaryCoinId && sparksByCoin.get(primaryCoinId)) || [];
     if (sparkline.length === 0) {
       const snapDates = agentSnapsByProjectDate.get(pid);

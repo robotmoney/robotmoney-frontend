@@ -139,7 +139,7 @@ test("legacy-row compatibility: a session inserted the pre-0017 way (no version/
   await sql`INSERT INTO committee_subjects (id, status, name) VALUES ('regime-test-subject', 'active', 'Regime Test Subject')
             ON CONFLICT (id) DO NOTHING`;
   const [row] = await sql<{ version: number; state: string; updated_at: Date; brief_opens_at: Date | null }[]>`
-    INSERT INTO committee_sessions (date, subject_id, subject_name, state)
+    INSERT INTO committee_sessions (convened_at, subject_id, subject_name, state)
     VALUES ('2031-01-01', 'regime-test-subject', 'Regime Test Subject', 'scheduled')
     RETURNING version, state, updated_at, brief_opens_at`;
   expect(row.version).toBe(1);
@@ -155,7 +155,7 @@ test("committee_sessions.state check accepts all six legal states and rejects an
   for (let i = 0; i < states.length; i++) {
     const state = states[i]!;
     const [row] = await sql<{ state: string }[]>`
-      INSERT INTO committee_sessions (date, subject_id, subject_name, state)
+      INSERT INTO committee_sessions (convened_at, subject_id, subject_name, state)
       VALUES (${`2031-02-${String(i + 1).padStart(2, "0")}`}, 'regime-test-subject', 'Regime Test Subject', ${state})
       RETURNING state`;
     expect(row.state).toBe(state);
@@ -167,7 +167,7 @@ test("committee_sessions.state check accepts all six legal states and rejects an
   // try/catch instead.
   let threw = false;
   try {
-    await sql`INSERT INTO committee_sessions (date, subject_id, subject_name, state)
+    await sql`INSERT INTO committee_sessions (convened_at, subject_id, subject_name, state)
         VALUES ('2031-03-01', 'regime-test-subject', 'Regime Test Subject', 'brief_published')`;
   } catch {
     threw = true;
@@ -181,7 +181,7 @@ test("committee_session_members and committee_session_events round-trip a real s
   await sql`INSERT INTO committee_members (id, status, name, lens) VALUES ('regime-test-member', 'active', 'Regime Test Member', 'macro')
             ON CONFLICT (id) DO NOTHING`;
   const [session] = await sql<{ id: string }[]>`
-    INSERT INTO committee_sessions (date, subject_id, subject_name, state)
+    INSERT INTO committee_sessions (convened_at, subject_id, subject_name, state)
     VALUES ('2031-04-01', 'regime-test-subject', 'Regime Test Subject', 'scheduled')
     RETURNING id`;
 

@@ -191,9 +191,13 @@ export function plannedRunAt(plan: SubjectCadencePlan, runs: number): number {
  * UNIQUE(date, subject_id). Behaviour is unchanged from the inline expression it
  * replaces — the 2027-dated-session question belongs to issue #345, not here.
  */
-export function sessionDateFor(nowMs: number, runs: number): string {
-  return new Date(nowMs + runs * 86_400_000).toISOString().slice(0, 10);
-}
+// sessionDateFor() is REMOVED. It returned `now + runs days` — the demo's
+// synthetic session date, invented client-side so repeat runs would not collide
+// on the backend's old UNIQUE(date, subject_id), and kept viable by a boot-time
+// TRUNCATE of session history. Migration 0022 made a session's date DERIVED from
+// the convened_at Postgres stamps, so a session's date is now a fact the
+// database reports rather than a value any caller may choose. The driver opens
+// the session first and reads the date back.
 
 /** `120000 → "2 min"`, `21600000 → "6 h"` — the READY line's duration words. */
 export function formatCadenceDuration(ms: number): string {

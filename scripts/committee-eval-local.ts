@@ -159,13 +159,15 @@ export async function runCommitteeAuthoringEvalCase(
       backendUrl: stack.backendUrl,
       modelConfig,
     };
-    await admin("reset");
+    // No admin("reset") here either: the endpoint is gone. This eval runs on a
+    // stack it created, so there is no prior history to clear — and if it is
+    // ever pointed at one that has some, wiping it would be the wrong answer.
     await runRegimeClassify(today, rail);
     await admin("subject", SUBJECTS[0]);
 
     // Member-container rail (issue #361 Phase 2): the session's members run in
     // their own containers against this eval stack.
-    const sessionRun = await runSession(today, SUBJECTS[0], 1, { rail });
+    const sessionRun = await runSession(SUBJECTS[0], 1, { rail });
     sessionState = sessionRun.pub?.session?.state ?? null;
     const presentMembers = MEMBERS.filter((m) => m.present);
     authoredCount = sessionRun.pub?.takes?.filter((t: any) => typeof t?.body === "string" && t.body.trim().length > 0).length ?? 0;

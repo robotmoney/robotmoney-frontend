@@ -65,7 +65,13 @@ export const ROUTES = {
     // ?full=1 reproduces the pre-#243 unpaginated/unprojected response for
     // callers (e.g. the admin sessions views) that still need every field.
     sessions: "/api/committee/sessions",
-    session: "/api/committee/sessions/:date/:subject", // GET
+    session: "/api/committee/sessions/:date/:subject", // GET — the LATEST session that day for that subject
+    // GET one session by its own id. Since migration 0022 a subject may convene
+    // more than once a day, so (date, subject) addresses "the latest one that
+    // day" and cannot reach the earlier ones; this is the unambiguous handle.
+    // One path segment, so it can never be confused with the two-segment
+    // date/subject form above.
+    sessionById: "/api/committee/sessions/:id",
     take: "/api/committee/takes/:id", // GET — public read-time-verified receipt
     takePermalink: "/committee/takes/:id", // rendered public verification receipt
     openSession: "/api/committee/open-session", // GET → session currently collecting, if any
@@ -88,7 +94,10 @@ export const ROUTES = {
     admin: {
       action: "/api/committee/admin/:action", // POST — generic lifecycle dispatch
       activate: "/api/committee/admin/activate", // POST — flip applied→active, mint bearer token
-      reset: "/api/committee/admin/reset", // POST — wipe session data (dev/demo)
+      // The former `reset` action (POST — wipe session data) is REMOVED: it
+      // TRUNCATEd published session/brief/recommendation/memo history so a demo
+      // could reuse today's date, which is data loss against any database that
+      // outlives its stack.
       // The former admin `regime` action and analytics queue action were
       // removed by issue #361: producer data only arrives as a submission,
       // and the independent producer owns its own cadence.

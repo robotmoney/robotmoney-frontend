@@ -1,0 +1,78 @@
+# Cloudflare Tunnel connector — TEMPLATE. Copy to /etc/cloudflared/config.yml on
+# the host that runs the connector and fill in the two placeholders.
+#
+#     cp cloudflared.config.example.yml /etc/cloudflared/config.yml
+#
+# This file is committed so the tunnel's shape is REVIEWABLE — the connector is
+# host-side software with no presence in docker-compose*.yml, so without a
+# checked-in template the only description of what `site.robotmoney.net` points
+# at lives on one droplet's filesystem, where no agent or reviewer can see it.
+#
+# NOT THE DEFAULT DESIGN. docs/runbooks/deployment.md §1 states there is "no
+# reverse proxy, and no tunnel by default", and docs/architecture.md §4 lists the
+# tunnel as OPTIONAL HARDENING that replaces proxied-DNS + DO Cloud Firewall with
+# zero public ingress. Committing this template does not make it the default: it
+# documents the one host that opted in. The documented prod topology is still
+# apex/`www` (marketing → DO Spaces CDN), `committee.`, and `app.`.
+#
+# NEVER COMMIT the credentials JSON that `cloudflared tunnel create` writes to
+# ~/.cloudflared/<uuid>.json. It is a tunnel-wide bearer credential; this file
+# only records its PATH.
+
+# ── Placeholders ────────────────────────────────────────────────────────────
+# Both values are printed by `cloudflared tunnel create <name>`. The UUID also
+# names the credentials file, so the two placeholders take the SAME value.
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: /root/.cloudflared/REPLACE_WITH_TUNNEL_UUID.json
+
+# ── Ingress ─────────────────────────────────────────────────────────────────
+# Rules are evaluated top-down; the first hostname match wins.
+ingress:
+  # site.robotmoney.net → the STAGE demo stack.
+  #
+  # WHY 48787 AND NOTHING ELSE. This is the single fixed host port in the whole
+  # system (scripts/stack/ports.ts:39). Every other published port — including
+  # postgres — is drawn free at boot on every run. `bun run demo -- --static-port` is
+  # the one sanctioned pin, and it FAILS rather than falling back when something
+  # already holds the port (scripts/lib/demo-main.ts:135), precisely because
+  # cloudflared routes 48787 and nothing else: a fallback would boot green and
+  # serve a tunnel that reaches nothing.
+  #
+  # Bring the origin up with:  bun run demo:stage
+  # Confirm it with:           bun run demo:status
+  - hostname: site.robotmoney.net
+    service: http://127.0.0.1:48787
+
+  # REQUIRED final rule — cloudflared refuses to start without a catch-all. A
+  # 404 rather than a proxy target: an unmatched hostname must not be silently
+  # routed to whatever happens to be the last service listed.
+  - service: http_status:404
+
+# ── Operational notes ───────────────────────────────────────────────────────
+#
+# WHAT IS BEHIND THIS HOSTNAME IS A DEMO STACK, NOT A PROD STACK. The pinned
+# boot runs docker-compose.demo.yml, which pins RM_ALLOW_INSECURE=1 (privileged
+# admin / onboarding / analytics endpoints answer with NO token — .env.example
+# says of that flag: "NEVER on a reachable box"), pins DEMO_MODE=1 (1h provider
+# cache TTLs), and leaves PROJECTS_SOURCE unset, so /projects serves the
+# vendored offline FIXTURE directory rather than live provider data. A real
+# production deployment is docker-compose.yml with RM_ENV=prod, an explicit
+# ADMIN_TOKEN + ANALYTICS_TOKEN, PROJECTS_SOURCE=live, and a managed
+# DATABASE_URL (docs/runbooks/deployment.md §5).
+#
+# THE TUNNEL DOES NOT CLOSE THE DIRECT PATH. Compose publishes 48787 on
+# 0.0.0.0, so the droplet's public IP still answers on :48787 alongside the
+# tunnel — a second, unproxied way in on a predictable port. Zero public ingress
+# (the whole point of §4's hardening) requires ALSO blocking it at the network:
+# a DO Cloud Firewall rule, or a host rule in iptables' DOCKER-USER chain.
+# `ufw` is NOT sufficient — docker-proxy publishes past it.
+#
+# INSTALL AS A SERVICE so the tunnel survives a reboot:
+#     cloudflared tunnel login                    # interactive; needs the CF account
+#     cloudflared tunnel create <name>            # prints UUID + credentials path
+#     cloudflared tunnel route dns <name> site.robotmoney.net
+#     cloudflared service install                 # systemd unit, enabled at boot
+#
+# The origin does NOT survive a reboot on its own — `bun run demo:stage` is
+# a foreground process, so the tunnel comes back up pointing at nothing until it
+# is restarted.

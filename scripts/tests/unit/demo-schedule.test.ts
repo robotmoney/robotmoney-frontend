@@ -32,7 +32,6 @@ import {
   planSubjectSchedules,
   renderCadenceLine,
   resolveDemoCadence,
-  sessionDateFor,
 } from "../../lib/demo-schedule.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
@@ -185,39 +184,12 @@ describe("planSubjectSchedules — prompt on bring-up, phase-offset in steady st
   });
 });
 
-describe("sessionDateFor — UNIQUE(date, subject_id) can never be violated", () => {
-  const SUBJECT_IDS = ["woon", "mav"];
-
-  for (const stage of [false, true]) {
-    const label = stage ? "stage" : "fast";
-    test(`[${label}] 20 runs per subject: dates strictly increase and no (date, subjectId) repeats`, () => {
-      const cadence = resolveDemoCadence({ stage });
-      const plans = planSubjectSchedules(SUBJECT_IDS.length, cadence, NOW);
-      const seen = new Set<string>();
-      plans.forEach((plan, i) => {
-        let prev = "";
-        for (let runs = 0; runs < 20; runs++) {
-          // Exactly what the driver computes: the wall clock at the run, plus
-          // one calendar day per completed run for THIS subject.
-          const date = sessionDateFor(plannedRunAt(plan, runs), runs);
-          expect(date > prev).toBe(true);
-          prev = date;
-          const key = `${date}|${SUBJECT_IDS[i]}`;
-          expect(seen.has(key)).toBe(false);
-          seen.add(key);
-        }
-      });
-      expect(seen.size).toBe(40);
-    });
-  }
-
-  test("the rotation itself is unchanged: one calendar day per completed run", () => {
-    const base = Date.UTC(2026, 6, 30, 12, 0, 0);
-    expect(sessionDateFor(base, 0)).toBe("2026-07-30");
-    expect(sessionDateFor(base, 1)).toBe("2026-07-31");
-    expect(sessionDateFor(base, 3)).toBe("2026-08-02");
-  });
-});
+// The former `sessionDateFor` block is GONE with the function. It asserted
+// that the demo's synthetic "today + one day per run" rotation never violated
+// UNIQUE(date, subject_id) — a property that only mattered while the CLIENT
+// chose session dates. Since migration 0022 Postgres stamps convened_at and
+// derives the date, the constraint itself is gone, and nothing in this repo may
+// invent a session date to test.
 
 describe("the READY banner cadence line is RENDERED from the resolved profile", () => {
   test("fast profile reports the ~2-min staggered cadence", () => {
@@ -285,7 +257,7 @@ export function importsCadenceProfile(src: string, expected: string[]): string |
 
 describe("cadence lives in ONE file — consumers carry no literal of their own", () => {
   test("scripts/lib/demo-main.ts imports the profile and the planner", () => {
-    expect(importsCadenceProfile(demoMain, ["resolveDemoCadence", "planSubjectSchedules", "sessionDateFor", "renderCadenceLine"])).toBeNull();
+    expect(importsCadenceProfile(demoMain, ["resolveDemoCadence", "planSubjectSchedules", "renderCadenceLine"])).toBeNull();
   });
 
   test("scripts/lib/demo-main.ts contains no cadence literal", () => {

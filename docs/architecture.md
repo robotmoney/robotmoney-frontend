@@ -1751,10 +1751,10 @@ flowchart TB
         N1["Helios → ~1min"]
         N2["Selene → ~6min"]
         N3["Rhea → ~11min"]
-        NX["… every 5min fast / every 6h --stage"]
+        NX["… every 5min fast / every 6h pinned"]
     end
 
-    subgraph Session["📋 Committee Session (per subject, cadence profile: ~2min fast / 6h --stage)"]
+    subgraph Session["📋 Committee Session (per subject, cadence profile: ~2min fast / 6h pinned)"]
         direction LR
         S1["scheduled"] --> S2["collecting"] --> S3["window_closed"] --> S4["aggregated"] --> S5["published"]
     end
@@ -1810,12 +1810,12 @@ api port used to *prefer* 48787, so a CI boot (no `.env`) raced the standing sta
 for the exact port `cloudflared` routes `stage.robotmoney-labs.dev` to, while the
 operator's `.env` pinned both ports and meant nothing was random locally at all.
 
-The one exception is `bun run demo -- --stage`, a CLI **argument** (never an env var —
+The one exception is `bun run demo -- --static-port`, a CLI **argument** (never an env var —
 same rule as `--pg-data`), which pins **only** the web/api port to 48787, the tunnel
 origin, warns prominently that it has done so, and — when the port is held — **fails
 without starting**, naming the holder from `docker ps`/`ss -tlnp`. It never falls back:
 `cloudflared` routes 48787 and nothing else, so a fallback would boot green and serve a
-502. Postgres stays random even under `--stage`. The flag is recorded in
+502. Postgres stays random even when pinned. The flag is recorded in
 `.agents/demo-state.json` so `demo:down`/`demo:status` reconstruct the same env.
 
 **Container naming and labels — environment-scoped.** Four families spawn containers on
@@ -1849,11 +1849,11 @@ container user and inits/resumes cleanly — so the named-volume fallback was no
 **(b) Staggered scheduled actions.** The demo continuously produces
 fresh activity, driven two ways (hybrid).
 
-**Cadence is a PROFILE, selected by the `--stage` argument** (never an env var —
+**Cadence is a PROFILE, selected by the `--static-port` argument** (never an env var —
 same hard rule as `--pg-data` and the port pin), and every value for every
 profile is stated once in `scripts/lib/demo-schedule.ts`:
 
-| | `bun run demo` / CI (**fast**) | `bun run demo -- --stage` (**realistic**) |
+| | `bun run demo` / CI (**fast**) | `bun run demo -- --static-port` (**realistic**) |
 |---|---|---|
 | Committee session, per subject | ~2 min | 6 h |
 | Subjects (2) phase offset → a session lands | ~1 min | ~3 h |
@@ -1871,7 +1871,7 @@ in `scripts/lib/demo-schedule.ts`, executed in
 load; the slow profile governs only steady state. The fast profile is what CI
 runs and is pinned to today's values — the nightly LIVE smoke derives its poll
 deadline from the **fast** profile explicitly (`scripts/demo-live-smoke.ts`), so
-a 6 h committee interval can never become a 12 h poll budget. A `--stage` boot is
+a 6 h committee interval can never become a 12 h poll budget. A `--static-port` boot is
 the only thing that injects `PRODUCER_*_CRON` into compose (through
 `resolveDemoEnv`'s `composeEnv`); every other boot resolves the committed
 `docker-compose.yml` defaults untouched.
@@ -1892,16 +1892,45 @@ the only thing that injects `PRODUCER_*_CRON` into compose (through
   tradeoff; the seed's cold-start enqueue still lands a live sample at boot).
 - **Committee opinions** — driven by a loop inside `scripts/demo.ts`, because a
   committee session needs live member agents to sign + submit takes. After a
-  one-time reset + setup, it runs one full session (open → brief → collect →
-  agents → close → aggregate → publish) on the profile's committee interval,
-  rotating (date, subject) so sessions accumulate. The timetable itself is the
-  pure `planSubjectSchedules` / `plannedRunAt` pair in
-  `scripts/lib/demo-schedule.ts` — the driver keeps only the I/O — and the
-  synthetic date rotation (one calendar day per completed run for that subject,
-  so `UNIQUE(date, subject_id)` cannot be violated) is the pure `sessionDateFor`.
-  It does **not** reset between ticks. It reuses the `runSession` runner exported
-  from `scripts/lib/committee/session.ts` (whose entry-point `main()` is guarded
-  so importing it does not trigger the reset-heavy standalone flow).
+  one-time setup it runs one full session (open → brief → collect → agents →
+  close → aggregate → publish) on the profile's committee interval, so sessions
+  accumulate. The timetable is the pure `planSubjectSchedules` / `plannedRunAt`
+  pair in `scripts/lib/demo-schedule.ts` — the driver keeps only the I/O. It
+  reuses the `runSession` runner exported from
+  `scripts/lib/committee/session.ts` (whose entry-point `main()` is guarded so
+  importing it does not trigger the standalone flow).
+
+  **THE DATABASE DATES A SESSION. Nothing wipes.** Both of those were once
+  otherwise, and they were the same mistake wearing two hats. The driver used to
+  compute a synthetic date — today plus one calendar day per completed run for
+  that subject — so repeat sessions could not collide on the old
+  `UNIQUE(date, subject_id)`, and each boot began by TRUNCATE-ing all session
+  history so "today" was free again. Invisible while every boot got a throwaway
+  postgres volume; against a persistent database (`--external-pg`) it destroyed
+  published memos on every restart and handed their ids to different memos.
+
+  Migration `0022` makes `convened_at timestamptz DEFAULT now()` a session's
+  identity and derives `date` from it as a generated column, and drops
+  `UNIQUE(date, subject_id)`. No caller supplies a date: `openSession` takes only
+  a subject, the driver opens first and reads the date back, and `sessionDateFor`
+  is gone. A subject may convene as often as its cadence says; each sitting is
+  its own row. The wiping admin endpoint and `resetSessions()` are removed
+  outright — an ephemeral database is dropped or inspected as a whole, and no
+  bring-up may TRUNCATE rows it did not create.
+
+  Two consequences worth knowing. `(date, subject)` no longer identifies one
+  session, so `/api/committee/sessions/:date/:subject` resolves to the LATEST
+  sitting that day and `/api/committee/sessions/:id` is the exact handle the
+  session lists link by. And the member-facing signed payload is UNCHANGED — it
+  still carries `date`; submissions resolve to the subject's open session and
+  then assert the signed date agrees, so no `rmpc` build, onboarding doc or
+  already-onboarded member had to change.
+
+  `regimeAsof` (issue #382) remains a separate knob from the session date: a
+  regime snapshot classifies real market indicators, so `date <= today` is
+  enforced on it. It was introduced when a session could be LABELLED with a
+  future date; it can no longer be, but the knob still lets a sitting just after
+  midnight UTC read the previous day's classification.
 
 One immediate tick of each runs at startup so the site has data on first load; the
 one-shot frontend check (`scripts/demo-frontend-check.ts`) also runs once,
@@ -2185,7 +2214,7 @@ The live path (the only path) can still be tuned via env before `bun run demo`.
 The live path preserves the honesty model: empty fetch → persisted real floor; a
 no-history indicator is excluded + logged (never synthetic).
 - Random ports (Postgres, API) on every run, with no fixed default and no env-pin path
-  — `bun run demo -- --stage` is the sole exception and pins only the api port to the
+  — `bun run demo -- --static-port` is the sole exception and pins only the api port to the
   cloudflared origin — plus an environment-scoped compose project name
   (`rm_ci_stack_<hash>` / `rm_demo_stack_<hash>`): concurrent runs do not collide, and a
   leaked container is attributable to the environment that made it. The run identity
@@ -2320,7 +2349,7 @@ scheduled action as it fires.
 
 The cadence line is **rendered from the resolved profile** (`renderCadenceLine`
 in `scripts/lib/demo-schedule.ts`), never hardcoded, so it always states the
-cadence actually in force. The same boot with `--stage` prints:
+cadence actually in force. The same boot with `--static-port` prints:
 
 ```
   Demo actions: a committee session per subject every ~6 h (2 subjects staggered → one lands about every ~3 h); research every 3h at :00, regime every 3h at :30.
@@ -3418,8 +3447,14 @@ Before wiring UI controls, correct these current behaviors:
 - `publishSession` must require `aggregated` and non-null recommendation and
   synthesis.
 - `submitRecommendation` must require an `expected` roster row for the member.
-- `registerMember` and `resetSessions` remain demo helpers and are not used for
-  production admin workflows.
+- `registerMember` remains a demo helper and is not used for production admin
+  workflows. It is idempotent by member id (`ON CONFLICT (id) DO UPDATE`,
+  rebinding the key and minting a token, with the roster cap exempting an
+  existing member), which is what lets a restarted demo re-adopt a persona
+  rather than admit a duplicate.
+- `resetSessions` is REMOVED — it TRUNCATEd published session/brief/
+  recommendation/memo history so a demo could reuse today's date. See §5's
+  "the database dates a session" note.
 - Every transition writes `committee_session_events` and `audit_log` in the same
   transaction as the state update.
 
