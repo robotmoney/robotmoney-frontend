@@ -1,7 +1,7 @@
 import { test, expect, beforeAll } from "bun:test";
 import * as ic from "../src/committee/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeApplication, canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
+import { canonicalizeApplication, canonicalizeSubmission, COMMITTEE_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleCommittee } from "../src/api/routes/committee.ts";
 
@@ -801,4 +801,66 @@ test("two sessions for one subject on one day: the dated route returns the LATES
   expect((await get("/api/committee/sessions/not-a-uuid"))?.status).toBe(404);
   // The two-segment dated form still resolves — one route never shadows the other.
   expect((await get(routePath(ROUTES.committee.session, { date, subject: subj })))?.status).toBe(200);
+});
+
+// ── Joining is idempotent by member id ──────────────────────────────────────
+// The demo re-registers a persona's COMMITTED key against the id the database
+// already holds, on every boot. That must rebind the key and mint a working
+// token WITHOUT creating a second member — otherwise a restart grows the roster
+// by one row per persona, which is exactly what the hosted database suffered
+// (three active Helios rows plus two stranded applications).
+test("re-registering an existing member rebinds the key and never creates a second row", async () => {
+  await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
+  const id = rid("persona");
+  const keyA = "AAAA" + "a".repeat(40);
+  const keyB = "BBBB" + "b".repeat(40);
+
+  const first = await ic.registerMember({ memberId: id, name: "Helios", lens: "liquidity", publicKey: keyA });
+  expect(first).toHaveProperty("token");
+
+  // Boot 2..4: the same persona, the same id, its committed key.
+  const tokens = [] as string[];
+  for (let boot = 0; boot < 3; boot++) {
+    const again = await ic.registerMember({ memberId: id, name: "Helios", lens: "liquidity", publicKey: keyB });
+    expect(again).toHaveProperty("token");
+    tokens.push((again as { token: string }).token);
+  }
+
+  // ONE member row, whatever the number of boots.
+  const rows = await sql`SELECT id, status, name FROM committee_members WHERE id = ${id}`;
+  expect(rows.length).toBe(1);
+  expect(rows[0].status).toBe("active");
+  expect(rows[0].name).toBe("Helios");
+
+  // Exactly one ACTIVE key, and it is the one most recently registered — the
+  // superseded key must not linger and keep verifying.
+  const keys = await sql`SELECT public_key FROM committee_member_keys WHERE member_id = ${id} AND active`;
+  expect(keys.length).toBe(1);
+  expect(keys[0].public_key).toBe(keyB);
+
+  // The newest token authenticates as this member.
+  expect(await ic.memberIdForToken(tokens[tokens.length - 1])).toBe(id);
+});
+
+test("re-registering an active member does not consume roster capacity", async () => {
+  await sql`TRUNCATE committee_members RESTART IDENTITY CASCADE`;
+  // Fill the roster to the cap with distinct members…
+  const ids: string[] = [];
+  for (let i = 0; i < COMMITTEE_ROSTER_CAP; i++) {
+    const id = rid(`cap${i}`);
+    ids.push(id);
+    const r = await ic.registerMember({ memberId: id, name: `Member ${i}`, publicKey: `K${i}${"k".repeat(40)}` });
+    expect(r).toHaveProperty("token");
+  }
+  // …then re-register one of them, as every demo boot does. A full roster must
+  // not turn an existing persona's re-key into a rejection, or a restarted demo
+  // would lose its own members.
+  const again = await ic.registerMember({ memberId: ids[0], name: "Member 0", publicKey: `R${"r".repeat(43)}` });
+  expect(again).toHaveProperty("token");
+  const count = await sql`SELECT count(*)::int AS n FROM committee_members WHERE status = 'active'`;
+  expect(count[0].n).toBe(COMMITTEE_ROSTER_CAP);
+
+  // A NET-NEW member is still refused at the cap.
+  const overflow = await ic.registerMember({ memberId: rid("over"), name: "Overflow", publicKey: `O${"o".repeat(43)}` });
+  expect(overflow).not.toHaveProperty("token");
 });

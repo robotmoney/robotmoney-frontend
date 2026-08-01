@@ -1,0 +1,138 @@
+{
+  "_README": [
+    "PUBLICLY KNOWN DEMO IDENTITIES — NOT SECRETS. These Ed25519 keypairs belong",
+    "to the standing demo's named personas (Athena, Boreas, ... Eos) and are",
+    "committed ON PURPOSE so a demo can be restarted without inventing a new",
+    "identity for a persona that already exists in a persistent database.",
+    "",
+    "WHY THEY EXIST. A persona used to get a freshly generated key in a",
+    "per-boot Docker volume, with its rmpc passphrase held only in the demo",
+    "process's memory. Both vanish on restart, so an already-onboarded persona",
+    "could be listed on the roster but could never sign again, and the demo",
+    "either re-admitted it as a duplicate or ran the session without it.",
+    "",
+    "SECURITY. Anyone reading this repository can sign as these personas on any",
+    "stack that trusts these keys. That is acceptable ONLY because they are demo",
+    "characters on a demo committee. NEVER register one of these keys for a real",
+    "member, and never reuse this file outside the demo/eval paths.",
+    "",
+    "Regenerate with: bun scripts/gen-persona-keys.ts (prints a replacement file)."
+  ],
+  "athena": {
+    "publicKeyB64": "2JuQIyeTrf4IfebOmy8gbpmiVHsKO03/qBUokt0hmlQ=",
+    "privateJwk": {
+      "crv": "Ed25519",
+      "d": "nIjIAc08RTey2uVPrBWrnMzwA4x1yB4x_wVRTedlQPg",
+      "ext": true,
+      "key_ops": [
+        "sign"
+      ],
+      "kty": "OKP",
+      "x": "2JuQIyeTrf4IfebOmy8gbpmiVHsKO03_qBUokt0hmlQ"
+    }
+  },
+  "boreas": {
+    "publicKeyB64": "HB0e/fEqN2j6Zy8IL2/GrgDxUAu4GrX9L067cOy6i5M=",
+    "privateJwk": {
+      "crv": "Ed25519",
+      "d": "zLWsg7WFuLuIxiC6_phlnDNRkOPDpIy3RWwk-o2ev0k",
+      "ext": true,
+      "key_ops": [
+        "sign"
+      ],
+      "kty": "OKP",
+      "x": "HB0e_fEqN2j6Zy8IL2_GrgDxUAu4GrX9L067cOy6i5M"
+    }
+  },
+  "cygnus": {
+    "publicKeyB64": "SwxSeUFO5G76phzRblog/jCfnl/63o4ocWzPyfgQT8s=",
+    "privateJwk": {
+      "crv": "Ed25519",
+      "d": "geXdnUUB60PKo7XB81MpaJKAQXiDkAcRHvycCGGDaCY",
+      "ext": true,
+      "key_ops": [
+        "sign"
+      ],
+      "kty": "OKP",
+      "x": "SwxSeUFO5G76phzRblog_jCfnl_63o4ocWzPyfgQT8s"
+    }
+  },
+  "draco": {
+    "publicKeyB64": "qxSuwRjmRzTzrLXVtUpLWLaKOi1By9OQWufy2+L83HA=",
+    "privateJwk": {
+      "crv": "Ed25519",
+      "d": "tOJEC8jjAgSY0Gv1jUZ-XxC7KmlJ3jW2vJBtrnUJ8xg",
+      "ext": true,
+      "key_ops": [
+        "sign"
+      ],
+      "kty": "OKP",
+      "x": "qxSuwRjmRzTzrLXVtUpLWLaKOi1By9OQWufy2-L83HA"
+    }
+  },
+  "helios": {
+    "publicKeyB64": "I727HZWpL0zeXuIr4hRmao5+vG+Ew9lwqc/fBVwGYI4=",
+    "privateJwk": {
+      "crv": "Ed25519",
+      "d": "HkS89HseyWZliKKYa0v-gge6nHV78rJs5_v5a10yENg",
+      "ext": true,
+      "key_ops": [
+        "sign"
+      ],
+      "kty": "OKP",
+      "x": "I727HZWpL0zeXuIr4hRmao5-vG-Ew9lwqc_fBVwGYI4"
+    }
+  },
+  "selene": {
+    "publicKeyB64": "9ZBoSjxSx2n6z03DFTSUw6ovnjx2bvRE35/iBFohYyU=",
+    "privateJwk": {
+      "crv": "Ed25519",
+      "d": "NUnEWVFxUkOLMu7B6pZtj_X1FCwHV0VSKTTSyZN5Po0",
+      "ext": true,
+      "key_ops": [
+        "sign"
+      ],
+      "kty": "OKP",
+      "x": "9ZBoSjxSx2n6z03DFTSUw6ovnjx2bvRE35_iBFohYyU"
+    }
+  },
+  "rhea": {
+    "publicKeyB64": "jDUssvcmeU96RZLuHT4/Db9gXfTd5BGciJpC1qr88qM=",
+    "privateJwk": {
+      "crv": "Ed25519",
+      "d": "DBMsJaBgZao-fQHs6PWPSiKIKPG-iqQ5qAZgw3gHOmo",
+      "ext": true,
+      "key_ops": [
+        "sign"
+      ],
+      "kty": "OKP",
+      "x": "jDUssvcmeU96RZLuHT4_Db9gXfTd5BGciJpC1qr88qM"
+    }
+  },
+  "nyx": {
+    "publicKeyB64": "iKYg/HvmxuJdiVgcltU//gv9y9Ebvdg+20pNQ+K7SvA=",
+    "privateJwk": {
+      "crv": "Ed25519",
+      "d": "A9GL4ypycXS9vKhgSF1GVIkdxkBp_h9rFfOzCq1HNgQ",
+      "ext": true,
+      "key_ops": [
+        "sign"
+      ],
+      "kty": "OKP",
+      "x": "iKYg_HvmxuJdiVgcltU__gv9y9Ebvdg-20pNQ-K7SvA"
+    }
+  },
+  "eos": {
+    "publicKeyB64": "B199ApjUFTM+q6jsVCfn2R9YeF6btKPusP93DPuP2xU=",
+    "privateJwk": {
+      "crv": "Ed25519",
+      "d": "2rAA_vOQJqOp9sUEEU2dPZHYfWTGPu4V9LtcV-kuCF8",
+      "ext": true,
+      "key_ops": [
+        "sign"
+      ],
+      "kty": "OKP",
+      "x": "B199ApjUFTM-q6jsVCfn2R9YeF6btKPusP93DPuP2xU"
+    }
+  }
+}

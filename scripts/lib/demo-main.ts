@@ -28,6 +28,8 @@ import {
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./demo-newcomers.ts";
+import { personaIdentity } from "./committee/persona-keys.ts";
+import { decideAdmission, planAdoptions } from "./committee/roster-plan.ts";
 import { memberHomeVolumeName } from "../agent/member-agent.ts";
 import {
   assertStageWebPortFree,
@@ -1731,6 +1733,40 @@ async function main(): Promise<void> {
     onboardedHomes,
   };
 
+  // ── Adopt the personas this database already knows ────────────────────────
+  // A persistent database outlives the stack, so by the second boot the roster
+  // already holds personas this process never admitted. Without this they sat on
+  // the roster as historical members and never filed another take — the standing
+  // demo ran three-member sessions while claiming six seats — because their
+  // signing key lived in a per-boot volume and their passphrase only in the
+  // previous process's memory.
+  //
+  // Adoption is possible because a persona's key is COMMITTED
+  // (scripts/lib/committee/fixtures/persona-keys.json): the enroll run below
+  // seeds the container keystore with the known key and re-registers it against
+  // the member id the database already has (registerMember is idempotent by id —
+  // it rebinds the key, mints a token, and the roster cap exempts an existing
+  // member). The persona keeps its id, its name and every take it has filed.
+  //
+  // Only demo characters are adopted: a member with no committed identity is
+  // somebody else's, and inventing a key for them is exactly the duplicate-making
+  // behaviour this replaces.
+  const dbRoster = await e2e.rosterMembers();
+  if (dbRoster === null) {
+    log("roster unreadable at boot — continuing with the built-in members only (no personas adopted)");
+  } else {
+    const seatedIds = new Set<string>(e2e.MEMBERS.map((m: { memberId: string }) => m.memberId));
+    const plan = planAdoptions(dbRoster, seatedIds, (name) => Boolean(personaIdentity(name)));
+    for (const m of plan.duplicates) {
+      log(`persona ${m.name}: ignoring duplicate roster row ${m.id.slice(0, 8)} — one seat per character`);
+    }
+    for (const m of plan.adopt) {
+      e2e.MEMBERS.push({ memberId: m.id, name: m.name, lens: m.lens ?? "returning member", bias: 0, present: true });
+      log(`adopted ${m.name} (${m.id.slice(0, 8)}) from the database — signing with the committed persona key`);
+    }
+    if (plan.adopt.length > 0) log(`committee now ${e2e.MEMBERS.length} seats (${plan.adopt.length} adopted from the database)`);
+  }
+
   async function committeeDriver(): Promise<void> {
     for (;;) {
       // Pick the earliest-due subject and wait until its slot.
@@ -1857,18 +1893,14 @@ async function main(): Promise<void> {
       // Checked here, immediately before admitting, rather than once at start-up:
       // an admission takes minutes, and a name can be taken by an operator (or by
       // a second stack) in the meantime.
-      const takenNames = await e2e.existingMemberNames();
-      if (takenNames === null) {
-        // Conservative, like the roster-cap read below: an unreadable roster
-        // cannot prove the name is free, and a duplicate member is worse than a
-        // delayed one.
+      const decision = decideAdmission(identity.name, await e2e.existingMemberNames());
+      if (!decision.admit) {
         state.upcoming = [];
-        log(`onboarding ${identity.name} skipped — roster is unreadable, refusing to risk a duplicate`);
-        continue;
-      }
-      if (takenNames.has(identity.name.trim().toLowerCase())) {
-        state.upcoming = [];
-        log(`onboarding ${identity.name} skipped — already on the roster (this database has been onboarded before)`);
+        log(
+          decision.reason === "roster-unreadable"
+            ? `onboarding ${identity.name} skipped — roster is unreadable, refusing to risk a duplicate`
+            : `onboarding ${identity.name} skipped — already on the roster (this database has been onboarded before)`,
+        );
         continue;
       }
       // Roster cap: once the active committee reaches the contract's

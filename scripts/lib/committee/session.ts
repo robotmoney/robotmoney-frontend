@@ -210,20 +210,40 @@ export async function activeMemberCount(targetUrl: string = backendUrl()): Promi
  * treat that as "cannot prove this name is free" and skip, exactly as
  * activeMemberCount() assumes FULL rather than empty.
  */
-export async function existingMemberNames(targetUrl: string = backendUrl()): Promise<Set<string> | null> {
+export interface RosterMember {
+  id: string;
+  name: string;
+  lens: string | null;
+  status: string;
+}
+
+/** The full roster (every status), or null when it cannot be read. */
+export async function rosterMembers(targetUrl: string = backendUrl()): Promise<RosterMember[] | null> {
   try {
     const r = await fetch(`${targetUrl}${ROUTES.committee.admin.members}`, { headers: getAdminHeaders() });
     if (!r.ok) throw new Error(`GET ${ROUTES.committee.admin.members} -> ${r.status}`);
-    const body = await responseJson(r) as { members?: { name?: string }[] };
+    const body = await responseJson(r) as { members?: { id?: string; name?: string; lens?: string | null; status?: string }[] };
     if (!Array.isArray(body.members)) throw new Error("admin members response has no members array");
-    return new Set(body.members.map((m) => String(m?.name ?? "").trim().toLowerCase()).filter(Boolean));
+    return body.members
+      .filter((m) => m?.id && m?.name)
+      .map((m) => ({ id: String(m.id), name: String(m.name), lens: m.lens ?? null, status: String(m.status ?? "") }));
   } catch (err) {
+    console.error(`[e2e] rosterMembers: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
+/** Lower-cased names on the roster, or null when the roster cannot be read. */
+export async function existingMemberNames(targetUrl: string = backendUrl()): Promise<Set<string> | null> {
+  const members = await rosterMembers(targetUrl);
+  if (members === null) {
     console.error(
-      `[e2e] existingMemberNames: ${err instanceof Error ? err.message : err} — ` +
-        `cannot prove a newcomer name is unused; the caller must SKIP rather than risk a duplicate`,
+      "[e2e] existingMemberNames: roster unreadable — cannot prove a newcomer name is unused; " +
+        "the caller must SKIP rather than risk a duplicate",
     );
     return null;
   }
+  return new Set(members.map((m) => m.name.trim().toLowerCase()).filter(Boolean));
 }
 
 // Exported (in addition to standalone-main use) so scripts/rmpc-release-e2e.ts

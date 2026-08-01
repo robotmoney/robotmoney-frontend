@@ -160,6 +160,21 @@ async function verifyToken(token: string): Promise<string | null> {
 
 // ── client-native keystore (fixed demo roster) ──────────────────────────────
 async function ensureClientKeyPair(): Promise<{ publicKeyB64: string; privateKey: CryptoKey }> {
+  // A COMMITTED persona identity, when the harness supplies one
+  // (scripts/lib/committee/persona-keys.ts). It wins over whatever this
+  // container's volume happens to hold, because the volume is per-boot and the
+  // persona is not: adopting the known key is what lets a restarted demo sign as
+  // a persona its persistent database already knows, instead of inventing a new
+  // identity and duplicating the member. Seeded into the keystore so every later
+  // run in this container reads it from the normal place.
+  const supplied = process.env.RM_MEMBER_IDENTITY?.trim();
+  if (supplied) {
+    const { privateJwk, publicKeyB64 } = JSON.parse(supplied) as { privateJwk: JsonWebKey; publicKeyB64: string };
+    const privateKey = await crypto.subtle.importKey("jwk", privateJwk, { name: "Ed25519" }, false, ["sign"]);
+    mkdirSync(CLIENT_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(CLIENT_IDENTITY, JSON.stringify({ privateJwk, publicKeyB64 }), { mode: 0o600 });
+    return { publicKeyB64, privateKey };
+  }
   if (existsSync(CLIENT_IDENTITY)) {
     const stored = JSON.parse(readFileSync(CLIENT_IDENTITY, "utf8")) as { privateJwk: JsonWebKey; publicKeyB64: string };
     const privateKey = await crypto.subtle.importKey("jwk", stored.privateJwk, { name: "Ed25519" }, false, ["sign"]);
