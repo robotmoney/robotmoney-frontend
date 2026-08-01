@@ -79,6 +79,12 @@ export const ROUTES = {
 
   projects: {
     list: "/api/projects", // GET → aggregated projects directory
+    // Issue #389 (§5.5, P3.1): ProjectProfile "dossier" — hero, KPI strip,
+    // full facet tables, 90d raw-daily history, ratio tiles, activity feed
+    // for ONE project. Same public/unauthenticated `projects` namespace as
+    // `list` above (not `dashboards.*` or `analytics.*` — this is the
+    // existing #70/#93 route family, not a new dashboard surface).
+    detail: "/api/projects/:slug", // GET → one project's full profile DTO
     adminUpdate: "/api/projects/admin/:slug", // POST — admin-managed overview write (#93)
   },
 

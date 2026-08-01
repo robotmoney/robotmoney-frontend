@@ -61,6 +61,15 @@ async function main(): Promise<void> {
   routes[ROUTES.dashboards.overview] = await get(ROUTES.dashboards.overview);
   routes[ROUTES.dashboards.agents] = await get(ROUTES.dashboards.agents);
   routes[ROUTES.projects.list] = await get(ROUTES.projects.list);
+  // Issue #389 (/projects/:slug ProjectProfile): discovered from the list
+  // capture just above, same pattern as the committee member/session/subject
+  // routes below — captures the profile DTO for every project the directory
+  // currently lists (empty on a fresh/dev-seed-less deploy, never an error).
+  const projectSlugs = ((routes[ROUTES.projects.list] as { projects?: { slug: string }[] })?.projects ?? []).map((p) => p.slug);
+  for (const slug of projectSlugs) {
+    const p = expand(ROUTES.projects.detail, { slug });
+    routes[p] = await get(p);
+  }
   for (const key of RESEARCH_KEYS) {
     const p = expand(ROUTES.dashboards.researchSignal, { key });
     routes[p] = await get(p);

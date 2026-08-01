@@ -26,6 +26,7 @@ export const ROUTES: {
   };
   projects: {
     list: string;
+    detail: string;
     adminUpdate: string;
   };
   committee: {

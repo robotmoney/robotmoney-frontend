@@ -230,11 +230,22 @@ const SECTIONS = [
 // one resolves to the shared "coming soon" placeholder), so without this
 // check they would silently fall through to home's title/description AND
 // home's INDEXABLE default robots directive — exactly the kind of stub-page
-// leak §4.1 says must never happen. `/projects/:slug` is included even
-// though its eventual page (§5.5) is public, because right now it renders
-// the same placeholder as every other stub — noindex until real content
-// ships, same rule as the static dashboard entries above.
-const DASH_STUB_PARAM_PREFIXES = ["/agents/", "/lobster/", "/vaults/", "/wallets/", "/projects/"];
+// leak §4.1 says must never happen. `/projects/:slug` is handled separately
+// below (issue #389 shipped its real page) — it is NOT in this list.
+const DASH_STUB_PARAM_PREFIXES = ["/agents/", "/lobster/", "/vaults/", "/wallets/"];
+
+// `/projects/:slug` ProjectProfile (issue #389, §5.5, P3.1). Real content now
+// ships (unlike the stub prefixes above), but per §6's provenance table this
+// route stays `noindex` at launch, same as `/projects` (the list) — both are
+// still behind the same PROJECTS_SOURCE=live cutover (issue #346) and this
+// page's Holdings/Activity sections are honestly empty until P1.6 lands.
+// `follow` (not `nofollow` like the DASH_STUB entries) because this page's own
+// facet-table links (→ /agents/:id etc.) are real content worth a crawler
+// following once those targets exist, unlike a placeholder page linking
+// nowhere. The per-slug display name isn't known synchronously here (this
+// runs before the page's own data fetch), so the title is generic rather than
+// fabricated from the slug.
+const PROJECT_PROFILE_PREFIX = "/projects/";
 
 /**
  * @param {string} segment
@@ -281,6 +292,13 @@ export function metaFor(pathname) {
         robots: "noindex, nofollow",
       };
     }
+  }
+  if (p.startsWith(PROJECT_PROFILE_PREFIX)) {
+    return {
+      title: "Project Profile — Robot Money Analytics",
+      description: "Token metrics, revenue, and treasury breakdown for a tracked agentic-economy project.",
+      robots: "noindex, follow",
+    };
   }
   return META["/"];
 }

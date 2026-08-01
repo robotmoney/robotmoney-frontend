@@ -1,0 +1,302 @@
+<!-- /projects/:slug — ProjectProfile "dossier" (issue #389, docs/bot-
+     analytics-ui-port-plan.md §5.5, P3.1). Renders inside views/dash/
+     _layout.html's [data-outlet]; the ancestor `.a3` shell (issue #379)
+     already supplies the scoped theme, so nothing here repeats that class.
+     Real, non-fabricated data only (issue #98/#346 honesty contract) — an
+     empty/sparse project renders its honest empty states, never seed rows.
+
+     Two §5.5 sections are intentionally NOT here: Holdings (no per-asset
+     wallet_holdings-equivalent table exists) and per-agent Buyers/Holders +
+     the Buyers/Txn ratio (no buyer/holder column anywhere in this schema) —
+     see contract/src/projects.d.ts's ProjectDetail doc comment. -->
+<div x-data="projectProfileView" data-project-profile-view>
+  <a href="/projects" class="a3-profile__back" data-profile-back-link>← All projects</a>
+
+  <template x-if="loading">
+    <p class="data-label" data-profile-loading style="margin-top: 1rem;">Loading …</p>
+  </template>
+  <template x-if="error">
+    <p class="a3-badge a3-badge--destructive" data-profile-error x-text="error" style="margin-top: 1rem;"></p>
+  </template>
+  <template x-if="notFound">
+    <p class="data-label" data-profile-not-found style="margin-top: 1rem;">Project not found.</p>
+  </template>
+
+  <template x-if="!loading && !error && !notFound && project">
+    <div data-profile-content>
+      <!-- Provenance notice (same honesty-contract convention as /projects,
+           issue #346's pj-provenance banner) -->
+      <p class="data-label a3-profile__notice" data-profile-notice>
+        Development data. Figures reflect the seeded/curated roster until
+        <code>PROJECTS_SOURCE=live</code> — see the provenance footer below
+        for per-facet freshness.
+      </p>
+
+      <!-- Hero -->
+      <div class="metric-card a3-profile__hero" data-profile-hero>
+        <div class="a3-profile__hero-main">
+          <div class="a3-profile__logo" data-profile-logo>
+            <template x-if="project.logoUrl">
+              <img :src="project.logoUrl" :alt="project.displayName" style="width:100%; height:100%; object-fit:cover; border-radius: var(--radius);" />
+            </template>
+            <template x-if="!project.logoUrl">
+              <span x-text="initials()"></span>
+            </template>
+          </div>
+          <div>
+            <h1 data-profile-name x-text="project.displayName" style="letter-spacing: 0.02em; font-size: 1.375rem;"></h1>
+            <div class="a3-profile__pills" data-profile-facet-pills>
+              <template x-for="f in facetLabels()" :key="f">
+                <span class="a3-badge a3-badge--cyan" x-text="f"></span>
+              </template>
+              <template x-if="project.primaryChain">
+                <span class="a3-badge a3-badge--muted" x-text="project.primaryChain.toUpperCase()"></span>
+              </template>
+            </div>
+            <p class="data-label" data-profile-overview-short x-text="project.overviewShort" style="max-width: 40rem; text-transform:none; letter-spacing:normal; font-size:0.85rem;"></p>
+            <div class="a3-profile__links">
+              <a :href="project.websiteUrl" target="_blank" rel="noopener" x-show="project.websiteUrl" data-profile-website-link>
+                <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-globe"></use></svg> Website
+              </a>
+              <a :href="'https://twitter.com/' + (project.twitterHandle || '').replace(/^@/, '')" target="_blank" rel="noopener" x-show="project.twitterHandle" data-profile-twitter-link>
+                <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-twitter"></use></svg> <span x-text="project.twitterHandle"></span>
+              </a>
+            </div>
+            <div x-show="(project.sparkline || []).length > 0" data-profile-hero-spark x-html="heroSparkSvg()" style="margin-top:0.5rem;"></div>
+          </div>
+        </div>
+
+        <div class="a3-profile__score" data-profile-score>
+          <span class="data-label">Coverage Score</span>
+          <span class="data-value" data-profile-score-value x-text="fmtInt(project.dataCoverageScore)"></span>
+          <template x-for="bar in scoreBars" :key="bar.key">
+            <div class="a3-profile__scorebar" :data-scorebar="bar.key">
+              <span x-text="bar.label" style="width: 4.5rem; flex:none;"></span>
+              <div class="a3-profile__scorebar-track">
+                <div class="a3-profile__scorebar-fill" :style="'width:' + Math.max(0, Math.min(100, project[bar.key] ?? 0)) + '%'"></div>
+              </div>
+              <span x-text="fmtInt(project[bar.key])" style="width:2.2rem; text-align:right;"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Overview -->
+      <div class="metric-card" data-profile-overview-card x-show="project.overviewLong" style="margin-top:1rem;">
+        <p class="data-label">Overview</p>
+        <p data-profile-overview-long x-text="project.overviewLong" style="white-space: pre-wrap; font-size:0.85rem;"></p>
+      </div>
+
+      <!-- Money strip -->
+      <div class="a3-profile__kpis" data-profile-kpis>
+        <div class="metric-card a3-profile__kpi-tile" data-kpi="marketCap">
+          <span class="data-label">Market Cap</span>
+          <span class="data-value" x-text="fmtUsd(project.kpis.marketCapUsd)"></span>
+          <span class="a3-profile__kpi-sub">FDV <span x-text="fmtUsd(project.kpis.fdvUsd)"></span></span>
+        </div>
+        <div class="metric-card a3-profile__kpi-tile" data-kpi="revenue30d">
+          <span class="data-label">Revenue 30d</span>
+          <span class="data-value" x-text="fmtUsd(project.kpis.revenue30dUsd)"></span>
+          <span class="a3-profile__kpi-sub">across <span x-text="project.agents.length"></span> agent(s)</span>
+        </div>
+        <div class="metric-card a3-profile__kpi-tile" data-kpi="ps">
+          <span class="data-label">P/S (ann.)</span>
+          <span class="data-value" x-text="fmtRatio(project.kpis.psRatioAnnualized)"></span>
+        </div>
+        <div class="metric-card a3-profile__kpi-tile" data-kpi="walletBalance">
+          <span class="data-label">Wallet Balance</span>
+          <span class="data-value" x-text="fmtUsd(project.kpis.walletBalanceUsd)"></span>
+          <span class="a3-profile__kpi-sub"><span x-text="project.kpis.walletCount"></span> wallet(s)</span>
+        </div>
+        <div class="metric-card a3-profile__kpi-tile" data-kpi="vaultTvl">
+          <span class="data-label">Vault TVL</span>
+          <span class="data-value" x-text="fmtUsd(project.kpis.vaultTvlUsd)"></span>
+          <span class="a3-profile__kpi-sub">weighted APY <span x-text="fmtApy(project.kpis.vaultWeightedApy)"></span></span>
+        </div>
+        <div class="metric-card a3-profile__kpi-tile" data-kpi="x402">
+          <span class="data-label">x402 Footprint</span>
+          <span class="data-value" x-text="fmtUsd(project.kpis.x402VolumeUsd)"></span>
+          <span class="a3-profile__kpi-sub"><span x-text="fmtInt(project.kpis.x402TxnCount)"></span> txns</span>
+        </div>
+      </div>
+
+      <!-- Facet: Agents -->
+      <div class="a3-profile__section" x-show="project.agents.length > 0" data-profile-agents-section>
+        <p class="data-label">Agents · <span x-text="project.agents.length"></span></p>
+        <div class="a3-table-wrap hide-x-scrollbar">
+          <table class="a3-table" data-profile-agents-table>
+            <thead>
+              <tr>
+                <th>Name</th><th>Protocol</th><th>x402 Score</th><th>Txns</th>
+                <th>Revenue 30d</th><th>Productivity</th><th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="a in project.agents" :key="a.id">
+                <tr data-profile-agent-row>
+                  <td><a :href="a.href" x-text="a.name"></a></td>
+                  <td x-text="(a.protocolStandard || 'other').toUpperCase()"></td>
+                  <td x-text="fmtNum(a.x402Score)"></td>
+                  <td x-text="fmtInt(a.x402TxnCount)"></td>
+                  <td x-text="fmtUsd(a.revenue30dUsd)"></td>
+                  <td x-text="fmtNum(a.productivityScore)"></td>
+                  <td><span :class="a.isActive ? 'status-active' : 'status-inactive'" x-text="a.isActive ? 'Active' : 'Inactive'"></span></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Facet: Tokens -->
+      <div class="a3-profile__section" x-show="project.coins.length > 0" data-profile-coins-section>
+        <p class="data-label">Tokens · <span x-text="project.coins.length"></span></p>
+        <div class="a3-table-wrap hide-x-scrollbar">
+          <table class="a3-table" data-profile-coins-table>
+            <thead>
+              <tr>
+                <th>Token</th><th>Chain</th><th>Price</th><th>24h %</th>
+                <th>Market Cap</th><th>FDV</th><th>Volume 24h</th><th>90d</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="c in project.coins" :key="c.id">
+                <tr data-profile-coin-row>
+                  <td><a :href="'/lobster/' + c.id"><span x-text="c.ticker || c.name"></span></a></td>
+                  <td x-text="(c.chain || '—')"></td>
+                  <td x-text="fmtUsd(c.priceUsd)"></td>
+                  <td :style="'color:' + pctColor(c.percentChange24h)" x-text="fmtPct(c.percentChange24h)"></td>
+                  <td x-text="fmtUsd(c.marketCap)"></td>
+                  <td x-text="fmtUsd(c.fdv)"></td>
+                  <td x-text="fmtUsd(c.volume24h)"></td>
+                  <td x-html="coinSparkSvg(c)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Facet: Wallets -->
+      <div class="a3-profile__section" x-show="project.wallets.length > 0" data-profile-wallets-section>
+        <p class="data-label">Wallets · <span x-text="project.wallets.length"></span></p>
+        <div class="a3-table-wrap hide-x-scrollbar">
+          <table class="a3-table" data-profile-wallets-table>
+            <thead>
+              <tr><th>Label</th><th>Address</th><th>Chain</th><th>Balance</th><th>Last Tx</th></tr>
+            </thead>
+            <tbody>
+              <template x-for="w in project.wallets" :key="w.id">
+                <tr data-profile-wallet-row>
+                  <td x-text="w.label"></td>
+                  <td x-text="shortAddr(w.address)"></td>
+                  <td x-text="(w.chain || '—')"></td>
+                  <td x-text="fmtUsd(w.balanceUsd)"></td>
+                  <td x-text="fmtRel(w.lastTxAt)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Facet: Vaults -->
+      <div class="a3-profile__section" x-show="project.vaults.length > 0" data-profile-vaults-section>
+        <p class="data-label">Vaults · <span x-text="project.vaults.length"></span></p>
+        <div class="a3-table-wrap hide-x-scrollbar">
+          <table class="a3-table" data-profile-vaults-table>
+            <thead>
+              <tr><th>Name</th><th>Protocol</th><th>Chain</th><th>Strategy</th><th>TVL</th><th>APY</th><th>Link</th></tr>
+            </thead>
+            <tbody>
+              <template x-for="v in project.vaults" :key="v.id">
+                <tr data-profile-vault-row>
+                  <td x-text="v.name"></td>
+                  <td x-text="(v.protocol || '—')"></td>
+                  <td x-text="(v.chain || '—')"></td>
+                  <td x-text="(v.strategyType || '—')"></td>
+                  <td x-text="fmtUsd(v.tvlUsd)"></td>
+                  <td x-text="fmtApy(v.yieldApy)"></td>
+                  <td>
+                    <a x-show="v.vaultAddress && v.chain === 'base'" :href="'https://basescan.org/address/' + v.vaultAddress" target="_blank" rel="noopener">open ↗</a>
+                    <span x-show="!(v.vaultAddress && v.chain === 'base')">—</span>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- History (90d) -->
+      <div class="a3-profile__section" data-profile-history-section>
+        <p class="data-label">History · 90d</p>
+        <template x-if="historyEmpty()">
+          <p class="data-label" data-profile-history-empty style="text-transform:none; letter-spacing:normal;">Not enough history yet.</p>
+        </template>
+        <template x-if="!historyEmpty()">
+          <div>
+            <div class="metric-card a3-profile__chart-card" data-chart-card="tokenPriceUsd" style="margin-bottom:1rem;">
+              <span class="data-label">Token Price</span>
+              <div class="a3-profile__chart-frame"><canvas x-ref="chartTokenPrice"></canvas></div>
+            </div>
+            <div class="a3-profile__charts">
+              <div class="metric-card a3-profile__chart-card" data-chart-card="marketCapUsd">
+                <span class="data-label">Market Cap</span>
+                <div class="a3-profile__chart-frame"><canvas x-ref="chartMarketCap"></canvas></div>
+              </div>
+              <div class="metric-card a3-profile__chart-card" data-chart-card="dailyRevenueUsd">
+                <span class="data-label">Daily Revenue</span>
+                <div class="a3-profile__chart-frame"><canvas x-ref="chartDailyRevenue"></canvas></div>
+              </div>
+              <div class="metric-card a3-profile__chart-card" data-chart-card="treasuryUsd">
+                <span class="data-label">Treasury (Wallets + TVL)</span>
+                <div class="a3-profile__chart-frame"><canvas x-ref="chartTreasury"></canvas></div>
+              </div>
+              <div class="metric-card a3-profile__chart-card" data-chart-card="avgProductivity">
+                <span class="data-label">Avg Agent Productivity</span>
+                <div class="a3-profile__chart-frame"><canvas x-ref="chartProductivity"></canvas></div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Ratios -->
+      <div class="a3-profile__section" data-profile-ratios-section>
+        <p class="data-label">Ratios</p>
+        <div class="a3-profile__ratios">
+          <div class="metric-card" data-ratio="ps"><span class="data-label">P/S (ann.)</span><span class="data-value" x-text="fmtRatio(project.ratios.psRatioAnnualized)"></span></div>
+          <div class="metric-card" data-ratio="fdvMcap"><span class="data-label">FDV/MCAP</span><span class="data-value" x-text="fmtRatio(project.ratios.fdvToMarketCap)"></span></div>
+          <div class="metric-card" data-ratio="tvlMcap"><span class="data-label">TVL/MCAP</span><span class="data-value" x-text="fmtRatio(project.ratios.tvlToMarketCap)"></span></div>
+          <div class="metric-card" data-ratio="revGrowth"><span class="data-label">Rev Growth (15d)</span><span class="data-value" :style="'color:' + pctColor(project.ratios.revenueGrowthPct)" x-text="fmtPct(project.ratios.revenueGrowthPct)"></span></div>
+          <div class="metric-card" data-ratio="capEff"><span class="data-label">Capital Efficiency</span><span class="data-value" x-text="fmtRatio(project.ratios.capitalEfficiency)"></span></div>
+        </div>
+      </div>
+
+      <!-- Activity feed — hidden until agent_activity_log has a writer (P1.6) -->
+      <div class="a3-profile__section" x-show="project.activity.length > 0" data-profile-activity-section>
+        <p class="data-label">Activity</p>
+        <div class="a3-profile__activity">
+          <template x-for="e in project.activity" :key="e.id">
+            <div class="a3-profile__activity-row" data-profile-activity-row>
+              <span class="a3-badge" :class="'a3-badge--' + (e.status === 'success' ? 'green' : e.status === 'pending' ? 'amber' : 'destructive')" x-text="e.status"></span>
+              <a :href="e.agentHref" x-show="e.agentHref" x-text="e.agentName"></a>
+              <span x-show="!e.agentHref" x-text="e.agentName"></span>
+              <span x-text="e.actionType"></span>
+              <span class="data-label" x-text="fmtRel(e.occurredAt)"></span>
+              <p x-show="e.commitSummary" x-text="e.commitSummary" style="margin: 0.2rem 0 0; font-size:0.8rem;"></p>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Provenance footer -->
+      <div class="a3-profile__provenance" data-profile-provenance-footer>
+        <a :href="project.websiteUrl" target="_blank" rel="noopener" x-show="project.websiteUrl">Website</a>
+        <a :href="'https://twitter.com/' + (project.twitterHandle || '').replace(/^@/, '')" target="_blank" rel="noopener" x-show="project.twitterHandle">X</a>
+        <span x-show="project.coverageCalculatedAt">Coverage recalculated <span x-text="fmtRel(project.coverageCalculatedAt)"></span></span>
+      </div>
+    </div>
+  </template>
+</div>

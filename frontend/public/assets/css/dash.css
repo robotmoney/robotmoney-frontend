@@ -908,3 +908,56 @@
 .a3 .a3-usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; text-align: center; }
 
 .a3 .a3-copy-wallet.is-copied { color: hsl(var(--success)); border-color: hsl(var(--success) / 0.4); }
+
+/* ── /projects/:slug ProjectProfile "dossier" (issue #389, §5.5, P3.1) ────
+   Hero/KPI/ratio/history/activity layout; table shell/badges/metric-card
+   above are shared P0.1/P0.2 primitives reused as-is. */
+.a3 .a3-profile__back { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); }
+.a3 .a3-profile__back:hover { color: hsl(var(--primary)); }
+.a3 .a3-profile__hero { display: flex; flex-wrap: wrap; gap: 1.5rem; justify-content: space-between; margin-top: 0.75rem; }
+.a3 .a3-profile__hero-main { display: flex; gap: 1rem; min-width: 0; }
+.a3 .a3-profile__logo {
+  width: 4rem; height: 4rem; flex: none; border-radius: var(--radius);
+  background: hsl(var(--muted)); display: flex; align-items: center; justify-content: center;
+  font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 1.1rem; color: hsl(var(--muted-foreground));
+  overflow: hidden;
+}
+.a3 .a3-profile__pills { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.4rem 0; }
+.a3 .a3-profile__links { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 0.5rem; }
+.a3 .a3-profile__links a { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); }
+.a3 .a3-profile__links a:hover { color: hsl(var(--primary)); }
+.a3 .a3-profile__score {
+  min-width: 14rem; flex: none; border-left: 1px solid hsl(var(--border)); padding-left: 1.5rem;
+  display: flex; flex-direction: column; gap: 0.5rem;
+}
+.a3 .a3-profile__scorebar { display: flex; align-items: center; gap: 0.5rem; font-size: 0.7rem; color: hsl(var(--muted-foreground)); }
+.a3 .a3-profile__scorebar-track { flex: 1; height: 4px; border-radius: 9999px; background: hsl(var(--muted)); overflow: hidden; }
+.a3 .a3-profile__scorebar-fill { height: 100%; background: hsl(var(--primary)); }
+.a3 .a3-profile__notice { border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 0.6rem 0.9rem; margin: 0.75rem 0 0; text-transform: none; letter-spacing: normal; }
+.a3 .a3-profile__kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.75rem; margin: 1.5rem 0; }
+.a3 .a3-profile__kpi-tile { display: flex; flex-direction: column; gap: 0.35rem; }
+.a3 .a3-profile__kpi-sub { font-size: 0.7rem; color: hsl(var(--muted-foreground)); }
+.a3 .a3-profile__section { margin: 1.75rem 0; }
+.a3 .a3-profile__charts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-top: 0.75rem; }
+/* The fixed height lives on this WRAPPER div, never the `<canvas>` itself —
+   Chart.js's `responsive:true` ResizeObserver reads the CANVAS PARENT's
+   clientHeight and writes the canvas's own width/height via JS on every
+   resize; a competing CSS height rule targeting the canvas element directly
+   fights that JS-set value and produces a runaway resize-observer feedback
+   loop (reproduced while building this: `fullPage` screenshots grew taller on
+   every retry). Same convention as the existing `.rm-chart`/`.alloc-pie`
+   wrapper (components.css) every other chart-using view in this codebase
+   already follows. */
+.a3 .a3-profile__chart-frame { height: 8rem; margin-top: 0.5rem; }
+.a3 .a3-profile__ratios { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
+.a3 .a3-profile__activity { max-height: 24rem; overflow-y: auto; }
+.a3 .a3-profile__activity-row { padding: 0.5rem 0; border-top: 1px solid hsl(var(--border)); font-size: 0.8rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.a3 .a3-profile__provenance { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1.75rem; font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
+.a3 .a3-profile__provenance a { color: hsl(var(--muted-foreground)); }
+.a3 .a3-profile__provenance a:hover { color: hsl(var(--primary)); }
+
+@media (max-width: 640px) {
+  .a3 .a3-profile__hero { flex-direction: column; }
+  .a3 .a3-profile__score { border-left: none; border-top: 1px solid hsl(var(--border)); padding-left: 0; padding-top: 1rem; }
+  .a3 .a3-profile__charts { grid-template-columns: 1fr; }
+}
