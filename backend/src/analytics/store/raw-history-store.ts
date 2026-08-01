@@ -38,26 +38,34 @@ export async function loadRawIndicatorHistory(db: DbHandle = sql): Promise<RawIn
 // Persist merged history back, upserting on (date, indicator) so re-runs
 // overwrite rather than duplicate. Non-finite values are skipped (the floor only
 // stores real observations). No-op for empty input.
+//
+// `source` (issue #397) tags every row in this call with the data source that
+// produced it — 'live' by default (the orchestrator's production merge path),
+// or an explicit override (store/floor-seed.ts passes 'seed' for its vendored
+// gap-fill writer). ON CONFLICT overwrites `source` along with `value` so a
+// genuine live fetch upgrades a previously-seeded row's provenance, matching
+// the existing "fetched wins on overlap" honesty semantics.
 export async function saveRawIndicatorHistory(
   byIndicator: RawIndicatorHistory,
   db: DbHandle = sql,
+  source: string = "live",
 ): Promise<void> {
-  const rows: { date: string; indicator: string; value: number }[] = [];
+  const rows: { date: string; indicator: string; value: number; source: string }[] = [];
   for (const [indicator, points] of Object.entries(byIndicator)) {
     for (const p of points) {
       if (!Number.isFinite(p.value)) continue;
-      rows.push({ date: p.date, indicator, value: p.value });
+      rows.push({ date: p.date, indicator, value: p.value, source });
     }
   }
   if (rows.length === 0) return;
   // The full floor is tens of thousands of (date,indicator) rows; a single
-  // multi-row INSERT would blow past Postgres' 65534 bind-parameter cap (3 params
+  // multi-row INSERT would blow past Postgres' 65534 bind-parameter cap (4 params
   // per row). Chunk so each statement stays well under the limit.
-  const CHUNK = 5000; // 5000 × 3 = 15000 params per statement
+  const CHUNK = 5000; // 5000 × 4 = 20000 params per statement
   for (let i = 0; i < rows.length; i += CHUNK) {
     const batch = rows.slice(i, i + CHUNK);
     await db`
-      INSERT INTO raw_indicator_history ${db(batch, "date", "indicator", "value")}
-      ON CONFLICT (date, indicator) DO UPDATE SET value = EXCLUDED.value`;
+      INSERT INTO raw_indicator_history ${db(batch, "date", "indicator", "value", "source")}
+      ON CONFLICT (date, indicator) DO UPDATE SET value = EXCLUDED.value, source = EXCLUDED.source`;
   }
 }

@@ -42,6 +42,10 @@ export interface RegimeSnapshotRow {
   factorPercentile?: number | null;
   panelWeights?: Record<string, Record<string, number>> | null;
   version?: string | null;
+  // Row-level provenance (issue #397): which data source wrote this row —
+  // 'live' | 'hermetic' | 'fixture' | 'seed' going forward; `null`/undefined
+  // on every pre-migration row (genuinely unknown, never fabricated).
+  source?: string | null;
   percentiles: Record<string, number>;
   // Rich per-indicator objects ({raw_value, raw_date, transformed_value,
   // percentile, signed_percentile, panel_weight, sparkline}); JSON-serializable.
@@ -81,6 +85,7 @@ export function rowToSnapshot(r: any): RegimeSnapshot {
     factorPercentile: num(r.factor_percentile),
     panelWeights: r.panel_weights ?? null,
     version: r.version ?? null,
+    source: r.source ?? null,
     percentiles: r.percentiles ?? {},
     indicators: r.indicators ?? [],
     // Dashboard-level blobs — present only on the asof/latest row (NULL on history).

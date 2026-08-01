@@ -81,6 +81,18 @@ test("cold DB: seed writes every row; a second run is a no-op (idempotent)", asy
   }
 });
 
+test("cold DB: seeded rows are tagged source='seed' (issue #397 provenance)", async () => {
+  const path = writeSeed();
+  try {
+    await applyRawFloorSeed(await loadRawFloorSeed(path));
+    const rows = await sql`SELECT indicator, source FROM raw_indicator_history WHERE indicator IN ('AAA','BBB') ORDER BY indicator, date`;
+    expect(rows.length).toBe(5);
+    expect(rows.every((r: any) => r.source === "seed")).toBe(true);
+  } finally {
+    rmSync(join(path, ".."), { recursive: true, force: true });
+  }
+});
+
 test("append-only floor: pre-existing DB rows win on overlap; seed only fills gaps", async () => {
   const path = writeSeed();
   try {

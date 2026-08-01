@@ -13,7 +13,7 @@ import { persistResearchSignal } from "./research-store.ts";
 
 export const directAnalyticsPersistence: AnalyticsPersistence = {
   loadRawHistory: () => loadRawIndicatorHistory(),
-  saveRawHistory: (byIndicator) => saveRawIndicatorHistory(byIndicator),
+  saveRawHistory: (byIndicator, source) => saveRawIndicatorHistory(byIndicator, undefined, source),
   // Gap-fill inside one transaction so a mid-seed failure never leaves a
   // partially-seeded floor.
   seedRawHistory: (byIndicator) => sql.begin((tx) => applyRawFloorSeed(byIndicator, tx)),

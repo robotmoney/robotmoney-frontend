@@ -88,6 +88,14 @@ export function registerRegimeView(Alpine) {
     regimeCardStyle(r) { const c = this.regimeColor(r); return `border-color:${c};background:${rgba(c, 0.1)}`; },
     fmtSign(s) { return s == null ? "—" : (s >= 0 ? "+" : "") + s; },
     sourceLabel(s) { return SOURCE_LABEL[s] || s || "—"; },
+    // Row-level provenance badge label (issue #397): which AnalyticsDataSource
+    // wrote the served snapshot — distinct from sourceLabel() above, which
+    // labels a PER-INDICATOR upstream vendor (FRED/Yahoo/…). `latest.source`
+    // is `null`/undefined on every pre-migration row (honestly unlabeled), so
+    // the badge is hidden entirely rather than guessing "live".
+    provenanceLabel(s) {
+      return { live: "Live data", hermetic: "Demo data (hermetic)", fixture: "Test fixture data", seed: "Reference snapshot (seed)" }[s] || s;
+    },
     // Per-indicator +1/−1 sign explanation (the panel-table hover tooltip).
     signTooltip(sign, name) {
       if (sign == null || sign >= 0) {

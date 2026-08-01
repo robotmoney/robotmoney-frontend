@@ -300,6 +300,21 @@
 .rm-section-title, .rv__dash-title { font-size: 1.6rem; font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; margin: 0.35rem 0 0; }
 .rm-asof, .rv__asof { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); }
 
+/* /regime row-level provenance badge (issue #397): which data source wrote the
+   served snapshot. Stacks under the as-of label, right-aligned to match. 'live'
+   reads neutral (the healthy default); 'hermetic'/'fixture'/'seed' read amber
+   (the existing non-live warn tone, matching .alloc-aum__prov on /allocation)
+   since they mean the served data is not this run's real production fetch. */
+.rv__asof-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem; }
+.rv__prov {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.15em; padding: 0.2rem 0.5rem; border-radius: var(--radius);
+  border: 1px solid var(--color-border); color: var(--color-text-dim);
+}
+.rv__prov--hermetic, .rv__prov--fixture, .rv__prov--seed {
+  color: var(--color-warn); border-color: rgba(232, 166, 64, 0.4); background: rgba(232, 166, 64, 0.08);
+}
+
 /* summary / stat card grid + card */
 .rm-cards, .rv__cards { display: grid; grid-template-columns: 1fr; gap: 0.8rem; }
 .rm-card, .rv__card {

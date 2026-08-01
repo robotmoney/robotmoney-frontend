@@ -107,6 +107,7 @@ test("saveRegimeSnapshots: round-trips the full v2 row (panel fields, weights, v
     factorPercentile: 0.21,
     panelWeights,
     version: "v2-2026.07",
+    source: "live",
     percentiles: { T10Y2Y: 0.62, DEFI_TVL: 0.71 },
     indicators: richIndicators,
     panels,
@@ -133,6 +134,8 @@ test("saveRegimeSnapshots: round-trips the full v2 row (panel fields, weights, v
   expect(back!.onchainPercentile).toBeCloseTo(0.72, 9);
   expect(back!.factorPercentile).toBeCloseTo(0.21, 9);
   expect(back!.version).toBe("v2-2026.07");
+  // Row-level provenance (issue #397) round-trips through the store writer.
+  expect(back!.source).toBe("live");
   expect(back!.panelWeights).toEqual(panelWeights);
   expect(back!.percentiles).toEqual({ T10Y2Y: 0.62, DEFI_TVL: 0.71 });
   expect(back!.indicators).toEqual(richIndicators);
@@ -143,11 +146,13 @@ test("saveRegimeSnapshots: round-trips the full v2 row (panel fields, weights, v
   expect(back!.correlations).toEqual(correlations);
   expect(back!.extras).toEqual(extras);
 
-  // re-save with a mutated composite → overwrite, exactly one row.
-  await saveRegimeSnapshots([{ ...row, composite: 0.1 }]);
-  const rows = await sql`SELECT composite FROM regime_snapshots WHERE date = ${RDATE}`;
+  // re-save with a mutated composite AND source → overwrite, exactly one row,
+  // provenance updates too (not sticky to the first-ever write).
+  await saveRegimeSnapshots([{ ...row, composite: 0.1, source: "hermetic" }]);
+  const rows = await sql`SELECT composite, source FROM regime_snapshots WHERE date = ${RDATE}`;
   expect(rows.length).toBe(1);
   expect(Number(rows[0].composite)).toBeCloseTo(0.1, 9);
+  expect(rows[0].source).toBe("hermetic");
 });
 
 test("persistResearchSignal: round-trips and upserts on (signal_key, date)", async () => {

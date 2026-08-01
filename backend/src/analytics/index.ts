@@ -196,9 +196,11 @@ export async function runAnalytics(
       t0,
     );
 
-    // Persist the append-only merged floor back before computing.
+    // Persist the append-only merged floor back before computing. Tag every
+    // row with which AnalyticsDataSource actually produced it this run
+    // (issue #397 provenance).
     t0 = new Date();
-    await persistence.saveRawHistory(merged);
+    await persistence.saveRawHistory(merged, sourceLabel);
     mergedRaw = merged;
     collector.stage("store", "ok", "persisted append-only merged raw indicator floor", t0);
 
@@ -256,7 +258,7 @@ export async function runAnalytics(
     });
 
     t0 = new Date();
-    const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, ages, backtest, correlations);
+    const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, ages, backtest, correlations, sourceLabel);
     collector.stage("report", "ok", `built ${rows.length} snapshot row(s) for persistence`, t0);
 
     t0 = new Date();
@@ -345,7 +347,7 @@ export async function runAnalytics(
         // never published against data that was never durably persisted.
         if (refresh && refresh.newRows.length > 0) {
           t0 = new Date();
-          await persistence.saveRawHistory({ MNA: refresh.newRows });
+          await persistence.saveRawHistory({ MNA: refresh.newRows }, sourceLabel);
           collector.stage("store", "ok", `persisted ${refresh.newRows.length} freshly-fetched MNA row(s)`, t0);
         }
         t0 = new Date();
@@ -398,6 +400,7 @@ function buildSnapshotRows(
   ages: Record<string, number[]> = {},
   backtest: BacktestPayload | null = null,
   correlations: CorrelationsPayload | null = null,
+  source: string | null = null,
 ): RegimeSnapshotRow[] {
   const rows: RegimeSnapshotRow[] = [];
   const lastIdx = dateAxis.length - 1;
@@ -438,6 +441,7 @@ function buildSnapshotRows(
       factorPercentile: nn(r3.factorPercentile?.[i]),
       panelWeights,
       version: CURRENT_REGIME_VERSION,
+      source,
       percentiles,
       indicators,
       // Panel index cards rendered by the /regime view. Three panels: the 2-panel

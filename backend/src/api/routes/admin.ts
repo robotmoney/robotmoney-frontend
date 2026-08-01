@@ -511,8 +511,10 @@ export async function handleAdmin(
     if (from) conds.push(sql`date >= ${from}`);
     if (to) conds.push(sql`date <= ${to}`);
     const where = conds.reduce((a, b) => sql`${a} AND ${b}`);
+    // `source` (issue #397): row-level provenance — null on every pre-migration
+    // row (genuinely unknown, never fabricated).
     const points = await sql`
-      SELECT date::text AS date, value FROM raw_indicator_history
+      SELECT date::text AS date, value, source FROM raw_indicator_history
        WHERE ${where}
        ORDER BY date DESC LIMIT ${limit}`;
     return { status: 200, body: { indicator, points } };

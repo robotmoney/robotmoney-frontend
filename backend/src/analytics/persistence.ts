@@ -25,7 +25,9 @@ export interface AnalyticsPersistence {
   // Read the whole persisted raw floor, grouped by indicator, sorted by date.
   loadRawHistory(): Promise<RawIndicatorHistory>;
   // Upsert merged raw history on (date, indicator); fetched wins on overlap.
-  saveRawHistory(byIndicator: RawIndicatorHistory): Promise<void>;
+  // `source` (issue #397) tags the whole batch's provenance ('live' |
+  // 'hermetic' | 'fixture'); omitted defaults to 'live' at the store.
+  saveRawHistory(byIndicator: RawIndicatorHistory, source?: string): Promise<void>;
   // Cold-DB gap-fill: write only (date, indicator) points NOT already persisted
   // (existing rows always win). Idempotent — a warm floor makes this a no-op.
   seedRawHistory(byIndicator: RawIndicatorHistory): Promise<FloorSeedResult>;
