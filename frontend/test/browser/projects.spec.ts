@@ -1,9 +1,12 @@
-// Render + interaction tests for the ported /projects directory (issue #70).
-// Same harness as analytics-views.spec.ts: the SPA + view HTML are served by the
-// backend at baseURL, vendor CDN scripts are fulfilled from node_modules, and the
+// Render + interaction tests for the ported /projects directory (issue #70;
+// fidelity upgrades from issue #388, §5.4). Same harness as
+// analytics-views.spec.ts: the SPA + view HTML are served by the backend at
+// baseURL, vendor CDN scripts are fulfilled from node_modules, and the
 // /api/projects response is STUBBED with a deterministic DTO so the assertions are
 // network-free. We verify routing to /projects, table row rendering with the a2
-// tokens, facet pills, the inline sparkline, and interactive column sorting.
+// tokens, facet pills, the inline sparkline, interactive column sorting, the
+// Definitions dialog, column drag-resize persistence, the synced scroll
+// mirror, and row links to the profile route.
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
 import { navigate } from "./navigation.ts";
@@ -195,6 +198,77 @@ test("navigate rejects within its configured timeout when completion never arriv
   await expect(navigate(page, "/regime", { timeoutMs: 25 })).rejects.toThrow(
     "navigate(/regime): router never dispatched rm:view-changed within 25ms",
   );
+});
+
+// Issue #388 (P2.8, docs/bot-analytics-ui-port-plan.md §5.4): fidelity
+// upgrades on the existing /projects directory — Definitions dialog, dual
+// synced horizontal scrollbars, column resizing with localStorage
+// persistence, and row links to the (still-stubbed) /projects/:slug profile
+// route. Item 4 (sticky-left Project column) and item 6 (wallet/facet
+// tooltips) were already shipped before this issue (native `title` attrs +
+// `.a2-sticky`), so no new coverage is added for those.
+
+test("row name links to the project profile route (§5.4 item 5)", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/projects");
+
+  const alphaLink = page.locator(".pj-table tbody tr", { hasText: "Alpha Labs" }).locator("a.pj-name__link");
+  await expect(alphaLink).toHaveAttribute("href", "/projects/alpha");
+});
+
+test("Definitions dialog lists a term for every column and closes on Escape (§5.4 item 1)", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/projects");
+
+  await expect(page.locator(".pj-dialog-overlay")).toBeHidden();
+  await page.locator(".pj-defs-trigger").click();
+  await expect(page.locator(".pj-dialog-overlay")).toBeVisible();
+
+  const terms = page.locator(".pj-defs__item dt");
+  await expect(terms).toHaveCount(13);
+  await expect(page.locator(".pj-defs__item", { hasText: "Wallet Balance" })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".pj-dialog-overlay")).toBeHidden();
+});
+
+test("column drag-resize persists to localStorage['projects-col-widths-v2'] (§5.4 item 3)", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/projects");
+
+  const handle = page.locator('[data-col-resize="mcap"]');
+  const box = await handle.boundingBox();
+  if (!box) throw new Error("resize handle not found");
+
+  const startX = box.x + box.width / 2;
+  const startY = box.y + box.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX + 80, startY, { steps: 5 });
+  await page.mouse.up();
+
+  const stored = await page.evaluate(() => localStorage.getItem("projects-col-widths-v2"));
+  expect(stored).not.toBeNull();
+  const widths = JSON.parse(stored as string);
+  expect(widths.mcap).toBeGreaterThanOrEqual(130 + 80 - 5); // allow small rounding slack
+});
+
+test("the top scroll mirror stays in sync with the table's horizontal scroll (§5.4 item 2)", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/projects");
+
+  // Widen nothing needed — the table is already wider than the viewport with
+  // 12 fixed-width columns; scroll the main container and assert the mirror
+  // follows, then the reverse.
+  await page.locator(".pj-scroll").evaluate((el) => { el.scrollLeft = 40; });
+  await expect(page.locator(".pj-scroll-mirror")).toHaveJSProperty("scrollLeft", 40);
+
+  await page.locator(".pj-scroll-mirror").evaluate((el) => { el.scrollLeft = 15; });
+  await expect(page.locator(".pj-scroll")).toHaveJSProperty("scrollLeft", 15);
 });
 
 test("sticky project pins first on load; clicking a header re-sorts and releases the pin", async ({ page }) => {
