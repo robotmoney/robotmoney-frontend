@@ -10,7 +10,7 @@
 // in every env incl. a public box); if unset, allow only outside prod
 // (config.allowInsecure — demo/ephemeral convenience). Fail-closed: prod with no
 // token → 403, checked BEFORE any DB work or body parsing on every owned route.
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { config as globalConfig } from "../../config.ts";
 import { sql, jsonValue } from "../../db/client.ts";
 import { INDICATORS } from "../../analytics/analyze/indicators.ts";
@@ -18,26 +18,13 @@ import { computeRegimeStaleness } from "../../analytics/report/regime-projection
 import { decodeCursor, encodeCursor } from "../../admin/cursor.ts";
 import { recordAudit, redactAuditRow } from "../../admin/audit.ts";
 import { getOverviewProjection, PRODUCTION_KINDS } from "../../admin/overview.ts";
-
-// Constant-time secret comparison (over fixed-length sha256 hashes so lengths
-// always match and timing doesn't leak the secret) — mirrors projects.ts.
-function secretEq(presented: string | null, expected: string): boolean {
-  const a = createHash("sha256").update(presented ?? "").digest();
-  const b = createHash("sha256").update(expected).digest();
-  return timingSafeEqual(a, b);
-}
+import { isPrivileged } from "../auth.ts";
 
 // Auth surface for the admin dashboard. Injectable so tests can exercise a
 // prod-mode config (token required, insecure disallowed) against the ephemeral DB.
 export interface AdminAuthConfig {
   adminToken: string | null;
   allowInsecure: boolean;
-}
-
-function requireAdmin(req: Request, cfg: AdminAuthConfig = globalConfig): boolean {
-  return cfg.adminToken
-    ? secretEq(req.headers.get("X-Admin-Token"), cfg.adminToken)
-    : cfg.allowInsecure;
 }
 
 // Clamp a `?limit=` query param to [1, max] with a default when unset/invalid.
@@ -174,7 +161,7 @@ export async function handleAdmin(
   // POST /api/admin/auth — the login form validates the password here (200 iff
   // authorized; the guard below returns 403 otherwise). No body needed.
   if (m === "POST" && p === "/api/admin/auth") {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     return { status: 200, body: { ok: true } };
   }
 
@@ -184,7 +171,7 @@ export async function handleAdmin(
   // next queued swarm event, and a not_run/running/degraded/failed/dead/
   // stale/healthy alert feed.
   if (m === "GET" && p === "/api/admin/overview") {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     return { status: 200, body: await getOverviewProjection() };
   }
 
@@ -193,7 +180,7 @@ export async function handleAdmin(
   // `summary` are the original response shape (backward compatible); `nextCursor`
   // is additive.
   if (m === "GET" && p === "/api/admin/jobs") {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     try {
       const limit = parseLimit(url.searchParams.get("limit"));
       const cursor = parseCursor(url.searchParams.get("cursor"));
@@ -247,7 +234,7 @@ export async function handleAdmin(
   // US-Q1.) Checked before the generic GET /api/admin/jobs/:id below since both
   // share the /api/admin/jobs/:id prefix.
   if (m === "POST" && /^\/api\/admin\/jobs\/[^/]+\/retry$/.test(p)) {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     const idStr = decodeURIComponent(p.split("/")[4]);
     if (!/^\d+$/.test(idStr)) return { status: 400, body: { error: "job id must be numeric" } };
     const id = Number(idStr);
@@ -302,7 +289,7 @@ export async function handleAdmin(
   // plus its recent runs (the logs). Reject a non-numeric id with 400; 404 when
   // the id doesn't exist.
   if (m === "GET" && p.startsWith("/api/admin/jobs/")) {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     const idStr = decodeURIComponent(p.slice("/api/admin/jobs/".length));
     if (!/^\d+$/.test(idStr)) return { status: 400, body: { error: "job id must be numeric" } };
     const id = Number(idStr);
@@ -323,7 +310,7 @@ export async function handleAdmin(
   // GET /api/admin/runs — cursor-paginated job_runs feed, optionally filtered by
   // ?kind=&status=&scopeType=&scopeId= (scope filters join through the owning job).
   if (m === "GET" && p === "/api/admin/runs") {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     try {
       const limit = parseLimit(url.searchParams.get("limit"));
       const cursor = parseCursor(url.searchParams.get("cursor"));
@@ -361,7 +348,7 @@ export async function handleAdmin(
   // toggled in the consumer DB: the independent producer owns cadence. Other
   // schedule kinds were never accepted by this endpoint. (D25 / issue #361.)
   if (m === "PATCH" && /^\/api\/admin\/schedules\/[^/]+$/.test(p)) {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     const idStr = decodeURIComponent(p.slice("/api/admin/schedules/".length));
     if (!/^\d+$/.test(idStr)) return { status: 400, body: { error: "schedule id must be numeric" } };
     const id = Number(idStr);
@@ -405,7 +392,7 @@ export async function handleAdmin(
   // header/cookie/secret/password/signature keys are stripped from any nested
   // JSON before the row leaves this process (never merely omitted client-side).
   if (m === "GET" && p === "/api/admin/audit") {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     try {
       const limit = parseLimit(url.searchParams.get("limit"));
       const cursor = parseCursor(url.searchParams.get("cursor"));
@@ -450,7 +437,7 @@ export async function handleAdmin(
   // freshness. Full stage/warning/artifact detail is reserved for the
   // single-run endpoint below (kept out of the list response deliberately).
   if (m === "GET" && p === "/api/admin/research/runs") {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     const limit = clampLimit(url.searchParams.get("limit"));
     const kind = url.searchParams.get("kind");
     const status = url.searchParams.get("status");
@@ -474,7 +461,7 @@ export async function handleAdmin(
   // warnings, bounded artifact previews, and freshness. 404 for an unknown id,
   // 400 for a non-numeric one.
   if (m === "GET" && p.startsWith("/api/admin/research/runs/")) {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     const idStr = decodeURIComponent(p.slice("/api/admin/research/runs/".length));
     if (!/^\d+$/.test(idStr)) return { status: 400, body: { error: "run id must be numeric" } };
     const id = Number(idStr);
@@ -499,7 +486,7 @@ export async function handleAdmin(
   // read of raw_indicator_history. Rejects unregistered indicators, invalid
   // dates, and excessive limits before touching the database.
   if (m === "GET" && p.startsWith("/api/admin/research/raw-series/")) {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     const indicator = decodeURIComponent(p.slice("/api/admin/research/raw-series/".length));
     if (!RAW_SERIES_ALLOWLIST.has(indicator)) return { status: 400, body: { error: `indicator "${indicator}" is not allowlisted` } };
     const from = url.searchParams.get("from");
@@ -523,7 +510,7 @@ export async function handleAdmin(
   // GET /api/admin/research/signals/:key?from=&to=&limit= — allowlisted read
   // of research_signals. Rejects unregistered signal keys.
   if (m === "GET" && p.startsWith("/api/admin/research/signals/")) {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     const key = decodeURIComponent(p.slice("/api/admin/research/signals/".length));
     if (!SIGNAL_ALLOWLIST.has(key)) return { status: 400, body: { error: `signal "${key}" is not allowlisted` } };
     const from = url.searchParams.get("from");
@@ -545,7 +532,7 @@ export async function handleAdmin(
   // Analytics production is outside the admin authority domain. Keep this
   // retired route explicit so old clients fail closed.
   if (m === "POST" && p === "/api/admin/research/rerun") {
-    if (!requireAdmin(req, cfg)) return FORBIDDEN;
+    if (!isPrivileged(req, cfg)) return FORBIDDEN;
     return {
       status: 409,
       body: { error: "analytics production is owned by the independent producer; admin cannot rerun it" },
