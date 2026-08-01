@@ -13,6 +13,8 @@ import { getTokenMetrics as fetchTokenMetrics } from "../../chain/token-metrics.
 import { getWalletSleeves as fetchWalletSleeves } from "../../chain/wallet-sleeves.ts";
 import { getAllocationFramework } from "../../chain/allocation-framework.ts";
 import { fetchEntities, fetchMarketOverview } from "../../projects/entities-projections.ts";
+import { fetchList2 } from "../../projects/list2-projections.ts";
+import { fetchLeaderboard } from "../../projects/leaderboard-projections.ts";
 
 // GET /api/dashboards/research-signals/:key → latest research signal payload
 export async function getResearchSignal(key: string) {
@@ -85,4 +87,19 @@ export async function getEntities() {
 // getTokenMetrics() as /allocation — no new price feed).
 export async function getMarketOverview() {
   return fetchMarketOverview();
+}
+
+// GET /api/dashboards/list2 → "List v2 (WIP)" per-facet-tab table feed
+// (issue #387, docs/bot-analytics-ui-port-plan.md §5.2, P2.6). Never
+// synthetic: a fresh DB with empty facet tables returns empty arrays per tab.
+export async function getList2() {
+  return fetchList2();
+}
+
+// GET /api/dashboards/leaderboard → "List v3 · Money Agents" leaderboard +
+// evidence (issue #387, §5.3, P2.7). Computed per-request over real facet
+// data (D8: no materialized view here) — see leaderboard-projections.ts for
+// the scoring formula and its documented fidelity notes.
+export async function getLeaderboard() {
+  return fetchLeaderboard();
 }

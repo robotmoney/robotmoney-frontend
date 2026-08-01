@@ -28,6 +28,8 @@ import { registerAdminCommitteeSession } from "./views/admin/committee-session.j
 import { registerDashStyleguideView } from "./views/dash-styleguide.js";
 import { registerDashShellView } from "./views/dash-shell.js";
 import { registerListView } from "./views/list.js";
+import { registerList2View } from "./views/list2.js";
+import { registerList3View } from "./views/list3.js";
 
 export function registerViews(Alpine) {
   registerProjectsView(Alpine);
@@ -49,4 +51,6 @@ export function registerViews(Alpine) {
   registerDashStyleguideView(Alpine);
   registerDashShellView(Alpine);
   registerListView(Alpine);
+  registerList2View(Alpine);
+  registerList3View(Alpine);
 }

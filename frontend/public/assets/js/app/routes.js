@@ -25,6 +25,11 @@ const DASH_COMING_SOON_VIEW = `${VIEW_DIR}/dash/coming-soon.html`;
 // first dashboard route to ship real content ahead of the coming-soon
 // placeholder above.
 const LIST_VIEW = `${VIEW_DIR}/dash/list.html`;
+// /list2 "List v2 (WIP)" and /list3 "List v3 · Money Agents" (issue #387,
+// §5.2/§5.3, P2.6/P2.7) — the second and third dashboard routes to ship real
+// content ahead of the coming-soon placeholder above.
+const LIST2_VIEW = `${VIEW_DIR}/dash/list2.html`;
+const LIST3_VIEW = `${VIEW_DIR}/dash/list3.html`;
 
 // Static dashboard routes (§4.1's list) that render inside DASH_LAYOUT_VIEW.
 // `gated: true` means dash-shell.js's gate must pass before the outlet
@@ -38,8 +43,8 @@ const LIST_VIEW = `${VIEW_DIR}/dash/list.html`;
 /** @type {Record<string, DashRoute>} */
 const DASH_ROUTES = {
   "/list": { view: LIST_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
-  "/list2": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
-  "/list3": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
+  "/list2": { view: LIST2_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
+  "/list3": { view: LIST3_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/market": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/dashboard": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/agents": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },

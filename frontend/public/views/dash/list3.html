@@ -1,0 +1,181 @@
+<!-- /list3 — "List v3 · Money Agents" (issue #387, docs/bot-analytics-ui-
+     port-plan.md §5.3, P2.7). Renders inside views/dash/_layout.html's
+     [data-outlet]; the ancestor `.a3` shell (issue #379) already supplies the
+     scoped theme. Real, non-fabricated data only (issue #98/#346 honesty
+     contract) — the leaderboard is computed per-request over real facet
+     tables (D8: no materialized view here). -->
+<div x-data="list3View" data-list3-view style="max-width: 88rem; margin: 0 auto;">
+  <p class="data-label" style="letter-spacing: 0.2em; text-transform: uppercase;">Robot Money · Money-Agent Index / Top 100</p>
+  <div style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:1rem;">
+    <h1 style="margin:0;">List v3 · Money Agents</h1>
+    <a href="/submit" class="a3-badge a3-badge--muted" data-list3-submit-link>Invite / submit an agent</a>
+  </div>
+  <p class="data-label" style="margin: 0.25rem 0 1.5rem;">Ranked by real, wallet-and-revenue-backed signal — never fabricated.</p>
+
+  <template x-if="loading">
+    <p class="data-label" data-list3-loading>Building the money-agent leaderboard…</p>
+  </template>
+  <template x-if="error">
+    <div class="metric-card" data-list3-error>
+      <span class="a3-badge a3-badge--destructive">Could not load List v3 data</span>
+      <p class="data-label" x-text="error"></p>
+    </div>
+  </template>
+
+  <template x-if="!loading && !error">
+    <div>
+      <p class="data-label" data-list3-freshness x-text="'Last refreshed: ' + fmtRel(asOf)"></p>
+
+      <!-- 4 StatCards -->
+      <div class="a3-overview-grid" data-list3-stats>
+        <div class="metric-card">
+          <span class="data-label">Listed Agents</span>
+          <span class="data-value" x-text="fmtInt(stats?.listedAgents)"></span>
+        </div>
+        <div class="metric-card">
+          <span class="data-label">Verified Wallet Balance</span>
+          <span class="data-value" x-text="fmtUsd(stats?.verifiedWalletBalanceUsd)"></span>
+        </div>
+        <div class="metric-card">
+          <span class="data-label">30D Money In</span>
+          <span class="data-value" x-text="fmtUsd(stats?.moneyIn30dUsd)"></span>
+        </div>
+        <div class="metric-card">
+          <span class="data-label">High Confidence</span>
+          <span class="data-value" x-text="fmtInt(stats?.highConfidenceCount)"></span>
+        </div>
+      </div>
+
+      <!-- Leaderboard health (debug) -->
+      <details data-list3-debug style="margin-bottom: 1.5rem;">
+        <summary class="data-label" style="cursor:pointer;">Leaderboard health (debug)</summary>
+        <div class="metric-card" style="margin-top: 0.75rem;">
+          <p class="data-label">Row count: <span x-text="debug?.rowCount"></span> · Last refresh: <span x-text="fmtRel(debug?.lastRefreshAt)"></span></p>
+          <div class="a3-overview-grid" data-list3-source-health>
+            <template x-for="s in (debug?.sources || [])" :key="s.name">
+              <div class="metric-card">
+                <span class="data-label" x-text="s.name"></span>
+                <span class="a3-badge" :class="sourceStatusClass(s.status)" x-text="s.status" :data-source-status="s.name"></span>
+                <p class="data-label" x-text="s.freshCount + '/' + s.totalCount + ' fresh <36h'"></p>
+              </div>
+            </template>
+          </div>
+        </div>
+      </details>
+
+      <template x-if="sortedRows.length === 0">
+        <div class="metric-card" data-list3-empty>
+          <span class="data-label">No active wallet-backed agents found yet.</span>
+        </div>
+      </template>
+
+      <template x-if="sortedRows.length > 0">
+        <div class="a3-table-wrap hide-x-scrollbar" style="max-height: calc(100vh - 220px); overflow-y: auto;">
+          <table class="a3-table" data-list3-table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>AGENT</th>
+                <th @click="sortBy('revenue30dUsd')" :class="isSort('revenue30dUsd') ? 'is-sorted' : ''">30D IN <span x-text="sortIcon('revenue30dUsd')"></span></th>
+                <th @click="sortBy('walletBalanceUsd')" :class="isSort('walletBalanceUsd') ? 'is-sorted' : ''" x-a3-tooltip="'A blank wallet is not $0 — see the Evidence drawer'">WALLET <span x-text="sortIcon('walletBalanceUsd')"></span></th>
+                <th x-show="hasX402" @click="sortBy('x402VolumeUsd')" :class="isSort('x402VolumeUsd') ? 'is-sorted' : ''">X402 <span x-text="sortIcon('x402VolumeUsd')"></span></th>
+                <th @click="sortBy('tokenMarketCapUsd')" :class="isSort('tokenMarketCapUsd') ? 'is-sorted' : ''">TOKEN <span x-text="sortIcon('tokenMarketCapUsd')"></span></th>
+                <th @click="sortBy('lastObservedAt')" :class="isSort('lastObservedAt') ? 'is-sorted' : ''">ACTIVITY <span x-text="sortIcon('lastObservedAt')"></span></th>
+                <th>EVIDENCE</th>
+                <th x-a3-tooltip="'26-week money trail'">MOMENTUM</th>
+                <th @click="sortBy('signalScore')" :class="isSort('signalScore') ? 'is-sorted' : ''" x-a3-tooltip="'log10(revenue×5 + wallet×2 + x402×1.5 + mcap×0.15 + 1)×100 + recency boost'">RM SCORE <span x-text="sortIcon('signalScore')"></span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="row in sortedRows" :key="row.id">
+                <tr data-list3-row :data-rank="row.displayRank">
+                  <td x-text="row.displayRank"></td>
+                  <td>
+                    <a :href="row.href" data-row-link>
+                      <span x-text="row.name"></span>
+                      <span x-show="row.protocol" class="a3-badge a3-badge--cyan" x-text="row.protocol"></span>
+                    </a>
+                  </td>
+                  <td x-text="fmtUsd(row.revenue30dUsd)"></td>
+                  <td>
+                    <a x-show="row.walletBalanceUsd != null && row.walletBalanceUsd > 0" :href="'https://basescan.org/address/' + row.walletAddress" target="_blank" rel="noopener" x-text="walletLabel(row)" data-wallet-link></a>
+                    <span x-show="!(row.walletBalanceUsd != null && row.walletBalanceUsd > 0)" x-text="walletLabel(row)"></span>
+                  </td>
+                  <td x-show="hasX402" x-text="fmtUsd(row.x402VolumeUsd) + (row.x402Txns ? ' · ' + fmtInt(row.x402Txns) + ' tx' : '')"></td>
+                  <td>
+                    <span x-show="row.tokenTicker" x-text="row.tokenTicker"></span>
+                    <span x-text="fmtUsd(row.tokenMarketCapUsd)"></span>
+                  </td>
+                  <td x-text="fmtRel(row.lastObservedAt)"></td>
+                  <td>
+                    <span class="a3-badge" :class="confidenceBadgeClass(row.confidence)" x-text="row.confidence + ' · ' + fmtScore(row.signalScore)"></span>
+                    <button type="button" class="a3-badge a3-badge--muted" @click="openEvidence(row)" data-evidence-link>Evidence</button>
+                  </td>
+                  <td x-show="row.moneyTrailSparkline.length > 0" x-html="sparkSvg(row.moneyTrailSparkline)"></td>
+                  <td x-show="row.moneyTrailSparkline.length === 0"></td>
+                  <td>
+                    <span class="a3-badge a3-badge--cyan" x-text="fmtScore(row.signalScore)"></span>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <!-- Evidence drawer (right Sheet, §5.3) -->
+  <div class="a3-sheet-overlay" x-show="drawerOpen" x-cloak @click.self="closeEvidence()" @keydown.escape.window="closeEvidence()" data-evidence-drawer>
+    <div class="a3-sheet a3-sheet--xl" role="dialog" aria-modal="true" @click.stop>
+      <button type="button" class="a3-sheet-close" @click="closeEvidence()" aria-label="Close">×</button>
+      <template x-if="selected">
+        <div>
+          <h3 x-text="selected.name"></h3>
+          <span class="a3-badge" :class="confidenceBadgeClass(selected.confidence)" x-text="selected.confidence + ' confidence · ' + fmtScore(selected.signalScore)" data-evidence-confidence></span>
+
+          <section style="margin-top: 1rem; border-top: 1px solid hsl(var(--border)); padding-top: 0.75rem;" data-evidence-section="wallet">
+            <p class="data-label">Wallet proof</p>
+            <span class="a3-badge" :class="evidenceBadgeClass(selected.evidence.wallet)" x-text="selected.evidence.wallet"></span>
+            <p class="data-label" x-text="walletLabel(selected)"></p>
+          </section>
+          <section style="border-top: 1px solid hsl(var(--border)); padding-top: 0.75rem; margin-top: 0.75rem;" data-evidence-section="money-in">
+            <p class="data-label">Money-in proof</p>
+            <span class="a3-badge" :class="evidenceBadgeClass(selected.evidence.moneyIn)" x-text="selected.evidence.moneyIn"></span>
+            <p class="data-label" x-text="'30d: ' + fmtUsd(selected.revenue30dUsd)"></p>
+          </section>
+          <section style="border-top: 1px solid hsl(var(--border)); padding-top: 0.75rem; margin-top: 0.75rem;" data-evidence-section="x402">
+            <p class="data-label">x402 proof</p>
+            <span class="a3-badge" :class="evidenceBadgeClass(selected.evidence.x402)" x-text="selected.evidence.x402"></span>
+            <p class="data-label" x-text="fmtUsd(selected.x402VolumeUsd) + ' · ' + fmtInt(selected.x402Txns) + ' txns'"></p>
+          </section>
+          <section style="border-top: 1px solid hsl(var(--border)); padding-top: 0.75rem; margin-top: 0.75rem;" data-evidence-section="token">
+            <p class="data-label">Token proof</p>
+            <span class="a3-badge" :class="evidenceBadgeClass(selected.evidence.token)" x-text="selected.evidence.token"></span>
+            <p class="data-label" x-text="(selected.tokenTicker || '—') + ' · ' + fmtUsd(selected.tokenMarketCapUsd)"></p>
+          </section>
+          <section style="border-top: 1px solid hsl(var(--border)); padding-top: 0.75rem; margin-top: 0.75rem;" data-evidence-section="identity">
+            <p class="data-label">Identity proof</p>
+            <span class="a3-badge" :class="evidenceBadgeClass(selected.evidence.identity)" x-text="selected.evidence.identity"></span>
+            <p class="data-label" x-text="selected.protocol || 'unknown protocol'"></p>
+          </section>
+          <section style="border-top: 1px solid hsl(var(--border)); padding-top: 0.75rem; margin-top: 0.75rem;" data-evidence-section="freshness">
+            <p class="data-label">Freshness</p>
+            <span class="a3-badge" :class="evidenceBadgeClass(selected.evidence.freshness)" x-text="selected.evidence.freshness"></span>
+            <p class="data-label" x-text="'Last observed ' + fmtRel(selected.lastObservedAt)"></p>
+          </section>
+
+          <section style="border-top: 1px solid hsl(var(--border)); padding-top: 0.75rem; margin-top: 0.75rem;" data-evidence-section="all-checks">
+            <p class="data-label">All checks</p>
+            <template x-for="k in ['wallet','moneyIn','x402','token','identity','freshness']" :key="k">
+              <p style="margin: 0.15rem 0;">
+                <span class="a3-badge" :class="evidenceBadgeClass(selected.evidence[k])" x-text="k"></span>
+                <span x-text="selected.evidence[k]"></span>
+              </p>
+            </template>
+          </section>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
