@@ -329,6 +329,16 @@ async function runProducerRegimeContainer(rail: ProducerComposeRail, asof: strin
 // analytics boundary under its own provider credential. Waiting on
 // the PUBLIC read keeps this a black-box observation: the snapshot is "landed"
 // when the site would serve it.
+//
+// This polls `latest.date` (the served snapshot ROW's own date — the
+// pipeline's write/asof target, always forced to `asof` once the run lands),
+// never `staleness.asof`. Since issue #398, `staleness.asof` means the
+// newest REAL raw observation date, which legitimately lags "today" for
+// slow-publishing sources (FRED, weekends) even on a perfectly healthy run —
+// polling on it here would wait for real-world data that may never arrive
+// same-day and time out spuriously. "Did today's row land" and "is the
+// underlying data fresh" are different questions; this function only asks
+// the former.
 export async function runRegimeClassify(
   asof: string,
   rail: ProducerComposeRail,
@@ -344,13 +354,13 @@ export async function runRegimeClassify(
   let last: any = null;
   while (Date.now() < deadline) {
     last = await readLatest(baseUrl);
-    const servedAsof: string | null = last?.staleness?.asof ?? null;
+    const servedAsof: string | null = last?.latest?.date ?? null;
     if (servedAsof && servedAsof >= asof) return last;
     await wait(2000);
   }
   throw new Error(
     `regime.classify for ${asof} did not land within ${timeoutMs}ms ` +
-      `(served asof: ${last?.staleness?.asof ?? "none"}) — is the analytics producer configured for this stack?`,
+      `(served asof: ${last?.latest?.date ?? "none"}) — is the analytics producer configured for this stack?`,
   );
 }
 
