@@ -76,6 +76,9 @@ export const SCHEDULES: SeedSchedule[] = [
   { kind: "projects.fetch_vaults", cron: "30 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
   { kind: "projects.snapshot_daily", cron: "40 0 * * *", payload: {}, timezone: "UTC", enabled: true },
   { kind: "projects.sync_revenue", cron: "50 1 * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Kept enabled here (byte-for-byte prod/CI shape); DEMO_MODE flips this row
+  // off below (issue #399) so it never overwrites seedDemoProjects()'s
+  // curated coverage scores.
   { kind: "projects.recompute_coverage", cron: "0 3 * * *", payload: {}, timezone: "UTC", enabled: true },
 ];
 
@@ -213,6 +216,23 @@ export async function seedJobSchedules(): Promise<void> {
       `;
     }
     console.log("DEMO_MODE: confirmed retired consumer analytics schedules disabled (independent producer owns cadence)");
+
+    // DEMO_MODE also disables the daily projects.recompute_coverage schedule
+    // (issue #399): the handler recomputes data_coverage_score from live
+    // inputs, which would collapse seedDemoProjects()'s deliberately
+    // incomplete demo rows back down and hide them below the /projects
+    // directory's MIN_SCORE gate (projections.ts) — defeating the point of
+    // seeding curated demo data in the first place. One-directional (only
+    // ever sets false) and idempotent via the `AND enabled` guard, exactly
+    // like the wallet-sampler disable above, so re-running the seed against
+    // an EXISTING demo database disables a canonical row left enabled by an
+    // older deployment (not just a fresh insert), and an operator's manual
+    // disable is never re-enabled.
+    await sql`
+      UPDATE job_schedules SET enabled = false
+       WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *' AND enabled
+    `;
+    console.log("DEMO_MODE: disabled projects.recompute_coverage (seeded demo project scores are curated, not recomputed)");
   }
 
   // Retire the combined `analytics.run` kind (issue #107). This seed is
