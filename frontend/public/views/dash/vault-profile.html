@@ -1,0 +1,138 @@
+<!-- /vaults/:id — VaultProfile "vault dossier" (issue #391,
+     docs/bot-analytics-ui-port-plan.md §5.12, P3.4). Renders inside
+     views/dash/_layout.html's [data-outlet]; the ancestor `.a3` shell (issue
+     #379) already supplies the scoped theme, so nothing here repeats that
+     class. Real, non-fabricated data only (issue #98/#346 honesty contract)
+     — Yield History never renders a fabricated series (D11); see
+     dash-vault-profile.js's header comment. -->
+<div x-data="vaultProfileView" data-vault-profile-view>
+  <a href="/vaults" class="a3-back-link" data-vault-profile-back-link>← Back to Agent-Managed Vaults</a>
+
+  <template x-if="loading">
+    <p class="data-label" data-vault-profile-loading>Loading …</p>
+  </template>
+  <template x-if="error">
+    <p class="a3-badge a3-badge--destructive" data-vault-profile-error x-text="error"></p>
+  </template>
+  <template x-if="notFound">
+    <div class="a3-dossier-empty" data-vault-profile-not-found>
+      <svg class="a3-icon a3-icon--lg"><use href="/assets/img/dash-icons.svg#i-vault"></use></svg>
+      <span class="data-label">Vault not found.</span>
+    </div>
+  </template>
+
+  <template x-if="!loading && !error && !notFound && profile">
+    <div>
+      <div class="a3-dossier-header">
+        <div class="a3-dossier-identity-compact">
+          <div class="a3-dossier-icon">
+            <svg class="a3-icon a3-icon--lg"><use href="/assets/img/dash-icons.svg#i-vault"></use></svg>
+          </div>
+          <div>
+            <h1 class="a3-dossier-title" data-vault-profile-name>
+              <span x-text="profile.name"></span>
+            </h1>
+            <div class="a3-dossier-badges-row">
+              <span class="a3-badge" :class="isLive() ? 'a3-badge--solid a3-badge--green' : 'a3-badge--muted'" data-vault-profile-source-badge x-text="(profile.dataSource || 'unknown').toUpperCase()"></span>
+              <span class="a3-badge a3-badge--purple" x-show="profile.strategyType" x-text="(profile.strategyType || '').toUpperCase()"></span>
+              <span class="a3-badge a3-badge--muted" x-show="profile.chain" x-text="(profile.chain || '').toUpperCase()"></span>
+            </div>
+            <p class="a3-dossier-subtitle">
+              <span x-show="profile.vaultAddress" data-vault-profile-address x-text="fmtAddr(profile.vaultAddress)"></span>
+              <span x-show="profile.lastRebalanceAt"> · Last rebalance: <span x-text="fmtDate(profile.lastRebalanceAt)"></span></span>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <template x-if="profile.stale">
+        <div class="a3-notice" data-vault-profile-stale-notice>
+          <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-alert-circle"></use></svg>
+          <span>TVL/APY figures haven't refreshed recently — they may be out of date.</span>
+        </div>
+      </template>
+
+      <div class="a3-dossier-stats" data-vault-profile-stats>
+        <div class="metric-card">
+          <p class="a3-dossier-stat-label">TVL</p>
+          <p class="a3-dossier-stat-value" data-vault-profile-tvl x-text="fmtUsd(profile.tvlUsd)"></p>
+        </div>
+        <div class="metric-card">
+          <p class="a3-dossier-stat-label">APY</p>
+          <p class="a3-dossier-stat-value" x-text="fmtApy(profile.apy)"></p>
+        </div>
+        <div class="metric-card">
+          <p class="a3-dossier-stat-label">Protocol</p>
+          <p class="a3-dossier-stat-value" style="font-size:0.9rem;" x-text="profile.protocol || '—'"></p>
+        </div>
+      </div>
+
+      <div class="a3-card">
+        <div class="a3-dossier-chart-toolbar">
+          <h2 class="a3-card-title">TVL History</h2>
+          <div class="a3-toggle-group" data-vault-profile-period>
+            <template x-for="p in periods" :key="p.id">
+              <button type="button" class="a3-toggle" :class="isPeriod(p.id) ? 'is-active' : ''" @click="setPeriod(p.id)" :data-period="p.id" x-text="p.label"></button>
+            </template>
+          </div>
+        </div>
+        <template x-if="filteredTvlHistory.length === 0">
+          <p class="data-label" data-vault-profile-tvl-empty>No TVL history yet.</p>
+        </template>
+        <div style="height:14rem;" x-show="filteredTvlHistory.length > 0">
+          <canvas x-ref="tvlChart" data-vault-profile-tvl-chart-canvas></canvas>
+        </div>
+      </div>
+
+      <div class="a3-card">
+        <h2 class="a3-card-title">Yield History</h2>
+        <!-- D11: honest empty state — this repo never fabricates the
+             original's seeded random-walk APY series. -->
+        <p class="data-label" data-vault-profile-yield-empty>No yield history yet.</p>
+      </div>
+
+      <div class="a3-card">
+        <h2 class="a3-card-title">Managing Agent</h2>
+        <template x-if="profile.linkedAgents.length === 0">
+          <p class="data-label">No linked agents.</p>
+        </template>
+        <div class="a3-dossier-chip-row" data-vault-profile-linked-agents>
+          <template x-for="a in profile.linkedAgents" :key="a.id">
+            <a class="a3-dossier-chip" :href="a.href" x-text="a.name" data-linked-agent-chip></a>
+          </template>
+        </div>
+      </div>
+
+      <div class="a3-card">
+        <h2 class="a3-card-title">Linked Wallets</h2>
+        <template x-if="profile.linkedWallets.length === 0">
+          <p class="data-label" data-vault-profile-wallets-empty>No linked wallets.</p>
+        </template>
+        <template x-if="profile.linkedWallets.length > 0">
+          <div class="a3-table-wrap hide-x-scrollbar">
+            <table class="a3-table" data-vault-profile-wallets-table>
+              <thead>
+                <tr>
+                  <th>LABEL</th>
+                  <th>ADDRESS</th>
+                  <th>CHAIN</th>
+                  <th>BALANCE</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="w in profile.linkedWallets" :key="w.id">
+                  <tr :data-row-key="w.id">
+                    <td><a :href="w.href" x-text="w.label"></a></td>
+                    <td x-text="fmtAddr(w.address)"></td>
+                    <td x-text="(w.chain || '—').toUpperCase()"></td>
+                    <td x-text="fmtUsd(w.balanceUsd)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+</div>

@@ -232,7 +232,20 @@ const SECTIONS = [
 // home's INDEXABLE default robots directive — exactly the kind of stub-page
 // leak §4.1 says must never happen. `/projects/:slug` is handled separately
 // below (issue #389 shipped its real page) — it is NOT in this list.
-const DASH_STUB_PARAM_PREFIXES = ["/agents/", "/lobster/", "/vaults/", "/wallets/"];
+//
+// `robots: noindex, nofollow` applies to EVERY prefix below regardless of
+// content status — issue #380's rule (line ~136 above) is explicit that
+// shipping real content does not, by itself, flip a dashboard route
+// indexable; only the P5.4 go-live cutover does. /agents/:id still resolves
+// to the shared "coming soon" placeholder (AgentProfile has not shipped as
+// of issue #391), so its description keeps saying so. /lobster/:id,
+// /vaults/:id, /wallets/:id shipped real dossier content in issue #391 —
+// "not yet available" would now be a false claim about a page that exists,
+// so those three get their own accurate copy below (
+// DASH_SHIPPED_DETAIL_PARAM_PREFIXES) while keeping the SAME noindex/nofollow
+// directive.
+const DASH_STUB_PARAM_PREFIXES = ["/agents/"];
+const DASH_SHIPPED_DETAIL_PARAM_PREFIXES = ["/lobster/", "/vaults/", "/wallets/"];
 
 // `/projects/:slug` ProjectProfile (issue #389, §5.5, P3.1). Real content now
 // ships (unlike the stub prefixes above), but per §6's provenance table this
@@ -299,6 +312,15 @@ export function metaFor(pathname) {
       description: "Token metrics, revenue, and treasury breakdown for a tracked agentic-economy project.",
       robots: "noindex, follow",
     };
+  }
+  for (const prefix of DASH_SHIPPED_DETAIL_PARAM_PREFIXES) {
+    if (p.startsWith(prefix)) {
+      return {
+        title: "Robot Money Analytics",
+        description: "Analytics dashboard detail page — gated behind the dashboard access screen.",
+        robots: "noindex, nofollow",
+      };
+    }
   }
   return META["/"];
 }

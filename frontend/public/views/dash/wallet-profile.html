@@ -1,0 +1,100 @@
+<!-- /wallets/:id — WalletProfile "wallet dossier" (issue #391,
+     docs/bot-analytics-ui-port-plan.md §5.14, P3.5). Renders inside
+     views/dash/_layout.html's [data-outlet]; the ancestor `.a3` shell (issue
+     #379) already supplies the scoped theme, so nothing here repeats that
+     class. Real, non-fabricated data only (issue #98/#346 honesty contract)
+     — token holdings/transactions depend on P1.6 (not yet landed, and the
+     plan's OWN documented data caveat), so this page shows an honest notice
+     instead of fabricating that content; see dash-wallet-profile.js's header
+     comment. -->
+<div x-data="walletProfileView" data-wallet-profile-view>
+  <a href="/wallets" class="a3-back-link" data-wallet-profile-back-link>← Back to Tracked Wallets</a>
+
+  <template x-if="loading">
+    <p class="data-label" data-wallet-profile-loading>Loading …</p>
+  </template>
+  <template x-if="error">
+    <p class="a3-badge a3-badge--destructive" data-wallet-profile-error x-text="error"></p>
+  </template>
+  <template x-if="notFound">
+    <div class="a3-dossier-empty" data-wallet-profile-not-found>
+      <svg class="a3-icon a3-icon--lg"><use href="/assets/img/dash-icons.svg#i-wallet"></use></svg>
+      <span class="data-label">Wallet not found.</span>
+    </div>
+  </template>
+
+  <template x-if="!loading && !error && !notFound && profile">
+    <div>
+      <div class="a3-dossier-header">
+        <div class="a3-dossier-identity-compact">
+          <div class="a3-dossier-icon">
+            <svg class="a3-icon a3-icon--lg"><use href="/assets/img/dash-icons.svg#i-wallet"></use></svg>
+          </div>
+          <div>
+            <h1 class="a3-dossier-title" data-wallet-profile-label>
+              <span x-text="profile.label"></span>
+            </h1>
+            <div class="a3-dossier-badges-row">
+              <span class="a3-badge a3-badge--cyan" x-show="profile.category" x-text="(profile.category || '').toUpperCase()"></span>
+              <span class="a3-badge a3-badge--muted" x-show="profile.chain" x-text="(profile.chain || '').toUpperCase()"></span>
+            </div>
+          </div>
+        </div>
+        <button type="button" class="a3-copy-btn" :data-copy="profile.address" x-show="profile.address" data-wallet-profile-copy>
+          <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-copy"></use></svg>
+          <span data-copy-label>Copy</span>
+        </button>
+      </div>
+
+      <div class="a3-card" data-wallet-profile-address-strip x-show="profile.address">
+        <code x-text="profile.address"></code>
+      </div>
+
+      <template x-if="profile.stale">
+        <div class="a3-notice" data-wallet-profile-stale-notice>
+          <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-alert-circle"></use></svg>
+          <!-- D14: wallet refresh is unimplemented (the handler throws) — the
+               balance below is the last discovery/snapshot sample, not a live
+               read. -->
+          <span>Wallet refresh isn't implemented yet — this balance is a snapshot, not a live read.</span>
+        </div>
+      </template>
+
+      <div class="a3-dossier-stats" data-wallet-profile-stats>
+        <div class="metric-card">
+          <p class="a3-dossier-stat-label">Balance</p>
+          <p class="a3-dossier-stat-value" data-wallet-profile-balance x-text="fmtUsd(profile.balanceUsd)"></p>
+          <p class="data-label" x-show="balanceDeltaUsd !== null" data-wallet-profile-balance-delta x-text="fmtDelta(balanceDeltaUsd) + ' (30d)'"></p>
+        </div>
+        <div class="metric-card">
+          <p class="a3-dossier-stat-label">Last Activity</p>
+          <p class="a3-dossier-stat-value" style="font-size:0.95rem;" data-wallet-profile-last-tx x-text="fmtDate(profile.lastTxAt)"></p>
+        </div>
+        <div class="metric-card">
+          <p class="a3-dossier-stat-label">Linked Agent</p>
+          <template x-if="profile.linkedAgent">
+            <p class="a3-dossier-stat-value" style="font-size:0.95rem;">
+              <a :href="profile.linkedAgent.href" x-text="profile.linkedAgent.name" data-wallet-profile-linked-agent></a>
+            </p>
+          </template>
+          <template x-if="!profile.linkedAgent">
+            <p class="data-label">—</p>
+          </template>
+        </div>
+      </div>
+
+      <div class="a3-card">
+        <h2 class="a3-card-title">Balance History (30d)</h2>
+        <template x-if="profile.balanceHistory.length === 0">
+          <p class="data-label" data-wallet-profile-history-empty>No snapshot history yet.</p>
+        </template>
+        <div x-show="profile.balanceHistory.length > 0" style="width:100%; overflow:hidden;" data-wallet-profile-sparkline x-html="balanceSparkSvg()"></div>
+      </div>
+
+      <div class="a3-notice" data-wallet-profile-holdings-notice>
+        <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-info"></use></svg>
+        <span>Token holdings and transaction history aren't available yet — they depend on a wallet-holdings table this repo hasn't built (docs/bot-analytics-ui-port-plan.md §5.14's own documented data caveat).</span>
+      </div>
+    </div>
+  </template>
+</div>
