@@ -1,6 +1,6 @@
 // Alpine factory for the /lobster "Lobster Coins" directory (issue #386,
 // docs/bot-analytics-ui-port-plan.md §5.9, P2.3). Fetches the read-only
-// GET /api/dash/coins feed and handles interactive sorting/formatting —
+// GET /api/dashboards/coins feed and handles interactive sorting/formatting —
 // the backend (dash/lists.ts) already applies the default mcap-desc sort.
 import { api, ROUTES } from "../../lib/api.js";
 
@@ -14,7 +14,7 @@ export function registerDashLobsterView(Alpine) {
 
     async init() {
       try {
-        const data = await api.get(ROUTES.dash.coins);
+        const data = await api.get(ROUTES.dashboards.coins);
         this.rows = data.coins || [];
       } catch (e) {
         this.error = e.message;

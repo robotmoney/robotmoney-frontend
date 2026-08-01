@@ -2,7 +2,7 @@
 // directory (issue #386, docs/bot-analytics-ui-port-plan.md §5.11, P2.4).
 // Same harness as dash-lobster.spec.ts: real backend serving the SPA/view
 // HTML, vendor CDN scripts fulfilled locally, gate mocked, and GET
-// /api/dash/vaults stubbed with a deterministic DTO.
+// /api/dashboards/vaults stubbed with a deterministic DTO.
 //
 // Generate/refresh the visual baseline with:
 //   bun run test:browser -- --update-snapshots dash-vaults
@@ -19,7 +19,7 @@ const VAULTS = {
 };
 
 function mockVaultsApi(page: Page, body: unknown = VAULTS): void {
-  page.route("**/api/dash/vaults", (route) =>
+  page.route("**/api/dashboards/vaults", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) }));
 }
 

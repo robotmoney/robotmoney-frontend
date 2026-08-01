@@ -3,8 +3,10 @@
 // projections over the EXISTING #70/#87 facet tables (lobster_coins,
 // agent_vaults, tracked_wallets, openclaw_agents) — no new tables, no
 // fabricated columns. This is the single read/projection layer; the HTTP
-// routes (api/routes/dash-lists.ts) are thin adapters over it, matching the
-// projects/projections.ts convention.
+// routes (api/routes/dashboards.ts) are thin adapters over it, matching the
+// projects/projections.ts convention. Sibling to entities-projections.ts
+// (#384) / agents-projections.ts (#385) — same directory, same "thin route
+// over a projection module" split, one file per phase-2 feed.
 import { sql } from "../db/client.ts";
 import type {
   CoinsListResponse,
@@ -40,7 +42,7 @@ function iso(v: unknown): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-// GET /api/dash/coins → /lobster directory (§5.9). Default sort (mcap desc) is
+// GET /api/dashboards/coins → /lobster directory (§5.9). Default sort (mcap desc) is
 // applied server-side so a client with JS disabled still sees a sane order;
 // the Alpine view re-sorts interactively over this same array.
 export async function fetchCoinsList(): Promise<CoinsListResponse> {
@@ -69,7 +71,7 @@ export async function fetchCoinsList(): Promise<CoinsListResponse> {
   };
 }
 
-// GET /api/dash/vaults → /vaults directory (§5.11). agent_vaults has no direct
+// GET /api/dashboards/vaults → /vaults directory (§5.11). agent_vaults has no direct
 // agent_id FK (only project_id, #70's schema) — the managing-agent name is a
 // best-effort join to that project's oldest active agent, a documented
 // approximation, never a fabricated name.
@@ -105,7 +107,7 @@ export async function fetchVaultsList(): Promise<VaultsListResponse> {
   };
 }
 
-// GET /api/dash/wallets → /wallets directory (§5.13). Unifies tracked_wallets
+// GET /api/dashboards/wallets → /wallets directory (§5.13). Unifies tracked_wallets
 // with agent-derived wallets (openclaw_agents rows carrying a wallet_address),
 // deduped by lowercased address — a tracked_wallets row wins the dedup (it is
 // the more specific, purpose-tracked record) when both name the same address.

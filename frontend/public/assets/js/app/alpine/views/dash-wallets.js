@@ -1,6 +1,6 @@
 // Alpine factory for the /wallets "Tracked Wallets" directory (issue #386,
 // docs/bot-analytics-ui-port-plan.md §5.13, P2.5). Fetches the read-only
-// GET /api/dash/wallets feed (already merged + balance-desc sorted
+// GET /api/dashboards/wallets feed (already merged + balance-desc sorted
 // server-side, dash/lists.ts) and handles the two toggle chips, the
 // chain-column auto-hide, and per-row explorer/copy affordances.
 import { api, ROUTES } from "../../lib/api.js";
@@ -27,7 +27,7 @@ export function registerDashWalletsView(Alpine) {
 
     async init() {
       try {
-        const data = await api.get(ROUTES.dash.wallets);
+        const data = await api.get(ROUTES.dashboards.wallets);
         this.rows = data.wallets || [];
       } catch (e) {
         this.error = e.message;

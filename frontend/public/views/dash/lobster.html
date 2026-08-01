@@ -2,7 +2,7 @@
      port-plan.md §5.9, P2.3). Injected into views/dash/_layout.html's
      [data-outlet] (already carrying the single `.a3` root), so this fragment
      stays unscoped itself. Driven by the boot-registered dashLobster()
-     factory (alpine/views.js) over GET /api/dash/coins (dash/lists.ts) — a
+     factory (alpine/views.js) over GET /api/dashboards/coins (coins-vaults-wallets-projections.ts) — a
      real, non-fabricated read over the existing lobster_coins table (#70). -->
 <div x-data="dashLobster()" x-init="init()" data-dash-lobster>
 

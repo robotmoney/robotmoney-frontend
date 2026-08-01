@@ -2,7 +2,7 @@
 // (issue #386, docs/bot-analytics-ui-port-plan.md §5.13, P2.5). Same harness
 // as dash-lobster.spec.ts / dash-vaults.spec.ts: real backend serving the
 // SPA/view HTML, vendor CDN scripts fulfilled locally, gate mocked, and GET
-// /api/dash/wallets stubbed with a deterministic DTO.
+// /api/dashboards/wallets stubbed with a deterministic DTO.
 //
 // Generate/refresh the visual baseline with:
 //   bun run test:browser -- --update-snapshots dash-wallets
@@ -20,7 +20,7 @@ const WALLETS = {
 };
 
 function mockWalletsApi(page: Page, body: unknown = WALLETS): void {
-  page.route("**/api/dash/wallets", (route) =>
+  page.route("**/api/dashboards/wallets", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) }));
 }
 

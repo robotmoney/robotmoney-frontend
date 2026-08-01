@@ -4,7 +4,6 @@ export * from "./dashboards";
 export * from "./committee";
 export * from "./committee-application";
 export * from "./projects";
-export * from "./dash-lists";
 export * from "./admin";
 export { ROUTES, path } from "./routes";
 export function canonicalizeSubmission(s: {

@@ -2,14 +2,14 @@
 // ui-port-plan.md §5.9/§5.11/§5.13). Runs against the ephemeral Postgres the
 // preload provisions + migrates (tests/preload.ts) — a real DB, never a mock.
 // Seeds the EXISTING #70/#87 facet tables directly and asserts the
-// dash/lists.ts projections + their thin route adapters produce the
-// documented DTO shape: provenance (refreshedAt/stale), default sort, the
-// vault→project→agent best-effort join, and the tracked/agent wallet
-// dedup-by-address merge.
+// coins-vaults-wallets-projections.ts projections + their thin route adapters
+// (routes/dashboards.ts) produce the documented DTO shape: provenance
+// (refreshedAt/stale), default sort, the vault→project→agent best-effort
+// join, and the tracked/agent wallet dedup-by-address merge.
 import { test, expect } from "bun:test";
 import { sql } from "../../src/db/client.ts";
-import { fetchCoinsList, fetchVaultsList, fetchWalletsList } from "../../src/dash/lists.ts";
-import { getCoinsList, getVaultsList, getWalletsList } from "../../src/api/routes/dash-lists.ts";
+import { fetchCoinsList, fetchVaultsList, fetchWalletsList } from "../../src/projects/coins-vaults-wallets-projections.ts";
+import { getCoinsList, getVaultsList, getWalletsList } from "../../src/api/routes/dashboards.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -41,7 +41,7 @@ test("fetchCoinsList returns active coins sorted by market cap desc, with proven
   expect(beta.refreshedAt).not.toBeNull();
   expect(beta.stale).toBe(false);
 
-  // GET /api/dash/coins is a thin adapter over the same projection.
+  // GET /api/dashboards/coins is a thin adapter over the same projection.
   const viaRoute = await getCoinsList();
   expect(viaRoute.coins.some((c) => c.id === a.id)).toBe(true);
 });

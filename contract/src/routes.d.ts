@@ -19,15 +19,13 @@ export const ROUTES: {
     submissions: string;
     activity: string;
     agents: string;
+    coins: string;
+    vaults: string;
+    wallets: string;
   };
   projects: {
     list: string;
     adminUpdate: string;
-  };
-  dash: {
-    coins: string;
-    vaults: string;
-    wallets: string;
   };
   committee: {
     members: string;

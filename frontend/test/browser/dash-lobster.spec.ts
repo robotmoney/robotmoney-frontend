@@ -3,7 +3,7 @@
 // as projects.spec.ts / dash-shell.spec.ts: the SPA + view HTML are served by
 // the real backend at baseURL, vendor CDN scripts are fulfilled from
 // node_modules, the gate's /api/admin/auth is mocked (dash-gate-mock.ts), and
-// GET /api/dash/coins is stubbed with a deterministic DTO so assertions are
+// GET /api/dashboards/coins is stubbed with a deterministic DTO so assertions are
 // network-free.
 //
 // Generate/refresh the visual baseline with:
@@ -22,7 +22,7 @@ const COINS = {
 };
 
 function mockCoinsApi(page: Page, body: unknown = COINS): void {
-  page.route("**/api/dash/coins", (route) =>
+  page.route("**/api/dashboards/coins", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) }));
 }
 

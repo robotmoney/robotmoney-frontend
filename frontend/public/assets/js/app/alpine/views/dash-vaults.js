@@ -1,6 +1,6 @@
 // Alpine factory for the /vaults "Agent-Managed Vaults" directory (issue
 // #386, docs/bot-analytics-ui-port-plan.md §5.11, P2.4). Fetches the
-// read-only GET /api/dash/vaults feed (already sorted tvl-desc server-side)
+// read-only GET /api/dashboards/vaults feed (already sorted tvl-desc server-side)
 // and handles interactive sorting/formatting + the three summary cards.
 import { api, ROUTES } from "../../lib/api.js";
 
@@ -14,7 +14,7 @@ export function registerDashVaultsView(Alpine) {
 
     async init() {
       try {
-        const data = await api.get(ROUTES.dash.vaults);
+        const data = await api.get(ROUTES.dashboards.vaults);
         this.rows = data.vaults || [];
       } catch (e) {
         this.error = e.message;
