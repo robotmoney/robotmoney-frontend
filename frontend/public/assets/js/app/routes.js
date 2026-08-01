@@ -38,6 +38,10 @@ const SUBMIT_VIEW = `${VIEW_DIR}/dash/submit.html`;
 // P4.1) — both routes intentionally alias this SAME fragment (the original's
 // own aliasing, §4.1).
 const ACTIVITY_VIEW = `${VIEW_DIR}/dash/activity.html`;
+// /agents "OpenClaw Agents" (issue #385, §5.7, P2.2) — the first per-entity
+// directory page to ship real content ahead of the coming-soon placeholder
+// above.
+const AGENTS_VIEW = `${VIEW_DIR}/dash/agents.html`;
 
 // Static dashboard routes (§4.1's list) that render inside DASH_LAYOUT_VIEW.
 // `gated: true` means dash-shell.js's gate must pass before the outlet
@@ -55,7 +59,7 @@ const DASH_ROUTES = {
   "/list3": { view: LIST3_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/market": { view: ACTIVITY_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/dashboard": { view: ACTIVITY_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
-  "/agents": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
+  "/agents": { view: AGENTS_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/lobster": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/vaults": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/wallets": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },

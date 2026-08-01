@@ -728,3 +728,15 @@
   animation: a3Pulse 1s step-end infinite;
 }
 .a3 .a3-terminal__empty { color: hsl(var(--success) / 0.6); padding: 0.5rem 0; }
+
+/* ── /agents "OpenClaw Agents" (issue #385, P2.2) ─────────────────────────
+   Summary strip + toolbar row are page-specific; tabs/select/badges/table
+   shell above are shared P0.1/P0.2 primitives reused as-is. */
+.a3 .a3-agents-summary {
+  border: 1px solid hsl(var(--border)); background: hsl(var(--muted) / 0.2); border-radius: var(--radius);
+  padding: 0.6rem 1rem; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+  color: hsl(var(--muted-foreground)); margin: 1rem 0;
+}
+.a3 .a3-agents-summary strong { color: hsl(var(--primary)); font-weight: 600; }
+.a3 .a3-agents-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin: 1.5rem 0 1rem; }
+
