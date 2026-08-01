@@ -32,11 +32,12 @@ export interface AdminProductionKindHealth {
 }
 
 export interface AdminRegimeStaleness {
-  asof: string | null;
+  asof: string | null; // newest REAL raw observation date gating overall freshness (issue #398) — never the pipeline's forward-filled snapshot write date
   serverDate: string;
   ageDays: number | null;
   stale: boolean;
   thresholdDays: number;
+  panelObservationDates: Record<string, string | null>; // per-panel newest real observation date, explaining the `stale` verdict
 }
 
 export interface AdminResearchFreshness {
