@@ -107,7 +107,9 @@ describe("frontend route resolution", () => {
 
 
   test("/submit is public (reachable off the gate screen itself) even though it shares the dash layout", () => {
-    expect(viewFor("/submit")).toBe("/views/dash/coming-soon.html");
+    // /submit (issue #393, P4.4) is the second dashboard route to ship real
+    // content ahead of the coming-soon placeholder — see the /list case above.
+    expect(viewFor("/submit")).toBe("/views/dash/submit.html");
     expect(routeMetaFor("/submit")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: false });
   });
 

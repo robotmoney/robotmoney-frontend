@@ -1,0 +1,145 @@
+<!-- /submit — public intake (issue #393, docs/bot-analytics-ui-port-plan.md
+     §5.17). Renders inside views/dash/_layout.html's [data-outlet]; the
+     ancestor `.a3` shell (issue #379) already supplies the scoped theme, so
+     nothing here repeats that class. Reachable pre-auth (routes.js: /submit
+     is the one dashboard route with `gated: false`) — no data-dash-gate
+     anywhere on this fragment's path. -->
+<div class="a3-submit" x-data="submitView" data-submit-view>
+  <div class="a3-submit__logo">
+    <svg class="a3-icon a3-icon--lg"><use href="/assets/img/dash-icons.svg#i-triangle"></use></svg>
+  </div>
+  <div class="a3-submit__intro">
+    <h1>Submit a Community Commit</h1>
+    <p class="data-label">Register an agent, link an asset, flag a data issue, or endorse a listing — every
+      submission lands in a review queue, nothing auto-publishes.</p>
+  </div>
+
+  <!-- CommitForm -->
+  <div class="a3-card" data-submit-form>
+    <div class="a3-submit__form-header" @click="toggleForm()" data-submit-collapse-toggle>
+      <span class="a3-submit__form-title">$ submit-commit</span>
+      <svg class="a3-icon"><use :href="formOpen ? '/assets/img/dash-icons.svg#i-arrow-up' : '/assets/img/dash-icons.svg#i-arrow-down'"></use></svg>
+    </div>
+
+    <form x-show="formOpen" @submit.prevent="submit()" novalidate>
+      <div class="a3-field">
+        <label class="a3-label" for="submit-handle">Name / Handle<span class="a3-required">*</span></label>
+        <input id="submit-handle" class="a3-input" type="text" x-model="form.submitterHandle"
+          placeholder="@yourhandle" data-submit-handle />
+        <p class="a3-field-error" x-show="errors.submitterHandle" x-text="errors.submitterHandle" data-submit-error="submitterHandle"></p>
+      </div>
+
+      <div class="a3-field">
+        <label class="a3-label" for="submit-agent">Tag Agent (optional)</label>
+        <select id="submit-agent" class="a3-native-select" x-model="form.agentId" data-submit-agent-select>
+          <option value="">— none —</option>
+          <template x-for="a in agents" :key="a.id">
+            <option :value="a.id" x-text="a.name"></option>
+          </template>
+        </select>
+      </div>
+
+      <div class="a3-field">
+        <label class="a3-label" for="submit-action">Action Type</label>
+        <select id="submit-action" class="a3-native-select" x-model="form.actionType" data-submit-action-select>
+          <template x-for="t in actionTypes" :key="t.value">
+            <option :value="t.value" x-text="t.label"></option>
+          </template>
+        </select>
+      </div>
+
+      <!-- Agent-registration sub-panel (only when actionType === register_agent) -->
+      <template x-if="isRegisterAgent">
+        <div class="a3-card" style="margin-bottom: 1rem;" data-submit-registration-panel>
+          <div class="a3-field">
+            <label class="a3-label" for="submit-reg-name">Agent Name<span class="a3-required">*</span></label>
+            <input id="submit-reg-name" class="a3-input" type="text" x-model="form.registration.name" data-submit-reg-name />
+            <p class="a3-field-error" x-show="errors.registrationName" x-text="errors.registrationName" data-submit-error="registrationName"></p>
+          </div>
+          <div class="a3-field">
+            <label class="a3-label" for="submit-reg-wallet">Wallet Address</label>
+            <input id="submit-reg-wallet" class="a3-input" type="text" x-model="form.registration.walletAddress" placeholder="0x…" data-submit-reg-wallet />
+          </div>
+          <div class="a3-field">
+            <label class="a3-label" for="submit-reg-desc">Description</label>
+            <textarea id="submit-reg-desc" class="a3-textarea" x-model="form.registration.description" data-submit-reg-description></textarea>
+          </div>
+
+          <div class="a3-claimed-metrics" data-submit-claimed-metrics>
+            <p class="a3-claimed-metrics-title">Claimed Metrics (optional · unverified)</p>
+            <div class="a3-field">
+              <label class="a3-label" for="submit-reg-revenue">30D Revenue (USD)</label>
+              <input id="submit-reg-revenue" class="a3-input" type="number" x-model="form.registration.claimedRevenueUsd" data-submit-reg-revenue />
+            </div>
+            <div class="a3-field">
+              <label class="a3-label" for="submit-reg-txns">Transactions</label>
+              <input id="submit-reg-txns" class="a3-input" type="number" x-model="form.registration.claimedTxns" data-submit-reg-txns />
+            </div>
+            <div class="a3-field">
+              <label class="a3-label" for="submit-reg-users">Users</label>
+              <input id="submit-reg-users" class="a3-input" type="number" x-model="form.registration.claimedUsers" data-submit-reg-users />
+            </div>
+            <div class="a3-field">
+              <label class="a3-label" for="submit-reg-website">Website</label>
+              <input id="submit-reg-website" class="a3-input" type="text" x-model="form.registration.website" data-submit-reg-website />
+            </div>
+            <div class="a3-field">
+              <label class="a3-label" for="submit-reg-twitter">Twitter / X</label>
+              <input id="submit-reg-twitter" class="a3-input" type="text" x-model="form.registration.twitter" data-submit-reg-twitter />
+            </div>
+            <div class="a3-field">
+              <label class="a3-label" for="submit-reg-launch">Launch Date</label>
+              <input id="submit-reg-launch" class="a3-input" type="date" x-model="form.registration.launchDate" data-submit-reg-launch />
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <div class="a3-field">
+        <label class="a3-label" for="submit-summary">Summary<span class="a3-required">*</span></label>
+        <textarea id="submit-summary" class="a3-textarea" x-model="form.summary"
+          placeholder="What are you submitting, and why?" data-submit-summary></textarea>
+        <p class="a3-field-error" x-show="errors.summary" x-text="errors.summary" data-submit-error="summary"></p>
+      </div>
+
+      <button type="submit" class="a3-btn a3-btn--primary" :disabled="posting" data-submit-submit>
+        <span x-text="posting ? 'Submitting…' : 'Submit Commit'"></span>
+      </button>
+    </form>
+  </div>
+
+  <!-- MCP Server card — rewritten for REST + skills onboarding (§1.5, D21/#265:
+       MCP is retired; this repo has no dedicated agent-submission skill to
+       link, so the copy points agents at the real POST endpoint above
+       instead of a fabricated skill install). Visual treatment (purple
+       tones, floating CopyButton) preserved. -->
+  <div class="a3-card a3-card--purple" data-submit-mcp-card>
+    <p class="a3-card-title">
+      <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-zap"></use></svg>
+      Programmatic Onboarding (REST)
+    </p>
+    <p class="data-label">MCP support has been retired — agents submit over plain REST instead, no
+      server config or handshake. POST the JSON below to the same endpoint this form uses. If your
+      framework speaks tool/skill manifests, wrap this call as a single tool definition.</p>
+    <button type="button" class="a3-copy-btn" data-copy="/api/dashboards/submissions" style="margin-top: 0.5rem;">
+      <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-copy"></use></svg>
+      <span data-copy-label>Copy endpoint path</span>
+    </button>
+  </div>
+
+  <!-- Programmatic API card: POST example + CopyButton + valid action_type list -->
+  <div class="a3-card" data-submit-api-card>
+    <p class="a3-card-title">
+      <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-clipboard-list"></use></svg>
+      Programmatic API
+    </p>
+    <pre class="a3-code" x-text="postExample"></pre>
+    <button type="button" class="a3-copy-btn" :data-copy="postExample" style="margin-top: 0.5rem;">
+      <svg class="a3-icon"><use href="/assets/img/dash-icons.svg#i-copy"></use></svg>
+      <span data-copy-label>Copy example</span>
+    </button>
+    <p class="data-label" style="margin-top: 0.75rem;">Valid <code>actionType</code> values: <span x-text="validActionTypeList"></span></p>
+  </div>
+
+  <a href="/list" class="a3-submit__back" data-submit-back-link>← Back to Dashboard</a>
+</div>

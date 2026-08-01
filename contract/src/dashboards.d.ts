@@ -471,3 +471,52 @@ export interface LeaderboardResponse {
   };
   asOf: string;
 }
+
+// POST /api/dashboards/submissions (issue #393, /submit §5.17) — public
+// agent-onboarding / community-commit intake. Anonymous, unauthenticated;
+// lands in a moderation queue (status stays 'pending' until an admin acts on
+// it from /admin) — no auto-publish. `actionType` mirrors the form's action
+// Select; `registration` is only present/validated when actionType is
+// 'register_agent'.
+export type SubmissionActionType =
+  | "register_agent"
+  | "update_agent"
+  | "link_wallet"
+  | "link_token"
+  | "link_vault"
+  | "report_issue"
+  | "endorse_agent"
+  | "general";
+
+export interface SubmissionRegistration {
+  name: string;
+  walletAddress?: string | null;
+  description?: string | null;
+  // "Claimed Metrics (optional · unverified)" — self-reported by the
+  // submitter, never treated as verified data anywhere downstream.
+  claimedRevenueUsd?: number | null;
+  claimedTxns?: number | null;
+  claimedUsers?: number | null;
+  website?: string | null;
+  twitter?: string | null;
+  launchDate?: string | null; // YYYY-MM-DD
+}
+
+export interface SubmissionCreate {
+  actionType: SubmissionActionType;
+  submitterHandle: string;
+  agentId?: string | null; // tag-agent Select value, when actionType targets an existing agent
+  summary: string;
+  registration?: SubmissionRegistration | null;
+}
+
+export interface Submission {
+  id: string;
+  actionType: SubmissionActionType;
+  submitterHandle: string;
+  agentId: string | null;
+  summary: string;
+  registration: SubmissionRegistration | null;
+  status: "pending" | "accepted" | "rejected";
+  createdAt: string;
+}

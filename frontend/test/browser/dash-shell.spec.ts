@@ -91,11 +91,16 @@ test("the gate links to /submit for a pre-auth community commit", async ({ page 
 });
 
 test("/submit is reachable without authenticating, even though it shares the dash layout", async ({ page }) => {
+  // /submit ships real content as of issue #393 (P4.4) — its own
+  // submit-view.spec.ts covers the CommitForm in depth; this spec only
+  // re-proves the shell-level contract (ungated, under the dash layout).
+  await page.route("**/api/dashboards/entities", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ entities: [] }) }));
   await page.goto("/");
   await navigate(page, "/submit");
   await expect(page.locator("[data-dash-gate]")).not.toBeVisible();
   await expect(page.locator("[data-dash-sidebar]")).toBeVisible();
-  await expect(page.locator("[data-outlet] [data-dash-coming-soon]")).toBeVisible();
+  await expect(page.locator("[data-outlet] [data-submit-view]")).toBeVisible();
 });
 
 async function login(page: Page): Promise<void> {

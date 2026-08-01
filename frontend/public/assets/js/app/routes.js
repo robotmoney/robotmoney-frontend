@@ -30,6 +30,10 @@ const LIST_VIEW = `${VIEW_DIR}/dash/list.html`;
 // content ahead of the coming-soon placeholder above.
 const LIST2_VIEW = `${VIEW_DIR}/dash/list2.html`;
 const LIST3_VIEW = `${VIEW_DIR}/dash/list3.html`;
+// /submit — public intake (issue #393, §5.17): the CommitForm + REST/skills
+// onboarding card. Ships real content ahead of the coming-soon placeholder
+// (like LIST_VIEW above); public/ungated per the DASH_ROUTES entry below.
+const SUBMIT_VIEW = `${VIEW_DIR}/dash/submit.html`;
 
 // Static dashboard routes (§4.1's list) that render inside DASH_LAYOUT_VIEW.
 // `gated: true` means dash-shell.js's gate must pass before the outlet
@@ -54,7 +58,7 @@ const DASH_ROUTES = {
   "/methodology": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/about": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/ask-mr-roboto": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
-  "/submit": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: false },
+  "/submit": { view: SUBMIT_VIEW, layout: DASH_LAYOUT_VIEW, gated: false },
 };
 
 // Param-route regexes (§4.1's "5 param regexes"). `/projects/:slug` is the

@@ -604,3 +604,67 @@
 .a3 .a3-spark-empty { color: hsl(var(--muted-foreground)); font-size: 0.8rem; }
 .a3 .a3-row-highlight { background: hsl(var(--primary) / 0.1); box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.4); animation: a3Pulse 1s ease-in-out 4; }
 .a3 tr.opacity-60 { opacity: 0.6; }
+
+/* ── Form primitives (issue #393, /submit §5.17) ──────────────────────────
+   P0.2 shipped tabs/dialog/sheet/select/switch/toast but no text-entry
+   controls (no form existed yet to need them). Generic (not submit-page-
+   specific) so a later dashboard form can reuse these rather than re-derive
+   them — same rationale as the P0.2 primitives above. */
+.a3 .a3-field { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 1rem; }
+.a3 .a3-label { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: hsl(var(--muted-foreground)); }
+.a3 .a3-label .a3-required { color: hsl(var(--destructive)); margin-left: 0.15rem; }
+.a3 .a3-input,
+.a3 .a3-textarea,
+.a3 .a3-native-select {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border-radius: var(--radius);
+  border: 1px solid hsl(var(--input));
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  font-size: 0.85rem;
+}
+.a3 .a3-input:focus, .a3 .a3-textarea:focus, .a3 .a3-native-select:focus { outline: none; border-color: hsl(var(--primary) / 0.6); }
+.a3 .a3-textarea { resize: vertical; min-height: 5rem; }
+.a3 .a3-field-hint { font-size: 0.72rem; color: hsl(var(--muted-foreground)); }
+.a3 .a3-field-error { font-size: 0.72rem; color: hsl(var(--destructive)); }
+
+.a3 .a3-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+  padding: 0.6rem 1rem; border-radius: var(--radius); border: 1px solid transparent;
+  font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 0.75rem;
+  text-transform: uppercase; letter-spacing: 0.06em; cursor: pointer;
+}
+.a3 .a3-btn--primary { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.a3 .a3-btn--primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.a3 .a3-btn--outline { background: transparent; border-color: hsl(var(--border)); color: hsl(var(--foreground)); }
+.a3 .a3-btn--outline:hover { border-color: hsl(var(--primary) / 0.4); color: hsl(var(--primary)); }
+
+.a3 .a3-card { background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1.5rem; }
+.a3 .a3-card--purple { border-color: hsl(var(--secondary) / 0.4); }
+.a3 .a3-card-title { display: flex; align-items: center; gap: 0.5rem; font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 0.5rem; }
+.a3 .a3-card-title .a3-icon { color: hsl(var(--secondary)); }
+
+/* Amber "Claimed Metrics (optional · unverified)" sub-section (§5.17). */
+.a3 .a3-claimed-metrics {
+  border: 1px solid hsl(var(--amber) / 0.35);
+  background: hsl(var(--amber) / 0.06);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  margin-top: 0.5rem;
+}
+.a3 .a3-claimed-metrics-title { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: hsl(var(--amber)); margin: 0 0 0.6rem; }
+
+/* ── /submit — public intake (issue #393, §5.17) ──────────────────────────
+   Centered max-w-xl column; the "$ submit-commit" collapsible CommitForm
+   header, the purple-toned MCP-card replacement, and the plain
+   Programmatic API card. Form controls above are shared primitives. */
+.a3-submit { max-width: 36rem; margin: 0 auto; }
+.a3-submit__logo { width: 3.5rem; height: 3.5rem; border-radius: var(--radius); background: hsl(var(--primary) / 0.1); border: 1px solid hsl(var(--primary) / 0.2); display: flex; align-items: center; justify-content: center; color: hsl(var(--primary)); margin: 0 auto 1rem; }
+.a3-submit__intro { text-align: center; margin-bottom: 1.5rem; }
+.a3-submit__form-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; margin-bottom: 1rem; }
+.a3-submit__form-title { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 0.85rem; color: hsl(var(--primary)); }
+.a3-submit__back { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); margin-top: 0.5rem; }
+.a3-submit__back:hover { color: hsl(var(--primary)); }
+.a3 pre.a3-code { background: hsl(var(--muted) / 0.4); border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 0.75rem; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; overflow-x: auto; white-space: pre; }

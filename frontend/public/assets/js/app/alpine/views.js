@@ -30,6 +30,7 @@ import { registerDashShellView } from "./views/dash-shell.js";
 import { registerListView } from "./views/list.js";
 import { registerList2View } from "./views/list2.js";
 import { registerList3View } from "./views/list3.js";
+import { registerSubmitView } from "./views/submit.js";
 
 export function registerViews(Alpine) {
   registerProjectsView(Alpine);
@@ -53,4 +54,5 @@ export function registerViews(Alpine) {
   registerListView(Alpine);
   registerList2View(Alpine);
   registerList3View(Alpine);
+  registerSubmitView(Alpine);
 }

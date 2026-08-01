@@ -125,4 +125,15 @@
         <main class="a3-shell__main" data-outlet></main>
       </div>
     </div>
+
+  <!-- Toast host (P0.2's a3Toast store, dash-ui.js) — shared across every
+       dashboard page so any fragment's `$store.a3Toast.push(...)` (e.g.
+       submit.js on the /submit CommitForm, issue #393) renders somewhere.
+       Lives outside the gated/ungated x-show branches above so a toast
+       fired right before a gate/outlet swap still shows. -->
+  <div class="a3-toast-viewport" data-dash-toast-viewport>
+    <template x-for="t in $store.a3Toast.items" :key="t.id">
+      <div class="a3-toast" :class="t.tone === 'success' ? 'a3-toast--success' : t.tone === 'destructive' ? 'a3-toast--destructive' : ''" x-text="t.message"></div>
+    </template>
+  </div>
 </section>
