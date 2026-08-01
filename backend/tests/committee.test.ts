@@ -284,6 +284,23 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(typeof s.synthesis).toBe("string");
   expect(s.synthesis!.length).toBeGreaterThan(60);
 
+  // Issue #323: the aggregator must not fill these five slots with verbatim
+  // take bodies. Cheap check per the issue: rationale !== synthesis, and no
+  // consensus entry is anywhere near a full take body's length.
+  const takeBodies: string[] = detail!.takes.map((t: any) => t.body ?? "");
+  expect(rec.rationale).not.toBe(s.synthesis);
+  for (const point of rec.consensus) {
+    expect(point.length).toBeLessThan(300);
+    expect(takeBodies).not.toContain(point);
+  }
+  expect(s.synthesis).not.toContain(takeBodies[0]);
+  // Disagreement topic names the actual stances in conflict, not the
+  // "Submitted views on <subject>" placeholder, and what_settles is a real,
+  // non-empty objective test rather than "".
+  expect(rec.disagreements[0].topic).not.toMatch(/^Submitted views on/);
+  expect(rec.disagreements[0].what_settles).not.toBe("");
+  expect(String(rec.disagreements[0].what_settles).length).toBeGreaterThan(0);
+
   // A submitted take body carries all three memo section headers.
   const body = detail!.takes[0].body ?? "";
   expect(body).toContain("**REGIME**");
@@ -366,8 +383,16 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
       expect(position.member_id).not.toBe(members[2].id);
     }
   }
-  expect(recommendation.rationale).toBe(`${fixtures[0].body}\n\n${fixtures[1].body}`);
-  expect(detail?.session.synthesis).toBe(`${fixtures[0].body}\n\n${fixtures[1].body}`);
+  // Issue #323: rationale/synthesis must be derived prose, never the
+  // concatenated take bodies, and must not equal each other.
+  expect(recommendation.rationale).toBeDefined();
+  expect(recommendation.rationale).not.toBe(`${fixtures[0].body}\n\n${fixtures[1].body}`);
+  expect(recommendation.rationale).not.toContain(fixtures[0].body);
+  expect(detail?.session.synthesis).not.toBe(`${fixtures[0].body}\n\n${fixtures[1].body}`);
+  expect(detail?.session.synthesis).not.toContain(fixtures[0].body);
+  expect(recommendation.rationale).not.toBe(detail?.session.synthesis);
+  expect(recommendation.disagreements[0].topic).not.toMatch(/^Submitted views on/);
+  expect(recommendation.disagreements[0].what_settles).not.toBe("");
   expect(recommendation.stances.neutral).toBe(1);
   expect(detail?.takes[2].weights).toEqual(fixtures[2].weights);
 });
