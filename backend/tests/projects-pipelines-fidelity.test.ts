@@ -12,7 +12,7 @@
 //      match the hand-derived ground truth end to end.
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import { fetchProjects } from "../src/projects/projections.ts";
+import { fetchProjects, selectPrimaryCoinId } from "../src/projects/projections.ts";
 import {
   coinGeckoFields,
   computeCoverage,
@@ -101,6 +101,16 @@ test("snapshot: coinSnapshotRow freezes the current market row as one dated poin
   });
 });
 
+test("primary coin selection is order-independent and breaks equal-cap ties by id", () => {
+  const coins = [
+    { id: "coin-low", marketCap: 90_000_000 },
+    { id: "coin-z", marketCap: 1_500_000_000 },
+    { id: "coin-a", marketCap: 1_500_000_000 },
+  ];
+  expect(selectPrimaryCoinId(coins)).toBe("coin-a");
+  expect(selectPrimaryCoinId([...coins].reverse())).toBe("coin-a");
+});
+
 // ── Layer 2: end-to-end pipeline → projection parity in real Postgres ────────
 test("full pipeline reproduces the ground-truth directory aggregates end to end", async () => {
   const prefix = `fid_${crypto.randomUUID().slice(0, 8)}`;
@@ -129,7 +139,7 @@ test("full pipeline reproduces the ground-truth directory aggregates end to end"
   expect(virtuals!.tvlUsd).toBe(1_000_000); // ERC-4626 vault TVL
   expect(virtuals!.facets).toEqual({ agent: true, x402: false, coin: true, wallet: true, vault: true });
   expect(virtuals!.dataCoverageScore).toBe(86);
-  expect(virtuals!.sparkline).toEqual([1.5]); // primary coin VIRTUAL, one snapshot @ 1.5
+  expect(virtuals!.sparkline).toEqual([1.5]); // highest-cap coin VIRTUAL, one snapshot @ 1.5
 
   const aixbt = bySlug("aixbt");
   expect(aixbt!.maxMarketCap).toBe(320_000_000);

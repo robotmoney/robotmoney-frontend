@@ -38,9 +38,9 @@ async function insertProject(over: Record<string, unknown> = {}): Promise<string
 test("fetchProjects aggregates facets, revenue, sparkline and returns the DTO shape", async () => {
   const pid = await insertProject({ display_name: "Aggregate Co", data_coverage_score: 90, website_url: "https://agg.example/", twitter_handle: "@agg", overview_short: "short blurb" });
 
-  // Two coins → max mcap/fdv across them; the primary (first) coin carries the spark.
-  const [coinA] = await sql`INSERT INTO lobster_coins ${sql({ project_id: pid, name: "Alpha", ticker: "ALP", market_cap: 5_000_000, fdv: 20_000_000, percent_change_24h: 3.5 })} RETURNING id`;
-  await sql`INSERT INTO lobster_coins ${sql({ project_id: pid, name: "Beta", ticker: "BET", market_cap: 12_000_000, fdv: 15_000_000, percent_change_24h: -8 })}`;
+  // Two coins → max mcap/fdv across them; the highest-cap coin carries the spark.
+  const [coinA] = await sql`INSERT INTO lobster_coins ${sql({ project_id: pid, name: "Alpha", ticker: "ALP", market_cap: 12_000_000, fdv: 20_000_000, percent_change_24h: 3.5 })} RETURNING id`;
+  await sql`INSERT INTO lobster_coins ${sql({ project_id: pid, name: "Beta", ticker: "BET", market_cap: 5_000_000, fdv: 15_000_000, percent_change_24h: -8 })}`;
 
   // 30d price snapshots for the primary coin (chronological sparkline).
   await sql`INSERT INTO daily_coin_snapshots ${sql([
