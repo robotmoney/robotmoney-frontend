@@ -15,6 +15,7 @@ import { getAllocationFramework } from "../../chain/allocation-framework.ts";
 import { fetchEntities, fetchMarketOverview } from "../../projects/entities-projections.ts";
 import { fetchList2 } from "../../projects/list2-projections.ts";
 import { fetchLeaderboard } from "../../projects/leaderboard-projections.ts";
+import { fetchActivityLog } from "../../projects/activity-log-projections.ts";
 
 // GET /api/dashboards/research-signals/:key → latest research signal payload
 export async function getResearchSignal(key: string) {
@@ -102,4 +103,12 @@ export async function getList2() {
 // the scoring formula and its documented fidelity notes.
 export async function getLeaderboard() {
   return fetchLeaderboard();
+}
+
+// GET /api/dashboards/activity → the /market + /dashboard TerminalFeed
+// (issue #392, docs/bot-analytics-ui-port-plan.md §5.6): agent activity log
+// feed. Never synthetic: a fresh DB with an empty agent_activity_log table
+// returns `{ entries: [] }` until a pipeline writer lands (P1.6).
+export async function getActivityLog() {
+  return fetchActivityLog();
 }

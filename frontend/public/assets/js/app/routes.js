@@ -34,6 +34,10 @@ const LIST3_VIEW = `${VIEW_DIR}/dash/list3.html`;
 // onboarding card. Ships real content ahead of the coming-soon placeholder
 // (like LIST_VIEW above); public/ungated per the DASH_ROUTES entry below.
 const SUBMIT_VIEW = `${VIEW_DIR}/dash/submit.html`;
+// /market + /dashboard "Agent Activity Log" TerminalFeed (issue #392, §5.6,
+// P4.1) — both routes intentionally alias this SAME fragment (the original's
+// own aliasing, §4.1).
+const ACTIVITY_VIEW = `${VIEW_DIR}/dash/activity.html`;
 
 // Static dashboard routes (§4.1's list) that render inside DASH_LAYOUT_VIEW.
 // `gated: true` means dash-shell.js's gate must pass before the outlet
@@ -49,8 +53,8 @@ const DASH_ROUTES = {
   "/list": { view: LIST_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/list2": { view: LIST2_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/list3": { view: LIST3_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
-  "/market": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
-  "/dashboard": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
+  "/market": { view: ACTIVITY_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
+  "/dashboard": { view: ACTIVITY_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/agents": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/lobster": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },
   "/vaults": { view: DASH_COMING_SOON_VIEW, layout: DASH_LAYOUT_VIEW, gated: true },

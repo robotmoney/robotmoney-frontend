@@ -520,3 +520,29 @@ export interface Submission {
   status: "pending" | "accepted" | "rejected";
   createdAt: string;
 }
+
+// GET /api/dashboards/activity (issue #392, docs/bot-analytics-ui-port-plan.md
+// §5.6, P4.1) — the /market + /dashboard TerminalFeed: a real-time feed of
+// agent actions, governance votes, and market events. Backed by
+// agent_activity_log (migration 0023); a fresh deploy with no writer yet
+// returns `{ entries: [] }`, never a fabricated row (issue #98/#346 honesty
+// contract). `agentHref` is null when the row's agent_id has no live
+// openclaw_agents match (deleted agent, or no agent attached to this action).
+export type ActivityLogStatus = "success" | "pending" | "rejected";
+
+export interface ActivityLogEntry {
+  id: string;
+  occurredAt: string; // ISO 8601
+  agentId: string | null;
+  agentName: string;
+  agentHref: string | null;
+  actionType: string;
+  status: ActivityLogStatus;
+  commitSummary: string | null;
+  submittedBy: string | null;
+  approvedBy: string | null;
+}
+
+export interface ActivityLogResponse {
+  entries: ActivityLogEntry[]; // newest first, zero-score noise filtered, up to 50
+}

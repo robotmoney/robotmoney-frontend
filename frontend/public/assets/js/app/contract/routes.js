@@ -52,6 +52,12 @@ export const ROUTES = {
     // that boundary is the bearer-gated PRODUCER ingestion surface; this is
     // an anonymous public submission, moderated later from /admin).
     submissions: "/api/dashboards/submissions", // POST → create a pending submission
+    // Issue #392 (/market + /dashboard TerminalFeed): real-time feed of agent
+    // actions, governance votes, and market events. Same public-read
+    // reasoning as entities/overview above — never analytics.* (bearer-gated
+    // ingestion). Backed by agent_activity_log (migration 0023); returns
+    // `{ entries: [] }` honestly until a pipeline writer lands (P1.6).
+    activity: "/api/dashboards/activity", // GET → agent activity log feed
   },
 
   projects: {

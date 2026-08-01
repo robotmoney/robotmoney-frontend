@@ -31,6 +31,7 @@ import { registerListView } from "./views/list.js";
 import { registerList2View } from "./views/list2.js";
 import { registerList3View } from "./views/list3.js";
 import { registerSubmitView } from "./views/submit.js";
+import { registerActivityView } from "./views/activity.js";
 
 export function registerViews(Alpine) {
   registerProjectsView(Alpine);
@@ -55,4 +56,5 @@ export function registerViews(Alpine) {
   registerList2View(Alpine);
   registerList3View(Alpine);
   registerSubmitView(Alpine);
+  registerActivityView(Alpine);
 }

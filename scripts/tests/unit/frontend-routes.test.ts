@@ -74,21 +74,19 @@ describe("frontend route resolution", () => {
   // `layout: DASH_LAYOUT_VIEW` + `gated: true` metadata for router.js's
   // layout composition + dash-shell.js's gate, EXCEPT /submit — linked
   // directly off the gate screen itself, so it must be reachable pre-auth.
-  // /list (issue #384, P2.1) is the first of these routes to ship real
-  // content — it resolves to its own fragment now, everything else still
+  // /list (issue #384, P2.1), /list2 + /list3 (issue #387), and /market +
+  // /dashboard (issue #392, P4.1) are the first of these routes to ship real
+  // content — they resolve to their own fragments now, everything else still
   // points at the shared coming-soon placeholder.
   test("resolves every static dashboard route to the shared placeholder, gated, under the dash layout", () => {
     const gatedPaths = [
-      "/market", "/dashboard", "/agents",
+      "/agents",
       "/lobster", "/vaults", "/wallets", "/methodology", "/about", "/ask-mr-roboto",
     ];
     for (const p of gatedPaths) {
       expect(viewFor(p)).toBe("/views/dash/coming-soon.html");
       expect(routeMetaFor(p)).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
     }
-    // /market and /dashboard alias the same fragment (the original's own
-    // aliasing, §4.1) — same view, same metadata.
-    expect(viewFor("/market")).toBe(viewFor("/dashboard"));
   });
 
   test("/list (issue #384) resolves to its own real fragment, still gated under the dash layout", () => {
@@ -105,6 +103,15 @@ describe("frontend route resolution", () => {
     expect(routeMetaFor("/list3")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
   });
 
+  // /market + /dashboard "Agent Activity Log" TerminalFeed (issue #392, P4.1).
+  test("/market and /dashboard (issue #392) resolve to the same real fragment, gated under the dash layout", () => {
+    expect(viewFor("/dashboard")).toBe("/views/dash/activity.html");
+    expect(routeMetaFor("/dashboard")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+    expect(routeMetaFor("/market")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+    // /market and /dashboard alias the same fragment (the original's own
+    // aliasing, §4.1) — same view, same metadata.
+    expect(viewFor("/market")).toBe(viewFor("/dashboard"));
+  });
 
   test("/submit is public (reachable off the gate screen itself) even though it shares the dash layout", () => {
     // /submit (issue #393, P4.4) is the second dashboard route to ship real
@@ -137,7 +144,7 @@ describe("frontend route resolution", () => {
   });
 
   test("every dashboard route fragment referenced by the router exists on disk", async () => {
-    const paths = ["/list", "/submit", "/agents/clawd", "/projects/robotmoney-vault"];
+    const paths = ["/list", "/submit", "/agents/clawd", "/projects/robotmoney-vault", "/dashboard", "/market"];
     for (const p of paths) {
       const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));
       expect(await file.exists()).toBe(true);

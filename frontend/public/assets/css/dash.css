@@ -668,3 +668,63 @@
 .a3-submit__back { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); margin-top: 0.5rem; }
 .a3-submit__back:hover { color: hsl(var(--primary)); }
 .a3 pre.a3-code { background: hsl(var(--muted) / 0.4); border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 0.75rem; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; overflow-x: auto; white-space: pre; }
+
+/* ── /market + /dashboard "Agent Activity Log" TerminalFeed (issue #392,
+   §5.6, P4.1) — macOS-terminal pastiche: emerald-on-black card, traffic-light
+   dots, `$ tail -f ...` line, max-h-420px scroll of activity entries, ✓/⏳/✗
+   status glyphs, blinking block cursor (frozen by playwright.config.ts's
+   `animations: "disabled"` under a visual golden, per §5.6's acceptance). */
+.a3 .a3-terminal {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  border: 1px solid hsl(var(--success) / 0.2);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.a3 .a3-terminal__titlebar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid hsl(var(--success) / 0.2);
+  background: hsl(var(--success) / 0.05);
+}
+.a3 .a3-terminal__dots { display: flex; gap: 0.4rem; }
+.a3 .a3-terminal__dot { width: 0.65rem; height: 0.65rem; border-radius: 9999px; }
+.a3 .a3-terminal__dot--red { background: #ff5f56; }
+.a3 .a3-terminal__dot--amber { background: #ffbd2e; }
+.a3 .a3-terminal__dot--green { background: #27c93f; }
+.a3 .a3-terminal__title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: hsl(var(--success));
+  opacity: 0.8;
+}
+.a3 .a3-terminal__body {
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 0.75rem 1rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
+  color: hsl(var(--success));
+}
+.a3 .a3-terminal__prompt { color: hsl(var(--success) / 0.7); margin: 0 0 0.6rem; }
+.a3 .a3-terminal__entry { display: block; padding: 0.25rem 0; line-height: 1.5; }
+.a3 .a3-terminal__entry + .a3-terminal__entry { border-top: 1px solid hsl(var(--success) / 0.08); }
+.a3 .a3-terminal__ts { color: hsl(var(--success) / 0.55); }
+.a3 .a3-terminal__status--success { color: hsl(var(--success)); }
+.a3 .a3-terminal__status--pending { color: hsl(var(--amber)); }
+.a3 .a3-terminal__status--rejected { color: hsl(var(--destructive)); }
+.a3 .a3-terminal__agent { color: hsl(var(--primary)); }
+.a3 .a3-terminal__agent:hover { text-decoration: underline; }
+.a3 .a3-terminal__meta { color: hsl(var(--success) / 0.6); font-size: 0.72rem; display: block; padding-left: 1.2rem; }
+.a3 .a3-terminal__cursor {
+  display: inline-block;
+  width: 0.5rem;
+  height: 1em;
+  background: hsl(var(--success));
+  vertical-align: text-bottom;
+  margin-left: 0.2rem;
+  animation: a3Pulse 1s step-end infinite;
+}
+.a3 .a3-terminal__empty { color: hsl(var(--success) / 0.6); padding: 0.5rem 0; }
