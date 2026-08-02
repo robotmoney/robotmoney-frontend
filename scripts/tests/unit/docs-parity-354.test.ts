@@ -19,7 +19,7 @@ const read = (rel: string) => readFileSync(join(repoRoot, rel), "utf8");
 
 const DOCS_HTML = "frontend/public/views/docs.html";
 const SITEMAP = "frontend/public/sitemap.xml";
-const RUNBOOK_PATH = "/docs/investment-committee/runbook";
+const RUNBOOK_PATH = "/docs/investment-swarm/runbook";
 const RUNBOOK_URL = `https://robotmoney.net${RUNBOOK_PATH}`;
 
 describe("AC4: the runbook is linked from /docs and present in sitemap.xml", () => {
@@ -27,8 +27,8 @@ describe("AC4: the runbook is linked from /docs and present in sitemap.xml", () 
 
   test("docs.html's sidebar links the runbook", () => {
     // The sidebar list (top of the page, next to "How it works"/"Participation")
-    // and the body list (the Investment Committee section prose) both carry an
-    // <a href="/docs/investment-committee/runbook">Runbook</a> link — assert on
+    // and the body list (the Investment Swarm section prose) both carry an
+    // <a href="/docs/investment-swarm/runbook">Runbook</a> link — assert on
     // count so a future edit that drops either one is caught, not just "at
     // least one somewhere in the file".
     const hrefMatches = docsHtml.match(

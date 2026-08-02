@@ -7,7 +7,7 @@
 import { api, ROUTES, path } from "../lib/api.js";
 import { subjectDot } from "./views/shared.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
-import { COMMITTEE_DISCLAIMER } from "../lib/committee-disclaimer.js";
+import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
 
 // Sentiment scale on the Beam/Pool/Beacon covenant: conviction reads as the
 // green mass (bullish deepest → constructive lighter), neutral as slate, and
@@ -68,7 +68,11 @@ function camelSession(raw) {
     })(),
     subjectSnapshotTotalValueUsd: raw.subjectSnapshotTotalValueUsd ?? raw.subject_snapshot_total_value_usd ?? null,
     synthesis: raw.synthesis || "",
-    committeeRecommendation: raw.committeeRecommendation || raw.committee_recommendation || null,
+    // committee_recommendation fallback kept for the archived session JSON
+    // (frontend/public/data/swarm/sessions/**) — that content is a historical
+    // record predating the issue #263 rename and is deliberately never
+    // rewritten, so it still carries the old field name.
+    swarmRecommendation: raw.swarmRecommendation || raw.swarm_recommendation || raw.committee_recommendation || null,
     generatedAt: raw.generatedAt || raw.generated_at || null,
   };
 }
@@ -83,7 +87,7 @@ export function camelTake(raw) {
     // The permalink id is NOT the same thing as `id` above. `id` falls back to
     // the member id so x-for has something stable to key on, but the shipped
     // archive's takes carry no id at all — only member_id — so that fallback was
-    // producing /committee/takes/athena, a member slug in a route that expects a
+    // producing /swarm/takes/athena, a member slug in a route that expects a
     // take id. Three per session across 32 archived sessions: 96 links that all
     // 404. Only a real take id gets a permalink.
     permalinkId: raw.id ?? null,
@@ -166,31 +170,31 @@ function normalizeSnapshot(raw) {
 }
 
 // The archive loaders below are the PRODUCTION static-archive path (sessions
-// dated before 2026-07-01 render from /data/committee/*.json). They are
+// dated before 2026-07-01 render from /data/swarm/*.json). They are
 // exported so scripts/tests/unit/frontend-routes.test.ts can execute the exact
 // loaders the browser runs against the shipped archive files (review 026:
 // the previous test covered a dead duplicate normalizer instead).
 export async function loadArchiveSession(date, subject) {
-  const index = await fetchJson("/data/committee/sessions/index.json");
+  const index = await fetchJson("/data/swarm/sessions/index.json");
   // index.json entries are snake_case (subject_id) while the API serves
   // camelCase — read both, matching camelSession's tolerant style, so the
   // existence check can never diverge from the file it just fetched.
   const exists = (index.sessions || []).some((s) => s.date === date && (s.subjectId ?? s.subject_id) === subject);
   if (!exists) throw new Error(`archive session missing: ${date}/${subject}`);
-  const raw = await fetchJson(`/data/committee/sessions/${date}-${subject}.json`);
+  const raw = await fetchJson(`/data/swarm/sessions/${date}-${subject}.json`);
   return { session: camelSession(raw), takes: (raw.takes || []).map(camelTake), source: "archive" };
 }
 
 export async function loadArchiveMember(id) {
-  return camelMember(await fetchJson(`/data/committee/manifests/members/${id}.json`));
+  return camelMember(await fetchJson(`/data/swarm/manifests/members/${id}.json`));
 }
 
 export async function loadArchiveSubject(id) {
-  return camelSubject(await fetchJson(`/data/committee/manifests/subjects/${id}.json`));
+  return camelSubject(await fetchJson(`/data/swarm/manifests/subjects/${id}.json`));
 }
 
 export async function loadArchiveSnapshot(subject, date) {
-  try { return normalizeSnapshot(await fetchJson(`/data/committee/subjects/${subject}/${date}.json`)); }
+  try { return normalizeSnapshot(await fetchJson(`/data/swarm/subjects/${subject}/${date}.json`)); }
   catch (_) { return null; }
 }
 
@@ -211,9 +215,9 @@ function pickSnapshotFor(snapshots, date) {
 
 // Exported alongside camelTake so scripts/tests/unit/frontend-routes.test.ts
 // can assert the two together: only permalinkId (never a member id) ever
-// produces a /committee/takes/* href.
+// produces a /swarm/takes/* href.
 export function takeHref(take) {
-  return take?.permalinkId ? path(ROUTES.committee.takePermalink, { id: take.permalinkId }) : null;
+  return take?.permalinkId ? path(ROUTES.swarm.takePermalink, { id: take.permalinkId }) : null;
 }
 
 // Shared with the Alpine `humanize` helper below and, via
@@ -225,8 +229,8 @@ function humanizeLabel(id) {
 }
 
 // Pure transform behind the Alpine `withinBucketWeights()` method (below):
-// normalizes a committeeRecommendation's per-bucket constituent weights into
-// the { bucket, items: [{ name, weight }] } rows session.html's `.cv__within`
+// normalizes a swarmRecommendation's per-bucket constituent weights into
+// the { bucket, items: [{ name, weight }] } rows session.html's `.sv__within`
 // block iterates. Exported so scripts/tests/unit/frontend-routes.test.ts can
 // assert AC2 (within-bucket weights render, matching production) without a
 // browser — the same reason camelTake/takeHref are exported above.
@@ -306,14 +310,14 @@ const helpers = {
     try { return date.toLocaleDateString("en-US", opts); } catch (_) { return value; }
   },
   memberTagline(member) {
-    return member?.tagline || member?.mandate || `${member?.name || "This member"} reads the session through a ${member?.lens || "committee"} lens.`;
+    return member?.tagline || member?.mandate || `${member?.name || "This member"} reads the session through a ${member?.lens || "swarm"} lens.`;
   },
   memberBiases(member) {
     if (Array.isArray(member?.biases) && member.biases.length) return member.biases.filter(Boolean);
     return member?.lens ? [member.lens] : ["independent review", "signed recommendations"];
   },
   fallbackMandate(member) {
-    return `Evaluate each subject through the ${member?.lens || "committee"} lens and submit a signed stance with confidence and rationale.`;
+    return `Evaluate each subject through the ${member?.lens || "swarm"} lens and submit a signed stance with confidence and rationale.`;
   },
   takeHref,
   escapeHtml(text) {
@@ -377,7 +381,7 @@ const helpers = {
         const heading = line.trim().match(/^\*\*([^*\n]+)\*\*$/);
         if (heading) {
           flushPara();
-          out.push(`<h4 class="cv__take-h">${this.escapeHtml(heading[1])}</h4>`);
+          out.push(`<h4 class="sv__take-h">${this.escapeHtml(heading[1])}</h4>`);
           continue;
         }
         para.push(this.inlineMarks(line));
@@ -390,11 +394,11 @@ const helpers = {
 };
 
 export function registerStaticViews(Alpine) {
-  // One string, four committee surfaces. See lib/committee-disclaimer.js for
+  // One string, four swarm surfaces. See lib/swarm-disclaimer.js for
   // why the wording is production's verbatim and not this repo's to edit.
-  Alpine.data("committeeDisclaimer", () => ({ text: COMMITTEE_DISCLAIMER }));
+  Alpine.data("swarmDisclaimer", () => ({ text: SWARM_DISCLAIMER }));
 
-  Alpine.data("committeeTakeReceipt", () => ({
+  Alpine.data("swarmTakeReceipt", () => ({
     ...helpers,
     loading: true,
     error: null,
@@ -402,14 +406,14 @@ export function registerStaticViews(Alpine) {
     memo: null,
     signer: null,
     async init() {
-      const match = location.pathname.match(/^\/committee\/takes\/([^/]+)\/?$/);
+      const match = location.pathname.match(/^\/swarm\/takes\/([^/]+)\/?$/);
       if (!match) {
         this.error = "Take not found";
         this.loading = false;
         return;
       }
       try {
-        const receipt = await api.get(path(ROUTES.committee.take, { id: decodeURIComponent(match[1]) }));
+        const receipt = await api.get(path(ROUTES.swarm.take, { id: decodeURIComponent(match[1]) }));
         this.take = camelTake(receipt.take);
         this.memo = receipt.memo;
         this.signer = receipt.signer;
@@ -434,17 +438,17 @@ export function registerStaticViews(Alpine) {
   }));
 
   // Public application-status poller (docs/architecture.md §11 R2), the page
-  // the runbook promises at <host>/committee/apply/<member-id>. Polls the
+  // the runbook promises at <host>/swarm/apply/<member-id>. Polls the
   // public, redacted status route until a terminal state (claimed/rejected)
   // or the component unmounts — Alpine's destroy() lifecycle hook (fired on
   // both route navigation via rm:before-view-change→destroyTree and a raw
   // page unload) always clears the timer, so leaving the page never leaves a
   // poll loop running against a stale id.
-  Alpine.data("committeeApplyStatus", () => ({
+  Alpine.data("swarmApplyStatus", () => ({
     ...helpers,
     STEPS: ["applied", "approved", "claimed"],
     // The KEYS above are lifecycle states and are pinned by
-    // scripts/tests/unit/committee-apply-form-and-status.test.ts. These are the
+    // scripts/tests/unit/swarm-apply-form-and-status.test.ts. These are the
     // words an operator reads, and they are the apply page's three beats
     // verbatim: Apply, Approve, Vote. "Claimed" was the API's word for the
     // agent proving it holds its private key, and as a label it did two things
@@ -467,7 +471,7 @@ export function registerStaticViews(Alpine) {
     pollTimer: null,
     pulseTimer: null,
     async init() {
-      const match = location.pathname.match(/^\/committee\/apply\/([^/]+)\/?$/);
+      const match = location.pathname.match(/^\/swarm\/apply\/([^/]+)\/?$/);
       if (!match) {
         this.error = "Application not found";
         this.loading = false;
@@ -486,7 +490,7 @@ export function registerStaticViews(Alpine) {
     },
     async refresh() {
       try {
-        this.status = await api.get(path(ROUTES.committee.applyStatus, { id: this.id }));
+        this.status = await api.get(path(ROUTES.swarm.applyStatus, { id: this.id }));
         this.error = null;
         if (["claimed", "rejected"].includes(this.status.state) && this.pollTimer) {
           clearInterval(this.pollTimer);
@@ -512,7 +516,7 @@ export function registerStaticViews(Alpine) {
       }
       // The redacted status endpoint never echoes the name, so pull it from the
       // public member projection. This is NOT gated on approval: GET
-      // /api/committee/members/:id already returns `name` for a member still in
+      // /api/swarm/members/:id already returns `name` for a member still in
       // `applied` (verified against a live stack), so the status route's
       // redaction was not withholding anything that endpoint does not publish
       // anyway, and gating here only meant the operator stared at a bare UUID
@@ -524,7 +528,7 @@ export function registerStaticViews(Alpine) {
       // that genuinely has no public projection would otherwise 404 forever.
       if (!this.member && !this.memberFetchTried) {
         this.memberFetchTried = true;
-        try { this.member = camelMember(await api.get(path(ROUTES.committee.member, { id: this.id }))); }
+        try { this.member = camelMember(await api.get(path(ROUTES.swarm.member, { id: this.id }))); }
         catch { /* no public projection — every caller falls back to the id */ }
       }
       // Opening this page is the one moment the browser ever learns the id, so
@@ -537,10 +541,10 @@ export function registerStaticViews(Alpine) {
     },
     // Route-level SEO titleizes the last URL segment, which here is a raw UUID
     // ("88efd6b9 E865 417d Afe1 45d84510338b — Robot Money Investment
-    // Committee"). Same fix memberProfile already applies: name the tab after
+    // Swarm"). Same fix memberProfile already applies: name the tab after
     // the member once it is known, and after the state until then.
     syncTitle() {
-      const suffix = "Robot Money Investment Committee";
+      const suffix = "Robot Money Investment Swarm";
       const name = this.member?.name;
       document.title = name
         ? `${name}: ${suffix}`
@@ -551,7 +555,7 @@ export function registerStaticViews(Alpine) {
     // remaining steps read neither done nor pending — they're moot, not "next".
     //
     // This is the LIFECYCLE state and its three values are pinned by
-    // scripts/tests/unit/committee-apply-form-and-status.test.ts (#245 AC2).
+    // scripts/tests/unit/swarm-apply-form-and-status.test.ts (#245 AC2).
     // Presentation-only distinctions belong in stepClass(), not here.
     stepState(step) {
       const order = ["applied", "approved", "claimed"];
@@ -679,7 +683,7 @@ export function registerStaticViews(Alpine) {
     },
     // The single "what is happening right now" panel at the top of the page.
     // It replaced a callout and a separate Agent activity section that sat at
-    // the foot: between them they said "<name> is on the committee" twice, in
+    // the foot: between them they said "<name> is on the swarm" twice, in
     // near-identical shapes, while the one genuinely live fact was below the
     // fold. One panel, one position, in every state.
     liveStatus() {
@@ -708,19 +712,19 @@ export function registerStaticViews(Alpine) {
         return { tone: "pending", label: "window open", live: true,
           lead: `A window is open for ${pending.date} / ${pending.subjectId}.`,
           body: `${name} has until it closes to read the brief and file its take.`,
-          url: `/committee/${pending.date}/${encodeURIComponent(pending.subjectId)}`,
+          url: `/swarm/${pending.date}/${encodeURIComponent(pending.subjectId)}`,
           linkText: "Follow the session" };
       }
       if (this.recordLoaded && !this.record.length) {
         return { tone: "pending", label: "no takes yet",
           lead: `${name} is ready, and has not filed yet.`,
-          body: "It has proved it holds its key, so it can file. No session is collecting right now, which is the committee's normal resting state: it catches the next window on its own." };
+          body: "It has proved it holds its key, so it can file. No session is collecting right now, which is the swarm's normal resting state: it catches the next window on its own." };
       }
       const last = this.record[0];
       return { tone: "good", label: "voting",
         lead: `${name} is voting.`,
         body: "Nothing is left for you to do. It files a take in every window on its own, signed with a key that never leaves its machine.",
-        url: last ? `/committee/takes/${encodeURIComponent(last.take?.id || "")}` : null,
+        url: last ? `/swarm/takes/${encodeURIComponent(last.take?.id || "")}` : null,
         linkText: "See the latest take" };
     },
     // Coarse phase for the rich status UI: approved covers approved + claimed.
@@ -735,7 +739,7 @@ export function registerStaticViews(Alpine) {
     // courtesy on this page, never a reason to fail it.
     async loadRecord() {
       try {
-        const res = await api.get(`${path(ROUTES.committee.memberTakes, { id: this.id })}?limit=50`);
+        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: this.id })}?limit=50`);
         this.record = res.takes || [];
         this.recordLoaded = true;
       } catch { /* leave the strip hidden rather than render a wrong zero */ }
@@ -772,7 +776,7 @@ export function registerStaticViews(Alpine) {
       // every third tick.
       if (!this.recordLoaded || this.pulseTicks++ % 3 === 0) await this.loadRecord();
       try {
-        const res = await api.get(`${ROUTES.committee.sessions}?state=collecting&limit=10`);
+        const res = await api.get(`${ROUTES.swarm.sessions}?state=collecting&limit=10`);
         this.openSessions = res.sessions || [];
       } catch { /* best-effort: an unreachable index just means no window shown */ }
     },
@@ -797,10 +801,10 @@ export function registerStaticViews(Alpine) {
       return (this.member && this.member.name) || this.id;
     },
     profileUrl() {
-      return `/committee/members/${encodeURIComponent(this.id)}`;
+      return `/swarm/members/${encodeURIComponent(this.id)}`;
     },
     recoveryMailto() {
-      return `mailto:hi@robotmoney.net?subject=${encodeURIComponent(`Key rotation for committee member ${this.id}`)}`;
+      return `mailto:hi@robotmoney.net?subject=${encodeURIComponent(`Key rotation for swarm member ${this.id}`)}`;
     },
     // The member id is a 36-character UUID that support, the admin surface and
     // the API all key on, so it gets a copy control rather than an invitation
@@ -819,7 +823,7 @@ export function registerStaticViews(Alpine) {
     // longer a separate object on the page.
   }));
 
-  // Public subject profile (/committee/subjects/:id). The reader-facing
+  // Public subject profile (/swarm/subjects/:id). The reader-facing
   // counterpart to the admin subject page: what portfolio is under review, what
   // it holds, which wallets are tracked, and every session about it.
   //
@@ -845,13 +849,13 @@ export function registerStaticViews(Alpine) {
     async init() {
       const id = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
       try {
-        this.subject = await api.get(path(ROUTES.committee.subject, { id })).then(camelSubject)
+        this.subject = await api.get(path(ROUTES.swarm.subject, { id })).then(camelSubject)
           .catch(() => loadArchiveSubject(id));
         if (!this.subject) throw new Error("Subject not found");
         // Route-level SEO titleizes the last URL segment, which for a slug like
         // "robotmoney-allocation" reads "Robotmoney Allocation". Name the tab
         // after the subject once we know what it is actually called.
-        if (this.subject?.name) document.title = `${this.subject.name}: Robot Money Investment Committee`;
+        if (this.subject?.name) document.title = `${this.subject.name}: Robot Money Investment Swarm`;
         // Each side-fetch is guarded on its own: a subject with no snapshot yet
         // still has sessions worth reading, and vice versa.
         this.snapshots = await this.loadSnapshots(id);
@@ -865,22 +869,22 @@ export function registerStaticViews(Alpine) {
     },
     async loadSnapshots(id) {
       try {
-        const res = await api.get(path(ROUTES.committee.subjectSnapshots, { id }));
+        const res = await api.get(path(ROUTES.swarm.subjectSnapshots, { id }));
         const list = (Array.isArray(res) ? res : res.snapshots || []).filter(Boolean);
         if (list.length) return list.slice().sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
       } catch (_) { /* fall through to the archive */ }
       return this.archiveSnapshots(id);
     },
-    // Static-archive fallback, the same path every other committee surface has.
+    // Static-archive fallback, the same path every other swarm surface has.
     // Without it this page renders a subject with an empty chart and a dashed
     // book value whenever the API is unreachable — and the shipped archive holds
     // 28-30 real daily snapshots per subject, which is a better answer than a
     // blank panel. There is no snapshot index file, so the dates come from the
-    // session index: those are the days the committee actually read this book.
+    // session index: those are the days the swarm actually read this book.
     async archiveSnapshots(id) {
       let dates = [];
       try {
-        const index = await fetchJson("/data/committee/sessions/index.json");
+        const index = await fetchJson("/data/swarm/sessions/index.json");
         dates = (index.sessions || [])
           .filter((s) => (s.subjectId ?? s.subject_id) === id)
           .map((s) => s.date)
@@ -914,21 +918,21 @@ export function registerStaticViews(Alpine) {
         }));
       let index = [];
       try {
-        index = pick((await api.get(ROUTES.committee.sessions)).sessions || []);
+        index = pick((await api.get(ROUTES.swarm.sessions)).sessions || []);
       } catch (_) { /* fall through to the archive */ }
       // Same archive fallback the snapshots take. index.json is snake_case while
       // the API is camelCase, so pick() reads both rather than silently matching
       // nothing and rendering "no published session yet" over a full archive.
       if (!index.length) {
         try {
-          index = pick((await fetchJson("/data/committee/sessions/index.json")).sessions || []);
+          index = pick((await fetchJson("/data/swarm/sessions/index.json")).sessions || []);
         } catch (_) {
           return [];
         }
       }
       return Promise.all(index.map(async (s) => {
         try {
-          const detail = await api.get(path(ROUTES.committee.session, { date: s.date, subject: s.subjectId }));
+          const detail = await api.get(path(ROUTES.swarm.session, { date: s.date, subject: s.subjectId }));
           return { ...s, synthesis: camelSession(detail.session || detail).synthesis, takes: (detail.takes || []).length };
         } catch (_) {
           if (archivePreferred(s.date)) {
@@ -950,9 +954,9 @@ export function registerStaticViews(Alpine) {
       const oldest = n ? this.sessions[n - 1].date : null;
       const since = oldest ? this.formatDate(oldest, "long").replace(/\s*\d{1,2},\s*/, " ") : null;
       const reviewed = !n
-        ? "The committee has not reviewed it yet"
-        : `the committee has reviewed it ${n === 1 ? "once" : n + " times"}${since ? " since " + since : ""}`;
-      const parts = ["This is a portfolio the Robot Money Investment Committee reviews."];
+        ? "The swarm has not reviewed it yet"
+        : `the swarm has reviewed it ${n === 1 ? "once" : n + " times"}${since ? " since " + since : ""}`;
+      const parts = ["This is a portfolio the Robot Money Investment Swarm reviews."];
       parts.push(worth ? `${worth} and ${reviewed}.` : `${reviewed[0].toUpperCase()}${reviewed.slice(1)}.`);
       return parts.join(" ");
     },
@@ -1091,11 +1095,11 @@ export function registerStaticViews(Alpine) {
       const memberId = location.pathname.split("/").filter(Boolean).pop();
       try {
         this.member = await loadArchiveMember(memberId).catch(() => null);
-        if (!this.member) this.member = await api.get(path(ROUTES.committee.member, { id: memberId })).then(camelMember);
+        if (!this.member) this.member = await api.get(path(ROUTES.swarm.member, { id: memberId })).then(camelMember);
         // Route-level SEO titleizes the last URL segment, which here is a raw
         // UUID ("D6e430f5 D706 4325…"). This is the page onboarding hands a new
         // operator, so name the tab after the member once it is known.
-        if (this.member?.name) document.title = `${this.member.name}: Robot Money Investment Committee`;
+        if (this.member?.name) document.title = `${this.member.name}: Robot Money Investment Swarm`;
         this.rows = await this.loadRows(memberId);
       } catch (e) {
         this.error = e.message || "Member not found";
@@ -1113,7 +1117,7 @@ export function registerStaticViews(Alpine) {
     // full history — and it cost 21 requests to get the wrong answer.
     async loadRows(memberId) {
       try {
-        const res = await api.get(`${path(ROUTES.committee.memberTakes, { id: memberId })}?limit=50`);
+        const res = await api.get(`${path(ROUTES.swarm.memberTakes, { id: memberId })}?limit=50`);
         return (res.takes || []).map((r) => ({
           session: { date: r.sessionDate, subjectId: r.subjectId, subjectName: r.subjectName, state: r.sessionState },
           // camelTake, not the raw row: raw takes carry no `permalinkId`, only
@@ -1133,12 +1137,12 @@ export function registerStaticViews(Alpine) {
     // window can sit deep in a date-ordered list, so a naive slice would drop it
     // and the page would read "no sessions yet" right after a verified submit.
     async scanSessions() {
-      const all = (await api.get(ROUTES.committee.sessions)).sessions || [];
+      const all = (await api.get(ROUTES.swarm.sessions)).sessions || [];
       const inProgress = all.filter((s) => ["collecting", "window_closed", "aggregated"].includes(s.state));
       const published = all.filter((s) => s.state === "published").slice(0, 20);
       const details = await Promise.all([...inProgress, ...published].map(async (s) => {
         try {
-          const detail = await api.get(path(ROUTES.committee.session, { date: s.date, subject: s.subjectId }));
+          const detail = await api.get(path(ROUTES.swarm.session, { date: s.date, subject: s.subjectId }));
           return { ...s, takes: detail.takes || [] };
         } catch (_) {
           if (archivePreferred(s.date)) {
@@ -1233,21 +1237,21 @@ export function registerStaticViews(Alpine) {
     members: [],
     async init() {
       // TWO addressing forms reach this view:
-      //   /committee/sessions/<uuid>  — one exact session, the only form that can
+      //   /swarm/sessions/<uuid>  — one exact session, the only form that can
       //                                 reach an earlier session of a day on which
       //                                 the subject convened more than once.
-      //   /committee/<date>/<subject> — the latest session that day. Kept because
+      //   /swarm/<date>/<subject> — the latest session that day. Kept because
       //                                 every published link, the prerenderer and
       //                                 the static archive use it.
       // The id form resolves first and then continues down the SAME path as the
       // dated form, using the date/subject the server reported, so the subject,
       // snapshot, brief and archive fallbacks all behave identically.
       const byId = location.pathname.match(
-        /^\/committee\/sessions\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i,
+        /^\/swarm\/sessions\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i,
       );
       if (byId) {
         try {
-          const detail = await api.get(path(ROUTES.committee.sessionById, { id: byId[1] }));
+          const detail = await api.get(path(ROUTES.swarm.sessionById, { id: byId[1] }));
           const s = camelSession(detail.session);
           await this.loadApi(s.date, s.subjectId, detail);
         } catch (_) {
@@ -1257,7 +1261,7 @@ export function registerStaticViews(Alpine) {
         }
         return;
       }
-      const match = location.pathname.match(/^\/committee\/(\d{4}-\d{2}-\d{2})\/([^/]+)/);
+      const match = location.pathname.match(/^\/swarm\/(\d{4}-\d{2}-\d{2})\/([^/]+)/);
       if (!match) {
         this.error = "Session not found";
         this.loading = false;
@@ -1288,7 +1292,7 @@ export function registerStaticViews(Alpine) {
       const ids = [...new Set([...this.takes.map((t) => t.memberId), ...KNOWN_ARCHIVE_MEMBERS])];
       const members = await Promise.all(ids.map((id) => loadArchiveMember(id).catch(() => null)));
       this.members = members.filter(Boolean);
-      this.brief = await fetchJson(`/data/committee/briefs/${date}-${subject}.json`).catch(() => null);
+      this.brief = await fetchJson(`/data/swarm/briefs/${date}-${subject}.json`).catch(() => null);
     },
     // `preloaded` is the already-fetched session when the caller resolved it by
     // id; without it this fetches the latest session for (date, subject) exactly
@@ -1300,11 +1304,11 @@ export function registerStaticViews(Alpine) {
       // portfolio). Each side-fetch is independently guarded so a missing
       // subject/snapshot never breaks the takes/session render.
       const [detail, memberData, brief, subjectData, snapshotData] = await Promise.all([
-        preloaded ?? api.get(path(ROUTES.committee.session, { date, subject })),
-        api.get(ROUTES.committee.members),
-        api.get(ROUTES.committee.brief, { date, subject }).catch(() => null),
-        api.get(path(ROUTES.committee.subject, { id: subject })).catch(() => null),
-        api.get(path(ROUTES.committee.subjectSnapshots, { id: subject })).catch(() => null),
+        preloaded ?? api.get(path(ROUTES.swarm.session, { date, subject })),
+        api.get(ROUTES.swarm.members),
+        api.get(ROUTES.swarm.brief, { date, subject }).catch(() => null),
+        api.get(path(ROUTES.swarm.subject, { id: subject })).catch(() => null),
+        api.get(path(ROUTES.swarm.subjectSnapshots, { id: subject })).catch(() => null),
       ]);
       this.source = "api";
       this.session = camelSession(detail.session);
@@ -1315,7 +1319,7 @@ export function registerStaticViews(Alpine) {
       this.brief = brief;
     },
     memberLens(memberId) {
-      return this.members.find((m) => m.id === memberId)?.lens || "committee member";
+      return this.members.find((m) => m.id === memberId)?.lens || "swarm member";
     },
     memberById(memberId) {
       return this.members.find((m) => m.id === memberId) || null;
@@ -1325,14 +1329,14 @@ export function registerStaticViews(Alpine) {
     // can; an id we hold no member record for still prints, because silently
     // dropping it would understate who missed the session.
     absentNames() {
-      return (this.session?.committeeRecommendation?.absent || [])
+      return (this.session?.swarmRecommendation?.absent || [])
         .map((id) => this.memberById(id)?.name || id);
     },
     // Stance distribution, largest first, with each share of the submitted
     // takes — the proportional bar and the key both read from this so they can
     // never disagree.
     stanceSpread() {
-      const stances = this.session?.committeeRecommendation?.stances || {};
+      const stances = this.session?.swarmRecommendation?.stances || {};
       const total = Object.values(stances).reduce((sum, n) => sum + Number(n || 0), 0);
       return Object.entries(stances)
         .map(([stance, n]) => ({ stance, n: Number(n), pct: total ? (Number(n) / total) * 100 : 0 }))
@@ -1342,7 +1346,7 @@ export function registerStaticViews(Alpine) {
     // largest type on the page) and leave the reader to tally the stance chips
     // themselves. Turnout is procedural; the finding is the modal stance — or,
     // when nothing outpolls anything else, that there ISN'T one. A split is a
-    // real committee result and this page stated it nowhere.
+    // real swarm result and this page stated it nowhere.
     verdict() {
       const rows = this.stanceSpread();
       if (!rows.length) return { label: "No stances recorded", detail: "", color: "#7e889e", split: true };
@@ -1364,7 +1368,7 @@ export function registerStaticViews(Alpine) {
       };
     },
     quorumText() {
-      const q = this.session?.committeeRecommendation?.quorum;
+      const q = this.session?.swarmRecommendation?.quorum;
       const submitted = q?.submitted ?? this.takes.length;
       const active = q?.active ?? this.members.length;
       return `${submitted} of ${active} submitted`;
@@ -1395,13 +1399,13 @@ export function registerStaticViews(Alpine) {
       return [subject ? `Subject: ${subject}.` : "", regime ? `Regime: ${regime}.` : "", signals ? `${signals} research signals attached.` : ""].filter(Boolean).join(" ") || JSON.stringify(body).slice(0, 240);
     },
     recommendationKind() {
-      const rec = this.session?.committeeRecommendation;
+      const rec = this.session?.swarmRecommendation;
       if (!rec) return "none";
       if (rec.quorum || rec.stances) return "rollup";
       return rec.type ? String(rec.type).replace(/_/g, " ") : "recommendation";
     },
     isRollupRecommendation() {
-      const rec = this.session?.committeeRecommendation;
+      const rec = this.session?.swarmRecommendation;
       return !!(rec && (rec.quorum || rec.stances));
     },
     // The recommendation's own prose, or "" when it cannot be trusted.
@@ -1410,19 +1414,19 @@ export function registerStaticViews(Alpine) {
     // take bodies concatenated: measured on 2026-09-25/mav it is 3714 characters
     // and BYTE-IDENTICAL to session.synthesis. Printing it would repeat the same
     // text a reader has already scrolled past under the takes, a third time,
-    // under a heading claiming it is the committee's reasoning. This is the same
+    // under a heading claiming it is the swarm's reasoning. This is the same
     // judgement synthesisIsEcho() and consensusItems() already make elsewhere on
     // this page; the fix belongs in the aggregator, and until it lands the page
     // stays silent rather than pretending three quoted takes are a rationale.
     recommendationRationale() {
-      const rec = this.session?.committeeRecommendation;
+      const rec = this.session?.swarmRecommendation;
       if (!rec || this.isRollupRecommendation()) return "";
       return rec.rationale || "";
     },
     // Structured, and correct on a rollup as much as on a typed recommendation:
-    // these are the positions the committee is actually calling for.
+    // these are the positions the swarm is actually calling for.
     recommendationActions() {
-      return this.session?.committeeRecommendation?.actions || [];
+      return this.session?.swarmRecommendation?.actions || [];
     },
     hasRecommendationDetail() {
       return !!(this.isBucketWeights() || this.recommendationActions().length || this.recommendationRationale());
@@ -1469,7 +1473,7 @@ export function registerStaticViews(Alpine) {
     // payload carries them; otherwise derives Recommended-only rows from the
     // weights map (target/actual are unavailable without allocation data).
     bucketWeights() {
-      const rec = this.session?.committeeRecommendation;
+      const rec = this.session?.swarmRecommendation;
       if (!rec || rec.type !== "bucket_weights") return [];
       const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
       if (Array.isArray(rec.buckets) && rec.buckets.length) {
@@ -1492,10 +1496,10 @@ export function registerStaticViews(Alpine) {
     // "within each bucket are the right constituents weighted correctly?".
     // Production prints this table; this rebuild dropped it.
     withinBucketWeights() {
-      return withinBucketWeightsFrom(this.session?.committeeRecommendation);
+      return withinBucketWeightsFrom(this.session?.swarmRecommendation);
     },
     isBucketWeights() {
-      const rec = this.session?.committeeRecommendation;
+      const rec = this.session?.swarmRecommendation;
       return !!(rec && rec.type === "bucket_weights" && this.bucketWeights().length);
     },
     // Inline-SVG grouped bars per bucket: Target (open outline), Actual (muted
@@ -1559,7 +1563,7 @@ export function registerStaticViews(Alpine) {
     },
     // The aggregator currently fills `consensus` with every take body verbatim
     // and `disagreements[].positions[].view` with two of those same bodies
-    // (backend committee/domain.ts: `authoredTakes.map(t => t.body)`). Rendered
+    // (backend swarm/domain.ts: `authoredTakes.map(t => t.body)`). Rendered
     // literally, one take appears three times on this page under three headings
     // that each promise synthesis.
     //
@@ -1587,13 +1591,13 @@ export function registerStaticViews(Alpine) {
     },
     takeOf(memberId) { return (this.takes || []).find((t) => t.memberId === memberId); },
     consensusItems() {
-      return (this.session?.committeeRecommendation?.consensus || []).filter((c) => !this.isEcho(c));
+      return (this.session?.swarmRecommendation?.consensus || []).filter((c) => !this.isEcho(c));
     },
     // Kept even when every view is an echo: WHO disagreed, and how far apart
     // they sat, is real information the takes list does not state anywhere.
     // Only the duplicated prose is suppressed — see the markup.
     disagreements() {
-      return this.session?.committeeRecommendation?.disagreements || [];
+      return this.session?.swarmRecommendation?.disagreements || [];
     },
   }));
 }

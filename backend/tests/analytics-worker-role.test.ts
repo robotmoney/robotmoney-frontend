@@ -102,7 +102,7 @@ test("analytics data tables DENY insert/update/delete to the worker role (42501)
   expect(await denied(worker`DELETE FROM regime_snapshots WHERE date = '1997-01-01'`)).toBe("42501");
   expect(await denied(worker`DELETE FROM research_signals WHERE signal_key = 'role-test'`)).toBe("42501");
 
-  // The rows are untouched, and the worker role can still READ them (committee
+  // The rows are untouched, and the worker role can still READ them (swarm
   // jobs read regime projections).
   const [row] = await worker`SELECT value FROM raw_indicator_history WHERE indicator = 'ROLE_TEST' AND date = '1997-01-01'`;
   expect(Number(row.value)).toBe(1);
@@ -122,7 +122,7 @@ test("non-analytics sampler tables stay writable to the worker role (legacy hand
 });
 
 // Admin surface telemetry tables (migration 0017, issue #150): the worker
-// must be able to READ them (committee/admin projections) but never mutate
+// must be able to READ them (swarm/admin projections) but never mutate
 // them — writes go only through the authenticated analytics-provider
 // endpoints. Full idempotency/backfill coverage lives in
 // admin-surface-migration.test.ts; this pins the permission boundary against
@@ -234,9 +234,9 @@ test("research pipeline telemetry tables (research_pipeline_runs/_stages/_warnin
 
 test("scoped queue lifecycle (jobs.scope_type/scope_id) still works under the restricted role after migration 0017", async () => {
   const [{ id }] = await worker`
-    INSERT INTO jobs (kind, payload, scope_type, scope_id) VALUES ('scoped-noop', '{}', 'committee_session', 'role-test-scope')
+    INSERT INTO jobs (kind, payload, scope_type, scope_id) VALUES ('scoped-noop', '{}', 'swarm_session', 'role-test-scope')
     RETURNING id`;
   await worker`UPDATE jobs SET status = 'cancelled' WHERE id = ${id}`;
   const [job] = await worker`SELECT status, scope_type, scope_id FROM jobs WHERE id = ${id}`;
-  expect(job).toEqual({ status: "cancelled", scope_type: "committee_session", scope_id: "role-test-scope" });
+  expect(job).toEqual({ status: "cancelled", scope_type: "swarm_session", scope_id: "role-test-scope" });
 });

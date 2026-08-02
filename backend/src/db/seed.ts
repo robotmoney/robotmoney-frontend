@@ -27,10 +27,10 @@ interface SeedSchedule {
 //
 // Swarm lifecycle schedules are NOT in this list — they are seeded by
 // seedSwarmSchedules() below, which is environment-configurable (issue
-// #208): COMMITTEE_SCHEDULES_ENABLED (disabled by default) switches the whole
-// committee.* cron sequence on/off, COMMITTEE_*_CRON / COMMITTEE_WINDOW_MINUTES
+// #208): SWARM_SCHEDULES_ENABLED (disabled by default) switches the whole
+// swarm.* cron sequence on/off, SWARM_*_CRON / SWARM_WINDOW_MINUTES
 // tune it, and changed values are applied to EXISTING job_schedules rows on
-// every seed run. The demo pins COMMITTEE_SCHEDULES_ENABLED=0 and instead
+// every seed run. The demo pins SWARM_SCHEDULES_ENABLED=0 and instead
 // enqueues lifecycle jobs explicitly via the admin enqueue-job endpoint, which
 // lets it control the pace while still exercising the real worker claim loop +
 // handler path.
@@ -61,7 +61,7 @@ export const SCHEDULES: SeedSchedule[] = [
   // — issue #208 made their enabled/cron/window environment-configurable via
   // resolveSwarmSchedules(), and (unlike every other row here) their
   // enabled/cron ARE overwritten on every seed run so a changed
-  // COMMITTEE_*_CRON / COMMITTEE_SCHEDULES_ENABLED is actually applied to an
+  // SWARM_*_CRON / SWARM_SCHEDULES_ENABLED is actually applied to an
   // existing deployment, not just a fresh database.
   // Projects "Agentic Economy Ecosystem" pipelines (issue #87). Ordered so a
   // day's chain is coherent: discover identity → refresh live metrics → snapshot
@@ -134,7 +134,7 @@ const SLOW_DEMO_SAMPLER_SCHEDULES: SeedSchedule[] = [
 // the "never touch enabled/cron on an existing row" rule below. Their
 // enabled/cron/window are environment-configuration (resolveSwarmSchedules,
 // backend/src/config.ts), not operator-toggled state — an operator changing
-// COMMITTEE_OPEN_SESSION_CRON (or flipping COMMITTEE_SCHEDULES_ENABLED) and
+// SWARM_OPEN_SESSION_CRON (or flipping SWARM_SCHEDULES_ENABLED) and
 // re-running the migrate/seed step must see that value actually applied to the
 // existing deployment, so this is an explicit UPDATE-by-kind (not the
 // (kind, cron) natural key the general loop above uses — the cron itself is
@@ -154,7 +154,7 @@ export async function seedSwarmSchedules(): Promise<void> {
       `;
     }
   }
-  console.log("seeded committee.* job_schedules (5 definition(s), env-configured, applied to existing rows)");
+  console.log("seeded swarm.* job_schedules (5 definition(s), env-configured, applied to existing rows)");
 }
 
 export async function seedJobSchedules(): Promise<void> {

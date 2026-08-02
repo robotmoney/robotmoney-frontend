@@ -1,14 +1,14 @@
 // THE CRITICAL TEST (Stage 3, docs/architecture.md §11 R6 / risk register #1
-// in docs/plans/onboarding-ic-workflow.md and /drive2/home/lucas/tmp/rm-committee-workflow.md).
+// in docs/plans/onboarding-ic-workflow.md and /drive2/home/lucas/tmp/rm-swarm-workflow.md).
 //
 // Proves byte-exactness across the JS/Rust boundary for the canonical
-// committee-application payload: the REAL rmpc binary (downloaded from
+// swarm-application payload: the REAL rmpc binary (downloaded from
 // GitHub Releases, never built from source here — same discipline as
 // scripts/rmpc-release-e2e.ts) signs the EXACT bytes produced by
-// contract/src/committee-application.js's canonicalizeApplication() (Stage
+// contract/src/swarm-application.js's canonicalizeApplication() (Stage
 // 0's golden fixtures), and the resulting signature is checked with the REAL
 // backend verification primitive (backend/src/lib/signing.ts
-// verifyApplicationSignature) — the exact function POST /api/committee/apply
+// verifyApplicationSignature) — the exact function POST /api/swarm/apply
 // runs in production. Nothing here is mocked or reimplemented: if the JS
 // serializer and whatever an agent feeds `rmpc committee-identity sign`
 // diverge by even one byte (field order, whitespace, escaping, encoding), a
@@ -32,7 +32,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..", "..");
 
 const fixtures = JSON.parse(
-  await Bun.file(join(repoRoot, "contract", "src", "__fixtures__", "committee-application.json")).text(),
+  await Bun.file(join(repoRoot, "contract", "src", "__fixtures__", "swarm-application.json")).text(),
 ) as {
   vectors: { name: string; payload: Record<string, unknown>; expectedCanonicalJson: string; expectedBytesHex: string }[];
 };
@@ -96,7 +96,7 @@ describe("canonicalizeApplication() is golden-fixture-stable", () => {
 // fetch still fails the test, just after a fair amount of time to succeed.
 const RMPC_TEST_TIMEOUT_MS = 60_000;
 
-describe("rmpc-signed canonical committee-application payload verifies against the real backend primitive", () => {
+describe("rmpc-signed canonical swarm-application payload verifies against the real backend primitive", () => {
   for (const vector of fixtures.vectors) {
     test(`${vector.name}`, async () => {
       const rmpcPath = await rmpcPathPromise;
@@ -111,7 +111,7 @@ describe("rmpc-signed canonical committee-application payload verifies against t
         // same construction a real applyMember() request carries: the
         // signature is over canonicalizeApplication({ name, contact, lens?,
         // publicKey }) where `publicKey` is the signer's own key (Stage 1,
-        // backend/src/committee/domain.ts applyMember).
+        // backend/src/swarm/domain.ts applyMember).
         const application = { ...vector.payload, publicKey: publicKeyB64 };
         const canonical = canonicalizeApplication(application as any);
         const signature = signCanonical(rmpcPath, keystorePath, passphrase, workDir, canonical, publicKeyB64);
@@ -143,7 +143,7 @@ describe("rmpc-signed canonical committee-application payload verifies against t
 
       // Application claims `signerPublicKey`, but is actually signed by the
       // OTHER identity's key — exactly the key/signature-mismatch case
-      // backend/tests/committee-apply-signed.test.ts pins at the route layer.
+      // backend/tests/swarm-apply-signed.test.ts pins at the route layer.
       const application = { ...vector.payload, publicKey: signerPublicKey };
       const canonical = canonicalizeApplication(application as any);
       const wrongSignature = signCanonical(rmpcPath, otherKeystore, otherPassphrase, workDir, canonical, otherPublicKey);

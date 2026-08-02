@@ -3,7 +3,7 @@ import { registerEval } from "../support/register.ts";
 
 registerEval({
   id: "onboarding.admission",
-  title: "A prospective committee agent completes admission",
+  title: "A prospective swarm agent completes admission",
   tags: ["onboarding", "admission"],
   tier: "real-inference",
   samples: 1,

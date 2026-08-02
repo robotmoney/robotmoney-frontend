@@ -41,7 +41,7 @@ const ACTIONS_ENV = {
   GITHUB_JOB: "e2e",
 };
 
-const ROLES: StackRole[] = ["stack", "eval", "eval-committee", "infra", "pgtest"];
+const ROLES: StackRole[] = ["stack", "eval", "eval-swarm", "infra", "pgtest"];
 
 describe("environment class", () => {
   test("GITHUB_ACTIONS === 'true' is CI; everything else is local", () => {
@@ -205,7 +205,7 @@ describe("the scheme is actually wired into every spawner", () => {
     const files = [
       ["scripts", "lib", "demo-main.ts"],
       ["scripts", "onboarding-eval-local.ts"],
-      ["scripts", "committee-eval-local.ts"],
+      ["scripts", "swarm-eval-local.ts"],
       ["scripts", "tests", "integration", "onboarding-eval-infra.test.ts"],
       ["backend", "tests", "preload.ts"],
     ];
@@ -231,7 +231,7 @@ describe("the scheme is actually wired into every spawner", () => {
   });
 
   test("every workflow-pinned DEMO_PROJECT carries the CI prefix", () => {
-    // Issue #373 retired committee-opencode-nightly.yml: its real-inference
+    // Issue #373 retired swarm-opencode-nightly.yml: its real-inference
     // admission is the SAME measurement e2e.yml already spends on a push to
     // main, and e2e.yml now also runs on the nightly `schedule` that workflow
     // used to hold. e2e.yml is therefore the only workflow left that pins a

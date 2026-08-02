@@ -7,7 +7,7 @@
 // served by the live backend's static file route exactly as production would
 // serve them. No route stubbing of the data fetch: this is the same
 // "exercise the shipped archive fixture, not a mock" pattern
-// committee-subject.spec.ts established for the committee static-archive
+// swarm-subject.spec.ts established for the swarm static-archive
 // fallback.
 //
 // Chart.js v4 exposes a static Chart.getChart(canvas) registry lookup, so the

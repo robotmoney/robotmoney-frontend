@@ -23,7 +23,7 @@
 //      reimplementation.
 //   3. Verify every (key, signature) pair with the REAL backend primitive
 //      verifyApplicationSignature (backend/src/lib/signing.ts) — the exact
-//      function POST /api/committee/apply runs. The pair that VERIFIES is the
+//      function POST /api/swarm/apply runs. The pair that VERIFIES is the
 //      evidence; nothing else has to be guessed.
 // This survives an upstream transcript-schema change (the tokens are still in
 // the text) and it cannot produce a false positive: a signature that verifies
@@ -66,7 +66,7 @@ const B64_SIGNATURE = /(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{86}==(?![A-Za-z0-9+/=])/g
 // and whatever `--path` an agent chooses are both outside our control, so this
 // is a family of shapes rather than one literal. Layer 3 reports what it
 // matched, so a miss is diagnosable instead of mysterious.
-export const KEYSTORE_PATH_PATTERN = /(committee[-_]?identity|keystore|\.rmpc\/|rmpc[-_]?identity|identity\.json)/i;
+export const KEYSTORE_PATH_PATTERN = /(swarm[-_]?identity|keystore|\.rmpc\/|rmpc[-_]?identity|identity\.json)/i;
 
 // Files worth reading when hunting for a signature the transcript did not
 // carry. Scoped patterns, never a whole-filesystem extract: an agent that

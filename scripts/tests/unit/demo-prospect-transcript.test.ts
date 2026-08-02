@@ -1,5 +1,5 @@
 // Issue #317: the standing live demo must retain and expose a discoverable,
-// tailable, secret-redacted transcript for EVERY prospective committee-member
+// tailable, secret-redacted transcript for EVERY prospective swarm-member
 // run — successful, failed, or still in progress — not only append the
 // combined transcript to the shared demo log when a prospect fails.
 //
@@ -23,7 +23,7 @@ import { buildOutcomeRecord, startProspectTranscript } from "../../lib/demo-pros
 /** A throwaway repo root with just enough shape for the writer: the skill file it hashes. */
 function fakeRepoRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "prospect-transcript-test-"));
-  const skillDir = join(root, "frontend", "public", "skills", "committee-onboarding");
+  const skillDir = join(root, "frontend", "public", "skills", "swarm-onboarding");
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(join(skillDir, "SKILL.md"), "# fake skill\n");
   return root;

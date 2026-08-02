@@ -1,10 +1,10 @@
 // Issue #129 / maintainability findings 002 + 009: regime thresholds existed
-// three times (analytics classifier 0.33/0.67; committee domain and MCP memo at
-// a diverged 0.45/0.55) and the committee layer wrote synthetic rows into the
+// three times (analytics classifier 0.33/0.67; swarm domain and MCP memo at
+// a diverged 0.45/0.55) and the swarm layer wrote synthetic rows into the
 // classifier-owned regime_snapshots table on the LIVE aggregation path. This
 // suite pins the remediation:
 //   * one canonical classifier in @robotmoney/contract, consumed by the
-//     analytics classifier AND the committee domain layer (mcp/tests pins the
+//     analytics classifier AND the swarm domain layer (mcp/tests pins the
 //     memo surface);
 //   * buildRegimeSummary (live aggregation) READS stored labels, re-derives
 //     only when the stored label is NULL, and never writes synthetic rows;
@@ -19,7 +19,7 @@ import {
   backfillRegimeHistory,
   buildRegimeSummary,
   ensureDemoSubjectFixtures,
-} from "../src/committee/domain.ts";
+} from "../src/swarm/domain.ts";
 
 const origEnv = config.env;
 afterEach(() => {
@@ -50,7 +50,7 @@ test("canonical thresholds are 0.33/0.67 and classifyRegime matches analyze/regi
   // The analytics classifier re-exports the very same function — not a copy.
   expect(classifierLabel).toBe(classifyRegime);
 
-  // The AC triple: 0.60 is NEUTRAL under canon (the old committee/mcp 0.45/0.55
+  // The AC triple: 0.60 is NEUTRAL under canon (the old swarm/mcp 0.45/0.55
   // rule wrongly called it risk_on), 0.70 is risk_on, 0.30 is risk_off.
   expect(classifyRegime(0.6)).toBe("neutral");
   expect(classifierLabel(0.6)).toBe("neutral");
@@ -67,7 +67,7 @@ test("canonical thresholds are 0.33/0.67 and classifyRegime matches analyze/regi
   expect(classifyRegime(0.6699)).toBe("neutral");
 });
 
-test("committee domain labeling path (buildRegimeSummary NULL-label fallback) uses the canonical classifier", async () => {
+test("swarm domain labeling path (buildRegimeSummary NULL-label fallback) uses the canonical classifier", async () => {
   for (const [composite, expected] of [
     [0.6, "neutral"],
     [0.7, "risk_on"],

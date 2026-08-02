@@ -48,14 +48,14 @@ separate subdomains, droplet, Space, Postgres, and firewall. Store secrets as
 | Resource | Staging | Production |
 |---|---|---|
 | Marketing host | `staging.robotmoney.net` | `robotmoney.net`, `www.` |
-| IC + analytics host (REST — the only member surface, D21) | `committee.staging.robotmoney.net` | `committee.robotmoney.net` |
+| IC + analytics host (REST — the only member surface, D21) | `swarm.staging.robotmoney.net` | `swarm.robotmoney.net` |
 | Dapp host | `app.staging.robotmoney.net` | `app.robotmoney.net` |
 | Droplets | staging droplets | production droplets |
 | Spaces (marketing) | `rm-marketing-staging` | `rm-marketing-prod` |
 | Postgres | single-node (cost) | **HA cluster** |
 
 D21 retired the MCP transport (formerly its own `mcp.` host on port `8443`,
-co-located on the `committee.` droplet — D18); members now use `committee.`'s
+co-located on the `swarm.` droplet — D18); members now use `swarm.`'s
 REST API like every other client. Decommissioning the `mcp.` DNS record,
 firewall rule, and container is tracked as D21's follow-up implementation
 work.
@@ -120,7 +120,7 @@ what a production deployment requires instead.
 
 ### 3.4 Origin CA certificate (for the proxied app subdomains)
 
-The `committee.`/`app.` droplets are Cloudflare-proxied, so each serves a
+The `swarm.`/`app.` droplets are Cloudflare-proxied, so each serves a
 **Cloudflare Origin CA certificate** (a long-lived cert Cloudflare issues for
 origin pulls; generated once in the dashboard or via API). Install the cert + key
 on the droplet (injected at deploy as **`CF_ORIGIN_CERT`** / **`CF_ORIGIN_KEY`**).
@@ -177,7 +177,7 @@ frontend, never committed (`.env` stays gitignored):
 - **`FRED_API_KEY`**, **`BASE_RPC_URL`** — per ARCHITECTURE §8.
   **`ANTHROPIC_API_KEY`** is reserved — not currently consumed by any code.
 - **`OPENCODE_API_KEY`** — the OpenCode Zen credential for every real-inference
-  path (committee take authorship, the member-agent onboarding containers). ONE
+  path (swarm take authorship, the member-agent onboarding containers). ONE
   variable name across CI / Stage / local, with a **different value in each**, so
   spend is attributable and rotating one never touches another. Needs pay-as-you-go
   credit on its Zen workspace (an opencode subscription does not fund it).
@@ -189,7 +189,7 @@ frontend, never committed (`.env` stays gitignored):
   `projects pipelines require PROJECTS_SOURCE=live in prod`) rather than serve
   the vendored fixture directory as production data. Leave unset in demo/dev
   (offline fixture source); the ephemeral CI env is always hermetic regardless.
-- Any committee signing secrets as applicable.
+- Any swarm signing secrets as applicable.
 
 The frontend's only input is `API_BASE_URL` in `config.js` (`""` = same origin on
 its subdomain) — not a secret.

@@ -1,11 +1,11 @@
 // CANONICAL regime-classification thresholds and label rule — the single source
 // of truth for turning a composite score into a regime label. The canon is the
 // analytics classifier (backend/src/analytics/analyze/regime.ts, historically
-// 0.33/0.67); every other surface that labels a composite — the committee
-// domain layer (backend/src/committee/domain.ts) and the committee memo builder
-// (scripts/lib/committee/memo.ts) — MUST consume this module rather than re-deriving its own
+// 0.33/0.67); every other surface that labels a composite — the swarm
+// domain layer (backend/src/swarm/domain.ts) and the swarm memo builder
+// (scripts/lib/swarm/memo.ts) — MUST consume this module rather than re-deriving its own
 // thresholds. Pure data + one pure function, zero runtime deps, so both the
-// backend and the committee tooling can share it.
+// backend and the swarm tooling can share it.
 //
 // Vocabulary note: labels are underscore-cased ("risk_off"/"risk_on") — the
 // wire/DB vocabulary. Prose surfaces that render hyphenated forms ("risk-on")

@@ -50,12 +50,12 @@ const META = {
     title: "Market Regime Classifier — Robot Money",
     description: "Robot Money's live regime classifier blends macro, onchain, and equity-factor panels into a daily cross-asset risk-on/risk-off score, recomputed every 24h.",
   },
-  "/committee": {
-    title: "AI Investment Committee — Robot Money",
+  "/swarm": {
+    title: "AI Investment Swarm — Robot Money",
     // The trailing caveat is production's and is not decoration: this string is
-    // the committee's search-results surface, where a reader meets stances and
+    // the swarm's search-results surface, where a reader meets stances and
     // "recommendation" with none of the page's own disclaimer around them.
-    description: "Robot Money's AI Investment Committee analyzes agent portfolios daily on Base — multiple lenses, one subject per session, one signed take per member. Auto-generated content, not financial advice.",
+    description: "Robot Money's AI Investment Swarm analyzes agent portfolios daily on Base — multiple lenses, one subject per session, one signed take per member. Auto-generated content, not financial advice.",
   },
   "/projects": {
     title: "Agentic Economy Ecosystem — Robot Money",
@@ -73,11 +73,11 @@ const META = {
   },
   "/changelog": {
     title: "Changelog & Roadmap — Robot Money",
-    description: "See what Robot Money has shipped and what's next: a public build log and phased roadmap covering the USDC vault on Base, AI Committee, and regime work.",
+    description: "See what Robot Money has shipped and what's next: a public build log and phased roadmap covering the USDC vault on Base, AI Swarm, and regime work.",
   },
   "/docs": {
-    title: "Robot Money Docs — Vault, Committee & Agent Skill",
-    description: "Explore Robot Money's developer docs: the ERC-4626 USDC vault on Base, the daily AI Investment Committee, and the robotmoney-cli skill for AI agents.",
+    title: "Robot Money Docs — Vault, Swarm & Agent Skill",
+    description: "Explore Robot Money's developer docs: the ERC-4626 USDC vault on Base, the daily AI Investment Swarm, and the robotmoney-cli skill for AI agents.",
   },
   "/faq": {
     title: "Robot Money FAQ — Autonomous Treasury Vault on Base",
@@ -101,7 +101,7 @@ const META = {
   },
   "/visualizations": {
     title: "Robot Money Visualizations — Live Vault Data",
-    description: "Robot Money's visualizations hub links to live views: the regime classifier, USDC vault allocation, and the AI Investment Committee, updating on Base.",
+    description: "Robot Money's visualizations hub links to live views: the regime classifier, USDC vault allocation, and the AI Investment Swarm, updating on Base.",
   },
   "/blog": {
     title: "Robot Money Blog — Research & Vault Updates",
@@ -215,13 +215,13 @@ const META = {
   },
 };
 
-// Dynamic detail routes (/docs/*, /blog/*, /committee/*) inherit a base
+// Dynamic detail routes (/docs/*, /blog/*, /swarm/*) inherit a base
 // description from their section and get a title derived from the last path
 // segment, so they are still unique and descriptive without hand-authoring each.
 const SECTIONS = [
   { prefix: "/docs", suffix: "Robot Money Docs" },
   { prefix: "/blog", suffix: "Robot Money Blog" },
-  { prefix: "/committee", suffix: "Robot Money Investment Committee" },
+  { prefix: "/swarm", suffix: "Robot Money Investment Swarm" },
 ];
 
 // Dashboard :id/:slug routes (issue #380's 5 param regexes in routes.js —

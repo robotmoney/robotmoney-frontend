@@ -3,7 +3,7 @@
 // the REAL orchestrator (runAnalytics) through the hermetic (deterministic,
 // network-free) data source with the direct SQL-backed persistence + telemetry
 // sinks (the same API-owned path api/routes/analytics.ts and
-// api/routes/committee.ts use), and asserts:
+// api/routes/swarm.ts use), and asserts:
 //   (1) AC1 — a regime.classify execution AND a research.refresh execution each
 //       create a telemetry run covering access/extract/transform/analyze/store/
 //       report, with stage statuses, summaries, warnings, checksums, and bounded

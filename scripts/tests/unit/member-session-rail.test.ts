@@ -20,7 +20,7 @@ import {
   memberSessionMounts,
   parseClientLine,
   railFromEnv,
-} from "../../lib/committee/agent.ts";
+} from "../../lib/swarm/agent.ts";
 
 const FUNDED: MemberAgentModel = { model: "opencode/test-model", apiKeyEnv: "OPENCODE_API_KEY", apiKey: "sk-test" };
 

@@ -84,7 +84,7 @@ function startStubBackend(o: StubOverrides = {}) {
     port: 0,
     fetch(req) {
       const p = new URL(req.url).pathname;
-      if (p === ROUTES.committee.sessions) return Response.json(o.sessions ?? sessionsPayload());
+      if (p === ROUTES.swarm.sessions) return Response.json(o.sessions ?? sessionsPayload());
       if (p === ROUTES.dashboards.regimeSnapshots) return Response.json(o.regime ?? regimePayload());
       if (p === ROUTES.dashboards.walletBalances) return Response.json(o.wallet ?? walletPayload({ "ZYFAI-SS1": "stale", "GIZA-SS1": "seed" }));
       if (p === ROUTES.dashboards.vaultEconomics) return Response.json(o.vault ?? vaultPayload());
@@ -135,12 +135,12 @@ describe("demo-live-smoke (nightly LIVE gate self-test, issue #128)", () => {
     }
   }, 20_000);
 
-  test("only 1 published session (starvation, #101) → exit non-zero naming committee", async () => {
+  test("only 1 published session (starvation, #101) → exit non-zero naming swarm", async () => {
     const backend = startStubBackend({ sessions: sessionsPayload(1) });
     try {
       const r = await runSmoke(backend);
       expect(r.exitCode).not.toBe(0);
-      expect(r.output).toContain("committee: only 1/2 sessions published");
+      expect(r.output).toContain("swarm: only 1/2 sessions published");
     } finally {
       backend.stop(true);
     }
@@ -207,23 +207,23 @@ describe("demo-live-smoke (nightly LIVE gate self-test, issue #128)", () => {
 
 // Issue #371 — the single most dangerous coupling in the cadence change. This
 // gate's poll deadline is derived (issue #128) rather than a magic number; when
-// the standing demo moved to a 6 h committee interval, deriving from "the
+// the standing demo moved to a 6 h swarm interval, deriving from "the
 // resolved cadence" would have given the nightly LIVE smoke a 12 h poll budget
 // against a 40-minute job timeout: the gate would die by timeout instead of
 // failing. The deadline must track the FAST profile and stay bounded.
 describe("LIVE_SMOKE_DEADLINE_MS is bounded and pinned to the fast/CI profile", () => {
-  test("it is two fast committee cadences, and at most 10 minutes", () => {
+  test("it is two fast swarm cadences, and at most 10 minutes", () => {
     const fast = resolveDemoCadence({ stage: false });
-    expect(LIVE_SMOKE_DEADLINE_MS).toBe(2 * fast.committeeIntervalMs);
+    expect(LIVE_SMOKE_DEADLINE_MS).toBe(2 * fast.swarmIntervalMs);
     expect(LIVE_SMOKE_DEADLINE_MS).toBe(240_000);
     expect(LIVE_SMOKE_DEADLINE_MS).toBeLessThanOrEqual(600_000);
   });
 
   test("constructing the STAGE profile leaves the exported deadline unchanged", () => {
     const stage = resolveDemoCadence({ stage: true });
-    expect(stage.committeeIntervalMs).toBe(21_600_000); // the 6 h standing cadence exists…
+    expect(stage.swarmIntervalMs).toBe(21_600_000); // the 6 h standing cadence exists…
     expect(LIVE_SMOKE_DEADLINE_MS).toBe(240_000);       // …and this gate never sees it.
-    expect(LIVE_SMOKE_DEADLINE_MS).toBeLessThan(2 * stage.committeeIntervalMs);
+    expect(LIVE_SMOKE_DEADLINE_MS).toBeLessThan(2 * stage.swarmIntervalMs);
   });
 
   test("the script itself carries no cadence literal — it derives, per issue #128", () => {

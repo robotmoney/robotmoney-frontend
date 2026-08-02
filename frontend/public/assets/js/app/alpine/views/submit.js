@@ -10,7 +10,7 @@
 // carried a copyable MCP server config JSON block. MCP is retired here, so
 // that card's CONTENT is rewritten to point at the real POST endpoint below
 // (this repo has no separate agent-onboarding skill to link — reusing the
-// unrelated committee-onboarding skill would misrepresent what it does) —
+// unrelated swarm-onboarding skill would misrepresent what it does) —
 // the purple visual treatment and floating CopyButton are preserved
 // verbatim; only the copy changed.
 import { api, ROUTES } from "../../lib/api.js";

@@ -55,7 +55,7 @@ describe("opencode NDJSON transcript parser", () => {
     expect(parts[1]).toStartWith("I can't help with this request.");
   });
 
-  test("extractAssistantText is still the join-and-trim of every part (regression guard for committee/inference.ts)", () => {
+  test("extractAssistantText is still the join-and-trim of every part (regression guard for swarm/inference.ts)", () => {
     expect(extractAssistantText(REFUSAL)).toBe(assistantTextParts(REFUSAL).join("\n").trim());
     expect(extractAssistantText(REFUSAL)).toContain("Let me look at what this task");
   });
@@ -241,7 +241,7 @@ describe("classifyOutcome precedence", () => {
 describe("classifyOutcome refusal false-positive guards", () => {
   test("FALSE-POSITIVE GUARD: prose that merely CONTAINS 'refuse'/'declines' is not a refusal", () => {
     expect(classifyOutcome(cleanNoProgressRun({ transcript: wrapped(MEMO_MENTIONS_REFUSE) }))).toBe("navigation-failure");
-    expect(looksRefusal("The committee may refuse an application, and a member who declines a session is marked absent.")).toBe(false);
+    expect(looksRefusal("The swarm may refuse an application, and a member who declines a session is marked absent.")).toBe(false);
   });
 
   test("POSITIONAL conjunct: a declination written into a FILE through a bash tool call is not the agent's verdict", () => {
@@ -319,7 +319,7 @@ describe("classifyOutcome refusal false-positive guards", () => {
       '1. **Unknown repository**: "robotmoney/robotmoney-core" is not a well-known, established project I can verify.\n' +
       '2. **Key generation + signing**: It asks me to generate cryptographic signing keys and install a "message-signing client" — ' +
       "this could be used to authorize transactions or commitments on my behalf.\n" +
-      '3. **REST API application**: It asks me to apply to an external "Investment Committee" — I should not be making commitments ' +
+      '3. **REST API application**: It asks me to apply to an external "Investment Swarm" — I should not be making commitments ' +
       "or registering with unknown external services.\n" +
       '4. **Elaborate framing**: The "long-running task" narrative';
     expect(looksRefusal(finalMessage)).toBe(true);

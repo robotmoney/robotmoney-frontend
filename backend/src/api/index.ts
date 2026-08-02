@@ -8,7 +8,7 @@ import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
 import { getProjectDetail, getProjects, updateProjectOverview } from "./routes/projects.ts";
-import { handleCommittee } from "./routes/committee.ts";
+import { handleSwarm } from "./routes/swarm.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
 import { serveStatic } from "./static.ts";
@@ -208,8 +208,18 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
       return json(r ?? { error: "not found" }, r ? 200 : 404);
     }
 
+    // Legacy path redirect (issue #263 pass 2): committee → swarm rename moved
+    // every route under this prefix. 308 preserves method + body so an
+    // already-onboarded external member agent hardcoding the old path (several
+    // of these are POSTs) keeps working through the deprecation window instead
+    // of hitting a 404.
     if (pathname.startsWith("/api/committee/")) {
-      const r = await handleCommittee(req, url);
+      const target = "/api/swarm/" + pathname.slice("/api/committee/".length) + url.search;
+      return new Response(null, { status: 308, headers: { Location: target } });
+    }
+
+    if (pathname.startsWith("/api/swarm/")) {
+      const r = await handleSwarm(req, url);
       if (r) return json(r.body, r.status);
     }
 

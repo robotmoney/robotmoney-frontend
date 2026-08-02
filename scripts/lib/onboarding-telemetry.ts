@@ -237,7 +237,7 @@ export interface OnboardingArtifactManifestInput {
   /**
    * The candidate's PUBLIC display name (issue #317) — safe to persist
    * unredacted: it is the same name the demo's onboarding pane and, once
-   * admitted, the committee roster already show. Never the contact (already
+   * admitted, the swarm roster already show. Never the contact (already
    * hashed below) and never a secret. Written into the manifest at creation
    * time, so it is discoverable from the very start of a still-running
    * attempt, not only once `finish()` writes `result.json`.

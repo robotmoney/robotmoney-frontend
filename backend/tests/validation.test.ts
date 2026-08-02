@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { parseApply, parseSigningDraft, parseSubmission, validateSigningDraft, validateSubmission } from "../src/api/validation.ts";
 
-test("committee request parsers reject malformed and out-of-range input", () => {
+test("swarm request parsers reject malformed and out-of-range input", () => {
   // §11 R2/R6: apply carries no client memberId; a signature is mandatory.
   expect(parseApply({ name: "A", contact: "a@example.test", publicKey: "key" })).toBeNull(); // missing signature
   expect(parseApply({ name: "A", publicKey: "key", signature: "sig" })).toBeNull(); // missing contact

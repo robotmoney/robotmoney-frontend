@@ -1,0 +1,92 @@
+<!-- Public, server-verified swarm take receipt (issue #207). -->
+<section class="cv cv--detail" x-data="swarmTakeReceipt()" data-swarm-take-receipt>
+  <div class="sv__body sv__body--narrow">
+    <a href="/swarm" class="sv__back">← /swarm</a>
+
+    <p class="sv__loading" x-show="loading">Verifying take…</p>
+    <p class="sv__error" x-show="error" x-text="error" x-cloak></p>
+
+    <template x-if="!loading && take">
+      <article class="sv__take sv__take--ported">
+        <header class="sv__detail-head">
+          <p class="sv__eyebrow">swarm take · verification receipt</p>
+          <h1 class="sv__detail-title">
+            <a class="tk-who" :href="`/swarm/members/${signer?.id || take.memberId}`"
+               x-text="signer?.name || take.memberName"></a>
+          </h1>
+          <!-- A receipt with no filing time is not a receipt. receivedAt has
+               always been in the payload and was never rendered. -->
+          <p class="tk-filed" x-show="take.receivedAt">
+            Filed <span x-text="formatDate(take.receivedAt, 'short')"></span>
+            <span class="tk-filed__t" x-text="new Date(take.receivedAt).toISOString().slice(11,16) + ' UTC'"></span>
+          </p>
+          <div class="sv__receipt-status">
+            <span class="sv__stance-badge" :style="stanceStyle(take.stance)">
+              <i :style="`background:${stanceColor(take.stance)}`"></i>
+              <span x-text="`${take.stance} · ${fmtPct(take.confidence)}`"></span>
+            </span>
+            <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !take.verified }"
+                  data-verified-badge :data-take-id="take.id" :data-verified-state="verifyLabel(take.verified)"
+                  tabindex="0" :aria-label="`${verifyLabel(take.verified)}. ${verifyTip(take.verified)}`">
+              <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <rect x="1.4" y="1.4" width="13.2" height="13.2" stroke="currentColor" stroke-width="1.2"/>
+                <path :d="verifyPath(take.verified)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
+              </svg>
+              <span class="sv__vfy-label" x-show="!take.verified" x-text="verifyLabel(take.verified)"></span>
+              <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(take.verified)"></span>
+            </span>
+          </div>
+        </header>
+
+        <div class="sv__take-body" x-html="linkified(take.body || '')"></div>
+
+        <section class="sv__panel">
+          <p class="sv__panel-label">Signer</p>
+          <dl class="sv__meta-grid">
+            <dt>member</dt><dd><a :href="`/swarm/members/${signer?.id}`" x-text="signer?.name || take.memberName"></a></dd>
+            <dt>member id</dt><dd x-text="signer?.id || take.memberId"></dd>
+            <dt>public key fingerprint</dt><dd class="sv__fingerprint" x-text="signer?.publicKeyFingerprint || 'unavailable'"></dd>
+          </dl>
+        </section>
+
+        <section class="sv__panel" x-show="memo && !memoIsEcho()">
+          <p class="sv__panel-label">Memo</p>
+          <h2 x-text="memo?.title || 'Member memo'"></h2>
+          <div class="sv__take-body" x-html="linkified(memo?.body || '')"></div>
+        </section>
+
+        <!-- What a reader can do next. The page was a dead end: it verified a
+             take and then offered nowhere to go, not even back to the member
+             whose record it belongs to. -->
+        <p class="tk-next">
+          <a :href="`/swarm/members/${signer?.id || take.memberId}`">This member's full record →</a>
+          <a href="/swarm">The swarm live →</a>
+          <a href="/docs/investment-swarm/how-it-works">How verification works →</a>
+        </p>
+      </article>
+    </template>
+
+    <!-- See assets/js/app/lib/swarm-disclaimer.js: one string, four
+         swarm surfaces, production's wording verbatim. -->
+    <section class="rm-disclaimer" role="note" aria-label="Disclaimer" x-data="swarmDisclaimer()">
+      <p class="rm-disclaimer__label">Disclaimer</p>
+      <p class="rm-disclaimer__body" x-text="text"></p>
+    </section>
+  </div>
+
+  <style>
+    /* The signer's name is the page's subject, so it is the link — the only
+       route to their record used to be a small row inside the Signer table. */
+    .tk-who { color: inherit; text-decoration: none; border-bottom: 1px solid var(--color-border); }
+    .tk-who:hover { border-bottom-color: var(--color-accent); }
+    .tk-filed { margin: 0.5rem 0 0; font-family: var(--font-mono); font-size: 0.74rem;
+                letter-spacing: 0.06em; color: var(--color-text-muted); }
+    .tk-filed__t { color: var(--color-text-dim); margin-left: 0.4rem; }
+    .tk-next { display: flex; flex-wrap: wrap; gap: 1.1rem; margin: 1.6rem 0 0;
+               padding-top: 1.1rem; border-top: 1px solid var(--color-border);
+               font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em; }
+    .tk-next a { color: var(--color-accent); text-decoration: none;
+                 border-bottom: 1px solid transparent; }
+    .tk-next a:hover { border-bottom-color: var(--color-accent); }
+  </style>
+</section>

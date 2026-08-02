@@ -6,9 +6,9 @@
      adminSurfaceView() factory (alpine/views/admin-surface.js) is registered at
      boot and drives every read/write — the router injects this fragment via
      innerHTML, so inline scripts here would be dead. One shell fragment serves
-     /admin and non-committee /admin/* subpath (frontend/public/assets/js/app/
+     /admin and non-swarm /admin/* subpath (frontend/public/assets/js/app/
      routes.js); this component reads location.pathname to pick a section.
-     Committee topic/member/roster/session management (issue #159) is a
+     Swarm topic/member/roster/session management (issue #159) is a
      separate route/shell, linked from the nav below — overview, research,
      queue, and audit (issue #155) all operate through this one view. There is
      no separate /admin/audit route: issue #159 originally shipped one, but
@@ -49,9 +49,9 @@
   <div x-show="authed" x-cloak>
 
     <!-- Overview/Research/Queue switch sections within this shell in place
-         (issue #157, @click="goSection(...)"); Committee/Audit are separate
+         (issue #157, @click="goSection(...)"); Swarm/Audit are separate
          routes with their own shells (issue #159, plain <a> navigation). Not
-         in the public nav — only reachable once signed in here. Committee/
+         in the public nav — only reachable once signed in here. Swarm/
          audit each re-check rm_admin_token on their own. -->
     <nav class="adm-nav" aria-label="Admin sections">
       <button type="button" class="adm-nav__link" :class="section === 'overview' && 'adm-nav__link--active'"
@@ -62,7 +62,7 @@
         @click="goSection('queue')">Queue</button>
       <button type="button" class="adm-nav__link" :class="section === 'audit' && 'adm-nav__link--active'"
         @click="goSection('audit')">Audit</button>
-      <a href="/admin/committee" class="adm-nav__link">Committee</a>
+      <a href="/admin/swarm" class="adm-nav__link">Swarm</a>
     </nav>
 
     <div class="adm-toolbar">
@@ -105,8 +105,8 @@
             </div>
             <p x-show="overview" class="adm-dim adm-msg">
               Server date <span x-text="overview?.serverDate"></span> ·
-              next committee event:
-              <span x-text="overview?.nextCommitteeEvent ? (overview.nextCommitteeEvent.kind + ' @ ' + fmtTime(overview.nextCommitteeEvent.runAfter)) : 'none scheduled'"></span>
+              next swarm event:
+              <span x-text="overview?.nextSwarmEvent ? (overview.nextSwarmEvent.kind + ' @ ' + fmtTime(overview.nextSwarmEvent.runAfter)) : 'none scheduled'"></span>
             </p>
 
             <h2 class="adm-h2">Next scheduled runs</h2>
@@ -317,7 +317,7 @@
               <option value="cancelled">cancelled</option>
             </select>
           </div>
-          <div class="adm-field"><span>Scope type</span><input type="text" x-model="queueFilters.scopeType" placeholder="e.g. committee_session" /></div>
+          <div class="adm-field"><span>Scope type</span><input type="text" x-model="queueFilters.scopeType" placeholder="e.g. swarm_session" /></div>
           <div class="adm-field"><span>Scope id</span><input type="text" x-model="queueFilters.scopeId" placeholder="scope id" /></div>
           <button type="button" class="adm-btn adm-btn--ghost" @click="applyQueueFilters()">Apply</button>
           <button type="button" class="adm-btn adm-btn--ghost" @click="clearQueueFilters()">Clear</button>
@@ -341,12 +341,12 @@
                   <td>
                     <button
                       type="button" class="adm-btn adm-btn--ghost"
-                      x-show="!isCommitteeSchedule(sch)"
+                      x-show="!isSwarmSchedule(sch)"
                       :disabled="schedulePending === sch.id"
                       @click="toggleSchedule(sch)"
                       x-text="sch.enabled ? 'Disable' : 'Enable'"
                     ></button>
-                    <span x-show="isCommitteeSchedule(sch)" class="adm-dim">legacy/demo — not product scheduling</span>
+                    <span x-show="isSwarmSchedule(sch)" class="adm-dim">legacy/demo — not product scheduling</span>
                   </td>
                 </tr>
               </template>

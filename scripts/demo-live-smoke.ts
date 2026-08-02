@@ -11,15 +11,15 @@
 // WHY THIS EXISTS
 // Worker-lane starvation (#101), a dead external feed blocking a factor (#127),
 // and LIVE-only provenance drift must not stay invisible while CI is green.
-// This script runs after the committee driver + the frontend checks (issue
+// This script runs after the swarm driver + the frontend checks (issue
 // #134, already asserts LIVE wallet provenance) + browser checks, while the
 // LIVE stack is still up. It asserts the stack reached a healthy LIVE steady
 // state:
 //
-//   (a) committee — >= LIVE_SMOKE_MIN_PUBLISHED_SESSIONS sessions reached state
-//       'published' (the #101 single-worker starvation guard). The committee session e2e
+//   (a) swarm — >= LIVE_SMOKE_MIN_PUBLISHED_SESSIONS sessions reached state
+//       'published' (the #101 single-worker starvation guard). The swarm session e2e
 //       driver publishes two sessions through the REAL worker job queue
-//       (committee lane, per-state deadlines in scripts/lib/committee/session.ts), so a starved
+//       (swarm lane, per-state deadlines in scripts/lib/swarm/session.ts), so a starved
 //       lane already fails the driver; this re-asserts the published rows
 //       actually landed and are served.
 //   (b) regime — /api/dashboards/regime-snapshots reports staleness.stale ===
@@ -71,7 +71,7 @@ const ALLOWED_DEGRADES = new Set(["stale", "seed"]);
 export const RESEARCH_KEYS = ["channel-divergence", "late-cycle-signals"] as const;
 
 /**
- * Overall poll deadline: two full committee cadences of the FAST (CI) profile.
+ * Overall poll deadline: two full swarm cadences of the FAST (CI) profile.
  *
  * This gate only ever runs against a CI / `bun run demo` stack, which is always
  * the fast profile — so it is pinned to that profile explicitly and NEVER to
@@ -81,7 +81,7 @@ export const RESEARCH_KEYS = ["channel-divergence", "late-cycle-signals"] as con
  * 40-minute job timeout, and the gate would die by timeout instead of failing.
  * The issue #128 single-source property is kept (no magic number here), bounded.
  */
-export const LIVE_SMOKE_DEADLINE_MS = 2 * resolveDemoCadence({ stage: false }).committeeIntervalMs;
+export const LIVE_SMOKE_DEADLINE_MS = 2 * resolveDemoCadence({ stage: false }).swarmIntervalMs;
 
 // ── Pure evaluators ─────────────────────────────────────────────────────────
 // Each takes the parsed API payload (null ⇒ the fetch failed / non-2xx) and
@@ -90,13 +90,13 @@ export const LIVE_SMOKE_DEADLINE_MS = 2 * resolveDemoCadence({ stage: false }).c
 
 interface SessionRow { state?: string; date?: string; subjectId?: string }
 export function evaluateSessions(body: { sessions?: SessionRow[] } | null): string[] {
-  if (!body?.sessions) return ["committee: GET /api/committee/sessions returned no session list"];
+  if (!body?.sessions) return ["swarm: GET /api/swarm/sessions returned no session list"];
   const published = body.sessions.filter((s) => s.state === "published");
   if (published.length < LIVE_SMOKE_MIN_PUBLISHED_SESSIONS) {
     return [
-      `committee: only ${published.length}/${LIVE_SMOKE_MIN_PUBLISHED_SESSIONS} sessions published ` +
+      `swarm: only ${published.length}/${LIVE_SMOKE_MIN_PUBLISHED_SESSIONS} sessions published ` +
         `(states: ${body.sessions.map((s) => `${s.date}/${s.subjectId}=${s.state}`).join(", ") || "none"}) — ` +
-        "worker-committee lane starvation (#101 failure mode) or a lifecycle stall",
+        "worker-swarm lane starvation (#101 failure mode) or a lifecycle stall",
     ];
   }
   return [];
@@ -207,7 +207,7 @@ export async function collectFailures(backend: string): Promise<string[]> {
     // though plenty of published history exists. Ask the server to filter to
     // `published` directly instead of relying on evaluateSessions' client-side
     // filter of an unfiltered top-20 page.
-    getJson(`${backend}${ROUTES.committee.sessions}?state=published&limit=50`),
+    getJson(`${backend}${ROUTES.swarm.sessions}?state=published&limit=50`),
     getJson(`${backend}${ROUTES.dashboards.regimeSnapshots}?range=1`),
     getJson(`${backend}${ROUTES.dashboards.walletBalances}`),
     getJson(`${backend}${ROUTES.dashboards.vaultEconomics}`),
@@ -241,7 +241,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   console.log(
-    `\n✓ LIVE smoke passed: >=${LIVE_SMOKE_MIN_PUBLISHED_SESSIONS} committee sessions published, ` +
+    `\n✓ LIVE smoke passed: >=${LIVE_SMOKE_MIN_PUBLISHED_SESSIONS} swarm sessions published, ` +
       "regime snapshot fresh, wallet + vault-economics provenance live " +
       `(allowed #120 degrades logged above), research signals ${RESEARCH_KEYS.join(" + ")} served.\n`,
   );

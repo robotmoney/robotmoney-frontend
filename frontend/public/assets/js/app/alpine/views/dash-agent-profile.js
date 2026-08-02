@@ -6,7 +6,7 @@
 //
 // The id is read off `location.pathname` (the router injects this fragment's
 // markup verbatim for every `/agents/:id`; there is no template-per-param
-// mechanism) — same pattern as the public committee subject profile,
+// mechanism) — same pattern as the public swarm subject profile,
 // `alpine/static-views.js`'s `subjectProfile()`.
 //
 // Two sections the plan (§5.8) describes are deliberately NOT rendered here:

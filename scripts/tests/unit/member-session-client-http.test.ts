@@ -1,4 +1,4 @@
-// Hermetic HTTP-boundary guards for the in-container committee member client.
+// Hermetic HTTP-boundary guards for the in-container swarm member client.
 // A member must never turn an API failure into fabricated context or locally
 // reconstructed signing bytes: non-2xx context reads are loud, and the exact
 // canonical string returned by RM is the string handed to the signer.
@@ -29,8 +29,8 @@ afterEach(() => {
 describe("member-session REST reads fail loudly", () => {
   for (const route of [
     `${ROUTES.dashboards.regimeSnapshots}?range=1`,
-    `${ROUTES.committee.brief}?date=2026-07-30&subject=woon`,
-    ROUTES.committee.signingPayload,
+    `${ROUTES.swarm.brief}?date=2026-07-30&subject=woon`,
+    ROUTES.swarm.signingPayload,
   ]) {
     test(`${route} rejects a non-2xx JSON response`, async () => {
       mockFetch(async () => new Response(JSON.stringify({ error: "planted upstream failure" }), {
@@ -48,7 +48,7 @@ describe("member-session REST reads fail loudly", () => {
       status: 401,
       headers: { "Content-Type": "application/json" },
     }));
-    const result = await restJson(ROUTES.committee.verifyToken, undefined, { allowStatuses: [401] });
+    const result = await restJson(ROUTES.swarm.verifyToken, undefined, { allowStatuses: [401] });
     expect(result.status).toBe(401);
     expect(result.body).toEqual({ error: "unknown member token" });
   });
@@ -59,17 +59,17 @@ describe("member-session REST reads fail loudly", () => {
       headers: { "Content-Type": "application/json" },
     }));
     await expect(
-      restJson(ROUTES.committee.verifyToken, undefined, { allowStatuses: [401] }),
+      restJson(ROUTES.swarm.verifyToken, undefined, { allowStatuses: [401] }),
     ).rejects.toThrow(/HTTP 503: database unavailable/);
   });
 });
 
 describe("fetchSigningPayload", () => {
   test("returns the API-provided canonical string byte-for-byte", async () => {
-    const exact = 'committee-submission-v1|{"body":"keeps trailing space "}\n';
+    const exact = 'swarm-submission-v1|{"body":"keeps trailing space "}\n';
     const draft = { memberId: "athena", stance: "constructive", confidence: 0.73 };
     mockFetch(async (input, init) => {
-      expect(String(input)).toBe(`http://member-api${ROUTES.committee.signingPayload}`);
+      expect(String(input)).toBe(`http://member-api${ROUTES.swarm.signingPayload}`);
       expect(init?.method).toBe("POST");
       expect(init?.headers).toEqual({ "Content-Type": "application/json" });
       expect(init?.body).toBe(JSON.stringify(draft));

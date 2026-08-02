@@ -5,9 +5,9 @@
 //
 //   1. crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign","verify"])
 //   2. crypto.subtle.exportKey("raw", kp.publicKey) -> base64
-//   3. canonical bytes from POST /api/committee/signing-payload, which the
+//   3. canonical bytes from POST /api/swarm/signing-payload, which the
 //      server computes as canonicalizeSubmission(draft) (see
-//      backend/src/api/routes/committee.ts)
+//      backend/src/api/routes/swarm.ts)
 //   4. crypto.subtle.sign({ name: "Ed25519" }, privateKey, canonicalBytes) -> base64
 //
 // Nothing previously executed this recipe end to end against the real
@@ -53,8 +53,8 @@ const draft = {
 test("the doc's own Web Crypto identity + signing recipe is accepted by the real backend verifier", async () => {
   const identity = await docGenerateIdentity();
 
-  // Step 3: the exact bytes /api/committee/signing-payload returns is
-  // canonicalizeSubmission(draft) — see backend/src/api/routes/committee.ts.
+  // Step 3: the exact bytes /api/swarm/signing-payload returns is
+  // canonicalizeSubmission(draft) — see backend/src/api/routes/swarm.ts.
   const canonical = canonicalizeSubmission(draft);
   const signature = await docSign(canonical, identity.privateKey);
 

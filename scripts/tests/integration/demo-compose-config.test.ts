@@ -80,8 +80,8 @@ function serviceEnv(cfg: ComposeConfig, svc: string): Record<string, string | nu
 }
 
 // Every service whose process reads the Base RPC / analytics knobs: the api and
-// all three worker lanes (issue #107 topology — committee/analytics/research).
-const RPC_CONSUMERS = ["api", "worker-committee", "worker-analytics", "worker-research"] as const;
+// all three worker lanes (issue #107 topology — swarm/analytics/research).
+const RPC_CONSUMERS = ["api", "worker-swarm", "worker-analytics", "worker-research"] as const;
 
 describe("docker compose config — demo data path resolution", () => {
   test("the complete compose model parses without an analytics token file", () => {
@@ -141,7 +141,7 @@ describe("docker compose config — demo data path resolution", () => {
 });
 
 // Issue #371: the demo's cadence PROFILE reaches the analytics-producer through
-// resolveDemoEnv's composeEnv, so committee cadence and research cadence are
+// resolveDemoEnv's composeEnv, so swarm cadence and research cadence are
 // stated in one file (scripts/lib/demo-schedule.ts). These cases run the real
 // `docker compose config` interpolation, which is the only thing that proves the
 // container would actually receive those cron strings.

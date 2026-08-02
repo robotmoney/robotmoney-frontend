@@ -32,7 +32,7 @@ export const ROUTES: {
     detail: string;
     adminUpdate: string;
   };
-  committee: {
+  swarm: {
     members: string;
     waitlist: string;
     member: string;

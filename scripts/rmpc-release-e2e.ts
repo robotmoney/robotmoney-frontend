@@ -10,20 +10,20 @@
 // golden fixtures; THIS script is the only thing that proves a released binary
 // drives the full chain against a LIVE robotmoney-frontend backend stack:
 //   rmpc committee-identity create/show-public-key
-//   → signed POST /api/committee/apply (server mints the memberId, §11 R2/R6)
-//   → GET /api/committee/apply/:id (applied)
-//   → POST /api/committee/admin/activate (admin; still claimRequired, no
+//   → signed POST /api/swarm/apply (server mints the memberId, §11 R2/R6)
+//   → GET /api/swarm/apply/:id (applied)
+//   → POST /api/swarm/admin/activate (admin; still claimRequired, no
 //     token minted here — §11 R7 approval, unchanged by this stage)
-//   → GET /api/committee/apply/:id (approved)
+//   → GET /api/swarm/apply/:id (approved)
 //   → POST token-claim/challenge → rmpc-signed POST token-claim (claim, §6/#205)
-//   → GET /api/committee/apply/:id (claimed)
-//   → canonicalizeSubmission → rmpc sign → POST /api/committee/submit
+//   → GET /api/swarm/apply/:id (claimed)
+//   → canonicalizeSubmission → rmpc sign → POST /api/swarm/submit
 // then reads the result back and independently re-verifies the signature.
 //
 // Run standalone against a locally booted `bun run demo` stack (use the
 // compose project printed by the demo):
 //   BACKEND_URL=http://127.0.0.1:<web-port> DEMO_PROJECT=<project> bun run scripts/rmpc-release-e2e.ts
-// (same BACKEND_URL convention as scripts/lib/committee/session.ts — defaults
+// (same BACKEND_URL convention as scripts/lib/swarm/session.ts — defaults
 // to the standard demo port when unset.) In CI, scripts/lib/demo-main.ts runs
 // this script against the SAME stack it just booted when RMPC_RELEASE_E2E=1 is
 // set (see .github/workflows/rmpc-release-e2e-nightly.yml) — no parallel stack.
@@ -36,7 +36,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalizeApplication, canonicalizeClaimChallenge, canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { fetchRmpc, runRmpcJson, RMPC_VERSION, resolveRmpcAsset, missingCommitteeIdentitySubcommands } from "./lib/rmpc-fetch.ts";
-import { admin, enqueueLifecycleJob, runRegimeClassify, waitForSessionState } from "./lib/committee/session.ts";
+import { admin, enqueueLifecycleJob, runRegimeClassify, waitForSessionState } from "./lib/swarm/session.ts";
 import { DEFAULT_COMPOSE_FILES } from "./stack/config.ts";
 
 // Re-exported so this script's own boot logic can be tested in isolation.
@@ -50,7 +50,7 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 const adminHeaders: Record<string, string> = ADMIN_TOKEN ? { "X-Admin-Token": ADMIN_TOKEN } : {};
 
 // Distinctly namespaced identity + subject (issue #104) so this driver never
-// collides with the demo's own built-in onboarding loop / committee roster /
+// collides with the demo's own built-in onboarding loop / swarm roster /
 // sessions (woon, mav, athena, boreas, …) when run against a standing local
 // demo. The server mints the real memberId (§11 R2) — RUN_LABEL only seeds
 // the human-readable name/contact/subject so runs are identifiable, never a
@@ -117,37 +117,37 @@ async function main(): Promise<void> {
     return signed.signature;
   }
 
-  // ── POST /api/committee/apply — signed, setup-gated (§11 R1-R6) ──────────
+  // ── POST /api/swarm/apply — signed, setup-gated (§11 R1-R6) ──────────
   // The server mints the memberId; the request carries no id at all. `contact`
   // is required (server-enforced, issue #205).
   const application = { name: "RMPC Release E2E", contact: `${RUN_LABEL}@example.test`, lens: "release-proof", publicKey: publicKeyB64 };
   const applySignature = signCanonical(canonicalizeApplication(application), "apply");
-  const applyRes = await fetch(`${BACKEND_URL}${ROUTES.committee.apply}`, {
+  const applyRes = await fetch(`${BACKEND_URL}${ROUTES.swarm.apply}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...application, signature: applySignature }),
   });
   const applyBody = await readJson(applyRes);
   if (applyRes.status !== 201 || !applyBody.ok || typeof applyBody.memberId !== "string") {
-    fail(`POST ${ROUTES.committee.apply} → ${applyRes.status}: ${JSON.stringify(applyBody)}`);
+    fail(`POST ${ROUTES.swarm.apply} → ${applyRes.status}: ${JSON.stringify(applyBody)}`);
   }
   const memberId: string = applyBody.memberId;
   log(`applied — server-minted memberId=${memberId}`);
 
-  const applyStatusPath = routePath(ROUTES.committee.applyStatus, { id: memberId });
+  const applyStatusPath = routePath(ROUTES.swarm.applyStatus, { id: memberId });
   const appliedStatus = await readJson(await fetch(`${BACKEND_URL}${applyStatusPath}`));
   if (appliedStatus.state !== "applied") fail(`GET ${applyStatusPath} → expected state 'applied', got: ${JSON.stringify(appliedStatus)}`);
 
-  // ── POST /api/committee/admin/activate — approval (§11 R7). Unchanged: does
+  // ── POST /api/swarm/admin/activate — approval (§11 R7). Unchanged: does
   // NOT mint a token; still requires the claim flow below (issue #205). ──────
-  const activateRes = await fetch(`${BACKEND_URL}${ROUTES.committee.admin.activate}`, {
+  const activateRes = await fetch(`${BACKEND_URL}${ROUTES.swarm.admin.activate}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...adminHeaders },
     body: JSON.stringify({ memberId }),
   });
   const activateBody = await readJson(activateRes);
   if (activateRes.status !== 200 || !activateBody.claimRequired) {
-    fail(`POST ${ROUTES.committee.admin.activate} → ${activateRes.status}: ${JSON.stringify(activateBody)}`);
+    fail(`POST ${ROUTES.swarm.admin.activate} → ${activateRes.status}: ${JSON.stringify(activateBody)}`);
   }
   log(`activated ${memberId} (claimRequired=true)`);
 
@@ -155,24 +155,24 @@ async function main(): Promise<void> {
   if (approvedStatus.state !== "approved") fail(`GET ${applyStatusPath} → expected state 'approved', got: ${JSON.stringify(approvedStatus)}`);
 
   // ── Claim the bearer token by signing the server's challenge (§6, issue #205) ─
-  const challengeRes = await fetch(`${BACKEND_URL}${ROUTES.committee.claimChallenge}`, {
+  const challengeRes = await fetch(`${BACKEND_URL}${ROUTES.swarm.claimChallenge}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ memberId }),
   });
   const challenge = await readJson<{ memberId: string; challenge: string; expiresAt: string }>(challengeRes);
   if (challengeRes.status !== 200 || !challenge.challenge) {
-    fail(`POST ${ROUTES.committee.claimChallenge} → ${challengeRes.status}: ${JSON.stringify(challenge)}`);
+    fail(`POST ${ROUTES.swarm.claimChallenge} → ${challengeRes.status}: ${JSON.stringify(challenge)}`);
   }
   const claimSignature = signCanonical(canonicalizeClaimChallenge(challenge), "claim");
-  const claimRes = await fetch(`${BACKEND_URL}${ROUTES.committee.claimToken}`, {
+  const claimRes = await fetch(`${BACKEND_URL}${ROUTES.swarm.claimToken}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...challenge, signature: claimSignature }),
   });
   const claimBody = await readJson(claimRes);
   if (claimRes.status !== 200 || typeof claimBody.token !== "string") {
-    fail(`POST ${ROUTES.committee.claimToken} → ${claimRes.status}: ${JSON.stringify(claimBody)}`);
+    fail(`POST ${ROUTES.swarm.claimToken} → ${claimRes.status}: ${JSON.stringify(claimBody)}`);
   }
   const memberToken: string = claimBody.token;
   log(`claimed bearer token for ${memberId}`);
@@ -184,9 +184,9 @@ async function main(): Promise<void> {
   }
   log(`applyStatus reflects applied → approved → claimed for ${memberId}, no contact/publicKey echoed`);
 
-  // ── Open a distinctly-namespaced session (reuses the committee session
+  // ── Open a distinctly-namespaced session (reuses the swarm session
   // driver's proven job-queue lifecycle — the same path the required e2e +
-  // nightly committee sessions drive — instead of a second, unproven
+  // nightly swarm sessions drive — instead of a second, unproven
   // direct-admin lifecycle) ──────────────────────────────────────────────────
   // admin()/waitForSessionState() read BACKEND_URL from env at module load;
   // this script is invoked with BACKEND_URL already set (demo-main.ts or the
@@ -222,19 +222,19 @@ async function main(): Promise<void> {
   // independently re-verified below.
   const canonical = canonicalizeSubmission(draft);
   const signature = signCanonical(canonical, "recommendation");
-  const submitRes = await fetch(`${BACKEND_URL}${ROUTES.committee.submit}`, {
+  const submitRes = await fetch(`${BACKEND_URL}${ROUTES.swarm.submit}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${memberToken}` },
     body: JSON.stringify({ ...draft, signature }),
   });
   const submitBody = await readJson(submitRes);
   if (submitRes.status !== 200 || submitBody.verified !== true) {
-    fail(`POST ${ROUTES.committee.submit} → ${submitRes.status}: ${JSON.stringify(submitBody)}`);
+    fail(`POST ${ROUTES.swarm.submit} → ${submitRes.status}: ${JSON.stringify(submitBody)}`);
   }
   log(`submit accepted + server-verified for ${memberId}`);
 
   // ── Independent readback + signature re-verification ───────────────────────
-  const sessionPath = routePath(ROUTES.committee.session, { date: TODAY, subject: SUBJECT_ID });
+  const sessionPath = routePath(ROUTES.swarm.session, { date: TODAY, subject: SUBJECT_ID });
   const sessionRes = await fetch(`${BACKEND_URL}${sessionPath}`);
   const sessionBody = await readJson(sessionRes);
   if (sessionRes.status !== 200) fail(`GET ${sessionPath} → ${sessionRes.status}: ${JSON.stringify(sessionBody)}`);

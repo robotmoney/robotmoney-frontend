@@ -67,7 +67,7 @@ describe("scripts/lib/demo-main.ts is measurably smaller after the #456 split", 
   });
 
   test("the TUI state machine moved to demo-tui-view.ts, not merely duplicated", () => {
-    for (const fn of ["setContainer", "setStep", "startOnboarding", "setOnboardStep", "committeeProgress", "phaseGlyph", "columns"]) {
+    for (const fn of ["setContainer", "setStep", "startOnboarding", "setOnboardStep", "swarmProgress", "phaseGlyph", "columns"]) {
       expect(tuiView).toMatch(new RegExp(`export function ${fn}\\(|export const ${fn}\\b`));
       // demo-main.ts must call these, not redeclare them.
       expect(demoMain).not.toMatch(new RegExp(`^function ${fn}\\(`, "m"));
@@ -110,10 +110,10 @@ describe("the process.env.ADMIN_TOKEN global mutation is gone (issue #456)", () 
 
   test("the admin token is threaded explicitly instead: sessionRail carries adminToken, and every consumer accepts it as a parameter", () => {
     expect(demoMain).toContain("adminToken: adminPassword");
-    // committee/session.ts: the in-process consumers the demo's dynamically
+    // swarm/session.ts: the in-process consumers the demo's dynamically
     // imported driver calls now take an explicit token rather than reading
     // the (removed) global mutation off process.env in this same process.
-    const session = readFileSync(join(libDir, "committee", "session.ts"), "utf8");
+    const session = readFileSync(join(libDir, "swarm", "session.ts"), "utf8");
     expect(session).toContain("getAdminHeaders(token?: string)");
     expect(session).toMatch(/export async function admin\(action: string, body: unknown = \{\}, adminToken\?: string\)/);
     expect(session).toContain("rosterMembers(targetUrl: string = backendUrl(), adminToken?: string)");
@@ -125,7 +125,7 @@ describe("the process.env.ADMIN_TOKEN global mutation is gone (issue #456)", () 
     // value this SAME process had mutated onto itself; each now gets it
     // explicitly in its own spawn env object.
     const explicitCount = (demoMain.match(/ADMIN_TOKEN: adminPassword/g) ?? []).length;
-    // sessionRail, starterEnv, the CI committee-session driver, the browser
+    // sessionRail, starterEnv, the CI swarm-session driver, the browser
     // checks step, and the rmpc-release-e2e driver.
     expect(explicitCount).toBeGreaterThanOrEqual(5);
   });

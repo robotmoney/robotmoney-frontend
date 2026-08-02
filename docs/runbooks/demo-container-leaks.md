@@ -84,7 +84,7 @@ reaped prior runs' orphans either, so the host had accumulated containers up to
 four days old.
 
 Three fixes, in `.github/workflows/e2e.yml` (they were also in
-`committee-opencode-nightly.yml`, which issue #373 retired — `e2e.yml` now
+`swarm-opencode-nightly.yml`, which issue #373 retired — `e2e.yml` now
 carries that workflow's nightly slot as well as its push-to-`main` run):
 
 1. the always() step runs `docker compose -p "$DEMO_PROJECT" down -v

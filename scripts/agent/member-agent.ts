@@ -40,7 +40,7 @@
 // The ONE other source of `-e` flags is the caller's explicit `ownerEnv`: the
 // half of the session environment a real applicant's HUMAN would have exported
 // before launching their agent (the onboarding eval's single use is the
-// keystore passphrase the published committee-onboarding skill tells the agent
+// keystore passphrase the published swarm-onboarding skill tells the agent
 // to ask its owner for). It is an explicit parameter, never an ambient read,
 // and every value in it is redacted out of the returned transcript.
 //
@@ -84,7 +84,7 @@ export interface MemberAgentModel {
 
 // opencode.json written per-run, mounted read-only into the container (never
 // baked into the image). Carries NO onboarding-specific knowledge and no
-// Robot Money connectivity config — the agent reaches the committee REST API
+// Robot Money connectivity config — the agent reaches the swarm REST API
 // with plain HTTP (bash), using the base URL carried in the prompt's harness
 // note (D21: the MCP transport is retired, so there is no MCP client to wire).
 //
@@ -115,7 +115,7 @@ export interface MemberAgentModel {
 // `external_directory: "allow"` because opencode's defaults contain
 // `external_directory: { "*": "ask", … }` and an "ask" in a non-interactive
 // `opencode run` has nobody to ask, so it RESOLVES TO A REJECTION rather than a
-// wait — an agent that cloned the committee-onboarding skill into /tmp could
+// wait — an agent that cloned the swarm-onboarding skill into /tmp could
 // `ls` its way to SKILL.md and never read a byte of it. That diagnosis was
 // right and its fix survives here in the general form: nothing in this
 // container stops to ask, and nothing is denied.
@@ -247,7 +247,7 @@ export interface MemberAgentArgvOptions {
    * and machine facts the container cannot discover, never instructions. The
    * onboarding eval's single use is the keystore passphrase (see
    * scripts/lib/onboarding-eval.ts's KEYSTORE_PASSPHRASE_ENV), because the
-   * published committee-onboarding skill tells the agent to ask its owner to
+   * published swarm-onboarding skill tells the agent to ask its owner to
    * export it and to WAIT for them — unanswerable in a headless container.
    *
    * Anything passed here is REDACTED out of the returned transcript.

@@ -1,0 +1,59 @@
+{
+  "description": "Golden vectors for the canonical swarm-application serialization (contract/src/swarm-application.js canonicalizeApplication). Stage 3 feeds these `payload` objects into the rmpc Rust signer's own canonical serialization and asserts the resulting UTF-8 bytes (hex-encoded) equal `expectedBytesHex` here — proving byte-exactness across the JS/Rust boundary. Do not hand-edit `expectedBytesHex`; regenerate from canonicalizeApplication().",
+  "vectors": [
+    {
+      "name": "basic-no-lens",
+      "payload": {
+        "name": "Nova Desk",
+        "contact": "nova@example.test",
+        "publicKey": "YmUwLbJYgrbWC5g6UJ+v4t8hVmCCPHeDhTYR5zdlxhA="
+      },
+      "expectedCanonicalJson": "{\"name\":\"Nova Desk\",\"contact\":\"nova@example.test\",\"publicKey\":\"YmUwLbJYgrbWC5g6UJ+v4t8hVmCCPHeDhTYR5zdlxhA=\"}",
+      "expectedBytesHex": "7b226e616d65223a224e6f7661204465736b222c22636f6e74616374223a226e6f7661406578616d706c652e74657374222c227075626c69634b6579223a22596d55774c624a596772625743356736554a2b7634743868566d43435048654468545952357a646c7868413d227d"
+    },
+    {
+      "name": "with-lens",
+      "payload": {
+        "name": "Athena Capital",
+        "contact": "athena@example.test",
+        "lens": "macro risk",
+        "publicKey": "2w3ubE+a7vwW96xCB6SitBUoz9oWCPJW9COc4uPz2XvZR3szZeu+pTBW5mewJ21e"
+      },
+      "expectedCanonicalJson": "{\"name\":\"Athena Capital\",\"contact\":\"athena@example.test\",\"lens\":\"macro risk\",\"publicKey\":\"2w3ubE+a7vwW96xCB6SitBUoz9oWCPJW9COc4uPz2XvZR3szZeu+pTBW5mewJ21e\"}",
+      "expectedBytesHex": "7b226e616d65223a22417468656e61204361706974616c222c22636f6e74616374223a22617468656e61406578616d706c652e74657374222c226c656e73223a226d6163726f207269736b222c227075626c69634b6579223a223277337562452b613776775739367843423653697442556f7a396f5743504a5739434f633475507a3258765a5233737a5a65752b70544257356d65774a323165227d"
+    },
+    {
+      "name": "unicode-name-and-contact",
+      "payload": {
+        "name": "Növa Déskü 桌面 🤖",
+        "contact": "növa+桌面@exämple.test",
+        "lens": "on-chain flows ⚡",
+        "publicKey": "aGVsbG93b3JsZGhlbGxvd29ybGRoZWxsb3dvcmxkaGVsbG93b3JsZA=="
+      },
+      "expectedCanonicalJson": "{\"name\":\"Növa Déskü 桌面 🤖\",\"contact\":\"növa+桌面@exämple.test\",\"lens\":\"on-chain flows ⚡\",\"publicKey\":\"aGVsbG93b3JsZGhlbGxvd29ybGRoZWxsb3dvcmxkaGVsbG93b3JsZA==\"}",
+      "expectedBytesHex": "7b226e616d65223a224ec3b676612044c3a9736bc3bc20e6a18ce99da220f09fa496222c22636f6e74616374223a226ec3b676612be6a18ce99da2406578c3a46d706c652e74657374222c226c656e73223a226f6e2d636861696e20666c6f777320e29aa1222c227075626c69634b6579223a22614756736247393362334a735a47686c62477876643239796247526f5a57787362336476636d786b614756736247393362334a735a413d3d227d"
+    },
+    {
+      "name": "whitespace-and-punctuation-edge-cases",
+      "payload": {
+        "name": "  Leading/trailing\tspaces\nand \"quotes\" & <html> tags  ",
+        "contact": "quote\"back\\slash@example.test",
+        "lens": "line1\nline2",
+        "publicKey": "cXVvdGUiYmFja1xzbGFzaEBleGFtcGxlLnRlc3Q9PT0="
+      },
+      "expectedCanonicalJson": "{\"name\":\"  Leading/trailing\\tspaces\\nand \\\"quotes\\\" & <html> tags  \",\"contact\":\"quote\\\"back\\\\slash@example.test\",\"lens\":\"line1\\nline2\",\"publicKey\":\"cXVvdGUiYmFja1xzbGFzaEBleGFtcGxlLnRlc3Q9PT0=\"}",
+      "expectedBytesHex": "7b226e616d65223a2220204c656164696e672f747261696c696e675c747370616365735c6e616e64205c2271756f7465735c222026203c68746d6c3e20746167732020222c22636f6e74616374223a2271756f74655c226261636b5c5c736c617368406578616d706c652e74657374222c226c656e73223a226c696e65315c6e6c696e6532222c227075626c69634b6579223a226358567664475569596d466a6131787a6247467a6145426c654746746347786c4c6e526c633351395054303d227d"
+    },
+    {
+      "name": "empty-lens-string-still-included",
+      "payload": {
+        "name": "Empty Lens Co",
+        "contact": "empty@example.test",
+        "lens": "",
+        "publicKey": "ZW1wdHlsZW5zZW1wdHlsZW5zZW1wdHlsZW5zZW1wdHlsZW5z"
+      },
+      "expectedCanonicalJson": "{\"name\":\"Empty Lens Co\",\"contact\":\"empty@example.test\",\"lens\":\"\",\"publicKey\":\"ZW1wdHlsZW5zZW1wdHlsZW5zZW1wdHlsZW5zZW1wdHlsZW5z\"}",
+      "expectedBytesHex": "7b226e616d65223a22456d707479204c656e7320436f222c22636f6e74616374223a22656d707479406578616d706c652e74657374222c226c656e73223a22222c227075626c69634b6579223a225a57317764486c735a57357a5a57317764486c735a57357a5a57317764486c735a57357a5a57317764486c735a57357a227d"
+    }
+  ]
+}

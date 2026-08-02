@@ -346,14 +346,14 @@ export function assertNoVaultAddressCollision(
 }
 
 // --- Swarm session-lifecycle cron cadence (issue #208) -------------------
-// The five committee.* job_schedules rows (open_session/publish_brief/
+// The five swarm.* job_schedules rows (open_session/publish_brief/
 // close_window/aggregate/publish) ship seed-time DISABLED by default so a
 // fresh CI/e2e/demo database never auto-enqueues real swarm lifecycle jobs
 // alongside the demo's own explicit enqueue-job admin path.
-// COMMITTEE_SCHEDULES_ENABLED is the single switch that turns the WHOLE
+// SWARM_SCHEDULES_ENABLED is the single switch that turns the WHOLE
 // managed sequence on for a deployment: production sets it explicitly (daily
 // 06:00-08:00 UTC — see the per-kind CRON defaults below); staging may set the
-// same flag with accelerated COMMITTEE_*_CRON overrides; repo demo/e2e never
+// same flag with accelerated SWARM_*_CRON overrides; repo demo/e2e never
 // sets it (docker-compose.demo.yml pins it off, matching the DEMO_MODE
 // pattern). Resolved once at seed-time (backend/src/db/seed.ts) — job_schedules
 // rows are the persisted source of truth thereafter; the scheduler
@@ -372,9 +372,9 @@ export interface SwarmScheduleConfig {
 // an unparseable cron on any one row throws mid-loop and rolls back the whole
 // tick, silently stalling every OTHER schedule too (vault sampling, wallet
 // balances, buybacks, projects pipelines, analytics), repeatedly, every tick,
-// until fixed. Before this env-configurability landed, the five committee.*
+// until fixed. Before this env-configurability landed, the five swarm.*
 // crons were fixed literals that could never be wrong; now an operator typo
-// in COMMITTEE_*_CRON is user-reachable. Validate at config-resolution time
+// in SWARM_*_CRON is user-reachable. Validate at config-resolution time
 // (seed-time) so a bad value fails the `bun run migrate` deploy step loudly,
 // instead of degrading the shared scheduler at runtime.
 function assertValidCron(envVarName: string, cron: string): void {
@@ -388,38 +388,38 @@ function assertValidCron(envVarName: string, cron: string): void {
 export function resolveSwarmSchedules(
   env: Record<string, string | undefined> = process.env,
 ): SwarmScheduleConfig[] {
-  const enabled = env.COMMITTEE_SCHEDULES_ENABLED === "1" || env.COMMITTEE_SCHEDULES_ENABLED === "true";
-  const windowMinutesRaw = Number(env.COMMITTEE_WINDOW_MINUTES ?? "");
+  const enabled = env.SWARM_SCHEDULES_ENABLED === "1" || env.SWARM_SCHEDULES_ENABLED === "true";
+  const windowMinutesRaw = Number(env.SWARM_WINDOW_MINUTES ?? "");
   const windowMinutes = Number.isFinite(windowMinutesRaw) && windowMinutesRaw > 0 ? windowMinutesRaw : 60;
   const timezone = "UTC";
   const cronVars: Record<string, string> = {
-    COMMITTEE_OPEN_SESSION_CRON: env.COMMITTEE_OPEN_SESSION_CRON || "0 6 * * *",
-    COMMITTEE_PUBLISH_BRIEF_CRON: env.COMMITTEE_PUBLISH_BRIEF_CRON || "0 7 * * *",
-    COMMITTEE_CLOSE_WINDOW_CRON: env.COMMITTEE_CLOSE_WINDOW_CRON || "0 8 * * *",
-    COMMITTEE_AGGREGATE_CRON: env.COMMITTEE_AGGREGATE_CRON || "0 9 * * *",
-    COMMITTEE_PUBLISH_CRON: env.COMMITTEE_PUBLISH_CRON || "0 10 * * *",
+    SWARM_OPEN_SESSION_CRON: env.SWARM_OPEN_SESSION_CRON || "0 6 * * *",
+    SWARM_PUBLISH_BRIEF_CRON: env.SWARM_PUBLISH_BRIEF_CRON || "0 7 * * *",
+    SWARM_CLOSE_WINDOW_CRON: env.SWARM_CLOSE_WINDOW_CRON || "0 8 * * *",
+    SWARM_AGGREGATE_CRON: env.SWARM_AGGREGATE_CRON || "0 9 * * *",
+    SWARM_PUBLISH_CRON: env.SWARM_PUBLISH_CRON || "0 10 * * *",
   };
   for (const [name, cron] of Object.entries(cronVars)) assertValidCron(name, cron);
   return [
-    { kind: "committee.open_session", cron: cronVars.COMMITTEE_OPEN_SESSION_CRON, enabled, payload: {}, timezone },
+    { kind: "swarm.open_session", cron: cronVars.SWARM_OPEN_SESSION_CRON, enabled, payload: {}, timezone },
     // windowMinutes rides on the publish_brief job's payload — publishBrief()
-    // reads it to compute window_closes_at, so COMMITTEE_WINDOW_MINUTES is the
+    // reads it to compute window_closes_at, so SWARM_WINDOW_MINUTES is the
     // single knob that keeps the publish_brief -> close_window cron gap
     // (default 07:00 -> 08:00 = 60 minutes) coherent with the actual window.
-    { kind: "committee.publish_brief", cron: cronVars.COMMITTEE_PUBLISH_BRIEF_CRON, enabled, payload: { windowMinutes }, timezone },
-    { kind: "committee.close_window", cron: cronVars.COMMITTEE_CLOSE_WINDOW_CRON, enabled, payload: {}, timezone },
-    { kind: "committee.aggregate", cron: cronVars.COMMITTEE_AGGREGATE_CRON, enabled, payload: {}, timezone },
-    { kind: "committee.publish", cron: cronVars.COMMITTEE_PUBLISH_CRON, enabled, payload: {}, timezone },
+    { kind: "swarm.publish_brief", cron: cronVars.SWARM_PUBLISH_BRIEF_CRON, enabled, payload: { windowMinutes }, timezone },
+    { kind: "swarm.close_window", cron: cronVars.SWARM_CLOSE_WINDOW_CRON, enabled, payload: {}, timezone },
+    { kind: "swarm.aggregate", cron: cronVars.SWARM_AGGREGATE_CRON, enabled, payload: {}, timezone },
+    { kind: "swarm.publish", cron: cronVars.SWARM_PUBLISH_CRON, enabled, payload: {}, timezone },
   ];
 }
 
-// --- Committee public base URL ----------------------------------------------
-// The absolute origin the committee notification emails link back to. Every
+// --- Swarm public base URL ----------------------------------------------
+// The absolute origin the swarm notification emails link back to. Every
 // other surface in this codebase can get away with a root-relative path because
 // it renders inside a browser that already has an origin; an email does not. It
 // is read in a mail client, so a link that is not absolute is not a link at all.
 // That matters more here than it looks: the application status page at
-// /committee/apply/<memberId> is reachable ONLY by its opaque id, nothing on the
+// /swarm/apply/<memberId> is reachable ONLY by its opaque id, nothing on the
 // site links to it, and the operator is handed the URL exactly once by their own
 // coding agent in a chat transcript. The email is the durable copy, so the URL
 // inside it has to be complete and it has to point at the deployment the
@@ -429,28 +429,28 @@ export function resolveSwarmSchedules(
 // Defaults to the public production site: an unconfigured real deployment still
 // emits a link that works for a real operator, which is the failure mode we can
 // live with. Trailing slashes are stripped at resolution so every call site can
-// concatenate a leading-slash path without minting "https://host//committee/...".
-// Resolved at module load like the other single-value knobs below; the committee
+// concatenate a leading-slash path without minting "https://host//swarm/...".
+// Resolved at module load like the other single-value knobs below; the swarm
 // tests that need a different origin set the env before importing config.
-export function resolveCommitteePublicBaseUrl(
+export function resolveSwarmPublicBaseUrl(
   env: Record<string, string | undefined> = process.env,
 ): string {
-  return (env.COMMITTEE_PUBLIC_BASE_URL || "https://robotmoney.net").replace(/\/+$/, "");
+  return (env.SWARM_PUBLIC_BASE_URL || "https://robotmoney.net").replace(/\/+$/, "");
 }
 
-// --- Committee notification sender (issue #322) ------------------------------
-// Resolved the same call-time way as resolveCommitteePublicBaseUrl above rather
+// --- Swarm notification sender (issue #322) ------------------------------
+// Resolved the same call-time way as resolveSwarmPublicBaseUrl above rather
 // than only baked into the `config` singleton below: applyMember's receipt is
 // the one caller (domain.ts::sendApplicationReceipt) that must observe an
 // unset sender WITHOUT throwing — every other notification path (activation,
-// seat-open) is fine treating the frozen-at-load `config.committeeNotificationEmailFrom`
+// seat-open) is fine treating the frozen-at-load `config.swarmNotificationEmailFrom`
 // as authoritative, since a real deployment's env does not change mid-process.
 // A call-time resolver is what lets a test flip this one input per-call, in the
 // same process, without reloading the config module.
-export function resolveCommitteeNotificationEmailFrom(
+export function resolveSwarmNotificationEmailFrom(
   env: Record<string, string | undefined> = process.env,
 ): string | null {
-  return env.COMMITTEE_NOTIFICATION_EMAIL_FROM || null;
+  return env.SWARM_NOTIFICATION_EMAIL_FROM || null;
 }
 
 // Fail-closed: default to "prod" when RM_ENV is unset, and REFUSE to start on an
@@ -481,18 +481,18 @@ export const config = {
   // those endpoints are allowed only outside prod (demo/ephemeral convenience).
   adminToken: process.env.ADMIN_TOKEN || null,
   // Credential for the analytics-provider role. Only this role may write the
-  // regime via POST /api/committee/regime. Presented as a Bearer token. If set,
+  // regime via POST /api/swarm/regime. Presented as a Bearer token. If set,
   // it is required (every env); if unset, the role is allowed only outside prod
   // (demo/ephemeral convenience), mirroring adminToken.
   analyticsToken: envSecret("ANALYTICS_TOKEN"),
   // Swarm activation email uses a durable outbox + swarm worker job.
   // The sender is persisted with the message; the deployment transport is an
   // HTTP email adapter invoked only by that worker (tests inject a fake).
-  committeeNotificationEmailFrom: resolveCommitteeNotificationEmailFrom(),
-  committeeNotificationEmailTransportUrl: process.env.COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_URL || null,
-  committeeNotificationEmailTransportToken: process.env.COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_TOKEN || null,
+  swarmNotificationEmailFrom: resolveSwarmNotificationEmailFrom(),
+  swarmNotificationEmailTransportUrl: process.env.SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL || null,
+  swarmNotificationEmailTransportToken: process.env.SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN || null,
   // Origin every link inside those emails is built from (see the resolver above).
-  committeePublicBaseUrl: resolveCommitteePublicBaseUrl(),
+  swarmPublicBaseUrl: resolveSwarmPublicBaseUrl(),
   // NOTE: the analytics pipeline (analytics/index.ts runAnalytics) selects its
   // data source SOLELY via `ANALYTICS_SOURCE` (unset|live → real fetchers,
   // hermetic → seeded/offline) — see analytics/index.ts::resolveAnalyticsSource.

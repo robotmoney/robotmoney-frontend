@@ -76,17 +76,17 @@ export const CI_IDENTITY_VARS = [
 // Which family started the container. Part of the name (not just a label)
 // because the five families can legitimately co-exist inside ONE CI job, where
 // the env hash is by design identical for all of them — e.g. `bun run eval`
-// runs the onboarding eval and the committee eval as two Bun test files in the
-// same process/job, so `eval` and `eval-committee` MUST resolve to different
+// runs the onboarding eval and the swarm eval as two Bun test files in the
+// same process/job, so `eval` and `eval-swarm` MUST resolve to different
 // project names or one's `stack.down()` would tear down the other's containers
 // mid-run.
 //
 //   stack          — the demo / any full or core compose bring-up (demo-main.ts)
 //   eval           — the local real-inference onboarding eval (onboarding-eval-local.ts)
-//   eval-committee — the local real-inference committee-authoring eval (committee-eval-local.ts)
+//   eval-swarm — the local real-inference swarm-authoring eval (swarm-eval-local.ts)
 //   infra          — the inference-off rails check (onboarding-eval-infra.test.ts)
 //   pgtest         — the backend suite's ephemeral postgres (backend/tests/preload.ts)
-export type StackRole = "stack" | "eval" | "eval-committee" | "infra" | "pgtest";
+export type StackRole = "stack" | "eval" | "eval-swarm" | "infra" | "pgtest";
 
 export interface StackEnvironment {
   /** Which kind of environment started this stack. */

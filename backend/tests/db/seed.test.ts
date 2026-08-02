@@ -261,7 +261,7 @@ test("demo guard (#399): a disabled schedule is never picked up by the scheduler
   expect(jobs[0]!.c).toBe(0); // disabled row is never enqueued, so the handler never fires and demo scores stay untouched
 });
 
-test("without DEMO_MODE the seeded row set is byte-for-byte SCHEDULES (+ the env-configured committee rows) — no demo cadence leaks into prod/CI", async () => {
+test("without DEMO_MODE the seeded row set is byte-for-byte SCHEDULES (+ the env-configured swarm rows) — no demo cadence leaks into prod/CI", async () => {
   delete process.env.DEMO_MODE;
   await sql`DELETE FROM job_schedules`; // re-seeded immediately below (fresh-boot shape)
   await seedJobSchedules();

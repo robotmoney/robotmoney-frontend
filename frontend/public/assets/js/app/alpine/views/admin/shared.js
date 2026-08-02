@@ -1,5 +1,5 @@
 // Shared admin-surface plumbing (issue #159): the login/token/403 contract every
-// /admin/committee/* and /admin/audit page follows, plus small formatting
+// /admin/swarm/* and /admin/audit page follows, plus small formatting
 // helpers. NOT an Alpine.data factory itself — each page's factory spreads
 // `adminAuthState()` into its returned object literal and calls the shared
 // methods from its own init()/load(). This mirrors the existing

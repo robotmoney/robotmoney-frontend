@@ -14,13 +14,19 @@ import { join } from "node:path";
 
 export const RMPC_REPO = "robotmoney/robotmoney-core";
 
+// "committee-identity" below is robotmoney-core's OWN CLI subcommand name —
+// a separate repo's binary contract, not this repo's product branding. It
+// stayed "committee-identity" through the frontend's Committee→Swarm rename
+// (issue #263); do NOT rename it here without a matching robotmoney-core
+// release, verified the same way the version bump above is.
+//
 // Pinned release: robotmoney-core v0.3.2 is the first release whose rmpc
 // binary ships a working `committee-identity create/show-public-key/sign`
 // (implements robotmoney-core issue #1111/PR #1112; verified locally
 // 2026-07-10 against rmpc-v0.3.2-linux-amd64.tar.gz's --help before this
 // driver was written, and re-confirmed 2026-07-24 by
 // scripts/tests/integration/rmpc-canonical-apply.test.ts, which additionally proves it
-// signs the committee-application canonical payload byte-exactly). Bump this
+// signs the swarm-application canonical payload byte-exactly). Bump this
 // (and re-run that test locally) when adopting a newer rmpc release — no
 // auto-discovery mechanism is needed for a once-in-a-while manual bump.
 export const RMPC_VERSION = process.env.RMPC_VERSION?.trim() || "v0.3.2";

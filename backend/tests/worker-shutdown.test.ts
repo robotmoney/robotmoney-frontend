@@ -22,7 +22,7 @@ function gate() {
 let hangGate = gate();
 
 beforeAll(() => {
-  handlers["committee.test_shutdown_fast"] = async () => ({ ok: true });
+  handlers["swarm.test_shutdown_fast"] = async () => ({ ok: true });
   handlers["test.shutdown_slow"] = async () => { await new Promise((r) => setTimeout(r, 800)); return { ok: true }; };
   handlers["research.test_shutdown_hang"] = async () => { await hangGate.opened; return { ok: true }; };
 });
@@ -50,7 +50,7 @@ async function waitForStatus(id: number, status: string, ms: number): Promise<vo
 }
 
 test("idle shutdown: all lanes signaled together exit bounded with no orphaned work", async () => {
-  const workers: WorkerHandle[] = [LANES.committee, LANES.analytics, LANES.research].map((lane) =>
+  const workers: WorkerHandle[] = [LANES.swarm, LANES.analytics, LANES.research].map((lane) =>
     startWorker({ lane, workerId: `idle-${lane.name}`, ...fastOpts, shutdownTimeoutMs: 5000 }));
   await sleep(150); // loops spinning idle
 

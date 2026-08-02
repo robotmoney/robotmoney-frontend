@@ -149,7 +149,7 @@ const ADMIN_SPECS: SecretSpec[] = [
 const SECRET_SPECS: SecretSpec[] = [
   {
     name: "ADMIN_TOKEN",
-    description: "guards committee onboarding and administrative endpoints",
+    description: "guards swarm onboarding and administrative endpoints",
     source: "generated-token",
     validate: strongToken,
   },
@@ -370,7 +370,7 @@ async function provisionOriginCertificate(
   const keyPath = join(directory, "origin.key");
   const csrPath = join(directory, "origin.csr");
   const suffix = environment === "staging" ? ".staging.robotmoney.net" : ".robotmoney.net";
-  const hostnames = [`committee${suffix}`, `app${suffix}`];
+  const hostnames = [`swarm${suffix}`, `app${suffix}`];
   try {
     const keyResult = await command([
       "openssl", "ecparam", "-genkey", "-name", "prime256v1", "-out", keyPath,

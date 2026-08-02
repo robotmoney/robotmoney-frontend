@@ -1,8 +1,8 @@
 // Shared parser for the `opencode run --format json` NDJSON transcript
 // (docs/architecture.md §11.3 E5, docs/decisions.md D22 "shared components").
 //
-// Moved out of scripts/lib/committee/inference.ts so BOTH consumers read the
-// stream with one definition: the committee take author (which wants all the
+// Moved out of scripts/lib/swarm/inference.ts so BOTH consumers read the
+// stream with one definition: the swarm take author (which wants all the
 // authored prose) and the member-agent outcome classifier
 // (scripts/agent/classify-outcome.ts, which wants only the agent's FINAL
 // message — its verdict — never its running commentary).

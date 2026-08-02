@@ -7,10 +7,10 @@ requirements R1–R8. Companion issue for the linked skill:
 robotmoney/robotmoney-core#1170.
 
 > **D21 update.** `docs/decisions.md` D21 retired the MCP server: there is no
-> RM-hosted MCP surface. "Discover" is now "install the `committee-onboarding`
+> RM-hosted MCP surface. "Discover" is now "install the `swarm-onboarding`
 > skill" (the skill is the discovery mechanism, not a live tool call), and
 > every remaining step — apply, claim, submit, memo — rides on the REST API
-> that already exists (`ROUTES.committee.*`), not an MCP tool. This plan is
+> that already exists (`ROUTES.swarm.*`), not an MCP tool. This plan is
 > updated in place to match; the phase that only existed to build an MCP
 > discovery surface (formerly Phase 3) is dropped.
 
@@ -35,10 +35,10 @@ activation-email outbox are already §11-shaped. Everything below diverges.
 
 ## Phase 1 — Signed-apply contract
 
-Today `POST /api/committee/apply` takes a **client-supplied `memberId`** plus
+Today `POST /api/swarm/apply` takes a **client-supplied `memberId`** plus
 `name`/`publicKey`/`contact` with no signature
-(`backend/src/api/routes/committee.ts:148`, `backend/src/api/validation.ts:53`,
-`backend/src/committee/domain.ts:385-408`).
+(`backend/src/api/routes/swarm.ts:148`, `backend/src/api/validation.ts:53`,
+`backend/src/swarm/domain.ts:385-408`).
 
 - Define the **canonical application payload** (deterministic byte serialization
   of `{name, contact, publicKey, ...}`) in the `contract` package, alongside the
@@ -56,25 +56,25 @@ Today `POST /api/committee/apply` takes a **client-supplied `memberId`** plus
   applications queue need no gating change; every queued application is
   toolchain-proven by construction.
 - Rewrite the tests that assert the old shape:
-  `backend/tests/committee.test.ts:27-52`,
-  `backend/tests/committee-claim.test.ts:25-38` (`applyAndActivate` helper),
+  `backend/tests/swarm.test.ts:27-52`,
+  `backend/tests/swarm-claim.test.ts:25-38` (`applyAndActivate` helper),
   roster-cap tests. Add: invalid-signature, key/signature mismatch, replayed
   payload, and UUID-minting assertions.
 
 ## Phase 2 — Status page + apply page rework
 
-- Public status route `GET /api/committee/apply/:id` (add to
+- Public status route `GET /api/swarm/apply/:id` (add to
   `contract/src/routes.js`): redacted application state
   (`applied → approved → claimed`, timestamps, no contact echo). New frontend
-  view `/committee/apply/:id` polling it — the page the runbook already promises
+  view `/swarm/apply/:id` polling it — the page the runbook already promises
   (absent today; confirmed).
-- `/committee/apply` (`frontend/public/views/committee/apply.html` +
+- `/swarm/apply` (`frontend/public/views/swarm/apply.html` +
   `apply-form.js`): remove in-browser keygen and the typed member-id. The page
   becomes (a) the canonical prompt to copy into an agent, and (b) a paste box
   accepting the agent-produced signed application payload for owners who prefer
   submitting by hand — same contract, no unsigned path.
 - Tests: status-route redaction; docs/route tests extended
-  (`scripts/tests/unit/committee-docs-rmpc-and-routes.test.ts`).
+  (`scripts/tests/unit/swarm-docs-rmpc-and-routes.test.ts`).
 
 ## Phase 3 — retired (D21)
 
@@ -87,10 +87,10 @@ tools to.
 
 The capability this phase existed to provide — canonical, current application
 steps reachable before any credential exists — is now provided by the
-**`committee-onboarding` skill** itself (§11 R5): it is installed fresh from
+**`swarm-onboarding` skill** itself (§11 R5): it is installed fresh from
 `robotmoney-core` as the first onboarding step, so it is already
 "pre-credential discovery" by construction, no server call needed. `apply`
-needs no new surface either — `ROUTES.committee.apply` already exists and
+needs no new surface either — `ROUTES.swarm.apply` already exists and
 already accepts the signed payload (Phase 1). Nothing here carries forward to
 another phase; it is dropped, not merged.
 
@@ -106,8 +106,8 @@ container to depend on:
 - **Member container**: a vanilla OpenCode agent image (no Robot Money tooling
   preinstalled) added to `docker-compose.demo.yml`, one instance per admission,
   with egress to the demo **API** container, the `robotmoney-core` `rmpc`
-  release asset, the repo-owned `committee-onboarding` skill served by the API
-  from `frontend/public/skills/committee-onboarding/SKILL.md`, and the
+  release asset, the repo-owned `swarm-onboarding` skill served by the API
+  from `frontend/public/skills/swarm-onboarding/SKILL.md`, and the
   model API. Real inference on a **vanilla OpenCode install** running a funded,
   registry-selected model (D22 rule 1 as amended 2026-07-28): the model is chosen
   by the single `AGENT_MODEL` signal resolved against
@@ -119,7 +119,7 @@ container to depend on:
   container, and injects the canonical copy-paste prompt with only the skill
   URL pointed at that local static file (all other text is sourced from the
   contract, not duplicated). No further interaction: the agent must install the
-  `committee-onboarding` skill, install `rmpc`, keygen, and submit the signed
+  `swarm-onboarding` skill, install `rmpc`, keygen, and submit the signed
   application over the REST API on its own.
 - **Observation**: the strip's step states come from the outside — the public
   status API (Phase 2) and the roster — not from instrumenting the agent. Step
@@ -128,7 +128,7 @@ container to depend on:
   admitted`); §10.1 of architecture.md updates to match (`discover` now means
   "skill installed," not "MCP tool called").
 - **Auto-approve**: demo-side watcher approves each application 10 s after it
-  completes, via `POST /api/committee/admin/activate` (unchanged, R7).
+  completes, via `POST /api/swarm/admin/activate` (unchanged, R7).
 - **Failure semantics**: an admission that doesn't reach `admitted` within its
   window renders red in the strip and logs the container transcript — the eval
   failed; nothing retries the member's steps for it.
@@ -157,7 +157,7 @@ Per the test-coverage invariants (loud-skip only, executed-in-CI assertions):
   quota flake) is handled with retry/backoff around the model call, not by
   dropping inference from the gate. Because the eval is keyless (D22) there is
   no secret to withhold and therefore **no fork/same-repo distinction**: every
-  PR, forked or not, runs the identical eval. ~~`committee-opencode-nightly.yml`
+  PR, forked or not, runs the identical eval. ~~`swarm-opencode-nightly.yml`
   is repointed at the layered eval (§11.3) on a `core` stack — sampling and
   layer diagnostics live there; the PR gate keeps the single admission.~~
   **Superseded by D26 (issue #373):** that workflow is retired. Layer diagnostics
@@ -171,7 +171,7 @@ Per the test-coverage invariants (loud-skip only, executed-in-CI assertions):
   into the nightly eval) so there is one onboarding driver, not two, and no
   OAuth step left to maintain.
 - Docs tests: pin the quickstart prompt text to the contract constant; assert
-  the prompt names the `committee-onboarding` skill and the signed-application
+  the prompt names the `swarm-onboarding` skill and the signed-application
   step.
 
 ## Phase 6 — Deployment/provisioning
@@ -181,11 +181,11 @@ Per the test-coverage invariants (loud-skip only, executed-in-CI assertions):
   repo-owned skill) and the `robotmoney-core` `rmpc` release asset, not a demo
   MCP surface or a remotely published development skill.
 - Staging: nothing to provision for onboarding specifically — the copy-paste
-  prompt is exercised against `committee.<staging-domain>`'s existing REST API,
+  prompt is exercised against `swarm.<staging-domain>`'s existing REST API,
   the same surface everything else on staging already uses. (D18's `mcp.`
   subdomain provisioning is dropped, not needed.)
 - Model-key secret management for the demo/nightly eval containers (never baked
-  into images; env-injected like `COMMITTEE_REAL_INFERENCE` today).
+  into images; env-injected like `SWARM_REAL_INFERENCE` today).
 
 ## Cross-repo dependencies (robotmoney-core)
 

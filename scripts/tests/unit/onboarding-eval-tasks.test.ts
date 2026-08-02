@@ -30,7 +30,7 @@ const repoRoot = join(import.meta.dir, "..", "..", "..");
 const ANSWER_LEAK_PATTERNS = [
   /\bcurl\b/i,
   /rmpc\s+committee-identity\s+(create|sign|show-public-key)/i,
-  /POST\s+\/api\/committee\/apply/i,
+  /POST\s+\/api\/swarm\/apply/i,
   /\breleases\/download\b/i,
   /~\/\.local\/bin|\/usr\/local\/bin/,
 ];
@@ -43,7 +43,7 @@ function assertNoAnswerLeak(task: string, label: string): void {
 
 describe("runtime — Robot-Money-free trivial task", () => {
   test("names no Robot Money vocabulary at all", () => {
-    expect(RUNTIME_TASK).not.toMatch(/robot\s*money|committee|onboarding/i);
+    expect(RUNTIME_TASK).not.toMatch(/robot\s*money|swarm|onboarding/i);
   });
 
   test("asks for exactly the probe path and content this suite observes", () => {

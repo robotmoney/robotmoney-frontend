@@ -34,7 +34,7 @@ import { readFileSync } from "node:fs";
 /** The compose services whose `depends_on: postgres` must be dropped. */
 export const POSTGRES_DEPENDENT_SERVICES = [
   "api",
-  "worker-committee",
+  "worker-swarm",
   "worker-analytics",
   "worker-research",
 ] as const;

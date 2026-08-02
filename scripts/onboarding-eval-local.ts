@@ -11,7 +11,7 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_TIMEOUT_MS,
   generateIdentity,
-  LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH,
+  LOCAL_SWARM_ONBOARDING_SKILL_PATH,
   runOnboardingEval,
   type OnboardingEvalResult,
   type ModelConfig,
@@ -84,7 +84,7 @@ const project = options.project ?? stackProjectName("eval", stackEnvironment);
 const identity = generateIdentity(options.sampleId);
 const selectedModel = modelConfig.model;
 const prompt = buildAgentPrompt(identity);
-const skillPath = join(repoRoot, "frontend", "public", LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH);
+const skillPath = join(repoRoot, "frontend", "public", LOCAL_SWARM_ONBOARDING_SKILL_PATH);
 const artifacts = createOnboardingArtifactWriter({
   repoRoot,
   composeProject: project,
@@ -175,7 +175,7 @@ try {
       `Docker published the api on ${STAGE_WEB_PORT}, the stage tunnel origin; refusing to run the eval on it.`,
     );
   }
-  await stack.waitForHttp(`${stack.backendUrl}${ROUTES.committee.members}`, 30_000);
+  await stack.waitForHttp(`${stack.backendUrl}${ROUTES.swarm.members}`, 30_000);
   await stack.build(["member-agent"]);
 
   // Follow only after readiness, so startup/build chatter cannot bury the

@@ -36,7 +36,7 @@ test("serveStatic sets Cache-Control: no-cache for root path /", async () => {
 });
 
 test("serveStatic sets Cache-Control: no-cache for SPA client route fallback", async () => {
-  const res = await serveStatic("/committee/2026-07-30/subject", tempDir);
+  const res = await serveStatic("/swarm/2026-07-30/subject", tempDir);
   expect(res).not.toBeNull();
   expect(res?.status).toBe(200);
   expect(res?.headers.get("Cache-Control")).toBe("no-cache");

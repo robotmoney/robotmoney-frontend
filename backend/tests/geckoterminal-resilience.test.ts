@@ -1,6 +1,6 @@
 // Resilience coverage for the GeckoTerminal new_pools sweep (#135, evidence from
 // #101): on the LIVE path api.geckoterminal.com 429s the keyless firehose, and an
-// unbounded throttled leg stretches analytics.run past committee deadlines. These
+// unbounded throttled leg stretches analytics.run past swarm deadlines. These
 // tests prove (all with mocked HTTP — no live network, no real waits):
 //   1. sustained 429s abort within the bounded budget/attempts, the leg throws
 //      (never fabricates a count), fetchAll records the degraded outcome loudly,

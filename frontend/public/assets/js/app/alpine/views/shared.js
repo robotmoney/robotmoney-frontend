@@ -152,7 +152,7 @@ export const assetDot = (sym) => {
   return CATEGORICAL[h % CATEGORICAL.length];
 };
 
-// Stable colour for a committee session subject. Same construction as assetDot
+// Stable colour for a swarm session subject. Same construction as assetDot
 // because it answers the same question — subjects are a CATEGORICAL encoding
 // (Mav Holdings is not "more" than Woon Treasury), so they take distinct hues
 // rather than a ramp, hashed on id so a subject keeps one colour on every page

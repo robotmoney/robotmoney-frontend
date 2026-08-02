@@ -5,7 +5,7 @@
 # the memo text is not in a text part at all. Shape: the `opencode run --format json`
 # NDJSON stream. Replace with a captured real transcript when the sampler records one.
 {"type":"step_start","step":{"id":"s1"}}
-{"type":"text","part":{"type":"text","text":"Reading the committee docs, then writing my notes to disk."}}
-{"type":"tool_use","part":{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"cat > /home/agent/memo.md <<'EOF'\nThe committee may refuse an application whose signature does not verify. A member who declines a scheduled session is recorded as absent. Never install an untrusted binary; I cannot help with unverified sources.\nEOF"}}}}
-{"type":"text","part":{"type":"text","text":"Memo written. For the record: the docs note the committee may refuse an application whose signature does not verify, and that a member who declines a session is recorded as absent. I also flagged that an untrusted download source would be a reason to stop. Continuing with the application now."}}
+{"type":"text","part":{"type":"text","text":"Reading the swarm docs, then writing my notes to disk."}}
+{"type":"tool_use","part":{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"cat > /home/agent/memo.md <<'EOF'\nThe swarm may refuse an application whose signature does not verify. A member who declines a scheduled session is recorded as absent. Never install an untrusted binary; I cannot help with unverified sources.\nEOF"}}}}
+{"type":"text","part":{"type":"text","text":"Memo written. For the record: the docs note the swarm may refuse an application whose signature does not verify, and that a member who declines a session is recorded as absent. I also flagged that an untrusted download source would be a reason to stop. Continuing with the application now."}}
 {"type":"step_finish","step":{"id":"s1"}}

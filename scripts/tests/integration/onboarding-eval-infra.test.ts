@@ -2,10 +2,10 @@
 // (scripts/lib/onboarding-eval.ts, docs/architecture.md §11 R8, Stage 5 of
 // docs/plans/onboarding-ic-workflow.md). This is a rails check, NOT a
 // substitute for the eval: it proves every piece the eval rides on works — the
-// member-agent image builds and starts, it can reach the committee REST API
+// member-agent image builds and starts, it can reach the swarm REST API
 // over the compose network, and a signed apply built with the real `rmpc`
 // release binary (driven DIRECTLY by this test, never by an agent) lands
-// end-to-end through POST /api/committee/apply — all without spending a single
+// end-to-end through POST /api/swarm/apply — all without spending a single
 // model token. (D21: the MCP transport is retired; the agent and this rails
 // check use the REST API.) It is wired as an early fail-fast step ahead of the
 // real-inference gate in .github/workflows/e2e.yml.
@@ -43,7 +43,7 @@ import { fetchRmpc } from "../../lib/rmpc-fetch.ts";
 import {
   buildMemberAgentArgv,
   KEYSTORE_PASSPHRASE_ENV,
-  LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH,
+  LOCAL_SWARM_ONBOARDING_SKILL_PATH,
 } from "../../lib/onboarding-eval.ts";
 import {
   ensureMemberVolume,
@@ -56,7 +56,7 @@ import {
   CLIENT_ENTRY,
   ensureMemberIdentity,
   memberSessionMounts,
-} from "../../lib/committee/agent.ts";
+} from "../../lib/swarm/agent.ts";
 import {
   createStack,
   DEFAULT_COMPOSE_FILES,
@@ -127,10 +127,10 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
   beforeAll(async () => {
     // Minimal stack: the shared module's `core` profile — postgres (api's
     // dependency) + api, and NOTHING else. No worker lanes: applying/
-    // activating a committee membership is pure Postgres CRUD + crypto
+    // activating a swarm membership is pure Postgres CRUD + crypto
     // verification, never touches the job queue, so booting the worker images
     // would only slow this "fast, cheap" check down for nothing. (D21: no mcp
-    // service — the committee surface is the api's REST API.)
+    // service — the swarm surface is the api's REST API.)
     const environment = infraEnvironment();
     stackCredentials = generateStackCredentials();
     stack = createStack(
@@ -152,7 +152,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     // never becomes ready, when migrations fail, or when /health never
     // answers.
     await stack.up();
-    await stack.waitForHttp(`${stack.backendUrl}${ROUTES.committee.members}`, 30_000);
+    await stack.waitForHttp(`${stack.backendUrl}${ROUTES.swarm.members}`, 30_000);
 
     // Build (never run yet — that's the inference-off "container starts" test
     // below) the member-agent image now so its cost is paid once in beforeAll,
@@ -248,7 +248,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     () => {
       // scripts/lib/member-agent/Dockerfile puts /home/agent/.local/bin on PATH,
       // but the container runs as root — so without an explicit HOME, `~`
-      // resolves to /root and the committee-onboarding skill's own copy-paste
+      // resolves to /root and the swarm-onboarding skill's own copy-paste
       // line, `install -m 755 rmpc ~/.local/bin/rmpc`, lands where PATH does
       // not look. Observed live: the agent ran exactly that line and then got
       // `rmpc: command not found`. That friction belongs to this image, not to
@@ -280,11 +280,11 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
     () => {
       const assets = [
         {
-          path: LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH,
-          marker: "name: committee-onboarding",
+          path: LOCAL_SWARM_ONBOARDING_SKILL_PATH,
+          marker: "name: swarm-onboarding",
         },
         {
-          path: "/views/docs/investment-committee/participation.html",
+          path: "/views/docs/investment-swarm/participation.html",
           marker: "<h1>Participation</h1>",
         },
       ];
@@ -399,7 +399,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         const signed = await signFromMemberHome(payloadFile, `rmpc-apply-${crypto.randomUUID().slice(0, 6)}`);
         expect(signed.public_key).toBe(publicKeyB64);
 
-        const applyRes = await fetch(`${stack!.backendUrl}${ROUTES.committee.apply}`, {
+        const applyRes = await fetch(`${stack!.backendUrl}${ROUTES.swarm.apply}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...application, signature: signed.signature }),
@@ -411,7 +411,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         expect(body.memberId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
         const memberId: string = body.memberId;
 
-        const statusPath = routePath(ROUTES.committee.applyStatus, { id: memberId });
+        const statusPath = routePath(ROUTES.swarm.applyStatus, { id: memberId });
         const statusRes = await fetch(`${stack!.backendUrl}${statusPath}`);
         expect(statusRes.status).toBe(200);
         const status = await statusRes.json();
@@ -420,7 +420,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         expect(JSON.stringify(status)).not.toContain(application.contact);
         expect(JSON.stringify(status)).not.toContain(publicKeyB64);
 
-        const approveRes = await fetch(`${stack!.backendUrl}/api/committee/admin/members/${memberId}/review`, {
+        const approveRes = await fetch(`${stack!.backendUrl}/api/swarm/admin/members/${memberId}/review`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -430,7 +430,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
         });
         expect(approveRes.status).toBe(200);
 
-        const challengeRes = await fetch(`${stack!.backendUrl}${ROUTES.committee.claimChallenge}`, {
+        const challengeRes = await fetch(`${stack!.backendUrl}${ROUTES.swarm.claimChallenge}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ memberId }),
@@ -444,7 +444,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
           `rmpc-claim-${crypto.randomUUID().slice(0, 6)}`,
         );
 
-        const claimRes = await fetch(`${stack!.backendUrl}${ROUTES.committee.claimToken}`, {
+        const claimRes = await fetch(`${stack!.backendUrl}${ROUTES.swarm.claimToken}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...challenge, signature: claimSignature.signature }),
@@ -489,7 +489,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
           // lifecycle synchronously instead of adding another service.
           const admin = async (action: string, input: Record<string, unknown>) => {
             const res = await fetch(
-              `${stack!.backendUrl}${routePath(ROUTES.committee.admin.action, { action })}`,
+              `${stack!.backendUrl}${routePath(ROUTES.swarm.admin.action, { action })}`,
               {
                 method: "POST",
                 headers: {
@@ -576,7 +576,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
           // stored payload/signature, and the public receipt exposes the exact
           // active-key fingerprint used for that verification.
           const sessionRes = await fetch(
-            `${stack!.backendUrl}${routePath(ROUTES.committee.session, { date, subject: subjectId })}`,
+            `${stack!.backendUrl}${routePath(ROUTES.swarm.session, { date, subject: subjectId })}`,
           );
           expect(sessionRes.status).toBe(200);
           const session = await sessionRes.json();
@@ -585,7 +585,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
           expect(take.id).toMatch(/^[0-9a-f-]{36}$/i);
 
           const receiptRes = await fetch(
-            `${stack!.backendUrl}${routePath(ROUTES.committee.take, { id: take.id })}`,
+            `${stack!.backendUrl}${routePath(ROUTES.swarm.take, { id: take.id })}`,
           );
           expect(receiptRes.status).toBe(200);
           const receipt = await receiptRes.json();
@@ -617,7 +617,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
       // in a labeled named volume), and the harness's only privileged act is
       // registering the PUBLIC key. The authoring/submission half (a real model
       // call) is executed and asserted by the required e2e demo gate's
-      // committee sessions (assertAuthoredTakes).
+      // swarm sessions (assertAuthoredTakes).
       const memberId = "rails-check";
       const volume = memberHomeVolumeName(stack!.config.project, memberId);
       ensureMemberVolume(volume, stack!.config.project, stack!.spawnEnv);
@@ -677,7 +677,7 @@ describe("onboarding eval infra rails (Docker, no inference)", () => {
       const identity = await ensureMemberIdentity(rail, { memberId, name: "Rails Check", lens: "infra" });
       expect(typeof identity.freshToken).toBe("string");
       // The minted token authenticates as this member.
-      const verify = await fetch(`${stack!.backendUrl}${ROUTES.committee.verifyToken}`, {
+      const verify = await fetch(`${stack!.backendUrl}${ROUTES.swarm.verifyToken}`, {
         headers: { Authorization: `Bearer ${identity.freshToken}` },
       });
       expect(verify.status).toBe(200);

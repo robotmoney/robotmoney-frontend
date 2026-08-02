@@ -12,7 +12,7 @@
 #      drift).
 #   2. no tracked *.md file contains an unresolved git conflict marker.
 #   3. no tracked docs/*.md file is empty.
-#   4. the IC committee docs (issue #187) never regress to the legacy
+#   4. the IC swarm docs (issue #187) never regress to the legacy
 #      /api/ic/submit design: no reference to /api/ic/submit or the
 #      x-ic-key header, per that issue's own acceptance criterion.
 set -uo pipefail
@@ -50,11 +50,11 @@ for f in docs/*.md docs/runbooks/*.md docs/archive/*.md; do
   fi
 done
 
-# 4. IC committee docs (issue #187) must never reference the legacy
+# 4. IC swarm docs (issue #187) must never reference the legacy
 #    /api/ic/submit endpoint or its x-ic-key header.
 ic_docs=(
-  "frontend/public/views/docs/investment-committee/participation.html"
-  "frontend/public/views/docs/investment-committee/api-reference.html"
+  "frontend/public/views/docs/investment-swarm/participation.html"
+  "frontend/public/views/docs/investment-swarm/api-reference.html"
 )
 for f in "${ic_docs[@]}"; do
   [ -e "$f" ] || continue

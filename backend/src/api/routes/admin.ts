@@ -361,7 +361,7 @@ export async function handleAdmin(
       return await sql.begin(async (tx) => {
         const [schedule] = await tx`SELECT * FROM job_schedules WHERE id = ${id} FOR UPDATE`;
         if (!schedule) return { status: 404, body: { error: "schedule not found" } };
-        if (schedule.kind.startsWith("committee.")) {
+        if (schedule.kind.startsWith("swarm.")) {
           return {
             status: 409,
             body: {

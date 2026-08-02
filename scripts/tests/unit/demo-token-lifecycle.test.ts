@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildDemoLifecycleComposeEnv } from "../../lib/demo-lifecycle-env.ts";
 import { provisionDemoAnalyticsToken, removeDemoAnalyticsToken } from "../../lib/demo-secret.ts";
-import { cleanupKeptCommitteeEval, committeeEvalStateFile } from "../../committee-eval-local.ts";
+import { cleanupKeptSwarmEval, swarmEvalStateFile } from "../../swarm-eval-local.ts";
 
 const state = {
   project: "rm_demo_stack_fresh_shell",
@@ -32,11 +32,11 @@ describe("demo token lifecycle", () => {
     expect(stale.ANALYTICS_TOKEN).toBeUndefined();
   });
 
-  test("committee eval --keep state makes token cleanup discoverable and tolerates an already-missing file", () => {
+  test("swarm eval --keep state makes token cleanup discoverable and tolerates an already-missing file", () => {
     const repo = mkdtempSync(join(tmpdir(), "rm-kept-eval-state-"));
     const project = `rm_eval_keep_${Date.now()}`;
     const tokenFile = provisionDemoAnalyticsToken(project, "secret");
-    const stateFile = committeeEvalStateFile(repo, project);
+    const stateFile = swarmEvalStateFile(repo, project);
     mkdirSync(dirname(stateFile), { recursive: true });
     writeFileSync(stateFile, JSON.stringify({
       project,
@@ -49,7 +49,7 @@ describe("demo token lifecycle", () => {
     expect(removeDemoAnalyticsToken(tokenFile, project)).toBe(true);
 
     let invoked = false;
-    cleanupKeptCommitteeEval(repo, project, {}, (argv, env) => {
+    cleanupKeptSwarmEval(repo, project, {}, (argv, env) => {
       invoked = true;
       expect(argv).toContain("down");
       expect(argv).toContain("--volumes");

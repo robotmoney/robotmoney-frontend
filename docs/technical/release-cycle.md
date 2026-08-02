@@ -45,12 +45,12 @@ Four components, concretely, as they exist in this repo:
   raw SQL (`src/db/client.ts`). It also co-serves the buildless frontend's
   static files when `STATIC_DIR` is set — so today the API and the frontend
   assets it serves are, in production, deployed as one unit on the
-  `committee.` droplet (see below).
+  `swarm.` droplet (see below).
 - **(c) Workers (research pipelines)** — a Postgres-backed task queue
   (`jobs`/`job_schedules`/`job_runs`, [decisions.md
   D9](../decisions.md#d9--custom-postgres-backed-task-queue-not-github-actions-cron--pg_cron)),
   consumed by three separately-deployed containers pinned to lanes via
-  `WORKER_LANE` (`worker-committee`, `worker-analytics`, `worker-research` —
+  `WORKER_LANE` (`worker-swarm`, `worker-analytics`, `worker-research` —
   see `docker-compose.yml` and
   [architecture.md §7](../architecture.md#7-task-queue--workers)). Workers
   connect to Postgres **directly**, not through the API, using a restricted
@@ -83,7 +83,7 @@ into: an **API tier** droplet (API + all three worker containers
 co-located — currently one deploy unit at the infra level even though they
 are separate containers), a **data tier** (DO Managed Postgres HA, entirely
 independent lifecycle), and a **static tier** (marketing served from DO
-Spaces CDN, decoupled from the API entirely). The committee/dashboard SPA,
+Spaces CDN, decoupled from the API entirely). The swarm/dashboard SPA,
 however, is still co-served by the API process (`STATIC_DIR`) — so today
 that slice of the frontend is version-locked to whatever API build is on the
 droplet, while marketing is not.
@@ -102,7 +102,7 @@ Kubernetes (k3s) cluster instead of docker-compose.
 
 ### 3.1 Static tier — Cloudflare edge, for both frontends; API on its own subdomain
 
-Marketing **and** the committee/dashboard SPA are buildless static trees
+Marketing **and** the swarm/dashboard SPA are buildless static trees
 (D2), and both get served from **Cloudflare Pages**. The API is **not** on
 those hostnames: it lives on its **own subdomain** (`api.`), reached
 directly, exactly the way D13 already routes each surface to its own host.
@@ -193,7 +193,7 @@ compatibility windows (§7), zero-downtime deploys, and migration/code
 decoupling (§5.2) — effectively require an orchestrator, and k3s delivers
 one at single-droplet cost.
 
-- **One image, five Deployments**: `api`, `worker-committee`,
+- **One image, five Deployments**: `api`, `worker-swarm`,
   `worker-analytics`, `worker-research`, and `analytics-producer`. All five
   are built from the single `backend/Dockerfile` today and differ only by
   `command:` (`src/api/index.ts`, `src/worker/index.ts`,
@@ -293,7 +293,7 @@ Unchanged in kind from D13, sharpened in detail:
   additive. Compatibility risk when behind: the frontend or workers
   assuming a response shape the API hasn't shipped yet.
 - **(c) Workers.** Two different risk profiles under one label. The
-  **queue-consuming lanes** (`committee`/`analytics`/`research`) read/write
+  **queue-consuming lanes** (`swarm`/`analytics`/`research`) read/write
   Postgres directly with a restricted role, so they are coupled to schema
   shape exactly like the API is, but *without* the API's ability to gate
   behavior behind a runtime check — a worker's compatibility posture is
@@ -306,7 +306,7 @@ Unchanged in kind from D13, sharpened in detail:
   §3.2, the *same image*) but not of the DB schema their handlers assume.
 - **(d) Frontend.** Triggered by `frontend/public/**` changes. Marketing
   (DO Spaces CDN) is fully decoupled and can ship any time. The
-  committee/dashboard SPA is currently bundled into the API's deploy via
+  swarm/dashboard SPA is currently bundled into the API's deploy via
   `STATIC_DIR`, so it has no independent release path today even though
   nothing in its design requires that — it's a buildless static tree that
   could be pushed to its own CDN/bucket target the same way marketing is.
@@ -449,7 +449,10 @@ and third are now **resolved by prescribed runner changes** (collected in
 - **Numeric prefixes are not unique, and nothing checks.** Two collisions
   already exist on main: `0014_projects_pipelines.sql` /
   `0014_wallet_balance_samples.sql`, and `0021_chain_indexer_samples.sql` /
-  `0021_committee_waitlist.sql`. `migrate.ts` sorts by *filename*, so
+  `0021_committee_waitlist.sql` (the historical filename — issue #263 renamed
+  the live schema in `0025_swarm_rename.sql`, but migration files themselves
+  are an immutable record of what actually ran and are never renamed).
+  `migrate.ts` sorts by *filename*, so
   ordering is deterministic (the suffix breaks the tie) — but the prefixes
   are not unique and not truly sequential, and nothing catches a collision
   at merge time. Harmless when a single boot applies everything to a fresh
@@ -546,8 +549,8 @@ feature that spans schema + API + frontend + workers, a flag needs to be
 readable by whichever of those components guards the user-visible or
 data-mutating behavior — realistically that's **the API**, since it's the
 one component every write and read passes through, and it already has a
-precedent for environment-driven feature gating: the committee cron
-sequence is gated by `COMMITTEE_SCHEDULES_ENABLED` plus per-kind cron env
+precedent for environment-driven feature gating: the swarm cron
+sequence is gated by `SWARM_SCHEDULES_ENABLED` plus per-kind cron env
 vars ([architecture.md
 §9.4](../architecture.md#94-data-model--session-lifecycle)). The frontend
 would read flag state from the API (a field on an existing response, or a
@@ -761,7 +764,7 @@ reinvented ad hoc:
 - **Feature toggles (Martin Fowler's taxonomy)** — release toggles (hide
   incomplete work), ops toggles (kill switches), and permission toggles are
   the relevant categories here; the existing
-  `COMMITTEE_SCHEDULES_ENABLED`-style env gate is closest to an ops toggle.
+  `SWARM_SCHEDULES_ENABLED`-style env gate is closest to an ops toggle.
   A cross-component feature (schema + API + frontend all need to agree it's
   "on") is a **release toggle** in Fowler's terms, and those are explicitly
   meant to be short-lived and removed once the feature is fully rolled out
@@ -825,7 +828,7 @@ Carried over from the first draft:
   either way, so the topology doesn't force this.)
 - **Feature-flag storage and source of truth.** A DB table read by the API
   (and exposed to the frontend/workers via API-mediated reads), a
-  dedicated env-var convention like `COMMITTEE_SCHEDULES_ENABLED`, or a
+  dedicated env-var convention like `SWARM_SCHEDULES_ENABLED`, or a
   third-party flag service? No decision has been made and none is implied
   by anything in this doc.
 - **API version-prefix threshold.** What actually counts as a "breaking

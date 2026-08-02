@@ -34,7 +34,7 @@ import {
 export type StackProfile = "core" | "full";
 
 export const CORE_SERVICES = ["postgres", "api"] as const;
-export const WORKER_LANE_SERVICES = ["worker-committee", "worker-analytics", "worker-research"] as const;
+export const WORKER_LANE_SERVICES = ["worker-swarm", "worker-analytics", "worker-research"] as const;
 export const PRODUCER_SERVICES = ["analytics-producer"] as const;
 export const FULL_SERVICES = [...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES] as const;
 
@@ -130,7 +130,7 @@ export function hostBackendUrl(apiPort: number): string {
 
 // ── Credentials ─────────────────────────────────────────────────────────────
 export interface StackCredentials {
-  // Guards the /admin task-queue dashboard (X-Admin-Token) and every committee
+  // Guards the /admin task-queue dashboard (X-Admin-Token) and every swarm
   // admin route. Fresh per stack.
   adminToken: string;
   // Analytics-provider bearer (issue #106): the api verifies it, the worker

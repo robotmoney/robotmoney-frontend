@@ -1,4 +1,4 @@
-// Idempotency of joining the committee (scripts/lib/committee/roster-plan.ts).
+// Idempotency of joining the swarm (scripts/lib/swarm/roster-plan.ts).
 //
 // The bug these pin: the demo admitted its fixed newcomer list from an
 // in-process counter that restarted at 0 with the process, so every restart
@@ -22,9 +22,9 @@ import {
   planAdoptions,
   takenNamesFrom,
   type RosterRow,
-} from "../../lib/committee/roster-plan.ts";
+} from "../../lib/swarm/roster-plan.ts";
 import { NEWCOMER_NAMES } from "../../lib/demo-newcomers.ts";
-import { personaIdentity } from "../../lib/committee/persona-keys.ts";
+import { personaIdentity } from "../../lib/swarm/persona-keys.ts";
 
 const row = (over: Partial<RosterRow> & { name: string }): RosterRow => ({
   id: over.id ?? `id-${over.name.toLowerCase()}`,
@@ -104,7 +104,7 @@ describe("planAdoptions — every persona takes exactly one seat", () => {
 
   test("three active Helios rows yield ONE seat and two reported duplicates", () => {
     // Exactly the state the hosted database is in after the duplicate-admission
-    // bug: seating all three would put one character on the committee 3 times.
+    // bug: seating all three would put one character on the swarm 3 times.
     const roster = [
       ...BUILT_IN,
       row({ name: "Helios", id: "uuid-1" }),

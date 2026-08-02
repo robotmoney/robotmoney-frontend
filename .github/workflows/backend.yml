@@ -28,7 +28,7 @@
 # belong exclusively to research-pipeline.yml (issue #275 addendum): the
 # GeckoTerminal new_pools resilience suite and the chain token-price resilience
 # suite. Both are narrowly scoped to backend/src/analytics/** and
-# backend/src/chain/**, so an unrelated backend change (committee, admin,
+# backend/src/chain/**, so an unrelated backend change (swarm, admin,
 # chain-agnostic routes) no longer pays for them — research-pipeline.yml runs
 # them exclusively, gated on those specific paths.
 name: backend

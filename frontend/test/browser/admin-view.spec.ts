@@ -207,10 +207,10 @@ test("admin view: overview alerts, tiles, and next-schedule table render from mo
   const deadTile = page.locator(".adm-tile", { hasText: "dead" });
   await expect(deadTile.locator(".adm-tile__count")).toHaveText("1");
 
-  // Nav reaches the committee operations surface (issue #159); Audit is an
+  // Nav reaches the swarm operations surface (issue #159); Audit is an
   // in-shell section here (issue #155), not a separate route — see
   // admin-surface.spec.ts for its dedicated coverage.
-  await expect(page.locator(".adm-nav__link", { hasText: "Committee" })).toHaveAttribute("href", "/admin/committee");
+  await expect(page.locator(".adm-nav__link", { hasText: "Swarm" })).toHaveAttribute("href", "/admin/swarm");
   await expect(page.getByRole("button", { name: "Audit", exact: true })).toBeVisible();
 });
 
@@ -345,12 +345,12 @@ test("admin view: a mocked 403 clears the token, stops polling, and shows sessio
   expect(requestedPaths.length).toBe(0);
 });
 
-// ── Committee operations surface fixtures (issue #159) ──────────────────────
+// ── Swarm operations surface fixtures (issue #159) ──────────────────────
 // Reconciled to the REAL backend (issue #152/PR #169) per PR #172 review:
 // these mocks now serve the actual, already-shipped URL prefix
-// (/api/committee/admin/*, backend/src/api/routes/committee-admin.ts) with
+// (/api/swarm/admin/*, backend/src/api/routes/swarm-admin.ts) with
 // its real verbs, action names, and response envelopes — not the invented
-// /api/admin/committee/* contract that no backend route ever implemented.
+// /api/admin/swarm/* contract that no backend route ever implemented.
 
 const TOPIC_FIXTURE = {
   id: "woon-vault", status: "active", name: "Woon Vault", operator: "Woon Labs",
@@ -409,8 +409,8 @@ function baseRosterRows(): RosterRowFixture[] {
   ];
 }
 
-// Public per-member submission content (committee/projections.ts toTake(), via
-// GET /api/committee/sessions/:date/:subject). Only Athena has submitted —
+// Public per-member submission content (swarm/projections.ts toTake(), via
+// GET /api/swarm/sessions/:date/:subject). Only Athena has submitted —
 // Nova/Robotmoney stay "expected" (rendered as "absent" until they submit).
 // No nonce/signature/canonicalPayload field exists on any read route.
 function baseTakes() {
@@ -420,7 +420,7 @@ function baseTakes() {
   ];
 }
 
-// Public session summary (committee/projections.ts toSession()) — the ONLY
+// Public session summary (swarm/projections.ts toSession()) — the ONLY
 // session read surface. No version/briefOpensAt/publishAt field exists here
 // (those are only ever returned transiently by the create-session response).
 function sessionSummary(overrides: Record<string, unknown> = {}) {
@@ -428,12 +428,12 @@ function sessionSummary(overrides: Record<string, unknown> = {}) {
     id: "sess-1", date: "2026-07-20", subjectId: "woon-vault", subjectName: "Woon Vault",
     state: "collecting", windowClosesAt: "2026-07-20T20:00:00.000Z", publishedAt: null,
     regimeSummary: null, subjectSnapshotTotalValueUsd: null, synthesis: null,
-    committeeRecommendation: null, socialDraftId: null, generatedAt: "2026-07-19T00:00:00.000Z",
+    swarmRecommendation: null, socialDraftId: null, generatedAt: "2026-07-19T00:00:00.000Z",
     ...overrides,
   };
 }
 
-async function mockCommitteeApi(
+async function mockSwarmApi(
   page: Page,
   opts: { session?: ReturnType<typeof sessionSummary>; rosterRows?: ReturnType<typeof baseRosterRows>; takes?: ReturnType<typeof baseTakes> } = {},
 ): Promise<void> {
@@ -445,37 +445,37 @@ async function mockCommitteeApi(
   const takes = opts.takes || baseTakes();
 
   // ── Topics ──────────────────────────────────────────────────────────────
-  await page.route(/\/api\/committee\/admin\/subjects$/, (route) => {
+  await page.route(/\/api\/swarm\/admin\/subjects$/, (route) => {
     if (route.request().method() === "POST") {
       return route.fulfill(jsonReply({ ok: true, status: 201, subject: { ...TOPIC_FIXTURE, id: "new-topic" } }, 201));
     }
     return route.fulfill(jsonReply({ subjects: [TOPIC_FIXTURE] }));
   });
-  await page.route(/\/api\/committee\/admin\/subjects\/woon-vault\/update$/, (route) =>
+  await page.route(/\/api\/swarm\/admin\/subjects\/woon-vault\/update$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, subject: { ...TOPIC_FIXTURE, version: 4 } })));
-  await page.route(/\/api\/committee\/admin\/subjects\/woon-vault\/deactivate$/, (route) =>
+  await page.route(/\/api\/swarm\/admin\/subjects\/woon-vault\/deactivate$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, subject: { ...TOPIC_FIXTURE, status: "inactive", version: 4 } })));
 
   // ── Members ─────────────────────────────────────────────────────────────
-  await page.route(/\/api\/committee\/admin\/members$/, (route) => {
+  await page.route(/\/api\/swarm\/admin\/members$/, (route) => {
     if (route.request().method() === "POST") {
       return route.fulfill(jsonReply({ ok: true, status: 201, member: { ...MEMBER_APPLIED, id: "new-member" }, token: "member-bearer-token-abc123" }, 201));
     }
     return route.fulfill(jsonReply({ members: [MEMBER_APPLIED, MEMBER_ACTIVE, MEMBER_INACTIVE] }));
   });
-  await page.route(/\/api\/committee\/admin\/applications(\?.*)?$/, (route) =>
+  await page.route(/\/api\/swarm\/admin\/applications(\?.*)?$/, (route) =>
     route.fulfill(jsonReply({ applications: [NOVA_APPLICATION] })));
   // activate/reject are the SAME endpoint (POST .../review, body {decision}).
-  await page.route(/\/api\/committee\/admin\/members\/nova\/review$/, (route) =>
+  await page.route(/\/api\/swarm\/admin\/members\/nova\/review$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, memberId: "nova", memberStatus: "active", token: "activated-bearer-token-xyz789" })));
   // reactivate mints a fresh credential WITHOUT taking a new public key.
-  await page.route(/\/api\/committee\/admin\/members\/cleo\/reactivate$/, (route) =>
+  await page.route(/\/api\/swarm\/admin\/members\/cleo\/reactivate$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_INACTIVE, status: "active" }, token: "reactivated-bearer-token-def456" })));
-  await page.route(/\/api\/committee\/admin\/members\/athena\/rotate-key$/, (route) =>
+  await page.route(/\/api\/swarm\/admin\/members\/athena\/rotate-key$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, memberId: "athena", token: "rotated-bearer-token-ghi789" })));
 
   // ── Sessions ────────────────────────────────────────────────────────────
-  await page.route(/\/api\/committee\/admin\/sessions$/, (route) => {
+  await page.route(/\/api\/swarm\/admin\/sessions$/, (route) => {
     if (route.request().method() === "POST") {
       return route.fulfill(jsonReply({
         ok: true, status: 201,
@@ -487,21 +487,21 @@ async function mockCommitteeApi(
   });
   // No admin session-list route exists — the overview's Sessions tab and the
   // session detail page both read the PUBLIC list/detail routes instead.
-  // (?.*)? tolerates the ?full=1 committee-session.js now sends (issue #243).
-  await page.route(/\/api\/committee\/sessions(\?.*)?$/, (route) => route.fulfill(jsonReply({ sessions: [session] })));
-  await page.route(/\/api\/committee\/sessions\/2026-07-20\/woon-vault$/, (route) =>
+  // (?.*)? tolerates the ?full=1 swarm-session.js now sends (issue #243).
+  await page.route(/\/api\/swarm\/sessions(\?.*)?$/, (route) => route.fulfill(jsonReply({ sessions: [session] })));
+  await page.route(/\/api\/swarm\/sessions\/2026-07-20\/woon-vault$/, (route) =>
     route.fulfill(jsonReply({ session, takes })));
-  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/roster$/, (route) => route.fulfill(jsonReply({ roster: rosterRows })));
+  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/roster$/, (route) => route.fulfill(jsonReply({ roster: rosterRows })));
   // Three separate roster-mutation endpoints, never a single PATCH.
-  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/roster\/(add|excuse|restore)$/, (route) => {
+  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/roster\/(add|excuse|restore)$/, (route) => {
     const memberId = route.request().postDataJSON()?.memberId;
     return route.fulfill(jsonReply({ ok: true, status: 200, sessionId: "sess-1", memberId }));
   });
-  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/close$/, (route) =>
+  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/close$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, session: { id: "sess-1", state: "window_closed", version: 3 } })));
-  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/aggregate$/, (route) =>
+  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/aggregate$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, idempotent: true, session: { id: "sess-1", state: "aggregated", version: 3 } })));
-  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/cancel$/, (route) =>
+  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/cancel$/, (route) =>
     route.fulfill(jsonReply({ ok: false, status: 409, error: "illegal_transition:published->cancelled" }, 409)));
 }
 
@@ -515,39 +515,39 @@ async function signIn(page: Page, path: string): Promise<void> {
 }
 
 // AC: route map + direct navigation + back/forward.
-test("committee admin: direct navigation and back/forward across nested routes", async ({ page }) => {
-  await mockCommitteeApi(page);
+test("swarm admin: direct navigation and back/forward across nested routes", async ({ page }) => {
+  await mockSwarmApi(page);
 
-  await signIn(page, "/admin/committee");
-  await expect(page.getByRole("heading", { name: "Committee Operations" })).toBeVisible();
+  await signIn(page, "/admin/swarm");
+  await expect(page.getByRole("heading", { name: "Swarm Operations" })).toBeVisible();
 
   await page.getByRole("cell", { name: "Woon Vault" }).click();
-  await expect(page).toHaveURL(/\/admin\/committee\/subjects\/woon-vault$/);
+  await expect(page).toHaveURL(/\/admin\/swarm\/subjects\/woon-vault$/);
   await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
 
   await page.goBack();
-  await expect(page).toHaveURL(/\/admin\/committee$/);
-  await expect(page.getByRole("heading", { name: "Committee Operations" })).toBeVisible();
+  await expect(page).toHaveURL(/\/admin\/swarm$/);
+  await expect(page.getByRole("heading", { name: "Swarm Operations" })).toBeVisible();
 
   await page.goForward();
-  await expect(page).toHaveURL(/\/admin\/committee\/subjects\/woon-vault$/);
+  await expect(page).toHaveURL(/\/admin\/swarm\/subjects\/woon-vault$/);
 
   // Direct navigation (full document load) to a nested :id route also resolves,
   // using the token already persisted in this tab's sessionStorage.
-  await page.goto("/admin/committee/members/athena");
+  await page.goto("/admin/swarm/members/athena");
   await expect(page.getByRole("heading", { name: /Member athena/ })).toBeVisible();
 });
 
 // AC: 403 clears token, stops polling, clears sensitive state, session-expired message.
-test("committee admin: a mocked 403 logs out and shows session-expired", async ({ page }) => {
+test("swarm admin: a mocked 403 logs out and shows session-expired", async ({ page }) => {
   await mockVendorScripts(page);
   await page.route("**/api/admin/auth", (route) => route.fulfill(jsonReply({ ok: true })));
-  await page.route(/\/api\/committee\/admin\/subjects$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
-  await page.route(/\/api\/committee\/admin\/members$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
-  // (?.*)? tolerates the ?full=1 committee-overview.js now sends (issue #243).
-  await page.route(/\/api\/committee\/sessions(\?.*)?$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
+  await page.route(/\/api\/swarm\/admin\/subjects$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
+  await page.route(/\/api\/swarm\/admin\/members$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
+  // (?.*)? tolerates the ?full=1 swarm-overview.js now sends (issue #243).
+  await page.route(/\/api\/swarm\/sessions(\?.*)?$/, (route) => route.fulfill(jsonReply({ error: "forbidden" }, 403)));
 
-  await signIn(page, "/admin/committee");
+  await signIn(page, "/admin/swarm");
   await expect(page.getByText("Session expired — sign in again.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
 
@@ -556,9 +556,9 @@ test("committee admin: a mocked 403 logs out and shows session-expired", async (
 });
 
 // AC: topic form validation + successful create asserts endpoint/body.
-test("committee admin: topic form rejects invalid input and create posts the exact body", async ({ page }) => {
-  await mockCommitteeApi(page);
-  await signIn(page, "/admin/committee");
+test("swarm admin: topic form rejects invalid input and create posts the exact body", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm");
 
   await page.getByTestId("new-topic-toggle").click();
   await page.getByTestId("topic-submit").click();
@@ -581,7 +581,7 @@ test("committee admin: topic form rejects invalid input and create posts the exa
   await expect(page.getByTestId("topic-form").getByText(/rpc topics require/)).toBeVisible();
 
   let captured: unknown = null;
-  await page.route(/\/api\/committee\/admin\/subjects$/, async (route) => {
+  await page.route(/\/api\/swarm\/admin\/subjects$/, async (route) => {
     if (route.request().method() === "POST") {
       captured = route.request().postDataJSON();
       return route.fulfill(jsonReply({ ok: true, status: 201, subject: { ...TOPIC_FIXTURE, id: "new-topic" } }, 201));
@@ -601,19 +601,19 @@ test("committee admin: topic form rejects invalid input and create posts the exa
 });
 
 // AC: server-side rejection of an unrecognized field / stale version surfaces inline.
-test("committee admin: topic edit surfaces a 400 (unknown field) and a 409 (stale version)", async ({ page }) => {
-  await mockCommitteeApi(page);
-  await signIn(page, "/admin/committee/subjects/woon-vault");
+test("swarm admin: topic edit surfaces a 400 (unknown field) and a 409 (stale version)", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/subjects/woon-vault");
   await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
 
-  await page.route(/\/api\/committee\/admin\/subjects\/woon-vault\/update$/, (route) =>
+  await page.route(/\/api\/swarm\/admin\/subjects\/woon-vault\/update$/, (route) =>
     route.fulfill(jsonReply({ error: "unknown field: bogus" }, 400)));
   await page.getByTestId("topic-edit-toggle").click();
   await page.getByTestId("edit-reason").fill("Editing for coverage purposes.");
   await page.getByTestId("edit-submit").click();
   await expect(page.getByText("unknown field: bogus")).toBeVisible();
 
-  await page.route(/\/api\/committee\/admin\/subjects\/woon-vault\/update$/, (route) =>
+  await page.route(/\/api\/swarm\/admin\/subjects\/woon-vault\/update$/, (route) =>
     route.fulfill(jsonReply({ ok: false, status: 409, error: "stale_version" }, 409)));
   await page.getByTestId("edit-submit").click();
   await expect(page.getByText(/stale version/)).toBeVisible();
@@ -622,13 +622,13 @@ test("committee admin: topic edit surfaces a 400 (unknown field) and a 409 (stal
 // AC: a successful topic edit POSTs the dedicated `.../update` endpoint (not
 // PATCH) and asserts the exact request body, keyed `expectedVersion` (not
 // `version` — the field the real backend's parseExpectedVersion reads).
-test("committee admin: topic edit succeeds and posts the exact update body", async ({ page }) => {
-  await mockCommitteeApi(page);
-  await signIn(page, "/admin/committee/subjects/woon-vault");
+test("swarm admin: topic edit succeeds and posts the exact update body", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/subjects/woon-vault");
   await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
 
   let captured: unknown = null;
-  await page.route(/\/api\/committee\/admin\/subjects\/woon-vault\/update$/, async (route) => {
+  await page.route(/\/api\/swarm\/admin\/subjects\/woon-vault\/update$/, async (route) => {
     captured = route.request().postDataJSON();
     return route.fulfill(jsonReply({ ok: true, status: 200, subject: { ...TOPIC_FIXTURE, name: "Woon Vault Renamed", version: 4 } }));
   });
@@ -648,13 +648,13 @@ test("committee admin: topic edit succeeds and posts the exact update body", asy
 
 // AC: the deactivate flow (toggle → reason → confirm) POSTs the dedicated
 // deactivate endpoint and asserts expectedVersion/reason in the request body.
-test("committee admin: topic deactivate flow posts to the dedicated endpoint with expectedVersion and reason", async ({ page }) => {
-  await mockCommitteeApi(page);
-  await signIn(page, "/admin/committee/subjects/woon-vault");
+test("swarm admin: topic deactivate flow posts to the dedicated endpoint with expectedVersion and reason", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/subjects/woon-vault");
   await expect(page.getByRole("heading", { name: /Topic woon-vault/ })).toBeVisible();
 
   let captured: unknown = null;
-  await page.route(/\/api\/committee\/admin\/subjects\/woon-vault\/deactivate$/, async (route) => {
+  await page.route(/\/api\/swarm\/admin\/subjects\/woon-vault\/deactivate$/, async (route) => {
     captured = route.request().postDataJSON();
     return route.fulfill(jsonReply({ ok: true, status: 200, subject: { ...TOPIC_FIXTURE, status: "inactive", version: 4 } }));
   });
@@ -670,9 +670,9 @@ test("committee admin: topic deactivate flow posts to the dedicated endpoint wit
 
 // AC: applied/active/inactive filtering + one-time credential reveal + no
 // token_hash/bearer token rendered in detail JSON.
-test("committee admin: member filters, one-time credential reveal, and redacted detail JSON", async ({ page }) => {
-  await mockCommitteeApi(page);
-  await signIn(page, "/admin/committee");
+test("swarm admin: member filters, one-time credential reveal, and redacted detail JSON", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm");
   await page.getByRole("button", { name: "Members" }).click();
 
   await page.getByTestId("member-filter-applied").click();
@@ -699,7 +699,7 @@ test("committee admin: member filters, one-time credential reveal, and redacted 
 
   // Navigate to a member whose fixture carries a stray token_hash — the
   // rendered detail JSON must never show it raw.
-  await page.goto("/admin/committee/members/athena");
+  await page.goto("/admin/swarm/members/athena");
   const detailJson = page.getByTestId("member-json");
   await expect(detailJson).toBeVisible();
   await expect(detailJson).not.toContainText("should-never-render-raw");
@@ -708,9 +708,9 @@ test("committee admin: member filters, one-time credential reveal, and redacted 
 
 // AC: the "Inactive" filter renders the inactive set; manual-add, reactivate,
 // and rotate-key each mint and reveal their own one-time credential exactly once.
-test("committee admin: inactive filter, manual-add credential reveal, and reactivate/rotate-key credentials", async ({ page }) => {
-  await mockCommitteeApi(page);
-  await signIn(page, "/admin/committee");
+test("swarm admin: inactive filter, manual-add credential reveal, and reactivate/rotate-key credentials", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm");
   await page.getByRole("button", { name: "Members" }).click();
 
   await page.getByTestId("member-filter-inactive").click();
@@ -753,7 +753,7 @@ test("committee admin: inactive filter, manual-add credential reveal, and reacti
 
   // Rotate key: Athena is active, so `member-rotate-key` is offered; its
   // response mints a distinct fresh credential, shown exactly once.
-  await page.goto("/admin/committee/members/athena");
+  await page.goto("/admin/swarm/members/athena");
   await expect(page.getByRole("heading", { name: /Member athena/ })).toBeVisible();
 
   await page.getByTestId("member-rotate-key").click();
@@ -770,11 +770,11 @@ test("committee admin: inactive filter, manual-add credential reveal, and reacti
 // AC: session scheduling reason/ISO-ordering validation + UTC/local rendering
 // + roster snapshot + disabled illegal-transition controls. "Linked jobs" is
 // gone (no session-scoped job read exists on the real backend — see
-// mockCommitteeApi's header comment), and legal actions are now the 5 real
+// mockSwarmApi's header comment), and legal actions are now the 5 real
 // action names, computed client-side from the session's `state`.
-test("committee admin: session create validation, UTC/local timeline, roster, and disabled illegal actions", async ({ page }) => {
-  await mockCommitteeApi(page);
-  await signIn(page, "/admin/committee");
+test("swarm admin: session create validation, UTC/local timeline, roster, and disabled illegal actions", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm");
   await page.getByRole("button", { name: "Sessions" }).click();
   await page.getByTestId("new-session-toggle").click();
 
@@ -790,7 +790,7 @@ test("committee admin: session create validation, UTC/local timeline, roster, an
   await page.getByTestId("session-submit").click();
   await expect(page.getByText(/briefOpensAt < windowClosesAt < publishAt/)).toBeVisible();
 
-  await page.goto("/admin/committee/sessions/sess-1");
+  await page.goto("/admin/swarm/sessions/sess-1");
   // Timeline now only has Window closes / Published (no version/briefOpensAt/
   // publishAt — no GET route exposes them).
   await expect(page.locator(".adm-meta-grid").getByText("2026-07-20 20:00:00 UTC")).toBeVisible();
@@ -801,7 +801,7 @@ test("committee admin: session create validation, UTC/local timeline, roster, an
   await expect(page.getByRole("cell", { name: "Robotmoney", exact: true })).toBeVisible();
 
   // Default fixture state is "collecting" → only close/cancel are legal
-  // (backend/src/committee/admin.ts TRANSITIONS, restricted to the 5 real
+  // (backend/src/swarm/admin.ts TRANSITIONS, restricted to the 5 real
   // HTTP actions).
   await expect(page.getByTestId("session-action-close")).toBeEnabled();
   await expect(page.getByTestId("session-action-cancel")).toBeEnabled();
@@ -814,10 +814,10 @@ test("committee admin: session create validation, UTC/local timeline, roster, an
 // derived states, read-only recommendation detail, collapsed disclosure.
 // The disclosure no longer shows a signature/canonicalPayload/nonce — no
 // route anywhere returns them; it shows verified/body/memoUrl instead (see
-// committee-session.js's header comment for the full route composition).
-test("committee admin: roster matrix states, filter, and collapsed recommendation disclosure", async ({ page }) => {
-  await mockCommitteeApi(page);
-  await signIn(page, "/admin/committee/sessions/sess-1");
+// swarm-session.js's header comment for the full route composition).
+test("swarm admin: roster matrix states, filter, and collapsed recommendation disclosure", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/sessions/sess-1");
 
   const rows = page.getByTestId("roster-table").locator("tbody tr");
   // 3 roster rows + 3 (initially hidden) disclosure rows + 1 (hidden) empty-state row.
@@ -853,15 +853,15 @@ test("committee admin: roster matrix states, filter, and collapsed recommendatio
 // "excused" filter, and the excuse/restore controls each hit their OWN POST
 // endpoint (never a single PATCH with an `operation` field), body `{memberId}`
 // only — no `version` (roster rows aren't optimistic-locked on the real backend).
-test("committee admin: excused roster row renders distinctly and excuse/restore submit roster mutations", async ({ page }) => {
+test("swarm admin: excused roster row renders distinctly and excuse/restore submit roster mutations", async ({ page }) => {
   const excusedRosterRows: RosterRowFixture[] = [
     ...baseRosterRows(),
     { member_id: "ren", member_name: "Ren", member_lens: "growth", status: "excused",
       included_at: "2026-07-19T00:00:00.000Z", excused_at: "2026-07-19T01:00:00.000Z",
       reason: "Conflict of interest disclosed." },
   ];
-  await mockCommitteeApi(page, { rosterRows: excusedRosterRows });
-  await signIn(page, "/admin/committee/sessions/sess-1");
+  await mockSwarmApi(page, { rosterRows: excusedRosterRows });
+  await signIn(page, "/admin/swarm/sessions/sess-1");
 
   // The excused row renders distinctly (its own state cell) alongside the
   // submitted/expected/absent rows already covered by the matrix test above.
@@ -876,7 +876,7 @@ test("committee admin: excused roster row renders distinctly and excuse/restore 
 
   // Restore Ren (excused → expected) — its own endpoint, body {memberId, reason}.
   let capturedRestore: unknown = null;
-  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/roster\/restore$/, async (route) => {
+  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/roster\/restore$/, async (route) => {
     capturedRestore = route.request().postDataJSON();
     return route.fulfill(jsonReply({ ok: true, status: 200, sessionId: "sess-1", memberId: "ren" }));
   });
@@ -893,7 +893,7 @@ test("committee admin: excused roster row renders distinctly and excuse/restore 
 
   // Excuse Nova (expected → excused) — its own endpoint, body {memberId, reason}.
   let capturedExcuse: unknown = null;
-  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/roster\/excuse$/, async (route) => {
+  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/roster\/excuse$/, async (route) => {
     capturedExcuse = route.request().postDataJSON();
     return route.fulfill(jsonReply({ ok: true, status: 200, sessionId: "sess-1", memberId: "nova" }));
   });
@@ -909,38 +909,38 @@ test("committee admin: excused roster row renders distinctly and excuse/restore 
 
 // AC: aggregate fields render from a read-only aggregated session. Unlike the
 // original invented AdminSessionAggregate DTO, this data is the REAL
-// persisted shape (committee/domain.ts aggregateSession() writes
-// committeeRecommendation + synthesis onto the session row itself; toSession()
+// persisted shape (swarm/domain.ts aggregateSession() writes
+// swarmRecommendation + synthesis onto the session row itself; toSession()
 // reads them straight back — no sourceRecommendationIds field exists).
-test("committee admin: aggregate view renders quorum, stance counts, synthesis, and consensus", async ({ page }) => {
-  await mockCommitteeApi(page, {
+test("swarm admin: aggregate view renders quorum, stance counts, synthesis, and consensus", async ({ page }) => {
+  await mockSwarmApi(page, {
     session: sessionSummary({
       state: "aggregated",
-      synthesis: "The committee reads a bullish tilt across the panel.",
-      committeeRecommendation: {
+      synthesis: "The swarm reads a bullish tilt across the panel.",
+      swarmRecommendation: {
         quorum: { active: 3, submitted: 1, absent: ["nova", "robotmoney"], participation: 0.33 },
         stances: { bullish: 1, neutral: 0 }, meanConfidence: 0.8,
         consensus: ["Rotate into WOON"], disagreements: [],
       },
     }),
   });
-  await signIn(page, "/admin/committee/sessions/sess-1");
+  await signIn(page, "/admin/swarm/sessions/sess-1");
 
   await expect(page.getByRole("heading", { name: "Aggregate" })).toBeVisible();
   await expect(page.getByText("bullish: 1")).toBeVisible();
   await expect(page.locator(".adm-bullet-list").getByText("Rotate into WOON", { exact: true })).toBeVisible();
-  await expect(page.getByText("The committee reads a bullish tilt across the panel.")).toBeVisible();
+  await expect(page.getByText("The swarm reads a bullish tilt across the panel.")).toBeVisible();
 });
 
 // AC: lifecycle actions — confirm+reason required, synchronous state-change
 // response (never a 202 job envelope — no jobId/existing field exists on this
 // backend), idempotent no-op handling, and a visible 409 error.
-test("committee admin: lifecycle action requires confirm+reason, shows the new state, idempotent reuse, and 409", async ({ page }) => {
-  await mockCommitteeApi(page);
-  await signIn(page, "/admin/committee/sessions/sess-1");
+test("swarm admin: lifecycle action requires confirm+reason, shows the new state, idempotent reuse, and 409", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/sessions/sess-1");
 
   let capturedBody: unknown = null;
-  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/close$/, async (route) => {
+  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/close$/, async (route) => {
     capturedBody = route.request().postDataJSON();
     return route.fulfill(jsonReply({ ok: true, status: 200, session: { id: "sess-1", state: "window_closed", version: 3 } }));
   });
@@ -960,17 +960,17 @@ test("committee admin: lifecycle action requires confirm+reason, shows the new s
 
   // Re-open the session detail in `window_closed` (aggregate/reopen/cancel are
   // legal from there) to exercise the idempotent no-op branch on aggregate.
-  await mockCommitteeApi(page, { session: sessionSummary({ state: "window_closed" }) });
-  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/aggregate$/, (route) =>
+  await mockSwarmApi(page, { session: sessionSummary({ state: "window_closed" }) });
+  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/aggregate$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, idempotent: true, session: { id: "sess-1", state: "window_closed", version: 3 } })));
-  await page.goto("/admin/committee/sessions/sess-1");
+  await page.goto("/admin/swarm/sessions/sess-1");
   await page.getByTestId("session-action-aggregate").click();
   await page.getByTestId("action-reason").fill("Aggregating after window close.");
   await page.getByTestId("action-confirm-submit").click();
   await expect(page.getByTestId("action-result")).toContainText("idempotent");
 
   // A concurrent state change surfaces the server's 409 clearly.
-  await page.route(/\/api\/committee\/admin\/sessions\/sess-1\/cancel$/, (route) =>
+  await page.route(/\/api\/swarm\/admin\/sessions\/sess-1\/cancel$/, (route) =>
     route.fulfill(jsonReply({ ok: false, status: 409, error: "terminal_state:published" }, 409)));
   await page.getByTestId("session-action-cancel").click();
   await page.getByTestId("action-reason").fill("Cancelling due to topic deprecation.");

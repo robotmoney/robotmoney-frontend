@@ -145,7 +145,7 @@ describe("externalPgOverlayYaml — removes the container, the volume and the ed
     expect(yaml).toContain("  pgdata: !reset null");
   });
 
-  test.each(["api", "worker-committee", "worker-analytics", "worker-research"])(
+  test.each(["api", "worker-swarm", "worker-analytics", "worker-research"])(
     "%s loses its depends_on so compose cannot pull postgres back in",
     (service) => {
       expect(yaml).toContain(`  ${service}:\n    depends_on: !reset null`);

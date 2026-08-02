@@ -3,7 +3,7 @@
 // recorded in job_runs.
 import { makeAnalyticsHandlers } from "./analytics.ts";
 import { refreshBuybacks } from "./buybacks.ts";
-import * as committee from "./committee.ts";
+import * as swarm from "./swarm.ts";
 import * as projects from "./projects.ts";
 import { sampleSharePrice, sampleVaultAdapters } from "./vault.ts";
 import { sampleWalletBalances, sampleWalletSleeves } from "./wallet.ts";
@@ -35,19 +35,19 @@ export const handlers: Record<string, JobHandler> = {
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,
   // swarm session lifecycle
-  "committee.open_session": committee.openSession,
-  "committee.publish_brief": committee.publishBrief,
-  "committee.close_window": committee.closeWindow,
-  "committee.aggregate": committee.aggregateSession,
-  "committee.publish": committee.publishSession,
+  "swarm.open_session": swarm.openSession,
+  "swarm.publish_brief": swarm.publishBrief,
+  "swarm.close_window": swarm.closeWindow,
+  "swarm.aggregate": swarm.aggregateSession,
+  "swarm.publish": swarm.publishSession,
   // Three notification kinds, one delivery body. They stay separate registry
-  // entries rather than collapsing into a shared "committee.send_notification"
+  // entries rather than collapsing into a shared "swarm.send_notification"
   // because `kind` is what an operator greps in `jobs`/`job_runs` when a mail
   // did not arrive, and "the receipt lane is backed up" is a different incident
   // from "approvals are not going out".
-  "committee.send_application_received_notification": committee.sendApplicationReceivedNotification,
-  "committee.send_activation_notification": committee.sendActivationNotification,
-  "committee.send_seat_open_notification": committee.sendSeatOpenNotification,
+  "swarm.send_application_received_notification": swarm.sendApplicationReceivedNotification,
+  "swarm.send_activation_notification": swarm.sendActivationNotification,
+  "swarm.send_seat_open_notification": swarm.sendSeatOpenNotification,
   // projects "Agentic Economy Ecosystem" data pipelines (issue #87). Ported from
   // the deprecated bot-analytics edge functions onto the kind→handler pattern.
   // discover/refreshCoins/refreshWallets/syncRevenue/fetchVaults each already

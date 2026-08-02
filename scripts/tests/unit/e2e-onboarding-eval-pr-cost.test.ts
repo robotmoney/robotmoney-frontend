@@ -17,7 +17,7 @@
 //     exercised before merge, and only breaks `main` afterwards);
 //   - a push to the default branch runs it;
 //   - the NIGHTLY `schedule` mirror of this same workflow runs it (issue #373:
-//     committee-opencode-nightly.yml, which used to be the eval's scheduled
+//     swarm-opencode-nightly.yml, which used to be the eval's scheduled
 //     home, is retired — nightly is now a mirror of the merge-to-main set, so
 //     the schedule route must spend exactly what the push route spends);
 //   - a `workflow_dispatch` runs it only when the `real_eval` input asked;
@@ -729,7 +729,7 @@ describe("the coverage that replaces the per-PR eval is really there", () => {
     expect(onboardingRailsYml).toMatch(/github\.event\.pull_request\.draft == false/);
   });
 
-  // Issue #373 retired committee-opencode-nightly.yml. Its measurement was the
+  // Issue #373 retired swarm-opencode-nightly.yml. Its measurement was the
   // SAME real-inference admission this workflow already spent on a push to
   // main, so the nightly it held became this workflow's own `schedule:` — and
   // the coverage that replaces the per-PR eval must therefore be found HERE, in
@@ -745,9 +745,9 @@ describe("the coverage that replaces the per-PR eval is really there", () => {
   });
 
   test("the retired nightly is gone, and nothing still points at it", () => {
-    expect(existsSync(join(repoRoot, ".github/workflows/committee-opencode-nightly.yml"))).toBe(false);
+    expect(existsSync(join(repoRoot, ".github/workflows/swarm-opencode-nightly.yml"))).toBe(false);
     // The workflow may EXPLAIN the retirement in prose; what it must not do is
     // cite it as a live home for the measurement.
-    expect(e2eYml).not.toMatch(/SCHEDULED HOME is\s*\n?#?\s*\.github\/workflows\/committee-opencode-nightly\.yml/);
+    expect(e2eYml).not.toMatch(/SCHEDULED HOME is\s*\n?#?\s*\.github\/workflows\/swarm-opencode-nightly\.yml/);
   });
 });
