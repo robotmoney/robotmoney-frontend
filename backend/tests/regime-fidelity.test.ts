@@ -30,20 +30,33 @@
 // maxCompositeDiff≈0.0725 / 9 label rows on that basis).
 //
 // Because a v3 full-history recompute is already what production does, adding
-// BTC_MVRV to the floor makes regime-history.csv.gz, regime-snapshot.json.gz,
+// BTC_MVRV to the floor made regime-history.csv.gz, regime-snapshot.json.gz,
 // and regime-compute-reference.json.gz all STALE the same way (every
-// onchain-panel-derived number changes) — they were regenerated together via
-// `bun run scripts/regime-goldens-regenerate.ts`, a single fresh v3 replay
-// over the BTC_MVRV-inclusive floor, using this SAME already-proven-faithful
-// TS pipeline. That means regime-compute-reference.json.gz is no longer an
-// INDEPENDENT cross-implementation reference (the original out-of-repo
-// agentjuno/robotmoney generator is unavailable to this repo) — it is
-// in-repo self-consistent from this regeneration forward. The STRICT
-// multi-day test below therefore now proves internal consistency of the
-// replay (dateAxis/output shape, no accidental divergence between the two
-// call sites), not independent algorithm-port fidelity; that independent
-// proof stands on the historical record (this suite passed it before #400
-// touched the floor). The TRACKING test's tolerances are unchanged and still
+// onchain-panel-derived number changes). regime-history.csv.gz and
+// regime-snapshot.json.gz are regenerated via
+// `bun run scripts/regime-goldens-regenerate.ts` (this SAME TS pipeline —
+// legitimate, since they're production-methodology outputs, not independent-
+// fidelity fixtures).
+//
+// regime-compute-reference.json.gz is different: it exists ONLY to prove
+// this TS port matches an INDEPENDENT implementation. PR #444 (issue #400)
+// temporarily regenerated it from this repo's own TS pipeline instead —
+// incorrectly claiming the original out-of-repo agentjuno/robotmoney JS
+// generator was "permanently unavailable" — which silently narrowed this
+// STRICT test from independent cross-implementation fidelity down to mere
+// self-consistency. That claim was false (issue #447):
+// `robotmoney/robotmoney-site`, an active fork in this same GitHub org,
+// still holds the exact original `scripts/regime/{compute,lib/*}.js`,
+// byte-identical to upstream. This repo now vendors that original JS
+// verbatim (`backend/scripts/vendor/regime-reference-js/`, see its
+// README.md for blob-sha provenance) and regenerates
+// regime-compute-reference.json.gz from it via
+// `bun run scripts/regime-independent-reference-regenerate.ts` — restoring
+// this as a genuine independent reference. The STRICT multi-day test below
+// once again proves independent algorithm-port fidelity (verified 0
+// mismatches across the full 3,102-day history + every field, including
+// BTC_MVRV's real ~9.3% onchain-panel weight), not just internal
+// consistency. The TRACKING test's tolerances are unchanged and still
 // provide real regression protection going forward.
 import { test, expect } from "bun:test";
 import {
@@ -164,24 +177,34 @@ test("regime fidelity (STRICT): full last-day pipeline matches the committed reg
 // above) because the ORIGINAL update.js froze every earlier row at an earlier
 // raw-data vintage, so a fresh recompute from the committed raw legitimately
 // diverged. That divergence was a data-vintage artifact, NOT a port defect —
-// so to prove multi-day methodology fidelity this test compared against a
+// so to prove multi-day methodology fidelity this test compares against a
 // REFERENCE computed by the ORIGINAL JS pipeline over the SAME vendored raw
-// fixture (regime-compute-reference.json.gz, produced by driving
-// agentjuno/robotmoney scripts/regime end-to-end — lib/utils
+// fixture (regime-compute-reference.json.gz — lib/utils
 // (buildDateAxis + alignDailyForwardFill/ZeroFill) → lib/transforms.applyTransform
 // → compute.js computeRegime, 2-panel [macro, onchain] default).
 //
 // Issue #400 (see the file-header note): this repo's OWN CURRENT_REGIME_VERSION
 // "v3" methodology already recomputes the full history fresh on every run (no
-// frozen lockout), and regime-history.csv.gz / regime-compute-reference.json.gz
-// are now BOTH regenerated together, from the SAME in-repo v3 replay, via
-// `bun run scripts/regime-goldens-regenerate.ts` — the out-of-repo original-JS
-// generator is unavailable to this repo. This test therefore no longer proves
-// independent cross-implementation fidelity (that proof stands on the
-// historical record predating #400); it now guards against the replay ever
-// silently diverging between call sites / across a future regeneration. A
-// regression in the ported math (rank, sign-align, inverse-correlation
-// weights, composite, smoothing) still fails here.
+// frozen lockout), so regime-history.csv.gz was regenerated via
+// `bun run scripts/regime-goldens-regenerate.ts` (this SAME TS pipeline — a
+// legitimate production-methodology output, not an independent-fidelity
+// fixture).
+//
+// Issue #447: regime-compute-reference.json.gz was, for a time (PR #444),
+// ALSO regenerated from this same in-repo TS pipeline — based on the false
+// claim that the original out-of-repo agentjuno/robotmoney JS generator was
+// permanently unavailable. It is not: `robotmoney/robotmoney-site`, a fork
+// in this same GitHub org, still holds it byte-identical to upstream. This
+// repo now vendors that original JS verbatim
+// (`backend/scripts/vendor/regime-reference-js/`) and regenerates
+// regime-compute-reference.json.gz from it via
+// `bun run scripts/regime-independent-reference-regenerate.ts`. This test
+// therefore once again proves independent cross-implementation fidelity —
+// verified 0 mismatches across all 3,102 days and every field, including
+// BTC_MVRV's real, non-trivial ~9.3% onchain-panel weight in this run — not
+// just internal self-consistency. A regression in the ported math (rank,
+// sign-align, inverse-correlation weights, composite, smoothing) still
+// fails here, exactly as it always has.
 test("regime fidelity (STRICT, multi-day): our TS computeRegime reproduces the ORIGINAL JS pipeline to <1e-12 across ALL rows + exact labels", async () => {
   const { result, dateAxis } = await replay();
   const ref = await loadRegimeComputeReference();

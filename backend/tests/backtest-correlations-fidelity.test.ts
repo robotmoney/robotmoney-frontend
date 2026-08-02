@@ -15,28 +15,34 @@
 // ORIGINAL JS over the SAME raw fixture; the committed snapshot is asserted to
 // TRACK within the documented vintage drift.
 //
-// Reference (regime-backtest-correlations-reference.json.gz) was originally
-// produced by running update.js computeBacktest (stripped) + computeCorrelations
-// VERBATIM over:
-//   • result: reconstructed from regime-compute-reference.json.gz (original JS
-//     2-panel computeRegime over the vendored raw fixture — which our TS port
+// Reference (regime-backtest-correlations-reference.json.gz) is produced by
+// running the ORIGINAL, vendored update.js computeBacktest (stripped) +
+// computeCorrelations VERBATIM over:
+//   • result: the ORIGINAL JS 2-panel computeRegime over the vendored raw
+//     fixture (regime-compute-reference.json.gz — which our TS port
 //     reproduces to <1e-12, proven in regime-fidelity.test.ts)
 //   • extras: real Yahoo ^GSPC / ETH-USD + FRED DTB3, truncated to <= asof, vendored
 //     as regime-extras.json.gz.
-// via the out-of-repo generator (scratchpad/gen-fixtures.js in the PR that added
-// this test).
+// via `bun run scripts/regime-independent-reference-regenerate.ts`, which
+// drives `backend/scripts/vendor/regime-reference-js/` — a verbatim vendoring
+// of `robotmoney/robotmoney-site` (a fork of agentjuno/robotmoney, same
+// GitHub org) scripts/regime/update.js's computeBacktest/computeCorrelations,
+// extracted with no logic changes (see that directory's README.md for
+// blob-sha provenance).
 //
-// Issue #400: adding real BTC_MVRV to the floor makes the composite (and every
-// downstream backtest/correlations number) change, so this reference — like
-// regime-compute-reference.json.gz — was regenerated together with the other
-// regime goldens via `bun run scripts/regime-goldens-regenerate.ts`: the SAME
-// already-proven-faithful in-repo TS pipeline (computeBacktest/computeCorrelations
-// over a fresh v3 computeRegime), NOT the out-of-repo original-JS generator
-// (unavailable to this repo). From this regeneration forward this file is
-// in-repo self-consistent, not an independent cross-implementation check —
-// the STRICT test below now guards against the replay diverging between call
-// sites / across a future regeneration, not independent algorithm-port
-// fidelity (that proof stands on the historical record predating #400).
+// Issue #400: adding real BTC_MVRV to the floor changed the composite (and
+// every downstream backtest/correlations number).
+//
+// Issue #447: for a time (PR #444), this reference was regenerated from this
+// repo's OWN in-repo TS pipeline instead of the original JS — based on the
+// false claim that the original out-of-repo agentjuno/robotmoney generator
+// was permanently unavailable. It is not: `robotmoney/robotmoney-site` still
+// holds it byte-identical to upstream, verified by matching blob shas. This
+// repo now vendors that original code and regenerates this fixture from it
+// again, restoring the STRICT test below to a genuine independent
+// cross-implementation check — verified 0 mismatches (correlationLeaves=48,
+// backtestLeaves=4992) over the BTC_MVRV-inclusive floor, not merely a guard
+// against the replay diverging between call sites.
 import { test, expect } from "bun:test";
 import {
   loadRawIndicatorHistory,
