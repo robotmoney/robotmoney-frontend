@@ -14,7 +14,6 @@ import {
   alignDailyForwardFill,
   rollingPercentileRank,
   pctChangeLag,
-  percentileInWindow,
 } from "../transform/math.ts";
 
 const CHANNEL_START = "2018-01-01";
@@ -93,6 +92,17 @@ function lastFinite(arr: number[]): number {
   return NaN;
 }
 
+// The original's "latest" reading (channel-divergence.js::summarize, ~line
+// 181/187: `const last = dates.length - 1; beta[last]`) is the POSITIONAL
+// last element of the date-aligned series — NaN if that day itself didn't
+// resolve — not the last FINITE element (lastFinite above, which can differ
+// when the series ends in NaN/a gap). Ported verbatim for parity; see #465
+// finding 11.2 (R5a). Distinct from lastFinite: this ALWAYS matches the axis'
+// final date, never reaching back through trailing NaNs.
+function positionalLast(arr: number[]): number {
+  return arr.length ? arr[arr.length - 1] : NaN;
+}
+
 function nn(v: number): number | null {
   return Number.isFinite(v) ? v : null;
 }
@@ -106,6 +116,17 @@ function seriesOf(dateAxis: string[], arr: number[]): { date: string; value: num
 // the final day. Ported from late-cycle-signals.js `weekly`.
 function weekly<T>(pts: T[]): T[] {
   return pts.filter((_, i) => i % 7 === 0 || i === pts.length - 1);
+}
+
+// R5b (#465 finding 11.6): v0's late-cycle-signals.js::latestOf (~line
+// 284-289) — last-FINITE scan paired with its own date, 6-dec rounded.
+// Ported verbatim so summary.* keeps v0's {date, value} shape instead of
+// v1's prior unrounded {latest}.
+function latestOf(dates: string[], arr: number[]): { date: string | null; value: number | null } {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (Number.isFinite(arr[i])) return { date: dates[i], value: +arr[i].toFixed(6) };
+  }
+  return { date: null, value: null };
 }
 
 // ─── CHANNEL DIVERGENCE ──────────────────────────────────────────────────────
@@ -144,13 +165,23 @@ export function computeChannelDivergence(inputs: ChannelInputs, asof: string): R
   const qqq90 = pctChangeLag(qqqA, FLOW_WINDOW);
   const flow = stables90.map((s, i) => (Number.isFinite(s) && Number.isFinite(qqq90[i]) ? s - qqq90[i] : NaN));
 
-  const betaLast = lastFinite(beta);
-  const betaFinite = beta.filter(Number.isFinite);
-  const betaPct = betaFinite.length ? percentileInWindow(betaLast, betaFinite) : NaN;
-  const ratioPctLast = lastFinite(ratioPct);
-  const flowLast = lastFinite(flow);
-  const flowFinite = flow.filter(Number.isFinite);
-  const flowPct = flowFinite.length ? percentileInWindow(flowLast, flowFinite) : NaN;
+  // R7 (#465 finding 11.5/D8): all three CHANNEL inputs must share ONE
+  // percentile definition — the same trailing-756d, 30-obs-gated, midrank
+  // rollingPercentileRank the regime core uses — so the composite never mixes
+  // a look-ahead-contaminated full-sample stat (percentileInWindow) with a
+  // point-in-time rolling rank. BTC_QQQ_RATIO already used rollingPercentileRank;
+  // BTC_BETA and STABLES_QQQ_FLOW now match it instead of percentileInWindow.
+  const betaPctSeries = rollingPercentileRank(beta, PCT_RANK_WINDOW);
+  const flowPctSeries = rollingPercentileRank(flow, PCT_RANK_WINDOW);
+
+  // R5a (#465 finding 11.2): positional-last, matching v0's
+  // channel-divergence.js::summarize (`beta[dates.length - 1]`), not
+  // last-finite — see positionalLast() above.
+  const betaLast = positionalLast(beta);
+  const betaPct = positionalLast(betaPctSeries);
+  const ratioPctLast = positionalLast(ratioPct);
+  const flowLast = positionalLast(flow);
+  const flowPct = positionalLast(flowPctSeries);
   const channelPct = [betaPct, ratioPctLast, flowPct].filter(Number.isFinite);
   const composite = channelPct.length ? channelPct.reduce((a, b) => a + b, 0) / channelPct.length : NaN;
 
@@ -284,11 +315,11 @@ export function computeLateCycle(inputs: LateCycleInputs, asof: string): Researc
       consumer_conf_pct: wseries(confPct),
     },
     summary: {
-      concentration: { latest: nn(lastFinite(capVsEqualPct)) },
-      top7_vs_spy: { latest: nn(lastFinite(top7VsSpyPct)) },
-      mna: { latest: nn(lastFinite(mnaPct)) },
-      margin_yoy: { latest: nn(lastFinite(marginYoY)) },
-      consumer_conf: { latest: nn(lastFinite(confA)) },
+      concentration: latestOf(dateAxis, capVsEqualPct),
+      top7_vs_spy: latestOf(dateAxis, top7VsSpyPct),
+      mna: latestOf(dateAxis, mnaPct),
+      margin_yoy: latestOf(dateAxis, marginYoY),
+      consumer_conf: latestOf(dateAxis, confA),
     },
   };
 }
