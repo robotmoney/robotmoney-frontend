@@ -1,0 +1,14 @@
+-- v0 (robotmoney-site) archive support: pre-launch swarm_sessions had no
+-- signed swarm_recommendations mechanism at all — each v0 session JSON simply
+-- embedded a `takes` array (per-member narrative recommendations) inline on
+-- the session object. swarm_recommendations (0004_committee.sql) is a NEWER,
+-- cryptographically-signed table (signature text NOT NULL, verified boolean,
+-- nonce) built for the live agent-signing flow; backfilling v0's unsigned
+-- narrative content into it would require fabricating a signature, which
+-- would misrepresent legacy content as cryptographically verified. Instead
+-- v0's takes get their own nullable jsonb column here — a faithful, honest
+-- port of data that already lived exactly this way (inline on the session),
+-- not an invention of new semantics.
+--
+-- Additive and idempotent: IF NOT EXISTS makes a second run a no-op.
+ALTER TABLE swarm_sessions ADD COLUMN IF NOT EXISTS legacy_takes jsonb;

@@ -1,0 +1,12 @@
+{
+  "formatVersion": 1,
+  "sourceRepo": "/drive2/home/lucas/robotmoney/robotmoney-site",
+  "sourceCommit": "0844d42608e3e82cb679881acc524be4f20df9d9",
+  "extractedAt": "2026-08-03T18:35:14Z",
+  "counts": {
+    "members": 3,
+    "subjects": 4,
+    "sessions": 32
+  },
+  "checksum": "e58cd39798aa9bd02e621783dc9d4b5f2a87922150187071c5d8a80e6ab0777f"
+}
