@@ -45,12 +45,24 @@ interface FieldSpec {
   expected: unknown;
 }
 
-interface Drift {
+export interface Drift {
   entity: string;
   naturalKey: string;
   field: string;
   oldValue: unknown;
   newValue: unknown;
+}
+
+// Per-entity insert/unchanged/drift counts plus every field-level drift found,
+// so a caller (the CLI entrypoint below, or a test) can act on precise
+// structured data instead of scraping console output or a process-global exit
+// code. Same shape convention as repopulateEdgarSeed()'s report
+// (analytics/edgar-seed-loader.ts).
+export interface V0BootstrapResult {
+  members: { inserted: number; unchanged: number; drifted: number; total: number };
+  subjects: { inserted: number; unchanged: number; drifted: number; total: number };
+  sessions: { inserted: number; unchanged: number; drifted: number; total: number };
+  drifts: Drift[];
 }
 
 // Order/key-order-independent structural equality for parsed jsonb values.
@@ -261,7 +273,10 @@ async function processSession(sess: V0Session, drifts: Drift[]): Promise<RowOutc
   return "drift";
 }
 
-export async function main(): Promise<void> {
+// The core, testable bootstrap: loads the archive, applies it to the
+// database, and returns a structured result — no process.exitCode side
+// effect, so a caller (test or CLI) decides what to do with the outcome.
+export async function runV0SeedBootstrap(): Promise<V0BootstrapResult> {
   const { payload, manifest } = await loadV0Archive();
   console.log(
     `[v0-seed-bootstrap] loaded archive: sourceRepo=${manifest.sourceRepo} sourceCommit=${manifest.sourceCommit} ` +
@@ -324,7 +339,7 @@ export async function main(): Promise<void> {
     `[v0-seed-bootstrap] sessions: inserted=${sessionsInserted} unchanged=${sessionsUnchanged} drifted=${sessionsDrifted} (of ${payload.sessions.length})`,
   );
 
-  // ── Summary — attempted every entity above BEFORE deciding the exit code,
+  // ── Summary — attempted every entity above BEFORE deciding the outcome,
   // so a drift earlier in the run never suppresses inserts that come after it.
   if (drifts.length > 0) {
     console.error(
@@ -336,10 +351,25 @@ export async function main(): Promise<void> {
         `  - ${d.entity} (${d.naturalKey}) field "${d.field}": existing=${JSON.stringify(d.oldValue)} incoming=${JSON.stringify(d.newValue)}`,
       );
     }
-    process.exitCode = 1;
   } else {
     console.log("[v0-seed-bootstrap] no inconsistencies detected — bootstrap complete.");
   }
+
+  return {
+    members: { inserted: membersInserted, unchanged: membersUnchanged, drifted: membersDrifted, total: payload.members.length },
+    subjects: { inserted: subjectsInserted, unchanged: subjectsUnchanged, drifted: subjectsDrifted, total: payload.subjects.length },
+    sessions: { inserted: sessionsInserted, unchanged: sessionsUnchanged, drifted: sessionsDrifted, total: payload.sessions.length },
+    drifts,
+  };
+}
+
+// Thin CLI entrypoint: run the core bootstrap and translate its result into
+// the process exit code (never the other way around) — kept separate from
+// runV0SeedBootstrap() so tests can assert on the structured result directly
+// without mutating global process state.
+export async function main(): Promise<void> {
+  const result = await runV0SeedBootstrap();
+  if (result.drifts.length > 0) process.exitCode = 1;
 }
 
 // Run directly: `bun run scripts/v0-seed-bootstrap.ts`
