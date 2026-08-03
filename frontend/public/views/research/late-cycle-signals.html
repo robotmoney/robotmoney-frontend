@@ -56,40 +56,47 @@
       </div>
     </template>
 
+    <!-- What each gauge measures. The READING column that used to sit here was
+         hardcoded at authoring time while the backend recomputed these daily,
+         and it had drifted far enough to change the conclusion: concentration
+         read 53% here against 70.8% live, which is the difference between
+         mid-cycle and "saturated (late-cycle)". The note under it called those
+         frozen figures "readings as published on the live research preview".
+         The live panel above is now the only place a number appears, and it
+         carries its own asof. What survives here is the part the payload does
+         not state: what each gauge is actually measuring. -->
     <div class="stub__table-wrap">
       <table class="stub__table">
-        <caption class="stub__caption">Where the four gauges stand</caption>
+        <caption class="stub__caption">What each gauge measures</caption>
         <thead>
           <tr>
             <th scope="col" class="stub__th">Gauge</th>
-            <th scope="col" class="stub__th stub__th--num">Reading</th>
             <th scope="col" class="stub__th">Basis</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <th scope="row" class="stub__rowhead">Concentration</th>
-            <td class="stub__num">53%</td>
-            <td class="stub__td-sub">SPY/RSP 3y percentile</td>
+            <th scope="row" class="stub__rowhead">Index concentration</th>
+            <td class="stub__td-sub">SPY/RSP ratio, 3y percentile</td>
+          </tr>
+          <tr>
+            <th scope="row" class="stub__rowhead">Top-7 basket vs SPY</th>
+            <td class="stub__td-sub">NVDA, MSFT, AAPL, GOOGL, AMZN, META, AVGO vs SPY, 3y percentile</td>
           </tr>
           <tr>
             <th scope="row" class="stub__rowhead">M&amp;A activity</th>
-            <td class="stub__num">94%</td>
-            <td class="stub__td-sub">S-4 count 3y percentile</td>
+            <td class="stub__td-sub">SEC EDGAR monthly S-4 filing count, 3y percentile</td>
           </tr>
           <tr>
             <th scope="row" class="stub__rowhead">Margin debt</th>
-            <td class="stub__num">+9.9%</td>
-            <td class="stub__td-sub">YoY growth</td>
+            <td class="stub__td-sub">FRED Z.1 broker-dealer margin loans, YoY growth</td>
           </tr>
           <tr>
-            <th scope="row" class="stub__rowhead">Consumer conf.</th>
-            <td class="stub__num">44.8</td>
-            <td class="stub__td-sub">UMich sentiment</td>
+            <th scope="row" class="stub__rowhead">Consumer confidence</th>
+            <td class="stub__td-sub">FRED UMCSENT, University of Michigan sentiment</td>
           </tr>
         </tbody>
       </table>
-      <p class="stub__table-note">Readings as published on the live research preview.</p>
     </div>
 
     <div class="stub__body">

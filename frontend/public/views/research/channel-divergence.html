@@ -48,34 +48,37 @@
   </template>
 
   <section class="rs__sec">
-    <h2 class="rs__h2">Published readings</h2>
+    <h2 class="rs__h2">Long-run reference</h2>
+    <!-- The READING column that used to sit beside these medians was hardcoded
+         at authoring time and drifted against the live panel above (0.52 vs
+         0.479, 7% vs 5.9%, -5.9% vs -7.1% on 2026-08-03), while its caption
+         described it as what the research page publishes. The medians are the
+         part that is genuinely fixed and genuinely useful, since the payload
+         carries a current value and a percentile but no long-run baseline to
+         read it against. Current numbers now come only from the live panel. -->
     <div class="rs__tablewrap">
       <table class="rs__table">
         <caption class="rs__caption">
-          The three transmission indicators as published on the research page. The live panel
-          above carries current values whenever the signal API responds.
+          The baseline each indicator is read against. Current values are in the live panel
+          above, with the date they were computed.
         </caption>
         <thead>
           <tr>
             <th scope="col">Indicator</th>
-            <th scope="col">Reading</th>
             <th scope="col">8y median</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <th scope="row">BTC &beta; vs risk-appetite</th>
-            <td class="rs__num">0.52</td>
             <td class="rs__num">1.04</td>
           </tr>
           <tr>
             <th scope="row">BTC/QQQ percentile</th>
-            <td class="rs__num">7%</td>
             <td class="rs__num">57%</td>
           </tr>
           <tr>
             <th scope="row">Stables vs QQQ 90d flow</th>
-            <td class="rs__num">-5.9%</td>
             <td class="rs__num">+8.9%</td>
           </tr>
         </tbody>
