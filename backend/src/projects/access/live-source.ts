@@ -9,6 +9,14 @@
 // the volatile metrics (market cap / FDV / 24h / revenue / TVL) are all fetched
 // live here. Fully-autonomous multi-source discovery (the legacy 1963-line
 // discover-agents crawler) is a tracked follow-up — see the issue open_questions.
+//
+// The discovery seed itself (R11 follow-up —
+// docs/audits/v0-v1-parity/R11-projects-supabase-audit.md §6) is the REAL v0
+// project/agent/coin/wallet/vault identity roster, committed at
+// ../seed/v0-roster-data.json and loaded network-free via ../seed/roster-seed.ts.
+// It is regenerated deliberately by an operator via
+// `bun run projects-roster-seed:regenerate` (scripts/projects-roster-seed-
+// regenerate.ts) — never implicitly here.
 import { config, resolveBaseRpcSource, resolvePriceSource, resolveTrackedAssets } from "../../config.ts";
 import { callAsset, callDecimals, callTotalAssets, type RpcCallOptions } from "../../chain/base-rpc-client.ts";
 import {
@@ -19,7 +27,7 @@ import {
 } from "../../chain/wallet-valuation.ts";
 import type { CoinGeckoMarketRow, DexPayload } from "../transforms.ts";
 import type { DiscoveredProject, Erc4626Read, ProjectsDataSource } from "./data-source.ts";
-import { DISCOVERY_DATASET } from "../fixtures/dataset.ts";
+import { loadV0Roster } from "../seed/roster-seed.ts";
 
 const CG_BASE = "https://api.coingecko.com/api/v3";
 const DEX_BASE = "https://api.dexscreener.com/latest/dex/tokens";
@@ -73,7 +81,9 @@ export const liveProjectsDataSource: ProjectsDataSource = {
   kind: "live",
 
   async discoverProjects(): Promise<DiscoveredProject[]> {
-    return structuredClone(DISCOVERY_DATASET);
+    // Deep-clone so a handler mutating a record can never corrupt the seed
+    // (same discipline as fixture-source.ts's discoverProjects).
+    return structuredClone(await loadV0Roster());
   },
 
   async coinGeckoMarkets(ids: string[]): Promise<CoinGeckoMarketRow[]> {
