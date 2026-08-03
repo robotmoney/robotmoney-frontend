@@ -16,6 +16,7 @@
     "edgar-seed:regenerate": "bun run scripts/edgar-seed-regenerate.ts",
     "v0-seed:bootstrap": "bun run scripts/v0-seed-bootstrap.ts",
     "floor-seed:regenerate": "bun run scripts/floor-seed-regenerate.ts",
+    "prod-bootstrap": "bun run scripts/prod-bootstrap.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
