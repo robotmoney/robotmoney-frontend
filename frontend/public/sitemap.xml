@@ -14,6 +14,17 @@
   <url><loc>https://robotmoney.net/blog</loc><lastmod>2026-07-24</lastmod><changefreq>weekly</changefreq><priority>0.6</priority></url>
   <url><loc>https://robotmoney.net/visualizations</loc><lastmod>2026-07-24</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
   <url><loc>https://robotmoney.net/smart-contract-risks</loc><lastmod>2026-07-24</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
+
+  <!-- Research. These four carry their own titles and descriptions in
+       assets/js/app/seo.js and are linked from /blog, /media and /regime, but
+       were never declared here, so the only way to them was an internal link.
+       The two /research/* pages are recomputed daily from the research signals,
+       hence `daily`; the two reference pieces are long-form prose that changes
+       when the method does. -->
+  <url><loc>https://robotmoney.net/research/channel-divergence</loc><lastmod>2026-08-03</lastmod><changefreq>daily</changefreq><priority>0.6</priority></url>
+  <url><loc>https://robotmoney.net/research/late-cycle-signals</loc><lastmod>2026-08-03</lastmod><changefreq>daily</changefreq><priority>0.6</priority></url>
+  <url><loc>https://robotmoney.net/regime-detection</loc><lastmod>2026-07-24</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
+  <url><loc>https://robotmoney.net/regime/indicators</loc><lastmod>2026-07-24</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
   <url><loc>https://robotmoney.net/disclaimer</loc><lastmod>2026-07-24</lastmod><changefreq>yearly</changefreq><priority>0.3</priority></url>
   <url><loc>https://robotmoney.net/terms</loc><lastmod>2026-08-01</lastmod><changefreq>yearly</changefreq><priority>0.3</priority></url>
   <url><loc>https://robotmoney.net/privacy</loc><lastmod>2026-08-01</lastmod><changefreq>yearly</changefreq><priority>0.3</priority></url>

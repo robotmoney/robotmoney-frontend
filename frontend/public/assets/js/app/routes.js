@@ -141,7 +141,13 @@ export function routeMetaFor(pathname) {
 /** @type {Record<string, string>} */
 const ROUTES = {
   "/": HOME_VIEW,
-  "/research": HOME_VIEW,
+  // NOTE: no "/research" entry. It used to resolve to HOME_VIEW, which served
+  // the entire home page at a second URL — duplicate content for a crawler, and
+  // a visitor who typed it got a page with no research on it. Nothing links to
+  // it, and the old site 404s it. There is no research index to point at either:
+  // /blog already lists both research pieces as cards, so a second listing would
+  // just be /blog again under another address. Falling through to the catch-all
+  // (→ views/research.html, absent → not-found) is the honest answer.
   "/allocation": ALLOCATION_VIEW,
   "/performance": PERFORMANCE_VIEW,
   "/allocation2": PERFORMANCE_VIEW, // legacy redirect
