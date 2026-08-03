@@ -17,6 +17,8 @@
     "v0-seed:bootstrap": "bun run scripts/v0-seed-bootstrap.ts",
     "floor-seed:regenerate": "bun run scripts/floor-seed-regenerate.ts",
     "prod-bootstrap": "bun run scripts/prod-bootstrap.ts",
+    "regime-eq-comparison:regenerate": "bun run scripts/regime-eq-comparison-regenerate.ts",
+    "weighting-comparison:regenerate": "bun run scripts/weighting-comparison-regenerate.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
