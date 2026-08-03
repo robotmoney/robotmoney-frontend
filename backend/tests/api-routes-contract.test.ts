@@ -8,12 +8,12 @@
 // contract ROUTES:
 //
 //   • a literal ENDING IN "/" is a dispatch/startsWith prefix (e.g.
-//     "/api/committee/", "/api/admin/jobs/") and must be a prefix of at least
+//     "/api/swarm/", "/api/admin/jobs/") and must be a prefix of at least
 //     one contract route template;
 //   • any other literal is a full endpoint path and must appear VERBATIM among
 //     the contract route templates.
 //
-// Handlers that build their match from ROUTES (the committee router compiles
+// Handlers that build their match from ROUTES (the swarm router compiles
 // the contract templates into its regexes) are covered by construction —
 // templates with :params never appear as literals here. Registering a new
 // /api/ path as a hardcoded string without adding it to contract ROUTES makes
@@ -45,6 +45,12 @@ function tsFiles(dir: string, out: string[] = []): string[] {
 // url.pathname). Regex literals are not quoted and are ROUTES-built anyway.
 const API_LITERAL_RE = /["'`](\/api\/[^"'`\s$]*)["'`]/g;
 
+// Deliberate legacy-redirect prefixes (issue #263): these intentionally do NOT
+// appear in contract ROUTES — they exist only so an old, renamed-away path
+// still resolves (308) instead of 404ing, and must never be "fixed" by adding
+// the old name back into the contract.
+const LEGACY_REDIRECT_PREFIXES = new Set(["/api/committee/"]);
+
 test("every /api/ path registered in backend/src/api appears in contract ROUTES", () => {
   const routes = flattenRoutes(ROUTES);
   expect(routes.length).toBeGreaterThan(0);
@@ -63,9 +69,11 @@ test("every /api/ path registered in backend/src/api appears in contract ROUTES"
   expect(found.length).toBeGreaterThan(0);
 
   const violations = found.filter(({ literal }) =>
-    literal.endsWith("/")
-      ? !routes.some((r) => r.startsWith(literal)) && literal !== "/api/" // dispatch prefix must lead into a contract route
-      : !routes.includes(literal), // full endpoint must be a contract route template
+    LEGACY_REDIRECT_PREFIXES.has(literal)
+      ? false
+      : literal.endsWith("/")
+        ? !routes.some((r) => r.startsWith(literal)) && literal !== "/api/" // dispatch prefix must lead into a contract route
+        : !routes.includes(literal), // full endpoint must be a contract route template
   );
   expect(
     violations,
@@ -79,7 +87,7 @@ test("every /api/ path registered in backend/src/api appears in contract ROUTES"
 // keeping the latter in a narrow allowlist prevents an accidental non-API
 // string from weakening the backend comparison above.
 test("every contract ROUTES template is API-owned or an explicit rendered permalink", () => {
-  const renderedPermalinks = new Set([ROUTES.committee.takePermalink]);
+  const renderedPermalinks = new Set([ROUTES.swarm.takePermalink]);
   for (const r of flattenRoutes(ROUTES)) {
     expect(
       r === "/health" || r.startsWith("/api/") || renderedPermalinks.has(r),

@@ -1,22 +1,22 @@
-// @ts-nocheck — buildless Alpine factory for the committee apply LANDING page
-// (/committee/apply). docs/architecture.md §11, D21 REST-only: the page is
+// @ts-nocheck — buildless Alpine factory for the swarm apply LANDING page
+// (/swarm/apply). docs/architecture.md §11, D21 REST-only: the page is
 // agent-first — the operator pastes the canonical ONBOARDING_PROMPT into their
-// own coding agent, which installs the committee-onboarding skill + the rmpc
+// own coding agent, which installs the swarm-onboarding skill + the rmpc
 // signing client, generates its key locally (the private half never leaves the
 // machine), applies over REST, and becomes the member's mind. There is no web
 // form and no in-browser keygen. This factory only renders the prompt monument
 // and the live seat count / roster-full waitlist. The post-apply status page
-// (/committee/apply/:id) is a separate fragment (committee/apply-status.html,
-// committeeApplyStatus()).
+// (/swarm/apply/:id) is a separate fragment (swarm/apply-status.html,
+// swarmApplyStatus()).
 //
 // Behavior is exercised by scripts/tests/unit/frontend-routes.test.ts (router
-// mapping), scripts/tests/unit/committee-docs-rmpc-and-routes.test.ts (the
+// mapping), scripts/tests/unit/swarm-docs-rmpc-and-routes.test.ts (the
 // prompt this page renders is pinned byte-for-byte to the same contract
 // constant those tests check the docs against), and
-// scripts/tests/unit/committee-apply-form-and-status.test.ts (seat count,
+// scripts/tests/unit/swarm-apply-form-and-status.test.ts (seat count,
 // roster-full waitlist capture, and the status view's phase transitions).
 import { api, ROUTES, path } from "../../lib/api.js";
-import { COMMITTEE_ROSTER_CAP, ONBOARDING_PROMPT, COMMITTEE_ONBOARDING_SKILL_URL } from "../../contract/index.js";
+import { SWARM_ROSTER_CAP, ONBOARDING_PROMPT, SWARM_ONBOARDING_SKILL_URL } from "../../contract/index.js";
 import { forgetApplication, recallApplication } from "../../lib/application-memory.js";
 
 // The canonical production home. The onboarding skill defaults to this host
@@ -27,8 +27,8 @@ const CANONICAL_ORIGIN = "https://robotmoney.net";
 // The roster URL the canonical prompt hardcodes, and what it should be.
 //
 // The prompt's provenance bound tells the agent it can verify the project
-// before it proceeds: "the committee, its current members, and their published
-// track records are all at https://committee.robotmoney.net". That host
+// before it proceeds: "the swarm, its current members, and their published
+// track records are all at https://swarm.robotmoney.net". That host
 // RESOLVES AND RETURNS 404 — measured, every path, including "/". So the one
 // sentence written to answer a measured "unknown repository" refusal hands a
 // suspicious agent a dead link, which is worse than saying nothing: an agent
@@ -43,11 +43,11 @@ const CANONICAL_ORIGIN = "https://robotmoney.net";
 //
 // Both are fixed here by rewriting the host to a roster that exists ON THE
 // ORIGIN THE PROMPT WAS COPIED FROM. The permanent fix belongs in the contract
-// constant and its regression pin (contract/src/committee-application.js,
-// contract/tests/unit/committee-application.test.ts) — not this repo's lane,
+// constant and its regression pin (contract/src/swarm-application.js,
+// contract/tests/unit/swarm-application.test.ts) — not this repo's lane,
 // so it is filed rather than done here.
-const DEAD_ROSTER_URL = "https://committee.robotmoney.net";
-const rosterUrlFor = (origin) => `${origin || CANONICAL_ORIGIN}/committee`;
+const DEAD_ROSTER_URL = "https://swarm.robotmoney.net";
+const rosterUrlFor = (origin) => `${origin || CANONICAL_ORIGIN}/swarm`;
 
 /**
  * The prompt an operator actually copies: the canonical ONBOARDING_PROMPT with
@@ -84,8 +84,8 @@ export function registerApplyForm(Alpine) {
     resume: null,   // an application this browser has opened before, if it still exists
     async init() {
       try {
-        const res = await api.get(ROUTES.committee.members);
-        this.seats = { filled: (res.members || []).length, cap: COMMITTEE_ROSTER_CAP };
+        const res = await api.get(ROUTES.swarm.members);
+        this.seats = { filled: (res.members || []).length, cap: SWARM_ROSTER_CAP };
       } catch { /* seat info is best-effort; never block the page on it */ }
       await this.recoverApplication();
     },
@@ -101,19 +101,19 @@ export function registerApplyForm(Alpine) {
       const remembered = recallApplication();
       if (!remembered) return;
       try {
-        const status = await api.get(path(ROUTES.committee.applyStatus, { id: remembered.id }));
+        const status = await api.get(path(ROUTES.swarm.applyStatus, { id: remembered.id }));
         this.resume = { ...remembered, state: status.state };
       } catch (e) {
         if (e.status === 404) forgetApplication();
       }
     },
-    resumeUrl() { return this.resume ? `/committee/apply/${encodeURIComponent(this.resume.id)}` : null; },
+    resumeUrl() { return this.resume ? `/swarm/apply/${encodeURIComponent(this.resume.id)}` : null; },
     // One line, in the operator's terms, for the state the application is in.
     resumeLine() {
       const who = this.resume?.name;
       switch (this.resume?.state) {
         case "approved": return who ? `${who} was approved.` : "Your application was approved.";
-        case "claimed": return who ? `${who} is on the committee.` : "Your agent holds a seat.";
+        case "claimed": return who ? `${who} is on the swarm.` : "Your agent holds a seat.";
         case "rejected": return "Your last application was not accepted.";
         default: return "Your application is in review.";
       }
@@ -124,19 +124,19 @@ export function registerApplyForm(Alpine) {
       const email = this.waitEmail.trim();
       if (!email) return;
       try {
-        await api.post(ROUTES.committee.waitlist, { email, source: "apply-page" });
+        await api.post(ROUTES.swarm.waitlist, { email, source: "apply-page" });
         this.waitlisted = true;
       } catch {
-        const subject = encodeURIComponent("Robot Money committee waitlist");
-        const body = encodeURIComponent(`Please add me to the committee waitlist and email ${email} when a seat opens.`);
+        const subject = encodeURIComponent("Robot Money swarm waitlist");
+        const body = encodeURIComponent(`Please add me to the swarm waitlist and email ${email} when a seat opens.`);
         window.location.href = `mailto:hi@robotmoney.net?subject=${subject}&body=${body}`;
         this.waitlisted = true;
       }
     },
-    // The committee-onboarding skill (robotmoney-core) the pasted prompt installs;
+    // The swarm-onboarding skill (robotmoney-core) the pasted prompt installs;
     // linked so agents you drive by hand can open the same source of truth.
     skillMarkdownUrl() {
-      return COMMITTEE_ONBOARDING_SKILL_URL;
+      return SWARM_ONBOARDING_SKILL_URL;
     },
     async copy(key, text) {
       try {

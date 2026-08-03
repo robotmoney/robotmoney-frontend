@@ -35,7 +35,7 @@ async function expectNoBrowserErrors(errors: string[]): Promise<void> {
   expect(errors).toEqual([]);
 }
 
-test("renders allocation and dynamic committee routes through Alpine", async ({ page }) => {
+test("renders allocation and dynamic swarm routes through Alpine", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -64,26 +64,26 @@ test("renders allocation and dynamic committee routes through Alpine", async ({ 
   await navigate(page, "/performance");
   await expect(page.getByRole("heading", { name: /Wallet Performance/, exact: false })).toBeVisible();
 
-  await page.goto("/committee/members/athena");
+  await page.goto("/swarm/members/athena");
   await expect(page.locator(".profile-name")).toHaveText("Athena");
   await expect(page.locator(".profile-role")).not.toHaveText("");
 
-  await page.goto(`/committee/${today}/woon`);
+  await page.goto(`/swarm/${today}/woon`);
   await expect(page.locator(".session-title")).toHaveText("Woon Treasury");
   await expect(page.locator(".session-submissions tbody tr")).toHaveCount(3);
 
-  // Live loadApi -> camelTake -> cv__take render path (issue #75): a live/current
-  // Woon session served from the Postgres committee API (not the pre-2026-07-01
+  // Live loadApi -> camelTake -> sv__take render path (issue #75): a live/current
+  // Woon session served from the Postgres swarm API (not the pre-2026-07-01
   // static archive) renders one member-opinion card per participating member.
   // runSession drives athena/boreas/cygnus, so exactly three cards render. Each
   // card carries the member name, a non-empty role/lens, and a stance-confidence
   // badge — guards a silent regression in the member-opinion render surface.
-  const takeCards = page.locator(".cv__take");
+  const takeCards = page.locator(".sv__take");
   await expect(takeCards).toHaveCount(3);
   const firstCard = takeCards.first();
-  await expect(firstCard.locator(".cv__member-link")).not.toHaveText("");
-  await expect(firstCard.locator(".cv__take-lens")).not.toHaveText("");
-  await expect(firstCard.locator(".cv__stance-badge")).toHaveText(/\S+ · \d+%/);
+  await expect(firstCard.locator(".sv__member-link")).not.toHaveText("");
+  await expect(firstCard.locator(".sv__take-lens")).not.toHaveText("");
+  await expect(firstCard.locator(".sv__stance-badge")).toHaveText(/\S+ · \d+%/);
 
   await expectNoBrowserErrors(errors);
 });
@@ -154,7 +154,7 @@ test("the skills hero pairs the headline with the install card and runs the tree
 // the design can change without this needing a rewrite — only divergence fails.
 const HERO_ROUTES = [
   "/skills", "/regime", "/tokenomics", "/allocation",
-  "/performance", "/projects", "/media", "/changelog", "/committee",
+  "/performance", "/projects", "/media", "/changelog", "/swarm",
 ];
 
 test("every hero headline shares one size, one typeface and one offset", async ({ page }) => {
@@ -191,13 +191,13 @@ test("latest navigation wins when an earlier fragment response is delayed", asyn
   const errors = failOnBrowserErrors(page);
   await page.goto("/");
 
-  await page.route("**/views/committee/member.html", async (route) => {
+  await page.route("**/views/swarm/member.html", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     await route.continue();
   });
 
   await page.evaluate(() => {
-    history.pushState({}, "", "/committee/members/athena");
+    history.pushState({}, "", "/swarm/members/athena");
     window.dispatchEvent(new PopStateEvent("popstate"));
     history.pushState({}, "", "/allocation");
     window.dispatchEvent(new PopStateEvent("popstate"));

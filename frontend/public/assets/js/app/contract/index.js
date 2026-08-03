@@ -7,12 +7,12 @@ export {
   canonicalizeApplication,
   buildOnboardingPrompt,
   ONBOARDING_PROMPT,
-  COMMITTEE_ONBOARDING_SKILL_URL,
+  SWARM_ONBOARDING_SKILL_URL,
   APPLY_HOW_TO_STEPS,
-} from "./committee-application.js";
+} from "./swarm-application.js";
 
-// Mirrors contract/src/committee.js COMMITTEE_ROSTER_CAP. Interim: the apply
+// Mirrors contract/src/swarm.js SWARM_ROSTER_CAP. Interim: the apply
 // page derives seats-open from members.length vs this constant. The durable
 // fix is the members API returning { rosterCap, seatsAvailable } so the client
 // need not hardcode the cap (backend lane).
-export const COMMITTEE_ROSTER_CAP = 10;
+export const SWARM_ROSTER_CAP = 10;

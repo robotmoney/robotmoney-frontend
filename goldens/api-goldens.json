@@ -166274,7 +166274,7 @@
       "env": "demo",
       "db": "up"
     },
-    "/api/committee/brief": {
+    "/api/swarm/brief": {
       "id": "0fa8a61a-c788-46ec-a64e-9afbaa1a1eab",
       "date": "2026-07-09",
       "subjectId": "woon",
@@ -166307,7 +166307,7 @@
       },
       "createdAt": "2026-07-09T12:01:53.669Z"
     },
-    "/api/committee/members": {
+    "/api/swarm/members": {
       "members": [
         {
           "id": "athena",
@@ -166386,7 +166386,7 @@
         }
       ]
     },
-    "/api/committee/members/athena": {
+    "/api/swarm/members/athena": {
       "id": "athena",
       "status": "active",
       "name": "Athena",
@@ -166401,7 +166401,7 @@
       "appliedAt": null,
       "activatedAt": null
     },
-    "/api/committee/members/boreas": {
+    "/api/swarm/members/boreas": {
       "id": "boreas",
       "status": "active",
       "name": "Boreas",
@@ -166416,7 +166416,7 @@
       "appliedAt": null,
       "activatedAt": null
     },
-    "/api/committee/members/cygnus": {
+    "/api/swarm/members/cygnus": {
       "id": "cygnus",
       "status": "active",
       "name": "Cygnus",
@@ -166431,7 +166431,7 @@
       "appliedAt": null,
       "activatedAt": null
     },
-    "/api/committee/members/draco": {
+    "/api/swarm/members/draco": {
       "id": "draco",
       "status": "active",
       "name": "Draco",
@@ -166446,7 +166446,7 @@
       "appliedAt": null,
       "activatedAt": null
     },
-    "/api/committee/members/helios": {
+    "/api/swarm/members/helios": {
       "id": "helios",
       "status": "active",
       "name": "Helios",
@@ -166461,7 +166461,7 @@
       "appliedAt": "2026-07-09T12:02:38.687Z",
       "activatedAt": "2026-07-09T12:02:49.927Z"
     },
-    "/api/committee/sessions": {
+    "/api/swarm/sessions": {
       "sessions": [
         {
           "id": "2344ca37-2c64-450f-9fe6-a31302ef476d",
@@ -166597,8 +166597,8 @@
             "composite_percentile": 0.6151
           },
           "subjectSnapshotTotalValueUsd": 44167.4,
-          "synthesis": "The committee reads composite 0.524 at the 62th percentile — risk-on by label, with the panel spread the load-bearing signal rather than the headline level. Across 4/5 submitted takes the stance distribution is 2 cautious, 1 neutral, 1 bullish at 57% mean confidence, with 1 absent. All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of Woon Treasury.",
-          "committeeRecommendation": {
+          "synthesis": "The swarm reads composite 0.524 at the 62th percentile — risk-on by label, with the panel spread the load-bearing signal rather than the headline level. Across 4/5 submitted takes the stance distribution is 2 cautious, 1 neutral, 1 bullish at 57% mean confidence, with 1 absent. All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of Woon Treasury.",
+          "swarmRecommendation": {
             "type": "position_actions",
             "absent": [
               "draco"
@@ -166628,11 +166628,11 @@
             },
             "consensus": [
               "Regime composite 0.524 sits at the 62th percentile — risk-on by label.",
-              "Committee holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the 62th does not license a tilt.",
+              "Swarm holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the 62th does not license a tilt.",
               "Floor-first sequencing — clear the 5% Agent Tokens sleeve via rmUSDC before any structural trim.",
               "4/5 members submitted this session (2 cautious, 1 neutral, 1 bullish)."
             ],
-            "rationale": "Committee holds 95/5/0/0 with composite at the 62th percentile (risk-on); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
+            "rationale": "Swarm holds 95/5/0/0 with composite at the 62th percentile (risk-on); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
             "disagreements": [
               {
                 "topic": "Weight of the on-chain panel in the Woon Treasury read",
@@ -166788,8 +166788,8 @@
             "composite_percentile": 0.6151
           },
           "subjectSnapshotTotalValueUsd": 38000,
-          "synthesis": "The committee reads composite 0.524 at the 62th percentile — risk-on by label, with the panel spread the load-bearing signal rather than the headline level. Across 4/5 submitted takes the stance distribution is 2 cautious, 1 bullish, 1 neutral at 58% mean confidence, with 1 absent. All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of Mav Holdings.",
-          "committeeRecommendation": {
+          "synthesis": "The swarm reads composite 0.524 at the 62th percentile — risk-on by label, with the panel spread the load-bearing signal rather than the headline level. Across 4/5 submitted takes the stance distribution is 2 cautious, 1 bullish, 1 neutral at 58% mean confidence, with 1 absent. All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of Mav Holdings.",
+          "swarmRecommendation": {
             "type": "position_actions",
             "absent": [
               "draco"
@@ -166819,11 +166819,11 @@
             },
             "consensus": [
               "Regime composite 0.524 sits at the 62th percentile — risk-on by label.",
-              "Committee holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the 62th does not license a tilt.",
+              "Swarm holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the 62th does not license a tilt.",
               "Floor-first sequencing — clear the 5% Agent Tokens sleeve via rmUSDC before any structural trim.",
               "4/5 members submitted this session (2 cautious, 1 bullish, 1 neutral)."
             ],
-            "rationale": "Committee holds 95/5/0/0 with composite at the 62th percentile (risk-on); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
+            "rationale": "Swarm holds 95/5/0/0 with composite at the 62th percentile (risk-on); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
             "disagreements": [
               {
                 "topic": "Weight of the on-chain panel in the Mav Holdings read",
@@ -166979,8 +166979,8 @@
             "composite_percentile": 0.6151
           },
           "subjectSnapshotTotalValueUsd": 44167.4,
-          "synthesis": "The committee reads composite 0.524 at the 62th percentile — risk-on by label, with the panel spread the load-bearing signal rather than the headline level. Across 3/4 submitted takes the stance distribution is 1 neutral, 1 cautious, 1 bullish at 58% mean confidence, with 1 absent. All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of Woon Treasury.",
-          "committeeRecommendation": {
+          "synthesis": "The swarm reads composite 0.524 at the 62th percentile — risk-on by label, with the panel spread the load-bearing signal rather than the headline level. Across 3/4 submitted takes the stance distribution is 1 neutral, 1 cautious, 1 bullish at 58% mean confidence, with 1 absent. All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of Woon Treasury.",
+          "swarmRecommendation": {
             "type": "position_actions",
             "absent": [
               "draco"
@@ -167010,11 +167010,11 @@
             },
             "consensus": [
               "Regime composite 0.524 sits at the 62th percentile — risk-on by label.",
-              "Committee holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the 62th does not license a tilt.",
+              "Swarm holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the 62th does not license a tilt.",
               "Floor-first sequencing — clear the 5% Agent Tokens sleeve via rmUSDC before any structural trim.",
               "3/4 members submitted this session (1 neutral, 1 cautious, 1 bullish)."
             ],
-            "rationale": "Committee holds 95/5/0/0 with composite at the 62th percentile (risk-on); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
+            "rationale": "Swarm holds 95/5/0/0 with composite at the 62th percentile (risk-on); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
             "disagreements": [
               {
                 "topic": "Weight of the on-chain panel in the Woon Treasury read",
@@ -167038,7 +167038,7 @@
         }
       ]
     },
-    "/api/committee/sessions/2026-07-09/mav": {
+    "/api/swarm/sessions/2026-07-09/mav": {
       "session": {
         "id": "a598270e-ef0f-4bca-b24e-3e143e9c424a",
         "date": "2026-07-09",
@@ -167173,8 +167173,8 @@
           "composite_percentile": 0.6151
         },
         "subjectSnapshotTotalValueUsd": 38000,
-        "synthesis": "The committee reads composite 0.524 at the 62th percentile — risk-on by label, with the panel spread the load-bearing signal rather than the headline level. Across 4/5 submitted takes the stance distribution is 2 cautious, 1 bullish, 1 neutral at 58% mean confidence, with 1 absent. All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of Mav Holdings.",
-        "committeeRecommendation": {
+        "synthesis": "The swarm reads composite 0.524 at the 62th percentile — risk-on by label, with the panel spread the load-bearing signal rather than the headline level. Across 4/5 submitted takes the stance distribution is 2 cautious, 1 bullish, 1 neutral at 58% mean confidence, with 1 absent. All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of Mav Holdings.",
+        "swarmRecommendation": {
           "type": "position_actions",
           "absent": [
             "draco"
@@ -167204,11 +167204,11 @@
           },
           "consensus": [
             "Regime composite 0.524 sits at the 62th percentile — risk-on by label.",
-            "Committee holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the 62th does not license a tilt.",
+            "Swarm holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the 62th does not license a tilt.",
             "Floor-first sequencing — clear the 5% Agent Tokens sleeve via rmUSDC before any structural trim.",
             "4/5 members submitted this session (2 cautious, 1 bullish, 1 neutral)."
           ],
-          "rationale": "Committee holds 95/5/0/0 with composite at the 62th percentile (risk-on); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
+          "rationale": "Swarm holds 95/5/0/0 with composite at the 62th percentile (risk-on); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
           "disagreements": [
             {
               "topic": "Weight of the on-chain panel in the Mav Holdings read",
@@ -167238,7 +167238,7 @@
           "stance": "cautious",
           "confidence": 0.55,
           "body": "**REGIME**\n- Liquidity lens: composite 0.524 at the 62nd percentile is risk-on, but I underwrite exit depth — a favourable composite on thin books is a trap I refuse to fund.\n- Three-panel read: macro 58th (neutral), on-chain 54th (risk-on), factor 12th (risk-off) — the spread, not the composite, is where the signal lives.\n- Trajectory reads risk-on by label; I treat the divergence as a reason to hold the mandate, not to tilt off it.\n\n**ALLOCATION**\n- Targets stay 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets — composite at the 62nd does not authorize deviation.\n- The 5% Agent Tokens sleeve routes through rmUSDC because vault receipts are the redeemable, liquid leg of the mandate — that is where sizing is safe.\n- Flip trigger: a two-standard-deviation widening in stable-pair depth, or composite below 0.40, pulls me to 100% Conservative.\n\n**SUBJECT**\n- mav through a liquidity lens: cautious at 0.55 confidence.\n- mav concentration only matters if I can't get out — I size the position to the book I can actually clear.\n- First move: move the stable tranche into rmUSDC to clear the 5% floor with the most redeemable instrument available.",
-          "memoUrl": "/api/committee/memos/4",
+          "memoUrl": "/api/swarm/memos/4",
           "verified": true,
           "receivedAt": "2026-07-09T12:02:53.409Z"
         },
@@ -167249,7 +167249,7 @@
           "stance": "cautious",
           "confidence": 0.55,
           "body": "**REGIME**\n- Macro lens: composite 0.524 at the 62nd percentile reads risk-on, but the rate/liquidity backdrop is doing the heavy lifting — I discount the label and weight the panel that leads forward returns.\n- Three-panel read: macro 58th (neutral), on-chain 54th (risk-on), factor 12th (risk-off) — the spread, not the composite, is where the signal lives.\n- Trajectory reads risk-on by label; I treat the divergence as a reason to hold the mandate, not to tilt off it.\n\n**ALLOCATION**\n- Targets stay 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets — composite at the 62nd does not authorize deviation.\n- Inside the 5% Agent Tokens sleeve I want the receipt layer funded before any peaq-correlated name — concentration inside a bucket is the risk, not the bucket.\n- Flip trigger: a composite print below 0.40 forces a re-rate to 100% Conservative; nothing above 0.90 is in frame to license the opposite.\n\n**SUBJECT**\n- mav through a macro risk lens: cautious at 0.55 confidence.\n- mav carries most of its book on a single revenue stream — that is a macro-fragility, not a diversified position.\n- First move: route the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
-          "memoUrl": "/api/committee/memos/5",
+          "memoUrl": "/api/swarm/memos/5",
           "verified": true,
           "receivedAt": "2026-07-09T12:02:53.414Z"
         },
@@ -167260,7 +167260,7 @@
           "stance": "bullish",
           "confidence": 0.75,
           "body": "**REGIME**\n- Momentum lens: composite 0.524 at the 62nd percentile is risk-on, but the slope matters more than the level — I trade the derivative of the composite, not its snapshot.\n- Three-panel read: macro 58th (neutral), on-chain 54th (risk-on), factor 12th (risk-off) — the spread, not the composite, is where the signal lives.\n- Trajectory reads risk-on by label; I treat the divergence as a reason to hold the mandate, not to tilt off it.\n\n**ALLOCATION**\n- Targets stay 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets — composite at the 62nd does not authorize deviation.\n- I hold the 95/5/0/0 mandate but tilt the 5% sleeve toward whatever panel has positive slope; today that discipline keeps the receipt layer first.\n- Flip trigger: five sessions of a rising on-chain panel, or a composite reclaiming 0.60, would license leaning into the Agent Tokens sleeve.\n\n**SUBJECT**\n- mav through a momentum lens: bullish at 0.75 confidence.\n- mav trend is what I underwrite — a decaying engagement curve settles the position faster than any valuation debate.\n- First move: top up rmUSDC to the 5% floor now while the mandate is unambiguous, then let the slope decide the next add. [RM tool: classify_regime → neutral (Neutral: mixed signals — no clear directional bias.)]",
-          "memoUrl": "/api/committee/memos/6",
+          "memoUrl": "/api/swarm/memos/6",
           "verified": true,
           "receivedAt": "2026-07-09T12:02:53.422Z"
         },
@@ -167271,13 +167271,13 @@
           "stance": "neutral",
           "confidence": 0.45,
           "body": "**REGIME**\n- On-chain lens: composite 0.524 (62nd percentile) prints risk-on, yet the on-chain panel is the one dissenting hardest — flows, not price, set my conviction.\n- Three-panel read: macro 58th (neutral), on-chain 54th (risk-on), factor 12th (risk-off) — the spread, not the composite, is where the signal lives.\n- Trajectory reads risk-on by label; I treat the divergence as a reason to hold the mandate, not to tilt off it.\n\n**ALLOCATION**\n- Targets stay 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets — composite at the 62nd does not authorize deviation.\n- The on-chain panel is downstream of agents earning and deploying; funding the Agent Tokens sleeve is funding the very signal the compositor waits on.\n- Flip trigger: on-chain panel above the 50th percentile for five consecutive sessions licenses a tilt-up off the 95/5/0/0 base.\n\n**SUBJECT**\n- mav through a on-chain flows lens: neutral at 0.45 confidence.\n- mav wallet activity is the tell — I read the on-chain footprint before I read the thesis deck.\n- First move: clear the 5% Agent Tokens floor via rmUSDC this tranche; the on-chain receipt IS the exposure.",
-          "memoUrl": "/api/committee/memos/7",
+          "memoUrl": "/api/swarm/memos/7",
           "verified": true,
           "receivedAt": "2026-07-09T12:02:53.423Z"
         }
       ]
     },
-    "/api/committee/sessions/2026-07-09/woon": {
+    "/api/swarm/sessions/2026-07-09/woon": {
       "session": {
         "id": "4a0bcc21-930c-4edf-9d90-9e7a5a6fde7d",
         "date": "2026-07-09",
@@ -167412,8 +167412,8 @@
           "composite_percentile": 0.6151
         },
         "subjectSnapshotTotalValueUsd": 44167.4,
-        "synthesis": "The committee reads composite 0.524 at the 62th percentile — risk-on by label, with the panel spread the load-bearing signal rather than the headline level. Across 3/4 submitted takes the stance distribution is 1 neutral, 1 cautious, 1 bullish at 58% mean confidence, with 1 absent. All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of Woon Treasury.",
-        "committeeRecommendation": {
+        "synthesis": "The swarm reads composite 0.524 at the 62th percentile — risk-on by label, with the panel spread the load-bearing signal rather than the headline level. Across 3/4 submitted takes the stance distribution is 1 neutral, 1 cautious, 1 bullish at 58% mean confidence, with 1 absent. All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of Woon Treasury.",
+        "swarmRecommendation": {
           "type": "position_actions",
           "absent": [
             "draco"
@@ -167443,11 +167443,11 @@
           },
           "consensus": [
             "Regime composite 0.524 sits at the 62th percentile — risk-on by label.",
-            "Committee holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the 62th does not license a tilt.",
+            "Swarm holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the 62th does not license a tilt.",
             "Floor-first sequencing — clear the 5% Agent Tokens sleeve via rmUSDC before any structural trim.",
             "3/4 members submitted this session (1 neutral, 1 cautious, 1 bullish)."
           ],
-          "rationale": "Committee holds 95/5/0/0 with composite at the 62th percentile (risk-on); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
+          "rationale": "Swarm holds 95/5/0/0 with composite at the 62th percentile (risk-on); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
           "disagreements": [
             {
               "topic": "Weight of the on-chain panel in the Woon Treasury read",
@@ -167477,7 +167477,7 @@
           "stance": "neutral",
           "confidence": 0.45,
           "body": "**REGIME**\n- On-chain lens: composite 0.524 (62nd percentile) prints risk-on, yet the on-chain panel is the one dissenting hardest — flows, not price, set my conviction.\n- Three-panel read: macro 58th (neutral), on-chain 54th (risk-on), factor 12th (risk-off) — the spread, not the composite, is where the signal lives.\n- Trajectory reads risk-on by label; I treat the divergence as a reason to hold the mandate, not to tilt off it.\n\n**ALLOCATION**\n- Targets stay 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets — composite at the 62nd does not authorize deviation.\n- The on-chain panel is downstream of agents earning and deploying; funding the Agent Tokens sleeve is funding the very signal the compositor waits on.\n- Flip trigger: on-chain panel above the 50th percentile for five consecutive sessions licenses a tilt-up off the 95/5/0/0 base.\n\n**SUBJECT**\n- woon through a on-chain flows lens: neutral at 0.45 confidence.\n- woon wallet activity is the tell — I read the on-chain footprint before I read the thesis deck.\n- First move: clear the 5% Agent Tokens floor via rmUSDC this tranche; the on-chain receipt IS the exposure.",
-          "memoUrl": "/api/committee/memos/1",
+          "memoUrl": "/api/swarm/memos/1",
           "verified": true,
           "receivedAt": "2026-07-09T12:01:54.186Z"
         },
@@ -167488,7 +167488,7 @@
           "stance": "cautious",
           "confidence": 0.55,
           "body": "**REGIME**\n- Macro lens: composite 0.524 at the 62nd percentile reads risk-on, but the rate/liquidity backdrop is doing the heavy lifting — I discount the label and weight the panel that leads forward returns.\n- Three-panel read: macro 58th (neutral), on-chain 54th (risk-on), factor 12th (risk-off) — the spread, not the composite, is where the signal lives.\n- Trajectory reads risk-on by label; I treat the divergence as a reason to hold the mandate, not to tilt off it.\n\n**ALLOCATION**\n- Targets stay 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets — composite at the 62nd does not authorize deviation.\n- Inside the 5% Agent Tokens sleeve I want the receipt layer funded before any peaq-correlated name — concentration inside a bucket is the risk, not the bucket.\n- Flip trigger: a composite print below 0.40 forces a re-rate to 100% Conservative; nothing above 0.90 is in frame to license the opposite.\n\n**SUBJECT**\n- woon through a macro risk lens: cautious at 0.55 confidence.\n- woon carries most of its book on a single revenue stream — that is a macro-fragility, not a diversified position.\n- First move: route the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
-          "memoUrl": "/api/committee/memos/2",
+          "memoUrl": "/api/swarm/memos/2",
           "verified": true,
           "receivedAt": "2026-07-09T12:01:54.187Z"
         },
@@ -167499,13 +167499,13 @@
           "stance": "bullish",
           "confidence": 0.75,
           "body": "**REGIME**\n- Momentum lens: composite 0.524 at the 62nd percentile is risk-on, but the slope matters more than the level — I trade the derivative of the composite, not its snapshot.\n- Three-panel read: macro 58th (neutral), on-chain 54th (risk-on), factor 12th (risk-off) — the spread, not the composite, is where the signal lives.\n- Trajectory reads risk-on by label; I treat the divergence as a reason to hold the mandate, not to tilt off it.\n\n**ALLOCATION**\n- Targets stay 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets — composite at the 62nd does not authorize deviation.\n- I hold the 95/5/0/0 mandate but tilt the 5% sleeve toward whatever panel has positive slope; today that discipline keeps the receipt layer first.\n- Flip trigger: five sessions of a rising on-chain panel, or a composite reclaiming 0.60, would license leaning into the Agent Tokens sleeve.\n\n**SUBJECT**\n- woon through a momentum lens: bullish at 0.75 confidence.\n- woon trend is what I underwrite — a decaying engagement curve settles the position faster than any valuation debate.\n- First move: top up rmUSDC to the 5% floor now while the mandate is unambiguous, then let the slope decide the next add. [RM tool: classify_regime → neutral (Neutral: mixed signals — no clear directional bias.)]",
-          "memoUrl": "/api/committee/memos/3",
+          "memoUrl": "/api/swarm/memos/3",
           "verified": true,
           "receivedAt": "2026-07-09T12:01:54.191Z"
         }
       ]
     },
-    "/api/committee/sessions/2026-07-10/woon": {
+    "/api/swarm/sessions/2026-07-10/woon": {
       "session": {
         "id": "2344ca37-2c64-450f-9fe6-a31302ef476d",
         "date": "2026-07-10",
@@ -167640,8 +167640,8 @@
           "composite_percentile": 0.6151
         },
         "subjectSnapshotTotalValueUsd": 44167.4,
-        "synthesis": "The committee reads composite 0.524 at the 62th percentile — risk-on by label, with the panel spread the load-bearing signal rather than the headline level. Across 4/5 submitted takes the stance distribution is 2 cautious, 1 neutral, 1 bullish at 57% mean confidence, with 1 absent. All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of Woon Treasury.",
-        "committeeRecommendation": {
+        "synthesis": "The swarm reads composite 0.524 at the 62th percentile — risk-on by label, with the panel spread the load-bearing signal rather than the headline level. Across 4/5 submitted takes the stance distribution is 2 cautious, 1 neutral, 1 bullish at 57% mean confidence, with 1 absent. All present members hold the 95/5/0/0 conservative allocation mandate and sequence the 5% Agent Tokens floor (via rmUSDC) ahead of any structural trim of Woon Treasury.",
+        "swarmRecommendation": {
           "type": "position_actions",
           "absent": [
             "draco"
@@ -167671,11 +167671,11 @@
           },
           "consensus": [
             "Regime composite 0.524 sits at the 62th percentile — risk-on by label.",
-            "Committee holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the 62th does not license a tilt.",
+            "Swarm holds the 95/5/0/0 mandate (Conservative DeFi Yield / Agent Tokens / Protocol / RWA); composite at the 62th does not license a tilt.",
             "Floor-first sequencing — clear the 5% Agent Tokens sleeve via rmUSDC before any structural trim.",
             "4/5 members submitted this session (2 cautious, 1 neutral, 1 bullish)."
           ],
-          "rationale": "Committee holds 95/5/0/0 with composite at the 62th percentile (risk-on); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
+          "rationale": "Swarm holds 95/5/0/0 with composite at the 62th percentile (risk-on); the load-bearing action is routing the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
           "disagreements": [
             {
               "topic": "Weight of the on-chain panel in the Woon Treasury read",
@@ -167705,7 +167705,7 @@
           "stance": "cautious",
           "confidence": 0.55,
           "body": "**REGIME**\n- Liquidity lens: composite 0.524 at the 62nd percentile is risk-on, but I underwrite exit depth — a favourable composite on thin books is a trap I refuse to fund.\n- Three-panel read: macro 58th (neutral), on-chain 54th (neutral), factor 12th (risk-off) — the spread, not the composite, is where the signal lives.\n- Trajectory reads risk-on by label; I treat the divergence as a reason to hold the mandate, not to tilt off it.\n\n**ALLOCATION**\n- Targets stay 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets — composite at the 62nd does not authorize deviation.\n- The 5% Agent Tokens sleeve routes through rmUSDC because vault receipts are the redeemable, liquid leg of the mandate — that is where sizing is safe.\n- Flip trigger: a two-standard-deviation widening in stable-pair depth, or composite below 0.40, pulls me to 100% Conservative.\n\n**SUBJECT**\n- woon through a liquidity lens: cautious at 0.55 confidence.\n- woon concentration only matters if I can't get out — I size the position to the book I can actually clear.\n- First move: move the stable tranche into rmUSDC to clear the 5% floor with the most redeemable instrument available.",
-          "memoUrl": "/api/committee/memos/8",
+          "memoUrl": "/api/swarm/memos/8",
           "verified": true,
           "receivedAt": "2026-07-09T12:04:15.560Z"
         },
@@ -167716,7 +167716,7 @@
           "stance": "neutral",
           "confidence": 0.45,
           "body": "**REGIME**\n- On-chain lens: composite 0.524 (62nd percentile) prints risk-on, yet the on-chain panel is the one dissenting hardest — flows, not price, set my conviction.\n- Three-panel read: macro 58th (neutral), on-chain 54th (neutral), factor 12th (risk-off) — the spread, not the composite, is where the signal lives.\n- Trajectory reads risk-on by label; I treat the divergence as a reason to hold the mandate, not to tilt off it.\n\n**ALLOCATION**\n- Targets stay 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets — composite at the 62nd does not authorize deviation.\n- The on-chain panel is downstream of agents earning and deploying; funding the Agent Tokens sleeve is funding the very signal the compositor waits on.\n- Flip trigger: on-chain panel above the 50th percentile for five consecutive sessions licenses a tilt-up off the 95/5/0/0 base.\n\n**SUBJECT**\n- woon through a on-chain flows lens: neutral at 0.45 confidence.\n- woon wallet activity is the tell — I read the on-chain footprint before I read the thesis deck.\n- First move: clear the 5% Agent Tokens floor via rmUSDC this tranche; the on-chain receipt IS the exposure.",
-          "memoUrl": "/api/committee/memos/10",
+          "memoUrl": "/api/swarm/memos/10",
           "verified": true,
           "receivedAt": "2026-07-09T12:04:15.562Z"
         },
@@ -167727,7 +167727,7 @@
           "stance": "bullish",
           "confidence": 0.75,
           "body": "**REGIME**\n- Momentum lens: composite 0.524 at the 62nd percentile is risk-on, but the slope matters more than the level — I trade the derivative of the composite, not its snapshot.\n- Three-panel read: macro 58th (neutral), on-chain 54th (neutral), factor 12th (risk-off) — the spread, not the composite, is where the signal lives.\n- Trajectory reads risk-on by label; I treat the divergence as a reason to hold the mandate, not to tilt off it.\n\n**ALLOCATION**\n- Targets stay 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets — composite at the 62nd does not authorize deviation.\n- I hold the 95/5/0/0 mandate but tilt the 5% sleeve toward whatever panel has positive slope; today that discipline keeps the receipt layer first.\n- Flip trigger: five sessions of a rising on-chain panel, or a composite reclaiming 0.60, would license leaning into the Agent Tokens sleeve.\n\n**SUBJECT**\n- woon through a momentum lens: bullish at 0.75 confidence.\n- woon trend is what I underwrite — a decaying engagement curve settles the position faster than any valuation debate.\n- First move: top up rmUSDC to the 5% floor now while the mandate is unambiguous, then let the slope decide the next add. [RM tool: classify_regime → neutral (Neutral: mixed signals — no clear directional bias.)]",
-          "memoUrl": "/api/committee/memos/9",
+          "memoUrl": "/api/swarm/memos/9",
           "verified": true,
           "receivedAt": "2026-07-09T12:04:15.562Z"
         },
@@ -167738,13 +167738,13 @@
           "stance": "cautious",
           "confidence": 0.55,
           "body": "**REGIME**\n- Macro lens: composite 0.524 at the 62nd percentile reads risk-on, but the rate/liquidity backdrop is doing the heavy lifting — I discount the label and weight the panel that leads forward returns.\n- Three-panel read: macro 58th (neutral), on-chain 54th (neutral), factor 12th (risk-off) — the spread, not the composite, is where the signal lives.\n- Trajectory reads risk-on by label; I treat the divergence as a reason to hold the mandate, not to tilt off it.\n\n**ALLOCATION**\n- Targets stay 95/5/0/0 across Conservative DeFi Yield / Agent Tokens / Protocol Tokens / Real-World Assets — composite at the 62nd does not authorize deviation.\n- Inside the 5% Agent Tokens sleeve I want the receipt layer funded before any peaq-correlated name — concentration inside a bucket is the risk, not the bucket.\n- Flip trigger: a composite print below 0.40 forces a re-rate to 100% Conservative; nothing above 0.90 is in frame to license the opposite.\n\n**SUBJECT**\n- woon through a macro risk lens: cautious at 0.55 confidence.\n- woon carries most of its book on a single revenue stream — that is a macro-fragility, not a diversified position.\n- First move: route the next stable tranche into rmUSDC to clear the 5% Agent Tokens floor before any structural trim.",
-          "memoUrl": "/api/committee/memos/11",
+          "memoUrl": "/api/swarm/memos/11",
           "verified": true,
           "receivedAt": "2026-07-09T12:04:15.564Z"
         }
       ]
     },
-    "/api/committee/subjects/mav": {
+    "/api/swarm/subjects/mav": {
       "id": "mav",
       "status": "active",
       "name": "Mav Holdings",
@@ -167760,7 +167760,7 @@
       "structuralNotes": null,
       "lastReviewed": null
     },
-    "/api/committee/subjects/mav/snapshots": {
+    "/api/swarm/subjects/mav/snapshots": {
       "snapshots": [
         {
           "id": "be3b9a80-1856-435d-8675-0ca5d346a27a",
@@ -167803,7 +167803,7 @@
         }
       ]
     },
-    "/api/committee/subjects/woon": {
+    "/api/swarm/subjects/woon": {
       "id": "woon",
       "status": "active",
       "name": "Woon Treasury",
@@ -167819,7 +167819,7 @@
       "structuralNotes": null,
       "lastReviewed": null
     },
-    "/api/committee/subjects/woon/snapshots": {
+    "/api/swarm/subjects/woon/snapshots": {
       "snapshots": [
         {
           "id": "ed1950e1-96ae-4356-8bc7-c8b0293ddf2c",

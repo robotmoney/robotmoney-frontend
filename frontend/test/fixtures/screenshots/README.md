@@ -11,8 +11,8 @@ ported `frontend/public/views/*.html` pages.
   `fullPage: true`, `deviceScaleFactor: 1`, settle wait after `load`.
 - `original/_manifest.json` lists every route and capture status.
 
-Routes covered: home, allocation, allocation2, regime, committee, tokenomics,
-skills, media (+articles/videos), blog (+7 posts), docs (+investment-committee
+Routes covered: home, allocation, allocation2, regime, swarm, tokenomics,
+skills, media (+articles/videos), blog (+7 posts), docs (+investment-swarm
 and skill trees), faq, changelog, disclaimer, research (channel-divergence,
 late-cycle-signals).
 

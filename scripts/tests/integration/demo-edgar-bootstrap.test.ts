@@ -30,7 +30,7 @@ const backendDir = join(repoRoot, "backend");
 // A tiny, self-contained canonical seed pair (mirrors backend's
 // extract/edgar-seed.ts format exactly) — avoids importing backend/src from
 // this ROOT-suite test (cross-package tsc coupling; see demo-main.ts's own
-// comment on why the committee session driver is loaded via subprocess instead of static import).
+// comment on why the swarm session driver is loaded via subprocess instead of static import).
 function writeTinySeedFixture(): { dir: string; gzPath: string; manifestPath: string } {
   const dir = mkdtempSync(join(tmpdir(), "rm-edgar-boot-"));
   const csv = "date,indicator,value\n2021-01-31,MNA,10\n2021-02-28,MNA,11\n";

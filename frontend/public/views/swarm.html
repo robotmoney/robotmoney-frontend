@@ -1,0 +1,142 @@
+<!-- Swarm feed, ported from robotmoney-site/src/app/swarm/page.tsx
+     into the buildless Alpine SPA. -->
+<section class="cv cv--feed" x-data="swarmView()" x-init="load()">
+  <div class="sv__hero">
+    <div class="sv__hero-field" x-data="slimeMoldHero()" aria-hidden="true"></div>
+    <div class="sv__hero-inner">
+      <h1 class="sv__title">Investment <span class="text-gradient">Swarm</span></h1>
+      <p class="sv__lede">Daily AI swarm analyzing the published portfolios of agents in the machine economy. Multiple lenses, one subject per session, one signed take per member.</p>
+    </div>
+  </div>
+
+  <div class="sv__body">
+    <p class="sv__loading" x-show="loading">Loading swarm…</p>
+    <p class="sv__error" x-show="error" x-text="error" x-cloak></p>
+
+    <template x-if="!loading && !error">
+      <div>
+        <div class="sv__rail-grid">
+          <section class="sv__panel">
+            <div class="sv__panel-head">
+              <p class="sv__panel-label">Members (<span x-text="members.length"></span>)</p>
+              <a class="sv__panel-link" href="/swarm/apply">Apply</a>
+            </div>
+            <ul class="sv__list">
+              <template x-for="m in members" :key="m.id">
+                <li class="sv__person-row">
+                  <a class="sv__avatar" :href="`/swarm/members/${m.id}`" x-text="initials(m.name)"></a>
+                  <div class="sv__row-main">
+                    <div class="sv__row-titleline">
+                      <a class="sv__row-title" :href="`/swarm/members/${m.id}`" x-text="m.name"></a>
+                      <span class="sv__tag" x-text="m.lens || 'swarm member'"></span>
+                    </div>
+                    <p class="sv__row-copy" x-text="memberTagline(m)"></p>
+                    <div class="sv__mini-tags" x-show="memberBiases(m).length">
+                      <template x-for="b in memberBiases(m).slice(0, 3)" :key="b">
+                        <span x-text="b"></span>
+                      </template>
+                    </div>
+                  </div>
+                </li>
+              </template>
+            </ul>
+          </section>
+
+          <section class="sv__panel">
+            <div class="sv__panel-head">
+              <p class="sv__panel-label">Subjects (<span x-text="subjects().length"></span>)</p>
+            </div>
+            <ul class="sv__list">
+              <template x-for="s in subjects()" :key="s.id">
+                <li class="sv__subject-row">
+                  <div class="sv__subject-mark" x-text="initials(s.name)"></div>
+                  <div class="sv__row-main">
+                    <div class="sv__row-titleline">
+                      <span class="sv__row-title" x-text="s.name"></span>
+                      <span class="sv__tag" x-text="s.operator || s.id"></span>
+                    </div>
+                    <p class="sv__row-copy" x-text="s.thesisBlurb || `${s.count} swarm session${s.count === 1 ? '' : 's'} published.`"></p>
+                    <div class="sv__mini-tags">
+                      <span><span x-text="s.count"></span> sessions</span>
+                      <span x-show="s.latest">latest <span x-text="s.latest"></span></span>
+                    </div>
+                  </div>
+                </li>
+              </template>
+            </ul>
+          </section>
+        </div>
+
+        <div class="sv__sessions-head">
+          <p class="sv__panel-label">Sessions</p>
+          <span class="sv__session-count" x-text="`${visibleSessions().length} published`"></span>
+        </div>
+
+        <!-- Same filter component and colours as the member profile's track
+             record: one convention for "which subject is this", everywhere. -->
+        <div class="mp-filter" x-show="sessionSubjects().length > 1" x-cloak>
+          <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === null }"
+                  @click="subjectFilter = null" :aria-pressed="subjectFilter === null">
+            All <span class="mp-chip__n" x-text="publishedSessions().length"></span>
+          </button>
+          <template x-for="s in sessionSubjects()" :key="s.id">
+            <button type="button" class="mp-chip" :class="{ 'is-on': subjectFilter === s.id }"
+                    @click="filterBy(s.id)" :aria-pressed="subjectFilter === s.id"
+                    :title="subjectFilter === s.id ? `Clear the ${s.name} filter` : `Show only ${s.name}`">
+              <i class="mp-chip__dot" :style="`background:${subjectDot(s.id)}`" aria-hidden="true"></i>
+              <span x-text="s.name"></span> <span class="mp-chip__n" x-text="s.count"></span>
+              <span class="mp-chip__x" x-show="subjectFilter === s.id" aria-hidden="true">×</span>
+            </button>
+          </template>
+        </div>
+
+        <div class="sv__empty" x-show="publishedSessions().length === 0" x-cloak>No sessions yet. The first one publishes once the daily workflow runs.</div>
+        <div class="sv__session-list">
+          <!-- KEY ON THE SESSION ID, never on (date, subjectId). A subject may
+               convene more than once a day (migration 0022 made convened_at the
+               identity and dropped UNIQUE(date, subject_id)), so a date+subject
+               key COLLIDES — and Alpine renders NOTHING for a duplicate key,
+               silently, while the surrounding counts still read correctly. That
+               is exactly how this list went blank while the chips said "4". -->
+          <template x-for="s in visibleSessions()" :key="s.id">
+            <!-- Link by SESSION ID, falling back to the dated URL for archive
+                 rows that have none. Two rows of the same (date, subject) are
+                 two different sessions; the dated URL resolves to the later of
+                 them, so linking by it would leave the earlier one unreachable
+                 and make the pair look like a duplicate of one page. -->
+            <a class="sv__session-card mp-take"
+               :href="sessionHref(s)"
+               :style="`--mp-subject:${subjectDot(s.subjectId)}`">
+              <div class="sv__session-top">
+                <div class="sv__session-titleline">
+                  <span class="sv__date" x-text="formatDate(s.date, 'short')"></span>
+                  <i class="mp-take__dot" aria-hidden="true"></i>
+                  <span class="sv__session-title" x-text="s.subjectName"></span>
+                </div>
+                <div class="sv__session-meta">
+                  <span x-show="s.regimeSummary">regime: <span x-text="regimeLabel(s.regimeSummary?.regime)"></span></span>
+                  <span x-show="!s.regimeSummary && s.state" x-text="s.state"></span>
+                  <span x-text="quorumText(s)"></span>
+                </div>
+              </div>
+              <div class="sv__stance-line">
+                <template x-for="[stance, n] in stanceEntries(s)" :key="stance">
+                  <span class="sv__stance-dotline"><i :style="`background:${stanceColor(stance)}`"></i><b x-text="n"></b> <span x-text="stance"></span></span>
+                </template>
+              </div>
+              <p class="sv__session-copy" x-show="synthesisPreview(s)" x-text="synthesisPreview(s)"></p>
+            </a>
+          </template>
+        </div>
+      </div>
+    </template>
+
+    <!-- Outside the loading template on purpose: the disclaimer is true before
+         the feed arrives and true if it never does. One string, four surfaces —
+         see assets/js/app/lib/swarm-disclaimer.js. -->
+    <section class="rm-disclaimer" role="note" aria-label="Disclaimer" x-data="swarmDisclaimer()">
+      <p class="rm-disclaimer__label">Disclaimer</p>
+      <p class="rm-disclaimer__body" x-text="text"></p>
+    </section>
+  </div>
+</section>

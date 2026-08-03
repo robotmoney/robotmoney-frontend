@@ -1,4 +1,4 @@
-// Frontend-structure check. Runs after the E2E committee session while the
+// Frontend-structure check. Runs after the E2E swarm session while the
 // stack is live and once at startup on local boots. It verifies route
 // fragments and the API data they consume. Data-provenance expectations
 // (issue #134) always assert LIVE provenance now — issue #147 removed
@@ -66,16 +66,16 @@ async function main() {
 
   // Check that the view HTML files are served by the backend.
   // The SPA serves them as raw fragments that the router injects.
-  // Committee index is the reference-faithful directory (robotmoney-site
-  // src/app/committee/page.tsx): members + subjects rails and a browsable
+  // Swarm index is the reference-faithful directory (robotmoney-site
+  // src/app/swarm/page.tsx): members + subjects rails and a browsable
   // sessions list. Signed takes + memo links render on the session DETAIL
   // page (checked below), mirroring the reference layout.
-  await checkView("/views/committee.html", [
-    "x-data=\"committeeView()\"",
+  await checkView("/views/swarm.html", [
+    "x-data=\"swarmView()\"",
     "x-for=\"m in members\"",   // members rail
     "subjects()",               // subjects rail
     "publishedSessions()",      // browsable sessions list
-    "cv__session-card",         // per-session card
+    "sv__session-card",         // per-session card
     "stanceColor(",             // per-take stance dots on each session
   ]);
   await checkView("/views/regime.html", [
@@ -115,30 +115,30 @@ async function main() {
     "x-data=\"walletPerfView()\"",
     "a2-card",  // shared chart-card component
   ]);
-  await checkView("/views/committee/member.html", [
+  await checkView("/views/swarm/member.html", [
     "x-data=\"memberProfile()\"",
     "profile-name",  // e2e hook (spa.spec.ts asserts member name)
   ]);
   // Session detail renders the members' signed takes + memo links and the
   // e2e submissions table (spa.spec.ts asserts .session-submissions rows).
   // The reference-faithful member-opinion cards (issue #75) must survive: one
-  // cv__take card per member with a role/lens line and a stance-confidence
+  // sv__take card per member with a role/lens line and a stance-confidence
   // badge — the surface spa.spec.ts asserts against for live demo sessions.
-  await checkView("/views/committee/session.html", [
+  await checkView("/views/swarm/session.html", [
     "x-data=\"icSessionDetail()\"",
     "x-for=\"t in takes\"",  // renders the members' signed takes
-    "cv__take",              // member-opinion card (issue #75 render surface)
-    "cv__stance-badge",      // stance · confidence badge
-    "cv__take-lens",         // member role/lens line
-    "cv__memo-link",         // memoUrl rendering
+    "sv__take",              // member-opinion card (issue #75 render surface)
+    "sv__stance-badge",      // stance · confidence badge
+    "sv__take-lens",         // member role/lens line
+    "sv__memo-link",         // memoUrl rendering
     "session-submissions",   // compact submissions table (e2e hook)
   ]);
 
   // Router patterns and globally registered factories keep dynamic fragments
   // executable after innerHTML injection.
   checkLocalViewFile("../assets/js/app/routes.js", [
-    "committee\\/members\\/",
-    "committee\\/\\d{4}-\\d{2}-\\d{2}\\/",
+    "swarm\\/members\\/",
+    "swarm\\/\\d{4}-\\d{2}-\\d{2}\\/",
   ]);
   checkLocalViewFile("../assets/js/app/router.js", [
     "AbortController",
@@ -165,7 +165,7 @@ async function main() {
     "Alpine",
     "assets/js/app/main.js",  // module that registers Alpine factories + boots the router
     "/config.js",  // runtime config bootstrap
-    "href=\"/committee\"",
+    "href=\"/swarm\"",
     "href=\"/regime\"",
   ]);
 
@@ -197,14 +197,14 @@ async function main() {
     checks.push({ name: "GET /api/dashboards/wallet-balances returns data", ok: false, detail: `${wbRes.status}` });
   }
 
-  // Check that the API serves data the views depend on (the committee view
+  // Check that the API serves data the views depend on (the swarm view
   // loads its data from these endpoints).
-  const sessionsRes = await fetch(`${BACKEND}${ROUTES.committee.sessions}`);
+  const sessionsRes = await fetch(`${BACKEND}${ROUTES.swarm.sessions}`);
   if (sessionsRes.ok) {
     const sessions = await sessionsRes.json();
-    checks.push({ name: `GET ${ROUTES.committee.sessions} returns data`, ok: true, detail: `${sessions.sessions?.length ?? 0} sessions` });
+    checks.push({ name: `GET ${ROUTES.swarm.sessions} returns data`, ok: true, detail: `${sessions.sessions?.length ?? 0} sessions` });
   } else {
-    checks.push({ name: `GET ${ROUTES.committee.sessions} returns data`, ok: false, detail: `${sessionsRes.status}` });
+    checks.push({ name: `GET ${ROUTES.swarm.sessions} returns data`, ok: false, detail: `${sessionsRes.status}` });
   }
 
   // Report.

@@ -92,7 +92,7 @@ Credentials flow through three layers:
 analytics series; the app runs seeded without it.
 
 `ANALYTICS_TOKEN` is the analytics-provider bearer (issue #106): the **api**
-process verifies it on `POST /api/committee/regime` and every `/api/analytics/*`
+process verifies it on `POST /api/swarm/regime` and every `/api/analytics/*`
 route, and the **worker** presents the same value when its updater jobs submit
 computed outputs through that boundary (`ANALYTICS_API_URL` points the worker at
 the api; docker-compose defaults it to `http://api:8787`). The worker refuses to

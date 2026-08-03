@@ -11,10 +11,10 @@ const destDir = join(root, "frontend/public/assets/js/app/contract");
 // Every contract runtime module the no-build frontend needs vendored
 // verbatim. Each entry must be import-free (no node_modules dependencies) —
 // it's served to the browser as-is, the same discipline `routes.js` already
-// follows. `committee-application.js` carries ONBOARDING_PROMPT (§11 R4) so
-// the /committee/apply page and the demo onboarding prompt can never drift
+// follows. `swarm-application.js` carries ONBOARDING_PROMPT (§11 R4) so
+// the /swarm/apply page and the demo onboarding prompt can never drift
 // onto two different copies of the same prompt.
-const FILES = ["routes.js", "committee-application.js"];
+const FILES = ["routes.js", "swarm-application.js"];
 
 if (process.argv.includes("--check")) {
   let stale = false;

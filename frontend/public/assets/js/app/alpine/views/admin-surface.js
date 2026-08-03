@@ -4,7 +4,7 @@
 // path (frontend/public/assets/js/app/routes.js maps the whole subtree to
 // this view); this component reads location.pathname at init to decide which
 // section to render and keeps navigating with history.pushState so deep links
-// like /admin/research/runs/:id are shareable. Committee topic/member/roster/
+// like /admin/research/runs/:id are shareable. Swarm topic/member/roster/
 // session management is explicitly OUT of scope for this view (#157 scope) —
 // only overview, research (pipeline telemetry), queue (jobs/schedules/retry),
 // and the audit log operate through it.
@@ -264,9 +264,9 @@ export function registerAdminSurfaceView(Alpine) {
 
     // PATCH /api/admin/schedules/:id — toggle ONLY `enabled` on an analytics
     // schedule (US-Q1 schedule-toggle acceptance). Cron/timezone/kind/payload are read-only; the
-    // committee.* demo rows are protected server-side (409) and never offered
+    // swarm.* demo rows are protected server-side (409) and never offered
     // a toggle control here.
-    isCommitteeSchedule(schedule) { return String(schedule?.kind || "").startsWith("committee."); },
+    isSwarmSchedule(schedule) { return String(schedule?.kind || "").startsWith("swarm."); },
     async toggleSchedule(schedule) {
       const reason = window.prompt(
         `Reason for ${schedule.enabled ? "disabling" : "enabling"} "${schedule.kind}" (10-500 characters):`, "",

@@ -23,7 +23,7 @@ const OVERVIEW_FIXTURE = {
   queueCounts: { pending: 1, running: 0, succeeded: 10, failed: 0, dead: 1, cancelled: 0 },
   alerts: [{ id: "a1", level: "dead", kind: "queue", message: "1 job is dead and needs a manual retry." }],
   enabledAnalyticsSchedules: [],
-  nextCommitteeEvent: null,
+  nextSwarmEvent: null,
 };
 
 const JOBS_FIXTURE = {
@@ -35,7 +35,7 @@ const JOBS_FIXTURE = {
   schedules: [
     { id: 1, kind: "regime.classify", cron: "30 22 * * *", timezone: "UTC", enabled: true,
       last_enqueued_at: "2026-07-15T22:30:00.000Z", next_run_at: "2026-07-16T22:30:00.000Z" },
-    { id: 6, kind: "committee.open_session", cron: "0 6 * * *", timezone: "UTC", enabled: false,
+    { id: 6, kind: "swarm.open_session", cron: "0 6 * * *", timezone: "UTC", enabled: false,
       last_enqueued_at: null, next_run_at: null },
   ],
   summary: { byStatus: { dead: 1 }, byKind: { "regime.classify": 1 } },
@@ -83,7 +83,7 @@ async function login(page: Page): Promise<void> {
   await expect(page.locator(".adm-nav")).toBeVisible();
 }
 
-test("admin schedules: toggle button is hidden for committee demo rows and PATCHes for analytics rows", async ({ page }) => {
+test("admin schedules: toggle button is hidden for swarm demo rows and PATCHes for analytics rows", async ({ page }) => {
   mockAdminApi(page);
   await login(page);
 
@@ -91,9 +91,9 @@ test("admin schedules: toggle button is hidden for committee demo rows and PATCH
   page.once("dialog", (d) => d.accept("operational toggle for the browser test"));
 
   const analyticsRow = page.locator("tr").filter({ hasText: "regime.classify" }).first();
-  const committeeRow = page.locator("tr").filter({ hasText: "committee.open_session" }).first();
-  await expect(committeeRow.getByText("legacy/demo")).toBeVisible();
-  await expect(committeeRow.getByRole("button")).toHaveCount(0);
+  const swarmRow = page.locator("tr").filter({ hasText: "swarm.open_session" }).first();
+  await expect(swarmRow.getByText("legacy/demo")).toBeVisible();
+  await expect(swarmRow.getByRole("button")).toHaveCount(0);
 
   const [patchRequest] = await Promise.all([
     page.waitForRequest(/\/api\/admin\/schedules\/1$/),

@@ -9,15 +9,15 @@
 //
 //   - POSITIVE: against the REAL, unmodified frontend/public content the script
 //     exits 0, so the guard's pass path is not vacuously red.
-//   - NEGATIVE: with the `x-data="committeeView()"` marker deliberately stripped
-//     from the served /views/committee.html, the script exits NON-ZERO, so the
+//   - NEGATIVE: with the `x-data="swarmView()"` marker deliberately stripped
+//     from the served /views/swarm.html, the script exits NON-ZERO, so the
 //     loud-failure guarantee is verified rather than assumed.
 //
 // scripts/demo-frontend-check.ts only ever runs against a live backend (docker-compose
 // demo stack or `bun run demo`), which this "root" test job (`bun run test`, wired in
 // .github/workflows/integration.yml) does not have. So this file stands up a minimal
 // in-process static file + API stub server that serves frontend/public content plus a
-// stub /api/committee/sessions response, then spawns the real script against it.
+// stub /api/swarm/sessions response, then spawns the real script against it.
 import { describe, expect, test } from "bun:test";
 import { join, normalize } from "node:path";
 import { ROUTES } from "@robotmoney/contract";
@@ -27,7 +27,7 @@ const publicDir = join(repoRoot, "frontend", "public");
 
 // A rewrite maps a served pathname to a function that transforms the on-disk
 // file's text before it is returned. The negative case uses this to strip a
-// core-surface marker from /views/committee.html so the guard must fail.
+// core-surface marker from /views/swarm.html so the guard must fail.
 type Rewrites = Record<string, (text: string) => string>;
 
 // Minimal valid wallet-balances payload (issue #84) whose provenance marker is
@@ -47,7 +47,7 @@ function startStubBackend(rewrites: Rewrites = {}, wallet: ReturnType<typeof wal
     port: 0,
     async fetch(req) {
       const url = new URL(req.url);
-      if (url.pathname === ROUTES.committee.sessions) {
+      if (url.pathname === ROUTES.swarm.sessions) {
         return Response.json({ sessions: [] });
       }
       if (url.pathname === ROUTES.dashboards.walletBalances) {
@@ -96,10 +96,10 @@ describe("scripts/demo-frontend-check.ts (demo readiness gate self-test)", () =>
     }
   }, 20_000);
 
-  test("exits non-zero when a core surface marker is stripped from /views/committee.html", async () => {
-    const marker = 'x-data="committeeView()"';
+  test("exits non-zero when a core surface marker is stripped from /views/swarm.html", async () => {
+    const marker = 'x-data="swarmView()"';
     const backend = startStubBackend({
-      "/views/committee.html": (text) => {
+      "/views/swarm.html": (text) => {
         // Guard against a silently-vacuous negative: the marker MUST be present
         // in the real content for stripping it to mean anything.
         expect(text).toContain(marker);

@@ -64,7 +64,7 @@ export async function isValidEd25519PublicKey(publicKeyB64: string): Promise<boo
 
 /**
  * §11 R6 — setup-gated apply. Verifies the applicant's rmpc signature over the
- * canonical committee-application payload (@robotmoney/contract) against the
+ * canonical swarm-application payload (@robotmoney/contract) against the
  * submitted key BEFORE the server records anything. Same idiom as
  * verifySubmissionSignature/verifyClaimChallengeSignature: import the exact
  * key encoding accepted everywhere else, canonicalize, verify — no bespoke
@@ -114,7 +114,7 @@ export interface StoredSubmissionSignature {
  * Read-time verification seam for public receipts (issue #207).
  * Callers must build `submission` from the persisted payload and must not trust
  * the stored `verified` flag. The public receipt contract is documented in
- * frontend/public/views/docs/investment-committee/api-reference.html.
+ * frontend/public/views/docs/investment-swarm/api-reference.html.
  */
 export async function verifyStoredSubmissionSignature(stored: StoredSubmissionSignature): Promise<boolean> {
   return verifySubmissionSignature(stored.submission, stored.signatureB64, stored.publicKeyB64);

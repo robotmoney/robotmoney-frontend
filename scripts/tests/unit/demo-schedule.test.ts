@@ -57,8 +57,8 @@ describe("resolveDemoCadence — one profile per invocation, selected by --stage
   test("fast (default) profile is TODAY'S values, pinned — a globally-slow demo is a regression", () => {
     const c = resolveDemoCadence({ stage: false });
     expect(c.profile).toBe("fast");
-    expect(c.committeeIntervalMs).toBe(120_000);
-    expect(c.committeeStaggerMs).toBe(60_000);
+    expect(c.swarmIntervalMs).toBe(120_000);
+    expect(c.swarmStaggerMs).toBe(60_000);
     // Onboarding admissions are unchanged on the fast path (AC6).
     expect(c.onboardingFirstMs).toBe(60_000);
     expect(c.onboardingIntervalMs).toBe(300_000);
@@ -71,8 +71,8 @@ describe("resolveDemoCadence — one profile per invocation, selected by --stage
   test("stage profile convenes each subject every 6 h", () => {
     const c = resolveDemoCadence({ stage: true });
     expect(c.profile).toBe("realistic");
-    expect(c.committeeIntervalMs).toBe(21_600_000);
-    expect(c.committeeStaggerMs).toBe(c.committeeIntervalMs / DEMO_SUBJECT_COUNT); // 3 h
+    expect(c.swarmIntervalMs).toBe(21_600_000);
+    expect(c.swarmStaggerMs).toBe(c.swarmIntervalMs / DEMO_SUBJECT_COUNT); // 3 h
   });
 
   test("stage research fires every 3 hours; regime fires every 3 hours offset by 30 minutes", () => {
@@ -87,10 +87,10 @@ describe("resolveDemoCadence — one profile per invocation, selected by --stage
     expect(regime.map((m, i) => m - research[i])).toEqual(Array(8).fill(30));
   });
 
-  test("stage onboarding admissions ride the committee beat, first one still prompt", () => {
+  test("stage onboarding admissions ride the swarm beat, first one still prompt", () => {
     const c = resolveDemoCadence({ stage: true });
     expect(c.onboardingFirstMs).toBeLessThanOrEqual(DEMO_FIRST_SESSION_MAX_MS);
-    expect(c.onboardingIntervalMs).toBe(c.committeeIntervalMs);
+    expect(c.onboardingIntervalMs).toBe(c.swarmIntervalMs);
   });
 
   test("the fast profile's producer crons ARE the committed docker-compose.yml defaults", () => {
@@ -123,11 +123,11 @@ describe("planSubjectSchedules — prompt on bring-up, phase-offset in steady st
       }
     });
 
-    test(`[${label}] steady-state runs are exactly committeeIntervalMs apart per subject`, () => {
+    test(`[${label}] steady-state runs are exactly swarmIntervalMs apart per subject`, () => {
       const plans = planSubjectSchedules(DEMO_SUBJECT_COUNT, cadence, NOW);
       for (const p of plans) {
         for (let n = 1; n < 10; n++) {
-          expect(plannedRunAt(p, n + 1) - plannedRunAt(p, n)).toBe(cadence.committeeIntervalMs);
+          expect(plannedRunAt(p, n + 1) - plannedRunAt(p, n)).toBe(cadence.swarmIntervalMs);
         }
         // Run 0 is the bring-up session; run 1 is the first grid slot after it.
         expect(plannedRunAt(p, 0)).toBe(p.firstAt);
@@ -135,13 +135,13 @@ describe("planSubjectSchedules — prompt on bring-up, phase-offset in steady st
       }
     });
 
-    test(`[${label}] subjects are phase-offset by committeeIntervalMs / subjectCount`, () => {
+    test(`[${label}] subjects are phase-offset by swarmIntervalMs / subjectCount`, () => {
       const plans = planSubjectSchedules(DEMO_SUBJECT_COUNT, cadence, NOW);
-      const offset = cadence.committeeIntervalMs / DEMO_SUBJECT_COUNT;
+      const offset = cadence.swarmIntervalMs / DEMO_SUBJECT_COUNT;
       for (const p of plans) expect(p.phaseOffsetMs).toBe(offset);
       // Steady-state slots sit on distinct residues of the interval grid.
-      const residues = plans.map((p) => (plannedRunAt(p, 3) - NOW) % cadence.committeeIntervalMs);
-      expect(residues).toEqual(plans.map((p) => (p.index * offset) % cadence.committeeIntervalMs));
+      const residues = plans.map((p) => (plannedRunAt(p, 3) - NOW) % cadence.swarmIntervalMs);
+      expect(residues).toEqual(plans.map((p) => (p.index * offset) % cadence.swarmIntervalMs));
       // …so merged steady-state sessions land one every `offset` overall.
       const merged: number[] = [];
       for (const p of plans) for (let n = 1; n <= 6; n++) merged.push(plannedRunAt(p, n));
@@ -149,9 +149,9 @@ describe("planSubjectSchedules — prompt on bring-up, phase-offset in steady st
       for (let i = 1; i < merged.length; i++) expect(merged[i] - merged[i - 1]).toBe(offset);
     });
 
-    test(`[${label}] the declared committeeStaggerMs IS the planner's phase offset for the demo's subjects`, () => {
+    test(`[${label}] the declared swarmStaggerMs IS the planner's phase offset for the demo's subjects`, () => {
       const plans = planSubjectSchedules(DEMO_SUBJECT_COUNT, cadence, NOW);
-      expect(plans[1].phaseOffsetMs).toBe(cadence.committeeStaggerMs);
+      expect(plans[1].phaseOffsetMs).toBe(cadence.swarmStaggerMs);
     });
   }
 
@@ -173,7 +173,7 @@ describe("planSubjectSchedules — prompt on bring-up, phase-offset in steady st
   test("the phase-offset rule follows subjectCount, not a hardcoded 2", () => {
     const cadence = resolveDemoCadence({ stage: true });
     const plans = planSubjectSchedules(3, cadence, NOW);
-    for (const p of plans) expect(p.phaseOffsetMs).toBe(cadence.committeeIntervalMs / 3); // 2 h
+    for (const p of plans) expect(p.phaseOffsetMs).toBe(cadence.swarmIntervalMs / 3); // 2 h
     for (const p of plans) expect(p.firstAt - NOW).toBeLessThanOrEqual(DEMO_FIRST_SESSION_MAX_MS);
   });
 
@@ -200,7 +200,7 @@ describe("the READY banner cadence line is RENDERED from the resolved profile", 
     expect(line).toContain("regime daily at 22:30");
   });
 
-  test("stage profile reports the 6h-committee / 3h-research cadence", () => {
+  test("stage profile reports the 6h-swarm / 3h-research cadence", () => {
     const line = renderCadenceLine(resolveDemoCadence({ stage: true }));
     expect(line).toContain("every ~6 h");
     expect(line).toContain("about every ~3 h");
@@ -285,10 +285,10 @@ describe("cadence lives in ONE file — consumers carry no literal of their own"
     expect(architecture).not.toContain("per subject, ~2min cadence");
   });
 
-  test("CI's committee path never reads the cadence profile (the e2e gate is unaffected)", () => {
-    // CI publishes its two sessions back-to-back through committee/session.ts;
+  test("CI's swarm path never reads the cadence profile (the e2e gate is unaffected)", () => {
+    // CI publishes its two sessions back-to-back through swarm/session.ts;
     // an import here would put the CI gate on a demo timer.
-    const session = readFileSync(join(repoRoot, "scripts", "lib", "committee", "session.ts"), "utf8");
+    const session = readFileSync(join(repoRoot, "scripts", "lib", "swarm", "session.ts"), "utf8");
     expect(session).not.toContain("demo-schedule");
   });
 });
@@ -299,7 +299,7 @@ describe("red controls: the graders must REPORT a regression", () => {
     expect(cadenceLiteralsIn(broken)).toContain("300_000");
   });
 
-  test("cadenceLiteralsIn reports a re-inlined committee interval and date rotation", () => {
+  test("cadenceLiteralsIn reports a re-inlined swarm interval and date rotation", () => {
     expect(cadenceLiteralsIn("const intervalMs = 120000;")).toEqual(["120000"]);
     expect(cadenceLiteralsIn("new Date(Date.now() + runs * 86400_000)")).toEqual(["86400_000"]);
   });

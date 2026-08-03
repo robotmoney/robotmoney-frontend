@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
-// The SITTING committee member's own session client — runs INSIDE the
+// The SITTING swarm member's own session client — runs INSIDE the
 // member's container on the member-agent rail (issue #361 Phase 2; docs/
 // decisions.md D25, docs/architecture.md §9.7). It is the member's "own
 // software", the runnable analogue of the published starter client
-// (scripts/starter-committee-agent.ts): the harness never authors, signs, or
+// (scripts/starter-swarm-agent.ts): the harness never authors, signs, or
 // submits on a member's behalf — it only launches this client in the member's
-// container (scripts/lib/committee/agent.ts runMemberSessionAgent) and
+// container (scripts/lib/swarm/agent.ts runMemberSessionAgent) and
 // observes the session from outside.
 //
 // Everything member-scoped happens in here, inside the container:
@@ -15,7 +15,7 @@
 //   - the regime read and the session brief are fetched by THIS process over
 //     REST (§11.3 E7 — the harness supplies no context);
 //   - the take is authored by THIS process's own `opencode run` call
-//     (scripts/lib/committee/inference.ts — the same authoring library, now
+//     (scripts/lib/swarm/inference.ts — the same authoring library, now
 //     executed inside the member's private filesystem, which makes the old
 //     host-side concurrent-cold-start SQLite race structurally impossible);
 //   - the canonical submission bytes are fetched from RM's signing-payload
@@ -28,7 +28,7 @@
 //     in `enroll` mode; the PUBLIC key is printed for the harness (playing the
 //     RM operator) to register; the private key never leaves this container's
 //     volume.
-//   - "rmpc" — the committee-onboarding skill's layout, created during a REAL
+//   - "rmpc" — the swarm-onboarding skill's layout, created during a REAL
 //     onboarding by the member's own vanilla agent inside this same HOME
 //     volume: ~/robotmoney-identity.json (encrypted rmpc keystore),
 //     ~/robotmoney-member-id, ~/robotmoney-member-token. Signing shells out to
@@ -38,7 +38,7 @@
 //
 // ENV CONTRACT (all RM_* injected explicitly by the harness at
 // `docker compose run` time — a container inherits nothing):
-//   RM_API_URL        committee REST base (compose-internal, e.g. http://api:8787)
+//   RM_API_URL        swarm REST base (compose-internal, e.g. http://api:8787)
 //   RM_MEMBER_ID      the member id this client acts as
 //   RM_MEMBER_NAME / RM_MEMBER_LENS / RM_MEMBER_BIAS   persona facts
 //   RM_SESSION_DATE / RM_SUBJECT_ID / RM_SESSION_ID    session coordinates
@@ -62,14 +62,14 @@ import { classifyRegime, ROUTES } from "@robotmoney/contract";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { authorTake, type RegimeContext } from "../lib/committee/inference.ts";
+import { authorTake, type RegimeContext } from "../lib/swarm/inference.ts";
 
 const HOME = process.env.HOME ?? "/home/agent";
 const CLIENT_DIR = join(HOME, ".rm-member");
 const CLIENT_IDENTITY = join(CLIENT_DIR, "identity.jwk.json");
 const CLIENT_TOKEN = join(CLIENT_DIR, "token");
-// The committee-onboarding skill's own layout (created by a real onboarding
-// run inside this HOME): see frontend/public/skills/committee-onboarding/SKILL.md.
+// The swarm-onboarding skill's own layout (created by a real onboarding
+// run inside this HOME): see frontend/public/skills/swarm-onboarding/SKILL.md.
 const RMPC_IDENTITY = join(HOME, "robotmoney-identity.json");
 const RMPC_MEMBER_ID = join(HOME, "robotmoney-member-id");
 const RMPC_MEMBER_TOKEN = join(HOME, "robotmoney-member-token");
@@ -116,13 +116,13 @@ export async function restJson<T = any>(
 
 /** Fetch the exact canonical byte string RM validated for this draft. */
 export async function fetchSigningPayload(draft: Record<string, unknown>): Promise<string> {
-  const { body } = await restJson<{ canonical?: unknown }>(ROUTES.committee.signingPayload, {
+  const { body } = await restJson<{ canonical?: unknown }>(ROUTES.swarm.signingPayload, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(draft),
   });
   if (typeof body?.canonical !== "string" || body.canonical.length === 0) {
-    throw new Error(`${ROUTES.committee.signingPayload} returned HTTP 200 without a non-empty .canonical string`);
+    throw new Error(`${ROUTES.swarm.signingPayload} returned HTTP 200 without a non-empty .canonical string`);
   }
   // Do not trim, normalize, parse, or locally reconstruct this value: these
   // are the exact bytes the API promises to verify.
@@ -152,7 +152,7 @@ function persistToken(kind: KeystoreKind, token: string): void {
 }
 
 async function verifyToken(token: string): Promise<string | null> {
-  const { status, body } = await restJson<{ memberId?: string }>(ROUTES.committee.verifyToken, {
+  const { status, body } = await restJson<{ memberId?: string }>(ROUTES.swarm.verifyToken, {
     headers: { Authorization: `Bearer ${token}` },
   }, { allowStatuses: [401] });
   return status === 200 && body?.memberId ? body.memberId : null;
@@ -161,7 +161,7 @@ async function verifyToken(token: string): Promise<string | null> {
 // ── client-native keystore (fixed demo roster) ──────────────────────────────
 async function ensureClientKeyPair(): Promise<{ publicKeyB64: string; privateKey: CryptoKey }> {
   // A COMMITTED persona identity, when the harness supplies one
-  // (scripts/lib/committee/persona-keys.ts). It wins over whatever this
+  // (scripts/lib/swarm/persona-keys.ts). It wins over whatever this
   // container's volume happens to hold, because the volume is per-boot and the
   // persona is not: adopting the known key is what lets a restarted demo sign as
   // a persona its persistent database already knows, instead of inventing a new
@@ -198,7 +198,7 @@ function rmpcSign(canonical: string): string {
   const payloadFile = join(tmpdir(), `rm-signing-payload-${crypto.randomUUID()}.bin`);
   try {
     // EXACT canonical bytes: no trailing newline (rmpc refuses trailing
-    // whitespace as a guardrail — see the committee-onboarding skill).
+    // whitespace as a guardrail — see the swarm-onboarding skill).
     writeFileSync(payloadFile, canonical);
     const r = Bun.spawnSync(
       ["rmpc", "committee-identity", "--path", RMPC_IDENTITY, "sign", "--payload-file", payloadFile],
@@ -279,7 +279,7 @@ async function participate(): Promise<void> {
 
   // Read context over REST — this member's OWN fetch, not the harness's.
   const regime = (await restJson<{ latest?: any }>(`${ROUTES.dashboards.regimeSnapshots}?range=1`)).body?.latest ?? {};
-  await restJson(`${ROUTES.committee.brief}?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(subjectId)}`);
+  await restJson(`${ROUTES.swarm.brief}?date=${encodeURIComponent(date)}&subject=${encodeURIComponent(subjectId)}`);
   const composite = Number(regime?.composite ?? 0.5);
   const regimeCtx: RegimeContext = {
     composite,
@@ -314,7 +314,7 @@ async function participate(): Promise<void> {
   // Post the memo, ask the API for the exact validated canonical byte string,
   // sign those bytes IN HERE, then submit. Local canonical reconstruction is
   // deliberately absent: the server response is the protocol authority.
-  const memo = await restJson<{ ok?: boolean; url?: string }>(ROUTES.committee.memos, {
+  const memo = await restJson<{ ok?: boolean; url?: string }>(ROUTES.swarm.memos, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ sessionId, title: `${name}'s analysis of ${subjectId}`, body }),
@@ -338,7 +338,7 @@ async function participate(): Promise<void> {
     const { privateKey } = await ensureClientKeyPair();
     signature = b64(await crypto.subtle.sign({ name: "Ed25519" }, privateKey, new TextEncoder().encode(canonical)));
   }
-  const submitted = await restJson<{ ok?: boolean; verified?: boolean; error?: string }>(ROUTES.committee.submit, {
+  const submitted = await restJson<{ ok?: boolean; verified?: boolean; error?: string }>(ROUTES.swarm.submit, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ ...draft, signature }),

@@ -39,7 +39,7 @@ describe("goldens-drift", () => {
     // Check that key routes exist and have expected structure
     const keyRoutes = {
       "/api/dashboards/allocation": (data: any) => data.strategy && Array.isArray(data.strategy),
-      "/api/dashboards/committee": (data: any) => typeof data === "object",
+      "/api/dashboards/swarm": (data: any) => typeof data === "object",
       "/api/dashboards/regime": (data: any) => typeof data === "object",
     };
 

@@ -27,7 +27,7 @@ const ENTRIES = {
       status: "success",
       commitSummary: "reported 30d revenue",
       submittedBy: "agent-one",
-      approvedBy: "committee-bot",
+      approvedBy: "swarm-bot",
     },
     {
       id: "e2",

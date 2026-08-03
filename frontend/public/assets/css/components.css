@@ -278,22 +278,22 @@
 /* ════════ Shared data-view components ════════
    Page-agnostic building blocks for data dashboards (regime, allocation, …).
    Each rule is the SINGLE SOURCE OF TRUTH: the neutral .rm-* name is grouped
-   with the original regime .rv__* (and committee .cv__*) selector, copying
+   with the original regime .rv__* (and swarm .sv__*) selector, copying
    regime's exact values, so both the reference page and new pages render
-   identically from one block. The matching regime/committee blocks were
+   identically from one block. The matching regime/swarm blocks were
    removed from views.css. Regime-DOMAIN styling (hero, backtests, correlations,
    sparklines, posbars, indicator cells, pie, methodology) stays in views.css. */
 
 /* eyebrow (kicker) */
-.rm-eyebrow, .rv__eyebrow, .cv__eyebrow {
+.rm-eyebrow, .rv__eyebrow, .sv__eyebrow {
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
   letter-spacing: 0.3em; color: var(--color-accent);
 }
 .rm-eyebrow--accent, .rv__eyebrow--accent { color: var(--color-accent); }
 
 /* loading / error states */
-.rm-loading, .rv__loading, .cv__loading, .cv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
-.rm-error, .rv__error, .cv__error { color: var(--color-warn); font-family: var(--font-mono); }
+.rm-loading, .rv__loading, .sv__loading, .sv__empty { color: var(--color-text-muted); font-family: var(--font-mono); }
+.rm-error, .rv__error, .sv__error { color: var(--color-warn); font-family: var(--font-mono); }
 
 /* section head + title + as-of */
 .rm-section-head, .rv__dash-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
@@ -469,8 +469,8 @@
   color: var(--color-text); text-decoration-color: var(--color-accent);
 }
 
-/* ── Committee disclaimer ───────────────────────────────────────────────────
-   Closes the page, above the footer, on every committee surface. Quiet but not
+/* ── Swarm disclaimer ───────────────────────────────────────────────────
+   Closes the page, above the footer, on every swarm surface. Quiet but not
    hidden: it sits at the label rung with a full-width hairline above it, so it
    reads as the page's closing statement rather than as fine print smuggled in
    under a fold. No hue — a disclaimer that needs a colour to be noticed is
@@ -517,7 +517,7 @@
    inline stylesheet still owns its size/genart; this only fixes the anchor.
    !important is used deliberately: the per-page inline <style> is injected
    after this shared sheet and would otherwise win the cascade. */
-.a2-hero, .cv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head {
+.a2-hero, .sv__hero, .rv__hero, .tok__hero, .md-hero, .cl__hero, .sk__head {
   /* Top-aligned, not centred. Centring looks right on any one page but breaks
      the thing this rule exists for: these blocks are different heights (a lede
      wraps to one line on /tokenomics and three on /projects), so centring made
@@ -526,7 +526,7 @@
   align-items: flex-start !important;
   position: relative;
 }
-.a2-hero__inner, .cv__hero-inner, .rv__hero-inner, .tok__hero-inner,
+.a2-hero__inner, .sv__hero-inner, .rv__hero-inner, .tok__hero-inner,
 .md-hero__inner, .cl__hero-inner, .sk__head-inner {
   /* 10rem rather than the original 8rem: it sits a typical block near the
      middle of the band instead of high in it, which was the complaint, while
@@ -545,14 +545,14 @@
    the rules above use it: each page's inline <style> is injected after this
    sheet and would otherwise win. */
 .sk__title, .rv__title, .tok__h1, .a2-hero__title,
-.md-hero__title, .cl__h1, .cv__title {
+.md-hero__title, .cl__h1, .sv__title {
   font-family: var(--font-display) !important;
   font-weight: 700 !important;
   font-size: clamp(2.5rem, 4.2vw, 3.75rem) !important;
   line-height: 1.05 !important;
   letter-spacing: -0.01em !important;
   text-transform: uppercase !important;
-  /* /regime and /committee carried an 8px top margin, which is enough to read
+  /* /regime and /swarm carried an 8px top margin, which is enough to read
      as a jump when the headline is otherwise pinned to the same offset. */
   margin-top: 0 !important;
 }
@@ -568,7 +568,7 @@
    and under the content, and the lede steps up to the brighter reading grey the
    apply page already defines for long copy. Together they take /media to about
    7.9:1 while leaving the art plainly visible. */
-.a2-hero__viz, .cv__hero-field, .rv__hero-art, .tok__hero-art,
+.a2-hero__viz, .sv__hero-field, .rv__hero-art, .tok__hero-art,
 .md-hero__art, .cl__hero-art, .sk__head-viz {
   z-index: 0;
 }
@@ -576,7 +576,7 @@
    for a bottom fade, and the per-page inline <style> is injected after this
    sheet, so an ::after veil here loses the cascade on exactly the pages whose
    art is busiest. No hero defines a ::before. */
-.a2-hero::before, .cv__hero::before, .rv__hero::before, .tok__hero::before,
+.a2-hero::before, .sv__hero::before, .rv__hero::before, .tok__hero::before,
 .md-hero::before, .cl__hero::before, .sk__head::before {
   content: "";
   position: absolute;
@@ -585,7 +585,7 @@
   pointer-events: none;
   z-index: 0;
 }
-.a2-hero__lede, .cv__lede, .rv__hero-sub, .tok__lede,
+.a2-hero__lede, .sv__lede, .rv__hero-sub, .tok__lede,
 .md-hero__lede, .cl__lede, .sk__lede {
   color: #aeb6c6 !important;
 }

@@ -1410,3 +1410,112 @@ Every other open PR, including this decision's own #404, passes cleanly.
 **Not in scope.** Fixing PR #409's missing issue link — that is a genuine,
 unrelated violation the audit is correctly designed to catch, tracked on
 its own PR, not a recurrence of the `replan-audit-residue` blocker.
+
+## D28 — Committee → Swarm rename, pass 2: schema, routes, contract, and every frontend surface (issue #263, follow-up to #262/D-series pass 1)
+
+**Decision.** Pass 1 (#262, PR #352) renamed backend-internal copy and
+identifiers only, deliberately leaving the wire contract (routes), storage
+(tables), and every user-facing surface untouched so it could ship without a
+coordinated release. This pass finishes it: the `committee_*` Postgres
+schema, `/api/committee/*` routes, the contract package's `Committee*`
+types, the frontend SPA's `/committee/*` routes and every identifier/CSS
+class/file name, the public onboarding skill file, demo data fixtures,
+tests, CI path filters, and user-facing copy ("Committee" → "Swarm" /
+"Investment Swarm"). None of it was needed to ship the visible rebrand,
+which pass 1 already delivered — this pass exists to finish it precisely
+because it touches the wire contract and storage, which is why it was
+deferred behind a coordinated release rather than bundled with the copy
+pass.
+
+**Migration approach.** `backend/migrations/0025_swarm_rename.sql` renames
+every live `committee_*` table (and the one `committee_recommendation`
+column) to its `swarm_*` equivalent, plus every explicit and
+auto-generated constraint/index name for each table — Postgres does not
+cascade a table rename to its own auto-named constraints/indexes, so each
+is renamed explicitly. Forward-only, matching every other migration in
+this repo: no automated rollback exists; the file's own header comment
+documents the manual reverse-SQL order for recovery. Two tables from
+`0001_backends.sql` (`committee_takes`, `committee_submissions`) were
+already dropped as vestigial prototype remnants by
+`0006_committee_reconcile.sql` and are correctly NOT touched by 0025 — they
+don't exist. Historical migration files `0001`–`0024` are immutable and were
+**not** renamed or edited, including their own `committee_*`-named DDL and
+prose comments — matching this repo's existing "migration files are a
+historical record of what actually ran" convention.
+
+**Redirect strategy — three surfaces, same shape.** Every place an
+already-integrated external party (a member agent, a bookmarked URL) could
+have the OLD name memorized keeps resolving rather than hard-404ing:
+- **API routes** (`backend/src/api/index.ts`): any `/api/committee/*`
+  request gets a 308 (method/body-preserving, since several are POSTs) to
+  the same path under `/api/swarm/*`.
+- **Frontend SPA routes** (`frontend/public/assets/js/app/routes.js`):
+  `viewFor()` rewrites any `/committee/*`, `/admin/committee/*`, or
+  `/docs/investment-committee/*` prefix to its `/swarm`/`/admin/swarm`/
+  `/docs/investment-swarm` equivalent and re-resolves through the same
+  logic, covering every param sub-route (`/committee/members/:id`, etc.)
+  without duplicating each regex for the old prefix too — same pattern this
+  repo already used for the one-off `/allocation2` legacy redirect.
+- **Public onboarding skill** (`frontend/public/skills/`): the file moved to
+  `swarm-onboarding/SKILL.md`; a stub `SKILL.md` was left at the OLD
+  `committee-onboarding/` path (served as a plain static file, no dynamic
+  router involved) pointing to the new one, rather than deleting the old
+  path outright.
+
+**Historical demo data kept its old field name — reader carries the
+fallback.** `frontend/public/data/swarm/{sessions,briefs}/*.json` (~50
+files, `git mv`'d from `data/committee/` per an explicit decision below) is
+frozen historical content and was deliberately NOT content-swept — it still
+says `"committee_recommendation"` inside each session JSON. The frontend
+archive loader (`static-views.js`'s session normalizer) reads
+`raw.swarmRecommendation ?? raw.swarm_recommendation ?? raw.committee_recommendation`,
+in that fallback order, so the pre-rename archive keeps rendering without
+rewriting its content.
+
+**Two explicit product-copy decisions, made by Lucas rather than assumed:**
+- Demo data fixture path: renamed to `data/swarm/` (not left at the old path
+  as a stable mount point).
+- Product branding: "Committee" becomes "Swarm" / "Investment Swarm"
+  everywhere, including marketing copy — not just internal identifiers.
+  This in turn forced a copy fix in `docs/investment-swarm.html`: the
+  original prose used "IC" as a proper-noun abbreviation for the exclusive
+  active committee, and *separately* defined a capitalized "The Swarm" as
+  the open population of agents that could apply to join the IC. Collapsing
+  IC→Swarm made that circular ("The Swarm... can apply to join the
+  Swarm"). Resolved by collapsing to one concept — "Swarm" names the whole
+  thing, members and applicants alike — and rewriting the affected
+  sentences rather than preserving two tiers under a different name.
+
+**`rmpc`'s own CLI is NOT part of this rename — found and reverted.** A
+repo-wide text sweep initially renamed `committee-identity` (the rmpc CLI
+subcommand) and `RMPC_COMMITTEE_IDENTITY_PASSPHRASE` (the env var it reads)
+to `swarm-identity`/`RMPC_SWARM_IDENTITY_PASSPHRASE` across
+`scripts/agent/member-session-client.ts`, `scripts/lib/rmpc-fetch.ts`,
+`scripts/rmpc-release-e2e.ts`, the onboarding skill file, and several
+tests. This was wrong: `rmpc` is a separate binary owned by
+`robotmoney/robotmoney-core`, pinned at v0.3.2 — `scripts/lib/rmpc-fetch.ts`'s
+own header comment (predating this rename) documents that subcommand name
+as verified directly against that binary's `--help` output. Renaming it here
+does nothing to the real binary and would have broken every live
+`rmpc committee-identity sign` call this repo's onboarding/signing code
+makes. Caught via `git diff HEAD` against the pre-sweep original before
+committing, and reverted everywhere (subcommand string, env var, and the
+purely-local `missingCommitteeIdentitySubcommands`/
+`verifyCommitteeIdentitySubcommand` helper names, for consistency with the
+un-renamed contract they check). A guard comment was added at both
+`scripts/lib/rmpc-fetch.ts`'s pin declaration and the skill file's first
+mention of `committee-identity`, so this doesn't get re-broken by a future
+sweep. Renaming `rmpc`'s own CLI surface, if ever wanted, is a
+robotmoney-core change tracked there, not here.
+
+**Not in scope.** `mcp/` (already empty per D21's retirement); `recyclebin/`;
+this file's own D1–D26 body (historical record, annotated rather than
+rewritten, matching the regime-fidelity correction precedent on issue
+#400/#447); `docs/code-review/*` and `docs/reports/*`'s own historical
+content, except where a report cited a since-renamed *live* file path
+(`docs/reports/2026-07-29-local-onboarding-eval-assets.md`'s validation-log
+citation of the pre-rename contract test file was updated to
+`contract/tests/unit/swarm-application.test.ts`, annotated as a post-hoc path
+correction, since `scripts/tests/unit/test-path-citations.test.ts` scans
+`docs/reports/` for exactly this and does not exempt it the way it exempts
+`docs/code-review/`).

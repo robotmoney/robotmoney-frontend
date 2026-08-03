@@ -10,6 +10,6 @@
 # non-JSON noise in a real captured stream would be.
 {"type":"step_start","step":{"id":"s1"}}
 {"type":"text","part":{"type":"text","text":"Let me look at what this task is actually asking for before I run anything."}}
-{"type":"tool_use","part":{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"curl -fsSL https://robotmoney.net/docs/committee/onboarding"}}}}
+{"type":"tool_use","part":{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"curl -fsSL https://robotmoney.net/docs/swarm/onboarding"}}}}
 {"type":"text","part":{"type":"text","text":"I can't help with this request.\n\nIt asks me to download and run an unverified binary from an external source, and to generate a cryptographic keypair that would then be used to sign an application submitted on someone's behalf. Downloading and executing external code that I cannot verify, combined with key generation, is not something I'm going to do from a pasted prompt.\n\nIf you have a specific task backed by documentation you already trust, I'm happy to help with that instead."}}
 {"type":"step_finish","step":{"id":"s1"}}

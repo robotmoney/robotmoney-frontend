@@ -3,7 +3,7 @@
 // review flagged at 1131 lines/finding review-maintainability-032 and which
 // had since grown to 2087 lines/45 functions without the split it called
 // for). This module owns the DemoState shape, its transitions (setContainer /
-// setStep / startOnboarding / setOnboardStep / committeeProgress), and the
+// setStep / startOnboarding / setOnboardStep / swarmProgress), and the
 // pure display helpers the panes render with (glyphs, duration formatting,
 // column layout).
 //
@@ -13,7 +13,7 @@
 // the same shape the issue asked for the retired process.env.ADMIN_TOKEN
 // global mutation to move to.
 //
-// render() / renderResearch() / renderCommittee() stay in demo-main.ts: they
+// render() / renderResearch() / renderSwarm() stay in demo-main.ts: they
 // stitch this module's pieces together with demo-main-only context (the TUI
 // handle, the compose project name, boot uptime, the admin password, the
 // readiness-polling instance) that has no reason to live anywhere else.
@@ -23,17 +23,17 @@ export type Phase = "pending" | "building" | "starting" | "healthy" | "failed";
 export type StepStatus = "pending" | "running" | "done" | "failed";
 export interface ResearchEntry { id: number; kind: string; state: "queued" | "running" | "done"; asof?: string; at?: string; note: string; }
 export interface MemberState { stage: "connect" | "fetch" | "thinking" | "reporting" | "waiting" | "done" | "absent"; stance?: string; confidence?: number; }
-// Local structural mirror of the committee session driver's callback shape
-// (scripts/lib/committee/session.ts SessionProgress). The driver is loaded
+// Local structural mirror of the swarm session driver's callback shape
+// (scripts/lib/swarm/session.ts SessionProgress). The driver is loaded
 // via a dynamic import() (untyped) so this annotation stays decoupled from
 // that dynamic boundary.
 export type SessionProgress = (ev:
   | { type: "session"; state: string; sessionId?: number; subject: string; date?: string }
   | { type: "member"; memberId: string; stage: MemberState["stage"]; stance?: string; confidence?: number }
 ) => void;
-// Per-subject committee pane. Each subject (woon, mav, …) runs on its OWN
+// Per-subject swarm pane. Each subject (woon, mav, …) runs on its OWN
 // schedule and gets its OWN pane, so the TUI shows them side by side.
-export interface CommitteeState {
+export interface SwarmState {
   subjectName: string;
   sessionState: string;
   sessionId?: number;
@@ -42,7 +42,7 @@ export interface CommitteeState {
   history: { date: string; synthesis: string }[];
   nextAt: number; // epoch-ms of this subject's next session; 0 = running now
 }
-// Prospective committee-member onboarding, shown as a full-width checklist
+// Prospective swarm-member onboarding, shown as a full-width checklist
 // strip. The steps mirror the real join gates; session/memo/admitted flip to
 // done when the new member is observed participating (take + memo) in a live
 // session.
@@ -57,7 +57,7 @@ export interface DemoState {
   containers: { name: string; phase: Phase; detail?: string }[];
   steps: { name: string; status: StepStatus }[];
   research: ResearchEntry[];
-  committees: Record<string, CommitteeState>; // keyed by subject id
+  swarms: Record<string, SwarmState>; // keyed by subject id
   onboarded: OnboardState[]; // every prospective member that has entered onboarding
   upcoming: UpcomingMember[]; // scheduled future admissions with a countdown
   messages: string[];
@@ -89,14 +89,14 @@ export function setOnboardStep(state: DemoState, memberId: string, key: string, 
   if (step) step.status = status;
 }
 
-// ── Committee session progress → DemoState ──────────────────────────────────
-// Maps the additive runSession/runAgent callback events onto committee state
+// ── Swarm session progress → DemoState ──────────────────────────────────
+// Maps the additive runSession/runAgent callback events onto swarm state
 // and logs milestones. All member stages here are REAL pipeline events
 // emitted by the agent (connect/fetch/thinking/reporting/done) — no
 // fabricated sub-steps.
-export function committeeProgress(state: DemoState, subjectId: string, log: (msg: string) => void): SessionProgress {
+export function swarmProgress(state: DemoState, subjectId: string, log: (msg: string) => void): SessionProgress {
   return (ev) => {
-    const c = state.committees[subjectId];
+    const c = state.swarms[subjectId];
     if (!c) return;
     if (ev.type === "session") {
       c.sessionState = ev.state;
@@ -105,7 +105,7 @@ export function committeeProgress(state: DemoState, subjectId: string, log: (msg
       if (ev.state === "window_closed") {
         for (const id of Object.keys(c.members)) if (c.members[id].stage === "done") c.members[id].stage = "waiting";
       }
-      log(`committee ${subjectId}: ${ev.state}`);
+      log(`swarm ${subjectId}: ${ev.state}`);
     } else {
       c.members[ev.memberId] = { stage: ev.stage, stance: ev.stance, confidence: ev.confidence };
       // If this is an onboarding prospect, reflect its first live participation

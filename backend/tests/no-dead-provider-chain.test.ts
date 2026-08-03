@@ -2,7 +2,7 @@
 // (review-maintainability-011). The chain was: process.env.PROVIDER →
 // config.analyticsProvider → access/fetcher-provider.ts (test-only scaffolding
 // living in src/) — all dead, all deleted. The ONLY legitimate survivor of the
-// name is the committee route's AUTH predicate for the analytics-provider ROLE,
+// name is the swarm route's AUTH predicate for the analytics-provider ROLE,
 // renamed hasAnalyticsProviderRole precisely so a grep for the data-source knob
 // can never land in the auth path again.
 import { test, expect } from "bun:test";
@@ -51,13 +51,13 @@ test("fetcher-provider scaffolding is gone from src (file and references)", () =
 test("the only analyticsprovider-ish identifier is the shared auth predicate", () => {
   // Case-insensitive sweep: every match must be the auth predicate
   // hasAnalyticsProviderRole — defined in api/auth.ts (issue #106 extracted it
-  // from the committee router so the /api/analytics boundary reuses the same
+  // from the swarm router so the /api/analytics boundary reuses the same
   // constant-time check) and referenced only by the API routers that gate the
   // analytics-provider ROLE. (The hyphenated "analytics-provider" ROLE string
   // is a different, legitimate concept and cannot match this regex.)
   const allowedFiles = [
     join("api", "auth.ts"),
-    join("api", "routes", "committee.ts"),
+    join("api", "routes", "swarm.ts"),
     join("api", "routes", "analytics.ts"),
   ];
   const hits = grep(/analyticsprovider/i);

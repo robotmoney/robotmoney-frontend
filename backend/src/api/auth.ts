@@ -6,7 +6,7 @@
 //  • host/admin         — isPrivileged() (ADMIN_TOKEN as X-Admin-Token, or non-prod).
 //  • analytics-provider — hasAnalyticsProviderRole() (ANALYTICS_TOKEN bearer). The
 //    ONLY role that may write analytics data (regime recompute + /api/analytics/*).
-//  • member             — committee_member_keys bearer (checked in the swarm
+//  • member             — swarm_member_keys bearer (checked in the swarm
 //    domain layer, not here).
 //
 // Fail-closed: a configured token (constant-time compared) authorizes in any

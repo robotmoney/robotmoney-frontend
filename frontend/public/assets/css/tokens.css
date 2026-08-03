@@ -27,7 +27,7 @@
   /* Four text rungs, not three. #e2e4ec and #7e889e are 33 points of lightness
      apart with nothing between them, so a page that needed "quieter than a
      heading but still running prose" had to pick one of the two and every page
-     picked #e2e4ec: on /committee/apply, 84% of all rendered characters are the
+     picked #e2e4ec: on /swarm/apply, 84% of all rendered characters are the
      single tone --color-text. The missing rung is why controls reached for cyan
      to separate themselves from body copy, which is how cyan ended up as 26% of
      the type on the application status page.

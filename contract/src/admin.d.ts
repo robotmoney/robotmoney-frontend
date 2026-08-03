@@ -54,7 +54,7 @@ export interface AdminEnabledSchedule {
   nextRunAt: string | null;
 }
 
-export interface AdminNextCommitteeEvent {
+export interface AdminNextSwarmEvent {
   jobId: number;
   kind: string;
   runAfter: string;
@@ -69,7 +69,7 @@ export interface AdminOverview {
   regime: AdminRegimeStaleness;
   research: AdminResearchFreshness[];
   enabledAnalyticsSchedules: AdminEnabledSchedule[];
-  nextCommitteeEvent: AdminNextCommitteeEvent | null;
+  nextSwarmEvent: AdminNextSwarmEvent | null;
   alerts: AdminAlert[];
 }
 
@@ -160,34 +160,34 @@ export interface AdminAuditResponse {
   nextCursor: string | null;
 }
 
-// Admin surface DTOs for the committee operations UI (issue #159).
+// Admin surface DTOs for the swarm operations UI (issue #159).
 //
-// Scope: the committee-facing slice of docs/architecture.md §6.3 — topics
-// (committee_subjects), members, sessions/roster/lifecycle, and the audit feed.
+// Scope: the swarm-facing slice of docs/architecture.md §6.3 — topics
+// (swarm_subjects), members, sessions/roster/lifecycle, and the audit feed.
 // Research-run and queue-job admin DTOs are declared above (issue #155) — the
 // existing `/api/admin/{auth,jobs,jobs/:id,runs,audit}` routes are that
 // surface's contract, not this one.
 //
 // CORRECTED (PR #172 review, 2026-07-16): the original version of this file
-// invented a parallel `/api/admin/committee/*` contract (PATCH verbs, a single
+// invented a parallel `/api/admin/swarm/*` contract (PATCH verbs, a single
 // roster PATCH, `version`, a 202 job envelope) that assumed issue #152's
 // backend hadn't shipped yet. It merged weeks earlier as PR #169 at a
-// DIFFERENT, already-live prefix — `/api/committee/admin/*`
-// (backend/src/api/routes/committee-admin.ts + backend/src/committee/admin.ts)
+// DIFFERENT, already-live prefix — `/api/swarm/admin/*`
+// (backend/src/api/routes/swarm-admin.ts + backend/src/swarm/admin.ts)
 // — with its own verbs, action names, and response shapes. Every type below
 // now describes THAT real, already-shipped surface. Where the real backend
 // exposes strictly less than the original design assumed (no single-session
 // admin GET, no admin session list, no linked-jobs-by-session, no per-member
 // participation history, no signature/canonicalPayload disclosure), the type
 // is trimmed rather than fabricated — the frontend composes what it can from
-// the routes that actually exist (see committee-session.js's header comment
+// the routes that actually exist (see swarm-session.js's header comment
 // for the exact composition).
 
-import type { CommitteeMember, CommitteeSubject } from "./committee";
+import type { SwarmMember, SwarmSubject } from "./swarm";
 
-// ── Topics (committee_subjects) ─────────────────────────────────────────────
-// Matches backend/src/committee/admin.ts toSubjectAdmin() and the
-// committee-admin.ts `subjects` routes exactly.
+// ── Topics (swarm_subjects) ─────────────────────────────────────────────
+// Matches backend/src/swarm/admin.ts toSubjectAdmin() and the
+// swarm-admin.ts `subjects` routes exactly.
 
 export type SubjectSourceType = "rpc" | "manual" | "vault_tvl" | "framework";
 export type SubjectRecommendationType = "position_actions" | "bucket_weights";
@@ -200,7 +200,7 @@ export interface AdminWalletEntry {
 }
 
 /** Admin projection of a topic — backend toSubjectAdmin()'s exact shape. */
-export interface AdminTopic extends CommitteeSubject {
+export interface AdminTopic extends SwarmSubject {
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -242,8 +242,8 @@ export interface AdminTopicListResponse {
 }
 
 // ── Members ──────────────────────────────────────────────────────────────
-// Matches backend/src/committee/admin.ts toMemberAdmin() and the
-// committee-admin.ts `members`/`applications` routes exactly. The backend has
+// Matches backend/src/swarm/admin.ts toMemberAdmin() and the
+// swarm-admin.ts `members`/`applications` routes exactly. The backend has
 // no admin read for active-key metadata (activeKeyId/activeKeyCreatedAt) or
 // cross-session participation history — those fields do not exist on this DTO.
 
@@ -316,17 +316,17 @@ export interface MemberRotateKeyRequest {
   publicKey?: string;
 }
 
-// ── Committee sessions / roster / lifecycle ────────────────────────────────
+// ── Swarm sessions / roster / lifecycle ────────────────────────────────
 // The real backend (issue #152) exposes NO single-session admin GET, NO admin
 // session list, and no linked-jobs-by-session or per-session event feed. The
 // frontend composes a session detail view from three sources: the PUBLIC
-// session list/detail routes (ROUTES.committee.sessions /
-// ROUTES.committee.session), the admin roster GET, and — only transiently,
+// session list/detail routes (ROUTES.swarm.sessions /
+// ROUTES.swarm.session), the admin roster GET, and — only transiently,
 // right after a lifecycle POST — that POST's own response. See
-// committee-session.js's header comment for the exact composition and what
+// swarm-session.js's header comment for the exact composition and what
 // was dropped (linked jobs, signature/canonicalPayload disclosure).
 
-export type CommitteeSessionState =
+export type SwarmSessionState =
   | "scheduled"
   | "collecting"
   | "window_closed"
@@ -335,10 +335,10 @@ export type CommitteeSessionState =
   | "cancelled";
 
 /** The only 5 lifecycle actions the admin HTTP surface exposes
- * (committee-admin.ts sessions dispatcher). scheduled→collecting
+ * (swarm-admin.ts sessions dispatcher). scheduled→collecting
  * ("publish_brief" in the job-kind vocabulary) is worker/job-queue-driven
  * only — there is no manual admin action for it. */
-export type CommitteeSessionAction = "cancel" | "close" | "reopen" | "aggregate" | "publish";
+export type SwarmSessionAction = "cancel" | "close" | "reopen" | "aggregate" | "publish";
 
 /** POST .../sessions body (parseSessionCreate — all five fields required). */
 export interface SessionCreateRequest {
@@ -355,27 +355,27 @@ export interface SessionCreateRequest {
 export interface SessionCreateResponse {
   ok: boolean;
   status: number;
-  session: { id: string; date: string; subjectId: string; subjectName: string | null; state: CommitteeSessionState; version: number };
+  session: { id: string; date: string; subjectId: string; subjectName: string | null; state: SwarmSessionState; version: number };
   rosterSize: number;
   jobIds: number[];
 }
 
-/** Public projection (committee/projections.ts toSession()) — the only
+/** Public projection (swarm/projections.ts toSession()) — the only
  * session list/detail source. There is NO version, briefOpensAt, or
  * publishAt field on any GET route (those exist only transiently on the
  * create response above). */
-export interface CommitteeSessionSummary {
+export interface SwarmSessionSummary {
   id: string;
   date: string;
   subjectId: string;
   subjectName: string | null;
-  state: CommitteeSessionState;
+  state: SwarmSessionState;
   windowClosesAt: string | null;
   publishedAt: string | null;
   regimeSummary: unknown;
   subjectSnapshotTotalValueUsd: number | null;
   synthesis: unknown;
-  committeeRecommendation: unknown;
+  swarmRecommendation: unknown;
   socialDraftId: string | null;
   generatedAt: string;
 }
@@ -414,14 +414,14 @@ export interface SessionActionRequest {
   expectedVersion?: number;
 }
 
-// ── Committee audit ────────────────────────────────────────────────────────
+// ── Swarm audit ────────────────────────────────────────────────────────
 
 /** Synchronous response shared by every session lifecycle action
- * (fromResult() in committee-admin.ts) — NOT a 202 job-queue envelope; there
+ * (fromResult() in swarm-admin.ts) — NOT a 202 job-queue envelope; there
  * is no `jobId`/`existing` field. `idempotent` is set when the requested
  * state equals the current state (no-op: no version bump, no new event row).
  * A successful `aggregate` call additionally spreads in
- * committee/domain.ts aggregateSession()'s rollup fields, which are NOT
+ * swarm/domain.ts aggregateSession()'s rollup fields, which are NOT
  * persisted anywhere queryable afterward — this response is the only time
  * they're available. */
 export interface SessionActionResponse {
@@ -429,21 +429,21 @@ export interface SessionActionResponse {
   status: number;
   error?: string;
   idempotent?: boolean;
-  session?: { id: string; state: CommitteeSessionState; version: number };
+  session?: { id: string; state: SwarmSessionState; version: number };
   [key: string]: unknown;
 }
 
-// ── Audit (committee-scoped) ────────────────────────────────────────────────
+// ── Audit (swarm-scoped) ────────────────────────────────────────────────
 // GET .../audit row — the raw audit_log table shape (listAuditLog SELECT),
-// shared with every other committee-admin mutation (subjects/members/
-// sessions), not a committee-only feed. `scope` is a free-form JSON blob
+// shared with every other swarm-admin mutation (subjects/members/
+// sessions), not a swarm-only feed. `scope` is a free-form JSON blob
 // whose keys vary per `action` (e.g. session_transition carries
 // {sessionId, from, to, action}); there is no targetType/targetId/reason/
 // outcome/requestId/jobId column — those belong to the SEPARATE, real,
 // already-shipped generic `/api/admin/audit` feed (issue #155/PR #170 —
 // see AdminAuditRow/AdminAuditResponse above, and ROUTES.admin.audit), not
-// this committee-scoped one.
-export interface CommitteeAuditEntry {
+// this swarm-scoped one.
+export interface SwarmAuditEntry {
   id: number | string;
   actor: string;
   action: string;
@@ -451,9 +451,9 @@ export interface CommitteeAuditEntry {
   at: string;
 }
 
-export interface CommitteeAuditListResponse {
-  entries: CommitteeAuditEntry[];
+export interface SwarmAuditListResponse {
+  entries: SwarmAuditEntry[];
 }
 
 // ── Re-exported for callers that only need the member/subject base shape ────
-export type { CommitteeMember, CommitteeSubject };
+export type { SwarmMember, SwarmSubject };

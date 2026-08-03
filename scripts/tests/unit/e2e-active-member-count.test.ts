@@ -1,8 +1,8 @@
-// Hermetic tests for scripts/lib/committee/session.ts's activeMemberCount() — the demo onboarding
+// Hermetic tests for scripts/lib/swarm/session.ts's activeMemberCount() — the demo onboarding
 // driver's roster-cap pre-check (scripts/lib/demo-main.ts). Previously a
-// failed GET /api/committee/members silently resolved to `{ members: [] }`,
+// failed GET /api/swarm/members silently resolved to `{ members: [] }`,
 // so activeMemberCount() returned 0 on ANY transient read error — the cap
-// check (`active >= COMMITTEE_ROSTER_CAP`) then always passed, letting the
+// check (`active >= SWARM_ROSTER_CAP`) then always passed, letting the
 // demo keep admitting new agents regardless of the TRUE roster size. This
 // pins the fix: a read failure must report the roster as FULL (Infinity),
 // never empty.
@@ -16,7 +16,7 @@
 // touch it (a real cross-file race was observed before this change).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
-import { activeMemberCount } from "../../lib/committee/session.ts";
+import { activeMemberCount } from "../../lib/swarm/session.ts";
 
 let fixtureBackend: ReturnType<typeof Bun.serve>;
 let fixtureMode: "ok" | "error" | "malformed" = "ok";
@@ -28,7 +28,7 @@ beforeAll(() => {
     port: 0,
     fetch(req) {
       const url = new URL(req.url);
-      if (url.pathname === ROUTES.committee.members) {
+      if (url.pathname === ROUTES.swarm.members) {
         if (fixtureMode === "error") return new Response("boom", { status: 500 });
         if (fixtureMode === "malformed") return Response.json({ notMembers: true });
         return Response.json({ members: fixtureMemberIds.map((id) => ({ id })) });
@@ -60,7 +60,7 @@ describe("activeMemberCount() — fails CONSERVATIVELY (assume full), never assu
     fixtureMode = "error";
     const count = await activeMemberCount(backendUrl);
     expect(count).toBe(Number.POSITIVE_INFINITY);
-    expect(count).toBeGreaterThanOrEqual(10); // >= any plausible COMMITTEE_ROSTER_CAP
+    expect(count).toBeGreaterThanOrEqual(10); // >= any plausible SWARM_ROSTER_CAP
   });
 
   test("a malformed response (no members array) ALSO reports Infinity, not 0", async () => {

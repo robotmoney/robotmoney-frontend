@@ -1,5 +1,5 @@
 // Demo CADENCE PROFILE — the SINGLE source for how fast the standing demo
-// publishes committee sessions, admits newcomers, and refreshes analytics.
+// publishes swarm sessions, admits newcomers, and refreshes analytics.
 //
 // Two profiles, selected by ONE invocation argument (`bun run demo -- --stage`),
 // never by an env var — the same hard rule `--pg-data` and `--stage`'s port pin
@@ -7,12 +7,12 @@
 // deliberate invocation, not of a shell that happens to have something exported.
 //
 //   fast (default)      — `bun run demo` and CI. Today's values, unchanged: a
-//                         committee session per subject every ~2 min, subjects
+//                         swarm session per subject every ~2 min, subjects
 //                         staggered ~1 min. The required per-PR e2e demo
 //                         readiness gate and the nightly LIVE smoke both depend
 //                         on this staying fast and BOUNDED.
 //   realistic (--stage) — the standing/public demo behind
-//                         stage.robotmoney-labs.dev. A real investment committee
+//                         stage.robotmoney-labs.dev. A real investment swarm
 //                         does not sit every two minutes: each subject convenes
 //                         every 6 h, the two subjects are phase-offset by 3 h so
 //                         a session lands about every 3 h overall, and the
@@ -33,7 +33,7 @@
 // DECISION lives here where the required per-PR `unit` workflow executes it
 // directly (scripts/tests/unit/demo-schedule.test.ts).
 
-/** The standing demo convenes exactly these subjects (committee/session.ts SUBJECTS). */
+/** The standing demo convenes exactly these subjects (swarm/session.ts SUBJECTS). */
 export const DEMO_SUBJECT_COUNT = 2;
 
 /**
@@ -48,21 +48,21 @@ export type DemoCadenceProfile = "fast" | "realistic";
 export interface DemoCadence {
   /** Which profile these values came from. */
   profile: DemoCadenceProfile;
-  /** Steady-state interval between committee sessions for ONE subject. */
-  committeeIntervalMs: number;
+  /** Steady-state interval between swarm sessions for ONE subject. */
+  swarmIntervalMs: number;
   /**
    * Steady-state phase offset between consecutive subjects, i.e. how long after
    * one subject's slot the next subject's slot lands. For the demo's
-   * DEMO_SUBJECT_COUNT subjects this is committeeIntervalMs / DEMO_SUBJECT_COUNT.
+   * DEMO_SUBJECT_COUNT subjects this is swarmIntervalMs / DEMO_SUBJECT_COUNT.
    */
-  committeeStaggerMs: number;
+  swarmStaggerMs: number;
   /**
    * Gap between subjects' FIRST sessions at boot. Deliberately independent of
    * the steady-state stagger: under the realistic profile the phase offset is
    * hours, but bring-up must still land every subject's first session inside
    * DEMO_FIRST_SESSION_MAX_MS.
    */
-  committeeBootstrapStaggerMs: number;
+  swarmBootstrapStaggerMs: number;
   /** Delay from boot to the FIRST newcomer admission. */
   onboardingFirstMs: number;
   /** Delay between subsequent newcomer admissions. */
@@ -87,9 +87,9 @@ const HOUR_MS = 3_600_000;
 /** Today's values — `bun run demo` and CI. Changing these changes CI. */
 const FAST: DemoCadence = {
   profile: "fast",
-  committeeIntervalMs: 120_000,
-  committeeStaggerMs: 60_000,
-  committeeBootstrapStaggerMs: 60_000,
+  swarmIntervalMs: 120_000,
+  swarmStaggerMs: 60_000,
+  swarmBootstrapStaggerMs: 60_000,
   onboardingFirstMs: 60_000,
   onboardingIntervalMs: 300_000,
   regimeCron: COMMITTED_REGIME_CRON,
@@ -99,12 +99,12 @@ const FAST: DemoCadence = {
 /** The standing/public demo — `bun run demo -- --stage`. */
 const REALISTIC: DemoCadence = {
   profile: "realistic",
-  committeeIntervalMs: 6 * HOUR_MS,
-  committeeStaggerMs: (6 * HOUR_MS) / DEMO_SUBJECT_COUNT,
+  swarmIntervalMs: 6 * HOUR_MS,
+  swarmStaggerMs: (6 * HOUR_MS) / DEMO_SUBJECT_COUNT,
   // Bring-up promptness: both subjects' first sessions land inside two minutes.
-  committeeBootstrapStaggerMs: 30_000,
+  swarmBootstrapStaggerMs: 30_000,
   // The first admission stays prompt (a visitor sees onboarding on the first
-  // load); steady-state admissions then ride the committee beat.
+  // load); steady-state admissions then ride the swarm beat.
   onboardingFirstMs: 60_000,
   onboardingIntervalMs: 6 * HOUR_MS,
   regimeCron: "30 */3 * * *",
@@ -126,7 +126,7 @@ export interface SubjectCadencePlan {
   firstAt: number;
   /**
    * Absolute epoch ms of this subject's SECOND session — the first slot on the
-   * steady-state grid (`≡ index * phaseOffsetMs (mod committeeIntervalMs)`)
+   * steady-state grid (`≡ index * phaseOffsetMs (mod swarmIntervalMs)`)
    * strictly after `firstAt`.
    */
   steadyStartAt: number;
@@ -139,13 +139,13 @@ export interface SubjectCadencePlan {
 /**
  * Plan every subject's session timetable for one demo boot.
  *
- * Two rules, both previously inline in demo-main.ts's committee driver:
+ * Two rules, both previously inline in demo-main.ts's swarm driver:
  *
  *   1. PROMPTNESS — subject `i`'s first session fires at
- *      `now + i * committeeBootstrapStaggerMs`, so the site has data on first
+ *      `now + i * swarmBootstrapStaggerMs`, so the site has data on first
  *      load under BOTH profiles (bounded by DEMO_FIRST_SESSION_MAX_MS).
  *   2. PHASE OFFSET — steady-state slots for subject `i` sit on the grid
- *      `now + i * (committeeIntervalMs / subjectCount) + n * committeeIntervalMs`,
+ *      `now + i * (swarmIntervalMs / subjectCount) + n * swarmIntervalMs`,
  *      so sessions are spread evenly instead of clustering. The first steady
  *      slot is the earliest grid point strictly after that subject's first run.
  *
@@ -160,17 +160,17 @@ export function planSubjectSchedules(
   if (!Number.isInteger(subjectCount) || subjectCount < 1) {
     throw new Error(`planSubjectSchedules needs at least one subject, got ${subjectCount}`);
   }
-  const phaseOffsetMs = cadence.committeeIntervalMs / subjectCount;
+  const phaseOffsetMs = cadence.swarmIntervalMs / subjectCount;
   return Array.from({ length: subjectCount }, (_, index) => {
-    const firstAt = nowMs + index * cadence.committeeBootstrapStaggerMs;
+    const firstAt = nowMs + index * cadence.swarmBootstrapStaggerMs;
     const anchor = nowMs + index * phaseOffsetMs;
     // Smallest k >= 0 with anchor + k*interval STRICTLY after firstAt.
-    const k = Math.max(0, Math.floor((firstAt - anchor) / cadence.committeeIntervalMs) + 1);
+    const k = Math.max(0, Math.floor((firstAt - anchor) / cadence.swarmIntervalMs) + 1);
     return {
       index,
       firstAt,
-      steadyStartAt: anchor + k * cadence.committeeIntervalMs,
-      intervalMs: cadence.committeeIntervalMs,
+      steadyStartAt: anchor + k * cadence.swarmIntervalMs,
+      intervalMs: cadence.swarmIntervalMs,
       phaseOffsetMs,
     };
   });
@@ -225,10 +225,10 @@ export function renderCadenceLine(
   cadence: DemoCadence,
   subjectCount: number = DEMO_SUBJECT_COUNT,
 ): string {
-  const perSubject = formatCadenceDuration(cadence.committeeIntervalMs);
-  const overall = formatCadenceDuration(cadence.committeeIntervalMs / subjectCount);
+  const perSubject = formatCadenceDuration(cadence.swarmIntervalMs);
+  const overall = formatCadenceDuration(cadence.swarmIntervalMs / subjectCount);
   return (
-    `Demo actions: a committee session per subject every ~${perSubject} ` +
+    `Demo actions: a swarm session per subject every ~${perSubject} ` +
     `(${subjectCount} subjects staggered → one lands about every ~${overall}); ` +
     `research ${describeCron(cadence.researchCron)}, regime ${describeCron(cadence.regimeCron)}.`
   );

@@ -348,7 +348,7 @@ test("wallet-sleeves seam: amount and price readers inject independently and per
 });
 
 // ── allocation ──────────────────────────────────────────────────────────────
-test("allocation: seeded committee framework → 4 buckets, exact pct conversion, managed:true", async () => {
+test("allocation: seeded swarm framework → 4 buckets, exact pct conversion, managed:true", async () => {
   const r = await getAllocation();
   expect(r.managed).toBe(true);
   expect(r.buckets.map((b) => b.key)).toEqual(["defi-yield", "agent-tokens", "protocol-tokens", "rwa"]);
@@ -360,7 +360,7 @@ test("allocation: seeded committee framework → 4 buckets, exact pct conversion
   expect(agent.items.find((i) => i.label === "RobotMoney")!.targetPct).toBe(14.29);
 });
 
-test("allocation: with the row absent, getAllocation falls back to the committee seed default (managed data is static, not a degraded chain read)", async () => {
+test("allocation: with the row absent, getAllocation falls back to the swarm seed default (managed data is static, not a degraded chain read)", async () => {
   // Genuinely exercise the row-absent branch on the shared pool, then restore the
   // seeded row so the suite's DB state is unchanged.
   try {
@@ -371,7 +371,7 @@ test("allocation: with the row absent, getAllocation falls back to the committee
     expect(r.buckets).toHaveLength(4); // served from ALLOCATION_FRAMEWORK_SEED, not a chain read
     expect(r.strategy.find((s) => s.label === "Conservative DeFi Yield")!.targetPct).toBe(95);
   } finally {
-    // Restore the committee seed row (id=1) exactly as db/seed.ts wrote it.
+    // Restore the swarm seed row (id=1) exactly as db/seed.ts wrote it.
     await sql`
       INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
       VALUES (1, ${ALLOCATION_FRAMEWORK_SEED.asof}, ${ALLOCATION_FRAMEWORK_SEED.vault_contract},

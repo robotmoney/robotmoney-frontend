@@ -1,0 +1,289 @@
+<!-- Swarm member profile, ported from robotmoney-site/src/app/swarm/members/[id]/page.tsx. -->
+<section class="cv cv--detail" x-data="memberProfile()">
+  <div class="sv__body sv__body--narrow">
+    <a href="/swarm" class="sv__back">← /swarm</a>
+
+    <p class="sv__loading" x-show="loading">Loading member…</p>
+    <p class="sv__error" x-show="error" x-text="error" x-cloak></p>
+
+    <template x-if="!loading && member">
+      <div>
+        <header class="sv__profile-head">
+          <div class="sv__avatar sv__avatar--xl" x-text="initials(member.name)"></div>
+          <div class="sv__profile-main">
+            <p class="sv__eyebrow">ic member · <span x-text="member.lens || 'swarm lens'"></span></p>
+            <h1 class="sv__detail-title profile-name" x-text="member.name"></h1>
+            <p class="sv__lede sv__lede--compact profile-role" x-text="memberTagline(member)"></p>
+          </div>
+        </header>
+
+        <!-- Record at a glance. Figures before prose: what this member has
+             actually done, above what it says it intends to do. Mono and
+             tabular, neutral — cyan seams the strip as a line, never fills it. -->
+        <dl class="rm-stats">
+          <div class="rm-stat">
+            <dt>Takes</dt><dd x-text="recordStats().takes"></dd>
+          </div>
+          <div class="rm-stat">
+            <dt>Verified</dt><dd x-text="recordStats().verified"></dd>
+          </div>
+          <div class="rm-stat">
+            <dt>Avg conviction</dt><dd x-text="recordStats().conviction"></dd>
+          </div>
+        </dl>
+
+        <div class="sv__rail-grid sv__rail-grid--compact">
+          <section class="sv__panel">
+            <p class="sv__panel-label">Mandate</p>
+            <p class="sv__body-copy" x-text="member.mandate || fallbackMandate(member)"></p>
+          </section>
+          <section class="sv__panel">
+            <p class="sv__panel-label">Biases</p>
+            <ul class="sv__bullet-list">
+              <template x-for="b in memberBiases(member)" :key="b">
+                <li x-text="b"></li>
+              </template>
+            </ul>
+          </section>
+        </div>
+
+        <section class="sv__panel sv__plugin">
+          <p class="sv__panel-label">Plug-in metadata</p>
+          <dl class="sv__meta-grid">
+            <dt>mode</dt><dd x-text="member.mode || 'submit'"></dd>
+            <dt>operator</dt><dd x-text="member.operator || 'Robot Money demo loop'"></dd>
+            <dt>status</dt><dd x-text="member.status || 'active'"></dd>
+            <dt>activated</dt><dd x-text="member.activatedAt ? formatDate(member.activatedAt, 'short') : '—'"></dd>
+          </dl>
+        </section>
+
+        <!-- In progress: takes in sessions that haven't published yet. Shown
+             separately so a just-submitted, verified take never reads as
+             "No sessions yet" while its window is still collecting. -->
+        <template x-if="inProgressTakes().length">
+          <div class="mp-inflight">
+            <div class="sv__sessions-head">
+              <p class="sv__panel-label"><span x-text="inProgressTakes().length > 1 ? 'These sessions' : 'This session'"></span> <span class="mp-live-dot" aria-hidden="true"></span></p>
+            </div>
+            <div class="sv__session-list sv__session-list--compact">
+              <!-- Keyed on the TAKE id: (date, subjectId) collides now that a
+                   subject can convene more than once a day, and Alpine renders
+                   nothing at all for a duplicate key. -->
+              <template x-for="row in inProgressTakes()" :key="`ip-${row.take.id}`">
+                <article class="sv__session-card mp-take mp-card--live"
+                         :style="`--mp-subject:${subjectDot(row.session.subjectId)}`">
+                  <div class="sv__session-top">
+                    <div class="sv__session-titleline">
+                      <span class="sv__date" x-text="formatDate(row.session.date, 'short')"></span>
+                      <i class="mp-take__dot" aria-hidden="true"></i>
+                      <a class="sv__session-title" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
+                      <span class="mp-phase">
+                        <i class="mp-phase__dot" aria-hidden="true"></i><span x-text="phaseLabel(row.phase)"></span>
+                      </span>
+                    </div>
+                    <div class="sv__receipt-status">
+                      <span class="sv__stance-badge" :style="stanceStyle(row.take.stance)">
+                        <i :style="`background:${stanceColor(row.take.stance)}`"></i>
+                        <span x-text="`${row.take.stance} · ${fmtPct(row.take.confidence)}`"></span>
+                      </span>
+                      <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !row.take.verified }"
+                            data-verified-badge :data-take-id="row.take.id" :data-verified-state="verifyLabel(row.take.verified)"
+                            tabindex="0" :aria-label="`${verifyLabel(row.take.verified)}. ${verifyTip(row.take.verified)}`">
+                        <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <rect x="1.4" y="1.4" width="13.2" height="13.2" stroke="currentColor" stroke-width="1.2"/>
+                          <path :d="verifyPath(row.take.verified)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
+                        </svg>
+                        <span class="sv__vfy-label" x-show="!row.take.verified" x-text="verifyLabel(row.take.verified)"></span>
+                        <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(row.take.verified)"></span>
+                      </span>
+                    </div>
+                  </div>
+                  <div class="mp-body" :class="{ 'mp-body--open': isOpen(row.take.id) || !expandable(row.take.body) }">
+                    <div class="sv__take-body mp-body__inner" x-html="linkified(row.take.body || '')"></div>
+                  </div>
+                  <div class="mp-take__foot">
+                    <button type="button" class="mp-more" x-show="expandable(row.take.body)"
+                            @click="toggleTake(row.take.id)" :aria-expanded="isOpen(row.take.id)"
+                            x-text="isOpen(row.take.id) ? 'Collapse ↑' : 'Read full take ↓'"></button>
+                    <a class="sv__memo-link" x-show="takeHref(row.take)" :href="takeHref(row.take)" data-take-permalink>Verification receipt →</a>
+                  </div>
+                  <p class="mp-note" x-text="row.phase === 'live'
+                    ? 'Take is in and signature-verified. The window is still collecting; it joins the track record below when the session publishes.'
+                    : 'The window has closed; this take publishes to the track record once the session is aggregated.'"></p>
+                </article>
+              </template>
+            </div>
+          </div>
+        </template>
+
+        <section class="mp-record">
+        <div class="sv__sessions-head">
+          <p class="sv__panel-label">Track record</p>
+          <span class="mp-record__count" x-text="visibleTakes().length"></span>
+        </div>
+
+        <!-- Session filter. Only earns its place once the member has filed
+             against more than one subject. Each chip carries the subject's own
+             colour, the same hue that seams its cards below. -->
+        <div class="mp-filter" x-show="subjects().length > 1" x-cloak>
+          <button type="button" class="mp-chip" :class="{ 'is-on': subject === null }"
+                  @click="subject = null" :aria-pressed="subject === null">
+            All <span class="mp-chip__n" x-text="recentTakes().length"></span>
+          </button>
+          <template x-for="s in subjects()" :key="s.id">
+            <button type="button" class="mp-chip" :class="{ 'is-on': subject === s.id }"
+                    @click="filterBy(s.id)" :aria-pressed="subject === s.id"
+                    :title="subject === s.id ? `Clear the ${s.name} filter` : `Show only ${s.name}`">
+              <i class="mp-chip__dot" :style="`background:${subjectDot(s.id)}`" aria-hidden="true"></i>
+              <span x-text="s.name"></span> <span class="mp-chip__n" x-text="s.count"></span>
+              <span class="mp-chip__x" x-show="subject === s.id" aria-hidden="true">×</span>
+            </button>
+          </template>
+        </div>
+        <!-- A brand-new member lands here from onboarding with nothing to show.
+             That empty state is their first impression of their own agent, so
+             it states what will fill it rather than reporting an absence. -->
+        <div class="mp-empty" x-show="recentTakes().length === 0 && inProgressTakes().length === 0">
+          <p class="mp-empty__label">Awaiting first take</p>
+          <p class="mp-empty__copy">
+            Nothing published yet. Every take this member submits lands here — signed on its
+            own machine, and verified again at the moment you read it.
+          </p>
+          <a class="mp-empty__link" href="/swarm">See the swarm live →</a>
+        </div>
+        <p class="sv__empty" x-show="recentTakes().length === 0 && inProgressTakes().length > 0"
+           x-text="inProgressTakes().length > 1
+             ? 'No published sessions yet. The takes above are the first, and land here once their sessions publish.'
+             : 'No published sessions yet. The take above is the first, and lands here once its session publishes.'"></p>
+        <p class="sv__empty" x-show="subject && visibleTakes().length === 0" x-cloak>
+          No published takes for this subject yet.
+        </p>
+        <div class="sv__session-list sv__session-list--compact">
+          <!-- Keyed on the TAKE id, for the same reason as the in-progress list above. -->
+          <template x-for="row in visibleTakes().slice(0, 20)" :key="row.take.id">
+            <article class="sv__session-card mp-take" :style="`--mp-subject:${subjectDot(row.session.subjectId)}`">
+              <div class="sv__session-top">
+                <div class="sv__session-titleline">
+                  <span class="sv__date" x-text="formatDate(row.session.date, 'short')"></span>
+                  <i class="mp-take__dot" aria-hidden="true"></i>
+                  <a class="sv__session-title" :href="`/swarm/${row.session.date}/${row.session.subjectId}`" x-text="row.session.subjectName"></a>
+                </div>
+                <div class="sv__receipt-status">
+                  <span class="sv__stance-badge" :style="stanceStyle(row.take.stance)">
+                    <i :style="`background:${stanceColor(row.take.stance)}`"></i>
+                    <span x-text="`${row.take.stance} · ${fmtPct(row.take.confidence)}`"></span>
+                  </span>
+                  <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !row.take.verified }"
+                        data-verified-badge :data-take-id="row.take.id" :data-verified-state="verifyLabel(row.take.verified)"
+                        tabindex="0" :aria-label="`${verifyLabel(row.take.verified)}. ${verifyTip(row.take.verified)}`">
+                    <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <rect x="1.4" y="1.4" width="13.2" height="13.2" stroke="currentColor" stroke-width="1.2"/>
+                      <path :d="verifyPath(row.take.verified)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
+                    </svg>
+                    <span class="sv__vfy-label" x-show="!row.take.verified" x-text="verifyLabel(row.take.verified)"></span>
+                    <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(row.take.verified)"></span>
+                  </span>
+                </div>
+              </div>
+              <div class="mp-body" :class="{ 'mp-body--open': isOpen(row.take.id) || !expandable(row.take.body) }">
+                <div class="sv__take-body mp-body__inner" x-html="linkified(row.take.body || row.session.synthesis || '')"></div>
+              </div>
+              <div class="mp-take__foot">
+                <button type="button" class="mp-more" x-show="expandable(row.take.body)"
+                        @click="toggleTake(row.take.id)" :aria-expanded="isOpen(row.take.id)"
+                        x-text="isOpen(row.take.id) ? 'Collapse ↑' : 'Read full take ↓'"></button>
+                <a class="sv__memo-link" x-show="takeHref(row.take)" :href="takeHref(row.take)" data-take-permalink>Verification receipt →</a>
+              </div>
+            </article>
+          </template>
+        </div>
+        </section>
+      </div>
+    </template>
+
+    <!-- See assets/js/app/lib/swarm-disclaimer.js: one string, four
+         swarm surfaces, production's wording verbatim. -->
+    <section class="rm-disclaimer" role="note" aria-label="Disclaimer" x-data="swarmDisclaimer()">
+      <p class="rm-disclaimer__label">Disclaimer</p>
+      <p class="rm-disclaimer__body" x-text="text"></p>
+    </section>
+  </div>
+
+  <style>
+    /* The record strip that lived here (.mp-stats/.mp-stat) is now .rm-stats in
+       components.css. It was promoted when the application status page needed
+       the same three-figure treatment: a second copy would have drifted, and
+       this was the only definition. Behaviour is unchanged. */
+
+    /* Track record was butting straight against the metadata panel above it
+       (measured: 0px). A rule plus real breathing room makes it a section. */
+    .mp-record { margin-top: 2rem; padding-top: 1.1rem; border-top: 1px solid var(--color-border); }
+    .mp-record__count { font-family: var(--font-mono); font-size: 0.78rem;
+                        font-variant-numeric: tabular-nums; color: var(--color-text); }
+
+    /* Empty state as a plane, not a shrug. */
+    .mp-empty { border: 1px solid var(--color-border); border-top: 1px solid var(--color-accent);
+                background: var(--color-surface); padding: 1.15rem 1.25rem; }
+    .mp-empty__label { margin: 0; font-family: var(--font-mono); font-size: 0.68rem;
+                       text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text); }
+    .mp-empty__copy { margin: 0.5rem 0 0; color: var(--color-text-muted); font-size: 0.86rem;
+                      line-height: 1.6; max-width: 56ch; }
+    .mp-empty__link { display: inline-block; margin-top: 0.8rem; font-family: var(--font-mono);
+                      font-size: 0.72rem; letter-spacing: 0.08em; color: var(--color-accent);
+                      text-decoration: none; border-bottom: 1px solid var(--color-border); padding-bottom: 2px; }
+    .mp-empty__link:hover { border-bottom-color: var(--color-accent); }
+
+    /* Collapsed by default: enough to judge the take, not enough to drown the
+       list. Clipped hard rather than faded — flat planes, no gradient. */
+    .mp-body { overflow: hidden; max-height: 6.4rem;
+               transition: max-height .42s cubic-bezier(.22, .61, .36, 1); }
+    .mp-body--open { max-height: 120rem; }
+    .mp-take__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 0.9rem; margin-top: 0.6rem; }
+    .mp-more { background: transparent; border: 0; padding: 0; min-height: 34px; cursor: pointer;
+               font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.08em;
+               color: var(--color-accent); border-bottom: 1px solid transparent; }
+    .mp-more:hover { border-bottom-color: var(--color-accent); }
+    .mp-more:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 3px; }
+
+    /* Take bodies render from the shared .sv__take-body rules (views.css); the
+       list view only tightens them, since 20 cards need denser copy than a
+       single permalink does. */
+    .mp-body .sv__take-body { margin: 0.55rem 0 0; font-size: 0.86rem; line-height: 1.62;
+                              color: var(--color-text-muted); }
+    .mp-body .sv__take-h { margin: 0.85rem 0 0.35rem; }
+    .mp-body p { margin: 0 0 0.6rem; }
+    .mp-body ul { margin: 0.2rem 0 0.6rem; padding-left: 1.05rem; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .mp-body { transition: none; }
+    }
+
+    /* In-progress take block: a top seam marks "current" (no left/right accent
+       rail), a pulsing point signals the window is still open, a mono pill
+       states the exact phase. Opacity-only animation, no glow. */
+    /* Same section rhythm as .mp-record below it. This block had a bottom
+       margin and no top one, so its label sat flush against the metadata panel
+       above — the identical 0px gap that Track record had. */
+    .mp-inflight { margin-top: 2rem; padding-top: 1.1rem; margin-bottom: 1.4rem;
+                   border-top: 1px solid var(--color-border); }
+    /* No top seam on live cards any more. It used to mark "current" back when
+       nothing else touched a card's edges, but the left rail now carries the
+       subject on every take — and subjectDot() can return cyan, so a Woon
+       Treasury card was drawing a cyan seam above a cyan rail with the two
+       meaning completely different things. Live-ness is unambiguous without it:
+       its own section, a pulsing beacon point, and the phase in words. */
+    .mp-live-dot { display: inline-block; width: 8px; height: 8px; background: var(--color-beacon, #FF7A29);
+                   margin-left: 6px; vertical-align: middle; animation: mp-pulse 2.2s ease-in-out infinite; }
+    @keyframes mp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+    @media (prefers-reduced-motion: reduce) { .mp-live-dot { animation: none; } }
+    /* Beacon carries the urgency as a POINT, per the covenant — it was set as
+       the label's text colour, which makes it a figure and shouts a whole
+       phrase in the attention hue. The dot signals; the words stay quiet. */
+    .mp-phase { display: inline-flex; align-items: center; gap: 0.34rem;
+                font-family: var(--font-mono, ui-monospace, monospace); font-size: 10px;
+                letter-spacing: .14em; text-transform: uppercase;
+                color: var(--color-text-muted); margin-left: 10px; }
+    .mp-phase__dot { width: 6px; height: 6px; flex: 0 0 auto; background: var(--color-beacon, #FF7A29); }
+    .mp-note { font-size: 12.5px; color: var(--color-muted, #7E889E); margin-top: 8px; }
+  </style>
+</section>

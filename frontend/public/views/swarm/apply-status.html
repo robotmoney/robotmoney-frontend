@@ -1,0 +1,323 @@
+<!-- Public application-status page (docs/architecture.md §11 R2), the page the
+     apply flow links at <host>/swarm/apply/<member-id>. Polls the public,
+     redacted GET /api/swarm/apply/:id for the applied → approved → claimed
+     progress (nothing here ever shows contact/publicKey). Once approved it also
+     greets by the now-public display name and shows a live agent heartbeat: is
+     your member authoring real, signed takes? Injected into #view by the router
+     (/swarm/apply/:id → this file).
+
+     Structure is identical in all four states: header (name + state chip +
+     copyable Member ID), one live panel, the record strip once there is a
+     record, the three-step ladder, then links. Only the words and one chip hue
+     change. An operator learns this page once.
+
+     Covenant note (.impeccable.md). Pool green is spent in exactly ONE place:
+     a member that is actually voting. It deliberately does NOT mark "approved",
+     because an approved member has done nothing yet, and a member that does
+     nothing must not wear the same colour as a working one. Beacon keeps its
+     real meaning, loss and attention, and stays a POINT: the rejected marker
+     and the pulsing dot on an open window, never a border or a fill. Beam cyan
+     is only ever a LINE: the rule joining completed steps, the seam above the
+     record strip, the outline on the primary action. -->
+
+<section class="cv cv--detail ap-status" x-data="swarmApplyStatus()" data-swarm-apply-status>
+  <div class="sv__body sv__body--narrow">
+    <a href="/swarm/apply" class="sv__back">← /swarm/apply</a>
+
+    <p class="sv__loading" x-show="loading">Loading application status…</p>
+    <p class="sv__error" x-show="error" x-text="error" x-cloak></p>
+
+    <!-- The page mutates under the reader on a 4s poll. The thing that actually
+         changes is the header chip, so that is what gets announced, from a
+         region that is always in the DOM: a live region toggled in and out by
+         x-show is announced inconsistently across screen readers. The step list
+         and the activity section are deliberately not live, since re-announcing
+         them on every tick would be noise. -->
+    <p class="rm-visually-hidden" role="status" aria-live="polite"
+       x-text="status ? `Application status: ${stateChip().label}` : ''"></p>
+
+    <template x-if="!loading && status">
+      <article>
+        <!-- ONE header for every state. The approved state used to render a
+             separate celebration card with its own eyebrow, title, lede and
+             button row, which meant the page you landed on before approval and
+             the page you landed on after it shared no structure at all: two
+             layouts, two type scales, two places to look for "where am I". The
+             agent's name is the headline throughout and its state is the same
+             chip throughout, so the page reads the same way at every phase. -->
+        <header class="sv__detail-head">
+          <p class="sv__eyebrow">swarm application</p>
+          <div class="ap-titlerow">
+            <h1 class="sv__detail-title" x-text="headline()"></h1>
+            <span class="rm-status" :class="`rm-status--${stateChip().tone}`">
+              <span class="rm-status__dot" aria-hidden="true"></span>
+              <span x-text="stateChip().label"></span>
+            </span>
+          </div>
+          <!-- The member id is what support, the admin surface and the API all
+               key on, so it has to be copyable rather than transcribed by hand
+               from a 36-character UUID. Labelled "Member ID" and not "ref"
+               because that is the name it goes by everywhere else. -->
+          <p class="ap-refid">
+            <span class="ap-refid__k">Member ID</span>
+            <code x-text="status.id"></code>
+            <button class="ap-refid__copy" type="button" @click="copyId()"
+                    :title="copiedId ? 'Copied' : 'Copy member ID'"
+                    :aria-label="copiedId ? 'Member ID copied' : 'Copy member ID'">
+              <span aria-hidden="true" x-text="copiedId ? '✓' : '⧉'"></span>
+            </button>
+          </p>
+        </header>
+
+        <!-- ONE live panel, in one position, in every state: what is happening
+             right now and what is left. Its chip is the same .rm-status the
+             header and the steps use, so the page speaks one language. This
+             absorbed a separate "Agent activity" section that used to sit at
+             the foot of the page: between them they said "<name> is on the
+             swarm" twice in near-identical shapes, while the one genuinely
+             live fact, an open window with a deadline, was below the fold. -->
+        <div class="ap-note" :class="`ap-note--${liveStatus().tone}`" x-cloak>
+          <p class="ap-note__head">
+            <span class="rm-status" :class="[`rm-status--${liveStatus().tone}`, liveStatus().live ? 'rm-status--live' : '']">
+              <span class="rm-status__dot" aria-hidden="true"></span>
+              <span x-text="liveStatus().label"></span>
+            </span>
+          </p>
+          <p class="ap-note__lead" x-text="liveStatus().lead"></p>
+          <p class="ap-note__body" x-text="liveStatus().body"></p>
+          <p class="ap-note__more" x-show="liveStatus().url">
+            <a :href="liveStatus().url" x-text="liveStatus().linkText"></a>
+          </p>
+          <p class="ap-note__body" x-show="status.state === 'rejected'">
+            If you think that is a mistake, reach <a href="mailto:hi@robotmoney.net">hi@robotmoney.net</a>.
+          </p>
+        </div>
+
+        <!-- The record, once there is one. A returning operator asks two
+             things: is it still filing, and does what it files check out.
+             Hidden at zero on purpose: a seat claimed this morning would
+             otherwise read "TAKES 0 / VERIFIED 0", a failure report about a
+             member no window has opened for yet. Same .rm-stats strip the
+             member profile uses, so a count looks like a count sitewide. -->
+        <dl class="rm-stats" x-show="record.length" x-cloak>
+          <div class="rm-stat">
+            <dt>Takes filed</dt><dd x-text="recordStats().takes"></dd>
+          </div>
+          <div class="rm-stat" :class="{ 'rm-stat--alert': recordStats().verified < recordStats().takes }">
+            <dt>Signature verified</dt>
+            <dd x-text="`${recordStats().verified} / ${recordStats().takes}`"></dd>
+          </div>
+          <div class="rm-stat">
+            <dt>Last filed</dt><dd x-text="recordStats().lastFiled"></dd>
+          </div>
+        </dl>
+
+        <!-- Progress. Carries its own dates, so there is no separate timeline
+             panel repeating them underneath. -->
+        <ol class="ap-steps" :class="{ 'ap-steps--settled': status.state === 'claimed' }">
+          <template x-for="(step, i) in STEPS" :key="step">
+            <li class="ap-step" :class="`ap-step--${stepClass(step)}`"
+                :aria-current="stepClass(step) === 'next' ? 'step' : false">
+              <span class="ap-step__num" x-text="String(i + 1).padStart(2, '0')"></span>
+              <span class="ap-step__mark" aria-hidden="true"></span>
+              <span class="ap-step__label" x-text="stepLabel(step)"></span>
+              <span class="ap-step__when">
+                <template x-if="stepChip(step)">
+                  <span class="rm-status" :class="`rm-status--${stepChip(step).tone}`">
+                    <span class="rm-status__dot" aria-hidden="true"></span>
+                    <span x-text="stepChip(step).label"></span>
+                  </span>
+                </template>
+                <template x-if="!stepChip(step)">
+                  <span class="ap-step__stamp">
+                    <span class="ap-step__date" x-text="stepWhen(step)"></span>
+                    <span class="ap-step__time" x-text="stepTime(step)"></span>
+                  </span>
+                </template>
+              </span>
+            </li>
+          </template>
+        </ol>
+
+        <!-- Where an operator goes from here. Same links the approval email
+             carries, so the two agree. -->
+        <nav class="rm-actions" x-show="statusPhase() === 'approved'" x-cloak aria-label="Member links">
+          <a :href="profileUrl()" class="rm-actions__do"
+             x-text="record.length ? 'See the full record →' : 'See the public profile →'"></a>
+          <a href="/swarm" class="rm-actions__link">Watch the swarm live</a>
+          <a href="/docs/investment-swarm/how-it-works" class="rm-actions__link">How sessions work</a>
+        </nav>
+
+        <p class="ap-docs" x-show="status.state !== 'rejected'">
+          Lost your identity, or the token after it was claimed?
+          <a :href="recoveryMailto()">Email us to rotate your key</a>.
+        </p>
+      </article>
+    </template>
+  </div>
+
+  <style>
+    /* On-brand per .impeccable.md (Beam/Pool/Beacon): cyan is a LINE only,
+       green is the MASS for value gained, beacon is a POINT for loss/attention;
+       radius ≤2px; flat planes; NO glow. Colours come from tokens.css rather
+       than a private copy of the palette, which is how this page drifted off
+       covenant in the first place. */
+
+    /* Every link on this page that carries no class of its own. The recovery
+       mailto at the foot was rendering in the browser's default blue, and its
+       :visited state in purple, both off the palette entirely. That is the same
+       defect views.css already had to fix once for .sv__meta-grid dd a, so this
+       is written as a net rather than a patch: any unclassed <a> added here
+       later is covered without anyone having to remember. */
+    /* Every focusable thing on the page, not just the two that had it. There is
+       no global a:focus-visible anywhere in assets/css/, so the back link, the
+       recovery mailto and the panel link were falling through to the UA ring. */
+    .ap-status a:focus-visible, .ap-status button:focus-visible {
+      outline: 1px solid var(--color-accent); outline-offset: 3px; }
+
+    /* Underscored in Beam rather than lettered in it, matching .rm-actions.
+       Cyan running text was 26% of every character this page rendered, against
+       2% on the apply page, purely because links were the only thing separating
+       themselves from body copy by hue instead of by rule. */
+    .ap-status a:not([class]), .ap-status a:not([class]):visited {
+      color: var(--color-text); text-decoration: underline;
+      text-decoration-color: var(--color-accent-line);
+      text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    .ap-status a:not([class]):hover { text-decoration-color: var(--color-accent); }
+
+    /* The way back out. A back link is not a destination worth advertising, so
+       it reads at the label rung and only warms on hover. */
+    .ap-status .sv__back { color: var(--color-text-muted); }
+
+    /* The action row is .rm-actions in components.css now — shared with the
+       apply page so the two ends of the flow offer their links the same way.
+       The local copy that used to live here declared one primary and two quiet
+       links and rendered three identical cyan ones, because its group selector
+       outranked its own modifier. */
+
+    /* Name and state on one line: the chip has to sit with the title it
+       qualifies, not float somewhere below it. Baseline-aligned so the chip
+       rides the cap height of a display face that changes size with the
+       viewport. */
+    .ap-status .ap-titlerow { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem 1rem; }
+    .ap-status .ap-titlerow .sv__detail-title { margin: .35rem 0 0; }
+
+    /* Member id, for support and the API. Was the <h1>. */
+    .ap-status .ap-refid { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+      margin: .8rem 0 0; font-family: var(--font-mono); font-size: .7rem;
+      letter-spacing: .1em; text-transform: uppercase; color: var(--color-text-muted); }
+    .ap-status .ap-refid code { color: var(--color-text-muted); text-transform: none; letter-spacing: 0;
+      font-size: .78rem; overflow-wrap: anywhere; }
+    .ap-status .ap-refid__copy { position: relative; display: inline-flex; align-items: center; justify-content: center;
+      width: 26px; height: 26px; padding: 0; cursor: pointer; background: transparent;
+      border: 1px solid var(--color-border); border-radius: var(--radius);
+      color: var(--color-text-muted); font-family: var(--font-mono); font-size: .76rem; line-height: 1; }
+    /* The visible control stays small so it does not compete with the id it
+       sits beside, but the thing a thumb has to hit is 44px. Every other
+       control on this page is already 44; this one was 26. */
+    .ap-status .ap-refid__copy::after { content: ""; position: absolute; top: 50%; left: 50%;
+      width: 44px; height: 44px; transform: translate(-50%, -50%); }
+    .ap-status .ap-refid__copy:hover { color: var(--color-accent); border-color: var(--color-accent); }
+    .ap-status .ap-refid__copy:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
+
+    /* The what-is-happening callout, directly under the header. Quiet surface,
+       no coloured rail: the lead sentence carries the weight. */
+    /* The live panel. One shape in every state: chip, lead, body, optional
+       link. The tone modifiers change NOTHING about type or geometry, only
+       which hue the chip's dot carries, because a state that renders at a
+       different size is a different component wearing the same class name. */
+    .ap-status .ap-note { margin: 1.7rem 0 0; padding: 1.15rem 1.3rem;
+      background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); }
+    .ap-status .ap-note__head { margin: 0 0 .8rem; }
+    .ap-status .ap-note__lead { margin: 0; font-size: 1.05rem; line-height: 1.45; color: var(--color-text); }
+    /* The supporting sentence is prose, so it takes the prose rung rather than
+       the label rung it was borrowing: --color-text-muted is the tone this page
+       gives timestamps and column headings, and reading a full sentence at it
+       is harder than it needs to be. */
+    .ap-status .ap-note__body { margin: .6rem 0 0; font-size: .92rem; line-height: 1.6;
+      color: var(--color-text-soft); max-width: 66ch; }
+    .ap-status .ap-note__body b { color: var(--color-text); font-weight: 700; }
+    /* The one link out of the live panel. Same treatment as a destination in the
+       action row: underscored in Beam, lettered in type. */
+    .ap-status .ap-note__more { margin: .9rem 0 0; font-family: var(--font-mono); font-size: .72rem;
+      text-transform: uppercase; letter-spacing: .12em; }
+    .ap-status .ap-note__more a, .ap-status .ap-note__body a {
+      color: var(--color-text); text-decoration: underline;
+      text-decoration-color: var(--color-accent-line);
+      text-decoration-thickness: 1px; text-underline-offset: 5px; }
+    .ap-status .ap-note__more a:hover, .ap-status .ap-note__body a:hover {
+      text-decoration-color: var(--color-accent); }
+
+    /* Progress. Every step states its number, its name and when it happened, so
+       three identical dots can no longer stand in for "where am I". The rule
+       joining completed steps is cyan because a connector is structure, and
+       structure is exactly what cyan is for; the completed marker is a green
+       mass because reaching a step is a gain. Square, so it never reads as one
+       of the round "a reading" dots used across the swarm tree. */
+    .ap-status .ap-steps { list-style: none; margin: 2rem 0 2.2rem; padding: 0; }
+    .ap-status .ap-step { position: relative; display: grid; grid-template-columns: 2.4rem .9rem 1fr auto;
+      align-items: center; gap: 0 1.05rem; padding: .95rem 0;
+      font-family: var(--font-mono); font-size: .95rem; text-transform: uppercase; letter-spacing: .1em; }
+    .ap-status .ap-step__num { font-size: .78rem; color: var(--color-text-muted); }
+    .ap-status .ap-step__mark { position: relative; width: .9rem; height: .9rem; justify-self: center;
+      border: 1px solid var(--color-border); background: transparent; }
+    /* Anchored to the ROW, not to the mark. A fixed height off the mark assumed
+       rows were padding + mark tall, but a row is sized by its tallest cell,
+       which is the two-line stamp: measured, the rail drew 30px across gaps of
+       43 to 59px and covered as little as half the span. left matches the mark
+       column centre (2.4rem track + 1.05rem gap + half of .9rem). */
+    .ap-status .ap-step { --mark-x: 3.9rem; }
+    .ap-status .ap-step:not(:last-child)::after { content: ""; position: absolute;
+      left: var(--mark-x); top: calc(50% + .45rem); bottom: calc(-50% + .45rem);
+      width: 1px; margin-left: -.5px; background: var(--color-border); }
+    .ap-status .ap-step__label { color: var(--color-text-muted); }
+    .ap-status .ap-step__when { display: flex; align-items: center; justify-content: flex-end; }
+    /* Date over clock time. All three steps routinely fall on one day, so the
+       date alone printed the same string three times and hid the sequence; the
+       time is the discriminating line and carries tabular figures so the three
+       stamps align digit for digit. */
+    .ap-status .ap-step__stamp { display: flex; flex-direction: column; align-items: flex-end; gap: .12rem; }
+    .ap-status .ap-step__date { font-size: .8rem; letter-spacing: .06em; text-transform: none;
+      color: var(--color-text-dim); }
+    /* --color-text-dim measured 2.57:1 on the page ground, roughly half the AA
+       minimum, on the line this design calls the discriminating one. */
+    .ap-status .ap-step__time { font-size: .72rem; letter-spacing: .04em; text-transform: none;
+      color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+
+    .ap-status .ap-step--done .ap-step__mark { background: var(--color-green); border-color: var(--color-green); }
+    /* Carries :not(:last-child) so it matches the base connector rule's
+       specificity. Without it the base rule wins and every completed step
+       still draws a grey line. */
+    .ap-status .ap-step--done:not(:last-child)::after { background: var(--color-accent); }
+    .ap-status .ap-step--done .ap-step__label { color: var(--color-text); }
+    .ap-status .ap-step--done .ap-step__date { color: var(--color-text-muted); }
+
+    .ap-status .ap-step--next .ap-step__mark { border-color: var(--color-accent); }
+    .ap-status .ap-step--next .ap-step__label { color: var(--color-text); }
+
+    /* Moot steps recede through the marker alone. They used to carry
+       opacity: .45 on the label too, which composited it to #252935 on the page
+       ground, a 1.38:1 contrast that made the words "Approve" and "Vote"
+       effectively invisible on the one state where a reader most needs to see
+       which steps were skipped. */
+    .ap-status .ap-step--moot .ap-step__mark { opacity: .45; }
+    .ap-status .ap-step--moot .ap-step__num,
+    .ap-status .ap-step--moot .ap-step__label { color: var(--color-text-muted); }
+
+    /* `claimed` is terminal, so it was tempting to compress this ladder into
+       three short lines and reclaim the fold. That is reverted deliberately: it
+       changed the grid, the mark size, the type scale, the padding and the
+       stamp direction, which meant an operator who had watched the ladder
+       through applied and approved found a different component on the one visit
+       that mattered. Identical geometry in every state is the whole point of
+       the rebuild, and it outranks reclaiming a screenful on one of them. The
+       modifier survives for spacing only. */
+    .ap-status .ap-steps--settled { margin: 2rem 0 2.2rem; }
+
+      letter-spacing: .03em; font-size: 17px; margin: 0 0 .9rem; color: var(--color-text); }
+      font-size: .95rem; line-height: 1.55; color: var(--color-text-muted); }
+      text-transform: uppercase; letter-spacing: .12em; }
+
+    .ap-status .ap-docs { font-size: .82rem; color: var(--color-text-muted); margin-top: 1.8rem; }
+  </style>
+</section>

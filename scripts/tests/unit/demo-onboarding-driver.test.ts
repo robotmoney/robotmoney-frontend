@@ -74,7 +74,7 @@ export function logsClassifiedOutcome(body: string): string | null {
 /**
  * null when the admission delays come from the cadence profile; a reason
  * otherwise. Issue #371 moved the driver off its own 60_000 / 300_000 literals
- * so a `--stage` boot admits one newcomer per committee interval (6 h) instead
+ * so a `--stage` boot admits one newcomer per swarm interval (6 h) instead
  * of one every five minutes, while plain `bun run demo` is unchanged.
  */
 export function admissionDelaysComeFromProfile(body: string): string | null {
@@ -178,7 +178,7 @@ describe("the demo's onboarding driver (scripts/lib/demo-main.ts)", () => {
   });
 
   test("its admission delays come from the cadence profile, not from 60_000 / 300_000 literals", () => {
-    // Issue #371: under `--stage` an admission must land once per committee
+    // Issue #371: under `--stage` an admission must land once per swarm
     // interval (6 h). A surviving literal here would keep newcomers arriving
     // every five minutes on the public demo regardless of the profile.
     expect(admissionDelaysComeFromProfile(body)).toBeNull();

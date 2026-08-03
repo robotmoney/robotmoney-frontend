@@ -8,8 +8,8 @@ export function registerAllocationView(Alpine) {
   // ── Asset Allocation ───────────────────────────────────────────────────────
   // EVERY section is now data-driven — no baked DATA literals remain:
   //   • Strategy pie + 4 mini bucket pies + bucket-card target weights come
-  //     from GET /api/dashboards/allocation (admin/committee-managed target
-  //     weights seeded from committee/allocation.json). Slice/legend COLOURS
+  //     from GET /api/dashboards/allocation (admin/swarm-managed target
+  //     weights seeded from swarm/allocation.json). Slice/legend COLOURS
   //     are presentation-only and stay client-side (the DTO carries no colour).
   //   • Vault pie + holdings table + TVL come from GET /api/dashboards/vault-economics.
   //   • Wallet pie + aggregate holdings table come from the per-asset legs of
@@ -242,7 +242,7 @@ export function registerAllocationView(Alpine) {
     },
     draw() {
       // Big strategy pie + 4 mini bucket pies — target weights from the live
-      // allocation framework (committee/allocation.json). Slice colours are
+      // allocation framework (swarm/allocation.json). Slice colours are
       // presentation-only (the DTO carries no colour); weights are never baked.
       // Honest degrade: if a feed is missing, its pie is simply not drawn — no
       // fabricated placeholder split.

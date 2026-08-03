@@ -36,8 +36,8 @@
 #     out of this job): the inference-off infra-rails check,
 #     scripts/tests/integration/onboarding-eval-infra.test.ts. It proves every
 #     rail the real eval rides on — member-agent image builds and starts,
-#     reaches the committee REST API over the compose network, a signed apply
-#     lands through POST /api/committee/apply — without spending a model
+#     reaches the swarm REST API over the compose network, a signed apply
+#     lands through POST /api/swarm/apply — without spending a model
 #     token. It moved to its own workflow because it brings up its own minimal
 #     stack (postgres + api only) and never needed this job's full LIVE demo
 #     boot; nothing about the check ITSELF changed.
@@ -53,7 +53,7 @@
 #     dispatch input — is the primary mechanism.)
 #   - NIGHTLY (issue #373): the real-inference measurement's SCHEDULED HOME is
 #     now THIS workflow's own `schedule: 37 4 * * *` (nightly 04:37 UTC) — the
-#     slot the retired .github/workflows/committee-opencode-nightly.yml held.
+#     slot the retired .github/workflows/swarm-opencode-nightly.yml held.
 #     ONBOARDING_REAL_EVAL resolves to "1" on `schedule` exactly as it does on
 #     `push`, so a nightly run spends one real admission. That is a SMALLER
 #     per-night sweep than the retired nightly's models × identities, and a
@@ -108,8 +108,8 @@
 #       failure, which presents as a container EXIT rather than a timeout —
 #       see that function's doc comment.
 #       scripts/lib/onboarding-eval.ts resolves the same model
-#       scripts/lib/committee/inference.ts already
-#       uses for real committee takes.
+#       scripts/lib/swarm/inference.ts already
+#       uses for real swarm takes.
 #   (b) That model is FUNDED (D22 as amended 2026-07-28): the default is
 #       `opencode/deepseek-v4-flash`, billed to the `OPENCODE_API_KEY` repo
 #       secret. Which model runs is selected by `AGENT_MODEL` against
@@ -131,7 +131,7 @@ on:
   # ten mirrors. The invariant is enforced mechanically by
   # scripts/tests/unit/nightly-mirrors-merge-set.test.ts, not by convention.
   #
-  # This one keeps 04:37 UTC, the slot the retired committee-opencode-nightly.yml
+  # This one keeps 04:37 UTC, the slot the retired swarm-opencode-nightly.yml
   # held: a `schedule` run of THIS workflow is now the real-inference
   # onboarding admission's scheduled home (ONBOARDING_REAL_EVAL resolves to "1"
   # on `schedule` exactly as it does on `push`, below). One admission a night,
@@ -205,8 +205,8 @@ jobs:
         # runner user's cache with no elevation.
         run: bunx playwright install chromium
       # D21 retired the mcp/ package — no separate MCP install/typecheck/test
-      # steps. The committee surface is the api's REST API; the committee
-      # session driver (scripts/lib/committee/session.ts) is covered by the
+      # steps. The swarm surface is the api's REST API; the swarm
+      # session driver (scripts/lib/swarm/session.ts) is covered by the
       # root typecheck + the "Full-stack demo" step below.
       # Needed BEFORE "Full-stack demo" (issue #108): scripts/lib/demo-main.ts
       # now spawns backend/scripts/edgar-seed-bootstrap.ts as a host-side
@@ -217,10 +217,10 @@ jobs:
       - name: Install backend deps (for the host-side EDGAR seed bootstrap step)
         working-directory: backend
         run: bun install --frozen-lockfile
-      # Needed BEFORE "Full-stack demo" (issue #301): scripts/lib/committee/
+      # Needed BEFORE "Full-stack demo" (issue #301): scripts/lib/swarm/
       # inference.ts's runOpencode() Bun.spawn()s the bare `opencode` binary
-      # HOST-SIDE (scripts/lib/committee/session.ts runs as a runner subprocess,
-      # not inside a container) for every committee session the demo boots —
+      # HOST-SIDE (scripts/lib/swarm/session.ts runs as a runner subprocess,
+      # not inside a container) for every swarm session the demo boots —
       # there is no template fallback anymore, so a runner without this CLI on
       # PATH fails the required gate loudly instead of degrading. This is a
       # DIFFERENT consumer than scripts/lib/member-agent/Dockerfile's baked-in
@@ -228,7 +228,7 @@ jobs:
       # pinned release + checksum, kept in lockstep with that Dockerfile's
       # OPENCODE_VERSION / OPENCODE_LINUX_X64_SHA256 args on purpose — bump both
       # together.
-      - name: Install opencode CLI (committee takes require live inference)
+      - name: Install opencode CLI (swarm takes require live inference)
         env:
           OPENCODE_VERSION: "1.18.1"
           OPENCODE_LINUX_X64_SHA256: "9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b994816acf192159511"
@@ -301,7 +301,7 @@ jobs:
               MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — the eval was requested for this run, but no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is funded (D22 as amended), so the eval will fail loudly rather than silently degrade. Configure the OPENCODE_API_KEY secret, or set AGENT_MODEL=free to run keyless."
             fi
           elif [ "$IS_PULL_REQUEST" = "true" ]; then
-            MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the exclusive runner time per-PR evals cost against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: THIS SAME WORKFLOW, on every push to main and on its nightly schedule mirror at 04:37 UTC (cron '37 4 * * *'), plus workflow_dispatch with real_eval=true. Issue #373 retired .github/workflows/committee-opencode-nightly.yml, which used to hold that slot: each of those runs now spends exactly one real admission and writes an admission record to the job summary and an uploaded artifact, so the admission rate over time is read off run history — thirty nights is thirty samples. What this PR run DID assert about that surface: the separate, inference-off .github/workflows/onboarding-eval-rails.yml workflow (issue #275 addendum), which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full whenever its own path filter matches."
+            MSG="§11 R8 real-inference onboarding eval: **DELIBERATELY NOT RUN** on this pull_request run — ONBOARDING_REAL_EVAL is not set here and ZERO model tokens are spent. Off by default, not removed: issue #289 (an exhaustible free tier) plus the exclusive runner time per-PR evals cost against a stochastic metric. TO OPT THIS PR IN: add the label 'real-eval' to the pull request — that re-triggers this workflow at once and every subsequent run of the PR spends a real eval until the label is removed. Where it ALSO runs: THIS SAME WORKFLOW, on every push to main and on its nightly schedule mirror at 04:37 UTC (cron '37 4 * * *'), plus workflow_dispatch with real_eval=true. Issue #373 retired .github/workflows/swarm-opencode-nightly.yml, which used to hold that slot: each of those runs now spends exactly one real admission and writes an admission record to the job summary and an uploaded artifact, so the admission rate over time is read off run history — thirty nights is thirty samples. What this PR run DID assert about that surface: the separate, inference-off .github/workflows/onboarding-eval-rails.yml workflow (issue #275 addendum), which executes scripts/tests/integration/onboarding-eval-infra.test.ts in full whenever its own path filter matches."
           else
             MSG="§11 R8 real-inference onboarding eval: NOT REQUESTED on this manual run — re-dispatch this workflow with real_eval=true to spend one. ZERO model tokens are spent here. The separate onboarding-eval-rails.yml workflow still covers the inference-off rails check."
           fi
@@ -315,7 +315,7 @@ jobs:
       # that keep broken demos off main: scripts/demo-frontend-check.ts (core-surface
       # detector), `test:browser` (Playwright), and scripts/demo-live-smoke.ts
       # (issue #128's LIVE steady-state assertions — reused as-is, not re-authored:
-      # >=2 published committee sessions, fresh regime snapshot, live wallet/vault
+      # >=2 published swarm sessions, fresh regime snapshot, live wallet/vault
       # provenance with only the documented #120 degrades, both research signals
       # landed). scripts/demo-frontend-check.ts's own loud-failure path is itself
       # self-tested by scripts/tests/integration/demo-frontend-check.test.ts (run in the required
@@ -350,7 +350,7 @@ jobs:
           # robotmoney.env=ci + robotmoney.env.hash labels from the helper, which
           # is the channel tooling should select on.
           DEMO_PROJECT: rm_ci_stack_${{ github.run_id }}_${{ github.run_attempt }}
-          # Committee takes are always live-authored through opencode. A missing
+          # Swarm takes are always live-authored through opencode. A missing
           # credential, CLI, or model response fails this required gate loudly;
           # there is no deterministic memo fallback.
           #
@@ -373,7 +373,7 @@ jobs:
           # Add the `real-eval` label to a PR to opt it in; remove it to opt out
           # (full rationale in this file's header, "OPTING ONE PR IN"). The
           # nightly `schedule` mirror of THIS workflow (04:37 UTC — issue #373
-          # retired committee-opencode-nightly.yml, which used to hold that
+          # retired swarm-opencode-nightly.yml, which used to hold that
           # slot) owns the trend measurement, one admission a night, recorded to
           # the job summary and an artifact. demo-main.ts reads ONBOARDING_REAL_EVAL ===
           # "1"; empty is simply "off". When it IS on, it runs the funded
@@ -392,7 +392,7 @@ jobs:
           # byte-identical, which
           # scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts asserts.
           ONBOARDING_REAL_EVAL: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
-          # The committee session always requires live authoring. On an
+          # The swarm session always requires live authoring. On an
           # untrusted fork GitHub supplies an empty secret and the session fails
           # loudly instead of fabricating a template take.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}

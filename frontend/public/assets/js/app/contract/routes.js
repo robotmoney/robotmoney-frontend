@@ -31,7 +31,7 @@ export const ROUTES = {
     buybacks: "/api/dashboards/buybacks", // GET → token buyback history
     tokenMetrics: "/api/dashboards/token-metrics", // GET → ROBOTMONEY price/supply/marketCap + fee split
     walletSleeves: "/api/dashboards/wallet-sleeves", // GET → per-prop-wallet holdings breakdown
-    allocation: "/api/dashboards/allocation", // GET → admin/committee-managed strategy+bucket target weights
+    allocation: "/api/dashboards/allocation", // GET → admin/swarm-managed strategy+bucket target weights
     // Issue #384 (/list "Total Market"): unified agent/coin/vault/wallet table
     // feed + the TotalMarketOverview summary (counts, vault TVL, leaders, RM
     // token). Namespaced under dashboards (public, unauthenticated reads) —
@@ -95,54 +95,54 @@ export const ROUTES = {
     adminUpdate: "/api/projects/admin/:slug", // POST — admin-managed overview write (#93)
   },
 
-  committee: {
-    members: "/api/committee/members", // GET
-    waitlist: "/api/committee/waitlist", // POST — capture interest when roster is full
-    member: "/api/committee/members/:id", // GET
-    memberTakes: "/api/committee/members/:id/takes", // GET ?limit= — this member's takes across sessions (issue #243), newest first, in-progress included
+  swarm: {
+    members: "/api/swarm/members", // GET
+    waitlist: "/api/swarm/waitlist", // POST — capture interest when roster is full
+    member: "/api/swarm/members/:id", // GET
+    memberTakes: "/api/swarm/members/:id/takes", // GET ?limit= — this member's takes across sessions (issue #243), newest first, in-progress included
     // POST (member bearer) — issue #325: the apply payload is deliberately
     // minimal ({name, contact, lens?, publicKey}, D21), so this is the ONLY
     // path by which an admitted member ever acquires tagline/mandate/biases/
     // voiceMd/mode/operator/avatar. Partial write: only the fields present in
     // the body are changed. The path :id must match the bearer token's own
     // member id — this can never write another member's profile.
-    memberProfile: "/api/committee/members/:id/profile",
-    subject: "/api/committee/subjects/:id", // GET
-    subjectSnapshots: "/api/committee/subjects/:id/snapshots", // GET
+    memberProfile: "/api/swarm/members/:id/profile",
+    subject: "/api/swarm/subjects/:id", // GET
+    subjectSnapshots: "/api/swarm/subjects/:id/snapshots", // GET
     // GET ?state=&limit=&cursor= — light index rows (no regimeSummary/synthesis/
     // subjectSnapshotTotalValueUsd) + an opaque nextCursor (null when exhausted).
     // ?full=1 reproduces the pre-#243 unpaginated/unprojected response for
     // callers (e.g. the admin sessions views) that still need every field.
-    sessions: "/api/committee/sessions",
-    session: "/api/committee/sessions/:date/:subject", // GET — the LATEST session that day for that subject
+    sessions: "/api/swarm/sessions",
+    session: "/api/swarm/sessions/:date/:subject", // GET — the LATEST session that day for that subject
     // GET one session by its own id. Since migration 0022 a subject may convene
     // more than once a day, so (date, subject) addresses "the latest one that
     // day" and cannot reach the earlier ones; this is the unambiguous handle.
     // One path segment, so it can never be confused with the two-segment
     // date/subject form above.
-    sessionById: "/api/committee/sessions/:id",
-    take: "/api/committee/takes/:id", // GET — public read-time-verified receipt
-    takePermalink: "/committee/takes/:id", // rendered public verification receipt
-    openSession: "/api/committee/open-session", // GET → session currently collecting, if any
-    brief: "/api/committee/brief", // GET ?date=&subject=
-    signingPayload: "/api/committee/signing-payload", // POST → canonical bytes a member must sign
-    memos: "/api/committee/memos", // POST (member bearer) — publish a long-form memo
-    memo: "/api/committee/memos/:id", // GET — public memo read
-    verifyToken: "/api/committee/verify-token", // GET (member bearer) → { memberId }
-    apply: "/api/committee/apply", // POST — public onboarding (recorded 'applied', inactive key)
-    applyStatus: "/api/committee/apply/:id", // GET — public, redacted application status (applied/approved/claimed)
-    applicationStatus: "/api/committee/applications/:id/status", // GET — public, privacy-safe application status
-    claimChallenge: "/api/committee/token-claim/challenge", // POST — opaque 10-minute key-proof challenge
-    claimToken: "/api/committee/token-claim", // POST — first valid key proof returns the sole bearer token
-    register: "/api/committee/register", // POST (privileged) — apply+activate shortcut for demo/E2E
-    regime: "/api/committee/regime", // POST (analytics-provider bearer) — provider SUBMITS computed snapshots ({ snapshots }); never a server-side recompute
-    submit: "/api/committee/submit", // POST (member bearer, ed25519-signed)
+    sessionById: "/api/swarm/sessions/:id",
+    take: "/api/swarm/takes/:id", // GET — public read-time-verified receipt
+    takePermalink: "/swarm/takes/:id", // rendered public verification receipt
+    openSession: "/api/swarm/open-session", // GET → session currently collecting, if any
+    brief: "/api/swarm/brief", // GET ?date=&subject=
+    signingPayload: "/api/swarm/signing-payload", // POST → canonical bytes a member must sign
+    memos: "/api/swarm/memos", // POST (member bearer) — publish a long-form memo
+    memo: "/api/swarm/memos/:id", // GET — public memo read
+    verifyToken: "/api/swarm/verify-token", // GET (member bearer) → { memberId }
+    apply: "/api/swarm/apply", // POST — public onboarding (recorded 'applied', inactive key)
+    applyStatus: "/api/swarm/apply/:id", // GET — public, redacted application status (applied/approved/claimed)
+    applicationStatus: "/api/swarm/applications/:id/status", // GET — public, privacy-safe application status
+    claimChallenge: "/api/swarm/token-claim/challenge", // POST — opaque 10-minute key-proof challenge
+    claimToken: "/api/swarm/token-claim", // POST — first valid key proof returns the sole bearer token
+    register: "/api/swarm/register", // POST (privileged) — apply+activate shortcut for demo/E2E
+    regime: "/api/swarm/regime", // POST (analytics-provider bearer) — provider SUBMITS computed snapshots ({ snapshots }); never a server-side recompute
+    submit: "/api/swarm/submit", // POST (member bearer, ed25519-signed)
     // Admin lifecycle (X-Admin-Token). The backend registers ONE dispatcher at
     // admin.action; the named entries below enumerate the verbs it accepts so
     // drivers can reference them without re-hardcoding the path.
     admin: {
-      action: "/api/committee/admin/:action", // POST — generic lifecycle dispatch
-      activate: "/api/committee/admin/activate", // POST — flip applied→active, mint bearer token
+      action: "/api/swarm/admin/:action", // POST — generic lifecycle dispatch
+      activate: "/api/swarm/admin/activate", // POST — flip applied→active, mint bearer token
       // The former `reset` action (POST — wipe session data) is REMOVED: it
       // TRUNCATEd published session/brief/recommendation/memo history so a demo
       // could reuse today's date, which is data loss against any database that
@@ -150,47 +150,47 @@ export const ROUTES = {
       // The former admin `regime` action and analytics queue action were
       // removed by issue #361: producer data only arrives as a submission,
       // and the independent producer owns its own cadence.
-      subject: "/api/committee/admin/subject", // POST — ensure a subject row
-      subjectFixtures: "/api/committee/admin/subject_fixtures", // POST — seed reference-shaped demo fixtures
-      open: "/api/committee/admin/open", // POST — open a session
-      brief: "/api/committee/admin/brief", // POST — publish the brief, open the window
-      close: "/api/committee/admin/close", // POST — close the submission window
-      aggregate: "/api/committee/admin/aggregate", // POST — deterministic rollup
-      publish: "/api/committee/admin/publish", // POST — publish the session
-      enqueueJob: "/api/committee/admin/enqueue-job", // POST — drive lifecycle via the worker job queue
+      subject: "/api/swarm/admin/subject", // POST — ensure a subject row
+      subjectFixtures: "/api/swarm/admin/subject_fixtures", // POST — seed reference-shaped demo fixtures
+      open: "/api/swarm/admin/open", // POST — open a session
+      brief: "/api/swarm/admin/brief", // POST — publish the brief, open the window
+      close: "/api/swarm/admin/close", // POST — close the submission window
+      aggregate: "/api/swarm/admin/aggregate", // POST — deterministic rollup
+      publish: "/api/swarm/admin/publish", // POST — publish the session
+      enqueueJob: "/api/swarm/admin/enqueue-job", // POST — drive lifecycle via the worker job queue
 
       // Admin surface (issue #152): topics/members/roster/lifecycle/audit.
       // Distinct sub-resource paths (never a single-segment :action) so they
       // never collide with the generic dispatcher above.
-      subjects: "/api/committee/admin/subjects", // GET list (all statuses) / POST create
-      subjectUpdate: "/api/committee/admin/subjects/:id/update", // POST — versioned edit (409 stale_version)
-      subjectDeactivate: "/api/committee/admin/subjects/:id/deactivate", // POST — versioned deactivate
+      subjects: "/api/swarm/admin/subjects", // GET list (all statuses) / POST create
+      subjectUpdate: "/api/swarm/admin/subjects/:id/update", // POST — versioned edit (409 stale_version)
+      subjectDeactivate: "/api/swarm/admin/subjects/:id/deactivate", // POST — versioned deactivate
 
-      members: "/api/committee/admin/members", // GET list (all statuses, redacted) / POST manual add
-      applications: "/api/committee/admin/applications", // GET ?status= — application review queue
-      memberReview: "/api/committee/admin/members/:id/review", // POST { decision: approve|reject }
-      memberDeactivate: "/api/committee/admin/members/:id/deactivate", // POST — versioned
-      memberReactivate: "/api/committee/admin/members/:id/reactivate", // POST — versioned, mints a fresh credential
-      memberRotateKey: "/api/committee/admin/members/:id/rotate-key", // POST — one-time credential in the response only
+      members: "/api/swarm/admin/members", // GET list (all statuses, redacted) / POST manual add
+      applications: "/api/swarm/admin/applications", // GET ?status= — application review queue
+      memberReview: "/api/swarm/admin/members/:id/review", // POST { decision: approve|reject }
+      memberDeactivate: "/api/swarm/admin/members/:id/deactivate", // POST — versioned
+      memberReactivate: "/api/swarm/admin/members/:id/reactivate", // POST — versioned, mints a fresh credential
+      memberRotateKey: "/api/swarm/admin/members/:id/rotate-key", // POST — one-time credential in the response only
 
-      sessionCreate: "/api/committee/admin/sessions", // POST — UTC-validated, snapshots the roster, enqueues 4 scoped jobs
-      sessionRoster: "/api/committee/admin/sessions/:id/roster", // GET — the frozen expected roster
-      rosterAdd: "/api/committee/admin/sessions/:id/roster/add", // POST { memberId } — before collecting only
-      rosterExcuse: "/api/committee/admin/sessions/:id/roster/excuse", // POST { memberId } — before collecting only
-      rosterRestore: "/api/committee/admin/sessions/:id/roster/restore", // POST { memberId } — before collecting only
-      sessionCancel: "/api/committee/admin/sessions/:id/cancel", // POST — versioned guarded transition
-      sessionClose: "/api/committee/admin/sessions/:id/close", // POST — versioned guarded transition
-      sessionReopen: "/api/committee/admin/sessions/:id/reopen", // POST — versioned guarded transition
-      sessionAggregate: "/api/committee/admin/sessions/:id/aggregate", // POST — versioned guarded transition
-      sessionPublish: "/api/committee/admin/sessions/:id/publish", // POST — versioned guarded transition
+      sessionCreate: "/api/swarm/admin/sessions", // POST — UTC-validated, snapshots the roster, enqueues 4 scoped jobs
+      sessionRoster: "/api/swarm/admin/sessions/:id/roster", // GET — the frozen expected roster
+      rosterAdd: "/api/swarm/admin/sessions/:id/roster/add", // POST { memberId } — before collecting only
+      rosterExcuse: "/api/swarm/admin/sessions/:id/roster/excuse", // POST { memberId } — before collecting only
+      rosterRestore: "/api/swarm/admin/sessions/:id/roster/restore", // POST { memberId } — before collecting only
+      sessionCancel: "/api/swarm/admin/sessions/:id/cancel", // POST — versioned guarded transition
+      sessionClose: "/api/swarm/admin/sessions/:id/close", // POST — versioned guarded transition
+      sessionReopen: "/api/swarm/admin/sessions/:id/reopen", // POST — versioned guarded transition
+      sessionAggregate: "/api/swarm/admin/sessions/:id/aggregate", // POST — versioned guarded transition
+      sessionPublish: "/api/swarm/admin/sessions/:id/publish", // POST — versioned guarded transition
 
-      audit: "/api/committee/admin/audit", // GET ?actor=&action=&since=&until=&limit= — redacted audit trail
+      audit: "/api/swarm/admin/audit", // GET ?actor=&action=&since=&until=&limit= — redacted audit trail
 
       // Agent health (issue #208, scout #214): missed-window absences and
       // rejected submission signatures, otherwise visible only in an agent's
       // own stdout. Raw event history + per-type counts; no automatic
       // dead-agent threshold.
-      agentHealth: "/api/committee/admin/agent-health", // GET ?sessionId=&memberId=&eventType=&limit=
+      agentHealth: "/api/swarm/admin/agent-health", // GET ?sessionId=&memberId=&eventType=&limit=
     },
   },
 
@@ -237,11 +237,11 @@ export const ROUTES = {
     researchRerun: "/api/admin/research/rerun", // POST — retired; 409 because the independent producer owns execution
   },
 
-  // Committee operations surface (issue #159 UI over issue #152/PR #169's
+  // Swarm operations surface (issue #159 UI over issue #152/PR #169's
   // already-shipped backend; docs/architecture.md §6.3 and §7.1). This
-  // is the SAME table `committee.admin.*` above (backend/src/api/routes/
-  // committee-admin.ts) — there is deliberately no second `admin.committee.*`
+  // is the SAME table `swarm.admin.*` above (backend/src/api/routes/
+  // swarm-admin.ts) — there is deliberately no second `admin.swarm.*`
   // route table for this feature, so the frontend and backend can never drift
   // onto two different URL prefixes again (see PR #172 review). Consumers:
-  // frontend/public/assets/js/app/alpine/views/admin/committee-*.js.
+  // frontend/public/assets/js/app/alpine/views/admin/swarm-*.js.
 };

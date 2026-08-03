@@ -1,11 +1,11 @@
-/* Data-driven view styles: regime + committee. Reuses the design tokens. */
+/* Data-driven view styles: regime + swarm. Reuses the design tokens. */
 .rv, .cv { padding: 9rem 1.5rem 6rem; }
 /* eyebrow, loading and error are promoted to components.css (.rm-eyebrow /
    .rm-loading / .rm-error, grouped with the rv and cv titles, single source). */
-.rv__title, .cv__title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; font-size: 2.5rem; letter-spacing: -0.01em; line-height: 1.05; margin: 0.5rem 0; }
-@media (min-width: 768px) { .rv__title, .cv__title { font-size: 3.25rem; } }
-@media (min-width: 1024px) { .rv__title, .cv__title { font-size: 3.75rem; } }
-.rv__sub, .cv__sub { color: var(--color-text-muted); font-family: var(--font-sans); font-size: 0.85rem; }
+.rv__title, .sv__title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; font-size: 2.5rem; letter-spacing: -0.01em; line-height: 1.05; margin: 0.5rem 0; }
+@media (min-width: 768px) { .rv__title, .sv__title { font-size: 3.25rem; } }
+@media (min-width: 1024px) { .rv__title, .sv__title { font-size: 3.75rem; } }
+.rv__sub, .sv__sub { color: var(--color-text-muted); font-family: var(--font-sans); font-size: 0.85rem; }
 
 /* regime pills (shared: summary meta + panel headers) */
 .regime-pill {
@@ -128,65 +128,65 @@
 .rv__method-note { color: var(--color-text-muted); font-size: 0.85rem; line-height: 1.6; margin: 1rem 0 0; }
 .rv__link { color: var(--color-accent); text-decoration: underline; }
 
-/* committee — each .cv__* selector is declared in EXACTLY ONE block per media
+/* swarm — each .sv__* selector is declared in EXACTLY ONE block per media
    context (base props for several classes live in the port section below).
    Duplicate same-selector blocks silently override each other and caused the
    #80 regression twice; enforced by scripts/tests/css-duplicate-selectors.test.ts. */
-.cv__hero-fade { position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(6,8,12,0.25), rgba(6,8,12,0.72) 70%, var(--color-void)); pointer-events: none; }
-.cv__hero .cv__detail-title .text-gradient { font-family: var(--font-display); font-weight: 700; background: none; -webkit-text-fill-color: currentColor; color: inherit; }
-.cv__feed-title { margin: 0 0 0.6rem; font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; font-size: 1.8rem; }
-.cv__back:hover { color: var(--color-accent); }
+.sv__hero-fade { position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(6,8,12,0.25), rgba(6,8,12,0.72) 70%, var(--color-void)); pointer-events: none; }
+.sv__hero .sv__detail-title .text-gradient { font-family: var(--font-display); font-weight: 700; background: none; -webkit-text-fill-color: currentColor; color: inherit; }
+.sv__feed-title { margin: 0 0 0.6rem; font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; font-size: 1.8rem; }
+.sv__back:hover { color: var(--color-accent); }
 /* Backdrop chip: ONE border, a dim label and a bright value. The rule this
-   replaces was `.cv__fact-row span`, which also matched the value <span>
+   replaces was `.sv__fact-row span`, which also matched the value <span>
    nested inside each chip and drew it a second box whose right edge landed on
    the chip's own — the doubled frame that read as broken. */
-.cv__fact { display: inline-flex; align-items: center; gap: 0.45rem;
+.sv__fact { display: inline-flex; align-items: center; gap: 0.45rem;
   border: 1px solid var(--color-border); border-radius: var(--radius); padding: 0.34rem 0.6rem; }
-.cv__fact em { font-style: normal; color: var(--color-text-dim); }
-.cv__fact b { font-weight: 500; color: var(--color-text); letter-spacing: 0.1em; font-variant-numeric: tabular-nums; }
-/* Form carries the category, hue carries the value. Across the committee tree a
+.sv__fact em { font-style: normal; color: var(--color-text-dim); }
+.sv__fact b { font-weight: 500; color: var(--color-text); letter-spacing: 0.1em; font-variant-numeric: tabular-nums; }
+/* Form carries the category, hue carries the value. Across the swarm tree a
    ROUND dot means a reading (stance, verdict, regime) and a SQUARE one means an
    identity (which subject this is). Regime is a reading, so this is a circle
    sized to the stance dots — it shipped square, which quietly filed it with the
    subject marks instead. */
-.cv__fact-dot { width: 0.42rem; height: 0.42rem; flex: 0 0 auto; border-radius: 50%; margin-right: -0.12rem; }
-.cv__bar { margin: 0.6rem 0 1rem; }
-.cv__action-row span { color: var(--color-text); }
-.cv__avatar--large { width: 4.5rem; height: 4.5rem; font-size: 1.4rem; flex: 0 0 auto; }
-.cv__member-hero { display: flex; gap: 1.25rem; align-items: center; }
-.cv__metadata-grid { display: grid; grid-template-columns: 1fr; gap: 0.8rem; }
-.cv__metadata-grid div { border-top: 1px solid var(--color-border); padding-top: 0.65rem; }
-.cv__metadata-grid span { display: block; color: var(--color-text-dim); font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; }
-.cv__metadata-grid b { display: block; margin-top: 0.25rem; color: var(--color-text); font-family: var(--font-mono); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
-/* Committee verdict. Replaces the .cv__aggregate box whose largest element was
+.sv__fact-dot { width: 0.42rem; height: 0.42rem; flex: 0 0 auto; border-radius: 50%; margin-right: -0.12rem; }
+.sv__bar { margin: 0.6rem 0 1rem; }
+.sv__action-row span { color: var(--color-text); }
+.sv__avatar--large { width: 4.5rem; height: 4.5rem; font-size: 1.4rem; flex: 0 0 auto; }
+.sv__member-hero { display: flex; gap: 1.25rem; align-items: center; }
+.sv__metadata-grid { display: grid; grid-template-columns: 1fr; gap: 0.8rem; }
+.sv__metadata-grid div { border-top: 1px solid var(--color-border); padding-top: 0.65rem; }
+.sv__metadata-grid span { display: block; color: var(--color-text-dim); font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; }
+.sv__metadata-grid b { display: block; margin-top: 0.25rem; color: var(--color-text); font-family: var(--font-mono); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+/* Swarm verdict. Replaces the .sv__aggregate box whose largest element was
    "3/5" — turnout, not a finding. The call leads, the proportional bar shows
    the weight behind it, and the procedural numbers (quorum, mean confidence,
    who was absent) drop to a footer where they belong. */
-.cv__verdict { margin: 0.6rem 0 0; }
-.cv__verdict-call { display: flex; align-items: center; gap: 0.6rem; margin: 0;
+.sv__verdict { margin: 0.6rem 0 0; }
+.sv__verdict-call { display: flex; align-items: center; gap: 0.6rem; margin: 0;
   font-family: var(--font-display, var(--font-mono)); font-size: 1.55rem; font-weight: 700;
   text-transform: uppercase; letter-spacing: 0.01em; color: var(--color-text); }
-.cv__verdict-call i { width: 0.55rem; height: 0.55rem; flex: 0 0 auto; border-radius: 50%; }
+.sv__verdict-call i { width: 0.55rem; height: 0.55rem; flex: 0 0 auto; border-radius: 50%; }
 /* A split is a real result, but it is not a call — it reads muted so it can
-   never be mistaken for the committee endorsing a position. */
-.cv__verdict-call.is-split { font-size: 1.25rem; color: var(--color-text-muted); }
-.cv__verdict-detail { margin: 0.4rem 0 0; color: var(--color-text-muted); font-size: 0.86rem; line-height: 1.6; }
-.cv__verdict-bar { display: flex; gap: 2px; height: 6px; margin: 1rem 0 0.75rem; }
-.cv__verdict-bar i { display: block; height: 100%; min-width: 2px; }
-.cv__stances { display: flex; flex-wrap: wrap; gap: 0.9rem; font-family: var(--font-mono); font-size: 0.74rem; color: var(--color-text-muted); }
-.cv__verdict-meta { display: flex; flex-wrap: wrap; gap: 1.75rem; margin: 1.25rem 0 0;
+   never be mistaken for the swarm endorsing a position. */
+.sv__verdict-call.is-split { font-size: 1.25rem; color: var(--color-text-muted); }
+.sv__verdict-detail { margin: 0.4rem 0 0; color: var(--color-text-muted); font-size: 0.86rem; line-height: 1.6; }
+.sv__verdict-bar { display: flex; gap: 2px; height: 6px; margin: 1rem 0 0.75rem; }
+.sv__verdict-bar i { display: block; height: 100%; min-width: 2px; }
+.sv__stances { display: flex; flex-wrap: wrap; gap: 0.9rem; font-family: var(--font-mono); font-size: 0.74rem; color: var(--color-text-muted); }
+.sv__verdict-meta { display: flex; flex-wrap: wrap; gap: 1.75rem; margin: 1.25rem 0 0;
   padding-top: 0.9rem; border-top: 1px solid var(--color-border); }
-.cv__verdict-meta div { min-width: 0; }
-.cv__verdict-meta dt { font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-dim); }
-.cv__verdict-meta dd { margin: 0.3rem 0 0; font-family: var(--font-mono); font-size: 0.78rem; color: var(--color-text-muted); overflow-wrap: anywhere; }
+.sv__verdict-meta div { min-width: 0; }
+.sv__verdict-meta dt { font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-dim); }
+.sv__verdict-meta dd { margin: 0.3rem 0 0; font-family: var(--font-mono); font-size: 0.78rem; color: var(--color-text-muted); overflow-wrap: anywhere; }
 
-.cv__takes { display: flex; flex-direction: column; gap: 1rem; }
-.cv__take { position: relative; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1.25rem; --vfy-inset: 1.25rem; }
-.cv__take-head { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-bottom: 0.5rem; padding-right: 1.6rem; }
-.cv__member { font-weight: 700; }
-.cv__conf { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
+.sv__takes { display: flex; flex-direction: column; gap: 1rem; }
+.sv__take { position: relative; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1.25rem; --vfy-inset: 1.25rem; }
+.sv__take-head { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-bottom: 0.5rem; padding-right: 1.6rem; }
+.sv__member { font-weight: 700; }
+.sv__conf { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 /* ── Subject encoding + filter ───────────────────────────────────────────────
-   Shared by the member profile's track record and the /committee roster. Both
+   Shared by the member profile's track record and the /swarm roster. Both
    lists interleave several subjects by date, so both need the same answer to
    "which subject is this row", and two surfaces must never teach two
    conventions for the same data. Lives here rather than in either page's
@@ -211,33 +211,33 @@
 
 /* A row carries its subject's hue on the left edge, so which session it belongs
    to is legible before you read a word of it — and it groups a filtered list.
-   .cv__session-card sets a 1px border on all sides and repaints all four cyan
+   .sv__session-card sets a 1px border on all sides and repaints all four cyan
    on hover, so the rail is re-asserted there; otherwise pointing at a card
    would silently reassign it to another subject. The padding gives back the
    extra pixel so copy stays aligned with cards that have no rail.
 
-   The selector is doubled (.cv__session-card.mp-take) on purpose:
-   .cv__session-card is declared later in this file and its shorthand `border`
+   The selector is doubled (.sv__session-card.mp-take) on purpose:
+   .sv__session-card is declared later in this file and its shorthand `border`
    would otherwise win on source order alone. Specificity makes the rail
    independent of where this block sits. */
-.cv__session-card.mp-take { border-left: 2px solid var(--mp-subject, var(--color-border));
+.sv__session-card.mp-take { border-left: 2px solid var(--mp-subject, var(--color-border));
   padding-left: calc(1.15rem - 1px); }
-.cv__session-card.mp-take:hover { border-left-color: var(--mp-subject, var(--color-border)); }
+.sv__session-card.mp-take:hover { border-left-color: var(--mp-subject, var(--color-border)); }
 .mp-take__dot { width: 7px; height: 7px; flex: 0 0 auto; align-self: center;
   background: var(--mp-subject, var(--color-border)); }
 
 /* Verification badge. "Verified" is the single most load-bearing word on the
-   committee — it is the difference between a signed record and an assertion —
+   swarm — it is the difference between a signed record and an assertion —
    and it was shipping as bare text most readers would skim past. Now a mark
    plus a plain-language line on hover or keyboard focus.
    The full sentence also rides on aria-label, so assistive tech gets the
    explanation without depending on a hover-only tooltip. */
-.cv__vfy { position: relative; display: inline-flex; align-items: center; gap: 0.34rem;
+.sv__vfy { position: relative; display: inline-flex; align-items: center; gap: 0.34rem;
   font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em;
   color: var(--color-accent); cursor: help; }
-.cv__vfy--bad { color: var(--color-warn); }
-.cv__vfy-mark { width: 13px; height: 13px; flex: 0 0 auto; display: block; }
-.cv__vfy-tip { position: absolute; right: 0; bottom: calc(100% + 9px); z-index: 30;
+.sv__vfy--bad { color: var(--color-warn); }
+.sv__vfy-mark { width: 13px; height: 13px; flex: 0 0 auto; display: block; }
+.sv__vfy-tip { position: absolute; right: 0; bottom: calc(100% + 9px); z-index: 30;
   width: max-content; max-width: min(272px, 72vw); padding: 0.55rem 0.65rem;
   background: var(--color-surface); border: 1px solid var(--color-border);
   border-top: 1px solid currentColor; border-radius: var(--radius);
@@ -245,10 +245,10 @@
   letter-spacing: 0; text-transform: none; color: var(--color-text-muted); text-align: left;
   opacity: 0; visibility: hidden; transform: translateY(3px); pointer-events: none;
   transition: opacity .16s ease, transform .16s ease, visibility 0s linear .16s; }
-.cv__vfy:hover .cv__vfy-tip, .cv__vfy:focus-visible .cv__vfy-tip {
+.sv__vfy:hover .sv__vfy-tip, .sv__vfy:focus-visible .sv__vfy-tip {
   opacity: 1; visibility: visible; transform: none; transition-delay: 0s; }
-.cv__vfy:focus-visible { outline: 1px solid currentColor; outline-offset: 3px; }
-@media (prefers-reduced-motion: reduce) { .cv__vfy-tip { transition: none; } }
+.sv__vfy:focus-visible { outline: 1px solid currentColor; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { .sv__vfy-tip { transition: none; } }
 /* The seal is icon-only and pinned to its card's top-right corner in every
    context. A badge that trails a variable-width stance chip lands at a
    different x on every row, so a reader has to hunt for it; pinned, the marks
@@ -257,28 +257,28 @@
    which is why the tooltip was added. --vfy-inset matches the host's padding
    so the mark sits on the card's own content edge; the negative offset is the
    badge's own padding, which grows the pointer target without moving it. */
-.cv__vfy--pin { position: absolute; z-index: 2; padding: 0.34rem;
+.sv__vfy--pin { position: absolute; z-index: 2; padding: 0.34rem;
   top: calc(var(--vfy-inset, 1.15rem) - 0.34rem); right: calc(var(--vfy-inset, 1.15rem) - 0.34rem); }
 /* Pinned at the top edge, the tip opens DOWNWARD: above, it would cover the
    card before it, or leave the viewport entirely on the first row. The seam
    stays on the tip's top edge, still the side facing the mark. */
-.cv__vfy--pin .cv__vfy-tip { top: calc(100% + 7px); bottom: auto; transform: translateY(-3px); }
+.sv__vfy--pin .sv__vfy-tip { top: calc(100% + 7px); bottom: auto; transform: translateY(-3px); }
 /* A failure state must not depend on a hover. A bare ✕ reads as decoration
    until you interrogate it, and hover does not exist on touch — so the mark
    meaning "this signature did not check out" says so in words, while the
    ordinary verified case stays a silent glyph. Labelling ONLY the exception is
    what makes it findable: if every row said "verified", the one row that did
    not would be harder to spot, not easier. */
-.cv__vfy-label { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.08em; white-space: nowrap; }
+.sv__vfy-label { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.08em; white-space: nowrap; }
 /* The pinned badge grows leftward out of the corner when it carries the word,
    so the row under it needs a wider gutter — but only on the cards that fail. */
-.cv__take:has(.cv__vfy--bad) .cv__take-head,
-.cv__take:has(.cv__vfy--bad) .cv__receipt-status,
-.cv__session-card:has(.cv__vfy--bad) .cv__receipt-status { padding-right: 7.5rem; }
+.sv__take:has(.sv__vfy--bad) .sv__take-head,
+.sv__take:has(.sv__vfy--bad) .sv__receipt-status,
+.sv__session-card:has(.sv__vfy--bad) .sv__receipt-status { padding-right: 7.5rem; }
 /* Gutters reserving the pinned corner, so the row that ends nearest it never
    runs underneath the mark. */
-.cv__receipt-status { display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap; padding-right: 1.6rem; }
-.cv__fingerprint { overflow-wrap: anywhere; }
+.sv__receipt-status { display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap; padding-right: 1.6rem; }
+.sv__fingerprint { overflow-wrap: anywhere; }
 .stance { font-family: var(--font-mono); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em; padding: 0.2rem 0.6rem; border-radius: var(--radius); }
 .stance--bullish { color: var(--color-accent); background: rgba(0,229,255,0.1); }
 .stance--constructive { color: var(--color-green); background: rgba(16,185,129,0.1); }
@@ -286,188 +286,188 @@
 .stance--cautious { color: var(--color-warm); background: rgba(232,166,64,0.1); }
 .stance--bearish { color: var(--color-warn); background: rgba(255,102,68,0.1); }
 
-/* committee port: feed, member detail, session detail */
+/* swarm port: feed, member detail, session detail */
 .cv--feed, .cv--detail { padding: 0; }
-.cv__hero { position: relative; min-height: 52vh; display: flex; align-items: center; overflow: hidden; border-bottom: 1px solid var(--color-border); background: var(--color-void); }
-.cv__hero::after { content: ""; position: absolute; inset: auto 0 0; height: 110px; background: linear-gradient(to top, var(--color-void), transparent); pointer-events: none; z-index: 1; }
-.cv__hero-inner { position: relative; z-index: 2; width: min(100%, 80rem); margin: 0 auto; padding: 2.5rem 1.5rem; }
-.cv__hero-field { position: absolute; inset: 0; }
-.cv__hero-field canvas { width: 100% !important; height: 100% !important; }
-.cv__body { width: min(100%, 80rem); margin: 0 auto; padding: 3rem 1.5rem 5rem; }
-.cv__body--narrow { width: min(100%, 54rem); padding-top: 8rem; }
-.cv__lede { max-width: 44rem; margin: 0.75rem 0 0; color: var(--color-text-muted); font-size: 1.05rem; line-height: 1.7; }
-.cv__lede--compact { font-size: 0.95rem; max-width: 42rem; }
-.cv__rail-grid { display: grid; gap: 1.5rem; margin-bottom: 4rem; }
-.cv__rail-grid--compact { margin: 0 0 2rem; }
-.cv__panel { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); }
-.cv__panel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
-.cv__panel-label { margin: 0; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
-.cv__back { display: inline-block; margin-bottom: 2rem; }
-.cv__panel-link, .cv__back, .cv__memo-link { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-accent); text-decoration: none; }
-.cv__panel-link:hover, .cv__back:hover, .cv__memo-link:hover { text-decoration: underline; }
-.cv__list { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; }
-.cv__person-row, .cv__subject-row { display: flex; align-items: flex-start; gap: 0.8rem; min-width: 0; }
-.cv__avatar, .cv__subject-mark { width: 2.5rem; height: 2.5rem; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 0.78rem; font-weight: 700; text-decoration: none; }
+.sv__hero { position: relative; min-height: 52vh; display: flex; align-items: center; overflow: hidden; border-bottom: 1px solid var(--color-border); background: var(--color-void); }
+.sv__hero::after { content: ""; position: absolute; inset: auto 0 0; height: 110px; background: linear-gradient(to top, var(--color-void), transparent); pointer-events: none; z-index: 1; }
+.sv__hero-inner { position: relative; z-index: 2; width: min(100%, 80rem); margin: 0 auto; padding: 2.5rem 1.5rem; }
+.sv__hero-field { position: absolute; inset: 0; }
+.sv__hero-field canvas { width: 100% !important; height: 100% !important; }
+.sv__body { width: min(100%, 80rem); margin: 0 auto; padding: 3rem 1.5rem 5rem; }
+.sv__body--narrow { width: min(100%, 54rem); padding-top: 8rem; }
+.sv__lede { max-width: 44rem; margin: 0.75rem 0 0; color: var(--color-text-muted); font-size: 1.05rem; line-height: 1.7; }
+.sv__lede--compact { font-size: 0.95rem; max-width: 42rem; }
+.sv__rail-grid { display: grid; gap: 1.5rem; margin-bottom: 4rem; }
+.sv__rail-grid--compact { margin: 0 0 2rem; }
+.sv__panel { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); }
+.sv__panel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.sv__panel-label { margin: 0; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
+.sv__back { display: inline-block; margin-bottom: 2rem; }
+.sv__panel-link, .sv__back, .sv__memo-link { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-accent); text-decoration: none; }
+.sv__panel-link:hover, .sv__back:hover, .sv__memo-link:hover { text-decoration: underline; }
+.sv__list { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; }
+.sv__person-row, .sv__subject-row { display: flex; align-items: flex-start; gap: 0.8rem; min-width: 0; }
+.sv__avatar, .sv__subject-mark { width: 2.5rem; height: 2.5rem; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 0.78rem; font-weight: 700; text-decoration: none; }
 /* Identity mark: a square plane, not a disc — the covenant is flat planes and
    radius <= 2px. Beam cyan is a LINE, so it seams the top edge rather than
    filling the plane, and the monogram stays neutral: cyan is never a figure. */
-.cv__avatar { justify-content: center; border-radius: var(--radius); background: var(--color-surface);
+.sv__avatar { justify-content: center; border-radius: var(--radius); background: var(--color-surface);
   color: var(--color-text); border-top: 1px solid var(--color-accent); letter-spacing: 0.06em; }
-.cv__avatar--xl { width: 5rem; height: 5rem; font-size: 1.35rem; border-top-width: 2px; }
-.cv__subject-mark { border-radius: var(--radius); color: var(--color-green); background: rgba(16,185,129,0.08); }
-.cv__row-main { min-width: 0; flex: 1; }
-.cv__row-titleline, .cv__session-titleline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.65rem; min-width: 0; }
-.cv__row-title { color: var(--color-text); font-weight: 700; text-decoration: none; }
-.cv__row-title:hover, .cv__member-link:hover { color: var(--color-accent); }
-.cv__tag { display: inline-flex; align-items: center; border: 1px solid var(--color-border); padding: 0.12rem 0.38rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
-.cv__row-copy, .cv__session-copy, .cv__body-copy { margin: 0.35rem 0 0; color: var(--color-text-muted); line-height: 1.6; font-size: 0.84rem; }
-.cv__mini-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.45rem; }
-.cv__mini-tags span { background: rgba(255,255,255,0.04); color: var(--color-text-dim); font-family: var(--font-mono); font-size: 0.58rem; padding: 0.15rem 0.38rem; }
-.cv__sessions-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 0 0 1rem; }
-.cv__session-count, .cv__date, .cv__session-meta { font-family: var(--font-mono); font-size: 0.74rem; color: var(--color-text-dim); }
-.cv__session-list { display: grid; gap: 0.75rem; }
-.cv__session-list--compact { gap: 0.55rem; }
-.cv__session-card { position: relative; display: block; border: 1px solid var(--color-border); padding: 1.15rem; color: inherit; text-decoration: none; transition: border-color 0.16s ease, background 0.16s ease; }
-.cv__session-card:hover { border-color: var(--color-accent); background: rgba(0,229,255,0.035); }
-.cv__session-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-.cv__session-title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; font-size: 1.08rem; color: var(--color-text); }
-.cv__session-meta { display: flex; flex-wrap: wrap; gap: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; }
-.cv__stance-line { display: flex; flex-wrap: wrap; gap: 0.55rem 0.8rem; margin: 0.65rem 0 0; }
-.cv__stance-dotline { display: inline-flex; align-items: center; gap: 0.32rem; font-family: var(--font-mono); font-size: 0.66rem; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
-/* .cv__dis-stance was rendering its dot at 0x0: the stance spread added to the
+.sv__avatar--xl { width: 5rem; height: 5rem; font-size: 1.35rem; border-top-width: 2px; }
+.sv__subject-mark { border-radius: var(--radius); color: var(--color-green); background: rgba(16,185,129,0.08); }
+.sv__row-main { min-width: 0; flex: 1; }
+.sv__row-titleline, .sv__session-titleline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.65rem; min-width: 0; }
+.sv__row-title { color: var(--color-text); font-weight: 700; text-decoration: none; }
+.sv__row-title:hover, .sv__member-link:hover { color: var(--color-accent); }
+.sv__tag { display: inline-flex; align-items: center; border: 1px solid var(--color-border); padding: 0.12rem 0.38rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
+.sv__row-copy, .sv__session-copy, .sv__body-copy { margin: 0.35rem 0 0; color: var(--color-text-muted); line-height: 1.6; font-size: 0.84rem; }
+.sv__mini-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.45rem; }
+.sv__mini-tags span { background: rgba(255,255,255,0.04); color: var(--color-text-dim); font-family: var(--font-mono); font-size: 0.58rem; padding: 0.15rem 0.38rem; }
+.sv__sessions-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 0 0 1rem; }
+.sv__session-count, .sv__date, .sv__session-meta { font-family: var(--font-mono); font-size: 0.74rem; color: var(--color-text-dim); }
+.sv__session-list { display: grid; gap: 0.75rem; }
+.sv__session-list--compact { gap: 0.55rem; }
+.sv__session-card { position: relative; display: block; border: 1px solid var(--color-border); padding: 1.15rem; color: inherit; text-decoration: none; transition: border-color 0.16s ease, background 0.16s ease; }
+.sv__session-card:hover { border-color: var(--color-accent); background: rgba(0,229,255,0.035); }
+.sv__session-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.sv__session-title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; font-size: 1.08rem; color: var(--color-text); }
+.sv__session-meta { display: flex; flex-wrap: wrap; gap: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.sv__stance-line { display: flex; flex-wrap: wrap; gap: 0.55rem 0.8rem; margin: 0.65rem 0 0; }
+.sv__stance-dotline { display: inline-flex; align-items: center; gap: 0.32rem; font-family: var(--font-mono); font-size: 0.66rem; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+/* .sv__dis-stance was rendering its dot at 0x0: the stance spread added to the
    Disagreements panel reused the badge markup but not the badge class, so it
    never picked up a size. An invisible dot is worse than none, because the
    colour is the only thing distinguishing two members' positions there. */
-.cv__stance-dotline i, .cv__stance-chip i, .cv__stance-badge i, .cv__dis-stance i { width: 0.42rem; height: 0.42rem; border-radius: 50%; display: inline-block; }
-.cv__profile-head { display: flex; align-items: flex-start; gap: 1.25rem; flex-wrap: wrap; margin: 1.5rem 0 2.5rem; }
-.cv__profile-main { flex: 1; min-width: 16rem; }
-.cv__detail-head { margin: 1.5rem 0 2.5rem; }
-.cv__detail-title { margin: 0.35rem 0 0; font-family: var(--font-display); text-transform: uppercase; font-size: clamp(2.2rem, 5vw, 3.6rem); line-height: 1.08; font-weight: 700; letter-spacing: -0.01em; }
-.cv__fact-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.15rem; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
-.cv__meta-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.45rem 1.4rem; margin: 0.9rem 0 0; font-family: var(--font-mono); font-size: 0.78rem; }
-.cv__meta-grid dt { color: var(--color-text-muted); }
-.cv__meta-grid dd { margin: 0; color: var(--color-text); overflow-wrap: anywhere; }
+.sv__stance-dotline i, .sv__stance-chip i, .sv__stance-badge i, .sv__dis-stance i { width: 0.42rem; height: 0.42rem; border-radius: 50%; display: inline-block; }
+.sv__profile-head { display: flex; align-items: flex-start; gap: 1.25rem; flex-wrap: wrap; margin: 1.5rem 0 2.5rem; }
+.sv__profile-main { flex: 1; min-width: 16rem; }
+.sv__detail-head { margin: 1.5rem 0 2.5rem; }
+.sv__detail-title { margin: 0.35rem 0 0; font-family: var(--font-display); text-transform: uppercase; font-size: clamp(2.2rem, 5vw, 3.6rem); line-height: 1.08; font-weight: 700; letter-spacing: -0.01em; }
+.sv__fact-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.15rem; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
+.sv__meta-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.45rem 1.4rem; margin: 0.9rem 0 0; font-family: var(--font-mono); font-size: 0.78rem; }
+.sv__meta-grid dt { color: var(--color-text-muted); }
+.sv__meta-grid dd { margin: 0; color: var(--color-text); overflow-wrap: anywhere; }
 /* The signer's name was falling through to the browser's default link colours
    — a purple :visited link on the receipt, off the palette entirely. */
-.cv__meta-grid dd a { color: var(--color-accent); text-decoration: none; }
-.cv__meta-grid dd a:hover { text-decoration: underline; }
-.cv__bullet-list { margin: 0.8rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.35rem; }
-.cv__bullet-list li { color: var(--color-text-muted); font-size: 0.88rem; }
-.cv__bullet-list li::before { content: "· "; color: var(--color-text-dim); }
-.cv__discussion { display: grid; grid-template-columns: 1fr; gap: 1rem; margin: 1.5rem 0 2rem; }
+.sv__meta-grid dd a { color: var(--color-accent); text-decoration: none; }
+.sv__meta-grid dd a:hover { text-decoration: underline; }
+.sv__bullet-list { margin: 0.8rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.35rem; }
+.sv__bullet-list li { color: var(--color-text-muted); font-size: 0.88rem; }
+.sv__bullet-list li::before { content: "· "; color: var(--color-text-dim); }
+.sv__discussion { display: grid; grid-template-columns: 1fr; gap: 1rem; margin: 1.5rem 0 2rem; }
 /* Market backdrop. One panel, not two: the old "Brief" half held a single
    derived sentence restating the <h1> and a backdrop chip. A note says what
    the section IS — neither old heading did, and a reader had no way to tell
-   whether this was the committee's reading or the input they were handed. */
-.cv__backdrop { margin: 1.5rem 0 2rem; }
-.cv__panel-note { margin: 0.55rem 0 0; max-width: 46rem; color: var(--color-text-muted); font-size: 0.85rem; line-height: 1.6; }
-.cv__backdrop-grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem 2.5rem; margin-top: 0.4rem; }
-.cv__metric-line { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-top: 0.8rem; font-family: var(--font-mono); color: var(--color-text-muted); }
-.cv__metric-line b { color: var(--color-text); font-size: 1.4rem; }
-.cv__bar, .cv__panel-bar div { height: 0.45rem; background: rgba(255,255,255,0.06); border: 1px solid var(--color-border); overflow: hidden; }
-.cv__bar i, .cv__panel-bar i { display: block; height: 100%; background: var(--color-green); }
-.cv__sparkline { margin-top: 1rem; height: 4.25rem; }
-.cv__sparkline svg { width: 100%; height: 100%; display: block; }
-.cv__panel-sub { margin: 1rem 0 0.4rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-text-muted); }
-.cv__panel-divergence { overflow-x: auto; }
-.cv__panel-divergence svg { width: 100%; max-width: 17rem; height: auto; display: block; }
-.cv__bucket-bars-svg { overflow-x: auto; }
-.cv__bucket-bars-svg svg { width: 100%; min-width: 22rem; max-width: 34rem; height: auto; display: block; }
-.cv__panel-bars { display: grid; gap: 0.55rem; margin-top: 1rem; }
-.cv__panel-bar { display: grid; grid-template-columns: 4.8rem 1fr 2.5rem; gap: 0.65rem; align-items: center; font-family: var(--font-mono); font-size: 0.68rem; color: var(--color-text-muted); }
-.cv__panel-bar b { color: var(--color-text); text-align: right; }
-.cv__portfolio, .cv__recommendation { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); margin-bottom: 2rem; }
-.cv__portfolio-grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem; margin: 1.5rem 0; align-items: start; }
-.cv__donut-list { display: grid; gap: 0.55rem; }
-.cv__donut-row { display: grid; grid-template-columns: 2.5rem 1fr auto; gap: 0.6rem; align-items: center; font-family: var(--font-mono); font-size: 0.72rem; color: var(--color-text-muted); }
-.cv__donut-row i { width: 2.1rem; height: 2.1rem; border-radius: 50%; background: conic-gradient(var(--c) calc(var(--p) * 1%), rgba(255,255,255,0.06) 0); border: 1px solid var(--color-border); position: relative; }
-.cv__donut-row i::after { content: ""; position: absolute; inset: 0.42rem; border-radius: 50%; background: var(--color-void); }
-.cv__donut-row span { color: var(--color-text); }
-.cv__donut-row b { color: var(--color-text-dim); font-weight: 500; }
-.cv__table-wrap { overflow-x: auto; }
-.cv__data-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.72rem; }
-.cv__data-table th { color: var(--color-text-dim); text-align: left; font-weight: 400; padding: 0.35rem 0.55rem; border-bottom: 1px solid var(--color-border); }
-.cv__data-table td { padding: 0.45rem 0.55rem; border-bottom: 1px solid rgba(255,255,255,0.06); color: var(--color-text-muted); text-align: left; }
-.cv__data-table td:first-child { color: var(--color-text); }
-.cv__num { text-align: right !important; }
-.cv__notables { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
-.cv__notables ul { margin: 0.75rem 0 0; padding-left: 1rem; color: var(--color-text-muted); font-size: 0.82rem; line-height: 1.55; }
-.cv__stance-chip { display: inline-flex; align-items: center; gap: 0.35rem; }
-.cv__rich-rec { display: grid; gap: 1rem; }
-.cv__rec-actions { display: grid; gap: 0.5rem; }
-.cv__action-row { display: grid; grid-template-columns: 7rem 5rem 1fr; gap: 0.75rem; align-items: start; border-top: 1px solid var(--color-border); padding-top: 0.65rem; font-size: 0.82rem; }
-.cv__action-row span, .cv__action-row b { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; }
-.cv__action-row b { color: var(--color-text); }
-.cv__action-row p { margin: 0; color: var(--color-text-muted); line-height: 1.5; }
+   whether this was the swarm's reading or the input they were handed. */
+.sv__backdrop { margin: 1.5rem 0 2rem; }
+.sv__panel-note { margin: 0.55rem 0 0; max-width: 46rem; color: var(--color-text-muted); font-size: 0.85rem; line-height: 1.6; }
+.sv__backdrop-grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem 2.5rem; margin-top: 0.4rem; }
+.sv__metric-line { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-top: 0.8rem; font-family: var(--font-mono); color: var(--color-text-muted); }
+.sv__metric-line b { color: var(--color-text); font-size: 1.4rem; }
+.sv__bar, .sv__panel-bar div { height: 0.45rem; background: rgba(255,255,255,0.06); border: 1px solid var(--color-border); overflow: hidden; }
+.sv__bar i, .sv__panel-bar i { display: block; height: 100%; background: var(--color-green); }
+.sv__sparkline { margin-top: 1rem; height: 4.25rem; }
+.sv__sparkline svg { width: 100%; height: 100%; display: block; }
+.sv__panel-sub { margin: 1rem 0 0.4rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-text-muted); }
+.sv__panel-divergence { overflow-x: auto; }
+.sv__panel-divergence svg { width: 100%; max-width: 17rem; height: auto; display: block; }
+.sv__bucket-bars-svg { overflow-x: auto; }
+.sv__bucket-bars-svg svg { width: 100%; min-width: 22rem; max-width: 34rem; height: auto; display: block; }
+.sv__panel-bars { display: grid; gap: 0.55rem; margin-top: 1rem; }
+.sv__panel-bar { display: grid; grid-template-columns: 4.8rem 1fr 2.5rem; gap: 0.65rem; align-items: center; font-family: var(--font-mono); font-size: 0.68rem; color: var(--color-text-muted); }
+.sv__panel-bar b { color: var(--color-text); text-align: right; }
+.sv__portfolio, .sv__recommendation { border: 1px solid var(--color-border); padding: 1.25rem; background: rgba(255,255,255,0.015); margin-bottom: 2rem; }
+.sv__portfolio-grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem; margin: 1.5rem 0; align-items: start; }
+.sv__donut-list { display: grid; gap: 0.55rem; }
+.sv__donut-row { display: grid; grid-template-columns: 2.5rem 1fr auto; gap: 0.6rem; align-items: center; font-family: var(--font-mono); font-size: 0.72rem; color: var(--color-text-muted); }
+.sv__donut-row i { width: 2.1rem; height: 2.1rem; border-radius: 50%; background: conic-gradient(var(--c) calc(var(--p) * 1%), rgba(255,255,255,0.06) 0); border: 1px solid var(--color-border); position: relative; }
+.sv__donut-row i::after { content: ""; position: absolute; inset: 0.42rem; border-radius: 50%; background: var(--color-void); }
+.sv__donut-row span { color: var(--color-text); }
+.sv__donut-row b { color: var(--color-text-dim); font-weight: 500; }
+.sv__table-wrap { overflow-x: auto; }
+.sv__data-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.72rem; }
+.sv__data-table th { color: var(--color-text-dim); text-align: left; font-weight: 400; padding: 0.35rem 0.55rem; border-bottom: 1px solid var(--color-border); }
+.sv__data-table td { padding: 0.45rem 0.55rem; border-bottom: 1px solid rgba(255,255,255,0.06); color: var(--color-text-muted); text-align: left; }
+.sv__data-table td:first-child { color: var(--color-text); }
+.sv__num { text-align: right !important; }
+.sv__notables { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
+.sv__notables ul { margin: 0.75rem 0 0; padding-left: 1rem; color: var(--color-text-muted); font-size: 0.82rem; line-height: 1.55; }
+.sv__stance-chip { display: inline-flex; align-items: center; gap: 0.35rem; }
+.sv__rich-rec { display: grid; gap: 1rem; }
+.sv__rec-actions { display: grid; gap: 0.5rem; }
+.sv__action-row { display: grid; grid-template-columns: 7rem 5rem 1fr; gap: 0.75rem; align-items: start; border-top: 1px solid var(--color-border); padding-top: 0.65rem; font-size: 0.82rem; }
+.sv__action-row span, .sv__action-row b { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; }
+.sv__action-row b { color: var(--color-text); }
+.sv__action-row p { margin: 0; color: var(--color-text-muted); line-height: 1.5; }
 /* Cyan seams the top edge instead of washing the whole plane: the covenant
    makes cyan a LINE, never a mass, and a tinted field is a mass. */
-.cv__panel--accent { border-color: var(--color-border); border-top-color: var(--color-accent); }
-.cv__dis-pos { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; min-width: 0; }
-.cv__dis-stance { display: inline-flex; align-items: center; gap: 0.35rem; }
-.cv__dis-read { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
+.sv__panel--accent { border-color: var(--color-border); border-top-color: var(--color-accent); }
+.sv__dis-pos { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; min-width: 0; }
+.sv__dis-stance { display: inline-flex; align-items: center; gap: 0.35rem; }
+.sv__dis-read { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
   color: var(--color-accent) !important; text-transform: none !important; }
-.cv__disagreements { display: grid; gap: 1rem; margin-top: 1rem; }
-.cv__disagreement h3 { margin: 0 0 0.5rem; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text); }
-.cv__disagreement ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.5rem; }
-.cv__disagreement li { display: grid; grid-template-columns: 6.5rem 1fr; gap: 0.75rem; color: var(--color-text-muted); font-size: 0.78rem; line-height: 1.55; }
-.cv__disagreement a { color: var(--color-text); text-decoration: none; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem; }
-.cv__disagreement a:hover { color: var(--color-accent); }
-.cv__disagreement p { margin: 0.65rem 0 0; color: var(--color-text-dim); font-size: 0.78rem; line-height: 1.55; }
-.cv__takes-section { margin-top: 2rem; }
-.cv__takes--ported { margin-top: 1rem; gap: 1rem; }
-.cv__take--ported { background: transparent; padding: 1.35rem; --vfy-inset: 1.35rem; }
-.cv__take-member { display: flex; align-items: center; gap: 0.8rem; }
-.cv__member-link { color: var(--color-text); text-decoration: none; font-family: var(--font-sans); font-weight: 700; font-size: 1.15rem; }
-.cv__take-lens { margin-top: 0.15rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
-.cv__stance-badge { display: inline-flex; align-items: center; gap: 0.42rem; border: 1px solid; padding: 0.18rem 0.5rem; font-family: var(--font-mono); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.1em; }
-.cv__take-body { margin: 1rem 0 0; color: var(--color-text); line-height: 1.7; font-size: 0.9rem; }
-.cv__take-body p { margin: 0 0 0.9rem; }
-.cv__take-body ul { margin: 0.25rem 0 1rem; padding-left: 1.2rem; }
-.cv__take-body li { margin: 0.25rem 0; }
-.cv__take-body li::marker { color: var(--color-text-dim); }
+.sv__disagreements { display: grid; gap: 1rem; margin-top: 1rem; }
+.sv__disagreement h3 { margin: 0 0 0.5rem; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text); }
+.sv__disagreement ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.5rem; }
+.sv__disagreement li { display: grid; grid-template-columns: 6.5rem 1fr; gap: 0.75rem; color: var(--color-text-muted); font-size: 0.78rem; line-height: 1.55; }
+.sv__disagreement a { color: var(--color-text); text-decoration: none; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem; }
+.sv__disagreement a:hover { color: var(--color-accent); }
+.sv__disagreement p { margin: 0.65rem 0 0; color: var(--color-text-dim); font-size: 0.78rem; line-height: 1.55; }
+.sv__takes-section { margin-top: 2rem; }
+.sv__takes--ported { margin-top: 1rem; gap: 1rem; }
+.sv__take--ported { background: transparent; padding: 1.35rem; --vfy-inset: 1.35rem; }
+.sv__take-member { display: flex; align-items: center; gap: 0.8rem; }
+.sv__member-link { color: var(--color-text); text-decoration: none; font-family: var(--font-sans); font-weight: 700; font-size: 1.15rem; }
+.sv__take-lens { margin-top: 0.15rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text-dim); }
+.sv__stance-badge { display: inline-flex; align-items: center; gap: 0.42rem; border: 1px solid; padding: 0.18rem 0.5rem; font-family: var(--font-mono); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.1em; }
+.sv__take-body { margin: 1rem 0 0; color: var(--color-text); line-height: 1.7; font-size: 0.9rem; }
+.sv__take-body p { margin: 0 0 0.9rem; }
+.sv__take-body ul { margin: 0.25rem 0 1rem; padding-left: 1.2rem; }
+.sv__take-body li { margin: 0.25rem 0; }
+.sv__take-body li::marker { color: var(--color-text-dim); }
 /* Section heading inside a rendered take ("REGIME", "ALLOCATION", "SUBJECT").
    A label, not a title: mono, small, tracked — so it separates the sections
    without competing with the page's own headings. Global, because take bodies
    render on the member, session, and permalink pages alike. */
-.cv__take-h { margin: 1.15rem 0 0.4rem; font-family: var(--font-mono); font-size: 0.64rem;
+.sv__take-h { margin: 1.15rem 0 0.4rem; font-family: var(--font-mono); font-size: 0.64rem;
   font-weight: 700; text-transform: uppercase; letter-spacing: 0.16em; color: var(--color-text-muted); }
-.cv__take-h:first-child { margin-top: 0; }
-.cv__take-body strong { color: var(--color-text); font-weight: 700; }
-.cv__take-body a, .cv__synthesis a { color: var(--color-accent); }
-.cv__synthesis { margin-top: 2rem; border-left: 2px solid var(--color-accent); padding-left: 1.4rem; }
-.cv__synthesis div { margin: 0.75rem 0 0; color: var(--color-text); font-family: var(--font-sans); line-height: 1.75; font-size: 1.05rem; }
-.cv__synthesis p { margin: 0 0 0.75rem; }
+.sv__take-h:first-child { margin-top: 0; }
+.sv__take-body strong { color: var(--color-text); font-weight: 700; }
+.sv__take-body a, .sv__synthesis a { color: var(--color-accent); }
+.sv__synthesis { margin-top: 2rem; border-left: 2px solid var(--color-accent); padding-left: 1.4rem; }
+.sv__synthesis div { margin: 0.75rem 0 0; color: var(--color-text); font-family: var(--font-sans); line-height: 1.75; font-size: 1.05rem; }
+.sv__synthesis p { margin: 0 0 0.75rem; }
 @media (max-width: 720px) {
-  .cv__body--narrow { padding-top: 6.5rem; }
-  .cv__session-top, .cv__take-head { align-items: flex-start; }
-  .cv__action-row { grid-template-columns: 1fr; }
-  .cv__disagreement li { grid-template-columns: 1fr; gap: 0.2rem; }
-  .cv__panel-bar { grid-template-columns: 4.5rem 1fr; }
-  .cv__panel-bar b { display: none; }
+  .sv__body--narrow { padding-top: 6.5rem; }
+  .sv__session-top, .sv__take-head { align-items: flex-start; }
+  .sv__action-row { grid-template-columns: 1fr; }
+  .sv__disagreement li { grid-template-columns: 1fr; gap: 0.2rem; }
+  .sv__panel-bar { grid-template-columns: 4.5rem 1fr; }
+  .sv__panel-bar b { display: none; }
 }
 
-/* committee application form (/committee/apply) */
-.cv__form { display: flex; flex-direction: column; gap: 1.25rem; max-width: 32rem; margin-top: 2rem; }
-.cv__field { display: flex; flex-direction: column; gap: 0.4rem; }
-.cv__input {
+/* swarm application form (/swarm/apply) */
+.sv__form { display: flex; flex-direction: column; gap: 1.25rem; max-width: 32rem; margin-top: 2rem; }
+.sv__field { display: flex; flex-direction: column; gap: 0.4rem; }
+.sv__input {
   background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius);
   color: var(--color-text); font-family: var(--font-sans); font-size: 0.9rem; padding: 0.65rem 0.8rem;
 }
-.cv__input:focus { outline: none; border-color: var(--color-accent); }
-.cv__textarea { resize: vertical; min-height: 4rem; font-family: var(--font-sans); }
-.cv__submit {
+.sv__input:focus { outline: none; border-color: var(--color-accent); }
+.sv__textarea { resize: vertical; min-height: 4rem; font-family: var(--font-sans); }
+.sv__submit {
   align-self: flex-start; cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem;
   text-transform: uppercase; letter-spacing: 0.1em; padding: 0.6rem 1.4rem; border-radius: var(--radius);
   color: var(--color-bg); background: var(--color-accent); border: none;
 }
-.cv__submit:disabled { opacity: 0.5; cursor: default; }
-.cv__applied { flex-direction: column; align-items: flex-start; }
+.sv__submit:disabled { opacity: 0.5; cursor: default; }
+.sv__applied { flex-direction: column; align-items: flex-start; }
 
-/* The application-status checklist that lived here (.cv__steps/.cv__step-dot)
+/* The application-status checklist that lived here (.sv__steps/.sv__step-dot)
    is gone. It filled its "done" dots with Beam cyan, which put a cyan mass
    behind a figure, and on a finished application all three read identically.
    Its replacement is the numbered, dated .ap-steps in the page's own
-   <style> (frontend/public/views/committee/apply-status.html) — that page was
+   <style> (frontend/public/views/swarm/apply-status.html) — that page was
    the only consumer, so this set had no other callers. */
 
 @media (min-width: 768px) {
@@ -477,16 +477,16 @@
   .rv__panels { grid-template-columns: repeat(3, 1fr); }
   .rv__panels.rv--cols2 { grid-template-columns: repeat(2, 1fr); }
   .rv__panels.rv--cols3 { grid-template-columns: repeat(3, 1fr); }
-  .cv__rail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .cv__backdrop-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  /* .cv__discussion stays single-column at every width. Consensus and
+  .sv__rail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sv__backdrop-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  /* .sv__discussion stays single-column at every width. Consensus and
      Disagreements are different KINDS of claim about the session, not a pair to
      compare side by side, and they are wildly unequal in length — two columns
      forced a ragged bottom and implied they carry equal weight. Now that echoed
      prose is suppressed, Consensus is often empty too, which left a lone
      column stranded in half the grid. They read as a sequence. */
-  .cv__portfolio-grid { grid-template-columns: 0.75fr 1.25fr; }
-  .cv__metadata-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sv__portfolio-grid { grid-template-columns: 0.75fr 1.25fr; }
+  .sv__metadata-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* research signals (/research/*) */
@@ -625,11 +625,11 @@
 }
 .adm-log--err { color: var(--color-warn); border-color: rgba(255, 102, 68, 0.3); }
 
-/* ── Admin surface (#157 + #155) + committee operations (#159): section nav,
+/* ── Admin surface (#157 + #155) + swarm operations (#159): section nav,
    alerts, filters, stage timeline, artifact previews, schedule toggle, audit
    log, tabs, mutation forms/modals, and detail grids layered onto the /admin
    shell above. Both features share these same .adm-* primitives (the
-   committee nav/forms/tabs render on their own routes but reuse this one
+   swarm nav/forms/tabs render on their own routes but reuse this one
    rule set) — kept as a SINGLE definition per selector; do not reintroduce a
    second same-selector block here, since a duplicate leaks orphan
    properties into whichever cascades last (see #80/PR#81). */
@@ -658,7 +658,7 @@
   color: var(--color-text); background: var(--color-deep); border: 1px solid var(--color-border); border-radius: var(--radius); }
 .adm-filters .adm-input { flex: 0 1 10rem; }
 /* Single definition (see the header note above) — shared by both the queue/
-   research filter forms and the committee create/edit/confirm forms. */
+   research filter forms and the swarm create/edit/confirm forms. */
 .adm-field { display: flex; flex-direction: column; gap: 0.3rem; font-family: var(--font-mono); font-size: 0.72rem; color: var(--color-text-muted); }
 .adm-pager { display: flex; gap: 0.5rem; margin: 0.75rem 0; }
 
@@ -709,15 +709,15 @@
 /* Within-bucket weights. The bucket bars say how much goes to each bucket; this
    says what is inside them. Rows are a name and a number, tabular so the column
    of percentages reads down. No fills: the figure is the point, not a bar. */
-.cv__within { margin-top: 1rem; }
-.cv__within-bucket { margin-top: 0.75rem; }
-.cv__within-name { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em;
+.sv__within { margin-top: 1rem; }
+.sv__within-bucket { margin-top: 0.75rem; }
+.sv__within-name { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em;
                    text-transform: uppercase; color: var(--color-text-dim); margin: 0 0 0.35rem; }
-.cv__within-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px;
+.sv__within-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px;
                    background: var(--color-border); border: 1px solid var(--color-border); }
-.cv__within-list li { display: flex; justify-content: space-between; align-items: baseline;
+.sv__within-list li { display: flex; justify-content: space-between; align-items: baseline;
                       gap: 1rem; background: var(--color-surface); padding: 0.4rem 0.65rem;
                       font-size: 0.85rem; color: var(--color-text-muted); }
-.cv__within-list b { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+.sv__within-list b { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
                      color: var(--color-text); font-weight: 600; }
-@media (min-width: 640px) { .cv__within-list { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 640px) { .sv__within-list { grid-template-columns: 1fr 1fr; } }

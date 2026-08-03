@@ -36,7 +36,7 @@
 // PRECISION IS PREFERRED OVER RECALL, on purpose. A missed refusal costs one
 // retry. A FALSE refusal would silently retry away a genuine navigation failure
 // and weaken a required gate — the expensive error. Bare `refuse`/`decline` is
-// deliberately not a pattern: "the committee may refuse an application" matches
+// deliberately not a pattern: "the swarm may refuse an application" matches
 // nothing here. Every classification is logged with an excerpt of the final
 // message by its callers, so a misclassification is diagnosable from CI logs
 // rather than invisible.
@@ -54,7 +54,7 @@ export type OnboardingOutcome =
 // The layer-4 sweep of 2026-07-27 reported an admission rate of 0.20 with four
 // samples classified `timed-out`. One of those four had in fact been stopped by
 // the HARNESS: the agent cloned robotmoney-core, walked to
-// plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md, and every
+// plugins/robotmoney-swarm/skills/swarm-onboarding/SKILL.md, and every
 // attempt to READ a file in that clone was rejected by a permission rule the
 // harness's own generated opencode.json leaves in place. A run the harness
 // prevented from doing the task says nothing about whether the task is

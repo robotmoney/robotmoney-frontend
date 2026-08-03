@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { runRegimeClassify, type ProducerComposeRail } from "../../lib/committee/session.ts";
+import { runRegimeClassify, type ProducerComposeRail } from "../../lib/swarm/session.ts";
 
 test("regime producer uses the caller's explicit stack coordinates", async () => {
   const rail: ProducerComposeRail = {

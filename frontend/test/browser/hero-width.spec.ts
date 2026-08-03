@@ -3,7 +3,7 @@
 // width-constrained content containers (max-width 1100px/1000px/840px), which
 // clipped each hero's background/canvas art to the container instead of the
 // full-bleed pattern already used on home/performance/allocation/media/regime/
-// committee (width:100vw with negative margins to escape the container, while
+// swarm (width:100vw with negative margins to escape the container, while
 // inner text keeps its own max-width). This spec pins that fix:
 //   - the hero element spans the full viewport width, flush to the left edge;
 //   - the hero title stays within the page's content max-width, proving the

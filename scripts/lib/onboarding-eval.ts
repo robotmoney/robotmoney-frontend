@@ -7,8 +7,8 @@
 // then OBSERVES ONLY: this module never applies, signs, claims, or connects on
 // the member's behalf. Everything from "install the skill" onward is the
 // containerized agent's own real inference, working out §11.2 from the prompt
-// + the installed committee-onboarding skill — exactly what a real prospective
-// member's own agent would have to do (D21: over the committee REST API).
+// + the installed swarm-onboarding skill — exactly what a real prospective
+// member's own agent would have to do (D21: over the swarm REST API).
 //
 // Real inference is the DEFAULT mode here, never an optional extra. The model
 // is whatever AGENT_MODEL resolves to against ./model-registry.ts — by default
@@ -29,11 +29,11 @@
 //
 // ── Observe-only design, and its known coarseness ───────────────────────────
 // The only two things this harness watches from OUTSIDE the container are:
-//   (a) GET /api/committee/admin/members (admin) — to find the member row the
+//   (a) GET /api/swarm/admin/members (admin) — to find the member row the
 //       SERVER minted for this run's generated identity, matched by the
 //       contact email this module generated and injected (the server mints
 //       the id, never this harness — §11 R2); and
-//   (b) GET /api/committee/apply/:id + GET /api/committee/members (public) —
+//   (b) GET /api/swarm/apply/:id + GET /api/swarm/members (public) —
 //       once the id is known, to track applied → approved → claimed → on the
 //       active roster.
 // Nothing observable distinguishes "connect" from "discover" from "toolchain"
@@ -57,18 +57,18 @@
 //     because operators paste it verbatim and "<display name>" then reaches the
 //     server as a real application), and a headless container has no owner to
 //     ask, so the note answers the question the prompt raised;
-//   - the committee REST API base URL for this run (the prompt's doc link is a
+//   - the swarm REST API base URL for this run (the prompt's doc link is a
 //     production host this ephemeral demo stack cannot serve; a real human, per
-//     the real docs, would be applying against committee.robotmoney.net);
+//     the real docs, would be applying against swarm.robotmoney.net);
 //   - the keystore passphrase, exported into the container's environment
-//     (KEYSTORE_PASSPHRASE_ENV) — the repo-owned committee-onboarding skill
+//     (KEYSTORE_PASSPHRASE_ENV) — the repo-owned swarm-onboarding skill
 //     tells the agent to ask its owner for exactly this and to WAIT for them,
 //     which is unanswerable in a headless container;
 //   - a vanilla, non-hostile permission set and the real auto-approve flag
 //     (scripts/agent/member-agent.ts), so the eval measures our instructions
 //     rather than our own sandbox refusing the agent's tool calls.
 //
-// Discovering WHAT to do — installing the committee-onboarding skill,
+// Discovering WHAT to do — installing the swarm-onboarding skill,
 // installing rmpc, generating keys, signing, submitting the signed apply over
 // REST, waiting, claiming — is still 100% the agent's own real inference. No
 // harness-supplied string names a tool, an endpoint, a payload shape or a step
@@ -136,12 +136,12 @@ export type { ClassifiableRun, HarnessFault, OnboardingOutcome, OutcomeBranch, O
 import type { HarnessFault, OnboardingOutcome, OutcomeBranch, TranscriptLiveness } from "../agent/classify-outcome.ts";
 import { explainOutcome } from "../agent/classify-outcome.ts";
 export { assistantTextParts, extractAssistantText, finalAssistantText } from "../agent/transcript.ts";
-// The committee REST API the member-agent container reaches over the compose
+// The swarm REST API the member-agent container reaches over the compose
 // network — the `api` service on its internal port. D21 retired the `mcp`
-// service; the agent applies over this REST surface (POST /api/committee/apply)
-// directly, following the committee-onboarding skill.
+// service; the agent applies over this REST surface (POST /api/swarm/apply)
+// directly, following the swarm-onboarding skill.
 export const DEFAULT_API_URL_INTERNAL = "http://api:8787";
-export const LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH = "/skills/committee-onboarding/SKILL.md";
+export const LOCAL_SWARM_ONBOARDING_SKILL_PATH = "/skills/swarm-onboarding/SKILL.md";
 // Live-verified via a real GitHub Actions e2e run: a vanilla agent doing
 // genuine reasoning (fetching docs, downloading rmpc, generating a key, and
 // — when the linked skill's payload description wasn't quite enough —
@@ -164,7 +164,7 @@ export const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 export const DEFAULT_POLL_INTERVAL_MS = 3_000;
 export const DEFAULT_AUTO_APPROVE_DELAY_MS = 10_000; // §11 R7
 // The env var `rmpc` reads its keystore passphrase from — the ONE secret the
-// repo-owned committee-onboarding skill tells the agent to have its human owner
+// repo-owned swarm-onboarding skill tells the agent to have its human owner
 // export before launching it. The harness plays the owner here (see
 // demoHarnessNote); it is not a hint about what the agent should do with it.
 // Same name scripts/rmpc-release-e2e.ts and the rails check already use.
@@ -199,12 +199,12 @@ export function generateIdentity(runId: string = crypto.randomUUID().slice(0, 8)
 //     identity, so the harness answers that question here instead of rewriting
 //     the canonical text — which is what keeps this an eval of the real prompt
 //     rather than of a harness-only variant;
-//  2. the committee API base URL — the ephemeral demo stack cannot serve the
+//  2. the swarm API base URL — the ephemeral demo stack cannot serve the
 //     production host the docs name;
 //  3. that the owner has already put the secrets they'd otherwise be asked to
 //     type into the session's environment.
 //
-// (3) is not a convenience. The repo-owned committee-onboarding skill tells the
+// (3) is not a convenience. The repo-owned swarm-onboarding skill tells the
 // agent, in as many words, to ask its owner to export the keystore passphrase
 // and to *wait* for them ("Tell me once it's set"), and forbids accepting the
 // value in conversation. A headless eval container has no owner to answer, so
@@ -223,7 +223,7 @@ function demoHarnessNote(identity: OnboardingIdentity, apiBaseUrl: string): stri
     `- Apply as "${identity.name}" with contact email ${identity.contact}. The ` +
     "instructions above tell you to ask for these; this run is unattended, so " +
     "take them from here rather than waiting for a reply.\n" +
-    `- The Robot Money committee REST API for this run is reachable at ${apiBaseUrl} ` +
+    `- The Robot Money swarm REST API for this run is reachable at ${apiBaseUrl} ` +
     "over this local demo network. Apply against that base URL instead of the " +
     "production host in the docs, which this ephemeral demo stack does not serve.\n" +
     "- Your owner is not at the keyboard for this session and cannot answer " +
@@ -238,7 +238,7 @@ function demoHarnessNote(identity: OnboardingIdentity, apiBaseUrl: string): stri
 // URL in ONBOARDING_PROMPT; the eval changes only that URL so the agent fetches
 // the repo-owned skill from the same API container it is already evaluating.
 export function buildEvalOnboardingPrompt(apiBaseUrl: string = DEFAULT_API_URL_INTERNAL): string {
-  const localSkillUrl = `${apiBaseUrl.replace(/\/+$/, "")}${LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH}`;
+  const localSkillUrl = `${apiBaseUrl.replace(/\/+$/, "")}${LOCAL_SWARM_ONBOARDING_SKILL_PATH}`;
   return buildOnboardingPrompt(localSkillUrl);
 }
 
@@ -334,8 +334,8 @@ export function isFullyOnboarded(observed: ObservedApplication & { claimedAt: st
 
 // ── External observation (public status route + admin roster) ───────────────
 async function findMemberIdByContact(backendUrl: string, adminToken: string, contact: string): Promise<string | null> {
-  const res = await fetch(`${backendUrl}${ROUTES.committee.admin.members}`, { headers: { "X-Admin-Token": adminToken } });
-  if (!res.ok) throw new Error(`GET ${ROUTES.committee.admin.members} -> ${res.status}`);
+  const res = await fetch(`${backendUrl}${ROUTES.swarm.admin.members}`, { headers: { "X-Admin-Token": adminToken } });
+  if (!res.ok) throw new Error(`GET ${ROUTES.swarm.admin.members} -> ${res.status}`);
   const body = (await res.json()) as { members: Array<{ id: string; contactEmail: string | null }> };
   return body.members.find((m) => m.contactEmail === contact)?.id ?? null;
 }
@@ -346,7 +346,7 @@ interface ApplyStatusObservation {
 }
 
 async function fetchApplyStatus(backendUrl: string, memberId: string): Promise<ApplyStatusObservation | null> {
-  const p = routePath(ROUTES.committee.applyStatus, { id: memberId });
+  const p = routePath(ROUTES.swarm.applyStatus, { id: memberId });
   const res = await fetch(`${backendUrl}${p}`);
   if (!res.ok) throw new Error(`GET ${p} -> ${res.status}`);
   const body = (await res.json()) as { state: ApplyState; claimedAt?: string | null };
@@ -354,8 +354,8 @@ async function fetchApplyStatus(backendUrl: string, memberId: string): Promise<A
 }
 
 async function isOnActiveRoster(backendUrl: string, memberId: string): Promise<boolean> {
-  const res = await fetch(`${backendUrl}${ROUTES.committee.members}`);
-  if (!res.ok) throw new Error(`GET ${ROUTES.committee.members} -> ${res.status}`);
+  const res = await fetch(`${backendUrl}${ROUTES.swarm.members}`);
+  if (!res.ok) throw new Error(`GET ${ROUTES.swarm.members} -> ${res.status}`);
   const body = (await res.json()) as { members: Array<{ id: string }> };
   return body.members.some((m) => m.id === memberId);
 }
@@ -410,7 +410,7 @@ export function scheduleAutoApprove(
   onEvent: (msg: string) => void = () => {},
 ): void {
   setTimeout(() => {
-    fetch(`${backendUrl}${ROUTES.committee.admin.activate}`, {
+    fetch(`${backendUrl}${ROUTES.swarm.admin.activate}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken },
       body: JSON.stringify({ memberId }),
@@ -429,7 +429,7 @@ export interface RunOnboardingEvalOptions {
   composeProject: string; // the ALREADY-RUNNING demo stack's compose project name
   composeFiles?: string[];
   backendUrl: string; // host-published backend URL for THIS harness's own polling
-  apiUrlInternal?: string; // the committee REST API base the CONTAINER reaches over the compose network
+  apiUrlInternal?: string; // the swarm REST API base the CONTAINER reaches over the compose network
   adminToken: string;
   env?: Record<string, string | undefined>; // resolveModelConfig source; default process.env
   timeoutMs?: number;
@@ -652,7 +652,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
             log(`application ${memberId} applied — auto-approving in ${autoApproveDelayMs}ms (§11 R7)`);
             scheduleAutoApprove(opts.backendUrl, opts.adminToken, memberId, autoApproveDelayMs, log);
           }
-          const observedRoster = await observer.poll("committee.members", () =>
+          const observedRoster = await observer.poll("swarm.members", () =>
             isOnActiveRoster(opts.backendUrl, memberId!),
           );
           if (observedRoster.ok) onActiveRoster = observedRoster.value;
@@ -715,7 +715,7 @@ export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise
 //      scripts/agent/classify-outcome.ts for the three-conjunct evidence a
 //      refusal must show before it earns a retry.
 //   3. `timed-out` — on ANY tier. This used to be restricted to the KEYLESS
-//      tier, on the retired committee-opencode-nightly.yml's documented experience that a
+//      tier, on the retired swarm-opencode-nightly.yml's documented experience that a
 //      free-tier "call can take minutes and occasionally returns nothing",
 //      with the corollary that a FUNDED model is fast/reliable enough for a
 //      timeout to keep meaning what it always meant. Measurement retired that
@@ -770,7 +770,7 @@ export const DEFAULT_RETRY_BACKOFF_MS = [45_000];
 // before. Later attempts DERIVE from it instead of discarding it: the display
 // NAME is preserved (the demo's roster records the planned newcomer's name, and
 // a retry that admitted "Onboarding Eval ci-retry-2-…" instead would put a
-// different person on the committee than the one the demo announced), while the
+// different person on the swarm than the one the demo announced), while the
 // runId and the contact local-part get an -rN suffix so no attempt ever re-uses
 // a contact — the key this harness matches the server-minted member row on.
 export function retryIdentity(base: OnboardingIdentity | undefined, attempt: number): OnboardingIdentity {

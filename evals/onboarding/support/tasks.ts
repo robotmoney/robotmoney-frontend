@@ -54,7 +54,7 @@ export const RUNTIME_TASK =
 
 // ── skill-install ────────────────────────────────────────────────────────────
 // The canonical prompt's framing, its two bounds, and the ask to install the
-// committee-onboarding skill — verbatim, up to (and including) the colon that
+// swarm-onboarding skill — verbatim, up to (and including) the colon that
 // introduces what the skill carries, and nothing after it. It names the skill
 // and where it lives; how to install one is the agent's own harness
 // knowledge, which is the thing under test.

@@ -84,7 +84,7 @@ test("claim challenges use a separate versioned canonical signing domain", () =>
     memberId: "m1",
     challenge: "challenge-1",
     expiresAt: "2026-07-21T18:30:00.000Z",
-  })).toBe('{"purpose":"committee-token-claim-v1","memberId":"m1","challenge":"challenge-1","expiresAt":"2026-07-21T18:30:00.000Z"}');
+  })).toBe('{"purpose":"swarm-token-claim-v1","memberId":"m1","challenge":"challenge-1","expiresAt":"2026-07-21T18:30:00.000Z"}');
 });
 
 test("stored submission seam re-verifies canonical bytes at read time", async () => {

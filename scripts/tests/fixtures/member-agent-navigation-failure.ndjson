@@ -7,7 +7,7 @@
 # (C2) rejects it. Replace with a captured real transcript when the sampler records
 # one.
 {"type":"step_start","step":{"id":"s1"}}
-{"type":"text","part":{"type":"text","text":"Installing the committee-onboarding skill and the rmpc release binary now."}}
-{"type":"tool_use","part":{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"rmpc committee-identity --path ./identity.json create"}}}}
+{"type":"text","part":{"type":"text","text":"Installing the swarm-onboarding skill and the rmpc release binary now."}}
+{"type":"tool_use","part":{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"rmpc swarm-identity --path ./identity.json create"}}}}
 {"type":"text","part":{"type":"text","text":"The apply endpoint keeps returning 400 signature_invalid. I signed the canonical payload with the key I generated, but the server disagrees about the byte-exact serialization. I can't complete the application without knowing the exact field order it canonicalizes."}}
 {"type":"step_finish","step":{"id":"s1"}}

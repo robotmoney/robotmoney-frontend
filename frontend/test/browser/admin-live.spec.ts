@@ -7,7 +7,7 @@ import { mockVendorScripts } from "./vendor-scripts.ts";
 // admin-surface.spec.ts mock 100% of admin network calls (page.route), so a
 // backend contract change (path/verb/field rename) can ship undetected — this
 // is exactly the class of bug #159 shipped and caught only by manual review
-// (see backend/src/api/routes/committee-admin.ts + committee-overview.js's
+// (see backend/src/api/routes/swarm-admin.ts + swarm-overview.js's
 // own header comment: "topics/members list envelopes are keyed `subjects`/
 // `members` (not `items`)"). This spec drives the real admin UI against the
 // LIVE demo backend the required e2e job already boots (scripts/lib/
@@ -137,7 +137,7 @@ test("admin-live: overview loads the real GET /api/admin/overview envelope (queu
   // admin.html's schedule table keeps an x-show="...length === 0" fallback
   // <tr> ("No enabled schedules.") in the DOM at all times (just hidden),
   // alongside the x-for rows — an unscoped locator overcounts by one when
-  // the list is non-empty. Scope to :visible, same fix as the committee
+  // the list is non-empty. Scope to :visible, same fix as the swarm
   // tab-row locators below.
   const scheduleOverview = await readLiveOverview();
   const scheduleRows = page.locator(".rm-table.adm-table tbody tr:visible");
@@ -169,21 +169,21 @@ test("admin-live: overview loads the real GET /api/admin/overview envelope (queu
   }
 });
 
-test("admin-live: committee subjects/members lists load the real 'subjects'/'members' envelopes (not 'items')", async ({ page }) => {
+test("admin-live: swarm subjects/members lists load the real 'subjects'/'members' envelopes (not 'items')", async ({ page }) => {
   await login(page);
 
-  // loadAll() (committee-overview.js) fires subjects + members (+ sessions)
-  // concurrently the moment /admin/committee initializes — register both
+  // loadAll() (swarm-overview.js) fires subjects + members (+ sessions)
+  // concurrently the moment /admin/swarm initializes — register both
   // listeners BEFORE navigating so neither request races past us.
   const subjectsResponsePromise = page.waitForResponse(
-    (res) => new URL(res.url()).pathname === "/api/committee/admin/subjects" && res.request().method() === "GET",
+    (res) => new URL(res.url()).pathname === "/api/swarm/admin/subjects" && res.request().method() === "GET",
   );
   const membersResponsePromise = page.waitForResponse(
-    (res) => new URL(res.url()).pathname === "/api/committee/admin/members" && res.request().method() === "GET",
+    (res) => new URL(res.url()).pathname === "/api/swarm/admin/members" && res.request().method() === "GET",
   );
 
-  await page.goto("/admin/committee");
-  await expect(page.getByRole("heading", { name: "Committee Operations" })).toBeVisible();
+  await page.goto("/admin/swarm");
+  await expect(page.getByRole("heading", { name: "Swarm Operations" })).toBeVisible();
 
   const [subjectsRes, membersRes] = await Promise.all([subjectsResponsePromise, membersResponsePromise]);
   expect(subjectsRes.ok()).toBe(true);
@@ -192,9 +192,9 @@ test("admin-live: committee subjects/members lists load the real 'subjects'/'mem
   const subjectsBody = await subjectsRes.json();
   const membersBody = await membersRes.json();
 
-  // The exact envelope keys the frontend reads (committee-overview.js
+  // The exact envelope keys the frontend reads (swarm-overview.js
   // loadAll(): topicsRes.subjects / membersRes.members) — asserted against
-  // the LIVE backend/src/api/routes/committee-admin.ts response, not a
+  // the LIVE backend/src/api/routes/swarm-admin.ts response, not a
   // hand-maintained fixture. `items` is the invented, never-shipped key an
   // earlier draft of this surface assumed (issue #159's post-merge notes);
   // asserting its absence pins the real contract, not the wrong one.
@@ -203,14 +203,14 @@ test("admin-live: committee subjects/members lists load the real 'subjects'/'mem
   expect(Array.isArray(membersBody.members)).toBe(true);
   expect(membersBody).not.toHaveProperty("items");
 
-  // committee-overview.js's loadAll() throws — surfacing `error` in the
+  // swarm-overview.js's loadAll() throws — surfacing `error` in the
   // toolbar — if either response is missing its expected array key ("admin
   // subjects response missing 'subjects' array" / "... 'members' array").
   // No error banner here proves the frontend actually parsed these exact
   // keys from the live response, not merely that a request round-tripped.
   await expect(page.locator(".adm-toolbar .rm-error")).toBeHidden();
 
-  // committee.html's Topics/Members/Sessions tabs are toggled with x-show,
+  // swarm.html's Topics/Members/Sessions tabs are toggled with x-show,
   // not x-if — the other two tabs' <table class="adm-table"> rows stay in
   // the DOM (just display:none) while Topics is active, so an unscoped
   // "table.adm-table tbody tr.adm-row" locator overcounts by summing every
@@ -220,13 +220,13 @@ test("admin-live: committee subjects/members lists load the real 'subjects'/'mem
   // The row-count expectations below are built from Alpine's LIVE reactive
   // state (this.topics / this.members), not the subjectsBody/membersBody
   // captured above — same defensive pattern as the overview test's
-  // liveOverview read: comparing against the exact object committee.html's
+  // liveOverview read: comparing against the exact object swarm.html's
   // x-for bindings render from can never diverge from the DOM, whereas two
   // independent reads of a live, unmocked backend legitimately can (this is
   // the same class of race that hit the overview test's assertions in CI).
   const topicRows = page.locator("table.adm-table tbody tr.adm-row:visible");
   const liveTopics: Array<{ id: string }> = await page.evaluate(() => {
-    const el = document.querySelector('[x-data="adminCommitteeOverview"]');
+    const el = document.querySelector('[x-data="adminSwarmOverview"]');
     // @ts-expect-error -- Alpine is a global from the vendor CDN script, not a module import
     return window.Alpine.$data(el).topics;
   });
@@ -239,10 +239,10 @@ test("admin-live: committee subjects/members lists load the real 'subjects'/'mem
 
   await page.getByRole("button", { name: "Members", exact: true }).click();
 
-  // memberFilter defaults to "active" (committee-overview.js) — apply the
+  // memberFilter defaults to "active" (swarm-overview.js) — apply the
   // same filter to the live payload before asserting the rendered row count.
   const liveMembers: Array<{ status?: string }> = await page.evaluate(() => {
-    const el = document.querySelector('[x-data="adminCommitteeOverview"]');
+    const el = document.querySelector('[x-data="adminSwarmOverview"]');
     // @ts-expect-error -- Alpine is a global from the vendor CDN script, not a module import
     return window.Alpine.$data(el).members;
   });

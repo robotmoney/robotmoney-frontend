@@ -35,14 +35,14 @@
 #   demo            : named volume `pgdata` persists across restarts
 #   prod            : point DATABASE_URL at an external/managed Postgres and run
 #                     `api` + internal worker lanes + independent producer
-#                     (docker compose up api worker-committee worker-analytics worker-research analytics-producer)
+#                     (docker compose up api worker-swarm worker-analytics worker-research analytics-producer)
 
 # Task-queue worker lanes (issue #107): one container per execution lane. This
 # IS the production/default lane topology:
-#   worker-committee — RESERVED for interactive committee session-lifecycle
-#                      jobs (committee.%); no other lane may claim them.
+#   worker-swarm — RESERVED for interactive swarm session-lifecycle
+#                      jobs (swarm.%); no other lane may claim them.
 #   worker-analytics — internal scheduled pipelines (vault/wallet/buybacks/
-#                      projects), excluding committee.% / research.%.
+#                      projects), excluding swarm.% / research.%.
 #   worker-research  — compatibility lane for unreachable legacy research.%
 #                      queue handlers; D25 producer execution does not use it.
 #   analytics-producer — owns regime/research timers and submits over REST; no
@@ -73,10 +73,10 @@ x-worker-env: &worker-env
   RM_ENV: ${RM_ENV:-demo}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
   # Activation notifications are persisted by the API and delivered by the
-  # reserved committee worker through the deployment's HTTP mail adapter.
-  COMMITTEE_NOTIFICATION_EMAIL_FROM: ${COMMITTEE_NOTIFICATION_EMAIL_FROM:-committee-demo@robotmoney.invalid}
-  COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_URL: ${COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
-  COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
+  # reserved swarm worker through the deployment's HTTP mail adapter.
+  SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-swarm-demo@robotmoney.invalid}
+  SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL: ${SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL:-}
+  SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN: ${SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN:-}
 
 services:
   postgres:
@@ -119,7 +119,7 @@ services:
       # demo sets a random per-launch value (worker doesn't serve the API).
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       # Analytics-provider bearer credential (issue #106): the api VERIFIES it on
-      # POST /api/committee/regime + every /api/analytics/* route. Fail-closed:
+      # POST /api/swarm/regime + every /api/analytics/* route. Fail-closed:
       # unset locks those routes except under RM_ALLOW_INSECURE/ephemeral.
       ANALYTICS_TOKEN: ${ANALYTICS_TOKEN:-}
       ANALYTICS_TOKEN_FILE: /run/secrets/analytics_token
@@ -128,21 +128,21 @@ services:
       # REQUIRES PROJECTS_SOURCE=live — the projects pipelines throw rather
       # than serve fixture data as production. See .env.example.
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
-      COMMITTEE_NOTIFICATION_EMAIL_FROM: ${COMMITTEE_NOTIFICATION_EMAIL_FROM:-committee-demo@robotmoney.invalid}
-      # Committee session-lifecycle cron cadence (issue #208). Read at
-      # `bun run migrate` time (seed() -> resolveCommitteeSchedules) — this is
+      SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-swarm-demo@robotmoney.invalid}
+      # Swarm session-lifecycle cron cadence (issue #208). Read at
+      # `bun run migrate` time (seed() -> resolveSwarmSchedules) — this is
       # the SINGLE-BOX/prod compose file, so it explicitly enables the daily
       # 06:00-08:00 UTC sequence by default; docker-compose.demo.yml pins
-      # COMMITTEE_SCHEDULES_ENABLED off (repo demo/e2e never auto-runs the
-      # committee on its own). Staging overrides any of these per-kind crons
-      # (or COMMITTEE_WINDOW_MINUTES) to an accelerated cadence via its own env.
-      COMMITTEE_SCHEDULES_ENABLED: ${COMMITTEE_SCHEDULES_ENABLED:-1}
-      COMMITTEE_OPEN_SESSION_CRON: ${COMMITTEE_OPEN_SESSION_CRON:-0 6 * * *}
-      COMMITTEE_PUBLISH_BRIEF_CRON: ${COMMITTEE_PUBLISH_BRIEF_CRON:-0 7 * * *}
-      COMMITTEE_CLOSE_WINDOW_CRON: ${COMMITTEE_CLOSE_WINDOW_CRON:-0 8 * * *}
-      COMMITTEE_AGGREGATE_CRON: ${COMMITTEE_AGGREGATE_CRON:-0 9 * * *}
-      COMMITTEE_PUBLISH_CRON: ${COMMITTEE_PUBLISH_CRON:-0 10 * * *}
-      COMMITTEE_WINDOW_MINUTES: ${COMMITTEE_WINDOW_MINUTES:-60}
+      # SWARM_SCHEDULES_ENABLED off (repo demo/e2e never auto-runs the
+      # swarm on its own). Staging overrides any of these per-kind crons
+      # (or SWARM_WINDOW_MINUTES) to an accelerated cadence via its own env.
+      SWARM_SCHEDULES_ENABLED: ${SWARM_SCHEDULES_ENABLED:-1}
+      SWARM_OPEN_SESSION_CRON: ${SWARM_OPEN_SESSION_CRON:-0 6 * * *}
+      SWARM_PUBLISH_BRIEF_CRON: ${SWARM_PUBLISH_BRIEF_CRON:-0 7 * * *}
+      SWARM_CLOSE_WINDOW_CRON: ${SWARM_CLOSE_WINDOW_CRON:-0 8 * * *}
+      SWARM_AGGREGATE_CRON: ${SWARM_AGGREGATE_CRON:-0 9 * * *}
+      SWARM_PUBLISH_CRON: ${SWARM_PUBLISH_CRON:-0 10 * * *}
+      SWARM_WINDOW_MINUTES: ${SWARM_WINDOW_MINUTES:-60}
       # Serve the static frontend from this same process — no Caddy/nginx.
       STATIC_DIR: /srv/frontend
     ports:
@@ -177,11 +177,11 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  worker-committee:
+  worker-swarm:
     <<: *worker-base
     environment:
       <<: *worker-env
-      WORKER_LANE: committee
+      WORKER_LANE: swarm
 
   worker-analytics:
     <<: *worker-base
@@ -215,8 +215,8 @@ services:
       - api
     restart: unless-stopped
 
-  # D21 retired the member-facing MCP server: committee members reach the
-  # committee REST API on the `api` service directly (docs/decisions.md D21).
+  # D21 retired the member-facing MCP server: swarm members reach the
+  # swarm REST API on the `api` service directly (docs/decisions.md D21).
 
 volumes:
   pgdata:

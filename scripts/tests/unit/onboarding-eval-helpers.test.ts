@@ -45,7 +45,7 @@ import {
   generateIdentity,
   isFullyOnboarded,
   KEYSTORE_PASSPHRASE_ENV,
-  LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH,
+  LOCAL_SWARM_ONBOARDING_SKILL_PATH,
   looksRateLimited,
   type MemberAgentModel,
   memberAgentContainerName,
@@ -60,7 +60,7 @@ import {
 } from "../../lib/onboarding-eval.ts";
 import {
   buildOnboardingPrompt,
-  COMMITTEE_ONBOARDING_SKILL_URL,
+  SWARM_ONBOARDING_SKILL_URL,
   ONBOARDING_PROMPT,
 } from "@robotmoney/contract";
 import { isKeylessModel, MODEL_FAMILIES, resolveAgentModel } from "../../lib/model-registry.ts";
@@ -87,12 +87,12 @@ describe("onboarding-eval pure helpers", () => {
   });
 
   test("the eval prompt changes only the canonical prompt's skill URL", () => {
-    const localSkillUrl = `http://api:8787${LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH}`;
+    const localSkillUrl = `http://api:8787${LOCAL_SWARM_ONBOARDING_SKILL_PATH}`;
     const evalPrompt = buildEvalOnboardingPrompt();
     expect(evalPrompt).toBe(buildOnboardingPrompt(localSkillUrl));
-    expect(evalPrompt).toBe(ONBOARDING_PROMPT.replace(COMMITTEE_ONBOARDING_SKILL_URL, localSkillUrl));
+    expect(evalPrompt).toBe(ONBOARDING_PROMPT.replace(SWARM_ONBOARDING_SKILL_URL, localSkillUrl));
     expect(evalPrompt).toContain(localSkillUrl);
-    expect(evalPrompt).not.toContain(COMMITTEE_ONBOARDING_SKILL_URL);
+    expect(evalPrompt).not.toContain(SWARM_ONBOARDING_SKILL_URL);
   });
 
   test("buildAgentPrompt supplies identity in a separate note after the locally parameterized canonical prompt", () => {
@@ -108,7 +108,7 @@ describe("onboarding-eval pure helpers", () => {
   });
 
   test("buildAgentPrompt tells the agent its owner is absent and their secrets are already exported", () => {
-    // The repo-owned committee-onboarding skill instructs the agent to ask its
+    // The repo-owned swarm-onboarding skill instructs the agent to ask its
     // human owner to export the keystore passphrase and to WAIT for them ("Tell
     // me once it's set"). A headless container has no owner to answer, so
     // WITHOUT this the correct behaviour IS to stop — which is exactly what CI
@@ -216,7 +216,7 @@ describe("onboarding-eval pure helpers", () => {
     const cfg = buildAgentOpencodeConfig("opencode/some-model") as any;
     expect(cfg.model).toBe("opencode/some-model");
     expect(cfg.mcp).toBeUndefined();
-    expect(JSON.stringify(cfg)).not.toMatch(/rmpc|apply|committee|robotmoney/i);
+    expect(JSON.stringify(cfg)).not.toMatch(/rmpc|apply|swarm|robotmoney/i);
     // The model is a PARAMETER: this builder invents nothing and has no default.
     expect((buildAgentOpencodeConfig("opencode/another") as any).model).toBe("opencode/another");
   });
@@ -234,7 +234,7 @@ describe("onboarding-eval pure helpers", () => {
   // The `external_directory` line was the previous, narrower attempt at the same
   // diagnosis (opencode's defaults carry `external_directory: {"*": "ask", …}`,
   // and in a non-interactive `opencode run` an "ask" has nobody to ask, so it
-  // resolves to a REJECTION — an agent that cloned the committee-onboarding
+  // resolves to a REJECTION — an agent that cloned the swarm-onboarding
   // skill into /tmp could `ls` its way to SKILL.md and never read a byte). That
   // property is preserved by the general form asserted here: nothing is denied
   // and nothing stops to ask.
@@ -361,7 +361,7 @@ describe("member-agent container primitive", () => {
   });
 
   // ── ownerEnv: the human owner's half of the session environment ────────────
-  // The published committee-onboarding skill tells the agent to ask its owner
+  // The published swarm-onboarding skill tells the agent to ask its owner
   // to export the keystore passphrase and to WAIT for them ("Tell me once it's
   // set"), and forbids accepting the value in conversation. A headless
   // container has no owner to answer, so an agent that follows the skill
@@ -530,7 +530,7 @@ describe("runOnboardingEvalWithRetry", () => {
     expect(looksRateLimited("anthropic rate_limit_error: slow down")).toBe(true);
     expect(looksRateLimited("upstream returned 529 overloaded_error")).toBe(true);
     expect(looksRateLimited(undefined)).toBe(false);
-    expect(looksRateLimited("agent could not install the committee-onboarding skill")).toBe(false);
+    expect(looksRateLimited("agent could not install the swarm-onboarding skill")).toBe(false);
   });
 
   test("admitted on the first attempt — never retries", async () => {
@@ -759,7 +759,7 @@ describe("runOnboardingEvalWithRetry", () => {
         calls++;
         return fakeResult({
           timedOut: true,
-          observerError: "application.status: GET /api/committee/apply/m1 -> 503",
+          observerError: "application.status: GET /api/swarm/apply/m1 -> 503",
         });
       },
     });
@@ -786,7 +786,7 @@ describe("runOnboardingEvalWithRetry", () => {
     expect(seen.length).toBe(2);
     // The demo announces the planned newcomer by NAME and records it in
     // e2e.MEMBERS — a retry that admitted a generated name would put a
-    // different person on the committee than the one it announced.
+    // different person on the swarm than the one it announced.
     expect(seen.map((s) => s.name)).toEqual(["Ada Lovelace", "Ada Lovelace"]);
     expect(seen[0]).toEqual(planned);
     expect(seen[1]!.runId).toBe("ada-r2");

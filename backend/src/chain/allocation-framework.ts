@@ -2,7 +2,7 @@
 // (live-data contract §4). This is NOT a chain read and carries NO AI enrichment
 // (see the "projects overviews admin-managed" policy): it projects the single-row
 // allocation_framework table (migration 0001), which db/seed.ts seeds once from
-// robotmoney-site/data/committee/allocation.json and an admin may later rewrite.
+// robotmoney-site/data/swarm/allocation.json and an admin may later rewrite.
 //
 // Replaces the baked bucket percentages in the frontend allocation view (95%
 // Conservative DeFi Yield / 5% Agent Tokens / 0% Protocol / 0% RWA and the
@@ -52,7 +52,7 @@ interface FrameworkSeed {
   buckets: RawBucket[];
 }
 
-// Seed copied verbatim from robotmoney-site/data/committee/allocation.json
+// Seed copied verbatim from robotmoney-site/data/swarm/allocation.json
 // (target_weight values only — the swarm's authoritative policy). Exported so
 // db/seed.ts inserts it ON CONFLICT DO NOTHING (never clobbering an admin edit)
 // and so getAllocationFramework can fall back to it if the row is somehow absent.

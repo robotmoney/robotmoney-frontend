@@ -17,7 +17,7 @@ const repoRoot = join(import.meta.dir, "../../..");
 const publicDir = join(repoRoot, "frontend", "public");
 
 // Walk every static asset the site ships (skip the committed data/ archive: it
-// holds legitimate historical committee snapshot JSON with its own value_usd
+// holds legitimate historical swarm snapshot JSON with its own value_usd
 // figures, which are NOT the removed allocation baked literals).
 function walk(dir: string): string[] {
   const out: string[] = [];

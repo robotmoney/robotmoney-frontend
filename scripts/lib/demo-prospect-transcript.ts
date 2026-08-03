@@ -1,7 +1,7 @@
 // Per-prospect transcript retention for the standing live demo (issue #317).
 //
 // The member-agent runner (scripts/agent/member-agent.ts) already redacts and
-// returns a transcript for every prospective committee-member run, but the
+// returns a transcript for every prospective swarm-member run, but the
 // demo's onboarding driver (scripts/lib/demo-main.ts) only ever wrote it to
 // the shared demo log, and only when the prospect FAILED (`if (result.transcript)
 // log(...)`, gated behind `!result.admitted`). A successful or still-running
@@ -53,7 +53,7 @@ import {
   DEFAULT_AUTO_APPROVE_DELAY_MS,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_TIMEOUT_MS,
-  LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH,
+  LOCAL_SWARM_ONBOARDING_SKILL_PATH,
   type OnboardingEvalResult,
   type OnboardingIdentity,
 } from "./onboarding-eval.ts";
@@ -87,7 +87,7 @@ export function startProspectTranscript(opts: {
   identity: OnboardingIdentity;
   model: string;
 }): ProspectTranscript {
-  const skillPath = join(opts.repoRoot, "frontend", "public", LOCAL_COMMITTEE_ONBOARDING_SKILL_PATH);
+  const skillPath = join(opts.repoRoot, "frontend", "public", LOCAL_SWARM_ONBOARDING_SKILL_PATH);
   // The exact prompt attempt 1 runs with — mirrors what runOnboardingEval
   // builds internally (buildAgentPrompt(identity, DEFAULT_API_URL_INTERNAL)),
   // since the demo never overrides apiUrlInternal. Only used for the
@@ -108,7 +108,7 @@ export function startProspectTranscript(opts: {
     autoApproveDelayMs: DEFAULT_AUTO_APPROVE_DELAY_MS,
     // Safe candidate identity (issue #317 AC): the prospect's PUBLIC display
     // name — the same one the demo's onboarding pane and, once admitted, the
-    // committee roster already show. Never the contact (redacted above via
+    // swarm roster already show. Never the contact (redacted above via
     // contactHash) and never a secret.
     candidateName: opts.identity.name,
   });

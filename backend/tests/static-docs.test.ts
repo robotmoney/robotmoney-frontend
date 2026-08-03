@@ -13,10 +13,10 @@ afterEach(async () => {
 async function fixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "robotmoney-static-"));
   staticRoots.push(root);
-  await mkdir(join(root, "views/docs/investment-committee"), { recursive: true });
+  await mkdir(join(root, "views/docs/investment-swarm"), { recursive: true });
   await writeFile(root + "/index.html", '<!doctype html><head><meta name="robots" content="index, follow"></head><main id="view"></main>');
   await writeFile(
-    join(root, "views/docs/investment-committee/participation.html"),
+    join(root, "views/docs/investment-swarm/participation.html"),
     "<article><h1>Participation</h1><p>Use the canonical payload before signing.</p></article>",
   );
   return root;
@@ -24,7 +24,7 @@ async function fixture(): Promise<string> {
 
 describe("static documentation routes", () => {
   test("returns the participation guide inside the SPA shell for a no-JS request", async () => {
-    const response = await serveStatic("/docs/investment-committee/participation", await fixture());
+    const response = await serveStatic("/docs/investment-swarm/participation", await fixture());
 
     expect(response?.headers.get("Content-Type")).toContain("text/html");
     const html = await response?.text();
@@ -33,7 +33,7 @@ describe("static documentation routes", () => {
   });
 
   test("keeps non-doc client routes on the unchanged SPA shell", async () => {
-    const response = await serveStatic("/committee/apply", await fixture());
+    const response = await serveStatic("/swarm/apply", await fixture());
 
     expect(await response?.text()).toBe(
       '<!doctype html><head><meta name="robots" content="index, follow"></head><main id="view"></main>',

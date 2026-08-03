@@ -29,8 +29,8 @@ import {
 } from "./onboarding-eval.ts";
 import { startProspectTranscript } from "./demo-prospect-transcript.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./demo-newcomers.ts";
-import { personaIdentity } from "./committee/persona-keys.ts";
-import { admissionDelayMs, decideAdmission, planAdoptions } from "./committee/roster-plan.ts";
+import { personaIdentity } from "./swarm/persona-keys.ts";
+import { admissionDelayMs, decideAdmission, planAdoptions } from "./swarm/roster-plan.ts";
 import { memberHomeVolumeName } from "../agent/member-agent.ts";
 import {
   assertStageWebPortFree,
@@ -53,11 +53,11 @@ import {
   type StackEvent,
   type StackHostPorts,
 } from "../stack/index.ts";
-import { COMMITTEE_ROSTER_CAP, ROUTES } from "@robotmoney/contract";
+import { SWARM_ROSTER_CAP, ROUTES } from "@robotmoney/contract";
 import {
   columns,
   columnWidth,
-  committeeProgress,
+  swarmProgress,
   fmtCountdown,
   fmtDuration,
   memberGlyph,
@@ -101,7 +101,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // compose binds it, and randomizing more stacks only widened the gap. Docker
 // choosing and binding in one step inside the daemon has neither failure mode.
 // (D21 retired the member-facing MCP server — there is no longer an `mcp`
-// container or host port; members reach the committee REST API on the api port.)
+// container or host port; members reach the swarm REST API on the api port.)
 //
 // THE ONE EXCEPTION: `bun run demo -- --static-port` appends docker-compose.stage.yml,
 // which pins the api's host port (only) to 48787, the tunnel origin. It is a
@@ -340,15 +340,15 @@ if (pgDataDir) {
 // Admin dashboard password (/admin — the task-queue jobs dashboard, guarded by
 // ADMIN_TOKEN). A FRESH random secret every launch. Issue #456: this used to
 // be published by mutating process.env.ADMIN_TOKEN on THIS process, so every
-// same-process reader (the dynamically-imported committee session driver's
+// same-process reader (the dynamically-imported swarm session driver's
 // admin()/rosterMembers()/existingMemberNames(), agent.ts's enroll()) picked
 // it up implicitly off the global — the exact "module-level or process.env
 // global mutable state" shape the 2026-07-14 maintainability review flagged.
 // It is now threaded EXPLICITLY instead: every in-process consumer takes an
 // `adminToken` parameter (sessionRail.adminToken below, and the two
 // runOnboardingEvalWithRetry call sites), and every genuine CHILD PROCESS
-// that needs it (the CI committee-session driver, the browser checks, the
-// rmpc-release-e2e driver, the starter-committee-agent exerciser) gets it as
+// that needs it (the CI swarm-session driver, the browser checks, the
+// rmpc-release-e2e driver, the starter-swarm-agent exerciser) gets it as
 // an explicit `ADMIN_TOKEN: adminPassword` entry in that spawn's own env
 // object — never via `...process.env` inheriting a value this process
 // happened to have mutated onto itself. It is printed ONLY to the
@@ -393,7 +393,7 @@ delete process.env.ANALYTICS_TOKEN;
 // Why an allowlist and not `...process.env`: scripts/stack deliberately does not
 // inherit the ambient environment (§11.3 E1 — that is what keeps a provider key
 // out of a container). But the DEMO is an operator tool, and these knobs are
-// documented and load-bearing for it: exporting COMMITTEE_WINDOW_MINUTES=5 or a
+// documented and load-bearing for it: exporting SWARM_WINDOW_MINUTES=5 or a
 // custom BASE_RPC_URL before `bun run demo` works today, and silently ignoring
 // it after the bring-up moved onto the shared module would be a behaviour
 // regression that is miserable to debug. Every name here is interpolated by
@@ -404,16 +404,16 @@ delete process.env.ANALYTICS_TOKEN;
 // source and an exported value must never shadow it.
 const DEMO_COMPOSE_PASSTHROUGH = [
   "BASE_RPC_URL",
-  "COMMITTEE_AGGREGATE_CRON",
-  "COMMITTEE_CLOSE_WINDOW_CRON",
-  "COMMITTEE_NOTIFICATION_EMAIL_FROM",
-  "COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_TOKEN",
-  "COMMITTEE_NOTIFICATION_EMAIL_TRANSPORT_URL",
-  "COMMITTEE_OPEN_SESSION_CRON",
-  "COMMITTEE_PUBLISH_BRIEF_CRON",
-  "COMMITTEE_PUBLISH_CRON",
-  "COMMITTEE_SCHEDULES_ENABLED",
-  "COMMITTEE_WINDOW_MINUTES",
+  "SWARM_AGGREGATE_CRON",
+  "SWARM_CLOSE_WINDOW_CRON",
+  "SWARM_NOTIFICATION_EMAIL_FROM",
+  "SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN",
+  "SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL",
+  "SWARM_OPEN_SESSION_CRON",
+  "SWARM_PUBLISH_BRIEF_CRON",
+  "SWARM_PUBLISH_CRON",
+  "SWARM_SCHEDULES_ENABLED",
+  "SWARM_WINDOW_MINUTES",
   "FETCH_CACHE_DIR",
   "FLOOR_SEED_PATH",
   "PROJECTS_SOURCE",
@@ -502,7 +502,7 @@ const ts = () => new Date().toISOString();
 // --- DemoState (drives the TUI panes) -------------------------------------
 // The state shape, its transitions, and the pure display helpers now live in
 // ./demo-tui-view.ts (issue #456) — this file just owns the ONE instance for
-// this boot and threads it through. Local structural mirror of the committee
+// this boot and threads it through. Local structural mirror of the swarm
 // session driver's OnboardedMemberHome (agent.ts). The driver is loaded via a
 // dynamic import() (untyped) so the driver's module-load reads BACKEND_URL
 // AFTER it is set below; this local alias keeps our annotations decoupled
@@ -517,7 +517,7 @@ function serviceRoutes(base: string): { name: string; url: string }[] {
   return [
     { name: "Site", url: at("/") },
     { name: "Regime", url: at("/regime") },
-    { name: "Committee", url: at("/committee") },
+    { name: "Swarm", url: at("/swarm") },
     ...researchKeys.map((k) => ({ name: "Research", url: at(`/research/${k}`) })),
     // Admin task-queue jobs dashboard. URL only here (safe to appear anywhere);
     // the password is rendered on its own line in the TUI Services pane, never
@@ -530,10 +530,10 @@ const state: DemoState = {
   containers: [
     { name: "postgres", phase: "pending" },
     { name: "api", phase: "pending" },
-    // One container per worker execution lane (issue #107): committee is the
+    // One container per worker execution lane (issue #107): swarm is the
     // reserved interactive lane; analytics (regime + pipelines) and research
     // run independently so a blocked research fetch can't starve the others.
-    { name: "worker-committee", phase: "pending" },
+    { name: "worker-swarm", phase: "pending" },
     { name: "worker-analytics", phase: "pending" },
     { name: "worker-research", phase: "pending" },
   ],
@@ -543,7 +543,7 @@ const state: DemoState = {
     { name: "edgar seed", status: "pending" },
   ],
   research: [],
-  committees: {},
+  swarms: {},
   onboarded: [],
   upcoming: [],
   messages: [],
@@ -557,7 +557,7 @@ const state: DemoState = {
 // real-inference eval harness's observed step-state record
 // (scripts/lib/onboarding-eval.ts), and session/memo/admitted flip when the
 // newly-admitted member is separately observed submitting a signed take +
-// posting a memo in a live committee session (via committeeProgress).
+// posting a memo in a live swarm session (via swarmProgress).
 
 // --- Logging --------------------------------------------------------------
 // Orchestrator narration: always append a timestamped line to the log file; in
@@ -889,8 +889,8 @@ function renderResearch(height: number): string[] {
   return out;
 }
 
-function renderCommittee(subjectId: string, height: number): string[] {
-  const c = state.committees[subjectId];
+function renderSwarm(subjectId: string, height: number): string[] {
+  const c = state.swarms[subjectId];
   if (!c) return [color("2", "(no data)")];
   const nextTxt = c.nextAt > 0 ? `next ${fmtDuration(Math.max(0, c.nextAt - Date.now()))}` : "running…";
   const out = [
@@ -963,17 +963,17 @@ function render(): string[] {
   for (const m of state.messages) footer.push(color("2", `  ${m}`));
   footer.push(color("2", "  Ctrl-C / SIGTERM tears down the stack (containers + network; postgres data kept)."));
 
-  // Middle region: Research + one pane per committee subject, splitting the largest
+  // Middle region: Research + one pane per swarm subject, splitting the largest
   // remaining space. Side-by-side columns when they fit; stacked when too narrow.
   const midH = Math.max(3, H - lines.length - footer.length - 1);
   lines.push(hr(W));
-  const subjectIds = Object.keys(state.committees);
+  const subjectIds = Object.keys(state.swarms);
   const paneCount = 1 + subjectIds.length;
   const fits = W >= 72 && columnWidth(W, paneCount) >= 22;
   if (fits) {
     const panes = [
       renderResearch(midH),
-      ...subjectIds.map((id) => renderCommittee(id, midH)),
+      ...subjectIds.map((id) => renderSwarm(id, midH)),
     ].map((p) => p.slice(0, midH));
     for (const l of columns(panes, W)) lines.push(l);
   } else {
@@ -981,7 +981,7 @@ function render(): string[] {
     const each = Math.max(2, Math.floor(midH / paneCount));
     const panes = [
       renderResearch(each),
-      ...subjectIds.map((id) => renderCommittee(id, each)),
+      ...subjectIds.map((id) => renderSwarm(id, each)),
     ];
     for (let p = 0; p < panes.length; p++) {
       if (p > 0) lines.push(color("2", "·".repeat(Math.min(W, 24))));
@@ -992,9 +992,9 @@ function render(): string[] {
   return [...lines, ...footer];
 }
 
-// committeeProgress (maps the additive runSession/runAgent callback events
-// onto committee state) now lives in ./demo-tui-view.ts — every call site
-// passes `state` and `log` explicitly: `committeeProgress(state, subject.id, log)`.
+// swarmProgress (maps the additive runSession/runAgent callback events
+// onto swarm state) now lives in ./demo-tui-view.ts — every call site
+// passes `state` and `log` explicitly: `swarmProgress(state, subject.id, log)`.
 
 // --- Orchestration --------------------------------------------------------
 async function main(): Promise<void> {
@@ -1013,7 +1013,7 @@ async function main(): Promise<void> {
   // minutes standing up the stack, not ~20 minutes later at the eval step
   // itself. Which CI runs set it (issue #289, #373): .github/workflows/e2e.yml,
   // on a push to main, on its nightly `schedule` mirror of that push (04:37 UTC
-  // — the slot the retired committee-opencode-nightly.yml held), on a
+  // — the slot the retired swarm-opencode-nightly.yml held), on a
   // `pull_request` whose PR carries the `real-eval` opt-in label, or
   // on a `workflow_dispatch` started with real_eval=true. An ORDINARY PR run
   // therefore leaves ONBOARDING_REAL_EVAL empty and skips this resolve, which
@@ -1032,7 +1032,7 @@ async function main(): Promise<void> {
   // StackHooks is how the TUI is driven WITHOUT scripts/stack importing a
   // renderer: each lifecycle event maps onto the panes exactly as the
   // hand-rolled sequence did, so the visible boot is unchanged.
-  const WORKER_LANES = ["worker-committee", "worker-analytics", "worker-research", "analytics-producer"];
+  const WORKER_LANES = ["worker-swarm", "worker-analytics", "worker-research", "analytics-producer"];
   const onStackEvent = (e: StackEvent): void => {
     if (e.phase === "log") return void log(e.message);
     const { phase, status } = e;
@@ -1060,7 +1060,7 @@ async function main(): Promise<void> {
       }
     } else if (phase === "services") {
       if (status === "start") {
-        log("starting api, worker lanes (committee/analytics/research)…");
+        log("starting api, worker lanes (swarm/analytics/research)…");
         for (const n of ["api", ...WORKER_LANES]) setContainer(state, n, "starting");
       } else {
         // No /health endpoint on a lane — `up` ⇒ running (unchanged semantics).
@@ -1139,30 +1139,30 @@ async function main(): Promise<void> {
 
   if (process.env.CI) {
     // CI: run checks then tear down. (Unchanged — pure console, "inherit" stdio.)
-    console.log("\n[demo] running committee session…");
+    console.log("\n[demo] running swarm session…");
     // RM_ALLOW_INSECURE=1: docker-compose.demo.yml runs the api container with
     // this flag, so the backend's regime-write/admin gates ARE open here. The
     // session driver is secure-by-default
-    // (scripts/lib/committee/session.ts regimeWriteInsecure — opt-IN, mirroring
+    // (scripts/lib/swarm/session.ts regimeWriteInsecure — opt-IN, mirroring
     // backend config.ts allowInsecure), so tell it explicitly that this stack
     // is insecure, keeping its 5c/5d cross-role log annotations truthful ("gate
     // open").
     //
     // The stack's exact compose env (stack.spawnEnv) + COMPOSE_FILE ride along
     // because the session driver now launches one member-agent CONTAINER per
-    // present member (issue #361 Phase 2, scripts/lib/committee/agent.ts
+    // present member (issue #361 Phase 2, scripts/lib/swarm/agent.ts
     // railFromEnv) — its `docker compose run` children must re-resolve the
     // same compose model this boot created, or the volume-hash check prompts
     // to recreate live data (see scripts/agent/member-agent.ts).
-    await run(["bun", "run", "scripts/lib/committee/session.ts"], repoRoot,
-      { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "committee session");
+    await run(["bun", "run", "scripts/lib/swarm/session.ts"], repoRoot,
+      { ...process.env, ...stack.spawnEnv, COMPOSE_FILE: composeFilesRun, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword, RM_ALLOW_INSECURE: "1" } as Record<string, string>, "swarm session");
 
     // Issue #209: exercise the repo-native single-member starter against this
     // required per-PR live stack. Its --e2e mode only provisions isolated
     // member credentials + an open session; the actual poll → brief → author →
     // memo → canonicalize → sign → submit → verified readback path is the same
     // exported implementation operators run. (D21: REST is the only transport.)
-    console.log("[demo] running starter committee agent (REST)…");
+    console.log("[demo] running starter swarm agent (REST)…");
     const starterEnv = {
       ...process.env,
       BACKEND_URL: backendUrl,
@@ -1170,23 +1170,23 @@ async function main(): Promise<void> {
     } as Record<string, string>;
     const { BACKEND_URL: _missingBackend, ...withoutBackendUrl } = starterEnv;
     await expectRunFailure(
-      ["bun", "run", "scripts/starter-committee-agent.ts", "--transport=rest", "--e2e"],
+      ["bun", "run", "scripts/starter-swarm-agent.ts", "--transport=rest", "--e2e"],
       repoRoot,
       withoutBackendUrl,
-      "starter committee agent missing BACKEND_URL guard",
+      "starter swarm agent missing BACKEND_URL guard",
     );
     const { ADMIN_TOKEN: _missingAdmin, ...withoutAdminToken } = starterEnv;
     await expectRunFailure(
-      ["bun", "run", "scripts/starter-committee-agent.ts", "--transport=rest", "--e2e"],
+      ["bun", "run", "scripts/starter-swarm-agent.ts", "--transport=rest", "--e2e"],
       repoRoot,
       withoutAdminToken,
-      "starter committee agent missing ADMIN_TOKEN guard",
+      "starter swarm agent missing ADMIN_TOKEN guard",
     );
     await run(
-      ["bun", "run", "scripts/starter-committee-agent.ts", "--transport=rest", "--e2e"],
+      ["bun", "run", "scripts/starter-swarm-agent.ts", "--transport=rest", "--e2e"],
       repoRoot,
       starterEnv,
-      "starter committee agent REST live-stack exercise",
+      "starter swarm agent REST live-stack exercise",
     );
 
     console.log("[demo] running frontend checks…");
@@ -1199,7 +1199,7 @@ async function main(): Promise<void> {
 
     // LIVE steady-state smoke (issue #128, now the ONLY CI path since issue #147
     // removed DEMO_HERMETIC and the hermetic RPC guard): assert >=2 published
-    // committee sessions, a fresh regime snapshot, wallet/vault provenance live
+    // swarm sessions, a fresh regime snapshot, wallet/vault provenance live
     // (with only the documented #120 degrades), and both research signals
     // served. Fails loudly, naming the leg/feed — never a skip.
     console.log("[demo] asserting LIVE steady state (demo-live-smoke)…");
@@ -1222,7 +1222,7 @@ async function main(): Promise<void> {
     // pattern as RMPC_RELEASE_E2E above. Only runs when ONBOARDING_REAL_EVAL=1.
     // Which CI runs set it (issue #289, #373): .github/workflows/e2e.yml on
     // exactly four events — a push to main, its NIGHTLY `schedule` mirror of
-    // that push (04:37 UTC, the slot the retired committee-opencode-nightly.yml
+    // that push (04:37 UTC, the slot the retired swarm-opencode-nightly.yml
     // held), a `pull_request` whose PR carries the `real-eval` OPT-IN LABEL, and
     // a `workflow_dispatch` started with real_eval=true. It is off by default on
     // pull requests: that gating dates from the free-tier default whose quota
@@ -1330,7 +1330,7 @@ async function main(): Promise<void> {
     console.log("\n" + "── Robot Money demo — READY ──".padEnd(68, "─"));
     console.log(`  Site:       ${backendUrl}/`);
     console.log(`  Regime:     ${backendUrl}/regime`);
-    console.log(`  Committee:  ${backendUrl}/committee`);
+    console.log(`  Swarm:  ${backendUrl}/swarm`);
     for (const k of researchKeys) console.log(`  Research:   ${backendUrl}/research/${k}`);
     // URL only — the admin password is shown in the interactive TUI, never here.
     console.log(`  Admin:      ${backendUrl}/admin  (password shown in the interactive TUI only)`);
@@ -1364,17 +1364,17 @@ async function main(): Promise<void> {
   // timers (D25 / issue #361 Phase 4), never the consumer queue. Their schedules
   // come from this invocation's cadence profile via resolveDemoEnv's composeEnv
   // (PRODUCER_REGIME_CRON / PRODUCER_RESEARCH_CRON), so regime and research stay
-  // offset from each other and from the committee beat.
+  // offset from each other and from the swarm beat.
   //
-  // The committee session drives live agents to submit takes over REST, so it
+  // The swarm session drives live agents to submit takes over REST, so it
   // runs from a loop HERE. It fires immediately (data on first load) then on the
-  // profile's committee interval.
+  // profile's swarm interval.
   //
   // The session driver captures BACKEND_URL at module load, so set it BEFORE
   // the dynamic import. main()'s reset-heavy flow is guarded by import.meta.url,
   // so importing here does NOT reset — we reset ONCE below and then accumulate.
   process.env.BACKEND_URL = backendUrl;
-  const e2e = await import(join(repoRoot, "scripts", "lib", "committee", "session.ts"));
+  const e2e = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));
   const producerRail = {
     repoRoot,
     composeProject: project,
@@ -1385,7 +1385,7 @@ async function main(): Promise<void> {
 
   // One-time setup: seed regime. NOTHING IS WIPED HERE.
   //
-  // This used to begin with `admin("reset")`, a TRUNCATE of every committee
+  // This used to begin with `admin("reset")`, a TRUNCATE of every swarm
   // session, brief, recommendation and (by CASCADE) memo. That was invisible
   // while each boot got a throwaway postgres volume — there was never anything
   // to destroy — and became data loss the moment the database outlived the
@@ -1428,7 +1428,7 @@ async function main(): Promise<void> {
 
   // Each subject runs on its OWN schedule (own interval + a stagger offset) so woon
   // and mav appear in separate panes on separate cadences. Execution is SERIALIZED
-  // (run the earliest-due subject, then reschedule just that one) so two committee
+  // (run the earliest-due subject, then reschedule just that one) so two swarm
   // sessions never run concurrently and race on the shared member roster. runSession
   // with sessionIndex>0 self-seeds the (subject, regime) for its date, so no subject
   // needs pre-seeding here.
@@ -1444,7 +1444,7 @@ async function main(): Promise<void> {
   }));
   // Populate the per-subject panes and seed their countdowns.
   for (const sch of schedules) {
-    state.committees[sch.subject.id] = {
+    state.swarms[sch.subject.id] = {
       subjectName: sch.subject.name, sessionState: "idle", members: {},
       publishedCount: 0, history: [], nextAt: sch.nextAt,
     };
@@ -1470,7 +1470,7 @@ async function main(): Promise<void> {
   // rail.adminToken directly — issue #461 retired agent.ts's own
   // env-reading getAdminHeaders()) both take this token as an explicit
   // parameter, so this is what makes the dynamically-imported (same-process)
-  // committee session driver still authenticate correctly.
+  // swarm session driver still authenticate correctly.
   const sessionRail = {
     ...producerRail,
     modelConfig: resolveModelConfig(process.env),
@@ -1487,7 +1487,7 @@ async function main(): Promise<void> {
   // previous process's memory.
   //
   // Adoption is possible because a persona's key is COMMITTED
-  // (scripts/lib/committee/fixtures/persona-keys.json): the enroll run below
+  // (scripts/lib/swarm/fixtures/persona-keys.json): the enroll run below
   // seeds the container keystore with the known key and re-registers it against
   // the member id the database already has (registerMember is idempotent by id —
   // it rebinds the key, mints a token, and the roster cap exempts an existing
@@ -1509,17 +1509,17 @@ async function main(): Promise<void> {
       e2e.MEMBERS.push({ memberId: m.id, name: m.name, lens: m.lens ?? "returning member", bias: 0, present: true });
       log(`adopted ${m.name} (${m.id.slice(0, 8)}) from the database — signing with the committed persona key`);
     }
-    if (plan.adopt.length > 0) log(`committee now ${e2e.MEMBERS.length} seats (${plan.adopt.length} adopted from the database)`);
+    if (plan.adopt.length > 0) log(`swarm now ${e2e.MEMBERS.length} seats (${plan.adopt.length} adopted from the database)`);
   }
 
-  async function committeeDriver(): Promise<void> {
+  async function swarmDriver(): Promise<void> {
     for (;;) {
       // Pick the earliest-due subject and wait until its slot.
       const due = schedules.reduce((a, b) => (b.nextAt < a.nextAt ? b : a));
       const wait = due.nextAt - Date.now();
       if (wait > 0) await sleep(wait);
       const subject = due.subject;
-      const c = state.committees[subject.id];
+      const c = state.swarms[subject.id];
       // NO DATE IS COMPUTED HERE. This used to be
       // `sessionDateFor(Date.now(), due.runs)` — today plus one synthetic day
       // per run — invented so repeat sessions would not collide on the old
@@ -1528,22 +1528,22 @@ async function main(): Promise<void> {
       // runSession() opens the session first and reads its date back from the
       // row Postgres stamped (convened_at, migration 0022), so the only clock
       // that dates a session is the database's.
-      log(`committee → ${subject.id} (convening; the database dates the session)`);
+      log(`swarm → ${subject.id} (convening; the database dates the session)`);
       c.members = {};
       c.nextAt = 0; // running now → pane shows "running…"
       try {
         const res = await e2e.runSession(subject, due.runs + 1, {
           rail: sessionRail,
-          onProgress: tuiActive ? committeeProgress(state, subject.id, log) : undefined,
+          onProgress: tuiActive ? swarmProgress(state, subject.id, log) : undefined,
         });
         c.publishedCount++;
         const synth: string = res?.pub?.session?.synthesis ?? "";
         const date: string = res?.pub?.session?.date ?? "(unknown)";
         c.history.push({ date, synthesis: synth });
         if (c.history.length > 4) c.history.shift();
-        log(`committee published ${date}/${subject.id}`);
+        log(`swarm published ${date}/${subject.id}`);
       } catch (err) {
-        log(`committee session failed (stack still running): ${err instanceof Error ? err.message : err}`);
+        log(`swarm session failed (stack still running): ${err instanceof Error ? err.message : err}`);
       }
       due.runs++;
       // Next slot comes from the PLAN (self-correcting, no drift), never from a
@@ -1553,13 +1553,13 @@ async function main(): Promise<void> {
       c.nextAt = due.nextAt;
     }
   }
-  void committeeDriver();
+  void swarmDriver();
 
   // ── Periodic new-member onboarding (§11 R8: real-inference eval) ─────────
   // Every admission launches ONE vanilla OpenCode member-agent container
   // (scripts/lib/onboarding-eval.ts) and hands it the canonical copy-paste
   // prompt with a generated identity — no scripting beyond that: the agent
-  // installs the committee-onboarding skill + `rmpc`, generates its own
+  // installs the swarm-onboarding skill + `rmpc`, generates its own
   // keypair, signs and submits the application over REST, and claims its token
   // entirely through its own real inference. This driver only OBSERVES (poll the public status
   // API + the admin roster) and performs the one scripted action §11 R7
@@ -1595,8 +1595,8 @@ async function main(): Promise<void> {
   // rather than running forever.
   // ADMISSION CADENCE comes from the profile (scripts/lib/demo-schedule.ts), not
   // from literals here: the first admission stays prompt under both profiles
-  // (after the base committee shows), and later admissions ride the fast
-  // profile's 5-min beat or, under `--stage`, the realistic committee interval.
+  // (after the base swarm shows), and later admissions ride the fast
+  // profile's 5-min beat or, under `--stage`, the realistic swarm interval.
   // Adapt the shared finite-roster planner (demo-newcomers.ts) to the
   // real-inference driver's identity shape. `identity.runId` is a LOCAL slug
   // only (this driver's bookkeeping key + the container's --title); the real
@@ -1663,17 +1663,17 @@ async function main(): Promise<void> {
         );
         continue;
       }
-      // Roster cap: once the active committee reaches the contract's
-      // COMMITTEE_ROSTER_CAP, stop admitting — the same finite-roster bound
+      // Roster cap: once the active swarm reaches the contract's
+      // SWARM_ROSTER_CAP, stop admitting — the same finite-roster bound
       // above already stops the demo from growing forever, but this stays as
       // defense in depth for a shared/reused roster. activeMemberCount() now
       // fails CONSERVATIVELY (assume full, never assume empty) on a read
       // error, so a transient fetch problem pauses admission instead of
       // silently waving one through.
       const active = await e2e.activeMemberCount();
-      if (active >= COMMITTEE_ROSTER_CAP) {
+      if (active >= SWARM_ROSTER_CAP) {
         state.upcoming = [];
-        log(`onboarding ${identity.name} skipped — roster full (${active}/${COMMITTEE_ROSTER_CAP})`);
+        log(`onboarding ${identity.name} skipped — roster full (${active}/${SWARM_ROSTER_CAP})`);
         continue;
       }
       startOnboarding(state, identity.runId, identity.name); // append to the persistent pane + drop from upcoming
@@ -1717,7 +1717,7 @@ async function main(): Promise<void> {
         transcript.finish(result, Date.now() - attemptStartedAt);
 
         // Rekey the pane entry to the server-minted memberId (§11 R2) as soon as
-        // it's known, so committeeProgress's later ev.memberId lookups match.
+        // it's known, so swarmProgress's later ev.memberId lookups match.
         const ob = state.onboarded.find((o) => o.memberId === identity.runId);
         if (ob && result.memberId) ob.memberId = result.memberId;
         const entryId = result.memberId ?? identity.runId;
@@ -1726,7 +1726,7 @@ async function main(): Promise<void> {
         // record — no fabricated sub-steps. Drop the harness's own trailing
         // "session" entry (it means "reached the active roster", which this
         // driver already tracks via `admitted` below); the strip's OWN
-        // session/memo/admitted tail tracks real committee participation.
+        // session/memo/admitted tail tracks real swarm participation.
         for (const s of result.steps) {
           if (s.step === "session") continue;
           setOnboardStep(state, entryId, s.step, s.status === "done" ? "done" : "pending");
@@ -1778,7 +1778,7 @@ async function main(): Promise<void> {
         // the SAME outcome vocabulary in the log — a run that reads "admitted"
         // and one that reads "refused" are then directly comparable.
         log(`onboarding ${identity.name} classified ${classifyOutcome(result)}`);
-        log(`onboarded ${identity.name} (#${n + 1}/${NEWCOMER_NAMES.length}) memberId=${result.memberId} — committee now ${e2e.MEMBERS.length} seats; awaiting first session`);
+        log(`onboarded ${identity.name} (#${n + 1}/${NEWCOMER_NAMES.length}) memberId=${result.memberId} — swarm now ${e2e.MEMBERS.length} seats; awaiting first session`);
       } catch (err) {
         log(`onboarding ${identity.name} eval threw (stack still running): ${err instanceof Error ? err.message : err}`);
         transcript.finishThrew(err, Date.now() - attemptStartedAt);

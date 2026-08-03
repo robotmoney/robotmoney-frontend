@@ -31,7 +31,7 @@
 # live backend at baseURL) and stays exclusively in the `e2e` workflow's
 # `test:browser` step. A future markup/style-only spec written in the
 # deterministic archive-fallback style (the pattern PR #327's
-# committee-subject.spec.ts introduced: force `/api/**` to fail and assert the
+# swarm-subject.spec.ts introduced: force `/api/**` to fail and assert the
 # static-archive render path) is a natural fit to add here later.
 #
 # CI taxonomy class: feature-correctness. No Docker, no live backend, no

@@ -16,7 +16,7 @@ For the *why* behind each choice, see [decisions.md](./decisions.md).
 - **Preserve the marketing UI** of robotmoney.net (reproduce the look exactly).
 - **Cherry-pick two feature areas**: the **regime/research** data views (the
   regime classifier + its regime-family research signals) and the **Investment
-  Committee**. Allocation / vault / wallet dashboards are out of scope, **except**
+  Swarm**. Allocation / vault / wallet dashboards are out of scope, **except**
   the `/allocation` page's vault-economics slice (TVL, share price, adapters,
   7-day APY), brought into scope by a live Base RPC pipeline — see
   [decisions.md §D15](./decisions.md#d15--live-vault-economics-pipeline-from-base-rpc-supersedes-d1s-vault-dashboard-exclusion)
@@ -87,7 +87,7 @@ robotmoney-frontend/
   `frontend/public/assets/js/app/lib/api.js`, using the API origin from
   `window.RM_CONFIG.API_BASE_URL` (set by `frontend/public/config.js`). `""` means
   same origin — the default, since the `api` co-serves this surface's SPA assets at
-  its subdomain root (in production, `committee.robotmoney.net`; see the
+  its subdomain root (in production, `swarm.robotmoney.net`; see the
   topology's [subdomain map](#3-the-surfaces--subdomain-map)).
 - The database schema and migrations live in `backend/`; the frontend knows only
   the DTOs in `contract`.
@@ -172,7 +172,7 @@ the GitHub UI, not something automatable from this repo.
   (`backend/tests/geckoterminal-resilience.test.ts`,
   `backend/tests/token-prices-resilience.test.ts`) — `backend.yml`'s own
   `bun test` excludes them (`--path-ignore-patterns`) so an unrelated backend
-  change (committee, admin, chain-agnostic routes) no longer pays for them.
+  change (swarm, admin, chain-agnostic routes) no longer pays for them.
   Broader tests that also happen to touch analytics/chain code but assert
   API-route behavior outside that surface
   (`backend/tests/api/wallet-balances.test.ts`,
@@ -187,8 +187,8 @@ the GitHub UI, not something automatable from this repo.
   `e2e`'s full LIVE demo boot. It stays system-correctness (Docker-backed,
   deferred on draft PRs), gated on the paths that surface actually depends on
   (`evals/**`, `scripts/lib/member-agent/**`, `scripts/lib/rmpc-fetch.ts`,
-  `scripts/lib/onboarding-eval.ts`, `scripts/lib/committee/**`,
-  `backend/src/committee/**`). The REAL-inference eval (the one that spends a
+  `scripts/lib/onboarding-eval.ts`, `scripts/lib/swarm/**`,
+  `backend/src/swarm/**`). The REAL-inference eval (the one that spends a
   model token) stays inside `e2e.yml`'s "Full-stack demo" step, unchanged — it
   deliberately reuses that already-booted LIVE stack rather than standing up a
   second one.
@@ -231,7 +231,7 @@ Harness code (today `scripts/`) separates by role rather than by medium:
 
 ```
 bin/         executable entrypoints — the `bun run` targets
-demo/        demo RUNTIME (the long-lived process): main, tui, schedule, committee/
+demo/        demo RUNTIME (the long-lived process): main, tui, schedule, swarm/
 stack/       SHARED compose lifecycle: profiles (core | full), ports, volumes
 agent/       SHARED member-agent primitives: Dockerfile, run, config, classify
 toolchain/   SHARED external-binary fetchers (rmpc)
@@ -263,7 +263,7 @@ into `<main>`. All browser-native, no build.
 frontend/public/
   index.html                 # the app shell: nav + <main id="view"> + footer
   config.js                  # window.RM_CONFIG = { API_BASE_URL } (per-env, no secrets)
-  views/*.html               # one HTML partial per route (home, allocation, regime, committee/*)
+  views/*.html               # one HTML partial per route (home, allocation, regime, swarm/*)
   assets/
     css/{tokens,design-system,components}.css
     js/app/
@@ -433,13 +433,13 @@ A small server on **Bun** using `Bun.serve` — no framework, no build (Bun runs
 TypeScript sources directly).
 
 - `src/api/index.ts` — the `Bun.serve` entry: a `/health` check and the API routes
-  (`comments`, `dashboards`, `committee`, `projects`, `admin`, `analytics`), using
+  (`comments`, `dashboards`, `swarm`, `projects`, `admin`, `analytics`), using
   `postgres` (postgres.js) with raw SQL.
 - **Serves the static frontend too.** When `STATIC_DIR` is set, the same process
   serves `frontend/public` via `Bun.file`, with an `index.html` fallback for SPA
   deep links — so the SPA and its API are **same-origin** (no CORS) with no
   reverse proxy. In production this surface is its own subdomain
-  (`committee.robotmoney.net`), Cloudflare-proxied for TLS (see the
+  (`swarm.robotmoney.net`), Cloudflare-proxied for TLS (see the
   topology's [subdomain map](#3-the-surfaces--subdomain-map)); CORS headers remain for an optional split-origin
   setup.
 - `src/worker/` — the always-on task-queue worker (see §7).
@@ -468,7 +468,7 @@ Four distinctions, kept deliberately separate:
   on-chain seam: later only the signature is anchored.)
 - **Credential exchange and membership are separate.** Active members exchange
   their member ID and bearer credential by signing a server-issued key-proof
-  challenge (`token-claim/challenge` → `token-claim`, issue #205). Committee
+  challenge (`token-claim/challenge` → `token-claim`, issue #205). Swarm
   membership starts with `apply` (metadata + public key), followed by an
   administrator-controlled `applied → active` transition.
 - **Scoped roles.** Every write is authorized to a role: members write only their
@@ -489,16 +489,16 @@ Four distinctions, kept deliberately separate:
 ## 6. Data model
 
 One Postgres database consolidates everything previously split across committed
-CSV/JSON, Upstash Redis (comments), and GitHub-as-DB (committee). Full schema in
+CSV/JSON, Upstash Redis (comments), and GitHub-as-DB (swarm). Full schema in
 `backend/migrations/`; the groups:
 
-- **Backends** (`0001_backends.sql`): `comments`; the committee tables
-  (`committee_members`, `committee_subjects`, `committee_sessions`,
-  `committee_takes`, `committee_briefs`, `committee_subject_snapshots`,
-  `committee_applications`, `committee_submissions`); and the single-row
+- **Backends** (`0001_backends.sql`): `comments`; the swarm tables
+  (`swarm_members`, `swarm_subjects`, `swarm_sessions`,
+  `swarm_takes`, `swarm_briefs`, `swarm_subject_snapshots`,
+  `swarm_applications`, `swarm_submissions`); and the single-row
   `allocation_framework` (shared by the allocation dashboard and the IC). The IC
   tables are detailed in §9.4 and get reconciled toward an append-only
-  `committee_recommendations` store in Phase 5.
+  `swarm_recommendations` store in Phase 5.
 - **Dashboard time-series** (`0002_dashboards.sql`): `vault_tvl`,
   `wallet_balances`, `prices`, `vault_apy`, `regime_snapshots`,
   `regime_indicators`, `research_signals`. The worker upserts on natural unique
@@ -535,13 +535,13 @@ startup). Lanes are deterministic kind allowlists applied inside the claim:
 
 | Lane | Claims | Purpose |
 |------|--------|---------|
-| `committee` | `committee.%` only | **Reserved** interactive session-lifecycle capacity — no other lane may claim these kinds. |
-| `analytics` | everything except `committee.%`/`research.%` | Internal scheduled pipelines (vault/wallet/buybacks/projects); legacy `regime.classify` rows are disabled/dead-lettered. |
+| `swarm` | `swarm.%` only | **Reserved** interactive session-lifecycle capacity — no other lane may claim these kinds. |
+| `analytics` | everything except `swarm.%`/`research.%` | Internal scheduled pipelines (vault/wallet/buybacks/projects); legacy `regime.classify` rows are disabled/dead-lettered. |
 | `research` | `research.%` only | Compatibility lane for retired queue rows; supported research runs in the independent producer. |
-| `generic` | everything except `committee.%` | Single-process dev convenience; never part of the compose topology and never able to consume reserved capacity. |
+| `generic` | everything except `swarm.%` | Single-process dev convenience; never part of the compose topology and never able to consume reserved capacity. |
 
 The production/default topology is one container per lane
-(`worker-committee`/`worker-analytics`/`worker-research` in
+(`worker-swarm`/`worker-analytics`/`worker-research` in
 `docker-compose.yml`), plus the non-queue `analytics-producer`. Worker lanes
 scale independently; producer cadence does not pass through a worker lane.
 Worker ids default to `<lane>-<pid>`, so `locked_by`, logs, and the admin jobs
@@ -575,7 +575,7 @@ serving `/api/admin/*`, and the buildless `/admin` frontend view
   all jobs (the log feed), with optional filters.
 - `POST /api/admin/auth` — validates the password for the login form.
 
-All four are PRIVILEGED with the same guard the committee/projects admin routes
+All four are PRIVILEGED with the same guard the swarm/projects admin routes
 use: `ADMIN_TOKEN` presented as `X-Admin-Token` (constant-time compared), or —
 only outside prod — the `config.allowInsecure` convenience path. Fail-closed: the
 403 check runs before any DB work. The `/admin` view is intentionally NOT in the
@@ -592,7 +592,7 @@ to return fail-closed `409` responses because the producer owns execution. Every
 `/admin/*` path resolves to this one shell
 fragment (`frontend/public/assets/js/app/routes.js`); the component reads
 `location.pathname` to pick a section. See the
-[Admin Surface specification](#admin-surface-research-and-investment-committee) for the
+[Admin Surface specification](#admin-surface-research-and-investment-swarm) for the
 full target contract — the backend routes those sections call are delivered by
 issue #155 and exercised here only through Playwright's mocked API fixtures
 until that lands.
@@ -650,7 +650,7 @@ into six independently testable stages — **access → extract → transform �
   add the asof-only regime **backtest** + predictive **correlations** payloads
   (ported from the original `regime-snapshot.json`).
 - **`store/`** — the only SQL writes, and **API-owned** (issue #106): only the
-  API process (its `/api/analytics` + committee regime routes via
+  API process (its `/api/analytics` + swarm regime routes via
   `store/direct.ts`), tests, and migration/demo tooling may import these
   writers. `regime-store.ts` (`saveRegimeSnapshots`), `research-store.ts`
   (`persistResearchSignal`), and `raw-history-store.ts` (the append-only
@@ -821,7 +821,7 @@ covers what *this repo* ships.
 
 **CI & demo — single box**, `docker-compose.yml`:
 
-- `postgres` + `api` + the three worker lanes (`worker-committee` /
+- `postgres` + `api` + the three worker lanes (`worker-swarm` /
   `worker-analytics` / `worker-research`, §7). The `api` process **also serves
   the static frontend** (`STATIC_DIR=/srv/frontend`) — one origin, no app-level proxy.
 - **DB modes** are driven by `DATABASE_URL` + the postgres volume:
@@ -832,7 +832,7 @@ covers what *this repo* ships.
 credentials in [deployment.md](./runbooks/deployment.md)):
 
 - **API tier** — `api` + the worker lanes on a DO droplet at its own subdomain
-  (`committee.robotmoney.net`); the `api` co-serves this surface's SPA assets at the
+  (`swarm.robotmoney.net`); the `api` co-serves this surface's SPA assets at the
   subdomain root. Cloudflare-proxied; a DO Cloud Firewall limits ingress to
   Cloudflare IPs.
 - **Data tier** — `DATABASE_URL` points at a **DO Managed Postgres HA cluster**
@@ -858,7 +858,7 @@ iframe and answers every `/api/*` call from committed goldens
 
 ---
 
-## 9. Investment Committee (feature architecture)
+## 9. Investment Swarm (feature architecture)
 
 > Status: design reference for the IC feature (built in Phase 5). It reuses the
 > shared infrastructure above — the boundary (§3), the buildless frontend (§4), the
@@ -866,16 +866,16 @@ iframe and answers every `/api/*` call from committed goldens
 > signed-submission protocol over the REST API.
 
 The IC's value is the **structured, signed, attributable recommendation record** —
-not the reasoning. Committee members are **autonomous third parties** who run their
+not the reasoning. Swarm members are **autonomous third parties** who run their
 own data/agent/model and publish their own memos; their only obligation is to POST
 a schema-valid, **signed** recommendation before a session's window closes. Robot
-Money is the **protocol host + optional data utility**, never a committee
+Money is the **protocol host + optional data utility**, never a swarm
 participant. **RM generates no member content**: a member who does not submit is
 recorded as **absent**, never fabricated. No blockchain in v0 (signature anchoring
 is a stubbed seam, §9.3).
 
-**Concept model — one committee, many of everything else.** There is exactly
-**one** Investment Committee. It has many **members** (the autonomous third parties
+**Concept model — one swarm, many of everything else.** There is exactly
+**one** Investment Swarm. It has many **members** (the autonomous third parties
 above, each with an analytical lens — macro risk, on-chain flows, momentum,
 contrarian); it reviews many **subjects** (the portfolios/wallets under review,
 e.g. `woon`/Woon Treasury, `mav`/Mav Holdings); and it runs many **sessions** —
@@ -884,7 +884,7 @@ one per `(date, subject)` pair — each advancing through the lifecycle
 terminal `cancelled`; §9.4). Each member posts at most one signed **recommendation** (a "take") per
 session; a non-submitting member is recorded **absent**, never fabricated. The
 plurals (members / subjects / sessions / takes) are the moving parts — they are
-**not** multiple committees.
+**not** multiple swarms.
 
 ### 9.1 Where the IC lives
 
@@ -892,13 +892,13 @@ It spans the layers but only through the contract (§3).
 
 | Layer | IC responsibility |
 |---|---|
-| `contract/` | `ROUTES.committee` + `committee.d.ts` DTOs — the only thing crossing boundaries. |
-| `backend/` | API routes (`src/api/routes/committee.ts`), committee Postgres tables, and the worker handlers that own the session lifecycle (§9.4). Owns the DB. |
-| `frontend/` | Read-only committee views (members/subjects/sessions/apply) reaching the API via `app/lib/api.js`. |
+| `contract/` | `ROUTES.swarm` + `swarm.d.ts` DTOs — the only thing crossing boundaries. |
+| `backend/` | API routes (`src/api/routes/swarm.ts`), swarm Postgres tables, and the worker handlers that own the session lifecycle (§9.4). Owns the DB. |
+| `frontend/` | Read-only swarm views (members/subjects/sessions/apply) reaching the API via `app/lib/api.js`. |
 
 All three depend only on `contract`; `frontend/` reaches `backend/` solely over
 HTTP. A member's agent participates the same way — plain HTTP calls to the REST
-API, following the `committee-onboarding` skill (§11 R4/R5) rather than
+API, following the `swarm-onboarding` skill (§11 R4/R5) rather than
 connecting to any RM-hosted service; nothing RM-hosted to install (D21 retired
 the earlier MCP-server surface).
 
@@ -906,7 +906,7 @@ the earlier MCP-server surface).
 
 | Actor | Identity | Scoped writes | Reads |
 |---|---|---|---|
-| **Committee member** | access-key hash for identity; **signing key** for authorship | their **own signed recommendations** (scoped to `member_id`) | briefs, regime, published sessions |
+| **Swarm member** | access-key hash for identity; **signing key** for authorship | their **own signed recommendations** (scoped to `member_id`) | briefs, regime, published sessions |
 | **RM analytics provider** | service credential / role | **regime snapshots** (+ RM-run subject snapshots) | — |
 | **Protocol host** (the worker) | the worker process | sessions, briefs, lifecycle state, aggregation | all |
 | **Public reader** | anonymous | nothing | published sessions, regime, memo links |
@@ -918,8 +918,8 @@ recommendation; neither can mutate sessions. Member and analytics-provider are
 
 ### 9.3 The protocol = two contracts
 
-**Submission** (`CommitteeSubmission` in `committee.d.ts`, POST
-`ROUTES.committee.submit`): `{ memberId, date, subjectId, nonce, stance,
+**Submission** (`SwarmSubmission` in `swarm.d.ts`, POST
+`ROUTES.swarm.submit`): `{ memberId, date, subjectId, nonce, stance,
 confidence, body | memoUrl, signature }`. The structured stance/confidence (+ typed
 recommendation shape) is the canonical machine-readable commitment; long-form prose
 can live at a member-hosted `memoUrl` the report links out to.
@@ -937,12 +937,12 @@ nothing else changes.
 
 ### 9.4 Data model & session lifecycle
 
-A committee migration extends §6 with append-only, audit-flavored tables:
-`committee_members`, `committee_member_keys` (public-key + access-key-hash
-registry), `committee_subjects`, `committee_sessions`, `committee_briefs`,
-**`committee_recommendations`** (append-only — payload + signature + nonce +
+A swarm migration extends §6 with append-only, audit-flavored tables:
+`swarm_members`, `swarm_member_keys` (public-key + access-key-hash
+registry), `swarm_subjects`, `swarm_sessions`, `swarm_briefs`,
+**`swarm_recommendations`** (append-only — payload + signature + nonce +
 `verified`; the canonical store behind a take/submission),
-`committee_subject_snapshots`, and `audit_log` (actor, action, scope, ts). Regime
+`swarm_subject_snapshots`, and `audit_log` (actor, action, scope, ts). Regime
 data is written by the analytics provider (§9.6).
 
 The **task queue (§7) is the orchestrator** — there is no GitHub-Actions cron. The
@@ -955,21 +955,21 @@ scheduled → collecting → window_closed → aggregated → published   (+ can
 (Brief publication is the `scheduled → collecting` transition, not a persisted
 state; `cancelled` is the terminal escape hatch.)
 
-- `committee.open_session` (cron) — pick the rotation subject, create the session.
-- `committee.publish_brief` — assemble the brief (regime + subject snapshot + recent
+- `swarm.open_session` (cron) — pick the rotation subject, create the session.
+- `swarm.publish_brief` — assemble the brief (regime + subject snapshot + recent
   sessions); open the submission window.
 - *window:* members submit via the REST `submit` endpoint, calling the same
   **domain handler**, not the worker.
-- `committee.close_window` (cron at deadline) — stop accepting submissions. For a
+- `swarm.close_window` (cron at deadline) — stop accepting submissions. For a
   session with a frozen expected roster (§9.4.1), this also materializes one durable
   `absent` agent-health event per non-excused member who never submitted.
-- `committee.aggregate` — deterministic rollup + optional editorial synthesis **over
+- `swarm.aggregate` — deterministic rollup + optional editorial synthesis **over
   the takes actually posted**; absences recorded as absent. **No host-authored takes.**
-- `committee.publish` — mark the session visible via API + frontend.
+- `swarm.publish` — mark the session visible via API + frontend.
 
-The five `committee.*` cron rows are **environment-configurable** (issue #208):
-`COMMITTEE_SCHEDULES_ENABLED` (default `false`) is the single switch for the whole
-sequence, plus a `COMMITTEE_*_CRON` variable per kind and `COMMITTEE_WINDOW_MINUTES`
+The five `swarm.*` cron rows are **environment-configurable** (issue #208):
+`SWARM_SCHEDULES_ENABLED` (default `false`) is the single switch for the whole
+sequence, plus a `SWARM_*_CRON` variable per kind and `SWARM_WINDOW_MINUTES`
 for the submission-window length. Production explicitly enables the daily
 06:00–10:00 UTC sequence; staging may accelerate the cadence; repo demo/e2e stays
 disabled (the demo drives lifecycle jobs itself via the admin enqueue-job endpoint,
@@ -980,9 +980,9 @@ existing `job_schedules` rows, not just a fresh database.
 
 A roster member missing its expected submission window, and a rejected/tampered
 submission signature, were previously visible only in an agent's own stdout.
-Both are now recorded on a durable, append-only `committee_agent_health_events`
+Both are now recorded on a durable, append-only `swarm_agent_health_events`
 table (bounded, redacted `detail` — never a raw signature/public key/payload) and
-exposed admin-only via `GET /api/committee/admin/agent-health` (raw event history
+exposed admin-only via `GET /api/swarm/admin/agent-health` (raw event history
 + per-type counts). There is no automatic dead-agent threshold — an operator reads
 the history and decides.
 
@@ -991,7 +991,7 @@ the history and decides.
 The backend is a **domain/service layer** (plain Bun/TS functions over Postgres:
 `getRegime()`, `getBrief()`, `getSession()`, `verifyAndStoreSubmission()`,
 `aggregateSession()`, …) where window enforcement, signature verification, and
-authz live **once**. **REST/JSON** (`Bun.serve`, paths in `ROUTES.committee`) is
+authz live **once**. **REST/JSON** (`Bun.serve`, paths in `ROUTES.swarm`) is
 the only transport — the website's transport and every member's transport (D21
 retired the MCP transport that previously shared this layer). Reads public
 (`members`, `subjects/:id`, `sessions`, `brief`); writes scoped (`apply` +
@@ -1000,18 +1000,18 @@ retired the MCP transport that previously shared this layer). Reads public
 #### 9.5.1 Member surface — skill-taught, REST-only
 
 A member's agent has nothing RM-hosted to connect to: it calls the REST API
-directly. The **`committee-onboarding` skill** — maintained for development and
-evaluation at `frontend/public/skills/committee-onboarding/SKILL.md` and
+directly. The **`swarm-onboarding` skill** — maintained for development and
+evaluation at `frontend/public/skills/swarm-onboarding/SKILL.md` and
 installed into the agent's own harness — is the procedure a member's owner
 follows, and is itself the discovery mechanism. The production prompt retains
 the published `robotmoney-core` URL; synchronizing an approved repo-owned skill
 to that release location is a separate release concern, never a prerequisite
 for local evaluation. It teaches installing and configuring the `rmpc` client
 (keygen, canonical-payload signing) and then walks the agent through the REST
-calls (`ROUTES.committee.apply`, `signingPayload`, `submit`, `memos`).
+calls (`ROUTES.swarm.apply`, `signingPayload`, `submit`, `memos`).
 **Signing stays member-side**: `rmpc` signs the canonical payload in the
 member's own environment and the request carries the `signature`, which the
-server only **verifies**. `ROUTES.committee.signingPayload` returns the exact
+server only **verifies**. `ROUTES.swarm.signingPayload` returns the exact
 canonical bytes to sign.
 
 Endpoints exercised: **read** (`openSession`, `sessions`, `session`, `brief`,
@@ -1041,7 +1041,7 @@ substitute for the analytics role.
 **Implemented boundary.** `analytics-producer` has no database or admin
 credential, owns the regime/research cron timers, computes on its side, and
 submits through the typed analytics routes. Its bearer is file-mounted only into
-the producer and API verifier; shared workers, the demo host, and committee
+the producer and API verifier; shared workers, the demo host, and swarm
 members do not receive it. Consumer schedules are disabled and legacy queued
 analytics jobs are dead-lettered. Admin retry/toggle/rerun/enqueue operations and
 the retired research-eligibility endpoint fail closed, so no supported consumer
@@ -1057,7 +1057,7 @@ independent.
 
 **Implemented member/eval topology.** E2E runs the real single-box stack
 (Postgres + API + worker), but each onboarding candidate and each present
-committee member runs in its **own disposable member-agent container** through
+swarm member runs in its **own disposable member-agent container** through
 `scripts/agent/member-agent.ts`'s shared `runMemberAgent()` primitive.
 Containers inherit no host environment. Each gets only enumerated
 connection/session facts, its scoped model credential when inference requires
@@ -1070,8 +1070,8 @@ key generated during admission is the key used in later sessions. Inside the
 container, `scripts/agent/member-session-client.ts` fetches regime and brief data
 over REST, performs the member's live inference, builds and signs the canonical
 payload, posts its memo, and submits its recommendation. The harness-side
-`scripts/lib/committee/agent.ts` only launches/observes the container and may
-register a fixed demo member's public key once; `scripts/lib/committee/session.ts`
+`scripts/lib/swarm/agent.ts` only launches/observes the container and may
+register a fixed demo member's public key once; `scripts/lib/swarm/session.ts`
 owns session orchestration. Neither harness module holds a member private key or
 authors, signs, repairs, or submits a take.
 
@@ -1096,14 +1096,14 @@ selected model requires it (§11.3 E1). Inference is time-bounded
 bracketed cleanup, and member outcomes are settled independently so one failure
 does not sink the session (#122).
 
-The required `e2e` demo boot therefore executes and asserts live committee-take
+The required `e2e` demo boot therefore executes and asserts live swarm-take
 authorship on every run. The nightly workflow additionally measures
 real-inference **onboarding** (§11.3), a distinct surface.
 
 ### 9.8 Phase-5 build order & reconciliation
 
-Build order: (1) committee migration (§9.4 tables + key registry); (2) finalize the
-`CommitteeSubmission`/`CommitteeTake` DTOs; (3) API `committee.ts` (reads, `apply`,
+Build order: (1) swarm migration (§9.4 tables + key registry); (2) finalize the
+`SwarmSubmission`/`SwarmTake` DTOs; (3) API `swarm.ts` (reads, `apply`,
 `submit` with access-key + signature verification + window enforcement);
 (4) orchestration handlers + `job_schedules` rows; (5) role-gated analytics regime
 write; (6) E2E harness (REST-only, D21); (7) frontend pages; (8) stubbed
@@ -1111,14 +1111,14 @@ on-chain anchor adapter. Steps 1–6 are the irreducible core.
 
 Reconciliation with the current scaffolding (the migration written in §6 reflects an
 earlier prototype): the canonical store becomes append-only
-`committee_recommendations` (reconcile `committee_takes`/`committee_submissions`
-into it); `CommitteeTake.model`/`generatedAt` become **optional member-declared
+`swarm_recommendations` (reconcile `swarm_takes`/`swarm_submissions`
+into it); `SwarmTake.model`/`generatedAt` become **optional member-declared
 provenance** (a take is member-submitted and signed, not host/LLM-generated);
 add **signature verification + a member public-key registry** (today `keys.ts`
 covers access-key hashing only); add the **role/authz layer** (member /
 analytics-provider / host), ideally with Postgres row-level security as
 defense-in-depth; and add the **role-gated regime write** endpoint. The worker's
-committee handlers are **orchestration** (open/brief/close/aggregate/publish), never
+swarm handlers are **orchestration** (open/brief/close/aggregate/publish), never
 generation of member takes.
 
 ---
@@ -1382,7 +1382,7 @@ from this repo's own tables and pipelines instead of Supabase.
 - **Admin-managed overviews, no AI enrichment (issue #93/#96).** `overview_short`/
   `overview_long`/`description` are free text written *only* through the
   privileged `POST /api/projects/admin/:slug` route
-  (`updateProjectOverview()`, admin-token gated the same way committee routes
+  (`updateProjectOverview()`, admin-token gated the same way swarm routes
   are). There is no LLM/AI call anywhere on the projects read or write path.
   The scheduled `projects.discover` upsert deliberately excludes
   `overview_short`/`overview_long` from its `ON CONFLICT DO UPDATE` set, so a
@@ -1649,10 +1649,10 @@ interface WalletSleeves {
 
 - **Method**: GET (no query params).
 - **Module/function**: `backend/src/chain/allocation-framework.ts` (or a `db/` reader) →
-  `getAllocationFramework()`. This is **admin/committee-managed** data (no chain
+  `getAllocationFramework()`. This is **admin/swarm-managed** data (no chain
   read, no AI enrichment — see the "projects overviews admin-managed" policy):
   it reads the single-row `allocation_framework` table.
-- **Source of truth**: `robotmoney-site/data/committee/allocation.json`
+- **Source of truth**: `robotmoney-site/data/swarm/allocation.json`
   (`buckets[].target_weight` + `items[].target_weight`, `vault_contract
   0x4f83…49dd`) seeded into `allocation_framework`. Replaces the baked bucket
   percentages in `allocation.html` (95% Conservative DeFi Yield / 5% Agent
@@ -1676,7 +1676,7 @@ interface AllocationFramework {
   buckets: AllocationBucket[];    // 2x2 detail cards
   asOf: string;                   // allocation_framework.asof (ISO day) or read time
   source: "live" | "stub";
-  managed: true;                  // admin/committee-authored, never chain-derived
+  managed: true;                  // admin/swarm-authored, never chain-derived
 }
 ```
 
@@ -1708,8 +1708,8 @@ interface AllocationFramework {
 ```
 > The bucket-item weights above are the shape/example only. The implementer
 > seeds the exact `target_weight` values from
-> `robotmoney-site/data/committee/allocation.json`; do not invent weights the
-> committee data does not carry.
+> `robotmoney-site/data/swarm/allocation.json`; do not invent weights the
+> swarm data does not carry.
 
 ---
 
@@ -1724,7 +1724,7 @@ interface AllocationFramework {
   upsert-on-natural-key convention as `0012`/`0014`. Seed the 10 historical rows
   `ON CONFLICT DO NOTHING` with `provenance='seed'`.
 - **Seed** `allocation_framework` (id=1) from
-  `robotmoney-site/data/committee/allocation.json` in `backend/src/db/seed.ts`.
+  `robotmoney-site/data/swarm/allocation.json` in `backend/src/db/seed.ts`.
 - **Goldens**: every new route MUST have a `routes[...]` entry in
   `goldens/api-goldens.json` (preview 404s otherwise). Use the examples above as
   the shape; regenerate real values with `bun run goldens:update` against a
@@ -1738,7 +1738,7 @@ interface AllocationFramework {
 
 ## Demo Specification
 
-What `bun run demo` must demonstrate to exercise the full Investment Committee lifecycle —
+What `bun run demo` must demonstrate to exercise the full Investment Swarm lifecycle —
 a single command that provisions everything, runs the session lifecycle end-to-end, and
 keeps the stack live as a **standing demo** (see §0). Ctrl-C / SIGTERM tears the stack
 down **but keeps the postgres data** (see §0(c)); a startup failure leaves it up for
@@ -1747,12 +1747,12 @@ also keeping its data. `bun run demo -- --pg-data <host-dir>` bind-mounts postgr
 host directory so a reboot resumes from it; `bun run demo:clean` is the only command that
 deletes demo data volumes.
 
-> **One committee, not many.** Everything below exercises the *single* Investment
-> Committee. The harness drives it through **two sessions** (session 1 = today's
+> **One swarm, not many.** Everything below exercises the *single* Investment
+> Swarm. The harness drives it through **two sessions** (session 1 = today's
 > subject; session 2 = a different subject the next day, referencing session 1's
 > outcome), with N **members** submitting signed takes and one deliberate no-show
 > (recorded absent). These plurals — members / subjects / sessions / takes — are the
-> moving parts of the one committee, **not** separate committees.
+> moving parts of the one swarm, **not** separate swarms.
 
 > **D21 migration note.** MCP is retired (see [decisions.md
 > D21](./decisions.md)); the normative sections below (§1, §§3–6, §11) already
@@ -1787,7 +1787,7 @@ flowchart TB
         NX["… every 5min fast / every 6h pinned"]
     end
 
-    subgraph Session["📋 Committee Session (per subject, cadence profile: ~2min fast / 6h pinned)"]
+    subgraph Session["📋 Swarm Session (per subject, cadence profile: ~2min fast / 6h pinned)"]
         direction LR
         S1["scheduled"] --> S2["collecting"] --> S3["window_closed"] --> S4["aggregated"] --> S5["published"]
     end
@@ -1799,7 +1799,7 @@ flowchart TB
 
     subgraph TUI["🖥 TUI Panels"]
         TP["Research Queue"]
-        TP2["Committee Status"]
+        TP2["Swarm Status"]
         TP3["Onboarding Strip"]
     end
 
@@ -1888,13 +1888,13 @@ profile is stated once in `scripts/lib/demo-schedule.ts`:
 
 | | `bun run demo` / CI (**fast**) | `bun run demo -- --static-port` (**realistic**) |
 |---|---|---|
-| Committee session, per subject | ~2 min | 6 h |
+| Swarm session, per subject | ~2 min | 6 h |
 | Subjects (2) phase offset → a session lands | ~1 min | ~3 h |
 | Research (`PRODUCER_RESEARCH_CRON`) | `0 23 * * *` | `0 */3 * * *` |
 | Regime (`PRODUCER_REGIME_CRON`) | `30 22 * * *` | `30 */3 * * *` |
 | Newcomer admissions | first ~1 min, then every 5 min | first ~1 min, then every 6 h |
 
-A real investment committee does not sit every two minutes, so the standing
+A real investment swarm does not sit every two minutes, so the standing
 public demo reads as a plausibly-paced record rather than a toy — and it stops
 burning ~30 sessions/hour/subject of provider quota on a host that shares its
 per-IP limits with CI. **Bring-up is prompt under both profiles**: every
@@ -1904,7 +1904,7 @@ in `scripts/lib/demo-schedule.ts`, executed in
 load; the slow profile governs only steady state. The fast profile is what CI
 runs and is pinned to today's values — the nightly LIVE smoke derives its poll
 deadline from the **fast** profile explicitly (`scripts/demo-live-smoke.ts`), so
-a 6 h committee interval can never become a 12 h poll budget. A `--static-port` boot is
+a 6 h swarm interval can never become a 12 h poll budget. A `--static-port` boot is
 the only thing that injects `PRODUCER_*_CRON` into compose (through
 `resolveDemoEnv`'s `composeEnv`); every other boot resolves the committed
 `docker-compose.yml` defaults untouched.
@@ -1923,14 +1923,14 @@ the only thing that injects `PRODUCER_*_CRON` into compose (through
   self-hosted CI runner share one host IP, and per-minute GeckoTerminal/Base-RPC
   sampling exhausts the per-IP quotas (hourly token prices are an accepted demo
   tradeoff; the seed's cold-start enqueue still lands a live sample at boot).
-- **Committee opinions** — driven by a loop inside `scripts/demo.ts`, because a
-  committee session needs live member agents to sign + submit takes. After a
+- **Swarm opinions** — driven by a loop inside `scripts/demo.ts`, because a
+  swarm session needs live member agents to sign + submit takes. After a
   one-time setup it runs one full session (open → brief → collect → agents →
-  close → aggregate → publish) on the profile's committee interval, so sessions
+  close → aggregate → publish) on the profile's swarm interval, so sessions
   accumulate. The timetable is the pure `planSubjectSchedules` / `plannedRunAt`
   pair in `scripts/lib/demo-schedule.ts` — the driver keeps only the I/O. It
   reuses the `runSession` runner exported from
-  `scripts/lib/committee/session.ts` (whose entry-point `main()` is guarded so
+  `scripts/lib/swarm/session.ts` (whose entry-point `main()` is guarded so
   importing it does not trigger the standalone flow).
 
   **THE DATABASE DATES A SESSION. Nothing wipes.** Both of those were once
@@ -1952,8 +1952,8 @@ the only thing that injects `PRODUCER_*_CRON` into compose (through
   bring-up may TRUNCATE rows it did not create.
 
   Two consequences worth knowing. `(date, subject)` no longer identifies one
-  session, so `/api/committee/sessions/:date/:subject` resolves to the LATEST
-  sitting that day and `/api/committee/sessions/:id` is the exact handle the
+  session, so `/api/swarm/sessions/:date/:subject` resolves to the LATEST
+  sitting that day and `/api/swarm/sessions/:id` is the exact handle the
   session lists link by. And the member-facing signed payload is UNCHANGED — it
   still carries `date`; submissions resolve to the subject's open session and
   then assert the signed date agrees, so no `rmpc` build, onboarding doc or
@@ -2058,14 +2058,14 @@ scheduled → collecting → window_closed → aggregated → published   (+ can
 
 Transitions must go through the **worker job pipeline**, not direct domain calls:
 
-- Each lifecycle transition is a job kind (`committee.open_session`,
-  `committee.publish_brief`, `committee.close_window`, `committee.aggregate`,
-  `committee.publish`) enqueued via the scheduler or explicitly for the demo.
+- Each lifecycle transition is a job kind (`swarm.open_session`,
+  `swarm.publish_brief`, `swarm.close_window`, `swarm.aggregate`,
+  `swarm.publish`) enqueued via the scheduler or explicitly for the demo.
 - Jobs are claimed and executed through the real `FOR UPDATE SKIP LOCKED` claim loop.
 - Job schedules are seeded so a no-intervention run would also progress through the
   lifecycle (even if the demo also triggers them explicitly for determinism).
-  *(As shipped: the `committee.*` schedule rows are seeded disabled by default —
-  `COMMITTEE_SCHEDULES_ENABLED`, issue #208 / PR #229 — and the demo pins them
+  *(As shipped: the `swarm.*` schedule rows are seeded disabled by default —
+  `SWARM_SCHEDULES_ENABLED`, issue #208 / PR #229 — and the demo pins them
   disabled, driving the lifecycle transitions explicitly via the admin
   enqueue-job endpoint.)*
 
@@ -2076,16 +2076,16 @@ Transitions must go through the **worker job pipeline**, not direct domain calls
 REST is the only transport (D21 retired the MCP server); the routes below
 must be demonstrated exercising the same domain code:
 
-- `POST /api/committee/admin/open`
-- `POST /api/committee/admin/brief`
-- `POST /api/committee/admin/close`
-- `POST /api/committee/admin/aggregate`
-- `POST /api/committee/admin/publish`
-- `POST /api/committee/submit`
-- `POST /api/committee/regime` (role-gated analytics write)
-- `GET /api/committee/members`
-- `GET /api/committee/sessions` / `GET /api/committee/sessions/:date/:subject`
-- `GET /api/committee/brief?date=&subject=`
+- `POST /api/swarm/admin/open`
+- `POST /api/swarm/admin/brief`
+- `POST /api/swarm/admin/close`
+- `POST /api/swarm/admin/aggregate`
+- `POST /api/swarm/admin/publish`
+- `POST /api/swarm/submit`
+- `POST /api/swarm/regime` (role-gated analytics write)
+- `GET /api/swarm/members`
+- `GET /api/swarm/sessions` / `GET /api/swarm/sessions/:date/:subject`
+- `GET /api/swarm/brief?date=&subject=`
 - `GET /api/dashboards/regime-snapshots`
 - `GET /api/dashboards/research-signals/:key`
 
@@ -2097,7 +2097,7 @@ correctly in the SPA:
 - Signed takes display with verification badges (green check / red mismatch).
 - Absent members are listed as absent.
 - Regime chart and research signal views render.
-- The `/committee` view shows the published session.
+- The `/swarm` view shows the published session.
 - `memoUrl` values (if any) render as outbound links.
 
 ## 4. Actors and roles
@@ -2106,7 +2106,7 @@ Every actor role must be exercised and cross-role write denial asserted:
 
 | Actor | What the demo must do |
 |---|---|
-| **Committee member** (× N agents) | Call the REST API, read regime/brief, sign with own ed25519 key, submit recommendation. One agent deliberately no-shows. Members must NOT be able to write regime data or mutate sessions. |
+| **Swarm member** (× N agents) | Call the REST API, read regime/brief, sign with own ed25519 key, submit recommendation. One agent deliberately no-shows. Members must NOT be able to write regime data or mutate sessions. |
 | **RM analytics provider** | Write a regime snapshot (and optionally research signals) under a scoped credential. Must NOT be able to submit recommendations or mutate sessions. |
 | **Protocol host (worker)** | Drive lifecycle transitions through the job queue. Must NOT generate member takes. |
 | **Public reader** | Anonymous reads: published sessions, regime, research signals, member list. Must NOT write anything. |
@@ -2134,7 +2134,7 @@ Each agent must:
 1. Generate its own ed25519 keypair on its own machine, via the `rmpc` binary
    (never server-side — see §11 R3).
 2. Register via the member onboarding flow (§11): after installing the
-   `committee-onboarding` skill and `rmpc`, and local keygen, the agent submits
+   `swarm-onboarding` skill and `rmpc`, and local keygen, the agent submits
    a signed application (username, contact, public key, `rmpc` signature) via
    the REST API; the server verifies it and issues the member UUID.
 3. Identify itself to the REST API with its access-key hash (or bearer token
@@ -2143,10 +2143,10 @@ Each agent must:
    hardcoded stance based on agent identity).
 5. Decide a stance using a deterministic but non-trivial policy (weighted composite of
    regime signals + per-agent bias).
-6. Fetch the canonical signing payload via `ROUTES.committee.signingPayload`.
+6. Fetch the canonical signing payload via `ROUTES.swarm.signingPayload`.
 7. Sign with its own private key (managed by `rmpc`).
-8. Submit via `ROUTES.committee.submit`.
-9. Optionally publish a memo via `ROUTES.committee.memos` (or via `memoUrl` in the
+8. Submit via `ROUTES.swarm.submit`.
+9. Optionally publish a memo via `ROUTES.swarm.memos` (or via `memoUrl` in the
    submission).
 
 RM never holds the private key at any point.
@@ -2179,12 +2179,12 @@ and runs the loud-failure guards that keep broken demos off main:
 
 - `scripts/demo-frontend-check.ts` — the **core-surface-missing detector**: fetches
   each route fragment from the live backend and exits non-zero if a core surface marker
-  (e.g. `x-data="committeeView()"`) is absent. Its wallet-balances provenance
+  (e.g. `x-data="swarmView()"`) is absent. Its wallet-balances provenance
   assertion (issue #134) always expects `live` (`stale`/`seed` are allowed
   degrades, loudly logged) now that there is only one supported demo mode.
 - `test:browser` (Playwright, `spa.spec.ts`) — drives the rendered SPA.
 - `scripts/demo-live-smoke.ts` (issue #128) — asserts the LIVE steady state:
-  ≥2 published committee sessions (the #101 starvation guard), a fresh regime
+  ≥2 published swarm sessions (the #101 starvation guard), a fresh regime
   snapshot, wallet + vault-economics provenance `live` (only the documented
   #120 ZYFAI/GIZA degrades tolerated, loud-logged), and both research signals
   landed. The required gate, the push-to-`main` run and the nightly `schedule`
@@ -2197,7 +2197,7 @@ The core-surface detector's own loud-failure path is **self-tested**, not assume
 `scripts/tests/integration/demo-frontend-check.test.ts` (run in the required `integration` job via
 `bun run test`) spawns the real `scripts/demo-frontend-check.ts` against an in-process
 stub backend and proves both directions — it exits non-zero when the
-`x-data="committeeView()"` marker is stripped from the served `/views/committee.html`,
+`x-data="swarmView()"` marker is stripped from the served `/views/swarm.html`,
 and exits 0 against the correct, unmodified content — so a change that silently weakened
 the detector's assertions is caught. The `demo-live-smoke.ts` assertions are likewise
 self-tested by `scripts/tests/integration/demo-live-smoke.test.ts`.
@@ -2282,7 +2282,7 @@ The demo must demonstrate the full agent memo lifecycle:
 1. At least one agent publishes a long-form memo at a member-hosted URL (or a
    simulated URL within the demo).
 2. The `memoUrl` is included in the submission payload and covered by the signature.
-3. `ROUTES.committee.memos` writes the memo to the member's own storage and
+3. `ROUTES.swarm.memos` writes the memo to the member's own storage and
    returns the URL.
 4. The published session frontend renders the `memoUrl` as a link.
 5. Tampering with the `memoUrl` after submission invalidates the signature (asserted
@@ -2304,7 +2304,7 @@ In an interactive terminal the demo takes over the screen with a zero-dependency
 TUI (`scripts/lib/tui.ts`) that repaints ~4×/s. Raw logs are **suppressed** on screen;
 the TUI shows only distilled state. Layout:
 
-- **Services** — the run's URLs (Site / Regime / Committee / Research per key / MCP /
+- **Services** — the run's URLs (Site / Regime / Swarm / Research per key / MCP /
   Admin), on `127.0.0.1:<random port>`. The **Admin** entry is the `/admin`
   task-queue jobs dashboard (#117); its password (`ADMIN_TOKEN`) is a fresh
   random value generated per run and rendered **only** here, on the pane's
@@ -2327,7 +2327,7 @@ the TUI shows only distilled state. Layout:
   own via real inference — the demo only observes the public application-status
   API and the admin roster (§11 R8). `session`/`memo`/`admitted` flip the same
   way as before: when the newly-admitted member is separately observed
-  submitting a signed take + posting a memo in a live committee session. A
+  submitting a signed take + posting a memo in a live swarm session. A
   failed or timed-out admission renders red — a real eval result, never
   retried — and, whether the prospect is admitted, fails, or is still
   in-progress, its secret-redacted transcript is retained in a discoverable,
@@ -2336,7 +2336,7 @@ the TUI shows only distilled state. Layout:
   checklist** in the pane (most recent shown, with a `(+N earlier admitted)`
   note), and an `upcoming → Name in m:ss …` line **counts down** to the next
   scheduled admissions. See §11.
-- **Activity** (largest region) — Research plus **one pane per committee subject**, laid
+- **Activity** (largest region) — Research plus **one pane per swarm subject**, laid
   out as responsive columns (side by side when they fit, stacking when the terminal is
   narrow):
   - **Research** — currently a **legacy observability view** over historical
@@ -2352,7 +2352,7 @@ the TUI shows only distilled state. Layout:
 - **Log footer** — the last few distilled events plus: `Ctrl-C / SIGTERM tears down the
   stack (containers + network; postgres data kept)`.
 
-Full verbose output from every process (api, worker, mcp, migrations, the committee
+Full verbose output from every process (api, worker, mcp, migrations, the swarm
 driver, and the orchestrator's own narration) is written to
 `.agents/demo-<project>.log` (path shown in the TUI header, recorded in the state file,
 and shown by `bun run demo:status`). On Ctrl-C / SIGTERM the terminal is restored first,
@@ -2370,7 +2370,7 @@ scheduled action as it fires.
 ── Robot Money demo ── READY ────────────────────────────
   Site:       http://127.0.0.1:<api>/
   Regime:     http://127.0.0.1:<api>/regime
-  Committee:  http://127.0.0.1:<api>/committee
+  Swarm:  http://127.0.0.1:<api>/swarm
   Research:   http://127.0.0.1:<api>/research/<key>
   MCP:        http://127.0.0.1:<mcp>/health
   Admin:      http://127.0.0.1:<api>/admin  (password shown in the interactive TUI only)
@@ -2378,7 +2378,7 @@ scheduled action as it fires.
   State file: .agents/demo-state.json
   Log file:   .agents/demo-<project>.log
   PG data:    volume <project>_pgdata (fresh-per-run; kept on teardown)
-  Demo actions: a committee session per subject every ~2 min (2 subjects staggered → one lands about every ~1 min); research daily at 23:00, regime daily at 22:30.
+  Demo actions: a swarm session per subject every ~2 min (2 subjects staggered → one lands about every ~1 min); research daily at 23:00, regime daily at 22:30.
   Ctrl-C / SIGTERM tears down the stack (containers + network; postgres data kept).
   Reclaim stopped demos' data volumes with: bun run demo:clean
 ```
@@ -2388,13 +2388,13 @@ in `scripts/lib/demo-schedule.ts`), never hardcoded, so it always states the
 cadence actually in force. The same boot with `--static-port` prints:
 
 ```
-  Demo actions: a committee session per subject every ~6 h (2 subjects staggered → one lands about every ~3 h); research every 3h at :00, regime every 3h at :30.
+  Demo actions: a swarm session per subject every ~6 h (2 subjects staggered → one lands about every ~3 h); research every 3h at :00, regime every 3h at :30.
 ```
 
 ## 11. Member onboarding (normative spec)
 
 Status: target sequence. This section is the plan of record for how a prospective
-committee member joins; the demo (§10.1), e2e suite, and user-facing docs are aligned to
+swarm member joins; the demo (§10.1), e2e suite, and user-facing docs are aligned to
 it (`scripts/lib/onboarding-eval.ts` drives the demo and e2e admission path;
 `scripts/rmpc-release-e2e.ts` is the no-inference proof of the same signed-apply chain).
 Where any other code differs, this section wins.
@@ -2417,18 +2417,18 @@ Where any other code differs, this section wins.
   key at any point in the lifecycle.
 - **R4 — One-prompt setup.** Onboarding starts with a single copy-paste prompt the
   owner drops into their agent harness (canonical text in the participation
-  quickstart). The prompt frames the committee, states up front the bounds an
+  quickstart). The prompt frames the swarm, states up front the bounds an
   agent needs in order to evaluate the request (key custody, and what a
-  committee signature does and does not authorize), tells the agent to install
-  the **`committee-onboarding` skill** into its own harness (the skill's exact
+  swarm signature does and does not authorize), tells the agent to install
+  the **`swarm-onboarding` skill** into its own harness (the skill's exact
   file URL — agents sent to the repo root reported the skill did not exist), and
   tells it to **ask** the owner for the identity to apply under (R1). It carries
   no fill-in-the-blank placeholders: operators paste it verbatim, so a literal
   `<display name>` left in the text reaches the server as a real application.
   Nothing beyond pasting this prompt and answering that one question is required
   of the human at setup time.
-- **R5 — Skill-based discovery.** The **`committee-onboarding` skill** at
-  `frontend/public/skills/committee-onboarding/SKILL.md` is the repo-owned
+- **R5 — Skill-based discovery.** The **`swarm-onboarding` skill** at
+  `frontend/public/skills/swarm-onboarding/SKILL.md` is the repo-owned
   canonical development and evaluation statement of the application steps — set up `rmpc`,
   generate keys, submit the signed application over the REST API, wait for
   approval, then participate — **and** the detailed procedure: setting up the
@@ -2447,7 +2447,7 @@ Where any other code differs, this section wins.
   payload, and the server verifies that signature against the submitted key before
   recording anything. Setup — `rmpc` install, keygen — therefore happens
   **before** apply, apply runs fully headlessly over the REST API
-  (`ROUTES.committee.apply`), and the review queue only ever contains
+  (`ROUTES.swarm.apply`), and the review queue only ever contains
   applications whose toolchain is already proven; no separate setup-proof step
   exists.
 - **R7 — Approval.** In production, the application then waits for a human admin to
@@ -2475,7 +2475,7 @@ Where any other code differs, this section wins.
 ### 11.2 Sequence
 
 1. **connect** — the owner pastes the canonical prompt (R4) into their agent harness.
-2. **discover** — following the prompt, the agent installs the `committee-onboarding`
+2. **discover** — following the prompt, the agent installs the `swarm-onboarding`
    skill (R5) into its own harness, which supplies the current, detailed application
    steps.
 3. **toolchain + keygen** — following the skill, the agent installs `rmpc`
@@ -2483,7 +2483,7 @@ Where any other code differs, this section wins.
 4. **apply (signed)** — headlessly, the agent submits the application: the owner's
    username and contact (R1) plus the public key and an `rmpc` signature over the
    canonical application payload (R6), over the REST API
-   (`ROUTES.committee.apply`); the web form accepts the same agent-produced signed
+   (`ROUTES.swarm.apply`); the web form accepts the same agent-produced signed
    payload. The server verifies the signature against the submitted key, records
    the application, and mints and returns the member's UUID (R2), which the status
    page tracks from then on. An unsigned or badly-signed submission never
@@ -2500,7 +2500,7 @@ lens, and a public key — so a freshly-admitted member has no tagline, mandate,
 biases, voice, mode, operator, or avatar; those fields render null (or a
 lens-derived fallback) until the member fills them in itself. **After claim**,
 the same bearer-authenticated member may call
-`POST /api/committee/members/:id/profile` (`ROUTES.committee.memberProfile`,
+`POST /api/swarm/members/:id/profile` (`ROUTES.swarm.memberProfile`,
 issue #325) with any subset of `{tagline, mandate, biases, voiceMd, mode,
 operator, avatar}` to author its own profile — the same fields the three
 manifest-seeded members (`athena`, `woon`, `robotmoney`) carry by hand. The
@@ -2522,7 +2522,7 @@ the previous admission finishes (real eval duration is additive, so a 30-minute
 timeout pushes the next attempt out by that much). The newcomer roster is
 **fixed and finite** — the five names in `scripts/lib/demo-newcomers.ts`, in
 order, with no generated fallback once the list is exhausted (#260). The driver
-then stops; the roster cap (`COMMITTEE_ROSTER_CAP`) is defence in depth and is
+then stops; the roster cap (`SWARM_ROSTER_CAP`) is defence in depth and is
 never reached by the standing demo. A failed admission is not retried and is not
 replaced, so the demo can finish with fewer than five newcomers seated — that is
 the eval result, reported rather than hidden.
@@ -2583,7 +2583,7 @@ agent can sequence the whole thing itself.
 | # | Layer | Proves | Stack | Observed by |
 |---|---|---|---|---|
 | 0 | runtime | image, `opencode.json`, provider reachable | none | trivial task completes; distinguishes *dead* from *refused* |
-| 1 | skill install | the agent can find and install `committee-onboarding` | none | `SKILL.md` present on disk in the runtime's skill path |
+| 1 | skill install | the agent can find and install `swarm-onboarding` | none | `SKILL.md` present on disk in the runtime's skill path |
 | 2 | toolchain | the agent can install `rmpc` for its own arch | none | binary on PATH; `--help` lists `committee-identity` |
 | 3 | keygen + signing | local ed25519 identity, byte-exact canonical payload | none | harness verifies the signature **offline** against `canonicalizeApplication` |
 | 4 | admission | the full R4→R8 sequence, unaided | `core` | server-minted member reaches the active roster |
@@ -2597,7 +2597,7 @@ Layers 1-3 observe by inspecting the **stopped container's filesystem** before
 removal, never by instructing the agent to emit artifacts — adding harness
 instructions would edit the task under test. Layer 4 uses the canonical
 `ONBOARDING_PROMPT` construction as its prefix, changing **only** the skill URL
-to `${apiUrlInternal}/skills/committee-onboarding/SKILL.md`: the prompt
+to `${apiUrlInternal}/skills/swarm-onboarding/SKILL.md`: the prompt
 asks the owner for identity rather than carrying blanks for a harness to
 substitute, so the unattended run answers that question — alongside the existing
 local-network note — in one clearly delimited block appended after the canonical
@@ -2660,7 +2660,7 @@ extra work. Cron minutes are staggered so the mirrors do not all start at once.
 
 The real-inference admission's scheduled home is therefore
 `.github/workflows/e2e.yml` itself, on the `schedule: 37 4 * * *` slot the
-retired `committee-opencode-nightly.yml` used to hold: `ONBOARDING_REAL_EVAL`
+retired `swarm-opencode-nightly.yml` used to hold: `ONBOARDING_REAL_EVAL`
 resolves to `"1"` on a `schedule` event exactly as it does on a `push`, so a
 nightly spends **one** real admission. That is a smaller per-night sweep than the
 retired nightly's models × identities, and a **larger denominator over time** —
@@ -2709,10 +2709,10 @@ exactly what an owner supplies before their agent ever starts —
   fill-in-the-blank placeholders for a harness to substitute (R4) — it **asks**
   its owner — so the harness answers that question in its appended note rather
   than rewriting the canonical text;
-- the committee API base URL for this run, because the ephemeral demo stack
+- the swarm API base URL for this run, because the ephemeral demo stack
   cannot serve the production host the docs name;
 - the keystore passphrase, exported into the agent's environment. The published
-  `committee-onboarding` skill tells the agent to ask its owner for this and to
+  `swarm-onboarding` skill tells the agent to ask its owner for this and to
   **wait** for them ("Tell me once it's set"), and forbids accepting the value
   in conversation. A headless container has no owner to answer, so an agent
   following the skill correctly *stops*. Supplying it is the owner's job, not a
@@ -2781,7 +2781,7 @@ the local eval's own artifacts (docs/reports/2026-07-29-local-onboarding-eval-as
 
 ---
 
-## Admin Surface: Research and Investment Committee
+## Admin Surface: Research and Investment Swarm
 
 Status: implementation specification
 Audience: engineering agents implementing the next admin phase
@@ -2794,15 +2794,15 @@ Build one authenticated operator surface that lets a Robot Money administrator:
 1. diagnose every run of the research pipeline from source access through the
    public report;
 2. inspect and safely rerun queue work;
-3. create and manage Investment Committee topics;
-4. add, activate, deactivate, and review committee members;
-5. schedule a committee session and observe its lifecycle;
+3. create and manage Investment Swarm topics;
+4. add, activate, deactivate, and review swarm members;
+5. schedule a swarm session and observe its lifecycle;
 6. inspect the exact roster, brief inputs, signed member recommendations,
    absences, aggregate, and publication for a session; and
 7. see an immutable audit trail for every admin mutation.
 
 An implementation is complete only when an admin can perform these workflows
-without SQL access, shell access, or manual calls to the existing committee
+without SQL access, shell access, or manual calls to the existing swarm
 admin dispatcher.
 
 ## 2. Decisions fixed by this specification
@@ -2814,15 +2814,15 @@ These decisions are not open implementation questions:
 - Keep the buildless Alpine frontend and the frontend-to-backend HTTP boundary.
 - Keep the Postgres queue as the executor. Admin requests enqueue lifecycle and
   research work; the browser never runs domain operations itself.
-- Preserve accepted committee recommendations as append-only signed records.
+- Preserve accepted swarm recommendations as append-only signed records.
   Admins cannot edit or delete them.
-- “Remove member” means deactivate. No committee member is hard-deleted.
-- “Topic” is the UI term; `committee_subjects` remains the database and API
+- “Remove member” means deactivate. No swarm member is hard-deleted.
+- “Topic” is the UI term; `swarm_subjects` remains the database and API
   domain term.
-- The persisted committee states are exactly `scheduled`, `collecting`,
+- The persisted swarm states are exactly `scheduled`, `collecting`,
   `window_closed`, `aggregated`, `published`, and the new terminal state
   `cancelled`. There is no persisted `brief_published` state in the product.
-- A committee session snapshots its expected roster when it is created.
+- A swarm session snapshots its expected roster when it is created.
   Later global member changes do not rewrite that roster or historical quorum.
 - Research recovery reruns a complete tool. Individual stages are not retried
   because the current stages share in-memory data and are not independently
@@ -2831,11 +2831,11 @@ These decisions are not open implementation questions:
   upserted by a rerun. The new run/stage records preserve who ran what, the
   before/after checksums, warnings, and outcome; this phase does not introduce
   versioned copies of every raw time-series row.
-- The seeded recurring committee schedules remain disabled. Product committee
+- The seeded recurring swarm schedules remain disabled. Product swarm
   scheduling uses one-off queue jobs scoped to a specific session. Empty-payload
   recurring rows cannot identify a subject or session and must not be enabled by
   this UI. *(Superseded by issue #208 / PR #229: schedules are
-  environment-configurable via `COMMITTEE_SCHEDULES_ENABLED` — see §9.4 of the
+  environment-configurable via `SWARM_SCHEDULES_ENABLED` — see §9.4 of the
   main document.)*
 
 ## 3. Current product baseline
@@ -2860,15 +2860,15 @@ The implementation must extend, not replace, these pieces:
   `/api/analytics/*` boundary and has no database credential. Migration `0016`
   continues denying the shared worker role writes to analytics tables. New
   analytics telemetry writes must respect the same boundary.
-- The current committee domain supports public reads, applications, activation,
+- The current swarm domain supports public reads, applications, activation,
   signed submissions, memos, subject creation, and the five-state lifecycle.
   Several lifecycle functions currently lack state guards; this plan adds them.
-- Canonical accepted takes live in `committee_recommendations`, one per
+- Canonical accepted takes live in `swarm_recommendations`, one per
   `(session_id, member_id)`, with replay protection on `(member_id, nonce)`.
   Invalid signatures are rejected before insert and are not retained. The admin
   UI therefore shows accepted submissions only; rejected submission-attempt
   forensics are out of scope.
-- Public committee DTOs intentionally omit secrets and admin metadata. Admin DTOs
+- Public swarm DTOs intentionally omit secrets and admin metadata. Admin DTOs
   must be new types rather than widening public responses with contact or key
   information.
 
@@ -2889,14 +2889,14 @@ Acceptance:
 
 ### US-A2 — See operational health
 
-As an admin, I can see current failures, stale research, active committee work,
+As an admin, I can see current failures, stale research, active swarm work,
 and the next scheduled events on one page.
 
 Acceptance:
 
 - Overview cards show queue counts, stale analytics outputs, historical retired
   consumer-job health, any accidentally enabled legacy analytics schedule, and
-  the next committee session event. Producer-native cadence/run health remains
+  the next swarm session event. Producer-native cadence/run health remains
   an observability follow-up.
 - Alerts distinguish `not_run`, `running`, `degraded`, `failed`, `dead`,
   `stale`, and `healthy`.
@@ -2973,7 +2973,7 @@ Acceptance:
 
 - Research rerun, analytics job retry, and analytics schedule-toggle endpoints
   return `409` without inserting a job or changing a schedule.
-- The committee admin dispatcher accepts lifecycle actions only; it cannot
+- The swarm admin dispatcher accepts lifecycle actions only; it cannot
   enqueue `regime.classify` or `research.refresh`.
 - The retired authenticated `research-eligibility` path returns
   `409 producer_owned` and performs zero queue/schedule mutations.
@@ -2989,25 +2989,25 @@ Acceptance:
 - Existing queue screens remain available under `/admin/queue`.
 - Filters cover kind, job status, run status, scope type/id, and created range.
 - Job detail includes payload, dedupe key, worker lock, attempts, every run, and
-  any linked analytics run or committee session.
+  any linked analytics run or swarm session.
 - “Retry” is available only for a `dead` job. It clones kind/payload/priority into
   a new pending job, gives it a unique manual dedupe key, and audits the source
   and new job ids. It never changes the dead row.
 - Schedule editing is limited to enabled/disabled for existing analytics
   schedules. Cron, timezone, kind, and payload are read-only in this phase.
-- The five disabled recurring `committee.*` rows are labelled “legacy/demo —
+- The five disabled recurring `swarm.*` rows are labelled “legacy/demo —
   not product scheduling” and cannot be enabled from the UI. *(Superseded by
   issue #208 / PR #229: schedules are environment-configurable via
-  `COMMITTEE_SCHEDULES_ENABLED` — see §9.4 of the main document.)*
+  `SWARM_SCHEDULES_ENABLED` — see §9.4 of the main document.)*
 
-### US-C1 — Create and edit a committee topic
+### US-C1 — Create and edit a swarm topic
 
-As a committee manager, I can add a topic and make it eligible for future
+As a swarm manager, I can add a topic and make it eligible for future
 sessions.
 
 Acceptance:
 
-- Create and edit support every durable `committee_subjects` field.
+- Create and edit support every durable `swarm_subjects` field.
 - New topic ids match `^[a-z0-9][a-z0-9-]{1,63}$` and are immutable after create.
 - Required fields are id, name, operator, thesis, source type, and
   recommendation type.
@@ -3020,9 +3020,9 @@ Acceptance:
   old sessions, briefs, snapshots, and recommendations unchanged.
 - Edits require the current `version`; a stale version returns 409.
 
-### US-C2 — Review and manage committee members
+### US-C2 — Review and manage swarm members
 
-As a committee manager, I can review applications and manually manage the
+As a swarm manager, I can review applications and manually manage the
 roster without destroying history.
 
 Acceptance:
@@ -3045,16 +3045,16 @@ Acceptance:
   atomically revokes old keys before issuing a new token.
 - Rejecting an application sets its application status to `rejected`, sets the
   member inactive, and leaves its key inactive.
-- `COMMITTEE_ROSTER_CAP` is HARD-ENFORCED on every transition-to-active. The
+- `SWARM_ROSTER_CAP` is HARD-ENFORCED on every transition-to-active. The
   production admin API (manual add, activate/approve, reactivate — and the demo
   `registerMember` shortcut) refuses an admission that would exceed the cap with
   a 409, race-safely (a transaction-scoped advisory lock serializes admissions
   so two concurrent activations cannot both slip past the last free seat).
 - All writes require the current member `version`; stale writes return 409.
 
-### US-C3 — Schedule and observe a committee session
+### US-C3 — Schedule and observe a swarm session
 
-As a committee manager, I can select a topic and schedule its collection and
+As a swarm manager, I can select a topic and schedule its collection and
 publication times.
 
 Acceptance:
@@ -3066,11 +3066,11 @@ Acceptance:
   of `briefOpensAt`.
 - `(date, subject_id)` remains unique.
 - Creation inserts the session in `scheduled`, snapshots all currently active
-  members into `committee_session_members`, and enqueues four one-off jobs:
+  members into `swarm_session_members`, and enqueues four one-off jobs:
   `publish_brief` at brief open, `close_window` at window close, `aggregate` one
   second after close, and `publish` at publish time.
-- Each job has `scope_type = 'committee_session'`, `scope_id = session UUID`, and
-  dedupe key `committee:<session-id>:<action>`. Repeated creation or enqueue does
+- Each job has `scope_type = 'swarm_session'`, `scope_id = session UUID`, and
+  dedupe key `swarm:<session-id>:<action>`. Repeated creation or enqueue does
   not duplicate jobs.
 - Session detail presents the timeline in UTC and browser-local time, linked job
   states, countdown, expected roster, response count, and next legal action.
@@ -3078,9 +3078,9 @@ Acceptance:
   session reaches `collecting`, an admin may explicitly add or excuse a roster
   member. Once collecting starts, the roster is immutable.
 
-### US-C4 — Operate guarded committee transitions
+### US-C4 — Operate guarded swarm transitions
 
-As a committee manager, I can run or recover a session lifecycle without
+As a swarm manager, I can run or recover a session lifecycle without
 creating impossible state.
 
 The transition matrix is authoritative:
@@ -3100,18 +3100,18 @@ artifact already exist; it must not rewrite timestamps or enqueue duplicate jobs
 `published` and `cancelled` are terminal in this phase.
 
 Manual actions enqueue the same worker kind used by scheduled actions and return
-202 with a job id. `cancel` and `reopen` add `committee.cancel` and
-`committee.reopen_window` worker kinds so every transition remains observable in
-the committee lane.
+202 with a job id. `cancel` and `reopen` add `swarm.cancel` and
+`swarm.reopen_window` worker kinds so every transition remains observable in
+the swarm lane.
 
 ### US-C5 — Inspect member datapoints and aggregation
 
-As a committee manager, I can inspect what every expected member supplied and
+As a swarm manager, I can inspect what every expected member supplied and
 how the aggregate was derived.
 
 Acceptance:
 
-- The roster matrix derives one row per `committee_session_members` row and
+- The roster matrix derives one row per `swarm_session_members` row and
   reports `expected`, `excused`, `submitted`, or `absent`.
 - `submitted` includes recommendation id, stance, confidence, received time,
   verification state, body, memo URL, nonce, signature, and canonical payload.
@@ -3123,7 +3123,7 @@ Acceptance:
 - The aggregate view shows stance counts, mean confidence, expected/submitted/
   absent counts, consensus, disagreements, actions or weights, and the source
   recommendation ids used.
-- No admin endpoint can update `committee_recommendations`.
+- No admin endpoint can update `swarm_recommendations`.
 
 ### US-A3 — Inspect audit history
 
@@ -3229,12 +3229,12 @@ Telemetry tables are analytics-owned: migration `0017` must explicitly revoke
 worker `INSERT/UPDATE/DELETE` on them. Worker telemetry is written through new
 analytics-provider endpoints, never the worker SQL connection.
 
-### 5.3 Committee integrity and scheduling
+### 5.3 Swarm integrity and scheduling
 
 Add `version int NOT NULL DEFAULT 1` and `updated_at timestamptz NOT NULL DEFAULT
-now()` to `committee_members`, `committee_subjects`, and `committee_sessions`.
+now()` to `swarm_members`, `swarm_subjects`, and `swarm_sessions`.
 
-Add to `committee_sessions`:
+Add to `swarm_sessions`:
 
 ```text
 brief_opens_at timestamptz
@@ -3248,11 +3248,11 @@ constraint. Add foreign keys from sessions/recommendations/snapshots/briefs to
 subjects only after a migration query proves there are no orphan subject ids;
 otherwise insert placeholder inactive subjects for the orphan ids first.
 
-Create `committee_session_members`:
+Create `swarm_session_members`:
 
 ```text
-session_id uuid references committee_sessions(id) on delete cascade
-member_id text references committee_members(id)
+session_id uuid references swarm_sessions(id) on delete cascade
+member_id text references swarm_members(id)
 member_name text not null
 member_lens text
 status text not null default 'expected' check (expected, excused)
@@ -3266,17 +3266,17 @@ Backfill existing sessions from the historical evidence available:
 
 - insert every member that submitted to the session as `expected` using current
   name/lens snapshots;
-- for sessions with `committee_recommendation.quorum.active`, add currently
+- for sessions with `swarm_recommendation.quorum.active`, add currently
   active members until the recorded active count is reached, ordered by member
   id; and
 - if the exact historical roster cannot be reconstructed, retain the row set and
   add an audit event `backfill_session_roster` with `scope.approximate = true`.
 
-Create `committee_session_events`:
+Create `swarm_session_events`:
 
 ```text
 id bigserial primary key
-session_id uuid references committee_sessions(id) on delete cascade
+session_id uuid references swarm_sessions(id) on delete cascade
 from_state text
 to_state text not null
 action text not null
@@ -3307,7 +3307,7 @@ before_state jsonb
 after_state jsonb
 outcome text not null default 'succeeded'
 job_id bigint references jobs(id) on delete set null
-session_id uuid references committee_sessions(id) on delete set null
+session_id uuid references swarm_sessions(id) on delete set null
 ```
 
 Index `(at DESC)`, `(target_type, target_id, at DESC)`, and `request_id`.
@@ -3322,8 +3322,8 @@ Index `(at DESC)`, `(target_type, target_id, at DESC)`, and `request_id`.
 - Add admin DTOs to `contract/src/admin.d.ts` and routes to
   `contract/src/routes.js`/`routes.d.ts`. Run `scripts/sync-contract.ts` so the
   browser contract copy stays generated from the canonical contract.
-- Add committee mutations to `backend/src/committee/domain.ts` or focused
-  modules under `backend/src/committee/`; both REST and workers call the same
+- Add swarm mutations to `backend/src/swarm/domain.ts` or focused
+  modules under `backend/src/swarm/`; both REST and workers call the same
   functions.
 - Add an optional analytics trace observer to `runAnalytics`. The compute path
   must remain usable with a no-op observer in tests and non-worker callers.
@@ -3384,23 +3384,23 @@ state is 409, accepted queue work is 202, and successful synchronous mutation is
 | `GET /api/admin/research/series/:indicator` | allowlisted raw history range |
 | `GET /api/admin/research/signals/:key/:date` | stored signal payload |
 | `POST /api/admin/research/rerun` | retired producer control; returns `409` without enqueue |
-| `GET /api/admin/committee/overview` | session/member/topic summary |
-| `GET/POST /api/admin/committee/subjects` | list/create topics |
-| `GET/PATCH /api/admin/committee/subjects/:id` | topic detail/edit |
-| `POST /api/admin/committee/subjects/:id/deactivate` | deactivate topic |
-| `GET /api/admin/committee/members` | all statuses/applications |
-| `GET /api/admin/committee/members/:id` | private admin member projection |
-| `POST /api/admin/committee/members` | manual active member add |
-| `PATCH /api/admin/committee/members/:id` | profile fields only |
-| `POST /api/admin/committee/members/:id/activate` | activate applicant |
-| `POST /api/admin/committee/members/:id/deactivate` | deactivate and revoke keys |
-| `POST /api/admin/committee/members/:id/reactivate` | new key/token and activate |
-| `POST /api/admin/committee/members/:id/rotate-key` | rotate active key/token |
-| `POST /api/admin/committee/members/:id/reject` | reject application |
-| `GET/POST /api/admin/committee/sessions` | list/create scheduled session |
-| `GET /api/admin/committee/sessions/:id` | complete operational session DTO |
-| `PATCH /api/admin/committee/sessions/:id/roster` | add/excuse before collecting |
-| `POST /api/admin/committee/sessions/:id/actions/:action` | enqueue transition |
+| `GET /api/admin/swarm/overview` | session/member/topic summary |
+| `GET/POST /api/admin/swarm/subjects` | list/create topics |
+| `GET/PATCH /api/admin/swarm/subjects/:id` | topic detail/edit |
+| `POST /api/admin/swarm/subjects/:id/deactivate` | deactivate topic |
+| `GET /api/admin/swarm/members` | all statuses/applications |
+| `GET /api/admin/swarm/members/:id` | private admin member projection |
+| `POST /api/admin/swarm/members` | manual active member add |
+| `PATCH /api/admin/swarm/members/:id` | profile fields only |
+| `POST /api/admin/swarm/members/:id/activate` | activate applicant |
+| `POST /api/admin/swarm/members/:id/deactivate` | deactivate and revoke keys |
+| `POST /api/admin/swarm/members/:id/reactivate` | new key/token and activate |
+| `POST /api/admin/swarm/members/:id/rotate-key` | rotate active key/token |
+| `POST /api/admin/swarm/members/:id/reject` | reject application |
+| `GET/POST /api/admin/swarm/sessions` | list/create scheduled session |
+| `GET /api/admin/swarm/sessions/:id` | complete operational session DTO |
+| `PATCH /api/admin/swarm/sessions/:id/roster` | add/excuse before collecting |
+| `POST /api/admin/swarm/sessions/:id/actions/:action` | enqueue transition |
 | `GET /api/admin/audit` | filtered append-only audit list |
 
 Mutation request and response shapes are fixed as follows. Unknown fields are
@@ -3500,7 +3500,7 @@ For a manual lifecycle action, first locate the scoped job with the canonical
 dedupe key. If it is pending, atomically move `run_after` to `now()` and return
 that job with `existing: true`. If it is running, return it unchanged with
 `existing: true`. If it is terminal or absent, enqueue a recovery job with
-dedupe key `committee:<session-id>:<action>:manual:<audit-request-id>`. This is
+dedupe key `swarm:<session-id>:<action>:manual:<audit-request-id>`. This is
 how “run now” coexists with the four jobs created at scheduling time.
 
 Reopen atomically changes the session to `collecting`, sets the new close time,
@@ -3509,7 +3509,7 @@ close/aggregate/publish jobs suffixed with the reopen event id. Cancel atomicall
 changes the session to `cancelled` and marks all pending scoped jobs cancelled.
 Neither operation touches running or terminal queue rows.
 
-The generic existing `/api/committee/admin/:action` endpoints remain for demo
+The generic existing `/api/swarm/admin/:action` endpoints remain for demo
 compatibility but the new browser must not call them. Mark `reset` and
 `subject_fixtures` dev/demo-only and return 403 for them when `RM_ENV=prod`.
 
@@ -3527,7 +3527,7 @@ Before wiring UI controls, correct these current behaviors:
 - `closeWindow` must detect a zero-row guarded update and return 409 instead of
   reporting a transition that did not occur.
 - `aggregateSession` must require `window_closed`, read expected members from
-  `committee_session_members`, and use the latest subject snapshot at or before
+  `swarm_session_members`, and use the latest subject snapshot at or before
   the session date.
 - `publishSession` must require `aggregated` and non-null recommendation and
   synthesis.
@@ -3540,7 +3540,7 @@ Before wiring UI controls, correct these current behaviors:
 - `resetSessions` is REMOVED — it TRUNCATEd published session/brief/
   recommendation/memo history so a demo could reuse today's date. See §5's
   "the database dates a session" note.
-- Every transition writes `committee_session_events` and `audit_log` in the same
+- Every transition writes `swarm_session_events` and `audit_log` in the same
   transaction as the state update.
 
 ## 7. Frontend implementation
@@ -3553,10 +3553,10 @@ Use one admin shell for:
 - `/admin/research`
 - `/admin/research/runs/:id`
 - `/admin/queue`
-- `/admin/committee`
-- `/admin/committee/subjects/:id`
-- `/admin/committee/members/:id`
-- `/admin/committee/sessions/:id`
+- `/admin/swarm`
+- `/admin/swarm/subjects/:id`
+- `/admin/swarm/members/:id`
+- `/admin/swarm/sessions/:id`
 - `/admin/audit`
 
 Update `frontend/public/assets/js/app/routes.js` so every `/admin` subpath maps to
@@ -3577,7 +3577,7 @@ scripts in the injected HTML fragment will not execute.
   is false. Lists and historical detail do not continuously poll.
 - Preserve list filters in query parameters and record selection in the path.
 - Every empty, loading, error, stale, and unauthorized state has visible text.
-- Show UTC first for committee schedules, with browser-local time secondary.
+- Show UTC first for swarm schedules, with browser-local time secondary.
 - Render JSON in collapsed, copyable `<pre>` blocks. Never inject payload HTML.
 - Mutation buttons disable while pending. Success links to the created job or
   record; errors remain beside the form.
@@ -3610,7 +3610,7 @@ Add tests proving:
   telemetry warning behavior;
 - dead-job retry clones rather than mutates; and
 - analytics retry/rerun/schedule paths return `409` with zero queue/schedule
-  mutation; committee demo rows remain protected too.
+  mutation; swarm demo rows remain protected too.
 
 ### 8.2 Browser tests
 
@@ -3647,7 +3647,7 @@ bun run check-contract
 bun run typecheck
 ```
 
-Also run the repository’s analytics boundary, worker-role, committee lifecycle,
+Also run the repository’s analytics boundary, worker-role, swarm lifecycle,
 and frontend route guard tests touched by these changes.
 
 ## 9. Delivery order
@@ -3655,7 +3655,7 @@ and frontend route guard tests touched by these changes.
 Implement in this order so every phase leaves a usable product:
 
 1. migration `0017`, constraints, roster/session-event backfill, and audit helper;
-2. guarded committee domain transitions and roster-based aggregation;
+2. guarded swarm domain transitions and roster-based aggregation;
 3. admin DTOs/routes and queue scope/retry/schedule services;
 4. analytics telemetry tables, authenticated write client, observer, and stage
    instrumentation;
@@ -3670,8 +3670,8 @@ analytics telemetry endpoints exist, and the frontend last.
 ## 10. Definition of done
 
 The phase is done when all user stories in section 4 pass, no existing public
-committee/research route regresses, production admin and telemetry routes fail
-closed, a research job can be traced through all six stages, and a committee
+swarm/research route regresses, production admin and telemetry routes fail
+closed, a research job can be traced through all six stages, and a swarm
 manager can create a topic, manage members, schedule a roster-snapshotted
 session, inspect every accepted member datapoint, operate guarded lifecycle
 transitions, and explain every mutation from the audit log.
@@ -3683,7 +3683,7 @@ transitions, and explain every mutation from the audit log.
 How `robotmoney.net` presents several independent product surfaces as one
 seamless site, organized by a clean **separation of concerns** — both across
 infrastructure tiers and across **two vendors**. This document is cross-cutting:
-it spans the **marketing** site, **this repo** (Investment Committee + analytics),
+it spans the **marketing** site, **this repo** (Investment Swarm + analytics),
 and the **on-chain dapp** (`robotmoney-core`). It is a companion to
 the rest of this document (this frontend's internals) and
 [decisions.md](./decisions.md); the production topology here is decision **D13**,
@@ -3695,12 +3695,12 @@ members use (see [§10](#10-relationship-to-existing-decisions)).
 flowchart LR
     subgraph Users["Users"]
         Visitors["Web Visitors"]
-        Members["Committee Members<br/>(REST API clients via the<br/>committee-onboarding skill)"]
+        Members["Swarm Members<br/>(REST API clients via the<br/>swarm-onboarding skill)"]
     end
 
     subgraph Frontend["Frontend"]
         Static["Static Assets<br/>HTML + Alpine.js + CSS<br/>p5.js + Chart.js"]
-        API["API Server<br/>Bun.serve — routes, auth,<br/>committee domain"]
+        API["API Server<br/>Bun.serve — routes, auth,<br/>swarm domain"]
     end
 
     subgraph Backend["Backend"]
@@ -3775,7 +3775,7 @@ Each surface is its own hostname, resolved by a plain DNS record:
 | Hostname | Surface | Tier → home | Source |
 |----------|---------|-------------|--------|
 | `robotmoney.net`, `www.` | Marketing | Static → **DO Spaces CDN** | marketing UI (this repo, D1) |
-| `committee.robotmoney.net` | IC + analytics (REST — the only member surface, D21) | API → **DO droplet** (Bun) + Data → **Postgres HA** | `robotmoney-frontend` (this repo) |
+| `swarm.robotmoney.net` | IC + analytics (REST — the only member surface, D21) | API → **DO droplet** (Bun) + Data → **Postgres HA** | `robotmoney-frontend` (this repo) |
 | `app.robotmoney.net` | Dapp | API → **DO droplet** (`rmpc` + gateway) | `robotmoney-core` |
 
 Each app is served at **its own root**, so there is **no path-prefix and no
@@ -3785,7 +3785,7 @@ within a surface).
 
 > **D21.** The MCP server previously had its own subdomain and port here
 > (`mcp.`, port `8443` — D18). D21 retired the MCP transport; members now use
-> `committee.`'s REST API like every other client, so the fourth subdomain and
+> `swarm.`'s REST API like every other client, so the fourth subdomain and
 > its §3.1 provisioning (Cloudflare alternate port, `MCP_PORT`, firewall rule)
 > no longer apply. Actually decommissioning the DNS record, firewall rule, and
 > `mcp` container is tracked as D21's follow-up implementation work.
@@ -3799,7 +3799,7 @@ within a surface).
   host-based usage: DO delivers, caches, and terminates TLS with its **custom-domain
   certificate**. Cloudflare does *not* sit in the data path here, so there is **no
   double-CDN** (§7).
-- **App subdomains** (`committee.`, `app.`) → **proxied** (orange-cloud) records to
+- **App subdomains** (`swarm.`, `app.`) → **proxied** (orange-cloud) records to
   the droplet. Cloudflare presents its edge certificate to users and provides
   TLS/DDoS plus traffic analytics; the droplet serves a **Cloudflare Origin CA
   certificate** to the proxy. The droplet's **DO Cloud Firewall** allows ingress
@@ -3827,7 +3827,7 @@ must **degrade gracefully**; the page never hard-depends on the API.
 Request/response services run on **DigitalOcean Droplets**, one surface per
 subdomain:
 
-- **`committee.`** — this repo's Bun `api` + `worker`; the `api` co-serves this
+- **`swarm.`** — this repo's Bun `api` + `worker`; the `api` co-serves this
   surface's SPA assets (`STATIC_DIR`) same-origin at the subdomain root.
 - **`app.`** — the `rmpc` daemon + on-chain gateway (`robotmoney-core`).
 
@@ -3882,7 +3882,7 @@ own same-host API) use CORS.
 - **D13 (vendor-split tiered topology)** — **surface list refined by D18, then
   D18 superseded by D21:** MCP (`mcp.`) was documented as a fourth
   subdomain-routed surface (D18); D21 retired the MCP transport entirely, so
-  the surface map is back to three subdomains — `committee.` serves REST to
+  the surface map is back to three subdomains — `swarm.` serves REST to
   every client, member and browser alike.
 - **D11 (single box, no reverse proxy)** — **superseded for production by D13.**
   Production splits across subdomains on DO with Cloudflare for DNS+observability;
@@ -3937,7 +3937,7 @@ flowchart TB
 
     subgraph Handlers["Registered Handlers"]
         H1["legacy regime.classify / research.refresh<br/>unreachable compatibility handlers<br/>(cleanup debt)"]
-        H2["committee.*<br/>session lifecycle<br/>(open → brief → close →<br/>aggregate → publish)"]
+        H2["swarm.*<br/>session lifecycle<br/>(open → brief → close →<br/>aggregate → publish)"]
     end
 
     Pending -->|"claimed"| Running

@@ -28,7 +28,7 @@
 // It is ALSO where the demo's cadence profile reaches the analytics-producer:
 // a `--stage` boot injects the realistic profile's PRODUCER_REGIME_CRON /
 // PRODUCER_RESEARCH_CRON (scripts/lib/demo-schedule.ts) so research cadence and
-// committee cadence are stated in ONE file. A non-stage boot injects neither, so
+// swarm cadence are stated in ONE file. A non-stage boot injects neither, so
 // compose resolves the COMMITTED production defaults untouched and the CI demo
 // path is byte-for-byte unaffected.
 import { resolveDemoCadence } from "./demo-schedule.ts";

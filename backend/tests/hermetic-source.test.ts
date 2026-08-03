@@ -51,7 +51,7 @@ test("hermeticDataSource is deterministic (same series across runs)", async () =
 });
 
 // The demo/e2e proof: the FULL orchestrator run (the exact path the demo drives
-// via /committee/admin/regime) completes offline + persists real-shaped rows when
+// via /swarm/admin/regime) completes offline + persists real-shaped rows when
 // fed the hermetic source — with the network hard-banned for the whole run.
 test("runAnalytics(hermetic) persists regime + research OFFLINE (demo/e2e path)", async () => {
   const ASOF = new Date().toISOString().slice(0, 10);

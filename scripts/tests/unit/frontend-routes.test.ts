@@ -2,9 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { DASH_LAYOUT_VIEW, routeMetaFor, viewFor } from "../../../frontend/public/assets/js/app/routes.js";
 // These are the PRODUCTION archive loaders: the same functions the browser
-// runs for pre-2026-07-01 committee sessions (static-views.js is a plain ES
+// runs for pre-2026-07-01 swarm sessions (static-views.js is a plain ES
 // module, so Bun executes the real code path — not a test double). The old
-// lib/committee-controllers.js + lib/committee-archive.js pair this test used
+// lib/swarm-controllers.js + lib/swarm-archive.js pair this test used
 // to import was a dead duplicate normalizer never loaded by main.js's import
 // graph (review-maintainability-026) and has been deleted.
 import {
@@ -21,7 +21,7 @@ import {
 const repoRoot = join(import.meta.dir, "../../..");
 
 // static-views.js reaches the archive through global fetch with root-relative
-// URLs ("/data/committee/..."). Serve those straight from the shipped static
+// URLs ("/data/swarm/..."). Serve those straight from the shipped static
 // files so the loaders execute against exactly what production serves, and
 // record every requested URL so we can assert URL construction too.
 const requestedUrls: string[] = [];
@@ -61,9 +61,9 @@ describe("frontend route resolution", () => {
     expect(viewFor("/admin/research/runs/abc-123")).toBe("/views/admin.html");
     expect(viewFor("/admin/queue")).toBe("/views/admin.html");
     // Audit (issue #155/PR #170) is an in-shell section, not a separate
-    // route — /admin/audit falls through to this same catch-all. Committee
+    // route — /admin/audit falls through to this same catch-all. Swarm
     // (issue #159) IS its own route with dedicated fragments — see
-    // "resolves admin committee operations routes" below.
+    // "resolves admin swarm operations routes" below.
     expect(viewFor("/admin/audit")).toBe("/views/admin.html");
     expect(viewFor("/admin/")).toBe("/views/admin.html");
   });
@@ -226,7 +226,7 @@ describe("frontend route resolution", () => {
     expect(routeMetaFor("/allocation")).toBeNull();
     expect(routeMetaFor("/admin")).toBeNull();
     expect(routeMetaFor("/projects")).toBeNull();
-    expect(routeMetaFor("/committee/members/athena")).toBeNull();
+    expect(routeMetaFor("/swarm/members/athena")).toBeNull();
   });
 
   test("every dashboard route fragment referenced by the router exists on disk", async () => {
@@ -263,60 +263,60 @@ describe("frontend route resolution", () => {
     }
   });
 
-  test("resolves dynamic committee routes to reusable fragments", () => {
-    expect(viewFor("/committee/members/athena")).toBe("/views/committee/member.html");
-    expect(viewFor("/committee/members/woon")).toBe("/views/committee/member.html");
-    expect(viewFor("/committee/takes/4e9991de-0501-44f5-b21d-254acecd15a8")).toBe("/views/committee/take.html");
-    expect(viewFor("/committee/2026-07-01/woon")).toBe("/views/committee/session.html");
-    expect(viewFor("/committee/2026-06-25/woon")).toBe("/views/committee/session.html");
+  test("resolves dynamic swarm routes to reusable fragments", () => {
+    expect(viewFor("/swarm/members/athena")).toBe("/views/swarm/member.html");
+    expect(viewFor("/swarm/members/woon")).toBe("/views/swarm/member.html");
+    expect(viewFor("/swarm/takes/4e9991de-0501-44f5-b21d-254acecd15a8")).toBe("/views/swarm/take.html");
+    expect(viewFor("/swarm/2026-07-01/woon")).toBe("/views/swarm/session.html");
+    expect(viewFor("/swarm/2026-06-25/woon")).toBe("/views/swarm/session.html");
   });
 
-  // Public subject profile (/committee/subjects/:id, issue #159's reader-facing
-  // counterpart). Same dedicated-fragment pattern as /committee/members/:id
-  // above and /admin/committee/subjects/:id below — PR #327 shipped the route
+  // Public subject profile (/swarm/subjects/:id, issue #159's reader-facing
+  // counterpart). Same dedicated-fragment pattern as /swarm/members/:id
+  // above and /admin/swarm/subjects/:id below — PR #327 shipped the route
   // without a test asserting it (issue #340).
   test("resolves the public subject profile route to its own fragment", () => {
-    expect(viewFor("/committee/subjects/robotmoney-vault")).toBe("/views/committee/subject.html");
-    expect(viewFor("/committee/subjects/woon")).toBe("/views/committee/subject.html");
-    expect(viewFor("/committee/subjects/robotmoney-vault/")).toBe("/views/committee/subject.html");
+    expect(viewFor("/swarm/subjects/robotmoney-vault")).toBe("/views/swarm/subject.html");
+    expect(viewFor("/swarm/subjects/woon")).toBe("/views/swarm/subject.html");
+    expect(viewFor("/swarm/subjects/robotmoney-vault/")).toBe("/views/swarm/subject.html");
   });
 
   // Public application-status page (docs/architecture.md §11 R2) — a
-  // dedicated fragment for /committee/apply/<id>, distinct from the plain
-  // /committee/apply application form the id-less path still resolves to via
+  // dedicated fragment for /swarm/apply/<id>, distinct from the plain
+  // /swarm/apply application form the id-less path still resolves to via
   // the generic catch-all below.
   test("resolves the application-status route to its own fragment, distinct from the apply form", () => {
-    expect(viewFor("/committee/apply/4e9991de-0501-44f5-b21d-254acecd15a8")).toBe(
-      "/views/committee/apply-status.html",
+    expect(viewFor("/swarm/apply/4e9991de-0501-44f5-b21d-254acecd15a8")).toBe(
+      "/views/swarm/apply-status.html",
     );
-    expect(viewFor("/committee/apply/4e9991de-0501-44f5-b21d-254acecd15a8/")).toBe(
-      "/views/committee/apply-status.html",
+    expect(viewFor("/swarm/apply/4e9991de-0501-44f5-b21d-254acecd15a8/")).toBe(
+      "/views/swarm/apply-status.html",
     );
-    expect(viewFor("/committee/apply")).toBe("/views/committee/apply.html");
+    expect(viewFor("/swarm/apply")).toBe("/views/swarm/apply.html");
   });
 
-  // Admin committee operations surface (issue #159) — every nested path in
+  // Admin swarm operations surface (issue #159) — every nested path in
   // docs/architecture.md §7.1's route list resolves to a shipped
   // fragment, including :id detail pages.
-  test("resolves admin committee operations routes", () => {
+  test("resolves admin swarm operations routes", () => {
     expect(viewFor("/admin")).toBe("/views/admin.html");
-    expect(viewFor("/admin/committee")).toBe("/views/admin/committee.html");
-    expect(viewFor("/admin/committee/subjects/woon-vault")).toBe("/views/admin/committee-subject.html");
-    expect(viewFor("/admin/committee/members/athena")).toBe("/views/admin/committee-member.html");
-    expect(viewFor("/admin/committee/sessions/9f2c1e0a-aaaa-bbbb-cccc-000000000001")).toBe(
-      "/views/admin/committee-session.html",
+    expect(viewFor("/admin/swarm")).toBe("/views/admin/swarm.html");
+    expect(viewFor("/admin/swarm/subjects/woon-vault")).toBe("/views/admin/swarm-subject.html");
+    expect(viewFor("/admin/swarm/members/athena")).toBe("/views/admin/swarm-member.html");
+    expect(viewFor("/admin/swarm/sessions/9f2c1e0a-aaaa-bbbb-cccc-000000000001")).toBe(
+      "/views/admin/swarm-session.html",
     );
   });
 
-  test("every admin/committee route fragment referenced by the router exists on disk", async () => {
+  test("every admin/swarm route fragment referenced by the router exists on disk", async () => {
     const paths = [
       "/admin",
-      "/admin/committee",
-      "/admin/committee/subjects/woon-vault",
-      "/admin/committee/members/athena",
-      "/admin/committee/sessions/9f2c1e0a-aaaa-bbbb-cccc-000000000001",
-      "/committee/apply",
-      "/committee/apply/4e9991de-0501-44f5-b21d-254acecd15a8",
+      "/admin/swarm",
+      "/admin/swarm/subjects/woon-vault",
+      "/admin/swarm/members/athena",
+      "/admin/swarm/sessions/9f2c1e0a-aaaa-bbbb-cccc-000000000001",
+      "/swarm/apply",
+      "/swarm/apply/4e9991de-0501-44f5-b21d-254acecd15a8",
     ];
     for (const p of paths) {
       const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));
@@ -324,10 +324,35 @@ describe("frontend route resolution", () => {
     }
   });
 
-  test("/committee contains the hero canvas mount surface", async () => {
-    const html = await Bun.file(join(repoRoot, "frontend/public/views/committee.html")).text();
-    expect(viewFor("/committee")).toBe("/views/committee.html");
-    expect(html).toContain('class="cv__hero-field"');
+  // Legacy path redirect (issue #263 pass 2): every old /committee URL
+  // (including /admin/committee and /docs/investment-committee) must resolve
+  // to the exact same fragment as its renamed /swarm equivalent, never 404.
+  test("legacy /committee paths resolve to the same fragment as their renamed /swarm equivalent", () => {
+    expect(viewFor("/committee")).toBe(viewFor("/swarm"));
+    expect(viewFor("/committee/members/athena")).toBe(viewFor("/swarm/members/athena"));
+    expect(viewFor("/committee/subjects/woon")).toBe(viewFor("/swarm/subjects/woon"));
+    expect(viewFor("/committee/takes/4e9991de-0501-44f5-b21d-254acecd15a8")).toBe(
+      viewFor("/swarm/takes/4e9991de-0501-44f5-b21d-254acecd15a8"),
+    );
+    expect(viewFor("/committee/apply")).toBe(viewFor("/swarm/apply"));
+    expect(viewFor("/committee/apply/4e9991de-0501-44f5-b21d-254acecd15a8")).toBe(
+      viewFor("/swarm/apply/4e9991de-0501-44f5-b21d-254acecd15a8"),
+    );
+    expect(viewFor("/committee/2026-06-25/woon")).toBe(viewFor("/swarm/2026-06-25/woon"));
+    expect(viewFor("/admin/committee")).toBe(viewFor("/admin/swarm"));
+    expect(viewFor("/admin/committee/subjects/woon-vault")).toBe(viewFor("/admin/swarm/subjects/woon-vault"));
+    expect(viewFor("/admin/committee/members/athena")).toBe(viewFor("/admin/swarm/members/athena"));
+    expect(viewFor("/admin/committee/sessions/9f2c1e0a-aaaa-bbbb-cccc-000000000001")).toBe(
+      viewFor("/admin/swarm/sessions/9f2c1e0a-aaaa-bbbb-cccc-000000000001"),
+    );
+    expect(viewFor("/docs/investment-committee")).toBe(viewFor("/docs/investment-swarm"));
+    expect(viewFor("/docs/investment-committee/how-it-works")).toBe(viewFor("/docs/investment-swarm/how-it-works"));
+  });
+
+  test("/swarm contains the hero canvas mount surface", async () => {
+    const html = await Bun.file(join(repoRoot, "frontend/public/views/swarm.html")).text();
+    expect(viewFor("/swarm")).toBe("/views/swarm.html");
+    expect(html).toContain('class="sv__hero-field"');
     expect(html).toContain('x-data="slimeMoldHero()"');
   });
 
@@ -352,11 +377,11 @@ describe("frontend route resolution", () => {
     expect(takes.find((take) => take.memberId === "woon")?.stance).toBe("constructive");
     // The shipped archive carries no `id` field on its takes — only
     // `member_id` — so every one of these must resolve to no permalink at
-    // all rather than /committee/takes/<member-slug> (issue #359 AC1).
+    // all rather than /swarm/takes/<member-slug> (issue #359 AC1).
     expect(takes.every((take) => take.permalinkId == null)).toBe(true);
     expect(takes.every((take) => takeHref(take) === null)).toBe(true);
 
-    const rec = detail.session.committeeRecommendation as {
+    const rec = detail.session.swarmRecommendation as {
       actions: Array<{ action: string }>;
       disagreements: Array<{ topic: string }>;
     };
@@ -365,8 +390,8 @@ describe("frontend route resolution", () => {
 
     // URL-construction invariant: the loader validated against the sessions
     // index, then fetched the per-session archive file at its canonical path.
-    expect(requestedUrls).toContain("/data/committee/sessions/index.json");
-    expect(requestedUrls).toContain("/data/committee/sessions/2026-06-25-woon.json");
+    expect(requestedUrls).toContain("/data/swarm/sessions/index.json");
+    expect(requestedUrls).toContain("/data/swarm/sessions/2026-06-25-woon.json");
   });
 
   test("production loader rejects sessions absent from the archive index", async () => {
@@ -383,7 +408,7 @@ describe("frontend route resolution", () => {
     expect(member?.name).toBe("Woon");
     expect(member?.lens).toBe("machine economy participant");
     expect(member?.mandate).toContain("fellow agent");
-    expect(requestedUrls).toContain("/data/committee/manifests/members/woon.json");
+    expect(requestedUrls).toContain("/data/swarm/manifests/members/woon.json");
   });
 
   test("production loader resolves the archived portfolio snapshot", async () => {
@@ -407,7 +432,7 @@ describe("frontend route resolution", () => {
     expect(await loadArchiveSnapshot("woon", "1999-01-01")).toBeNull();
   });
 
-  // camelSubject backs both the live /api/committee/subjects/:id response and
+  // camelSubject backs both the live /api/swarm/subjects/:id response and
   // the archive manifest loader. The subject endpoint has always returned
   // nft_contracts, but nothing mapped it into camelCase before the public
   // subject profile (issue #340 / PR #327) — the field arrived as
@@ -427,7 +452,7 @@ describe("frontend route resolution", () => {
     expect(subject).not.toHaveProperty("nft_contracts");
 
     // Tolerates an already-camelCase source too (the live API projects
-    // nftContracts directly — see backend/src/committee/projections.ts).
+    // nftContracts directly — see backend/src/swarm/projections.ts).
     const alreadyCamel = camelSubject({ id: "x", nftContracts: [{ address: "0xabc" }] });
     if (!alreadyCamel) throw new Error("camelSubject unexpectedly returned null");
     expect(alreadyCamel.nftContracts).toEqual([{ address: "0xabc" }]);
@@ -465,7 +490,7 @@ describe("frontend route resolution", () => {
   // (`raw.id || raw.member_id`) purely so x-for had something stable to key
   // on, and takeHref() minted a permalink straight off that same `id`. Every
   // archived take carries only `member_id`, so that produced dead links like
-  // /committee/takes/athena — 3 per session across 32 archived sessions.
+  // /swarm/takes/athena — 3 per session across 32 archived sessions.
   // permalinkId is the fix: a field only a real take id ever populates.
   test("camelTake never mints a permalink out of a member id", () => {
     const memberIdOnly = camelTake({ member_id: "athena", stance: "cautious", confidence: 0.72, body: "..." });
@@ -477,16 +502,16 @@ describe("frontend route resolution", () => {
 
     const withRealId = camelTake({ id: "take-9f2c1e0a", member_id: "athena", stance: "bullish", confidence: 0.9 });
     expect(withRealId.permalinkId).toBe("take-9f2c1e0a");
-    expect(takeHref(withRealId)).toBe("/committee/takes/take-9f2c1e0a");
+    expect(takeHref(withRealId)).toBe("/swarm/takes/take-9f2c1e0a");
   });
 
-  // The member profile page (/committee/members/:id) builds its rows from two
+  // The member profile page (/swarm/members/:id) builds its rows from two
   // sources — the member-takes endpoint (loadRows) and, on failure, a scan of
   // the sessions index (scanSessions) which also serves the archive. Both
   // used to hand takeHref() the RAW api/archive take object (only
   // `member_id`, never `permalinkId`), so `takeHref(row.take)` returned null
   // for every row on that page and the "Verification receipt" link silently
-  // disappeared — never a dead /committee/takes/<slug> link there, just a
+  // disappeared — never a dead /swarm/takes/<slug> link there, just a
   // permalink that could never appear even for a take with a real id. Routing
   // the row's take through camelTake() (the fix) restores the working link
   // when a real id exists, while still refusing the member-id fallback.
@@ -503,7 +528,7 @@ describe("frontend route resolution", () => {
     // though a real id exists — takeHref only ever reads `.permalinkId`.
     expect(takeHref(rawWithRealId)).toBeNull();
     // After the fix, camelTake'ing the row restores it.
-    expect(takeHref(camelTake(rawWithRealId))).toBe("/committee/takes/take-real-1");
+    expect(takeHref(camelTake(rawWithRealId))).toBe("/swarm/takes/take-real-1");
   });
 
   // issue #359 AC2: `within_bucket_weights` has been in the session payload
@@ -511,7 +536,7 @@ describe("frontend route resolution", () => {
   // read it, so an allocation session's own bucket_weights table answered
   // "95/5/0/0" and stopped, on a page whose copy asks "within each bucket are
   // the right constituents weighted correctly?". withinBucketWeightsFrom() is
-  // the pure transform behind session.html's `.cv__within` block (the
+  // the pure transform behind session.html's `.sv__within` block (the
   // Alpine `withinBucketWeights()` method just delegates to it), exported the
   // same way camelTake/takeHref are so this can be asserted without a
   // browser. This drives it off the real archived fixture that shipped with
@@ -521,7 +546,7 @@ describe("frontend route resolution", () => {
     const detail = await loadArchiveSession("2026-06-13", "robotmoney-allocation");
     if (!detail.session) throw new Error("archive session normalized to null");
 
-    const rec = detail.session.committeeRecommendation as { type: string; within_bucket_weights: Record<string, Record<string, number>> };
+    const rec = detail.session.swarmRecommendation as { type: string; within_bucket_weights: Record<string, Record<string, number>> };
     expect(rec.type).toBe("bucket_weights");
     expect(Object.keys(rec.within_bucket_weights)).toHaveLength(4);
 
@@ -546,7 +571,7 @@ describe("frontend route resolution", () => {
       { name: "compound", weight: 0.14 },
     ]);
     // fmtPct1's convention (one decimal place, e.g. "32.0%") is what
-    // session.html's `.cv__within-list` binds each item's weight through —
+    // session.html's `.sv__within-list` binds each item's weight through —
     // confirm the raw numbers this test asserts are exactly what that
     // formatter would print, so a future rounding regression in either place
     // shows up here too.
@@ -562,7 +587,7 @@ describe("frontend route resolution", () => {
 
     // A recommendation with no within_bucket_weights payload at all (older
     // archived sessions, or a non-allocation subject) must render nothing —
-    // the `.cv__within` block's x-show guards on this being empty.
+    // the `.sv__within` block's x-show guards on this being empty.
     expect(withinBucketWeightsFrom(null)).toEqual([]);
     expect(withinBucketWeightsFrom({ type: "bucket_weights" })).toEqual([]);
   });

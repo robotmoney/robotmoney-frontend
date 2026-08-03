@@ -13,7 +13,7 @@
 # tunnel as OPTIONAL HARDENING that replaces proxied-DNS + DO Cloud Firewall with
 # zero public ingress. Committing this template does not make it the default: it
 # documents the one host that opted in. The documented prod topology is still
-# apex/`www` (marketing → DO Spaces CDN), `committee.`, and `app.`.
+# apex/`www` (marketing → DO Spaces CDN), `swarm.`, and `app.`.
 #
 # NEVER COMMIT the credentials JSON that `cloudflared tunnel create` writes to
 # ~/.cloudflared/<uuid>.json. It is a tunnel-wide bearer credential; this file

@@ -4,12 +4,12 @@
 # generic OpenCode agent CLI plus the bare shell tools (curl/tar/git/jq) any of
 # those would need to install `rmpc` and talk HTTP for itself — exactly what a
 # real prospective member's own machine would have BEFORE following our docs.
-# Everything Robot-Money-specific — installing the committee-onboarding skill,
+# Everything Robot-Money-specific — installing the swarm-onboarding skill,
 # installing rmpc, generating keys, building + signing the canonical application
 # payload, submitting it over the REST API — is something the agent inside the
 # container must work out at runtime from the injected canonical prompt
 # (contract's ONBOARDING_PROMPT text, with the skill URL pointed locally by
-# scripts/lib/onboarding-eval.ts) plus the committee-onboarding skill it
+# scripts/lib/onboarding-eval.ts) plus the swarm-onboarding skill it
 # installs (D21 — the MCP transport is retired; the agent uses plain HTTP). A
 # failure to figure any of this out is a valid (red) eval result about our
 # instructions, not a bug in this image.
@@ -21,7 +21,7 @@ ARG OPENCODE_LINUX_X64_SHA256=9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b9948
 # Pinned Bun runtime + checksum (issue #361 Phase 2). Bun is a GENERIC
 # JavaScript runtime, in the same "bare tools any agent's machine would have"
 # class as curl/git/jq above — it carries no Robot Money knowledge. It exists
-# here because a SITTING committee member's container runs the member's own
+# here because a SITTING swarm member's container runs the member's own
 # deterministic session client (scripts/agent/member-session-client.ts,
 # bundled into one sanitized artifact and mounted read-only at launch by the
 # member's owner — exactly like an operator installing the published starter
@@ -61,7 +61,7 @@ RUN curl -fsSLo /tmp/bun.zip \
 #
 # HOME must agree with that dir. The container runs as root, so without this
 # `~` is /root while PATH advertises /home/agent/.local/bin — and the repo-owned
-# committee-onboarding skill's own copy-paste install line,
+# swarm-onboarding skill's own copy-paste install line,
 # `install -m 755 rmpc ~/.local/bin/rmpc`, then puts the binary somewhere PATH
 # does not look. Observed live: the agent ran exactly that line, got
 # `rmpc: command not found`, and had to spend turns rediscovering where its own

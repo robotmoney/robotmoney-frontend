@@ -203,7 +203,7 @@ Executed in the adhoc worktree:
   ordering, chunk-split and generated-secret redaction, transcript/classifier
   compatibility, observer failure/recovery classification, success/failure
   artifacts, and follower termination.
-- `bun test contract/tests/unit/committee-application.test.ts scripts/tests/unit/onboarding-eval-helpers.test.ts` — 88 passed, 0 failed.
+- `bun test contract/tests/unit/swarm-application.test.ts scripts/tests/unit/onboarding-eval-helpers.test.ts` — 88 passed, 0 failed. (Path renamed since — issue #263 renamed `committee-application.test.ts` to `swarm-application.test.ts`; the command as originally run used the pre-rename name.)
 - `bun test scripts/tests/integration/onboarding-eval-infra.test.ts` — 7
   passed, 0 failed, including in-container static-file fetches and a real
   `rmpc` signed application against the API.

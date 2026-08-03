@@ -70,7 +70,7 @@ Preview mode trades data realism for zero setup:
   **layout, copy, components, and navigation** — do **not** trust the numbers,
   charts, or time-series you see there.
 - For **realistic, evolving data** (real analytics, live-ish simulations,
-  scheduled recomputes, committee sessions), run the full stack:
+  scheduled recomputes, swarm sessions), run the full stack:
 
   ```bash
   bun run demo         # see docs/architecture.md — much better data simulations
@@ -98,7 +98,6 @@ mechanism** — the dictionary is the only authorization surface.
 | Site UI | `frontend/public/` — `views/`, `assets/css/`, `assets/js/app/`, `assets/` |
 | Server / queue / workers / migrations | `backend/` |
 | Shared HTTP contract | `contract/` — re-vendor with `bun run sync-contract`, never hand-edit |
-| Committee MCP server | `mcp/` |
 | Tooling & CI scripts | `scripts/` — tests in `scripts/tests/unit/` (checkout-only: no Docker, no network, `bun run test:unit`) or `scripts/tests/integration/` (Docker- or network-backed, `bun run test:integration`). The directory IS the CI cost class (D23); never leave a test loose at `scripts/tests/`. |
 | Technical docs about this repo | `docs/**/*.md` (kebab-case) |
 | Workflows | `.github/workflows/` |
@@ -185,7 +184,7 @@ An autonomous agent (or a human) can follow this checklist deterministically:
 
 ### External-actor changes — reviewer no-cheating checklist
 
-For any PR that claims to move an onboarding candidate, committee member, or
+For any PR that claims to move an onboarding candidate, swarm member, or
 analytics/research producer onto the external-actor rail
 ([D25](docs/decisions.md#d25--external-actor-rail-for-simulated-independent-entities)),
 the reviewer must verify every item in the diff and its executed test evidence:

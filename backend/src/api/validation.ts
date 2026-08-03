@@ -1,4 +1,4 @@
-import type { ApplyInput, MemberProfilePatch, SubmissionInput } from "../committee/domain.ts";
+import type { ApplyInput, MemberProfilePatch, SubmissionInput } from "../swarm/domain.ts";
 import { STANCES, type canonicalizeSubmission } from "@robotmoney/contract";
 
 export type JsonObject = Record<string, unknown>;
@@ -90,10 +90,10 @@ export function isEmail(email: string): boolean {
 // §11 R2/R6 — the public onboarding shape carries NO client-supplied id: the
 // server mints the member UUID at apply time. It DOES carry the rmpc
 // signature over the canonical application payload (@robotmoney/contract);
-// route-layer verification (backend/src/api/routes/committee.ts) rejects an
+// route-layer verification (backend/src/api/routes/swarm.ts) rejects an
 // unsigned/malformed request before ic.applyMember ever runs. `contact` is
 // required here (non-empty, matching the canonical payload's required field —
-// see contract/src/committee-application.js) — the route additionally checks
+// see contract/src/swarm-application.js) — the route additionally checks
 // email FORMAT on top of this non-empty check.
 export function parseApply(body: JsonObject | null): ApplyInput | null {
   if (!body) return null;

@@ -40,7 +40,7 @@ const labelFlags = dockerLabelFlags(stackLabels(environment, name));
 // Must be set BEFORE any module reads config.databaseUrl / creates the pool.
 process.env.DATABASE_URL = `postgres://robotmoney:robotmoney@localhost:${port}/robotmoney`;
 process.env.RM_ENV = "ephemeral";
-process.env.COMMITTEE_NOTIFICATION_EMAIL_FROM = "committee-test@robotmoney.invalid";
+process.env.SWARM_NOTIFICATION_EMAIL_FROM = "swarm-test@robotmoney.invalid";
 
 const up = Bun.spawnSync([
   "docker", "run", "-d", "--rm", "--name", name,

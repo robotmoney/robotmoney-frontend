@@ -2,15 +2,15 @@
 # monolith. This is the inference-OFF rails check for the real-inference
 # onboarding eval (scripts/lib/onboarding-eval.ts, docs/architecture.md §11
 # R8): it proves the member-agent image builds and starts, reaches the
-# committee REST API over the compose network, and a signed apply built with
+# swarm REST API over the compose network, and a signed apply built with
 # the real `rmpc` release binary lands end-to-end through POST
-# /api/committee/apply — all WITHOUT spending a single model token.
+# /api/swarm/apply — all WITHOUT spending a single model token.
 # (scripts/tests/integration/onboarding-eval-infra.test.ts)
 #
 # Why this is genuinely separable from the full `e2e` LIVE demo boot: the test
 # brings up its OWN minimal stack — the shared scripts/stack module's `core`
 # profile (postgres + api only, no worker lanes, no live RPC/analytics/
-# committee inference). Applying/activating a committee membership is pure
+# swarm inference). Applying/activating a swarm membership is pure
 # Postgres CRUD + crypto verification, never touches the job queue, so this
 # never needed the heavy full-stack boot it used to ride inside. Moving it to
 # its own workflow means it no longer waits behind — or pays for — the ~40+
@@ -32,8 +32,8 @@
 #
 # Path-gated (issue #275 addendum): a `pull_request` run whose changed files
 # don't match evals/**, scripts/lib/member-agent/**, scripts/lib/rmpc-fetch.ts,
-# scripts/lib/onboarding-eval.ts, scripts/lib/committee/**, or
-# backend/src/committee/** skips the job body — a REAL dorny/paths-filter skip,
+# scripts/lib/onboarding-eval.ts, scripts/lib/swarm/**, or
+# backend/src/swarm/** skips the job body — a REAL dorny/paths-filter skip,
 # not a synthetic outcome. `push` to `main` is never path-filtered (see the job
 # `if:` below), so a merge to main always runs this in full.
 name: onboarding-eval-rails
@@ -80,8 +80,8 @@ jobs:
               - 'scripts/lib/member-agent/**'
               - 'scripts/lib/rmpc-fetch.ts'
               - 'scripts/lib/onboarding-eval.ts'
-              - 'scripts/lib/committee/**'
-              - 'backend/src/committee/**'
+              - 'scripts/lib/swarm/**'
+              - 'backend/src/swarm/**'
 
   onboarding-eval-rails:
     needs: [changes]

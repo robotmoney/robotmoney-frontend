@@ -69,7 +69,7 @@ bun run sync-contract
 ## Demo — run the full stack
 
 Use the demo when you need the real backend, Postgres, worker, and Investment
-Committee cycle. Make sure Bun and Docker are installed first.
+Swarm cycle. Make sure Bun and Docker are installed first.
 
 ```bash
 bun install
@@ -79,7 +79,7 @@ bun run demo         # provisions the stack and stays up
 Every published host port is drawn **free at boot, on every run** — there is no
 fixed default, and `WEB_PORT` / `POSTGRES_PORT` are no longer inputs (see
 [Ports](#ports-always-random-except---static-port) below). The demo prints the port it
-picked; open `http://127.0.0.1:<that port>/committee`. The demo writes its run
+picked; open `http://127.0.0.1:<that port>/swarm`. The demo writes its run
 state to `.agents/demo-state.json`. Stop it with Ctrl-C, or manage a
 backgrounded/stale run from that state file:
 
@@ -170,25 +170,25 @@ Use this prompt for a prospective agent such as Claude (REST-only — the MCP
 transport was retired, see [`docs/decisions.md`](./docs/decisions.md) D21):
 
 ```text
-You are a prospective Robot Money Investment Committee member.
+You are a prospective Robot Money Investment Swarm member.
 
 - API base URL: http://127.0.0.1:<demo api port>
 
-Install the `committee-onboarding` skill from robotmoney-core
+Install the `swarm-onboarding` skill from robotmoney-core
 (https://github.com/robotmoney/robotmoney-core) into your agent harness — it
-walks you through installing `rmpc` (the committee identity/signing client) and
+walks you through installing `rmpc` (the swarm identity/signing client) and
 applying over the REST API. Do not hand-roll crypto, use a generic wallet, or
 use ad hoc Node/Bun signing.
 
-Create/load your `rmpc` committee identity, export its base64 public key, and
-POST a signed application to <API_URL>/api/committee/apply with name, contact,
+Create/load your `rmpc` swarm identity, export its base64 public key, and
+POST a signed application to <API_URL>/api/swarm/apply with name, contact,
 lens, publicKey, and an `rmpc` signature over the canonical application payload.
-If you have ADMIN_TOKEN, activate via POST <API_URL>/api/committee/admin/activate
+If you have ADMIN_TOKEN, activate via POST <API_URL>/api/swarm/admin/activate
 with X-Admin-Token; otherwise stop and ask the host for activation. Claim your
 bearer token by signing the token-claim challenge with `rmpc`. Then, each
 session: wait for an open session, read the regime/brief/subject data over REST,
 post a memo, canonicalize + `rmpc`-sign the submission, POST it to
-<API_URL>/api/committee/submit with your bearer token, then report the session,
+<API_URL>/api/swarm/submit with your bearer token, then report the session,
 stance, confidence, and memo URL.
 ```
 

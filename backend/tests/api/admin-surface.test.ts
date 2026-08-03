@@ -160,9 +160,9 @@ test("overview: #398 regression — a today-dated regime_snapshots row with STAL
   expect(body.alerts.some((a) => a.source === "regime" && a.level === "stale")).toBe(true);
 });
 
-test("overview: enabled analytics schedules + next committee event + alert shape", async () => {
-  const committeeId = await insertJob({
-    kind: "committee.publish_brief",
+test("overview: enabled analytics schedules + next swarm event + alert shape", async () => {
+  const swarmId = await insertJob({
+    kind: "swarm.publish_brief",
     status: "pending",
     run_after: new Date(Date.now() + 60 * 60 * 1000),
   });
@@ -170,24 +170,24 @@ test("overview: enabled analytics schedules + next committee event + alert shape
   expect(res?.status).toBe(200);
   const body = res?.body as {
     enabledAnalyticsSchedules: Array<{ kind: string }>;
-    nextCommitteeEvent: { jobId: number; kind: string } | null;
+    nextSwarmEvent: { jobId: number; kind: string } | null;
     alerts: Array<{ level: string; source: string; message: string }>;
   };
   // External producer owns cadence; no consumer-DB analytics schedule is enabled.
   expect(body.enabledAnalyticsSchedules).toEqual([]);
-  expect(body.nextCommitteeEvent).not.toBeNull();
-  expect(body.nextCommitteeEvent!.jobId).toBeGreaterThanOrEqual(0);
+  expect(body.nextSwarmEvent).not.toBeNull();
+  expect(body.nextSwarmEvent!.jobId).toBeGreaterThanOrEqual(0);
   const ALLOWED = new Set(["not_run", "running", "degraded", "failed", "dead", "stale", "healthy"]);
   for (const a of body.alerts) expect(ALLOWED.has(a.level)).toBe(true);
-  void committeeId;
+  void swarmId;
 });
 
 // ── GET /api/admin/jobs and /api/admin/runs — filters, scope, cursor, 400s ─
 
 test("jobs: kind/status/scope filters + cursor pagination + limit bounds", async () => {
   const scopeId = crypto.randomUUID();
-  const idA = await insertJob({ status: "pending", scope_type: "committee_session", scope_id: scopeId });
-  const idB = await insertJob({ status: "dead", scope_type: "committee_session", scope_id: scopeId });
+  const idA = await insertJob({ status: "pending", scope_type: "swarm_session", scope_id: scopeId });
+  const idB = await insertJob({ status: "dead", scope_type: "swarm_session", scope_id: scopeId });
   const idC = await insertJob({ status: "pending" }); // no scope
 
   const byKind = await call(req("GET", `/api/admin/jobs?kind=${KIND}`, PROD.adminToken));
@@ -202,7 +202,7 @@ test("jobs: kind/status/scope filters + cursor pagination + limit bounds", async
   expect(statusBody.jobs.every((j) => j.status === "dead")).toBe(true);
   expect(statusBody.jobs.some((j) => Number(j.id) === idB)).toBe(true);
 
-  const byScope = await call(req("GET", `/api/admin/jobs?kind=${KIND}&scopeType=committee_session&scopeId=${scopeId}`, PROD.adminToken));
+  const byScope = await call(req("GET", `/api/admin/jobs?kind=${KIND}&scopeType=swarm_session&scopeId=${scopeId}`, PROD.adminToken));
   const scopeBody = byScope?.body as { jobs: { id: number }[] };
   const scopeIds = scopeBody.jobs.map((j) => Number(j.id));
   expect(scopeIds.sort()).toEqual([idA, idB].sort());
@@ -334,7 +334,7 @@ test("schedule toggle: admin cannot enable retired consumer analytics schedules"
   expect(updated.kind).toBe("regime.classify"); // untouched
 });
 
-test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields, non-analytics kind, committee demo rows", async () => {
+test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields, non-analytics kind, swarm demo rows", async () => {
   const [regime] = await sql`SELECT id FROM job_schedules WHERE kind = 'regime.classify' LIMIT 1`;
   const reason = "a perfectly fine operational reason";
 
@@ -351,10 +351,10 @@ test("schedule toggle: 400/404/409 for unknown fields, missing, protected fields
   const [vault] = await sql`SELECT id FROM job_schedules WHERE kind = 'vault.sample_share_price' LIMIT 1`;
   expect((await call(req("PATCH", `/api/admin/schedules/${vault.id}`, PROD.adminToken, { enabled: false, reason })))?.status).toBe(400);
 
-  // committee demo row
-  const [committee] = await sql`SELECT id FROM job_schedules WHERE kind LIKE 'committee.%' LIMIT 1`;
-  expect((await call(req("PATCH", `/api/admin/schedules/${committee.id}`, PROD.adminToken, { enabled: true, reason })))?.status).toBe(409);
-  const [unchanged] = await sql`SELECT enabled FROM job_schedules WHERE id = ${committee.id}`;
+  // swarm demo row
+  const [swarm] = await sql`SELECT id FROM job_schedules WHERE kind LIKE 'swarm.%' LIMIT 1`;
+  expect((await call(req("PATCH", `/api/admin/schedules/${swarm.id}`, PROD.adminToken, { enabled: true, reason })))?.status).toBe(409);
+  const [unchanged] = await sql`SELECT enabled FROM job_schedules WHERE id = ${swarm.id}`;
   expect(unchanged.enabled).toBe(false); // seeded disabled, still disabled
 });
 

@@ -70,19 +70,19 @@ services:
       DEMO_MODE: "1"
       # Cache DIRECTORY (a path is genuinely environmental, unlike the TTLs).
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
-      # PINNED off (issue #208): repo demo/e2e never auto-runs the committee.*
+      # PINNED off (issue #208): repo demo/e2e never auto-runs the swarm.*
       # session crons — the demo drives lifecycle jobs itself via the explicit
       # admin enqueue-job endpoint (unaffected by this issue). This overrides
       # docker-compose.yml's prod-shaped default (enabled) regardless of
-      # whatever COMMITTEE_SCHEDULES_ENABLED the invoking shell happens to have.
-      COMMITTEE_SCHEDULES_ENABLED: "0"
+      # whatever SWARM_SCHEDULES_ENABLED the invoking shell happens to have.
+      SWARM_SCHEDULES_ENABLED: "0"
 
   # Internal worker lanes share demo data-path knobs for their remaining queue
-  # work: worker-committee owns lifecycle jobs and worker-analytics owns chain/
+  # work: worker-swarm owns lifecycle jobs and worker-analytics owns chain/
   # projects samplers. worker-research remains only for unreachable legacy rows;
   # the independent analytics-producer owns regime/research compute and cadence.
   # The share-price sampler still reads the vault over eth_call.
-  worker-committee: &demo-worker
+  worker-swarm: &demo-worker
     labels:
       robotmoney.demo.project: ${DEMO_PROJECT}
       robotmoney.env: ${RM_STACK_ENV_CLASS}
@@ -117,9 +117,9 @@ services:
   # nothing.
   #
   # Egress this service needs: the `api` service (compose network — the
-  # committee REST API the agent applies against; D21 retired the MCP server),
+  # swarm REST API the agent applies against; D21 retired the MCP server),
   # GitHub Releases (github.com + objects.githubusercontent.com, for the `rmpc`
-  # binary and the committee-onboarding skill the agent installs itself), and
+  # binary and the swarm-onboarding skill the agent installs itself), and
   # OpenCode Zen (the real model API). Real inference is the NORMAL case (§11 R8).
   #
   # Which agent runs here is switchable per environment by AGENT_MODEL, resolved

@@ -62,7 +62,7 @@ async function main(): Promise<void> {
   routes[ROUTES.dashboards.agents] = await get(ROUTES.dashboards.agents);
   routes[ROUTES.projects.list] = await get(ROUTES.projects.list);
   // Issue #389 (/projects/:slug ProjectProfile): discovered from the list
-  // capture just above, same pattern as the committee member/session/subject
+  // capture just above, same pattern as the swarm member/session/subject
   // routes below — captures the profile DTO for every project the directory
   // currently lists (empty on a fresh/dev-seed-less deploy, never an error).
   const projectSlugs = ((routes[ROUTES.projects.list] as { projects?: { slug: string }[] })?.projects ?? []).map((p) => p.slug);
@@ -74,25 +74,25 @@ async function main(): Promise<void> {
     const p = expand(ROUTES.dashboards.researchSignal, { key });
     routes[p] = await get(p);
   }
-  routes[ROUTES.committee.sessions] = await get(ROUTES.committee.sessions);
-  routes[ROUTES.committee.members] = await get(ROUTES.committee.members);
+  routes[ROUTES.swarm.sessions] = await get(ROUTES.swarm.sessions);
+  routes[ROUTES.swarm.members] = await get(ROUTES.swarm.members);
   for (const page of COMMENT_PAGES) routes[ROUTES.comments.list] = await get(`${ROUTES.comments.list}?page=${page}`);
 
   // Parameterised routes, discovered from the lists just captured.
-  const members = ((routes[ROUTES.committee.members] as { members?: { id: string }[] })?.members) ?? [];
-  for (const m of members) routes[expand(ROUTES.committee.member, { id: m.id })] = await get(expand(ROUTES.committee.member, { id: m.id }));
-  const sessions = ((routes[ROUTES.committee.sessions] as { sessions?: { date: string; subjectId: string }[] })?.sessions) ?? [];
+  const members = ((routes[ROUTES.swarm.members] as { members?: { id: string }[] })?.members) ?? [];
+  for (const m of members) routes[expand(ROUTES.swarm.member, { id: m.id })] = await get(expand(ROUTES.swarm.member, { id: m.id }));
+  const sessions = ((routes[ROUTES.swarm.sessions] as { sessions?: { date: string; subjectId: string }[] })?.sessions) ?? [];
   for (const s of sessions) {
-    const p = expand(ROUTES.committee.session, { date: s.date, subject: s.subjectId });
+    const p = expand(ROUTES.swarm.session, { date: s.date, subject: s.subjectId });
     routes[p] = await get(p);
-    routes[ROUTES.committee.brief] = await get(`${ROUTES.committee.brief}?date=${s.date}&subject=${s.subjectId}`);
+    routes[ROUTES.swarm.brief] = await get(`${ROUTES.swarm.brief}?date=${s.date}&subject=${s.subjectId}`);
   }
   // Per-subject routes the session detail page fetches for the portfolio donut +
   // thesis (loadApi → subject + snapshots). Discovered from the sessions list.
   const subjectIds = [...new Set(sessions.map((s) => s.subjectId))];
   for (const id of subjectIds) {
-    routes[expand(ROUTES.committee.subject, { id })] = await get(expand(ROUTES.committee.subject, { id }));
-    routes[expand(ROUTES.committee.subjectSnapshots, { id })] = await get(expand(ROUTES.committee.subjectSnapshots, { id }));
+    routes[expand(ROUTES.swarm.subject, { id })] = await get(expand(ROUTES.swarm.subject, { id }));
+    routes[expand(ROUTES.swarm.subjectSnapshots, { id })] = await get(expand(ROUTES.swarm.subjectSnapshots, { id }));
   }
   // /agents/:id "Money-agent dossier" (issue #390, §5.8, P3.2), discovered
   // from the agents directory list just captured above.

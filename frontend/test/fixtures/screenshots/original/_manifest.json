@@ -16,7 +16,7 @@
     "ok": true
   },
   {
-    "route": "/committee",
+    "route": "/swarm",
     "ok": true
   },
   {
@@ -76,19 +76,19 @@
     "ok": true
   },
   {
-    "route": "/docs/investment-committee",
+    "route": "/docs/investment-swarm",
     "ok": true
   },
   {
-    "route": "/docs/investment-committee/how-it-works",
+    "route": "/docs/investment-swarm/how-it-works",
     "ok": true
   },
   {
-    "route": "/docs/investment-committee/api-reference",
+    "route": "/docs/investment-swarm/api-reference",
     "ok": true
   },
   {
-    "route": "/docs/investment-committee/participation",
+    "route": "/docs/investment-swarm/participation",
     "ok": true
   },
   {

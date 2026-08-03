@@ -6,7 +6,7 @@
 // Covers the issue ACs:
 //   • every mutation returns 401/403 AND makes zero database changes without a
 //     valid bearer token; accepts a valid ANALYTICS_TOKEN; NEVER accepts
-//     ADMIN_TOKEN or a committee-member credential as a substitute;
+//     ADMIN_TOKEN or a swarm-member credential as a substitute;
 //   • malformed / oversized / duplicate-conflicting / non-finite / partial
 //     payloads are rejected before any row changes;
 //   • valid batches persist atomically + idempotently on their natural keys; a
@@ -80,11 +80,11 @@ test("readiness authenticates the producer credential without reading or mutatin
 
 test("every mutation: 401 with no bearer, 403 with a wrong/admin/member bearer — and ZERO row changes", async () => {
   prodAuth();
-  // A real committee-member credential (the strongest confusable substitute).
+  // A real swarm-member credential (the strongest confusable substitute).
   const memberId = `az_${crypto.randomUUID().slice(0, 8)}`;
   const memberToken = `tok_member_${crypto.randomUUID().slice(0, 8)}`;
-  await sql`INSERT INTO committee_members (id, status, name) VALUES (${memberId}, 'active', ${memberId})`;
-  await sql`INSERT INTO committee_member_keys (member_id, public_key, token_hash)
+  await sql`INSERT INTO swarm_members (id, status, name) VALUES (${memberId}, 'active', ${memberId})`;
+  await sql`INSERT INTO swarm_member_keys (member_id, public_key, token_hash)
             VALUES (${memberId}, ${"A".repeat(44)}, ${hashKey(memberToken)})`;
 
   const before = await tableCounts();
@@ -358,8 +358,8 @@ test("telemetry: 401 with no bearer, 403 with a wrong/admin/member bearer — ZE
   prodAuth();
   const memberId = `az_${crypto.randomUUID().slice(0, 8)}`;
   const memberToken = `tok_member_${crypto.randomUUID().slice(0, 8)}`;
-  await sql`INSERT INTO committee_members (id, status, name) VALUES (${memberId}, 'active', ${memberId})`;
-  await sql`INSERT INTO committee_member_keys (member_id, public_key, token_hash)
+  await sql`INSERT INTO swarm_members (id, status, name) VALUES (${memberId}, 'active', ${memberId})`;
+  await sql`INSERT INTO swarm_member_keys (member_id, public_key, token_hash)
             VALUES (${memberId}, ${"B".repeat(44)}, ${hashKey(memberToken)})`;
 
   const body = validTelemetryBody();

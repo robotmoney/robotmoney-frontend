@@ -4,8 +4,8 @@
 // the SAME media context with conflicting declarations — the later block
 // silently wins per-property, so editing the earlier block is a no-op and any
 // merge that drops/reorders one block changes layout with no nearby diff noise
-// (the #80 regression pattern, recurred as finding 023: .cv__context-grid /
-// .cv__discussion / .cv__portfolio-grid styled by two base blocks and two
+// (the #80 regression pattern, recurred as finding 023: .sv__context-grid /
+// .sv__discussion / .sv__portfolio-grid styled by two base blocks and two
 // @media(min-width:768px) blocks with conflicting grid-template-columns).
 //
 // This lint parses every CSS file under frontend/public/assets/css/ (top-level

@@ -1,0 +1,213 @@
+<!-- Public swarm subject profile. The reader-facing counterpart to the
+     admin subject page (#159), and the surface production robotmoney.net has
+     published per subject all along: what portfolio is under review, what it
+     holds today, which wallets are tracked, and every session about it.
+     Conventions are member.html's — same sv__ shell, same portfolio block as
+     session.html so a holdings read looks identical wherever it appears. -->
+<section class="cv cv--detail" x-data="subjectProfile()">
+  <div class="sv__body sv__body--narrow">
+    <a href="/swarm" class="sv__back">← /swarm</a>
+
+    <p class="sv__loading" x-show="loading">Loading subject…</p>
+    <!-- x-if, not x-show: x-show only toggles CSS display and leaves the node
+         in the DOM, so a page that loaded cleanly would still have a
+         `.sv__error` element for any test/reader to find. x-if removes it
+         entirely when there is no error. -->
+    <template x-if="error"><p class="sv__error" x-text="error"></p></template>
+
+    <template x-if="!loading && subject">
+      <div>
+        <header class="sv__profile-head">
+          <div class="sv__avatar sv__avatar--xl sp-mark" :style="`--sp-subject:${subjectDot(subject.id)}`"
+               x-text="initials(subject.name)"></div>
+          <div class="sv__profile-main">
+            <p class="sv__eyebrow">ic subject<span x-show="subject.operator"> · operator <span x-text="subject.operator"></span></span></p>
+            <h1 class="sv__detail-title" x-text="subject.name"></h1>
+            <p class="sv__lede sv__lede--compact" x-show="subject.thesisBlurb" x-text="subject.thesisBlurb"></p>
+            <p class="sp-links" x-show="subject.homepage || subject.xHandle">
+              <a x-show="subject.homepage" :href="subject.homepage" rel="noopener noreferrer" target="_blank"
+                 x-text="hostOf(subject.homepage) + ' ↗'"></a>
+              <a x-show="subject.xHandle" :href="`https://x.com/${String(subject.xHandle).replace(/^@/, '')}`"
+                 rel="noopener noreferrer" target="_blank" x-text="'@' + String(subject.xHandle).replace(/^@/, '') + ' ↗'"></a>
+            </p>
+          </div>
+        </header>
+
+        <!-- What this page IS, in a sentence. The page previously opened with a
+             three-figure stat strip whose "Top position" was the fourth place
+             the same holding appeared, and it never said what a subject is. A
+             reader should not have to infer that from an eyebrow. -->
+        <p class="sp-summary" x-text="summaryLine()"></p>
+
+        <!-- Concentration over time. A holdings table is a single day; the
+             question a reader actually has is whether the book is getting more
+             concentrated or less, which only a series answers. One line per
+             position, oldest to newest. Each line's colour is repeated as a short
+             rule beside its token in the holdings table below, so the two read as
+             one thing. Lines and not a stacked area: see concentrationLines(). -->
+        <section class="sv__panel sp-chart" x-show="concentrationLines()">
+          <div class="sv__panel-head">
+            <p class="sv__panel-label">Concentration · top positions as % of NAV</p>
+            <span class="sv__tag" x-text="spanLabel()"></span>
+          </div>
+          <div class="sp-chart__svg" x-html="concentrationLines()"></div>
+        </section>
+
+        <!-- Same markup as session.html's portfolio read, deliberately: the two
+             surfaces show the same kind of thing and must not teach two
+             different readings of it. -->
+        <section class="sv__portfolio" x-show="snapshot">
+          <div class="sv__panel-head">
+            <p class="sv__panel-label">Holdings · <span x-text="fmtUsd(snapshot?.totalValueUsd)"></span> total</p>
+            <span class="sv__tag" x-text="snapshot?.date"></span>
+          </div>
+          <div class="sp-holdings">
+            <div class="sv__table-wrap">
+              <table class="sv__data-table">
+                <thead><tr><th>Token</th><th>Chain</th><th class="sv__num">Value</th><th class="sv__num">Share</th></tr></thead>
+                <tbody>
+                  <template x-for="p in positionRows().slice(0, 8)" :key="`${p.token}-${p.chain}`">
+                    <tr>
+                      <td><i class="sp-key" :style="`--k:${seriesColor(p.token)}`" aria-hidden="true"></i><span x-text="p.token"></span></td>
+                      <td x-text="p.chain"></td>
+                      <td class="sv__num" x-text="fmtUsd(p.value_usd)"></td>
+                      <td class="sv__num" x-text="fmtPct1(p.share)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="sv__notables" x-show="(snapshot?.notable || []).length">
+            <p class="sv__panel-label">Notable</p>
+            <ul>
+              <template x-for="n in (snapshot?.notable || [])" :key="n"><li x-text="n"></li></template>
+            </ul>
+          </div>
+        </section>
+
+        <!-- x-if wraps every optional panel below, not x-show: x-show only
+             sets display:none and leaves the section in the DOM, so a
+             subject with no wallets/NFT contracts would still render a
+             `.sv__panel` element matching that heading text — present, just
+             invisible. x-if removes the section entirely when the gated
+             list is empty, matching "hidden" to what a reader (and a test)
+             can actually find on the page. -->
+        <div class="sv__rail-grid sv__rail-grid--compact">
+          <template x-if="trackedWallets().length">
+            <section class="sv__panel">
+              <p class="sv__panel-label">Tracked wallets (<span x-text="trackedWallets().length"></span>)</p>
+              <ul class="sv__bullet-list sp-wallets">
+                <template x-for="w in trackedWallets()" :key="`${w.chain}-${w.address}`">
+                  <li>
+                    <span class="sp-wallet__label" x-text="w.label || 'wallet'"></span>
+                    <span class="sv__tag" x-text="w.chain"></span>
+                    <code x-text="truncAddress(w.address)"></code>
+                  </li>
+                </template>
+              </ul>
+            </section>
+          </template>
+          <template x-if="nftContracts().length">
+            <section class="sv__panel">
+              <p class="sv__panel-label">NFT contracts</p>
+              <p class="sv__body-copy sp-note">Declared by the operator, not valued in v1.</p>
+              <ul class="sv__bullet-list">
+                <template x-for="n in nftContracts()" :key="`${n.chain}-${n.name}`">
+                  <li><span x-text="n.name"></span> <span class="sv__tag" x-text="n.chain"></span></li>
+                </template>
+              </ul>
+            </section>
+          </template>
+        </div>
+
+        <!-- camelSubject defaults this to [], which is truthy — a plain
+             x-show on the field renders an empty panel on every subject that
+             has none. Gate on length, and render the list it actually is. -->
+        <template x-if="structuralNotes().length">
+          <section class="sv__panel">
+            <p class="sv__panel-label">Structural notes</p>
+            <ul class="sv__bullet-list">
+              <template x-for="n in structuralNotes()" :key="n"><li x-text="n"></li></template>
+            </ul>
+          </section>
+        </template>
+
+        <section class="sp-sessions">
+          <div class="sv__sessions-head">
+            <p class="sv__panel-label">Sessions (<span x-text="sessions.length"></span>)</p>
+          </div>
+
+          <p class="sv__empty" x-show="!sessions.length" x-cloak>
+            No published session yet. Every session the swarm holds on this subject lands here.
+          </p>
+
+          <div class="sv__session-list sv__session-list--compact">
+            <!-- Keyed on the SESSION id: a subject may convene more than once
+                 a day, so (date, subjectId) is no longer unique. -->
+            <template x-for="s in sessions" :key="s.id">
+              <article class="sv__session-card" :style="`--mp-subject:${subjectDot(s.subjectId)}`">
+                <div class="sv__session-top">
+                  <div class="sv__session-titleline">
+                    <span class="sv__date" x-text="formatDate(s.date, 'short')"></span>
+                    <!-- Same reason as the /swarm list: link the exact
+                         session by id when the row has one (live API), and fall
+                         back to the dated URL for static-archive rows, whose
+                         synthetic id is the `${date}-${subjectId}` composite. -->
+                    <a class="sv__session-title"
+                       :href="s.id && s.id !== `${s.date}-${s.subjectId}` ? `/swarm/sessions/${encodeURIComponent(s.id)}` : `/swarm/${s.date}/${encodeURIComponent(s.subjectId)}`"
+                       x-text="takeCountLabel(s)"></a>
+                  </div>
+                </div>
+                <div class="sv__take-body" x-show="s.synthesis" x-html="linkified(s.synthesis || '')"></div>
+              </article>
+            </template>
+          </div>
+        </section>
+      </div>
+    </template>
+
+    <!-- The swarm disclaimer belongs here too, and production carries it on
+         every swarm surface. It is deliberately NOT in this change: the
+         shared string lands with fix/swarm-parity-and-status-page, and
+         duplicating it here would fork the wording. Once that merges this page
+         takes the same four lines the other three surfaces use:
+           <section class="rm-disclaimer" role="note" aria-label="Disclaimer"
+                    x-data="swarmDisclaimer()"> … </section>
+         Tracked so it cannot be forgotten: this page is the fifth surface. -->
+  </div>
+
+  <style>
+    /* The subject mark is a SQUARE, matching the swarm tree's grammar: a
+       round dot is a reading, a square one is an identity. subjectDot() already
+       returns this subject's identity colour everywhere else on the site, so the
+       avatar seams with it rather than inventing a second colour for the page. */
+    /* One sentence, set larger than body, doing the job the stat strip did
+       badly: say what this page is and give the two figures that matter. */
+    .sp-summary { font-size: 1.05rem; line-height: 1.6; color: var(--color-text-muted);
+                  max-width: 62ch; margin: 20px 0 0; border-top: 1px solid var(--color-accent);
+                  padding-top: 16px; }
+    .sp-holdings { margin-top: 14px; }
+    /* The series key. Cyan is a LINE in this system and never a fill or a
+       figure, so the chart's colour returns beside the token as a short rule
+       rather than tinting the token name or drawing a filled dot. */
+    .sp-key { display: inline-block; width: 14px; height: 2px; background: var(--k, var(--color-border));
+              vertical-align: middle; margin-right: 9px; }
+    .sp-sessions { margin-top: 34px; }
+    .sp-mark { border-radius: 0; border-color: var(--sp-subject, var(--color-border)); }
+    /* Set the colour explicitly. Left to the UA these render as default-blue
+       underlined links, which is not a house colour and reads as unstyled. */
+    .sp-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px;
+                font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
+    .sp-links a { color: var(--color-accent); text-decoration: none;
+                  border-bottom: 1px solid transparent; }
+    .sp-links a:hover, .sp-links a:focus-visible { border-bottom-color: var(--color-accent); }
+    .sp-chart__svg { margin: 12px 0 4px; }
+    .sp-chart__svg svg { display: block; width: 100%; height: auto; }
+    .sp-wallets li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .sp-wallet__label { font-size: 12.5px; }
+    .sp-wallets code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px;
+                       color: var(--color-text-muted); }
+    .sp-note { font-size: 12.5px; color: var(--color-muted, #7E889E); margin-bottom: 8px; }
+  </style>
+</section>

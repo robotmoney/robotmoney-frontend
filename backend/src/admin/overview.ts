@@ -48,7 +48,7 @@ export interface AdminOverview {
   regime: RegimeStaleness;
   research: Array<{ signalKey: string; latestDate: string | null; ageDays: number | null; stale: boolean }>;
   enabledAnalyticsSchedules: Array<{ id: number; kind: string; cron: string; nextRunAt: string | null }>;
-  nextCommitteeEvent: { jobId: number; kind: string; runAfter: string; scopeType: string | null; scopeId: string | null } | null;
+  nextSwarmEvent: { jobId: number; kind: string; runAfter: string; scopeType: string | null; scopeId: string | null } | null;
   alerts: Alert[];
 }
 
@@ -159,18 +159,18 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
 
   // ── Next swarm event (derived from the queue only — swarm session
   // scheduling itself is out of this issue's scope) ─────────────────────
-  const [committeeJob] = await sql`
+  const [swarmJob] = await sql`
     SELECT id, kind, run_after, scope_type, scope_id
       FROM jobs
-     WHERE kind LIKE 'committee.%' AND status = 'pending'
+     WHERE kind LIKE 'swarm.%' AND status = 'pending'
      ORDER BY run_after ASC LIMIT 1`;
-  const nextCommitteeEvent = committeeJob
+  const nextSwarmEvent = swarmJob
     ? {
-        jobId: Number(committeeJob.id),
-        kind: committeeJob.kind,
-        runAfter: new Date(committeeJob.run_after).toISOString(),
-        scopeType: committeeJob.scope_type ?? null,
-        scopeId: committeeJob.scope_id ?? null,
+        jobId: Number(swarmJob.id),
+        kind: swarmJob.kind,
+        runAfter: new Date(swarmJob.run_after).toISOString(),
+        scopeType: swarmJob.scope_type ?? null,
+        scopeId: swarmJob.scope_id ?? null,
       }
     : null;
 
@@ -181,7 +181,7 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
     regime,
     research,
     enabledAnalyticsSchedules,
-    nextCommitteeEvent,
+    nextSwarmEvent,
     alerts,
   };
 }

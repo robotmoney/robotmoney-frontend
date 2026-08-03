@@ -51,7 +51,7 @@ export const MODEL_FAMILIES: Record<string, ModelFamily> = {
   deepseek: {
     default: "v4-flash",
     models: { "v4-flash": "deepseek-v4-flash", "v4-pro": "deepseek-v4-pro" },
-    note: "Repo default. Fast, cheap ($0.95/$4 per 1M), and — unlike the Claude family on Zen — it does NOT refuse the committee-take persona.",
+    note: "Repo default. Fast, cheap ($0.95/$4 per 1M), and — unlike the Claude family on Zen — it does NOT refuse the swarm-take persona.",
   },
   kimi: {
     default: "k2.7-code",
@@ -61,12 +61,12 @@ export const MODEL_FAMILIES: Record<string, ModelFamily> = {
   claude: {
     default: "sonnet-5",
     models: { "sonnet-5": "claude-sonnet-5", "haiku-4-5": "claude-haiku-4-5", "opus-5": "claude-opus-5", "fable-5": "claude-fable-5" },
-    note: "CAUTION: Zen's Claude models carry an OpenCode coding-assistant framing that fights persona prompts — haiku-4-5 refused the committee take outright, sonnet-5 went off-format. Fine for agentic/coding work, unreliable for persona authoring.",
+    note: "CAUTION: Zen's Claude models carry an OpenCode coding-assistant framing that fights persona prompts — haiku-4-5 refused the swarm take outright, sonnet-5 went off-format. Fine for agentic/coding work, unreliable for persona authoring.",
   },
   gpt: {
     default: "5.4",
     models: { "5.4": "gpt-5.4", "5.4-mini": "gpt-5.4-mini", "5.4-nano": "gpt-5.4-nano", "5.5": "gpt-5.5", "5-codex": "gpt-5-codex", "5.3-codex": "gpt-5.3-codex" },
-    note: "Authored a well-formed committee take. Codex members need the CLI (the raw OpenAI-compatible REST shape 400s for them).",
+    note: "Authored a well-formed swarm take. Codex members need the CLI (the raw OpenAI-compatible REST shape 400s for them).",
   },
   glm: { default: "5.2", models: { "5.2": "glm-5.2", "5.1": "glm-5.1", "5": "glm-5" }, note: "Verified working." },
   minimax: { default: "m3", models: { m3: "minimax-m3", "m2.7": "minimax-m2.7", "m2.5": "minimax-m2.5" }, note: "Verified working; verbose." },
