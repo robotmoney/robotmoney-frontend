@@ -225,26 +225,41 @@ test("channel-divergence view renders the Stablecoin-vs-QQQ-flow gauge with valu
   await expect(page.locator('.rs__series-canvas canvas[data-series="stables_vs_qqq_flow"]')).toHaveCount(1);
 });
 
-test("late-cycle view renders the static four-gauge readings table", async ({ page }) => {
+test("late-cycle view renders live gauges, and no hardcoded readings beside them", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");
   await navigate(page, "/research/late-cycle-signals");
 
-  // late-cycle-signals was fully converted to static long-form prose (#333,
-  // synced in #353): no researchView wiring, no live payload, so there is no
-  // .rs__title/.rs__gauge at all anymore — only the ported stub__ markup that
-  // demo-frontend-check.ts also asserts against (stub__title/stub__table/stub__series).
+  // The long-form prose (stub__ markup, which demo-frontend-check.ts also
+  // asserts against) is unchanged; what this page gained is the researchView
+  // wiring that R4 added, so the numbers now come from the signal payload.
   await expect(page.locator(".stub__title")).toContainText("How late in the rally");
   await expectResearchTitleUsesDisplayFont(page, ".stub__title");
-  await expect(page.locator(".rs__gauge")).toHaveCount(0);
 
-  // The four-gauge readings table, ported verbatim from the published page.
+  // One live gauge per gauge in the payload — five, including TOP7_VS_SPY,
+  // which the old hardcoded table omitted entirely.
+  const gauges = page.locator(".rs__gauge");
+  await expect(gauges).toHaveCount(LATECYCLE_PAYLOAD.gauges.length);
+  await expect(page.locator(".rs__asof")).toContainText(LATECYCLE_PAYLOAD.asof);
+
+  const concentrationGauge = page.locator(".rs__gauge", { hasText: "Index concentration" });
+  await expect(concentrationGauge.locator(".rs__gauge-val")).toHaveText("1.2841");
+  await expect(concentrationGauge.locator(".rs__gauge-pct")).toContainText("88%");
+  await expect(page.locator(".rs__gauge", { hasText: "Top-7 basket vs SPY" })).toHaveCount(1);
+
+  // The table beside them is now a legend, not a second set of readings: one
+  // row per gauge naming what it measures, and NO numeric reading column. The
+  // previous version of this test pinned "53%", "94%", "+9.9%" and "44.8" —
+  // figures hardcoded at authoring time that had drifted so far from the live
+  // signal (concentration 53% vs 70.8%) that the table contradicted the page's
+  // own conclusion. A test that asserts a stale number keeps it alive, so the
+  // assertion is now that no such number is there.
   const rows = page.locator(".stub__table tbody tr");
-  await expect(rows).toHaveCount(4);
-  await expect(rows.filter({ hasText: "Concentration" }).locator(".stub__num")).toHaveText("53%");
-  await expect(rows.filter({ hasText: "M&A activity" }).locator(".stub__num")).toHaveText("94%");
-  await expect(rows.filter({ hasText: "Margin debt" }).locator(".stub__num")).toHaveText("+9.9%");
-  await expect(rows.filter({ hasText: "Consumer conf." }).locator(".stub__num")).toHaveText("44.8");
+  await expect(rows).toHaveCount(LATECYCLE_PAYLOAD.gauges.length);
+  await expect(page.locator(".stub__table .stub__num")).toHaveCount(0);
+  await expect(page.locator(".stub__caption")).toHaveText("What each gauge measures");
+  await expect(rows.filter({ hasText: "Index concentration" })).toContainText("SPY/RSP ratio, 3y percentile");
+  await expect(rows.filter({ hasText: "Top-7 basket vs SPY" })).toContainText("NVDA");
 
   // And one stub__series write-up block per gauge (four numbered sections).
   await expect(page.locator(".stub__series")).toHaveCount(4);
