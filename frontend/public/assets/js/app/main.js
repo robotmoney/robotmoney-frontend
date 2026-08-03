@@ -9,6 +9,7 @@ import { registerStaticViews } from "./alpine/static-views.js";
 import { registerDashUi } from "./alpine/dash-ui.js";
 import { applyChartDefaults } from "./lib/chart-theme.js";
 import { start } from "./router.js";
+import { startAnalytics } from "./analytics.js";
 import { api, ROUTES } from "./lib/api.js";
 
 // The real vault (source of truth: robotmoney-site config, Base mainnet). This
@@ -94,6 +95,10 @@ document.addEventListener("alpine:init", () => {
   // use a3Tabs/a3Dialog/a3Sheet/etc. without its own registration step.
   registerDashUi(Alpine);
 });
+
+// Subscribe to the router's `rm:view-changed` BEFORE start() below fires the
+// first one, so the landing route is counted like every later one.
+startAnalytics();
 
 // Boot the router once the document is parsed. The router renders the current
 // path into #view; Alpine's MutationObserver initializes the injected markup.

@@ -106,6 +106,22 @@
     <!-- Per-environment public config (API origin). No secrets. -->
     <script src="/config.js"></script>
 
+    <!-- Google tag (gtag.js). `send_page_view: false` is the ONE deliberate
+         edit to the issued snippet: this is a client-rendered SPA, so the
+         automatic pageview would fire once on the shell and never again as the
+         router swaps routes through the history API. assets/js/app/analytics.js
+         sends every pageview instead, including the first, on the router's
+         `rm:view-changed` event — the moment the title and URL are the ones a
+         reader sees. -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-4JV7T715NY"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+
+      gtag('config', 'G-4JV7T715NY', { send_page_view: false });
+    </script>
+
     <!-- No build, browser-native. Document order = execution order:
          1) main.js (module) registers Alpine.data factories + boots the router;
             its alpine:init listener is in place before Alpine starts.
