@@ -3,10 +3,15 @@
      robotmoney.net/research/late-cycle-signals: four slow-moving gauges
      (index concentration, M&A activity, margin debt, consumer confidence),
      each with its write-up and read-it-this-way line, plus the framing and
-     regime-composite sections.
-     Static fragment. NO <script>, NO custom Alpine factories. -->
+     regime-composite sections. Carries the live researchView payload (5
+     gauges: CONCENTRATION, TOP7_VS_SPY, MNA, MARGIN, CONF — the backend's
+     computeLateCycle persists TOP7_VS_SPY as its own gauge alongside the
+     four published in the write-up above) and per-indicator sparklines,
+     same pattern as the channel-divergence preview.
+     Fragment only: NO <script>, NO custom Alpine factories beyond the
+     existing researchView, NO <html>/<head>/<body>. -->
 
-<section class="stub">
+<section class="stub" x-data="researchView('late-cycle-signals')" x-init="load()">
   <div class="stub__container">
     <header class="stub__head">
       <div class="stub__eyebrow">Research preview</div>
@@ -27,7 +32,29 @@
         construction, and the 2018/2020 rows of BofA&rsquo;s own table show the false-positive
         cost. Read these as gradients, not triggers.
       </p>
+      <p class="rs__asof" x-show="payload" x-cloak>
+        Live gauges as of <span x-text="payload?.asof"></span>.
+      </p>
     </header>
+
+    <p class="rs__loading" x-show="loading">Loading live signal&hellip;</p>
+    <p class="rs__error" x-show="error" x-text="error" x-cloak></p>
+
+    <!-- Live gauges from the signal payload: CONCENTRATION, TOP7_VS_SPY, MNA,
+         MARGIN, CONF (research-signals.ts computeLateCycle gauges[]). -->
+    <template x-if="payload">
+      <div class="rs__gauges">
+        <template x-for="g in payload.gauges" :key="g.id">
+          <div class="rs__gauge">
+            <div class="rs__gauge-name" x-text="g.name"></div>
+            <div class="rs__gauge-val" x-text="g.value"></div>
+            <div class="rs__bar"><div class="rs__bar-fill" :style="`width:${g.percentile*100}%`"></div></div>
+            <div class="rs__gauge-pct">percentile <span x-text="pct(g.percentile)"></span></div>
+            <span :class="readClass(g.read)" x-text="g.read"></span>
+          </div>
+        </template>
+      </div>
+    </template>
 
     <div class="stub__table-wrap">
       <table class="stub__table">
@@ -82,7 +109,13 @@
         </p>
         <div class="stub__series">
           <div class="stub__series-label">Series: SPY/RSP 3y percentile (scale 0 to 1)</div>
+          <template x-if="payload">
+            <div class="rs__series-canvas"><canvas data-series="concentration_cap_vs_equal_pct"></canvas></div>
+          </template>
           <div class="stub__series-label">Secondary: Top-7-today basket vs SPY, 3y %ile (survivorship caveat)</div>
+          <template x-if="payload">
+            <div class="rs__series-canvas"><canvas data-series="concentration_top7_vs_spy_pct"></canvas></div>
+          </template>
           <p class="stub__read">
             <span class="stub__read-key">Read it this way</span>
             Higher = narrower leadership. Persistent readings above 0.8 are the late-cycle
@@ -104,6 +137,9 @@
         </p>
         <div class="stub__series">
           <div class="stub__series-label">Series: S-4 monthly count, 3y percentile (scale 0 to 1)</div>
+          <template x-if="payload">
+            <div class="rs__series-canvas"><canvas data-series="mna_pct"></canvas></div>
+          </template>
           <p class="stub__read">
             <span class="stub__read-key">Read it this way</span>
             Higher = more deal-making = later cycle. Lows mark early-cycle risk aversion
@@ -124,6 +160,9 @@
         </p>
         <div class="stub__series">
           <div class="stub__series-label">Series: Margin debt YoY growth</div>
+          <template x-if="payload">
+            <div class="rs__series-canvas"><canvas data-series="margin_debt_yoy"></canvas></div>
+          </template>
           <p class="stub__read">
             <span class="stub__read-key">Read it this way</span>
             Positive and rising = leverage expanding (risk-on, but froth at extremes). Deeply
@@ -144,6 +183,9 @@
         </p>
         <div class="stub__series">
           <div class="stub__series-label">Series: UMich consumer sentiment</div>
+          <template x-if="payload">
+            <div class="rs__series-canvas"><canvas data-series="consumer_conf_level"></canvas></div>
+          </template>
           <p class="stub__read">
             <span class="stub__read-key">Read it this way</span>
             Elevated and rolling over = late-cycle warning. Depressed = contrarian risk-on.
