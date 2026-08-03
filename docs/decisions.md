@@ -1514,8 +1514,8 @@ rewritten, matching the regime-fidelity correction precedent on issue
 #400/#447); `docs/code-review/*` and `docs/reports/*`'s own historical
 content, except where a report cited a since-renamed *live* file path
 (`docs/reports/2026-07-29-local-onboarding-eval-assets.md`'s validation-log
-citation of `contract/tests/unit/committee-application.test.ts` was updated
-to the renamed `swarm-application.test.ts`, annotated as a post-hoc path
+citation of the pre-rename contract test file was updated to
+`contract/tests/unit/swarm-application.test.ts`, annotated as a post-hoc path
 correction, since `scripts/tests/unit/test-path-citations.test.ts` scans
 `docs/reports/` for exactly this and does not exempt it the way it exempts
 `docs/code-review/`).
