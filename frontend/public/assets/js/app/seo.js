@@ -224,6 +224,25 @@ const SECTIONS = [
   { prefix: "/swarm", suffix: "Robot Money Investment Swarm" },
 ];
 
+// The last resort in metaFor(), reached only by a path that is in no META
+// entry, under no SECTIONS prefix and no dashboard prefix — which is exactly
+// the set that resolves to views/not-found.html. It used to return META["/"],
+// so every 404 in the site advertised the HOME PAGE's title, description and
+// canonical, under the indexable default robots directive: a soft-404 that
+// invites Google to index unlimited nonexistent URLs as duplicates of the home
+// page. Fails closed for the same reason the dashboard stub prefixes above do.
+//
+// Every page in sitemap.xml is covered before this line is reached: the ones
+// without their own META entry are all under /docs, /blog or /swarm, which
+// SECTIONS handles. A NEW top-level page added without a META entry would land
+// here and be noindexed — deliberate, and the same trade the stub-prefix checks
+// already make. Add the entry with the page.
+const NOT_FOUND_META = {
+  title: "Page Not Found — Robot Money",
+  description: "This Robot Money page does not exist. Browse the vault, regime classifier, research and investment swarm from the navigation.",
+  robots: "noindex, follow",
+};
+
 // Dashboard :id/:slug routes (issue #380's 5 param regexes in routes.js —
 // /agents/:id, /lobster/:id, /vaults/:id, /wallets/:id, /projects/:slug).
 // None has a per-slug META entry (their profile pages don't exist yet — every
@@ -322,7 +341,7 @@ export function metaFor(pathname) {
       };
     }
   }
-  return META["/"];
+  return NOT_FOUND_META;
 }
 
 /**
