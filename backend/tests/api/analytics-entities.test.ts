@@ -14,6 +14,24 @@ import { getEntities, getMarketOverview } from "../../src/api/routes/dashboards.
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
 
+// daysAgo() is fine for "some time in the past", but NOT for two dates that
+// must share an ISO week: on a Tuesday or Wednesday, daysAgo(3) and daysAgo(1)
+// straddle a Monday and the weekly sum bucket splits in two. Anchor to the
+// last COMPLETE week instead, so the fixture dates are deterministic on every
+// day of the week.
+const DAY_MS = 86_400_000;
+const isoDayIndex = (t: number) => (new Date(t).getUTCDay() + 6) % 7; // Mon=0 … Sun=6
+const lastCompleteWeekMonday = () => {
+  const now = Date.now();
+  return now - isoDayIndex(now) * DAY_MS - 7 * DAY_MS;
+};
+// n days into that week: inLastWeek(0) = Monday, inLastWeek(2) = Wednesday.
+const inLastWeek = (n: number) =>
+  new Date(lastCompleteWeekMonday() + n * DAY_MS).toISOString().slice(0, 10);
+// The same offset one week earlier, for a row that must land in an EARLIER bucket.
+const inWeekBefore = (n: number) =>
+  new Date(lastCompleteWeekMonday() + (n - 7) * DAY_MS).toISOString().slice(0, 10);
+
 test("fetchEntities returns one row per agent/coin/vault/wallet with per-type contextual metrics", async () => {
   const tag = rid("ent");
 
@@ -83,11 +101,11 @@ test("fetchEntities returns one row per agent/coin/vault/wallet with per-type co
 test("fetchEntities weekly-buckets a coin's price series (last-value aggregation)", async () => {
   const tag = rid("spark");
   const [coin] = await sql`INSERT INTO lobster_coins ${sql({ name: `${tag}-coin`, is_active: true })} RETURNING id`;
-  // Two snapshots in the same UTC week, one in an earlier week.
+  // Two snapshots in the same ISO week, one in an earlier week.
   await sql`INSERT INTO daily_coin_snapshots ${sql([
-    { coin_id: coin.id, snapshot_date: daysAgo(20), price_usd: 1.0 },
-    { coin_id: coin.id, snapshot_date: daysAgo(3), price_usd: 2.0 },
-    { coin_id: coin.id, snapshot_date: daysAgo(1), price_usd: 2.5 },
+    { coin_id: coin.id, snapshot_date: inWeekBefore(0), price_usd: 1.0 },
+    { coin_id: coin.id, snapshot_date: inLastWeek(0), price_usd: 2.0 },
+    { coin_id: coin.id, snapshot_date: inLastWeek(2), price_usd: 2.5 },
   ])}`;
 
   const { entities } = await fetchEntities();
