@@ -125,7 +125,7 @@ async function main() {
   // sv__take card per member with a role/lens line and a stance-confidence
   // badge — the surface spa.spec.ts asserts against for live demo sessions.
   await checkView("/views/swarm/session.html", [
-    "x-data=\"icSessionDetail()\"",
+    "x-data=\"swarmSessionDetail()\"",
     "x-for=\"t in takes\"",  // renders the members' signed takes
     "sv__take",              // member-opinion card (issue #75 render surface)
     "sv__stance-badge",      // stance · confidence badge
@@ -145,7 +145,7 @@ async function main() {
   ]);
   checkLocalViewFile("../assets/js/app/alpine/static-views.js", [
     "memberProfile",
-    "icSessionDetail",
+    "swarmSessionDetail",
   ]);
 
   for (const filename of new Bun.Glob("**/*.html").scanSync({ cwd: viewsDir })) {

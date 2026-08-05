@@ -9,7 +9,7 @@
 // EXECUTING tests behind their runtime claims — only markup-substring e2e and
 // manual verification had run). The additions below drive, with the same
 // no-DOM/no-Alpine-runtime pattern: the Swarm Recommendation action table
-// and rationale-suppression on icSessionDetail() (AC1), the live status
+// and rationale-suppression on swarmSessionDetail() (AC1), the live status
 // panel's windowClosesAt-over-state trust on swarmApplyStatus() (AC2),
 // stepClass()/stateChip()/liveStatus() across the five states the PR's
 // verification section claims to have manually checked (AC3), and the
@@ -378,9 +378,9 @@ describe("swarmApplyStatus: stepClass()/stateChip()/liveStatus() across the stat
   });
 });
 
-describe("icSessionDetail: rollup recommendation renders action rows and suppresses the echoed rationale (issue #341 AC1)", () => {
+describe("swarmSessionDetail: rollup recommendation renders action rows and suppresses the echoed rationale (issue #341 AC1)", () => {
   test("rollup-shaped session (quorum+stances+actions present) — isRollupRecommendation() true, actions pass through, rationale suppressed", () => {
-    const d = factories.icSessionDetail() as any;
+    const d = factories.swarmSessionDetail() as any;
     d.session = {
       swarmRecommendation: {
         quorum: { submitted: 3, active: 5 },
@@ -405,7 +405,7 @@ describe("icSessionDetail: rollup recommendation renders action rows and suppres
   });
 
   test("non-rollup recommendation with a real rationale and no actions — rationale passes through untouched, still counts as detail", () => {
-    const d = factories.icSessionDetail() as any;
+    const d = factories.swarmSessionDetail() as any;
     d.session = {
       swarmRecommendation: { type: "narrative", rationale: "The swarm recommends holding." },
     };
@@ -417,7 +417,7 @@ describe("icSessionDetail: rollup recommendation renders action rows and suppres
   });
 
   test("no recommendation at all — every derived method reads empty/false, never throws on a missing session", () => {
-    const d = factories.icSessionDetail() as any;
+    const d = factories.swarmSessionDetail() as any;
     d.session = {};
 
     expect(d.isRollupRecommendation()).toBe(false);
@@ -435,7 +435,7 @@ describe("harness self-check", () => {
     expect(typeof factories.swarmApplyStatus).toBe("function");
   });
 
-  test("icSessionDetail was registered and is instantiable (issue #341)", () => {
-    expect(typeof factories.icSessionDetail).toBe("function");
+  test("swarmSessionDetail was registered and is instantiable (issue #341)", () => {
+    expect(typeof factories.swarmSessionDetail).toBe("function");
   });
 });

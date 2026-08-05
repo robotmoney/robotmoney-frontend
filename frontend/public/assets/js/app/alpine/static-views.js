@@ -1295,7 +1295,7 @@ export function registerStaticViews(Alpine) {
     toggleTake(id) { this.openTakes = { ...this.openTakes, [id]: !this.openTakes[id] }; },
   }));
 
-  Alpine.data("icSessionDetail", () => ({
+  Alpine.data("swarmSessionDetail", () => ({
     ...helpers,
     loading: true,
     error: null,
