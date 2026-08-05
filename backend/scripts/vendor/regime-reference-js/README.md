@@ -12,9 +12,17 @@ implementation, not this repo's own TS port.
 
 **These files are vendored verbatim for offline regeneration of
 independent-fidelity golden fixtures only — they are never imported by
-production or runtime code.** `backend/tests/no-new-vendor.test.ts`-style
-forbidden-host scanning does not apply to this directory; nothing here is
-reachable from `src/`.
+production or runtime code.** The `backend/tests/` forbidden-host vendor scan
+(issue #84) does NOT cover this directory — it is a hardcoded allowlist of six
+`backend/src/chain/*` files and never reads `backend/scripts/vendor/` at all.
+Do not cite it as this directory's guard.
+
+The guard that actually enforces this directory's rules is
+`scripts/tests/unit/vendored-reference-containment.test.ts` (issue #504). It
+runs per-PR in the required `unit` workflow and asserts both halves of the
+containment: that no `backend/src/**` file imports, requires, or path-builds
+into `backend/scripts/vendor/**`, and that `backend/tsconfig.json` never gains
+a `.js` include glob or sets `allowJs` — see the tsconfig rule below.
 
 ## Provenance
 
@@ -64,5 +72,11 @@ port.
   requires/imports these files, and only at regeneration time (an explicit,
   human-invoked `bun run` command, never CI, never demo boot, never
   production).
+- **`backend/tsconfig.json` never gains a `.js` include glob and never sets
+  `allowJs`.** This directory sits *inside* an included path — `include` covers
+  `scripts/**/*.ts` — so the only thing keeping the vendored code out of the
+  compiled tree is its `.js` extension. Widening `include` to JavaScript, or
+  enabling `allowJs`, would silently pull this verbatim third-party code into
+  `bun run typecheck`.
 - **CommonJS**, as in the source repo — do not convert to ESM/TS; the point is
   to run the original code unmodified.
