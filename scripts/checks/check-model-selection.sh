@@ -2,9 +2,9 @@
 # docs/decisions.md D22 — rule 1 AS AMENDED 2026-07-28, plus rules 2-4 unchanged;
 # docs/architecture.md §11.3 E1 (as amended) and E2. Enforced as a static guard.
 #
-# Same shape as backend/scripts/check-no-ai-overview.sh: the exit code IS the
-# verdict. Runs per-PR in .github/workflows/integration.yml — milliseconds, no
-# Docker, no network — and is EXECUTED (not merely present) by
+# Same shape as scripts/checks/check-no-test-imports-in-runtime.sh: the exit
+# code IS the verdict. Runs per-PR in .github/workflows/integration.yml —
+# milliseconds, no Docker, no network — and is EXECUTED (not merely present) by
 # scripts/tests/unit/model-selection-guard.test.ts, which runs it against
 # planted fixtures and asserts it goes RED on each rule it claims to enforce.
 #
