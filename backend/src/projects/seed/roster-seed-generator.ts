@@ -100,35 +100,95 @@ interface V0Vault {
 
 const PAGE_SIZE = 1000;
 
-// Paginated PostgREST GET (limit/offset — the six tables here top out at
-// ~1,500 rows, well within a handful of pages). `extraFilter` is an already
-// URL-encoded `key=op.value` PostgREST filter string, e.g. "status=eq.active".
-async function fetchAllRows<T>(
+// PostgREST answers a `Prefer: count=exact` request with
+// `Content-Range: <first>-<last>/<total>` (or `*/<total>` for an empty range).
+// The total is server-side truth about the FILTERED set — the only number in
+// this pipeline that does not come from the rows we happened to receive.
+export function parseContentRangeTotal(header: string | null, table: string): number {
+  const slash = header ? header.lastIndexOf("/") : -1;
+  if (!header || slash < 0) {
+    throw new Error(
+      `v0 supabase GET ${table}: no row total in the Content-Range response header (got ${JSON.stringify(header)}) — ` +
+        `refusing to extract without a server-declared count to check completeness against`,
+    );
+  }
+  const total = Number(header.slice(slash + 1));
+  if (!Number.isInteger(total) || total < 0) {
+    throw new Error(`v0 supabase GET ${table}: unparseable Content-Range row total in ${JSON.stringify(header)}`);
+  }
+  return total;
+}
+
+// Paginated PostgREST GET. `extraFilter` is an already URL-encoded
+// `key=op.value` PostgREST filter string, e.g. "status=eq.active".
+//
+// KEYSET pagination (`id=gt.<lastId>&order=id.asc`), not limit/offset: `id` is
+// a random UUID and the source is a live, concurrently-written database, so an
+// insert landing before the current offset shifts the whole window — silently
+// skipping a row — and a delete duplicates one. A keyset cursor is anchored to
+// a row that was actually seen, so neither can happen.
+//
+// COMPLETENESS: every request carries `Prefer: count=exact`, and the total the
+// server declares on the FIRST page (the only request with no `id=gt.` cursor,
+// so the only one whose count covers the whole filtered set) is asserted
+// against the number of rows actually collected. Without that assertion an
+// anon-key RLS policy hiding rows, a PostgREST `db-max-rows` cap below
+// PAGE_SIZE, or an upstream filter change all produce a smaller-but-perfectly-
+// self-consistent artifact that no downstream check can distinguish from a
+// complete one.
+export async function fetchAllRows<T extends { id: string }>(
   cfg: V0SupabaseConfig,
   table: string,
   select: string,
   extraFilter?: string,
-): Promise<T[]> {
+): Promise<{ rows: T[]; upstreamTotal: number }> {
   const out: T[] = [];
-  let offset = 0;
+  let upstreamTotal: number | null = null;
+  let cursor: string | null = null;
   for (;;) {
-    const params = new URLSearchParams({ select, order: "id.asc", limit: String(PAGE_SIZE), offset: String(offset) });
+    const params = new URLSearchParams({ select, order: "id.asc", limit: String(PAGE_SIZE) });
+    if (cursor !== null) params.set("id", `gt.${cursor}`);
     const url = `${cfg.url}/rest/v1/${table}?${params.toString()}${extraFilter ? `&${extraFilter}` : ""}`;
     const res = await fetch(url, {
-      headers: { apikey: cfg.anonKey, Authorization: `Bearer ${cfg.anonKey}`, accept: "application/json" },
+      headers: {
+        apikey: cfg.anonKey,
+        Authorization: `Bearer ${cfg.anonKey}`,
+        accept: "application/json",
+        Prefer: "count=exact",
+      },
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`v0 supabase GET ${table} failed: ${res.status} ${body.slice(0, 300)}`);
     }
+    const declared = parseContentRangeTotal(res.headers.get("content-range"), table);
+    if (upstreamTotal === null) upstreamTotal = declared;
     const page = (await res.json()) as T[];
     out.push(...page);
     if (page.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    const last = page[page.length - 1];
+    if (!last || typeof last.id !== "string" || last.id === "") {
+      throw new Error(
+        `v0 supabase GET ${table}: a full page came back without a usable id on its last row — ` +
+          `keyset pagination cannot advance, refusing to fall back to an offset scan`,
+      );
+    }
+    cursor = last.id;
   }
-  return out;
+  if (out.length !== upstreamTotal) {
+    throw new Error(
+      `v0 supabase GET ${table}: fetched ${out.length} row(s) but the server declared ${upstreamTotal} ` +
+        `(Prefer: count=exact) — the extract is incomplete or the table changed mid-pull; refusing to build a seed from it`,
+    );
+  }
+  return { rows: out, upstreamTotal };
 }
 
+// `*Total` is the number of rows RECEIVED for that table. fetchAllRows has
+// already asserted it equals the server-declared `Prefer: count=exact` total,
+// so it is upstream truth rather than "however many we happened to get" — but
+// the authoritative copy of that number is the one persisted into the manifest
+// (RosterSeedManifest.upstreamTotals), not this print-once struct.
 export interface RosterGenerationStats {
   projectsTotal: number;
   projectsIncluded: number;
@@ -362,7 +422,7 @@ export interface GeneratedRoster {
 // silently-empty roster masquerading as "regenerated successfully" would be
 // worse than a loud failure.
 export async function generateV0RosterArtifact(cfg: V0SupabaseConfig = resolveV0SupabaseConfig()): Promise<GeneratedRoster> {
-  const [projects, agents, coins, wallets, vaults] = await Promise.all([
+  const [projectRows, agentRows, coinRows, walletRows, vaultRows] = await Promise.all([
     fetchAllRows<V0Project>(
       cfg,
       "projects",
@@ -390,13 +450,38 @@ export async function generateV0RosterArtifact(cfg: V0SupabaseConfig = resolveV0
     ),
   ]);
 
-  const { projects: mapped, stats } = mapV0RosterRows({ projects, agents, coins, wallets, vaults });
+  const { projects: mapped, stats } = mapV0RosterRows({
+    projects: projectRows.rows,
+    agents: agentRows.rows,
+    coins: coinRows.rows,
+    wallets: walletRows.rows,
+    vaults: vaultRows.rows,
+  });
   if (mapped.length === 0) {
     throw new Error(
       "v0 roster generation produced ZERO projects — refusing to write an empty seed " +
         "(this almost certainly means the fetch/mapping silently failed, not that v0 has no active projects)",
     );
   }
-  const manifest = buildManifest(mapped, { generatedAt: new Date().toISOString() });
+  // Server-declared upstream totals and the skip tallies go INTO the manifest,
+  // not just onto the operator's terminal: printed-then-discarded stats cannot
+  // be checked by anything later, which is what let a self-derived manifest
+  // look complete. validateRoster reconciles included + skipped === upstream on
+  // every load from here on.
+  const upstreamTotals = {
+    projects: projectRows.upstreamTotal,
+    agents: agentRows.upstreamTotal,
+    coins: coinRows.upstreamTotal,
+    wallets: walletRows.upstreamTotal,
+    vaults: vaultRows.upstreamTotal,
+  };
+  const skipped = {
+    projects: stats.projectsSkipped,
+    agents: stats.agentsSkipped,
+    coins: stats.coinsSkipped,
+    wallets: stats.walletsSkipped,
+    vaults: stats.vaultsSkipped,
+  };
+  const manifest = buildManifest(mapped, { generatedAt: new Date().toISOString(), upstreamTotals, skipped });
   return { projects: mapped, manifest, stats };
 }

@@ -21,7 +21,11 @@ export interface AdminAlert {
 }
 
 export interface AdminProductionKindHealth {
-  kind: "regime.classify" | "research.refresh";
+  // Retired analytics consumers plus every live projects.* pipeline — the
+  // overview alerts on all of them (backend/src/admin/overview.ts
+  // MONITORED_KINDS). Kept as a plain string so adding a monitored kind is not
+  // a breaking DTO change.
+  kind: string;
   lastJobId: number | null;
   lastJobStatus: string | null;
   lastRunStatus: string | null;
@@ -62,6 +66,20 @@ export interface AdminNextSwarmEvent {
   scopeId: string | null;
 }
 
+// Provenance + coverage of the committed v0 identity roster the projects
+// directory is built from. `generatedAt`/`declaredProjectCount`/`checksumPrefix`
+// are what the seed manifest declares; `activeProjectCount` is what is actually
+// persisted and active. `error` non-null means the manifest cannot be read at
+// all, so discovery cannot run.
+export interface AdminRosterSeedHealth {
+  generatedAt: string | null;
+  ageDays: number | null;
+  declaredProjectCount: number | null;
+  checksumPrefix: string | null;
+  activeProjectCount: number;
+  error: string | null;
+}
+
 export interface AdminOverview {
   serverDate: string;
   queueCounts: Record<string, number>;
@@ -70,6 +88,7 @@ export interface AdminOverview {
   research: AdminResearchFreshness[];
   enabledAnalyticsSchedules: AdminEnabledSchedule[];
   nextSwarmEvent: AdminNextSwarmEvent | null;
+  rosterSeed: AdminRosterSeedHealth;
   alerts: AdminAlert[];
 }
 

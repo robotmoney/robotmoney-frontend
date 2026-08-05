@@ -7,6 +7,7 @@
 // the admin surface reads.
 import { sql } from "../db/client.ts";
 import { computeRegimeSnapshotStaleness, type RegimeStaleness } from "../analytics/report/regime-projection.ts";
+import { loadRosterSeedManifest } from "../projects/seed/roster-seed.ts";
 
 // Research signals are considered stale after this many UTC calendar days
 // without a new row — named per docs/architecture.md US-A2 ("Use a
@@ -18,6 +19,27 @@ export const RESEARCH_STALE_DAYS = 2;
 // the independent producer does not enqueue either kind.
 export const PRODUCTION_KINDS = ["regime.classify", "research.refresh"] as const;
 export type ProductionKind = (typeof PRODUCTION_KINDS)[number];
+
+// Kinds the overview raises run-health alerts for. This is deliberately NOT
+// PRODUCTION_KINDS: that constant carries a second, unrelated meaning — "owned
+// by the independent analytics producer, so admin may not retry or toggle it"
+// (api/routes/admin.ts) — and the projects pipelines are neither producer-owned
+// nor retired. They are, however, the live scheduled jobs that actually keep
+// the public directory current, and until now nothing alerted on them at all:
+// the alert feed covered exactly two retired kinds. Worse, an exhausted degrade
+// settles the job 'succeeded' (worker/loop.ts), so a permanently broken
+// discovery run looked healthy forever.
+export const MONITORED_KINDS = [
+  ...PRODUCTION_KINDS,
+  "projects.discover",
+  "projects.refresh_coins",
+  "projects.refresh_wallets",
+  "projects.sync_revenue",
+  "projects.snapshot_daily",
+  "projects.fetch_vaults",
+  "projects.recompute_coverage",
+] as const;
+export type MonitoredKind = (typeof MONITORED_KINDS)[number];
 
 // The two research-signal natural keys research.refresh persists.
 const RESEARCH_SIGNAL_KEYS = ["channel-divergence", "late-cycle-signals"] as const;
@@ -31,7 +53,7 @@ export interface Alert {
 }
 
 export interface ProductionKindHealth {
-  kind: ProductionKind;
+  kind: MonitoredKind;
   lastJobId: number | null;
   lastJobStatus: string | null;
   lastRunStatus: string | null; // succeeded | failed | degraded, from the latest job_runs row
@@ -49,7 +71,24 @@ export interface AdminOverview {
   research: Array<{ signalKey: string; latestDate: string | null; ageDays: number | null; stale: boolean }>;
   enabledAnalyticsSchedules: Array<{ id: number; kind: string; cron: string; nextRunAt: string | null }>;
   nextSwarmEvent: { jobId: number; kind: string; runAfter: string; scopeType: string | null; scopeId: string | null } | null;
+  rosterSeed: RosterSeedHealth;
   alerts: Alert[];
+}
+
+// Health of the committed v0 identity roster the live discovery source serves.
+// Everything under `manifest` is what the artifact DECLARES about itself (its
+// checksum is verified at load, not here); `activeProjectCount` is what is
+// actually persisted. The two side by side are the operator's only way to see
+// that the directory is serving a stale or partial roster — the leaderboard's
+// own freshness panel reads persisted timestamps, so it cannot report a seed
+// that never loaded.
+export interface RosterSeedHealth {
+  generatedAt: string | null;
+  ageDays: number | null;
+  declaredProjectCount: number | null;
+  checksumPrefix: string | null;
+  activeProjectCount: number; // persisted rows a discovery pass wrote and left active
+  error: string | null; // manifest unreadable/unsupported — the seed cannot load at all
 }
 
 function visibilityTimeoutSeconds(): number {
@@ -67,7 +106,7 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
 
   // ── Production-kind health ────────────────────────────────────────────
   const production: ProductionKindHealth[] = [];
-  for (const kind of PRODUCTION_KINDS) {
+  for (const kind of MONITORED_KINDS) {
     const [lastJob] = await sql`
       SELECT id, status, locked_at
         FROM jobs WHERE kind = ${kind}
@@ -174,6 +213,64 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
       }
     : null;
 
+  // ── Roster seed health ─────────────────────────────────────────────────
+  // The directory's identity data comes from a COMMITTED artifact that only an
+  // operator can refresh, so "when was it captured" and "how much of it is
+  // actually live" are the two numbers that say whether the public directory is
+  // current — and neither was reachable anywhere before this. Manifest only: the
+  // ~1.1 MB data file is not read on an admin request.
+  const [activeRow] = await sql`
+    SELECT count(*)::int AS n FROM projects WHERE status = 'active' AND resolved_at IS NOT NULL`;
+  const activeProjectCount = Number(activeRow?.n ?? 0);
+  let rosterSeed: RosterSeedHealth = {
+    generatedAt: null,
+    ageDays: null,
+    declaredProjectCount: null,
+    checksumPrefix: null,
+    activeProjectCount,
+    error: null,
+  };
+  try {
+    const manifest = await loadRosterSeedManifest();
+    const generatedAtMs = new Date(manifest.generatedAt).getTime();
+    rosterSeed = {
+      generatedAt: manifest.generatedAt,
+      ageDays: Number.isNaN(generatedAtMs) ? null : Math.floor((Date.now() - generatedAtMs) / 86_400_000),
+      declaredProjectCount: manifest.projectCount,
+      checksumPrefix: manifest.checksum?.slice(0, 12) ?? null,
+      activeProjectCount,
+      error: null,
+    };
+  } catch (e) {
+    // Reported, never swallowed: an unreadable manifest means discoverProjects()
+    // will throw and the nightly pass will degrade — which settles 'succeeded'
+    // once attempts are exhausted, so this entry is the only honest signal.
+    rosterSeed = { ...rosterSeed, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (rosterSeed.error) {
+    alerts.push({ level: "failed", source: "projects.roster_seed", message: `roster seed unreadable: ${rosterSeed.error}` });
+  } else if (activeProjectCount === 0) {
+    alerts.push({
+      level: "not_run",
+      source: "projects.roster_seed",
+      message: `roster seed declares ${rosterSeed.declaredProjectCount} project(s) but none are persisted and active`,
+    });
+  } else if (rosterSeed.declaredProjectCount != null && activeProjectCount < rosterSeed.declaredProjectCount) {
+    alerts.push({
+      level: "degraded",
+      source: "projects.roster_seed",
+      message:
+        `roster seed declares ${rosterSeed.declaredProjectCount} project(s), ${activeProjectCount} persisted and active ` +
+        `(seed generatedAt ${rosterSeed.generatedAt}, ${rosterSeed.ageDays}d old)`,
+    });
+  } else {
+    alerts.push({
+      level: "healthy",
+      source: "projects.roster_seed",
+      message: `roster seed ${rosterSeed.checksumPrefix} generatedAt ${rosterSeed.generatedAt} (${rosterSeed.ageDays}d old), ${activeProjectCount} active project(s)`,
+    });
+  }
+
   return {
     serverDate,
     queueCounts,
@@ -182,6 +279,7 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
     research,
     enabledAnalyticsSchedules,
     nextSwarmEvent,
+    rosterSeed,
     alerts,
   };
 }

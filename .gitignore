@@ -25,3 +25,10 @@ onboarding-admission-record.md
 # Never source, never committed, so the whole directory is ignored.
 .agents/
 .audit-scratch/
+
+# Same-directory temp files the seed writers rename over their committed
+# artifact (backend/src/projects/seed/roster-seed.ts
+# replaceRosterSeedAtomically, analytics/extract/*-seed-generator.ts). A crash
+# between the write and the rename orphans one next to the real artifact, where
+# `git add -A` would happily commit a ~1 MB near-duplicate.
+*.tmp-[0-9]*

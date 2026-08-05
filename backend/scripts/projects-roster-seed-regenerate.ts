@@ -1,5 +1,5 @@
 // Explicit LIVE v0-roster regeneration command (R11 follow-up —
-// docs/audits/v0-v1-parity/R11-projects-supabase-audit.md §6). The ONLY way
+// docs/audits/v0-v1-parity/R11-projects-supabase-audit.md, Verdict). The ONLY way
 // the committed backend/src/projects/seed/v0-roster-data.json +
 // .manifest.json pair is produced or replaced — NEVER implicit during
 // migrations, demo boot, or required per-PR CI (no other code path imports
@@ -38,16 +38,26 @@ export async function main(): Promise<void> {
 
   const { projects, manifest, stats } = await generateV0RosterArtifact(cfg);
 
+  // The denominators here are the SERVER-declared upstream totals
+  // (`Prefer: count=exact`), already asserted against the rows actually
+  // received — and they are persisted into the manifest rather than only
+  // printed, so a later load can still reconcile included + skipped == upstream.
   console.log(
     `[projects-roster-seed-regenerate] projects ${stats.projectsIncluded}/${stats.projectsTotal} ` +
       `agents ${stats.agentsIncluded}/${stats.agentsTotal} coins ${stats.coinsIncluded}/${stats.coinsTotal} ` +
-      `wallets ${stats.walletsIncluded}/${stats.walletsTotal} vaults ${stats.vaultsIncluded}/${stats.vaultsTotal}`,
+      `wallets ${stats.walletsIncluded}/${stats.walletsTotal} vaults ${stats.vaultsIncluded}/${stats.vaultsTotal} ` +
+      `(upstream totals recorded in the manifest: ${JSON.stringify(manifest.upstreamTotals)})`,
   );
   for (const line of stats.notes) console.warn(`[projects-roster-seed-regenerate] note: ${line}`);
 
   const outPath = arg("out") ?? DEFAULT_ROSTER_SEED_PATH;
   const manifestOutPath = arg("manifest-out") ?? DEFAULT_ROSTER_SEED_MANIFEST_PATH;
-  replaceRosterSeedAtomically(outPath, manifestOutPath, projects, manifest);
+  // --allow-shrink waives the previous manifest's projectCount regression floor
+  // (roster-seed.ts assertNoProjectCountRegression) — the operator's explicit
+  // "yes, v0 really did lose that many projects" acknowledgement. Without it a
+  // large drop refuses to write and leaves the committed pair untouched.
+  const allowShrink = process.argv.includes("--allow-shrink");
+  replaceRosterSeedAtomically(outPath, manifestOutPath, projects, manifest, { allowShrink });
   console.log(
     `[projects-roster-seed-regenerate] wrote ${outPath} + ${manifestOutPath} (atomic replace, prior pair untouched on any failure)`,
   );
