@@ -25,6 +25,7 @@
     "demo:status": "bun scripts/demo-status.ts",
     "demo:clean": "bun scripts/demo-clean.ts",
     "demo:reap": "bun scripts/demo-reap.ts",
+    "smoke": "bun scripts/demo.ts --smoke",
     "credentials": "bun scripts/gitops-credentials.ts",
     "credentials:check": "bun scripts/gitops-credentials.ts --check"
   },

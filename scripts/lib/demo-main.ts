@@ -119,8 +119,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // operator's muscle memory keeps working.
 const STATIC_PORT_FLAG = "--static-port";
 const LEGACY_STAGE_FLAG = "--stage";
+const SMOKE_MODE_FLAG = "--smoke";
+const smokeMode = process.argv.includes(SMOKE_MODE_FLAG);
 const usedLegacyStageFlag = process.argv.includes(LEGACY_STAGE_FLAG);
-const staticPortMode = process.argv.includes(STATIC_PORT_FLAG) || usedLegacyStageFlag;
+const staticPortMode = process.argv.includes(STATIC_PORT_FLAG) || usedLegacyStageFlag || smokeMode;
 if (usedLegacyStageFlag) {
   console.warn(
     `[demo] ${LEGACY_STAGE_FLAG} is DEPRECATED and now means ${STATIC_PORT_FLAG} — same behaviour, clearer name ` +
@@ -260,8 +262,11 @@ const databaseUrl = internalDatabaseUrl(database);
 // The --stage overlay belongs to the BASE list, not to the run-only extension:
 // it is the one file that names a host port, so demo:status must resolve the
 // same topology when it asks `docker compose port` what is actually published.
-const composeFilesBase = ["docker-compose.yml", "docker-compose.demo.yml", ...(staticPortMode ? [STAGE_COMPOSE_FILE] : [])]
-  .join(":");
+const composeFilesBase = [
+  "docker-compose.yml",
+  ...(smokeMode ? [] : ["docker-compose.demo.yml"]),
+  ...(staticPortMode ? [STAGE_COMPOSE_FILE] : [])
+].join(":");
 let composeFilesRun = composeFilesBase;
 
 // The --external-pg overlay, generated the same way (and for the same reason) as
@@ -540,8 +545,7 @@ const state: DemoState = {
   steps: [
     { name: "migrate", status: "pending" },
     { name: "api /health", status: "pending" },
-    { name: "v0 seed", status: "pending" },
-    { name: "edgar seed", status: "pending" },
+    { name: smokeMode ? "prod-bootstrap" : "edgar seed", status: "pending" },
   ],
   research: [],
   swarms: {},
@@ -1120,7 +1124,7 @@ async function main(): Promise<void> {
   // `docker compose port` once the containers exist — see scripts/stack/ports.ts
   // for why the daemon picks them instead of us). Everything below this line
   // depends on that call having happened.
-  applyHostPorts(await stack.up({ migrateEnv: { DEMO_MODE: "1", DEMO_SEED_PROJECTS: "1" } }));
+  applyHostPorts(await stack.up({ migrateEnv: smokeMode ? {} : { DEMO_MODE: "1", DEMO_SEED_PROJECTS: "1" } }));
 
   // Producer-owned EDGAR/MNA bootstrap (issue #108/D25) — AFTER migrations +
   // API readiness. The finite producer command ingests the committed seed via
@@ -1128,25 +1132,37 @@ async function main(): Promise<void> {
   // refresh. It never enables or enqueues a consumer research job. A failure
   // throws because the seed + immediate research result are a required boot
   // step, not best effort.
-  setStep(state, "v0 seed", "running");
-  log("bootstrapping v0 committee archive…");
-  await stack.composeAsync(
-    ["run", "--rm", "--no-deps", "api", "bun", "run", "scripts/v0-seed-bootstrap.ts"],
-    "v0 seed bootstrap (api)",
-    { stdout: outFd, stderr: errFd },
-  );
-  setStep(state, "v0 seed", "done");
-  log("v0 committee archive bootstrapped");
-
-  setStep(state, "edgar seed", "running");
-  log("ingesting EDGAR/MNA seed + enabling the research schedule…");
-  await stack.composeAsync(
-    ["run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "seed"],
-    "edgar seed bootstrap (independent producer)",
-    { stdout: outFd, stderr: errFd },
-  );
-  setStep(state, "edgar seed", "done");
-  log("EDGAR/MNA seed ingested — research.refresh is now eligible");
+  if (smokeMode) {
+    setStep(state, "prod-bootstrap", "running");
+    log("running prod-bootstrap in api container…");
+    await stack.composeAsync(
+      [
+        "run",
+        "--rm",
+        "--no-deps",
+        "-e",
+        "ANALYTICS_API_URL=http://api:8787",
+        "api",
+        "bun",
+        "run",
+        "scripts/prod-bootstrap.ts",
+      ],
+      "prod-bootstrap (api)",
+      { stdout: outFd, stderr: errFd },
+    );
+    setStep(state, "prod-bootstrap", "done");
+    log("production bootstrap complete");
+  } else {
+    setStep(state, "edgar seed", "running");
+    log("ingesting EDGAR/MNA seed + enabling the research schedule…");
+    await stack.composeAsync(
+      ["run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "seed"],
+      "edgar seed bootstrap (independent producer)",
+      { stdout: outFd, stderr: errFd },
+    );
+    setStep(state, "edgar seed", "done");
+    log("EDGAR/MNA seed ingested — research.refresh is now eligible");
+  }
 
   if (process.env.CI) {
     // CI: run checks then tear down. (Unchanged — pure console, "inherit" stdio.)
@@ -1564,7 +1580,7 @@ async function main(): Promise<void> {
       c.nextAt = due.nextAt;
     }
   }
-  void swarmDriver();
+  if (!smokeMode) void swarmDriver();
 
   // ── Periodic new-member onboarding (§11 R8: real-inference eval) ─────────
   // Every admission launches ONE vanilla OpenCode member-agent container
@@ -1798,7 +1814,7 @@ async function main(): Promise<void> {
     state.upcoming = [];
     log(`onboarding complete — all ${NEWCOMER_NAMES.length} named newcomers attempted, no more will join`);
   }
-  void onboardingDriver();
+  if (!smokeMode) void onboardingDriver();
 
   await new Promise<never>(() => { /* run forever; Ctrl-C/SIGTERM (or `demo:down`) stops the stack */ });
 }
