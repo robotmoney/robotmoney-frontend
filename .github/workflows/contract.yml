@@ -18,7 +18,11 @@
 # unreachable network is a RED, per the loud-skip-never invariant.
 #
 # CI taxonomy class: feature-correctness. Runs on every PR (draft AND ready) —
-# cheap, no Docker, no network. This workflow replaces the contract-specific
+# cheap, no Docker. It is the ONE feature-correctness workflow that touches the
+# live network, and only for the single HTTPS GET described above; that
+# exception is recorded in docs/architecture.md §3 rather than left as a
+# contradiction between this header and the cost-class table.
+# This workflow replaces the contract-specific
 # steps that previously lived in integration.yml (issue #275). It is directly
 # required in branch protection (issue #275 addendum: the ci-gate.yml/
 # ci-gate.ts fan-in mechanism this workflow used to feed was removed after a

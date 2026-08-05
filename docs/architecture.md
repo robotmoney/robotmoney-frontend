@@ -205,8 +205,19 @@ the GitHub UI, not something automatable from this repo.
 System-correctness workflows (`backend`, `research-pipeline`, `integration`,
 `onboarding-eval-rails`, `e2e`) defer on draft PRs; the feature-correctness
 workflows (`unit`, `repo-guards`, `contract`, `frontend`) continue to execute
-there — cheap enough (no Docker, no live network) to gate early regardless of
-draft state.
+there — cheap enough (no Docker) to gate early regardless of draft state.
+
+The one live-network exception is deliberate and bounded (issue #484):
+`contract` runs `contract/tests/live` — a single HTTPS GET asserting
+`SWARM_ONBOARDING_SKILL_URL` still returns 200. It is the only discovery link in
+the D21 onboarding flow, a 404 there raises no error anywhere in this repo, and
+the guard's previous schedule-only home did not exist, so it had never executed
+in CI at all while the URL 404'd in production for two days. It runs on the
+per-PR path rather than nightly-only so the red lands on the PR that causes it,
+gated behind `contract`'s existing `contract/**` paths-filter. The accepted
+cost: a raw.githubusercontent.com outage reds a required check on `contract/**`
+PRs. That is the intended direction — per the loud-skip-never invariant, an
+unreachable external resource must fail, never skip.
 
 **L2 — Shared code is named for its domain, never for its consumer.** `stack/`,
 `agent/`, `toolchain/` state what belongs in them; `lib/`, `utils/`, `helpers/`
@@ -219,7 +230,7 @@ Per-package test layout, by cost class:
 |---|---|---|---|
 | `<pkg>/tests/unit/` | unit | nothing | every PR (the default `bun test` target) |
 | `<pkg>/tests/integration/` | integration | Docker, a local stack | PR ready-for-review |
-| `<pkg>/tests/live/` | live | real external network | nightly |
+| `<pkg>/tests/live/` | live | real external network | its package's workflow — PR (path-gated), merge to main, and the nightly mirror |
 | `evals/` | eval | Docker + network + **real inference** | nightly, sweep-only |
 
 `backend/tests/` is the reference implementation of this and needs no change: it
