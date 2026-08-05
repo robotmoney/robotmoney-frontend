@@ -69,10 +69,13 @@ export function canonicalizeApplication(a) {
 // That label mismatch is the residue of the half-finished cross-repo rename,
 // and it is strictly better than a 404: the agent gets the real, current
 // procedure. Renaming the plugin in robotmoney-core so the post-rename URL
-// becomes true is the permanent repair and is tracked there, not here — this
-// repo does not edit robotmoney-core. When it lands, change this string and the
-// live test follows automatically (it derives the expected front-matter name
-// from this URL's own skill segment).
+// becomes true is the permanent repair, and it is tracked THERE, not here —
+// this repo does not edit robotmoney-core: robotmoney-core#1199 (the 404 URL
+// itself) and robotmoney-core#1201 (the still-open `committee-identity` →
+// `swarm-identity` decision that determines how far the rename goes). When it
+// lands, change this string and the live test follows automatically — it
+// derives the expected front-matter name from this URL's own skill segment,
+// so no edit there is needed.
 export const SWARM_ONBOARDING_SKILL_URL =
   "https://raw.githubusercontent.com/robotmoney/robotmoney-core/dev/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md";
 
