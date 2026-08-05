@@ -7,12 +7,6 @@
 // multi-day" test independently proved this port byte-identical to the
 // original JS over the PRE-BTC_MVRV floor):
 //
-//   - regime-compute-reference.json.gz  (full-history reference; previously
-//     "produced by driving agentjuno/robotmoney scripts/regime end-to-end" —
-//     that out-of-repo generator is unavailable to this repo, so from this
-//     regeneration forward the file is IN-REPO self-consistent, not an
-//     independent cross-implementation check. Documented in
-//     regime-fidelity.test.ts.)
 //   - regime-history.csv.gz  (full-history per-date rows; CURRENT_REGIME_VERSION
 //     "v3" already means "every run recomputes the full history on
 //     best-available raw data, no frozen lockout" — see regime-versions.ts —
@@ -20,12 +14,24 @@
 //     not a new one invented for this regeneration.)
 //   - regime-snapshot.json.gz  (asof-only rich snapshot: composite/percentile/
 //     panel indices/regime + per-indicator objects + backtest + correlations)
-//   - regime-backtest-correlations-reference.json.gz  (same caveat as
-//     regime-compute-reference.json.gz: previously an out-of-repo original-JS
-//     reference, now in-repo self-consistent.)
 //
 // regime-extras.json.gz (real Yahoo ^GSPC/ETH-USD + FRED DTB3) is untouched —
 // it is independent of the registry indicators / raw floor.
+//
+// Issue #447: this script used to ALSO write the two INDEPENDENT-fidelity
+// reference fixtures here, driving them from this SAME in-repo TS pipeline —
+// which silently converted them from independent cross-implementation
+// references into in-repo self-consistency checks (PR #444 claimed the
+// original out-of-repo agentjuno/robotmoney JS generator was "permanently
+// unavailable"; it was not — `robotmoney/robotmoney-site`, a same-org fork,
+// still holds it byte-identical). Those two fixtures are now EXCLUSIVELY
+// owned by `regime-independent-reference-regenerate.ts`, which drives the
+// genuine vendored original JS instead of this TS port; see that script's
+// header for which files it owns. Do not add write blocks for them back
+// here — the two scripts must never both write the same file. This file
+// deliberately contains no textual reference to either fixture's basename,
+// so `grep` for those basenames is a reliable guard that ownership has not
+// silently drifted back (issue #500 acceptance criterion).
 //
 // Usage: bun run scripts/regime-goldens-regenerate.ts
 import { gzipSync, gunzipSync } from "node:zlib";
@@ -130,30 +136,9 @@ async function main(): Promise<void> {
 
   console.log(`[regime-goldens-regenerate] dateAxis=${dateAxis.length} rows, asof=${dateAxis[dateAxis.length - 1]}`);
 
-  // ── regime-compute-reference.json.gz ──────────────────────────────────────
-  const reference = {
-    meta: {
-      source:
-        "in-repo regeneration (backend/scripts/regime-goldens-regenerate.ts) over the BTC_MVRV-inclusive floor — " +
-        "the original out-of-repo agentjuno/robotmoney generator is unavailable to this repo (issue #400)",
-      backfill_start: BACKFILL_START,
-      max_date: maxDate,
-      indicators: INDICATORS.map((i) => i.id),
-      rows: dateAxis.length,
-    },
-    dateAxis,
-    composite: r2.composite,
-    compositePercentile: r2.compositePercentile,
-    macroIndex: r2.macroIndex,
-    onchainIndex: r2.onchainIndex,
-    macroPercentile: r2.macroPercentile,
-    onchainPercentile: r2.onchainPercentile,
-    regime: r2.regime,
-    macroRegime: r2.macroRegime,
-    onchainRegime: r2.onchainRegime,
-  };
-  writeGzAtomic("regime-compute-reference.json.gz", JSON.stringify(reference));
-  console.log("[regime-goldens-regenerate] wrote regime-compute-reference.json.gz");
+  // The full-history INDEPENDENT-fidelity reference is NOT written here — see
+  // the file header note. It is exclusively owned by
+  // regime-independent-reference-regenerate.ts (issue #447).
 
   // ── regime-history.csv.gz ─────────────────────────────────────────────────
   // v3 methodology already means "every run recomputes the full history" (no
@@ -188,20 +173,11 @@ async function main(): Promise<void> {
   const corr = computeCorrelations(dateAxis, r2, extras as CorrelationExtras);
   const bt = stripDailyFromSnapshot(computeBacktest(dateAxis, r2, extras as BacktestExtras));
 
-  // ── regime-backtest-correlations-reference.json.gz ────────────────────────
-  const btCorrRef = {
-    meta: {
-      asof: dateAxis[dateAxis.length - 1],
-      extras: { spx: extras.spx.length, eth: extras.eth.length, tbill3m: extras.tbill3m.length },
-      source:
-        "in-repo regeneration (backend/scripts/regime-goldens-regenerate.ts) — the original out-of-repo " +
-        "agentjuno/robotmoney generator (scratchpad/gen-fixtures.js) is unavailable to this repo (issue #400)",
-    },
-    correlations: corr,
-    backtest: bt,
-  };
-  writeGzAtomic("regime-backtest-correlations-reference.json.gz", JSON.stringify(btCorrRef));
-  console.log("[regime-goldens-regenerate] wrote regime-backtest-correlations-reference.json.gz");
+  // The backtest+correlations INDEPENDENT-fidelity reference is NOT written
+  // here — see the file header note. It is exclusively owned by
+  // regime-independent-reference-regenerate.ts (issue #447). `corr`/`bt`
+  // above are still computed here because regime-snapshot.json.gz (below)
+  // legitimately embeds this TS pipeline's own backtest/correlations output.
 
   // ── regime-snapshot.json.gz ────────────────────────────────────────────────
   // Preserve the existing rich, non-numeric top-level/descriptive fields

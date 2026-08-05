@@ -68,15 +68,21 @@ export async function loadJsonGz<T = any>(name: string): Promise<T> {
   return JSON.parse(await readGz(name)) as T;
 }
 
-// Ground-truth reference originally produced by running the ORIGINAL
-// agentjuno/robotmoney scripts/regime pipeline (lib/utils align + lib/transforms
-// + compute.js) over the vendored raw-indicator-history.csv.gz — the 2-panel
-// [macro, onchain] default composite, full history. Since issue #400 (real
-// BTC_MVRV added to the floor), regenerated via the in-repo
-// `bun run scripts/regime-goldens-regenerate.ts` — the out-of-repo original-JS
-// generator is unavailable to this repo; see regime-fidelity.test.ts's
-// file-header note for the resulting change in what this file's STRICT test
-// proves.
+// Ground-truth reference produced by running the ORIGINAL, independently-
+// written agentjuno/robotmoney scripts/regime pipeline (lib/utils align +
+// lib/transforms + compute.js) over the vendored raw-indicator-history.csv.gz
+// — the 2-panel [macro, onchain] default composite, full history. Since issue
+// #400 (real BTC_MVRV added to the floor) and issue #447 (restoring the
+// independent reference after PR #444 temporarily substituted this repo's
+// own TS pipeline for it, on the mistaken belief the original JS generator
+// was permanently unavailable), regenerated via
+// `bun run scripts/regime-independent-reference-regenerate.ts`, which drives
+// the ORIGINAL JS vendored verbatim at
+// `backend/scripts/vendor/regime-reference-js/` (source:
+// `robotmoney/robotmoney-site`, a same-org fork of agentjuno/robotmoney that
+// still holds it byte-identical to upstream — see that directory's
+// README.md). See regime-fidelity.test.ts's file-header note for what this
+// file's STRICT test proves.
 export interface RegimeComputeReference {
   meta: { source: string; backfill_start: string; max_date: string; indicators: string[]; rows: number };
   dateAxis: string[];
