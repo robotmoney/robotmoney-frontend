@@ -2669,6 +2669,25 @@ path with fewer services booted. Three components are shared by construction:
   scorecard. A refusal is retryable under this classifier, which is why the demo
   no longer forfeits a finite roster seat to one unlucky sample.
 
+**A dead run's cause is read, never guessed.** `opencode run --format json`
+reports a failed model exchange as a first-class `{"type":"error",…}` line on
+**stdout** — carrying the provider's message, HTTP status, `isRetryable`
+verdict and endpoint — and writes nothing to stderr.
+`scripts/agent/transcript.ts`'s `transcriptErrors()` is the one parser for it,
+and both consumers of a dead run read it: the swarm driver's
+`emptyTranscriptCause()` (`scripts/lib/swarm/inference.ts`) quotes the named
+error instead of speculating, and `harnessFaultOf()` treats a non-retryable
+401/402/403 with no authored text as `provider-rejected-harness-credential` —
+a `harness-error`, because an unfunded or unauthorized key is the harness's own
+configuration failing, not a measurement of the product. The conjunct matters:
+`opencode run` also issues a small session-title call whose failure emits its
+own error event, so a run that authored a take keeps its real result. Pinned by
+`scripts/tests/unit/opencode-error-attribution.test.ts` against a CI-captured
+payload. This exists because on 2026-08-05 the Zen workspace ran out of balance
+and every consumer reported the resulting `HTTP 401, isRetryable: false` as
+either an unspecified provider outage (six e2e failures, three futile reruns) or
+a red `navigation-failure` against the onboarding instructions.
+
 **E6 — CI placement: nightly mirrors the merge-to-main set.** The invariant
 (issue #373, D26) is an *equality of sets*: **every** workflow that runs on
 `push: branches: [main]` also runs on a nightly `schedule:`, and **nothing else

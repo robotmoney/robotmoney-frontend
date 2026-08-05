@@ -41,6 +41,90 @@ export function extractAssistantText(transcript: string): string {
   return assistantTextParts(transcript).join("\n").trim();
 }
 
+// ── Structured provider/runtime errors (issue #501 follow-up) ───────────────
+// `opencode run --format json` reports a failed model exchange as a FIRST-CLASS
+// NDJSON event on STDOUT and writes nothing to stderr:
+//
+//   {"type":"error","timestamp":…,"sessionID":"ses_…","error":{"name":"APIError",
+//     "data":{"message":"Insufficient balance. …","statusCode":401,
+//             "isRetryable":false,"responseHeaders":{…},
+//             "metadata":{"url":"https://opencode.ai/zen/v1/chat/completions"}}}}
+//
+// Every consumer in this repo used to drop that line on the floor — the
+// parsers above keep `type:"text"` and `continue` past everything else — and
+// then GUESSED at the cause from an empty stderr. On 2026-08-05 that turned a
+// flat, non-retryable billing failure (the Zen workspace ran out of balance at
+// ~15:09Z) into six "intermittent provider outage" e2e failures across main and
+// PR #513, each retried in vain, while the machine-readable cause sat unread in
+// stdout. The cause is never a guess when the provider names it: parse it.
+//
+// Deliberately schema-light, like the rest of this file: every field is
+// optional, unknown shapes degrade to what could be read, and a transcript with
+// no error event returns []. Verified against the pinned opencode build the
+// member-agent image installs (1.18.1, scripts/lib/member-agent/Dockerfile).
+export interface TranscriptError {
+  /** Error class opencode reported, e.g. "APIError". "" when unnamed. */
+  name: string;
+  /** Provider-authored message, e.g. "Insufficient balance. …". "" when absent. */
+  message: string;
+  /** HTTP status the provider returned (401/402/403/429/…), or null. */
+  statusCode: number | null;
+  /**
+   * The provider's OWN retryability verdict. `false` means retrying can only
+   * waste time — a credential, funding, or quota fault that a human must clear.
+   */
+  isRetryable: boolean | null;
+  /** Endpoint that failed, e.g. "https://opencode.ai/zen/v1/chat/completions". */
+  url: string | null;
+}
+
+// Every `type:"error"` event in the stream, in order. Reads both the 1.18.x
+// nested `error.data.*` shape and a bare `error.message`, so a future flattening
+// of the payload degrades to a named error rather than to silence.
+export function transcriptErrors(transcript: string): TranscriptError[] {
+  const errors: TranscriptError[] = [];
+  for (const line of transcript.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    let ev: any;
+    try {
+      ev = JSON.parse(t);
+    } catch {
+      continue;
+    }
+    if (ev?.type !== "error") continue;
+    const err = ev?.error ?? {};
+    const data = err?.data ?? {};
+    const message = typeof data.message === "string"
+      ? data.message
+      : typeof err.message === "string"
+      ? err.message
+      : "";
+    errors.push({
+      name: typeof err.name === "string" ? err.name : "",
+      message,
+      statusCode: typeof data.statusCode === "number" ? data.statusCode : null,
+      isRetryable: typeof data.isRetryable === "boolean" ? data.isRetryable : null,
+      url: typeof data?.metadata?.url === "string" ? data.metadata.url : null,
+    });
+  }
+  return errors;
+}
+
+// One dense human line per error, for a log or a thrown message. Names the
+// provider's own verdict (status + retryability) so a reader never has to infer
+// whether a retry could have helped.
+export function describeTranscriptError(e: TranscriptError): string {
+  const bits = [
+    e.statusCode === null ? null : `HTTP ${e.statusCode}`,
+    e.isRetryable === null ? null : e.isRetryable ? "retryable" : "NOT retryable",
+    e.url,
+  ].filter(Boolean);
+  const head = e.name || "error";
+  const detail = bits.length ? ` [${bits.join(", ")}]` : "";
+  return `${head}: ${e.message || "(no message)"}${detail}`;
+}
+
 // The LAST authored text part — the agent's closing verdict, which is what
 // refusal detection keys on: an agent that mentions declining mid-run and then
 // goes on to complete the task has not refused. Returns "" for an
