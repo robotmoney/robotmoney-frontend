@@ -541,6 +541,7 @@ const state: DemoState = {
     { name: "migrate", status: "pending" },
     { name: "api /health", status: "pending" },
     { name: "edgar seed", status: "pending" },
+    { name: "v0 archive", status: "pending" },
   ],
   research: [],
   swarms: {},
@@ -997,6 +998,15 @@ function render(): string[] {
 // passes `state` and `log` explicitly: `swarmProgress(state, subject.id, log)`.
 
 // --- Orchestration --------------------------------------------------------
+// A throwaway Ed25519 key for importing v0's takes when the operator has not
+// configured one. Never registered against a member, so every take it signs
+// reads back as verified:false — which is the truth about v0 narrative content
+// regardless of who signed it.
+async function generateV0ArchiveSigningKey(): Promise<string> {
+  const kp = (await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"])) as CryptoKeyPair;
+  return Buffer.from(await crypto.subtle.exportKey("pkcs8", kp.privateKey)).toString("base64");
+}
+
 async function main(): Promise<void> {
   // §11 R8: real inference is the demo's onboarding mode, never an optional
   // extra behind a flag — there is no hermetic/scripted onboarding fallback.
@@ -1136,6 +1146,36 @@ async function main(): Promise<void> {
   );
   setStep(state, "edgar seed", "done");
   log("EDGAR/MNA seed ingested — research.refresh is now eligible");
+
+  // v0 committee archive (72 sessions, 216 takes, 208 snapshots, 73 briefs).
+  // WITHOUT THIS, /swarm on a fresh boot is an empty shell: the site's session
+  // feed, subject pages and member pages all read published history, and a
+  // demo stack has none of its own. Same "required boot step, not best
+  // effort" contract as the EDGAR seed above — a failure throws.
+  //
+  // Direct SQL rather than HTTP (there is no ingest endpoint for historical
+  // sessions), so it runs in the api container with --no-deps: it needs the
+  // image and DATABASE_URL, not a second api process.
+  //
+  // The signing key: v0's takes are signed at import so they can live in
+  // swarm_recommendations without a fabricated signature (see
+  // backend/scripts/v0-seed-bootstrap.ts). An operator-held key is used when
+  // one is configured; otherwise this generates a throwaway per boot. That is
+  // safe for the demo and stays idempotent across re-boots on a persistent
+  // Postgres, because the signature is deliberately NOT one of the fields
+  // drift-checked on an existing row — and these rows report verified:false
+  // either way, since the key is never registered as a member key.
+  setStep(state, "v0 archive", "running");
+  log("importing v0 committee archive (sessions, takes, snapshots, briefs)…");
+  const v0SigningKey = process.env.V0_ARCHIVE_SIGNING_KEY || (await generateV0ArchiveSigningKey());
+  await stack.composeAsync(
+    ["run", "--rm", "--no-deps", "-e", `V0_ARCHIVE_SIGNING_KEY=${v0SigningKey}`,
+      "api", "bun", "run", "scripts/v0-seed-bootstrap.ts"],
+    "v0 committee archive bootstrap",
+    { stdout: outFd, stderr: errFd },
+  );
+  setStep(state, "v0 archive", "done");
+  log("v0 committee archive imported — /swarm has published history");
 
   if (process.env.CI) {
     // CI: run checks then tear down. (Unchanged — pure console, "inherit" stdio.)
