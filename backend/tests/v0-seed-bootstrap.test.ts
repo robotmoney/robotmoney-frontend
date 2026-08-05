@@ -1,26 +1,51 @@
-// Integration coverage for the v0 (robotmoney-site) Investment Committee
-// archive bootstrap (issue #467), against the SAME ephemeral Postgres the
-// rest of the suite uses. Runs the REAL committed archive
-// (seed-data/v0-committee-archive.json.gz) through the REAL
-// runV0SeedBootstrap() core against a clean schema and proves the three
-// contractual behaviors from the issue's acceptance criteria:
-//   • cold DB: exactly 3 members, 4 subjects, 32 sessions inserted, with
-//     legacy_takes populated (athena + woon present) on every session
+// Integration coverage for the v0 Investment Committee archive bootstrap
+// (issue #467), against the SAME ephemeral Postgres the rest of the suite
+// uses. Runs the REAL committed archive (seed-data/v0-committee-archive.json.gz)
+// through the REAL runV0SeedBootstrap() core against a clean schema and proves
+// the contractual behaviors:
+//   • cold DB: every dataset in the archive lands — members, subjects,
+//     sessions, takes, snapshots, briefs — at exactly the manifest's counts
+//   • takes go to swarm_recommendations (NOT a legacy column) and report
+//     verified=false, because the archival signing key is not a member key
 //   • idempotent: a second run against the now-seeded DB is a clean no-op
 //   • drift-detection: a deliberate mutation of an existing row is reported
 //     field-by-field and NEVER silently overwritten
-import { afterEach, beforeEach, expect, test } from "bun:test";
+//   • PROVENANCE: every take is filed at the timestamp v0 recorded, never at
+//     the bootstrap run's clock, and is signed by the published archival key —
+//     with drift detection over both (review-data-integrity F1 and F3)
+//   • the read boundary reports these rows as ARCHIVAL, which is not the same
+//     statement as a failed signature check (F2)
+//
+// Counts are read from the archive manifest rather than hard-coded, so
+// regenerating the artifact (scripts/v0-seed-regenerate.ts) against a newer
+// v0-archive commit does not turn this file red for the wrong reason. The
+// per-dataset ASSERTIONS are still exact — "everything in the archive landed",
+// not "some rows landed".
+import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { runV0SeedBootstrap } from "../scripts/v0-seed-bootstrap.ts";
-import { loadV0Archive } from "../src/swarm/v0-archive.ts";
+import { loadV0Archive, V0_ARCHIVE_PUBLIC_KEY_B64 } from "../src/swarm/v0-archive.ts";
+import { verifyStoredSubmissionSignature } from "../src/lib/signing.ts";
+import { getMemberTakes, getSession, getTakeReceipt } from "../src/swarm/domain.ts";
 
 const MEMBER_IDS = ["athena", "robotmoney", "woon"];
 const SUBJECT_IDS = ["robotmoney-allocation", "robotmoney-treasury", "robotmoney-vault", "woon"];
 
+// No key is set: the importer uses the PUBLISHED archival key
+// (v0-archive.ts). Any ambient V0_ARCHIVE_SIGNING_KEY is cleared so the
+// signature assertions below are about the key this repo actually ships with,
+// not whatever happens to be exported in the runner's environment.
+beforeAll(() => {
+  delete process.env.V0_ARCHIVE_SIGNING_KEY;
+});
+
 async function cleanArchiveRows(): Promise<void> {
-  // Sessions first (no FK dependency either way here, but keep dependency
-  // order symmetric with the bootstrap's own members -> subjects -> sessions
-  // ordering), then subjects, then members.
+  // Reverse dependency order. swarm_recommendations cascades from sessions,
+  // but delete it explicitly so a failure here is about this table rather than
+  // a surprise about cascade behavior.
+  await sql`DELETE FROM swarm_recommendations WHERE subject_id = ANY(${SUBJECT_IDS})`;
+  await sql`DELETE FROM swarm_briefs WHERE subject_id = ANY(${SUBJECT_IDS})`;
+  await sql`DELETE FROM swarm_subject_snapshots WHERE subject_id = ANY(${SUBJECT_IDS})`;
   await sql`DELETE FROM swarm_sessions WHERE subject_id = ANY(${SUBJECT_IDS})`;
   await sql`DELETE FROM swarm_subjects WHERE id = ANY(${SUBJECT_IDS})`;
   await sql`DELETE FROM swarm_members WHERE id = ANY(${MEMBER_IDS})`;
@@ -29,55 +54,92 @@ async function cleanArchiveRows(): Promise<void> {
 beforeEach(cleanArchiveRows);
 afterEach(cleanArchiveRows);
 
-test("cold DB: v0-seed-bootstrap inserts exactly 3 members, 4 subjects, 32 sessions, with legacy_takes on every session", async () => {
+test("cold DB: every dataset in the archive is inserted at its manifest count", async () => {
+  const { payload, manifest } = await loadV0Archive();
+  const expectedTakes = payload.sessions.reduce((n, s) => n + (s.takes?.length ?? 0), 0);
+  expect(expectedTakes).toBeGreaterThan(0); // the archive must actually carry takes
+
   const result = await runV0SeedBootstrap();
 
-  expect(result.members).toEqual({ inserted: 3, unchanged: 0, drifted: 0, total: 3 });
-  expect(result.subjects).toEqual({ inserted: 4, unchanged: 0, drifted: 0, total: 4 });
-  expect(result.sessions).toEqual({ inserted: 32, unchanged: 0, drifted: 0, total: 32 });
+  expect(result.members).toEqual({ inserted: manifest.counts.members, unchanged: 0, drifted: 0, total: manifest.counts.members });
+  expect(result.subjects).toEqual({ inserted: manifest.counts.subjects, unchanged: 0, drifted: 0, total: manifest.counts.subjects });
+  expect(result.sessions).toEqual({ inserted: manifest.counts.sessions, unchanged: 0, drifted: 0, total: manifest.counts.sessions });
+  expect(result.takes).toEqual({ inserted: expectedTakes, unchanged: 0, drifted: 0, total: expectedTakes });
+  expect(result.snapshots).toEqual({ inserted: manifest.counts.snapshots, unchanged: 0, drifted: 0, total: manifest.counts.snapshots });
+  expect(result.briefs).toEqual({ inserted: manifest.counts.briefs, unchanged: 0, drifted: 0, total: manifest.counts.briefs });
   expect(result.drifts).toEqual([]);
 
-  const [{ n: memberCount }] = await sql<{ n: number }[]>`
-    SELECT COUNT(*)::int AS n FROM swarm_members WHERE id = ANY(${MEMBER_IDS})`;
-  expect(memberCount).toBe(3);
+  const count = async (table: string, col: string, ids: string[]) =>
+    (await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM ${sql(table)} WHERE ${sql(col)} = ANY(${ids})`)[0].n;
 
-  const [{ n: subjectCount }] = await sql<{ n: number }[]>`
-    SELECT COUNT(*)::int AS n FROM swarm_subjects WHERE id = ANY(${SUBJECT_IDS})`;
-  expect(subjectCount).toBe(4);
+  expect(await count("swarm_members", "id", MEMBER_IDS)).toBe(manifest.counts.members);
+  expect(await count("swarm_subjects", "id", SUBJECT_IDS)).toBe(manifest.counts.subjects);
+  expect(await count("swarm_sessions", "subject_id", SUBJECT_IDS)).toBe(manifest.counts.sessions);
+  expect(await count("swarm_recommendations", "subject_id", SUBJECT_IDS)).toBe(expectedTakes);
+  expect(await count("swarm_subject_snapshots", "subject_id", SUBJECT_IDS)).toBe(manifest.counts.snapshots);
+  expect(await count("swarm_briefs", "subject_id", SUBJECT_IDS)).toBe(manifest.counts.briefs);
+});
 
-  const sessionRows = await sql<{ legacy_takes: { member_id: string }[] | null }[]>`
-    SELECT legacy_takes FROM swarm_sessions WHERE subject_id = ANY(${SUBJECT_IDS})`;
-  expect(sessionRows.length).toBe(32);
-  for (const row of sessionRows) {
-    expect(row.legacy_takes).not.toBeNull();
-    expect(Array.isArray(row.legacy_takes)).toBe(true);
-    expect(row.legacy_takes!.length).toBeGreaterThan(0);
-    const memberIds = row.legacy_takes!.map((t) => t.member_id);
-    // AC: "athena and woon takes confirmed present in every session".
-    expect(memberIds).toContain("athena");
-    expect(memberIds).toContain("woon");
+test("takes land in swarm_recommendations, signed but NOT verifiable as a member submission", async () => {
+  await runV0SeedBootstrap();
+
+  const rows = await sql<{ member_id: string; nonce: string; signature: string; payload: Record<string, unknown>; body: string }[]>`
+    SELECT member_id, nonce, signature, payload, body FROM swarm_recommendations
+    WHERE subject_id = ANY(${SUBJECT_IDS}) ORDER BY date, member_id LIMIT 5`;
+  expect(rows.length).toBe(5);
+
+  for (const r of rows) {
+    // A REAL signature, not a placeholder: non-empty, base64, 64 raw bytes.
+    expect(Buffer.from(r.signature, "base64").length).toBe(64);
+    // Deterministic, reconstructible nonce — what makes the import idempotent.
+    expect(r.nonce.startsWith("v0-archive-")).toBe(true);
+    // The payload is the canonical submission shape a live member signs.
+    expect(r.payload.memberId).toBe(r.member_id);
+    expect(r.payload.body).toBe(r.body);
   }
+
+  // The archival key is deliberately NOT registered in swarm_member_keys, so
+  // the read path cannot verify these against a member and must not claim to.
+  const keyRows = await sql<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM swarm_member_keys WHERE member_id = ANY(${MEMBER_IDS}) AND active`;
+  expect(keyRows[0].n).toBe(0);
+
+  // Stored verified flag is false, and re-verification against any member key
+  // would fail too — belt and braces, since toVerifiedTake() recomputes it.
+  const [{ n: verifiedCount }] = await sql<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM swarm_recommendations WHERE subject_id = ANY(${SUBJECT_IDS}) AND verified`;
+  expect(verifiedCount).toBe(0);
+
+  const someone = rows[0];
+  const bogus = await verifyStoredSubmissionSignature({
+    submission: someone.payload as never,
+    signatureB64: someone.signature,
+    publicKeyB64: Buffer.alloc(32).toString("base64"),
+  });
+  expect(bogus).toBe(false);
 });
 
 test("idempotent: a second run against the now-seeded DB is a clean no-op", async () => {
+  const { payload, manifest } = await loadV0Archive();
+  const expectedTakes = payload.sessions.reduce((n, s) => n + (s.takes?.length ?? 0), 0);
+
   const first = await runV0SeedBootstrap();
-  expect(first.members.inserted).toBe(3);
-  expect(first.subjects.inserted).toBe(4);
-  expect(first.sessions.inserted).toBe(32);
   expect(first.drifts).toEqual([]);
+  expect(first.sessions.inserted).toBe(manifest.counts.sessions);
+  expect(first.takes.inserted).toBe(expectedTakes);
 
   const second = await runV0SeedBootstrap();
-  expect(second.members).toEqual({ inserted: 0, unchanged: 3, drifted: 0, total: 3 });
-  expect(second.subjects).toEqual({ inserted: 0, unchanged: 4, drifted: 0, total: 4 });
-  expect(second.sessions).toEqual({ inserted: 0, unchanged: 32, drifted: 0, total: 32 });
+  expect(second.members.inserted).toBe(0);
+  expect(second.subjects.inserted).toBe(0);
+  expect(second.sessions).toEqual({ inserted: 0, unchanged: manifest.counts.sessions, drifted: 0, total: manifest.counts.sessions });
+  expect(second.takes).toEqual({ inserted: 0, unchanged: expectedTakes, drifted: 0, total: expectedTakes });
+  expect(second.snapshots).toEqual({ inserted: 0, unchanged: manifest.counts.snapshots, drifted: 0, total: manifest.counts.snapshots });
+  expect(second.briefs).toEqual({ inserted: 0, unchanged: manifest.counts.briefs, drifted: 0, total: manifest.counts.briefs });
   expect(second.drifts).toEqual([]);
 
-  const [{ n: memberCount }] = await sql<{ n: number }[]>`
-    SELECT COUNT(*)::int AS n FROM swarm_members WHERE id = ANY(${MEMBER_IDS})`;
-  expect(memberCount).toBe(3);
-  const [{ n: sessionCount }] = await sql<{ n: number }[]>`
-    SELECT COUNT(*)::int AS n FROM swarm_sessions WHERE subject_id = ANY(${SUBJECT_IDS})`;
-  expect(sessionCount).toBe(32);
+  const [{ n }] = await sql<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM swarm_recommendations WHERE subject_id = ANY(${SUBJECT_IDS})`;
+  expect(n).toBe(expectedTakes);
 });
 
 test("drift: a mutated existing member field is reported field-by-field and never silently overwritten", async () => {
@@ -90,12 +152,7 @@ test("drift: a mutated existing member field is reported field-by-field and neve
 
   const result = await runV0SeedBootstrap();
 
-  // No inserts (everything already existed); athena counts as drifted, the
-  // other two members are unchanged.
   expect(result.members).toEqual({ inserted: 0, unchanged: 2, drifted: 1, total: 3 });
-  expect(result.subjects).toEqual({ inserted: 0, unchanged: 4, drifted: 0, total: 4 });
-  expect(result.sessions).toEqual({ inserted: 0, unchanged: 32, drifted: 0, total: 32 });
-
   expect(result.drifts).toEqual([
     {
       entity: "swarm_members",
@@ -106,36 +163,196 @@ test("drift: a mutated existing member field is reported field-by-field and neve
     },
   ]);
 
-  // The mutated row was NEVER silently overwritten.
   const [{ tagline }] = await sql<{ tagline: string }[]>`SELECT tagline FROM swarm_members WHERE id = 'athena'`;
   expect(tagline).toBe(mutatedTagline);
 });
 
-test("drift: a mutated existing session's legacy_takes is reported and never silently overwritten", async () => {
+test("drift: a mutated take body is reported and never silently overwritten", async () => {
   await runV0SeedBootstrap();
 
-  const mutatedTakes = [{ member_id: "athena", stance: "MUTATED", body: "tampered take" }];
-  await sql`
-    UPDATE swarm_sessions SET legacy_takes = ${sql.json(mutatedTakes)}
-    WHERE subject_id = 'woon'
-    AND id = (SELECT id FROM swarm_sessions WHERE subject_id = 'woon' ORDER BY convened_at LIMIT 1)`;
+  const [target] = await sql<{ id: string; member_id: string; body: string }[]>`
+    SELECT id, member_id, body FROM swarm_recommendations
+    WHERE subject_id = 'woon' ORDER BY date, member_id LIMIT 1`;
+  const tampered = "TAMPERED — a take body that the archive must not overwrite";
+  await sql`UPDATE swarm_recommendations SET body = ${tampered} WHERE id = ${target.id}`;
 
   const result = await runV0SeedBootstrap();
 
-  expect(result.members).toEqual({ inserted: 0, unchanged: 3, drifted: 0, total: 3 });
-  expect(result.subjects).toEqual({ inserted: 0, unchanged: 4, drifted: 0, total: 4 });
-  expect(result.sessions.inserted).toBe(0);
-  expect(result.sessions.drifted).toBe(1);
-  expect(result.sessions.unchanged).toBe(31);
+  expect(result.takes.inserted).toBe(0);
+  expect(result.takes.drifted).toBe(1);
 
-  const legacyTakesDrift = result.drifts.find((d) => d.entity === "swarm_sessions" && d.field === "legacy_takes");
-  expect(legacyTakesDrift).toBeDefined();
-  expect(legacyTakesDrift!.naturalKey).toContain("subject_id=woon");
-  expect((legacyTakesDrift!.oldValue as { stance: string }[])[0].stance).toBe("MUTATED");
+  const drift = result.drifts.find((d) => d.entity === "swarm_recommendations" && d.field === "body");
+  expect(drift).toBeDefined();
+  expect(drift!.oldValue).toBe(tampered);
+  expect(drift!.newValue).toBe(target.body);
 
-  // Never silently overwritten.
-  const [{ legacy_takes }] = await sql<{ legacy_takes: { stance: string }[] }[]>`
-    SELECT legacy_takes FROM swarm_sessions
-    WHERE subject_id = 'woon' AND id = (SELECT id FROM swarm_sessions WHERE subject_id = 'woon' ORDER BY convened_at LIMIT 1)`;
-  expect(legacy_takes[0]!.stance).toBe("MUTATED");
+  const [{ body }] = await sql<{ body: string }[]>`SELECT body FROM swarm_recommendations WHERE id = ${target.id}`;
+  expect(body).toBe(tampered);
+});
+
+test("snapshots and briefs carry real content, not empty rows", async () => {
+  await runV0SeedBootstrap();
+
+  const [snap] = await sql<{ positions: unknown[]; total_value_usd: string | null }[]>`
+    SELECT positions, total_value_usd FROM swarm_subject_snapshots
+    WHERE subject_id = ANY(${SUBJECT_IDS}) AND jsonb_array_length(positions) > 0 LIMIT 1`;
+  expect(snap).toBeDefined();
+  expect(Array.isArray(snap.positions)).toBe(true);
+  expect(snap.positions.length).toBeGreaterThan(0);
+
+  const [brief] = await sql<{ body: Record<string, unknown> }[]>`
+    SELECT body FROM swarm_briefs WHERE subject_id = ANY(${SUBJECT_IDS}) LIMIT 1`;
+  expect(brief).toBeDefined();
+  expect(Object.keys(brief.body).length).toBeGreaterThan(0);
+});
+
+// ── Provenance (review-data-integrity F1) ───────────────────────────────────
+//
+// swarm_recommendations.received_at is NOT NULL DEFAULT now(), so an INSERT
+// that omits it does not leave the column empty — it stamps the bootstrap
+// run's wall clock on all 216 archive takes and calls that their filing time.
+// /swarm/takes/<id> renders exactly that value as "Filed <date> <HH:MM> UTC",
+// and the table is append-only, so the correction after a bad import is a
+// DELETE rather than a rerun.
+//
+// RED CONTROL. Dropping `received_at` from the INSERT and from the drift field
+// list in processTake() — i.e. reverting to the reviewed head — makes both
+// tests below fail: the first on the very first take (received_at is the run
+// clock, not 2026-05-25T01:33:30.430Z), the second because the mutation is
+// never reported. The "run start" assertion is the half that cannot be
+// satisfied by any constant: it fails for anything derived from now().
+test("every imported take is filed at the artifact's generated_at, never at the run clock", async () => {
+  const runStart = new Date();
+  await runV0SeedBootstrap();
+
+  const { payload } = await loadV0Archive();
+  const expected = new Map<string, string>();
+  for (const sess of payload.sessions) {
+    for (const take of sess.takes ?? []) {
+      expected.set(`${sess.subject_id}|${sess.date}|${take.member_id}`, (take.generated_at ?? sess.generated_at)!);
+    }
+  }
+  expect(expected.size).toBeGreaterThan(0);
+
+  const rows = await sql<{ subject_id: string; date: string; member_id: string; received_at: Date }[]>`
+    SELECT subject_id, to_char(date, 'YYYY-MM-DD') AS date, member_id, received_at
+    FROM swarm_recommendations WHERE subject_id = ANY(${SUBJECT_IDS})`;
+  expect(rows.length).toBe(expected.size);
+
+  for (const r of rows) {
+    const key = `${r.subject_id}|${r.date}|${r.member_id}`;
+    const want = expected.get(key);
+    expect(want).toBeDefined();
+    expect(new Date(r.received_at).toISOString()).toBe(new Date(want!).toISOString());
+    // The property no constant can fake: v0 filed these before this process
+    // existed, so not one of them may carry a timestamp from this run.
+    expect(new Date(r.received_at).getTime()).toBeLessThan(runStart.getTime());
+  }
+});
+
+test("drift: a mutated received_at is reported and never silently overwritten", async () => {
+  await runV0SeedBootstrap();
+
+  const [target] = await sql<{ id: string; received_at: Date }[]>`
+    SELECT id, received_at FROM swarm_recommendations
+    WHERE subject_id = 'woon' ORDER BY date, member_id LIMIT 1`;
+  const tampered = "2020-01-01T00:00:00.000Z";
+  await sql`UPDATE swarm_recommendations SET received_at = ${tampered} WHERE id = ${target.id}`;
+
+  const result = await runV0SeedBootstrap();
+
+  expect(result.takes.inserted).toBe(0);
+  expect(result.takes.drifted).toBe(1);
+  const drift = result.drifts.find((d) => d.entity === "swarm_recommendations" && d.field === "received_at");
+  expect(drift).toBeDefined();
+  expect(new Date(drift!.oldValue as string).toISOString()).toBe(tampered);
+  expect(new Date(drift!.newValue as string).toISOString()).toBe(new Date(target.received_at).toISOString());
+
+  const [{ received_at }] = await sql<{ received_at: Date }[]>`
+    SELECT received_at FROM swarm_recommendations WHERE id = ${target.id}`;
+  expect(new Date(received_at).toISOString()).toBe(tampered);
+});
+
+// ── Attributable signatures (F3) ────────────────────────────────────────────
+//
+// The archival key used to be minted per run and discarded, so nobody —
+// including us — could say which key signed a given archive row, and an import
+// interrupted under one key and resumed under another was undetectable
+// (`signature` was not drift-checked). The key is now published and the column
+// is drift-checked, which is what these two assert.
+test("every imported take verifies against the PUBLISHED archival key, and only that key", async () => {
+  await runV0SeedBootstrap();
+
+  const rows = await sql<{ signature: string; payload: Record<string, unknown> }[]>`
+    SELECT signature, payload FROM swarm_recommendations WHERE subject_id = ANY(${SUBJECT_IDS})`;
+  expect(rows.length).toBeGreaterThan(0);
+
+  for (const r of rows) {
+    const ok = await verifyStoredSubmissionSignature({
+      submission: r.payload as never,
+      signatureB64: r.signature,
+      publicKeyB64: V0_ARCHIVE_PUBLIC_KEY_B64,
+    });
+    expect(ok).toBe(true);
+  }
+
+  // Attributable is not the same as authoritative: the archival key is still
+  // deliberately absent from swarm_member_keys, so no read path can ever
+  // report one of these as a verified member submission.
+  const [{ n }] = await sql<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM swarm_member_keys WHERE member_id = ANY(${MEMBER_IDS}) AND active`;
+  expect(n).toBe(0);
+});
+
+test("drift: a take signed by a different key is reported rather than read as unchanged", async () => {
+  await runV0SeedBootstrap();
+
+  const [target] = await sql<{ id: string; signature: string }[]>`
+    SELECT id, signature FROM swarm_recommendations
+    WHERE subject_id = 'woon' ORDER BY date, member_id LIMIT 1`;
+  // What a resumed import under a second archival key leaves behind: a valid
+  // 64-byte Ed25519 signature over the same payload, made by someone else.
+  const foreign = Buffer.alloc(64, 7).toString("base64");
+  await sql`UPDATE swarm_recommendations SET signature = ${foreign} WHERE id = ${target.id}`;
+
+  const result = await runV0SeedBootstrap();
+
+  expect(result.takes.drifted).toBe(1);
+  const drift = result.drifts.find((d) => d.entity === "swarm_recommendations" && d.field === "signature");
+  expect(drift).toBeDefined();
+  expect(drift!.oldValue).toBe(foreign);
+  expect(drift!.newValue).toBe(target.signature);
+});
+
+// ── The read boundary tells archival from failed-verification (F2) ──────────
+//
+// verified:false answers "did this member's signature check out". For these
+// rows nothing was ever checked — they predate member key registration — and
+// the public surfaces rendered the false case as "this take's signature did
+// not check out. Treat it as unattributed." The projection now carries the
+// distinction, on all three read paths that serve takes.
+test("all three read paths report imported takes as archival, not as failed verification", async () => {
+  await runV0SeedBootstrap();
+
+  const detail = await getSession("2026-06-25", "woon");
+  expect(detail).not.toBeNull();
+  expect(detail!.takes.length).toBeGreaterThan(0);
+  for (const t of detail!.takes) {
+    expect(t.archival).toBe(true);
+    expect(t.verified).toBe(false);
+    // The filing time the receipt page renders, straight off the read path.
+    expect(t.receivedAt.startsWith("2026-06-25")).toBe(true);
+  }
+
+  const record = await getMemberTakes("woon", 50);
+  expect(record.takes.length).toBeGreaterThan(0);
+  expect(record.takes.every((r) => r.take.archival === true)).toBe(true);
+
+  const receipt = await getTakeReceipt(detail!.takes[0].id);
+  expect(receipt).not.toBeNull();
+  expect(receipt!.take.archival).toBe(true);
+  expect(receipt!.take.verified).toBe(false);
+  // No member key is registered for an archival take, so the receipt cannot
+  // offer a fingerprint to check it against — and must not invent one.
+  expect(receipt!.signer.publicKeyFingerprint).toBeNull();
 });

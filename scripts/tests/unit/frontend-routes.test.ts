@@ -2,14 +2,15 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { DASH_LAYOUT_VIEW, routeMetaFor, viewFor } from "../../../frontend/public/assets/js/app/routes.js";
 // These are the PRODUCTION archive loaders: the same functions the browser
-// runs for pre-2026-07-01 swarm sessions (static-views.js is a plain ES
-// module, so Bun executes the real code path — not a test double). The old
+// runs when it falls back to the shipped static archive (static-views.js is a
+// plain ES module, so Bun executes the real code path — not a test double). The old
 // lib/swarm-controllers.js + lib/swarm-archive.js pair this test used
 // to import was a dead duplicate normalizer never loaded by main.js's import
 // graph (review-maintainability-026) and has been deleted.
 import {
   camelSubject,
   camelTake,
+  helpers,
   loadArchiveMember,
   loadArchiveSession,
   loadArchiveSnapshot,
@@ -590,5 +591,59 @@ describe("frontend route resolution", () => {
     // the `.sv__within` block's x-show guards on this being empty.
     expect(withinBucketWeightsFrom(null)).toEqual([]);
     expect(withinBucketWeightsFrom({ type: "bucket_weights" })).toEqual([]);
+  });
+  // ── Archival vs. failed verification (review-data-integrity F2) ───────────
+  //
+  // `verified: false` used to be rendered with exactly one sentence: "This
+  // take's signature did not check out against the member's public key. Treat
+  // it as unattributed." That is a statement about a check that RAN AND
+  // FAILED. Backporting v0's pre-launch archive put 216 takes on the public
+  // surfaces that were never member-signed at all — member key registration
+  // did not exist when they were published — so the wrong sentence became the
+  // majority case across /swarm/<date>/<subject>, /swarm/takes/<id> and
+  // /swarm/members/<id>.
+  //
+  // The badge state alone is not what was wrong; the WORDING was. So the
+  // wording is what is asserted here, on the real shipped helpers.
+  test("an archival take is never described as a failed signature check", () => {
+    const archival = camelTake({ id: "t1", member_id: "athena", stance: "hold", verified: false, archival: true });
+    expect(archival.archival).toBe(true);
+
+    expect(helpers.verifyLabel(archival.verified, archival.archival)).toBe("archived");
+    const tip = helpers.verifyTip(archival.verified, archival.archival);
+    expect(tip).toContain("never member-signed");
+    expect(tip).toContain("not a failed signature check");
+    // The exact copy that must not reach these rows.
+    expect(tip).not.toContain("did not check out");
+    expect(tip).not.toContain("unattributed");
+    // Neither the pass mark nor the failure mark: archived is a third state.
+    const archMark = helpers.verifyPath(archival.verified, archival.archival);
+    expect(archMark).not.toBe(helpers.verifyPath(true, false));
+    expect(archMark).not.toBe(helpers.verifyPath(false, false));
+  });
+
+  test("a genuinely unverified member submission still gets the failed-check wording", () => {
+    // The case the original copy was written for, which must not regress: a
+    // real member submission whose signature did not verify.
+    const failed = camelTake({ id: "t2", member_id: "athena", stance: "hold", verified: false });
+    expect(failed.archival).toBe(false);
+    expect(helpers.verifyLabel(failed.verified, failed.archival)).toBe("unverified");
+    expect(helpers.verifyTip(failed.verified, failed.archival)).toContain("did not check out");
+
+    const good = camelTake({ id: "t3", member_id: "athena", stance: "hold", verified: true });
+    expect(helpers.verifyLabel(good.verified, good.archival)).toBe("verified");
+    expect(helpers.verifyTip(good.verified, good.archival)).toContain("key only they hold");
+  });
+
+  test("the shipped static archive's takes are archival, so the fallback path cannot claim a failed check either", async () => {
+    const detail = await loadArchiveSession("2026-06-25", "woon");
+    const takes = detail.takes as Array<{ archival: boolean; verified: unknown }>;
+    expect(takes.length).toBeGreaterThan(0);
+    // Everything under /data/swarm is v0 content by construction. The files
+    // predate the flag and carry no nonce, so loadArchiveSession stamps it.
+    expect(takes.every((t) => t.archival === true)).toBe(true);
+    for (const t of takes) {
+      expect(helpers.verifyTip(t.verified, t.archival)).not.toContain("did not check out");
+    }
   });
 });

@@ -1,0 +1,28 @@
+-- Drop swarm_sessions.legacy_takes (added by 0026) — v0's takes belong in
+-- swarm_recommendations like every other take.
+--
+-- 0026 added this column so v0's unsigned narrative takes could be imported
+-- without fabricating a signature for swarm_recommendations. The concern was
+-- right; the remedy shaped v1's data model around v0's history, which is the
+-- one thing this backport is not allowed to do. It also cost the takes their
+-- readership: withTakes() (src/swarm/domain.ts) reads swarm_recommendations,
+-- so 216 imported takes sat in a column nothing in backend/src or
+-- frontend/public ever selected.
+--
+-- The replacement, in scripts/v0-seed-bootstrap.ts, fabricates nothing: each
+-- take is signed at import with a real Ed25519 archival key over the real
+-- canonical payload, and that key is deliberately NOT registered in
+-- swarm_member_keys. toVerifiedTake() re-verifies against the member's
+-- registered key at read time, so these rows report verified:false on their
+-- own — truthfully, and without any read path needing to know v0 existed.
+--
+-- SAFE TO DROP: nothing reads this column. Its only writer was
+-- v0-seed-bootstrap.ts, updated in the same change as this migration, and its
+-- content is fully reproducible from the committed seed artifact
+-- (seed-data/v0-committee-archive.json.gz) — which is itself a copy of
+-- robotmoney/v0-archive, where v0's takes are preserved verbatim.
+--
+-- IRREVERSIBLE ONLY IN FORM: re-running the bootstrap against the archive
+-- restores every take, so no data is lost by dropping the column.
+
+ALTER TABLE swarm_sessions DROP COLUMN IF EXISTS legacy_takes;

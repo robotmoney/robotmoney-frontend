@@ -25,15 +25,15 @@
               <i :style="`background:${stanceColor(take.stance)}`"></i>
               <span x-text="`${take.stance} · ${fmtPct(take.confidence)}`"></span>
             </span>
-            <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !take.verified }"
-                  data-verified-badge :data-take-id="take.id" :data-verified-state="verifyLabel(take.verified)"
-                  tabindex="0" :aria-label="`${verifyLabel(take.verified)}. ${verifyTip(take.verified)}`">
+            <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !take.verified && !take.archival, 'sv__vfy--arch': take.archival }"
+                  data-verified-badge :data-take-id="take.id" :data-verified-state="verifyLabel(take.verified, take.archival)"
+                  tabindex="0" :aria-label="`${verifyLabel(take.verified, take.archival)}. ${verifyTip(take.verified, take.archival)}`">
               <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <rect x="1.4" y="1.4" width="13.2" height="13.2" stroke="currentColor" stroke-width="1.2"/>
-                <path :d="verifyPath(take.verified)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
+                <path :d="verifyPath(take.verified, take.archival)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
               </svg>
-              <span class="sv__vfy-label" x-show="!take.verified" x-text="verifyLabel(take.verified)"></span>
-              <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(take.verified)"></span>
+              <span class="sv__vfy-label" x-show="!take.verified" x-text="verifyLabel(take.verified, take.archival)"></span>
+              <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(take.verified, take.archival)"></span>
             </span>
           </div>
         </header>

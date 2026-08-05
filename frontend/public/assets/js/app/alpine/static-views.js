@@ -34,8 +34,21 @@ async function fetchJson(url) {
   return res.json();
 }
 
+// Prefer the committed static archive for dates it actually COVERS.
+//
+// This used to read `< "2026-07-01"` — a second hardcoded boundary that did
+// not match ARCHIVE_LAST_DATE ("2026-06-25"), leaving 2026-06-26..06-30
+// "archive-preferred" but absent from the archive. Combined with the
+// deliberate `throw primary` below (which suppresses the API fallback for
+// archive-preferred dates), those five days were unreachable: the page
+// rendered "Session not found" while the API served them perfectly well.
+//
+// It was invisible for as long as the database also stopped at 2026-06-25 —
+// the gap had nothing in it. Importing v0's full history (72 sessions through
+// 2026-08-04) put five real sessions inside it. Deriving the boundary from
+// ARCHIVE_LAST_DATE means the two can no longer disagree.
 function archivePreferred(date) {
-  return String(date || "") < "2026-07-01";
+  return String(date || "") <= ARCHIVE_LAST_DATE;
 }
 
 function camelSession(raw) {
@@ -100,6 +113,13 @@ export function camelTake(raw) {
     model: raw.model,
     memoUrl: raw.memoUrl || raw.memo_url,
     verified: raw.verified,
+    // v0 pre-launch archive content, not a member submission — see the
+    // verification badge below for why this is NOT the same thing as
+    // `verified: false`. The API serves it (projections.ts derives it from the
+    // take's nonce); the shipped static archive JSON predates the field and
+    // gets it stamped on by loadArchiveSession(), since everything in that
+    // archive is v0 content by definition.
+    archival: raw.archival === true,
     receivedAt: raw.receivedAt || raw.received_at || raw.generated_at || raw.generatedAt,
   };
 }
@@ -169,8 +189,9 @@ function normalizeSnapshot(raw) {
   };
 }
 
-// The archive loaders below are the PRODUCTION static-archive path (sessions
-// dated before 2026-07-01 render from /data/swarm/*.json). They are
+// The archive loaders below are the PRODUCTION static-archive fallback for a
+// checkout with no backend (sessions through ARCHIVE_LAST_DATE render from
+// /data/swarm/*.json; the API is preferred for every date). They are
 // exported so scripts/tests/unit/frontend-routes.test.ts can execute the exact
 // loaders the browser runs against the shipped archive files (review 026:
 // the previous test covered a dead duplicate normalizer instead).
@@ -182,7 +203,14 @@ export async function loadArchiveSession(date, subject) {
   const exists = (index.sessions || []).some((s) => s.date === date && (s.subjectId ?? s.subject_id) === subject);
   if (!exists) throw new Error(`archive session missing: ${date}/${subject}`);
   const raw = await fetchJson(`/data/swarm/sessions/${date}-${subject}.json`);
-  return { session: camelSession(raw), takes: (raw.takes || []).map(camelTake), source: "archive" };
+  // Everything under /data/swarm is v0 pre-launch content, so its takes are
+  // archival by construction — the files themselves predate the flag and carry
+  // no nonce for camelTake to derive it from.
+  return {
+    session: camelSession(raw),
+    takes: (raw.takes || []).map((t) => camelTake({ ...t, archival: true })),
+    source: "archive",
+  };
 }
 
 export async function loadArchiveMember(id) {
@@ -245,7 +273,12 @@ export function withinBucketWeightsFrom(rec) {
   })).filter((b) => b.items.length);
 }
 
-const helpers = {
+// Exported so scripts/tests/unit/frontend-routes.test.ts can assert the
+// verification-badge WORDING directly, not just the badge's state attribute.
+// The three-state distinction below (verified / unverified / archived) is a
+// copy contract as much as a rendering one — the sentence a reader is shown is
+// the thing that was wrong — so the sentence itself is what gets pinned.
+export const helpers = {
   // Strip punctuation before taking initials. Operators name their agents
   // freely, and "woon (test)" was rendering as "W(" — the second word's first
   // character is a parenthesis, not a letter.
@@ -326,15 +359,35 @@ const helpers = {
   // ── Verification badge ──────────────────────────────────────────────────────
   // One wording, one mark, shared by the member, session and permalink pages —
   // "verified" must mean exactly the same thing everywhere it appears.
-  verifyLabel(ok) { return ok ? "verified" : "unverified"; },
-  verifyTip(ok) {
+  //
+  // THREE STATES, NOT TWO. `verified: false` used to be rendered with a single
+  // sentence — "this take's signature did not check out against the member's
+  // public key" — which is a claim about a check that ran and failed. That is
+  // false for every take imported from v0's pre-launch archive: those were
+  // published before member key registration existed and were never
+  // member-signed, so no such check ever happened. They are the majority of
+  // the takes on the site, so the wrong sentence was the common case.
+  // `archival` (see camelTake) separates them, and it is checked FIRST because
+  // an archival take is always verified:false and the failure wording must
+  // never reach it.
+  verifyState(ok, archival) { return archival ? "archived" : ok ? "verified" : "unverified"; },
+  verifyLabel(ok, archival) { return this.verifyState(ok, archival); },
+  verifyTip(ok, archival) {
+    if (archival) {
+      return "Archived from the pre-launch record. Published by v0 before member key registration existed, so it was never member-signed — this is not a failed signature check.";
+    }
     return ok
       ? "Signed on the member's own machine with a key only they hold. The signature is re-checked against their public key every time this take is served — not just when it was filed."
       : "This take's signature did not check out against the member's public key. Treat it as unattributed.";
   },
-  // Inner glyph of the badge: a check for verified, a cross for not. Drawn
-  // rather than typed so it keeps its weight next to mono text at 13px.
-  verifyPath(ok) { return ok ? "M4.6 8.2l2.3 2.3 4.6-5" : "M5.4 5.4l5.2 5.2M10.6 5.4l-5.2 5.2"; },
+  // Inner glyph of the badge: a check for verified, a cross for a failed
+  // check, a horizontal bar for archived — a state that is neither a pass nor
+  // a failure and must not borrow either mark. Drawn rather than typed so it
+  // keeps its weight next to mono text at 13px.
+  verifyPath(ok, archival) {
+    if (archival) return "M4.4 8h7.2";
+    return ok ? "M4.6 8.2l2.3 2.3 4.6-5" : "M5.4 5.4l5.2 5.2M10.6 5.4l-5.2 5.2";
+  },
 
   // Subject hue, from the one shared definition (views/shared.js) so the member
   // profile, the roster and any future surface cannot drift apart. A symbol is
@@ -749,10 +802,18 @@ export function registerStaticViews(Alpine) {
     // correctness, and a conviction figure sitting beside two counts reads as a
     // score for judgement we have no basis to give. That one stays on the
     // profile, next to the takes it summarises.
+    // `verifiable` is the denominator, and it is NOT `takes`. Archival takes
+    // (v0 pre-launch content, never member-signed) cannot verify by
+    // construction, so counting them in the denominator renders a member's
+    // whole record as a signature failure — "0 / 50", styled as an alert. Only
+    // takes that were actually member-signed can be verified or not.
     recordStats() {
+      const verifiable = this.record.filter((r) => !r.take?.archival);
       return {
         takes: this.record.length,
-        verified: this.record.filter((r) => r.take?.verified).length,
+        verifiable: verifiable.length,
+        archival: this.record.length - verifiable.length,
+        verified: verifiable.filter((r) => r.take?.verified).length,
         lastFiled: this.record[0] ? this.formatDate(this.record[0].sessionDate, "short") : "—",
         last: this.record[0] || null,
       };
@@ -1131,7 +1192,9 @@ export function registerStaticViews(Alpine) {
       }
     },
     // Fallback for hosts without the member-takes endpoint, and the path that
-    // still serves the shipped static archive for pre-2026-07-01 sessions.
+    // still serves the shipped static archive for sessions through
+    // ARCHIVE_LAST_DATE (the boundary is derived from that constant, not from a
+    // second hardcoded date).
     // Prioritises in-progress sessions by STATE, not date position: a
     // just-submitted take lives in a collecting session, and a manually-opened
     // window can sit deep in a date-ordered list, so a naive slice would drop it
@@ -1157,9 +1220,10 @@ export function registerStaticViews(Alpine) {
       return details
         .map((session) => {
           // camelTake before matching: this is the fallback path for the
-          // pre-2026-07-01 static archive, whose takes are snake_case and
-          // carry no `permalinkId` until camelTake derives one from a real
-          // take `id` (never from `member_id`).
+          // static archive (dates through ARCHIVE_LAST_DATE), whose takes are
+          // snake_case and carry no `permalinkId` until camelTake derives one
+          // from a real take `id` (never from `member_id`). loadArchiveSession
+          // has already stamped `archival` on the ones it served.
           const take = (session.takes || []).map(camelTake).find((t) => t.memberId === this.member?.id);
           return take ? { session, take, phase: this.takePhase(session.state) } : null;
         })
@@ -1179,12 +1243,19 @@ export function registerStaticViews(Alpine) {
     // The record at a glance. Counts every take, published or still collecting,
     // so a just-submitted one registers immediately rather than reading as zero
     // while its window is open. Conviction is the mean confidence across them.
+    // `verifiable` excludes archival takes for the same reason as the apply
+    // page's stat strip: v0's pre-launch takes were never member-signed, so
+    // they are not failed verifications and must not sit in the denominator.
+    // A member whose record is entirely archive read "Verified 0".
     recordStats() {
       const all = this.allTakes();
       const conf = all.map((r) => Number(r.take.confidence)).filter((n) => Number.isFinite(n));
+      const verifiable = all.filter((r) => !r.take.archival);
       return {
         takes: all.length,
-        verified: all.filter((r) => r.take.verified).length,
+        verifiable: verifiable.length,
+        archival: all.length - verifiable.length,
+        verified: verifiable.filter((r) => r.take.verified).length,
         conviction: conf.length ? this.fmtPct(conf.reduce((a, b) => a + b, 0) / conf.length) : "—",
       };
     },
@@ -1232,6 +1303,9 @@ export function registerStaticViews(Alpine) {
     session: null,
     subject: null,
     snapshot: null,
+    // Published bucket targets; null until loadApi() resolves them, and on
+    // the archive fallback, where the framework is not available.
+    allocation: null,
     brief: null,
     takes: [],
     members: [],
@@ -1269,11 +1343,21 @@ export function registerStaticViews(Alpine) {
       }
       const [, date, subject] = match;
       try {
-        if (archivePreferred(date)) await this.loadArchive(date, subject);
-        else await this.loadApi(date, subject);
+        // API FIRST, for every date — matching what the two list views above
+        // (loadSessionsWithSynthesis, the member/subject feeds) have always
+        // done. This view used to prefer the static archive for dates it
+        // covered, which meant the same session could be read from two
+        // different sources: the feed showed the database's copy while the
+        // page showed the checked-in copy. Now that v0's full history lives
+        // in the database, the archive is a FALLBACK for checkouts with no
+        // backend, not a competing source of truth for old dates.
+        await this.loadApi(date, subject);
       } catch (primary) {
         try {
-          if (archivePreferred(date)) throw primary;
+          // Fall back to the static archive. It only carries dates through
+          // ARCHIVE_LAST_DATE, so archivePreferred() is what decides whether
+          // falling back is even worth attempting.
+          if (!archivePreferred(date)) throw primary;
           await this.loadArchive(date, subject);
         } catch (_) {
           this.error = `Session not found for ${date}/${subject}. This checkout's reference archive currently has Woon sessions through ${ARCHIVE_LAST_DATE}.`;
@@ -1303,12 +1387,19 @@ export function registerStaticViews(Alpine) {
       // renders the SAME reference experience as the archive path (charts +
       // portfolio). Each side-fetch is independently guarded so a missing
       // subject/snapshot never breaks the takes/session render.
-      const [detail, memberData, brief, subjectData, snapshotData] = await Promise.all([
+      const [detail, memberData, brief, subjectData, snapshotData, allocation] = await Promise.all([
         preloaded ?? api.get(path(ROUTES.swarm.session, { date, subject })),
         api.get(ROUTES.swarm.members),
         api.get(ROUTES.swarm.brief, { date, subject }).catch(() => null),
         api.get(path(ROUTES.swarm.subject, { id: subject })).catch(() => null),
         api.get(path(ROUTES.swarm.subjectSnapshots, { id: subject })).catch(() => null),
+        // The allocation framework supplies the TARGET weight each bucket is
+        // measured against. Without it the bucket chart could only draw
+        // "Recommended", so a session that proposed 97/3 against a 95/5 target
+        // rendered as two bars with nothing to compare them to — the reader
+        // could not see that it deviated at all. Guarded like the other
+        // side-fetches: a missing framework degrades the chart, never the page.
+        api.get(ROUTES.dashboards.allocation).catch(() => null),
       ]);
       this.source = "api";
       this.session = camelSession(detail.session);
@@ -1317,6 +1408,7 @@ export function registerStaticViews(Alpine) {
       this.subject = subjectData ? camelSubject(subjectData) : null;
       this.snapshot = pickSnapshotFor(snapshotData?.snapshots, date);
       this.brief = brief;
+      this.allocation = allocation;
     },
     memberLens(memberId) {
       return this.members.find((m) => m.id === memberId)?.lens || "swarm member";
@@ -1472,6 +1564,19 @@ export function registerStaticViews(Alpine) {
     // Prefers explicit bucket rows (name/target/actual/recommended) if the
     // payload carries them; otherwise derives Recommended-only rows from the
     // weights map (target/actual are unavailable without allocation data).
+    // Bucket ids and framework labels are written differently on each side
+    // ("conservative_defi_yield" vs "Conservative DeFi Yield" — note DeFi's
+    // inner capital, which humanize() cannot reproduce). Comparing on
+    // letters-and-digits only lets the two meet without either side having to
+    // adopt the other's spelling.
+    allocationTargets() {
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const out = new Map();
+      for (const s of this.allocation?.strategy || []) {
+        if (Number.isFinite(Number(s.targetPct))) out.set(norm(s.label), { label: s.label, target: Number(s.targetPct) / 100 });
+      }
+      return out;
+    },
     bucketWeights() {
       const rec = this.session?.swarmRecommendation;
       if (!rec || rec.type !== "bucket_weights") return [];
@@ -1486,9 +1591,48 @@ export function registerStaticViews(Alpine) {
       }
       const weights = rec.weights;
       if (!weights || typeof weights !== "object") return [];
-      return Object.entries(weights).map(([id, w]) => ({
-        name: this.humanize(id), target: null, actual: null, recommended: num(w) ?? 0,
-      }));
+      const targets = this.allocationTargets();
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      return Object.entries(weights).map(([id, w]) => {
+        const framework = targets.get(norm(this.humanize(id))) ?? targets.get(norm(id));
+        return {
+          // Prefer the framework's own spelling of the bucket name when it is
+          // known; humanize() of an id cannot recover "DeFi".
+          name: framework?.label || this.humanize(id),
+          target: framework ? framework.target : null,
+          actual: null,
+          recommended: num(w) ?? 0,
+        };
+      });
+    },
+    // The date the published framework's targets are stated as of.
+    // /api/dashboards/allocation serves the SINGLE CURRENT row of
+    // allocation_framework — there is no history — so this is the only handle
+    // a reader has on when the target being drawn was set.
+    allocationAsOf() { return this.allocation?.asOf || null; },
+    // Whether the target predates the session it is being compared against.
+    // v0's archive spans 2026-05-25 onward and the framework's asOf is later
+    // than the earliest of them, so a straight join measures a historical
+    // session against a target that did not exist yet — and, because the
+    // framework is admin-editable, an edit today silently rewrites yesterday's
+    // verdict on every archived allocation session.
+    targetPostdatesSession() {
+      const asOf = this.allocationAsOf();
+      const date = this.session?.date;
+      return !!(asOf && date && String(date) < String(asOf).slice(0, 10));
+    },
+    // Whether the swarm proposed something OTHER than the published target.
+    // Mirrors the reference implementation's half-a-point tolerance, so a
+    // rounding artifact never renders as a deviation.
+    //
+    // Suppressed when the target postdates the session: "deviates from target"
+    // is a judgement on the swarm, and it cannot be made against a target the
+    // swarm could not have been aiming at. The bars still draw, captioned with
+    // the framework's own asOf, so the comparison is visible as a comparison
+    // rather than asserted as a finding.
+    deviatesFromTarget() {
+      if (this.targetPostdatesSession()) return false;
+      return this.bucketWeights().some((b) => b.target != null && Math.abs(b.recommended - b.target) > 0.005);
     },
     // Per-constituent weights inside each bucket. The payload has carried
     // `within_bucket_weights` all along and nothing rendered it, so allocation

@@ -541,6 +541,7 @@ const state: DemoState = {
     { name: "migrate", status: "pending" },
     { name: "api /health", status: "pending" },
     { name: "edgar seed", status: "pending" },
+    { name: "v0 archive", status: "pending" },
   ],
   research: [],
   swarms: {},
@@ -1136,6 +1137,35 @@ async function main(): Promise<void> {
   );
   setStep(state, "edgar seed", "done");
   log("EDGAR/MNA seed ingested — research.refresh is now eligible");
+
+  // v0 committee archive (72 sessions, 216 takes, 208 snapshots, 73 briefs).
+  // WITHOUT THIS, /swarm on a fresh boot is an empty shell: the site's session
+  // feed, subject pages and member pages all read published history, and a
+  // demo stack has none of its own. Same "required boot step, not best
+  // effort" contract as the EDGAR seed above — a failure throws.
+  //
+  // Direct SQL rather than HTTP (there is no ingest endpoint for historical
+  // sessions), so it runs in the api container with --no-deps: it needs the
+  // image and DATABASE_URL, not a second api process.
+  //
+  // The signing key: v0's takes are signed at import so they can live in
+  // swarm_recommendations without a fabricated signature (see
+  // backend/scripts/v0-seed-bootstrap.ts). The demo passes nothing — the
+  // importer uses the PUBLISHED archival key (src/swarm/v0-archive.ts). An
+  // earlier pass minted a throwaway key per boot and threw it away, which made
+  // re-boots on a persistent Postgres non-idempotent the moment `signature`
+  // became a drift-checked column, and made the resulting signatures
+  // attributable to nobody. The published key is deterministic, so a re-boot
+  // is a clean 0-drift no-op.
+  setStep(state, "v0 archive", "running");
+  log("importing v0 committee archive (sessions, takes, snapshots, briefs)…");
+  await stack.composeAsync(
+    ["run", "--rm", "--no-deps", "api", "bun", "run", "scripts/v0-seed-bootstrap.ts"],
+    "v0 committee archive bootstrap",
+    { stdout: outFd, stderr: errFd },
+  );
+  setStep(state, "v0 archive", "done");
+  log("v0 committee archive imported — /swarm has published history");
 
   if (process.env.CI) {
     // CI: run checks then tear down. (Unchanged — pure console, "inherit" stdio.)
