@@ -47,20 +47,41 @@
 // missing/duplicated/invalid/out-of-range, the WHOLE refresh degrades — no
 // partial batch is ever returned as `newRows`. The caller retains its
 // last-good persisted floor and research signal by simply not submitting
-// anything this run (see analytics/index.ts:330-342).
+// anything this run (see analytics/index.ts's late-cycle-signals branch).
+//
+// Issue #509 added the THIRD degrade trigger, and it is the one that matters
+// most for Tier 2: a batch that is complete and individually well-formed but
+// diverges from the persisted floor as a WHOLE (`assessEdgarBatchDivergence`)
+// also degrades, because Tier 2's write clobbers ~200 months of archived
+// history that no in-system path can restore. It also added
+// `refreshEdgarWithTierFallback` at the bottom of this file, so a degraded
+// weekly reconciliation no longer suppresses the daily signal.
 import { fetchEdgarMonthCount } from "./extract/edgar.ts";
 import {
   planEdgarFetch,
   planEdgarFetchIncremental,
   validateEdgarBatch,
+  assessEdgarBatchDivergence,
   EDGAR_FLOOR_START,
   EDGAR_REVISION_WINDOW_MONTHS,
 } from "./extract/edgar-fetch-plan.ts";
-import type { EdgarPointRow } from "./extract/edgar-fetch-plan.ts";
+import type { EdgarPointRow, EdgarDivergenceOptions } from "./extract/edgar-fetch-plan.ts";
 import type { Point } from "./types.ts";
 
 export type EdgarRefreshStatus = "up-to-date" | "updated" | "degraded";
 export type EdgarRefreshTier = "incremental" | "full";
+// WHY a degraded run degraded (issue #509). Set iff status === "degraded".
+//   "deadline"   — the hard deadline cut the sweep short.
+//   "validation" — a planned month came back missing/duplicated/invalid.
+//   "divergence" — the batch was complete and well-formed but diverged from
+//                  the persisted floor beyond `assessEdgarBatchDivergence`'s
+//                  bounds (a bulk rewrite / degenerate all-zero batch).
+// The distinction is load-bearing: "deadline"/"validation" are capacity or
+// transient-transport failures, so a degraded Tier 2 sweep may safely retry
+// as a cheap Tier 1 sweep (see refreshEdgarWithTierFallback). "divergence"
+// means EDGAR's ANSWERS are untrustworthy this run — retrying a subset of the
+// same answers must NOT happen.
+export type EdgarDegradeKind = "deadline" | "validation" | "divergence";
 
 // The UTC weekday (0=Sunday .. 6=Saturday) on which the daily research run
 // upgrades from Tier 1 (incremental) to Tier 2 (full reconciliation sweep).
@@ -118,6 +139,11 @@ export function defaultEdgarRefreshDeadlineMs(tier: EdgarRefreshTier): number {
 export interface EdgarRefreshOutcome {
   status: EdgarRefreshStatus;
   tier: EdgarRefreshTier; // which tier this run actually planned/executed
+  degradeKind?: EdgarDegradeKind; // set iff status === "degraded" (issue #509)
+  // True when a degraded Tier 2 (full) sweep fell back to a Tier 1
+  // (incremental) sweep this run, so the daily signal is not collateral
+  // damage of a weekly reconciliation failure (issue #509).
+  fellBackFromFullSweep?: boolean;
   plannedMonths: number;
   // Planned months NOT already in the persisted floor (genuinely new) vs
   // already-persisted months re-fetched for the trailing revision window
@@ -143,6 +169,13 @@ export interface EdgarIncrementalRefreshOptions {
   // regardless) but it is still used to split the plan's `newMonths` vs
   // `revisedMonths` reporting metrics below.
   persistedMonths: readonly string[];
+  // The persisted floor's actual (date, value) rows — the batch-level
+  // divergence guard (issue #509) compares the fresh batch against THESE
+  // before the caller is allowed to overwrite them. Omitted ⇒ the guard still
+  // runs its degeneracy (all-zero) check, but has nothing to diff against, so
+  // production callers must pass it (access/data-source.ts does).
+  persistedRows?: readonly Point[];
+  divergence?: EdgarDivergenceOptions; // thresholds override — tests only
   deadlineAt: number; // absolute cutoff (same clock as `now`) — the hard deadline
   floorStart?: string;
   // Explicit tier override — mainly for tests and any future operator-
@@ -236,6 +269,7 @@ export async function refreshEdgarIncremental(opts: EdgarIncrementalRefreshOptio
     return {
       status: "degraded",
       tier,
+      degradeKind: "deadline",
       plannedMonths: plan.length,
       newMonths,
       revisedMonths,
@@ -255,6 +289,7 @@ export async function refreshEdgarIncremental(opts: EdgarIncrementalRefreshOptio
     return {
       status: "degraded",
       tier,
+      degradeKind: "validation",
       plannedMonths: plan.length,
       newMonths,
       revisedMonths,
@@ -262,6 +297,34 @@ export async function refreshEdgarIncremental(opts: EdgarIncrementalRefreshOptio
       missingMonths: validation.missingCount,
       rejectedMonths: validation.rejectedCount,
       reason: validation.reason,
+      newRows: [],
+    };
+  }
+
+  // BATCH-LEVEL DIVERGENCE GUARD (issue #509) — the last gate before these
+  // rows become authoritative. `validateEdgarBatch` above only proved every
+  // row is individually well-formed; a complete batch of well-formed-but-
+  // wrong counts (SEC's FTS index mid-rebuild answering 200 with zeros or
+  // near-zeros for every month) would otherwise sail through and the
+  // caller's `ON CONFLICT ... DO UPDATE` would rewrite the whole persisted
+  // history — including the #108 seed baseline, which the gap-fill seed path
+  // can never restore. Degrade instead: retain last-good, publish nothing.
+  const divergence = assessEdgarBatchDivergence(validation.rows, opts.persistedRows ?? [], opts.divergence);
+  if (!divergence.ok) {
+    logger.warn?.(
+      `[edgar] MNA refresh (${tier}) DEGRADED: ${divergence.reason} — retaining last-good, no partial commit`,
+    );
+    return {
+      status: "degraded",
+      tier,
+      degradeKind: "divergence",
+      plannedMonths: plan.length,
+      newMonths,
+      revisedMonths,
+      fetchedMonths: validation.rows.length,
+      missingMonths: 0,
+      rejectedMonths: 0,
+      reason: divergence.reason,
       newRows: [],
     };
   }
@@ -280,4 +343,45 @@ export async function refreshEdgarIncremental(opts: EdgarIncrementalRefreshOptio
     rejectedMonths: 0,
     newRows: validation.rows,
   };
+}
+
+// Run the tier THIS `asOf` selects, and — if a Tier 2 (full reconciliation)
+// sweep degrades for a CAPACITY or TRANSPORT reason — retry once as the cheap
+// Tier 1 (incremental) sweep this same run would have done on any other day
+// (issue #509).
+//
+// WHY: before this, a Sunday whose ~200-month reconciliation sweep blew its
+// deadline (or lost one arbitrary month of 200 to a transient 5xx) suppressed
+// the DAILY late-cycle signal entirely — the caller sees `degraded` and
+// retains last-good, so Sunday published nothing even though the incremental
+// data it needed was perfectly fine and cheap to fetch. The reconciliation is
+// a nice-to-have on a weekly cadence; the daily signal is not.
+//
+// The one degrade kind that does NOT fall back is "divergence": that means
+// the full batch WAS complete and well-formed and still diverged from the
+// persisted floor beyond bounds — i.e. EDGAR's answers themselves are
+// untrustworthy this run. Re-asking the same endpoint for a 3-month subset of
+// those same answers and then WRITING them would reintroduce, at small scale,
+// exactly the corruption the guard just refused at large scale.
+export async function refreshEdgarWithTierFallback(
+  opts: EdgarIncrementalRefreshOptions,
+): Promise<EdgarRefreshOutcome> {
+  const first = await refreshEdgarIncremental(opts);
+  if (first.status !== "degraded" || first.tier !== "full" || first.degradeKind === "divergence") return first;
+
+  const now = opts.now ?? Date.now;
+  const logger = opts.logger ?? console;
+  logger.warn?.(
+    `[edgar] MNA refresh: full reconciliation sweep degraded (${first.degradeKind}: ${first.reason}) — ` +
+      "falling back to the incremental sweep so the daily signal is not suppressed by a weekly reconciliation failure",
+  );
+  // A fresh budget: the full sweep may have consumed its entire (much larger)
+  // deadline already, so reusing `opts.deadlineAt` would guarantee an instant
+  // second degrade.
+  const fallback = await refreshEdgarIncremental({
+    ...opts,
+    tier: "incremental",
+    deadlineAt: now() + DEFAULT_EDGAR_INCREMENTAL_DEADLINE_MS,
+  });
+  return { ...fallback, fellBackFromFullSweep: true };
 }

@@ -15,8 +15,14 @@ import {
   planEdgarFetch,
   planEdgarFetchIncremental,
   validateEdgarBatch,
+  assessEdgarBatchDivergence,
   EDGAR_FLOOR_START,
   EDGAR_REVISION_WINDOW_MONTHS,
+  EDGAR_DEGENERACY_MIN_ROWS,
+  EDGAR_DEGENERATE_ZERO_RATIO,
+  EDGAR_MIN_COMPARABLE_MONTHS,
+  EDGAR_MAX_REVISED_HISTORY_RATIO,
+  EDGAR_MAX_AGGREGATE_DRIFT_RATIO,
   type EdgarPlanMonth,
 } from "../src/analytics/extract/edgar-fetch-plan.ts";
 
@@ -235,4 +241,121 @@ test("validateEdgarBatch: an out-of-range date (past asof) fails", () => {
   const fetched = [{ date: "2099-01-31", value: 1 }]; // wrong/future date entirely
   const result = validateEdgarBatch(plan, fetched, { asOf: "2010-01-31" });
   expect(result.ok).toBe(false);
+});
+
+// ── assessEdgarBatchDivergence: the batch-level guard (issue #509) ────────
+//
+// validateEdgarBatch above is per-ROW and, correctly, accepts 0. This guard
+// is the whole-BATCH gate that stands between a well-formed-but-wrong Tier 2
+// sweep and an irreversible overwrite of ~200 months of archived history.
+// Pure — direct calls over deterministic inputs, no network, no DB.
+
+// A floor of `n` consecutive month-end rows starting at 2010-01, all `value`.
+function floorOf(n: number, value = 100): { date: string; value: number }[] {
+  const out: { date: string; value: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const y = 2010 + Math.floor(i / 12);
+    const m = (i % 12) + 1;
+    const day = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    out.push({ date: `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`, value });
+  }
+  return out;
+}
+
+test("assessEdgarBatchDivergence: an ALL-ZERO batch is degenerate by definition and is refused", () => {
+  const floor = floorOf(24);
+  const batch = floor.map((p) => ({ date: p.date, value: 0 }));
+  const result = assessEdgarBatchDivergence(batch, floor);
+  expect(result.ok).toBe(false);
+  expect(result.reason).toMatch(/degenerate batch/);
+  // Every value in the batch is individually a finite non-negative integer,
+  // so the PER-ROW validator would have waved this through — which is the
+  // whole reason this guard exists.
+  const plan = batch.map((p) => ({ monthStart: `${p.date.slice(0, 7)}-01`, monthEnd: p.date }));
+  expect(validateEdgarBatch(plan, batch, { asOf: batch[batch.length - 1]!.date }).ok).toBe(true);
+});
+
+test("assessEdgarBatchDivergence: a NEAR-all-zero batch (>= the zero ratio) is refused too", () => {
+  const floor = floorOf(20);
+  // 18 of 20 zero = 90%, exactly at EDGAR_DEGENERATE_ZERO_RATIO.
+  const batch = floor.map((p, i) => ({ date: p.date, value: i < 18 ? 0 : 100 }));
+  const result = assessEdgarBatchDivergence(batch, floor);
+  expect(result.ok).toBe(false);
+  expect(result.reason).toMatch(/degenerate batch/);
+});
+
+test("assessEdgarBatchDivergence: a SMALL all-zero batch is ACCEPTED — a 1-2 month incremental plan can legitimately be zero (e.g. the current month on its first day)", () => {
+  const floor = floorOf(3);
+  const batch = [{ date: "2010-04-30", value: 0 }];
+  expect(assessEdgarBatchDivergence(batch, floor).ok).toBe(true);
+  expect(EDGAR_DEGENERACY_MIN_ROWS).toBeGreaterThan(1);
+});
+
+test("assessEdgarBatchDivergence: a bulk REWRITE of historical months is refused (too many changed), while a realistic back-revision to a handful of months is accepted", () => {
+  const floor = floorOf(100);
+  // A revision touching 3 of 100 already-persisted months by a few filings —
+  // exactly what Tier 2 exists to land. Must NOT be refused.
+  const revision = floor.map((p, i) => ({ date: p.date, value: i < 3 ? p.value + 2 : p.value }));
+  expect(assessEdgarBatchDivergence(revision, floor).ok).toBe(true);
+
+  // Half the series rewritten in one batch — a rewrite, not a revision.
+  const rewrite = floor.map((p, i) => ({ date: p.date, value: i < 50 ? 7 : p.value }));
+  const result = assessEdgarBatchDivergence(rewrite, floor);
+  expect(result.ok).toBe(false);
+  expect(result.reason).toMatch(/bulk rewrite/);
+  expect(result.comparedMonths).toBe(100);
+  expect(result.changedMonths).toBe(50);
+});
+
+test("assessEdgarBatchDivergence: an AGGREGATE drift beyond bounds is refused even when few months changed", () => {
+  const floor = floorOf(40, 100); // sum 4000
+  // Only 4 of 40 months change (10%, under the changed-months bound) but they
+  // each explode, dragging the aggregate far past the drift bound.
+  const batch = floor.map((p, i) => ({ date: p.date, value: i < 4 ? 100_000 : p.value }));
+  const result = assessEdgarBatchDivergence(batch, floor);
+  expect(result.ok).toBe(false);
+  expect(result.reason).toMatch(/aggregate diverges/);
+  expect(result.changedMonths).toBe(4);
+});
+
+test("assessEdgarBatchDivergence: the ratio checks do NOT apply to a small incremental batch — a 2-month revision window legitimately changes 100% of what it re-fetches", () => {
+  const floor = floorOf(100);
+  const batch = [
+    { date: floor[98]!.date, value: floor[98]!.value * 3 },
+    { date: floor[99]!.date, value: floor[99]!.value * 3 },
+  ];
+  const result = assessEdgarBatchDivergence(batch, floor);
+  expect(result.ok).toBe(true);
+  expect(result.comparedMonths).toBe(2);
+  expect(result.changedMonths).toBe(2);
+  expect(result.comparedMonths).toBeLessThan(EDGAR_MIN_COMPARABLE_MONTHS);
+});
+
+test("assessEdgarBatchDivergence: a batch of genuinely NEW months (no overlap with the floor) is accepted — nothing is being overwritten", () => {
+  const floor = floorOf(12);
+  const batch = floorOf(24).slice(12); // months 13..24, none persisted yet
+  const result = assessEdgarBatchDivergence(batch, floor);
+  expect(result.ok).toBe(true);
+  expect(result.comparedMonths).toBe(0);
+});
+
+test("assessEdgarBatchDivergence: an identical replay of the persisted floor is accepted and reports zero changed months (idempotent re-submission is not divergence)", () => {
+  const floor = floorOf(150);
+  const result = assessEdgarBatchDivergence(floor.map((p) => ({ ...p })), floor);
+  expect(result.ok).toBe(true);
+  expect(result.changedMonths).toBe(0);
+  expect(result.comparedMonths).toBe(150);
+});
+
+test("assessEdgarBatchDivergence: thresholds are overridable (so callers/tests can tighten or relax them) and the exported defaults are the documented ones", () => {
+  expect(EDGAR_DEGENERATE_ZERO_RATIO).toBe(0.9);
+  expect(EDGAR_DEGENERACY_MIN_ROWS).toBe(6);
+  expect(EDGAR_MIN_COMPARABLE_MONTHS).toBe(12);
+  expect(EDGAR_MAX_REVISED_HISTORY_RATIO).toBe(0.25);
+  expect(EDGAR_MAX_AGGREGATE_DRIFT_RATIO).toBe(0.25);
+
+  const floor = floorOf(20);
+  const batch = floor.map((p, i) => ({ date: p.date, value: i < 6 ? p.value + 1 : p.value })); // 30% changed
+  expect(assessEdgarBatchDivergence(batch, floor).ok).toBe(false);
+  expect(assessEdgarBatchDivergence(batch, floor, { maxRevisedHistoryRatio: 0.5 }).ok).toBe(true);
 });

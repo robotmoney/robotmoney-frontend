@@ -3,14 +3,13 @@
 // on its own side and submits through the authenticated analytics REST boundary.
 import parser from "cron-parser";
 import { ROUTES } from "@robotmoney/contract";
-import { runAnalytics, resolveAnalyticsSource } from "../analytics/index.ts";
+import { runAnalytics, resolveAnalyticsSource, RESEARCH_TOOL_GROUP } from "../analytics/index.ts";
 import { analyticsApiClient, resolveAnalyticsApiConfig, type AnalyticsApiConfig } from "../analytics/api-client.ts";
 import { bootstrapEdgarSeed } from "../analytics/edgar-seed-loader.ts";
 import type { AnalyticsPersistence } from "../analytics/persistence.ts";
 import type { AnalyticsDataSource } from "../analytics/access/data-source.ts";
 
 export type ProducerKind = "regime" | "research";
-export const RESEARCH_TOOLS = ["channel-divergence", "late-cycle-signals"] as const;
 
 type Runner = (asof: string, tool: string, source: AnalyticsDataSource, persistence: AnalyticsPersistence) => Promise<Record<string, unknown>>;
 
@@ -35,9 +34,14 @@ export async function runProducerOnce(
   const source = deps.source ?? resolveAnalyticsSource();
   const runner: Runner = deps.runner ?? ((date, tool, src, store) => runAnalytics(date, tool, src, store));
   if (kind === "regime") return runner(asof, "regime", source, persistence);
-  const out: Record<string, unknown> = {};
-  for (const tool of RESEARCH_TOOLS) Object.assign(out, await runner(asof, tool, source, persistence));
-  return out;
+  // ONE invocation for both research signals (issue #509). They share a
+  // single fetchResearchInputs call — and therefore a single live EDGAR
+  // sweep. Looping the research tool ids here ran that sweep once PER TOOL: two
+  // full ~200-request reconciliation crawls every full-sweep day, the first
+  // of which was discarded entirely (only the late-cycle-signals branch
+  // persists the fetched rows), and whose degrade never reached the
+  // telemetry collector.
+  return runner(asof, RESEARCH_TOOL_GROUP, source, persistence);
 }
 
 async function waitForApi(cfg: AnalyticsApiConfig): Promise<void> {

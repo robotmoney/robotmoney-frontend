@@ -12,7 +12,7 @@ import { sql } from "../src/db/client.ts";
 import { config } from "../src/config.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { canonicalCsv, buildManifest, type EdgarSeedRow } from "../src/analytics/extract/edgar-seed.ts";
-import { bootstrapEdgarSeed, repopulateEdgarSeed } from "../src/analytics/edgar-seed-loader.ts";
+import { bootstrapEdgarSeed, repopulateEdgarSeed, repairEdgarSeed } from "../src/analytics/edgar-seed-loader.ts";
 import type { AnalyticsApiConfig } from "../src/analytics/api-client.ts";
 
 const TOKEN = "tok_edgar_repopulate_test";
@@ -151,4 +151,62 @@ test("repopulation is idempotent: a second run over an already-restored DB seeds
   expect(second.seeded).toBe(0);
   expect(second.existing).toBe(4);
   expect(second.rejected).toBe(0);
+});
+
+// ── the REPAIR path (issue #509) ───────────────────────────────────────────
+//
+// The gap-fill above is the right default, and it is also exactly why an
+// already-OVERWRITTEN floor was unrepairable in system: every clobbered date
+// is PRESENT, so `repopulateEdgarSeed` reports the whole artifact as
+// `rejected` and restores nothing. `repairEdgarSeed` is the operator-only
+// inverse.
+
+test("repair: after a bulk overwrite clobbered every persisted month, gap-fill repopulation restores NOTHING (it reports them all as rejected) — this is the hole the repair path fills", async () => {
+  await bootstrapEdgarSeed(cfg);
+  // A bad full-sweep batch: every archived month rewritten to a degenerate 0.
+  await sql`UPDATE raw_indicator_history SET value = 0, source = 'live' WHERE indicator = 'MNA'`;
+
+  const gapFill = await repopulateEdgarSeed(cfg);
+  expect(gapFill.seeded).toBe(0);
+  expect(gapFill.rejected).toBe(4); // the entire artifact "disagrees" and is left standing
+  const stillClobbered = await sql<{ value: string }[]>`
+    SELECT value FROM raw_indicator_history WHERE indicator = 'MNA' ORDER BY date`;
+  expect(stillClobbered.map((r) => Number(r.value))).toEqual([0, 0, 0, 0]);
+
+  // The repair path restores the archived baseline — values AND provenance.
+  const repair = await repairEdgarSeed(cfg);
+  expect(repair.restored).toBe(4);
+  expect(repair.unchanged).toBe(0);
+  const restored = await sql<{ date: string; value: string; source: string | null }[]>`
+    SELECT date::text AS date, value, source FROM raw_indicator_history WHERE indicator = 'MNA' ORDER BY date`;
+  expect(restored.map((r) => ({ date: r.date, value: Number(r.value) }))).toEqual([
+    { date: "2022-01-31", value: 50 },
+    { date: "2022-02-28", value: 60 },
+    { date: "2022-03-31", value: 70 },
+    { date: "2022-04-30", value: 80 },
+  ]);
+  for (const r of restored) expect(r.source).toBe("seed"); // the seed→live flip is undone too
+});
+
+test("repair: is idempotent and reports zero restored once the floor already matches the artifact", async () => {
+  await bootstrapEdgarSeed(cfg);
+  const first = await repairEdgarSeed(cfg);
+  expect(first.restored).toBe(0);
+  expect(first.unchanged).toBe(4);
+
+  const second = await repairEdgarSeed(cfg);
+  expect(second).toEqual(first);
+  const rows = await sql`SELECT count(*)::int AS n FROM raw_indicator_history WHERE indicator = 'MNA'`;
+  expect(Number(rows[0]!.n)).toBe(4); // no duplicate rows — still an upsert on (date, indicator)
+});
+
+test("repair: refuses without the analytics-provider credential and changes zero rows", async () => {
+  await bootstrapEdgarSeed(cfg);
+  await sql`UPDATE raw_indicator_history SET value = 0 WHERE indicator = 'MNA'`;
+
+  await expect(repairEdgarSeed({ baseUrl: cfg.baseUrl, token: null })).rejects.toThrow(/HTTP 401/);
+  await expect(repairEdgarSeed({ baseUrl: cfg.baseUrl, token: "wrong-token" })).rejects.toThrow(/HTTP 403/);
+
+  const rows = await sql<{ value: string }[]>`SELECT value FROM raw_indicator_history WHERE indicator = 'MNA' ORDER BY date`;
+  expect(rows.map((r) => Number(r.value))).toEqual([0, 0, 0, 0]); // untouched
 });
