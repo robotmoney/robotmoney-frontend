@@ -2,8 +2,6 @@ import { test, expect } from "bun:test";
 import { percentileInWindow, applySign } from "../src/analytics/transform/math.ts";
 import { seededProvider } from "../src/analytics/access/provider.ts";
 import { regimeTool } from "../src/analytics/analyze/regime.ts";
-import { channelDivergenceTool } from "../src/analytics/analyze/channel-divergence.ts";
-import { lateCycleTool } from "../src/analytics/analyze/late-cycle.ts";
 
 test("transforms: percentile + sign", () => {
   expect(percentileInWindow(3, [1, 2, 3, 4])).toBeCloseTo(0.75, 5);
@@ -37,29 +35,12 @@ test("regime classifier produces valid, bounded snapshots", async () => {
   expect(again.composite).toBe(snapshots.at(-1)!.composite);
 });
 
-const ASOF = "2024-01-15";
-const ctx = { asof: ASOF, provider: seededProvider, dep: () => undefined } as any;
-
-test("channel-divergence compute: bounded gauges, valid reads, charted series", async () => {
-  const payload = await channelDivergenceTool.compute(ctx);
-  expect(payload.asof).toBe(ASOF);
-  expect(payload.gauges.length).toBeGreaterThan(0);
-  for (const g of payload.gauges) {
-    expect(g.percentile).toBeGreaterThanOrEqual(0);
-    expect(g.percentile).toBeLessThanOrEqual(1);
-    expect(["channel intact", "softening", "breaking down"]).toContain(g.read);
-  }
-  expect(payload.series.points.length).toBeGreaterThan(0);
-});
-
-test("late-cycle compute: bounded gauges, valid reads, charted series", async () => {
-  const payload = await lateCycleTool.compute(ctx);
-  expect(payload.asof).toBe(ASOF);
-  expect(payload.gauges.length).toBeGreaterThan(0);
-  for (const g of payload.gauges) {
-    expect(g.percentile).toBeGreaterThanOrEqual(0);
-    expect(g.percentile).toBeLessThanOrEqual(1);
-    expect(["benign", "elevated", "saturated (late-cycle)"]).toContain(g.read);
-  }
-  expect(payload.series.points.length).toBeGreaterThan(0);
-});
+// channel-divergence / late-cycle "compute: bounded gauges, valid reads,
+// charted series" tests used to live here, exercising the seeded-random-walk
+// shadow tools `analyze/channel-divergence.ts` / `analyze/late-cycle.ts`.
+// Those tools shared filenames with (but did not implement) the real v0
+// scripts, were registered in no Registry, and this was their only test
+// (parity audit 11.9 / Phase R R3). They were deleted rather than fixed —
+// the REAL production signals (`computeChannelDivergence` / `computeLateCycle`
+// in `analyze/research-signals.ts`) are covered against genuine v0 fixtures
+// by `research-fidelity.test.ts` (Phase R R2).
