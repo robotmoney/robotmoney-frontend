@@ -454,17 +454,38 @@
 /* Cyan seams the top edge instead of washing the whole plane: the covenant
    makes cyan a LINE, never a mass, and a tinted field is a mass. */
 .sv__panel--accent { border-color: var(--color-border); border-top-color: var(--color-accent); }
-.sv__dis-pos { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; min-width: 0; }
-.sv__dis-stance { display: inline-flex; align-items: center; gap: 0.35rem; }
+/* The stance chip. nowrap so it cannot break mid-label and pull the view
+   column out of alignment on a narrow panel. */
+.sv__dis-stance { display: inline-flex; align-items: baseline; gap: 0.35rem; white-space: nowrap; }
+.sv__dis-nostance { color: var(--color-text-dim); font-style: italic; }
 .sv__dis-read { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
   color: var(--color-accent) !important; text-transform: none !important; }
-.sv__disagreements { display: grid; gap: 1rem; margin-top: 1rem; }
-.sv__disagreement h3 { margin: 0 0 0.5rem; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text); }
-.sv__disagreement ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.5rem; }
-.sv__disagreement li { display: grid; grid-template-columns: 6.5rem 1fr; gap: 0.75rem; color: var(--color-text-muted); font-size: 0.78rem; line-height: 1.55; }
+.sv__disagreements { display: grid; gap: 1.6rem; margin-top: 1rem; }
+.sv__disagreement h3 { margin: 0 0 0.7rem; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text); }
+.sv__disagreement ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 0; }
+/* Three fixed columns — member, stance, view — so every view in a disagreement
+   begins at the same x and the column can be scanned down. They shared two
+   columns before, with the stance and view inline in the second, so each row's
+   view started wherever that row's stance chip ended.
+   Baseline alignment, not centre: the three cells are set at different sizes,
+   and centring made the member name ride high against its own view. */
+.sv__disagreement li { display: grid; grid-template-columns: 6.5rem 9.5rem 1fr;
+  gap: 0.75rem; align-items: baseline; color: var(--color-text-muted);
+  font-size: 0.78rem; line-height: 1.55; padding: 0.5rem 0; }
+/* A hairline per position rather than gaps alone: with wrapping views the rows
+   are unequal heights, and whitespace on its own stopped saying where one
+   member's position ended and the next began. */
+.sv__disagreement li + li { border-top: 1px solid rgba(255,255,255,0.05); }
 .sv__disagreement a { color: var(--color-text); text-decoration: none; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem; }
 .sv__disagreement a:hover { color: var(--color-accent); }
-.sv__disagreement p { margin: 0.65rem 0 0; color: var(--color-text-dim); font-size: 0.78rem; line-height: 1.55; }
+/* "Settles when" is the resolution condition, not body copy — set it off from
+   the positions above it so it reads as the disagreement's footer. */
+.sv__disagreement p { margin: 0.8rem 0 0; padding-top: 0.7rem;
+  border-top: 1px solid var(--color-border); color: var(--color-text-dim);
+  font-size: 0.78rem; line-height: 1.55; }
+.sv__disagreement p em { font-style: normal; font-family: var(--font-mono);
+  font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--color-text-muted); margin-right: 0.4rem; }
 .sv__takes-section { margin-top: 2rem; }
 .sv__takes--ported { margin-top: 1rem; gap: 1rem; }
 .sv__take--ported { background: transparent; padding: 1.35rem; --vfy-inset: 1.35rem; }
@@ -493,7 +514,11 @@
   .sv__body--narrow { padding-top: 6.5rem; }
   .sv__session-top, .sv__take-head { align-items: flex-start; }
   .sv__action-row { grid-template-columns: 1fr; }
-  .sv__disagreement li { grid-template-columns: 1fr; gap: 0.2rem; }
+  /* Member and stance share the top line, view below across both — three 6.5rem
+     columns do not survive a phone, and stacking all three wasted a full line
+     on a two-word stance chip. */
+  .sv__disagreement li { grid-template-columns: auto 1fr; gap: 0.2rem 0.7rem; }
+  .sv__disagreement .sv__dis-view { grid-column: 1 / -1; }
   .sv__panel-bar { grid-template-columns: 4.5rem 1fr; }
   .sv__panel-bar b { display: none; }
 }

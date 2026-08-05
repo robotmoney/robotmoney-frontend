@@ -330,12 +330,31 @@
                              is stated nowhere else in this panel. When the view is
                              an echo of a take printed above, show the spread and
                              link to the take instead of reprinting it. -->
-                        <span class="sv__dis-pos">
-                          <span class="sv__dis-stance" x-show="takeOf(p.member_id)"
-                                :style="stanceStyle(takeOf(p.member_id)?.stance)">
-                            <i :style="`background:${stanceColor(takeOf(p.member_id)?.stance)}`"></i>
-                            <span x-text="`${takeOf(p.member_id)?.stance} · ${fmtPct(takeOf(p.member_id)?.confidence)}`"></span>
-                          </span>
+                        <!-- Stance and view are SEPARATE grid cells, and the
+                             stance cell is always laid out. They used to share
+                             one wrapping flex box, so each member's view began
+                             wherever that member's stance chip happened to end
+                             — "cautious · 68%" and "constructive · 72%" are
+                             different widths — and a long view wrapped as a
+                             block onto its own line. Three rows of the same
+                             disagreement therefore started in three different
+                             places. Fixed columns make the views a column a
+                             reader can scan down. -->
+                        <span class="sv__dis-stance-cell">
+                          <template x-if="takeOf(p.member_id)">
+                            <span class="sv__dis-stance" :style="stanceStyle(takeOf(p.member_id)?.stance)">
+                              <i :style="`background:${stanceColor(takeOf(p.member_id)?.stance)}`"></i>
+                              <span x-text="`${takeOf(p.member_id)?.stance} · ${fmtPct(takeOf(p.member_id)?.confidence)}`"></span>
+                            </span>
+                          </template>
+                          <!-- A member quoted in a disagreement whose take is not
+                               in this response held the cell open as blank. Say
+                               so, so the column stays a column. -->
+                          <template x-if="!takeOf(p.member_id)">
+                            <span class="sv__dis-nostance">no take</span>
+                          </template>
+                        </span>
+                        <span class="sv__dis-view">
                           <span x-show="!isEcho(p.view)" x-html="inlineMarks(p.view)"></span>
                           <!-- x-if, not x-show: takeHref() throws "missing path
                                param: id" if it is evaluated for a member whose
