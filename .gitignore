@@ -16,6 +16,12 @@ test-results/
 # Cloudflare Pages deploy dir assembled by scripts/cloudflare-statics.sh.
 _site/
 
+# The api process's STATIC_DIR assembly (frontend/public + the per-route
+# prerendered HTML), built by scripts/static-assembly.sh and bind-mounted into
+# the api container by docker-compose.yml. A BUILD OUTPUT, never source —
+# every byte in it is derived from frontend/public and seo.js's table.
+_static/
+
 # The real-inference admission record a CI/demo run renders (issue #373). A CI
 # ARTIFACT, never source: scripts/lib/demo-main.ts writes it and e2e.yml folds
 # it into the job summary and uploads it.

@@ -916,6 +916,14 @@ covers what *this repo* ships.
 - `postgres` + `api` + the three worker lanes (`worker-swarm` /
   `worker-analytics` / `worker-research`, §7). The `api` process **also serves
   the static frontend** (`STATIC_DIR=/srv/frontend`) — one origin, no app-level proxy.
+  `/srv/frontend` is a bind mount of `_static/`, an **assembled** directory
+  (`scripts/static-assembly.sh`: `frontend/public` plus the per-route
+  `<route>/index.html` `scripts/prerender.ts` writes from `seo.js`'s table), not
+  the raw source tree — so a plain `curl` of any sitemap route returns that
+  route's own `<title>`/`og:*` and link unfurlers stop reading every URL as the
+  home page (D29). `scripts/stack/stack.ts`'s `up()` runs the assembly before
+  `docker compose up`; a hand-run `docker compose up` needs
+  `bun run static:assemble` first.
 - **DB modes** are driven by `DATABASE_URL` + the postgres volume:
   - *ephemeral* (CI): throwaway, `docker compose down -v`.
   - *demo*: named `pgdata` volume persists across restarts.
@@ -929,8 +937,11 @@ credentials in [deployment.md](./runbooks/deployment.md)):
   Cloudflare IPs.
 - **Data tier** — `DATABASE_URL` points at a **DO Managed Postgres HA cluster**
   (no `postgres` container).
-- **Static tier** — marketing is served separately from a **DO Spaces CDN** on the
-  apex/`www`, not by this `api`.
+- **Static tier** — marketing's intended end-state is a **DO Spaces CDN** on the
+  apex/`www`, served separately from this `api` (D13). It is not wired yet, so
+  the **cutover host for `robotmoney.net` is the `api` process's assembled
+  `STATIC_DIR`** (D29, [deployment.md](./runbooks/deployment.md) §2.1); the
+  Spaces migration uploads that same assembly and inherits its prerender.
 - **Config**: the only required env var is `DATABASE_URL`. The frontend's only
   input is `API_BASE_URL` in `config.js` (`""` = same origin on its subdomain).
   Secrets (e.g. `BASE_RPC_URL`) live in the droplet env, not in the frontend;

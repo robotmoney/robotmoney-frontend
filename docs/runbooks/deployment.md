@@ -60,6 +60,52 @@ REST API like every other client. Decommissioning the `mcp.` DNS record,
 firewall rule, and container is tracked as D21's follow-up implementation
 work.
 
+### 2.1 Marketing cutover host — the `api` process, serving an assembled `STATIC_DIR`
+
+**`robotmoney.net` cuts over onto the `api` process** (decision
+[D29](../decisions.md#d29--the-api-process-static_dir-is-the-cutover-host-for-robotmoneynet-and-its-deploy-path-prerenders-per-route-html-issue-480)),
+which co-serves the marketing SPA from `STATIC_DIR` with no reverse proxy
+(D11/D13) — the shape the cutover origin `site.robotmoney.net` already runs
+behind the connector in §3.3. **Cloudflare Pages is not a production host
+here**: §1 disables Cloudflare git integration, the §3.1 token carries no Pages
+permission, and the one Pages project (`robotmoney-preview`, D20) has automatic
+production deploys disabled with previews limited to `preview/*`. D13's DO
+Spaces CDN (§4.2) remains the intended end-state tier for marketing and is not
+yet wired; it inherits everything below unchanged, because what it would upload
+is the same assembled directory.
+
+**`STATIC_DIR` is a build output, not the source tree.** `frontend/public` holds
+exactly one `index.html` — the home-page shell — so an api serving it answers
+every extensionless route with the home page's `<title>`/`og:*`, and every
+shared link unfurls as the home page (unfurlers never run
+`assets/js/app/seo.js`). The deploy path therefore assembles:
+
+```sh
+bun run static:assemble        # scripts/static-assembly.sh → _static/
+```
+
+which copies `frontend/public` into `_static/` and runs `scripts/prerender.ts`
+over it (`PRERENDER_DIR=_static`), writing a `<route>/index.html` for every
+`<loc>` in `frontend/public/sitemap.xml` from `seo.js`'s `metaFor` table — the
+same prerenderer `scripts/cloudflare-statics.sh` runs over `_site`, so there is
+one metadata table for both hosts. `docker-compose.yml` bind-mounts `./_static`
+read-only at `/srv/frontend`.
+
+**Operationally:**
+
+- `scripts/stack/stack.ts`'s `up()` runs the assembly before `docker compose up`,
+  so `bun run demo`, `bun run demo -- --stage`, the evals and CI all serve
+  prerendered HTML with no extra step. Assembly failure aborts the bring-up.
+- A **hand-run `docker compose up -d` must run `bun run static:assemble` first.**
+  Docker creates an *empty* directory at a bind path that does not exist, and the
+  api would then serve nothing.
+- A **redeploy that changes `sitemap.xml` or `seo.js` must re-run the assembly**;
+  the prerendered files are otherwise stale. The assembly empties `_static/` in
+  place (never `rm -rf`), so it is safe to re-run against a live bind mount.
+- `scripts/tests/integration/prerender-static-dir.test.ts` is the CI gate: it
+  runs the real assembly, boots the real `backend/src/api/index.ts` against it,
+  and fails red if any sitemap route answers with the home-page shell's metadata.
+
 ---
 
 ## 3. Cloudflare credentials
