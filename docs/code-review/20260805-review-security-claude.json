@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "review": "review-security",
+  "repository": "git@github.com:robotmoney/robotmoney-frontend.git",
+  "branch": "adhoc/20260805-004008-remove-no-supabase-guard",
+  "commit": "1cdd4f93527bfa05b360b21b2341737db0e52542",
+  "reviewed_at": "2026-08-05",
+  "scope": [
+    ".github/workflows/backend.yml",
+    "backend/scripts/check-no-supabase.sh (deleted)",
+    "docs/decisions.md (D8 enforcement note)",
+    "docs/architecture.md (§11.3 L3 cross-reference)",
+    "scripts/checks/check-model-selection.sh, scripts/checks/check-no-test-imports-in-runtime.sh (comment-only cross-reference updates)",
+    "scripts/tests/unit/ci-workflows-structure.test.ts (assertion table update)",
+    "PR #485 diff only, risk-routed light profile"
+  ],
+  "verdict": "Pass with one medium/medium coverage-gap finding — safe to merge. The diff itself is a clean, internally-consistent step deletion with no permission/trigger/secret changes; the one finding is a residual automated-detection gap for D8 that the PR's own docs/decisions.md update already partially discloses.",
+  "findings": [
+    {
+      "id": "review-security-001",
+      "review": "review-security",
+      "classification": "SECURITY_MISSING_CONTROL",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/decisions.md:118 (D8 — self-hosted Postgres, not Supabase)",
+      "evidence": [
+        ".github/workflows/backend.yml:94-98",
+        "backend/tests/no-new-vendor.test.ts:10-19",
+        "backend/src/projects/transforms.ts",
+        "backend/src/projects/projections.ts",
+        "backend/src/projects/entities-projections.ts",
+        "docs/decisions.md:1069-1072"
+      ],
+      "impact": "After this PR, no automated CI check scans all of backend/src for Supabase SDK/infra markers. The only surviving grep-based vendor guard, backend/tests/no-new-vendor.test.ts, is hardcoded to a 6-file allowlist scoped to unrelated issue #84 (prop-wallet valuation: src/chain/token-prices.ts, wallet-balances.ts, wallet-valuation.ts, wallet-history-seed.ts, worker/handlers/wallet.ts, api/routes/dashboards.ts). It does not cover backend/src/projects/transforms.ts, projections.ts, or entities-projections.ts — the actual issue #87 ported-pipeline files the deleted check-no-supabase.sh targeted, and files whose own header comments state they are 1:1 ports of legacy Supabase edge-function logic. No dependency-manifest/lockfile scanning (no Dependabot, no audit script, no CODEOWNERS) exists in this repo to catch a new @supabase/supabase-js entry in backend/package.json either. Given docs/bot-analytics-ui-port-plan.md documents an active, ongoing effort to port more of that legacy Supabase-based app, a future stray verbatim port that reintroduces a supabase-js import or SUPABASE_SERVICE_ROLE_KEY read into backend/src/projects/* (or any backend/src file outside the 6-file allowlist) would now pass CI with zero automated signal, relying entirely on manual PR review to catch it.",
+      "recommendation": "Either (a) broaden backend/tests/no-new-vendor.test.ts's scope (or add a repo-wide grep step) to cover all of backend/src rather than the fixed 6-file issue-#84 list, restoring mechanical enforcement of D8 without re-adding the removed single-vendor-named script verbatim, or (b) if manual review is the intentionally accepted replacement mechanism (as docs/decisions.md:1069-1072 already states), add a CODEOWNERS entry for backend/src/projects/** and backend/package.json so that review is structurally required rather than merely assumed.",
+      "owner": "decision",
+      "related_findings": []
+    }
+  ],
+  "clean_areas": [
+    ".github/workflows/backend.yml diff is a pure 2-line step deletion; no changes to the job's permissions, triggers (on:), runner, or any other step — confirmed by reading the full current file.",
+    "The deletion is internally consistent across the whole PR: backend/scripts/check-no-supabase.sh is removed, and every cross-reference to it in docs/architecture.md, docs/decisions.md, scripts/checks/check-model-selection.sh, scripts/checks/check-no-test-imports-in-runtime.sh, and scripts/tests/unit/ci-workflows-structure.test.ts is updated in the same commit set — no dangling references to the deleted script remain.",
+    "docs/decisions.md explicitly records the trade-off (removal of the grep enforcement, D8's architectural preference unchanged) rather than silently dropping it — this is a disclosed decision, not a silent regression.",
+    "The surviving check-no-ai-overview.sh step and the ephemeral-Postgres test run are unaffected and continue to run in the same job."
+  ],
+  "unresolved_decisions": [
+    "Whether D8 enforcement for backend/src is meant to remain fully manual going forward, or whether the narrower automated coverage (no-new-vendor.test.ts) should be expanded to close the backend/src/projects/* gap — docs/decisions.md:1069-1072 gestures at 'narrower review of new deps' as the replacement but does not name a concrete mechanism (no CODEOWNERS entry found)."
+  ],
+  "limitations": [
+    "Light diff-scoped profile per review-contract.md: evidence gathering was scoped to files this PR's diff implicates (backend.yml, the deleted script, and the docs/scripts that reference it), not a full-repository security sweep.",
+    "Did not verify GitHub branch-protection/CODEOWNERS configuration outside the repo tree (no CODEOWNERS file exists in-tree); required-reviewer policy for backend/src changes could not be confirmed from the checkout alone."
+  ],
+  "unreviewed_surfaces": [
+    "Runtime behavior of backend/src/projects/* pipelines themselves (only their vendor-reference surface was checked, not their broader correctness).",
+    "Any Supabase-related history/PRs prior to this one; only the current diff and current file states were reviewed."
+  ]
+}
