@@ -241,17 +241,41 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
 export async function getMemberTakes(memberId: string, limit?: number) {
   const cappedLimit = parseSessionsLimit(limit);
   const rows = await sql`
-    SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
-           r.memo_url, r.payload, r.signature, r.received_at,
-           s.date AS session_date, s.subject_id, s.subject_name, s.state AS session_state,
-           (SELECT k.public_key FROM swarm_member_keys k
-            WHERE k.member_id = r.member_id AND k.active
-            ORDER BY k.created_at DESC LIMIT 1) AS public_key
-    FROM swarm_recommendations r
-    JOIN swarm_sessions s ON s.id = r.session_id
-    JOIN swarm_members m ON m.id = r.member_id
-    WHERE r.member_id = ${memberId}
-    ORDER BY s.date DESC, s.generated_at DESC
+    WITH all_takes AS (
+      SELECT r.id::text, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+             r.memo_url, r.payload, r.signature, r.received_at,
+             s.date AS session_date, s.subject_id, s.subject_name, s.state AS session_state,
+             (SELECT k.public_key FROM swarm_member_keys k
+              WHERE k.member_id = r.member_id AND k.active
+              ORDER BY k.created_at DESC LIMIT 1) AS public_key,
+             s.generated_at
+      FROM swarm_recommendations r
+      JOIN swarm_sessions s ON s.id = r.session_id
+      JOIN swarm_members m ON m.id = r.member_id
+      WHERE r.member_id = ${memberId}
+
+      UNION ALL
+
+      SELECT s.id::text AS id,
+             take->>'member_id' AS member_id,
+             m.name AS member_name,
+             take->>'stance' AS stance,
+             (take->>'confidence')::numeric AS confidence,
+             take->>'body' AS body,
+             NULL AS memo_url,
+             NULL AS payload,
+             NULL AS signature,
+             s.generated_at AS received_at,
+             s.date AS session_date, s.subject_id, s.subject_name, s.state AS session_state,
+             NULL AS public_key,
+             s.generated_at
+      FROM swarm_sessions s
+      CROSS JOIN jsonb_array_elements(s.legacy_takes) AS take
+      JOIN swarm_members m ON m.id = take->>'member_id'
+      WHERE take->>'member_id' = ${memberId}
+    )
+    SELECT * FROM all_takes
+    ORDER BY session_date DESC, generated_at DESC
     LIMIT ${cappedLimit}`;
   const takes = await Promise.all(rows.map(async (row) => ({
     sessionDate: day(row.session_date),
@@ -307,14 +331,35 @@ export async function getSessionById(
 // The shared body of both lookups above: a session row plus its verified takes.
 async function withTakes(s: Record<string, unknown>) {
   const takes = await sql`
-    SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
-           r.memo_url, r.payload, r.signature, r.received_at,
-           (SELECT k.public_key FROM swarm_member_keys k
-            WHERE k.member_id = r.member_id AND k.active
-            ORDER BY k.created_at DESC LIMIT 1) AS public_key
-    FROM swarm_recommendations r
-    JOIN swarm_members m ON m.id = r.member_id
-    WHERE r.session_id = ${s.id as string} ORDER BY r.received_at`;
+    WITH all_takes AS (
+      SELECT r.id::text, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
+             r.memo_url, r.payload, r.signature, r.received_at,
+             (SELECT k.public_key FROM swarm_member_keys k
+              WHERE k.member_id = r.member_id AND k.active
+              ORDER BY k.created_at DESC LIMIT 1) AS public_key
+      FROM swarm_recommendations r
+      JOIN swarm_members m ON m.id = r.member_id
+      WHERE r.session_id = ${s.id as string}
+
+      UNION ALL
+
+      SELECT s.id::text || '-' || (take->>'member_id') AS id,
+             take->>'member_id' AS member_id,
+             m.name AS member_name,
+             take->>'stance' AS stance,
+             (take->>'confidence')::numeric AS confidence,
+             take->>'body' AS body,
+             NULL AS memo_url,
+             NULL AS payload,
+             NULL AS signature,
+             s.generated_at AS received_at,
+             NULL AS public_key
+      FROM swarm_sessions s
+      CROSS JOIN jsonb_array_elements(s.legacy_takes) AS take
+      JOIN swarm_members m ON m.id = take->>'member_id'
+      WHERE s.id = ${s.id as string}
+    )
+    SELECT * FROM all_takes ORDER BY received_at`;
   return { session: toSession(s), takes: await Promise.all(takes.map(toVerifiedTake)) };
 }
 
