@@ -1,116 +1,125 @@
-// RESEARCH FIDELITY: deterministic replay of channel-divergence and
-// late-cycle-signals from inputs embedded in the original's committed JSON
-// (plus STABLES from the raw fixture) must reproduce the committed gauge series.
+// RESEARCH FIDELITY: the SHIPPED production functions (computeChannelDivergence
+// / computeLateCycle from analyze/research-signals.ts — the ones the real
+// orchestrator calls, NOT the seeded-random-walk shadow tools deleted in R3)
+// are fed inputs reconstructed from the original's committed JSON (plus
+// STABLES from the raw fixture) and must reproduce the committed indicator
+// series. This asserts the code CI actually ships, not a parallel
+// reimplementation of it (R2; A3 F6; the #444 pattern of a truthful-sounding
+// test over a parallel implementation).
 //
 // What is deterministically reproducible from vendored data:
 //   channel-divergence:
 //     - btc_qqq_ratio_percentile  (needs btc_price + qqq_price, both embedded)
 //     - stables_vs_qqq_flow       (needs STABLES from raw fixture + qqq_price)
 //     btc_beta_vs_risk_appetite needs SPY daily (NOT embedded) → covered by the
-//     rollingBeta unit test in transform.test.ts instead.
+//     rollingBeta unit test in transform.test.ts instead; fed an empty spy
+//     input here so the shipped function still runs its real code path (the
+//     beta gauge just comes out NaN/unchecked).
 //   late-cycle-signals:
 //     - mna_pct                   (mna_s4_monthly embedded in full)
 //     - margin_debt_yoy / _pct    (margin_debt_level embedded in full)
 //     - consumer_conf_pct         (consumer_conf_level embedded in full)
-//     concentration_* need SPY+RSP+top7 daily (NOT embedded) → buildEqualWeightIndex
-//     is unit-tested in transform.test.ts instead.
+//     concentration_* need RSP+top7 daily (NOT embedded) → buildEqualWeightIndex
+//     is unit-tested in transform.test.ts instead; fed empty rsp/top7 inputs
+//     here so the shipped function still runs its real code path.
 import { test, expect } from "bun:test";
 import { loadJsonGz, loadRawIndicatorHistory } from "./fixtures/regime/load.ts";
+import { mergeSeries } from "../src/analytics/transform/math.ts";
 import {
-  buildDateAxis,
-  alignDailyForwardFill,
-  rollingPercentileRank,
-  pctChangeLag,
-  mergeSeries,
-} from "../src/analytics/transform/math.ts";
+  computeChannelDivergence,
+  computeLateCycle,
+  TOP7,
+  type ChannelInputs,
+  type LateCycleInputs,
+} from "../src/analytics/analyze/research-signals.ts";
+import type { ResearchPoint } from "../src/analytics/analyze/research.ts";
 import { refreshEdgarIncremental } from "../src/analytics/edgar-incremental-refresh.ts";
 import { EDGAR_REVISION_WINDOW_MONTHS } from "../src/analytics/extract/edgar-fetch-plan.ts";
 
 type Pt = { date: string; value: number | null };
-const arr = (pts: Pt[]) => pts.map((p) => (p.value == null ? NaN : p.value));
 
-function maxDiffAtEmbeddedDates(
-  embedded: Pt[],
-  axis: string[],
-  computed: number[],
-): { max: number; n: number } {
-  const idx = new Map(axis.map((d, i) => [d, i]));
+// Fixture Pt[] (value nullable) → shipped-function Point[] input (value
+// required), dropping the pre-history / gap NaNs the same way a real fetcher's
+// sparse observation list would never contain them in the first place.
+function toPoints(pts: Pt[]): { date: string; value: number }[] {
+  return pts.filter((p): p is { date: string; value: number } => p.value != null);
+}
+
+// Compare two {date,value|null}[] series by date key (rather than by shared
+// array index / a reconstructed date axis) — robust to either side being
+// weekly-subsampled or windowed differently, which is exactly how both the
+// shipped function's output and the genuine v0 fixture actually look.
+function maxDiffByDate(embedded: Pt[], computed: ResearchPoint[] | undefined): { max: number; n: number } {
+  const map = new Map((computed ?? []).filter((p) => p.value != null).map((p) => [p.date, p.value as number]));
   let max = 0;
   let n = 0;
   for (const p of embedded) {
     if (p.value == null) continue;
-    const i = idx.get(p.date);
-    if (i == null) continue;
-    const c = computed[i];
-    if (!Number.isFinite(c)) continue;
+    const c = map.get(p.date);
+    if (c == null || !Number.isFinite(c)) continue;
     max = Math.max(max, Math.abs(c - p.value));
     n++;
   }
   return { max, n };
 }
 
-test("channel-divergence fidelity: btc_qqq_ratio_percentile + stables_vs_qqq_flow reproduce the JSON", async () => {
+test("channel-divergence fidelity: computeChannelDivergence (shipped) reproduces btc_qqq_ratio_percentile + stables_vs_qqq_flow from the JSON", async () => {
   const cd = await loadJsonGz("channel-divergence.json.gz");
-  const PCT_WIN = cd.spec.percentile_window_days; // 756
-  const FLOW_WIN = cd.spec.flow_window_days; // 90
-  const axis: string[] = cd.btc_price.map((p: Pt) => p.date);
-  const btc = arr(cd.btc_price);
-  const qqq = arr(cd.qqq_price);
+  // Sanity: the fixture's declared spec still matches the shipped constants
+  // it's implicitly asserting fidelity against.
+  expect(cd.spec.percentile_window_days).toBe(756);
+  expect(cd.spec.flow_window_days).toBe(90);
 
-  // btc_qqq_ratio_percentile
-  const ratio = btc.map((b, i) =>
-    Number.isFinite(b) && Number.isFinite(qqq[i]) && qqq[i] !== 0 ? b / qqq[i] : NaN,
-  );
-  const ratioPct = rollingPercentileRank(ratio, PCT_WIN);
-  const r = maxDiffAtEmbeddedDates(cd.indicators.btc_qqq_ratio_percentile, axis, ratioPct);
+  const raw = await loadRawIndicatorHistory();
+  const inputs: ChannelInputs = {
+    btc: toPoints(cd.btc_price),
+    qqq: toPoints(cd.qqq_price),
+    spy: [], // not embedded in this fixture — beta gauge not asserted below
+    stables: raw.STABLES,
+  };
+  const result = computeChannelDivergence(inputs, cd.asof);
+
+  const r = maxDiffByDate(cd.indicators.btc_qqq_ratio_percentile, result.indicators?.btc_qqq_ratio_percentile);
   console.log(`[research-fidelity] btc_qqq_ratio_percentile: compared=${r.n} maxDiff=${r.max}`);
   expect(r.n).toBeGreaterThan(2900);
   expect(r.max).toBeLessThan(5e-3); // 6-dec rounded inputs can nudge a rank
 
-  // stables_vs_qqq_flow (STABLES from raw fixture, qqq from JSON)
-  const raw = await loadRawIndicatorHistory();
-  const stablesAligned = alignDailyForwardFill(raw.STABLES, axis);
-  const stables90 = pctChangeLag(stablesAligned, FLOW_WIN);
-  const qqq90 = pctChangeLag(qqq, FLOW_WIN);
-  const flow = stables90.map((s, i) =>
-    Number.isFinite(s) && Number.isFinite(qqq90[i]) ? s - qqq90[i] : NaN,
-  );
-  const f = maxDiffAtEmbeddedDates(cd.indicators.stables_vs_qqq_flow, axis, flow);
+  const f = maxDiffByDate(cd.indicators.stables_vs_qqq_flow, result.indicators?.stables_vs_qqq_flow);
   console.log(`[research-fidelity] stables_vs_qqq_flow: compared=${f.n} maxDiff=${f.max}`);
   expect(f.n).toBeGreaterThan(2900);
   expect(f.max).toBeLessThan(1e-3);
 });
 
-test("late-cycle fidelity: mna_pct, margin_debt_yoy(+pct), consumer_conf_pct reproduce the JSON", async () => {
+test("late-cycle fidelity: computeLateCycle (shipped) reproduces mna_pct, margin_debt_yoy(+pct), consumer_conf_pct from the JSON", async () => {
   const lc = await loadJsonGz("late-cycle-signals.json.gz");
-  const START = lc.spec.start; // 2010-01-01
-  const PCT_WIN = lc.spec.percentile_window_days; // 756
-  const axis = buildDateAxis(START, lc.asof);
+  expect(lc.spec.percentile_window_days).toBe(756);
+  expect(lc.spec.start).toBe("2010-01-01");
 
-  // mna_pct
-  const mnaAligned = alignDailyForwardFill(arrPts(lc.indicators.mna_s4_monthly), axis);
-  const mnaPct = rollingPercentileRank(mnaAligned, PCT_WIN);
-  const m = maxDiffAtEmbeddedDates(lc.indicators.mna_pct, axis, mnaPct);
+  const inputs: LateCycleInputs = {
+    spy: toPoints(lc.spy_price),
+    rsp: [], // not embedded in this fixture — concentration gauges not asserted below
+    top7: TOP7.map(() => []), // not embedded — top7_vs_spy gauge not asserted below
+    mna: toPoints(lc.indicators.mna_s4_monthly),
+    margin: toPoints(lc.indicators.margin_debt_level),
+    conf: toPoints(lc.indicators.consumer_conf_level),
+  };
+  const result = computeLateCycle(inputs, lc.asof);
+
+  const m = maxDiffByDate(lc.indicators.mna_pct, result.indicators?.mna_pct);
   console.log(`[research-fidelity] mna_pct: compared=${m.n} maxDiff=${m.max}`);
   expect(m.n).toBeGreaterThan(700);
   expect(m.max).toBeLessThan(5e-3);
 
-  // margin_debt_yoy and margin_debt_yoy_pct
-  const marginAligned = alignDailyForwardFill(arrPts(lc.indicators.margin_debt_level), axis);
-  const marginYoY = pctChangeLag(marginAligned, 365);
-  const marginYoYPct = rollingPercentileRank(marginYoY, PCT_WIN);
-  const my = maxDiffAtEmbeddedDates(lc.indicators.margin_debt_yoy, axis, marginYoY);
-  const myp = maxDiffAtEmbeddedDates(lc.indicators.margin_debt_yoy_pct, axis, marginYoYPct);
+  const my = maxDiffByDate(lc.indicators.margin_debt_yoy, result.indicators?.margin_debt_yoy);
+  const myp = maxDiffByDate(lc.indicators.margin_debt_yoy_pct, result.indicators?.margin_debt_yoy_pct);
   console.log(`[research-fidelity] margin_debt_yoy: compared=${my.n} maxDiff=${my.max}`);
   console.log(`[research-fidelity] margin_debt_yoy_pct: compared=${myp.n} maxDiff=${myp.max}`);
   expect(my.n).toBeGreaterThan(700);
   expect(my.max).toBeLessThan(1e-4);
+  expect(myp.n).toBeGreaterThan(700);
   expect(myp.max).toBeLessThan(5e-3);
 
-  // consumer_conf_pct
-  const confAligned = alignDailyForwardFill(arrPts(lc.indicators.consumer_conf_level), axis);
-  const confPct = rollingPercentileRank(confAligned, PCT_WIN);
-  const c = maxDiffAtEmbeddedDates(lc.indicators.consumer_conf_pct, axis, confPct);
+  const c = maxDiffByDate(lc.indicators.consumer_conf_pct, result.indicators?.consumer_conf_pct);
   console.log(`[research-fidelity] consumer_conf_pct: compared=${c.n} maxDiff=${c.max}`);
   expect(c.n).toBeGreaterThan(700);
   expect(c.max).toBeLessThan(5e-3);
@@ -119,21 +128,19 @@ test("late-cycle fidelity: mna_pct, margin_debt_yoy(+pct), consumer_conf_pct rep
 // Issue #109: the fidelity guarantee above must ALSO hold when the MNA
 // series is assembled via the NEW incremental-refresh code path
 // (refreshEdgarIncremental + mergeSeries(persistedFloor, newRows)) instead
-// of a single embedded fixture array. Split the committed reference's own
-// mna_s4_monthly into "already persisted" (everything except the trailing
-// revision window) + "freshly fetched" (the trailing window, requested
-// through refreshEdgarIncremental with a deterministic fetchMonth double
-// that reproduces the reference's OWN values exactly) — the merge must
-// reconstruct the reference byte-for-byte, and mna_pct recomputed from that
-// merge must match the committed mna_pct within the SAME tolerance as the
-// fixture-only test above.
-test("late-cycle fidelity via the incremental EDGAR refresh path: persisted-floor ∪ freshly-fetched revision window reproduces the committed reference exactly", async () => {
+// of a single embedded fixture array, and when the resulting merged series
+// is then run through the SAME shipped computeLateCycle used above. Split the
+// committed reference's own mna_s4_monthly into "already persisted"
+// (everything except the trailing revision window) + "freshly fetched" (the
+// trailing window, requested through refreshEdgarIncremental with a
+// deterministic fetchMonth double that reproduces the reference's OWN values
+// exactly) — the merge must reconstruct the reference byte-for-byte, and
+// mna_pct recomputed by computeLateCycle from that merge must match the
+// committed mna_pct within the SAME tolerance as the fixture-only test above.
+test("late-cycle fidelity via the incremental EDGAR refresh path: persisted-floor ∪ freshly-fetched revision window, run through computeLateCycle (shipped), reproduces the committed reference exactly", async () => {
   const lc = await loadJsonGz("late-cycle-signals.json.gz");
-  const START = lc.spec.start;
-  const PCT_WIN = lc.spec.percentile_window_days;
-  const axis = buildDateAxis(START, lc.asof);
 
-  const mnaFull = arrPts(lc.indicators.mna_s4_monthly); // ascending, 2010-01-31..2026-06-30
+  const mnaFull = toPoints(lc.indicators.mna_s4_monthly); // ascending, 2010-01-31..2026-06-30
   const asOfMonth = lc.asof.slice(0, 7);
   const revisionMonthKeys = new Set<string>();
   {
@@ -167,14 +174,18 @@ test("late-cycle fidelity via the incremental EDGAR refresh path: persisted-floo
   const merged = mergeSeries(persistedPoints, outcome.newRows);
   expect(merged).toEqual(mnaFull); // byte-for-byte reproduction of the committed reference
 
-  const mnaAligned = alignDailyForwardFill(merged, axis);
-  const mnaPct = rollingPercentileRank(mnaAligned, PCT_WIN);
-  const m = maxDiffAtEmbeddedDates(lc.indicators.mna_pct, axis, mnaPct);
-  console.log(`[research-fidelity] mna_pct (via refreshEdgarIncremental): compared=${m.n} maxDiff=${m.max}`);
+  const inputs: LateCycleInputs = {
+    spy: toPoints(lc.spy_price),
+    rsp: [],
+    top7: TOP7.map(() => []),
+    mna: merged,
+    margin: toPoints(lc.indicators.margin_debt_level),
+    conf: toPoints(lc.indicators.consumer_conf_level),
+  };
+  const result = computeLateCycle(inputs, lc.asof);
+
+  const m = maxDiffByDate(lc.indicators.mna_pct, result.indicators?.mna_pct);
+  console.log(`[research-fidelity] mna_pct (via refreshEdgarIncremental + computeLateCycle): compared=${m.n} maxDiff=${m.max}`);
   expect(m.n).toBeGreaterThan(700);
   expect(m.max).toBeLessThan(5e-3); // same tolerance as the fixture-only fidelity test above
 });
-
-function arrPts(pts: { date: string; value: number }[]): { date: string; value: number }[] {
-  return pts.map((p) => ({ date: p.date, value: p.value }));
-}
