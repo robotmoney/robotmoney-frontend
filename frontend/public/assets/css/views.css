@@ -236,6 +236,10 @@
   font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em;
   color: var(--color-accent); cursor: help; }
 .sv__vfy--bad { color: var(--color-warn); }
+/* Archived is not a failure — it is the absence of a claim either way, so it
+   takes the muted neutral rather than borrowing the accent (a pass it did not
+   earn) or the warn colour (a failure that never happened). */
+.sv__vfy--arch { color: var(--color-text-muted); }
 .sv__vfy-mark { width: 13px; height: 13px; flex: 0 0 auto; display: block; }
 .sv__vfy-tip { position: absolute; right: 0; bottom: calc(100% + 9px); z-index: 30;
   width: max-content; max-width: min(272px, 72vw); padding: 0.55rem 0.65rem;
@@ -274,7 +278,10 @@
    so the row under it needs a wider gutter — but only on the cards that fail. */
 .sv__take:has(.sv__vfy--bad) .sv__take-head,
 .sv__take:has(.sv__vfy--bad) .sv__receipt-status,
-.sv__session-card:has(.sv__vfy--bad) .sv__receipt-status { padding-right: 7.5rem; }
+.sv__session-card:has(.sv__vfy--bad) .sv__receipt-status,
+.sv__take:has(.sv__vfy--arch) .sv__take-head,
+.sv__take:has(.sv__vfy--arch) .sv__receipt-status,
+.sv__session-card:has(.sv__vfy--arch) .sv__receipt-status { padding-right: 7.5rem; }
 /* Gutters reserving the pinned corner, so the row that ends nearest it never
    runs underneath the mark. */
 .sv__receipt-status { display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap; padding-right: 1.6rem; }

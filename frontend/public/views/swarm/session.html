@@ -190,8 +190,19 @@
                 Recommended accent
               </p>
               <div class="sv__bucket-bars-svg" x-html="bucketWeightsBars()"></div>
+              <!-- WHICH target. /api/dashboards/allocation serves the single
+                   CURRENT framework row, so the target drawn above is dated,
+                   and for archived sessions it is frequently dated AFTER the
+                   session. Naming its asOf is what keeps the chart a
+                   comparison rather than an unqualified claim. -->
+              <p class="sv__panel-sub sv__target-asof" data-target-asof
+                 x-show="allocationAsOf() && bucketWeights().some(b => b.target != null)">
+                Target as published <span x-text="formatDate(allocationAsOf(), 'short')"></span><span
+                  x-show="targetPostdatesSession()"> — after this session, so it is shown for reference only</span>
+              </p>
               <!-- The finding a reader is here for: did the swarm propose
-                   something other than the published target? -->
+                   something other than the published target? Withheld when the
+                   target postdates the session — see deviatesFromTarget(). -->
               <p class="sv__panel-sub sv__deviates" x-show="deviatesFromTarget()">
                 ⚠ deviates from target
               </p>
@@ -306,15 +317,15 @@
                     <i :style="`background:${stanceColor(t.stance)}`"></i>
                     <span x-text="`${t.stance} · ${fmtPct(t.confidence)}`"></span>
                   </span>
-                  <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !t.verified }"
-                        data-verified-badge :data-take-id="t.id" :data-verified-state="verifyLabel(t.verified)"
-                        tabindex="0" :aria-label="`${verifyLabel(t.verified)}. ${verifyTip(t.verified)}`">
+                  <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !t.verified && !t.archival, 'sv__vfy--arch': t.archival }"
+                        data-verified-badge :data-take-id="t.id" :data-verified-state="verifyLabel(t.verified, t.archival)"
+                        tabindex="0" :aria-label="`${verifyLabel(t.verified, t.archival)}. ${verifyTip(t.verified, t.archival)}`">
                     <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                       <rect x="1.4" y="1.4" width="13.2" height="13.2" stroke="currentColor" stroke-width="1.2"/>
-                      <path :d="verifyPath(t.verified)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
+                      <path :d="verifyPath(t.verified, t.archival)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
                     </svg>
-                    <span class="sv__vfy-label" x-show="!t.verified" x-text="verifyLabel(t.verified)"></span>
-                    <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(t.verified)"></span>
+                    <span class="sv__vfy-label" x-show="!t.verified" x-text="verifyLabel(t.verified, t.archival)"></span>
+                    <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(t.verified, t.archival)"></span>
                   </span>
                 </header>
                 <div class="sv__take-body" x-html="linkified(t.body || '')"></div>

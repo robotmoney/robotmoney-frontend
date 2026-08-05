@@ -24,8 +24,17 @@
           <div class="rm-stat">
             <dt>Takes</dt><dd x-text="recordStats().takes"></dd>
           </div>
+          <!-- Verified over VERIFIABLE, not over every take. A bare count read
+               "0" for any member whose record is pre-launch archive, which
+               says "nothing this member filed checks out" about takes that
+               were never member-signed in the first place. Archived takes get
+               their own figure rather than silently vanishing from the strip. -->
           <div class="rm-stat">
-            <dt>Verified</dt><dd x-text="recordStats().verified"></dd>
+            <dt>Verified</dt>
+            <dd x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></dd>
+          </div>
+          <div class="rm-stat" x-show="recordStats().archival">
+            <dt>Archived</dt><dd x-text="recordStats().archival"></dd>
           </div>
           <div class="rm-stat">
             <dt>Avg conviction</dt><dd x-text="recordStats().conviction"></dd>
@@ -86,15 +95,15 @@
                         <i :style="`background:${stanceColor(row.take.stance)}`"></i>
                         <span x-text="`${row.take.stance} · ${fmtPct(row.take.confidence)}`"></span>
                       </span>
-                      <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !row.take.verified }"
-                            data-verified-badge :data-take-id="row.take.id" :data-verified-state="verifyLabel(row.take.verified)"
-                            tabindex="0" :aria-label="`${verifyLabel(row.take.verified)}. ${verifyTip(row.take.verified)}`">
+                      <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !row.take.verified && !row.take.archival, 'sv__vfy--arch': row.take.archival }"
+                            data-verified-badge :data-take-id="row.take.id" :data-verified-state="verifyLabel(row.take.verified, row.take.archival)"
+                            tabindex="0" :aria-label="`${verifyLabel(row.take.verified, row.take.archival)}. ${verifyTip(row.take.verified, row.take.archival)}`">
                         <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                           <rect x="1.4" y="1.4" width="13.2" height="13.2" stroke="currentColor" stroke-width="1.2"/>
-                          <path :d="verifyPath(row.take.verified)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
+                          <path :d="verifyPath(row.take.verified, row.take.archival)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
                         </svg>
-                        <span class="sv__vfy-label" x-show="!row.take.verified" x-text="verifyLabel(row.take.verified)"></span>
-                        <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(row.take.verified)"></span>
+                        <span class="sv__vfy-label" x-show="!row.take.verified" x-text="verifyLabel(row.take.verified, row.take.archival)"></span>
+                        <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(row.take.verified, row.take.archival)"></span>
                       </span>
                     </div>
                   </div>
@@ -173,15 +182,15 @@
                     <i :style="`background:${stanceColor(row.take.stance)}`"></i>
                     <span x-text="`${row.take.stance} · ${fmtPct(row.take.confidence)}`"></span>
                   </span>
-                  <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !row.take.verified }"
-                        data-verified-badge :data-take-id="row.take.id" :data-verified-state="verifyLabel(row.take.verified)"
-                        tabindex="0" :aria-label="`${verifyLabel(row.take.verified)}. ${verifyTip(row.take.verified)}`">
+                  <span class="sv__vfy sv__vfy--pin" :class="{ 'sv__vfy--bad': !row.take.verified && !row.take.archival, 'sv__vfy--arch': row.take.archival }"
+                        data-verified-badge :data-take-id="row.take.id" :data-verified-state="verifyLabel(row.take.verified, row.take.archival)"
+                        tabindex="0" :aria-label="`${verifyLabel(row.take.verified, row.take.archival)}. ${verifyTip(row.take.verified, row.take.archival)}`">
                     <svg class="sv__vfy-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                       <rect x="1.4" y="1.4" width="13.2" height="13.2" stroke="currentColor" stroke-width="1.2"/>
-                      <path :d="verifyPath(row.take.verified)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
+                      <path :d="verifyPath(row.take.verified, row.take.archival)" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"/>
                     </svg>
-                    <span class="sv__vfy-label" x-show="!row.take.verified" x-text="verifyLabel(row.take.verified)"></span>
-                    <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(row.take.verified)"></span>
+                    <span class="sv__vfy-label" x-show="!row.take.verified" x-text="verifyLabel(row.take.verified, row.take.archival)"></span>
+                    <span class="sv__vfy-tip" aria-hidden="true" x-text="verifyTip(row.take.verified, row.take.archival)"></span>
                   </span>
                 </div>
               </div>
