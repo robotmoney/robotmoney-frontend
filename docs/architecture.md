@@ -242,9 +242,9 @@ ops/         credential/deploy utilities
 **L3 — Dependency direction.** Tests and evals may import runtime and shared
 code; **runtime must never import test or eval code**; both may import shared.
 This is enforced by a grep check in the same shape as
-`backend/scripts/check-no-supabase.sh` and `check-no-ai-overview.sh`, not by
-convention alone. A second grep asserts §11.3 E2 — that no mock, injection seam,
-or conditional skip appears under `evals/`.
+`backend/scripts/check-no-ai-overview.sh`, not by convention alone. A second
+grep asserts §11.3 E2 — that no mock, injection seam, or conditional skip
+appears under `evals/`.
 
 **Migration is incremental, not a big-bang reorg.** New directories are created
 as the work that needs them lands (D22's extractions land directly in `stack/`
