@@ -38,13 +38,15 @@
 //   - boreas / cygnus / draco and the five demo newcomers (Helios, Selene,
 //     Rhea, Nyx, Eos): demo fixtures from backend/src/demo/e2e.ts and
 //     scripts/lib/demo-newcomers.ts. They belong to `bun run demo`, not to a
-//     public deployment.
+//     public deployment. pruneToLiveRoster() retires the ones an existing
+//     deployment already holds.
 //
 // RETIRING the off-roster members an existing deployment already holds is
-// deliberately NOT here: it is the only half that can sweep away an operator
-// admitted through the real apply flow, so it is specified and gated
-// separately (issue #530, SWARM_SEED_ROSTER_PRUNE). Seating is additive and
-// safe on its own; this file stays additive.
+// pruneToLiveRoster() at the bottom of this file (issue #530). It is the only
+// half that can sweep away an operator admitted through the real apply flow,
+// so it carries its own flag (SWARM_SEED_ROSTER_PRUNE) and src/db/seed.ts
+// reaches it only when SWARM_SEED_ROSTER is set too: seating stays additive
+// and safe on its own, and the sweep is always a deliberate, separate act.
 //
 // voice_md is deliberately left null: the manifests keep the voice document
 // beside them as <id>.voice.md, no route or view reads SwarmMember.voiceMd,
@@ -128,6 +130,41 @@ export async function seedLiveRoster(): Promise<number> {
     `;
   }
   return LIVE_ROSTER.length;
+}
+
+// Retire every ACTIVE member that is not on the live roster, and report which
+// ids were retired (so the caller can log what it swept). Idempotent: a second
+// run finds nothing left to retire and returns [].
+//
+// DEACTIVATES, never deletes. Off-roster members already sat in published
+// sessions and own recommendations, memos and attendance rows the archive
+// renders by member id (swarm_recommendations.member_id is a plain NOT NULL
+// reference with no ON DELETE CASCADE, migrations/0004_committee.sql), and the
+// v0 archive backfill adds another set of rows that reference members the same
+// way. Deleting would tear holes in published history to tidy up a directory
+// listing. status='inactive' is exactly what getMembers() filters on, so the
+// roster page shows the live members while every archived session still
+// resolves its participants.
+//
+// Only status='active' rows are touched, which leaves a pending application
+// (status='applied') alone: an operator who has applied but not yet been
+// approved must still be there for the admin to approve after a convergence
+// run.
+//
+// Separate from seedLiveRoster() and OFF by default because it is the only
+// half that can sweep away an operator legitimately admitted through the real
+// apply flow — including woon, whom the v0 archive backfill seats as active
+// and whom this deliberately retires (decision #502: deactivate, never delete,
+// so its historical takes keep resolving by member id). Turn it on
+// deliberately, once, when converging a deployment that demo drivers have
+// populated.
+export async function pruneToLiveRoster(): Promise<string[]> {
+  const retired = await sql<{ id: string }[]>`
+    UPDATE swarm_members
+       SET status = 'inactive', version = version + 1, updated_at = now()
+     WHERE status = 'active' AND id <> ALL(${[...LIVE_ROSTER_IDS]})
+     RETURNING id`;
+  return retired.map((r) => r.id);
 }
 
 // Convenience read for the seed log line and for tests: the live roster as the
