@@ -41,7 +41,7 @@ import {
 import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 import { liveDataSource, type AnalyticsDataSource, type Logger } from "./access/data-source.ts";
 import { hermeticDataSource } from "./access/hermetic-source.ts";
-import { DEFAULT_EDGAR_REFRESH_DEADLINE_MS } from "./edgar-incremental-refresh.ts";
+import { selectEdgarRefreshTier, defaultEdgarRefreshDeadlineMs } from "./edgar-incremental-refresh.ts";
 import {
   TelemetryCollector,
   submitTelemetrySafely,
@@ -52,10 +52,14 @@ import {
 import { telemetryHttpSink } from "./telemetry-client.ts";
 
 const BACKFILL_START = "2018-01-01"; // crypto on-chain coverage starts ~2018 cleanly
-// Issue #109: hard-deadline budget the orchestrator grants the live source's
-// incremental EDGAR sweep — a single named constant so the value is never
-// silently redeclared/drifted between call sites.
-const EDGAR_REFRESH_DEADLINE_MS = DEFAULT_EDGAR_REFRESH_DEADLINE_MS;
+// R6 follow-up (two-tier EDGAR refresh, see edgar-incremental-refresh.ts):
+// the hard-deadline budget the orchestrator grants the live source's EDGAR
+// sweep now depends on which tier THIS asof selects — a cheap daily
+// incremental sweep needs a fraction of what the periodic full
+// reconciliation sweep needs. `selectEdgarRefreshTier`/
+// `defaultEdgarRefreshDeadlineMs` are the single source of truth for that
+// choice; this orchestrator and refreshEdgarIncremental itself both derive
+// the SAME tier from the SAME `asof`, so they can never disagree.
 
 // ─── The ONE analytics source knob ──────────────────────────────────────────
 // `ANALYTICS_SOURCE` is the single, authoritative selector the orchestrator (and
@@ -277,15 +281,20 @@ export async function runAnalytics(
 
   // ── RESEARCH SIGNALS ────────────────────────────────────────────────────────
   if (want("channel-divergence") || want("late-cycle-signals")) {
-    // Issue #109: hand the live source its persisted MNA floor + one hard
-    // deadline so it plans/fetches only the missing+revisable EDGAR months
-    // (never the whole 2010-to-present range). Hermetic/fixture sources
-    // ignore this context entirely.
+    // Two-tier EDGAR refresh (R6 follow-up, docs/v0-v1-quant-platform-parity-
+    // report.md finding 1.10): hand the live source its persisted MNA floor
+    // + one hard deadline, sized to whichever tier THIS asof selects — a
+    // cheap incremental sweep most days, a full [EDGAR_FLOOR_START, asof]
+    // reconciliation sweep periodically (see selectEdgarRefreshTier in
+    // edgar-incremental-refresh.ts) so an EDGAR back-revision to any
+    // historical month still lands, just not on every single run. Hermetic/
+    // fixture sources ignore this context entirely.
     let t0 = new Date();
     const floor = await getPersisted();
+    const edgarTier = selectEdgarRefreshTier(asof);
     const inputs = await source.fetchResearchInputs(asof, logger, {
       persistedMna: floor.MNA ?? [],
-      deadlineAt: Date.now() + EDGAR_REFRESH_DEADLINE_MS,
+      deadlineAt: Date.now() + defaultEdgarRefreshDeadlineMs(edgarTier),
     });
     collector.stage("access", "ok", `fetched research inputs from the ${sourceLabel} source`, t0);
 

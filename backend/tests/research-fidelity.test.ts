@@ -34,7 +34,6 @@ import {
 } from "../src/analytics/analyze/research-signals.ts";
 import type { ResearchPoint } from "../src/analytics/analyze/research.ts";
 import { refreshEdgarIncremental } from "../src/analytics/edgar-incremental-refresh.ts";
-import { EDGAR_REVISION_WINDOW_MONTHS } from "../src/analytics/extract/edgar-fetch-plan.ts";
 
 type Pt = { date: string; value: number | null };
 
@@ -125,53 +124,50 @@ test("late-cycle fidelity: computeLateCycle (shipped) reproduces mna_pct, margin
   expect(c.max).toBeLessThan(5e-3);
 });
 
-// Issue #109: the fidelity guarantee above must ALSO hold when the MNA
-// series is assembled via the NEW incremental-refresh code path
-// (refreshEdgarIncremental + mergeSeries(persistedFloor, newRows)) instead
-// of a single embedded fixture array, and when the resulting merged series
-// is then run through the SAME shipped computeLateCycle used above. Split the
-// committed reference's own mna_s4_monthly into "already persisted"
-// (everything except the trailing revision window) + "freshly fetched" (the
-// trailing window, requested through refreshEdgarIncremental with a
-// deterministic fetchMonth double that reproduces the reference's OWN values
-// exactly) — the merge must reconstruct the reference byte-for-byte, and
-// mna_pct recomputed by computeLateCycle from that merge must match the
-// committed mna_pct within the SAME tolerance as the fixture-only test above.
-test("late-cycle fidelity via the incremental EDGAR refresh path: persisted-floor ∪ freshly-fetched revision window, run through computeLateCycle (shipped), reproduces the committed reference exactly", async () => {
+// R6 (docs/v0-v1-quant-platform-parity-report.md, finding 1.10): the
+// fidelity guarantee above must ALSO hold when the MNA series is assembled
+// via the refreshEdgarIncremental code path (refreshEdgarIncremental +
+// mergeSeries(persistedFloor, newRows)) instead of a single embedded
+// fixture array, and when the resulting merged series is then run through the
+// SAME shipped computeLateCycle used above — specifically via Tier 2, the
+// weekly FULL reconciliation sweep (tier: "full", forced explicitly here
+// regardless of which weekday lc.asof happens to fall on; this test is about
+// the full-range planner's correctness, not about which day
+// selectEdgarRefreshTier would pick it on — that selection is covered
+// separately in edgar-incremental-refresh.test.ts).
+// Drive refreshEdgarIncremental with a deterministic fetchMonth double that
+// reproduces the committed reference's OWN values for every month in
+// [floorStart, asof] — the resulting newRows must reconstruct the reference
+// byte-for-byte (starting from an EMPTY persisted floor, since a full
+// re-crawl makes "what was already persisted" irrelevant to the fetched
+// batch), and mna_pct recomputed by computeLateCycle from that batch must
+// match the committed mna_pct within the SAME tolerance as the fixture-only
+// test above.
+test("late-cycle fidelity via the EDGAR refresh path: a full re-crawl, run through computeLateCycle (shipped), reproduces the committed reference exactly (R6, tier 'full')", async () => {
   const lc = await loadJsonGz("late-cycle-signals.json.gz");
+  const START = lc.spec.start; // 2010-01-01
 
   const mnaFull = toPoints(lc.indicators.mna_s4_monthly); // ascending, 2010-01-31..2026-06-30
-  const asOfMonth = lc.asof.slice(0, 7);
-  const revisionMonthKeys = new Set<string>();
-  {
-    const [y, m] = asOfMonth.split("-").map(Number) as [number, number];
-    for (let k = 0; k < EDGAR_REVISION_WINDOW_MONTHS; k++) {
-      let yy = y, mm = m - k;
-      while (mm <= 0) { mm += 12; yy -= 1; }
-      revisionMonthKeys.add(`${yy}-${String(mm).padStart(2, "0")}`);
-    }
-  }
-  const persistedPoints = mnaFull.filter((p) => !revisionMonthKeys.has(p.date.slice(0, 7)));
-  const revisionPoints = mnaFull.filter((p) => revisionMonthKeys.has(p.date.slice(0, 7)));
-  expect(revisionPoints.length).toBe(EDGAR_REVISION_WINDOW_MONTHS); // sanity: the split is exact
-  const byMonthStart = new Map(revisionPoints.map((p) => [`${p.date.slice(0, 7)}-01`, p.value]));
+  const byMonthStart = new Map(mnaFull.map((p) => [`${p.date.slice(0, 7)}-01`, p.value]));
 
   const outcome = await refreshEdgarIncremental({
     asOf: lc.asof,
-    persistedMonths: persistedPoints.map((p) => p.date.slice(0, 7)),
+    floorStart: START,
+    tier: "full", // force Tier 2 — this test is about the full-range planner, not the weekday gate
+    persistedMonths: [], // irrelevant to the full-range plan — asserted below via newRows.length
     deadlineAt: Date.now() + 30_000,
     requestDelayMs: 0,
     logger: { log: () => {}, warn: () => {} },
     fetchMonth: async (monthStart: string) => {
       const v = byMonthStart.get(monthStart);
-      if (v === undefined) throw new Error(`unexpected EDGAR request for ${monthStart} — plan should be exactly the revision window`);
+      if (v === undefined) throw new Error(`unexpected EDGAR request for ${monthStart} — plan should be exactly [floorStart, asof]`);
       return v;
     },
   });
   expect(outcome.status).toBe("updated");
-  expect(outcome.newRows.length).toBe(EDGAR_REVISION_WINDOW_MONTHS);
+  expect(outcome.newRows.length).toBe(mnaFull.length); // every month in the committed reference was (re)fetched
 
-  const merged = mergeSeries(persistedPoints, outcome.newRows);
+  const merged = mergeSeries([], outcome.newRows);
   expect(merged).toEqual(mnaFull); // byte-for-byte reproduction of the committed reference
 
   const inputs: LateCycleInputs = {
@@ -185,7 +181,7 @@ test("late-cycle fidelity via the incremental EDGAR refresh path: persisted-floo
   const result = computeLateCycle(inputs, lc.asof);
 
   const m = maxDiffByDate(lc.indicators.mna_pct, result.indicators?.mna_pct);
-  console.log(`[research-fidelity] mna_pct (via refreshEdgarIncremental + computeLateCycle): compared=${m.n} maxDiff=${m.max}`);
+  console.log(`[research-fidelity] mna_pct (via refreshEdgarIncremental full re-crawl + computeLateCycle): compared=${m.n} maxDiff=${m.max}`);
   expect(m.n).toBeGreaterThan(700);
   expect(m.max).toBeLessThan(5e-3); // same tolerance as the fixture-only fidelity test above
 });

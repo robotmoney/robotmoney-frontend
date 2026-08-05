@@ -1,18 +1,39 @@
-// End-to-end coverage for the LIVE incremental EDGAR/MNA research refresh
-// (issue #109) over the REAL authenticated /api/analytics/* boundary and the
-// REAL ephemeral Postgres the preload provisions (never mocked; a missing
-// Postgres fails the preload loudly, so this suite goes red rather than
-// skipping). Only the outbound HTTP to SEC EDGAR / Yahoo / FRED is faked
-// (deterministic, network-free); every persistence call goes through a REAL
-// Bun.serve wrapping the REAL handleAnalytics route handler, exactly like
-// production's worker → API boundary.
+// End-to-end coverage for the LIVE EDGAR/MNA research refresh over the REAL
+// authenticated /api/analytics/* boundary and the REAL ephemeral Postgres
+// the preload provisions (never mocked; a missing Postgres fails the preload
+// loudly, so this suite goes red rather than skipping). Only the outbound
+// HTTP to SEC EDGAR / Yahoo / FRED is faked (deterministic, network-free);
+// every persistence call goes through a REAL Bun.serve wrapping the REAL
+// handleAnalytics route handler, exactly like production's worker → API
+// boundary.
+//
+// R6 (docs/v0-v1-quant-platform-parity-report.md, finding 1.10) established
+// that the live EDGAR/MNA refresh must periodically re-crawl the FULL
+// [EDGAR_FLOOR_START, asof] range so an EDGAR back-revision to any
+// historical month always lands — not just the months missing/revisable
+// against the persisted floor. A follow-up review found that doing this on
+// EVERY run (the first R6 fix) was itself too expensive for daily
+// production use (~200 live EDGAR requests/day, forever), so the full
+// re-crawl is now Tier 2 of a two-tier design: a cheap Tier 1 (incremental)
+// sweep runs most days, and the full Tier 2 sweep runs periodically
+// (`selectEdgarRefreshTier` — see ../../src/analytics/edgar-incremental-
+// refresh.ts). This suite specifically exercises Tier 2 end to end over the
+// REAL authenticated API + DB, so `asof` below is deliberately chosen to
+// land on the periodic full-sweep weekday (Sunday UTC,
+// EDGAR_FULL_SWEEP_WEEKDAY_UTC's default). That makes this specific test
+// SLOW by design: it seeds the real ~198-month committed floor and drives
+// two full real-paced (250ms/month) sweeps over it, on purpose, because
+// that IS production behavior once a week (from the independent producer —
+// see edgar-incremental-refresh.ts's DEFAULT_EDGAR_FULL_SWEEP_DEADLINE_MS
+// comment) and this suite intentionally never mocks the pacing away.
 //
 // Covers:
-//   AC2 — seeding the full committed EDGAR seed floor, then running a LATER
-//         research refresh requests ONLY the missing+revision-window EDGAR
-//         months (never the full ~198-month committed range); a further run
-//         at the SAME as-of requests ONLY that same small trailing window —
-//         ZERO requests for anything older ("no historical crawl").
+//   R6  — seeding the full committed EDGAR seed floor, a LATER Tier 2
+//         (full) research refresh requests EVERY month in
+//         [EDGAR_FLOOR_START, asof] — the full committed range, not just
+//         what's missing/revisable; a further run at the SAME as-of
+//         requests that SAME full range again (never shrinks to "only what
+//         changed").
 //   AC6 — every floor read + history/signal submission carries the
 //         analytics-provider bearer credential.
 //   AC9 — the refresh's planned/new/revised/fetched/missing/rejected metrics
@@ -26,8 +47,23 @@ import { runAnalytics } from "../../src/analytics/index.ts";
 import { liveDataSource } from "../../src/analytics/access/data-source.ts";
 import { analyticsApiClient } from "../../src/analytics/api-client.ts";
 import { loadEdgarSeed } from "../../src/analytics/extract/edgar-seed.ts";
+import { enumerateMonths } from "../../src/analytics/extract/edgar.ts";
+import { EDGAR_FLOOR_START } from "../../src/analytics/extract/edgar-fetch-plan.ts";
+import { selectEdgarRefreshTier } from "../../src/analytics/edgar-incremental-refresh.ts";
 
 const TOKEN = "tok_edgar_e2e_secret";
+
+// The first Sunday (UTC — the periodic full-sweep weekday) on or after
+// `from` — used to pick an `asof` for this Tier 2 (full-sweep) suite
+// without hand-picking a date that could drift out of sync if the seed
+// artifact's own `asOf` ever changes.
+function nextFullSweepDate(from: string): string {
+  let d = new Date(`${from}T00:00:00Z`);
+  while (selectEdgarRefreshTier(d.toISOString().slice(0, 10)) !== "full") {
+    d = new Date(d.getTime() + 86_400_000);
+  }
+  return d.toISOString().slice(0, 10);
+}
 
 function startdtOf(url: string): string {
   try {
@@ -66,7 +102,7 @@ function installFetchDouble(localBaseUrl: string, edgarCountFor: (monthStart: st
 }
 
 test(
-  "live incremental EDGAR refresh: seeding the full committed floor, a later refresh requests ONLY missing+revision months over the REAL authenticated API + DB; a further run at the same as-of never touches historical months",
+  "live EDGAR refresh (R6 full re-crawl): seeding the full committed floor, a later refresh requests EVERY month in range over the REAL authenticated API + DB; a further run at the same as-of requests that SAME full range again",
   async () => {
     const origConfig = { analyticsToken: config.analyticsToken, allowInsecure: config.allowInsecure };
     const origEnv = {
@@ -102,7 +138,11 @@ test(
       for (const row of mnaRows) {
         await sql`INSERT INTO raw_indicator_history (date, indicator, value) VALUES (${row.date}, 'MNA', ${row.value})`;
       }
-      const asof = manifest.asOf; // the seed's own pinned as-of — a "later" refresh relative to endMonth
+      // A "later" refresh relative to endMonth, pinned to the periodic
+      // full-sweep weekday so this suite deterministically exercises Tier 2
+      // (see nextFullSweepDate above) rather than depending on which
+      // weekday the seed's own manifest.asOf happens to fall on.
+      const asof = nextFullSweepDate(manifest.asOf);
       await sql`DELETE FROM research_signals WHERE date = ${asof}`;
 
       const capturedLogs: string[] = [];
@@ -120,18 +160,24 @@ test(
       fetchDouble = null;
 
       expect(results1["late-cycle-signals"]).toBeDefined();
-      // Bounded: never the full ~198-month committed range.
-      expect(edgar1.length).toBeLessThan(10);
-      expect(edgar1.length).toBeGreaterThan(0);
+      // R6: EVERY month in [EDGAR_FLOOR_START, asof] is requested — the full
+      // committed range, matching v0's unconditional full re-crawl.
+      const expectedMonths = enumerateMonths(EDGAR_FLOOR_START, asof);
+      expect(edgar1.length).toBe(expectedMonths.length);
       // Every EDGAR request carried NO bearer (SEC EDGAR is a public keyless
       // API — the analytics-provider credential must never leak to it).
       for (const r of edgar1) expect(r.auth).toBeNull();
-      // No request touches deep history (well before the floor's endMonth).
-      for (const r of edgar1) expect(startdtOf(r.url) >= "2026-01-01").toBe(true);
+      // Deep history IS touched (R6: no "well before the floor's endMonth"
+      // exclusion any more) — proves this is a genuine full crawl, not a
+      // windowed one.
+      expect(edgar1.some((r) => startdtOf(r.url) === "2010-01-01")).toBe(true);
 
-      // Persisted for real, over the authenticated boundary.
+      // Persisted for real, over the authenticated boundary. Every
+      // already-seeded month is re-submitted (an upsert on (date,
+      // indicator)) plus whatever is newly in range, so the row count is
+      // exactly the full range, not "at least what was seeded".
       const mnaAfter = await sql`SELECT date::text AS date, value FROM raw_indicator_history WHERE indicator = 'MNA' ORDER BY date`;
-      expect(mnaAfter.length).toBeGreaterThanOrEqual(mnaRows.length);
+      expect(mnaAfter.length).toBe(expectedMonths.length);
       const sigRows = await sql`SELECT payload FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
       expect(sigRows.length).toBe(1);
 
@@ -150,8 +196,10 @@ test(
       expect(refreshLog).toMatch(/planned=\d+ new=\d+ revised=\d+ fetched=\d+ missing=0 rejected=0/);
       for (const m of capturedLogs) expect(m).not.toContain(TOKEN);
 
-      // ── ACT 2: a FURTHER run at the SAME as-of touches ONLY the fixed
-      // trailing revision window — ZERO requests for anything historical.
+      // ── ACT 2 (R6): a FURTHER run at the SAME as-of requests the SAME full
+      // range again — the request set never shrinks to "only what's new",
+      // which is exactly the R6 property under test: an EDGAR back-revision
+      // to ANY historical month, however old, lands on every single run.
       requests.length = 0;
       fetchDouble = installFetchDouble(process.env.ANALYTICS_API_URL, () => 5);
       const results2 = await runAnalyticsWithLogger(asof, logger);
@@ -160,8 +208,8 @@ test(
       fetchDouble = null;
 
       expect(results2["late-cycle-signals"]).toBeDefined();
-      expect(edgar2.length).toBeLessThanOrEqual(edgar1.length); // never grows
-      for (const r of edgar2) expect(startdtOf(r.url) >= "2026-06-01").toBe(true); // only the trailing window
+      expect(edgar2.length).toBe(edgar1.length); // R6: identical full-range plan every run
+      expect(edgar2.some((r) => startdtOf(r.url) === "2010-01-01")).toBe(true); // deep history requested AGAIN
     } finally {
       if (fetchDouble) fetchDouble.restore();
       server.stop(true);
@@ -191,5 +239,9 @@ test(
       }
     }
   },
-  { timeout: 60_000 },
+  // R6: two full ~199-month sweeps at v0's own 250ms/month pacing is ~100s
+  // of pure politeness delay alone — generous margin above that for DB/HTTP
+  // overhead. See the file-level comment: this slowness is deliberate, not
+  // a regression to fix.
+  { timeout: 180_000 },
 );

@@ -1,10 +1,32 @@
-// AC5 (atomicity/last-good) + AC7 (idempotency) coverage for the live
-// incremental EDGAR/MNA research refresh (issue #109), over the REAL
-// authenticated /api/analytics/* boundary and the REAL ephemeral Postgres
-// the preload provisions. Only outbound SEC EDGAR/Yahoo/FRED HTTP is faked.
+// AC5 (atomicity/last-good) + AC7 (idempotency) coverage for the EDGAR/MNA
+// research refresh, over the REAL authenticated /api/analytics/* boundary
+// and the REAL ephemeral Postgres the preload provisions. Only outbound SEC
+// EDGAR/Yahoo/FRED HTTP is faked.
 //
-//   AC5 — when the incremental refresh DEGRADES (a required month comes
-//         back missing), NEITHER the persisted MNA floor NOR the published
+// R6 (docs/v0-v1-quant-platform-parity-report.md, finding 1.10) originally
+// widened the fetch plan from "missing months + a 2-month revision window"
+// to the FULL [EDGAR_FLOOR_START, asof] range every run, matching v0's
+// late-cycle-signals.js — then a follow-up review found that "every run,
+// forever" was itself too expensive for production (~200 live EDGAR
+// requests/day), so the live pipeline now runs a cheap Tier 1 (incremental)
+// sweep most days and only the FULL Tier 2 sweep on a bounded periodic
+// cadence (selectEdgarRefreshTier — see edgar-incremental-refresh.ts).
+// These tests specifically exercise the Tier 2 (full re-crawl) path end to
+// end over the real API + DB, so every `asof` below is deliberately chosen
+// to land on the periodic full-sweep weekday (Sunday UTC,
+// EDGAR_FULL_SWEEP_WEEKDAY_UTC's default) — verify with
+// `date -u -d "<asof>" +%A` if you ever need to change one. Every `asof` is
+// ALSO close to EDGAR_FLOOR_START so the full-range plan stays a handful of
+// months — otherwise a real full 2010-to-present sweep (~113+ months, each
+// paced 250ms apart, times three sequential runs per test) blows well past
+// any reasonable test timeout. The atomicity/idempotency PROPERTIES under
+// test are independent of how many months are in the plan or which tier
+// produced it — Tier 2 is simply the more expensive path to prove them on
+// end to end, since it exercises the full-range planner over the real
+// boundary.
+//
+//   AC5 — when the refresh DEGRADES (a required month comes back missing),
+//         NEITHER the persisted MNA floor NOR the published
 //         late-cycle-signals row for that as-of may change: readers observe
 //         either the prior complete version or a new complete version,
 //         never a signal computed against a partial floor. The run reports
@@ -106,23 +128,20 @@ test(
       process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
       process.env.ANALYTICS_TOKEN = TOKEN;
 
-      const asof = "2019-05-15";
+      const asof = "2010-03-14"; // a Sunday (full-sweep weekday) close to EDGAR_FLOOR_START (2010-01) — full range is {2010-01, 2010-02, 2010-03}
       await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
       await sql`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
-      // A FULLY seeded floor from the declared EDGAR_FLOOR_START (2010-01)
-      // through 2019-03 — 2019-04 and 2019-05 (asof's month) are both
-      // missing, so the plan is exactly {2019-04, 2019-05}, never the whole
-      // ~110-month range.
-      const seed: { date: string; indicator: string; value: number }[] = [];
-      const lastDayOfMonth = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
-      for (let y = 2010; y <= 2019; y++) {
-        const lastMonth = y === 2019 ? 3 : 12;
-        for (let m = 1; m <= lastMonth; m++) {
-          const day = lastDayOfMonth(y, m);
-          seed.push({ date: `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`, indicator: "MNA", value: 10 + m });
-        }
-      }
+      // A partially seeded floor (2010-01 only) — this asof lands on the
+      // full-sweep weekday, so tier 'full' is selected: the plan is the
+      // FULL [EDGAR_FLOOR_START, asof] range regardless of what's already
+      // persisted, so 2010-01/02/03 are ALL (re-)fetched this run, not just
+      // the newly-missing months (contrast with the cheaper tier
+      // 'incremental' plan any other day would select).
+      const seed: { date: string; indicator: string; value: number }[] = [
+        { date: "2010-01-31", indicator: "MNA", value: 11 },
+      ];
       await sql`INSERT INTO raw_indicator_history ${sql(seed, "date", "indicator", "value")}`;
+      const fullRangeMonths = 3; // 2010-01, 2010-02, 2010-03
 
       // ── RUN 1: a fully successful refresh — establishes the "last-good"
       // floor + signal for this as-of.
@@ -134,17 +153,19 @@ test(
       expect((results1["late-cycle-signals"] as any).skipped).toBeUndefined();
 
       const floorAfterRun1 = await mnaRows();
-      expect(floorAfterRun1.length).toBe(seed.length + 2); // 2019-04 + 2019-05 landed
-      expect(floorAfterRun1.length).toBeLessThan(200); // sanity: bounded, not a full re-crawl
+      // Tier 'full': every month in range is (re-)submitted (an upsert on
+      // (date, indicator)), so the ROW COUNT is exactly the full range —
+      // not seed.length + "only what was missing".
+      expect(floorAfterRun1.length).toBe(fullRangeMonths);
       const [sigAfterRun1] = await sql`SELECT payload FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
       expect(sigAfterRun1).toBeDefined();
       const payloadAfterRun1 = sigAfterRun1.payload;
 
       // ── RUN 2: the SAME as-of, but EDGAR now fails ONE required month
-      // (the newly-missing 2019-05 slot re-requested as part of the
-      // trailing revision window) — the refresh must degrade.
+      // (tier 'full': every month is required — pick the current asof
+      // month) — the refresh must degrade.
       fetchDouble = installFetchDouble(process.env.ANALYTICS_API_URL, (monthStart) =>
-        monthStart === "2019-05-01" ? null : 99,
+        monthStart === "2010-03-01" ? null : 99,
       );
       const results2 = await runAnalytics(asof, "late-cycle-signals", liveDataSource, analyticsApiClient());
       fetchDouble.restore();
@@ -209,21 +230,17 @@ test(
       process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
       process.env.ANALYTICS_TOKEN = TOKEN;
 
-      const asof = "2020-09-15";
+      const asof = "2010-04-11"; // a Sunday (full-sweep weekday) close to EDGAR_FLOOR_START (2010-01) — full range is {2010-01..2010-04}
       await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
       await sql`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
-      const seed: { date: string; indicator: string; value: number }[] = [];
-      const lastDayOfMonth = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
-      for (let y = 2010; y <= 2020; y++) {
-        const lastMonth = y === 2020 ? 7 : 12;
-        for (let m = 1; m <= lastMonth; m++) {
-          const day = lastDayOfMonth(y, m);
-          seed.push({ date: `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`, indicator: "MNA", value: 3 });
-        }
-      }
+      const seed: { date: string; indicator: string; value: number }[] = [
+        { date: "2010-01-31", indicator: "MNA", value: 3 },
+        { date: "2010-02-28", indicator: "MNA", value: 3 },
+      ];
       await sql`INSERT INTO raw_indicator_history ${sql(seed, "date", "indicator", "value")}`;
 
-      // ── RUN A: establishes last-good (2020-08 + 2020-09 land, value=5).
+      // ── RUN A: establishes last-good (this asof lands on the full-sweep
+      // weekday → tier 'full': the FULL range 2010-01..2010-04 lands, value=5).
       fetchDouble = installFetchDouble(process.env.ANALYTICS_API_URL, () => 5);
       const resultsA = await runAnalytics(asof, "late-cycle-signals", liveDataSource, analyticsApiClient());
       fetchDouble.restore();
@@ -233,8 +250,8 @@ test(
       const [sigAfterA] = await sql`SELECT payload FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
       expect(sigAfterA).toBeDefined();
 
-      // ── RUN B: a FULLY VALID EDGAR batch (the plan's fixed revision window
-      // is always re-fetched — new values every run by design), but the
+      // ── RUN B: a FULLY VALID EDGAR batch (tier 'full': the plan's FULL
+      // range is re-fetched — new values every run by design), but the
       // analytics API's raw-history submission ITSELF rejects (500).
       armFailure("POST", "/api/analytics/raw-history");
       fetchDouble = installFetchDouble(process.env.ANALYTICS_API_URL, () => 11);
@@ -264,8 +281,8 @@ test(
       // The floor write DID commit (durable, even though the overall run
       // failed later) — readers of the floor see the new value.
       const floorAfterC = await mnaRows();
-      const septAfterC = floorAfterC.find((r) => r.date === "2020-09-30");
-      expect(septAfterC?.value).toBe(17);
+      const aprAfterC = floorAfterC.find((r) => r.date === "2010-04-30");
+      expect(aprAfterC?.value).toBe(17);
       // But the signal was NEVER published against it: readers of
       // research_signals still see the PRIOR complete version (from RUN A),
       // never a signal computed from this run's (now-persisted) floor.

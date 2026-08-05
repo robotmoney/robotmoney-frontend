@@ -14,7 +14,8 @@ import { fetchFred } from "../extract/fred.ts";
 import { mergeSeries } from "../transform/math.ts";
 import {
   refreshEdgarIncremental,
-  DEFAULT_EDGAR_REFRESH_DEADLINE_MS,
+  selectEdgarRefreshTier,
+  defaultEdgarRefreshDeadlineMs,
   type EdgarRefreshOutcome,
 } from "../edgar-incremental-refresh.ts";
 import type { ChannelInputs, LateCycleInputs } from "../analyze/research-signals.ts";
@@ -119,16 +120,21 @@ export const liveDataSource: AnalyticsDataSource = {
       ...TOP7.map((sym) => safe(sym, () => fetchYahoo(sym, unix(LATECYCLE_START)), logger)),
     ]);
 
-    // Issue #109: EDGAR/MNA is no longer a blind full 2010-to-present crawl
-    // on every run. Plan + fetch ONLY the missing months plus the trailing
-    // revision window against the persisted floor the orchestrator handed
-    // us, under one hard deadline. A degraded refresh (deadline hit, or any
-    // planned month missing/duplicated/invalid) falls back to the persisted
-    // floor UNCHANGED — never a partial fresh batch — and is reported via
-    // `mnaRefresh` so the orchestrator can skip publishing a signal against
-    // incomplete data this run.
+    // Two-tier EDGAR refresh (R6 follow-up, docs/v0-v1-quant-platform-parity-
+    // report.md finding 1.10): most runs are a cheap INCREMENTAL sweep
+    // (missing months + a small trailing revision window); periodically
+    // (see selectEdgarRefreshTier in ../edgar-incremental-refresh.ts) it's a
+    // FULL 2010-to-present crawl, matching v0's `late-cycle-signals.js`, so
+    // an EDGAR back-revision to any historical month still lands, just on a
+    // bounded periodic cadence rather than every run. One hard deadline
+    // either way, sized to whichever tier this asof selects. A degraded
+    // refresh (deadline hit, or any planned month missing/duplicated/
+    // invalid) falls back to the persisted floor UNCHANGED — never a
+    // partial fresh batch — and is reported via `mnaRefresh` so the
+    // orchestrator can skip publishing a signal against incomplete data
+    // this run.
     const persistedMna = edgarCtx?.persistedMna ?? [];
-    const deadlineAt = edgarCtx?.deadlineAt ?? Date.now() + DEFAULT_EDGAR_REFRESH_DEADLINE_MS;
+    const deadlineAt = edgarCtx?.deadlineAt ?? Date.now() + defaultEdgarRefreshDeadlineMs(selectEdgarRefreshTier(asof));
     const [margin, conf, mnaRefresh] = await Promise.all([
       safe("FRED BOGZ1FL663067003Q", () => fetchFred("BOGZ1FL663067003Q"), logger),
       safe("FRED UMCSENT", () => fetchFred("UMCSENT"), logger),
