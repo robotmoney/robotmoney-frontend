@@ -65,7 +65,18 @@ export function extractAssistantText(transcript: string): string {
 export interface TranscriptError {
   /** Error class opencode reported, e.g. "APIError". "" when unnamed. */
   name: string;
-  /** Provider-authored message, e.g. "Insufficient balance. …". "" when absent. */
+  /**
+   * The PROVIDER's own typed discriminator, lifted out of the upstream
+   * `responseBody` envelope (`{"error":{"type":"CreditsError",…}}`). This is the
+   * only trustworthy way to tell an exhausted balance from any other 401 —
+   * Zen answers both with the same status, and the human-readable message is
+   * prose that may be reworded upstream at any time. "" when absent.
+   */
+  providerType: string;
+  /**
+   * Provider-authored message, REDACTED (see redactProviderText). Never the raw
+   * upstream string: these errors are printed into CI logs and PR comments.
+   */
   message: string;
   /** HTTP status the provider returned (401/402/403/429/…), or null. */
   statusCode: number | null;
@@ -78,10 +89,53 @@ export interface TranscriptError {
   url: string | null;
 }
 
+// Everything a provider error may carry that must not reach a log, a CI
+// annotation or a PR comment: the model credential itself, and the
+// account-scoped identifiers a billing URL embeds. The upstream text is
+// otherwise preserved verbatim — the point is an honest diagnosis, so only the
+// identifying substrings go, and each is replaced by a NAMED placeholder rather
+// than deleted, so a reader can see that something was removed.
+//
+// The generic action ("top up …") is added by the caller from the classified
+// KIND, never scraped out of the redacted URL: a workspace-specific billing
+// link is exactly what may not be reproduced here.
+const KEY_LIKE = /\b(?:sk|zk|pk)-[A-Za-z0-9_-]{8,}\b/g;
+const ACCOUNT_ID = /\b(?:wrk|acc|org|usr)_[A-Za-z0-9]{6,}\b/g;
+const WORKSPACE_URL = /https?:\/\/[^\s"']*\/workspace\/[^\s"']*/g;
+
+export function redactProviderText(text: string, secrets: readonly string[] = []): string {
+  let out = text;
+  // Live credential values first: a key pasted into an upstream message would
+  // otherwise survive every pattern below.
+  for (const secret of secrets) {
+    if (secret && secret.length >= 8) out = out.split(secret).join("[redacted credential]");
+  }
+  return out
+    .replace(WORKSPACE_URL, "[redacted workspace url]")
+    .replace(KEY_LIKE, "[redacted credential]")
+    .replace(ACCOUNT_ID, "[redacted account id]");
+}
+
+// Zen wraps its typed error in the raw HTTP body: `{"type":"error","error":
+// {"type":"CreditsError","message":"…"}}`. Reads it defensively — an
+// unparseable or reshaped body yields "" and the caller falls back to status.
+function providerTypeOf(data: any): string {
+  const body = data?.responseBody;
+  if (typeof data?.type === "string") return data.type;
+  if (typeof body !== "string") return "";
+  try {
+    const parsed = JSON.parse(body);
+    const t = parsed?.error?.type ?? parsed?.type;
+    return typeof t === "string" && t !== "error" ? t : "";
+  } catch {
+    return "";
+  }
+}
+
 // Every `type:"error"` event in the stream, in order. Reads both the 1.18.x
 // nested `error.data.*` shape and a bare `error.message`, so a future flattening
 // of the payload degrades to a named error rather than to silence.
-export function transcriptErrors(transcript: string): TranscriptError[] {
+export function transcriptErrors(transcript: string, secrets: readonly string[] = []): TranscriptError[] {
   const errors: TranscriptError[] = [];
   for (const line of transcript.split("\n")) {
     const t = line.trim();
@@ -102,10 +156,11 @@ export function transcriptErrors(transcript: string): TranscriptError[] {
       : "";
     errors.push({
       name: typeof err.name === "string" ? err.name : "",
-      message,
+      providerType: providerTypeOf(data),
+      message: redactProviderText(message, secrets),
       statusCode: typeof data.statusCode === "number" ? data.statusCode : null,
       isRetryable: typeof data.isRetryable === "boolean" ? data.isRetryable : null,
-      url: typeof data?.metadata?.url === "string" ? data.metadata.url : null,
+      url: typeof data?.metadata?.url === "string" ? redactProviderText(data.metadata.url, secrets) : null,
     });
   }
   return errors;
@@ -116,6 +171,7 @@ export function transcriptErrors(transcript: string): TranscriptError[] {
 // whether a retry could have helped.
 export function describeTranscriptError(e: TranscriptError): string {
   const bits = [
+    e.providerType || null,
     e.statusCode === null ? null : `HTTP ${e.statusCode}`,
     e.isRetryable === null ? null : e.isRetryable ? "retryable" : "NOT retryable",
     e.url,

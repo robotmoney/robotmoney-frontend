@@ -30,6 +30,13 @@
 import { STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
 import { describeTranscriptError, extractAssistantText, transcriptErrors } from "../../agent/transcript.ts";
+import {
+  classifyInferenceFailure,
+  InferenceFailure,
+  inferenceFailureAction,
+  providerOf,
+  renderInferenceDiagnostic,
+} from "../../agent/inference-failure.ts";
 import { DEFAULT_AGENT_MODEL, resolveAgentModel } from "../model-registry.ts";
 import { ZEN_KEY_ENV, zenApiKey } from "../opencode-key.ts";
 // Regime inputs passed to each live author. This used to live beside the retired
@@ -134,6 +141,14 @@ export function parseStanceFromBody(body: string): ParsedTake {
 // scripts/tests/unit/member-agent-classify.test.ts. Re-exported so this file's
 // own call site below and every external importer are untouched.
 export { describeTranscriptError, extractAssistantText, transcriptErrors };
+// The failure vocabulary the swarm boundary throws with (issue #527), re-exported
+// so a consumer of this module never has to reach past it for the kind.
+export {
+  classifyInferenceFailure,
+  InferenceFailure,
+  type InferenceFailureKind,
+  inferenceFailureAction,
+} from "../../agent/inference-failure.ts";
 
 function dispositionLabel(bias: number): string {
   if (bias >= 0.1) return "leans constructive; you look for reasons the position works before you fault it";
@@ -220,44 +235,53 @@ export function opencodeSpawnEnv(
 // asserted the account was funded. A present key means a present key.
 const keyLabel = () => (zenApiKey() ? `${ZEN_KEY_ENV} set` : `no ${ZEN_KEY_ENV} set`);
 
-// HONEST cause attribution (issue #361 Phase 0, extended 2026-08-05). PURE and
-// exported so the unit suite can pin every branch hermetically, with no spawn.
+// HONEST cause attribution (issue #361 Phase 0, extended by issue #527). PURE
+// and exported so the unit suite can pin every branch hermetically, with no
+// spawn.
 //
 // The precedence below is strictly most-specific-first, and each rung is
 // EVIDENCE rather than inference:
 //
 //  1. A structured `type:"error"` event in the JSON stream — the provider (or
-//     the CLI) NAMED the failure, with an HTTP status and its own retryability
-//     verdict. Never guess when this is present. This rung is new: the previous
-//     version read only stderr, so the six e2e failures of 2026-08-05 were all
-//     reported as a maybe-outage ("unreachable, rate-limited, unfunded, or
-//     returned nothing") while stdout carried
-//     `APIError: Insufficient balance … HTTP 401, NOT retryable` on every one of
-//     them. Three autofix reruns were spent on a fault no retry could clear.
+//     the CLI) NAMED the failure, with a typed discriminator, an HTTP status
+//     and its own retryability verdict. Never guess when this is present. This
+//     rung is new: the previous version read only stderr, so the six e2e
+//     failures of 2026-08-05 were all reported as a maybe-outage ("unreachable,
+//     rate-limited, unfunded, or returned nothing") while stdout carried
+//     `CreditsError: Insufficient balance … HTTP 401, NOT retryable` on every
+//     one of them. Three autofix reruns were spent on a fault no retry could
+//     clear, and nobody topped the workspace up because nothing said to.
 //  2. Non-empty stderr — during the 2026-07-30 incident the captured stderr
 //     showed the opencode CLI dying LOCALLY on its own SQLite migration before
 //     any model call, so this outranks any provider-side speculation.
 //  3. Neither — the only case in which the cause is genuinely unknown, and the
 //     only one allowed to say so.
+//
+// The message text is rendered from the classified KIND, so the diagnosis and
+// the machine-readable `InferenceFailure.kind` can never drift apart.
 export function emptyTranscriptCause(stdout: string, stderr: string): string {
-  const errors = transcriptErrors(stdout);
-  if (errors.length > 0) {
-    const named = errors.map(describeTranscriptError).join(" | ");
-    const nonRetryable = errors.some((e) => e.isRetryable === false);
-    return `the run reported ${errors.length} error event(s) on stdout — this is the provider's/CLI's OWN ` +
-      `account of the failure, not an inference: ${named}.` +
-      (nonRetryable
-        ? ` At least one is marked NOT retryable: rerunning the job cannot clear it, a human must fix the ` +
-          `credential/funding/quota it names.`
-        : ``);
-  }
-  if (stderr.trim()) {
-    return `no error event on stdout, but the CLI wrote to stderr, which usually means the opencode process ` +
-      `itself failed locally (crash, state/config error) BEFORE or INSTEAD OF a model exchange — do not blame ` +
-      `the provider/network without reading it. stderr: ${stderr.slice(0, 400)}`;
-  }
-  return `the stream carried NO error event and stderr was empty, so nothing named a cause: the run produced ` +
-    `no assistant text and no diagnosis. Re-run with --print-logs (or OPENCODE_BIN wrapping) to capture one.`;
+  const errors = transcriptErrors(stdout, [zenApiKey() ?? ""]);
+  return renderInferenceDiagnostic(classifyInferenceFailure(errors, stderr), errors, stderr);
+}
+
+// The loud throw for a run that produced no assistant text, carrying the kind,
+// the provider and the resolved model id alongside the rendered diagnosis.
+function emptyTranscriptFailure(stdout: string, stderr: string, model: string, exitCode: number): InferenceFailure {
+  const errors = transcriptErrors(stdout, [zenApiKey() ?? ""]);
+  const classification = classifyInferenceFailure(errors, stderr);
+  return new InferenceFailure(
+    `opencode inference produced an empty transcript (exit ${exitCode}) for model '${model}' ` +
+      `(${keyLabel()}): no assistant text in the --format json stream; NO template fallback. ` +
+      renderInferenceDiagnostic(classification, errors, stderr),
+    {
+      kind: classification.kind,
+      provider: providerOf(model),
+      model,
+      providerType: classification.error?.providerType ?? "",
+      statusCode: classification.error?.statusCode ?? null,
+      retryable: classification.retryable,
+    },
+  );
 }
 
 // Run the opencode CLI on a prompt and return the concatenated final
@@ -294,10 +318,11 @@ async function runOpencode(prompt: string): Promise<string> {
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       try { proc.kill(); } catch { /* best-effort */ }
-      reject(new Error(
+      reject(new InferenceFailure(
         `opencode inference timed out after ${ms}ms for model '${model}' ` +
-          `(${keyLabel()}): the zen model did not respond; ` +
-          `NO template fallback. Override the bound via OPENCODE_TIMEOUT_MS.`,
+          `(${keyLabel()}): the zen model did not respond; NO template fallback. ` +
+          `cause=timed-out — ${inferenceFailureAction("timed-out")}`,
+        { kind: "timed-out", provider: providerOf(model), model },
       ));
     }, ms);
   });
@@ -316,11 +341,7 @@ async function runOpencode(prompt: string): Promise<string> {
   }
   const text = extractAssistantText(stdout);
   if (!text) {
-    throw new Error(
-      `opencode inference produced an empty transcript (exit ${exitCode}) for model '${model}' ` +
-        `(${keyLabel()}): no assistant text in the --format json stream; ` +
-        `NO template fallback. ${emptyTranscriptCause(stdout, stderr)}`,
-    );
+    throw emptyTranscriptFailure(stdout, stderr, model, exitCode);
   }
   return text;
 }

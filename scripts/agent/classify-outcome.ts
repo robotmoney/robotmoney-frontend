@@ -41,6 +41,7 @@
 // message by its callers, so a misclassification is diagnosable from CI logs
 // rather than invisible.
 import { assistantTextParts, describeTranscriptError, finalAssistantText, transcriptErrors } from "./transcript.ts";
+import { classifyInferenceFailure, inferenceFailureAction } from "./inference-failure.ts";
 
 export type OnboardingOutcome =
   | "admitted"
@@ -176,19 +177,24 @@ export function harnessFaultOf(run: ClassifiableRun): HarnessFault | null {
   // emits its own error event; a run whose take succeeded while only that call
   // was rejected must stay a real result, exactly as `rateLimitDominates`
   // refuses to reclassify a run that authored a closing verdict.
-  const credentialRejection = transcriptErrors(t).find(
+  const errors = transcriptErrors(t);
+  const credentialRejection = errors.find(
     (e) =>
       e.isRetryable === false &&
       e.statusCode !== null &&
       (HARNESS_CREDENTIAL_STATUSES as readonly number[]).includes(e.statusCode),
   );
   if (credentialRejection && finalAssistantText(t) === "") {
+    // One vocabulary with the swarm boundary (issue #527): the same event that
+    // makes authorTake reject with `exhausted-credits` names this fault too, so
+    // a maintainer reading either surface is told the same thing.
+    const kind = classifyInferenceFailure([credentialRejection]).kind;
     return {
       kind: "provider-rejected-harness-credential",
       detail:
-        `the model provider rejected the harness's own credential and the agent never authored a word: ` +
-        `${describeTranscriptError(credentialRejection)} — the harness's key/funding, not the product, ` +
-        `stopped this run, and no retry can clear it`,
+        `the model provider rejected the harness's own credential and the agent never authored a word ` +
+        `(cause=${kind}): ${describeTranscriptError(credentialRejection)} — the harness's key/funding, not ` +
+        `the product, stopped this run. ${inferenceFailureAction(kind)}`,
     };
   }
   // BOTH conjuncts required: the container was positively observed not to
