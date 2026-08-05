@@ -170,8 +170,13 @@ test("bucket_weights session draws Target bars from the allocation framework and
   expect(chart).not.toContain("Conservative Defi Yield");
   await expect(page.locator('.sv__bucket-bars-svg svg')).toHaveAttribute("aria-label", /vs target/);
 
-  // The caption names the series actually drawn.
-  await expect(page.locator(".sv__bucket-bars .sv__panel-sub").first()).toContainText("Target open");
+  // The caption names the series actually drawn. Each clause is an x-show span,
+  // so it stays in the DOM and is toggled by CSS — textContent would read the
+  // hidden clauses too. useInnerText makes the assertion "what the caption
+  // reads on screen", which is the property under test. The match is
+  // case-insensitive because the caption is uppercased by CSS text-transform,
+  // which innerText (unlike textContent) applies.
+  await expect(page.locator(".sv__bucket-bars .sv__panel-sub").first()).toContainText(/target open/i, { useInnerText: true });
 
   // The finding a reader is here for.
   await expect(page.locator(".sv__deviates")).toBeVisible();
@@ -214,7 +219,9 @@ test("bucket_weights session degrades to Recommended-only when the framework is 
   expect(chart).toContain("R 97");
   expect(chart).not.toContain("T 95");
   await expect(page.locator('.sv__bucket-bars-svg svg')).not.toHaveAttribute("aria-label", /vs target/);
-  await expect(page.locator(".sv__bucket-bars .sv__panel-sub").first()).not.toContainText("Target open");
+  // Same x-show caption as above: useInnerText, so a clause that is present in
+  // the DOM but display:none correctly reads as "not on screen".
+  await expect(page.locator(".sv__bucket-bars .sv__panel-sub").first()).not.toContainText(/target open/i, { useInnerText: true });
   await expect(page.locator(".sv__deviates")).toBeHidden();
 });
 
