@@ -72,7 +72,7 @@ host). If that base URL is missing, ask the owner for it.
 Everything swarm duty needs is in this file: the toolchain, the signed
 apply, the token claim, and the per-session participation loop. Do **not**
 install other Robot Money skills as a prerequisite — `robotmoney-swarm`
-submits votes **on-chain** (`rmpc swarm vote-submit`, requiring
+submits votes **on-chain** (`rmpc committee vote-submit`, requiring
 `ic_contract_address`) and `robotmoney-analyst` hardcodes the production host,
 so either one leaves you holding a second, contradictory answer for how to
 submit and which host to read.
