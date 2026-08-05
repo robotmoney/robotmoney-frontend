@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "review": "review-security",
+  "repository": "git@github.com:robotmoney/robotmoney-frontend.git",
+  "branch": "adhoc/20260805-015816-remove-no-ai-overview-guard",
+  "commit": "aba6600469a57b15b339d49ace63a9e83c4c86ba",
+  "reviewed_at": "2026-08-05",
+  "scope": [
+    ".github/workflows/backend.yml",
+    "backend/scripts/check-no-ai-overview.sh (deleted)",
+    "docs/decisions.md (D8/D23 enforcement-precedent note)",
+    "docs/architecture.md (§3 L3 cross-reference)",
+    "scripts/checks/check-model-selection.sh, scripts/checks/check-no-test-imports-in-runtime.sh (comment-only cross-reference updates)",
+    "scripts/tests/unit/ci-workflows-structure.test.ts (assertion table update)",
+    "PR #486 diff only, risk-routed light profile"
+  ],
+  "verdict": "Pass with one medium/high coverage-gap finding, partially mitigated — safe to merge. The diff itself is a clean, internally-consistent step deletion with no permission/trigger/secret changes. The finding is a residual automated-detection gap for issue #93's AI-overview ban, structurally similar to PR #485's Supabase finding but with an active adjacent porting effort raising likelihood and a narrow existing test providing partial (not full) mitigation.",
+  "findings": [
+    {
+      "id": "review-security-001",
+      "review": "review-security",
+      "classification": "SECURITY_MISSING_CONTROL",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:1382 (issue #93/#96 — admin-managed overviews, no AI enrichment)",
+      "evidence": [
+        ".github/workflows/backend.yml:94-96 (deleted step)",
+        "backend/tests/no-new-vendor.test.ts:19 (FORBIDDEN list has no anthropic/claude entry and is scoped to 6 unrelated #84 wallet-valuation files, not backend/src/projects/*)",
+        "backend/src/worker/handlers/projects.ts:1-9 (5 of the legacy backfill-project orchestrator's 6 steps are already ported here; step 4, enrich-project-overviews, is the one omitted)",
+        "backend/src/projects/transforms.ts:188 (compute_project_coverage 'Ported 1:1' precedent from the same legacy orchestrator)",
+        "backend/tests/api/projects-admin.test.ts:37-46 (exact-match assertion that admin-submitted overview_short/overview_long pass through unmodified — covers only the admin write path, not a new standalone enrichment pipeline/cron)",
+        "backend/package.json:1-10 (no @anthropic-ai/sdk or similar dependency present today)",
+        "docs/decisions.md:1073-1076",
+        "docs/bot-analytics-ui-port-plan.md:913 (D4: LLM ban on /ask-mr-roboto path, same #93/#96 constraint, tracked as a live decision in the ongoing port plan)"
+      ],
+      "impact": "After this PR, no automated CI check scans backend/src broadly for Anthropic/Claude API references or the enrich-project-overviews marker. The only surviving grep-based vendor guard, backend/tests/no-new-vendor.test.ts, has no anthropic/claude term at all and is hardcoded to a 6-file allowlist unrelated to backend/src/projects/*. Unlike a generic residual-risk claim, this repo has a live, active porting effort (issue #87, R11/#477) that is systematically re-implementing the same legacy 'backfill-project' six-step orchestrator into backend/src/worker/handlers/projects.ts: 5 of its 6 steps (discover, refresh_coins, refresh_wallets, sync_revenue, snapshot_daily, fetch_vaults, recompute_coverage) are already ported, with header comments explicitly enumerating all six legacy steps including the omitted enrich-project-overviews. A future contributor continuing this well-established 'port step N of backfill-project' pattern could plausibly port step 4 too, especially since 5 of 6 siblings already exist as 1:1 ports, and no CI signal would stop it. Mitigating factor found during review: backend/tests/api/projects-admin.test.ts asserts an exact string match on overview_short/overview_long after an admin write, which would catch AI enrichment that rewrites text on the existing admin write path — but it would NOT catch a new standalone enrichment pipeline/cron handler (the realistic reintroduction shape, mirroring how recompute_coverage was added as a new worker handler) that populates or overwrites overview text outside that single write path.",
+      "recommendation": "Either (a) add 'anthropic' and 'claude' to a repo-wide or backend/src/projects/*-scoped forbidden-term list (extending no-new-vendor.test.ts's pattern or a narrowly-scoped sibling test) so the same porting workflow that already ported 5 of 6 orchestrator steps cannot silently port the sixth, or (b) if manual review is the intentionally accepted replacement mechanism, add a CODEOWNERS entry for backend/src/projects/** and backend/src/worker/handlers/projects.ts (no CODEOWNERS file exists in this repo today) so a human review of exactly this surface is structurally required, not merely assumed.",
+      "owner": "decision",
+      "related_findings": []
+    }
+  ],
+  "clean_areas": [
+    ".github/workflows/backend.yml diff is a pure 2-line step deletion; no changes to the job's permissions, triggers (on:), runner, or any other step — confirmed by reading the full current file.",
+    "The deletion is internally consistent across the whole PR: backend/scripts/check-no-ai-overview.sh is removed, and every cross-reference to it in docs/architecture.md, docs/decisions.md, scripts/checks/check-model-selection.sh, scripts/checks/check-no-test-imports-in-runtime.sh, and scripts/tests/unit/ci-workflows-structure.test.ts is updated in the same commit set — no dangling references to the deleted script remain.",
+    "docs/decisions.md explicitly records the trade-off (removal of grep enforcement, issue #93's admin-managed-overview-text intent unaffected) rather than silently dropping it — a disclosed decision, not a silent regression.",
+    "Repo-wide grep for anthropic|claude|enrich-project-overviews across backend/src at HEAD returns zero matches: the repo is genuinely clean today, not merely passing a check that no longer runs.",
+    "The stated false-positive rationale (PR #477's v0-roster-data.json containing incidental third-party project names/descriptions like 'KellyClaude'/'Claudeputer') is independently plausible: #477 is confirmed open (not yet merged) and adds backend/src/projects/seed/v0-roster-data.json, a 30k-line committed data file, which is exactly the kind of vendored third-party text a case-insensitive source grep cannot distinguish from a real SDK call.",
+    "backend/package.json has no @anthropic-ai/sdk (or equivalent) dependency today, and no bun.lock entry for one either — no live dependency-level exposure exists at this commit.",
+    "backend/tests/api/projects-admin.test.ts provides a genuine, executed-in-CI behavioral assertion (exact-string passthrough of admin-submitted overview text) that a naive AI-rewrite-on-write reintroduction would break — a partial mitigant this PR's diff does not remove."
+  ],
+  "unresolved_decisions": [
+    "Whether issue #93/#96's AI-enrichment ban for backend/src/projects/* is meant to remain fully convention-and-review enforced going forward, or whether a narrow allowlist/forbidden-term test (mirroring no-new-vendor.test.ts's shape) should be added now, before the active six-step orchestrator port (issue #87) reaches its remaining step."
+  ],
+  "limitations": [
+    "Light diff-scoped profile per review-contract.md: evidence gathering was scoped to files this PR's diff implicates plus the directly-cited docs/tests, not a full-repository security sweep.",
+    "Did not verify GitHub branch-protection/CODEOWNERS configuration outside the repo tree (no CODEOWNERS file exists in-tree); required-reviewer policy for backend/src/projects/** changes could not be confirmed from the checkout alone.",
+    "PR #477 (the stated trigger for this removal, containing the false-positive roster data) is open and unmerged as of this review; its final content was not reviewed as part of this PR's scope."
+  ],
+  "unreviewed_surfaces": [
+    "Runtime behavior of backend/src/projects/* pipelines themselves beyond the overview-text write path (only the AI-enrichment vendor-reference surface was checked).",
+    "Any Anthropic/Claude-related history/PRs prior to this one; only the current diff and current file states were reviewed."
+  ]
+}
