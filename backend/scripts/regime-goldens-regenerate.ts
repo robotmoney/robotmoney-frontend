@@ -18,17 +18,20 @@
 // regime-extras.json.gz (real Yahoo ^GSPC/ETH-USD + FRED DTB3) is untouched —
 // it is independent of the registry indicators / raw floor.
 //
-// Issue #447: this script used to ALSO write regime-compute-reference.json.gz
-// and regime-backtest-correlations-reference.json.gz here, driving them from
-// this SAME in-repo TS pipeline — which silently converted those two files
-// from independent cross-implementation references into in-repo
-// self-consistency checks (PR #444 claimed the original out-of-repo
-// agentjuno/robotmoney JS generator was "permanently unavailable"; it was
-// not — `robotmoney/robotmoney-site`, a same-org fork, still holds it
-// byte-identical). Those two files are now EXCLUSIVELY owned by
-// `regime-independent-reference-regenerate.ts`, which drives the genuine
-// vendored original JS instead of this TS port. Do not add write blocks for
-// them back here — the two scripts must never both write the same file.
+// Issue #447: this script used to ALSO write the two INDEPENDENT-fidelity
+// reference fixtures here, driving them from this SAME in-repo TS pipeline —
+// which silently converted them from independent cross-implementation
+// references into in-repo self-consistency checks (PR #444 claimed the
+// original out-of-repo agentjuno/robotmoney JS generator was "permanently
+// unavailable"; it was not — `robotmoney/robotmoney-site`, a same-org fork,
+// still holds it byte-identical). Those two fixtures are now EXCLUSIVELY
+// owned by `regime-independent-reference-regenerate.ts`, which drives the
+// genuine vendored original JS instead of this TS port; see that script's
+// header for which files it owns. Do not add write blocks for them back
+// here — the two scripts must never both write the same file. This file
+// deliberately contains no textual reference to either fixture's basename,
+// so `grep` for those basenames is a reliable guard that ownership has not
+// silently drifted back (issue #500 acceptance criterion).
 //
 // Usage: bun run scripts/regime-goldens-regenerate.ts
 import { gzipSync, gunzipSync } from "node:zlib";
@@ -133,8 +136,8 @@ async function main(): Promise<void> {
 
   console.log(`[regime-goldens-regenerate] dateAxis=${dateAxis.length} rows, asof=${dateAxis[dateAxis.length - 1]}`);
 
-  // regime-compute-reference.json.gz is NOT written here — see the file
-  // header note. It is exclusively owned by
+  // The full-history INDEPENDENT-fidelity reference is NOT written here — see
+  // the file header note. It is exclusively owned by
   // regime-independent-reference-regenerate.ts (issue #447).
 
   // ── regime-history.csv.gz ─────────────────────────────────────────────────
@@ -170,8 +173,8 @@ async function main(): Promise<void> {
   const corr = computeCorrelations(dateAxis, r2, extras as CorrelationExtras);
   const bt = stripDailyFromSnapshot(computeBacktest(dateAxis, r2, extras as BacktestExtras));
 
-  // regime-backtest-correlations-reference.json.gz is NOT written here — see
-  // the file header note. It is exclusively owned by
+  // The backtest+correlations INDEPENDENT-fidelity reference is NOT written
+  // here — see the file header note. It is exclusively owned by
   // regime-independent-reference-regenerate.ts (issue #447). `corr`/`bt`
   // above are still computed here because regime-snapshot.json.gz (below)
   // legitimately embeds this TS pipeline's own backtest/correlations output.
