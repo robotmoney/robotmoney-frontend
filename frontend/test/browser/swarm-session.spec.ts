@@ -38,7 +38,7 @@ import { expect, test, type Page } from "@playwright/test";
 // published allocation framework of a live session are not a stable thing to
 // assert numbers against, and a session's takes are written by live inference.
 // Each test therefore serves the session, the roster and the framework itself
-// and asserts the shipped Alpine view (static-views.js's icSessionDetail) draws
+// and asserts the shipped Alpine view (static-views.js's swarmSessionDetail) draws
 // them. Everything else — the SPA shell, /config.js, the static-archive JSON
 // under /data/swarm/** — is served by the real backend at baseURL, which is
 // why this spec lives in the `e2e` workflow's `test:browser` step (the whole
