@@ -15,7 +15,10 @@ import { test, expect } from "bun:test";
 import {
   refreshEdgarIncremental,
   selectEdgarRefreshTier,
+  defaultEdgarRefreshDeadlineMs,
   EDGAR_FULL_SWEEP_WEEKDAY_UTC,
+  DEFAULT_EDGAR_INCREMENTAL_DEADLINE_MS,
+  DEFAULT_EDGAR_FULL_SWEEP_DEADLINE_MS,
 } from "../src/analytics/edgar-incremental-refresh.ts";
 
 function allMonthsBetween(startYm: string, endYm: string): string[] {
@@ -61,6 +64,30 @@ test("selectEdgarRefreshTier: an explicit override weekday changes which day is 
   // 2026-08-05 is a Wednesday (UTC).
   expect(selectEdgarRefreshTier("2026-08-05", 3)).toBe("full");
   expect(selectEdgarRefreshTier("2026-08-04", 3)).toBe("incremental");
+});
+
+// ── Per-tier deadline budgets ────────────────────────────────────────────
+// The whole point of the two tiers is that they cost different amounts, so
+// their hard-deadline budgets must be DISTINCT and must be derived from one
+// shared tier→budget mapping (`defaultEdgarRefreshDeadlineMs`) rather than
+// hand-copied at each call site (analytics/index.ts and
+// access/data-source.ts both call it).
+
+test("defaultEdgarRefreshDeadlineMs: the two tiers have distinct budgets — 90s incremental, 15min full sweep", () => {
+  expect(DEFAULT_EDGAR_INCREMENTAL_DEADLINE_MS).toBe(90_000);
+  expect(DEFAULT_EDGAR_FULL_SWEEP_DEADLINE_MS).toBe(15 * 60_000);
+  expect(DEFAULT_EDGAR_FULL_SWEEP_DEADLINE_MS).toBeGreaterThan(DEFAULT_EDGAR_INCREMENTAL_DEADLINE_MS);
+  expect(defaultEdgarRefreshDeadlineMs("incremental")).toBe(DEFAULT_EDGAR_INCREMENTAL_DEADLINE_MS);
+  expect(defaultEdgarRefreshDeadlineMs("full")).toBe(DEFAULT_EDGAR_FULL_SWEEP_DEADLINE_MS);
+});
+
+test("defaultEdgarRefreshDeadlineMs: composes with selectEdgarRefreshTier so a Sunday asOf gets the full-sweep budget and a weekday asOf the incremental one", () => {
+  expect(defaultEdgarRefreshDeadlineMs(selectEdgarRefreshTier("2026-08-02"))).toBe(
+    DEFAULT_EDGAR_FULL_SWEEP_DEADLINE_MS,
+  ); // Sunday
+  expect(defaultEdgarRefreshDeadlineMs(selectEdgarRefreshTier("2026-08-05"))).toBe(
+    DEFAULT_EDGAR_INCREMENTAL_DEADLINE_MS,
+  ); // Wednesday
 });
 
 // ── Tier 1 (incremental, the daily default): only missing + revision
