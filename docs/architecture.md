@@ -4238,6 +4238,11 @@ These documents describe current product and system commitments:
 ## Reviews and investigations
 
 Point-in-time review artifacts live under [`code-review/`](./code-review/).
+To ensure review pins survive the repo's serial-rebase merge workflow without
+breaking the CI ancestor guard:
+- Reviews of **merged history** pin the merged SHA using the `"commit"` key.
+- Reviews of **in-flight work** record a rebase-stable identity using `"pull_request"` instead of a bare commit SHA.
+
 Resolved debugging notes live under [`archive/`](./archive/), with their
 original dates and findings preserved. Archived material is evidence, not a
 statement of current behavior; update the canonical document when a finding

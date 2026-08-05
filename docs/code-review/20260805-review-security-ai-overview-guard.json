@@ -3,7 +3,7 @@
   "review": "review-security",
   "repository": "git@github.com:robotmoney/robotmoney-frontend.git",
   "branch": "adhoc/20260805-015816-remove-no-ai-overview-guard",
-  "commit": "aba6600469a57b15b339d49ace63a9e83c4c86ba",
+  "commit": "acd315b",
   "reviewed_at": "2026-08-05",
   "scope": [
     ".github/workflows/backend.yml",

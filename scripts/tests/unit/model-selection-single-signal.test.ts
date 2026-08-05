@@ -356,11 +356,12 @@ describe("scripts/checks/check-model-selection.sh survives this diff", () => {
     expect(wf).toContain("bash scripts/checks/check-model-selection.sh");
   });
 
-  test("no COMPETING guard was added alongside it — scripts/checks/ holds exactly these two", () => {
+  test("no COMPETING guard was added alongside it — scripts/checks/ holds exactly these three", () => {
     // A second, contradictory guard (the withdrawn check-eval-keyless.sh being
     // the specific one) is the failure this pins: two guards asserting opposite
     // rules means one of them is permanently red or permanently ignored.
     expect(readdirSync(join(repoRoot, "scripts", "checks")).filter((f) => f.endsWith(".sh")).sort()).toEqual([
+      "check-code-review-artifacts.sh",
       "check-model-selection.sh",
       "check-no-test-imports-in-runtime.sh",
     ]);
