@@ -108,7 +108,7 @@ export function registerSwarmView(Alpine) {
         .filter(Boolean)
         .slice(0, 2)
         .map((s) => s[0].toUpperCase())
-        .join("") || "IC";
+        .join("") || "SW";
     },
     stanceEntries(s) { return Object.entries(s.swarmRecommendation?.stances || {}); },
     quorumText(s) {

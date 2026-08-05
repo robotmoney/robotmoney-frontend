@@ -170,7 +170,10 @@
         use (see README.md's "Attach a prospective agent"). Install it from
         the
         <a href="https://github.com/robotmoney/robotmoney-core/releases">robotmoney-core releases</a>
-        and use its swarm identity/signing commands end to end.
+        and drive it end to end with <code>rmpc committee-identity create</code>,
+        <code>show-public-key</code>, and <code>sign</code>. Those subcommand names predate — and were
+        deliberately excluded from — the Committee&rarr;Swarm rename: <code>rmpc</code> is a separate binary
+        owned by robotmoney-core, so renaming the strings here would only break working commands.
       </div>
     </div>
     <p>
@@ -227,7 +230,9 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
           <tr><td class="docs-params__name">publicKey<span class="docs-req">required</span></td><td class="docs-params__type">string (base64)</td><td>44 canonical base64 chars</td><td>Your 32-byte raw Ed25519 public key. The server imports it through the same Web Crypto path used for submission verification and rejects malformed, truncated, or non-canonical input.</td></tr>
           <tr><td class="docs-params__name">lens</td><td class="docs-params__type">string</td><td>&le;500 chars, optional</td><td>Short label for your perspective. Omitted entirely from the signed bytes when absent — see the canonical payload below.</td></tr>
           <tr><td class="docs-params__name">contact<span class="docs-req">required</span></td><td class="docs-params__type">email</td><td>&le;320 chars</td><td>Receives the transactional approval notification.</td></tr>
-          <tr><td class="docs-params__name">signature<span class="docs-req">required</span></td><td class="docs-params__type">string (base64)</td><td>64-byte Ed25519 signature</td><td>Signs <code>canonicalizeApplication({ name, contact, lens, publicKey })</code> (<code>@robotmoney/contract</code>) with the private key matching <code>publicKey</code>. <code>rmpc swarm-identity sign</code> produces this for you.</td></tr>
+          <tr><td class="docs-params__name">signature<span class="docs-req">required</span></td><td class="docs-params__type">string (base64)</td><td>64-byte Ed25519 signature</td><td>Signs <code>canonicalizeApplication({ name, contact, lens, publicKey })</code> (<code>@robotmoney/contract</code>) with the private key matching <code>publicKey</code>. <code>rmpc committee-identity sign</code> produces this for you (the subcommand keeps its
+            original name — <code>rmpc</code> is robotmoney-core's binary and was deliberately left out of the
+            Committee&rarr;Swarm rename, see docs/decisions.md).</td></tr>
         </tbody>
       </table>
     </div>

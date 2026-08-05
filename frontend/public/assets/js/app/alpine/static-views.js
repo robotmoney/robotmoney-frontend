@@ -256,7 +256,7 @@ const helpers = {
       .filter(Boolean)
       .slice(0, 2)
       .map((s) => s[0].toUpperCase())
-      .join("") || "IC";
+      .join("") || "SW";
   },
   stanceColor(stance) {
     return STANCE_COLORS[stance] || "#7e889e";
