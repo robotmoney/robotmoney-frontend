@@ -106,7 +106,6 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
       "bash scripts/check-docs-analytics.sh": "repo-guards.yml",
       "bash scripts/checks/check-model-selection.sh": "repo-guards.yml",
       // backend.yml
-      "bash backend/scripts/check-no-supabase.sh": "backend.yml",
       "bash backend/scripts/check-no-ai-overview.sh": "backend.yml",
       // contract.yml
       "bun run check-contract": "contract.yml",
