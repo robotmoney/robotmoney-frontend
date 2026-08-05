@@ -47,11 +47,34 @@ export function canonicalizeApplication(a) {
 // from an agent's point of view — it simply never discovers the skill — so
 // reachability is asserted for real (status 200 plus the skill's own
 // front-matter markers) by
-// contract/tests/live/swarm-onboarding-skill-url-live.test.ts, which runs
-// nightly, off the per-PR path. The offline regression pin on this branch
-// segment lives in contract/tests/unit/swarm-application.test.ts.
+// contract/tests/live/swarm-onboarding-skill-url-live.test.ts. The offline
+// regression pin on this string lives in
+// contract/tests/unit/swarm-application.test.ts.
+//
+// THE PLUGIN/SKILL SEGMENTS ARE THE PRE-RENAME ONES, ON PURPOSE (issue #484).
+// The Committee→Swarm rename (#407) renamed this URL's `robotmoney-committee/
+// …/committee-onboarding` segments to `robotmoney-swarm/…/swarm-onboarding`,
+// but that rename never crossed the repo boundary: robotmoney-core@dev ships
+// plugins `robotmoney-analyst`, `robotmoney-cli`, `robotmoney-committee` and
+// `robotmoney-user` — there is no `robotmoney-swarm` — so the renamed URL 404'd
+// from 2026-08-03 and the entire onboarding funnel was dead in production, with
+// no error raised anywhere in this repo. Measured 2026-08-05: the renamed form
+// 404s, the form below returns 200. This constant therefore names WHAT IS
+// PUBLISHED, not what this repo would prefer to be published.
+//
+// Consequence worth stating plainly rather than hiding: the file served here
+// declares `name: committee-onboarding` in its front matter while
+// ONBOARDING_PROMPT (below) and this repo's own evaluation copy at
+// frontend/public/skills/swarm-onboarding/SKILL.md use the post-rename name.
+// That label mismatch is the residue of the half-finished cross-repo rename,
+// and it is strictly better than a 404: the agent gets the real, current
+// procedure. Renaming the plugin in robotmoney-core so the post-rename URL
+// becomes true is the permanent repair and is tracked there, not here — this
+// repo does not edit robotmoney-core. When it lands, change this string and the
+// live test follows automatically (it derives the expected front-matter name
+// from this URL's own skill segment).
 export const SWARM_ONBOARDING_SKILL_URL =
-  "https://raw.githubusercontent.com/robotmoney/robotmoney-core/dev/plugins/robotmoney-swarm/skills/swarm-onboarding/SKILL.md";
+  "https://raw.githubusercontent.com/robotmoney/robotmoney-core/dev/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md";
 
 // The single copy-paste prompt an owner drops into their agent harness (R4).
 //

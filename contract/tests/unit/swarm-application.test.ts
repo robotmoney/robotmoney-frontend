@@ -300,9 +300,9 @@ describe("APPLY_HOW_TO_STEPS — canonical step list (R5, §11.2)", () => {
 });
 
 describe("SWARM_ONBOARDING_SKILL_URL", () => {
-  test("is an https URL naming the swarm-onboarding skill", () => {
+  test("is an https URL naming an onboarding skill file", () => {
     expect(SWARM_ONBOARDING_SKILL_URL.startsWith("https://")).toBe(true);
-    expect(SWARM_ONBOARDING_SKILL_URL).toContain("swarm-onboarding");
+    expect(SWARM_ONBOARDING_SKILL_URL).toContain("-onboarding/SKILL.md");
     expect(SWARM_ONBOARDING_SKILL_URL.endsWith("SKILL.md")).toBe(true);
   });
 
@@ -313,10 +313,31 @@ describe("SWARM_ONBOARDING_SKILL_URL", () => {
   // The limit of this assertion, stated plainly: it proves the STRING, not that
   // the file is reachable. Reachability is proved only by the live test at
   // contract/tests/live/swarm-onboarding-skill-url-live.test.ts, which is
-  // deliberately outside this (per-PR, network-free) directory.
+  // deliberately outside this (network-free) directory but runs in the SAME
+  // required `contract` job (issue #484 — before that it ran in no job at all).
   test("points at robotmoney-core's `dev` default branch, not the 404ing `main`", () => {
     expect(SWARM_ONBOARDING_SKILL_URL).toContain("/robotmoney-core/dev/");
     expect(SWARM_ONBOARDING_SKILL_URL).not.toContain("/robotmoney-core/main/");
+  });
+
+  // Regression pin for issue #484, the second time this URL's path segments
+  // 404'd. #407's Committee→Swarm rename rewrote them to `robotmoney-swarm/
+  // …/swarm-onboarding`, but robotmoney-core was never renamed to match — it
+  // publishes plugins `robotmoney-analyst`, `robotmoney-cli`,
+  // `robotmoney-committee` and `robotmoney-user`, and nothing named
+  // `robotmoney-swarm` — so the entire onboarding funnel was dead for two days
+  // with no error raised anywhere in this repo.
+  //
+  // What this pin is FOR: a future rename sweep over this repo must not
+  // "correct" these segments again on the strength of a local naming
+  // convention. They track what robotmoney-core actually publishes, and the
+  // only thing that licenses changing them is robotmoney-core publishing the
+  // renamed path — which the live test, not this one, is what verifies.
+  test("names the plugin/skill path robotmoney-core actually publishes, not the post-#407 rename that 404s", () => {
+    expect(SWARM_ONBOARDING_SKILL_URL).toContain(
+      "/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md",
+    );
+    expect(SWARM_ONBOARDING_SKILL_URL).not.toContain("robotmoney-swarm");
   });
 });
 

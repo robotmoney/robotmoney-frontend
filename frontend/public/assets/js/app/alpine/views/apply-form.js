@@ -28,25 +28,23 @@ const CANONICAL_ORIGIN = "https://robotmoney.net";
 //
 // The prompt's provenance bound tells the agent it can verify the project
 // before it proceeds: "the swarm, its current members, and their published
-// track records are all at https://swarm.robotmoney.net". That host
-// RESOLVES AND RETURNS 404 — measured, every path, including "/". So the one
-// sentence written to answer a measured "unknown repository" refusal hands a
-// suspicious agent a dead link, which is worse than saying nothing: an agent
-// told to verify, that then verifies and gets a 404, has been given evidence
-// AGAINST proceeding.
+// track records are all at <roster URL>". That sentence is not origin-aware,
+// which is the same defect the base-URL line below fixes: an agent handed a
+// staging or localhost stack is otherwise sent to the PRODUCTION roster to
+// establish the provenance of a stack it will never touch, so the check it was
+// invited to run proves nothing about what it is about to run. Fixed here by
+// rewriting the host to a roster that exists ON THE ORIGIN THE PROMPT WAS
+// COPIED FROM.
 //
-// It is also not origin-aware, which is the same defect the base-URL line below
-// already fixes. An agent handed a staging or localhost stack was being sent to
-// a production roster to establish the provenance of a stack it will never
-// touch, so the check it was invited to run proved nothing about what it was
-// about to run.
-//
-// Both are fixed here by rewriting the host to a roster that exists ON THE
-// ORIGIN THE PROMPT WAS COPIED FROM. The permanent fix belongs in the contract
-// constant and its regression pin (contract/src/swarm-application.js,
-// contract/tests/unit/swarm-application.test.ts) — not this repo's lane,
-// so it is filed rather than done here.
-const DEAD_ROSTER_URL = "https://swarm.robotmoney.net";
+// This string must stay equal to whatever roster URL ONBOARDING_PROMPT ships,
+// or the rewrite below silently no-ops and every copied prompt keeps the
+// production URL. That is not hypothetical: it read "https://swarm.robotmoney.net"
+// (a host that resolved and 404'd on every path) until the contract constant was
+// corrected to the canonical-origin form, at which point the split/join stopped
+// matching anything and the rehost quietly died — while its unit test kept
+// passing against a hand-written fixture that still contained the old host.
+// The test now drives the REAL ONBOARDING_PROMPT so this cannot recur silently.
+export const CANONICAL_ROSTER_URL = `${CANONICAL_ORIGIN}/swarm`;
 const rosterUrlFor = (origin) => `${origin || CANONICAL_ORIGIN}/swarm`;
 
 /**
@@ -65,7 +63,7 @@ const rosterUrlFor = (origin) => `${origin || CANONICAL_ORIGIN}/swarm`;
  * hosts, and the only addition is appended at the end.
  */
 export function copyablePrompt(prompt, origin) {
-  const rehosted = prompt.split(DEAD_ROSTER_URL).join(rosterUrlFor(origin));
+  const rehosted = prompt.split(CANONICAL_ROSTER_URL).join(rosterUrlFor(origin));
   if (!origin || origin === CANONICAL_ORIGIN) return rehosted;
   return `${rehosted} Use ${origin} as the API base URL.`;
 }

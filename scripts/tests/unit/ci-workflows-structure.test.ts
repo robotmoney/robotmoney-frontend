@@ -107,6 +107,13 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
       "bash scripts/checks/check-model-selection.sh": "repo-guards.yml",
       // contract.yml
       "bun run check-contract": "contract.yml",
+      // Added after the split (issue #484): contract/tests/live's reachability
+      // guard for SWARM_ONBOARDING_SKILL_URL. It documented itself as running
+      // in a `nightly-fetchers.yml` that never existed, so it had executed in
+      // no CI job at any point in its life while the URL it guards 404'd in
+      // production. Pinned here so "the live selector is invoked by a real
+      // workflow" is an assertion, not a comment.
+      "bun run test:live": "contract.yml",
       // integration.yml
       "bun run test:integration": "integration.yml",
     };
