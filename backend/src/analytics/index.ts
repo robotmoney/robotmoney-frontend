@@ -98,6 +98,15 @@ const nn = (v: number | undefined): number | null =>
 // research-signal entries of the telemetry summary, leaving regime (and any
 // other) entries untouched so regime telemetry behavior is unperturbed.
 const RESEARCH_SIGNAL_TELEMETRY_KEYS = ["channel-divergence", "late-cycle-signals"] as const;
+
+// `toolId` alias meaning "both research signals in ONE run" (issue #509).
+// Not a tool in its own right — it produces no output of its own; it selects
+// the same two tools the per-tool ids select, but inside a single
+// orchestrator invocation so the shared research-input fetch (and its live
+// EDGAR sweep) is paid for exactly once. Also the telemetry `kind` for such a
+// run: research_pipeline_runs.kind is free text, so 'research' is a new,
+// distinct value rather than an overload of an existing one.
+export const RESEARCH_TOOL_GROUP = "research";
 function boundedTelemetrySummary(raw: Record<string, unknown>): Record<string, unknown> {
   let out = raw;
   for (const key of RESEARCH_SIGNAL_TELEMETRY_KEYS) {
@@ -139,7 +148,15 @@ export async function runAnalytics(
   jobId?: number,
 ): Promise<Record<string, unknown>> {
   const logger: Logger = console;
-  const want = (id: string) => !toolId || toolId === id;
+  // `toolId` is one tool id, the RESEARCH_TOOL_GROUP alias, or omitted (whole
+  // suite). The alias exists because the two research signals SHARE one
+  // `fetchResearchInputs` call — and therefore one live EDGAR sweep. Running
+  // them as two separate runAnalytics invocations paid for that sweep twice
+  // per cycle (~400 requests and up to 2×15min every full-sweep day) and
+  // threw the first result away, since only the late-cycle-signals branch
+  // persists it (issue #509).
+  const wanted = toolId === RESEARCH_TOOL_GROUP ? new Set<string>(RESEARCH_SIGNAL_TELEMETRY_KEYS) : null;
+  const want = (id: string) => (wanted ? wanted.has(id) : !toolId || toolId === id);
   const results: Record<string, unknown> = {};
   const sourceLabel = source === hermeticDataSource ? "hermetic" : source === liveDataSource ? "live" : "fixture";
   const collector = new TelemetryCollector();
@@ -326,11 +343,36 @@ export async function runAnalytics(
     if (want("late-cycle-signals")) {
       const refresh = inputs.mnaRefresh;
       if (refresh) {
+        // `tier=` and `degrade=` are load-bearing, not decoration (issue
+        // #509): without them there is no way — from a log or from the
+        // persisted telemetry — to answer "did the weekly reconciliation
+        // sweep ever actually run, and if it degraded, why?". Producer
+        // downtime across the single full-sweep weekday, or a weekday-only
+        // PRODUCER_RESEARCH_CRON, otherwise disables reconciliation
+        // indefinitely, silently and with no catch-up.
         logger.log?.(
-          `[analytics] EDGAR MNA refresh: status=${refresh.status} planned=${refresh.plannedMonths} ` +
+          `[analytics] EDGAR MNA refresh: status=${refresh.status} tier=${refresh.tier}` +
+            (refresh.fellBackFromFullSweep ? " (fell back from the full sweep)" : "") +
+            (refresh.degradeKind ? ` degrade=${refresh.degradeKind}` : "") +
+            ` planned=${refresh.plannedMonths} ` +
             `new=${refresh.newMonths} revised=${refresh.revisedMonths} fetched=${refresh.fetchedMonths} ` +
             `missing=${refresh.missingMonths} rejected=${refresh.rejectedMonths}`,
         );
+        // Persisted checkpoint: research_pipeline_artifacts row, queryable
+        // per asof through the admin telemetry projection — the durable
+        // record of WHICH tier this asof actually executed.
+        collector.artifact("access", "edgar-refresh", {
+          asof,
+          tier: refresh.tier,
+          status: refresh.status,
+          degradeKind: refresh.degradeKind ?? null,
+          fellBackFromFullSweep: refresh.fellBackFromFullSweep ?? false,
+          plannedMonths: refresh.plannedMonths,
+          fetchedMonths: refresh.fetchedMonths,
+          missingMonths: refresh.missingMonths,
+          rejectedMonths: refresh.rejectedMonths,
+          reason: refresh.reason ?? null,
+        });
       }
       t0 = new Date();
       const bundle = { spy: inputs.spy, rsp: inputs.rsp, top7: inputs.top7, mna: inputs.mna, margin: inputs.margin, conf: inputs.conf };
@@ -345,7 +387,7 @@ export async function runAnalytics(
           `[analytics] late-cycle-signals: EDGAR refresh degraded (${refresh.reason}) — ` +
             "retaining last-good signal, NOT recomputing/publishing this run",
         );
-        collector.warn("analyze", `EDGAR MNA refresh degraded (${refresh.reason}) — retaining last-good signal, not recomputing`);
+        collector.warn("analyze", `EDGAR MNA refresh degraded (tier=${refresh.tier} degrade=${refresh.degradeKind}: ${refresh.reason}) — retaining last-good signal, not recomputing`);
         collector.stage("analyze", "warn", `skipped recompute: EDGAR refresh degraded (${refresh.reason})`, t0);
         collector.stage("store", "warn", "skipped — retained last-good persisted signal, nothing new written", new Date());
         results["late-cycle-signals"] = { skipped: true, reason: refresh.reason };

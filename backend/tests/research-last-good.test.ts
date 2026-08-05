@@ -157,6 +157,11 @@ test(
       // (date, indicator)), so the ROW COUNT is exactly the full range —
       // not seed.length + "only what was missing".
       expect(floorAfterRun1.length).toBe(fullRangeMonths);
+      // RESTORED (issue #509): bounded — a refresh for an asof this close to
+      // EDGAR_FLOOR_START must never produce a ~200-row floor. Deleted by PR
+      // #471; it is the assertion that would have caught a plan/write
+      // silently widening to the whole history.
+      expect(floorAfterRun1.length).toBeLessThan(200);
       const [sigAfterRun1] = await sql`SELECT payload FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
       expect(sigAfterRun1).toBeDefined();
       const payloadAfterRun1 = sigAfterRun1.payload;
@@ -302,4 +307,131 @@ test(
     }
   },
   { timeout: 60_000 },
+);
+
+// ── the batch-level divergence guard, end to end (issue #509) ──────────────
+//
+// The defect this covers: a Tier 2 sweep's ONLY gate before ~200 rows became
+// authoritative was the per-row `validateEdgarBatch`, which accepts any
+// finite non-negative integer — including the `0` an HTTP-200
+// `{"hits":{"total":{"value":0}}}` yields while SEC's FTS index is mid-
+// rebuild. The write is `ON CONFLICT (date, indicator) DO UPDATE SET value,
+// source`, and the gap-fill seed path can only restore MISSING dates, so a
+// single bad Sunday rewrote the archived baseline unrepairably.
+//
+// Every run below goes through the REAL authenticated API + REAL Postgres,
+// and the assertion that matters is on the DATABASE, not on a return value:
+// after a degenerate sweep the persisted rows must be byte-identical to what
+// they were before.
+test(
+  "divergence guard: a complete, well-formed but DEGENERATE full-sweep batch degrades instead of overwriting the persisted floor; a bulk rewrite is refused too; a realistic back-revision still lands",
+  async () => {
+    const origConfig = { analyticsToken: config.analyticsToken, allowInsecure: config.allowInsecure };
+    const origEnv = {
+      ANALYTICS_SOURCE: process.env.ANALYTICS_SOURCE,
+      ANALYTICS_API_URL: process.env.ANALYTICS_API_URL,
+      ANALYTICS_TOKEN: process.env.ANALYTICS_TOKEN,
+    };
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        const r = await handleAnalytics(req, url);
+        if (!r) return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+        return new Response(JSON.stringify(r.body), { status: r.status, headers: { "Content-Type": "application/json" } });
+      },
+    });
+    let fetchDouble: ReturnType<typeof installFetchDouble> | null = null;
+    try {
+      config.analyticsToken = TOKEN;
+      config.allowInsecure = false;
+      process.env.ANALYTICS_SOURCE = "live";
+      process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
+      process.env.ANALYTICS_TOKEN = TOKEN;
+
+      // 2011-01-02 is a Sunday (the full-sweep weekday), so tier 'full' plans
+      // the whole 13-month [2010-01, 2011-01] range — a miniature of the real
+      // ~199-month sweep, every month of it already persisted with a real
+      // value. Small enough to run four real-paced sweeps inside a test.
+      const asof = "2011-01-02";
+      const fullRangeMonths = 13;
+      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await sql`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
+      const seed: { date: string; indicator: string; value: number }[] = [];
+      const lastDayOfMonth = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+      for (let i = 0; i < fullRangeMonths; i++) {
+        const y = 2010 + Math.floor(i / 12);
+        const m = (i % 12) + 1;
+        const day = lastDayOfMonth(y, m);
+        seed.push({ date: `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`, indicator: "MNA", value: 100 });
+      }
+      await sql`INSERT INTO raw_indicator_history ${sql(seed, "date", "indicator", "value")}`;
+
+      // ── RUN 1: a healthy reconciliation — EDGAR confirms every month
+      // unchanged. Establishes last-good and proves the guard is not simply
+      // refusing everything.
+      fetchDouble = installFetchDouble(process.env.ANALYTICS_API_URL, () => 100);
+      const results1 = await runAnalytics(asof, "late-cycle-signals", liveDataSource, analyticsApiClient());
+      fetchDouble.restore();
+      fetchDouble = null;
+      expect((results1["late-cycle-signals"] as any).skipped).toBeUndefined();
+      const floorAfterRun1 = await mnaRows();
+      expect(floorAfterRun1.length).toBe(fullRangeMonths);
+      expect(floorAfterRun1.every((r) => r.value === 100)).toBe(true);
+      const [sigAfterRun1] = await sql`SELECT payload FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
+      const payloadAfterRun1 = sigAfterRun1.payload;
+
+      // ── RUN 2 (the defect): every month answers HTTP 200 with a count of
+      // 0. Individually valid; collectively degenerate.
+      fetchDouble = installFetchDouble(process.env.ANALYTICS_API_URL, () => 0);
+      const results2 = await runAnalytics(asof, "late-cycle-signals", liveDataSource, analyticsApiClient());
+      fetchDouble.restore();
+      fetchDouble = null;
+
+      expect((results2["late-cycle-signals"] as any).skipped).toBe(true);
+      expect((results2["late-cycle-signals"] as any).reason).toMatch(/degenerate batch/);
+      // THE assertion: the persisted floor was not touched. Before the guard
+      // existed, all 13 rows here would read 0 and their provenance would
+      // have flipped seed→live, with no in-system way back.
+      const floorAfterRun2 = await mnaRows();
+      expect(floorAfterRun2).toEqual(floorAfterRun1);
+      const [sigAfterRun2] = await sql`SELECT payload FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
+      expect(sigAfterRun2.payload).toEqual(payloadAfterRun1);
+
+      // ── RUN 3: a non-zero but wholesale rewrite (every month a different,
+      // plausible integer) is refused on the same grounds.
+      fetchDouble = installFetchDouble(process.env.ANALYTICS_API_URL, () => 7);
+      const results3 = await runAnalytics(asof, "late-cycle-signals", liveDataSource, analyticsApiClient());
+      fetchDouble.restore();
+      fetchDouble = null;
+      expect((results3["late-cycle-signals"] as any).skipped).toBe(true);
+      expect((results3["late-cycle-signals"] as any).reason).toMatch(/bulk rewrite|aggregate diverges/);
+      expect(await mnaRows()).toEqual(floorAfterRun1);
+
+      // ── RUN 4: the guard is a blast-radius limiter, NOT a revision
+      // blocker — a genuine back-revision to one old month lands.
+      fetchDouble = installFetchDouble(process.env.ANALYTICS_API_URL, (monthStart) =>
+        monthStart === "2010-01-01" ? 103 : 100,
+      );
+      const results4 = await runAnalytics(asof, "late-cycle-signals", liveDataSource, analyticsApiClient());
+      fetchDouble.restore();
+      fetchDouble = null;
+      expect((results4["late-cycle-signals"] as any).skipped).toBeUndefined();
+      const floorAfterRun4 = await mnaRows();
+      expect(floorAfterRun4.length).toBe(fullRangeMonths);
+      expect(floorAfterRun4.find((r) => r.date === "2010-01-31")!.value).toBe(103);
+      expect(floorAfterRun4.filter((r) => r.value === 100).length).toBe(fullRangeMonths - 1);
+    } finally {
+      if (fetchDouble) fetchDouble.restore();
+      server.stop(true);
+      config.analyticsToken = origConfig.analyticsToken;
+      config.allowInsecure = origConfig.allowInsecure;
+      for (const [k, v] of Object.entries(origEnv)) {
+        if (v === undefined) delete process.env[k as keyof typeof origEnv];
+        else process.env[k as keyof typeof origEnv] = v;
+      }
+      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+    }
+  },
+  { timeout: 120_000 },
 );
