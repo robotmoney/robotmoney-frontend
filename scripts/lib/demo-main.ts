@@ -264,7 +264,7 @@ const databaseUrl = internalDatabaseUrl(database);
 // same topology when it asks `docker compose port` what is actually published.
 const composeFilesBase = [
   "docker-compose.yml",
-  ...(smokeMode ? [] : ["docker-compose.demo.yml"]),
+  "docker-compose.demo.yml",
   ...(staticPortMode ? [STAGE_COMPOSE_FILE] : [])
 ].join(":");
 let composeFilesRun = composeFilesBase;
@@ -1580,7 +1580,7 @@ async function main(): Promise<void> {
       c.nextAt = due.nextAt;
     }
   }
-  if (!smokeMode) void swarmDriver();
+  void swarmDriver();
 
   // ── Periodic new-member onboarding (§11 R8: real-inference eval) ─────────
   // Every admission launches ONE vanilla OpenCode member-agent container

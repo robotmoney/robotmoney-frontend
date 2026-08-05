@@ -134,5 +134,23 @@
       "kty": "OKP",
       "x": "B199ApjUFTM-q6jsVCfn2R9YeF6btKPusP93DPuP2xU"
     }
+  },
+  "robot money": {
+    "publicKeyB64": "CMg+OaicdEzwK9p4NK2wyyld8uFTXre4Slb7N47uh3w=",
+    "privateJwk": {
+      "crv": "Ed25519",
+      "d": "xgcnDhG1eUkKpmpv9L2tg1a1TaoeXLVN3dKDwGeRzTs",
+      "x": "CMg-OaicdEzwK9p4NK2wyyld8uFTXre4Slb7N47uh3w",
+      "kty": "OKP"
+    }
+  },
+  "woon": {
+    "publicKeyB64": "9py4O+nGz9cLEcmJdCtL04dLX18/qY1ILv3SO+LSOJk=",
+    "privateJwk": {
+      "crv": "Ed25519",
+      "d": "oqUQneT7y8vEcnfyT14Y40yNen_aJD6k8GaZfI-i978",
+      "x": "9py4O-nGz9cLEcmJdCtL04dLX18_qY1ILv3SO-LSOJk",
+      "kty": "OKP"
+    }
   }
 }
