@@ -107,6 +107,31 @@ function nn(v: number): number | null {
   return Number.isFinite(v) ? v : null;
 }
 
+// #505: gauge fields get the same finite-value coercion `summary.*` already
+// gets from nn(), plus the rounding the payload publishes.
+//
+// SEMANTICS (mirrored on the Gauge type in research.ts, which is the canonical
+// statement): a gauge whose reading is non-finite publishes an EXPLICIT null,
+// meaning "no reading for this signal's as-of date" — never a raw NaN and never
+// a zero. Before this, gauges skipped nn() and `+NaN.toFixed(3)` is NaN (not a
+// string), so a non-finite reading left raw NaN on the gauge, which
+// JSON.stringify renders as `null` — a serialization artifact indistinguishable
+// to a consumer from a deliberate "no opinion", and NaN rather than null to any
+// in-process consumer. Under last-finite semantics that path was nearly
+// unreachable; the positional-last unification (#493 / PR #470) made it
+// reachable, because the final point of a trailing-NaN axis is now what gets
+// published.
+function gaugeNum(v: number, dp: number): number | null {
+  return Number.isFinite(v) ? +v.toFixed(dp) : null;
+}
+
+// #505: the read that accompanies a non-finite percentile. NaN fails every
+// comparison, so a plain threshold ladder silently returns its else-branch
+// ("softening" / "elevated"-adjacent middle bucket) for a reading that does not
+// exist. Both read ladders below guard on this first so a null-valued gauge
+// never carries a confident-sounding label.
+const NO_READ = "no reading";
+
 // Full daily series → {date,value|null}[] (6-dec rounded, matching the original).
 function seriesOf(dateAxis: string[], arr: number[]): { date: string; value: number | null }[] {
   return dateAxis.map((d, i) => ({ date: d, value: Number.isFinite(arr[i]) ? +arr[i].toFixed(6) : null }));
@@ -138,7 +163,8 @@ export interface ChannelInputs {
   stables: Point[]; // STABLES from the persisted raw floor
 }
 
-const channelRead = (p: number) => (p >= 0.6 ? "channel intact" : p <= 0.35 ? "breaking down" : "softening");
+const channelRead = (p: number) =>
+  !Number.isFinite(p) ? NO_READ : p >= 0.6 ? "channel intact" : p <= 0.35 ? "breaking down" : "softening";
 
 export function computeChannelDivergence(inputs: ChannelInputs, asof: string): ResearchPayload {
   const dateAxis = buildDateAxis(CHANNEL_START, asof);
@@ -185,11 +211,18 @@ export function computeChannelDivergence(inputs: ChannelInputs, asof: string): R
   const channelPct = [betaPct, ratioPctLast, flowPct].filter(Number.isFinite);
   const composite = channelPct.length ? channelPct.reduce((a, b) => a + b, 0) / channelPct.length : NaN;
 
+  // Every reading goes through gaugeNum: finite → rounded number, non-finite →
+  // explicit null (#505). BTC_QQQ_RATIO is the one deliberately MIXED gauge —
+  // its raw `value` stays last-FINITE while its `percentile` is positional-last,
+  // so on a trailing-NaN axis one gauge object carries both semantics. That is
+  // intentional per #493's Behaviour (v0's channel-divergence.js published the
+  // last finite ratio level but the positional-last percentile); do not
+  // "uniformize" it. See positionalLast() / lastFinite() above.
   const gauges: Gauge[] = [
-    { id: "BTC_BETA", name: "BTC beta vs risk appetite", value: +betaLast.toFixed(3), percentile: +betaPct.toFixed(3), read: channelRead(betaPct) },
-    { id: "BTC_QQQ_RATIO", name: "BTC/QQQ relative strength", value: +lastFinite(ratio).toFixed(2), percentile: +ratioPctLast.toFixed(3), read: channelRead(ratioPctLast) },
-    { id: "STABLES_QQQ_FLOW", name: "Stablecoin vs QQQ flow (90d)", value: +flowLast.toFixed(4), percentile: +flowPct.toFixed(3), read: channelRead(flowPct) },
-    { id: "CHANNEL", name: "Composite channel health", value: +composite.toFixed(3), percentile: +composite.toFixed(3), read: channelRead(composite) },
+    { id: "BTC_BETA", name: "BTC beta vs risk appetite", value: gaugeNum(betaLast, 3), percentile: gaugeNum(betaPct, 3), read: channelRead(betaPct) },
+    { id: "BTC_QQQ_RATIO", name: "BTC/QQQ relative strength", value: gaugeNum(lastFinite(ratio), 2), percentile: gaugeNum(ratioPctLast, 3), read: channelRead(ratioPctLast) },
+    { id: "STABLES_QQQ_FLOW", name: "Stablecoin vs QQQ flow (90d)", value: gaugeNum(flowLast, 4), percentile: gaugeNum(flowPct, 3), read: channelRead(flowPct) },
+    { id: "CHANNEL", name: "Composite channel health", value: gaugeNum(composite, 3), percentile: gaugeNum(composite, 3), read: channelRead(composite) },
   ];
 
   const median = (arr: number[]) => {
@@ -239,7 +272,8 @@ export interface LateCycleInputs {
   conf: Point[]; // FRED UMCSENT monthly
 }
 
-const lateRead = (p: number) => (p >= 0.7 ? "saturated (late-cycle)" : p >= 0.5 ? "elevated" : "benign");
+const lateRead = (p: number) =>
+  !Number.isFinite(p) ? NO_READ : p >= 0.7 ? "saturated (late-cycle)" : p >= 0.5 ? "elevated" : "benign";
 
 export function computeLateCycle(inputs: LateCycleInputs, asof: string): ResearchPayload {
   const dateAxis = buildDateAxis(LATECYCLE_START, asof);
@@ -272,12 +306,16 @@ export function computeLateCycle(inputs: LateCycleInputs, asof: string): Researc
   const confA = alignDailyForwardFill(inputs.conf, dateAxis);
   const confPct = rollingPercentileRank(confA, PCT_RANK_WINDOW);
 
+  // Late-cycle gauges are uniformly last-FINITE on both fields; the non-finite
+  // case here is an axis with NO finite observation at all (e.g. an input series
+  // that never resolves), which now publishes explicit nulls rather than raw
+  // NaN (#505).
   const gauges: Gauge[] = [
-    { id: "CONCENTRATION", name: "Index concentration (SPY/RSP)", value: +lastFinite(capVsEqual).toFixed(4), percentile: +lastFinite(capVsEqualPct).toFixed(3), read: lateRead(lastFinite(capVsEqualPct)) },
-    { id: "TOP7_VS_SPY", name: "Top-7 basket vs SPY", value: +lastFinite(top7VsSpy).toFixed(4), percentile: +lastFinite(top7VsSpyPct).toFixed(3), read: lateRead(lastFinite(top7VsSpyPct)) },
-    { id: "MNA", name: "M&A activity (S-4 filings)", value: +lastFinite(mnaAligned).toFixed(2), percentile: +lastFinite(mnaPct).toFixed(3), read: lateRead(lastFinite(mnaPct)) },
-    { id: "MARGIN", name: "Margin debt YoY", value: +lastFinite(marginYoY).toFixed(4), percentile: +lastFinite(marginYoYPct).toFixed(3), read: lateRead(lastFinite(marginYoYPct)) },
-    { id: "CONF", name: "Consumer confidence (UMich)", value: +lastFinite(confA).toFixed(2), percentile: +lastFinite(confPct).toFixed(3), read: lateRead(lastFinite(confPct)) },
+    { id: "CONCENTRATION", name: "Index concentration (SPY/RSP)", value: gaugeNum(lastFinite(capVsEqual), 4), percentile: gaugeNum(lastFinite(capVsEqualPct), 3), read: lateRead(lastFinite(capVsEqualPct)) },
+    { id: "TOP7_VS_SPY", name: "Top-7 basket vs SPY", value: gaugeNum(lastFinite(top7VsSpy), 4), percentile: gaugeNum(lastFinite(top7VsSpyPct), 3), read: lateRead(lastFinite(top7VsSpyPct)) },
+    { id: "MNA", name: "M&A activity (S-4 filings)", value: gaugeNum(lastFinite(mnaAligned), 2), percentile: gaugeNum(lastFinite(mnaPct), 3), read: lateRead(lastFinite(mnaPct)) },
+    { id: "MARGIN", name: "Margin debt YoY", value: gaugeNum(lastFinite(marginYoY), 4), percentile: gaugeNum(lastFinite(marginYoYPct), 3), read: lateRead(lastFinite(marginYoYPct)) },
+    { id: "CONF", name: "Consumer confidence (UMich)", value: gaugeNum(lastFinite(confA), 2), percentile: gaugeNum(lastFinite(confPct), 3), read: lateRead(lastFinite(confPct)) },
   ];
 
   const wseries = (arr: number[]) => weekly(seriesOf(dateAxis, arr));

@@ -254,11 +254,17 @@ export interface ResearchPoint {
   value: number | null;
 }
 
+// `value`/`percentile` are nullable, and null carries a specific, deliberate
+// meaning (#505): "no reading for this signal's as-of date" — the underlying
+// series had no finite value at the position the gauge reads. It is NOT a raw
+// NaN leaking through JSON.stringify (which is what it used to be), and it must
+// never be rendered as 0 or as a neutral mid-scale reading. `read` is the
+// literal "no reading" whenever `percentile` is null.
 export interface ResearchGauge {
   id: string;
   name: string;
-  value: number;
-  percentile: number; // 0..1
+  value: number | null;
+  percentile: number | null; // 0..1, or null when there is no reading
   read: string;
 }
 
