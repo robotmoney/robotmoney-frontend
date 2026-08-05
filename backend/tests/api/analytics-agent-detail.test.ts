@@ -37,6 +37,21 @@ test("fetchAgentDetail returns null for an unknown id (never fabricated)", async
   expect(detail).toBeNull();
 });
 
+// Regression for the dash-shell smoke test's `/agents/clawd` placeholder URL
+// (frontend/test/browser/dash-shell.spec.ts) crashing the full-stack e2e
+// demo: openclaw_agents.id is a `uuid` column, so an unvalidated non-UUID id
+// used to reach Postgres and throw "invalid input syntax for type uuid"
+// instead of resolving to this function's null -> 404 contract. Same
+// malformed-id convention as dossier-projections.test.ts's fetchCoinProfile
+// coverage.
+test("fetchAgentDetail returns null for a malformed id (never a thrown Postgres error)", async () => {
+  expect(await fetchAgentDetail("clawd")).toBeNull();
+  expect(await fetchAgentDetail("")).toBeNull();
+  expect(await fetchAgentDetail("not-a-uuid")).toBeNull();
+  expect(await fetchAgentDetail(crypto.randomUUID().slice(0, 20))).toBeNull(); // truncated UUID
+  expect(await fetchAgentDetail("../../etc/passwd")).toBeNull();
+});
+
 test("fetchAgentDetail joins project socials, matched wallet, project vaults/wallets, and computes the composite score", async () => {
   const tag = rid("dossier");
 
