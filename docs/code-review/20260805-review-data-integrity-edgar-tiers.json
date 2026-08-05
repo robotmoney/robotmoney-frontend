@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "review": "review-data-integrity",
+  "repository": "git@github.com:robotmoney/robotmoney-frontend.git",
+  "branch": "adhoc/20260803-175430-r6-edgar-full-recrawl",
+  "commit": "b91641eb0cd910a3083c51235227e40b152525e4",
+  "reviewed_at": "2026-08-05",
+  "scope": [
+    "backend/src/analytics/index.ts (RESEARCH SIGNALS section: EDGAR tier wiring)",
+    "backend/src/analytics/edgar-incremental-refresh.ts (selectEdgarRefreshTier, refreshEdgarIncremental, deadline sizing)",
+    "backend/src/analytics/extract/edgar-fetch-plan.ts (planEdgarFetch, planEdgarFetchIncremental, validateEdgarBatch)",
+    "backend/src/analytics/access/data-source.ts (liveDataSource.fetchResearchInputs EDGAR wiring)",
+    "PR #471 diff against merge-base acd315be132004bac348c7826f9468f83943a1ee only"
+  ],
+  "verdict": "pass — no medium+/medium+ correctness or data-integrity gaps found; tier coverage, replay determinism, upsert-based idempotency across tier switches, and the shared whole-batch-degrade honesty model all verified against source, not assumed",
+  "findings": [],
+  "clean_areas": [
+    "Coverage-by-construction: planEdgarFetch (Tier 2) and planEdgarFetchIncremental (Tier 1) both derive their month set from the same EDGAR_FLOOR_START constant and the same pure enumerateMonths(floorStart, asOf) (extract/edgar-fetch-plan.ts:58,110-113,132-146; extract/edgar.ts:31-43). Tier 1 plans EVERY month missing from the persisted floor (not just the trailing revision window) plus the 2-month revision window, so no month is ever permanently unreachable by either tier; Tier 2 unconditionally re-plans the full range regardless of persisted state. Verified against source, not assumed.",
+    "Tier-selection determinism/replay-safety: selectEdgarRefreshTier(asOf) (edgar-incremental-refresh.ts:80-86) reads only its asOf string argument via `new Date(`${asOf}T00:00:00Z`).getUTCDay()` — no Date.now()/wall-clock call anywhere in the function. Confirmed by direct read of the implementation (not inferred from comments) and independently asserted by backend/tests/edgar-incremental-refresh.test.ts:49 ('is a pure function of asOf alone — same input, same output, no hidden clock dependency'), which passed on a live run.",
+    "No tier-decision drift between call sites: analytics/index.ts:294 computes `edgarTier = selectEdgarRefreshTier(asof)` to size `deadlineAt`, and access/data-source.ts:113,137,141-146 passes that same `asof` string unchanged into `refreshEdgarIncremental({ asOf: asof, ... })`, which internally recomputes `tier = opts.tier ?? selectEdgarRefreshTier(opts.asOf)` (edgar-incremental-refresh.ts:167) on the identical input. Since both computations are the same pure function applied to the same string, the deadline-sizing tier and the tier actually executed can never disagree — traced end to end, not asserted from comments alone.",
+    "No duplicate/double-counted rows across a tier switch: the durable write path (raw-history-store.ts:48-71) does `INSERT ... ON CONFLICT (date, indicator) DO UPDATE SET value = EXCLUDED.value, source = EXCLUDED.source` — a true upsert keyed on (date, indicator), not an append. The in-memory merge used to build the signal-computation bundle (transform/math.ts:356-376, `mergeSeries`) is also a Map keyed by date with fetched values overwriting prior values. A Tier-1-then-Tier-2 (or reverse) sequence re-submitting an already-persisted month is therefore idempotent by construction on both the DB floor and the in-memory series.",
+    "Whole-batch-degrade honesty model applies identically to both tiers: refreshEdgarIncremental (edgar-incremental-refresh.ts:160-283) and validateEdgarBatch (extract/edgar-fetch-plan.ts:178-235) are single shared code paths for both tiers — only the `plan` array's origin differs (planEdgarFetch vs planEdgarFetchIncremental at edgar-incremental-refresh.ts:169-177). Deadline-abort and per-month validation failure both discard the ENTIRE batch (`newRows: []`) regardless of which tier produced the plan; Tier 1's smaller plan size changes only how fast a failure surfaces, not the discard-on-any-failure semantics.",
+    "Tests execute for real, not silently skipped: `bun test tests/edgar-incremental-refresh.test.ts tests/edgar-fetch-plan.test.ts` (36 pass/0 fail) and `bun test tests/research-last-good.test.ts tests/research-fidelity.test.ts tests/api/analytics-edgar.test.ts` (6 pass/0 fail) both ran live against an ephemeral Postgres instance with real migrations, exercising tier purity, month-boundary planning, idempotent replay for both tiers, the failure matrix, and end-to-end index.ts wiring including a concretely-located real Sunday for tier 'full' (tests/api/analytics-edgar.test.ts:62). No mocked-away subject, no `.skip`."
+  ],
+  "unresolved_decisions": [],
+  "limitations": [
+    "Diff-scoped light profile per review-contract.md: evidence resolved only in files this diff implicates (edgar-incremental-refresh.ts, extract/edgar-fetch-plan.ts, extract/edgar.ts, access/data-source.ts, store/raw-history-store.ts, transform/math.ts, analytics/index.ts) plus the tests directly covering them; the wider repository was not re-audited.",
+    "Live EDGAR FTS indexing-lag behavior (the empirical basis for the 2-month Tier-1 revision window and the weekly Tier-2 cadence) was not independently verified against the real SEC endpoint in this review — accepted as a design assumption documented in edgar-fetch-plan.ts's header comment and docs/v0-v1-quant-platform-parity-report.md finding 1.10, consistent with the diff's own stated rationale.",
+    "producer/index.ts's cron scheduling (which supplies the real `asof` that drives selectEdgarRefreshTier in production) is unchanged by this PR and was only spot-checked to confirm it derives `asof` from the actual UTC-scheduled fire date (producer/index.ts:99-113), not audited for its own reliability/downtime characteristics."
+  ],
+  "unreviewed_surfaces": [
+    "backend/src/producer/index.ts cron wiring and retry/failure handling around the scheduled research run (unchanged by this diff)",
+    "backend/src/analytics/analyze/research-signals.ts (computeLateCycle / mna_s4_monthly / mna_pct transform internals) — consumed inputs.mna as an opaque series; the transform itself is out of this diff's scope",
+    "backend/src/analytics/extract/edgar.ts's fetchEdgarMonthCount live HTTP retry/backoff behavior under real EDGAR outage conditions — only exercised via injected fakes in tests"
+  ]
+}
