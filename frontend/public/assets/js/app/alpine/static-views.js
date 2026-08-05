@@ -1245,6 +1245,9 @@ export function registerStaticViews(Alpine) {
     session: null,
     subject: null,
     snapshot: null,
+    // Published bucket targets; null until loadApi() resolves them, and on
+    // the archive fallback, where the framework is not available.
+    allocation: null,
     brief: null,
     takes: [],
     members: [],
@@ -1282,17 +1285,22 @@ export function registerStaticViews(Alpine) {
       }
       const [, date, subject] = match;
       try {
-        if (archivePreferred(date)) await this.loadArchive(date, subject);
-        else await this.loadApi(date, subject);
+        // API FIRST, for every date — matching what the two list views above
+        // (loadSessionsWithSynthesis, the member/subject feeds) have always
+        // done. This view used to prefer the static archive for dates it
+        // covered, which meant the same session could be read from two
+        // different sources: the feed showed the database's copy while the
+        // page showed the checked-in copy. Now that v0's full history lives
+        // in the database, the archive is a FALLBACK for checkouts with no
+        // backend, not a competing source of truth for old dates.
+        await this.loadApi(date, subject);
       } catch (primary) {
         try {
-          // Always try the OTHER source before giving up. Previously an
-          // archive-preferred date rethrew instead of falling back, so a date
-          // the archive did not carry became "not found" even when the API
-          // held the session. Whichever source was not tried first is tried
-          // now; only if BOTH fail does the page report not-found.
-          if (archivePreferred(date)) await this.loadApi(date, subject);
-          else await this.loadArchive(date, subject);
+          // Fall back to the static archive. It only carries dates through
+          // ARCHIVE_LAST_DATE, so archivePreferred() is what decides whether
+          // falling back is even worth attempting.
+          if (!archivePreferred(date)) throw primary;
+          await this.loadArchive(date, subject);
         } catch (_) {
           this.error = `Session not found for ${date}/${subject}. This checkout's reference archive currently has Woon sessions through ${ARCHIVE_LAST_DATE}.`;
         }
@@ -1321,12 +1329,19 @@ export function registerStaticViews(Alpine) {
       // renders the SAME reference experience as the archive path (charts +
       // portfolio). Each side-fetch is independently guarded so a missing
       // subject/snapshot never breaks the takes/session render.
-      const [detail, memberData, brief, subjectData, snapshotData] = await Promise.all([
+      const [detail, memberData, brief, subjectData, snapshotData, allocation] = await Promise.all([
         preloaded ?? api.get(path(ROUTES.swarm.session, { date, subject })),
         api.get(ROUTES.swarm.members),
         api.get(ROUTES.swarm.brief, { date, subject }).catch(() => null),
         api.get(path(ROUTES.swarm.subject, { id: subject })).catch(() => null),
         api.get(path(ROUTES.swarm.subjectSnapshots, { id: subject })).catch(() => null),
+        // The allocation framework supplies the TARGET weight each bucket is
+        // measured against. Without it the bucket chart could only draw
+        // "Recommended", so a session that proposed 97/3 against a 95/5 target
+        // rendered as two bars with nothing to compare them to — the reader
+        // could not see that it deviated at all. Guarded like the other
+        // side-fetches: a missing framework degrades the chart, never the page.
+        api.get(ROUTES.dashboards.allocation).catch(() => null),
       ]);
       this.source = "api";
       this.session = camelSession(detail.session);
@@ -1335,6 +1350,7 @@ export function registerStaticViews(Alpine) {
       this.subject = subjectData ? camelSubject(subjectData) : null;
       this.snapshot = pickSnapshotFor(snapshotData?.snapshots, date);
       this.brief = brief;
+      this.allocation = allocation;
     },
     memberLens(memberId) {
       return this.members.find((m) => m.id === memberId)?.lens || "swarm member";
@@ -1490,6 +1506,19 @@ export function registerStaticViews(Alpine) {
     // Prefers explicit bucket rows (name/target/actual/recommended) if the
     // payload carries them; otherwise derives Recommended-only rows from the
     // weights map (target/actual are unavailable without allocation data).
+    // Bucket ids and framework labels are written differently on each side
+    // ("conservative_defi_yield" vs "Conservative DeFi Yield" — note DeFi's
+    // inner capital, which humanize() cannot reproduce). Comparing on
+    // letters-and-digits only lets the two meet without either side having to
+    // adopt the other's spelling.
+    allocationTargets() {
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const out = new Map();
+      for (const s of this.allocation?.strategy || []) {
+        if (Number.isFinite(Number(s.targetPct))) out.set(norm(s.label), { label: s.label, target: Number(s.targetPct) / 100 });
+      }
+      return out;
+    },
     bucketWeights() {
       const rec = this.session?.swarmRecommendation;
       if (!rec || rec.type !== "bucket_weights") return [];
@@ -1504,9 +1533,25 @@ export function registerStaticViews(Alpine) {
       }
       const weights = rec.weights;
       if (!weights || typeof weights !== "object") return [];
-      return Object.entries(weights).map(([id, w]) => ({
-        name: this.humanize(id), target: null, actual: null, recommended: num(w) ?? 0,
-      }));
+      const targets = this.allocationTargets();
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      return Object.entries(weights).map(([id, w]) => {
+        const framework = targets.get(norm(this.humanize(id))) ?? targets.get(norm(id));
+        return {
+          // Prefer the framework's own spelling of the bucket name when it is
+          // known; humanize() of an id cannot recover "DeFi".
+          name: framework?.label || this.humanize(id),
+          target: framework ? framework.target : null,
+          actual: null,
+          recommended: num(w) ?? 0,
+        };
+      });
+    },
+    // Whether the swarm proposed something OTHER than the published target.
+    // Mirrors the reference implementation's half-a-point tolerance, so a
+    // rounding artifact never renders as a deviation.
+    deviatesFromTarget() {
+      return this.bucketWeights().some((b) => b.target != null && Math.abs(b.recommended - b.target) > 0.005);
     },
     // Per-constituent weights inside each bucket. The payload has carried
     // `within_bucket_weights` all along and nothing rendered it, so allocation

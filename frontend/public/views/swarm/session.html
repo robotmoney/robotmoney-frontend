@@ -180,8 +180,21 @@
                needs it for a different reason — see recommendationRationale(). -->
           <div class="sv__rich-rec" x-show="hasRecommendationDetail()">
             <div class="sv__bucket-bars" x-show="isBucketWeights()">
-              <p class="sv__panel-sub">Target open · Actual muted · Recommended accent</p>
+              <!-- The caption names only the series actually drawn. It used to
+                   read "Target open · Actual muted · Recommended accent"
+                   unconditionally while the chart rendered Recommended alone,
+                   describing two series that were not on screen. -->
+              <p class="sv__panel-sub">
+                <span x-show="bucketWeights().some(b => b.target != null)">Target open · </span>
+                <span x-show="bucketWeights().some(b => b.actual != null)">Actual muted · </span>
+                Recommended accent
+              </p>
               <div class="sv__bucket-bars-svg" x-html="bucketWeightsBars()"></div>
+              <!-- The finding a reader is here for: did the swarm propose
+                   something other than the published target? -->
+              <p class="sv__panel-sub sv__deviates" x-show="deviatesFromTarget()">
+                ⚠ deviates from target
+              </p>
             </div>
             <p class="sv__body-copy" x-show="recommendationRationale()" x-text="recommendationRationale()"></p>
             <!-- Per-constituent weights. The bucket bars above say how much
