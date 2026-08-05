@@ -1,0 +1,32 @@
+# PROVENANCE: captured VERBATIM from CI — the `e2e` job of run 31019288655 on
+# main (2026-08-05T15:18:34Z), where the layer-4 onboarding sample died with
+# `container exited (code 1)`. The opencode Zen workspace had run out of balance
+# at ~15:09Z; from then until the balance was restored, every real-inference run
+# on main AND on PR #513 failed this way. Only the WORKSPACE ID in the billing
+# URL is altered (wrk_REDACTED); every other byte is as the provider sent it.
+#
+# Two facts this fixture exists to pin:
+#
+#   1. The cause is MACHINE-READABLE and sits on STDOUT — statusCode 401,
+#      isRetryable false, the provider's own message and endpoint. Nothing has
+#      to be inferred from silence. The swarm driver nonetheless reported a
+#      speculative provider-side cause for six consecutive CI failures, and
+#      three autofix reruns were spent on a fault no rerun could clear.
+#   2. The run finalizes NO assistant text. That, plus the non-retryable
+#      auth/billing status, is the exact shape the classifier used to call
+#      `navigation-failure` — a real, never-retried red result about our
+#      onboarding instructions — for what was a lapsed invoice.
+#
+# NOTE FOR EDITORS: keep this header free of provider-throttling vocabulary —
+# the throttling pattern list in scripts/agent/classify-outcome.ts scans the
+# WHOLE transcript for them, comments included, so one careless word in a
+# comment silently reclassifies this fixture as provider weather. (Writing this
+# header reproduced that false positive on the first try; the sibling
+# tool-output fixture in this directory documents the live version of it.)
+#
+# The two error events are the real pair opencode emits: the small session-title
+# model call fails first, then the agent's own model call. The step events around
+# them are reconstructed to the shape scripts/agent/transcript.ts documents.
+{"type":"step_start","part":{"type":"step-start"}}
+{"type":"error","timestamp":1785943114380,"sessionID":"ses_02d7ec159ffexfMa1RQdVTlzrp","error":{"name":"APIError","data":{"message":"Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_REDACTED/billing","statusCode":401,"isRetryable":false,"responseHeaders":{"cf-placement":"remote-ORD","cf-ray":"a266c66fac0042d9-PHX","connection":"keep-alive","content-length":"177","content-type":"text/plain;charset=UTF-8","date":"Wed, 05 Aug 2026 15:18:34 GMT","server":"cloudflare"},"responseBody":"{\"type\":\"error\",\"error\":{\"type\":\"CreditsError\",\"message\":\"Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_REDACTED/billing\"}}","metadata":{"url":"https://opencode.ai/zen/v1/chat/completions"}}}}
+{"type":"error","timestamp":1785943114641,"sessionID":"ses_02d7ec159ffexfMa1RQdVTlzrp","error":{"name":"APIError","data":{"message":"Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_REDACTED/billing","statusCode":401,"isRetryable":false,"responseHeaders":{"cf-placement":"remote-ORD","cf-ray":"a266c66fad1142d9-PHX","connection":"keep-alive","content-length":"177","content-type":"text/plain;charset=UTF-8","date":"Wed, 05 Aug 2026 15:18:34 GMT","server":"cloudflare"},"responseBody":"{\"type\":\"error\",\"error\":{\"type\":\"CreditsError\",\"message\":\"Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_REDACTED/billing\"}}","metadata":{"url":"https://opencode.ai/zen/v1/chat/completions"}}}}

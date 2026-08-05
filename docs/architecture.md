@@ -2669,6 +2669,46 @@ path with fewer services booted. Three components are shared by construction:
   scorecard. A refusal is retryable under this classifier, which is why the demo
   no longer forfeits a finite roster seat to one unlucky sample.
 
+**A dead run's cause is read, never guessed (issue #527).** `opencode run
+--format json` reports a failed model exchange as a first-class
+`{"type":"error",…}` line on **stdout** — carrying the provider's typed
+discriminator, message, HTTP status, `isRetryable` verdict and endpoint — and
+writes nothing to stderr. `scripts/agent/transcript.ts`'s `transcriptErrors()`
+is the one parser for it, and `scripts/agent/inference-failure.ts` turns those
+events into a stable `InferenceFailureKind`: `exhausted-credits`,
+`auth-rejected`, `quota-limited`, `throttled`, `provider-failure`,
+`local-cli-failure`, `empty-response`, `timed-out`, `unclassified-error`.
+
+Two rules govern that classification. **The typed discriminator decides** —
+`exhausted-credits` fires on Zen's `CreditsError` and nothing else, never on an
+"Insufficient balance" substring (prose is reworded upstream) and never on a
+bare 401 (an invalid key returns the same status), because a wrong "top up the
+balance" sends a maintainer to a billing page while the real fault goes unread.
+**Nothing is ever softened** — every kind is a loud failure with no template
+fallback and no skip; the kind changes only what the message says. Provider
+text is redacted at parse time (credential values, `wrk_`/`acc_` identifiers,
+workspace-scoped billing URLs), because these strings land in CI logs and PR
+comments; the actionable "top up" instruction is rendered from the kind, never
+scraped from the URL.
+
+Both consumers of a dead run read it: the swarm boundary throws an
+`InferenceFailure` carrying kind, provider and resolved model id
+(`scripts/lib/swarm/inference.ts`), and `harnessFaultOf()` treats a
+non-retryable 401/402/403 with no authored text as
+`provider-rejected-harness-credential` — a `harness-error`, because an unfunded
+or unauthorized key is the harness's own configuration failing, not a
+measurement of the product. The conjunct matters: `opencode run` also issues a
+small session-title call whose failure emits its own error event, so a run that
+authored a take keeps its real result. Pinned by
+`scripts/tests/unit/opencode-error-attribution.test.ts` (hermetic, against a
+CI-captured payload) and `scripts/tests/unit/swarm-inference-opencode-argv.test.ts`
+(through a fake CLI on the real spawn path, table-driven over every kind plus
+the red control). This exists because on 2026-08-05 the Zen workspace ran out of
+balance and every consumer reported the resulting `CreditsError / HTTP 401 /
+isRetryable: false` as either an unspecified provider outage (six e2e failures,
+three futile reruns, nobody told to top it up) or a red `navigation-failure`
+against the onboarding instructions.
+
 **E6 — CI placement: nightly mirrors the merge-to-main set.** The invariant
 (issue #373, D26) is an *equality of sets*: **every** workflow that runs on
 `push: branches: [main]` also runs on a nightly `schedule:`, and **nothing else
