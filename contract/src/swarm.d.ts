@@ -163,6 +163,15 @@ export type RegimeSummaryListItem = Omit<RegimeSummary, "history">;
 
 // Aggregation rollup counts: how many active members, how many submitted, how
 // many were absent, and submitted/active as a fraction.
+//
+// ATTENDANCE INVARIANT (issue #501): for a seated roster,
+// `active - submitted === absent === SwarmRecommendation.absent.length`. The
+// counter and the list are two views of ONE derivation (seated members minus
+// submitters, backend/src/swarm/domain.ts aggregateSession) — a consumer must
+// never re-derive absence from the submitted takes, because a member that
+// never submitted has no take to find. Pinned by
+// backend/tests/swarm-absence-consistency.test.ts and
+// scripts/tests/unit/swarm-absence-report.test.ts.
 export interface SwarmQuorum {
   active: number;
   submitted: number;
@@ -200,6 +209,10 @@ export interface SwarmRecommendation {
   quorum: SwarmQuorum;
   stances: Record<string, number>; // stance (Stance vocabulary) → count
   meanConfidence: number | null;
+  // Seated members that submitted nothing — whatever the reason (a member
+  // container that failed or timed out, or a control-line parse refusal that
+  // renders the member ABSENT rather than fabricating a stance). Always agrees
+  // with `quorum` per the attendance invariant above.
   absent: string[];
   type: "bucket_weights" | "position_actions";
   rationale?: string;

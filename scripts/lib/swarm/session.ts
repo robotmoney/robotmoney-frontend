@@ -121,6 +121,66 @@ export function assertAuthoredTakes(tag: string, takes: any[], expectedMemberIds
   console.log(`${tag}: authored-take invariants passed for ${authored.length} present member(s)`);
 }
 
+// ── Attendance reporting (issue #501) ───────────────────────────────────────
+// Absence is a property of the SEATED ROSTER, never of the submitted takes.
+// This report used to be derived from `pub.takes` — a filter over the rows that
+// WERE submitted — so a member that produced no row at all could not appear in
+// it by construction, and the driver logged `absent: []` for the very session
+// it had just reported a take shortfall for. Every non-participation route ends
+// the same way (no take row): a member container that fails or times out
+// (mapSettledWithConcurrency rejects it below), and a control-line parse
+// refusal — a live model answering `STANCE: cautiously constructive |
+// CONFIDENCE: 0.65` is refused by parseStanceFromBody, which renders the member
+// ABSENT rather than fabricating a neutral stance.
+//
+// The authoritative list is the backend's ROSTER-DERIVED
+// `swarm_recommendation.absent` (backend/src/swarm/domain.ts aggregateSession:
+// seated members minus submitters), whose `quorum` carries the same seated
+// denominator the `takes=N of M` counter prints. Reading both from one object
+// is what makes the counter and the list consistent by construction; the check
+// below is the loud proof that they are.
+export interface AbsenceReport {
+  /** Seated roster size — the M in `takes=N of M` (quorum.active). */
+  active: number;
+  /** Seated members that submitted a take — the N (quorum.submitted). */
+  submitted: number;
+  /** Seated members that did NOT submit, by member id. */
+  absent: string[];
+}
+
+// Throws when the published session cannot describe its own attendance (no
+// rollup, malformed quorum) or when the counter and the list disagree. A
+// session that under-reports absence is a failed session, not a quiet
+// `absent: []`.
+export function absenceReport(pub: any, tag = "session"): AbsenceReport {
+  const rec = pub?.session?.swarmRecommendation;
+  if (!rec) {
+    throw new Error(
+      `${tag}: published session carries no swarmRecommendation — attendance cannot be reported, ` +
+        `and it must NEVER be re-derived from the submitted takes (a no-show has no take row at all).`,
+    );
+  }
+  const quorum = rec.quorum;
+  if (
+    !quorum || typeof quorum.active !== "number" || typeof quorum.submitted !== "number" ||
+    typeof quorum.absent !== "number"
+  ) {
+    throw new Error(`${tag}: swarmRecommendation.quorum is missing active/submitted/absent counts: ${JSON.stringify(quorum)}`);
+  }
+  if (!Array.isArray(rec.absent)) {
+    throw new Error(`${tag}: swarmRecommendation.absent is not a list: ${JSON.stringify(rec.absent)}`);
+  }
+  const absent = rec.absent.map(String);
+  const shortfall = quorum.active - quorum.submitted;
+  if (shortfall !== absent.length || quorum.absent !== absent.length) {
+    throw new Error(
+      `${tag}: attendance is inconsistent — takes=${quorum.submitted} of ${quorum.active} (shortfall ${shortfall}), ` +
+        `quorum.absent=${quorum.absent}, absent list has ${absent.length} member(s) ${JSON.stringify(absent)}`,
+    );
+  }
+  return { active: quorum.active, submitted: quorum.submitted, absent };
+}
+
 // Deterministic attendance comes from the SHARED demo no-show rule in
 // @robotmoney/contract (contract/src/swarm.js) — the backend demo e2e
 // consumes the same rule, so the two drivers can no longer drift (finding 008
@@ -502,9 +562,13 @@ export async function runSession(
   emitSession("published", sessionId);
 
   const pub = await fetch(`${backendUrl()}${routePath(ROUTES.swarm.session, { date, subject: subject.id })}`).then(responseJson);
-  console.log(`${tag} published: state=${pub.session.state}, takes=${pub.takes.length}`);
+  // ONE source for both lines (issue #501): the roster-derived rollup. The
+  // counter's denominator and the absent list can no longer drift, and
+  // absenceReport throws if they ever do.
+  const attendance = absenceReport(pub, tag);
+  console.log(`${tag} published: state=${pub.session.state}, takes=${attendance.submitted} of ${attendance.active}`);
   console.log(`${tag} synthesis: ${pub.session.synthesis}`);
-  console.log(`${tag} absent: ${JSON.stringify(pub.takes.filter((t: any) => t.verified === null || t.verified === false).map((t: any) => t.memberId))}`);
+  console.log(`${tag} absent: ${JSON.stringify(attendance.absent)}`);
 
   // Every present member's published take must be genuine live opencode
   // authoring (non-template body,
