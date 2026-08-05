@@ -1465,6 +1465,15 @@ async function main(): Promise<void> {
   // I/O: every subject's first session lands promptly under BOTH profiles, and
   // later runs walk that subject's phase-offset steady-state grid.
   interface SubjectSchedule { subject: { id: string; name: string }; plan: SubjectCadencePlan; nextAt: number; runs: number; }
+  if (smokeMode) {
+    e2e.SUBJECTS.length = 0;
+    e2e.SUBJECTS.push(
+      { id: "robotmoney-allocation", name: "Robot Money Allocation" },
+      { id: "robotmoney-treasury", name: "Robot Money Treasury" },
+      { id: "robotmoney-vault", name: "Robot Money Vault" },
+      { id: "woon", name: "Woon" },
+    );
+  }
   const plans = planSubjectSchedules(e2e.SUBJECTS.length, cadence, Date.now());
   const schedules: SubjectSchedule[] = e2e.SUBJECTS.map((s: { id: string; name: string }, i: number) => ({
     subject: s, plan: plans[i], nextAt: plans[i].firstAt, runs: 0,
