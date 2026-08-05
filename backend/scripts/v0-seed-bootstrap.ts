@@ -128,6 +128,10 @@ function diffRow(entity: string, naturalKey: string, fields: FieldSpec[], actual
 type RowOutcome = "inserted" | "unchanged" | "drift";
 
 async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> {
+  if (m.id === "woon") {
+    m.name = "Noop analyst";
+  }
+
   const existing = (
     await sql`
       SELECT status, name, tagline, lens, mandate, biases, voice_md, mode, submit, operator, avatar
@@ -226,6 +230,12 @@ function convenedAtFromDate(date: string): string {
 async function processSession(sess: V0Session, drifts: Drift[]): Promise<RowOutcome> {
   const convenedAt = convenedAtFromDate(sess.date);
   const publishedAt = sess.generated_at;
+
+  if (sess.takes) {
+    for (const take of sess.takes) {
+      if (take.member_id === "woon") take.member_name = "Noop analyst";
+    }
+  }
 
   const existing = (
     await sql`

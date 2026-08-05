@@ -144,7 +144,7 @@
       "kty": "OKP"
     }
   },
-  "woon": {
+  "noop analyst": {
     "publicKeyB64": "9py4O+nGz9cLEcmJdCtL04dLX18/qY1ILv3SO+LSOJk=",
     "privateJwk": {
       "crv": "Ed25519",

@@ -1506,7 +1506,7 @@ async function main(): Promise<void> {
   } else {
     const seatedIds = new Set<string>(e2e.MEMBERS.map((m: { memberId: string }) => m.memberId));
     const plan = planAdoptions(dbRoster, seatedIds, (name) => {
-      if (smokeMode && !["athena", "robot money", "woon"].includes(name.trim().toLowerCase())) {
+      if (smokeMode && !["athena", "robot money", "noop analyst"].includes(name.trim().toLowerCase())) {
         return false;
       }
       return Boolean(personaIdentity(name));
