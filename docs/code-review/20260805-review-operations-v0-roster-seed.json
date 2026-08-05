@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "review": "review-operations",
+  "repository": "git@github.com:robotmoney/robotmoney-frontend.git",
+  "branch": "adhoc/20260803-195547-r11-projects-supabase-audit",
+  "commit": "7fe9eb3aab3d482f9f3951a05b14748bbd43b27c",
+  "reviewed_at": "2026-08-05",
+  "scope": [
+    ".env.example",
+    "backend/src/projects/seed/roster-seed.ts",
+    "backend/src/projects/seed/roster-seed-generator.ts",
+    "backend/src/projects/access/live-source.ts",
+    "backend/scripts/projects-roster-seed-regenerate.ts",
+    "backend/package.json",
+    "backend/src/config.ts (evidence-only, unchanged by this PR)"
+  ],
+  "verdict": "Advisory pass: V0_ANALYTICS_SOURCE_URL/_KEY are confirmed operator-only and absent from every normal deployment path; loadV0Roster() is genuinely network-free and fails loudly on corruption. One medium-severity, high-confidence test-coverage gap: the new fail-loud/checksum-validation guarantee this PR advertises has zero executing test.",
+  "findings": [
+    {
+      "id": "review-operations-001",
+      "review": "review-operations",
+      "classification": "TEST_COVERAGE_MISSING",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "backend/src/projects/seed/roster-seed.ts:175-178 (\"Fails loudly (never a silent empty-roster fallback) on a missing file, corrupt JSON, or any structural/checksum violation ... matching fixture-source.ts's discipline\")",
+      "evidence": [
+        "backend/src/projects/seed/roster-seed.ts:179-208 (loadV0Roster: file-missing, manifest-missing, JSON-parse, and validateRoster/checksum throw paths)",
+        "backend/src/projects/seed/roster-seed-generator.ts:199-402 (mapV0RosterRows skip/mapping branches and generateV0RosterArtifact's zero-project refusal, exercised only manually via the operator-run regenerate script)",
+        "backend/src/worker/handlers/projects.ts:57 (sole runtime caller of discoverProjects -> loadV0Roster, a periodic worker job)",
+        "grep -rln \"roster-seed|loadV0Roster|validateRoster\" backend/tests .github/workflows -> no matches (verified 2026-08-05)",
+        "git diff --stat origin/main...HEAD -- backend/src/projects backend/scripts backend/package.json .env.example -> 8 files changed, 0 test files among them"
+      ],
+      "impact": "The load-time invariant this PR states as its own operational discipline (throw loudly, never fabricate/degrade silently) is unverified by any executing test or CI step. A future change that regresses it -- e.g. a well-meaning 'don't crash the worker' catch that falls back to an empty/stale roster, or a mapping regression in roster-seed-generator.ts's skip logic -- would ship with a fully green CI (bun test discovers zero relevant tests; no workflow references roster/loadV0Roster/validateRoster). Blast radius is bounded to the periodic projects-discovery worker job (not API/demo boot, confirmed via the single caller above), and the committed artifact currently loads and validates correctly (manually verified: `bun -e` against loadV0Roster() loaded 1037 projects with checksum passing), so there is no live incident -- only an unguarded regression path for the specific discipline the PR's own comments commit to.",
+      "recommendation": "Add bun:test coverage (backend/tests/ or colocated) exercising: loadV0Roster() success against the committed artifact; missing-data-file and missing-manifest-file throws; corrupt-JSON throw; each validateRoster structural/count/checksum mismatch throw; and mapV0RosterRows()'s skip/mapping branches (duplicate slug, missing required fields, unlinked project_id, zero-project refusal in generateV0RosterArtifact). Wire it into the existing `bun test` CI job so a regression of the loud-fail/never-fabricate guarantee fails CI before merge.",
+      "owner": "tests",
+      "related_findings": []
+    }
+  ],
+  "clean_areas": [
+    ".env.example (this PR's diff, lines +185..+207): explicitly states V0_ANALYTICS_SOURCE_URL/_KEY are 'ONLY needed to REGENERATE that committed seed' and 'Never required at runtime ... never in a normal API/worker/demo deployment' -- unambiguous, not misreadable as deploy-required",
+      "backend/src/config.ts: V0_ANALYTICS_SOURCE_URL/_KEY are absent from the entire file; the only required() env var is DATABASE_URL (config.ts:1,473) -- normal API/worker boot has zero dependency on these vars",
+      "Complete grep of backend/src and backend/scripts for V0_ANALYTICS_SOURCE_URL/_KEY: read only in backend/src/projects/seed/roster-seed-generator.ts:38-41 (resolveV0SupabaseConfig, throws loudly if either is unset) and referenced only in a usage-example comment in backend/scripts/projects-roster-seed-regenerate.ts:11-12 -- no other reader exists",
+      "loadV0Roster() (backend/src/projects/seed/roster-seed.ts:179-208): read in full -- zero network calls (Bun.file only), zero dependency on V0_ANALYTICS_SOURCE_URL/_KEY; only ROSTER_SEED_PATH/ROSTER_SEED_MANIFEST_PATH (test-only overrides) are consulted, and only for the artifact's own path resolution",
+      "Deployment wiring: exhaustive grep of docker-compose.yml, docker-compose.demo.yml, docker-compose.stage.yml, all Dockerfiles, and .github/workflows/*.yml for 'projects-roster-seed' and 'V0_ANALYTICS_SOURCE' returns zero matches -- the regenerate script is invoked only via the manual `bun run projects-roster-seed:regenerate` alias (backend/package.json:20), never automatically",
+      "Incident/recovery path: loadV0Roster() and validateRoster() throw descriptive errors on a missing file, missing manifest, invalid JSON, or any structural/count/checksum mismatch -- confirmed by direct read (roster-seed.ts:184-207) and by live execution against the committed artifact (1037 projects loaded, checksum validated, 2026-08-05)"
+  ],
+  "unresolved_decisions": [],
+  "limitations": [
+    "Diff-scoped light profile: evidence resolved only in files this PR's diff implicates (.env.example, projects/seed/*, live-source.ts, the regenerate script, config.ts) plus deployment/CI manifests grepped for the two new var names and the regenerate script/alias name; no whole-repository sweep was performed.",
+    "Did not independently verify v0's live Supabase credential-rotation/revocation process (out of scope: those credentials are never present in this repository or its CI)."
+  ],
+  "unreviewed_surfaces": [
+    "Content-quality/provenance correctness of the committed v0-roster-data.json rows themselves (data-integrity concern, not operations) -- out of scope for this review",
+    "Whether the worker job that calls discoverProjects() has its own failure alerting/monitoring wired up downstream of a thrown error (reliability/observability concern, not covered by this operations pass)"
+  ]
+}
