@@ -9,6 +9,7 @@
 // existing row — that lets the scheduler own slot bookkeeping and lets an
 // operator disable a schedule without the seed re-enabling it.
 import { sql, closeDb, jsonValue } from "./client.ts";
+import { seedLiveRoster } from "../swarm/roster-seed.ts";
 import { seedDemoProjects } from "../projects/demo-seed.ts";
 import { walletHistorySeedRows } from "../chain/wallet-history-seed.ts";
 import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
@@ -312,6 +313,22 @@ export async function seed(): Promise<void> {
   // Idempotent (upsert-on-slug + delete/re-insert facets), so safe on every boot.
   if (process.env.DEMO_SEED_PROJECTS === "1") {
     await seedDemoProjects();
+  }
+
+  // Public-deployment only: seat the house swarm (Athena, Robot Money) with
+  // the profile copy robotmoney.net publishes, from the committed manifests
+  // (see ../swarm/roster-seed.ts). Gated behind SWARM_SEED_ROSTER so every
+  // other seed — CI, the demo stack, a local dev database — stays byte-for-byte
+  // what it was; the demo's own roster comes from backend/src/demo/e2e.ts and
+  // must not gain two extra members.
+  //
+  // Additive only: it upserts the roster and leaves every other member alone.
+  // Retiring the off-roster members a demo-driven deployment accumulated is
+  // the separately gated half (issue #530, SWARM_SEED_ROSTER_PRUNE) — the only
+  // half that can sweep away a legitimately admitted operator.
+  if (process.env.SWARM_SEED_ROSTER === "1") {
+    const seated = await seedLiveRoster();
+    console.log(`seeded swarm live roster (${seated} member(s), profile copy from the committed manifests)`);
   }
 }
 
