@@ -1987,11 +1987,17 @@ export function registerStaticViews(Alpine) {
       // that IS 100% of NAV, so the scale is already stated by the geometry and
       // again by the value at the end of every bar — a tick row on top of that
       // read as a third, competing scale next to the "% of NAV" heading.
-      const W = 560, barX = 22, valW = 40;
+      // The bucket name sits in a left COLUMN beside its bars, not on a line of
+      // its own above them. Dropping the series column had left the bars running
+      // the full width of the panel as ~3px hairlines with the name stranded
+      // above — more air than figure. Beside the name they are shorter, thicker,
+      // and the whole thing reads as the table it is.
+      const W = 580, labelW = 160, valW = 44;
+      const barX = labelW;
       const barW = W - barX - valW;
-      const nameH = 15, subH = 6, subGap = 5, gap = 11;
-      const headY = 8, axisH = 15;
-      const groupH = nameH + series.length * (subH + subGap);
+      const subH = 8, subGap = 4, gap = 14;
+      const headY = 8, axisH = 23;
+      const groupH = series.length * subH + (series.length - 1) * subGap;
       const H = axisH + buckets.length * (groupH + gap) + 2;
       const x = (v) => barX + this.clampPct(v * 100) / 100 * barW;
       const mono = 'font-family="ui-monospace,monospace"';
@@ -2004,8 +2010,8 @@ export function registerStaticViews(Alpine) {
         const top = axisH + i * (groupH + gap);
         const sub = series.map((s, si) => {
           const v = b[s.key];
-          const barY = top + nameH + si * (subH + subGap);
-          const txtY = barY + subH - 0.5;
+          const barY = top + si * (subH + subGap);
+          const txtY = barY + subH - 1;
           // The full-width track. Without it a 0% bucket drew nothing at all —
           // three of four rows on a 97/3/0/0 recommendation were an empty band
           // and a number, which reads as missing data rather than as zero.
@@ -2021,8 +2027,11 @@ export function registerStaticViews(Alpine) {
           // be read against each other without either being numbered.
           return `${track}${rect}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="${s.txt}" font-size="9" ${mono}>${Math.round(v * 100)}%</text>`;
         }).join("");
+        // Centred against its own group of bars, so the name and the rows it
+        // labels are unambiguously one block.
+        const nameY = top + groupH / 2 + 3.5;
         return `<g>
-          <text x="0" y="${(top + 11).toFixed(1)}" fill="var(--color-text)" font-size="10.5" ${mono}>${this.escapeHtml(b.name)}</text>
+          <text x="0" y="${nameY.toFixed(1)}" fill="var(--color-text)" font-size="10" ${mono}>${this.escapeHtml(b.name)}</text>
           ${sub}
         </g>`;
       }).join("");
@@ -2041,11 +2050,9 @@ export function registerStaticViews(Alpine) {
       const buckets = this.bucketWeights();
       if (!buckets.length) return [];
       return [
-        buckets.some((b) => b.target != null)
-          ? { key: "target", label: "target", hint: "the published framework weight" } : null,
-        buckets.some((b) => b.actual != null)
-          ? { key: "actual", label: "actual", hint: "where the book sits today" } : null,
-        { key: "recommended", label: "recommended", hint: "what the swarm proposes" },
+        buckets.some((b) => b.target != null) ? { key: "target", label: "target" } : null,
+        buckets.some((b) => b.actual != null) ? { key: "actual", label: "actual" } : null,
+        { key: "recommended", label: "recommended" },
       ].filter(Boolean);
     },
     // The composite's trailing run. The two dashed rules are the regime

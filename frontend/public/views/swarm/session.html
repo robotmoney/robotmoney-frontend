@@ -213,15 +213,14 @@
               <div class="sv__bucket-bars-svg" x-html="bucketWeightsBars()"></div>
               <!-- The key, once, under the figure. Naming the series on every
                    row printed the same three words four times and made the
-                   chart read as a form; here each one can also say what it
-                   MEANS, which a per-row label had no room for. Order matches
-                   the bars' stacking order inside each bucket. -->
+                   chart read as a form. Order matches the bars' stacking order
+                   inside each bucket. Names only: what each series means is
+                   already the column heading of the table directly below. -->
               <ul class="sv__bars-key">
                 <template x-for="k in bucketBarsKey()" :key="k.key">
                   <li>
                     <i :class="`sv__bars-key__swatch is-${k.key}`" aria-hidden="true"></i>
-                    <b x-text="k.label"></b>
-                    <span x-text="k.hint"></span>
+                    <span x-text="k.label"></span>
                   </li>
                 </template>
               </ul>
