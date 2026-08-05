@@ -81,9 +81,14 @@ async function runMigrationsStep(): Promise<StepResult> {
 
 async function runV0SeedStep(): Promise<StepResult> {
   const result = await runV0SeedBootstrap();
+  // Every dataset the archive carries is named, so an operator reading this
+  // one line can tell that takes/snapshots/briefs actually loaded rather than
+  // inferring it from a session count.
   const summary =
     `${result.members.inserted} members, ${result.subjects.inserted} subjects, ` +
-    `${result.sessions.inserted} sessions inserted, ${result.drifts.length} drift`;
+    `${result.sessions.inserted} sessions, ${result.takes.inserted} takes, ` +
+    `${result.snapshots.inserted} snapshots, ${result.briefs.inserted} briefs inserted, ` +
+    `${result.drifts.length} drift`;
   if (result.drifts.length > 0) {
     // Completed, but the existing script's own exit-code convention treats
     // any drift as a non-zero outcome — surface it as a warning glyph here,

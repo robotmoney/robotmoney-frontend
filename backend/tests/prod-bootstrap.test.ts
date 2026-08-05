@@ -7,15 +7,40 @@
 // always runs (no fail-fast), the v0-seed drift outcome is aggregated into
 // an overall "failing" result, and the edgar step's unreachable-vs-genuine-
 // failure classification (skip vs. hard fail) is correct in both directions.
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import net from "node:net";
 import { sql } from "../src/db/client.ts";
 import { runProdBootstrap, type StepReport } from "../scripts/prod-bootstrap.ts";
+import { loadV0Archive } from "../src/swarm/v0-archive.ts";
 
 const MEMBER_IDS = ["athena", "robotmoney", "woon"];
 const SUBJECT_IDS = ["robotmoney-allocation", "robotmoney-treasury", "robotmoney-vault", "woon"];
 
+// A throwaway archival key: runV0SeedBootstrap() signs v0's takes with it at
+// import time and REFUSES to run without one, so the orchestrator under test
+// here cannot reach its v0-seed step unless this is set.
+// Expected v0-seed summary, derived from the committed archive rather than
+// hard-coded: the counts change every time the artifact is regenerated.
+let expectedV0Summary = "";
+
+beforeAll(async () => {
+  const { payload, manifest } = await loadV0Archive();
+  const takes = payload.sessions.reduce((n, s) => n + (s.takes?.length ?? 0), 0);
+  expectedV0Summary =
+    `${manifest.counts.members} members, ${manifest.counts.subjects} subjects, ` +
+    `${manifest.counts.sessions} sessions, ${takes} takes, ` +
+    `${manifest.counts.snapshots} snapshots, ${manifest.counts.briefs} briefs inserted, 0 drift`;
+  const kp = (await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"])) as CryptoKeyPair;
+  const pkcs8 = await crypto.subtle.exportKey("pkcs8", kp.privateKey);
+  process.env.V0_ARCHIVE_SIGNING_KEY = Buffer.from(pkcs8).toString("base64");
+});
+
 async function cleanArchiveRows(): Promise<void> {
+  // Reverse dependency order: everything that FKs to subjects/sessions goes
+  // first, or the subject delete below trips a foreign-key violation.
+  await sql`DELETE FROM swarm_recommendations WHERE subject_id = ANY(${SUBJECT_IDS})`;
+  await sql`DELETE FROM swarm_briefs WHERE subject_id = ANY(${SUBJECT_IDS})`;
+  await sql`DELETE FROM swarm_subject_snapshots WHERE subject_id = ANY(${SUBJECT_IDS})`;
   await sql`DELETE FROM swarm_sessions WHERE subject_id = ANY(${SUBJECT_IDS})`;
   await sql`DELETE FROM swarm_subjects WHERE id = ANY(${SUBJECT_IDS})`;
   await sql`DELETE FROM swarm_members WHERE id = ANY(${MEMBER_IDS})`;
@@ -70,7 +95,7 @@ test("cold DB: all three steps run, v0-seed inserts 3/4/32, edgar cleanly skips 
   const v0seed = reportFor(reports, "v0-seed:bootstrap");
   expect(v0seed.status).toBe("success");
   expect(v0seed.failing).toBe(false);
-  expect(v0seed.summary).toBe("3 members, 4 subjects, 32 sessions inserted, 0 drift");
+  expect(v0seed.summary).toBe(expectedV0Summary);
 
   const edgar = reportFor(reports, "edgar-seed:bootstrap");
   expect(edgar.status).toBe("skipped");
@@ -87,10 +112,10 @@ test("idempotent: a second full run inserts nothing further and still reports no
   delete process.env.ANALYTICS_TOKEN;
 
   const first = await runProdBootstrap();
-  expect(reportFor(first, "v0-seed:bootstrap").summary).toBe("3 members, 4 subjects, 32 sessions inserted, 0 drift");
+  expect(reportFor(first, "v0-seed:bootstrap").summary).toBe(expectedV0Summary);
 
   const second = await runProdBootstrap();
-  expect(reportFor(second, "v0-seed:bootstrap").summary).toBe("0 members, 0 subjects, 0 sessions inserted, 0 drift");
+  expect(reportFor(second, "v0-seed:bootstrap").summary).toBe("0 members, 0 subjects, 0 sessions, 0 takes, 0 snapshots, 0 briefs inserted, 0 drift");
   expect(second.some((r) => r.failing)).toBe(false);
 });
 
@@ -110,7 +135,7 @@ test("drift aggregation: a v0-seed drift marks the run overall failing, but ever
   // "inserted" counts only — subjects/sessions already exist from the first
   // run (unchanged, not inserted), so this reads 0/0 even though the DB
   // still holds all of them; only the drift count reflects the mutation.
-  expect(v0seed.summary).toBe("0 members, 0 subjects, 0 sessions inserted, 1 drift");
+  expect(v0seed.summary).toBe("0 members, 0 subjects, 0 sessions, 0 takes, 0 snapshots, 0 briefs inserted, 1 drift");
 
   expect(reportFor(reports, "migrations").failing).toBe(false);
   expect(reportFor(reports, "edgar-seed:bootstrap").failing).toBe(false);

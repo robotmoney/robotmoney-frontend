@@ -14,7 +14,14 @@
 import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 
-export const V0_ARCHIVE_FORMAT_VERSION = 1;
+// v2 (2026-08-05): adds `snapshots` and `briefs`. v1 carried members/subjects/
+// sessions only, because it was extracted from robotmoney-site — a FORK 2015
+// commits behind agentjuno/robotmoney, where neither dataset had ever been
+// committed. The archive repo (robotmoney/v0-archive) now holds 208 snapshot
+// files and 74 briefs alongside 72 sessions, so the artifact carries them too.
+// There is no v1 compatibility path: the committed artifact is regenerated in
+// the same commit as this bump, and loadV0Archive() rejects any other version.
+export const V0_ARCHIVE_FORMAT_VERSION = 2;
 
 export interface V0Wallet {
   address: string;
@@ -80,10 +87,40 @@ export interface V0Session {
   generated_at: string | null;
 }
 
+// One daily portfolio read for one subject, from
+// public/data/committee/subjects/<subject_id>/<date>.json. Framework subjects
+// (source.type === "framework") have nothing on-chain to read and contribute
+// no snapshots at all — an absent subject here is correct, not missing data.
+// Carried VERBATIM, including fields v1 has no column for (`fetched_at`,
+// `source_type`). The artifact is a shipping format for v0's bytes, not a
+// projection of v1's schema — dropping unmapped fields is the importer's job,
+// at the point rows are written, so re-reading the artifact always shows what
+// v0 actually published. Same reason V0Take keeps `model`/`usage`.
+export interface V0Snapshot {
+  subject_id: string;
+  date: string; // YYYY-MM-DD
+  total_value_usd: number | null;
+  positions: unknown[];
+  wallets: unknown[];
+  notable: unknown[];
+  [key: string]: unknown;
+}
+
+// The research/regime brief members received before a session, from
+// public/data/committee/briefs/<date>-<subject_id>.json. `body` is stored
+// whole: v0 never settled its shape and v1 reads it as opaque jsonb.
+export interface V0Brief {
+  date: string; // YYYY-MM-DD
+  subject_id: string;
+  body: unknown;
+}
+
 export interface V0ArchivePayload {
   members: V0Member[];
   subjects: V0Subject[];
   sessions: V0Session[];
+  snapshots: V0Snapshot[];
+  briefs: V0Brief[];
 }
 
 export interface V0ArchiveManifest {
@@ -91,7 +128,7 @@ export interface V0ArchiveManifest {
   sourceRepo: string;
   sourceCommit: string;
   extractedAt: string;
-  counts: { members: number; subjects: number; sessions: number };
+  counts: { members: number; subjects: number; sessions: number; snapshots: number; briefs: number };
   checksum: string; // sha256 hex of the canonical decompressed JSON text
 }
 
@@ -136,6 +173,17 @@ export function validateArchive(payload: V0ArchivePayload, manifest: V0ArchiveMa
   if (!Array.isArray(payload.sessions) || payload.sessions.length !== manifest.counts.sessions) {
     throw new Error(
       `v0 committee archive: parsed ${payload.sessions?.length ?? 0} session(s) but manifest declares counts.sessions=${manifest.counts.sessions}`,
+    );
+  }
+
+  if (!Array.isArray(payload.snapshots) || payload.snapshots.length !== manifest.counts.snapshots) {
+    throw new Error(
+      `v0 committee archive: parsed ${payload.snapshots?.length ?? 0} snapshot(s) but manifest declares counts.snapshots=${manifest.counts.snapshots}`,
+    );
+  }
+  if (!Array.isArray(payload.briefs) || payload.briefs.length !== manifest.counts.briefs) {
+    throw new Error(
+      `v0 committee archive: parsed ${payload.briefs?.length ?? 0} brief(s) but manifest declares counts.briefs=${manifest.counts.briefs}`,
     );
   }
 

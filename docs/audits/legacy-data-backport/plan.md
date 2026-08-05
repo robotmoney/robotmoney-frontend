@@ -13,7 +13,7 @@ These are the only open questions. Everything downstream is mechanical.
 
 | # | Decision | Recommendation |
 |---|---|---|
-| D1 | How legacy takes satisfy `signature NOT NULL` | Genuinely sign at import (gap-analysis §4.3). `verified = true` where we hold the member key, `false` where we do not. |
+| D1 | How legacy takes satisfy `signature NOT NULL` | **SETTLED 2026-08-05.** Genuinely sign at import (gap-analysis §4.3), with the archival key deliberately NOT registered in `swarm_member_keys` so `toVerifiedTake()` reports `verified: false` on its own. `0026`'s additive `legacy_takes` column is dropped by `0027`: shaping v1's schema around v0's history was rejected, and the column had no readers, so 216 takes were invisible to `withTakes()`. |
 | D2 | Whose key signs `woon`'s 26 takes | Operator archival key, `verified = false`. Alternative: ask peaq to re-sign; do not block the backport on it. |
 | D3 | Drop `finances_page` | Yes. Re-add as a real column later if a surface needs it. |
 | D4 | Drop `voice_samples` | Yes — fold into `*.voice.md` before import if the content matters. |

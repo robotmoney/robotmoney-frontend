@@ -1,12 +1,14 @@
 {
-  "formatVersion": 1,
-  "sourceRepo": "/drive2/home/lucas/robotmoney/robotmoney-site",
-  "sourceCommit": "0844d42608e3e82cb679881acc524be4f20df9d9",
-  "extractedAt": "2026-08-03T18:35:14Z",
+  "formatVersion": 2,
+  "sourceRepo": "https://github.com/agentjuno/robotmoney",
+  "sourceCommit": "9a8fd2a74b430688a1e85072ec551dcbc208021b",
+  "extractedAt": "2026-08-05T02:25:50.401Z",
   "counts": {
     "members": 3,
     "subjects": 4,
-    "sessions": 32
+    "sessions": 72,
+    "snapshots": 208,
+    "briefs": 73
   },
-  "checksum": "e58cd39798aa9bd02e621783dc9d4b5f2a87922150187071c5d8a80e6ab0777f"
+  "checksum": "84b43d8742939960a9a6e2ce0ecadeef6e5d2d379bf50b562819231b1ecf712b"
 }
