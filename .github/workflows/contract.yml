@@ -1,10 +1,28 @@
 # Contract tier: verifies the vendored contract copy matches the source and runs
-# the contract's unit tests. The contract package has its own test:unit selector
-# that runs offline tests; the live tests in contract/tests/live/ are run only
-# by nightly-fetchers.yml.
+# the contract's tests — both the offline `test` selector (contract/tests/unit)
+# and the `test:live` selector (contract/tests/live).
+#
+# WHY THE LIVE SELECTOR RUNS HERE (issue #484). contract/tests/live/ holds one
+# test, and its whole job is to fail red when SWARM_ONBOARDING_SKILL_URL stops
+# returning 200 — the single discovery link in the D21 onboarding flow, whose
+# 404 raises no error anywhere in this repo and just silently kills onboarding.
+# It used to document itself as running in a `contract-live-urls` job of
+# `nightly-fetchers.yml`; that workflow never existed, `grep -rn 'test:live'
+# .github/workflows/` returned nothing, and the guard had therefore never
+# executed in CI once. It would have caught #407's rename on its first run.
+# Rather than give it another schedule-only home, it runs in this already-
+# required job on every trigger the job has (pull_request, push to main, and
+# the nightly mirror): a red then lands on the PR that caused it, before the
+# break ships. Cost is one HTTPS GET, already gated behind this workflow's
+# `contract/**` paths-filter. No `continue-on-error`, no env gate, no skip —
+# unreachable network is a RED, per the loud-skip-never invariant.
 #
 # CI taxonomy class: feature-correctness. Runs on every PR (draft AND ready) —
-# cheap, no Docker, no network. This workflow replaces the contract-specific
+# cheap, no Docker. It is the ONE feature-correctness workflow that touches the
+# live network, and only for the single HTTPS GET described above; that
+# exception is recorded in docs/architecture.md §3 rather than left as a
+# contradiction between this header and the cost-class table.
+# This workflow replaces the contract-specific
 # steps that previously lived in integration.yml (issue #275). It is directly
 # required in branch protection (issue #275 addendum: the ci-gate.yml/
 # ci-gate.ts fan-in mechanism this workflow used to feed was removed after a
@@ -75,3 +93,9 @@ jobs:
       - name: Contract tests (unit)
         working-directory: contract
         run: bun run test
+      # Live URL reachability (issue #484). Deliberately NOT continue-on-error
+      # and NOT conditioned on any event or secret: the whole point is that a
+      # 404 or an unreachable network fails this required job loudly.
+      - name: Contract tests (live URLs)
+        working-directory: contract
+        run: bun run test:live

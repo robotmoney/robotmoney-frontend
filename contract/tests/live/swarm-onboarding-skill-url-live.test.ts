@@ -1,11 +1,27 @@
 // LIVE cost class (docs/architecture.md §3 "Test, eval, and tooling layout",
-// L1): this file makes a REAL request to raw.githubusercontent.com. It is
-// therefore unreachable from the contract package's default target
-// (`bun test tests/unit`, wired into the required `integration` job) and from
-// the repo root's `bun test scripts/tests`, so it adds NO network dependency to
-// the per-PR path. It runs only via `bun run test:live` in the
-// `contract-live-urls` job of .github/workflows/nightly-fetchers.yml
-// (schedule + workflow_dispatch, no `pull_request` trigger).
+// L1): this file makes a REAL request to raw.githubusercontent.com, so it lives
+// in its own directory and is unreachable from the contract package's default
+// target (`bun test tests/unit`) and from the repo root's `bun test
+// scripts/tests`.
+//
+// WHERE IT RUNS (issue #484). It is invoked by `bun run test:live` in the
+// `contract` job of .github/workflows/contract.yml — the same already-required
+// job that runs `check-contract` and the offline contract unit tests, on every
+// trigger that job has: `pull_request`, `push: branches: [main]`, and the
+// nightly schedule that mirrors the merge set.
+//
+// That is a DELIBERATE CHANGE from what this header used to claim. It used to
+// say it ran "only via `bun run test:live` in the `contract-live-urls` job of
+// .github/workflows/nightly-fetchers.yml" — a workflow that does not exist, in
+// this repo or any branch of it. `grep -rn 'test:live' .github/workflows/`
+// returned nothing: the script was declared in contract/package.json and
+// invoked by zero of eleven workflows, so this file had never executed in CI at
+// any point in its life. It would have caught the #407 rename on its first run.
+// A guard nobody runs is exactly the false green this repo's test-coverage
+// policy exists to forbid, so the repair is not another schedule-only home —
+// it is the per-PR, per-merge, required path, where a red is seen by the person
+// who caused it and before the break reaches users. The pre-merge cost is one
+// HTTPS GET, on the `contract/**` path filter the job already carries.
 //
 // What it exists to catch: SWARM_ONBOARDING_SKILL_URL is the single
 // discovery mechanism in the D21 onboarding flow — the launch prompt tells the
@@ -13,29 +29,50 @@
 // keygen, signed apply) is described only inside it. A URL that 404s produces
 // no error anywhere in this repo; the agent just fails to onboard. That is
 // exactly how the `/main/` form (robotmoney-core's default branch is `dev`)
-// survived: contract/tests/ executed in no CI job at all.
+// survived, and then how #407's rename onto a `robotmoney-swarm` plugin that
+// does not exist in robotmoney-core survived for two days in production.
 //
 // Loud-skip-never (test-coverage policy invariant 1): there is deliberately NO
-// try/catch, NO env gate, and NO conditional skip below. If DNS fails, egress is
-// blocked, or GitHub is down, the fetch rejects and this file fails RED. A
-// missing external resource must never be reported as a pass. Invariant 2 comes
-// for free from the directory selection: `bun test` against an empty or missing
-// directory exits 1 on bun 1.3.x, so an emptied `tests/live/` is red, not a
-// vacuous green.
+// try/catch, NO env gate, and NO conditional skip below, and the job that runs
+// it carries no `continue-on-error`. If DNS fails, egress is blocked, or GitHub
+// is down, the fetch rejects and this file fails RED. A missing external
+// resource must never be reported as a pass. Invariant 2 comes for free from
+// the directory selection: `bun test` against an empty or missing directory
+// exits 1 on bun 1.3.x, so an emptied `tests/live/` is red, not a vacuous
+// green.
 import { describe, expect, test } from "bun:test";
 import { SWARM_ONBOARDING_SKILL_URL } from "../../src/swarm-application.js";
 
 const TIMEOUT_MS = 30_000;
 
+/**
+ * The skill slug the URL itself names — the directory immediately above
+ * `SKILL.md`. Derived rather than hardcoded so this file keeps asserting "the
+ * file served IS the skill this URL claims to serve" across the half-finished
+ * cross-repo Committee→Swarm rename: it reads `committee-onboarding` today
+ * (that is what robotmoney-core actually publishes) and becomes
+ * `swarm-onboarding` the moment the constant is repointed, with no edit here.
+ */
+const SKILL_SLUG = new URL(SWARM_ONBOARDING_SKILL_URL).pathname.split("/").at(-2)!;
+
 describe("SWARM_ONBOARDING_SKILL_URL — live reachability", () => {
+  test("the URL names a skill directory above SKILL.md, so the slug below is really derived", () => {
+    // Without this, a constant that stopped ending in `<skill>/SKILL.md` would
+    // make SKILL_SLUG some unrelated path segment and quietly weaken every
+    // body assertion below into a match on garbage.
+    expect(SWARM_ONBOARDING_SKILL_URL.endsWith("/SKILL.md")).toBe(true);
+    expect(SKILL_SLUG).toMatch(/^[a-z0-9-]+-onboarding$/);
+  });
+
   test(
-    "serves HTTP 200 and the swarm-onboarding skill's own content",
+    "serves HTTP 200 and the onboarding skill's own content",
     async () => {
       const res = await fetch(SWARM_ONBOARDING_SKILL_URL, { redirect: "follow" });
 
-      // 200 only. A 404 (wrong branch segment), a 3xx that did not resolve, or
-      // a 5xx are all failures of the same user-visible thing: the agent cannot
-      // read the skill.
+      // 200 only. A 404 (wrong branch segment, or a plugin/skill directory that
+      // does not exist in robotmoney-core), a 3xx that did not resolve, or a 5xx
+      // are all failures of the same user-visible thing: the agent cannot read
+      // the skill.
       expect(res.status).toBe(200);
 
       const body = await res.text();
@@ -43,11 +80,43 @@ describe("SWARM_ONBOARDING_SKILL_URL — live reachability", () => {
       // A 200 is necessary but not sufficient — raw.githubusercontent.com and
       // github.com both happily return 200 with an HTML landing page or a
       // redirect target that is not this file. Assert the skill's OWN markers so
-      // a 200-with-wrong-body still fails: the front-matter name, and a mention
-      // of the rmpc toolchain the skill exists to install.
-      expect(body).toContain("name: swarm-onboarding");
+      // a 200-with-wrong-body still fails: the front-matter name (which must
+      // agree with the slug the URL names — a URL pointing into one skill's
+      // directory while serving another skill's file is a misconfiguration, not
+      // a success), and a mention of the rmpc toolchain the skill exists to
+      // install.
+      expect(body).toContain(`name: ${SKILL_SLUG}`);
       expect(body).toContain("rmpc");
       expect(body.length).toBeGreaterThan(500);
+    },
+    TIMEOUT_MS,
+  );
+
+  // RED CONTROL (issue #484). Everything above is a green assertion over a
+  // working URL, and a green assertion cannot tell you whether the check would
+  // have gone red on the broken input: a stubbed fetch, an egress proxy that
+  // answers 200 for everything, or a `res.status` that is never really compared
+  // would all leave the test above passing. So this control drives the SAME
+  // fetch against a path on the SAME host that cannot exist, and asserts that
+  // every discriminator the test above depends on actually fires — a non-200
+  // status, and a body carrying neither the front-matter name nor the toolchain
+  // marker.
+  //
+  // Concretely: this is what a run with the constant pointed at a known-404
+  // path observes, and therefore why such a run fails this job rather than
+  // passing vacuously.
+  test(
+    "red control: a known-404 path on the same host is observed as non-200, with none of the skill's markers",
+    async () => {
+      const dead = `${SWARM_ONBOARDING_SKILL_URL}.this-path-cannot-exist`;
+      const res = await fetch(dead, { redirect: "follow" });
+
+      expect(res.status).not.toBe(200);
+      expect(res.status).toBe(404);
+
+      const body = await res.text();
+      expect(body).not.toContain(`name: ${SKILL_SLUG}`);
+      expect(body).not.toContain("rmpc");
     },
     TIMEOUT_MS,
   );
