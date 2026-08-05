@@ -17,9 +17,24 @@ import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { config } from "../config.ts";
 
+// Server-side timeouts, applied as startup parameters so EVERY statement and
+// transaction on this pool inherits them. The worker drains its lane serially
+// in one process, so an unbounded statement (a hung bulk upsert, a lock wait)
+// stalls every other scheduled job behind it indefinitely — and the queue's own
+// reaper cannot help, because lease renewal keeps refreshing `locked_at` for a
+// job that is alive but stuck. These make the database, not the queue, the
+// thing that gives up. Generous by default (the projects discovery pass writes
+// ~2,800 rows in one transaction) and overridable per deployment.
+const STATEMENT_TIMEOUT_MS = Number(process.env.PG_STATEMENT_TIMEOUT_MS ?? 300_000); // 5 min
+const IDLE_IN_TXN_TIMEOUT_MS = Number(process.env.PG_IDLE_IN_TXN_TIMEOUT_MS ?? 600_000); // 10 min
+
 export const sql = postgres(process.env.WORKER_DATABASE_URL || config.databaseUrl, {
   max: Number(process.env.PG_POOL_MAX ?? 10),
   onnotice: () => {}, // silence NOTICE spam
+  connection: {
+    statement_timeout: STATEMENT_TIMEOUT_MS,
+    idle_in_transaction_session_timeout: IDLE_IN_TXN_TIMEOUT_MS,
+  },
 });
 
 // Same single-seam JSON assertion as db/client.ts.

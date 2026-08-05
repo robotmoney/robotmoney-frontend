@@ -17,7 +17,7 @@
 // re-run never duplicates rows.
 import { sql } from "../../db/worker-client.ts";
 import { selectProjectsDataSource } from "../../projects/access/select.ts";
-import type { ProjectsDataSource } from "../../projects/access/data-source.ts";
+import type { DiscoveredProject, ProjectsDataSource } from "../../projects/access/data-source.ts";
 import {
   coinGeckoFields,
   computeCoverage,
@@ -48,76 +48,242 @@ function degraded(kind: string, err: unknown, extra: Record<string, unknown> = {
 }
 
 // ── Discovery ────────────────────────────────────────────────────────────────
+
+// resolved_at / enriched_at describe WHEN THE IDENTITY DATA WAS CAPTURED, not
+// when this job last ran — the leaderboard's source-health panel
+// (projects/leaderboard-projections.ts sourceHealth) reads enriched_at and
+// calls a source "healthy" when it is within 36h. The live source serves a
+// committed roster frozen at its manifest's generatedAt, so stamping now() on
+// those rows every night would report a months-old dataset as fresh forever.
+// A source that declares its as-of wins; one that does not (the hermetic
+// fixture) falls back to wall-clock now, which for it is the truth.
+export function resolveDiscoveryTimestamp(asOf: string | null | undefined, now: Date = new Date()): Date {
+  if (asOf == null) return now;
+  const parsed = new Date(asOf);
+  if (Number.isNaN(parsed.getTime())) {
+    // Never silently substitute now() for an unparseable claim — that is how a
+    // fabricated freshness gets in through the back door.
+    throw new Error(`projects.discover: data source declared an unparseable discoveredAsOf ${JSON.stringify(asOf)}`);
+  }
+  return parsed;
+}
+
+// Rows are written in batched multi-row statements rather than one round trip
+// per row: the real roster is 1,037 projects + 1,767 facets = 2,804 statements,
+// and the analytics lane drains serially in a single worker, so at a managed
+// database's RTT that transaction alone blocks every other projects.*/vault.*/
+// wallet.* job for minutes. Chunked so no single statement approaches Postgres'
+// 65,535 bind-parameter ceiling as the roster grows.
+const UPSERT_CHUNK_ROWS = 400;
+
+// Every unnest() column below is bound as text[] and cast back in SQL. Mixing
+// element types across driver-inferred array parameters is where this pattern
+// breaks (postgres.js infers a scalar OID for a homogeneous boolean array, and
+// the server then refuses `boolean` → `boolean[]`); one param type with an
+// explicit server-side cast is unambiguous for every column.
+const numText = (v: number | null | undefined): string | null => (v == null ? null : String(v));
+
+function chunked<T>(rows: readonly T[], size = UPSERT_CHUNK_ROWS): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < rows.length; i += size) out.push(rows.slice(i, i + size));
+  return out;
+}
+
+// A multi-row `ON CONFLICT DO UPDATE` fails outright ("cannot affect row a
+// second time") if two rows in the SAME statement collide on the conflict key,
+// so the batching above only holds while the payload is unique on exactly the
+// keys the upserts target. The seed loader already enforces this
+// (projects/seed/roster-seed.ts validateRoster), but discover() accepts any
+// data source, so it is re-checked here and reported as a degrade rather than
+// surfacing as a raw Postgres error mid-transaction.
+export function assertUpsertKeysUnique(projects: readonly DiscoveredProject[]): void {
+  const slugs = new Set<string>();
+  for (const p of projects) {
+    if (slugs.has(p.slug)) throw new Error(`projects.discover: duplicate project slug ${JSON.stringify(p.slug)} in the discovered payload`);
+    slugs.add(p.slug);
+    const check = (facet: string, key: string, values: string[]) => {
+      const seen = new Set<string>();
+      for (const v of values) {
+        if (seen.has(v)) {
+          throw new Error(
+            `projects.discover: project ${p.slug} has two ${facet} rows sharing ${key} ${JSON.stringify(v)} — ` +
+              `they collide on the (project_id, ${key}) upsert key`,
+          );
+        }
+        seen.add(v);
+      }
+    };
+    check("agent", "name", p.agents.map((a) => a.name));
+    check("coin", "name", p.coins.map((c) => c.name));
+    check("wallet", "label", p.wallets.map((w) => w.label));
+    check("vault", "name", p.vaults.map((v) => v.name));
+  }
+}
+
+// A discovery run that carries fewer projects than this fraction of what is
+// currently live does NOT deactivate anything — it reports the shortfall
+// instead. Auto-deactivation is only safe when the incoming roster is trusted
+// to be complete; layering it on top of a silent under-extraction would take
+// the whole directory down automatically. An operator who means it enqueues the
+// job with payload {"allowShrink": true}.
+export const DISCOVERY_SHRINK_FLOOR_RATIO = 0.1;
+
 export async function discover(
-  _payload: Record<string, unknown> = {},
+  payload: Record<string, unknown> = {},
   source: ProjectsDataSource = selectProjectsDataSource(),
 ): Promise<HandlerResult> {
-  let projects;
+  let projects: DiscoveredProject[];
+  let discoveredAt: Date;
   try {
     projects = await source.discoverProjects();
+    discoveredAt = resolveDiscoveryTimestamp(await source.discoveredAsOf?.());
+    assertUpsertKeysUnique(projects);
   } catch (err) {
     return degraded("discover", err);
   }
 
+  const allowShrink = payload.allowShrink === true;
   let upserted = 0;
+  let deactivated = 0;
+  let shrinkRefusal: string | null = null;
+
   await sql.begin(async (tx) => {
-    for (const p of projects) {
-      // overview_short / overview_long are ADMIN-MANAGED free text (issue #93):
-      // seeded on first insert only, NEVER overwritten on a scheduled re-run.
-      // Their columns are deliberately absent from the DO UPDATE set so an admin
-      // edit (POST /api/projects/admin/:slug) survives every subsequent discovery
-      // pass, while display_name / description / logo / facet columns still refresh.
-      // (No AI/LLM enrichment exists anywhere on this path.)
-      const [{ id }] = await tx`
-        INSERT INTO projects (slug, display_name, description, overview_short, logo_url, website_url, twitter_handle, is_sticky, status, resolved_at)
-        VALUES (${p.slug}, ${p.display_name}, ${p.description}, ${p.description}, ${p.logo_url}, ${p.website_url}, ${p.twitter_handle}, ${p.is_sticky}, 'active', now())
+    // Captured BEFORE the upserts, while it still means "rows a previous
+    // discovery run left live".
+    const [activeRow] = await tx`
+      SELECT count(*)::int AS n FROM projects WHERE status = 'active' AND resolved_at IS NOT NULL`;
+    const activeBefore = activeRow.n as number;
+
+    // overview_short / overview_long are ADMIN-MANAGED free text (issue #93):
+    // seeded on first insert only, NEVER overwritten on a scheduled re-run.
+    // Their columns are deliberately absent from the DO UPDATE set so an admin
+    // edit (POST /api/projects/admin/:slug) survives every subsequent discovery
+    // pass, while display_name / description / logo / facet columns still refresh.
+    // (No AI/LLM enrichment exists anywhere on this path.)
+    const idBySlug = new Map<string, string>();
+    for (const batch of chunked(projects)) {
+      const returned = await tx`
+        INSERT INTO projects (slug, display_name, description, overview_short, logo_url, website_url,
+                              twitter_handle, is_sticky, status, resolved_at)
+        SELECT s, dn, de, de, lu, wu, th, st::boolean, 'active', ${discoveredAt}
+          FROM unnest(${batch.map((p) => p.slug)}::text[], ${batch.map((p) => p.display_name)}::text[],
+                      ${batch.map((p) => p.description)}::text[], ${batch.map((p) => p.logo_url)}::text[],
+                      ${batch.map((p) => p.website_url)}::text[], ${batch.map((p) => p.twitter_handle)}::text[],
+                      ${batch.map((p) => String(p.is_sticky))}::text[]) AS t(s, dn, de, lu, wu, th, st)
         ON CONFLICT (slug) DO UPDATE SET
           display_name = EXCLUDED.display_name, description = EXCLUDED.description,
           logo_url = EXCLUDED.logo_url, website_url = EXCLUDED.website_url, twitter_handle = EXCLUDED.twitter_handle,
-          is_sticky = EXCLUDED.is_sticky, status = 'active', resolved_at = now(), updated_at = now()
-        RETURNING id`;
-      const pid = id as string;
+          is_sticky = EXCLUDED.is_sticky, status = 'active', resolved_at = EXCLUDED.resolved_at, updated_at = now()
+        RETURNING id, slug`;
+      for (const r of returned) idBySlug.set(r.slug as string, r.id as string);
+      upserted += batch.length;
+    }
 
-      for (const a of p.agents) {
-        await tx`
-          INSERT INTO openclaw_agents (project_id, name, protocol_standard, wallet_address, virtuals_agent_id,
-            x402_score, x402_txn_count, x402_resources_count, x402_volume_usd, productivity_score, source_confidence, enriched_at)
-          VALUES (${pid}, ${a.name}, ${a.protocol_standard}, ${a.wallet_address ?? null}, ${a.virtuals_agent_id ?? null},
-            ${a.x402_score ?? null}, ${a.x402_txn_count ?? null}, ${a.x402_resources_count ?? null}, ${a.x402_volume_usd ?? null},
-            ${a.productivity_score ?? null}, ${a.source_confidence ?? null}, now())
-          ON CONFLICT (project_id, name) DO UPDATE SET
-            protocol_standard = EXCLUDED.protocol_standard, wallet_address = EXCLUDED.wallet_address,
-            virtuals_agent_id = EXCLUDED.virtuals_agent_id, x402_score = EXCLUDED.x402_score,
-            x402_txn_count = EXCLUDED.x402_txn_count, x402_resources_count = EXCLUDED.x402_resources_count,
-            x402_volume_usd = EXCLUDED.x402_volume_usd, productivity_score = EXCLUDED.productivity_score,
-            source_confidence = EXCLUDED.source_confidence, enriched_at = now()`;
+    const pid = (slug: string): string => {
+      const id = idBySlug.get(slug);
+      if (!id) throw new Error(`projects.discover: project ${slug} was upserted but returned no id`);
+      return id;
+    };
+
+    const agentRows = projects.flatMap((p) => p.agents.map((a) => ({ pid: pid(p.slug), a })));
+    for (const batch of chunked(agentRows)) {
+      await tx`
+        INSERT INTO openclaw_agents (project_id, name, protocol_standard, wallet_address, virtuals_agent_id,
+          x402_score, x402_txn_count, x402_resources_count, x402_volume_usd, productivity_score,
+          source_confidence, enriched_at)
+        SELECT p::uuid, n, ps, wa, va, xs::numeric, xt::integer, xr::integer, xv::numeric, prod::numeric, sc, ${discoveredAt}
+          FROM unnest(${batch.map((r) => r.pid)}::text[], ${batch.map((r) => r.a.name)}::text[],
+                      ${batch.map((r) => r.a.protocol_standard)}::text[],
+                      ${batch.map((r) => r.a.wallet_address ?? null)}::text[],
+                      ${batch.map((r) => r.a.virtuals_agent_id ?? null)}::text[],
+                      ${batch.map((r) => numText(r.a.x402_score))}::text[],
+                      ${batch.map((r) => numText(r.a.x402_txn_count))}::text[],
+                      ${batch.map((r) => numText(r.a.x402_resources_count))}::text[],
+                      ${batch.map((r) => numText(r.a.x402_volume_usd))}::text[],
+                      ${batch.map((r) => numText(r.a.productivity_score))}::text[],
+                      ${batch.map((r) => r.a.source_confidence ?? null)}::text[])
+               AS t(p, n, ps, wa, va, xs, xt, xr, xv, prod, sc)
+        ON CONFLICT (project_id, name) DO UPDATE SET
+          protocol_standard = EXCLUDED.protocol_standard, wallet_address = EXCLUDED.wallet_address,
+          virtuals_agent_id = EXCLUDED.virtuals_agent_id, x402_score = EXCLUDED.x402_score,
+          x402_txn_count = EXCLUDED.x402_txn_count, x402_resources_count = EXCLUDED.x402_resources_count,
+          x402_volume_usd = EXCLUDED.x402_volume_usd, productivity_score = EXCLUDED.productivity_score,
+          source_confidence = EXCLUDED.source_confidence, enriched_at = EXCLUDED.enriched_at`;
+    }
+
+    const coinRows = projects.flatMap((p) => p.coins.map((c) => ({ pid: pid(p.slug), c })));
+    for (const batch of chunked(coinRows)) {
+      await tx`
+        INSERT INTO lobster_coins (project_id, name, ticker, coingecko_id, contract_address, chain)
+        SELECT p::uuid, n, tk, cg, ca, ch
+          FROM unnest(${batch.map((r) => r.pid)}::text[], ${batch.map((r) => r.c.name)}::text[],
+                      ${batch.map((r) => r.c.ticker)}::text[],
+                      ${batch.map((r) => r.c.coingecko_id ?? null)}::text[],
+                      ${batch.map((r) => r.c.contract_address ?? null)}::text[],
+                      ${batch.map((r) => r.c.chain ?? null)}::text[]) AS t(p, n, tk, cg, ca, ch)
+        ON CONFLICT (project_id, name) DO UPDATE SET
+          ticker = EXCLUDED.ticker, coingecko_id = EXCLUDED.coingecko_id,
+          contract_address = EXCLUDED.contract_address, chain = EXCLUDED.chain`;
+    }
+
+    const walletRows = projects.flatMap((p) => p.wallets.map((w) => ({ pid: pid(p.slug), w })));
+    for (const batch of chunked(walletRows)) {
+      await tx`
+        INSERT INTO tracked_wallets (project_id, label, chain, address)
+        SELECT p::uuid, l, ch, ad
+          FROM unnest(${batch.map((r) => r.pid)}::text[], ${batch.map((r) => r.w.label)}::text[],
+                      ${batch.map((r) => r.w.chain)}::text[], ${batch.map((r) => r.w.address)}::text[])
+               AS t(p, l, ch, ad)
+        ON CONFLICT (project_id, label) DO UPDATE SET chain = EXCLUDED.chain, address = EXCLUDED.address`;
+    }
+
+    const vaultRows = projects.flatMap((p) => p.vaults.map((v) => ({ pid: pid(p.slug), v })));
+    for (const batch of chunked(vaultRows)) {
+      await tx`
+        INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, protocol, data_source)
+        SELECT p::uuid, n, va, ch, st, pr, ds
+          FROM unnest(${batch.map((r) => r.pid)}::text[], ${batch.map((r) => r.v.name)}::text[],
+                      ${batch.map((r) => r.v.vault_address ?? null)}::text[],
+                      ${batch.map((r) => r.v.chain ?? null)}::text[],
+                      ${batch.map((r) => r.v.strategy_type ?? null)}::text[],
+                      ${batch.map((r) => r.v.protocol ?? null)}::text[],
+                      ${batch.map((r) => r.v.data_source ?? null)}::text[]) AS t(p, n, va, ch, st, pr, ds)
+        ON CONFLICT (project_id, name) DO UPDATE SET
+          vault_address = EXCLUDED.vault_address, chain = EXCLUDED.chain, strategy_type = EXCLUDED.strategy_type,
+          protocol = EXCLUDED.protocol, data_source = EXCLUDED.data_source`;
+    }
+
+    // ── Reconciliation ────────────────────────────────────────────────────
+    // Without this, discovery is append-only: `projections.ts` serves
+    // `WHERE status = 'active'`, nothing else in the repo ever deactivates a
+    // project, and so a project dropped from the roster — or the entire roster,
+    // if this change were reverted — stays in the public directory forever with
+    // a frozen resolved_at, removable only by hand-written SQL against prod.
+    // Rows are marked inactive, NEVER deleted: their facet/snapshot history is
+    // FK-linked and a later run that re-discovers the slug flips it back.
+    // Scoped to `resolved_at IS NOT NULL` so only rows a previous discovery run
+    // wrote are eligible — a demo-seeded or manually inserted project is never
+    // touched by a discovery pass that has no opinion about it.
+    const floor = Math.ceil(activeBefore * (1 - DISCOVERY_SHRINK_FLOOR_RATIO));
+    if (!allowShrink && activeBefore > 0 && projects.length < floor) {
+      shrinkRefusal =
+        `discovered ${projects.length} project(s) against ${activeBefore} currently active — below the ` +
+        `${Math.round(DISCOVERY_SHRINK_FLOOR_RATIO * 100)}% shrink floor of ${floor}; deactivation SKIPPED ` +
+        `(re-enqueue with payload {"allowShrink":true} if the roster really did shrink)`;
+      console.error(`[projects.discover] ${shrinkRefusal}`);
+    } else {
+      const slugs = projects.map((p) => p.slug);
+      const removed = await tx`
+        UPDATE projects SET status = 'inactive', updated_at = now()
+         WHERE status = 'active' AND resolved_at IS NOT NULL AND NOT (slug = ANY(${slugs}))
+        RETURNING id`;
+      deactivated = removed.length;
+      if (deactivated > 0) {
+        console.warn(`[projects.discover] deactivated ${deactivated} project(s) absent from the discovered roster`);
       }
-      for (const c of p.coins) {
-        await tx`
-          INSERT INTO lobster_coins (project_id, name, ticker, coingecko_id, contract_address, chain)
-          VALUES (${pid}, ${c.name}, ${c.ticker}, ${c.coingecko_id ?? null}, ${c.contract_address ?? null}, ${c.chain ?? null})
-          ON CONFLICT (project_id, name) DO UPDATE SET
-            ticker = EXCLUDED.ticker, coingecko_id = EXCLUDED.coingecko_id,
-            contract_address = EXCLUDED.contract_address, chain = EXCLUDED.chain`;
-      }
-      for (const w of p.wallets) {
-        await tx`
-          INSERT INTO tracked_wallets (project_id, label, chain, address)
-          VALUES (${pid}, ${w.label}, ${w.chain}, ${w.address})
-          ON CONFLICT (project_id, label) DO UPDATE SET chain = EXCLUDED.chain, address = EXCLUDED.address`;
-      }
-      for (const v of p.vaults) {
-        await tx`
-          INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, protocol, data_source)
-          VALUES (${pid}, ${v.name}, ${v.vault_address ?? null}, ${v.chain ?? null}, ${v.strategy_type ?? null}, ${v.protocol ?? null}, ${v.data_source ?? null})
-          ON CONFLICT (project_id, name) DO UPDATE SET
-            vault_address = EXCLUDED.vault_address, chain = EXCLUDED.chain, strategy_type = EXCLUDED.strategy_type,
-            protocol = EXCLUDED.protocol, data_source = EXCLUDED.data_source`;
-      }
-      upserted++;
     }
   });
-  return { ok: true, status: "ok", projects: upserted };
+  return { ok: true, status: "ok", projects: upserted, deactivated, shrinkRefusal };
 }
 
 // ── Market refresh ───────────────────────────────────────────────────────────

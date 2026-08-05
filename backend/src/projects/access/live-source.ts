@@ -9,6 +9,14 @@
 // the volatile metrics (market cap / FDV / 24h / revenue / TVL) are all fetched
 // live here. Fully-autonomous multi-source discovery (the legacy 1963-line
 // discover-agents crawler) is a tracked follow-up — see the issue open_questions.
+//
+// The discovery seed itself (R11 follow-up —
+// docs/audits/v0-v1-parity/R11-projects-supabase-audit.md, Verdict) is the REAL v0
+// project/agent/coin/wallet/vault identity roster, committed at
+// ../seed/v0-roster-data.json and loaded network-free via ../seed/roster-seed.ts.
+// It is regenerated deliberately by an operator via
+// `bun run projects-roster-seed:regenerate` (scripts/projects-roster-seed-
+// regenerate.ts) — never implicitly here.
 import { config, resolveBaseRpcSource, resolvePriceSource, resolveTrackedAssets } from "../../config.ts";
 import { callAsset, callDecimals, callTotalAssets, type RpcCallOptions } from "../../chain/base-rpc-client.ts";
 import {
@@ -19,7 +27,7 @@ import {
 } from "../../chain/wallet-valuation.ts";
 import type { CoinGeckoMarketRow, DexPayload } from "../transforms.ts";
 import type { DiscoveredProject, Erc4626Read, ProjectsDataSource } from "./data-source.ts";
-import { DISCOVERY_DATASET } from "../fixtures/dataset.ts";
+import { loadV0RosterWithManifest, type LoadedRosterSeed } from "../seed/roster-seed.ts";
 
 const CG_BASE = "https://api.coingecko.com/api/v3";
 const DEX_BASE = "https://api.dexscreener.com/latest/dex/tokens";
@@ -69,11 +77,34 @@ async function dexPriceUsd(chain: string, address: string): Promise<number> {
   return parseFloat(best.priceUsd);
 }
 
+// The committed artifact cannot change while this process runs, and the pair is
+// ~30k lines, so parse+validate it once and serve both discoverProjects() and
+// discoveredAsOf() from the SAME validated load — never two independent reads
+// that could disagree. A rejection is not cached: a transient failure must be
+// retryable on the next scheduled run.
+let seedLoad: Promise<LoadedRosterSeed> | null = null;
+function loadedSeed(): Promise<LoadedRosterSeed> {
+  seedLoad ??= loadV0RosterWithManifest().catch((err) => {
+    seedLoad = null;
+    throw err;
+  });
+  return seedLoad;
+}
+
 export const liveProjectsDataSource: ProjectsDataSource = {
   kind: "live",
 
   async discoverProjects(): Promise<DiscoveredProject[]> {
-    return structuredClone(DISCOVERY_DATASET);
+    // Deep-clone so a handler mutating a record can never corrupt the seed
+    // (same discipline as fixture-source.ts's discoverProjects).
+    return structuredClone((await loadedSeed()).projects);
+  },
+
+  // The roster's REAL capture time, straight from the checksum-validated
+  // manifest — what the discovery handler stamps onto the rows it persists
+  // instead of now(). See ../seed/roster-seed.ts's loadV0RosterWithManifest.
+  async discoveredAsOf(): Promise<string | null> {
+    return (await loadedSeed()).manifest.generatedAt;
   },
 
   async coinGeckoMarkets(ids: string[]): Promise<CoinGeckoMarketRow[]> {
