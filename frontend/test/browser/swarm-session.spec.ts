@@ -1,9 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
-// Issue #498 — browser coverage for the two session-page data defects the v0
-// archive backport exposed. Both were previously proven only by an ad-hoc
-// headless sweep over the imported archive; a sweep is not a CI check, so the
-// behaviours are pinned here as executed assertions.
+// Issue #498 — browser coverage for the session-page data defects the v0
+// archive backport exposed. The first two were previously proven only by an
+// ad-hoc headless sweep over the imported archive; a sweep is not a CI check,
+// so the behaviours are pinned here as executed assertions. DEFECTS 3 and 4
+// come from the review-data-integrity pass on this PR (F2 and F4) — both are
+// about a true value being rendered as a claim it does not support.
 //
 // DEFECT 1 — the target was missing. `bucket_weights` sessions drew
 // "Recommended" alone: a session proposing 97/3 against a published 95/5
@@ -18,6 +20,18 @@ import { expect, test, type Page } from "@playwright/test";
 // archive-preferred date. Every date now goes to the API first and the static
 // archive is a fallback, so 2026-06-26..06-30 — dates the database holds and
 // the archive does not — reach their session.
+//
+// DEFECT 3 — every archived take was described as a failed signature check.
+// `verified: false` had exactly one wording behind it ("this take's signature
+// did not check out … treat it as unattributed"), and the 216 backported takes
+// were never member-signed at all, so nothing was ever checked. Archival is now
+// its own state, and both wordings are asserted below.
+//
+// DEFECT 4 — historical sessions were graded against today's target.
+// /api/dashboards/allocation serves the single CURRENT framework row, so a
+// 2026-05-25 session was being flagged "⚠ deviates from target" against a
+// target published 2026-06-02 — and an admin edit rewrote that verdict
+// retroactively.
 //
 // WHY THE API IS MOCKED. These are assertions about the RENDER, not about what
 // the demo stack happens to have seeded: the exact bucket weights and the
@@ -43,12 +57,21 @@ const MEMBERS = {
 };
 
 // Shaped like the API's session-detail takes (snake_case, real take ids, and
-// verified:false — which is exactly what the v0 archival import produces, since
-// its Ed25519 key is deliberately not registered in swarm_member_keys).
+// verified:false + archival:true — which is exactly what the v0 archival import
+// produces: the takes were published before member key registration existed, so
+// they were never member-signed and their signing key is deliberately not in
+// swarm_member_keys).
 const TAKES = [
-  { id: "take-athena", member_id: "athena", member_name: "Athena", stance: "hold", confidence: 0.7, body: "ARCHIVE IMPORT MARKER — athena take body.", verified: false },
-  { id: "take-draco", member_id: "draco", member_name: "Draco", stance: "trim", confidence: 0.55, body: "ARCHIVE IMPORT MARKER — draco take body.", verified: false },
-  { id: "take-vesta", member_id: "vesta", member_name: "Vesta", stance: "hold", confidence: 0.6, body: "ARCHIVE IMPORT MARKER — vesta take body.", verified: false },
+  { id: "take-athena", member_id: "athena", member_name: "Athena", stance: "hold", confidence: 0.7, body: "ARCHIVE IMPORT MARKER — athena take body.", verified: false, archival: true },
+  { id: "take-draco", member_id: "draco", member_name: "Draco", stance: "trim", confidence: 0.55, body: "ARCHIVE IMPORT MARKER — draco take body.", verified: false, archival: true },
+  { id: "take-vesta", member_id: "vesta", member_name: "Vesta", stance: "hold", confidence: 0.6, body: "ARCHIVE IMPORT MARKER — vesta take body.", verified: false, archival: true },
+];
+
+// A LIVE member submission whose signature genuinely failed to verify. Same
+// verified:false as the archive rows above, and a completely different claim
+// about why — which is the distinction this spec exists to pin.
+const FAILED_TAKES = [
+  { id: "take-athena", member_id: "athena", member_name: "Athena", stance: "hold", confidence: 0.7, body: "LIVE SUBMISSION MARKER — athena take body.", verified: false, archival: false },
 ];
 
 // The published framework /api/dashboards/allocation serves. Note the spelling:
@@ -56,6 +79,10 @@ const TAKES = [
 // id `conservative_defi_yield` cannot reproduce — the two sides are matched on
 // letters-and-digits only, and the framework's own spelling is what renders.
 const ALLOCATION = {
+  // The framework is a SINGLE CURRENT row with no history, so `asOf` is the
+  // only handle a reader has on when the target being drawn was set. 2026-06-02
+  // is the seeded value, which postdates the earliest archived sessions.
+  asOf: "2026-06-02",
   strategy: [
     { label: "Conservative DeFi Yield", targetPct: 95 },
     { label: "Directional Crypto", targetPct: 5 },
@@ -245,12 +272,102 @@ for (const [date, subjectId, subjectName] of [
     await expect(page.locator(".sv__error")).toBeHidden();
     await expect(page.locator(".sv__take")).toHaveCount(3);
     await expect(page.locator(".sv__take-body").first()).toContainText("ARCHIVE IMPORT MARKER");
-    // Takes imported from the v0 archive are signed with a key that is not
-    // registered, so the page must show them as unverified rather than
-    // claiming a verification it cannot make.
-    await expect(page.locator("[data-verified-badge]").first()).toHaveAttribute("data-verified-state", /unverified/i);
+    // Takes imported from the v0 archive are ARCHIVED, not unverified: the
+    // page must not claim a verification it cannot make, and must not claim a
+    // signature check that never happened either.
+    await expect(page.locator("[data-verified-badge]").first()).toHaveAttribute("data-verified-state", /archived/i);
   });
 }
+
+// review-data-integrity F2. verified:false carried one sentence — "This take's
+// signature did not check out against the member's public key. Treat it as
+// unattributed." — and the archive backport routed 216 takes that were never
+// member-signed straight into it. The badge STATE was already asserted above;
+// the state was never the wrong part. The copy was. Both cases are asserted
+// here, in the same render, because the bug is that one wording served two
+// incompatible meanings.
+test("an archival take is labelled archived and never described as a failed signature check", async ({ page }) => {
+  await mockSessionApi(page, { session: positionSession("2026-06-26", "robotmoney-vault", "Robot Money Vault"), allocation: ALLOCATION });
+
+  await page.goto("/swarm/2026-06-26/robotmoney-vault");
+
+  const badge = page.locator("[data-verified-badge]").first();
+  await expect(badge).toHaveAttribute("data-verified-state", "archived");
+  // aria-label carries the full sentence, so this is the text a screen-reader
+  // user is actually given — not a hover-only tooltip.
+  const label = await badge.getAttribute("aria-label");
+  expect(label).toContain("never member-signed");
+  expect(label).toContain("not a failed signature check");
+  expect(label).not.toContain("did not check out");
+  expect(label).not.toContain("unattributed");
+  // The visible tooltip says the same thing as the aria-label.
+  await expect(page.locator(".sv__vfy-tip").first()).toContainText("never member-signed");
+  // And it is not styled as a failure.
+  await expect(badge).toHaveClass(/sv__vfy--arch/);
+  await expect(badge).not.toHaveClass(/sv__vfy--bad/);
+});
+
+test("a live submission whose signature failed still gets the failed-check wording", async ({ page }) => {
+  await mockSessionApi(page, {
+    session: positionSession("2026-06-26", "robotmoney-vault", "Robot Money Vault"),
+    takes: FAILED_TAKES,
+    allocation: ALLOCATION,
+  });
+
+  await page.goto("/swarm/2026-06-26/robotmoney-vault");
+
+  const badge = page.locator("[data-verified-badge]").first();
+  await expect(badge).toHaveAttribute("data-verified-state", "unverified");
+  const label = await badge.getAttribute("aria-label");
+  expect(label).toContain("did not check out");
+  expect(label).toContain("unattributed");
+  await expect(badge).toHaveClass(/sv__vfy--bad/);
+  await expect(badge).not.toHaveClass(/sv__vfy--arch/);
+});
+
+// review-data-integrity F4. /api/dashboards/allocation serves the single
+// CURRENT allocation_framework row, and it is admin-editable. Joining a
+// historical session against it measures the swarm against a target that did
+// not exist yet, and lets an edit today silently rewrite yesterday's verdict.
+// The bars still draw — the comparison is informative — but the ⚠ finding is
+// withheld and the caption names the target's own asOf.
+test("a session that predates the published framework draws the target for reference and withholds the deviation verdict", async ({ page }) => {
+  // 2026-05-25 is the archive's first session; ALLOCATION.asOf is 2026-06-02.
+  await mockSessionApi(page, {
+    session: bucketSession("2026-05-25", { conservative_defi_yield: 0.97, directional_crypto: 0.03 }),
+    allocation: ALLOCATION,
+  });
+
+  await page.goto("/swarm/2026-05-25/robotmoney-allocation");
+
+  await expect(page.locator(".sv__error")).toBeHidden();
+  const chart = await bucketChartText(page);
+  expect(chart).toContain("T 95");
+  expect(chart).toContain("R 97");
+  // 97 vs 95 is a two-point gap — well past the 0.005 tolerance — so this is
+  // suppressed BECAUSE of the date, not because the numbers agree.
+  await expect(page.locator(".sv__deviates")).toBeHidden();
+  // Case-insensitive: the caption is uppercased by CSS text-transform, which
+  // innerText (unlike textContent) applies — same convention as the bucket
+  // caption assertions above.
+  await expect(page.locator("[data-target-asof]")).toContainText(/target as published/i, { useInnerText: true });
+  await expect(page.locator("[data-target-asof]")).toContainText(/after this session, so it is shown for reference only/i, { useInnerText: true });
+});
+
+test("a session dated after the published framework still gets the deviation verdict, captioned with the target's date", async ({ page }) => {
+  await mockSessionApi(page, {
+    session: bucketSession("2026-08-03", { conservative_defi_yield: 0.97, directional_crypto: 0.03 }),
+    allocation: ALLOCATION,
+  });
+
+  await page.goto("/swarm/2026-08-03/robotmoney-allocation");
+
+  await expect(page.locator(".sv__deviates")).toBeVisible();
+  await expect(page.locator("[data-target-asof]")).toContainText(/target as published/i, { useInnerText: true });
+  // The reference-only clause is an x-show span: present in the DOM, hidden by
+  // CSS, so useInnerText is what makes this "not on screen".
+  await expect(page.locator("[data-target-asof]")).not.toContainText(/reference only/i, { useInnerText: true });
+});
 
 test("a date the static archive DOES cover is read from the API, not from the checked-in archive", async ({ page }) => {
   // 2026-06-25/woon is the archive's last session and a file that really

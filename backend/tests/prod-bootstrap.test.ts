@@ -16,9 +16,6 @@ import { loadV0Archive } from "../src/swarm/v0-archive.ts";
 const MEMBER_IDS = ["athena", "robotmoney", "woon"];
 const SUBJECT_IDS = ["robotmoney-allocation", "robotmoney-treasury", "robotmoney-vault", "woon"];
 
-// A throwaway archival key: runV0SeedBootstrap() signs v0's takes with it at
-// import time and REFUSES to run without one, so the orchestrator under test
-// here cannot reach its v0-seed step unless this is set.
 // Expected v0-seed summary, derived from the committed archive rather than
 // hard-coded: the counts change every time the artifact is regenerated.
 let expectedV0Summary = "";
@@ -30,9 +27,10 @@ beforeAll(async () => {
     `${manifest.counts.members} members, ${manifest.counts.subjects} subjects, ` +
     `${manifest.counts.sessions} sessions, ${takes} takes, ` +
     `${manifest.counts.snapshots} snapshots, ${manifest.counts.briefs} briefs inserted, 0 drift`;
-  const kp = (await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"])) as CryptoKeyPair;
-  const pkcs8 = await crypto.subtle.exportKey("pkcs8", kp.privateKey);
-  process.env.V0_ARCHIVE_SIGNING_KEY = Buffer.from(pkcs8).toString("base64");
+  // The archival signing key is published (src/swarm/v0-archive.ts), so the
+  // orchestrator needs no key wired in; clear any ambient one so this runs
+  // against the key the repo ships with.
+  delete process.env.V0_ARCHIVE_SIGNING_KEY;
 });
 
 async function cleanArchiveRows(): Promise<void> {
@@ -82,7 +80,7 @@ async function freePort(): Promise<number> {
   });
 }
 
-test("cold DB: all three steps run, v0-seed inserts 3/4/32, edgar cleanly skips without ANALYTICS_TOKEN, nothing failing", async () => {
+test("cold DB: all three steps run, v0-seed inserts the archive's full manifest counts, edgar cleanly skips without ANALYTICS_TOKEN, nothing failing", async () => {
   delete process.env.ANALYTICS_TOKEN;
 
   const reports = await runProdBootstrap();

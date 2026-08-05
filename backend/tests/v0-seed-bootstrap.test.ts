@@ -10,6 +10,11 @@
 //   • idempotent: a second run against the now-seeded DB is a clean no-op
 //   • drift-detection: a deliberate mutation of an existing row is reported
 //     field-by-field and NEVER silently overwritten
+//   • PROVENANCE: every take is filed at the timestamp v0 recorded, never at
+//     the bootstrap run's clock, and is signed by the published archival key —
+//     with drift detection over both (review-data-integrity F1 and F3)
+//   • the read boundary reports these rows as ARCHIVAL, which is not the same
+//     statement as a failed signature check (F2)
 //
 // Counts are read from the archive manifest rather than hard-coded, so
 // regenerating the artifact (scripts/v0-seed-regenerate.ts) against a newer
@@ -19,19 +24,19 @@
 import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { runV0SeedBootstrap } from "../scripts/v0-seed-bootstrap.ts";
-import { loadV0Archive } from "../src/swarm/v0-archive.ts";
+import { loadV0Archive, V0_ARCHIVE_PUBLIC_KEY_B64 } from "../src/swarm/v0-archive.ts";
 import { verifyStoredSubmissionSignature } from "../src/lib/signing.ts";
+import { getMemberTakes, getSession, getTakeReceipt } from "../src/swarm/domain.ts";
 
 const MEMBER_IDS = ["athena", "robotmoney", "woon"];
 const SUBJECT_IDS = ["robotmoney-allocation", "robotmoney-treasury", "robotmoney-vault", "woon"];
 
-// A throwaway archival key for the suite. Generated once per process, so both
-// runs inside the idempotency test sign identically (Ed25519 is deterministic)
-// and the second run is a true no-op rather than a signature churn.
-beforeAll(async () => {
-  const kp = (await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"])) as CryptoKeyPair;
-  const pkcs8 = await crypto.subtle.exportKey("pkcs8", kp.privateKey);
-  process.env.V0_ARCHIVE_SIGNING_KEY = Buffer.from(pkcs8).toString("base64");
+// No key is set: the importer uses the PUBLISHED archival key
+// (v0-archive.ts). Any ambient V0_ARCHIVE_SIGNING_KEY is cleared so the
+// signature assertions below are about the key this repo actually ships with,
+// not whatever happens to be exported in the runner's environment.
+beforeAll(() => {
+  delete process.env.V0_ARCHIVE_SIGNING_KEY;
 });
 
 async function cleanArchiveRows(): Promise<void> {
@@ -199,4 +204,155 @@ test("snapshots and briefs carry real content, not empty rows", async () => {
     SELECT body FROM swarm_briefs WHERE subject_id = ANY(${SUBJECT_IDS}) LIMIT 1`;
   expect(brief).toBeDefined();
   expect(Object.keys(brief.body).length).toBeGreaterThan(0);
+});
+
+// ── Provenance (review-data-integrity F1) ───────────────────────────────────
+//
+// swarm_recommendations.received_at is NOT NULL DEFAULT now(), so an INSERT
+// that omits it does not leave the column empty — it stamps the bootstrap
+// run's wall clock on all 216 archive takes and calls that their filing time.
+// /swarm/takes/<id> renders exactly that value as "Filed <date> <HH:MM> UTC",
+// and the table is append-only, so the correction after a bad import is a
+// DELETE rather than a rerun.
+//
+// RED CONTROL. Dropping `received_at` from the INSERT and from the drift field
+// list in processTake() — i.e. reverting to the reviewed head — makes both
+// tests below fail: the first on the very first take (received_at is the run
+// clock, not 2026-05-25T01:33:30.430Z), the second because the mutation is
+// never reported. The "run start" assertion is the half that cannot be
+// satisfied by any constant: it fails for anything derived from now().
+test("every imported take is filed at the artifact's generated_at, never at the run clock", async () => {
+  const runStart = new Date();
+  await runV0SeedBootstrap();
+
+  const { payload } = await loadV0Archive();
+  const expected = new Map<string, string>();
+  for (const sess of payload.sessions) {
+    for (const take of sess.takes ?? []) {
+      expected.set(`${sess.subject_id}|${sess.date}|${take.member_id}`, (take.generated_at ?? sess.generated_at)!);
+    }
+  }
+  expect(expected.size).toBeGreaterThan(0);
+
+  const rows = await sql<{ subject_id: string; date: string; member_id: string; received_at: Date }[]>`
+    SELECT subject_id, to_char(date, 'YYYY-MM-DD') AS date, member_id, received_at
+    FROM swarm_recommendations WHERE subject_id = ANY(${SUBJECT_IDS})`;
+  expect(rows.length).toBe(expected.size);
+
+  for (const r of rows) {
+    const key = `${r.subject_id}|${r.date}|${r.member_id}`;
+    const want = expected.get(key);
+    expect(want).toBeDefined();
+    expect(new Date(r.received_at).toISOString()).toBe(new Date(want!).toISOString());
+    // The property no constant can fake: v0 filed these before this process
+    // existed, so not one of them may carry a timestamp from this run.
+    expect(new Date(r.received_at).getTime()).toBeLessThan(runStart.getTime());
+  }
+});
+
+test("drift: a mutated received_at is reported and never silently overwritten", async () => {
+  await runV0SeedBootstrap();
+
+  const [target] = await sql<{ id: string; received_at: Date }[]>`
+    SELECT id, received_at FROM swarm_recommendations
+    WHERE subject_id = 'woon' ORDER BY date, member_id LIMIT 1`;
+  const tampered = "2020-01-01T00:00:00.000Z";
+  await sql`UPDATE swarm_recommendations SET received_at = ${tampered} WHERE id = ${target.id}`;
+
+  const result = await runV0SeedBootstrap();
+
+  expect(result.takes.inserted).toBe(0);
+  expect(result.takes.drifted).toBe(1);
+  const drift = result.drifts.find((d) => d.entity === "swarm_recommendations" && d.field === "received_at");
+  expect(drift).toBeDefined();
+  expect(new Date(drift!.oldValue as string).toISOString()).toBe(tampered);
+  expect(new Date(drift!.newValue as string).toISOString()).toBe(new Date(target.received_at).toISOString());
+
+  const [{ received_at }] = await sql<{ received_at: Date }[]>`
+    SELECT received_at FROM swarm_recommendations WHERE id = ${target.id}`;
+  expect(new Date(received_at).toISOString()).toBe(tampered);
+});
+
+// ── Attributable signatures (F3) ────────────────────────────────────────────
+//
+// The archival key used to be minted per run and discarded, so nobody —
+// including us — could say which key signed a given archive row, and an import
+// interrupted under one key and resumed under another was undetectable
+// (`signature` was not drift-checked). The key is now published and the column
+// is drift-checked, which is what these two assert.
+test("every imported take verifies against the PUBLISHED archival key, and only that key", async () => {
+  await runV0SeedBootstrap();
+
+  const rows = await sql<{ signature: string; payload: Record<string, unknown> }[]>`
+    SELECT signature, payload FROM swarm_recommendations WHERE subject_id = ANY(${SUBJECT_IDS})`;
+  expect(rows.length).toBeGreaterThan(0);
+
+  for (const r of rows) {
+    const ok = await verifyStoredSubmissionSignature({
+      submission: r.payload as never,
+      signatureB64: r.signature,
+      publicKeyB64: V0_ARCHIVE_PUBLIC_KEY_B64,
+    });
+    expect(ok).toBe(true);
+  }
+
+  // Attributable is not the same as authoritative: the archival key is still
+  // deliberately absent from swarm_member_keys, so no read path can ever
+  // report one of these as a verified member submission.
+  const [{ n }] = await sql<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM swarm_member_keys WHERE member_id = ANY(${MEMBER_IDS}) AND active`;
+  expect(n).toBe(0);
+});
+
+test("drift: a take signed by a different key is reported rather than read as unchanged", async () => {
+  await runV0SeedBootstrap();
+
+  const [target] = await sql<{ id: string; signature: string }[]>`
+    SELECT id, signature FROM swarm_recommendations
+    WHERE subject_id = 'woon' ORDER BY date, member_id LIMIT 1`;
+  // What a resumed import under a second archival key leaves behind: a valid
+  // 64-byte Ed25519 signature over the same payload, made by someone else.
+  const foreign = Buffer.alloc(64, 7).toString("base64");
+  await sql`UPDATE swarm_recommendations SET signature = ${foreign} WHERE id = ${target.id}`;
+
+  const result = await runV0SeedBootstrap();
+
+  expect(result.takes.drifted).toBe(1);
+  const drift = result.drifts.find((d) => d.entity === "swarm_recommendations" && d.field === "signature");
+  expect(drift).toBeDefined();
+  expect(drift!.oldValue).toBe(foreign);
+  expect(drift!.newValue).toBe(target.signature);
+});
+
+// ── The read boundary tells archival from failed-verification (F2) ──────────
+//
+// verified:false answers "did this member's signature check out". For these
+// rows nothing was ever checked — they predate member key registration — and
+// the public surfaces rendered the false case as "this take's signature did
+// not check out. Treat it as unattributed." The projection now carries the
+// distinction, on all three read paths that serve takes.
+test("all three read paths report imported takes as archival, not as failed verification", async () => {
+  await runV0SeedBootstrap();
+
+  const detail = await getSession("2026-06-25", "woon");
+  expect(detail).not.toBeNull();
+  expect(detail!.takes.length).toBeGreaterThan(0);
+  for (const t of detail!.takes) {
+    expect(t.archival).toBe(true);
+    expect(t.verified).toBe(false);
+    // The filing time the receipt page renders, straight off the read path.
+    expect(t.receivedAt.startsWith("2026-06-25")).toBe(true);
+  }
+
+  const record = await getMemberTakes("woon", 50);
+  expect(record.takes.length).toBeGreaterThan(0);
+  expect(record.takes.every((r) => r.take.archival === true)).toBe(true);
+
+  const receipt = await getTakeReceipt(detail!.takes[0].id);
+  expect(receipt).not.toBeNull();
+  expect(receipt!.take.archival).toBe(true);
+  expect(receipt!.take.verified).toBe(false);
+  // No member key is registered for an archival take, so the receipt cannot
+  // offer a fingerprint to check it against — and must not invent one.
+  expect(receipt!.signer.publicKeyFingerprint).toBeNull();
 });
