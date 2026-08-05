@@ -242,7 +242,7 @@ export async function getMemberTakes(memberId: string, limit?: number) {
   const cappedLimit = parseSessionsLimit(limit);
   const rows = await sql`
     SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
-           r.memo_url, r.payload, r.signature, r.received_at,
+           r.memo_url, r.payload, r.signature, r.received_at, r.nonce,
            s.date AS session_date, s.subject_id, s.subject_name, s.state AS session_state,
            (SELECT k.public_key FROM swarm_member_keys k
             WHERE k.member_id = r.member_id AND k.active
@@ -308,7 +308,7 @@ export async function getSessionById(
 async function withTakes(s: Record<string, unknown>) {
   const takes = await sql`
     SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
-           r.memo_url, r.payload, r.signature, r.received_at,
+           r.memo_url, r.payload, r.signature, r.received_at, r.nonce,
            (SELECT k.public_key FROM swarm_member_keys k
             WHERE k.member_id = r.member_id AND k.active
             ORDER BY k.created_at DESC LIMIT 1) AS public_key
@@ -333,7 +333,7 @@ function hostedMemoId(memoUrl: string | null): number | null {
 export async function getTakeReceipt(id: string) {
   const row = (await sql`
     SELECT r.id, r.member_id, m.name AS member_name, r.stance, r.confidence, r.body,
-           r.memo_url, r.payload, r.signature, r.received_at,
+           r.memo_url, r.payload, r.signature, r.received_at, r.nonce,
            (SELECT k.public_key FROM swarm_member_keys k
             WHERE k.member_id = r.member_id AND k.active
             ORDER BY k.created_at DESC LIMIT 1) AS public_key

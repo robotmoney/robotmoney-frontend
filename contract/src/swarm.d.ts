@@ -86,6 +86,15 @@ export interface SwarmTake {
   memoUrl?: string | null;
   weights?: SwarmBucketWeight[];
   verified: boolean;
+  /**
+   * True when this take is v0 pre-launch archive content rather than a member
+   * submission — published before member key registration existed, so it was
+   * never member-signed. Distinct from `verified: false`, which means a
+   * signature was checked and did not match. Absent on payloads produced
+   * before this field existed (the shipped static archive JSON), where it is
+   * read as false.
+   */
+  archival?: boolean;
   receivedAt: string;
   // Optional provenance (legacy/prototype; absent for signed recommendations).
   sessionId?: string;

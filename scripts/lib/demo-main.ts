@@ -998,15 +998,6 @@ function render(): string[] {
 // passes `state` and `log` explicitly: `swarmProgress(state, subject.id, log)`.
 
 // --- Orchestration --------------------------------------------------------
-// A throwaway Ed25519 key for importing v0's takes when the operator has not
-// configured one. Never registered against a member, so every take it signs
-// reads back as verified:false — which is the truth about v0 narrative content
-// regardless of who signed it.
-async function generateV0ArchiveSigningKey(): Promise<string> {
-  const kp = (await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"])) as CryptoKeyPair;
-  return Buffer.from(await crypto.subtle.exportKey("pkcs8", kp.privateKey)).toString("base64");
-}
-
 async function main(): Promise<void> {
   // §11 R8: real inference is the demo's onboarding mode, never an optional
   // extra behind a flag — there is no hermetic/scripted onboarding fallback.
@@ -1159,18 +1150,17 @@ async function main(): Promise<void> {
   //
   // The signing key: v0's takes are signed at import so they can live in
   // swarm_recommendations without a fabricated signature (see
-  // backend/scripts/v0-seed-bootstrap.ts). An operator-held key is used when
-  // one is configured; otherwise this generates a throwaway per boot. That is
-  // safe for the demo and stays idempotent across re-boots on a persistent
-  // Postgres, because the signature is deliberately NOT one of the fields
-  // drift-checked on an existing row — and these rows report verified:false
-  // either way, since the key is never registered as a member key.
+  // backend/scripts/v0-seed-bootstrap.ts). The demo passes nothing — the
+  // importer uses the PUBLISHED archival key (src/swarm/v0-archive.ts). An
+  // earlier pass minted a throwaway key per boot and threw it away, which made
+  // re-boots on a persistent Postgres non-idempotent the moment `signature`
+  // became a drift-checked column, and made the resulting signatures
+  // attributable to nobody. The published key is deterministic, so a re-boot
+  // is a clean 0-drift no-op.
   setStep(state, "v0 archive", "running");
   log("importing v0 committee archive (sessions, takes, snapshots, briefs)…");
-  const v0SigningKey = process.env.V0_ARCHIVE_SIGNING_KEY || (await generateV0ArchiveSigningKey());
   await stack.composeAsync(
-    ["run", "--rm", "--no-deps", "-e", `V0_ARCHIVE_SIGNING_KEY=${v0SigningKey}`,
-      "api", "bun", "run", "scripts/v0-seed-bootstrap.ts"],
+    ["run", "--rm", "--no-deps", "api", "bun", "run", "scripts/v0-seed-bootstrap.ts"],
     "v0 committee archive bootstrap",
     { stdout: outFd, stderr: errFd },
   );

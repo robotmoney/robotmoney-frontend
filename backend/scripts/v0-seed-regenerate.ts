@@ -25,6 +25,7 @@
 // Usage:
 //   bun run scripts/v0-seed-regenerate.ts --source /path/to/v0-archive
 //   bun run scripts/v0-seed-regenerate.ts --source ../v0-archive --dry-run
+//   bun run scripts/v0-seed-regenerate.ts --source ../v0-archive --allow-shrink
 //
 // --source must be a checkout of robotmoney/v0-archive (the directory holding
 // manifest.json and current/). Its manifest.json supplies the provenance
@@ -37,6 +38,7 @@ import {
   DEFAULT_V0_ARCHIVE_PATH,
   DEFAULT_V0_ARCHIVE_MANIFEST_PATH,
   V0_ARCHIVE_FORMAT_VERSION,
+  assertNoCountRegression,
   computeChecksum,
   loadV0Archive,
   type V0ArchivePayload,
@@ -203,6 +205,21 @@ export async function main(): Promise<void> {
     },
     checksum: computeChecksum(canonicalText),
   };
+
+  // THE ONLY EXTERNAL CHECK THIS SCRIPT HAS. Everything else it validates is
+  // self-derived — the manifest is computed from whatever was just read, so a
+  // source checkout missing half its files produces an artifact that agrees
+  // with its own manifest perfectly. That is exactly how 32 of 72 sessions and
+  // 0 briefs shipped last time and passed every check. The committed manifest
+  // is the one number that did not come from this run, so a read that is
+  // SMALLER than it is refused. Skipped for --dry-run only in the sense that
+  // it still runs: a dry run that would shrink the artifact should say so.
+  if (!flag("allow-shrink")) {
+    const committed = existsSync(DEFAULT_V0_ARCHIVE_MANIFEST_PATH)
+      ? readJson<V0ArchiveManifest>(DEFAULT_V0_ARCHIVE_MANIFEST_PATH)
+      : null;
+    if (committed?.counts) assertNoCountRegression(manifest.counts, committed.counts);
+  }
 
   if (flag("dry-run")) {
     console.log("[v0-seed-regenerate] --dry-run: nothing written. Manifest would be:");

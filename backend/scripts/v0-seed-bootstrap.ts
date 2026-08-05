@@ -42,13 +42,17 @@
 // in the archive: take.model/usage, snapshot.fetched_at/source_type. The
 // artifact keeps saying exactly what v0 said.
 //
-// Usage: DATABASE_URL=... V0_ARCHIVE_SIGNING_KEY=... bun run scripts/v0-seed-bootstrap.ts
+// Usage: DATABASE_URL=... bun run scripts/v0-seed-bootstrap.ts
+// (V0_ARCHIVE_SIGNING_KEY overrides the published archival key; see
+// src/swarm/v0-archive.ts for why that key is published rather than secret.)
 // (wired as `bun run v0-seed:bootstrap` in package.json, and reached from the
 // repo root via `bun run bootstrap` -> backend prod-bootstrap)
 import { canonicalizeSubmission, signMessage } from "../src/lib/signing.ts";
 import { sql, closeDb, jsonValue } from "../src/db/client.ts";
 import {
   loadV0Archive,
+  V0_ARCHIVE_NONCE_PREFIX,
+  V0_ARCHIVE_SIGNING_KEY_PKCS8_B64,
   type V0Member,
   type V0Subject,
   type V0Session,
@@ -343,22 +347,26 @@ async function processSession(sess: V0Session, drifts: Drift[]): Promise<RowOutc
 // these rows reports verified:false on its own, forever, without anything
 // downstream having to know v0 existed.
 //
+// verified:false is NOT, however, the same statement as "this member's
+// signature failed to check out", and the read surfaces used to render it as
+// exactly that. The nonce prefix below is what lets them tell the difference
+// (projections.ts's `archival` flag) — these takes were published before member
+// key registration existed, so there is no member signature to have failed.
+//
 // Ed25519 is deterministic (RFC 8032): the same key over the same payload
 // always yields the same signature, so re-running the bootstrap is a clean
 // no-op rather than churning the signature column.
-const V0_IMPORT_NONCE_PREFIX = "v0-archive";
+const V0_IMPORT_NONCE_PREFIX = V0_ARCHIVE_NONCE_PREFIX;
 
+// The archival key is PUBLISHED (v0-archive.ts), not generated per run and not
+// required from the environment. The earlier design demanded an operator key
+// and, when the demo could not supply one, minted a throwaway per boot and
+// discarded it — so the same 216 rows were signed by a different key in every
+// deployment, by a key nobody held, and an import interrupted under one key and
+// resumed under another was undetectable. A published key makes the signature
+// reproducible everywhere, which is what lets it be drift-checked below.
 async function loadArchivalSigningKey(): Promise<CryptoKey> {
-  const b64 = process.env.V0_ARCHIVE_SIGNING_KEY;
-  if (!b64) {
-    throw new Error(
-      "V0_ARCHIVE_SIGNING_KEY is not set. Legacy takes are signed at import with an archival key so they can be " +
-        "stored in swarm_recommendations without a fabricated signature. Generate one with:\n" +
-        "  bun -e 'const k=await crypto.subtle.generateKey(\"Ed25519\",true,[\"sign\",\"verify\"]);" +
-        "console.log(Buffer.from(await crypto.subtle.exportKey(\"pkcs8\",k.privateKey)).toString(\"base64\"))'\n" +
-        "Keep it stable across runs: a different key produces different signatures for the same content.",
-    );
-  }
+  const b64 = process.env.V0_ARCHIVE_SIGNING_KEY || V0_ARCHIVE_SIGNING_KEY_PKCS8_B64;
   return crypto.subtle.importKey("pkcs8", Buffer.from(b64, "base64"), "Ed25519", false, ["sign"]);
 }
 
@@ -389,9 +397,29 @@ async function processTake(
   const submission = canonicalSubmissionFor(sess, take);
   const nonce = submission.nonce as string;
 
+  // WHEN v0 FILED THIS TAKE. `received_at` is NOT NULL DEFAULT now()
+  // (0004_committee.sql:41), so omitting it does not leave the column empty —
+  // it stamps every archive row with the bootstrap run's wall clock and calls
+  // that the filing time. swarm_recommendations is the append-only canonical
+  // take store and /swarm/takes/<id> renders this as "Filed <date> <HH:MM>
+  // UTC", so that is a falsified public receipt, written somewhere the fix is
+  // a DELETE rather than a rerun. The true value was in the artifact the whole
+  // time: all 216 takes carry a distinct `generated_at`.
+  //
+  // No fallback past the session's own generated_at: a take with neither
+  // timestamp hits the NOT NULL and fails the import loudly, which is the
+  // correct outcome. Silently substituting the run clock is the bug.
+  const receivedAt = take.generated_at ?? sess.generated_at ?? null;
+
+  // Ed25519 is deterministic, so this is the same 64 bytes on every run for
+  // the same content and key — which is what makes `signature` safe to
+  // drift-check rather than merely assert non-null. Computed before the
+  // lookup so both branches share it.
+  const signature = await signMessage(canonicalizeSubmission(submission as never), key);
+
   const existing = (
     await sql`
-      SELECT stance, confidence, body, nonce, payload
+      SELECT stance, confidence, body, nonce, payload, signature, received_at
       FROM swarm_recommendations WHERE session_id = ${sessionId} AND member_id = ${take.member_id}
     `
   )[0] as Record<string, unknown> | undefined;
@@ -402,18 +430,22 @@ async function processTake(
     { column: "body", kind: "text", expected: take.body },
     { column: "nonce", kind: "text", expected: nonce },
     { column: "payload", kind: "json", expected: submission },
+    // Without this, a row imported under a DIFFERENT archival key reads as
+    // "unchanged" forever — an interrupted-and-resumed import signed by two
+    // keys was invisible.
+    { column: "signature", kind: "text", expected: signature },
+    { column: "received_at", kind: "timestamp", expected: receivedAt },
   ];
   const naturalKey = `session=${sess.subject_id}/${sess.date}, member_id=${take.member_id}`;
 
   if (!existing) {
-    const signature = await signMessage(canonicalizeSubmission(submission as never), key);
     await sql`
       INSERT INTO swarm_recommendations
-        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, payload, signature, verified)
+        (session_id, member_id, subject_id, date, nonce, stance, confidence, body, payload, signature, verified, received_at)
       VALUES (
         ${sessionId}, ${take.member_id}, ${sess.subject_id}, ${sess.date}, ${nonce},
         ${take.stance ?? null}, ${take.confidence ?? null}, ${take.body ?? null},
-        ${sql.json(jsonValue(submission))}, ${signature}, false
+        ${sql.json(jsonValue(submission))}, ${signature}, false, ${receivedAt}
       )
     `;
     return "inserted";
