@@ -6,12 +6,18 @@
 // production module directly and assert on the exact geometry strings the
 // browser will render — no jsdom, no Playwright needed for the math itself
 // (dash-styleguide.spec.ts covers the rendered-in-a-real-page half).
+//
+// GEOMETRY ONLY. Colors deliberately live in
+// scripts/tests/unit/dash-color-css-lockstep.test.ts (issue #516): this file
+// used to assert the rendered stroke/fill against the very `DASH_COLOR`
+// constant that produced it, which cannot fail when those hex literals drift
+// from the dash.css `.a3` tokens they are a hand-copy of. The trend-routing
+// and color-value assertions now run there, anchored on the CSS instead.
+//
+// Runs in the required `unit.yml` job — `bun run test:unit`, and again in that
+// same workflow's `bun run test` sweep over scripts/tests.
 import { describe, expect, test } from "bun:test";
-import {
-  DASH_COLOR,
-  renderRowSparkline,
-  renderSparkline,
-} from "../../../frontend/public/assets/js/app/alpine/lib/sparkline.js";
+import { renderRowSparkline, renderSparkline } from "../../../frontend/public/assets/js/app/alpine/lib/sparkline.js";
 
 function pointsOf(svg: string): string {
   return svg.match(/<polyline[^>]*\bpoints="([^"]+)"/)?.[1] ?? "";
@@ -21,17 +27,12 @@ function pathDOf(svg: string): string {
   return svg.match(/<path[^>]*\bd="([^"]+)"/)?.[1] ?? "";
 }
 
-function fillOf(svg: string): string {
-  return svg.match(/<path[^>]*\bfill="([^"]+)"/)?.[1] ?? "";
-}
-
 describe("renderSparkline (default Sparkline, 80x24 stroke 1.5)", () => {
-  test("rising series: fixed points string, default accent color, no fill", () => {
+  test("rising series: fixed points string, no fill", () => {
     const svg = renderSparkline([1, 2, 3, 4]);
     expect(svg).toContain('viewBox="0 0 80 24"');
     expect(svg).toContain('width="80" height="24"');
     expect(pointsOf(svg)).toBe("0,22.5 26.67,15.5 53.33,8.5 80,1.5");
-    expect(svg).toContain(`stroke="${DASH_COLOR.accent}"`);
     expect(svg).toContain('stroke-width="1.5"');
     expect(svg).not.toContain("<path"); // polyline only, no area fill
   });
@@ -68,33 +69,15 @@ describe("renderRowSparkline (table-cell RowSparkline, 80x22 stroke 1.25, area f
     expect(renderRowSparkline([1, null, undefined, NaN])).toBe("—");
   });
 
-  test("rising >0.5% end-to-end auto-colors green (up) with a matching 12% area fill", () => {
+  // Area-path geometry and the 12%-opacity fill. WHICH color the trend routes
+  // to (and whether that color still matches dash.css) is asserted in
+  // scripts/tests/unit/dash-color-css-lockstep.test.ts.
+  test("rising >0.5% end-to-end draws a closed area path under the line", () => {
     const svg = renderRowSparkline([1, 1, 1, 2]);
     expect(pathDOf(svg)).toBe("M0,20.75 L26.67,20.75 L53.33,20.75 L80,1.25 L80,22 L0,22 Z");
     expect(pointsOf(svg)).toBe("0,20.75 26.67,20.75 53.33,20.75 80,1.25");
-    expect(fillOf(svg)).toBe(DASH_COLOR.up);
-    expect(svg).toContain(`stroke="${DASH_COLOR.up}"`);
     expect(svg).toContain('fill-opacity="0.12"');
     expect(svg).toContain('stroke-width="1.25"');
-  });
-
-  test("falling end-to-end auto-colors red (down)", () => {
-    const svg = renderRowSparkline([2, 2, 2, 1]);
-    expect(fillOf(svg)).toBe(DASH_COLOR.down);
-    expect(svg).toContain(`stroke="${DASH_COLOR.down}"`);
-  });
-
-  test("change within +/-0.5% auto-colors muted (flat)", () => {
-    const svg = renderRowSparkline([1, 1, 1, 1.001]); // +0.1%, under the 0.5% band
-    expect(fillOf(svg)).toBe(DASH_COLOR.flat);
-    expect(svg).toContain(`stroke="${DASH_COLOR.flat}"`);
-  });
-
-  test("zero-valued baseline still reads direction by sign (no NaN from a 0 denominator)", () => {
-    const up = renderRowSparkline([0, 0, 0, 1]);
-    expect(fillOf(up)).toBe(DASH_COLOR.up);
-    const down = renderRowSparkline([0, 0, 0, -1]);
-    expect(fillOf(down)).toBe(DASH_COLOR.down);
   });
 
   test("null/undefined/NaN gaps are skipped in the plotted line but still count toward the 4-point floor", () => {
