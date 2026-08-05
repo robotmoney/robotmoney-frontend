@@ -540,6 +540,7 @@ const state: DemoState = {
   steps: [
     { name: "migrate", status: "pending" },
     { name: "api /health", status: "pending" },
+    { name: "v0 seed", status: "pending" },
     { name: "edgar seed", status: "pending" },
   ],
   research: [],
@@ -1127,6 +1128,16 @@ async function main(): Promise<void> {
   // refresh. It never enables or enqueues a consumer research job. A failure
   // throws because the seed + immediate research result are a required boot
   // step, not best effort.
+  setStep(state, "v0 seed", "running");
+  log("bootstrapping v0 committee archive…");
+  await stack.composeAsync(
+    ["run", "--rm", "--no-deps", "api", "bun", "run", "scripts/v0-seed-bootstrap.ts"],
+    "v0 seed bootstrap (api)",
+    { stdout: outFd, stderr: errFd },
+  );
+  setStep(state, "v0 seed", "done");
+  log("v0 committee archive bootstrapped");
+
   setStep(state, "edgar seed", "running");
   log("ingesting EDGAR/MNA seed + enabling the research schedule…");
   await stack.composeAsync(
