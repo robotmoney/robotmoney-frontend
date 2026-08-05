@@ -1061,10 +1061,14 @@ with nothing marking or enforcing the difference, so nothing stops a test-only
 helper being imported into runtime.
 
 Enforcement is by grep check, not convention — the repo already proves the
-pattern works: `backend/scripts/check-no-supabase.sh` makes D8 executable, and
-`check-no-ai-overview.sh` does the same for issue #93. Both are ~18 lines and
-run in milliseconds. An invariant that lives only in prose is an invariant that
-rots.
+pattern works: `check-no-ai-overview.sh` does this for issue #93, ~18 lines
+and runs in milliseconds. An invariant that lives only in prose is an
+invariant that rots.
+
+(D8's own vendor-avoidance rationale stands; its prior grep enforcement,
+`backend/scripts/check-no-supabase.sh`, was removed as an overzealous,
+single-vendor-named guard — narrower review of new `backend/src` deps
+covers the same ground without hardcoding one competitor's name into CI.)
 
 **Relationship.**
 - **Serves D22**: `evals/` and the `stack/`/`agent/` extractions are where D22's
