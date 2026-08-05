@@ -65,6 +65,12 @@ export function missingCommitteeIdentitySubcommands(helpText: string): string[] 
   return ["create", "show-public-key", "sign"].filter((sub) => !new RegExp(`\\b${sub}\\b`).test(helpText));
 }
 
+export const RMPC_ON_CHAIN_NAMESPACE = "committee";
+
+export function missingCommitteeSubcommands(helpText: string): string[] {
+  return ["register", "vote-submit"].filter((sub) => !new RegExp(`\\b${sub}\\b`).test(helpText));
+}
+
 function cacheRoot(): string {
   return process.env.RMPC_CACHE_DIR?.trim() || join(tmpdir(), "robotmoney-rmpc-cache");
 }
@@ -76,6 +82,14 @@ function verifyCommitteeIdentitySubcommand(rmpcPath: string, version: string): v
   const missing = missingCommitteeIdentitySubcommands(out);
   if (missing.length > 0) {
     throw new Error(`downloaded rmpc ${version} is missing ${RMPC_COMMAND_NAMESPACE} subcommand(s): ${missing.join(", ")} — output:\n${out}`);
+  }
+
+  const r2 = Bun.spawnSync([rmpcPath, RMPC_ON_CHAIN_NAMESPACE, "--help"], { stdout: "pipe", stderr: "pipe" });
+  const out2 = new TextDecoder().decode(r2.stdout) + new TextDecoder().decode(r2.stderr);
+  if (r2.exitCode !== 0) throw new Error(`rmpc ${RMPC_ON_CHAIN_NAMESPACE} --help exited ${r2.exitCode}: ${out2}`);
+  const missing2 = missingCommitteeSubcommands(out2);
+  if (missing2.length > 0) {
+    throw new Error(`downloaded rmpc ${version} is missing ${RMPC_ON_CHAIN_NAMESPACE} subcommand(s): ${missing2.join(", ")} — output:\n${out2}`);
   }
 }
 
