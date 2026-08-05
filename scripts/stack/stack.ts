@@ -39,6 +39,7 @@ import {
 } from "./config.ts";
 import { parseComposePortOutput, PortDiscoveryError } from "./ports.ts";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "ports" | "health";
 
@@ -207,6 +208,28 @@ export function createStack(
     emit({ phase: "build", status: "done", detail: buildServices.join(", ") });
   }
 
+  // The api's STATIC_DIR is a bind mount of `_static` (docker-compose.yml), and
+  // `_static` is a BUILD OUTPUT: frontend/public plus the per-route prerendered
+  // HTML scripts/prerender.ts writes from seo.js's table (issue #480,
+  // docs/decisions.md D29). Nothing else in the bring-up produces it, and a
+  // bind path that does not exist makes Docker create an EMPTY directory — the
+  // api would then serve nothing at all, which is why this runs before
+  // `compose up` rather than being left to an operator to remember. Assembly
+  // failure aborts the bring-up loudly; it never degrades to the raw source
+  // tree, because that is precisely the shape that shipped the unfurl bug.
+  async function assembleStaticDir(): Promise<void> {
+    emit({ phase: "log", message: "assembling prerendered STATIC_DIR (_static)…" });
+    const proc = Bun.spawn(["bash", join(cfg.repoRoot, "scripts", "static-assembly.sh")], {
+      cwd: cfg.repoRoot,
+      env: spawnEnv,
+      stdin: "ignore",
+      stdout: (defaultIo.stdout ?? "pipe") as "pipe",
+      stderr: (defaultIo.stderr ?? "pipe") as "pipe",
+    });
+    const code = await proc.exited;
+    if (code !== 0) throw new Error(`static assembly failed (scripts/static-assembly.sh exited ${code})`);
+  }
+
   async function waitForPostgres(timeoutMs = 60_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -288,6 +311,7 @@ export function createStack(
   async function up(upOpts: StackUpOptions = {}): Promise<StackHostPorts> {
     assertFullStackProducerCredential(cfg);
     assertDockerAvailable();
+    await assembleStaticDir();
     await build();
 
     emit({ phase: "postgres", status: "start" });

@@ -169,7 +169,18 @@ services:
       # otherwise --stage would publish 48787 AND a second ephemeral port.
       - "8787"
     volumes:
-      - ./frontend/public:/srv/frontend:ro
+      # STATIC_DIR is the ASSEMBLED static dir, not the raw source tree.
+      # `frontend/public` holds exactly one `index.html` — the home-page shell —
+      # so mounting it made the api answer every extensionless route with the
+      # home page's <title>/og:*, and every shared robotmoney.net link unfurled
+      # as the home page in Slack/X/LinkedIn/iMessage (issue #480; unfurlers
+      # never run seo.js). `_static` is that same tree PLUS the per-route
+      # `<route>/index.html` files scripts/prerender.ts writes from seo.js's
+      # table; scripts/static-assembly.sh builds it and scripts/stack/stack.ts
+      # runs that before every `compose up`. For a hand-run `docker compose up`,
+      # run `bun run static:assemble` first — Docker creates an EMPTY directory
+      # at a bind path that does not exist, and the api would serve nothing.
+      - ./_static:/srv/frontend:ro
     secrets:
       - analytics_token
     depends_on:
