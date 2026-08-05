@@ -5,7 +5,8 @@
 // quo rather than weakening existing coverage. JSDoc-typing this file is a
 // worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
-import { subjectDot } from "./views/shared.js";
+import { ASSET_DOT, assetDot, subjectDot } from "./views/shared.js";
+import { CATEGORICAL, SERIES } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
 import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
 
@@ -21,9 +22,14 @@ const STANCE_COLORS = {
   bearish: "#ff7a29",
 };
 
-// One series palette, read by the concentration chart and by the holdings
-// table's key rule so a colour means the same token in both.
-const SERIES_COLORS = ["#00e5ff", "#5fb3a1", "#10b981", "#e8a640", "#ff7a29", "#7e889e", "#6ee7b7"];
+// The concentration chart's residual band: every position outside the charted
+// top-N, plus any NAV the position list does not account for. It is a leftover
+// rather than an asset, so it takes neither an assetDot hue nor a CATEGORICAL
+// slot — dim slate reads as "everything else" without competing with a real
+// holding for attention. (--color-text-dim, kept literal: this goes into an SVG
+// fill where a var() indirection buys nothing.)
+const OTHER_TOKEN = "other";
+const OTHER_COLOR = "#4a5268";
 
 const ARCHIVE_LAST_DATE = "2026-06-25";
 const KNOWN_ARCHIVE_MEMBERS = ["athena", "robotmoney", "woon"];
@@ -34,8 +40,60 @@ async function fetchJson(url) {
   return res.json();
 }
 
+// The published allocation framework: per-bucket target weight AND the tokens
+// that constitute each bucket.
+//
+// The tokens are the part nothing else has. /api/dashboards/allocation serves
+// labels and target percentages only, so "actual" — where the book ACTUALLY
+// sits today — was not computable from any source the session page had, and the
+// column simply never rendered on any session. With the token map a snapshot
+// can be summed into buckets, which is what makes the recommendation legible as
+// a MOVE (recommended minus actual) rather than as four numbers.
+//
+// Normalised on the way out so callers never touch the raw manifest's snake_case
+// or its `color` field — those hexes are the retired Tailwind rainbow (#3b82f6,
+// #1e3a8a…) and the covenant is explicit that a figure never reads colour off
+// the DTO.
+// Memoised across a SPA session — it is one immutable committed file, and the
+// session view asks for it on every route change. Only SUCCESS is cached: a
+// cached rejection would let one transient blip disable the target and actual
+// columns for the rest of the session, with no way back short of a reload.
+let allocationFrameworkPromise = null;
+function loadAllocationFramework() {
+  if (!allocationFrameworkPromise) {
+    allocationFrameworkPromise = fetchJson("/data/swarm/manifests/allocation.json")
+      .then((raw) => ({
+        asOf: raw.asof || raw.asOf || null,
+        buckets: (raw.buckets || []).map((b) => ({
+          id: b.id || "",
+          name: b.name || "",
+          target: Number.isFinite(Number(b.target_weight)) ? Number(b.target_weight) : null,
+          tokens: (b.tokens || []).map((t) => String(t).toUpperCase()),
+        })),
+      }))
+      .catch(() => {
+        allocationFrameworkPromise = null;
+        return null;
+      });
+  }
+  return allocationFrameworkPromise;
+}
+
+// Prefer the committed static archive for dates it actually COVERS.
+//
+// This used to read `< "2026-07-01"` — a second hardcoded boundary that did
+// not match ARCHIVE_LAST_DATE ("2026-06-25"), leaving 2026-06-26..06-30
+// "archive-preferred" but absent from the archive. Combined with the
+// deliberate `throw primary` below (which suppresses the API fallback for
+// archive-preferred dates), those five days were unreachable: the page
+// rendered "Session not found" while the API served them perfectly well.
+//
+// It was invisible for as long as the database also stopped at 2026-06-25 —
+// the gap had nothing in it. Importing v0's full history (72 sessions through
+// 2026-08-04) put five real sessions inside it. Deriving the boundary from
+// ARCHIVE_LAST_DATE means the two can no longer disagree.
 function archivePreferred(date) {
-  return String(date || "") < "2026-07-01";
+  return String(date || "") <= ARCHIVE_LAST_DATE;
 }
 
 function camelSession(raw) {
@@ -100,6 +158,13 @@ export function camelTake(raw) {
     model: raw.model,
     memoUrl: raw.memoUrl || raw.memo_url,
     verified: raw.verified,
+    // v0 pre-launch archive content, not a member submission — see the
+    // verification badge below for why this is NOT the same thing as
+    // `verified: false`. The API serves it (projections.ts derives it from the
+    // take's nonce); the shipped static archive JSON predates the field and
+    // gets it stamped on by loadArchiveSession(), since everything in that
+    // archive is v0 content by definition.
+    archival: raw.archival === true,
     receivedAt: raw.receivedAt || raw.received_at || raw.generated_at || raw.generatedAt,
   };
 }
@@ -169,8 +234,9 @@ function normalizeSnapshot(raw) {
   };
 }
 
-// The archive loaders below are the PRODUCTION static-archive path (sessions
-// dated before 2026-07-01 render from /data/swarm/*.json). They are
+// The archive loaders below are the PRODUCTION static-archive fallback for a
+// checkout with no backend (sessions through ARCHIVE_LAST_DATE render from
+// /data/swarm/*.json; the API is preferred for every date). They are
 // exported so scripts/tests/unit/frontend-routes.test.ts can execute the exact
 // loaders the browser runs against the shipped archive files (review 026:
 // the previous test covered a dead duplicate normalizer instead).
@@ -182,7 +248,14 @@ export async function loadArchiveSession(date, subject) {
   const exists = (index.sessions || []).some((s) => s.date === date && (s.subjectId ?? s.subject_id) === subject);
   if (!exists) throw new Error(`archive session missing: ${date}/${subject}`);
   const raw = await fetchJson(`/data/swarm/sessions/${date}-${subject}.json`);
-  return { session: camelSession(raw), takes: (raw.takes || []).map(camelTake), source: "archive" };
+  // Everything under /data/swarm is v0 pre-launch content, so its takes are
+  // archival by construction — the files themselves predate the flag and carry
+  // no nonce for camelTake to derive it from.
+  return {
+    session: camelSession(raw),
+    takes: (raw.takes || []).map((t) => camelTake({ ...t, archival: true })),
+    source: "archive",
+  };
 }
 
 export async function loadArchiveMember(id) {
@@ -245,7 +318,12 @@ export function withinBucketWeightsFrom(rec) {
   })).filter((b) => b.items.length);
 }
 
-const helpers = {
+// Exported so scripts/tests/unit/frontend-routes.test.ts can assert the
+// verification-badge WORDING directly, not just the badge's state attribute.
+// The three-state distinction below (verified / unverified / archived) is a
+// copy contract as much as a rendering one — the sentence a reader is shown is
+// the thing that was wrong — so the sentence itself is what gets pinned.
+export const helpers = {
   // Strip punctuation before taking initials. Operators name their agents
   // freely, and "woon (test)" was rendering as "W(" — the second word's first
   // character is a parenthesis, not a letter.
@@ -301,6 +379,15 @@ const helpers = {
     const key = String(regime || "").replace(/-/g, "_");
     return ({ risk_on: "#10b981", neutral: "#7e889e", risk_off: "#ff7a29" })[key] || "#7e889e";
   },
+  // A 0-1 percentile as "71st". The backdrop panel prints percentiles as bare
+  // integers next to a bar, where "71" could as easily be a score or a count;
+  // the ordinal is what makes it self-describing.
+  ordinal(fraction) {
+    const n = Math.round(Number(fraction || 0) * 100);
+    const rem100 = n % 100;
+    if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+    return `${n}${({ 1: "st", 2: "nd", 3: "rd" })[n % 10] || "th"}`;
+  },
   formatDate(value, style = "short") {
     if (!value) return "—";
     const date = String(value).includes("T") ? new Date(value) : new Date(`${value}T00:00:00Z`);
@@ -326,15 +413,35 @@ const helpers = {
   // ── Verification badge ──────────────────────────────────────────────────────
   // One wording, one mark, shared by the member, session and permalink pages —
   // "verified" must mean exactly the same thing everywhere it appears.
-  verifyLabel(ok) { return ok ? "verified" : "unverified"; },
-  verifyTip(ok) {
+  //
+  // THREE STATES, NOT TWO. `verified: false` used to be rendered with a single
+  // sentence — "this take's signature did not check out against the member's
+  // public key" — which is a claim about a check that ran and failed. That is
+  // false for every take imported from v0's pre-launch archive: those were
+  // published before member key registration existed and were never
+  // member-signed, so no such check ever happened. They are the majority of
+  // the takes on the site, so the wrong sentence was the common case.
+  // `archival` (see camelTake) separates them, and it is checked FIRST because
+  // an archival take is always verified:false and the failure wording must
+  // never reach it.
+  verifyState(ok, archival) { return archival ? "archived" : ok ? "verified" : "unverified"; },
+  verifyLabel(ok, archival) { return this.verifyState(ok, archival); },
+  verifyTip(ok, archival) {
+    if (archival) {
+      return "Archived from the pre-launch record. Published by v0 before member key registration existed, so it was never member-signed — this is not a failed signature check.";
+    }
     return ok
       ? "Signed on the member's own machine with a key only they hold. The signature is re-checked against their public key every time this take is served — not just when it was filed."
       : "This take's signature did not check out against the member's public key. Treat it as unattributed.";
   },
-  // Inner glyph of the badge: a check for verified, a cross for not. Drawn
-  // rather than typed so it keeps its weight next to mono text at 13px.
-  verifyPath(ok) { return ok ? "M4.6 8.2l2.3 2.3 4.6-5" : "M5.4 5.4l5.2 5.2M10.6 5.4l-5.2 5.2"; },
+  // Inner glyph of the badge: a check for verified, a cross for a failed
+  // check, a horizontal bar for archived — a state that is neither a pass nor
+  // a failure and must not borrow either mark. Drawn rather than typed so it
+  // keeps its weight next to mono text at 13px.
+  verifyPath(ok, archival) {
+    if (archival) return "M4.4 8h7.2";
+    return ok ? "M4.6 8.2l2.3 2.3 4.6-5" : "M5.4 5.4l5.2 5.2M10.6 5.4l-5.2 5.2";
+  },
 
   // Subject hue, from the one shared definition (views/shared.js) so the member
   // profile, the roster and any future surface cannot drift apart. A symbol is
@@ -749,10 +856,18 @@ export function registerStaticViews(Alpine) {
     // correctness, and a conviction figure sitting beside two counts reads as a
     // score for judgement we have no basis to give. That one stays on the
     // profile, next to the takes it summarises.
+    // `verifiable` is the denominator, and it is NOT `takes`. Archival takes
+    // (v0 pre-launch content, never member-signed) cannot verify by
+    // construction, so counting them in the denominator renders a member's
+    // whole record as a signature failure — "0 / 50", styled as an alert. Only
+    // takes that were actually member-signed can be verified or not.
     recordStats() {
+      const verifiable = this.record.filter((r) => !r.take?.archival);
       return {
         takes: this.record.length,
-        verified: this.record.filter((r) => r.take?.verified).length,
+        verifiable: verifiable.length,
+        archival: this.record.length - verifiable.length,
+        verified: verifiable.filter((r) => r.take?.verified).length,
         lastFiled: this.record[0] ? this.formatDate(this.record[0].sessionDate, "short") : "—",
         last: this.record[0] || null,
       };
@@ -966,21 +1081,146 @@ export function registerStaticViews(Alpine) {
         .map((p) => ({ ...p, share: total > 0 ? p.value_usd / total : 0 }))
         .sort((a, b) => b.share - a.share);
     },
-    // The chart draws one line per top token; the holdings table repeats that
-    // colour as a short rule beside the token. Keyed by TOKEN, not by row index,
-    // so the two cannot drift apart if either list is re-sorted.
+    // The chart draws one band per top token; the holdings table and the legend
+    // repeat that colour beside the token. Keyed by TOKEN via assetDot(), which
+    // is the same map /allocation's pies and the wallet tables read — so WETH is
+    // sand on this page AND everywhere else on the site.
+    //
+    // This used to index a local palette by the token's RANK, which meant a
+    // colour said "second-biggest today" rather than "WETH": the same holding
+    // drew sand here and teal on /allocation, and both colours moved the moment
+    // two positions swapped places.
     seriesColor(token) {
-      const i = this.topTokens().indexOf(token);
-      return i === -1 ? "var(--color-border)" : SERIES_COLORS[i % SERIES_COLORS.length];
+      if (token === OTHER_TOKEN) return OTHER_COLOR;
+      return this.chartColors()[token] || assetDot(token);
+    },
+    // assetDot() hashes any symbol it does not name explicitly into CATEGORICAL,
+    // so two unmapped tokens in one book can legitimately land on the same hue —
+    // and two same-coloured bands in a stack are indistinguishable from one band
+    // of their combined height, which is a chart that lies. Resolve per figure.
+    //
+    // NAMED tokens claim first. Resolving in stack order instead let WOON, whose
+    // hash happens to land on cyan, take cyan on a book that also holds
+    // ROBOTMONEY — which actually OWNS cyan — and pushed ROBOTMONEY onto sand, a
+    // colour it means nothing in. Ownership beats rank: a token the palette
+    // names keeps its colour, and the hashed ones fill in around it.
+    //
+    // The cost is that a hashed token's colour depends on which other tokens
+    // share its figure, so WOON can be sand here and cyan elsewhere. That is the
+    // right trade: an unmapped symbol has no identity to protect, and within one
+    // figure being TELLABLE APART beats being globally stable.
+    chartColors() {
+      const tokens = this.chartTokens();
+      const out = {};
+      const used = new Set([OTHER_COLOR]);
+      for (const token of tokens) {
+        const owned = ASSET_DOT[token];
+        if (owned && !used.has(owned)) {
+          out[token] = owned;
+          used.add(owned);
+        }
+      }
+      // Slate is withheld from the fallback pool: the covenant spends it on
+      // muted references and baselines, and a 36%-of-NAV holding is not a
+      // reference — drawn slate it reads as the leftovers bucket. Only a book
+      // deep enough to exhaust every other hue falls back to it.
+      const pool = CATEGORICAL.filter((hue) => hue !== SERIES.slate);
+      for (const token of tokens) {
+        if (out[token]) continue;
+        const hashed = assetDot(token);
+        const free = hashed !== SERIES.slate && !used.has(hashed);
+        const color = free
+          ? hashed
+          : (pool.find((hue) => !used.has(hue)) || CATEGORICAL.find((hue) => !used.has(hue)) || hashed);
+        out[token] = color;
+        used.add(color);
+      }
+      return out;
     },
     // The snapshots inside the chart window, oldest first.
+    //
+    // Calendar days, not readings. This was `slice(-windowDays)`, which cut the
+    // last N SNAPSHOTS — and on the archive path a snapshot is one per session,
+    // not one per day, so "90 days" could reach back two years while the panel
+    // said 9 readings. Fall back to the old cut only if the dates are unusable,
+    // and never return fewer than the two points a series needs.
     windowed() {
-      return this.snapshots.slice(-this.windowDays);
+      const all = this.snapshots;
+      if (all.length < 2) return all;
+      const day = (s) => Date.parse(`${s?.date}T00:00:00Z`);
+      const last = day(all[all.length - 1]);
+      if (!Number.isFinite(last)) return all.slice(-this.windowDays);
+      const floor = last - this.windowDays * 86400000;
+      const within = all.filter((s) => {
+        const t = day(s);
+        return !Number.isFinite(t) || t >= floor;
+      });
+      return within.length >= 2 ? within : all.slice(-2);
     },
     // Which tokens get their own band. Ranked by share on the most recent day, so
     // the legend and the newest column of the chart always agree.
     topTokens() {
       return this.positionRows().slice(0, this.topN).map((p) => p.token);
+    },
+    // A position's share of NAV on one snapshot. Reads both the API's camelCase
+    // and the archive's snake_case total.
+    shareOf(snap, token) {
+      const total = Number(snap?.total_value_usd ?? snap?.totalValueUsd ?? 0);
+      if (!(total > 0)) return 0;
+      const hit = (snap?.positions || []).find((p) => p.token === token);
+      return hit ? Number(hit.value_usd || 0) / total : 0;
+    },
+    // The tokens that actually earn a band. A holding that never reaches 1% of
+    // NAV anywhere in the window draws a sub-pixel sliver no reader can see, but
+    // still spends a hue and a legend row — so it belongs in the residual.
+    chartTokens() {
+      const rows = this.windowed();
+      if (rows.length < 2) return [];
+      return this.topTokens().filter((t) => rows.some((r) => this.shareOf(r, t) >= 0.01));
+    },
+    // Bands bottom-to-top, largest first, plus the residual. Stacking to a fixed
+    // 100% is the point of the panel: the reader's question is what fraction of
+    // the book one position has become, and a stack answers it by area without
+    // any cross-referencing. The largest position sits on the BOTTOM because
+    // only the bottom band has a flat baseline — every band above it is sheared
+    // by the ones below, so the position that matters most gets the honest edge.
+    concentrationSeries() {
+      const rows = this.windowed();
+      const tokens = this.chartTokens();
+      if (rows.length < 2 || !tokens.length) return [];
+      const colors = this.chartColors();
+      const bands = tokens.map((token) => ({
+        token,
+        color: colors[token] || assetDot(token),
+        shares: rows.map((r) => this.shareOf(r, token)),
+      }));
+      // Everything the bands do not cover: the tail below the top-N, the sub-1%
+      // holdings folded out above, and any NAV the position list misses. Adding
+      // it is what lets the stack total 100% honestly rather than quietly
+      // dropping the remainder the way the old line chart did.
+      const other = rows.map((_, i) => {
+        const covered = bands.reduce((sum, b) => sum + b.shares[i], 0);
+        return Math.max(0, 1 - covered);
+      });
+      // Rounding leaves a few basis points of residue on a book that is fully
+      // accounted for; a permanent 0% legend row is noise, so only carry the
+      // band when it is genuinely something.
+      if (other.some((v) => v > 0.005)) {
+        bands.push({ token: OTHER_TOKEN, color: OTHER_COLOR, shares: other });
+      }
+      return bands;
+    },
+    // The legend: swatch, token, and its share on the most recent reading. The
+    // panel previously shipped no legend at all, so six unlabelled lines could
+    // only be decoded against a 14px rule in the table further down the page.
+    concentrationLegend() {
+      const series = this.concentrationSeries();
+      if (!series.length) return [];
+      return series.map((b) => ({
+        token: b.token,
+        color: b.color,
+        pct: this.fmtPct1(b.shares[b.shares.length - 1] || 0),
+      })).reverse(); // top band first, so the legend reads down the stack
     },
     // "readings", not "days": the archive path carries one snapshot per session
     // rather than one per calendar day, so eight points can span a month. Naming
@@ -990,59 +1230,72 @@ export function registerStaticViews(Alpine) {
       if (w.length < 2) return "";
       return `${w[0].date} → ${w[w.length - 1].date} · ${w.length} readings`;
     },
-    // Share-of-NAV over time, one LINE per position. A holdings table is a single
-    // day; the question a reader has is whether the book is concentrating or
-    // diversifying, and only a series answers that.
+    // Share-of-NAV over time, one stacked BAND per position. A holdings table is
+    // a single day; the question a reader has is whether the book is
+    // concentrating or diversifying, and only a series answers that.
     //
-    // Lines rather than a stacked area, deliberately. This palette leads with
-    // cyan, and the covenant is explicit that cyan is a line and never a mass —
-    // a stacked band chart turns rank-1 into a ~770x140px cyan fill, which is
-    // the largest covenant breach on the page and reads as "cyan means value".
-    // Drawn as strokes it is covenant-clean AND the palette can stay identical to
-    // the donut lists below, so a colour means the same token everywhere on the
-    // page. Percentage share also composes better as lines: the reader is asking
-    // whether one line is climbing, not what the stack sums to (always 100%).
-    concentrationLines() {
+    // Bands rather than lines. Lines were tried first and failed on real books
+    // in two ways a legend cannot fix: positions at equal weight draw exactly on
+    // top of each other (the vault subject holds MORPHO/AAVE/COMPOUND at 33.3%
+    // each and rendered as ONE line), and the long tail of sub-5% holdings piles
+    // into an unreadable tangle along the axis. Stacked to a fixed 100%, share
+    // is read as area — equal weights are three equal bands, and "is one
+    // position taking over" is the bottom band's height, no decoding required.
+    //
+    // This does put cyan on screen as a mass where the brand grammar wants it as
+    // a line, on any book whose largest holding happens to be ROBOTMONEY.
+    // David's explicit call: legibility of the part-to-whole read wins here, and
+    // this panel now matches what robotmoney.net has always published.
+    concentrationArea() {
       const rows = this.windowed();
-      if (rows.length < 2) return "";
-      const tokens = this.topTokens();
-      if (!tokens.length) return "";
-      const colors = SERIES_COLORS;
-      const W = 640, H = 132, padB = 16, padT = 6, padL = 26;
+      const series = this.concentrationSeries();
+      if (rows.length < 2 || !series.length) return "";
+      const W = 640, H = 150, padB = 16, padT = 4, padL = 28;
       const plotH = H - padB - padT;
+      const y = (frac) => padT + plotH - this.clampPct(frac * 100) / 100 * plotH;
+      // x by DATE, not by index. The archive path carries one reading per
+      // session rather than one per day, so evenly-spaced points drew a
+      // three-week gap the same width as a one-day one and made a stale book
+      // look continuously observed. Index spacing stays as the fallback for
+      // snapshots whose dates will not parse.
+      const stamps = rows.map((r) => Date.parse(`${r?.date}T00:00:00Z`));
+      const dated = stamps.every((t) => Number.isFinite(t)) && stamps[stamps.length - 1] > stamps[0];
       const plotW = W - padL;
-      const stepX = rows.length > 1 ? plotW / (rows.length - 1) : plotW;
-      const shareOf = (snap, token) => {
-        const total = Number(snap.total_value_usd ?? snap.totalValueUsd ?? 0);
-        if (!(total > 0)) return 0;
-        const hit = (snap.positions || []).find((p) => p.token === token);
-        return hit ? Number(hit.value_usd || 0) / total : 0;
-      };
-      // The y-domain is a fixed 0-100% of NAV rather than fitted to the data, so
-      // the same line height means the same concentration on every subject and
-      // two books can be compared by eye. Ticks at 100 and 50 say so out loud —
-      // without them a flat run of lines low in the frame reads as a broken
-      // chart rather than as a diversified book. 50% is the line a single
-      // position crosses when it becomes the majority of the book.
-      const tick = (frac, label, dashed) => {
-        const y = padT + plotH - frac * plotH;
-        return `<line x1="26" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}" stroke="var(--color-border)" stroke-width="1"${dashed ? ' stroke-dasharray="3 4"' : ''}/>
-          <text x="0" y="${(y + 3).toFixed(1)}" fill="var(--color-text-dim)" font-size="8.5" font-family="ui-monospace,monospace">${label}</text>`;
-      };
-      const grid = tick(1, "100%", false) + tick(0.5, "50%", true);
-      const lines = tokens.map((token, i) => {
-        const pts = rows.map((snap, x) => {
-          const y = padT + plotH - this.clampPct(shareOf(snap, token) * 100) / 100 * plotH;
-          return `${(padL + x * stepX).toFixed(2)},${y.toFixed(2)}`;
-        }).join(" ");
-        return `<polyline points="${pts}" fill="none" stroke="${colors[i % colors.length]}" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+      const span = dated ? stamps[stamps.length - 1] - stamps[0] : 0;
+      const xs = rows.map((_, i) => (dated
+        ? padL + plotW * ((stamps[i] - stamps[0]) / span)
+        : padL + plotW * (i / (rows.length - 1))));
+      // Bands are drawn bottom-up over a running baseline. Each polygon runs
+      // along its own top edge left-to-right, then back along the baseline
+      // beneath it — so the band's height at any x IS that position's share.
+      const base = rows.map(() => 0);
+      const bands = series.map((b) => {
+        const top = base.map((v, i) => v + b.shares[i]);
+        const upper = top.map((v, i) => `${xs[i].toFixed(2)},${y(v).toFixed(2)}`);
+        const lower = base.map((v, i) => `${xs[i].toFixed(2)},${y(v).toFixed(2)}`).reverse();
+        for (let i = 0; i < base.length; i++) base[i] = top[i];
+        // A hairline in the page ground separates neighbours, so two adjacent
+        // hues of similar value still read as two bands rather than one blur.
+        return `<polygon points="${upper.concat(lower).join(" ")}" fill="${b.color}"
+          stroke="var(--color-deep)" stroke-width="1" stroke-linejoin="round"/>`;
       }).join("");
+      // Drawn ON TOP of the fills, and in a light wash rather than the dim slate
+      // a gridline takes on an empty ground — over a saturated band, slate is
+      // invisible. 50% is the line a single position crosses when it becomes the
+      // majority of the book, which is the one threshold this panel exists to
+      // show. 0 and 100 need no label: the stack fills the frame by construction.
+      const mid = `<line x1="${padL}" y1="${y(0.5).toFixed(1)}" x2="${W}" y2="${y(0.5).toFixed(1)}"
+          stroke="rgba(255,255,255,0.32)" stroke-width="1" stroke-dasharray="3 4"/>
+        <text x="0" y="${(y(0.5) + 3).toFixed(1)}" fill="var(--color-text-dim)" font-size="8.5" font-family="ui-monospace,monospace">50%</text>`;
       const axis = `<line x1="${padL}" y1="${padT + plotH}" x2="${W}" y2="${padT + plotH}" stroke="var(--color-border)" stroke-width="1"/>`;
       const ends = `<text x="${padL}" y="${H - 3}" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[0].date || "")}</text>
         <text x="${W}" y="${H - 3}" text-anchor="end" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace">${this.escapeHtml(rows[rows.length - 1].date || "")}</text>`;
+      // The legend is HTML beside the figure, so the accessible name here spells
+      // out what the bands are for a reader who gets only the image.
+      const named = series.map((b) => `${b.token} ${this.fmtPct1(b.shares[b.shares.length - 1] || 0)}`).reverse().join(", ");
       return `<svg viewBox="0 0 ${W} ${H}" role="img"
-        aria-label="Each top position as a share of net asset value, ${this.escapeHtml(rows[0].date || "")} to ${this.escapeHtml(rows[rows.length - 1].date || "")}">
-        ${grid}${lines}${axis}${ends}</svg>`;
+        aria-label="Top positions as a share of net asset value, stacked to 100%, ${this.escapeHtml(rows[0].date || "")} to ${this.escapeHtml(rows[rows.length - 1].date || "")}. Latest reading, largest first: ${this.escapeHtml(named)}.">
+        ${bands}${mid}${axis}${ends}</svg>`;
     },
     // Wallets come off the subject manifest where the operator declared them, and
     // off the latest snapshot where the indexer actually read them. Prefer the
@@ -1131,7 +1384,9 @@ export function registerStaticViews(Alpine) {
       }
     },
     // Fallback for hosts without the member-takes endpoint, and the path that
-    // still serves the shipped static archive for pre-2026-07-01 sessions.
+    // still serves the shipped static archive for sessions through
+    // ARCHIVE_LAST_DATE (the boundary is derived from that constant, not from a
+    // second hardcoded date).
     // Prioritises in-progress sessions by STATE, not date position: a
     // just-submitted take lives in a collecting session, and a manually-opened
     // window can sit deep in a date-ordered list, so a naive slice would drop it
@@ -1157,9 +1412,10 @@ export function registerStaticViews(Alpine) {
       return details
         .map((session) => {
           // camelTake before matching: this is the fallback path for the
-          // pre-2026-07-01 static archive, whose takes are snake_case and
-          // carry no `permalinkId` until camelTake derives one from a real
-          // take `id` (never from `member_id`).
+          // static archive (dates through ARCHIVE_LAST_DATE), whose takes are
+          // snake_case and carry no `permalinkId` until camelTake derives one
+          // from a real take `id` (never from `member_id`). loadArchiveSession
+          // has already stamped `archival` on the ones it served.
           const take = (session.takes || []).map(camelTake).find((t) => t.memberId === this.member?.id);
           return take ? { session, take, phase: this.takePhase(session.state) } : null;
         })
@@ -1179,12 +1435,19 @@ export function registerStaticViews(Alpine) {
     // The record at a glance. Counts every take, published or still collecting,
     // so a just-submitted one registers immediately rather than reading as zero
     // while its window is open. Conviction is the mean confidence across them.
+    // `verifiable` excludes archival takes for the same reason as the apply
+    // page's stat strip: v0's pre-launch takes were never member-signed, so
+    // they are not failed verifications and must not sit in the denominator.
+    // A member whose record is entirely archive read "Verified 0".
     recordStats() {
       const all = this.allTakes();
       const conf = all.map((r) => Number(r.take.confidence)).filter((n) => Number.isFinite(n));
+      const verifiable = all.filter((r) => !r.take.archival);
       return {
         takes: all.length,
-        verified: all.filter((r) => r.take.verified).length,
+        verifiable: verifiable.length,
+        archival: all.length - verifiable.length,
+        verified: verifiable.filter((r) => r.take.verified).length,
         conviction: conf.length ? this.fmtPct(conf.reduce((a, b) => a + b, 0) / conf.length) : "—",
       };
     },
@@ -1224,7 +1487,7 @@ export function registerStaticViews(Alpine) {
     toggleTake(id) { this.openTakes = { ...this.openTakes, [id]: !this.openTakes[id] }; },
   }));
 
-  Alpine.data("icSessionDetail", () => ({
+  Alpine.data("swarmSessionDetail", () => ({
     ...helpers,
     loading: true,
     error: null,
@@ -1232,6 +1495,12 @@ export function registerStaticViews(Alpine) {
     session: null,
     subject: null,
     snapshot: null,
+    // Published bucket targets; null until loadApi() resolves them, and on
+    // the archive fallback, where the framework is not available.
+    allocation: null,
+    // The published framework manifest: per-bucket targets and, crucially, the
+    // token→bucket map that makes "actual" computable. See bucketActuals().
+    allocationFramework: null,
     brief: null,
     takes: [],
     members: [],
@@ -1269,11 +1538,21 @@ export function registerStaticViews(Alpine) {
       }
       const [, date, subject] = match;
       try {
-        if (archivePreferred(date)) await this.loadArchive(date, subject);
-        else await this.loadApi(date, subject);
+        // API FIRST, for every date — matching what the two list views above
+        // (loadSessionsWithSynthesis, the member/subject feeds) have always
+        // done. This view used to prefer the static archive for dates it
+        // covered, which meant the same session could be read from two
+        // different sources: the feed showed the database's copy while the
+        // page showed the checked-in copy. Now that v0's full history lives
+        // in the database, the archive is a FALLBACK for checkouts with no
+        // backend, not a competing source of truth for old dates.
+        await this.loadApi(date, subject);
       } catch (primary) {
         try {
-          if (archivePreferred(date)) throw primary;
+          // Fall back to the static archive. It only carries dates through
+          // ARCHIVE_LAST_DATE, so archivePreferred() is what decides whether
+          // falling back is even worth attempting.
+          if (!archivePreferred(date)) throw primary;
           await this.loadArchive(date, subject);
         } catch (_) {
           this.error = `Session not found for ${date}/${subject}. This checkout's reference archive currently has Woon sessions through ${ARCHIVE_LAST_DATE}.`;
@@ -1293,6 +1572,11 @@ export function registerStaticViews(Alpine) {
       const members = await Promise.all(ids.map((id) => loadArchiveMember(id).catch(() => null)));
       this.members = members.filter(Boolean);
       this.brief = await fetchJson(`/data/swarm/briefs/${date}-${subject}.json`).catch(() => null);
+      // The archive path set no allocation at all, so a bucket_weights session
+      // read from a backendless checkout drew Recommended alone — no target to
+      // compare it against and no way to see whether it deviated. Same fallback
+      // shape as every other archive load: guarded, never fatal.
+      this.allocationFramework = await loadAllocationFramework();
     },
     // `preloaded` is the already-fetched session when the caller resolved it by
     // id; without it this fetches the latest session for (date, subject) exactly
@@ -1303,12 +1587,24 @@ export function registerStaticViews(Alpine) {
       // renders the SAME reference experience as the archive path (charts +
       // portfolio). Each side-fetch is independently guarded so a missing
       // subject/snapshot never breaks the takes/session render.
-      const [detail, memberData, brief, subjectData, snapshotData] = await Promise.all([
+      const [detail, memberData, brief, subjectData, snapshotData, allocation, framework] = await Promise.all([
         preloaded ?? api.get(path(ROUTES.swarm.session, { date, subject })),
         api.get(ROUTES.swarm.members),
         api.get(ROUTES.swarm.brief, { date, subject }).catch(() => null),
         api.get(path(ROUTES.swarm.subject, { id: subject })).catch(() => null),
         api.get(path(ROUTES.swarm.subjectSnapshots, { id: subject })).catch(() => null),
+        // The allocation framework supplies the TARGET weight each bucket is
+        // measured against. Without it the bucket chart could only draw
+        // "Recommended", so a session that proposed 97/3 against a 95/5 target
+        // rendered as two bars with nothing to compare them to — the reader
+        // could not see that it deviated at all. Guarded like the other
+        // side-fetches: a missing framework degrades the chart, never the page.
+        api.get(ROUTES.dashboards.allocation).catch(() => null),
+        // The published framework manifest, for the two things the dashboard
+        // endpoint does not carry: which TOKENS belong to each bucket (without
+        // which "actual" cannot be computed at all) and the per-bucket target as
+        // a fallback when the dashboard is unreachable.
+        loadAllocationFramework(),
       ]);
       this.source = "api";
       this.session = camelSession(detail.session);
@@ -1317,6 +1613,8 @@ export function registerStaticViews(Alpine) {
       this.subject = subjectData ? camelSubject(subjectData) : null;
       this.snapshot = pickSnapshotFor(snapshotData?.snapshots, date);
       this.brief = brief;
+      this.allocation = allocation;
+      this.allocationFramework = framework;
     },
     memberLens(memberId) {
       return this.members.find((m) => m.id === memberId)?.lens || "swarm member";
@@ -1390,6 +1688,24 @@ export function registerStaticViews(Alpine) {
         ["factor", r.factorPercentile, r.factorRegime],
       ].filter(([, pct]) => typeof pct === "number").map(([label, pct, regime]) => ({ label, pct, regime }));
     },
+    // Panels reading the opposite way from the composite. This is the single
+    // most-argued fact on a session page — the 2026-06-19 vault synthesis opens
+    // on "on-chain at the 10th percentile dissents from a 71st-percentile
+    // composite" — and the panel drew three bars that left the reader to notice
+    // it. risk_on vs risk_off only; a neutral panel is not a dissent.
+    dissentingPanels() {
+      const head = String(this.session?.regimeSummary?.regime || "").replace(/-/g, "_");
+      if (head !== "risk_on" && head !== "risk_off") return [];
+      const opposite = head === "risk_on" ? "risk_off" : "risk_on";
+      return this.panelInputs().filter((p) => String(p.regime || "").replace(/-/g, "_") === opposite);
+    },
+    dissentLine() {
+      const out = this.dissentingPanels();
+      if (!out.length) return "";
+      const names = out.map((p) => `${p.label} at the ${this.ordinal(p.pct)}`).join(" and ");
+      const head = this.regimeLabel(this.session?.regimeSummary?.regime);
+      return `${names} — ${out.length === 1 ? "dissents" : "dissent"} from a ${head} composite`;
+    },
     briefSummary() {
       const body = this.brief?.body || this.brief;
       if (!body) return "No brief available.";
@@ -1456,14 +1772,19 @@ export function registerStaticViews(Alpine) {
         const y = i * (rowH + rowGap);
         const pct = this.clampPct(r.pct * 100) / 100;
         const ty = (y + rowH * 0.7).toFixed(1);
+        // Each panel's bar takes its OWN regime colour. Drawn in one flat accent
+        // these three bars said only "how high", so a panel reading risk-off
+        // looked exactly like the two reading risk-on and the disagreement the
+        // members are arguing about was invisible in the figure.
+        const fill = this.regimeColor(r.regime);
         return `<g>
           <text x="0" y="${ty}" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace" style="text-transform:uppercase;letter-spacing:0.05em">${this.escapeHtml(r.label)}</text>
           <rect x="${labelW}" y="${y + 4}" width="${barW}" height="${rowH - 8}" fill="transparent" stroke="var(--color-border)"/>
-          <rect x="${labelW}" y="${y + 4}" width="${(pct * barW).toFixed(1)}" height="${rowH - 8}" fill="var(--color-accent)" fill-opacity="0.7"/>
-          <text x="${labelW + barW + 4}" y="${ty}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${Math.round(r.pct * 100)}</text>
+          <rect x="${labelW}" y="${y + 4}" width="${(pct * barW).toFixed(1)}" height="${rowH - 8}" fill="${fill}" fill-opacity="0.75"/>
+          <text x="${labelW + barW + 4}" y="${ty}" fill="var(--color-text-muted)" font-size="9" font-family="ui-monospace,monospace">${this.ordinal(r.pct)}</text>
         </g>`;
       }).join("");
-      return `<svg viewBox="0 0 ${W + 24} ${H}" role="img" aria-label="Panel percentile divergence with 50th-percentile reference">
+      return `<svg viewBox="0 0 ${W + 32} ${H}" role="img" aria-label="Panel percentile divergence with 50th-percentile reference">
         ${body}
         <line x1="${tick(0.5).toFixed(1)}" x2="${tick(0.5).toFixed(1)}" y1="2" y2="${H - 2}" stroke="var(--color-border)" stroke-dasharray="2 2"/>
       </svg>`;
@@ -1472,6 +1793,19 @@ export function registerStaticViews(Alpine) {
     // Prefers explicit bucket rows (name/target/actual/recommended) if the
     // payload carries them; otherwise derives Recommended-only rows from the
     // weights map (target/actual are unavailable without allocation data).
+    // Bucket ids and framework labels are written differently on each side
+    // ("conservative_defi_yield" vs "Conservative DeFi Yield" — note DeFi's
+    // inner capital, which humanize() cannot reproduce). Comparing on
+    // letters-and-digits only lets the two meet without either side having to
+    // adopt the other's spelling.
+    allocationTargets() {
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const out = new Map();
+      for (const s of this.allocation?.strategy || []) {
+        if (Number.isFinite(Number(s.targetPct))) out.set(norm(s.label), { label: s.label, target: Number(s.targetPct) / 100 });
+      }
+      return out;
+    },
     bucketWeights() {
       const rec = this.session?.swarmRecommendation;
       if (!rec || rec.type !== "bucket_weights") return [];
@@ -1486,9 +1820,93 @@ export function registerStaticViews(Alpine) {
       }
       const weights = rec.weights;
       if (!weights || typeof weights !== "object") return [];
-      return Object.entries(weights).map(([id, w]) => ({
-        name: this.humanize(id), target: null, actual: null, recommended: num(w) ?? 0,
-      }));
+      const targets = this.allocationTargets();
+      const manifest = this.frameworkBuckets();
+      const actuals = this.bucketActuals();
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      return Object.entries(weights).map(([id, w]) => {
+        const framework = targets.get(norm(this.humanize(id))) ?? targets.get(norm(id));
+        const bucket = manifest.get(norm(id)) ?? manifest.get(norm(this.humanize(id)));
+        return {
+          // Prefer the framework's own spelling of the bucket name when it is
+          // known; humanize() of an id cannot recover "DeFi".
+          name: framework?.label || bucket?.name || this.humanize(id),
+          // The live dashboard's target wins when it answered — it is the
+          // CURRENT framework — with the published manifest behind it so a
+          // backendless checkout still has something to compare against.
+          target: framework ? framework.target : (bucket ? bucket.target : null),
+          actual: bucket ? (actuals.get(bucket.id) ?? null) : null,
+          recommended: num(w) ?? 0,
+        };
+      });
+    },
+    // The framework's buckets, indexed by both id and name so a weights map
+    // keyed "conservative_defi_yield" and a manifest naming it "Conservative
+    // DeFi Yield" still meet — the same letters-and-digits comparison
+    // allocationTargets() uses, for the same reason.
+    frameworkBuckets() {
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const out = new Map();
+      for (const b of this.allocationFramework?.buckets || []) {
+        if (b.id) out.set(norm(b.id), b);
+        if (b.name) out.set(norm(b.name), b);
+      }
+      return out;
+    },
+    // Where the book ACTUALLY sits, per bucket, on this session's snapshot:
+    // each bucket's share of NAV, summed from the positions whose token the
+    // framework assigns to it.
+    //
+    // This is the number that turns the panel from a list of proposed weights
+    // into a proposed MOVE. It is derived, not published — so it is computed
+    // only when the snapshot and the framework are BOTH present, and a bucket
+    // whose tokens are simply absent from the book reads 0%, which is true,
+    // rather than "—", which would claim we do not know.
+    bucketActuals() {
+      const out = new Map();
+      const buckets = this.allocationFramework?.buckets || [];
+      const positions = this.snapshot?.positions || [];
+      const total = Number(this.snapshot?.totalValueUsd ?? this.snapshot?.total_value_usd ?? 0);
+      if (!buckets.length || !positions.length || !(total > 0)) return out;
+      for (const b of buckets) {
+        const held = positions
+          .filter((p) => b.tokens.includes(String(p.token || "").toUpperCase()))
+          .reduce((sum, p) => sum + Number(p.value_usd || 0), 0);
+        out.set(b.id, held / total);
+      }
+      return out;
+    },
+    // The date the published framework's targets are stated as of.
+    // /api/dashboards/allocation serves the SINGLE CURRENT row of
+    // allocation_framework — there is no history — so this is the only handle
+    // a reader has on when the target being drawn was set.
+    // Falls back to the manifest's own asof, so a target sourced from the
+    // published framework is still dated on screen. An undated target is an
+    // unqualified claim — see the caller.
+    allocationAsOf() { return this.allocation?.asOf || this.allocationFramework?.asOf || null; },
+    // Whether the target predates the session it is being compared against.
+    // v0's archive spans 2026-05-25 onward and the framework's asOf is later
+    // than the earliest of them, so a straight join measures a historical
+    // session against a target that did not exist yet — and, because the
+    // framework is admin-editable, an edit today silently rewrites yesterday's
+    // verdict on every archived allocation session.
+    targetPostdatesSession() {
+      const asOf = this.allocationAsOf();
+      const date = this.session?.date;
+      return !!(asOf && date && String(date) < String(asOf).slice(0, 10));
+    },
+    // Whether the swarm proposed something OTHER than the published target.
+    // Mirrors the reference implementation's half-a-point tolerance, so a
+    // rounding artifact never renders as a deviation.
+    //
+    // Suppressed when the target postdates the session: "deviates from target"
+    // is a judgement on the swarm, and it cannot be made against a target the
+    // swarm could not have been aiming at. The bars still draw, captioned with
+    // the framework's own asOf, so the comparison is visible as a comparison
+    // rather than asserted as a finding.
+    deviatesFromTarget() {
+      if (this.targetPostdatesSession()) return false;
+      return this.bucketWeights().some((b) => b.target != null && Math.abs(b.recommended - b.target) > 0.005);
     },
     // Per-constituent weights inside each bucket. The payload has carried
     // `within_bucket_weights` all along and nothing rendered it, so allocation
@@ -1502,6 +1920,48 @@ export function registerStaticViews(Alpine) {
       const rec = this.session?.swarmRecommendation;
       return !!(rec && rec.type === "bucket_weights" && this.bucketWeights().length);
     },
+    // The bucket table's rows: the recommendation as numbers, and the move it
+    // implies. The bars alone could not carry this panel — a book weighted
+    // 97/3/0/0 draws one long bar and three that round to nothing, so the whole
+    // recommendation was legible only in the value labels, and the reader had to
+    // do the arithmetic that matters (how far is this from where we are?) in
+    // their head.
+    //
+    // The gap is measured against ACTUAL where we know it, because that is the
+    // move being asked for; against target otherwise, which is a different
+    // question, so gapBasis() names which one is on screen rather than letting
+    // one column heading stand for both.
+    bucketRows() {
+      const basis = this.gapBasis();
+      return this.bucketWeights().map((b) => {
+        const from = basis === "actual" ? b.actual : b.target;
+        const gap = from == null ? null : b.recommended - from;
+        return { ...b, gap };
+      });
+    },
+    // "actual" once any bucket reports where the book actually sits, else
+    // "target" when the framework supplies one, else null — no basis, no column.
+    gapBasis() {
+      const buckets = this.bucketWeights();
+      if (buckets.some((b) => b.actual != null)) return "actual";
+      if (buckets.some((b) => b.target != null)) return "target";
+      return null;
+    },
+    // A gap under half a point is rounding, not a proposal — the same tolerance
+    // deviatesFromTarget() uses, so the table and the ⚠ line cannot disagree.
+    fmtGap(gap) {
+      if (gap == null) return "—";
+      const pp = gap * 100;
+      if (Math.abs(pp) < 0.5) return "—";
+      return `${pp > 0 ? "↑ +" : "↓ −"}${Math.abs(pp).toFixed(0)}pp`;
+    },
+    gapClass(gap) {
+      if (gap == null || Math.abs(gap * 100) < 0.5) return "";
+      return gap > 0 ? "is-up" : "is-down";
+    },
+    fmtWeight(v) {
+      return v == null ? "—" : `${Math.round(v * 100)}%`;
+    },
     // Inline-SVG grouped bars per bucket: Target (open outline), Actual (muted
     // fill), Recommended (accent fill) — mirrors the reference BucketWeightsBars.
     // Target/Actual rows only appear when at least one bucket supplies them, so
@@ -1513,52 +1973,111 @@ export function registerStaticViews(Alpine) {
       const hasTarget = buckets.some((b) => b.target != null);
       const hasActual = buckets.some((b) => b.actual != null);
       const series = [
-        hasTarget ? { key: "target", label: "T", fill: "transparent", stroke: "var(--color-text-muted)", txt: "var(--color-text-muted)" } : null,
-        hasActual ? { key: "actual", label: "A", fill: "var(--color-text-dim)", opacity: "0.6", txt: "var(--color-text-muted)" } : null,
-        { key: "recommended", label: "R", fill: "var(--color-accent)", txt: "var(--color-accent)" },
+        hasTarget ? { key: "target", label: "target", fill: "transparent", stroke: "var(--color-text-muted)", txt: "var(--color-text-muted)" } : null,
+        hasActual ? { key: "actual", label: "actual", fill: "var(--color-text-dim)", opacity: "0.9", txt: "var(--color-text-muted)" } : null,
+        { key: "recommended", label: "recommended", fill: "var(--color-accent)", txt: "var(--color-accent)" },
       ].filter(Boolean);
-      const W = 520, labelW = 130, valW = 40, barW = W - labelW - valW;
-      const nameH = 14, subH = 4, subGap = 4, gap = 8;
-      const groupH = nameH + series.length * (subH + subGap);
-      const H = buckets.length * (groupH + gap) + 4;
-      const x = (v) => labelW + this.clampPct(v * 100) / 100 * barW;
+      // The series are NOT named per row. Repeating "target / actual /
+      // recommended" beside every bucket printed the same three words four
+      // times and left the figure looking like a form; the key lives once,
+      // under the chart, as bucketBarsKey(). The values keep their % suffix,
+      // because that unit is per-number and a key cannot supply it.
+      //
+      // There is also no 0/50/100 tick row. Each bar sits on a full-width track
+      // that IS 100% of NAV, so the scale is already stated by the geometry and
+      // again by the value at the end of every bar — a tick row on top of that
+      // read as a third, competing scale next to the "% of NAV" heading.
+      // The bucket name sits in a left COLUMN beside its bars, not on a line of
+      // its own above them. Dropping the series column had left the bars running
+      // the full width of the panel as ~3px hairlines with the name stranded
+      // above — more air than figure. Beside the name they are shorter, thicker,
+      // and the whole thing reads as the table it is.
+      const W = 580, labelW = 160, valW = 44;
+      const barX = labelW;
+      const barW = W - barX - valW;
+      const subH = 8, subGap = 4, gap = 14;
+      const headY = 8, axisH = 23;
+      const groupH = series.length * subH + (series.length - 1) * subGap;
+      const H = axisH + buckets.length * (groupH + gap) + 2;
+      const x = (v) => barX + this.clampPct(v * 100) / 100 * barW;
+      const mono = 'font-family="ui-monospace,monospace"';
+      const heads = `<text x="0" y="${headY}" fill="var(--color-text-dim)" font-size="8.5" ${mono}
+          style="text-transform:uppercase;letter-spacing:0.06em">Bucket</text>
+        <text x="${W}" y="${headY}" text-anchor="end" fill="var(--color-text-dim)" font-size="8.5" ${mono}
+          style="text-transform:uppercase;letter-spacing:0.06em">% of NAV</text>`;
+      const rule = `<line x1="0" y1="${axisH - 4}" x2="${W}" y2="${axisH - 4}" stroke="var(--color-border)"/>`;
       const body = buckets.map((b, i) => {
-        const top = i * (groupH + gap);
+        const top = axisH + i * (groupH + gap);
         const sub = series.map((s, si) => {
           const v = b[s.key];
-          const barY = top + nameH + si * (subH + subGap);
-          const txtY = barY + subH + 0.5;
+          const barY = top + si * (subH + subGap);
+          const txtY = barY + subH - 1;
+          // The full-width track. Without it a 0% bucket drew nothing at all —
+          // three of four rows on a 97/3/0/0 recommendation were an empty band
+          // and a number, which reads as missing data rather than as zero.
+          const track = `<rect x="${barX}" y="${barY}" width="${barW}" height="${subH}" fill="var(--color-surface)"/>`;
           if (v == null) {
-            return `<text x="${labelW + barW + 4}" y="${txtY.toFixed(1)}" fill="var(--color-text-dim)" font-size="9" font-family="ui-monospace,monospace">${s.label} —</text>`;
+            return `${track}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="var(--color-text-dim)" font-size="9" ${mono}>—</text>`;
           }
-          const w = Math.max(0, x(v) - labelW);
+          const w = Math.max(0, x(v) - barX);
           const rect = s.fill === "transparent"
-            ? `<rect x="${labelW}" y="${barY}" width="${w.toFixed(1)}" height="${subH}" fill="transparent" stroke="${s.stroke}"/>`
-            : `<rect x="${labelW}" y="${barY}" width="${w.toFixed(1)}" height="${subH}" fill="${s.fill}"${s.opacity ? ` fill-opacity="${s.opacity}"` : ""}/>`;
-          return `${rect}<text x="${labelW + barW + 4}" y="${txtY.toFixed(1)}" fill="${s.txt}" font-size="9" font-family="ui-monospace,monospace">${s.label} ${Math.round(v * 100)}</text>`;
+            ? `<rect x="${barX}" y="${barY}" width="${w.toFixed(1)}" height="${subH}" fill="transparent" stroke="${s.stroke}"/>`
+            : `<rect x="${barX}" y="${barY}" width="${w.toFixed(1)}" height="${subH}" fill="${s.fill}"${s.opacity ? ` fill-opacity="${s.opacity}"` : ""}/>`;
+          // The order the bars are stacked in IS the key's order, so the two can
+          // be read against each other without either being numbered.
+          return `${track}${rect}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="${s.txt}" font-size="9" ${mono}>${Math.round(v * 100)}%</text>`;
         }).join("");
+        // Centred against its own group of bars, so the name and the rows it
+        // labels are unambiguously one block.
+        const nameY = top + groupH / 2 + 3.5;
         return `<g>
-          <text x="0" y="${(top + 10).toFixed(1)}" fill="var(--color-text-muted)" font-size="11" font-family="ui-monospace,monospace">${this.escapeHtml(b.name)}</text>
-          <line x1="${x(0.5).toFixed(1)}" x2="${x(0.5).toFixed(1)}" y1="${top + nameH - 2}" y2="${top + groupH}" stroke="var(--color-border)" stroke-dasharray="1 3"/>
+          <text x="0" y="${nameY.toFixed(1)}" fill="var(--color-text)" font-size="10" ${mono}>${this.escapeHtml(b.name)}</text>
           ${sub}
         </g>`;
       }).join("");
-      return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Bucket weights: recommended${hasTarget ? " vs target" : ""}${hasActual ? " vs actual" : ""}">
-        ${body}
+      // The accessible name states the comparison AND the bar order, since a
+      // screen reader gets the figure without the visual key beneath it.
+      const drawn = series.map((s) => s.label).join(", then ");
+      return `<svg viewBox="0 0 ${W} ${H}" role="img"
+        aria-label="Bucket weights as a percentage of NAV: recommended${hasTarget ? " vs target" : ""}${hasActual ? " vs actual" : ""}. Bars per bucket, in order: ${drawn}.">
+        ${heads}${rule}${body}
       </svg>`;
     },
+    // The key for the bars above, rendered once under the figure rather than
+    // repeated on all four buckets. Order matches the stacking order inside each
+    // group, so a reader maps top-to-top without a numbered legend.
+    bucketBarsKey() {
+      const buckets = this.bucketWeights();
+      if (!buckets.length) return [];
+      return [
+        buckets.some((b) => b.target != null) ? { key: "target", label: "target" } : null,
+        buckets.some((b) => b.actual != null) ? { key: "actual", label: "actual" } : null,
+        { key: "recommended", label: "recommended" },
+      ].filter(Boolean);
+    },
+    // The composite's trailing run. The two dashed rules are the regime
+    // thresholds — 0.33 and 0.67 — and they used to be drawn unnamed, so the
+    // line's most important property (which BAND it is in, and how close it sits
+    // to crossing out of it) was invisible. Naming them turns the sparkline from
+    // a shape into a reading.
     regimeSparkline() {
       const h = this.session?.regimeSummary?.history || [];
       if (h.length < 2) return "";
-      const W = 260, H = 58, pad = 5;
-      const x = (i) => pad + (i / (h.length - 1)) * (W - pad * 2);
+      const W = 260, H = 58, pad = 5, gutter = 26;
+      const x = (i) => gutter + (i / (h.length - 1)) * (W - gutter - pad);
       const y = (v) => H - pad - Number(v || 0) * (H - pad * 2);
       const pts = h.map((d, i) => `${x(i).toFixed(1)},${y(d.composite).toFixed(1)}`).join(" ");
-      return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Regime composite trailing history">
-        <line x1="${pad}" x2="${W - pad}" y1="${y(0.33)}" y2="${y(0.33)}" stroke="var(--color-border)" stroke-dasharray="2 3"/>
-        <line x1="${pad}" x2="${W - pad}" y1="${y(0.67)}" y2="${y(0.67)}" stroke="var(--color-border)" stroke-dasharray="2 3"/>
+      const band = (v, label) => `<line x1="${gutter}" x2="${W - pad}" y1="${y(v)}" y2="${y(v)}" stroke="var(--color-border)" stroke-dasharray="2 3"/>
+        <text x="0" y="${(y(v) + 3).toFixed(1)}" fill="var(--color-text-dim)" font-size="8"
+          font-family="ui-monospace,monospace">${label}</text>`;
+      const last = h[h.length - 1];
+      // The end dot takes the regime's own colour, so the line lands on the same
+      // reading the headline states rather than on a flat accent.
+      const dot = this.regimeColor(last.regime || this.session?.regimeSummary?.regime);
+      return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Regime composite over the trailing ${h.length} sessions, against the 0.33 risk-off and 0.67 risk-on thresholds">
+        ${band(0.67, "0.67")}${band(0.33, "0.33")}
         <polyline fill="none" stroke="var(--color-accent)" stroke-width="1.6" points="${pts}"/>
-        <circle cx="${x(h.length - 1)}" cy="${y(h[h.length - 1].composite)}" r="2.8" fill="var(--color-accent)"/>
+        <circle cx="${x(h.length - 1)}" cy="${y(last.composite)}" r="2.8" fill="${dot}"/>
       </svg>`;
     },
     // The aggregator currently fills `consensus` with every take body verbatim

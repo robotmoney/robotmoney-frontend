@@ -105,5 +105,13 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Install Chromium
         run: bunx playwright install chromium
+      - name: Guard against private repo links in shipped HTML
+        run: |
+          if grep -rnq "github.com/robotmoney/robotmoney-frontend" frontend/public/views/; then
+            echo "Error: Found private repo link (github.com/robotmoney/robotmoney-frontend) in frontend/public/views/."
+            echo "Use robotmoney-core or remove the link."
+            grep -rn "github.com/robotmoney/robotmoney-frontend" frontend/public/views/
+            exit 1
+          fi
       - name: Standalone Playwright specs (no live backend required)
         run: bunx playwright test frontend/test/browser/preview-smoke.spec.ts

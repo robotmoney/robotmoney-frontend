@@ -183,6 +183,17 @@ frontend, never committed (`.env` stays gitignored):
   credit on its Zen workspace (an opencode subscription does not fund it).
   `AGENT_MODEL` selects which model it buys — see `.env.example` and
   `scripts/lib/model-registry.ts`; `AGENT_MODEL=free` runs with no key at all.
+  **When that credit runs out**, the key still authenticates and every paid call
+  fails with Zen's typed `CreditsError`. Real-inference CI (the `e2e`
+  full-stack job, the onboarding eval) then goes red with
+  `cause=exhausted-credits` on the member failure line — that string means
+  *top up the workspace balance*, not that the application regressed, and no
+  rerun can clear it (the provider marks it `isRetryable: false`). Kinds are
+  classified at the inference boundary
+  (`scripts/agent/inference-failure.ts`): `auth-rejected` is a bad or revoked
+  key, `quota-limited` a plan cap, `throttled` the only one worth retrying.
+  Observed 2026-08-05, when the balance ran out mid-morning and six e2e runs
+  were misread as an intermittent provider outage.
 - **`PROJECTS_SOURCE=live`** — not a secret, but **required in prod**: the
   `/projects` directory pipelines fail closed
   (`backend/src/projects/access/select.ts` throws

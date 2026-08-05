@@ -107,6 +107,13 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
       "bash scripts/checks/check-model-selection.sh": "repo-guards.yml",
       // contract.yml
       "bun run check-contract": "contract.yml",
+      // Added after the split (issue #484): contract/tests/live's reachability
+      // guard for SWARM_ONBOARDING_SKILL_URL. It documented itself as running
+      // in a `nightly-fetchers.yml` that never existed, so it had executed in
+      // no CI job at any point in its life while the URL it guards 404'd in
+      // production. Pinned here so "the live selector is invoked by a real
+      // workflow" is an assertion, not a comment.
+      "bun run test:live": "contract.yml",
       // integration.yml
       "bun run test:integration": "integration.yml",
     };
@@ -137,6 +144,42 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
     // because "bun run typecheck" is a substring of unit.yml's compound command.
     const backendYml = read("backend.yml");
     expect(backendYml).toMatch(/working-directory:\s*backend[\s\S]*?run:\s*bun run typecheck/);
+  });
+
+  test("test file headers claiming a workflow execution must cite a command that actually exists in that workflow (issue #517)", () => {
+    // A grep-level guard preventing test headers from drifting when workflows move.
+    const walkTests = (dir: string): string[] => {
+      const files: string[] = [];
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          files.push(...walkTests(join(dir, entry.name)));
+        } else if (entry.name.endsWith(".test.ts")) {
+          files.push(join(dir, entry.name));
+        }
+      }
+      return files;
+    };
+
+    for (const file of walkTests(join(root, "scripts/tests"))) {
+      const content = readFileSync(file, "utf8");
+      // Find e.g. "Runs in the required integration.yml root job via `bun run test:integration`"
+      // or "Runs in the required `unit.yml` job — `bun run test:unit`"
+      for (const match of content.matchAll(/Runs in the required `?([a-z0-9.-]+\.yml)`?[^`]*`([^`]+)`/g)) {
+        const workflowName = match[1] as string;
+        let command = match[2] as string;
+
+        // Normalizations for files that haven't updated to cite the npm script
+        if (command === "bun test scripts/tests") command = "bun run test";
+        if (command === "bun test scripts/tests/unit") command = "bun run test:unit";
+        if (command === "bun test scripts/tests/integration") command = "bun run test:integration";
+
+        const wfContent = read(workflowName);
+        expect(
+          wfContent,
+          `${file} claims to run in ${workflowName} via \`${command}\`, but ${workflowName} does not execute that`,
+        ).toContain(command);
+      }
+    }
   });
 
   // ── issue #275 addendum item 2/3/4: real per-workflow path-skip wiring ───

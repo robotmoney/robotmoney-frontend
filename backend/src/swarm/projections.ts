@@ -9,6 +9,7 @@ import type {
   SubjectSnapshot,
 } from "@robotmoney/contract";
 import { verifyStoredSubmissionSignature } from "../lib/signing.ts";
+import { isV0ArchiveNonce } from "./v0-archive.ts";
 
 type Row = Record<string, any>;
 
@@ -140,6 +141,21 @@ export function toTake(row: Row): SwarmTake {
     memoUrl: row.memo_url ?? null,
     ...(Array.isArray(row.payload?.weights) ? { weights: row.payload.weights } : {}),
     verified: Boolean(row.verified),
+    // WHY `verified` ALONE IS NOT ENOUGH. It answers one question — "did this
+    // member's signature check out against their registered key" — and the
+    // public surfaces rendered its false case as the only reason it could be
+    // false: "this take's signature did not check out. Treat it as
+    // unattributed." For the takes imported from v0's pre-launch archive that
+    // is simply untrue. They were never member-signed; member key registration
+    // did not exist when they were published, so there is no failed check to
+    // report. Same flag, two incompatible meanings, and the archive is the
+    // larger population.
+    //
+    // So the read side says which it is, from the one durable marker the
+    // import leaves (v0-archive.ts's nonce prefix). Rows fetched by a query
+    // that does not select `nonce` report false, which is the safe direction:
+    // a live submission is never mislabelled archival.
+    archival: isV0ArchiveNonce(row.nonce),
     receivedAt: instant(row.received_at) ?? "",
   };
 }

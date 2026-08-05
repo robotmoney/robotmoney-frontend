@@ -291,12 +291,12 @@ These are in v1's declared scope and carry numbers, but **no v0 baseline artifac
 | 15.20 | `bucket_weights` (sums to 1.0 ±0.01) | `generate-session.js:433` | `meanTakeWeights` / `normalizedTakeWeights` | UNVERIFIED | |
 | 15.21 | `within_bucket_weights` | present | frontend **reads** it; **no backend producer located** | UNVERIFIED | Suspected gap. Needs a runtime check against a real published session. |
 | 15.22 | **Actual-vs-target bucket drift (pp)** | `charts.tsx:100,112-181,489-570` | **none** — frontend emits `target:null, actual:null` (`static-views.js:1473-1493`) | **PROVEN-DIFFERENT** | Drift chart silently degrades to "Recommended-only" without surfacing that two series are missing. |
-| 15.23 | Projects table (market cap, FDV, 24h %, sparkline, wallet balance) | Supabase | `projects/projections.ts:225-290` | UNVERIFIED | |
-| 15.24 | MC/FDV % | server | derived client-side (`views/projects.js:14`) | UNVERIFIED | |
-| 15.25 | `data_coverage_score` | Supabase `compute_project_coverage()` | `projects/transforms.ts:188,226` | UNVERIFIED | Baseline is **hand-derived from the legacy formulas**, so a misread formula reproduces itself. Not circular, but weaker than a captured artifact. |
+| 15.23 | Projects table (market cap, FDV, 24h %, sparkline, wallet balance) | Supabase | `projects/projections.ts:225-290` | **VERIFIED (R11)** | Live-baseline audit against v0's Supabase: [R11](audits/v0-v1-parity/R11-projects-supabase-audit.md). |
+| 15.24 | MC/FDV % | server | derived client-side (`views/projects.js:14`) | **VERIFIED (R11)** | See [R11 §2](audits/v0-v1-parity/R11-projects-supabase-audit.md). |
+| 15.25 | `data_coverage_score` | Supabase `compute_project_coverage()` | `projects/transforms.ts:188,226` | **VERIFIED (R11)** | [R11 §3](audits/v0-v1-parity/R11-projects-supabase-audit.md): formula PROVEN-IDENTICAL across all 995 live rows; the `MIN_SCORE` 55-vs-45 directory floor is a separate, quantified divergence. |
 | 15.26 | Revenue 30d on the projects table | present | removed from the DTO; relocated to `/agents` + leaderboard | **PROVEN-DIFFERENT** | Intentional (issue #346). |
 | 15.27 | Dashboard overview (entity counts, vault TVL + 7d sparkline, total AUM) | v0 pages | `projects/entities-projections.ts:282,337-352` | UNVERIFIED | |
-| 15.28 | x402 score / txns / volume / buyers / resources; productivity score | v0 | `projects/access/data-source.ts:19-23` | UNVERIFIED | |
+| 15.28 | x402 score / txns / volume / buyers / resources; productivity score | v0 | `projects/access/data-source.ts:19-23` | **PROVEN-DIFFERENT (R11)** | [R11 §5](audits/v0-v1-parity/R11-projects-supabase-audit.md): `x402_buyers` is real live v0 data with no v1 column at all. |
 | 15.29 | Scoring-weight methodology 40/30/30 | `analytics/src/pages/Methodology.tsx:10-12,70` | `/methodology` page | UNVERIFIED | Hardcoded on both sides. |
 
 ---

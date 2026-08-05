@@ -205,8 +205,19 @@ the GitHub UI, not something automatable from this repo.
 System-correctness workflows (`backend`, `research-pipeline`, `integration`,
 `onboarding-eval-rails`, `e2e`) defer on draft PRs; the feature-correctness
 workflows (`unit`, `repo-guards`, `contract`, `frontend`) continue to execute
-there — cheap enough (no Docker, no live network) to gate early regardless of
-draft state.
+there — cheap enough (no Docker) to gate early regardless of draft state.
+
+The one live-network exception is deliberate and bounded (issue #484):
+`contract` runs `contract/tests/live` — a single HTTPS GET asserting
+`SWARM_ONBOARDING_SKILL_URL` still returns 200. It is the only discovery link in
+the D21 onboarding flow, a 404 there raises no error anywhere in this repo, and
+the guard's previous schedule-only home did not exist, so it had never executed
+in CI at all while the URL 404'd in production for two days. It runs on the
+per-PR path rather than nightly-only so the red lands on the PR that causes it,
+gated behind `contract`'s existing `contract/**` paths-filter. The accepted
+cost: a raw.githubusercontent.com outage reds a required check on `contract/**`
+PRs. That is the intended direction — per the loud-skip-never invariant, an
+unreachable external resource must fail, never skip.
 
 **L2 — Shared code is named for its domain, never for its consumer.** `stack/`,
 `agent/`, `toolchain/` state what belongs in them; `lib/`, `utils/`, `helpers/`
@@ -219,7 +230,7 @@ Per-package test layout, by cost class:
 |---|---|---|---|
 | `<pkg>/tests/unit/` | unit | nothing | every PR (the default `bun test` target) |
 | `<pkg>/tests/integration/` | integration | Docker, a local stack | PR ready-for-review |
-| `<pkg>/tests/live/` | live | real external network | nightly |
+| `<pkg>/tests/live/` | live | real external network | its package's workflow — PR (path-gated), merge to main, and the nightly mirror |
 | `evals/` | eval | Docker + network + **real inference** | nightly, sweep-only |
 
 `backend/tests/` is the reference implementation of this and needs no change: it
@@ -808,6 +819,72 @@ proves. **Review expectations:**
 same as the EDGAR seed — review as a data change, confirm the new indicator's
 values are finite/plausible and the regeneration command used is recorded in
 the PR.
+
+**v0 identity-roster seed (issue #495).** The projects directory's identity
+data — every project/agent/coin/wallet/vault row's slug, name, ticker,
+protocol standard and address — comes from a committed artifact, not a live
+crawl: `backend/src/projects/seed/v0-roster-data.json` plus
+`v0-roster-data.manifest.json` (format version, source tag, the pull's real
+completion time `generatedAt`, per-facet counts, server-declared upstream
+totals, skip tallies, and a sha256 of the canonical content). Loader,
+validation and atomic replace live in `backend/src/projects/seed/roster-seed.ts`;
+the live extract that produces it is `roster-seed-generator.ts`. Volatile
+metrics — market cap, FDV, 24h change, wallet balance, vault TVL, revenue —
+are NEVER in the seed; they are fetched live per
+`backend/src/projects/access/live-source.ts`.
+
+- **Serving.** `liveProjectsDataSource.discoverProjects()` loads and fully
+  validates the pair with no network and no DB access, and
+  `discoveredAsOf()` returns the manifest's `generatedAt`. The nightly
+  `projects.discover` job (02:00 UTC) writes THAT timestamp into
+  `projects.resolved_at` / `openclaw_agents.enriched_at` — never `now()` — so
+  the leaderboard's source-health panel reports the roster's real age instead
+  of claiming a frozen dataset refreshed last night. Each load prints one
+  `[roster-seed] loaded <path> …` line naming the file, `generatedAt`, counts
+  and checksum prefix.
+- **Reconciliation and rollback.** `projects.discover` marks any project a
+  previous discovery run left active but that is absent from the current
+  roster `status='inactive'` (never DELETE — facet and snapshot history is
+  FK-linked, and a later run that re-discovers the slug flips it back). Rows
+  never written by discovery (`resolved_at IS NULL`) are never touched. The
+  step is guarded by a 10% shrink floor: a run carrying fewer projects than
+  90% of what is currently active does NOT deactivate anything and reports
+  `shrinkRefusal` instead, because auto-deactivating on top of a truncated
+  extract would take the directory down automatically. **To roll the roster
+  back** — including reverting to the 4-row fixture — enqueue the job with
+  payload `{"allowShrink": true}`, which waives the floor for that run.
+- **Monitoring.** `GET /api/admin/overview` carries a `rosterSeed` entry
+  (manifest `generatedAt`, age in days, declared project count, checksum
+  prefix, and the persisted active-project count) plus an alert when the
+  manifest is unreadable or fewer projects are live than the seed declares.
+  Every `projects.*` kind is in `MONITORED_KINDS`
+  (`backend/src/admin/overview.ts`), so a failed/degraded/dead/not-run
+  discovery raises an alert — an exhausted degrade settles the job
+  `'succeeded'`, so the run-health entry is the only signal that survives.
+- **Regeneration** (`bun run projects-roster-seed:regenerate`) is the ONLY way
+  the pair is produced or replaced — never implicit in migrations, demo boot,
+  or per-PR CI. **Credentials:** read-only `V0_ANALYTICS_SOURCE_URL` /
+  `V0_ANALYTICS_SOURCE_KEY` in the environment, required only to regenerate,
+  never to read the committed seed and never present in any deployment path.
+  Prefer `read -s` over an inline assignment so the key stays out of shell
+  history and `ps`. Every GET sends `Prefer: count=exact` and asserts the rows
+  received equal the total the server declares, pages by keyset cursor
+  (`id=gt.<lastId>`) rather than offset, refuses to write a zero-project seed,
+  and refuses a regeneration whose `projectCount` falls more than 10% below
+  the previous manifest unless the operator passes `--allow-shrink`.
+- **Recovery.** `replaceRosterSeedAtomically` writes each file through a
+  same-directory temp file + rename. The renames are per-file, not atomic as a
+  pair, so a crash between them can leave new data beside the old manifest —
+  which fails CLOSED (the next load raises a loud checksum mismatch, discovery
+  degrades, and last-persisted rows keep serving). Recover with
+  `git checkout backend/src/projects/seed/v0-roster-data.json
+  backend/src/projects/seed/v0-roster-data.manifest.json`; the next 02:00 cron
+  re-runs on its own. `ROSTER_SEED_PATH` / `ROSTER_SEED_MANIFEST_PATH` are
+  test-only overrides and are REFUSED under `RM_ENV=prod`.
+- **Review expectations:** same as the EDGAR seed — a PR that regenerates this
+  seed is a data change, not a code change. Check the manifest's counts against
+  its `upstreamTotals`/`skipped`, confirm `generatedAt` moved forward, and treat
+  any drop in `projectCount` as requiring an explanation in the PR body.
 
 The independent producer runs regime and research on **distinct timers**:
 `regime` daily at **22:30 UTC** (after US market close, so fetched raw data is
@@ -2657,6 +2734,46 @@ path with fewer services booted. Three components are shared by construction:
   in `runOnboardingEvalWithRetry`, the demo's onboarding driver, and the eval's
   scorecard. A refusal is retryable under this classifier, which is why the demo
   no longer forfeits a finite roster seat to one unlucky sample.
+
+**A dead run's cause is read, never guessed (issue #527).** `opencode run
+--format json` reports a failed model exchange as a first-class
+`{"type":"error",…}` line on **stdout** — carrying the provider's typed
+discriminator, message, HTTP status, `isRetryable` verdict and endpoint — and
+writes nothing to stderr. `scripts/agent/transcript.ts`'s `transcriptErrors()`
+is the one parser for it, and `scripts/agent/inference-failure.ts` turns those
+events into a stable `InferenceFailureKind`: `exhausted-credits`,
+`auth-rejected`, `quota-limited`, `throttled`, `provider-failure`,
+`local-cli-failure`, `empty-response`, `timed-out`, `unclassified-error`.
+
+Two rules govern that classification. **The typed discriminator decides** —
+`exhausted-credits` fires on Zen's `CreditsError` and nothing else, never on an
+"Insufficient balance" substring (prose is reworded upstream) and never on a
+bare 401 (an invalid key returns the same status), because a wrong "top up the
+balance" sends a maintainer to a billing page while the real fault goes unread.
+**Nothing is ever softened** — every kind is a loud failure with no template
+fallback and no skip; the kind changes only what the message says. Provider
+text is redacted at parse time (credential values, `wrk_`/`acc_` identifiers,
+workspace-scoped billing URLs), because these strings land in CI logs and PR
+comments; the actionable "top up" instruction is rendered from the kind, never
+scraped from the URL.
+
+Both consumers of a dead run read it: the swarm boundary throws an
+`InferenceFailure` carrying kind, provider and resolved model id
+(`scripts/lib/swarm/inference.ts`), and `harnessFaultOf()` treats a
+non-retryable 401/402/403 with no authored text as
+`provider-rejected-harness-credential` — a `harness-error`, because an unfunded
+or unauthorized key is the harness's own configuration failing, not a
+measurement of the product. The conjunct matters: `opencode run` also issues a
+small session-title call whose failure emits its own error event, so a run that
+authored a take keeps its real result. Pinned by
+`scripts/tests/unit/opencode-error-attribution.test.ts` (hermetic, against a
+CI-captured payload) and `scripts/tests/unit/swarm-inference-opencode-argv.test.ts`
+(through a fake CLI on the real spawn path, table-driven over every kind plus
+the red control). This exists because on 2026-08-05 the Zen workspace ran out of
+balance and every consumer reported the resulting `CreditsError / HTTP 401 /
+isRetryable: false` as either an unspecified provider outage (six e2e failures,
+three futile reruns, nobody told to top it up) or a red `navigation-failure`
+against the onboarding instructions.
 
 **E6 — CI placement: nightly mirrors the merge-to-main set.** The invariant
 (issue #373, D26) is an *equality of sets*: **every** workflow that runs on

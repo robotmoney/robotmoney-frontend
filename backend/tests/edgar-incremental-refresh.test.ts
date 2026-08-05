@@ -14,6 +14,7 @@
 import { test, expect } from "bun:test";
 import {
   refreshEdgarIncremental,
+  refreshEdgarWithTierFallback,
   selectEdgarRefreshTier,
   defaultEdgarRefreshDeadlineMs,
   EDGAR_FULL_SWEEP_WEEKDAY_UTC,
@@ -431,4 +432,183 @@ test("idempotency (tier 'full'): replaying the same complete full-range payload 
   expect(replay.revisedMonths).toBe(replay.plannedMonths);
   expect(replay.newRows).toEqual(first.newRows); // stable output on replay
   expect(calls).toBeGreaterThan(callsAfterFirst); // the FULL range is re-fetched every tier-'full' run, by design
+});
+
+// ── batch-level divergence guard wiring + Tier 2 → Tier 1 fallback (#509) ──
+
+// A persisted floor of `n` consecutive month-end rows from 2010-01.
+function persistedFloor(n: number, value = 100): { date: string; value: number }[] {
+  const out: { date: string; value: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const y = 2010 + Math.floor(i / 12);
+    const m = (i % 12) + 1;
+    const day = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    out.push({ date: `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`, value });
+  }
+  return out;
+}
+
+test("refreshEdgarIncremental (tier 'full'): a complete, individually-VALID all-zero batch DEGRADES instead of returning rows to write — the unguarded-bulk-overwrite defect", async () => {
+  // 2012-12-31: 36 months from EDGAR_FLOOR_START, all already persisted with
+  // a real value. EDGAR answers HTTP 200 with {"hits":{"total":{"value":0}}}
+  // for every one of them — the documented mid-rebuild failure mode. Every
+  // row is a finite non-negative integer, so validateEdgarBatch is happy.
+  const asOf = "2012-12-31";
+  const floor = persistedFloor(36);
+  const warnings: string[] = [];
+
+  const outcome = await refreshEdgarIncremental({
+    asOf,
+    tier: "full",
+    persistedMonths: floor.map((p) => p.date.slice(0, 7)),
+    persistedRows: floor,
+    deadlineAt: Date.now() + 60_000,
+    fetchMonth: async () => 0,
+    requestDelayMs: 0,
+    logger: { log: () => {}, warn: (m) => warnings.push(m) },
+  });
+
+  expect(outcome.status).toBe("degraded");
+  expect(outcome.degradeKind).toBe("divergence");
+  // The load-bearing assertion: NOTHING is handed back for the caller to
+  // write, so the ~36-month floor and its provenance survive untouched.
+  expect(outcome.newRows).toEqual([]);
+  expect(outcome.missingMonths).toBe(0); // not a fetch failure — every month answered
+  expect(outcome.rejectedMonths).toBe(0); // and every answer was individually well-formed
+  expect(outcome.reason).toMatch(/degenerate batch/);
+  expect(warnings.join(" ")).toMatch(/DEGRADED/);
+});
+
+test("refreshEdgarIncremental (tier 'full'): a batch that bulk-REWRITES the persisted floor degrades, while a realistic back-revision to a few months still lands", async () => {
+  const asOf = "2012-12-31";
+  const floor = persistedFloor(36);
+  const persistedMonths = floor.map((p) => p.date.slice(0, 7));
+  const base = {
+    asOf,
+    tier: "full" as const,
+    persistedMonths,
+    persistedRows: floor,
+    deadlineAt: Date.now() + 60_000,
+    requestDelayMs: 0,
+    logger: { log: () => {}, warn: () => {} },
+  };
+
+  // Every month answers a plausible-but-different integer → a full rewrite.
+  const rewrite = await refreshEdgarIncremental({ ...base, fetchMonth: async () => 42 });
+  expect(rewrite.status).toBe("degraded");
+  expect(rewrite.degradeKind).toBe("divergence");
+  expect(rewrite.newRows).toEqual([]);
+
+  // The SAME tier, same floor, but only 2010-01 revised upward by 3 filings:
+  // the guard must not stand in the way of the revisions Tier 2 exists for.
+  const revision = await refreshEdgarIncremental({
+    ...base,
+    fetchMonth: async (monthStart: string) => (monthStart === "2010-01-01" ? 103 : 100),
+  });
+  expect(revision.status).toBe("updated");
+  expect(revision.newRows.length).toBe(36);
+  expect(revision.newRows.find((r) => r.date === "2010-01-31")!.value).toBe(103);
+});
+
+test("refreshEdgarIncremental (tier 'incremental'): the guard leaves the small daily batch alone — a revision-window month tripling in value still lands", async () => {
+  const asOf = "2012-12-31"; // Monday — the incremental tier by default
+  expect(selectEdgarRefreshTier(asOf)).toBe("incremental");
+  const floor = persistedFloor(36);
+  const outcome = await refreshEdgarIncremental({
+    asOf,
+    persistedMonths: floor.map((p) => p.date.slice(0, 7)),
+    persistedRows: floor,
+    deadlineAt: Date.now() + 60_000,
+    fetchMonth: async () => 300,
+    requestDelayMs: 0,
+    logger: { log: () => {}, warn: () => {} },
+  });
+  expect(outcome.tier).toBe("incremental");
+  expect(outcome.status).toBe("updated");
+  expect(outcome.plannedMonths).toBe(2); // the trailing revision window only
+  expect(outcome.newRows.length).toBe(2);
+});
+
+test("refreshEdgarWithTierFallback: a Tier 2 sweep that degrades on its DEADLINE falls back to the cheap Tier 1 sweep, so the daily signal is still published", async () => {
+  const asOf = "2012-12-30"; // a Sunday (UTC) — the real full-sweep weekday
+  expect(selectEdgarRefreshTier(asOf)).toBe("full");
+  const floor = persistedFloor(35); // 2010-01..2012-11 persisted; 2012-12 missing
+  const requested: string[] = [];
+  let clock = 0;
+
+  const outcome = await refreshEdgarWithTierFallback({
+    asOf,
+    persistedMonths: floor.map((p) => p.date.slice(0, 7)),
+    persistedRows: floor,
+    // Already expired for the FULL sweep the moment it starts...
+    deadlineAt: 0,
+    now: () => clock,
+    fetchMonth: async (monthStart: string) => {
+      requested.push(monthStart);
+      clock += 1; // ...but the fallback gets its own fresh 90s budget.
+      return 100;
+    },
+    requestDelayMs: 0,
+    logger: { log: () => {}, warn: () => {} },
+  });
+
+  expect(outcome.status).toBe("updated");
+  expect(outcome.tier).toBe("incremental");
+  expect(outcome.fellBackFromFullSweep).toBe(true);
+  // The fallback fetched only the Tier 1 plan (missing month + the trailing
+  // revision window), never the 36-month full range.
+  expect(requested.map((m) => m.slice(0, 7))).toEqual(["2012-11", "2012-12"]);
+  expect(outcome.newRows.length).toBe(2);
+});
+
+test("refreshEdgarWithTierFallback: a Tier 2 sweep that degrades on DIVERGENCE does NOT fall back — EDGAR's answers are untrustworthy, so a smaller slice of the same answers must not be written either", async () => {
+  const asOf = "2012-12-30"; // Sunday — tier 'full'
+  const floor = persistedFloor(36);
+  const outcome = await refreshEdgarWithTierFallback({
+    asOf,
+    persistedMonths: floor.map((p) => p.date.slice(0, 7)),
+    persistedRows: floor,
+    deadlineAt: Date.now() + 60_000,
+    fetchMonth: async () => 0, // degenerate everywhere
+    requestDelayMs: 0,
+    logger: { log: () => {}, warn: () => {} },
+  });
+
+  expect(outcome.status).toBe("degraded");
+  expect(outcome.tier).toBe("full");
+  expect(outcome.degradeKind).toBe("divergence");
+  expect(outcome.fellBackFromFullSweep).toBeUndefined();
+  expect(outcome.newRows).toEqual([]);
+});
+
+test("refreshEdgarWithTierFallback: an ordinary successful run (either tier) is returned untouched — the fallback is inert unless a full sweep degraded", async () => {
+  const floor = persistedFloor(36);
+  const common = {
+    persistedMonths: floor.map((p) => p.date.slice(0, 7)),
+    persistedRows: floor,
+    deadlineAt: Date.now() + 60_000,
+    fetchMonth: async () => 100,
+    requestDelayMs: 0,
+    logger: { log: () => {}, warn: () => {} },
+  };
+
+  const weekday = await refreshEdgarWithTierFallback({ ...common, asOf: "2012-12-31" }); // Monday
+  expect(weekday.tier).toBe("incremental");
+  expect(weekday.fellBackFromFullSweep).toBeUndefined();
+
+  const sunday = await refreshEdgarWithTierFallback({ ...common, asOf: "2012-12-30" }); // Sunday
+  expect(sunday.status).toBe("updated");
+  expect(sunday.tier).toBe("full");
+  expect(sunday.fellBackFromFullSweep).toBeUndefined();
+
+  // A degraded INCREMENTAL run never triggers the fallback either (there is
+  // no cheaper tier to fall back to) — it degrades honestly, as before.
+  const degradedTier1 = await refreshEdgarWithTierFallback({
+    ...common,
+    asOf: "2012-12-31",
+    fetchMonth: async () => null,
+  });
+  expect(degradedTier1.status).toBe("degraded");
+  expect(degradedTier1.tier).toBe("incremental");
+  expect(degradedTier1.fellBackFromFullSweep).toBeUndefined();
 });

@@ -1,9 +1,24 @@
 import { expect, test } from "bun:test";
 import { hermeticDataSource } from "../src/analytics/access/hermetic-source.ts";
 import type { AnalyticsPersistence } from "../src/analytics/persistence.ts";
+import { runAnalytics, RESEARCH_TOOL_GROUP } from "../src/analytics/index.ts";
+import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { requireProducerApiConfig, runProducerCommand, runProducerOnce, startProducerSchedules } from "../src/producer/index.ts";
 
 const persistence = {} as AnalyticsPersistence;
+
+// An in-memory AnalyticsPersistence: the tool-selection assertion below is
+// about WHICH tools one runAnalytics call executes, not about persistence, so
+// this keeps the check free of SQL/HTTP without mocking away the subject.
+function recordingPersistence(): AnalyticsPersistence {
+  return {
+    async loadRawHistory() { return {}; },
+    async saveRawHistory() {},
+    async seedRawHistory() { return { seededPoints: 0, existingPoints: 0, indicators: 0 }; },
+    async saveRegimeSnapshots() {},
+    async saveResearchSignal() {},
+  };
+}
 
 test("independent producer computes regime itself and receives only an HTTP persistence port", async () => {
   const calls: string[] = [];
@@ -22,15 +37,32 @@ test("independent producer computes regime itself and receives only an HTTP pers
   expect(result).toEqual({ regime: { submitted: true } });
 });
 
-test("independent research producer scopes execution to the two research tools", async () => {
+// Issue #509: the research producer must invoke the orchestrator ONCE per
+// scheduled run, not once per research tool. Both signals share a single
+// fetchResearchInputs call — and therefore a single live EDGAR sweep — so the
+// old per-tool loop paid for that sweep twice every cycle (up to ~400 EDGAR
+// requests and 2×15min on a full-sweep day) and discarded the first result
+// entirely, since only the late-cycle-signals branch persists it.
+test("independent research producer runs the orchestrator ONCE for both research tools, never once per tool", async () => {
   const calls: string[] = [];
-  await runProducerOnce("research", "2031-01-02", {
+  const out = await runProducerOnce("research", "2031-01-02", {
     source: hermeticDataSource,
     persistence,
-    runner: async (_asof, tool) => { calls.push(tool); return { [tool]: true }; },
+    runner: async (_asof, tool) => {
+      calls.push(tool);
+      return { "channel-divergence": true, "late-cycle-signals": true };
+    },
   });
-  expect(calls).toEqual(["channel-divergence", "late-cycle-signals"]);
+  expect(calls).toEqual([RESEARCH_TOOL_GROUP]); // exactly one invocation
   expect(calls).not.toContain("regime");
+  // ...and both signals still come back from that single run.
+  expect(Object.keys(out).sort()).toEqual(["channel-divergence", "late-cycle-signals"]);
+});
+
+test("the research tool group selects exactly the two research signals inside one runAnalytics call — never regime, never the whole suite", async () => {
+  const results = await runAnalytics("2031-01-02", RESEARCH_TOOL_GROUP, hermeticDataSource, recordingPersistence(), noopTelemetrySink);
+  expect(Object.keys(results).sort()).toEqual(["channel-divergence", "late-cycle-signals"]);
+  expect(results.regime).toBeUndefined();
 });
 
 test("producer refuses to reach readiness without an analytics credential", async () => {
@@ -100,8 +132,10 @@ test("seed waits for the API, seeds raw history, then produces both research sig
     runner: async (_asof, tool, _source, store) => {
       expect(store).toBe(persistence);
       events.push(tool);
-      return { [tool]: true };
+      return { "channel-divergence": true, "late-cycle-signals": true };
     },
   });
-  expect(events).toEqual(["ready", "seed", "channel-divergence", "late-cycle-signals"]);
+  // One research invocation, not one per tool (issue #509) — still producing
+  // both signals, still strictly after readiness and seeding.
+  expect(events).toEqual(["ready", "seed", RESEARCH_TOOL_GROUP]);
 });

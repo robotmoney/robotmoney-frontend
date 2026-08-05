@@ -6,7 +6,7 @@
 //
 // This test pins the updated wording and fails if old false claims reappear.
 //
-// Runs in the required integration.yml root job via `bun test scripts/tests`.
+// Runs in the required unit.yml root job via `bun run test`.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

@@ -9,12 +9,15 @@
 // EXECUTING tests behind their runtime claims — only markup-substring e2e and
 // manual verification had run). The additions below drive, with the same
 // no-DOM/no-Alpine-runtime pattern: the Swarm Recommendation action table
-// and rationale-suppression on icSessionDetail() (AC1), the live status
+// and rationale-suppression on swarmSessionDetail() (AC1), the live status
 // panel's windowClosesAt-over-state trust on swarmApplyStatus() (AC2),
 // stepClass()/stateChip()/liveStatus() across the five states the PR's
 // verification section claims to have manually checked (AC3), and the
-// copyablePrompt() dead-roster-URL rewrite, whose existing test fixture never
-// contained the URL it claimed to test (AC4).
+// copyablePrompt() roster-URL rewrite, whose existing test fixture never
+// contained the URL it claimed to test (AC4). That fixture was later fixed to
+// hold a URL the shipped prompt no longer used, so the same vacuity returned
+// from the other side — the final describe block (issue #484) drives the real
+// constant.
 //
 // These are buildless Alpine factories registered via Alpine.data(name, fn).
 // We capture the factory functions with a stub Alpine that records only
@@ -27,10 +30,12 @@
 // methods the templates bind to.
 import { beforeAll, describe, expect, test } from "bun:test";
 import {
+  CANONICAL_ROSTER_URL,
   copyablePrompt,
   registerApplyForm,
 } from "../../../frontend/public/assets/js/app/alpine/views/apply-form.js";
 import { registerStaticViews } from "../../../frontend/public/assets/js/app/alpine/static-views.js";
+import { ONBOARDING_PROMPT } from "@robotmoney/contract";
 
 // A stub Alpine that captures Alpine.data(name, factory) registrations and
 // answers any other accessed method with a no-op — registerApplyForm /
@@ -111,19 +116,27 @@ describe("applyForm: roster-full waitlist capture (issue #245 AC2)", () => {
   });
 });
 
-describe("copyablePrompt: the base-URL fact the canonical prompt cannot carry, and the dead roster-URL rehost (issue #341 AC4)", () => {
-  test("canonical production origin (or none) → the prompt is returned verbatim when it carries no dead roster URL", () => {
+describe("copyablePrompt: the base-URL fact the canonical prompt cannot carry, and the roster-URL rehost (issue #341 AC4)", () => {
+  test("canonical production origin (or none) → the prompt is returned verbatim when it carries no roster URL", () => {
     expect(copyablePrompt("PROMPT", "https://robotmoney.net")).toBe("PROMPT");
     expect(copyablePrompt("PROMPT", undefined as unknown as string)).toBe("PROMPT");
   });
 
-  // The literal string the prompt actually ships (the dead
-  // https://swarm.robotmoney.net link, see apply-form.js's DEAD_ROSTER_URL
-  // comment): a fixture that never contains it — "PROMPT" alone, as this test
-  // used to read — never exercises the rewrite it claims to test.
-  const FIXTURE = "Read PROMPT. Verify the swarm at https://swarm.robotmoney.net before proceeding.";
+  // The literal string the prompt actually ships (see apply-form.js's
+  // CANONICAL_ROSTER_URL comment): a fixture that never contains it — "PROMPT"
+  // alone, as this test once read — never exercises the rewrite it claims to
+  // test.
+  //
+  // Hand-writing the URL into the fixture is not enough either, and that is how
+  // this regressed: the fixture below spelled out https://swarm.robotmoney.net
+  // long after the contract constant had been corrected off that host, so these
+  // three tests went on passing while the real rewrite matched nothing and every
+  // copied prompt kept the production roster URL. Interpolating the constant
+  // keeps the fixture honest, and the `describe` block below drives the REAL
+  // ONBOARDING_PROMPT so the two can never silently diverge again.
+  const FIXTURE = `Read PROMPT. Verify the swarm at ${CANONICAL_ROSTER_URL} before proceeding.`;
 
-  test("canonical production origin (or none) → the dead roster URL rehosts to the canonical origin's /swarm, no base-URL suffix", () => {
+  test("canonical production origin (or none) → the roster URL rehosts to the canonical origin's /swarm, no base-URL suffix", () => {
     expect(copyablePrompt(FIXTURE, "https://robotmoney.net")).toBe(
       "Read PROMPT. Verify the swarm at https://robotmoney.net/swarm before proceeding.",
     );
@@ -136,13 +149,38 @@ describe("copyablePrompt: the base-URL fact the canonical prompt cannot carry, a
   // free on every run, so an off-production origin is whatever this boot got.
   // (48787 as a fixture would quietly re-teach "the demo port" — the exact
   // assumption that raced the stage tunnel.)
-  test("off-production origin → the dead roster URL rehosts to that origin's own /swarm route, and the base URL is appended", () => {
+  test("off-production origin → the roster URL rehosts to that origin's own /swarm route, and the base URL is appended", () => {
     const origin = "http://localhost:53127";
     const out = copyablePrompt(FIXTURE, origin);
     expect(out.startsWith(`Read PROMPT. Verify the swarm at ${origin}/swarm`)).toBe(true);
     expect(out).toBe(
       `Read PROMPT. Verify the swarm at ${origin}/swarm before proceeding. Use ${origin} as the API base URL.`,
     );
+  });
+});
+
+// The rewrite above is only real if the string it splits on is the string the
+// SHIPPED prompt actually contains. Every test above uses a fixture this file
+// wrote, so all of them pass whether or not that is still true — which is
+// exactly how the rehost died unnoticed once the contract constant moved off
+// https://swarm.robotmoney.net (issue #484). These drive the real constant.
+describe("copyablePrompt fires on the ONBOARDING_PROMPT actually shipped, not just on a local fixture (issue #484)", () => {
+  test("the shipped prompt contains CANONICAL_ROSTER_URL — the string the rewrite splits on", () => {
+    expect(ONBOARDING_PROMPT).toContain(CANONICAL_ROSTER_URL);
+  });
+
+  test("off-production origin rehosts the shipped prompt's roster URL and leaves no production roster link behind", () => {
+    const origin = "http://localhost:53127";
+    const out = copyablePrompt(ONBOARDING_PROMPT, origin);
+    expect(out).toContain(`${origin}/swarm`);
+    // The whole point: an agent handed a localhost stack must not be pointed at
+    // the production roster to verify that stack's provenance.
+    expect(out).not.toContain(CANONICAL_ROSTER_URL);
+    expect(out.endsWith(` Use ${origin} as the API base URL.`)).toBe(true);
+  });
+
+  test("production origin leaves the shipped prompt byte-identical", () => {
+    expect(copyablePrompt(ONBOARDING_PROMPT, "https://robotmoney.net")).toBe(ONBOARDING_PROMPT);
   });
 });
 
@@ -340,9 +378,9 @@ describe("swarmApplyStatus: stepClass()/stateChip()/liveStatus() across the stat
   });
 });
 
-describe("icSessionDetail: rollup recommendation renders action rows and suppresses the echoed rationale (issue #341 AC1)", () => {
+describe("swarmSessionDetail: rollup recommendation renders action rows and suppresses the echoed rationale (issue #341 AC1)", () => {
   test("rollup-shaped session (quorum+stances+actions present) — isRollupRecommendation() true, actions pass through, rationale suppressed", () => {
-    const d = factories.icSessionDetail() as any;
+    const d = factories.swarmSessionDetail() as any;
     d.session = {
       swarmRecommendation: {
         quorum: { submitted: 3, active: 5 },
@@ -367,7 +405,7 @@ describe("icSessionDetail: rollup recommendation renders action rows and suppres
   });
 
   test("non-rollup recommendation with a real rationale and no actions — rationale passes through untouched, still counts as detail", () => {
-    const d = factories.icSessionDetail() as any;
+    const d = factories.swarmSessionDetail() as any;
     d.session = {
       swarmRecommendation: { type: "narrative", rationale: "The swarm recommends holding." },
     };
@@ -379,7 +417,7 @@ describe("icSessionDetail: rollup recommendation renders action rows and suppres
   });
 
   test("no recommendation at all — every derived method reads empty/false, never throws on a missing session", () => {
-    const d = factories.icSessionDetail() as any;
+    const d = factories.swarmSessionDetail() as any;
     d.session = {};
 
     expect(d.isRollupRecommendation()).toBe(false);
@@ -397,7 +435,7 @@ describe("harness self-check", () => {
     expect(typeof factories.swarmApplyStatus).toBe("function");
   });
 
-  test("icSessionDetail was registered and is instantiable (issue #341)", () => {
-    expect(typeof factories.icSessionDetail).toBe("function");
+  test("swarmSessionDetail was registered and is instantiable (issue #341)", () => {
+    expect(typeof factories.swarmSessionDetail).toBe("function");
   });
 });

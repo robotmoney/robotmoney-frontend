@@ -74,6 +74,14 @@ export interface ProjectsDataSource {
   readonly kind: "fixture" | "live";
   // Discovery bucket: the ecosystem directory + facet identity rows.
   discoverProjects(): Promise<DiscoveredProject[]>;
+  // The as-of time of the rows discoverProjects() just returned, when the
+  // source actually knows it. The live source serves a COMMITTED roster whose
+  // real capture time is recorded in its manifest; persisting those rows under
+  // now() would report a frozen dataset as refreshed-within-the-hour on every
+  // scheduled run, forever. Optional: a source with no meaningful as-of (the
+  // hermetic fixture) omits it and the caller falls back to wall-clock now,
+  // which for that source is the honest answer.
+  discoveredAsOf?(): Promise<string | null>;
   // Market bucket: CoinGecko markets batch (listed coins) + DexScreener token
   // pairs (on-chain-only coins and Virtuals revenue).
   coinGeckoMarkets(ids: string[]): Promise<CoinGeckoMarketRow[]>;

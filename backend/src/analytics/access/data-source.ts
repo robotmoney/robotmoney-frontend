@@ -13,7 +13,7 @@ import { fetchYahoo } from "../extract/yahoo.ts";
 import { fetchFred } from "../extract/fred.ts";
 import { mergeSeries } from "../transform/math.ts";
 import {
-  refreshEdgarIncremental,
+  refreshEdgarWithTierFallback,
   selectEdgarRefreshTier,
   defaultEdgarRefreshDeadlineMs,
   type EdgarRefreshOutcome,
@@ -128,19 +128,28 @@ export const liveDataSource: AnalyticsDataSource = {
     // an EDGAR back-revision to any historical month still lands, just on a
     // bounded periodic cadence rather than every run. One hard deadline
     // either way, sized to whichever tier this asof selects. A degraded
-    // refresh (deadline hit, or any planned month missing/duplicated/
-    // invalid) falls back to the persisted floor UNCHANGED — never a
-    // partial fresh batch — and is reported via `mnaRefresh` so the
+    // refresh (deadline hit, any planned month missing/duplicated/invalid,
+    // or — issue #509 — a complete batch that diverges from the persisted
+    // floor beyond bounds) falls back to the persisted floor UNCHANGED —
+    // never a partial fresh batch — and is reported via `mnaRefresh` so the
     // orchestrator can skip publishing a signal against incomplete data
     // this run.
+    //
+    // `refreshEdgarWithTierFallback` (not the bare refresh) so a degraded
+    // WEEKLY reconciliation sweep retries once as the cheap daily
+    // incremental sweep instead of suppressing that day's signal outright
+    // (issue #509). `persistedRows` feeds the batch-level divergence guard —
+    // the floor VALUES the fresh batch is about to overwrite, which is the
+    // only thing that guard can compare against.
     const persistedMna = edgarCtx?.persistedMna ?? [];
     const deadlineAt = edgarCtx?.deadlineAt ?? Date.now() + defaultEdgarRefreshDeadlineMs(selectEdgarRefreshTier(asof));
     const [margin, conf, mnaRefresh] = await Promise.all([
       safe("FRED BOGZ1FL663067003Q", () => fetchFred("BOGZ1FL663067003Q"), logger),
       safe("FRED UMCSENT", () => fetchFred("UMCSENT"), logger),
-      refreshEdgarIncremental({
+      refreshEdgarWithTierFallback({
         asOf: asof,
         persistedMonths: persistedMna.map((p) => p.date.slice(0, 7)),
+        persistedRows: persistedMna,
         deadlineAt,
         logger,
       }),

@@ -40,7 +40,8 @@
 // nothing here. Every classification is logged with an excerpt of the final
 // message by its callers, so a misclassification is diagnosable from CI logs
 // rather than invisible.
-import { assistantTextParts, finalAssistantText } from "./transcript.ts";
+import { assistantTextParts, describeTranscriptError, finalAssistantText, transcriptErrors } from "./transcript.ts";
+import { classifyInferenceFailure, inferenceFailureAction } from "./inference-failure.ts";
 
 export type OnboardingOutcome =
   | "admitted"
@@ -97,11 +98,20 @@ export const HARNESS_PERMISSION_REJECTION = "The user has specified a rule which
  */
 export const COMPOSE_VOLUME_RECREATE_PROMPT = "exists but doesn't match configuration in compose file";
 
+/**
+ * HTTP statuses that mean OUR model credential is the problem: unauthenticated,
+ * unpaid, forbidden. The provider is answering correctly; the harness handed it
+ * a key it will not serve. 429/529 are deliberately absent — those are genuine
+ * provider flake and belong to `rate-limited`, which is retryable.
+ */
+export const HARNESS_CREDENTIAL_STATUSES = [401, 402, 403] as const;
+
 export type HarnessFaultKind =
   | "agent-blocked-by-harness-permissions"
   | "compose-volume-config-mismatch"
   | "container-never-launched"
-  | "observer-polling-failed";
+  | "observer-polling-failed"
+  | "provider-rejected-harness-credential";
 
 export interface HarnessFault {
   kind: HarnessFaultKind;
@@ -141,6 +151,50 @@ export function harnessFaultOf(run: ClassifiableRun): HarnessFault | null {
       detail:
         "docker compose asked, interactively, whether to recreate a project volume whose recorded configuration " +
         "does not match the model this invocation resolved — the harness's compose environment is wrong for this project",
+    };
+  }
+  // BOTH conjuncts required: the provider explicitly REJECTED our credential
+  // with a non-retryable auth/billing status, AND the agent finalized no text
+  // at all — so this run is not a measurement of anything.
+  //
+  // This does NOT contradict the doctrine above ("the agent produced nothing"
+  // is not evidence). The evidence here is not the silence; it is a structured
+  // `type:"error"` event in which the provider NAMES the fault, its HTTP status
+  // and its own `isRetryable: false` verdict. An unfunded or unauthorized Zen
+  // key is the harness's own configuration failing — not provider weather
+  // (`rate-limited`, retryable) and emphatically not the product.
+  //
+  // Observed live 2026-08-05: the Zen workspace ran out of balance mid-morning
+  // and every layer-4 sample died with
+  // `APIError: Insufficient balance … HTTP 401, NOT retryable`. The ladder
+  // classified them `navigation-failure` — "the one outcome that is a real,
+  // never-retried red result" — so a billing lapse was recorded as evidence
+  // that our onboarding instructions do not work, and counted in the admission
+  // rate's denominator.
+  //
+  // The no-final-text conjunct is what keeps this narrow. `opencode run` also
+  // issues a small side call (session titling, `agent=title`) whose failure
+  // emits its own error event; a run whose take succeeded while only that call
+  // was rejected must stay a real result, exactly as `rateLimitDominates`
+  // refuses to reclassify a run that authored a closing verdict.
+  const errors = transcriptErrors(t);
+  const credentialRejection = errors.find(
+    (e) =>
+      e.isRetryable === false &&
+      e.statusCode !== null &&
+      (HARNESS_CREDENTIAL_STATUSES as readonly number[]).includes(e.statusCode),
+  );
+  if (credentialRejection && finalAssistantText(t) === "") {
+    // One vocabulary with the swarm boundary (issue #527): the same event that
+    // makes authorTake reject with `exhausted-credits` names this fault too, so
+    // a maintainer reading either surface is told the same thing.
+    const kind = classifyInferenceFailure([credentialRejection]).kind;
+    return {
+      kind: "provider-rejected-harness-credential",
+      detail:
+        `the model provider rejected the harness's own credential and the agent never authored a word ` +
+        `(cause=${kind}): ${describeTranscriptError(credentialRejection)} — the harness's key/funding, not ` +
+        `the product, stopped this run. ${inferenceFailureAction(kind)}`,
     };
   }
   // BOTH conjuncts required: the container was positively observed not to

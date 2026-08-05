@@ -103,9 +103,13 @@
           <div class="rm-stat">
             <dt>Takes filed</dt><dd x-text="recordStats().takes"></dd>
           </div>
-          <div class="rm-stat" :class="{ 'rm-stat--alert': recordStats().verified < recordStats().takes }">
+          <!-- Denominator is VERIFIABLE takes, not all of them: pre-launch
+               archive takes carry no member signature to check, so counting
+               them here turned an operator's whole record into a red
+               "0 / 50" alert about a failure that never happened. -->
+          <div class="rm-stat" :class="{ 'rm-stat--alert': recordStats().verified < recordStats().verifiable }">
             <dt>Signature verified</dt>
-            <dd x-text="`${recordStats().verified} / ${recordStats().takes}`"></dd>
+            <dd x-text="`${recordStats().verified} / ${recordStats().verifiable}`"></dd>
           </div>
           <div class="rm-stat">
             <dt>Last filed</dt><dd x-text="recordStats().lastFiled"></dd>

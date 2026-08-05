@@ -20,6 +20,7 @@ import {
   snapshotDaily,
   syncRevenue,
 } from "../src/worker/handlers/projects.ts";
+import type { ProjectsDataSource } from "../src/projects/access/data-source.ts";
 import { failingSource, uniqueSlugSource } from "./support/projects-fixture-source.ts";
 
 const KINDS = [
@@ -380,4 +381,79 @@ test("snapshotDaily/recomputeCoverage with project_ids:[] emit no invalid IN () 
   expect(snap.ok).toBe(true); // did not throw on `IN ()`
   const cov = await recomputeCoverage({ project_ids: [] });
   expect(cov.ok).toBe(true);
+});
+
+// ── discovery freshness provenance (issue #495 data-integrity blocker) ───────
+//
+// resolved_at / enriched_at are read by the leaderboard's source-health panel
+// (projects/leaderboard-projections.ts sourceHealth) as "when this data was
+// last refreshed", and it calls a source healthy when they are within 36h. The
+// live source serves a COMMITTED roster frozen at its manifest's generatedAt,
+// so stamping now() on those rows on every nightly run reported a months-old
+// dataset as fresh in perpetuity. These tests fail if now() ever comes back.
+
+const SEED_AS_OF = "2026-08-03T20:43:29.019Z";
+
+function asOfSource(prefix: string, asOf: string | null): ProjectsDataSource {
+  return { ...uniqueSlugSource(prefix), async discoveredAsOf() { return asOf; } };
+}
+
+test("discovery stamps the SOURCE's declared as-of on resolved_at/enriched_at, never wall-clock now()", async () => {
+  const prefix = `wkasof_${crypto.randomUUID().slice(0, 8)}`;
+  const startedAt = Date.now();
+  const d = await discover({}, asOfSource(prefix, SEED_AS_OF));
+  expect(d.ok).toBe(true);
+
+  const ids = await projectIds(prefix);
+  expect(ids.length).toBe(4);
+  const projectRows = await sql<{ resolved_at: Date }[]>`
+    SELECT resolved_at FROM projects WHERE id IN ${sql(ids)}`;
+  expect(projectRows.length).toBe(4);
+  for (const r of projectRows) expect(new Date(r.resolved_at).toISOString()).toBe(SEED_AS_OF);
+
+  const agentRows = await sql<{ enriched_at: Date }[]>`
+    SELECT enriched_at FROM openclaw_agents WHERE project_id IN ${sql(ids)}`;
+  expect(agentRows.length).toBeGreaterThan(0);
+  for (const a of agentRows) expect(new Date(a.enriched_at).toISOString()).toBe(SEED_AS_OF);
+
+  // The load-bearing half: these timestamps are strictly older than this test
+  // run, so they cannot have come from now(). Without the fix every row here
+  // carries a timestamp >= startedAt and the whole freshness signal is fiction.
+  for (const r of projectRows) expect(new Date(r.resolved_at).getTime()).toBeLessThan(startedAt);
+  for (const a of agentRows) expect(new Date(a.enriched_at).getTime()).toBeLessThan(startedAt);
+});
+
+test("re-running discovery over an unchanged seed does NOT advance enriched_at (a frozen roster stops claiming it just refreshed)", async () => {
+  const prefix = `wkasof2_${crypto.randomUUID().slice(0, 8)}`;
+  const src = asOfSource(prefix, SEED_AS_OF);
+  await discover({}, src);
+  const ids = await projectIds(prefix);
+  const before = await sql<{ enriched_at: Date }[]>`
+    SELECT enriched_at FROM openclaw_agents WHERE project_id IN ${sql(ids)} ORDER BY name`;
+  expect(before.length).toBeGreaterThan(0);
+
+  await discover({}, src); // the nightly re-run, same frozen artifact
+  const after = await sql<{ enriched_at: Date }[]>`
+    SELECT enriched_at FROM openclaw_agents WHERE project_id IN ${sql(ids)} ORDER BY name`;
+  expect(after.map((r) => new Date(r.enriched_at).toISOString())).toEqual(
+    before.map((r) => new Date(r.enriched_at).toISOString()),
+  );
+});
+
+test("a source that declares no as-of still gets wall-clock now() (the hermetic fixture path is unchanged)", async () => {
+  const prefix = `wknoasof_${crypto.randomUUID().slice(0, 8)}`;
+  const startedAt = Date.now() - 1000;
+  await discover({}, uniqueSlugSource(prefix)); // no discoveredAsOf implemented
+  const ids = await projectIds(prefix);
+  const [row] = await sql<{ resolved_at: Date }[]>`
+    SELECT resolved_at FROM projects WHERE id IN ${sql(ids)} LIMIT 1`;
+  expect(new Date(row.resolved_at).getTime()).toBeGreaterThanOrEqual(startedAt);
+});
+
+test("discovery degrades rather than persisting rows under an unparseable declared as-of", async () => {
+  const prefix = `wkbadasof_${crypto.randomUUID().slice(0, 8)}`;
+  const d = await discover({}, asOfSource(prefix, "not-a-timestamp"));
+  expect(d.ok).toBe(false);
+  expect(d.status).toBe("degraded");
+  expect(await projectIds(prefix)).toEqual([]); // nothing written under a fabricated fallback
 });

@@ -51,10 +51,24 @@ export function resolveRmpcAsset(version: string, platform: string, arch: string
   return { os, arch: archName, asset, url: `https://github.com/${repo}/releases/download/${version}/${asset}` };
 }
 
+// The rmpc top-level command namespace this repo documents and drives. It is
+// the literal argv token passed to the real binary by
+// verifyCommitteeIdentitySubcommand() below, exported so that anything
+// asserting on the namespace name — notably the shipped-docs guard in
+// scripts/tests/unit/docs-rmpc-cli-surface.test.ts — derives it from the same
+// place the binary is actually invoked instead of re-typing it.
+export const RMPC_COMMAND_NAMESPACE = "committee-identity";
+
 // Every committee-identity subcommand this whole onboarding flow depends on,
 // per `--help` text. Returns the ones missing (empty ⇒ all present).
 export function missingCommitteeIdentitySubcommands(helpText: string): string[] {
   return ["create", "show-public-key", "sign"].filter((sub) => !new RegExp(`\\b${sub}\\b`).test(helpText));
+}
+
+export const RMPC_ON_CHAIN_NAMESPACE = "committee";
+
+export function missingCommitteeSubcommands(helpText: string): string[] {
+  return ["register", "vote-submit"].filter((sub) => !new RegExp(`\\b${sub}\\b`).test(helpText));
 }
 
 function cacheRoot(): string {
@@ -62,12 +76,20 @@ function cacheRoot(): string {
 }
 
 function verifyCommitteeIdentitySubcommand(rmpcPath: string, version: string): void {
-  const r = Bun.spawnSync([rmpcPath, "committee-identity", "--help"], { stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync([rmpcPath, RMPC_COMMAND_NAMESPACE, "--help"], { stdout: "pipe", stderr: "pipe" });
   const out = new TextDecoder().decode(r.stdout) + new TextDecoder().decode(r.stderr);
-  if (r.exitCode !== 0) throw new Error(`rmpc committee-identity --help exited ${r.exitCode}: ${out}`);
+  if (r.exitCode !== 0) throw new Error(`rmpc ${RMPC_COMMAND_NAMESPACE} --help exited ${r.exitCode}: ${out}`);
   const missing = missingCommitteeIdentitySubcommands(out);
   if (missing.length > 0) {
-    throw new Error(`downloaded rmpc ${version} is missing committee-identity subcommand(s): ${missing.join(", ")} — output:\n${out}`);
+    throw new Error(`downloaded rmpc ${version} is missing ${RMPC_COMMAND_NAMESPACE} subcommand(s): ${missing.join(", ")} — output:\n${out}`);
+  }
+
+  const r2 = Bun.spawnSync([rmpcPath, RMPC_ON_CHAIN_NAMESPACE, "--help"], { stdout: "pipe", stderr: "pipe" });
+  const out2 = new TextDecoder().decode(r2.stdout) + new TextDecoder().decode(r2.stderr);
+  if (r2.exitCode !== 0) throw new Error(`rmpc ${RMPC_ON_CHAIN_NAMESPACE} --help exited ${r2.exitCode}: ${out2}`);
+  const missing2 = missingCommitteeSubcommands(out2);
+  if (missing2.length > 0) {
+    throw new Error(`downloaded rmpc ${version} is missing ${RMPC_ON_CHAIN_NAMESPACE} subcommand(s): ${missing2.join(", ")} — output:\n${out2}`);
   }
 }
 

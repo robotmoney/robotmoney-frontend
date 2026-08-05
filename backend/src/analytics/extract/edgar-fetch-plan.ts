@@ -19,10 +19,22 @@
 // ../../producer/index.ts). That is ~200 live EDGAR requests, daily,
 // forever, just to catch revisions that (per SEC's own FTS indexing
 // behavior) only ever land within a few weeks of a month's close. Confirmed
-// owner decision: v0's ARCHIVED historical data is what gets seeded (issue
-// #108's committed artifact, untouched by this module); the ONGOING
-// production refresh should be cheap day-to-day and only pay the full-crawl
-// cost periodically. Current (corrected) design is two-tier:
+// owner decision: v0's ARCHIVED historical data is what gets SEEDED (issue
+// #108's committed artifact); the ONGOING production refresh should be cheap
+// day-to-day and only pay the full-crawl cost periodically.
+//
+// NOTE (issue #509, correcting a stale claim this comment used to make): the
+// #108 seed artifact FILE is never modified here, but the ROWS it seeded are
+// NOT untouched by this module — Tier 2 re-plans and re-fetches every one of
+// them, and the caller's upsert (store/raw-history-store.ts) overwrites both
+// `value` and `source`, flipping a seeded row's provenance 'seed' → 'live'.
+// That flip is intended ("a genuine live fetch upgrades a previously-seeded
+// row's provenance"), which is exactly WHY the batch-level divergence guard
+// below (`assessEdgarBatchDivergence`) exists: a single well-formed but wrong
+// full-sweep batch would otherwise rewrite the entire archived baseline
+// irreversibly (store/floor-seed.ts's gap-fill can only restore MISSING
+// dates — see edgar-seed-loader.ts's `repairEdgarSeed` for the overwrite-mode
+// repair path). Current (corrected) design is two-tier:
 //
 //   Tier 1 — INCREMENTAL (`planEdgarFetchIncremental`): every day. Only the
 //   months missing from the persisted floor, plus a small trailing revision
@@ -232,4 +244,125 @@ export function validateEdgarBatch(
   }
   rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   return { ok: true, rows };
+}
+
+// ─── batch-level divergence guard (issue #509) ───────────────────────────────
+//
+// `validateEdgarBatch` above is a PER-ROW shape check: it accepts any finite
+// non-negative integer, including `0` — which is exactly what
+// `parseEdgarCount` returns for an HTTP-200 `{"hits":{"total":{"value":0}}}`
+// (extract/edgar.ts). That is the right per-row rule (a genuinely quiet month
+// IS zero), but it is NOT sufficient as the only gate in front of a Tier 2
+// full sweep: that sweep re-plans EVERY month from EDGAR_FLOOR_START, and the
+// caller's write is an upsert that clobbers `value` AND `source` on conflict.
+// One Sunday where SEC's full-text-search index is mid-rebuild — every month
+// answering 200 with a low-but-well-formed integer — would therefore rewrite
+// the entire ~200-month archived baseline in one transaction, unrepairably by
+// the normal seed path (store/floor-seed.ts fills MISSING dates only).
+//
+// So: before a batch is allowed to become authoritative, compare it AS A
+// WHOLE against the floor it is about to overwrite and DEGRADE (retain
+// last-good, publish nothing) rather than write when it looks degenerate.
+// PURE — no I/O, no clock; the caller supplies both sides.
+//
+// The thresholds below are deliberately loose. This guard is a blast-radius
+// limiter for a *bulk* rewrite, not a revision detector: EDGAR back-revisions
+// touch a handful of months by a handful of filings, which is far under every
+// bound here. Small batches (the Tier 1 daily plan: missing months + a
+// 2-month revision window) are intentionally NOT subject to the ratio checks
+// at all — for a 2-month plan "100% of compared months changed" is the normal,
+// designed behavior of the revision window, and the whole point of Tier 1 is
+// that its blast radius is already ~3 rows.
+
+// A batch of at least this many months where (nearly) every value is zero is
+// degenerate BY DEFINITION — no real [2010, present] window of S-4 filing
+// activity is empty. Below this size the check is skipped: a 1-2 month plan
+// legitimately can be zero (e.g. the current month on its first day).
+export const EDGAR_DEGENERACY_MIN_ROWS = 6;
+export const EDGAR_DEGENERATE_ZERO_RATIO = 0.9;
+
+// Ratio checks apply only once the batch re-fetches at least this many
+// ALREADY-PERSISTED months — i.e. a reconciliation sweep, never the small
+// daily revision window.
+export const EDGAR_MIN_COMPARABLE_MONTHS = 12;
+// Fraction of re-fetched historical months whose value may change in one
+// batch before the batch is treated as a rewrite rather than a revision.
+export const EDGAR_MAX_REVISED_HISTORY_RATIO = 0.25;
+// Fractional drift of the SUM over those same months.
+export const EDGAR_MAX_AGGREGATE_DRIFT_RATIO = 0.25;
+
+export interface EdgarDivergenceOptions {
+  degeneracyMinRows?: number;
+  degenerateZeroRatio?: number;
+  minComparableMonths?: number;
+  maxRevisedHistoryRatio?: number;
+  maxAggregateDriftRatio?: number;
+}
+
+export interface EdgarDivergenceAssessment {
+  ok: boolean;
+  comparedMonths: number; // fetched months that already exist in the floor
+  changedMonths: number; // ...of those, how many carry a different value
+  reason?: string; // set iff !ok
+}
+
+export function assessEdgarBatchDivergence(
+  rows: readonly EdgarPointRow[],
+  persisted: readonly Point[],
+  opts: EdgarDivergenceOptions = {},
+): EdgarDivergenceAssessment {
+  const degeneracyMinRows = opts.degeneracyMinRows ?? EDGAR_DEGENERACY_MIN_ROWS;
+  const zeroRatio = opts.degenerateZeroRatio ?? EDGAR_DEGENERATE_ZERO_RATIO;
+  const minComparable = opts.minComparableMonths ?? EDGAR_MIN_COMPARABLE_MONTHS;
+  const maxRevisedRatio = opts.maxRevisedHistoryRatio ?? EDGAR_MAX_REVISED_HISTORY_RATIO;
+  const maxDriftRatio = opts.maxAggregateDriftRatio ?? EDGAR_MAX_AGGREGATE_DRIFT_RATIO;
+
+  const priorByDate = new Map(persisted.map((p) => [p.date, p.value] as const));
+  const compared = rows.filter((r) => priorByDate.has(r.date));
+  const changed = compared.filter((r) => priorByDate.get(r.date) !== r.value);
+  const base = { comparedMonths: compared.length, changedMonths: changed.length };
+
+  // (1) Degenerate by definition: an all-zero / near-all-zero batch.
+  const zeros = rows.filter((r) => r.value === 0).length;
+  if (rows.length >= degeneracyMinRows && zeros >= rows.length * zeroRatio) {
+    return {
+      ...base,
+      ok: false,
+      reason:
+        `degenerate batch — ${zeros} of ${rows.length} fetched month(s) came back zero ` +
+        `(>= ${Math.round(zeroRatio * 100)}%); EDGAR answered well-formed but empty, refusing to overwrite the persisted floor`,
+    };
+  }
+
+  // (2)/(3) Ratio checks — reconciliation-sized batches only.
+  if (compared.length >= minComparable) {
+    if (changed.length > compared.length * maxRevisedRatio) {
+      return {
+        ...base,
+        ok: false,
+        reason:
+          `batch rewrites ${changed.length} of ${compared.length} already-persisted month(s) ` +
+          `(> ${Math.round(maxRevisedRatio * 100)}%) — a bulk rewrite, not a revision; refusing to overwrite the persisted floor`,
+      };
+    }
+    let freshSum = 0;
+    let priorSum = 0;
+    for (const r of compared) {
+      freshSum += r.value;
+      priorSum += priorByDate.get(r.date)!;
+    }
+    const drift = Math.abs(freshSum - priorSum) / Math.max(priorSum, 1);
+    if (drift > maxDriftRatio) {
+      return {
+        ...base,
+        ok: false,
+        reason:
+          `batch aggregate diverges from the persisted floor by ${(drift * 100).toFixed(1)}% ` +
+          `(${priorSum} → ${freshSum} over ${compared.length} month(s), bound ${Math.round(maxDriftRatio * 100)}%) — ` +
+          "refusing to overwrite the persisted floor",
+      };
+    }
+  }
+
+  return { ...base, ok: true };
 }
