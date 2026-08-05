@@ -226,6 +226,41 @@ the signature against the member's registered public key *before* inserting, and
 gates the insert on `s.state = 'collecting'`. A backfill cannot use that path —
 it writes directly.
 
+### 4.1a Outcome (2026-08-05)
+
+Option C below was taken, and the additive `legacy_takes` column from `0026`
+was dropped by `0027`. Verified end-to-end against a real stack — Postgres +
+API + the actual SPA in headless Chromium — on three sessions covering both
+recommendation types:
+
+| | allocation (framework) | treasury | woon |
+|---|---|---|---|
+| take articles | 3 | 3 | 3 |
+| members shown | A / RM / W | A / W / RM | A / RM / W |
+| first take body | 2004 chars | 1560 | 1466 |
+| bucket-weight bars | 1 | 0 | 0 |
+| within-bucket blocks | 4 | 0 | 0 |
+| action rows | 0 | 5 | 5 |
+| donut rows (snapshot) | 0 | 5 | 7 |
+| regime sparkline | 1 | 1 | 1 |
+| consensus items | 4 | 4 | 4 |
+| disagreements | 3 | 1 | 2 |
+| disagreement stance chips | 9 | 3 | 6 |
+| synthesis | 1382 chars | 1034 | 1083 |
+
+Every panel that should differ by subject type does: bucket bars and
+within-bucket weights only on the `bucket_weights` framework subject, action
+rows only on `position_actions` subjects, and donut rows only where a snapshot
+exists (the framework subject correctly has none). Synthesis renders on all
+three — `synthesisIsEcho()` does not fire on v0 content. No JS errors.
+
+**One block does not render, correctly:** the rollup verdict, `.sv__stance-chip`
+spread and quorum line. `isRollupRecommendation()` requires `quorum` or
+`stances` on the recommendation, which are v1-native concepts produced by
+aggregating submitted takes. v0 sessions were never convened with a quorum, so
+there is nothing truthful to show. The disagreement-panel stance chips — which
+read from each member's take rather than the rollup — do render.
+
 ### 4.2 Options considered
 
 **A. Add an archive table or a `provenance`/`legacy` column.** Rejected: this
@@ -237,7 +272,7 @@ it satisfies NOT NULL by lying. The column's meaning is "this content was signed
 by the member"; a placeholder makes that claim false for 96 rows and makes
 `verified` unauditable.
 
-**C. Genuinely sign the legacy takes at import time.** Recommended. Produce a
+**C. Genuinely sign the legacy takes at import time.** CHOSEN — see §4.1a. Produce a
 real canonical payload with `canonicalizeSubmission()`
 (`contract/src/signing.js:5`) and a real signature, then set `verified`
 according to whose key actually signed it. No schema change, no fabricated
