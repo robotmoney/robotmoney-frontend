@@ -4,7 +4,7 @@
 # "Tests and evals may import runtime and shared code; RUNTIME MUST NEVER
 # IMPORT TEST OR EVAL CODE; both may import shared." L3 says in so many words
 # that this is held by a grep check in the same shape as
-# backend/scripts/check-no-ai-overview.sh — the exit code IS the verdict —
+# scripts/checks/check-model-selection.sh — the exit code IS the verdict —
 # and not by convention alone. This is that check.
 #
 # Why it matters beyond tidiness: a runtime module that reaches into a test tree
