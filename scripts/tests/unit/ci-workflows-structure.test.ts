@@ -146,6 +146,42 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
     expect(backendYml).toMatch(/working-directory:\s*backend[\s\S]*?run:\s*bun run typecheck/);
   });
 
+  test("test file headers claiming a workflow execution must cite a command that actually exists in that workflow (issue #517)", () => {
+    // A grep-level guard preventing test headers from drifting when workflows move.
+    const walkTests = (dir: string): string[] => {
+      const files: string[] = [];
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          files.push(...walkTests(join(dir, entry.name)));
+        } else if (entry.name.endsWith(".test.ts")) {
+          files.push(join(dir, entry.name));
+        }
+      }
+      return files;
+    };
+
+    for (const file of walkTests(join(root, "scripts/tests"))) {
+      const content = readFileSync(file, "utf8");
+      // Find e.g. "Runs in the required integration.yml root job via `bun run test:integration`"
+      // or "Runs in the required `unit.yml` job — `bun run test:unit`"
+      for (const match of content.matchAll(/Runs in the required `?([a-z0-9.-]+\.yml)`?[^`]*`([^`]+)`/g)) {
+        const workflowName = match[1] as string;
+        let command = match[2] as string;
+
+        // Normalizations for files that haven't updated to cite the npm script
+        if (command === "bun test scripts/tests") command = "bun run test";
+        if (command === "bun test scripts/tests/unit") command = "bun run test:unit";
+        if (command === "bun test scripts/tests/integration") command = "bun run test:integration";
+
+        const wfContent = read(workflowName);
+        expect(
+          wfContent,
+          `${file} claims to run in ${workflowName} via \`${command}\`, but ${workflowName} does not execute that`,
+        ).toContain(command);
+      }
+    }
+  });
+
   // ── issue #275 addendum item 2/3/4: real per-workflow path-skip wiring ───
   describe("path-gated workflows carry real dorny/paths-filter wiring, never on.paths", () => {
     for (const file of PATH_GATED_WORKFLOWS) {

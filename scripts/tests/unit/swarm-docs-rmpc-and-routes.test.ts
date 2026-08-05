@@ -23,7 +23,7 @@
 //      scripts/lib/rmpc-fetch.ts asserts against the pinned release's
 //      `committee-identity --help`.
 //
-// Runs in the required integration.yml root job via `bun test scripts/tests`.
+// Runs in the required unit.yml root job via `bun run test`.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
