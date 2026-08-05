@@ -373,13 +373,32 @@
 .sv__metric-line b { color: var(--color-text); font-size: 1.4rem; }
 .sv__bar, .sv__panel-bar div { height: 0.45rem; background: rgba(255,255,255,0.06); border: 1px solid var(--color-border); overflow: hidden; }
 .sv__bar i, .sv__panel-bar i { display: block; height: 100%; background: var(--color-green); }
+/* The regime read in words, above the figures that support it. Set larger than
+   the metric line because it IS the answer — the composite, the bar and the
+   sparkline are all evidence for this one word. */
+.sv__regime-call { display: flex; align-items: center; gap: 0.55rem; margin: 0 0 0.85rem;
+                   font-family: var(--font-mono); font-size: 1.05rem; letter-spacing: 0.02em;
+                   color: var(--color-text); }
+/* Beacon is a POINT in the covenant, never a run of type — so the direction is
+   carried by a small square beside the word, not by colouring the word itself. */
+.sv__regime-call i { width: 0.5rem; height: 0.5rem; flex: none; }
 .sv__sparkline { margin-top: 1rem; height: 4.25rem; }
 .sv__sparkline svg { width: 100%; height: 100%; display: block; }
 .sv__panel-sub { margin: 1rem 0 0.4rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-text-muted); }
+/* The dissent line is a finding, not a caption: it keeps the panel-sub scale but
+   drops the uppercase tracking so it reads as a sentence. Written as a compound
+   selector and placed AFTER .sv__panel-sub deliberately — as a bare .sv__dissent
+   earlier in the file it lost the cascade to panel-sub's text-transform and the
+   sentence rendered in caps. */
+.sv__panel-sub.sv__dissent { text-transform: none; letter-spacing: 0; font-size: 0.7rem;
+                             line-height: 1.5; color: var(--color-text-muted); max-width: 34ch; }
 .sv__panel-divergence { overflow-x: auto; }
 .sv__panel-divergence svg { width: 100%; max-width: 17rem; height: auto; display: block; }
 .sv__bucket-bars-svg { overflow-x: auto; }
-.sv__bucket-bars-svg svg { width: 100%; min-width: 22rem; max-width: 34rem; height: auto; display: block; }
+/* Wider than the old 34rem: the bars figure now carries its own series names
+   and a "% of NAV" value column, and squeezed to 34rem the 10.5px bucket labels
+   collided with the series column. */
+.sv__bucket-bars-svg svg { width: 100%; min-width: 26rem; max-width: 42rem; height: auto; display: block; }
 .sv__panel-bars { display: grid; gap: 0.55rem; margin-top: 1rem; }
 .sv__panel-bar { display: grid; grid-template-columns: 4.8rem 1fr 2.5rem; gap: 0.65rem; align-items: center; font-family: var(--font-mono); font-size: 0.68rem; color: var(--color-text-muted); }
 .sv__panel-bar b { color: var(--color-text); text-align: right; }
@@ -397,6 +416,32 @@
 .sv__data-table td { padding: 0.45rem 0.55rem; border-bottom: 1px solid rgba(255,255,255,0.06); color: var(--color-text-muted); text-align: left; }
 .sv__data-table td:first-child { color: var(--color-text); }
 .sv__num { text-align: right !important; }
+/* The bars' key. Each swatch is drawn with the SAME treatment as the bar it
+   names — open outline, muted fill, accent fill — so the mapping is visual
+   rather than positional. */
+.sv__bars-key { list-style: none; margin: 0.6rem 0 0; padding: 0; display: flex;
+                flex-wrap: wrap; gap: 0.3rem 1.1rem;
+                font-family: var(--font-mono); font-size: 0.66rem; }
+.sv__bars-key li { display: flex; align-items: center; gap: 0.4rem; }
+.sv__bars-key span { color: var(--color-text-muted); }
+.sv__bars-key__swatch { width: 0.7rem; height: 0.4rem; flex: none; }
+.sv__bars-key__swatch.is-target { border: 1px solid var(--color-text-muted); }
+.sv__bars-key__swatch.is-actual { background: var(--color-text-dim); opacity: 0.9; }
+.sv__bars-key__swatch.is-recommended { background: var(--color-accent); }
+.sv__bars-key li:last-child span { color: var(--color-accent); }
+/* The bucket table repeats the bars as numbers. Sits directly under the figure
+   it restates, so it reads as one block rather than a second exhibit. */
+.sv__bucket-table { margin-top: 0.9rem; }
+.sv__bucket-table .sv__data-table { font-variant-numeric: tabular-nums; }
+/* Recommended is the column the panel exists to publish — it takes the accent
+   the R bar already uses above, so the eye lands in the same place in both. */
+.sv__num--rec { color: var(--color-accent) !important; }
+.sv__bucket-table td.sv__num--rec { color: var(--color-accent); }
+/* The move being asked for. Direction is carried by the ↑/↓ glyph in the text,
+   not by colour alone, so it survives a monochrome read; the colours only
+   reinforce it. Green = add, sand = trim — never red/green as the sole signal. */
+.sv__gap.is-up { color: var(--color-green); }
+.sv__gap.is-down { color: var(--color-warm, #e8a640); }
 .sv__notables { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
 .sv__notables ul { margin: 0.75rem 0 0; padding-left: 1rem; color: var(--color-text-muted); font-size: 0.82rem; line-height: 1.55; }
 .sv__stance-chip { display: inline-flex; align-items: center; gap: 0.35rem; }
@@ -409,17 +454,38 @@
 /* Cyan seams the top edge instead of washing the whole plane: the covenant
    makes cyan a LINE, never a mass, and a tinted field is a mass. */
 .sv__panel--accent { border-color: var(--color-border); border-top-color: var(--color-accent); }
-.sv__dis-pos { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; min-width: 0; }
-.sv__dis-stance { display: inline-flex; align-items: center; gap: 0.35rem; }
+/* The stance chip. nowrap so it cannot break mid-label and pull the view
+   column out of alignment on a narrow panel. */
+.sv__dis-stance { display: inline-flex; align-items: baseline; gap: 0.35rem; white-space: nowrap; }
+.sv__dis-nostance { color: var(--color-text-dim); font-style: italic; }
 .sv__dis-read { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
   color: var(--color-accent) !important; text-transform: none !important; }
-.sv__disagreements { display: grid; gap: 1rem; margin-top: 1rem; }
-.sv__disagreement h3 { margin: 0 0 0.5rem; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text); }
-.sv__disagreement ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.5rem; }
-.sv__disagreement li { display: grid; grid-template-columns: 6.5rem 1fr; gap: 0.75rem; color: var(--color-text-muted); font-size: 0.78rem; line-height: 1.55; }
+.sv__disagreements { display: grid; gap: 1.6rem; margin-top: 1rem; }
+.sv__disagreement h3 { margin: 0 0 0.7rem; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--color-text); }
+.sv__disagreement ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 0; }
+/* Three fixed columns — member, stance, view — so every view in a disagreement
+   begins at the same x and the column can be scanned down. They shared two
+   columns before, with the stance and view inline in the second, so each row's
+   view started wherever that row's stance chip ended.
+   Baseline alignment, not centre: the three cells are set at different sizes,
+   and centring made the member name ride high against its own view. */
+.sv__disagreement li { display: grid; grid-template-columns: 6.5rem 9.5rem 1fr;
+  gap: 0.75rem; align-items: baseline; color: var(--color-text-muted);
+  font-size: 0.78rem; line-height: 1.55; padding: 0.5rem 0; }
+/* A hairline per position rather than gaps alone: with wrapping views the rows
+   are unequal heights, and whitespace on its own stopped saying where one
+   member's position ended and the next began. */
+.sv__disagreement li + li { border-top: 1px solid rgba(255,255,255,0.05); }
 .sv__disagreement a { color: var(--color-text); text-decoration: none; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem; }
 .sv__disagreement a:hover { color: var(--color-accent); }
-.sv__disagreement p { margin: 0.65rem 0 0; color: var(--color-text-dim); font-size: 0.78rem; line-height: 1.55; }
+/* "Settles when" is the resolution condition, not body copy — set it off from
+   the positions above it so it reads as the disagreement's footer. */
+.sv__disagreement p { margin: 0.8rem 0 0; padding-top: 0.7rem;
+  border-top: 1px solid var(--color-border); color: var(--color-text-dim);
+  font-size: 0.78rem; line-height: 1.55; }
+.sv__disagreement p em { font-style: normal; font-family: var(--font-mono);
+  font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--color-text-muted); margin-right: 0.4rem; }
 .sv__takes-section { margin-top: 2rem; }
 .sv__takes--ported { margin-top: 1rem; gap: 1rem; }
 .sv__take--ported { background: transparent; padding: 1.35rem; --vfy-inset: 1.35rem; }
@@ -448,7 +514,11 @@
   .sv__body--narrow { padding-top: 6.5rem; }
   .sv__session-top, .sv__take-head { align-items: flex-start; }
   .sv__action-row { grid-template-columns: 1fr; }
-  .sv__disagreement li { grid-template-columns: 1fr; gap: 0.2rem; }
+  /* Member and stance share the top line, view below across both — three 6.5rem
+     columns do not survive a phone, and stacking all three wasted a full line
+     on a two-word stance chip. */
+  .sv__disagreement li { grid-template-columns: auto 1fr; gap: 0.2rem 0.7rem; }
+  .sv__disagreement .sv__dis-view { grid-column: 1 / -1; }
   .sv__panel-bar { grid-template-columns: 4.5rem 1fr; }
   .sv__panel-bar b { display: none; }
 }

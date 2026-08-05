@@ -141,7 +141,7 @@ function positionSession(date: string, subjectId: string, subjectName: string) {
 // "not found" test below.
 async function mockSessionApi(
   page: Page,
-  opts: { session: unknown; takes?: unknown[]; allocation?: unknown | null },
+  opts: { session: unknown; takes?: unknown[]; allocation?: unknown | null; snapshots?: unknown[] },
 ): Promise<void> {
   await page.route("**/api/**", (route) => {
     const pathname = new URL(route.request().url()).pathname;
@@ -151,6 +151,13 @@ async function mockSessionApi(
     }
     if (pathname === "/api/dashboards/allocation") {
       return opts.allocation ? route.fulfill(json(opts.allocation)) : route.fulfill(notFound);
+    }
+    // The subject's snapshots, which are what "actual" is derived from — a
+    // bucket's share of NAV is summed from the positions the framework assigns
+    // to it. Left 404ing unless a test supplies them, matching the guarded
+    // side-fetch every other case here relies on.
+    if (opts.snapshots && /\/snapshots$/.test(pathname)) {
+      return route.fulfill(json({ snapshots: opts.snapshots }));
     }
     if (pathname.startsWith("/api/swarm/")) return route.fulfill(notFound);
     return route.continue();
@@ -163,6 +170,15 @@ async function mockSessionApi(
 async function bucketChartText(page: Page): Promise<string> {
   await expect(page.locator(".sv__bucket-bars-svg svg")).toBeVisible();
   return (await page.locator(".sv__bucket-bars-svg").textContent()) ?? "";
+}
+
+// The series are named ONCE, in an HTML key under the figure, rather than on
+// every bucket row — so which series are drawn is asserted here and not against
+// the SVG's text. Reading the chart for "target" would now pass trivially
+// whether or not the series is drawn, which is exactly the assertion the
+// framework-unavailable test depends on.
+async function bucketKeyText(page: Page): Promise<string> {
+  return (await page.locator(".sv__bars-key").textContent()) ?? "";
 }
 
 test("bucket_weights session draws Target bars from the allocation framework and flags the deviation", async ({ page }) => {
@@ -186,24 +202,36 @@ test("bucket_weights session draws Target bars from the allocation framework and
   await expect(page.locator(".sv__detail-title")).toHaveText("Robot Money Allocation");
 
   const chart = await bucketChartText(page);
-  // Target series present, per bucket, alongside Recommended.
-  expect(chart).toContain("T 95");
-  expect(chart).toContain("R 97");
-  expect(chart).toContain("T 5");
-  expect(chart).toContain("R 3");
+  // Values carry their unit — they were "T 95"/"R 97", which asked the reader to
+  // decode a key from elsewhere on the page and never said the number was a
+  // percentage.
+  expect(chart).toContain("95%");
+  expect(chart).toContain("97%");
+  expect(chart).toContain("5%");
+  expect(chart).toContain("3%");
+  // The value column is headed, so a bar length is readable as a quantity
+  // rather than only comparable to its neighbour.
+  expect(chart).toContain("% of NAV");
+  // Target series present alongside Recommended, per the key under the figure.
+  const key = await bucketKeyText(page);
+  expect(key).toContain("target");
+  expect(key).toContain("recommended");
   // The framework's own spelling wins over humanize("conservative_defi_yield"),
   // which cannot recover DeFi's inner capital.
   expect(chart).toContain("Conservative DeFi Yield");
   expect(chart).not.toContain("Conservative Defi Yield");
   await expect(page.locator('.sv__bucket-bars-svg svg')).toHaveAttribute("aria-label", /vs target/);
 
-  // The caption names the series actually drawn. Each clause is an x-show span,
-  // so it stays in the DOM and is toggled by CSS — textContent would read the
-  // hidden clauses too. useInnerText makes the assertion "what the caption
-  // reads on screen", which is the property under test. The match is
-  // case-insensitive because the caption is uppercased by CSS text-transform,
-  // which innerText (unlike textContent) applies.
-  await expect(page.locator(".sv__bucket-bars .sv__panel-sub").first()).toContainText(/target open/i, { useInnerText: true });
+  // The recommendation as numbers, with the move it implies. The bars alone
+  // cannot carry a 97/3/0/0 book — two of four rows round to no bar at all.
+  const table = page.locator(".sv__bucket-table");
+  await expect(table).toBeVisible();
+  await expect(table.locator("thead")).toContainText(/target/i, { useInnerText: true });
+  await expect(table.locator("thead")).toContainText(/recommended/i, { useInnerText: true });
+  // Gap is against target here (no snapshot in this mock, so no actual), and
+  // the heading says WHICH basis is on screen rather than a bare "Gap".
+  await expect(table.locator("thead")).toContainText(/vs target/i, { useInnerText: true });
+  await expect(table.locator("tbody tr").first()).toContainText("+2pp");
 
   // The finding a reader is here for.
   await expect(page.locator(".sv__deviates")).toBeVisible();
@@ -225,11 +253,66 @@ test("bucket_weights session that matches its target draws Target bars and no de
 
   await expect(page.locator(".sv__error")).toBeHidden();
   const chart = await bucketChartText(page);
-  expect(chart).toContain("T 95");
-  expect(chart).toContain("R 95");
+  expect(chart).toContain("95%");
+  expect(await bucketKeyText(page)).toContain("target");
   // Same target, same recommendation — the indicator must stay off, otherwise
   // it says nothing when it does appear.
   await expect(page.locator(".sv__deviates")).toBeHidden();
+  // …and the gap column agrees with it: a zero move reads "—", not "0pp".
+  await expect(page.locator(".sv__bucket-table tbody tr").first().locator(".sv__gap")).toHaveText("—");
+});
+
+// "Actual" is the only figure on this panel that is DERIVED rather than
+// published: the framework manifest says which tokens constitute each bucket,
+// and the day's snapshot says what the book holds, so a bucket's actual weight
+// is its tokens' share of NAV. Before this, `actual` was hardcoded null on the
+// weights path and the column never rendered on any session — the panel showed
+// four proposed numbers with nothing to measure them against.
+test("bucket_weights session derives Actual from the snapshot and measures the gap against it", async ({ page }) => {
+  await mockSessionApi(page, {
+    // Recommended 97/3 against a book sitting entirely in Conservative DeFi.
+    session: bucketSession("2026-08-03", {
+      conservative_defi_yield: 0.97,
+      agent_tokens: 0.03,
+      protocol_tokens: 0,
+      real_world_assets: 0,
+    }),
+    allocation: ALLOCATION,
+    // AAVE/COMPOUND/MORPHO are all conservative_defi_yield tokens in the
+    // committed manifest, so actual must come out 100/0/0/0 — and the gap must
+    // flip to being measured against actual, not target.
+    snapshots: [{
+      date: "2026-08-03",
+      total_value_usd: 150,
+      positions: [
+        { token: "AAVE", chain: "base", value_usd: 50 },
+        { token: "COMPOUND", chain: "base", value_usd: 50 },
+        { token: "MORPHO", chain: "base", value_usd: 50 },
+      ],
+    }],
+  });
+
+  await page.goto("/swarm/2026-08-03/robotmoney-allocation");
+
+  await expect(page.locator(".sv__error")).toBeHidden();
+  const chart = await bucketChartText(page);
+  expect(chart).toContain("100%");
+  expect(await bucketKeyText(page)).toContain("actual");
+
+  const table = page.locator(".sv__bucket-table");
+  // Basis flips to actual the moment we know it: recommended-minus-actual is
+  // the MOVE being asked for, which is the question a reader has.
+  await expect(table.locator("thead")).toContainText(/vs actual/i, { useInnerText: true });
+  const conservative = table.locator("tbody tr").filter({ hasText: "Conservative DeFi Yield" });
+  await expect(conservative).toContainText("100%");
+  // 97 recommended − 100 actual = trim 3 points.
+  await expect(conservative.locator(".sv__gap")).toContainText("−3pp");
+  const agent = table.locator("tbody tr").filter({ hasText: "Agent Tokens" });
+  // 3 recommended − 0 actual = add 3. A bucket whose tokens are simply absent
+  // from the book reads 0%, which is true — not "—", which would claim we do
+  // not know.
+  await expect(agent).toContainText("0%");
+  await expect(agent.locator(".sv__gap")).toContainText("+3pp");
 });
 
 test("bucket_weights session degrades to Recommended-only when the framework is unavailable", async ({ page }) => {
@@ -237,18 +320,30 @@ test("bucket_weights session degrades to Recommended-only when the framework is 
     session: bucketSession("2026-08-03", { conservative_defi_yield: 0.97, directional_crypto: 0.03 }),
     allocation: null, // /api/dashboards/allocation 404s
   });
+  // There are now TWO sources for a target: the dashboard endpoint above and
+  // the committed framework manifest, which is what lets a backendless checkout
+  // still draw one. 404ing only the endpoint no longer produces the
+  // no-framework state this test exists to cover, so block both — otherwise the
+  // test silently stops testing degradation and passes on the fallback.
+  await page.route("**/data/swarm/manifests/allocation.json", (route) =>
+    route.fulfill({ status: 404, contentType: "application/json", body: "{}" }));
 
   await page.goto("/swarm/2026-08-03/robotmoney-allocation");
 
   // A missing framework degrades the chart, never the page.
   await expect(page.locator(".sv__error")).toBeHidden();
   const chart = await bucketChartText(page);
-  expect(chart).toContain("R 97");
-  expect(chart).not.toContain("T 95");
+  expect(chart).toContain("97%");
+  // Recommended alone: the key names it and nothing else, which is the whole
+  // claim of this test.
+  const key = await bucketKeyText(page);
+  expect(key).toContain("recommended");
+  expect(key).not.toContain("target");
+  expect(key).not.toContain("actual");
   await expect(page.locator('.sv__bucket-bars-svg svg')).not.toHaveAttribute("aria-label", /vs target/);
-  // Same x-show caption as above: useInnerText, so a clause that is present in
-  // the DOM but display:none correctly reads as "not on screen".
-  await expect(page.locator(".sv__bucket-bars .sv__panel-sub").first()).not.toContainText(/target open/i, { useInnerText: true });
+  // With no basis to measure against, the gap column is withheld entirely
+  // rather than printed as a row of em-dashes.
+  await expect(page.locator(".sv__bucket-table thead")).not.toContainText(/vs target|vs actual/i, { useInnerText: true });
   await expect(page.locator(".sv__deviates")).toBeHidden();
 });
 
@@ -342,8 +437,9 @@ test("a session that predates the published framework draws the target for refer
 
   await expect(page.locator(".sv__error")).toBeHidden();
   const chart = await bucketChartText(page);
-  expect(chart).toContain("T 95");
-  expect(chart).toContain("R 97");
+  expect(chart).toContain("95%");
+  expect(chart).toContain("97%");
+  expect(await bucketKeyText(page)).toContain("target");
   // 97 vs 95 is a two-point gap — well past the 0.005 tolerance — so this is
   // suppressed BECAUSE of the date, not because the numbers agree.
   await expect(page.locator(".sv__deviates")).toBeHidden();
