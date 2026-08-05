@@ -3,7 +3,16 @@
 // representative series for charting. Pure types — no I/O; the store stage
 // persists this payload to research_signals by key.
 
-export interface Gauge { id: string; name: string; value: number; percentile: number; read: string; }
+// NON-FINITE GAUGE SEMANTICS (#505, canonical): `value` and `percentile` are
+// nullable, and a null means exactly one thing — "this signal has no reading for
+// its as-of date" (the underlying series had no finite value at the position the
+// gauge reads). It is a deliberate, documented "unknown", NOT the JSON.stringify
+// rendering of a raw NaN, which is what a null on this field used to be: gauges
+// skipped the nn() coercion `summary.*` gets, and `+NaN.toFixed(3)` is NaN. A
+// null here must never be read as 0 or as a neutral middle reading; `read` is
+// the literal "no reading" whenever `percentile` is null. Producers must route
+// every gauge field through research-signals.ts::gaugeNum().
+export interface Gauge { id: string; name: string; value: number | null; percentile: number | null; read: string; }
 
 // One dated point in a research indicator series (value nullable for pre-history
 // / gaps, matching the original JSON artifacts).

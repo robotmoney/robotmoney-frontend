@@ -5,6 +5,9 @@
 //   (b) computeLateCycle's {date, value} 6dp summary shape, incl. the
 //       all-NaN {date:null, value:null} sentinel (R5b)
 //   (c) positionalLast vs lastFinite divergence on a trailing-NaN axis (R5a)
+//   (d) #505: gauge readings are finite-coerced — a non-finite reading is an
+//       EXPLICIT null (+ a "no reading" read), never a raw NaN that only looks
+//       like null once JSON.stringify has been applied
 // research-fidelity.test.ts replays real vendored data but only exercises
 // `indicators.*`, which R5/R7 left untouched — it can't see any of the above.
 //
@@ -224,11 +227,152 @@ test("R5a: a trailing-NaN axis distinguishes positionalLast from lastFinite in c
   expect(Number.isNaN(positionalLastVal)).toBe(true);
   expect(Number.isFinite(lastFiniteVal)).toBe(true);
 
-  // R5a: production reads the POSITIONAL-last value — NaN / null — and must
-  // NOT reach back through the trailing NaN to lastFiniteVal.
+  // R5a: production reads the POSITIONAL-last value — which has no finite
+  // reading here, published as an explicit null since #505 (it was a raw NaN
+  // before) — and must NOT reach back through the trailing NaN to
+  // lastFiniteVal.
   const ratioGauge = result.gauges.find((g) => g.id === "BTC_QQQ_RATIO")!;
-  expect(Number.isNaN(ratioGauge.percentile)).toBe(true);
+  expect(ratioGauge.percentile).toBeNull();
+  expect(ratioGauge.percentile).not.toBe(+lastFiniteVal.toFixed(3));
 
   const summary = result.summary as unknown as Record<string, { latest: number | null }>;
   expect(summary.ratio_percentile.latest).toBeNull();
+});
+
+// Asserts a gauge field is either a finite number or an EXPLICIT null — and in
+// particular never a raw NaN, which is the #505 defect: `+NaN.toFixed(3)` is
+// NaN, and JSON.stringify renders NaN as `null`, so the null a consumer saw was
+// a serialization artifact rather than a deliberate "no reading".
+// The label rides along in the compared object so a failure names the offending
+// gauge field instead of just reporting `false !== true`.
+function expectFiniteOrExplicitNull(v: number | null, label: string): void {
+  expect({ field: label, finiteOrExplicitNull: v === null || Number.isFinite(v) }).toEqual({
+    field: label,
+    finiteOrExplicitNull: true,
+  });
+}
+
+test("#505: a trailing-NaN axis publishes an EXPLICIT null gauge reading, never a raw NaN", () => {
+  const N = 150;
+  const asof = addDaysIso(CHANNEL_START, N - 1);
+  const btc = dailySeries(CHANNEL_START, N, (t) => 20000 + 30 * t + 500 * Math.sin(t / 9));
+
+  // LOAD-BEARING fixture construction: the final qqq value is forced to 0 so
+  // the `qqqA[i] !== 0` division guard in computeChannelDivergence yields NaN
+  // exactly at the axis' terminal index. OMITTING the final point does NOT
+  // work — alignDailyForwardFill backfills it from the previous day, leaving a
+  // dense, entirely-finite axis and a vacuous test.
+  const qqqValues = Array.from({ length: N }, (_, t) => 300 + 0.8 * t + 5 * Math.sin(t / 13));
+  qqqValues[N - 1] = 0;
+  const qqq: Point[] = qqqValues.map((value, t) => ({ date: addDaysIso(CHANNEL_START, t), value }));
+  const spy = dailySeries(CHANNEL_START, N, (t) => 400 + 0.5 * t + 4 * Math.sin(t / 17));
+  const stables = dailySeries(CHANNEL_START, N, (t) => 100000 + 200 * t + 1000 * Math.sin(t / 11));
+
+  // ── ANTI-VACUITY GUARD ────────────────────────────────────────────────────
+  // Prove, from the same building blocks production uses, that this fixture
+  // really does produce a NON-FINITE TERMINAL value — before asserting
+  // anything about the payload. Without this the assertions below would pass
+  // on a fixture where the condition never arises and prove nothing.
+  const axis = buildDateAxis(CHANNEL_START, asof);
+  const btcA = alignDailyForwardFill(btc, axis);
+  const qqqA = alignDailyForwardFill(qqq, axis);
+  expect(qqqA[qqqA.length - 1]).toBe(0); // forward-fill did NOT overwrite the terminal 0
+  const ratio = btcA.map((b, i) =>
+    Number.isFinite(b) && Number.isFinite(qqqA[i]) && qqqA[i] !== 0 ? b / qqqA[i] : NaN,
+  );
+  const ratioPct = rollingPercentileRank(ratio, PCT_RANK_WINDOW);
+  expect(Number.isNaN(positionalLastOf(ratio))).toBe(true);
+  expect(Number.isNaN(positionalLastOf(ratioPct))).toBe(true);
+  // ...and that the terminal NaN is local to the ratio axis, so a blanket
+  // "everything is null" payload would NOT satisfy the assertions below.
+  expect(ratio.filter(Number.isFinite).length).toBeGreaterThan(0);
+
+  const inputs: ChannelInputs = { btc, qqq, spy, stables };
+  const result = computeChannelDivergence(inputs, asof);
+
+  const ratioGauge = result.gauges.find((g) => g.id === "BTC_QQQ_RATIO")!;
+  // The non-finite positional-last percentile is published as a deliberate,
+  // documented null (see the Gauge type in research.ts) with an explicit read —
+  // not a raw NaN, and not a confident-sounding middle-bucket label.
+  expect(ratioGauge.percentile).toBeNull();
+  expect(ratioGauge.read).toBe("no reading");
+  // BTC_QQQ_RATIO is the deliberately MIXED gauge (#493 Behaviour): its raw
+  // `value` remains last-FINITE, so it stays a real number on this same
+  // trailing-NaN axis. Pinned here so a future "uniformize the gauge" change
+  // has to argue with a test.
+  expect(typeof ratioGauge.value).toBe("number");
+  expect(Number.isFinite(ratioGauge.value as number)).toBe(true);
+
+  // Every remaining gauge still carries a finite reading — the null above is
+  // specific to the axis that genuinely has no terminal reading.
+  for (const id of ["BTC_BETA", "STABLES_QQQ_FLOW", "CHANNEL"]) {
+    const g = result.gauges.find((x) => x.id === id)!;
+    expect(Number.isFinite(g.value as number)).toBe(true);
+    expect(Number.isFinite(g.percentile as number)).toBe(true);
+    expect(g.read).not.toBe("no reading");
+  }
+
+  // No gauge field anywhere in the payload is a raw NaN.
+  for (const g of result.gauges) {
+    expectFiniteOrExplicitNull(g.value, `${g.id}.value`);
+    expectFiniteOrExplicitNull(g.percentile, `${g.id}.percentile`);
+    expect(Number.isNaN(g.value as number)).toBe(false);
+    expect(Number.isNaN(g.percentile as number)).toBe(false);
+    expect(typeof g.read).toBe("string");
+    expect(g.read.length).toBeGreaterThan(0);
+  }
+
+  // The payload a consumer actually receives must be identical to the in-process
+  // payload. This is the crux of #505: with a raw NaN on the gauge, the wire
+  // form (null) and the in-process form (NaN) DISAGREE, so every null a frontend
+  // sees is ambiguous. Round-tripping makes that ambiguity a test failure.
+  const wire = JSON.parse(JSON.stringify(result.gauges)) as typeof result.gauges;
+  expect(wire).toEqual(result.gauges);
+  expect(wire.find((g) => g.id === "BTC_QQQ_RATIO")!.percentile).toBeNull();
+});
+
+test("#505: an axis with NO finite observation at all publishes null gauge value AND percentile", () => {
+  // The trailing-NaN case above can only null out a percentile (BTC_QQQ_RATIO's
+  // raw value is last-finite by design). This case covers the gauge `value`
+  // coercion: an input series that never resolves anywhere on the axis.
+  const N = 40; // clears the 30-obs rollingPercentileRank gate for concentration
+  const asof = addDaysIso(LATECYCLE_START, N - 1);
+  const spy = dailySeries(LATECYCLE_START, N, (t) => 400 + 2 * t);
+  const rsp = dailySeries(LATECYCLE_START, N, (t) => 150 + 0.5 * t + 3 * Math.sin(t / 5));
+  const top7: Point[][] = Array.from({ length: 7 }, (_, k) =>
+    dailySeries(LATECYCLE_START, N, (t) => 100 + k * 10 + t),
+  );
+  const mna = dailySeries(LATECYCLE_START, N, (t) => 10 + (t % 5));
+  const margin = dailySeries(LATECYCLE_START, N, (t) => 5000 + 10 * t);
+
+  // ANTI-VACUITY GUARD: prove the conf axis really is all-NaN (empty input →
+  // alignDailyForwardFill never resolves a value) before asserting on the
+  // payload.
+  const axis = buildDateAxis(LATECYCLE_START, asof);
+  const confA = alignDailyForwardFill([], axis);
+  expect(confA.length).toBeGreaterThan(0);
+  expect(confA.some(Number.isFinite)).toBe(false);
+
+  const inputs: LateCycleInputs = { spy, rsp, top7, mna, margin, conf: [] };
+  const result = computeLateCycle(inputs, asof);
+
+  const confGauge = result.gauges.find((g) => g.id === "CONF")!;
+  expect(confGauge.value).toBeNull();
+  expect(confGauge.percentile).toBeNull();
+  expect(confGauge.read).toBe("no reading");
+
+  // Not a blanket null payload: concentration still reads normally.
+  const concentration = result.gauges.find((g) => g.id === "CONCENTRATION")!;
+  expect(Number.isFinite(concentration.value as number)).toBe(true);
+  expect(Number.isFinite(concentration.percentile as number)).toBe(true);
+
+  for (const g of result.gauges) {
+    expectFiniteOrExplicitNull(g.value, `${g.id}.value`);
+    expectFiniteOrExplicitNull(g.percentile, `${g.id}.percentile`);
+    expect(Number.isNaN(g.value as number)).toBe(false);
+    expect(Number.isNaN(g.percentile as number)).toBe(false);
+  }
+
+  const wire = JSON.parse(JSON.stringify(result.gauges)) as typeof result.gauges;
+  expect(wire).toEqual(result.gauges);
 });
