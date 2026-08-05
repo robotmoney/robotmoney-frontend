@@ -373,13 +373,32 @@
 .sv__metric-line b { color: var(--color-text); font-size: 1.4rem; }
 .sv__bar, .sv__panel-bar div { height: 0.45rem; background: rgba(255,255,255,0.06); border: 1px solid var(--color-border); overflow: hidden; }
 .sv__bar i, .sv__panel-bar i { display: block; height: 100%; background: var(--color-green); }
+/* The regime read in words, above the figures that support it. Set larger than
+   the metric line because it IS the answer — the composite, the bar and the
+   sparkline are all evidence for this one word. */
+.sv__regime-call { display: flex; align-items: center; gap: 0.55rem; margin: 0 0 0.85rem;
+                   font-family: var(--font-mono); font-size: 1.05rem; letter-spacing: 0.02em;
+                   color: var(--color-text); }
+/* Beacon is a POINT in the covenant, never a run of type — so the direction is
+   carried by a small square beside the word, not by colouring the word itself. */
+.sv__regime-call i { width: 0.5rem; height: 0.5rem; flex: none; }
 .sv__sparkline { margin-top: 1rem; height: 4.25rem; }
 .sv__sparkline svg { width: 100%; height: 100%; display: block; }
 .sv__panel-sub { margin: 1rem 0 0.4rem; font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-text-muted); }
+/* The dissent line is a finding, not a caption: it keeps the panel-sub scale but
+   drops the uppercase tracking so it reads as a sentence. Written as a compound
+   selector and placed AFTER .sv__panel-sub deliberately — as a bare .sv__dissent
+   earlier in the file it lost the cascade to panel-sub's text-transform and the
+   sentence rendered in caps. */
+.sv__panel-sub.sv__dissent { text-transform: none; letter-spacing: 0; font-size: 0.7rem;
+                             line-height: 1.5; color: var(--color-text-muted); max-width: 34ch; }
 .sv__panel-divergence { overflow-x: auto; }
 .sv__panel-divergence svg { width: 100%; max-width: 17rem; height: auto; display: block; }
 .sv__bucket-bars-svg { overflow-x: auto; }
-.sv__bucket-bars-svg svg { width: 100%; min-width: 22rem; max-width: 34rem; height: auto; display: block; }
+/* Wider than the old 34rem: the bars figure now carries its own series names
+   and a "% of NAV" value column, and squeezed to 34rem the 10.5px bucket labels
+   collided with the series column. */
+.sv__bucket-bars-svg svg { width: 100%; min-width: 26rem; max-width: 42rem; height: auto; display: block; }
 .sv__panel-bars { display: grid; gap: 0.55rem; margin-top: 1rem; }
 .sv__panel-bar { display: grid; grid-template-columns: 4.8rem 1fr 2.5rem; gap: 0.65rem; align-items: center; font-family: var(--font-mono); font-size: 0.68rem; color: var(--color-text-muted); }
 .sv__panel-bar b { color: var(--color-text); text-align: right; }
@@ -397,6 +416,19 @@
 .sv__data-table td { padding: 0.45rem 0.55rem; border-bottom: 1px solid rgba(255,255,255,0.06); color: var(--color-text-muted); text-align: left; }
 .sv__data-table td:first-child { color: var(--color-text); }
 .sv__num { text-align: right !important; }
+/* The bucket table repeats the bars as numbers. Sits directly under the figure
+   it restates, so it reads as one block rather than a second exhibit. */
+.sv__bucket-table { margin-top: 0.9rem; }
+.sv__bucket-table .sv__data-table { font-variant-numeric: tabular-nums; }
+/* Recommended is the column the panel exists to publish — it takes the accent
+   the R bar already uses above, so the eye lands in the same place in both. */
+.sv__num--rec { color: var(--color-accent) !important; }
+.sv__bucket-table td.sv__num--rec { color: var(--color-accent); }
+/* The move being asked for. Direction is carried by the ↑/↓ glyph in the text,
+   not by colour alone, so it survives a monochrome read; the colours only
+   reinforce it. Green = add, sand = trim — never red/green as the sole signal. */
+.sv__gap.is-up { color: var(--color-green); }
+.sv__gap.is-down { color: var(--color-warm, #e8a640); }
 .sv__notables { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
 .sv__notables ul { margin: 0.75rem 0 0; padding-left: 1rem; color: var(--color-text-muted); font-size: 0.82rem; line-height: 1.55; }
 .sv__stance-chip { display: inline-flex; align-items: center; gap: 0.35rem; }

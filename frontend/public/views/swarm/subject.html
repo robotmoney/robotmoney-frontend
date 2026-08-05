@@ -41,16 +41,32 @@
 
         <!-- Concentration over time. A holdings table is a single day; the
              question a reader actually has is whether the book is getting more
-             concentrated or less, which only a series answers. One line per
-             position, oldest to newest. Each line's colour is repeated as a short
-             rule beside its token in the holdings table below, so the two read as
-             one thing. Lines and not a stacked area: see concentrationLines(). -->
-        <section class="sv__panel sp-chart" x-show="concentrationLines()">
+             concentrated or less, which only a series answers. One stacked band
+             per position, oldest to newest, summing to 100% of NAV. Each band's
+             colour is assetDot()'s, so it is the same colour this token takes on
+             /allocation and in the holdings table below — see concentrationArea()
+             for why bands rather than lines. -->
+        <section class="sv__panel sp-chart" x-show="concentrationArea()">
           <div class="sv__panel-head">
             <p class="sv__panel-label">Concentration · top positions as % of NAV</p>
             <span class="sv__tag" x-text="spanLabel()"></span>
           </div>
-          <div class="sp-chart__svg" x-html="concentrationLines()"></div>
+          <!-- Legend beside the figure, not inside it: it is real text (so it
+               selects, wraps, and scales with the reader's font size) and it
+               carries each band's CURRENT share, which is the number a reader
+               wants first and the old panel made them hunt for in the table. -->
+          <div class="sp-chart__body">
+            <div class="sp-chart__svg" x-html="concentrationArea()"></div>
+            <ul class="sp-legend">
+              <template x-for="l in concentrationLegend()" :key="l.token">
+                <li>
+                  <i class="sp-legend__key" :style="`--k:${l.color}`" aria-hidden="true"></i>
+                  <span class="sp-legend__token" x-text="l.token"></span>
+                  <span class="sp-legend__pct" x-text="l.pct"></span>
+                </li>
+              </template>
+            </ul>
+          </div>
         </section>
 
         <!-- Same markup as session.html's portfolio read, deliberately: the two
@@ -188,11 +204,11 @@
                   max-width: 62ch; margin: 20px 0 0; border-top: 1px solid var(--color-accent);
                   padding-top: 16px; }
     .sp-holdings { margin-top: 14px; }
-    /* The series key. Cyan is a LINE in this system and never a fill or a
-       figure, so the chart's colour returns beside the token as a short rule
-       rather than tinting the token name or drawing a filled dot. */
-    .sp-key { display: inline-block; width: 14px; height: 2px; background: var(--k, var(--color-border));
-              vertical-align: middle; margin-right: 9px; }
+    /* The series key, matching the chart's band for the same token. A filled
+       square, not a rule: the figure is now a stack of areas, and the key has to
+       look like the thing it points at. */
+    .sp-key { display: inline-block; width: 9px; height: 9px; background: var(--k, var(--color-border));
+              vertical-align: baseline; margin-right: 9px; }
     .sp-sessions { margin-top: 34px; }
     .sp-mark { border-radius: 0; border-color: var(--sp-subject, var(--color-border)); }
     /* Set the colour explicitly. Left to the UA these render as default-blue
@@ -202,8 +218,32 @@
     .sp-links a { color: var(--color-accent); text-decoration: none;
                   border-bottom: 1px solid transparent; }
     .sp-links a:hover, .sp-links a:focus-visible { border-bottom-color: var(--color-accent); }
-    .sp-chart__svg { margin: 12px 0 4px; }
+    /* Chart and legend sit side by side while there is room for both, and the
+       legend drops under the figure once the row would squeeze the bands. The
+       figure keeps a floor of ~300px so it never compresses to a stripe. */
+    .sp-chart__body { display: flex; flex-wrap: wrap; align-items: flex-start;
+                      gap: 8px 22px; margin: 14px 0 2px; }
+    .sp-chart__svg { flex: 1 1 300px; min-width: 0; }
     .sp-chart__svg svg { display: block; width: 100%; height: auto; }
+    .sp-legend { flex: 0 1 auto; list-style: none; margin: 2px 0 0; padding: 0;
+                 font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px;
+                 line-height: 1.9; }
+    .sp-legend li { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+    /* A square, matching the band it names — not the rounded dot the rest of the
+       site uses for a reading. */
+    .sp-legend__key { flex: none; width: 9px; height: 9px; background: var(--k, var(--color-border));
+                      transform: translateY(1px); }
+    .sp-legend__token { color: var(--color-text); }
+    /* The share is a supporting figure, not the label: muted, and pushed to a
+       column of its own so the numbers align down the legend. */
+    .sp-legend__pct { margin-left: auto; padding-left: 10px; color: var(--color-text-muted);
+                      font-variant-numeric: tabular-nums; }
+    /* Stacked under the figure, the legend goes wide — let the rows flow into a
+       band instead of one tall column pinned to the left. */
+    @media (max-width: 620px) {
+      .sp-legend { display: flex; flex-wrap: wrap; gap: 4px 18px; width: 100%; }
+      .sp-legend__pct { margin-left: 0; padding-left: 0; }
+    }
     .sp-wallets li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .sp-wallet__label { font-size: 12.5px; }
     .sp-wallets code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px;

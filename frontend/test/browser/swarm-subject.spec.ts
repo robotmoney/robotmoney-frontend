@@ -74,6 +74,27 @@ test("public subject profile renders holdings, wallets, NFT contracts, and struc
 
   // Concentration chart draws once there are >= 2 snapshots in the window.
   await expect(page.locator(".sp-chart__svg svg")).toBeVisible();
+  // Stacked bands, not lines: positions at equal weight drew exactly on top of
+  // each other as strokes (the vault's three 33.3% holdings rendered as ONE
+  // line), and share-of-NAV is an area question.
+  await expect(page.locator(".sp-chart__svg svg polygon").first()).toBeVisible();
+  await expect(page.locator(".sp-chart__svg svg polyline")).toHaveCount(0);
+
+  // The legend is the whole point of the rebuild — the panel previously drew
+  // unlabelled lines whose only key was a rule in the table further down.
+  const legend = page.locator(".sp-legend li");
+  await expect(legend.first()).toBeVisible();
+  await expect(page.locator(".sp-legend")).toContainText("WOON");
+  // Every row carries its CURRENT share, not just a name.
+  await expect(legend.first()).toContainText("%");
+
+  // A token's colour comes from assetDot(), so it is the same colour here, in
+  // the holdings table, and on /allocation — it used to be indexed by the
+  // position's RANK, which meant the colour said "second-biggest today" and
+  // moved whenever two holdings swapped places.
+  const usdcBand = await page.locator(".sp-legend li").filter({ hasText: "USDC" })
+    .locator(".sp-legend__key").evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(usdcBand).toBe("rgb(16, 185, 129)"); // #10b981, USDC's entry in ASSET_DOT
 
   // Tracked wallets: woon.json declares 3.
   const walletsPanel = page.locator(".sv__panel", { hasText: "Tracked wallets" });

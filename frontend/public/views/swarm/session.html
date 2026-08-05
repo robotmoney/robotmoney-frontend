@@ -58,20 +58,42 @@
             </p>
             <div class="sv__backdrop-grid">
               <div>
+                <!-- THE READ, in words, first. This block used to open with a
+                     bare "Composite 0.544" — a number with no scale, no unit and
+                     no interpretation, while the payload has carried `regime`
+                     ("risk_on") and `composite_percentile` all along. A reader
+                     cannot tell whether 0.544 is high; the swarm's own synthesis
+                     text says "risk_on at the 71st percentile", so the panel now
+                     says exactly that and keeps the raw figure as support. -->
+                <p class="sv__regime-call" x-show="session.regimeSummary?.regime">
+                  <i :style="`background:${regimeColor(session.regimeSummary?.regime)}`" aria-hidden="true"></i>
+                  <span x-text="regimeLabel(session.regimeSummary?.regime)"></span>
+                </p>
                 <div class="sv__metric-line">
                   <span>Composite</span>
                   <b x-text="fmtNum(session.regimeSummary?.composite, 3)"></b>
                 </div>
                 <div class="sv__bar" x-show="session.regimeSummary?.composite != null">
-                  <i :style="`width:${clampPct((session.regimeSummary?.composite || 0) * 100)}%`"></i>
+                  <i :style="`width:${clampPct((session.regimeSummary?.composite || 0) * 100)}%;background:${regimeColor(session.regimeSummary?.regime)}`"></i>
                 </div>
+                <!-- What that 0-to-1 position is worth against its own record.
+                     Without it the bar says "a bit over halfway" and a reader has
+                     no way to know that halfway is historically HIGH. -->
+                <p class="sv__panel-sub" x-show="session.regimeSummary?.compositePercentile != null"
+                   x-text="`${ordinal(session.regimeSummary?.compositePercentile)} percentile of its own history`"></p>
                 <div class="sv__sparkline" x-show="(session.regimeSummary?.history || []).length >= 2" x-html="regimeSparkline()"></div>
                 <p class="sv__panel-sub" x-show="(session.regimeSummary?.history || []).length >= 2"
-                   x-text="`composite, trailing ${(session.regimeSummary?.history || []).length} sessions`"></p>
+                   x-text="`composite, trailing ${(session.regimeSummary?.history || []).length} sessions · bands mark risk-off below 0.33 and risk-on above 0.67`"></p>
               </div>
               <div>
                 <p class="sv__panel-sub" x-show="panelInputs().length >= 2">Panels · percentile against own history, 50th marked</p>
                 <div class="sv__panel-divergence" x-show="panelInputs().length >= 2" x-html="panelDivergenceBars()"></div>
+                <!-- The finding, not just the three bars: when one panel reads
+                     the opposite way from the composite, that disagreement is
+                     what the members argue about in the takes below, and the
+                     panel should name it rather than leave it to be spotted. -->
+                <p class="sv__panel-sub sv__dissent" x-show="dissentingPanels().length"
+                   x-text="dissentLine()"></p>
                 <div class="sv__panel-bars" x-show="panelInputs().length === 1">
                   <template x-for="p in panelInputs()" :key="p.label">
                     <div class="sv__panel-bar">
@@ -180,16 +202,50 @@
                needs it for a different reason — see recommendationRationale(). -->
           <div class="sv__rich-rec" x-show="hasRecommendationDetail()">
             <div class="sv__bucket-bars" x-show="isBucketWeights()">
-              <!-- The caption names only the series actually drawn. It used to
-                   read "Target open · Actual muted · Recommended accent"
-                   unconditionally while the chart rendered Recommended alone,
-                   describing two series that were not on screen. -->
-              <p class="sv__panel-sub">
-                <span x-show="bucketWeights().some(b => b.target != null)">Target open · </span>
-                <span x-show="bucketWeights().some(b => b.actual != null)">Actual muted · </span>
-                Recommended accent
-              </p>
+              <!-- The caption used to be an encoding key — "Target open ·
+                   Actual muted · Recommended accent" — which asked the reader
+                   to hold three colour-to-word mappings in their head while
+                   reading the chart, and still never said the numbers were
+                   percentages. Every bar now names itself on its own row and
+                   the value column is headed "% of NAV", so the caption is free
+                   to say what the figure IS instead of how to decode it. -->
+              <p class="sv__panel-sub">Each bucket as a share of the vault, in percent</p>
               <div class="sv__bucket-bars-svg" x-html="bucketWeightsBars()"></div>
+              <!-- The same recommendation as numbers. The bars answer "which
+                   bucket is biggest" and nothing else: on a 97/3/0/0 book three
+                   of four rows round to no bar at all, so the proposal was
+                   readable only in the value labels — and the move it actually
+                   asks for (recommended minus where the book sits) was left as
+                   arithmetic for the reader. -->
+              <div class="sv__table-wrap sv__bucket-table">
+                <table class="sv__data-table">
+                  <thead>
+                    <tr>
+                      <th>Bucket</th>
+                      <th class="sv__num" x-show="bucketWeights().some(b => b.target != null)">Target</th>
+                      <th class="sv__num" x-show="bucketWeights().some(b => b.actual != null)">Actual</th>
+                      <th class="sv__num sv__num--rec">Recommended</th>
+                      <!-- Named for what it measures. The gap is against actual
+                           when we know it and target otherwise — two different
+                           questions, so the heading says which one is on screen
+                           rather than letting "Gap" stand for both. -->
+                      <th class="sv__num" x-show="gapBasis()"
+                          x-text="gapBasis() === 'actual' ? 'vs actual' : 'vs target'"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="b in bucketRows()" :key="b.name">
+                      <tr>
+                        <td x-text="b.name"></td>
+                        <td class="sv__num" x-show="bucketWeights().some(x => x.target != null)" x-text="fmtWeight(b.target)"></td>
+                        <td class="sv__num" x-show="bucketWeights().some(x => x.actual != null)" x-text="fmtWeight(b.actual)"></td>
+                        <td class="sv__num sv__num--rec" x-text="fmtWeight(b.recommended)"></td>
+                        <td class="sv__num sv__gap" :class="gapClass(b.gap)" x-show="gapBasis()" x-text="fmtGap(b.gap)"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
               <!-- WHICH target. /api/dashboards/allocation serves the single
                    CURRENT framework row, so the target drawn above is dated,
                    and for archived sessions it is frequently dated AFTER the
