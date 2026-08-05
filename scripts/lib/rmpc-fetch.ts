@@ -51,6 +51,14 @@ export function resolveRmpcAsset(version: string, platform: string, arch: string
   return { os, arch: archName, asset, url: `https://github.com/${repo}/releases/download/${version}/${asset}` };
 }
 
+// The rmpc top-level command namespace this repo documents and drives. It is
+// the literal argv token passed to the real binary by
+// verifyCommitteeIdentitySubcommand() below, exported so that anything
+// asserting on the namespace name — notably the shipped-docs guard in
+// scripts/tests/unit/docs-rmpc-cli-surface.test.ts — derives it from the same
+// place the binary is actually invoked instead of re-typing it.
+export const RMPC_COMMAND_NAMESPACE = "committee-identity";
+
 // Every committee-identity subcommand this whole onboarding flow depends on,
 // per `--help` text. Returns the ones missing (empty ⇒ all present).
 export function missingCommitteeIdentitySubcommands(helpText: string): string[] {
@@ -62,12 +70,12 @@ function cacheRoot(): string {
 }
 
 function verifyCommitteeIdentitySubcommand(rmpcPath: string, version: string): void {
-  const r = Bun.spawnSync([rmpcPath, "committee-identity", "--help"], { stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync([rmpcPath, RMPC_COMMAND_NAMESPACE, "--help"], { stdout: "pipe", stderr: "pipe" });
   const out = new TextDecoder().decode(r.stdout) + new TextDecoder().decode(r.stderr);
-  if (r.exitCode !== 0) throw new Error(`rmpc committee-identity --help exited ${r.exitCode}: ${out}`);
+  if (r.exitCode !== 0) throw new Error(`rmpc ${RMPC_COMMAND_NAMESPACE} --help exited ${r.exitCode}: ${out}`);
   const missing = missingCommitteeIdentitySubcommands(out);
   if (missing.length > 0) {
-    throw new Error(`downloaded rmpc ${version} is missing committee-identity subcommand(s): ${missing.join(", ")} — output:\n${out}`);
+    throw new Error(`downloaded rmpc ${version} is missing ${RMPC_COMMAND_NAMESPACE} subcommand(s): ${missing.join(", ")} — output:\n${out}`);
   }
 }
 
