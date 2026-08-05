@@ -94,8 +94,6 @@ jobs:
       - name: Typecheck backend
         working-directory: backend
         run: bun run typecheck
-      - name: No AI/LLM overview enrichment in backend/src (issue #93)
-        run: bash backend/scripts/check-no-ai-overview.sh
       - name: Run tests (ephemeral Postgres via Docker)
         working-directory: backend
         # tests/geckoterminal-resilience.test.ts and

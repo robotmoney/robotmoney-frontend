@@ -1061,14 +1061,18 @@ with nothing marking or enforcing the difference, so nothing stops a test-only
 helper being imported into runtime.
 
 Enforcement is by grep check, not convention — the repo already proves the
-pattern works: `check-no-ai-overview.sh` does this for issue #93, ~18 lines
-and runs in milliseconds. An invariant that lives only in prose is an
-invariant that rots.
+pattern works: `scripts/checks/check-model-selection.sh` and
+`check-no-test-imports-in-runtime.sh` are ~18-line examples and run in
+milliseconds. An invariant that lives only in prose is an invariant that
+rots.
 
 (D8's own vendor-avoidance rationale stands; its prior grep enforcement,
 `backend/scripts/check-no-supabase.sh`, was removed as an overzealous,
 single-vendor-named guard — narrower review of new `backend/src` deps
-covers the same ground without hardcoding one competitor's name into CI.)
+covers the same ground without hardcoding one competitor's name into CI.
+Issue #93's prior grep enforcement, `backend/scripts/check-no-ai-overview.sh`,
+was removed as deprecated per owner decision; issue #93's underlying
+admin-managed-overview-text intent is not otherwise affected by this PR.)
 
 **Relationship.**
 - **Serves D22**: `evals/` and the `stack/`/`agent/` extractions are where D22's
