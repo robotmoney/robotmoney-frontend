@@ -7,7 +7,7 @@
 // directly on main, and a canonical doc (architecture.md or decisions.md)
 // links to the plan so a reviewer on main can discover it exists at all.
 //
-// Runs in the required unit.yml job via `bun test scripts/tests/unit`.
+// Runs in the required unit.yml job via `bun run test:unit`.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

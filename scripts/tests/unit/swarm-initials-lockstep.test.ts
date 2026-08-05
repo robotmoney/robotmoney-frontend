@@ -19,7 +19,7 @@
 // swarm-apply-form-and-status.test.ts — `initials()` is pure, so the factory
 // is instantiated and the method driven directly, with no init()/network.
 //
-// Runs in the required integration.yml root job via `bun test scripts/tests`.
+// Runs in the required unit.yml root job via `bun run test`.
 import { describe, expect, test } from "bun:test";
 import { registerSwarmView } from "../../../frontend/public/assets/js/app/alpine/views/swarm.js";
 import { registerStaticViews } from "../../../frontend/public/assets/js/app/alpine/static-views.js";
