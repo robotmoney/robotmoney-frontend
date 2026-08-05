@@ -24,3 +24,4 @@ onboarding-admission-record.md
 # Agent/loop runtime state only — demo state files, logs, caches, plan backups.
 # Never source, never committed, so the whole directory is ignored.
 .agents/
+.audit-scratch/

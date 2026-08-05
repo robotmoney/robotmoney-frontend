@@ -9,7 +9,7 @@
 //
 // Network-boundary only: no SQL, no writes to v0, nothing beyond
 // `GET .../rest/v1/<table>`. Credentials are read from
-// V0_ANALYTICS_SUPABASE_URL / V0_ANALYTICS_SUPABASE_ANON_KEY at CALL time —
+// V0_ANALYTICS_SOURCE_URL / V0_ANALYTICS_SOURCE_KEY at CALL time —
 // never hardcoded, never logged, never written to a tracked file. A missing
 // key throws loudly (resolveV0SupabaseConfig) rather than fabricating a
 // roster — same discipline as ../access/fixture-source.ts.
@@ -35,10 +35,10 @@ export interface V0SupabaseConfig {
 }
 
 export function resolveV0SupabaseConfig(env: Record<string, string | undefined> = process.env): V0SupabaseConfig {
-  const url = env.V0_ANALYTICS_SUPABASE_URL?.trim();
-  const anonKey = env.V0_ANALYTICS_SUPABASE_ANON_KEY?.trim();
-  if (!url) throw new Error("missing required env var: V0_ANALYTICS_SUPABASE_URL");
-  if (!anonKey) throw new Error("missing required env var: V0_ANALYTICS_SUPABASE_ANON_KEY");
+  const url = env.V0_ANALYTICS_SOURCE_URL?.trim();
+  const anonKey = env.V0_ANALYTICS_SOURCE_KEY?.trim();
+  if (!url) throw new Error("missing required env var: V0_ANALYTICS_SOURCE_URL");
+  if (!anonKey) throw new Error("missing required env var: V0_ANALYTICS_SOURCE_KEY");
   return { url: url.replace(/\/+$/, ""), anonKey };
 }
 

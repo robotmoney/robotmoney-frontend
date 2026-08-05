@@ -8,8 +8,8 @@
 // skip/mapping notes, then commits the result.
 //
 // Usage:
-//   V0_ANALYTICS_SUPABASE_URL=https://<ref>.supabase.co \
-//   V0_ANALYTICS_SUPABASE_ANON_KEY=<anon key> \
+//   V0_ANALYTICS_SOURCE_URL=https://<ref>.supabase.co \
+//   V0_ANALYTICS_SOURCE_KEY=<anon key> \
 //     bun run scripts/projects-roster-seed-regenerate.ts
 //
 // (also registered as `bun run projects-roster-seed:regenerate` —
