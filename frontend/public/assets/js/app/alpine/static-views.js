@@ -34,8 +34,21 @@ async function fetchJson(url) {
   return res.json();
 }
 
+// Prefer the committed static archive for dates it actually COVERS.
+//
+// This used to read `< "2026-07-01"` — a second hardcoded boundary that did
+// not match ARCHIVE_LAST_DATE ("2026-06-25"), leaving 2026-06-26..06-30
+// "archive-preferred" but absent from the archive. Combined with the
+// deliberate `throw primary` below (which suppresses the API fallback for
+// archive-preferred dates), those five days were unreachable: the page
+// rendered "Session not found" while the API served them perfectly well.
+//
+// It was invisible for as long as the database also stopped at 2026-06-25 —
+// the gap had nothing in it. Importing v0's full history (72 sessions through
+// 2026-08-04) put five real sessions inside it. Deriving the boundary from
+// ARCHIVE_LAST_DATE means the two can no longer disagree.
 function archivePreferred(date) {
-  return String(date || "") < "2026-07-01";
+  return String(date || "") <= ARCHIVE_LAST_DATE;
 }
 
 function camelSession(raw) {
@@ -1273,8 +1286,13 @@ export function registerStaticViews(Alpine) {
         else await this.loadApi(date, subject);
       } catch (primary) {
         try {
-          if (archivePreferred(date)) throw primary;
-          await this.loadArchive(date, subject);
+          // Always try the OTHER source before giving up. Previously an
+          // archive-preferred date rethrew instead of falling back, so a date
+          // the archive did not carry became "not found" even when the API
+          // held the session. Whichever source was not tried first is tried
+          // now; only if BOTH fail does the page report not-found.
+          if (archivePreferred(date)) await this.loadApi(date, subject);
+          else await this.loadArchive(date, subject);
         } catch (_) {
           this.error = `Session not found for ${date}/${subject}. This checkout's reference archive currently has Woon sessions through ${ARCHIVE_LAST_DATE}.`;
         }
