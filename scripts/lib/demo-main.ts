@@ -1469,6 +1469,49 @@ async function main(): Promise<void> {
   const schedules: SubjectSchedule[] = e2e.SUBJECTS.map((s: { id: string; name: string }, i: number) => ({
     subject: s, plan: plans[i], nextAt: plans[i].firstAt, runs: 0,
   }));
+  // ── Adopt the personas this database already knows ────────────────────────
+  // A persistent database outlives the stack, so by the second boot the roster
+  // already holds personas this process never admitted. Without this they sat on
+  // the roster as historical members and never filed another take — the standing
+  // demo ran three-member sessions while claiming six seats — because their
+  // signing key lived in a per-boot volume and their passphrase only in the
+  // previous process's memory.
+  //
+  // Adoption is possible because a persona's key is COMMITTED
+  // (scripts/lib/swarm/fixtures/persona-keys.json): the enroll run below
+  // seeds the container keystore with the known key and re-registers it against
+  // the member id the database already has (registerMember is idempotent by id —
+  // it rebinds the key, mints a token, and the roster cap exempts an existing
+  // member). The persona keeps its id, its name and every take it has filed.
+  //
+  // Only demo characters are adopted: a member with no committed identity is
+  // somebody else's, and inventing a key for them is exactly the duplicate-making
+  // behaviour this replaces.
+  if (smokeMode) {
+    log("smoke mode: clearing built-in fake members so we only adopt imported personas");
+    e2e.MEMBERS.length = 0;
+  }
+  const dbRoster = await e2e.rosterMembers(undefined, adminPassword);
+  if (dbRoster === null) {
+    log("roster unreadable at boot — continuing with the built-in members only (no personas adopted)");
+  } else {
+    const seatedIds = new Set<string>(e2e.MEMBERS.map((m: { memberId: string }) => m.memberId));
+    const plan = planAdoptions(dbRoster, seatedIds, (name) => {
+      if (smokeMode && !["athena", "robot money", "woon"].includes(name.trim().toLowerCase())) {
+        return false;
+      }
+      return Boolean(personaIdentity(name));
+    });
+    for (const m of plan.duplicates) {
+      log(`persona ${m.name}: ignoring duplicate roster row ${m.id.slice(0, 8)} — one seat per character`);
+    }
+    for (const m of plan.adopt) {
+      e2e.MEMBERS.push({ memberId: m.id, name: m.name, lens: m.lens ?? "returning member", bias: 0, present: true });
+      log(`adopted ${m.name} (${m.id.slice(0, 8)}) from the database — signing with the committed persona key`);
+    }
+    if (plan.adopt.length > 0) log(`swarm now ${e2e.MEMBERS.length} seats (${plan.adopt.length} adopted from the database)`);
+  }
+
   // Populate the per-subject panes and seed their countdowns.
   for (const sch of schedules) {
     state.swarms[sch.subject.id] = {
@@ -1523,21 +1566,7 @@ async function main(): Promise<void> {
   // Only demo characters are adopted: a member with no committed identity is
   // somebody else's, and inventing a key for them is exactly the duplicate-making
   // behaviour this replaces.
-  const dbRoster = await e2e.rosterMembers(undefined, adminPassword);
-  if (dbRoster === null) {
-    log("roster unreadable at boot — continuing with the built-in members only (no personas adopted)");
-  } else {
-    const seatedIds = new Set<string>(e2e.MEMBERS.map((m: { memberId: string }) => m.memberId));
-    const plan = planAdoptions(dbRoster, seatedIds, (name) => Boolean(personaIdentity(name)));
-    for (const m of plan.duplicates) {
-      log(`persona ${m.name}: ignoring duplicate roster row ${m.id.slice(0, 8)} — one seat per character`);
-    }
-    for (const m of plan.adopt) {
-      e2e.MEMBERS.push({ memberId: m.id, name: m.name, lens: m.lens ?? "returning member", bias: 0, present: true });
-      log(`adopted ${m.name} (${m.id.slice(0, 8)}) from the database — signing with the committed persona key`);
-    }
-    if (plan.adopt.length > 0) log(`swarm now ${e2e.MEMBERS.length} seats (${plan.adopt.length} adopted from the database)`);
-  }
+
 
   async function swarmDriver(): Promise<void> {
     for (;;) {
