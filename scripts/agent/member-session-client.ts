@@ -53,6 +53,7 @@
 // free-form logging):
 //   RM_ENROLL {json}   enroll-mode result: { keystoreKind, publicKey?, tokenValid, memberId? }
 //   RM_STAGE  {json}   { stage: connect|fetch|thinking|reporting|done, stance?, confidence? }
+//   RM_TELEMETRY {json} incremental, redacted OpenCode lifecycle milestone
 //   RM_RESULT {json}   { memberId, stance, confidence, memoUrl?, verified }
 //
 // LOUD-FAILURE CONTRACT: any failure exits non-zero with the reason on
@@ -306,7 +307,15 @@ async function participate(): Promise<void> {
   // line) — no fallback; the thrown error exits this process non-zero and the
   // member renders absent.
   stage("thinking");
-  const authored = await authorTake({ memberId, name, lens, bias }, regimeCtx, subjectId);
+  const authored = await authorTake(
+    { memberId, name, lens, bias },
+    regimeCtx,
+    subjectId,
+    {
+      telemetry: (event) => out("RM_TELEMETRY", event),
+      diagnosticArtifactPath: process.env.RM_DIAGNOSTIC_ARTIFACT,
+    },
+  );
   const provenanceText = provenance.length ? `\n\n_Provenance: ${provenance.join("; ")}_` : "";
   const body = `${authored.body}${provenanceText}`;
   stage("reporting", { stance: authored.stance, confidence: authored.confidence });

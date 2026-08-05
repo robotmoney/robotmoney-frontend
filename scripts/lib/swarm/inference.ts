@@ -29,7 +29,7 @@
 // THROWS — it NEVER falls back to a templated body.
 import { STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
-import { describeTranscriptError, extractAssistantText, transcriptErrors } from "../../agent/transcript.ts";
+import { assistantTextParts, describeTranscriptError, extractAssistantText, transcriptErrors } from "../../agent/transcript.ts";
 import {
   classifyInferenceFailure,
   InferenceFailure,
@@ -39,6 +39,7 @@ import {
 } from "../../agent/inference-failure.ts";
 import { DEFAULT_AGENT_MODEL, resolveAgentModel } from "../model-registry.ts";
 import { ZEN_KEY_ENV, zenApiKey } from "../opencode-key.ts";
+import { redactTelemetryText } from "../onboarding-telemetry.ts";
 // Regime inputs passed to each live author. This used to live beside the retired
 // deterministic memo template; it belongs with the only remaining authoring
 // path so a future fallback cannot accidentally reappear through that module.
@@ -68,6 +69,41 @@ const opencodeBin = () => process.env.OPENCODE_BIN ?? "opencode";
 // OPENCODE_TIMEOUT_MS without a code change. On expiry we kill the subprocess and
 // throw loudly — still NO template fallback.
 const timeoutMs = () => Number(process.env.OPENCODE_TIMEOUT_MS ?? 120000);
+
+export type InferenceTelemetryMilestone =
+  | "cli_spawn_requested"
+  | "cli_spawned"
+  | "inference_requested"
+  | "first_stdout_byte"
+  | "first_stderr_byte"
+  | "first_ndjson_event"
+  | "primary_stream_observed"
+  | "first_assistant_text_part"
+  | "auxiliary_title_error"
+  | "primary_provider_error"
+  | "timeout_reached"
+  | "kill_signal"
+  | "process_exit"
+  | "stream_drain_timeout"
+  | "completion";
+
+export interface InferenceTelemetryEvent {
+  version: 1;
+  milestone: InferenceTelemetryMilestone;
+  timestamp: string;
+  provider: string;
+  model: string;
+  timeoutMs: number;
+  primaryStreamObserved: boolean;
+  detail?: string;
+}
+
+export type InferenceTelemetrySink = (event: InferenceTelemetryEvent) => void;
+
+export interface AuthorTakeOptions {
+  telemetry?: InferenceTelemetrySink;
+  diagnosticArtifactPath?: string;
+}
 
 // Prompt-facing stance vocabulary (most bullish first), DERIVED from the
 // canonical contract tuple (finding 027) — never re-declared locally.
@@ -287,13 +323,68 @@ function emptyTranscriptFailure(stdout: string, stderr: string, model: string, e
 // Run the opencode CLI on a prompt and return the concatenated final
 // assistant text. Throws loudly (no template fallback) when the binary cannot be
 // spawned (opencode unavailable) or the run yields no assistant text.
-async function runOpencode(prompt: string): Promise<string> {
+const DIAGNOSTIC_TAIL_BYTES = 12_000;
+const TERMINATE_GRACE_MS = 500;
+const KILL_GRACE_MS = 1_000;
+const PIPE_DRAIN_GRACE_MS = 500;
+
+function inferenceRedactions(prompt: string) {
+  return [
+    { value: zenApiKey(), placeholder: "<OPENCODE_API_KEY redacted>" },
+    { value: prompt, placeholder: "<prompt redacted>" },
+    { value: JSON.stringify(prompt).slice(1, -1), placeholder: "<escaped prompt redacted>" },
+  ];
+}
+
+function boundedTail(value: string, prompt: string): string {
+  const redacted = redactTelemetryText(value, inferenceRedactions(prompt));
+  return redacted.slice(-DIAGNOSTIC_TAIL_BYTES);
+}
+
+async function runOpencode(prompt: string, options: AuthorTakeOptions = {}): Promise<string> {
   const bin = opencodeBin();
   const model = inferenceModel();
+  const ms = timeoutMs();
+  const provider = providerOf(model);
+  let primaryStreamObserved = false;
+  const emit = (milestone: InferenceTelemetryMilestone, detail?: string) => options.telemetry?.({
+    version: 1,
+    milestone,
+    timestamp: new Date().toISOString(),
+    provider,
+    model,
+    timeoutMs: ms,
+    primaryStreamObserved,
+    ...(detail ? { detail: redactTelemetryText(detail, inferenceRedactions(prompt)) } : {}),
+  });
+  const title = `robotmoney-swarm-${model.replace(/[^a-zA-Z0-9_.-]/g, "-")}`;
+  const argv = [
+    bin,
+    "run",
+    prompt,
+    "--model",
+    model,
+    "--format",
+    "json",
+    "--auto",
+    // Supplying a value prevents OpenCode from launching its auxiliary
+    // gpt-5.4-nano title agent. The title is diagnostic metadata, not model
+    // authored content, so it must be deterministic.
+    "--title",
+    title,
+    // Verified against the pinned OpenCode 1.18.1 `run --help`. These logs are
+    // captured incrementally and redacted below; they are essential for
+    // locating a pre-stream stall inside OpenCode.
+    "--print-logs",
+    "--log-level",
+    "DEBUG",
+  ];
   let proc: ReturnType<typeof Bun.spawn>;
+  emit("inference_requested", `provider=${provider} model=${model} timeoutMs=${ms}`);
+  emit("cli_spawn_requested", `binary=${bin}`);
   try {
     proc = Bun.spawn(
-      [bin, "run", prompt, "--model", model, "--format", "json", "--auto"],
+      argv,
       // SCRUBBED environment (issue #361 Phase 0): the subprocess gets the
       // opencodeSpawnEnv allowlist (PATH/HOME/TERM + the single model
       // credential) — never a `process.env` spread, which handed every
@@ -308,41 +399,166 @@ async function runOpencode(prompt: string): Promise<string> {
         `Swarm takes require a working opencode CLI; there is NO template fallback in this path.`,
     );
   }
-  // Bound the call: a hung free-tier zen run would otherwise block forever (and
-  // freeze the whole swarm session). We RACE the read work against a timeout
-  // that rejects DIRECTLY — so the loud throw fires even if proc.kill() fails to
-  // close the stdout/stderr pipes (e.g. a killed opencode leaves a child holding
-  // them open). Never a template fallback.
-  const ms = timeoutMs();
+  emit("cli_spawned", `pid=${proc.pid}`);
+
+  let stdout = "";
+  let stderr = "";
+  let firstStdout = false;
+  let firstStderr = false;
+  let firstNdjson = false;
+  let firstText = false;
+  let auxiliaryTitleError = false;
+  let primaryProviderError = false;
+  let stdoutReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let stderrReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+  const requestedModelId = model.includes("/") ? model.slice(model.indexOf("/") + 1) : model;
+  const referencedModel = (line: string): string | null => {
+    const found = line.match(/model(?:ID)?[=: ]+(?:opencode\/)?([a-zA-Z0-9._-]+)/i)?.[1];
+    return found?.toLowerCase() ?? null;
+  };
+  const isAuxiliaryTitleLine = (line: string): boolean => {
+    const namedTitle = /agent[=: ]+title/i.test(line);
+    const referenced = referencedModel(line);
+    return namedTitle && referenced !== requestedModelId.toLowerCase();
+  };
+  const primaryProviderEvidence = (line: string): boolean => {
+    const lower = line.toLowerCase();
+    return lower.includes(model.toLowerCase()) || lower.includes(requestedModelId.toLowerCase()) ||
+      (provider === "opencode" && /opencode\.ai\/zen\//i.test(line));
+  };
+  const inspectLine = (stream: "stdout" | "stderr", line: string) => {
+    if (isAuxiliaryTitleLine(line)) {
+      if (!auxiliaryTitleError && /error|disabled|fail/i.test(line)) {
+        auxiliaryTitleError = true;
+        emit("auxiliary_title_error", "OpenCode auxiliary title agent reported an error; this is not the primary model stream");
+      }
+      return;
+    }
+    if (stream !== "stdout") return;
+    let event: any;
+    try { event = JSON.parse(line.trim()); } catch { return; }
+    if (!firstNdjson) {
+      firstNdjson = true;
+      emit("first_ndjson_event", `type=${String(event?.type ?? "unknown")}`);
+    }
+    const assistantText = event?.type === "text" && typeof event?.part?.text === "string" && event.part.text.trim();
+    const primaryError = event?.type === "error" && primaryProviderEvidence(line);
+    if (!primaryStreamObserved && (assistantText || primaryError)) {
+      primaryStreamObserved = true;
+      emit("primary_stream_observed", `type=${String(event?.type ?? "unknown")}`);
+    }
+    if (!firstText && assistantText) {
+      firstText = true;
+      emit("first_assistant_text_part");
+    }
+    if (!primaryProviderError && primaryError) {
+      primaryProviderError = true;
+      const errors = transcriptErrors(line, [zenApiKey() ?? ""]);
+      emit("primary_provider_error", errors[0] ? describeTranscriptError(errors[0]) : "structured primary error event");
+    }
+  };
+
+  const drainIncrementally = async (stream: ReadableStream<Uint8Array>, which: "stdout" | "stderr") => {
+    const reader = stream.getReader();
+    if (which === "stdout") stdoutReader = reader; else stderrReader = reader;
+    const decoder = new TextDecoder();
+    let pending = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      if (which === "stdout") {
+        if (!firstStdout) { firstStdout = true; emit("first_stdout_byte"); }
+        stdout += chunk;
+      } else {
+        if (!firstStderr) { firstStderr = true; emit("first_stderr_byte"); }
+        stderr += chunk;
+      }
+      pending += chunk;
+      for (;;) {
+        const newline = pending.indexOf("\n");
+        if (newline < 0) break;
+        inspectLine(which, pending.slice(0, newline));
+        pending = pending.slice(newline + 1);
+      }
+    }
+    const rest = decoder.decode();
+    if (rest) {
+      if (which === "stdout") stdout += rest; else stderr += rest;
+      pending += rest;
+    }
+    if (pending) inspectLine(which, pending);
+  };
+  const stdoutDrain = drainIncrementally(proc.stdout as ReadableStream<Uint8Array>, "stdout");
+  const stderrDrain = drainIncrementally(proc.stderr as ReadableStream<Uint8Array>, "stderr");
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      try { proc.kill(); } catch { /* best-effort */ }
-      reject(new InferenceFailure(
-        `opencode inference timed out after ${ms}ms for model '${model}' ` +
-          `(${keyLabel()}): the zen model did not respond; NO template fallback. ` +
-          `cause=timed-out — ${inferenceFailureAction("timed-out")}`,
-        { kind: "timed-out", provider: providerOf(model), model },
-      ));
-    }, ms);
-  });
-  let stdout: string, stderr: string, exitCode: number;
-  try {
-    [stdout, stderr, exitCode] = await Promise.race([
-      Promise.all([
-        new Response(proc.stdout as ReadableStream).text(),
-        new Response(proc.stderr as ReadableStream).text(),
-        proc.exited,
-      ]),
-      timeout,
+  const deadline = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), ms); });
+  const outcome = await Promise.race([proc.exited.then(() => "exited" as const), deadline]);
+  if (timer !== undefined) clearTimeout(timer);
+  let exitCode: number | null = null;
+  if (outcome === "timeout") {
+    emit("timeout_reached");
+    try {
+      proc.kill(15);
+      emit("kill_signal", "SIGTERM sent to OpenCode process");
+    } catch {
+      emit("kill_signal", "OpenCode process had already exited");
+    }
+    const afterTerm = await Promise.race([
+      proc.exited.then((code) => ({ exited: true as const, code })),
+      Bun.sleep(TERMINATE_GRACE_MS).then(() => ({ exited: false as const, code: null })),
     ]);
-  } finally {
-    clearTimeout(timer);
+    if (afterTerm.exited) {
+      exitCode = afterTerm.code;
+    } else {
+      try {
+        proc.kill(9);
+        emit("kill_signal", "SIGKILL sent after OpenCode ignored SIGTERM grace period");
+      } catch {
+        emit("kill_signal", "OpenCode process exited before SIGKILL escalation");
+      }
+      const afterKill = await Promise.race([
+        proc.exited.then((code) => ({ exited: true as const, code })),
+        Bun.sleep(KILL_GRACE_MS).then(() => ({ exited: false as const, code: null })),
+      ]);
+      if (afterKill.exited) exitCode = afterKill.code;
+    }
+  } else {
+    exitCode = await proc.exited;
+  }
+  emit("process_exit", exitCode === null ? "exit state unknown after bounded SIGKILL grace" : `exitCode=${exitCode}`);
+  const drains = Promise.all([stdoutDrain, stderrDrain]);
+  // OpenCode can exit while a descendant retains its inherited pipes. This is
+  // independent of the model timeout outcome: bound every drain, retain bytes
+  // collected so far, and cancel readers after the grace period.
+  const drained = await Promise.race([drains.then(() => true), Bun.sleep(PIPE_DRAIN_GRACE_MS).then(() => false)]);
+  if (!drained) {
+    emit("stream_drain_timeout", `stdout/stderr remained open after parent outcome=${outcome}; cancelling readers`);
+    await Promise.allSettled([stdoutReader?.cancel(), stderrReader?.cancel()]);
+  }
+  await Promise.race([drains.catch(() => []), Bun.sleep(PIPE_DRAIN_GRACE_MS)]);
+  if (outcome === "timeout") {
+    const artifact = options.diagnosticArtifactPath ? ` artifact=${options.diagnosticArtifactPath}.` : "";
+    throw new InferenceFailure(
+      `opencode inference timed out after ${ms}ms for model '${model}' (${keyLabel()}); ` +
+        `primaryStreamObserved=${primaryStreamObserved}. NO template fallback.${artifact} ` +
+        `Bounded redacted diagnostic tail: stdout=${JSON.stringify(boundedTail(stdout, prompt))} ` +
+        `stderr=${JSON.stringify(boundedTail(stderr, prompt))}. cause=timed-out — ${inferenceFailureAction("timed-out")}`,
+      { kind: "timed-out", provider, model },
+    );
   }
   const text = extractAssistantText(stdout);
   if (!text) {
-    throw emptyTranscriptFailure(stdout, stderr, model, exitCode);
+    const diagnosticRedactions = inferenceRedactions(prompt);
+    throw emptyTranscriptFailure(
+      redactTelemetryText(stdout, diagnosticRedactions),
+      redactTelemetryText(stderr, diagnosticRedactions),
+      model,
+      exitCode!,
+    );
   }
+  emit("completion", `assistantTextParts=${assistantTextParts(stdout).length}`);
   return text;
 }
 
@@ -358,8 +574,9 @@ export async function authorTake(
   p: Persona,
   regime: RegimeContext,
   subjectId: string,
+  options: AuthorTakeOptions = {},
 ): Promise<AuthoredTake> {
-  const text = await runOpencode(promptFor(p, regime, subjectId));
+  const text = await runOpencode(promptFor(p, regime, subjectId), options);
   const parsed = parseStanceFromBody(text);
   return { ...parsed, model: inferenceModel() };
 }

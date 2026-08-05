@@ -564,6 +564,47 @@ export interface MemberAgentResult {
 // observer and applies its own DEFAULT_TIMEOUT_MS.
 export const DEFAULT_MEMBER_AGENT_TIMEOUT_MS = 20 * 60_000;
 
+export async function inspectThenCleanup(opts: {
+  inspect?: () => Promise<void>;
+  cleanup: () => number | null;
+  onInspectError?: (error: unknown) => void;
+}): Promise<{ cleanupExitCode: number | null; inspectError: unknown | null }> {
+  let inspectError: unknown | null = null;
+  let cleanupExitCode: number | null = null;
+  try {
+    if (opts.inspect) await opts.inspect();
+  } catch (error) {
+    inspectError = error;
+    try { opts.onInspectError?.(error); } catch { /* a broken artifact sink cannot block cleanup */ }
+  } finally {
+    try { cleanupExitCode = opts.cleanup(); } catch { /* already removed / daemon unavailable */ }
+  }
+  return { cleanupExitCode, inspectError };
+}
+
+export async function boundedExitAfterTerminate(opts: {
+  exited: Promise<number>;
+  kill: (signal: number) => void;
+  termGraceMs?: number;
+  killGraceMs?: number;
+  onEscalate?: () => void;
+}): Promise<number | null> {
+  const afterTerm = await Promise.race([
+    opts.exited.then((code) => ({ exited: true as const, code })),
+    Bun.sleep(opts.termGraceMs ?? 500).then(() => ({ exited: false as const, code: null })),
+  ]);
+  if (afterTerm.exited) return afterTerm.code;
+  try {
+    opts.kill(9);
+    opts.onEscalate?.();
+  } catch { /* process exited between the grace check and escalation */ }
+  const afterKill = await Promise.race([
+    opts.exited.then((code) => ({ exited: true as const, code })),
+    Bun.sleep(opts.killGraceMs ?? 1_000).then(() => ({ exited: false as const, code: null })),
+  ]);
+  return afterKill.exited ? afterKill.code : null;
+}
+
 export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAgentResult> {
   const log = opts.onEvent ?? (() => {});
   const keep = opts.keepUntilInspected ?? false;
@@ -690,36 +731,56 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
     // error here.
     try {
       proc.kill();
+      telemetry.emit({ source: "cleanup", stream: "event", message: "member-agent CLI kill signal sent", containerName });
     } catch {
-      /* already exited */
+      telemetry.emit({ source: "cleanup", stream: "event", message: "member-agent CLI already exited before kill", containerName });
     }
 
-    if (keep) {
-      // Inspection reads the STOPPED container's filesystem, so wait for it to
-      // stop first. (After a TIMEOUT the kill above only signalled the CLI, so
-      // `timedOut` is passed through — an observer that kills on timeout may be
-      // reading a still-running filesystem.)
-      await proc.exited;
-      if (opts.inspect) await opts.inspect({ containerName, timedOut });
-    }
-
-    let containerCleanupExitCode: number | null = null;
-    try {
-      const cleanup = Bun.spawnSync(["docker", "rm", "-f", containerName], { stdout: "ignore", stderr: "ignore" });
-      containerCleanupExitCode = cleanup.exitCode;
-    } catch {
-      /* already removed */
-    }
-    telemetry.emit({
-      source: "cleanup",
-      stream: "event",
-      message: `member-agent container cleanup exit=${containerCleanupExitCode ?? "already-removed"}`,
-      containerName,
+    const cliExitCode = await boundedExitAfterTerminate({
+      exited: proc.exited,
+      kill: (signal) => proc.kill(signal),
+      onEscalate: () => telemetry.emit({
+        source: "cleanup", stream: "event", message: "member-agent CLI SIGKILL escalation sent", containerName,
+      }),
     });
+    if (cliExitCode === null) {
+      try {
+        telemetry.emit({
+          source: "cleanup", stream: "event",
+          message: "member-agent CLI exit state unknown after bounded SIGKILL grace; continuing to inspect and remove container",
+          containerName,
+        });
+      } catch { /* diagnostics cannot block cleanup */ }
+    }
+
+    const lifecycle = await inspectThenCleanup({
+      inspect: keep && opts.inspect
+        ? async () => {
+            telemetry.emit({ source: "cleanup", stream: "event", message: "member-agent container inspection started", containerName });
+            await opts.inspect!({ containerName, timedOut });
+            telemetry.emit({ source: "cleanup", stream: "event", message: "member-agent container inspection completed", containerName });
+          }
+        : undefined,
+      cleanup: () => Bun.spawnSync(["docker", "rm", "-f", containerName], {
+        stdout: "ignore", stderr: "ignore",
+      }).exitCode,
+      onInspectError: (error) => {
+        const safe = redactTelemetryText(error instanceof Error ? error.message : String(error), injected).slice(0, 1000);
+        telemetry.emit({ source: "cleanup", stream: "event", message: `member-agent diagnostic capture failed: ${safe}`, containerName });
+      },
+    });
+    try {
+      telemetry.emit({
+        source: "cleanup",
+        stream: "event",
+        message: `member-agent container cleanup exit=${lifecycle.cleanupExitCode ?? "already-removed"}`,
+        containerName,
+      });
+    } catch { /* cleanup already completed; a broken artifact sink cannot undo it */ }
     // LOAD-BEARING ORDERING: `docker rm -f` runs BEFORE the drains are awaited.
     // Closing the container's pipes is what lets the drains finish; awaiting
     // them first would hang. Do not "tidy" this.
-    const [rawStdout, rawStderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, proc.exited]);
+    const [rawStdout, rawStderr] = await Promise.all([stdoutPromise, stderrPromise]);
     await launchWatcher; // resolves as soon as the CLI is gone; never outlives the run
 
     // Both strings were assembled only from already-redacted stream records;
@@ -727,9 +788,17 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
     const stdout = rawStdout;
     const stderr = rawStderr;
 
+    if (lifecycle.inspectError) {
+      const safe = redactTelemetryText(
+        lifecycle.inspectError instanceof Error ? lifecycle.inspectError.message : String(lifecycle.inspectError),
+        injected,
+      ).slice(0, 1000);
+      throw new Error(`member-agent diagnostic capture failed after container cleanup: ${safe}`);
+    }
+
     return {
       containerName,
-      exitCode,
+      exitCode: cliExitCode,
       stdout,
       stderr,
       transcript: `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,

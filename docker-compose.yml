@@ -72,6 +72,7 @@ x-worker-env: &worker-env
   WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
   RM_ENV: ${RM_ENV:-demo}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
+  OPENCODE_TIMEOUT_MS: ${OPENCODE_TIMEOUT_MS:-}
   # Activation notifications are persisted by the API and delivered by the
   # reserved swarm worker through the deployment's HTTP mail adapter.
   SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-swarm-demo@robotmoney.invalid}

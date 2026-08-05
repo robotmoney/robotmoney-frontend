@@ -44,6 +44,7 @@ import {
 } from "../../agent/member-agent.ts";
 import { DEFAULT_API_URL_INTERNAL, resolveModelConfig } from "../onboarding-eval.ts";
 import { DEFAULT_COMPOSE_FILES } from "../../stack/config.ts";
+import { createSwarmSessionArtifactWriter } from "./telemetry.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(scriptDir, "..", "..", "..");
@@ -177,7 +178,7 @@ export type AgentProgress = (stage: AgentStage, info?: { stance?: string; confid
 const AGENT_STAGES: ReadonlySet<string> = new Set(["connect", "fetch", "thinking", "reporting", "done"]);
 
 // Parse one already-line-split client stdout message for the RM_<TAG> protocol.
-export function parseClientLine(tag: "RM_STAGE" | "RM_RESULT" | "RM_ENROLL", line: string): any | null {
+export function parseClientLine(tag: "RM_STAGE" | "RM_RESULT" | "RM_ENROLL" | "RM_TELEMETRY", line: string): any | null {
   const trimmed = line.trim();
   if (!trimmed.startsWith(`${tag} `)) return null;
   try {
@@ -187,7 +188,7 @@ export function parseClientLine(tag: "RM_STAGE" | "RM_RESULT" | "RM_ENROLL", lin
   }
 }
 
-function lastClientRecord(tag: "RM_STAGE" | "RM_RESULT" | "RM_ENROLL", stdout: string): any | null {
+function lastClientRecord(tag: "RM_STAGE" | "RM_RESULT" | "RM_ENROLL" | "RM_TELEMETRY", stdout: string): any | null {
   let found: any = null;
   for (const line of stdout.split("\n")) {
     const parsed = parseClientLine(tag, line);
@@ -217,8 +218,25 @@ interface MemberRunOpts {
 
 async function runMemberContainer(rail: SessionRail, o: MemberRunOpts) {
   const runtime = await buildMemberSessionRuntime(rail.repoRoot);
+  const memberId = o.extraEnv.RM_MEMBER_ID ?? "unknown-member";
+  const sessionId = o.extraEnv.RM_SESSION_ID;
+  const artifact = o.mode === "participate" && sessionId
+    ? createSwarmSessionArtifactWriter({
+        repoRoot: rail.repoRoot,
+        composeProject: rail.composeProject,
+        sessionId,
+        memberId,
+        runId: o.runId,
+        model: rail.modelConfig.model,
+        timeoutMs: o.timeoutMs,
+        redactions: [
+          { value: rail.modelConfig.apiKey, placeholder: `<${rail.modelConfig.apiKeyEnv ?? "MODEL_KEY"} redacted>` },
+          ...Object.entries(o.ownerEnv ?? {}).map(([key, value]) => ({ value, placeholder: `<${key} redacted>` })),
+        ],
+      })
+    : null;
   try {
-    return await runMemberAgent({
+    const result = await runMemberAgent({
       repoRoot: rail.repoRoot,
       composeProject: rail.composeProject,
       composeFiles: rail.composeFiles,
@@ -229,18 +247,32 @@ async function runMemberContainer(rail: SessionRail, o: MemberRunOpts) {
       extraEnv: {
         RM_API_URL: rail.apiUrlInternal ?? DEFAULT_API_URL_INTERNAL,
         AGENT_MODEL: rail.modelConfig.model,
+        ...(artifact ? { RM_DIAGNOSTIC_ARTIFACT: artifact.directory } : {}),
         ...o.extraEnv,
       },
       ownerEnv: o.ownerEnv,
       modelConfig: rail.modelConfig,
       composeSpawnEnv: rail.composeSpawnEnv,
       timeoutMs: o.timeoutMs,
-      onStructuredEvent: o.onStdoutLine
-        ? (ev) => {
-            if (ev.source === "agent" && ev.stream === "stdout") o.onStdoutLine!(ev.message);
-          }
+      onStructuredEvent: (ev) => {
+        artifact?.sink(ev);
+        if (o.onStdoutLine && ev.source === "agent" && ev.stream === "stdout") o.onStdoutLine(ev.message);
+      },
+      keepUntilInspected: artifact !== null,
+      inspect: artifact
+        ? async ({ containerName }) => artifact.captureInspect(containerName, rail.composeSpawnEnv)
         : undefined,
     });
+    artifact?.finish({
+      exitCode: result.exitCode,
+      timedOut: result.timedOut,
+      durationMs: result.durationMs,
+      containerLaunched: result.containerLaunched,
+    });
+    return result;
+  } catch (error) {
+    artifact?.finish({ error: error instanceof Error ? error.message : String(error) });
+    throw error;
   } finally {
     runtime.dispose();
   }
@@ -367,6 +399,7 @@ export async function runAgent(rail: SessionRail, o: AgentOpts, onProgress?: Age
       RM_SESSION_DATE: o.date,
       RM_SUBJECT_ID: o.subjectId,
       RM_SESSION_ID: String(o.sessionId),
+      ...(process.env.OPENCODE_TIMEOUT_MS ? { OPENCODE_TIMEOUT_MS: process.env.OPENCODE_TIMEOUT_MS } : {}),
     },
     ownerEnv: {
       ...(freshToken ? { RM_MEMBER_TOKEN: freshToken } : {}),
