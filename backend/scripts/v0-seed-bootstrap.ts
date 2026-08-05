@@ -172,6 +172,12 @@ async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> 
 }
 
 async function processSubject(s: V0Subject, drifts: Drift[]): Promise<RowOutcome> {
+  if (s.id === "woon") {
+    s.name = "Woon Treasury Allocation";
+  } else if (s.id === "robotmoney-treasury") {
+    s.name = "RM Protocol Treasury";
+  }
+
   const existing = (
     await sql`
       SELECT status, name, operator, homepage, x_handle, thesis_blurb, wallets, nft_contracts, source,
@@ -230,6 +236,12 @@ function convenedAtFromDate(date: string): string {
 async function processSession(sess: V0Session, drifts: Drift[]): Promise<RowOutcome> {
   const convenedAt = convenedAtFromDate(sess.date);
   const publishedAt = sess.generated_at;
+
+  if (sess.subject_id === "woon") {
+    sess.subject_name = "Woon Treasury Allocation";
+  } else if (sess.subject_id === "robotmoney-treasury") {
+    sess.subject_name = "RM Protocol Treasury";
+  }
 
   if (sess.takes) {
     for (const take of sess.takes) {

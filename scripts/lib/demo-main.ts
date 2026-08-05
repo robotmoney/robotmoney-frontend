@@ -1469,9 +1469,9 @@ async function main(): Promise<void> {
     e2e.SUBJECTS.length = 0;
     e2e.SUBJECTS.push(
       { id: "robotmoney-allocation", name: "Robot Money Allocation" },
-      { id: "robotmoney-treasury", name: "Robot Money Treasury" },
+      { id: "robotmoney-treasury", name: "RM Protocol Treasury" },
       { id: "robotmoney-vault", name: "Robot Money Vault" },
-      { id: "woon", name: "Woon" },
+      { id: "woon", name: "Woon Treasury Allocation" },
     );
   }
   const plans = planSubjectSchedules(e2e.SUBJECTS.length, cadence, Date.now());
