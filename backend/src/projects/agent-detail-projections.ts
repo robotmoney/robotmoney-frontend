@@ -31,6 +31,13 @@ import type { AgentDetail, AgentEvidence, AgentVaultSummary, AgentWalletSummary 
 
 export type { AgentDetail };
 
+// openclaw_agents.id is a `uuid PRIMARY KEY` — pre-validating the shape means
+// an arbitrary/malformed :id segment (e.g. the dash-shell smoke test's
+// `/agents/clawd` placeholder) resolves to this function's existing null →
+// 404 contract instead of a Postgres "invalid input syntax for type uuid"
+// 500 (same convention as dossier-projections.ts's UUID_RE).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function since(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 }
@@ -90,6 +97,8 @@ const FRESH_DAYS = 14;
 const STALE_DAYS = 60;
 
 export async function fetchAgentDetail(id: string): Promise<AgentDetail | null> {
+  if (!UUID_RE.test(id)) return null;
+
   const [agent] = await sql`
     SELECT a.id, a.name, a.protocol_standard, a.x402_score, a.x402_txn_count, a.x402_resources_count,
            a.x402_volume_usd, a.cumulative_revenue_usd, a.productivity_score, a.is_active,
