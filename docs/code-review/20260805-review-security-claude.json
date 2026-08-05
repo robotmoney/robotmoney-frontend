@@ -3,7 +3,7 @@
   "review": "review-security",
   "repository": "git@github.com:robotmoney/robotmoney-frontend.git",
   "branch": "adhoc/20260805-004008-remove-no-supabase-guard",
-  "commit": "1cdd4f93527bfa05b360b21b2341737db0e52542",
+  "commit": "7471027",
   "reviewed_at": "2026-08-05",
   "scope": [
     ".github/workflows/backend.yml",

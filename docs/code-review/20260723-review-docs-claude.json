@@ -3,7 +3,7 @@
   "review": "review-docs",
   "repository": "git@github.com:robotmoney/robotmoney-frontend.git",
   "branch": "adhoc/20260721-190555-docs-cleanup",
-  "commit": "6e5cfb49d87c5c00086433c97dec7153781de805",
+  "commit": "907b24f",
   "reviewed_at": "2026-07-23",
   "scope": [
     "documentation corpus: docs/**, CONTRIBUTING.md, README.md, frontend/public/views/docs/**, doc back-links across backend/frontend/contract/scripts/CI, Plan issue #15"

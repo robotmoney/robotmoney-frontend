@@ -41,6 +41,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Runtime code never imports test or eval code (D23)
         run: bash scripts/checks/check-no-test-imports-in-runtime.sh
+      - name: Code review artifacts pin reachable commits
+        run: bash scripts/checks/check-code-review-artifacts.sh
       - name: Check docs/analytics consistency
         run: bash scripts/check-docs-analytics.sh
       # D22 rule 1 as amended (2026-07-28): model ids live ONLY in
