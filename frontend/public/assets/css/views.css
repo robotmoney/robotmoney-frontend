@@ -416,6 +416,20 @@
 .sv__data-table td { padding: 0.45rem 0.55rem; border-bottom: 1px solid rgba(255,255,255,0.06); color: var(--color-text-muted); text-align: left; }
 .sv__data-table td:first-child { color: var(--color-text); }
 .sv__num { text-align: right !important; }
+/* The bars' key. Each swatch is drawn with the SAME treatment as the bar it
+   names — open outline, muted fill, accent fill — so the mapping is visual
+   rather than positional. */
+.sv__bars-key { list-style: none; margin: 0.7rem 0 0; padding: 0; display: flex;
+                flex-wrap: wrap; gap: 0.35rem 1.4rem;
+                font-family: var(--font-mono); font-size: 0.66rem; }
+.sv__bars-key li { display: flex; align-items: center; gap: 0.45rem; }
+.sv__bars-key b { font-weight: 400; color: var(--color-text-muted); }
+.sv__bars-key span { color: var(--color-text-dim); }
+.sv__bars-key__swatch { width: 0.72rem; height: 0.4rem; flex: none; }
+.sv__bars-key__swatch.is-target { border: 1px solid var(--color-text-muted); }
+.sv__bars-key__swatch.is-actual { background: var(--color-text-dim); opacity: 0.9; }
+.sv__bars-key__swatch.is-recommended { background: var(--color-accent); }
+.sv__bars-key li:last-child b { color: var(--color-accent); }
 /* The bucket table repeats the bars as numbers. Sits directly under the figure
    it restates, so it reads as one block rather than a second exhibit. */
 .sv__bucket-table { margin-top: 0.9rem; }

@@ -172,6 +172,15 @@ async function bucketChartText(page: Page): Promise<string> {
   return (await page.locator(".sv__bucket-bars-svg").textContent()) ?? "";
 }
 
+// The series are named ONCE, in an HTML key under the figure, rather than on
+// every bucket row — so which series are drawn is asserted here and not against
+// the SVG's text. Reading the chart for "target" would now pass trivially
+// whether or not the series is drawn, which is exactly the assertion the
+// framework-unavailable test depends on.
+async function bucketKeyText(page: Page): Promise<string> {
+  return (await page.locator(".sv__bars-key").textContent()) ?? "";
+}
+
 test("bucket_weights session draws Target bars from the allocation framework and flags the deviation", async ({ page }) => {
   // 97/3/0/0 recommended against the published 95/5/0/0 target — the exact
   // figures /swarm/2026-08-03/robotmoney-allocation carries, and the case that
@@ -193,19 +202,20 @@ test("bucket_weights session draws Target bars from the allocation framework and
   await expect(page.locator(".sv__detail-title")).toHaveText("Robot Money Allocation");
 
   const chart = await bucketChartText(page);
-  // Target series present, per bucket, alongside Recommended. The series are
-  // named in full and the values carry their unit — they were "T 95"/"R 97",
-  // which asked the reader to decode a key held elsewhere on the page and never
-  // said the number was a percentage.
-  expect(chart).toContain("target");
-  expect(chart).toContain("recommended");
+  // Values carry their unit — they were "T 95"/"R 97", which asked the reader to
+  // decode a key from elsewhere on the page and never said the number was a
+  // percentage.
   expect(chart).toContain("95%");
   expect(chart).toContain("97%");
   expect(chart).toContain("5%");
   expect(chart).toContain("3%");
-  // The value column and the scale are headed, so a bar length is readable as a
-  // quantity rather than only comparable to its neighbour.
+  // The value column is headed, so a bar length is readable as a quantity
+  // rather than only comparable to its neighbour.
   expect(chart).toContain("% of NAV");
+  // Target series present alongside Recommended, per the key under the figure.
+  const key = await bucketKeyText(page);
+  expect(key).toContain("target");
+  expect(key).toContain("recommended");
   // The framework's own spelling wins over humanize("conservative_defi_yield"),
   // which cannot recover DeFi's inner capital.
   expect(chart).toContain("Conservative DeFi Yield");
@@ -243,8 +253,8 @@ test("bucket_weights session that matches its target draws Target bars and no de
 
   await expect(page.locator(".sv__error")).toBeHidden();
   const chart = await bucketChartText(page);
-  expect(chart).toContain("target");
   expect(chart).toContain("95%");
+  expect(await bucketKeyText(page)).toContain("target");
   // Same target, same recommendation — the indicator must stay off, otherwise
   // it says nothing when it does appear.
   await expect(page.locator(".sv__deviates")).toBeHidden();
@@ -286,8 +296,8 @@ test("bucket_weights session derives Actual from the snapshot and measures the g
 
   await expect(page.locator(".sv__error")).toBeHidden();
   const chart = await bucketChartText(page);
-  expect(chart).toContain("actual");
   expect(chart).toContain("100%");
+  expect(await bucketKeyText(page)).toContain("actual");
 
   const table = page.locator(".sv__bucket-table");
   // Basis flips to actual the moment we know it: recommended-minus-actual is
@@ -323,9 +333,13 @@ test("bucket_weights session degrades to Recommended-only when the framework is 
   // A missing framework degrades the chart, never the page.
   await expect(page.locator(".sv__error")).toBeHidden();
   const chart = await bucketChartText(page);
-  expect(chart).toContain("recommended");
   expect(chart).toContain("97%");
-  expect(chart).not.toContain("target");
+  // Recommended alone: the key names it and nothing else, which is the whole
+  // claim of this test.
+  const key = await bucketKeyText(page);
+  expect(key).toContain("recommended");
+  expect(key).not.toContain("target");
+  expect(key).not.toContain("actual");
   await expect(page.locator('.sv__bucket-bars-svg svg')).not.toHaveAttribute("aria-label", /vs target/);
   // With no basis to measure against, the gap column is withheld entirely
   // rather than printed as a row of em-dashes.
@@ -423,9 +437,9 @@ test("a session that predates the published framework draws the target for refer
 
   await expect(page.locator(".sv__error")).toBeHidden();
   const chart = await bucketChartText(page);
-  expect(chart).toContain("target");
   expect(chart).toContain("95%");
   expect(chart).toContain("97%");
+  expect(await bucketKeyText(page)).toContain("target");
   // 97 vs 95 is a two-point gap — well past the 0.005 tolerance — so this is
   // suppressed BECAUSE of the date, not because the numbers agree.
   await expect(page.locator(".sv__deviates")).toBeHidden();

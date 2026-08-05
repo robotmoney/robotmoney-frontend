@@ -1977,37 +1977,26 @@ export function registerStaticViews(Alpine) {
         hasActual ? { key: "actual", label: "actual", fill: "var(--color-text-dim)", opacity: "0.9", txt: "var(--color-text-muted)" } : null,
         { key: "recommended", label: "recommended", fill: "var(--color-accent)", txt: "var(--color-accent)" },
       ].filter(Boolean);
-      // Each bar is NAMED on its own row. The series were labelled "T", "A" and
-      // "R" against a caption elsewhere on the page that decoded them, which
-      // asked the reader to hold a key in their head while reading a chart —
-      // and the value read "R 97" with no unit, so it was not even clear the
-      // number was a percentage. Spelled out and suffixed with %, each row says
-      // what it is without reference to anything.
-      const W = 560, labelW = 132, seriesW = 62, valW = 40;
-      const barX = labelW + seriesW;
+      // The series are NOT named per row. Repeating "target / actual /
+      // recommended" beside every bucket printed the same three words four
+      // times and left the figure looking like a form; the key lives once,
+      // under the chart, as bucketBarsKey(). The values keep their % suffix,
+      // because that unit is per-number and a key cannot supply it.
+      //
+      // There is also no 0/50/100 tick row. Each bar sits on a full-width track
+      // that IS 100% of NAV, so the scale is already stated by the geometry and
+      // again by the value at the end of every bar — a tick row on top of that
+      // read as a third, competing scale next to the "% of NAV" heading.
+      const W = 560, barX = 22, valW = 40;
       const barW = W - barX - valW;
       const nameH = 15, subH = 6, subGap = 5, gap = 11;
-      // Two rows, not one: the column headings sit above the scale ticks because
-      // side by side the rightmost tick and the value heading collided into
-      // "100% OF NAV", which reads as a single phrase and made the tick vanish.
-      const headY = 8, tickY = 19, axisH = 26;
+      const headY = 8, axisH = 15;
       const groupH = nameH + series.length * (subH + subGap);
       const H = axisH + buckets.length * (groupH + gap) + 2;
       const x = (v) => barX + this.clampPct(v * 100) / 100 * barW;
       const mono = 'font-family="ui-monospace,monospace"';
-      // A labelled scale, once, at the top, plus a heading over the value
-      // column. Every row previously carried a bare dotted line at the halfway
-      // mark with nothing naming it, so a bar's length was a shape rather than
-      // a quantity.
-      const ticks = [0, 0.5, 1].map((v) => {
-        const anchor = v === 0 ? "start" : v === 1 ? "end" : "middle";
-        return `<text x="${x(v).toFixed(1)}" y="${tickY}" text-anchor="${anchor}" fill="var(--color-text-dim)"
-          font-size="8.5" ${mono}>${v * 100}%</text>`;
-      }).join("");
       const heads = `<text x="0" y="${headY}" fill="var(--color-text-dim)" font-size="8.5" ${mono}
           style="text-transform:uppercase;letter-spacing:0.06em">Bucket</text>
-        <text x="${labelW}" y="${headY}" fill="var(--color-text-dim)" font-size="8.5" ${mono}
-          style="text-transform:uppercase;letter-spacing:0.06em">Series</text>
         <text x="${W}" y="${headY}" text-anchor="end" fill="var(--color-text-dim)" font-size="8.5" ${mono}
           style="text-transform:uppercase;letter-spacing:0.06em">% of NAV</text>`;
       const rule = `<line x1="0" y1="${axisH - 4}" x2="${W}" y2="${axisH - 4}" stroke="var(--color-border)"/>`;
@@ -2021,25 +2010,43 @@ export function registerStaticViews(Alpine) {
           // three of four rows on a 97/3/0/0 recommendation were an empty band
           // and a number, which reads as missing data rather than as zero.
           const track = `<rect x="${barX}" y="${barY}" width="${barW}" height="${subH}" fill="var(--color-surface)"/>`;
-          const name = `<text x="${labelW}" y="${txtY.toFixed(1)}" fill="${s.txt}" font-size="8.5" ${mono}>${s.label}</text>`;
           if (v == null) {
-            return `${name}${track}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="var(--color-text-dim)" font-size="9" ${mono}>—</text>`;
+            return `${track}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="var(--color-text-dim)" font-size="9" ${mono}>—</text>`;
           }
           const w = Math.max(0, x(v) - barX);
           const rect = s.fill === "transparent"
             ? `<rect x="${barX}" y="${barY}" width="${w.toFixed(1)}" height="${subH}" fill="transparent" stroke="${s.stroke}"/>`
             : `<rect x="${barX}" y="${barY}" width="${w.toFixed(1)}" height="${subH}" fill="${s.fill}"${s.opacity ? ` fill-opacity="${s.opacity}"` : ""}/>`;
-          return `${name}${track}${rect}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="${s.txt}" font-size="9" ${mono}>${Math.round(v * 100)}%</text>`;
+          // The order the bars are stacked in IS the key's order, so the two can
+          // be read against each other without either being numbered.
+          return `${track}${rect}<text x="${W}" y="${txtY.toFixed(1)}" text-anchor="end" fill="${s.txt}" font-size="9" ${mono}>${Math.round(v * 100)}%</text>`;
         }).join("");
         return `<g>
           <text x="0" y="${(top + 11).toFixed(1)}" fill="var(--color-text)" font-size="10.5" ${mono}>${this.escapeHtml(b.name)}</text>
-          <line x1="${x(0.5).toFixed(1)}" x2="${x(0.5).toFixed(1)}" y1="${top + nameH - 3}" y2="${top + groupH}" stroke="var(--color-border)" stroke-dasharray="1 3"/>
           ${sub}
         </g>`;
       }).join("");
-      return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Bucket weights as a percentage of NAV: recommended${hasTarget ? " vs target" : ""}${hasActual ? " vs actual" : ""}">
-        ${heads}${ticks}${rule}${body}
+      // The accessible name states the comparison AND the bar order, since a
+      // screen reader gets the figure without the visual key beneath it.
+      const drawn = series.map((s) => s.label).join(", then ");
+      return `<svg viewBox="0 0 ${W} ${H}" role="img"
+        aria-label="Bucket weights as a percentage of NAV: recommended${hasTarget ? " vs target" : ""}${hasActual ? " vs actual" : ""}. Bars per bucket, in order: ${drawn}.">
+        ${heads}${rule}${body}
       </svg>`;
+    },
+    // The key for the bars above, rendered once under the figure rather than
+    // repeated on all four buckets. Order matches the stacking order inside each
+    // group, so a reader maps top-to-top without a numbered legend.
+    bucketBarsKey() {
+      const buckets = this.bucketWeights();
+      if (!buckets.length) return [];
+      return [
+        buckets.some((b) => b.target != null)
+          ? { key: "target", label: "target", hint: "the published framework weight" } : null,
+        buckets.some((b) => b.actual != null)
+          ? { key: "actual", label: "actual", hint: "where the book sits today" } : null,
+        { key: "recommended", label: "recommended", hint: "what the swarm proposes" },
+      ].filter(Boolean);
     },
     // The composite's trailing run. The two dashed rules are the regime
     // thresholds — 0.33 and 0.67 — and they used to be drawn unnamed, so the
