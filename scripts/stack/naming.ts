@@ -54,6 +54,10 @@ export const LOCAL_PROJECT_PREFIX = "rm_demo";
 export const PROJECT_LABEL = "robotmoney.demo.project";
 export const ENV_CLASS_LABEL = "robotmoney.env";
 export const ENV_HASH_LABEL = "robotmoney.env.hash";
+// Applied only to the Compose default network. Unlike Compose's own project
+// label, this is an explicit ownership assertion: the demo reaper may enumerate
+// the network without first finding one of its containers.
+export const MANAGED_NETWORK_LABEL = "robotmoney.demo.network";
 
 // The compose interpolation variable names the two env labels are threaded
 // through (scripts/stack/config.ts's buildComposeEnv sets both;

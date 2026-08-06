@@ -1,7 +1,7 @@
 // Seed invariants for the wallet-balance sampling schedule (issue #118): chain
 // reads happen ONLY on the schedule, so the baseline sampler must run every
 // minute and a cold-start job must fill the table within seconds of boot. Under
-// DEMO_MODE the cadence is deliberately HOURLY instead (per-IP quota
+// The demo CLI's explicit schedule step makes the cadence HOURLY instead (per-IP quota
 // protection — the standing demo and the self-hosted CI runner share one host
 // IP, and per-minute GeckoTerminal/Base-RPC sampling exhausts both quotas),
 // which is also proven here — as is the same treatment for the demo's
@@ -10,25 +10,23 @@
 // are idempotent, so re-invoking them here is safe and self-contained.
 import { afterEach, expect, test } from "bun:test";
 import { sql } from "../../src/db/client.ts";
-import { SCHEDULES, seed, seedJobSchedules } from "../../src/db/seed.ts";
+import { SCHEDULES, seed, seedDemoJobSchedules, seedJobSchedules } from "../../src/db/seed.ts";
 import { resolveSwarmSchedules } from "../../src/config.ts";
 import { tickScheduler } from "../../src/worker/scheduler.ts";
 
 // Every test in this file must leave the shared ephemeral Postgres on the
 // PRODUCTION baseline (later test files, e.g. tests/api/admin-surface.test.ts,
-// assert against it): clear the demo flag, drop any demo-only rows, and re-arm
-// the per-minute baseline the DEMO_MODE path disables.
+// assert against it): drop demo-only rows and re-arm the per-minute baseline.
 afterEach(async () => {
-  delete process.env.DEMO_MODE;
-  await sql`DELETE FROM job_schedules WHERE kind = 'wallet.sample_balances' AND cron <> '* * * * *'`;
-  await sql`UPDATE job_schedules SET enabled = true WHERE kind = 'wallet.sample_balances' AND cron = '* * * * *'`;
+  await sql`DELETE FROM job_schedules WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron <> '* * * * *'`;
+  await sql`UPDATE job_schedules SET enabled = true WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron = '* * * * *'`;
   // Demo-cadence + pre-#287 analytics rows: the production baseline keeps only
   // the two daily rows for these kinds.
   await sql`
     DELETE FROM job_schedules
      WHERE kind IN ('regime.classify', 'research.refresh')
        AND cron NOT IN ('30 22 * * *', '0 23 * * *')`;
-  // Issue #399: DEMO_MODE disables projects.recompute_coverage in place (no
+  // Issue #399: the demo schedule step disables projects.recompute_coverage in place (no
   // second demo-cadence row, unlike wallet.sample_balances above) — re-arm it
   // so later test files sharing this ephemeral Postgres see the production
   // baseline enabled.
@@ -36,25 +34,22 @@ afterEach(async () => {
 });
 
 test("cadence (#118): seed registers wallet.sample_balances at the every-minute cron '* * * * *'", async () => {
-  delete process.env.DEMO_MODE; // prod-shaped seed
   await seed(); // idempotent (ON CONFLICT DO NOTHING throughout)
   const rows = await sql<{ cron: string; enabled: boolean }[]>`
     SELECT cron, enabled FROM job_schedules WHERE kind = 'wallet.sample_balances'
   `;
   // On a fresh prod/CI DB only the every-minute schedule exists — and it is
   // ENABLED. (The hourly row + per-minute disable are demo-gated below; the
-  // prod seed stays byte-for-byte unchanged with DEMO_MODE unset.)
+  // prod seed stays byte-for-byte unchanged.)
   expect(rows).toHaveLength(1);
   expect(rows[0]!.cron).toBe("* * * * *");
   expect(rows[0]!.enabled).toBe(true);
 });
 
-test("demo cadence (quota protection): DEMO_MODE seeds an ENABLED hourly sampler and DISABLES the per-minute baseline", async () => {
-  delete process.env.DEMO_MODE;
+test("demo cadence: explicit step seeds an ENABLED hourly sampler and DISABLES the per-minute baseline", async () => {
   await seed(); // establish the production baseline first (fresh-boot shape)
-  process.env.DEMO_MODE = "1";
-  await seedJobSchedules(); // the demo migrate/seed one-shot re-runs this with the flag set
-  await seedJobSchedules(); // idempotent: a re-run (every boot) must not change the outcome
+  await seedDemoJobSchedules();
+  await seedDemoJobSchedules();
   const rows = await sql<{ cron: string; enabled: boolean }[]>`
     SELECT cron, enabled FROM job_schedules WHERE kind = 'wallet.sample_balances' ORDER BY cron
   `;
@@ -69,10 +64,9 @@ test("demo cadence (quota protection): DEMO_MODE seeds an ENABLED hourly sampler
 });
 
 test("demo cadence never re-enables an operator-disabled hourly row (seed stays ON CONFLICT DO NOTHING)", async () => {
-  process.env.DEMO_MODE = "1";
-  await seedJobSchedules();
+  await seedDemoJobSchedules();
   await sql`UPDATE job_schedules SET enabled = false WHERE kind = 'wallet.sample_balances' AND cron = '3 * * * *'`;
-  await seedJobSchedules(); // re-boot: must not flip the operator's disable back on
+  await seedDemoJobSchedules();
   const rows = await sql<{ enabled: boolean }[]>`
     SELECT enabled FROM job_schedules WHERE kind = 'wallet.sample_balances' AND cron = '3 * * * *'
   `;
@@ -80,8 +74,7 @@ test("demo cadence never re-enables an operator-disabled hourly row (seed stays 
   expect(rows[0]!.enabled).toBe(false);
 });
 
-test("without DEMO_MODE a later seed re-run leaves the baseline untouched (no hourly row, per-minute stays enabled)", async () => {
-  delete process.env.DEMO_MODE;
+test("a canonical seed re-run leaves the baseline untouched", async () => {
   await seedJobSchedules();
   const rows = await sql<{ cron: string; enabled: boolean }[]>`
     SELECT cron, enabled FROM job_schedules WHERE kind = 'wallet.sample_balances'
@@ -108,10 +101,10 @@ test("cold start (#118): seed enqueues exactly ONE immediate wallet.sample_balan
   expect(again[0]!.c).toBe(1);
 });
 
-test("cold start survives DEMO_MODE: the immediate enqueue is NOT demo-gated (the live-smoke gate needs live provenance within seconds)", async () => {
+test("cold start is independent of the demo schedule step", async () => {
   await sql`DELETE FROM jobs WHERE dedupe_key = 'wallet.sample_balances:coldstart'`;
-  process.env.DEMO_MODE = "1";
   await seed();
+  await seedDemoJobSchedules();
   const jobs = await sql<{ c: number }[]>`
     SELECT count(*)::int AS c FROM jobs WHERE dedupe_key = 'wallet.sample_balances:coldstart'
   `;
@@ -145,8 +138,7 @@ const analyticsRows = async (): Promise<ScheduleRow[]> =>
   );
 
 test("demo analytics cadence (#287): legacy consumer schedules remain disabled for the independent producer", async () => {
-  process.env.DEMO_MODE = "1";
-  await seedJobSchedules();
+  await seedDemoJobSchedules();
   const byKey = Object.fromEntries((await analyticsRows()).map((r) => [`${r.kind}|${r.cron}`, r.enabled]));
   // Rows remain for migration compatibility, but the independent producer
   // owns the cadence and shared consumers must never claim these jobs.
@@ -157,7 +149,6 @@ test("demo analytics cadence (#287): legacy consumer schedules remain disabled f
 });
 
 test("demo analytics cadence (#287): seeding over pre-existing */2 rows leaves them DISABLED, and a re-run is a no-op", async () => {
-  delete process.env.DEMO_MODE;
   await seedJobSchedules(); // production baseline first
   // An already-deployed demo, seeded before #287: both ~2-minute rows present
   // and ENABLED (edgar-seed-bootstrap flips research.refresh on in practice).
@@ -166,8 +157,7 @@ test("demo analytics cadence (#287): seeding over pre-existing */2 rows leaves t
     VALUES ('regime.classify', '*/2 * * * *', true),
            ('research.refresh', '1-59/2 * * * *', true)`;
 
-  process.env.DEMO_MODE = "1";
-  await seedJobSchedules(); // the demo's migrate/seed one-shot re-runs with the flag set
+  await seedDemoJobSchedules();
   const after = await analyticsRows();
   const byKey = Object.fromEntries(after.map((r) => [`${r.kind}|${r.cron}`, r.enabled]));
   // The conflict key is (kind, cron), so the hourly rows only COEXIST with the
@@ -177,15 +167,14 @@ test("demo analytics cadence (#287): seeding over pre-existing */2 rows leaves t
   expect(byKey["regime.classify|7 * * * *"]).toBe(false);
   expect(byKey["research.refresh|37 * * * *"]).toBe(false);
 
-  await seedJobSchedules(); // every boot re-runs it: idempotent (`AND enabled` guard)
+  await seedDemoJobSchedules();
   expect(await analyticsRows()).toEqual(after);
 });
 
 test("demo analytics cadence (#287): the disable is one-directional — an operator-disabled hourly row is never re-enabled", async () => {
-  process.env.DEMO_MODE = "1";
-  await seedJobSchedules();
+  await seedDemoJobSchedules();
   await sql`UPDATE job_schedules SET enabled = false WHERE kind = 'regime.classify' AND cron = '7 * * * *'`;
-  await seedJobSchedules(); // re-boot must not flip the operator's disable back on
+  await seedDemoJobSchedules();
   const rows = await sql<{ enabled: boolean }[]>`
     SELECT enabled FROM job_schedules WHERE kind = 'regime.classify' AND cron = '7 * * * *'`;
   expect(rows).toHaveLength(1);
@@ -209,49 +198,43 @@ const recomputeCoverageRow = async (): Promise<{ enabled: boolean } | undefined>
     `
   )[0];
 
-test("demo guard (#399): DEMO_MODE disables the canonical projects.recompute_coverage schedule on a fresh seed", async () => {
-  delete process.env.DEMO_MODE;
+test("demo guard (#399): explicit step disables projects.recompute_coverage on a fresh seed", async () => {
   await sql`DELETE FROM job_schedules WHERE kind = 'projects.recompute_coverage'`;
-  process.env.DEMO_MODE = "1";
-  await seedJobSchedules(); // fresh insert (ON CONFLICT DO NOTHING) then the demo-gated disable
+  await seedJobSchedules();
+  await seedDemoJobSchedules();
   const row = await recomputeCoverageRow();
   expect(row?.enabled).toBe(false);
 });
 
 test("demo guard (#399): re-seeding an EXISTING demo database disables a row left enabled by an older deployment (upgrade case)", async () => {
-  delete process.env.DEMO_MODE;
   await seedJobSchedules(); // production baseline: row exists and enabled
   const before = await recomputeCoverageRow();
   expect(before?.enabled).toBe(true);
 
-  process.env.DEMO_MODE = "1";
-  await seedJobSchedules(); // simulates re-running seed against a pre-existing demo DB
+  await seedDemoJobSchedules();
   const after = await recomputeCoverageRow();
   expect(after?.enabled).toBe(false);
 
-  await seedJobSchedules(); // idempotent: a later boot must not change the outcome
+  await seedDemoJobSchedules();
   expect((await recomputeCoverageRow())?.enabled).toBe(false);
 });
 
 test("demo guard (#399): idempotent — an operator-disabled row stays disabled across repeated seed runs", async () => {
-  process.env.DEMO_MODE = "1";
-  await seedJobSchedules();
+  await seedDemoJobSchedules();
   expect((await recomputeCoverageRow())?.enabled).toBe(false);
-  await seedJobSchedules(); // every boot re-runs this; the `AND enabled` guard makes it a no-op
-  await seedJobSchedules();
+  await seedDemoJobSchedules();
+  await seedDemoJobSchedules();
   expect((await recomputeCoverageRow())?.enabled).toBe(false);
 });
 
-test("demo guard (#399): with DEMO_MODE unset the production schedule remains enabled and unchanged", async () => {
-  delete process.env.DEMO_MODE;
+test("demo guard (#399): canonical production schedule remains enabled", async () => {
   await seedJobSchedules();
   const row = await recomputeCoverageRow();
   expect(row?.enabled).toBe(true);
 });
 
 test("demo guard (#399): a disabled schedule is never picked up by the scheduler (tickScheduler filters WHERE enabled)", async () => {
-  process.env.DEMO_MODE = "1";
-  await seedJobSchedules();
+  await seedDemoJobSchedules();
   expect((await recomputeCoverageRow())?.enabled).toBe(false);
   await sql`UPDATE job_schedules SET next_run_at = now() - interval '1 day' WHERE kind = 'projects.recompute_coverage'`;
   await tickScheduler();
@@ -261,8 +244,7 @@ test("demo guard (#399): a disabled schedule is never picked up by the scheduler
   expect(jobs[0]!.c).toBe(0); // disabled row is never enqueued, so the handler never fires and demo scores stay untouched
 });
 
-test("without DEMO_MODE the seeded row set is byte-for-byte SCHEDULES (+ the env-configured swarm rows) — no demo cadence leaks into prod/CI", async () => {
-  delete process.env.DEMO_MODE;
+test("canonical seeded row set is byte-for-byte SCHEDULES plus swarm rows", async () => {
   await sql`DELETE FROM job_schedules`; // re-seeded immediately below (fresh-boot shape)
   await seedJobSchedules();
   const rows = plain(await sql<ScheduleRow[]>`SELECT kind, cron, enabled FROM job_schedules`);

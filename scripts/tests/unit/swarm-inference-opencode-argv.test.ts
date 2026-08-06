@@ -350,7 +350,7 @@ test("pre-stream timeout preserves partial diagnostics and reports that no prima
   const bin = join(dir, "opencode-hang");
   await writeFile(bin, `#!/usr/bin/env node
 process.on("SIGTERM", () => {});
-console.error("opencode booted api_key=sk-planted-secret-123456789 prompt=" + process.argv[3]);
+console.error("opencode booted api_key=sk-planted-secret-123456789 prompt=" + process.argv.at(-1));
 console.log(JSON.stringify({type:"step_start",part:{type:"step-start"}}));
 setInterval(() => {}, 60_000);
 `);

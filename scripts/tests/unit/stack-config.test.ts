@@ -14,7 +14,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   assertFullStackProducerCredential,
+  buildArgs,
   buildComposeEnv,
+  buildServicesFor,
   buildSpawnEnv,
   composeArgs,
   CORE_SERVICES,
@@ -27,6 +29,7 @@ import {
   hostBackendUrl,
   internalDatabaseUrl,
   migrateArgs,
+  MEMBER_AGENT_SERVICE,
   pgReadyArgs,
   servicesFor,
   upArgs,
@@ -63,6 +66,19 @@ describe("stack profiles", () => {
   test("full is core plus worker lanes and the independent producer, in order", () => {
     expect(servicesFor("full")).toEqual([...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES]);
     expect(servicesFor("full")).not.toContain("member-agent");
+  });
+
+  test("full prebuilds the profile-gated member-agent image exactly once without starting it", () => {
+    const buildServices = buildServicesFor("full");
+    expect(buildServices).toEqual([...servicesFor("full"), MEMBER_AGENT_SERVICE]);
+    expect(buildServices.filter((service) => service === MEMBER_AGENT_SERVICE)).toHaveLength(1);
+    expect(buildArgs(buildServices)).toEqual(["build", ...servicesFor("full"), MEMBER_AGENT_SERVICE]);
+    expect(servicesFor("full")).not.toContain(MEMBER_AGENT_SERVICE);
+  });
+
+  test("core retains its existing image plan; eval opts into member-agent explicitly", () => {
+    expect(buildServicesFor("core")).toEqual(servicesFor("core"));
+    expect(buildServicesFor("core")).not.toContain(MEMBER_AGENT_SERVICE);
   });
 });
 
@@ -204,11 +220,10 @@ describe("argv builders", () => {
   });
 
   test("migrateArgs renders each -e pair in order and still ends in the migrate command", () => {
-    expect(migrateArgs({ DEMO_MODE: "1", DEMO_SEED_PROJECTS: "1" })).toEqual([
+    expect(migrateArgs({ DEMO_SEED_PROJECTS: "1" }, ["--seed-demo-schedules"])).toEqual([
       "run", "--rm", "--no-deps", "-T",
-      "-e", "DEMO_MODE=1",
       "-e", "DEMO_SEED_PROJECTS=1",
-      "api", "bun", "run", "src/db/migrate.ts",
+      "api", "bun", "run", "src/db/migrate.ts", "--seed-demo-schedules",
     ]);
     expect(migrateArgs()).toEqual(["run", "--rm", "--no-deps", "-T", "api", "bun", "run", "src/db/migrate.ts"]);
   });

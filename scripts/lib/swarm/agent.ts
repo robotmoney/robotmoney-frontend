@@ -45,6 +45,8 @@ import {
 import { DEFAULT_API_URL_INTERNAL, resolveModelConfig } from "../onboarding-eval.ts";
 import { DEFAULT_COMPOSE_FILES } from "../../stack/config.ts";
 import { createSwarmSessionArtifactWriter } from "./telemetry.ts";
+import { opencodeTimeoutEnv } from "../opencode-env.ts";
+import { resolveOpenCodeTimeoutMs } from "../../agent/opencode-run.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(scriptDir, "..", "..", "..");
@@ -198,12 +200,12 @@ function lastClientRecord(tag: "RM_STAGE" | "RM_RESULT" | "RM_ENROLL" | "RM_TELE
 }
 
 // Generous but bounded per-container ceilings. The participate run contains
-// one real model call (itself bounded by OPENCODE_TIMEOUT_MS, default 120s in
-// scripts/lib/swarm/inference.ts) plus container start/stop and a handful
+// one real model call (itself bounded by the shared OpenCode timeout resolver)
+// plus container start/stop and a handful
 // of REST calls; enroll does no inference at all.
 const ENROLL_TIMEOUT_MS = 180_000;
-function participateTimeoutMs(): number {
-  return Number(process.env.OPENCODE_TIMEOUT_MS ?? 120_000) + 180_000;
+export function participateTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+  return resolveOpenCodeTimeoutMs(env) + 180_000;
 }
 
 interface MemberRunOpts {
@@ -399,7 +401,12 @@ export async function runAgent(rail: SessionRail, o: AgentOpts, onProgress?: Age
       RM_SESSION_DATE: o.date,
       RM_SUBJECT_ID: o.subjectId,
       RM_SESSION_ID: String(o.sessionId),
-      ...(process.env.OPENCODE_TIMEOUT_MS ? { OPENCODE_TIMEOUT_MS: process.env.OPENCODE_TIMEOUT_MS } : {}),
+      // SET → the exact value reaches the participating container; UNSET → the
+      // key is omitted rather than serialized empty (an empty string would
+      // resolve to Number("") === 0, i.e. an instant inference timeout).
+      // scripts/lib/opencode-env.ts owns that runtime-wide decision; its unit
+      // test executes both the blank and configured cases.
+      ...opencodeTimeoutEnv(),
     },
     ownerEnv: {
       ...(freshToken ? { RM_MEMBER_TOKEN: freshToken } : {}),

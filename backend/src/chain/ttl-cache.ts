@@ -8,8 +8,7 @@
 //   if (cache && now - cache.at < CACHE_TTL_MS) return cache.value;
 // pattern, with a matching per-module `_reset<Module>CacheForTests` hook.
 // token-prices.ts hand-copies a keyed variant of the same pattern (one entry
-// per token address) with a DEMO_MODE-aware TTL that is a runtime decision,
-// not a constant.
+// per token address) with a capability-configured TTL resolver.
 //
 // TtlCache<K, V> is the low-level keyed primitive both shapes are built from.
 // ttlCached() wraps a zero/-arg-ish async producer function in a single-slot
@@ -22,9 +21,7 @@ export interface TtlCacheEntry<V> {
   value: V;
 }
 
-/** A TTL may be a fixed number of ms, or a function resolved on every
- * get/set — token-prices.ts needs its window to track process.env.DEMO_MODE
- * at call time, not at module load. */
+/** A TTL may be a fixed number of ms, or a function resolved on every get/set. */
 export type TtlMs = number | (() => number);
 
 function resolveTtlMs(ttlMs: TtlMs): number {

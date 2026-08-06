@@ -29,9 +29,7 @@
 // analytics worker and with it the gate. The AC2 test reproduces the boot
 // condition hermetically: same job row, processed through the REAL queue
 // machinery (worker/loop.ts processOneJob on LANES.analytics) with the price
-// feed persistently 429ing, under the demo stack's own DEMO_MODE=1 env
-// (fetch-cache on, isolated to a fresh empty FETCH_CACHE_DIR so no on-disk
-// entry can mask the 429s). The job must settle 'succeeded' — the worker loop
+// feed persistently 429ing. The job must settle 'succeeded' — the worker loop
 // survives, nothing throws — with the degraded 'stale' rows persisted and the
 // request-path wallet endpoint still serving. Stubbing the 429s (rather than
 // hitting real GeckoTerminal) is deliberate: deterministic, and it does not
@@ -40,9 +38,6 @@
 // Postgres is REQUIRED and provisioned by tests/preload.ts, which FAILS LOUDLY
 // when Docker/Postgres is absent — never a silent skip (test-coverage policy).
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
 import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } from "../src/chain/base-rpc-client.ts";
 import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../src/chain/wallet-balances.ts";
@@ -60,8 +55,6 @@ const ENV_KEYS = [
   "PRICE_SOURCE",
   "GECKO_PRICE_MAX_RETRIES",
   "GECKO_PRICE_RETRY_BASE_MS",
-  "DEMO_MODE",
-  "FETCH_CACHE_DIR",
 ] as const;
 
 // The bounded budget under test: 2 retries → exactly 3 upstream attempts for
@@ -184,11 +177,6 @@ test("persistent GeckoTerminal 429s exhaust the REAL bounded retry budget and th
 
 // ── AC2: demo-readiness gate reaches ready under persistent 429s ────────────
 test("demo-readiness gate reaches ready under persistent 429s: the boot's cold-start wallet.sample_balances job settles 'succeeded' on the analytics lane (worker survives) and the request-path wallet endpoint keeps serving", async () => {
-  // Mirror the demo stack's env: DEMO_MODE=1 exactly as docker-compose.demo.yml
-  // pins it, with the on-disk fetch-cache isolated to a fresh empty dir so a
-  // previously cached success can never mask the 429s.
-  process.env.DEMO_MODE = "1";
-  process.env.FETCH_CACHE_DIR = mkdtempSync(join(tmpdir(), "rm-429-fetch-cache-"));
   await seedYesterdayWethSample();
 
   // The exact cold-start job db/seed.ts enqueues during the gate's

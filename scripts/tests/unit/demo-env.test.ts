@@ -15,6 +15,7 @@
 //     always win.
 import { describe, expect, test } from "bun:test";
 import { resolveDemoEnv } from "../../demo.ts";
+import { NORMAL_DEMO_CACHE_TTL_MS } from "../../lib/demo-env.ts";
 
 describe("resolveDemoEnv — always the live path (production parity)", () => {
   test("with no env set, resolves the live data path", () => {
@@ -29,6 +30,8 @@ describe("resolveDemoEnv — always the live path (production parity)", () => {
     expect(r.composeEnv.BASE_RPC_SOURCE).toBe("live");
     expect(r.composeEnv.ANALYTICS_SOURCE).toBe("live");
     expect(r.composeEnv.ANALYTICS_FLOOR_SEED).toBe("1");
+    expect(r.composeEnv.HTTP_FETCH_CACHE_TTL_MS).toBe(String(NORMAL_DEMO_CACHE_TTL_MS));
+    expect(r.composeEnv.TOKEN_PRICE_CACHE_TTL_MS).toBe(String(NORMAL_DEMO_CACHE_TTL_MS));
   });
 
   test("CI=true resolves the exact same live path — there is no hermetic mode to opt into", () => {
@@ -36,6 +39,12 @@ describe("resolveDemoEnv — always the live path (production parity)", () => {
     expect(r.baseRpcUrl).toBeUndefined();
     expect(r.analyticsSource).toBe("live");
     expect(r.baseRpcSource).toBe("live");
+  });
+
+  test("both scenarios share the same capability-specific demo cache policy", () => {
+    const r = resolveDemoEnv({});
+    expect(r.composeEnv.HTTP_FETCH_CACHE_TTL_MS).toBe(String(NORMAL_DEMO_CACHE_TTL_MS));
+    expect(r.composeEnv.TOKEN_PRICE_CACHE_TTL_MS).toBe(String(NORMAL_DEMO_CACHE_TTL_MS));
   });
 
   test("empty-string knobs behave as unset (compose interpolation yields empty strings)", () => {

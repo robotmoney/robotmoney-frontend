@@ -28,7 +28,7 @@ import {
 // `core` is postgres + api: everything apply/approve/claim needs (Postgres CRUD
 // plus signature verification), and nothing else. `full` adds the three worker
 // execution lanes that the standing demo drives. The member-agent service is
-// deliberately in NEITHER list: it is compose-profile gated
+// deliberately in NEITHER *running* list: it is compose-profile gated
 // (docker-compose.demo.yml `profiles: ["member-agent"]`) and is only ever
 // started one-shot via `docker compose run`.
 export type StackProfile = "core" | "full";
@@ -37,6 +37,7 @@ export const CORE_SERVICES = ["postgres", "api"] as const;
 export const WORKER_LANE_SERVICES = ["worker-swarm", "worker-analytics", "worker-research"] as const;
 export const PRODUCER_SERVICES = ["analytics-producer"] as const;
 export const FULL_SERVICES = [...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES] as const;
+export const MEMBER_AGENT_SERVICE = "member-agent" as const;
 
 // Services are always named EXPLICITLY (never a bare `docker compose up -d`),
 // so a compose service added in the future can never leak into `core`.
@@ -49,6 +50,22 @@ export const FULL_SERVICES = [...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PROD
 export function servicesFor(profile: StackProfile, opts: { externalPostgres?: boolean } = {}): string[] {
   const all = profile === "core" ? [...CORE_SERVICES] : [...FULL_SERVICES];
   return opts.externalPostgres ? all.filter((s) => s !== "postgres") : all;
+}
+
+/**
+ * Images a stack must finish building before it is ready for its consumers.
+ *
+ * A full stack drives swarm sessions, whose members launch concurrently as
+ * one-shot `member-agent` containers. The service is profile-gated so it must
+ * not appear in `servicesFor("full")`, but its image is still a runtime
+ * prerequisite. Including it once in the shared build plan prevents multiple
+ * concurrent `docker compose run` calls from racing an implicit cold build.
+ * Core stacks retain their existing build plan; onboarding/eval explicitly
+ * builds the member-agent image when that rail is requested.
+ */
+export function buildServicesFor(profile: StackProfile, opts: { externalPostgres?: boolean } = {}): string[] {
+  const running = servicesFor(profile, opts);
+  return profile === "full" ? [...running, MEMBER_AGENT_SERVICE] : running;
 }
 
 // The compose file list every consumer of this module defaults to. The demo
@@ -266,7 +283,7 @@ export function upArgs(services: string[]): string[] {
 // `--no-deps` is safe (and correct) because up() waits for postgres to be ready
 // BEFORE migrating; if that ordering is ever rearranged, migrate fails loudly
 // with a connection error instead of implicitly starting postgres.
-export function migrateArgs(extraEnv: Record<string, string> = {}): string[] {
+export function migrateArgs(extraEnv: Record<string, string> = {}, scriptArgs: string[] = []): string[] {
   return [
     "run",
     "--rm",
@@ -277,6 +294,7 @@ export function migrateArgs(extraEnv: Record<string, string> = {}): string[] {
     "bun",
     "run",
     "src/db/migrate.ts",
+    ...scriptArgs,
   ];
 }
 

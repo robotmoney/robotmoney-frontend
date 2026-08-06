@@ -1,8 +1,9 @@
 // Swarm-member take authorship via a REAL language-model call. This module
 // shells out to
 //
-//   opencode run "<persona + regime/subject brief>" \
-//     --model <resolved> --format json --auto
+//   opencode run --model <resolved> --format json --auto \
+//     --title <deterministic> --print-logs --log-level DEBUG \
+//     "<persona + regime/subject brief>"
 //
 // parses the NDJSON transcript for the final assistant message text, and returns
 // REGIME / ALLOCATION / SUBJECT prose ending in a parseable
@@ -34,10 +35,15 @@ import {
   classifyInferenceFailure,
   InferenceFailure,
   inferenceFailureAction,
-  providerOf,
   renderInferenceDiagnostic,
 } from "../../agent/inference-failure.ts";
-import { DEFAULT_AGENT_MODEL, resolveAgentModel } from "../model-registry.ts";
+import {
+  buildOpenCodeRunArgs,
+  buildOpenCodeSpawnEnv,
+  resolveOpenCodeRun,
+  type ResolvedOpenCodeRun,
+} from "../../agent/opencode-run.ts";
+import { DEFAULT_AGENT_MODEL } from "../model-registry.ts";
 import { ZEN_KEY_ENV, zenApiKey } from "../opencode-key.ts";
 import { redactTelemetryText } from "../onboarding-telemetry.ts";
 // Regime inputs passed to each live author. This used to live beside the retired
@@ -56,19 +62,13 @@ export interface RegimeContext {
 }
 
 export const DEFAULT_INFERENCE_MODEL = DEFAULT_AGENT_MODEL;
-// Resolved at call time (not module load) so an env override / test toggle
-// takes effect.
-const inferenceModel = () => resolveAgentModel();
-// The opencode binary name/path. Resolved at call time so a unit test can point
-// it at a nonexistent path to prove the loud-throw contract without a live call.
-const opencodeBin = () => process.env.OPENCODE_BIN ?? "opencode";
-// Hard ceiling on a single opencode-zen call (default 120s). A model can hang
-// indefinitely; without a bound, one stalled member call would block the whole
-// swarm session forever. Resolved at call time (not
-// module load) so the nightly job / an operator / a unit test can override via
-// OPENCODE_TIMEOUT_MS without a code change. On expiry we kill the subprocess and
-// throw loudly — still NO template fallback.
-const timeoutMs = () => Number(process.env.OPENCODE_TIMEOUT_MS ?? 120000);
+
+/** Scenario-neutral OpenCode runtime used by every swarm take. */
+export function resolveInferenceOpenCodeRun(
+  env: Record<string, string | undefined> = process.env,
+): ResolvedOpenCodeRun {
+  return resolveOpenCodeRun({ env, titleScope: "robotmoney-swarm" });
+}
 
 export type InferenceTelemetryMilestone =
   | "cli_spawn_requested"
@@ -251,18 +251,7 @@ export function promptFor(p: Persona, regime: RegimeContext, subjectId: string):
 //     secret that may reach the model subprocess.
 //
 // Pure and exported so the unit suite can pin the allowlist hermetically.
-export function opencodeSpawnEnv(
-  hostEnv: Record<string, string | undefined> = process.env,
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const k of ["PATH", "HOME", "TERM"]) {
-    const v = hostEnv[k];
-    if (v !== undefined) out[k] = v;
-  }
-  const key = hostEnv[ZEN_KEY_ENV];
-  if (key) out[ZEN_KEY_ENV] = key;
-  return out;
-}
+export { buildOpenCodeSpawnEnv as opencodeSpawnEnv } from "../../agent/opencode-run.ts";
 
 // What we actually know about the model credential. This used to print
 // "funded" whenever OPENCODE_API_KEY was merely SET — a claim the key cannot
@@ -302,7 +291,13 @@ export function emptyTranscriptCause(stdout: string, stderr: string): string {
 
 // The loud throw for a run that produced no assistant text, carrying the kind,
 // the provider and the resolved model id alongside the rendered diagnosis.
-function emptyTranscriptFailure(stdout: string, stderr: string, model: string, exitCode: number): InferenceFailure {
+function emptyTranscriptFailure(
+  stdout: string,
+  stderr: string,
+  model: string,
+  provider: string,
+  exitCode: number,
+): InferenceFailure {
   const errors = transcriptErrors(stdout, [zenApiKey() ?? ""]);
   const classification = classifyInferenceFailure(errors, stderr);
   return new InferenceFailure(
@@ -311,7 +306,7 @@ function emptyTranscriptFailure(stdout: string, stderr: string, model: string, e
       renderInferenceDiagnostic(classification, errors, stderr),
     {
       kind: classification.kind,
-      provider: providerOf(model),
+      provider,
       model,
       providerType: classification.error?.providerType ?? "",
       statusCode: classification.error?.statusCode ?? null,
@@ -320,9 +315,9 @@ function emptyTranscriptFailure(stdout: string, stderr: string, model: string, e
   );
 }
 
-// Run the opencode CLI on a prompt and return the concatenated final
-// assistant text. Throws loudly (no template fallback) when the binary cannot be
-// spawned (opencode unavailable) or the run yields no assistant text.
+// Run the opencode CLI on a prompt and return the concatenated final assistant
+// text plus the model resolved for that same run. Throws loudly (no template
+// fallback) when the binary cannot be spawned or the run yields no text.
 const DIAGNOSTIC_TAIL_BYTES = 12_000;
 const TERMINATE_GRACE_MS = 500;
 const KILL_GRACE_MS = 1_000;
@@ -341,11 +336,12 @@ function boundedTail(value: string, prompt: string): string {
   return redacted.slice(-DIAGNOSTIC_TAIL_BYTES);
 }
 
-async function runOpencode(prompt: string, options: AuthorTakeOptions = {}): Promise<string> {
-  const bin = opencodeBin();
-  const model = inferenceModel();
-  const ms = timeoutMs();
-  const provider = providerOf(model);
+async function runOpencode(
+  prompt: string,
+  options: AuthorTakeOptions = {},
+): Promise<{ text: string; model: string }> {
+  const run = resolveInferenceOpenCodeRun();
+  const { executable: bin, model, timeoutMs: ms, provider } = run;
   let primaryStreamObserved = false;
   const emit = (milestone: InferenceTelemetryMilestone, detail?: string) => options.telemetry?.({
     version: 1,
@@ -357,28 +353,9 @@ async function runOpencode(prompt: string, options: AuthorTakeOptions = {}): Pro
     primaryStreamObserved,
     ...(detail ? { detail: redactTelemetryText(detail, inferenceRedactions(prompt)) } : {}),
   });
-  const title = `robotmoney-swarm-${model.replace(/[^a-zA-Z0-9_.-]/g, "-")}`;
-  const argv = [
-    bin,
-    "run",
-    prompt,
-    "--model",
-    model,
-    "--format",
-    "json",
-    "--auto",
-    // Supplying a value prevents OpenCode from launching its auxiliary
-    // gpt-5.4-nano title agent. The title is diagnostic metadata, not model
-    // authored content, so it must be deterministic.
-    "--title",
-    title,
-    // Verified against the pinned OpenCode 1.18.1 `run --help`. These logs are
-    // captured incrementally and redacted below; they are essential for
-    // locating a pre-stream stall inside OpenCode.
-    "--print-logs",
-    "--log-level",
-    "DEBUG",
-  ];
+  // The prompt enters only the final execution argv; it is absent from the
+  // resolved runtime metadata used by telemetry/artifacts.
+  const argv = [bin, ...buildOpenCodeRunArgs(run, prompt)];
   let proc: ReturnType<typeof Bun.spawn>;
   emit("inference_requested", `provider=${provider} model=${model} timeoutMs=${ms}`);
   emit("cli_spawn_requested", `binary=${bin}`);
@@ -391,7 +368,7 @@ async function runOpencode(prompt: string, options: AuthorTakeOptions = {}): Pro
       // member-model subprocess the stack's whole admin credential set
       // (ADMIN_TOKEN, ANALYTICS_TOKEN, …). OpenCode state stays in this
       // member container's isolated, persistent HOME.
-      { stdout: "pipe", stderr: "pipe", env: opencodeSpawnEnv(process.env) },
+      { stdout: "pipe", stderr: "pipe", env: buildOpenCodeSpawnEnv(process.env) },
     );
   } catch (err) {
     throw new Error(
@@ -555,11 +532,12 @@ async function runOpencode(prompt: string, options: AuthorTakeOptions = {}): Pro
       redactTelemetryText(stdout, diagnosticRedactions),
       redactTelemetryText(stderr, diagnosticRedactions),
       model,
+      provider,
       exitCode!,
     );
   }
   emit("completion", `assistantTextParts=${assistantTextParts(stdout).length}`);
-  return text;
+  return { text, model };
 }
 
 export interface AuthoredTake extends ParsedTake {
@@ -576,7 +554,7 @@ export async function authorTake(
   subjectId: string,
   options: AuthorTakeOptions = {},
 ): Promise<AuthoredTake> {
-  const text = await runOpencode(promptFor(p, regime, subjectId), options);
-  const parsed = parseStanceFromBody(text);
-  return { ...parsed, model: inferenceModel() };
+  const authored = await runOpencode(promptFor(p, regime, subjectId), options);
+  const parsed = parseStanceFromBody(authored.text);
+  return { ...parsed, model: authored.model };
 }

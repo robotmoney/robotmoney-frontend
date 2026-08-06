@@ -190,11 +190,21 @@ async function runEdgarSeedStep(): Promise<StepResult> {
 
 // ── Fixed step list ──────────────────────────────────────────────────────────
 
-const steps: Step[] = [
-  { name: "migrations", run: runMigrationsStep },
+const initializationSteps: Step[] = [
   { name: "v0-seed:bootstrap", run: runV0SeedStep },
   { name: "edgar-seed:bootstrap", run: runEdgarSeedStep },
 ];
+
+export interface ProdBootstrapOptions {
+  /** The caller already ran migrate() in its stack lifecycle. */
+  alreadyMigrated?: boolean;
+}
+
+function stepsFor(options: ProdBootstrapOptions): Step[] {
+  return options.alreadyMigrated
+    ? [...initializationSteps]
+    : [{ name: "migrations", run: runMigrationsStep }, ...initializationSteps];
+}
 
 // ── Status rendering (plain ANSI, no new dependency) ────────────────────────
 
@@ -291,9 +301,10 @@ function printSummaryTable(reports: StepReport[]): void {
 // no fail-fast) and returns each one's structured report. No process.exitCode
 // side effect, so a caller (test or CLI) decides what to do with the outcome
 // — same separation as v0-seed-bootstrap.ts's runV0SeedBootstrap()/main().
-export async function runProdBootstrap(): Promise<StepReport[]> {
+export async function runProdBootstrap(options: ProdBootstrapOptions = {}): Promise<StepReport[]> {
   console.log("robotmoney prod-bootstrap — one-time production data pipelines\n");
 
+  const steps = stepsFor(options);
   const reports: StepReport[] = [];
   for (let i = 0; i < steps.length; i++) {
     reports.push(await runStepWithStatus(steps[i]!, i + 1, steps.length));
@@ -303,8 +314,17 @@ export async function runProdBootstrap(): Promise<StepReport[]> {
   return reports;
 }
 
+/** Archive/EDGAR initialization for a Stack.up() that already migrated once. */
+export async function runAlreadyMigratedProdInitialization(): Promise<StepReport[]> {
+  return runProdBootstrap({ alreadyMigrated: true });
+}
+
 export async function main(): Promise<void> {
-  const reports = await runProdBootstrap();
+  const known = new Set(["--already-migrated"]);
+  const args = process.argv.slice(2);
+  const unknown = args.filter((arg) => !known.has(arg));
+  if (unknown.length > 0) throw new Error(`prod-bootstrap: unknown argument(s): ${unknown.join(", ")}`);
+  const reports = await runProdBootstrap({ alreadyMigrated: args.includes("--already-migrated") });
   if (reports.some((r) => r.failing)) {
     process.exitCode = 1;
   }

@@ -53,8 +53,8 @@ ingress:
 # WHAT IS BEHIND THIS HOSTNAME IS A DEMO STACK, NOT A PROD STACK. The pinned
 # boot runs docker-compose.demo.yml, which pins RM_ALLOW_INSECURE=1 (privileged
 # admin / onboarding / analytics endpoints answer with NO token — .env.example
-# says of that flag: "NEVER on a reachable box"), pins DEMO_MODE=1 (1h provider
-# cache TTLs), and leaves PROJECTS_SOURCE unset, so /projects serves the
+# says of that flag: "NEVER on a reachable box"), applies quota-safe schedules
+# and one-hour capability cache TTLs explicitly, and leaves PROJECTS_SOURCE unset, so /projects serves the
 # vendored offline FIXTURE directory rather than live provider data. A real
 # production deployment is docker-compose.yml with RM_ENV=prod, an explicit
 # ADMIN_TOKEN + ANALYTICS_TOKEN, PROJECTS_SOURCE=live, and a managed

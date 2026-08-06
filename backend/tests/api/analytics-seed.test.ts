@@ -85,8 +85,7 @@ afterEach(async () => {
   config.allowInsecure = origAllowInsecure;
   await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
   await sql`DELETE FROM job_schedules WHERE kind = 'research.refresh'`;
-  // #287: leave no demo flag or cold-start job behind for later test files.
-  delete process.env.DEMO_MODE;
+  // #287: leave no cold-start job behind for later test files.
   await sql`DELETE FROM jobs WHERE dedupe_key = 'research.refresh:coldstart'`;
 });
 
@@ -168,8 +167,6 @@ test("authenticated research-eligibility fails closed without enabling schedules
       ('research.refresh', '1-59/2 * * * *', false)`;
   const [before] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM jobs WHERE kind = 'research.refresh'`;
-  process.env.DEMO_MODE = "1";
-
   const res = await postResearchEligibility(TOKEN);
   expect(res.status).toBe(409);
   expect(await res.json()).toEqual({

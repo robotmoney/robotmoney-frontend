@@ -72,7 +72,21 @@ x-worker-env: &worker-env
   WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
   RM_ENV: ${RM_ENV:-demo}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
-  OPENCODE_TIMEOUT_MS: ${OPENCODE_TIMEOUT_MS:-}
+  # Capability-specific cache controls. Blank/unset is intentionally passed
+  # through: backend parsing treats it as absent, preserving the production
+  # defaults (HTTP cache off; token-price cache 30s).
+  HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+  TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
+  # Optional per-call inference bound (issue #537), read by
+  # scripts/lib/swarm/inference.ts's timeoutMs(). Declared with a NULL value —
+  # not `${OPENCODE_TIMEOUT_MS:-}` — deliberately: the `:-` form resolves to the
+  # EMPTY STRING when the knob is unset, and an empty string is not "unset" to
+  # `Number(process.env.OPENCODE_TIMEOUT_MS ?? 120000)` — it is 0, i.e. an
+  # instant timeout on every model call. The null form passes the host value
+  # through when it exists and OMITS the variable entirely when it does not, so
+  # the committed default stays in force. Asserted both ways in
+  # scripts/tests/integration/demo-compose-config.test.ts.
+  OPENCODE_TIMEOUT_MS:
   # Activation notifications are persisted by the API and delivered by the
   # reserved swarm worker through the deployment's HTTP mail adapter.
   SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-swarm-demo@robotmoney.invalid}
@@ -129,6 +143,9 @@ services:
       # REQUIRES PROJECTS_SOURCE=live — the projects pipelines throw rather
       # than serve fixture data as production. See .env.example.
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
+      # Optional capability TTLs. Blank/unset preserves backend defaults.
+      HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+      TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
       SWARM_NOTIFICATION_EMAIL_FROM: ${SWARM_NOTIFICATION_EMAIL_FROM:-swarm-demo@robotmoney.invalid}
       # Swarm session-lifecycle cron cadence (issue #208). Read at
       # `bun run migrate` time (seed() -> resolveSwarmSchedules) — this is
@@ -208,6 +225,8 @@ services:
       ANALYTICS_API_URL: http://api:8787
       ANALYTICS_TOKEN_FILE: /run/secrets/analytics_token
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
+      # This process performs HTTP extraction but never token-price lookup.
+      HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       PRODUCER_REGIME_CRON: ${PRODUCER_REGIME_CRON:-30 22 * * *}
       PRODUCER_RESEARCH_CRON: ${PRODUCER_RESEARCH_CRON:-0 23 * * *}
     secrets:

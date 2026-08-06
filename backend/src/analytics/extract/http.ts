@@ -2,11 +2,9 @@
 // timeout/abort means an unreachable or slow source fails fast so the caller can
 // fall back to seeded / persisted for that series.
 //
-// Under DEMO_MODE (the pinned demo-stack flag; prod/CI leave it unset → cache
-// off) each GET body is memoized to disk for 1h via fetch-cache.ts so repeated
-// live demo boots do not re-pay the heavy cold-fetch cost (EDGAR ~200 requests,
-// big FRED/Shiller CSVs) and the demo host's shared per-IP provider quotas
-// (one IP for the standing demo AND the self-hosted CI runner) are preserved.
+// Callers configured with a positive HTTP_FETCH_CACHE_TTL_MS memoize each GET
+// body via fetch-cache.ts. Production and smoke default to uncached; normal
+// demo orchestration supplies one hour to protect shared-host provider quotas.
 
 import { withFetchCache } from "./fetch-cache.ts";
 

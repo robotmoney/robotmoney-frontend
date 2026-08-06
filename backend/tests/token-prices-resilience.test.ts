@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { _resetTokenPriceCacheForTests, fetchGeckoTokenPriceUsd } from "../src/chain/token-prices.ts";
+import { _resetTokenPriceCacheForTests, DEFAULT_TOKEN_PRICE_CACHE_TTL_MS, fetchGeckoTokenPriceUsd, resolveTokenPriceCacheTtlMs, TOKEN_PRICE_CACHE_TTL_ENV } from "../src/chain/token-prices.ts";
 
 const realFetch = globalThis.fetch;
 const ADDRESS = "0x4200000000000000000000000000000000000006"; // WETH
@@ -30,7 +30,7 @@ afterEach(() => {
   globalThis.fetch = realFetch;
   delete process.env.GECKO_PRICE_MAX_RETRIES;
   delete process.env.GECKO_PRICE_RETRY_BASE_MS;
-  delete process.env.DEMO_MODE;
+  delete process.env[TOKEN_PRICE_CACHE_TTL_ENV];
   _resetTokenPriceCacheForTests();
 });
 
@@ -167,9 +167,9 @@ test("a failed batch request rejects EVERY address in it (equivalent to the old 
   }
 });
 
-// ── cache window selection (source constants, chosen by DEMO_MODE at call time) ──
+// ── capability-specific cache window ──
 
-test("DEMO_MODE selects the 1h demo cache window at call time: a 60s-old price is still served in demo mode but refetched in production mode", async () => {
+test("capability TTL selects one hour for normal demo while production/smoke default to 30s", async () => {
   const realNow = Date.now;
   let calls = 0;
   globalThis.fetch = (async () => {
@@ -178,12 +178,18 @@ test("DEMO_MODE selects the 1h demo cache window at call time: a 60s-old price i
   }) as unknown as typeof fetch;
   try {
     expect(await fetchGeckoTokenPriceUsd(ADDRESS)).toBe(1901); // cache written at t0
-    Date.now = () => realNow() + 60_000; // 60s later: PAST the 30s default window, INSIDE the 1h demo window
-    process.env.DEMO_MODE = "1"; // set AFTER module load — proves call-time resolution
-    expect(await fetchGeckoTokenPriceUsd(ADDRESS)).toBe(1901); // demo window → cached, no upstream call
+    expect(resolveTokenPriceCacheTtlMs({})).toBe(DEFAULT_TOKEN_PRICE_CACHE_TTL_MS);
+    expect(DEFAULT_TOKEN_PRICE_CACHE_TTL_MS).toBe(30_000);
+    expect(resolveTokenPriceCacheTtlMs({ [TOKEN_PRICE_CACHE_TTL_ENV]: "3600000" })).toBe(3_600_000);
+    for (const invalid of ["-1", "1.5", "nope", "9007199254740992"]) {
+      expect(() => resolveTokenPriceCacheTtlMs({ [TOKEN_PRICE_CACHE_TTL_ENV]: invalid })).toThrow(/non-negative integer/);
+    }
+    Date.now = () => realNow() + 60_000;
+    process.env[TOKEN_PRICE_CACHE_TTL_ENV] = "3600000";
+    expect(await fetchGeckoTokenPriceUsd(ADDRESS)).toBe(1901);
     expect(calls).toBe(1);
-    delete process.env.DEMO_MODE;
-    expect(await fetchGeckoTokenPriceUsd(ADDRESS)).toBe(1902); // production 30s window expired → refetch
+    delete process.env[TOKEN_PRICE_CACHE_TTL_ENV];
+    expect(await fetchGeckoTokenPriceUsd(ADDRESS)).toBe(1902);
     expect(calls).toBe(2);
   } finally {
     Date.now = realNow;

@@ -40,8 +40,8 @@
 //
 // NEVER SKIPS: every failure exits non-zero and names the leg/feed that failed.
 // LIVE upstreams are eventually consistent right after boot (e.g. the seed's
-// cold-start wallet.sample_balances job — the demo's SCHEDULED sampler is
-// hourly under DEMO_MODE, per-IP quota protection, so boot freshness
+// cold-start wallet.sample_balances job — the standing demo's explicitly seeded
+// sampler is hourly for per-IP quota protection, so boot freshness
 // rides on that one immediate enqueue), so the checks POLL until they all
 // pass or the deadline lapses; the deadline derives from the demo's own
 // cadence profile (scripts/lib/demo-schedule.ts), not magic numbers.

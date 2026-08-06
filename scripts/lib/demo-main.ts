@@ -29,8 +29,14 @@ import {
 } from "./onboarding-eval.ts";
 import { startProspectTranscript } from "./demo-prospect-transcript.ts";
 import { NEWCOMER_NAMES, plannedNewcomer as plannedNewcomerBase } from "./demo-newcomers.ts";
-import { personaIdentity } from "./swarm/persona-keys.ts";
-import { admissionDelayMs, decideAdmission, planAdoptions } from "./swarm/roster-plan.ts";
+import {
+  SMOKE_MEMBERS,
+  adoptRestoredRoster,
+  bootstrapStepNames,
+  isSmokeMode,
+  scenarioPlan,
+} from "./smoke-mode.ts";
+import { admissionDelayMs, decideAdmission } from "./swarm/roster-plan.ts";
 import { memberHomeVolumeName } from "../agent/member-agent.ts";
 import {
   assertStageWebPortFree,
@@ -119,10 +125,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // operator's muscle memory keeps working.
 const STATIC_PORT_FLAG = "--static-port";
 const LEGACY_STAGE_FLAG = "--stage";
-const SMOKE_MODE_FLAG = "--smoke";
-const smokeMode = process.argv.includes(SMOKE_MODE_FLAG);
+// `bun smoke` → `bun scripts/demo.ts --smoke`. Every decision the flag implies
+// lives in scripts/lib/smoke-mode.ts (executed by
+// scripts/tests/unit/smoke-mode.test.ts); this file holds only the wiring.
+const smokeMode = isSmokeMode(process.argv);
+const scenario = scenarioPlan(smokeMode);
 const usedLegacyStageFlag = process.argv.includes(LEGACY_STAGE_FLAG);
-const staticPortMode = process.argv.includes(STATIC_PORT_FLAG) || usedLegacyStageFlag || smokeMode;
+const staticPortMode = process.argv.includes(STATIC_PORT_FLAG) || usedLegacyStageFlag;
 if (usedLegacyStageFlag) {
   console.warn(
     `[demo] ${LEGACY_STAGE_FLAG} is DEPRECATED and now means ${STATIC_PORT_FLAG} — same behaviour, clearer name ` +
@@ -545,12 +554,7 @@ const state: DemoState = {
   steps: [
     { name: "migrate", status: "pending" },
     { name: "api /health", status: "pending" },
-    ...(smokeMode
-      ? [{ name: "prod-bootstrap", status: "pending" as const }]
-      : [
-          { name: "edgar seed", status: "pending" as const },
-          { name: "v0 archive", status: "pending" as const },
-        ]),
+    ...bootstrapStepNames(smokeMode).map((name) => ({ name, status: "pending" as const })),
   ],
   research: [],
   swarms: {},
@@ -670,6 +674,7 @@ function dumpDiagnostics(): void {
 }
 
 let cleaned = false;
+let downStack: (() => { exitCode: number }) | undefined;
 // Teardown = `docker compose down` WITHOUT `-v` (issue: demo persistent volumes):
 // containers + network are removed but the postgres data volume (or --pg-data host
 // dir) SURVIVES, so a reboot resumes from where it left off. Deleting demo data is
@@ -689,7 +694,10 @@ function cleanup(): void {
     console.log(`[demo] WARNING: failed purging evaluation containers: ${err instanceof Error ? err.message : err}`);
   }
   console.log("\n[demo] tearing down (keeping postgres data)…");
-  const r = dockerCompose(["down"], false);
+  // Once createStack() exists, teardown uses the same scoped compose handle
+  // that built and started the scenario. The fallback is only for a failure
+  // before that handle could be constructed.
+  const r = downStack ? downStack() : dockerCompose(["down"], false);
   if (r.exitCode === 0 && !removeDemoAnalyticsToken(analyticsTokenFile, project)) {
     console.log(`[demo] WARNING: refused unsafe analytics-token cleanup path ${analyticsTokenFile}`);
   }
@@ -1098,109 +1106,80 @@ async function main(): Promise<void> {
     io: { stdout: outFd, stderr: errFd },
     hooks: { onEvent: onStackEvent },
   });
+  downStack = () => stack.down();
 
-  // DEMO_MODE — the single "this stack is the demo" flag (it replaced the
-  // retired per-property fast-schedules flag). docker-compose.demo.yml pins it on
-  // every demo container (and `compose run` applies that service env to this
-  // one-shot too); the explicit -e here is deliberate redundancy so the seed's
-  // demo gating never silently depends on which overlay files a future
-  // invocation composes. Under DEMO_MODE the seed (backend/src/db/seed.ts):
-  //   - keeps every legacy regime/research consumer schedule disabled; the
-  //     independent analytics-producer owns those timers;
-  //   - adds an HOURLY wallet.sample_balances row and disables the per-minute
-  //     baseline (per-IP quota protection: the standing demo and the
-  //     self-hosted CI runner share one host IP, and the per-minute sampler's
-  //     ~3 GeckoTerminal price calls + several Base RPC eth_calls per tick
-  //     exhaust both providers' quotas, starving CI on the same host; hourly
-  //     token prices are an accepted demo tradeoff). The seed's cold-start
-  //     enqueue still lands a live sample at boot, so the live-smoke gate's
-  //     "live within the deadline" contract is unaffected.
-  //
-  // DEMO_SEED_PROJECTS — demo (local AND CI): populate the projects directory so
-  // /api/projects returns a full "Agentic Economy Ecosystem" table. Demo-only —
-  // prod/regular-CI seeds run `migrate` without this flag, so their seed stays
-  // byte-for-byte unchanged (empty projects tables). Idempotent, so re-running
-  // the demo never duplicates rows.
-  //
-  // Both are passed as `migrateEnv` DATA; scripts/stack/config.ts's migrateArgs()
-  // renders them as the same `-e KEY=VALUE` pairs the hand-built argv used.
-  //
-  // up() RETURNS the host ports Docker assigned (read back with
-  // `docker compose port` once the containers exist — see scripts/stack/ports.ts
-  // for why the daemon picks them instead of us). Everything below this line
-  // depends on that call having happened.
-  applyHostPorts(await stack.up({ migrateEnv: smokeMode ? {} : { DEMO_MODE: "1", DEMO_SEED_PROJECTS: "1" } }));
-
-  // Producer-owned EDGAR/MNA bootstrap (issue #108/D25) — AFTER migrations +
-  // API readiness. The finite producer command ingests the committed seed via
-  // authenticated HTTP, then performs one immediate producer-owned research
-  // refresh. It never enables or enqueues a consumer research job. A failure
-  // throws because the seed + immediate research result are a required boot
-  // step, not best effort.
-  if (smokeMode) {
-    setStep(state, "prod-bootstrap", "running");
-    log("running prod-bootstrap in api container…");
-    await stack.composeAsync(
-      [
-        "run",
-        "--rm",
-        "--no-deps",
-        "-e",
-        "ANALYTICS_API_URL=http://api:8787",
-        "api",
-        "bun",
-        "run",
-        "scripts/prod-bootstrap.ts",
-      ],
-      "prod-bootstrap (api)",
-      { stdout: outFd, stderr: errFd },
-    );
-    setStep(state, "prod-bootstrap", "done");
-    log("production bootstrap complete");
-  } else {
-    setStep(state, "edgar seed", "running");
-    log("ingesting EDGAR/MNA seed + enabling the research schedule…");
-    await stack.composeAsync(
-      ["run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "seed"],
-      "edgar seed bootstrap (independent producer)",
-      { stdout: outFd, stderr: errFd },
-    );
-    setStep(state, "edgar seed", "done");
-    log("EDGAR/MNA seed ingested — research.refresh is now eligible");
+  async function initializeScenario(): Promise<void> {
+    const step = bootstrapStepNames(smokeMode)[0]!;
+    setStep(state, step, "running");
+    if (scenario.initializer === "archive") {
+      // Stack.up already migrated this database. The production initializer
+      // restores the archive + EDGAR data without running migrate a second time.
+      await stack.composeAsync(
+        ["run", "--rm", "--no-deps", "-e", "ANALYTICS_API_URL=http://api:8787", "api", "bun", "run", "scripts/prod-bootstrap.ts", "--already-migrated"],
+        "archive initializer (already migrated)",
+        { stdout: outFd, stderr: errFd },
+      );
+      log("archive and restored IC rows initialized");
+    } else {
+      // Simulation data only. Projects/schedules were selected on the single
+      // migrate call above; this producer-owned seed intentionally does not
+      // restore the v0 archive.
+      await stack.composeAsync(
+        ["run", "--rm", "--no-deps", "analytics-producer", "bun", "run", "src/producer/index.ts", "seed"],
+        "simulation analytics seed",
+        { stdout: outFd, stderr: errFd },
+      );
+      log("simulation schedules/projects/analytics initialized (archive omitted)");
+    }
+    setStep(state, step, "done");
   }
 
-  if (!smokeMode) {
-    // v0 committee archive (72 sessions, 216 takes, 208 snapshots, 73 briefs).
-    // WITHOUT THIS, /swarm on a fresh boot is an empty shell: the site's session
-    // feed, subject pages and member pages all read published history, and a
-    // demo stack has none of its own. Same "required boot step, not best
-    // effort" contract as the EDGAR seed above — a failure throws.
-    //
-    // Direct SQL rather than HTTP (there is no ingest endpoint for historical
-    // sessions), so it runs in the api container with --no-deps: it needs the
-    // image and DATABASE_URL, not a second api process.
-    //
-    // The signing key: v0's takes are signed at import so they can live in
-    // swarm_recommendations without a fabricated signature (see
-    // backend/scripts/v0-seed-bootstrap.ts). The demo passes nothing — the
-    // importer uses the PUBLISHED archival key (src/swarm/v0-archive.ts). An
-    // earlier pass minted a throwaway key per boot and threw it away, which made
-    // re-boots on a persistent Postgres non-idempotent the moment `signature`
-    // became a drift-checked column, and made the resulting signatures
-    // attributable to nobody. The published key is deterministic, so a re-boot
-    // is a clean 0-drift no-op.
-    setStep(state, "v0 archive", "running");
-    log("importing v0 committee archive (sessions, takes, snapshots, briefs)…");
-    await stack.composeAsync(
-      ["run", "--rm", "--no-deps", "api", "bun", "run", "scripts/v0-seed-bootstrap.ts"],
-      "v0 committee archive bootstrap",
-      { stdout: outFd, stderr: errFd },
-    );
-    setStep(state, "v0 archive", "done");
-    log("v0 committee archive imported — /swarm has published history");
+  // One shared bring-up: build/start, exactly one migration, typed scenario
+  // initialization, then Stack.up's single final readiness check.
+  applyHostPorts(await stack.up({
+    migrateEnv: scenario.migrateEnv,
+    migrateScriptArgs: [...scenario.migrateScriptArgs],
+    initialize: initializeScenario,
+  }));
+
+  if (process.env.CI && smokeMode) {
+    // ── CI SMOKE: the bounded end-to-end verdict (issue #537) ──────────────
+    // A production-shaped boot's checks are NOT the demo's checks. The demo's
+    // CI block below drives two sessions with the demo's invented characters,
+    // exercises the starter agent, and asserts the demo's LIVE steady state —
+    // none of which a smoke stack has. What a smoke boot must prove is exactly
+    // three things, and it proves them against the real HTTP API:
+    //   1. the production bootstrap restored the archive;
+    //   2. one NEW live swarm session completes with the restored personas;
+    //   3. the imported history is still served with #498's archival semantics.
+    // Session execution is the same runSession() used by demo and standing mode;
+    // only its typed subjects/members input differs.
+    console.log("\n[demo] smoke: running one live swarm session with the restored personas…");
+    process.env.BACKEND_URL = backendUrl;
+    const session = await import(join(repoRoot, "scripts", "lib", "swarm", "session.ts"));
+    const roster = await session.rosterMembers(undefined, adminPassword);
+    if (roster === null) throw new Error("smoke initializer restored no readable IC roster");
+    const members = adoptRestoredRoster(scenario, roster);
+    const rail = {
+      repoRoot,
+      composeProject: project,
+      composeFiles: composeFilesRun.split(":"),
+      composeSpawnEnv: stack.spawnEnv,
+      backendUrl,
+      modelConfig: resolveModelConfig(process.env),
+      onboardedHomes: new Map<string, OnboardedMemberHome>(),
+      adminToken: adminPassword,
+    };
+    await session.runSession(scenario.subjects[0]!, 1, { rail, members });
+
+    console.log("[demo] smoke: asserting restored subjects, personas, live take and archival history…");
+    await run(["bun", "run", "scripts/smoke-e2e-assert.ts"], repoRoot,
+      { ...process.env, BACKEND_URL: backendUrl } as Record<string, string>, "smoke e2e assertions");
+
+    console.log("\n[demo] CI smoke — scenario assertions passed");
   }
 
-  if (process.env.CI) {
+  if (process.env.CI && !smokeMode) {
     // CI: run checks then tear down. (Unchanged — pure console, "inherit" stdio.)
     console.log("\n[demo] running swarm session…");
     // RM_ALLOW_INSECURE=1: docker-compose.demo.yml runs the api container with
@@ -1375,9 +1354,13 @@ async function main(): Promise<void> {
       console.log(`[demo] real-inference onboarding eval: ${sweepResults.length}/${sweepResults.length} admission(s) admitted (§11 R8) ✓`);
     }
 
-    console.log("\n[demo] CI mode — all checks passed, tearing down…");
+    console.log("\n[demo] CI demo — scenario assertions passed");
+  }
+
+  if (process.env.CI) {
+    console.log("\n[demo] CI scenario complete — shared cleanup through Stack.down…");
     cleanup();
-    cleanCiVolume(); // required: reclaim this run's volume so the shared runner never leaks one
+    cleanCiVolume();
     process.exit(0);
   }
 
@@ -1501,17 +1484,10 @@ async function main(): Promise<void> {
   // I/O: every subject's first session lands promptly under BOTH profiles, and
   // later runs walk that subject's phase-offset steady-state grid.
   interface SubjectSchedule { subject: { id: string; name: string }; plan: SubjectCadencePlan; nextAt: number; runs: number; }
-  if (smokeMode) {
-    e2e.SUBJECTS.length = 0;
-    e2e.SUBJECTS.push(
-      { id: "robotmoney-allocation", name: "Robot Money Allocation" },
-      { id: "robotmoney-treasury", name: "RM Protocol Treasury" },
-      { id: "robotmoney-vault", name: "Robot Money Vault" },
-      { id: "woon", name: "Woon Treasury Allocation" },
-    );
-  }
-  const plans = planSubjectSchedules(e2e.SUBJECTS.length, cadence, Date.now());
-  const schedules: SubjectSchedule[] = e2e.SUBJECTS.map((s: { id: string; name: string }, i: number) => ({
+  const sessionSubjects = scenario.subjects.map((subject) => ({ ...subject }));
+  let sessionMembers = scenario.members.map((member) => ({ ...member }));
+  const plans = planSubjectSchedules(sessionSubjects.length, cadence, Date.now());
+  const schedules: SubjectSchedule[] = sessionSubjects.map((s, i) => ({
     subject: s, plan: plans[i], nextAt: plans[i].firstAt, runs: 0,
   }));
   // ── Adopt the personas this database already knows ────────────────────────
@@ -1529,32 +1505,17 @@ async function main(): Promise<void> {
   // it rebinds the key, mints a token, and the roster cap exempts an existing
   // member). The persona keeps its id, its name and every take it has filed.
   //
-  // Only demo characters are adopted: a member with no committed identity is
-  // somebody else's, and inventing a key for them is exactly the duplicate-making
-  // behaviour this replaces.
-  if (smokeMode) {
-    log("smoke mode: clearing built-in fake members so we only adopt imported personas");
-    e2e.MEMBERS.length = 0;
-  }
+  // Both scenarios reconnect database identities through one helper. It returns
+  // a fresh array so a previous run can never contaminate this run's seats.
+  if (smokeMode) log(`smoke mode: seating only the restored personas (${SMOKE_MEMBERS.map((m) => m.name).join(", ")})`);
   const dbRoster = await e2e.rosterMembers(undefined, adminPassword);
   if (dbRoster === null) {
-    log("roster unreadable at boot — continuing with the built-in members only (no personas adopted)");
+    if (smokeMode) throw new Error("smoke initializer restored no readable IC roster");
+    log("roster unreadable at boot — continuing with this run's simulation members");
   } else {
-    const seatedIds = new Set<string>(e2e.MEMBERS.map((m: { memberId: string }) => m.memberId));
-    const plan = planAdoptions(dbRoster, seatedIds, (name) => {
-      if (smokeMode && !["athena", "robot money", "noop analyst"].includes(name.trim().toLowerCase())) {
-        return false;
-      }
-      return Boolean(personaIdentity(name));
-    });
-    for (const m of plan.duplicates) {
-      log(`persona ${m.name}: ignoring duplicate roster row ${m.id.slice(0, 8)} — one seat per character`);
-    }
-    for (const m of plan.adopt) {
-      e2e.MEMBERS.push({ memberId: m.id, name: m.name, lens: m.lens ?? "returning member", bias: 0, present: true });
-      log(`adopted ${m.name} (${m.id.slice(0, 8)}) from the database — signing with the committed persona key`);
-    }
-    if (plan.adopt.length > 0) log(`swarm now ${e2e.MEMBERS.length} seats (${plan.adopt.length} adopted from the database)`);
+    const before = sessionMembers.length;
+    sessionMembers = adoptRestoredRoster(scenario, dbRoster, sessionMembers);
+    if (sessionMembers.length > before) log(`swarm now ${sessionMembers.length} seats (${sessionMembers.length - before} restored identities reconnected)`);
   }
 
   // Populate the per-subject panes and seed their countdowns.
@@ -1593,24 +1554,6 @@ async function main(): Promise<void> {
     adminToken: adminPassword,
   };
 
-  // ── Adopt the personas this database already knows ────────────────────────
-  // A persistent database outlives the stack, so by the second boot the roster
-  // already holds personas this process never admitted. Without this they sat on
-  // the roster as historical members and never filed another take — the standing
-  // demo ran three-member sessions while claiming six seats — because their
-  // signing key lived in a per-boot volume and their passphrase only in the
-  // previous process's memory.
-  //
-  // Adoption is possible because a persona's key is COMMITTED
-  // (scripts/lib/swarm/fixtures/persona-keys.json): the enroll run below
-  // seeds the container keystore with the known key and re-registers it against
-  // the member id the database already has (registerMember is idempotent by id —
-  // it rebinds the key, mints a token, and the roster cap exempts an existing
-  // member). The persona keeps its id, its name and every take it has filed.
-  //
-  // Only demo characters are adopted: a member with no committed identity is
-  // somebody else's, and inventing a key for them is exactly the duplicate-making
-  // behaviour this replaces.
 
 
   async function swarmDriver(): Promise<void> {
@@ -1635,6 +1578,7 @@ async function main(): Promise<void> {
       try {
         const res = await e2e.runSession(subject, due.runs + 1, {
           rail: sessionRail,
+          members: sessionMembers,
           onProgress: tuiActive ? swarmProgress(state, subject.id, log) : undefined,
         });
         c.publishedCount++;
@@ -1872,14 +1816,14 @@ async function main(): Promise<void> {
           volume: result.homeVolume ?? memberHomeVolumeName(project, result.identity.runId),
           passphrase: keystorePassphrase,
         });
-        e2e.MEMBERS.push({ memberId: result.memberId!, name: identity.name, lens, bias, present: true });
+        sessionMembers.push({ memberId: result.memberId!, name: identity.name, lens, bias, present: true });
         admitted++; // paces the NEXT wait — skipped names must not count
         setOnboardStep(state, entryId, "session", "running");
         // Classified on the success path too, so every admission attempt leaves
         // the SAME outcome vocabulary in the log — a run that reads "admitted"
         // and one that reads "refused" are then directly comparable.
         log(`onboarding ${identity.name} classified ${classifyOutcome(result)}`);
-        log(`onboarded ${identity.name} (#${n + 1}/${NEWCOMER_NAMES.length}) memberId=${result.memberId} — swarm now ${e2e.MEMBERS.length} seats; awaiting first session`);
+        log(`onboarded ${identity.name} (#${n + 1}/${NEWCOMER_NAMES.length}) memberId=${result.memberId} — swarm now ${sessionMembers.length} seats; awaiting first session`);
       } catch (err) {
         log(`onboarding ${identity.name} eval threw (stack still running): ${err instanceof Error ? err.message : err}`);
         transcript.finishThrew(err, Date.now() - attemptStartedAt);
@@ -1888,7 +1832,10 @@ async function main(): Promise<void> {
     state.upcoming = [];
     log(`onboarding complete — all ${NEWCOMER_NAMES.length} named newcomers attempted, no more will join`);
   }
-  if (!smokeMode) void onboardingDriver();
+  // Scripted newcomers are a DEMO narrative. A smoke boot shows the restored
+  // committee and nothing else, so the driver never starts there; `bun demo`
+  // keeps its unchanged behaviour (scripts/lib/smoke-mode.ts).
+  if (scenario.runsNewcomerOnboarding) void onboardingDriver();
 
   await new Promise<never>(() => { /* run forever; Ctrl-C/SIGTERM (or `demo:down`) stops the stack */ });
 }

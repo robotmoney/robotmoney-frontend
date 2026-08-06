@@ -354,8 +354,8 @@ export function assertNoVaultAddressCollision(
 // managed sequence on for a deployment: production sets it explicitly (daily
 // 06:00-08:00 UTC — see the per-kind CRON defaults below); staging may set the
 // same flag with accelerated SWARM_*_CRON overrides; repo demo/e2e never
-// sets it (docker-compose.demo.yml pins it off, matching the DEMO_MODE
-// pattern). Resolved once at seed-time (backend/src/db/seed.ts) — job_schedules
+// sets it (docker-compose.demo.yml pins it off). Resolved once at seed-time
+// (backend/src/db/seed.ts) — job_schedules
 // rows are the persisted source of truth thereafter; the scheduler
 // (worker/scheduler.ts) owns next_run_at/last_enqueued_at bookkeeping.
 export interface SwarmScheduleConfig {

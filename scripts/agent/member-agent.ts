@@ -61,6 +61,11 @@ import {
   type OnboardingTelemetry,
   type RedactionSecret,
 } from "../lib/onboarding-telemetry.ts";
+import {
+  buildOpenCodeConfig,
+  buildOpenCodeRunArgs,
+  resolveOpenCodeRun,
+} from "./opencode-run.ts";
 
 /**
  * The model + credential this primitive runs with, resolved by the caller.
@@ -129,14 +134,7 @@ export interface MemberAgentModel {
 //
 // The model arrives as a PARAMETER, resolved by the caller from the registry —
 // this function invents nothing.
-export function buildAgentOpencodeConfig(model: string): Record<string, unknown> {
-  return {
-    $schema: "https://opencode.ai/config.json",
-    model,
-    autoupdate: false,
-    permission: { "*": "allow" },
-  };
-}
+export { buildOpenCodeConfig as buildAgentOpencodeConfig } from "./opencode-run.ts";
 
 // ── Secret redaction ────────────────────────────────────────────────────────
 // A failed run's transcript is printed WHOLE into CI logs and the demo's
@@ -321,35 +319,14 @@ export function buildMemberAgentArgv(a: MemberAgentArgvOptions): string[] {
   ];
 }
 
-// The default (opencode) command tail, extracted verbatim so the two modes
-// share one argv builder above it.
+// The default (opencode) command tail. Its OpenCode portion is assembled by the
+// same scenario-neutral builder as in-container swarm-session inference.
 function buildOpencodeRunTail(a: MemberAgentArgvOptions): string[] {
-  return [
-    "run",
-    "--model",
-    a.modelConfig.model,
-    "--format",
-    "json",
-    // opencode's REAL "the operator is not at the keyboard" flag: auto-approve
-    // every permission that is not explicitly denied, and buildAgentOpencodeConfig
-    // denies none.
-    //
-    // This used to be `--dangerously-skip-permissions`, which opencode has
-    // never had — `opencode run --help` in the pinned v1.18.1 image offers
-    // `--auto`. yargs accepts unknown `--flags` SILENTLY, so nothing failed and
-    // nothing warned while every permission `ask` stayed armed and, in a
-    // headless container, unanswerable. That cost four consecutive red runs of
-    // the required gate. The Docker-backed rails check
-    // (scripts/tests/integration/onboarding-eval-infra.test.ts) now asserts
-    // every flag emitted here against the pinned binary's own `--help`, because
-    // an assertion on our own argv could never have caught it.
-    "--auto",
-    "--title",
-    a.title!,
-    "--dir",
-    "/home/agent",
-    a.prompt!,
-  ];
+  // Resolve against an empty environment to preserve this builder's pure
+  // contract: the caller already supplied the resolved model and title scope.
+  // Only the process-owning layer may read ambient configuration.
+  const run = resolveOpenCodeRun({ model: a.modelConfig.model, titleScope: a.title!, env: {} });
+  return buildOpenCodeRunArgs(run, a.prompt!, { directory: "/home/agent" });
 }
 
 // ── Persistent member volumes (issue #361 Phase 3: identity continuity) ─────
@@ -634,7 +611,7 @@ export async function runMemberAgent(opts: MemberAgentOptions): Promise<MemberAg
     // runs the member's own client (which invokes opencode itself, passing the
     // model on argv) and needs no mounted config.
     if (!commandMode) {
-      writeFileSync(opencodeConfigPath, JSON.stringify(buildAgentOpencodeConfig(opts.modelConfig.model), null, 2));
+      writeFileSync(opencodeConfigPath, JSON.stringify(buildOpenCodeConfig(opts.modelConfig.model), null, 2));
     }
 
     // A stack created by scripts/stack carries generated label and credential

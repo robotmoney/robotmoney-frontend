@@ -377,7 +377,9 @@ describe("member-agent container primitive", () => {
       "--model", "opencode/deepseek-v4-flash",
       "--format", "json",
       "--auto",
-      "--title", "onboarding-eval-run1",
+      "--title", "onboarding-eval-run1-opencode-deepseek-v4-flash",
+      "--print-logs",
+      "--log-level", "DEBUG",
       "--dir", "/home/agent",
       "PROMPT TEXT",
     ]);
@@ -445,7 +447,9 @@ describe("member-agent container primitive", () => {
     const funded = buildMemberAgentArgv({ ...base, modelConfig: FUNDED });
     // Structurally the same argv once the credential pair and the model id are
     // removed: the keyless path is not a second, divergent code path.
-    const strip = (a: string[]) => a.filter((x, i) => x !== "-e" && a[i - 1] !== "-e" && !x.startsWith("opencode/"));
+    const strip = (a: string[]) => a.filter((x, i) =>
+      x !== "-e" && a[i - 1] !== "-e" && !x.startsWith("opencode/") &&
+      !x.startsWith("onboarding-eval-run1-opencode-"));
     expect(strip(keyless)).toEqual(strip(funded));
   });
 

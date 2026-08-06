@@ -22,6 +22,7 @@
 import {
   API_CONTAINER_PORT,
   buildArgs,
+  buildServicesFor,
   buildComposeEnv,
   buildSpawnEnv,
   composeArgs,
@@ -40,7 +41,7 @@ import {
 import { parseComposePortOutput, PortDiscoveryError } from "./ports.ts";
 import { readFileSync } from "node:fs";
 
-export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "ports" | "health";
+export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "initialize" | "ports" | "health";
 
 export type StackEvent =
   | { phase: StackPhase; status: "start" | "done"; detail?: string }
@@ -67,6 +68,10 @@ export interface ComposeResult {
 export interface StackUpOptions {
   // Extra `-e KEY=VALUE` pairs for the one-shot migrate container.
   migrateEnv?: Record<string, string>;
+  migrateScriptArgs?: string[];
+  /** Scenario-specific initialization after services start but before the
+   * stack is declared ready. Migration remains owned by this method exactly once. */
+  initialize?: () => Promise<void>;
   pgTimeoutMs?: number;
   healthTimeoutMs?: number;
 }
@@ -91,7 +96,7 @@ export interface Stack {
   build(services?: string[]): Promise<void>;
   waitForPostgres(timeoutMs?: number): Promise<void>;
   waitForHttp(url: string, timeoutMs?: number): Promise<void>;
-  migrate(extraEnv?: Record<string, string>): Promise<void>;
+  migrate(extraEnv?: Record<string, string>, scriptArgs?: string[]): Promise<void>;
   /** Ask the daemon which host port it published one container port on. */
   publishedPort(service: string, containerPort: number): number;
   /** Both stack ports, queried live and then cached for this handle. */
@@ -151,6 +156,11 @@ export function createStack(
   // it is not waited on, and it publishes no host port.
   const externalPostgres = Boolean(cfg.database.url);
   const services = servicesFor(cfg.profile, { externalPostgres });
+  // A full stack runs member sessions after bring-up. `member-agent` is a
+  // one-shot, profile-gated service (never part of `services` / `up`), but its
+  // image must exist before those concurrent session containers launch. Keep
+  // that prebuild in the shared stack lifecycle used by both demo and smoke.
+  const defaultBuildServices = buildServicesFor(cfg.profile, { externalPostgres });
   const prefix = composeArgs(cfg.project, cfg.composeFiles);
 
   // NON-INTERACTIVE, ALWAYS. `docker compose` has questions it will ask on a
@@ -201,7 +211,7 @@ export function createStack(
     emit({ phase: "docker-preflight", status: "done" });
   }
 
-  async function build(buildServices: string[] = services): Promise<void> {
+  async function build(buildServices: string[] = defaultBuildServices): Promise<void> {
     emit({ phase: "build", status: "start", detail: buildServices.join(", ") });
     await composeAsync(buildArgs(buildServices), `compose build ${buildServices.join(" ")}`.trim());
     emit({ phase: "build", status: "done", detail: buildServices.join(", ") });
@@ -234,9 +244,9 @@ export function createStack(
     throw new Error(`timed out waiting for ${url}: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
   }
 
-  async function migrate(extraEnv: Record<string, string> = {}): Promise<void> {
+  async function migrate(extraEnv: Record<string, string> = {}, scriptArgs: string[] = []): Promise<void> {
     emit({ phase: "migrate", status: "start" });
-    await composeAsync(migrateArgs(extraEnv), "migrations");
+    await composeAsync(migrateArgs(extraEnv, scriptArgs), "migrations");
     emit({ phase: "migrate", status: "done" });
   }
 
@@ -303,7 +313,7 @@ export function createStack(
       emit({ phase: "postgres", status: "done" });
     }
 
-    await migrate(upOpts.migrateEnv);
+    await migrate(upOpts.migrateEnv, upOpts.migrateScriptArgs);
 
     // Named explicitly from the profile — never a bare `docker compose up -d` —
     // so a compose service added later can never leak into `core`.
@@ -311,6 +321,12 @@ export function createStack(
     emit({ phase: "services", status: "start", detail: rest.join(", ") });
     await composeAsync(upArgs(rest), "start services");
     emit({ phase: "services", status: "done", detail: rest.join(", ") });
+
+    if (upOpts.initialize) {
+      emit({ phase: "initialize", status: "start" });
+      await upOpts.initialize();
+      emit({ phase: "initialize", status: "done" });
+    }
 
     // Only NOW do the host ports exist. Everything downstream — the health
     // check below, the caller's READY banner, its state file — takes them from

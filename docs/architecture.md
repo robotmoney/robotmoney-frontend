@@ -2009,7 +2009,7 @@ the only thing that injects `PRODUCER_*_CRON` into compose (through
   `regime.classify` / `research.refresh` rows (including the old fast-demo
   cadences) are forced disabled and pending/running jobs dead-lettered; no
   supported endpoint can revive them.
-  `DEMO_MODE` also SLOWS the wallet sampler: it seeds an hourly
+  The demo CLI's explicit schedule step also slows the wallet sampler: it seeds an hourly
   `wallet.sample_balances` row (`3 * * * *`, staggered off the hourly vault
   sample) and disables the per-minute baseline — the standing demo and the
   self-hosted CI runner share one host IP, and per-minute GeckoTerminal/Base-RPC
@@ -2326,12 +2326,10 @@ The live path (the only path) can still be tuned via env before `bun run demo`.
   (append-only — existing DB rows win on overlap; no-op once warm). Defaults to `1`
   on every demo boot (`scripts/lib/demo-env.ts`); set `0` explicitly to disable it.
   `FLOOR_SEED_PATH` overrides the seed file (must be readable inside the container).
-- On-disk fetch cache — no TTL knob anymore (the old `FETCH_CACHE_TTL_MS` env
-  was removed): the TTL is mode-selected in
-  `backend/src/analytics/extract/fetch-cache.ts` — 1 hour under `DEMO_MODE`
-  (per-IP quota protection; the demo host also runs the self-hosted CI runner),
-  off everywhere else. Optional `FETCH_CACHE_DIR` still overrides the cache
-  directory (a path is genuinely environmental; the TTL is not).
+- Cache TTLs are capability-specific. `HTTP_FETCH_CACHE_TTL_MS` defaults off
+  and `TOKEN_PRICE_CACHE_TTL_MS` defaults to 30 seconds in production; shared
+  demo/smoke orchestration supplies one hour for both. Optional
+  `FETCH_CACHE_DIR` overrides only the HTTP cache directory.
 - **`BASE_RPC_URL`** — the vault-economics eth_call endpoint (§10). Unset →
   backend `config.ts` falls through to its production default
   (`https://mainnet.base.org`); set explicitly to point at a private RPC.

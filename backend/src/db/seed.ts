@@ -34,8 +34,7 @@ interface SeedSchedule {
 // enqueues lifecycle jobs explicitly via the admin enqueue-job endpoint, which
 // lets it control the pace while still exercising the real worker claim loop +
 // handler path.
-// Exported so tests can assert the non-DEMO_MODE seed is byte-for-byte this
-// list (prod/CI correctness depends on the demo gating never leaking).
+// Exported so tests can assert the production seed is byte-for-byte this list.
 export const SCHEDULES: SeedSchedule[] = [
   // Retired consumer-queue compatibility rows. The independent producer owns
   // these cadences; seedJobSchedules() enforces enabled=false even on rows
@@ -76,17 +75,13 @@ export const SCHEDULES: SeedSchedule[] = [
   { kind: "projects.fetch_vaults", cron: "30 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
   { kind: "projects.snapshot_daily", cron: "40 0 * * *", payload: {}, timezone: "UTC", enabled: true },
   { kind: "projects.sync_revenue", cron: "50 1 * * *", payload: {}, timezone: "UTC", enabled: true },
-  // Kept enabled here (byte-for-byte prod/CI shape); DEMO_MODE flips this row
-  // off below (issue #399) so it never overwrites seedDemoProjects()'s
-  // curated coverage scores.
+  // Kept enabled here (byte-for-byte prod/CI shape); the explicit demo schedule
+  // step disables this row (issue #399) so curated scores are not overwritten.
   { kind: "projects.recompute_coverage", cron: "0 3 * * *", payload: {}, timezone: "UTC", enabled: true },
 ];
 
-// Fast demo schedules — ONLY added when DEMO_MODE is set (the single "this
-// stack is the demo" flag: scripts/lib/demo-main.ts sets it on the migrate/seed
-// one-shot and docker-compose.demo.yml pins it on every demo container; it
-// replaced the retired per-property fast-schedules flag). Prod/CI leave it unset,
-// so the default seed above is byte-for-byte unchanged there.
+// Fast demo schedules — added only by seedDemoJobSchedules(), which the demo
+// CLI invokes explicitly. Production, smoke, and CI never call that step.
 //
 // Retired demo cadence rows remain as disabled compatibility markers so an
 // upgraded database cannot resurrect the old consumer producer. The independent
@@ -105,7 +100,7 @@ const SUPERSEDED_FAST_DEMO_SCHEDULES: { kind: string; cron: string }[] = [
   { kind: "research.refresh", cron: "1-59/2 * * * *" },
 ];
 
-// Slow demo samplers — also gated on DEMO_MODE. The standing local demo and
+// Slow demo samplers — also owned by the explicit demo schedule step. The standing local demo and
 // the self-hosted CI runner share ONE host IP, and the every-minute
 // wallet.sample_balances baseline (~3 GeckoTerminal price calls + several Base
 // RPC eth_calls per tick) exhausts both providers' per-IP quotas, starving CI
@@ -113,10 +108,8 @@ const SUPERSEDED_FAST_DEMO_SCHEDULES: { kind: string; cron: string }[] = [
 // is fine there, so the demo samples wallet balances HOURLY — staggered to
 // minute 3 so it never fires in the same minute as vault.sample_share_price
 // ("0 * * * *"). The conflict key is (kind, cron), so this row merely COEXISTS
-// with the per-minute baseline; seedJobSchedules() additionally DISABLES that
-// baseline row under DEMO_MODE (see below) — that is what actually switches
-// the cadence. Prod/CI leave the flag unset, so the default seed above is
-// byte-for-byte unchanged there.
+// with the per-minute baseline; seedDemoJobSchedules() additionally DISABLES
+// that baseline row — that is what actually switches the cadence.
 const SLOW_DEMO_SAMPLER_SCHEDULES: SeedSchedule[] = [
   { kind: "wallet.sample_balances", cron: "3 * * * *", payload: {}, timezone: "UTC", enabled: true },
   { kind: "wallet.sample_sleeves", cron: "3 * * * *", payload: {}, timezone: "UTC", enabled: true },
@@ -158,9 +151,7 @@ export async function seedSwarmSchedules(): Promise<void> {
 }
 
 export async function seedJobSchedules(): Promise<void> {
-  const schedules = process.env.DEMO_MODE
-    ? [...SCHEDULES, ...FAST_DEMO_SCHEDULES, ...SLOW_DEMO_SAMPLER_SCHEDULES]
-    : SCHEDULES;
+  const schedules = SCHEDULES;
   for (const s of schedules) {
     // ON CONFLICT DO NOTHING keeps this purely additive/idempotent: the row is
     // inserted once and never overwritten, so the scheduler-managed columns
@@ -188,53 +179,6 @@ export async function seedJobSchedules(): Promise<void> {
      WHERE kind IN ('regime.classify', 'research.refresh') AND status IN ('pending', 'running')
   `;
 
-  // DEMO_MODE also disables the per-minute wallet-sampler baseline: inserting
-  // the hourly (kind, cron) row above only makes it COEXIST with "* * * * *" —
-  // flipping the per-minute row off is what makes hourly sampling take effect
-  // (quota protection: the standing demo and the self-hosted CI runner share
-  // one IP against GeckoTerminal + the public Base RPC). This is a deliberate,
-  // demo-gated exception to the "never touch enabled on an existing row" rule
-  // in the header — and it is one-directional (only ever sets false), so an
-  // operator's manual disable is never re-enabled by a re-run. Idempotent: the
-  // `AND enabled` guard makes re-runs no-ops. The cold-start immediate enqueue
-  // in seed() below is deliberately untouched — the CI live-smoke gate depends
-  // on a fresh boot reaching 'live' wallet provenance within seconds.
-  if (process.env.DEMO_MODE) {
-    await sql`
-      UPDATE job_schedules SET enabled = false
-       WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron = '* * * * *' AND enabled
-    `;
-    console.log("DEMO_MODE: disabled per-minute wallet samplers (hourly demo cadence owns sampling)");
-
-    // Belt-and-suspenders retirement for the superseded ~2-minute analytics
-    // rows: every analytics row is disabled above, and these explicit natural
-    // keys document which historical demo cadences must never return.
-    for (const s of SUPERSEDED_FAST_DEMO_SCHEDULES) {
-      await sql`
-        UPDATE job_schedules SET enabled = false
-         WHERE kind = ${s.kind} AND cron = ${s.cron} AND enabled
-      `;
-    }
-    console.log("DEMO_MODE: confirmed retired consumer analytics schedules disabled (independent producer owns cadence)");
-
-    // DEMO_MODE also disables the daily projects.recompute_coverage schedule
-    // (issue #399): the handler recomputes data_coverage_score from live
-    // inputs, which would collapse seedDemoProjects()'s deliberately
-    // incomplete demo rows back down and hide them below the /projects
-    // directory's MIN_SCORE gate (projections.ts) — defeating the point of
-    // seeding curated demo data in the first place. One-directional (only
-    // ever sets false) and idempotent via the `AND enabled` guard, exactly
-    // like the wallet-sampler disable above, so re-running the seed against
-    // an EXISTING demo database disables a canonical row left enabled by an
-    // older deployment (not just a fresh insert), and an operator's manual
-    // disable is never re-enabled.
-    await sql`
-      UPDATE job_schedules SET enabled = false
-       WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *' AND enabled
-    `;
-    console.log("DEMO_MODE: disabled projects.recompute_coverage (seeded demo project scores are curated, not recomputed)");
-  }
-
   // Retire the combined `analytics.run` kind (issue #107). This seed is
   // otherwise purely additive, so an existing deployment would keep enqueuing a
   // kind that no longer has a handler or lane. Drop its schedule rows and
@@ -248,6 +192,37 @@ export async function seedJobSchedules(): Promise<void> {
            updated_at = now()
      WHERE kind = 'analytics.run' AND status IN ('pending', 'running')
   `;
+}
+
+/** Apply the demo's quota-safe schedule changes explicitly and idempotently. */
+export async function seedDemoJobSchedules(): Promise<void> {
+  for (const s of [...FAST_DEMO_SCHEDULES, ...SLOW_DEMO_SAMPLER_SCHEDULES]) {
+    await sql`
+      INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
+      VALUES (${s.kind}, ${s.cron}, ${sql.json(jsonValue(s.payload))}, ${s.timezone}, ${s.enabled})
+      ON CONFLICT (kind, cron) DO NOTHING
+    `;
+  }
+
+  await sql`
+    UPDATE job_schedules SET enabled = false
+     WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron = '* * * * *' AND enabled
+  `;
+  console.log("demo schedules: disabled per-minute wallet samplers (hourly cadence owns sampling)");
+
+  for (const s of SUPERSEDED_FAST_DEMO_SCHEDULES) {
+    await sql`
+      UPDATE job_schedules SET enabled = false
+       WHERE kind = ${s.kind} AND cron = ${s.cron} AND enabled
+    `;
+  }
+  console.log("demo schedules: confirmed retired consumer analytics schedules disabled");
+
+  await sql`
+    UPDATE job_schedules SET enabled = false
+     WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *' AND enabled
+  `;
+  console.log("demo schedules: disabled projects.recompute_coverage (curated scores are preserved)");
 }
 
 export async function seed(): Promise<void> {
