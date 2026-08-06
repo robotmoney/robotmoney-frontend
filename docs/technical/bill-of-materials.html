@@ -1,0 +1,2304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RobotMoney — Bill of Materials</title>
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --bg: #f5f5f5;
+  --text: #1a1a1a;
+  --border: #ddd;
+  --code-bg: #f9f9f9;
+  --accent: #0066cc;
+  --green: #2d7d2d;
+  --red: #8b3a3a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1a1a;
+    --text: #e0e0e0;
+    --border: #444;
+    --code-bg: #2a2a2a;
+    --accent: #66b3ff;
+    --green: #5fa35f;
+    --red: #d98787;
+  }
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  padding: 2rem;
+}
+
+.container {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+header {
+  border-bottom: 3px solid var(--accent);
+  padding-bottom: 1rem;
+  margin-bottom: 2rem;
+}
+
+h1 {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+.subtitle {
+  font-size: 1rem;
+  color: #888;
+  margin-bottom: 0.5rem;
+}
+
+.toc {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.toc h2 {
+  font-size: 1rem;
+  margin-bottom: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.toc ul {
+  list-style: none;
+  columns: 3;
+  gap: 2rem;
+}
+
+.toc li {
+  margin-bottom: 0.5rem;
+}
+
+.toc a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.toc a:hover {
+  text-decoration: underline;
+}
+
+section {
+  margin-bottom: 3rem;
+}
+
+h2 {
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--accent);
+}
+
+h3 {
+  font-size: 1.1rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  color: var(--accent);
+}
+
+.subsection {
+  background: var(--code-bg);
+  border-left: 4px solid var(--accent);
+  padding: 1rem;
+  margin-bottom: 1rem;
+  border-radius: 4px;
+}
+
+.subsection h4 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+th {
+  background: var(--accent);
+  color: white;
+  text-align: left;
+  padding: 0.75rem;
+  font-weight: 600;
+}
+
+td {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+code {
+  background: var(--code-bg);
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-family: "Monaco", "Courier New", monospace;
+  font-size: 0.9em;
+}
+
+.endpoint {
+  font-family: "Monaco", "Courier New", monospace;
+  background: var(--code-bg);
+  padding: 0.3em 0.6em;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.method {
+  display: inline-block;
+  padding: 0.2em 0.6em;
+  border-radius: 3px;
+  font-size: 0.85em;
+  font-weight: 600;
+  margin-right: 0.5rem;
+}
+
+.method.get {
+  background: #e3f2fd;
+  color: #1565c0;
+}
+
+.method.post {
+  background: #f3e5f5;
+  color: #6a1b9a;
+}
+
+.method.patch {
+  background: #fff3e0;
+  color: #e65100;
+}
+
+@media (prefers-color-scheme: dark) {
+  .method.get {
+    background: #0d47a1;
+    color: #90caf9;
+  }
+  .method.post {
+    background: #4a148c;
+    color: #ce93d8;
+  }
+  .method.patch {
+    background: #e65100;
+    color: #ffe0b2;
+  }
+}
+
+.file-path {
+  font-family: "Monaco", "Courier New", monospace;
+  color: var(--green);
+  font-size: 0.9em;
+}
+
+.note {
+  background: #fff9e6;
+  border-left: 4px solid #ffc700;
+  padding: 1rem;
+  margin: 1rem 0;
+  border-radius: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .note {
+    background: #3a3a0f;
+    border-left-color: #ffc700;
+  }
+}
+
+.warning {
+  background: #ffebee;
+  border-left: 4px solid #c62828;
+  padding: 1rem;
+  margin: 1rem 0;
+  border-radius: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .warning {
+    background: #3a0f0f;
+    border-left-color: #ff5252;
+  }
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.feature-card {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.feature-card h4 {
+  margin-top: 0;
+  color: var(--accent);
+}
+
+ul, ol {
+  margin-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+li {
+  margin-bottom: 0.5rem;
+}
+
+a {
+  color: var(--accent);
+}
+
+.cmd {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin: 0.5rem 0;
+  font-family: "Monaco", "Courier New", monospace;
+  overflow-x: auto;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+@media (max-width: 900px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .toc ul {
+    columns: 1;
+  }
+}
+
+footer {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  margin-top: 3rem;
+  text-align: center;
+  font-size: 0.9em;
+  color: #888;
+}
+
+.separator {
+  height: 1px;
+  background: var(--border);
+  margin: 2rem 0;
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<header>
+  <h1>🤖 RobotMoney — Bill of Materials</h1>
+  <div class="subtitle">Every module, service, route family, table group, and operational component this product requires — and where each one lives</div>
+</header>
+
+<div class="warning">
+  <strong>Scope &amp; accuracy.</strong> This page is an <em>orientation subset</em> of a large surface, not a complete
+  reference — the API alone exposes 102 distinct <code>/api/…</code> paths (of 104 total in
+  <span class="file-path">contract/src/routes.js</span>; the other two are <code>/health</code> and
+  <code>/swarm/takes/:id</code>) and the schema has ~54 live tables, and only a
+  fraction of each is listed here. The authoritative sources are:
+  <ul>
+    <li><span class="file-path">contract/src/routes.js</span> — every HTTP route path (the single source of truth both
+      the backend registration and the frontend client read)</li>
+    <li><span class="file-path">backend/migrations/*.sql</span> — the schema</li>
+    <li><span class="file-path">.env.example</span> + <span class="file-path">backend/src/config.ts</span> — configuration and defaults</li>
+    <li><span class="file-path">docs/architecture.md</span> and <span class="file-path">docs/decisions.md</span> — the canonical
+      architecture and accepted-decision records</li>
+  </ul>
+  Where this page and those disagree, they win. Contents verified against the repository on <strong>2026-08-05</strong>.
+</div>
+
+<div class="subsection">
+  <h4>What this document is for</h4>
+  <p>This is the inventory half of a pair: it enumerates <em>what</em> exists — the parts this product is built from and
+    the place each one lives. Its companion, <code>engineering/agentic-platform-challenges.md</code> in the private
+    <code>robotmoney-context</code> repository, explains <em>why</em> the
+    list runs this long and what makes any inventory of it so hard to keep correct. If your question is whether some
+    component here could simply be cut, read that companion's Part I first: it traces each component back to the
+    user-visible promise that requires it.</p>
+</div>
+
+<nav class="toc">
+  <h2>Quick Navigation</h2>
+  <ul>
+    <li><a href="#architecture">Architecture Overview</a></li>
+    <li><a href="#frontend">Frontend Views & Components</a></li>
+    <li><a href="#backend-routes">Backend API Routes</a></li>
+    <li><a href="#backend-services">Backend Services</a></li>
+    <li><a href="#contract">Contract & Types</a></li>
+    <li><a href="#database">Database & Persistence</a></li>
+    <li><a href="#worker">Worker Queue & Jobs</a></li>
+    <li><a href="#analytics">Analytics &amp; Producer Pipeline</a></li>
+    <li><a href="#swarm">Swarm Module</a></li>
+    <li><a href="#scripts">Scripts & Utilities</a></li>
+    <li><a href="#commands">Common Commands</a></li>
+    <li><a href="#integrations">Integrations & Dependencies</a></li>
+    <li><a href="#env">Environment Setup</a></li>
+  </ul>
+</nav>
+
+<!-- ARCHITECTURE OVERVIEW -->
+<section id="architecture">
+  <h2>🏗️ Architecture Overview</h2>
+
+  <div class="subsection">
+    <h4>Monorepo Structure</h4>
+    <p><strong>contract/</strong> — Shared HTTP contract (route table, DTOs, canonical signing + regime rules); zero
+      runtime dependencies, vendored into the frontend by <code>bun run sync-contract</code></p>
+    <p><strong>frontend/</strong> — Buildless static SPA (HTML + Alpine.js + CSS); no build step required</p>
+    <p><strong>backend/</strong> — Bun processes sharing one source tree: the <em>api</em> (HTTP + optional static
+      serving when <code>STATIC_DIR</code> is set), one <em>worker</em> per queue lane, and the independent
+      <em>analytics-producer</em>, which holds no database credential at all</p>
+    <p><strong>scripts/</strong> — the demo/stage stack driver, preview server, goldens capture, evals and checks</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="subsection">
+      <h4>Frontend Stack</h4>
+      <ul>
+        <li><strong>Alpine.js</strong> (v3.14.9) — Reactive SPA framework</li>
+        <li><strong>Chart.js</strong> (v4.5.1) — Time-series charting</li>
+        <li><strong>p5.js</strong> (v1.11.2) — Generative graphics & animations</li>
+        <li><strong>HTML5/CSS3</strong> — Zero transpilation</li>
+      </ul>
+    </div>
+    <div class="subsection">
+      <h4>Backend Stack</h4>
+      <ul>
+        <li><strong>Bun</strong> (≥1.2) — JavaScript runtime & server</li>
+        <li><strong>Postgres</strong> — Persistent state & job queue</li>
+        <li><strong>TypeScript</strong> (^5.9.3) — Type safety</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Design Philosophy:</strong> minimal dependencies and no frontend build step; one route table shared by
+    both sides; a Postgres-backed task queue for background work; and fail-closed configuration throughout — an unset
+    or unrecognized value refuses to start rather than guessing (<code>RM_ENV</code>, <code>WORKER_LANE</code>,
+    <code>ANALYTICS_SOURCE</code>, <code>BASE_RPC_SOURCE</code>, <code>PROJECTS_SOURCE</code> in prod).
+  </div>
+</section>
+
+<!-- FRONTEND VIEWS & COMPONENTS -->
+<section id="frontend">
+  <h2>🎨 Frontend Views & Components</h2>
+
+  <h3>Main View Files</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>View</th>
+        <th>File</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Home/Landing</td>
+        <td><span class="file-path">frontend/public/views/home.html</span></td>
+        <td>Landing page with terminal boot animation (p5.js)</td>
+      </tr>
+      <tr>
+        <td>Investment Swarm</td>
+        <td><span class="file-path">frontend/public/views/swarm.html</span></td>
+        <td>Swarm member interface, sessions, submissions</td>
+      </tr>
+      <tr>
+        <td>Dashboard surfaces</td>
+        <td><span class="file-path">frontend/public/views/dash/</span></td>
+        <td>A directory, not one file: <code>_layout.html</code> (shared shell injected into <code>[data-outlet]</code>)
+          plus <code>list.html</code>, <code>list2.html</code>, <code>list3.html</code>, <code>vaults.html</code>,
+          <code>wallets.html</code>, <code>agents.html</code>, <code>lobster.html</code>, the
+          <code>*-profile.html</code> dossiers, and <code>coming-soon.html</code></td>
+      </tr>
+      <tr>
+        <td>Performance</td>
+        <td><span class="file-path">frontend/public/views/performance.html</span></td>
+        <td>Performance tracking & metrics</td>
+      </tr>
+      <tr>
+        <td>Regime Analysis</td>
+        <td><span class="file-path">frontend/public/views/regime.html</span></td>
+        <td>Macro regime detection visualization</td>
+      </tr>
+      <tr>
+        <td>Allocation</td>
+        <td><span class="file-path">frontend/public/views/allocation.html</span></td>
+        <td>Token allocation framework</td>
+      </tr>
+      <tr>
+        <td>Projects</td>
+        <td><span class="file-path">frontend/public/views/projects.html</span></td>
+        <td>Project directory with AI agent listings</td>
+      </tr>
+      <tr>
+        <td>Admin</td>
+        <td><span class="file-path">frontend/public/views/admin.html</span></td>
+        <td>Admin dashboard (job queue, members, audit logs)</td>
+      </tr>
+      <tr>
+        <td>Docs</td>
+        <td><span class="file-path">frontend/public/views/docs.html</span></td>
+        <td>Documentation hub</td>
+      </tr>
+      <tr>
+        <td>FAQ/Legal</td>
+        <td><span class="file-path">frontend/public/views/faq.html</span>, etc.</td>
+        <td>Privacy, terms, disclaimer, changelog</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Alpine.js Component Library</h3>
+  <p>Location: <span class="file-path">frontend/public/assets/js/app/alpine/views/</span></p>
+
+  <div class="feature-grid">
+    <div class="feature-card">
+      <h4>Dashboard Surfaces</h4>
+      <ul>
+        <li>dash-shell.js</li>
+        <li>dash-vaults.js</li>
+        <li>dash-wallets.js</li>
+        <li>dash-agents.js</li>
+        <li>dash-gate.js</li>
+      </ul>
+    </div>
+    <div class="feature-card">
+      <h4>Profile Views</h4>
+      <ul>
+        <li>dash-coin-profile.js</li>
+        <li>dash-vault-profile.js</li>
+        <li>dash-wallet-profile.js</li>
+        <li>dash-agent-profile.js</li>
+        <li>dash-project-profile.js</li>
+      </ul>
+    </div>
+    <div class="feature-card">
+      <h4>Data Tables & Lists</h4>
+      <ul>
+        <li>list.js, list2.js — /list and /list2 facet tables</li>
+        <li>list3.js — the money-agent leaderboard view</li>
+        <li>activity.js, projects.js</li>
+      </ul>
+    </div>
+    <div class="feature-card">
+      <h4>Swarm UI</h4>
+      <ul>
+        <li>swarm.js (sessions)</li>
+        <li>submit.js (form)</li>
+        <li>apply-form.js (onboarding)</li>
+      </ul>
+    </div>
+    <div class="feature-card">
+      <h4>Charts & Analytics</h4>
+      <ul>
+        <li>regime.js</li>
+        <li>research.js</li>
+        <li>wallet-perf.js</li>
+        <li>fee-chart.js</li>
+        <li>buyback-summary.js</li>
+        <li>blog-charts.js</li>
+      </ul>
+    </div>
+    <div class="feature-card">
+      <h4>Admin Surfaces</h4>
+      <ul>
+        <li>admin-surface.js</li>
+        <li><span class="file-path">admin/</span> subdirectory: swarm-overview.js,
+          swarm-member.js, swarm-session.js, swarm-subject.js, shared.js</li>
+      </ul>
+    </div>
+    <div class="feature-card">
+      <h4>Shared / Misc</h4>
+      <ul>
+        <li>comments.js — public comment threads</li>
+        <li>allocation.js</li>
+        <li>shared.js</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Core JS Modules</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Module</th>
+        <th>Location</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>router.js</strong></td>
+        <td><span class="file-path">frontend/public/assets/js/app/</span></td>
+        <td>SPA routing and view navigation</td>
+      </tr>
+      <tr>
+        <td><strong>main.js</strong></td>
+        <td><span class="file-path">frontend/public/assets/js/app/</span></td>
+        <td>Bootstrap, Alpine.data registration, terminal animation</td>
+      </tr>
+      <tr>
+        <td><strong>routes.js</strong></td>
+        <td><span class="file-path">frontend/public/assets/js/app/</span></td>
+        <td>Frontend <em>view</em>-route table (URL path → view fragment, layout, gate). Not the HTTP contract —
+          see <code>app/contract/routes.js</code> below.</td>
+      </tr>
+      <tr>
+        <td><strong>api.js</strong></td>
+        <td><span class="file-path">frontend/public/assets/js/app/lib/</span></td>
+        <td>HTTP client for /api/* endpoints</td>
+      </tr>
+      <tr>
+        <td><strong>contract/</strong></td>
+        <td><span class="file-path">frontend/public/assets/js/app/contract/</span></td>
+        <td>Vendored copy of the shared contract runtime (<code>routes.js</code>, <code>index.js</code>,
+          <code>swarm-application.js</code>), written by <code>bun run sync-contract</code></td>
+      </tr>
+      <tr>
+        <td><strong>analytics.js</strong></td>
+        <td><span class="file-path">frontend/public/assets/js/app/</span></td>
+        <td>Google Analytics 4 pageviews for a client-rendered SPA (the loader itself lives in index.html's head).
+          Unrelated to the backend analytics pipeline.</td>
+      </tr>
+      <tr>
+        <td><strong>seo.js</strong></td>
+        <td><span class="file-path">frontend/public/assets/js/app/</span></td>
+        <td>Metadata injection for dynamic routes</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>CSS Architecture</h3>
+  <ul>
+    <li><strong>tokens.css</strong> — <em>Design</em> tokens (colour, type, spacing) — the foundation every other
+      stylesheet references. Nothing to do with the ROBOTMONEY token.</li>
+    <li><strong>design-system.css</strong> — Base rules, scrollbar, animations, reusable utilities</li>
+    <li><strong>components.css</strong> — Semantic component classes (navigation, hero, disclaimer)</li>
+    <li><strong>views.css</strong> — Data-driven view styles (regime + swarm)</li>
+    <li><strong>dash.css</strong> — The analytics dashboard theme, scoped entirely under <code>.a3</code> so it cannot
+      leak onto marketing pages</li>
+    <li><strong>docs-shell.css</strong> — The 3-column docs shell; active only on <code>/docs*</code> routes</li>
+    <li><strong>sections/*.css</strong> — Section-specific overrides (architecture, contract, footer, governance, token, etc.)</li>
+  </ul>
+</section>
+
+<!-- BACKEND API ROUTES -->
+<section id="backend-routes">
+  <h2>🛣️ Backend API Routes</h2>
+
+  <div class="warning">
+    <strong>Subset warning.</strong> <span class="file-path">contract/src/routes.js</span> is the authoritative route
+    table and defines <strong>102</strong> distinct <code>/api/…</code> paths (plus <code>/health</code> and the
+    non-API receipt permalink <code>/swarm/takes/:id</code>). The tables below show a small orientation slice. The
+    family split is: <strong>swarm 56</strong> (31 admin + 25 public), <strong>dashboards 22</strong>,
+    <strong>admin 13</strong>, <strong>analytics 7</strong>, <strong>projects 3</strong>, <strong>comments 1</strong>
+    path (GET list + POST create share it).
+  </div>
+
+  <h3>Dashboards API</h3>
+  <p>Public, unauthenticated read feeds. Location: <span class="file-path">backend/src/api/routes/dashboards.ts</span></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Endpoint</th>
+        <th>Method</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/vaults</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Agent-managed vault <em>directory</em> (the /vaults list). TVL/APY numbers are <code>vault-economics</code>.</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/vault-economics</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Live vault TVL / share price / APY / per-adapter economics</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/wallets</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Tracked + agent-derived wallet <em>directory</em>. Balances are <code>wallet-balances</code>.</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/wallet-balances</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Live prop-wallet valuation</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/wallet-sleeves</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Per-prop-wallet holdings breakdown</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/regime-snapshots</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Macro regime snapshots (<code>?range=</code>)</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/research-signals/:key</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>One research signal's snapshots. Live keys: <code>channel-divergence</code>, <code>late-cycle-signals</code>.</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/buybacks</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Token buyback history</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/token-metrics</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>ROBOTMONEY price / supply / market cap + fee split</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/allocation</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Admin/swarm-managed strategy + bucket target weights</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/entities</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Unified /list table rows (coins/vaults/wallets/agents)</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/overview</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Total-market summary (counts, vault TVL, leaders, RM token)</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/leaderboard</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Money-agent leaderboard + evidence (/list3)</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/activity</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Agent activity log feed</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/dashboards/submissions</span></td>
+        <td><span class="method post">POST</span></td>
+        <td><strong>Not swarm memos.</strong> Public, anonymous agent-onboarding / community-commit intake (the /submit
+          form). Rows land <code>status='pending'</code> for later moderation. Swarm memos go to
+          <code>/api/swarm/memos</code> and <code>/api/swarm/submit</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note">Also in this family and omitted above: <code>/api/dashboards/coins</code>,
+    <code>/api/dashboards/agents</code>, <code>/api/dashboards/list2</code>, and the per-entity detail dossiers
+    <code>/api/dashboards/{coins,vaults,wallets,agents}/:id</code>.</p>
+
+  <h3>Swarm API (public)</h3>
+  <p>Investment Swarm community. Location: <span class="file-path">backend/src/api/routes/swarm.ts</span> plus the
+    <span class="file-path">backend/src/api/routes/swarm/</span> subdirectory (<code>onboarding.ts</code>,
+    <code>receipts.ts</code>, <code>waitlist.ts</code>, <code>extensions.ts</code>, <code>types.ts</code>).
+    25 public paths; the 8 below are a slice.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Endpoint</th>
+        <th>Method</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="endpoint">/api/swarm/members</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>List all swarm members</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/members/:id</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Fetch specific member profile</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/sessions</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>List active/past sessions</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/sessions/:id</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>One session by its own id (<code>/api/swarm/sessions/:date/:subject</code> resolves the latest that day)</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/subjects/:id</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>One subject (plus <code>/subjects/:id/snapshots</code>). <strong>There is no public subject LIST</strong> —
+          listing is admin-gated at <code>/api/swarm/admin/subjects</code>.</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/apply</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Apply to join swarm (public onboarding; recorded 'applied' with an inactive key)</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/token-claim/challenge</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Request an opaque 10-minute key-proof challenge</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/token-claim</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>First valid key proof returns the sole bearer token</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/submit</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Submit an ed25519-signed take (member bearer)</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/memos</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Publish a long-form memo (member bearer); <code>/api/swarm/memos/:id</code> reads it back publicly</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note">Other public swarm paths not tabled here: <code>/waitlist</code>, <code>/members/:id/takes</code>,
+    <code>/members/:id/profile</code>, <code>/open-session</code>, <code>/brief</code>, <code>/signing-payload</code>,
+    <code>/takes/:id</code>, <code>/verify-token</code>, <code>/apply/:id</code>,
+    <code>/applications/:id/status</code>, <code>/register</code>, <code>/regime</code>.</p>
+
+  <h3>Swarm Admin API</h3>
+  <p>Privileged lifecycle operations. Location: <span class="file-path">backend/src/api/routes/swarm-admin.ts</span>.
+    31 paths under <code>/api/swarm/admin/</code>; the 6 below are a slice.</p>
+  <p class="note"><strong>Requires:</strong> the <code>X-Admin-Token</code> header matching <code>ADMIN_TOKEN</code>.
+    With no token configured these are open only when <code>RM_ALLOW_INSECURE=1</code> or <code>RM_ENV=ephemeral</code>.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Endpoint</th>
+        <th>Method</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="endpoint">/api/swarm/admin/members/:id/review</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Accept/reject an application — <code>{ decision: approve | reject }</code></td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/admin/activate</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Flip applied → active and mint the bearer token. <strong>No <code>:id</code> path segment</strong>; the
+          member is named in the body. (<code>/members/:id/reactivate</code> is the separate re-admission verb.)</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/admin/subjects</span></td>
+        <td><span class="method get">GET</span> / <span class="method post">POST</span></td>
+        <td>List subjects across all statuses / create one — the admin-only counterpart to the public per-id read</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/admin/sessions</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Create a session (UTC-validated, snapshots the roster, enqueues 4 scoped jobs)</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/admin/sessions/:id/aggregate</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Deterministic rollup of the session's takes (versioned guarded transition)</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/swarm/admin/sessions/:id/publish</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Publish session results (versioned guarded transition)</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note">Also under this prefix: a generic single-segment lifecycle dispatcher
+    <code>/api/swarm/admin/:action</code> (<code>subject</code>, <code>open</code>, <code>brief</code>,
+    <code>close</code>, <code>aggregate</code>, <code>publish</code>, <code>enqueue-job</code>, …), plus
+    <code>/members</code>, <code>/applications</code>, <code>/members/:id/{deactivate,reactivate,rotate-key}</code>,
+    <code>/subjects/:id/{update,deactivate}</code>, <code>/sessions/:id/{roster,roster/add,roster/excuse,
+    roster/restore,cancel,close,reopen}</code>, <code>/audit</code>, and <code>/agent-health</code>.</p>
+
+  <h3>Projects API</h3>
+  <p>Project directory. Location: <span class="file-path">backend/src/api/routes/projects.ts</span></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Endpoint</th>
+        <th>Method</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="endpoint">/api/projects</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>List all projects</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/projects/:slug</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Fetch project detail</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/projects/admin/:slug</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Admin-managed overview write. Note the prefix order — <code>admin</code> comes before the slug, so it can
+          never collide with the public <code>/api/projects/:slug</code> read.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Comments API</h3>
+  <p>Public comments. Location: <span class="file-path">backend/src/api/routes/comments.ts</span>. GET and POST share
+    the single path <code>/api/comments</code>; the thread is selected by the <code>?page=</code> query slug, not a
+    path parameter.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Endpoint</th>
+        <th>Method</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="endpoint">/api/comments?page=&lt;slug&gt;</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Visible comments for that page slug, oldest → newest. <strong>Not rate limited.</strong> An empty or
+          missing <code>page</code> returns an empty list rather than an error.</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/comments</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Create a comment. Rate limited to <strong>5 posts per 60&nbsp;s</strong> per hashed client IP (in-memory
+          sliding window; the IP is only ever stored as a sha256 hash).</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Analytics API — a WRITE boundary, not a read API</h3>
+  <p>Location: <span class="file-path">backend/src/api/routes/analytics.ts</span>. This is the analytics-provider
+    <strong>ingestion</strong> surface: updater processes submit computed outputs here instead of writing SQL, and the
+    API process is the only runtime component that imports the analytics store writers. Public read feeds live under
+    <code>/api/dashboards/*</code>.</p>
+  <p class="note"><strong>Requires:</strong> the <code>ANALYTICS_TOKEN</code> bearer (analytics-provider role,
+    constant-time compared). <code>ADMIN_TOKEN</code> and member bearers are never substitutes. Unauthenticated → 401;
+    wrong credential → 403.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Endpoint</th>
+        <th>Method</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="endpoint">/api/analytics/readiness</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Producer boot probe — authenticates the credential only; reads and mutates nothing</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/analytics/raw-history</span></td>
+        <td><span class="method get">GET</span> / <span class="method post">POST</span></td>
+        <td>The only data route accepting GET. POST batch-upserts on (date, indicator).</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/analytics/raw-history/seed</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Cold-DB gap fill (existing rows win) — EDGAR seed ingestion</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/analytics/regime-snapshots</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Snapshot batch upsert on (date). <strong>GET returns 405.</strong></td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/analytics/research-signals</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Signal batch upsert on (signal_key, date). <strong>GET returns 405.</strong></td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/analytics/telemetry</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>One run's structured telemetry (stages, warnings, artifacts, outcome). Non-fatal: a failed telemetry
+          submission never blocks the canonical writes.</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/analytics/research-eligibility</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Retired control-plane path. Authenticated callers get <strong>409</strong> and no schedule/job mutation —
+          retained so old clients fail closed.</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="note">
+    Every mutation validates the <em>entire</em> payload before opening a transaction, runs inside one transaction, and
+    is idempotent on its natural key. There is no generic SQL-over-HTTP endpoint.
+  </div>
+
+  <h3>Admin API</h3>
+  <p>Job queue and audit trails. Location: <span class="file-path">backend/src/api/routes/admin.ts</span></p>
+  <p class="note"><strong>Requires:</strong> ADMIN_TOKEN or RM_ALLOW_INSECURE=1</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Endpoint</th>
+        <th>Method</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="endpoint">/api/admin/jobs</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>List job queue status</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/admin/jobs/:id</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Fetch job detail</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/admin/jobs/:id/retry</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Clone a <code>dead</code> job into a new pending job</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/admin/runs</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Recent <code>job_runs</code> feed — the logs</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/admin/audit</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Redacted, filtered <code>audit_log</code> feed</td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/admin/auth</span></td>
+        <td><span class="method post">POST</span></td>
+        <td>Verify the admin password → <code>{ ok: true }</code></td>
+      </tr>
+      <tr>
+        <td><span class="endpoint">/api/admin/overview</span></td>
+        <td><span class="method get">GET</span></td>
+        <td>Health cards + alert feed (queue counts, last success/failure by kind, stale research signals, next
+          enabled schedules)</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note">Also here: the research-telemetry admin surface
+    <code>/api/admin/research/{runs,runs/:id,raw-series/:indicator,signals/:key}</code> and
+    <code>/api/admin/schedules/:id</code>. <code>/api/admin/research/rerun</code> is retired and answers
+    <strong>409</strong> — the independent producer owns execution.</p>
+</section>
+
+<!-- BACKEND SERVICES -->
+<section id="backend-services">
+  <h2>⚙️ Backend Services</h2>
+
+  <h3>Analytics Service</h3>
+  <p>Location: <span class="file-path">backend/src/analytics/</span> — a directory <em>of directories</em>:
+    <code>access/</code>, <code>extract/</code>, <code>transform/</code>, <code>analyze/</code>, <code>store/</code>,
+    <code>report/</code>, plus <code>index.ts</code>, <code>persistence.ts</code>, <code>api-client.ts</code>,
+    <code>telemetry.ts</code>.</p>
+  <div class="subsection">
+    <h4>Indicator Fetchers — <span class="file-path">extract/</span></h4>
+    <ul>
+      <li><strong>edgar.ts</strong> — SEC EDGAR full-text search (keyless); plus edgar-fetch-plan.ts and the seed loaders</li>
+      <li><strong>fred.ts</strong> — FRED macro series, fetched as keyless CSV from <code>fredgraph.csv</code></li>
+      <li><strong>yahoo.ts</strong> — Stock/index historical prices</li>
+      <li><strong>coinmetrics.ts</strong> — Crypto on-chain and market data</li>
+      <li><strong>defillama.ts</strong> — DeFi TVL metrics (one word, no hyphen)</li>
+      <li><strong>geckoterminal.ts</strong> — DEX pool / token market data</li>
+      <li><strong>shiller.ts</strong> — Valuation cyclical indicator (CAPE)</li>
+      <li><strong>blockchain-com.ts</strong> — Bitcoin network metrics</li>
+      <li><strong>http.ts</strong>, <strong>fetch-cache.ts</strong> — shared transport + on-disk GET cache</li>
+    </ul>
+  </div>
+  <div class="subsection">
+    <h4>Compute Layer — <span class="file-path">analyze/</span></h4>
+    <ul>
+      <li><strong>regime.ts</strong> — Macro regime classification. The label rule itself lives in
+        <span class="file-path">contract/src/regime.js</span> so every surface shares one threshold set.</li>
+      <li><strong>research.ts</strong> / <strong>research-signals.ts</strong> — the two shipped signals</li>
+      <li><strong>correlations.ts</strong> — Asset correlation matrices</li>
+      <li><strong>backtest.ts</strong> — Strategy backtesting</li>
+      <li><strong>indicators.ts</strong>, <strong>compute.ts</strong>, <strong>regime-versions.ts</strong>,
+        <strong>regime-eq-comparison.ts</strong>, <strong>weighting-comparison.ts</strong></li>
+    </ul>
+  </div>
+  <div class="subsection">
+    <h4>Source selection &amp; persistence</h4>
+    <ul>
+      <li><strong>access/data-source.ts</strong>, <strong>access/hermetic-source.ts</strong>,
+        <strong>access/provider.ts</strong> — data source interface; selected solely by <code>ANALYTICS_SOURCE</code>
+        (unset/live → real keyless fetchers, hermetic → deterministic offline source), fail-closed on anything else</li>
+      <li><strong>index.ts</strong> — <code>runAnalytics()</code> orchestrator; merges live + persisted floor</li>
+      <li><strong>store/</strong> — the writers, imported <em>only</em> by the API process</li>
+      <li><strong>api-client.ts</strong> — the HTTP <code>AnalyticsPersistence</code> client every out-of-process
+        updater uses instead of SQL</li>
+    </ul>
+  </div>
+
+  <h3>Analytics Producer Service</h3>
+  <p>Location: <span class="file-path">backend/src/producer/index.ts</span></p>
+  <p>The independent analytics/research producer (decision <strong>D25</strong>, issue #361). It runs as its own
+    container (<code>analytics-producer</code> in <code>docker-compose.yml</code>) with <em>no</em>
+    <code>DATABASE_URL</code>, no queue access and no <code>ADMIN_TOKEN</code>: it computes on its own side and can
+    persist only by submitting through <code>/api/analytics/*</code> under its secret-file-mounted provider bearer.</p>
+  <ul>
+    <li>Owns its own cadence: <code>PRODUCER_REGIME_CRON</code> (default <code>30 22 * * *</code>) and
+      <code>PRODUCER_RESEARCH_CRON</code> (default <code>0 23 * * *</code>), UTC — <strong>not</strong>
+      <code>job_schedules</code></li>
+    <li>CLI: <code>bun run src/producer/index.ts &lt;serve|seed|regime|research&gt; [YYYY-MM-DD]</code></li>
+    <li>Boots only after <code>/health</code> and an authenticated <code>/api/analytics/readiness</code> both pass; a
+      rejected credential is fatal, never a silent no-op</li>
+  </ul>
+
+  <h3>Chain Service</h3>
+  <p>Location: <span class="file-path">backend/src/chain/</span></p>
+  <p>Base RPC integration with TTL cache and graceful degradation to persisted values.</p>
+  <ul>
+    <li><strong>base-rpc-client.ts</strong> — the read-only JSON-RPC transport; <strong>ttl-cache.ts</strong> the cache</li>
+    <li><strong>vault-economics.ts</strong> — Vault TVL, share price, APY, per-adapter economics</li>
+    <li><strong>token-metrics.ts</strong>, <strong>token-prices.ts</strong> — token supply/price feeds</li>
+    <li><strong>wallet-balances.ts</strong>, <strong>wallet-sleeves.ts</strong>, <strong>wallet-valuation.ts</strong>,
+      <strong>wallet-history-seed.ts</strong> — wallet reads</li>
+    <li><strong>buyback-logs.ts</strong> — <code>eth_getLogs</code> buyback indexer</li>
+    <li><strong>allocation-framework.ts</strong> — Allocation framework state</li>
+  </ul>
+  <div class="note">
+    There is <strong>no</strong> <code>chain/adapters/</code> directory. The Morpho / Aave / Compound adapters are
+    <em>configuration addresses</em>, not per-adapter code: <code>resolveVaultAdapters()</code> in
+    <span class="file-path">backend/src/config.ts</span> reads <code>ADAPTER_MORPHO_ADDRESS</code> /
+    <code>ADAPTER_AAVE_ADDRESS</code> / <code>ADAPTER_COMPOUND_ADDRESS</code> (real Base mainnet defaults, decision
+    D15), and one generic <code>eth_call</code> path reads them all.
+  </div>
+
+  <h3>Projects Service</h3>
+  <p>Location: <span class="file-path">backend/src/projects/</span></p>
+  <p>Projection layer for the project directory, entity aggregation, activity logs, and leaderboards. There is no
+    <code>index.ts</code> — each projection is its own module.</p>
+  <ul>
+    <li><strong>projections.ts</strong> — shared projection helpers</li>
+    <li><strong>entities-projections.ts</strong> — entity aggregation (coins, vaults, wallets, agents)</li>
+    <li><strong>profile-projections.ts</strong>, <strong>dossier-projections.ts</strong>,
+      <strong>agent-detail-projections.ts</strong> — detail pages</li>
+    <li><strong>activity-log-projections.ts</strong> — activity log computation</li>
+    <li><strong>leaderboard-projections.ts</strong>, <strong>list2-projections.ts</strong> — ranking + facet tables</li>
+    <li><strong>access/</strong> — <code>data-source.ts</code>, <code>fixture-source.ts</code>,
+      <code>live-source.ts</code>, <code>select.ts</code>: the <code>PROJECTS_SOURCE</code> switch</li>
+    <li><strong>seed/</strong>, <strong>fixtures/</strong> — the committed v0 roster seed and offline dataset</li>
+  </ul>
+
+  <h3>Swarm Service</h3>
+  <p>Location: <span class="file-path">backend/src/swarm/</span> — six files, not one per noun:</p>
+  <ul>
+    <li><strong>domain.ts</strong> — member/session/take domain logic</li>
+    <li><strong>admin.ts</strong> — privileged lifecycle operations</li>
+    <li><strong>projections.ts</strong> — read models for the public API</li>
+    <li><strong>notifications.ts</strong> — durable outbox rows + swarm-lane delivery jobs</li>
+    <li><strong>roster-seed.ts</strong> — the <code>SWARM_SEED_ROSTER</code> house-roster seed</li>
+    <li><strong>v0-archive.ts</strong> — imported v0 session history</li>
+  </ul>
+
+  <h3>Admin Service</h3>
+  <p>Location: <span class="file-path">backend/src/admin/</span></p>
+  <ul>
+    <li><strong>audit.ts</strong> — audit trail logging (writes <code>audit_log</code>)</li>
+    <li><strong>cursor.ts</strong> — opaque keyset pagination cursors for the admin feeds</li>
+    <li><strong>overview.ts</strong> — the <code>/api/admin/overview</code> health-card aggregation</li>
+  </ul>
+
+  <h3>API Route Modules</h3>
+  <p>Location: <span class="file-path">backend/src/api/routes/</span></p>
+  <ul>
+    <li><code>dashboards.ts</code>, <code>projects.ts</code>, <code>comments.ts</code>,
+      <code>submissions.ts</code> — public surfaces</li>
+    <li><code>swarm.ts</code> and the <code>swarm/</code> subdirectory (<code>onboarding.ts</code>,
+      <code>receipts.ts</code>, <code>waitlist.ts</code>, <code>extensions.ts</code>, <code>types.ts</code>)</li>
+    <li><code>swarm-admin.ts</code>, <code>admin.ts</code>, <code>analytics.ts</code> — privileged surfaces</li>
+    <li>Siblings: <code>api/index.ts</code> (dispatch + <code>/health</code>), <code>api/auth.ts</code>,
+      <code>api/validation.ts</code>, <code>api/static.ts</code></li>
+  </ul>
+</section>
+
+<!-- CONTRACT & TYPES -->
+<section id="contract">
+  <h2>📋 Contract & Shared Types</h2>
+
+  <p>Location: <span class="file-path">contract/src/</span></p>
+
+  <h3>Dashboard Types</h3>
+  <code>dashboards.d.ts</code>
+  <ul>
+    <li><strong>VaultTvlPoint</strong> — TVL snapshot with timestamp</li>
+    <li><strong>VaultApy</strong> — APY data</li>
+    <li><strong>WalletBalancePoint</strong> — Balance snapshot</li>
+    <li><strong>AllocationFramework</strong> — Asset allocation buckets</li>
+    <li><strong>VaultEconomics</strong> — Composite vault metrics (TVL, APY, fees)</li>
+  </ul>
+
+  <h3>Swarm Types</h3>
+  <code>swarm.d.ts</code> — every exported swarm type carries the <code>Swarm</code> prefix:
+  <ul>
+    <li><strong>SwarmMember</strong> — Swarm participant (id, name, status, profile)</li>
+    <li><strong>SwarmSession</strong> — Research session; <code>SwarmSessionListItem</code> is the light index row</li>
+    <li><strong>SwarmSubject</strong> — Topic of analysis</li>
+    <li><strong>SwarmTake</strong> — Individual member stance; <code>SwarmTakeReceipt</code> for the public receipt</li>
+    <li><strong>SwarmMemo</strong> — Extended writeup/reasoning</li>
+    <li><strong>SwarmSubmission</strong> — Signed take payload</li>
+    <li><strong>SwarmApplication</strong> — Join request with public key</li>
+    <li><strong>SwarmRecommendation</strong>, <strong>SwarmBrief</strong>, <strong>SwarmQuorum</strong>,
+      <strong>SwarmDisagreement</strong>, <strong>SwarmWaitlistEntry</strong>, <strong>MemberStatus</strong>,
+      <strong>Stance</strong>, and the unprefixed <strong>RegimeSummary</strong> / <strong>SubjectSnapshot</strong></li>
+  </ul>
+  <div class="note">
+    There is no exported <code>SigningDraft</code> type. The canonical signing payload is produced and checked by
+    <code>validateSigningDraft()</code> / <code>parseSigningDraft()</code> in
+    <span class="file-path">backend/src/api/validation.ts</span>, with the canonicalizers
+    (<code>canonicalizeSubmission</code>, <code>canonicalizeApplication</code>,
+    <code>canonicalizeClaimChallenge</code>) exported from the contract root.
+  </div>
+
+  <h3>Project Types</h3>
+  <code>projects.d.ts</code>
+  <ul>
+    <li><strong>Project</strong> — Project stub (id, slug, name, type)</li>
+    <li><strong>ProjectDetail</strong> — Full project profile with AI agent mappings</li>
+  </ul>
+
+  <h3>Admin Types</h3>
+  <code>admin.d.ts</code> (the largest of the type files — ~49 exports)
+  <ul>
+    <li><strong>AdminJobRow</strong> / <strong>AdminJobsResponse</strong> — queue rows + the jobs feed envelope</li>
+    <li><strong>AdminRunRow</strong> / <strong>AdminRunsResponse</strong> — <code>job_runs</code> feed</li>
+    <li><strong>AdminAuditRow</strong> / <strong>AdminAuditResponse</strong> — audit log entry + envelope</li>
+    <li><strong>AdminOverview</strong>, <strong>AdminAlert</strong>, <strong>AdminAlertLevel</strong> — the health cards</li>
+    <li><strong>SwarmSessionState</strong> / <strong>SwarmSessionAction</strong>, <strong>MemberReviewRequest</strong>,
+      <strong>SessionCreateRequest</strong>, <strong>DeadJobRetryRequest</strong>, … — the operator request/response DTOs</li>
+  </ul>
+  <p class="note">There is no <code>JobStatus</code>, <code>AdminAudit</code>, or <code>CursorState</code> type — the
+    cursor is an opaque base64url string produced server-side by
+    <span class="file-path">backend/src/admin/cursor.ts</span>, never a shared type.</p>
+
+  <h3>Routes Constant</h3>
+  <code>routes.js</code> / <code>routes.d.ts</code>
+  <ul>
+    <li><strong>ROUTES</strong> — nested object of every endpoint path (102 <code>/api/…</code> paths), grouped by
+      family: <code>comments</code>, <code>dashboards</code>, <code>projects</code>, <code>swarm</code> (with a nested
+      <code>swarm.admin</code>), <code>analytics</code>, <code>admin</code>, plus <code>health</code></li>
+    <li><strong>path()</strong> — substitutes <code>:params</code> into a template and throws on a missing one</li>
+  </ul>
+
+  <div class="note">
+    The contract has zero runtime dependencies. <code>bun run sync-contract</code> copies the runtime files into
+    <code>frontend/public/assets/js/app/contract/</code> (see <code>destDir</code> in
+    <span class="file-path">scripts/sync-contract.ts</span>); <code>bun run check-contract</code> fails if the vendored
+    copy has drifted. Do not confuse this with <code>app/routes.js</code>, which is the frontend's own
+    <em>view</em>-route table.
+  </div>
+</section>
+
+<!-- DATABASE & PERSISTENCE -->
+<section id="database">
+  <h2>💾 Database & Persistence</h2>
+
+  <h3>Schema Layers</h3>
+  <p>Location: <span class="file-path">backend/migrations/</span> — 32 SQL files, <code>0001</code> …
+    <code>0027</code>, applied in filename order exactly once and tracked in <code>schema_migrations</code> by
+    <span class="file-path">backend/src/db/migrate.ts</span>. They create 56 tables and drop 2, leaving
+    <strong>~54 live tables</strong>. The handful below are an orientation subset; the migrations are authoritative.</p>
+
+  <div class="note">
+    <strong>The committee → swarm rename.</strong> Everything now named <code>swarm_*</code> was created as
+    <code>committee_*</code> and renamed in <span class="file-path">0025_swarm_rename.sql</span> (decision D28). Older
+    migrations still say <code>committee_*</code> — that is history, not a second set of tables.
+  </div>
+
+  <div class="subsection">
+    <h4>Analytics Tables</h4>
+    <ul>
+      <li><strong>raw_indicator_history</strong> — the raw indicator "floor" every computation reads</li>
+      <li><strong>regime_snapshots</strong> — persisted regime classification results (+ <code>regime_indicators</code>)</li>
+      <li><strong>research_signals</strong> — research signal snapshots</li>
+      <li><strong>wallet_balance_samples</strong>, <strong>wallet_sleeve_samples</strong>,
+        <strong>vault_adapter_samples</strong>, <strong>vault_share_price_history</strong> — the sampler history</li>
+    </ul>
+  </div>
+
+  <div class="subsection">
+    <h4>Swarm Tables</h4>
+    <ul>
+      <li><strong>swarm_members</strong> (+ <code>swarm_member_keys</code>) — member profiles and credentials</li>
+      <li><strong>swarm_sessions</strong>, <strong>swarm_briefs</strong>, <strong>swarm_session_members</strong>,
+        <strong>swarm_session_events</strong> — session state and the frozen roster</li>
+      <li><strong>swarm_subjects</strong>, <strong>swarm_subject_snapshots</strong> — session topics</li>
+      <li><strong>swarm_recommendations</strong> — the per-member stances. <em>There is no <code>swarm_takes</code>
+        table</em>: <code>committee_takes</code> was dropped in <span class="file-path">0006_committee_reconcile.sql</span>.</li>
+      <li><strong>swarm_memos</strong> — long-form memos. <em>There is no <code>swarm_submissions</code> table</em>
+        either; <code>committee_submissions</code> was dropped in the same migration.</li>
+      <li><strong>swarm_applications</strong>, <strong>swarm_claim_challenges</strong>,
+        <strong>swarm_waitlist</strong>, <strong>swarm_notification_outbox</strong>,
+        <strong>swarm_agent_health_events</strong></li>
+    </ul>
+  </div>
+
+  <div class="subsection">
+    <h4>Job Queue Tables</h4>
+    <ul>
+      <li><strong>jobs</strong> — <code>id, kind, payload, status, priority, run_after, attempts, max_attempts,
+        locked_at, locked_by, last_error, dedupe_key, …</code>. Note what is <em>not</em> there: no <code>lane</code>
+        column (lanes are <code>kind LIKE</code> patterns applied at claim time), no <code>retry_count</code>
+        (<code>attempts</code>/<code>max_attempts</code>), and no visibility-timeout column
+        (<code>locked_at</code> + the <code>JOB_VISIBILITY_TIMEOUT</code> env).</li>
+      <li><strong>job_runs</strong> — one row per execution attempt (started/finished, status, error, output). This is
+        the logs feed behind <code>/api/admin/runs</code>.</li>
+      <li><strong>job_schedules</strong> — cron rows. Analytics schedules here are force-disabled since D25.</li>
+    </ul>
+  </div>
+
+  <div class="subsection">
+    <h4>Admin & Analytics Provenance</h4>
+    <ul>
+      <li><strong>audit_log</strong> — the redacted admin audit trail behind <code>/api/admin/audit</code></li>
+      <li><strong>analytics_runs</strong>, <strong>analytics_stage_runs</strong>,
+        <strong>analytics_artifacts</strong> — pipeline run telemetry</li>
+      <li><strong>analytics_submissions</strong> — submission provenance; it also backs the public
+        <code>/api/dashboards/submissions</code> intake rows</li>
+    </ul>
+  </div>
+  <p class="note">Names that do <em>not</em> exist anywhere in the schema: <code>indicator_history</code>,
+    <code>wallet_samples</code>, <code>swarm_takes</code>, <code>swarm_submissions</code>, <code>job_audit</code>,
+    <code>cursor_state</code>, <code>analytics_audit</code>.</p>
+
+  <h3>Migration Utilities</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Module</th>
+        <th>Location</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>migrate.ts</strong></td>
+        <td><span class="file-path">backend/src/db/</span></td>
+        <td>Run all migration files in order</td>
+      </tr>
+      <tr>
+        <td><strong>seed.ts</strong></td>
+        <td><span class="file-path">backend/src/db/</span></td>
+        <td>Load seed data (projects, indicator defaults)</td>
+      </tr>
+      <tr>
+        <td><strong>client.ts</strong></td>
+        <td><span class="file-path">backend/src/db/</span></td>
+        <td>Postgres connection pool (shared across api/worker)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Database Configuration</h3>
+  <ul>
+    <li><strong>DATABASE_URL</strong> — Postgres connection string; the only required env var</li>
+    <li><strong>WORKER_DATABASE_URL</strong> — optional. Connects the worker's pool as the restricted
+      <code>rm_worker</code> role provisioned by <span class="file-path">0016_worker_role.sql</span>: it can claim and
+      complete jobs and maintain the non-analytics samplers, but is DENIED insert/update/delete on the analytics data
+      tables. Falls back to <code>DATABASE_URL</code> when unset.</li>
+    <li><strong>Clients</strong> — <span class="file-path">db/client.ts</span> (API) and
+      <span class="file-path">db/worker-client.ts</span> (worker) are separate pools, which is what makes the role
+      split possible.</li>
+  </ul>
+</section>
+
+<!-- WORKER QUEUE & JOBS -->
+<section id="worker">
+  <h2>⚡ Worker Queue & Background Jobs</h2>
+
+  <h3>Worker Architecture</h3>
+  <p>Location: <span class="file-path">backend/src/worker/</span></p>
+
+  <div class="subsection">
+    <h4>Job Lanes</h4>
+    <p>A lane is <em>not</em> a priority or a concurrency setting. It is a pair of SQL <code>LIKE</code> pattern lists
+      (include / exclude) applied inside the <code>FOR UPDATE SKIP LOCKED</code> claim query — it only narrows WHICH
+      pending <code>kind</code>s a worker may claim. Production runs one container per lane.</p>
+    <ul>
+      <li><strong>swarm</strong> — RESERVED interactive lane: claims <em>only</em> <code>swarm.%</code>. No other lane
+        may take those, so session lifecycle work is always immediately claimable.</li>
+      <li><strong>analytics</strong> — everything EXCEPT <code>swarm.%</code> and <code>research.%</code>. In practice
+        that is the vault / wallet / buybacks / projects pipelines — <strong>it excludes research</strong>.</li>
+      <li><strong>research</strong> — compatibility lane for legacy <code>research.%</code> rows. Since D25 the
+        independent producer owns supported research execution and nothing can enqueue new rows here.</li>
+      <li><strong>generic</strong> — dev/tooling convenience: everything EXCEPT the reserved <code>swarm.%</code>
+        kinds. Not part of the compose topology.</li>
+    </ul>
+    <p><code>WORKER_LANE</code> is <strong>REQUIRED</strong>. An empty or unknown value throws in
+      <code>resolveLane()</code> at startup — there is deliberately no default, because a misconfigured worker
+      silently claiming everything would eat the reserved swarm capacity.</p>
+  </div>
+
+  <div class="subsection">
+    <h4>Core Modules</h4>
+    <ul>
+      <li><strong>index.ts</strong> — process entry: resolves the lane, starts the runtime, handles SIGINT/SIGTERM</li>
+      <li><strong>runtime.ts</strong> — composes the three loops behind one start/stop handle; owns the bounded
+        shutdown contract (release the in-flight job back to <code>pending</code> rather than orphan it)</li>
+      <li><strong>loop.ts</strong> — the lane-filtered claim/drain loop and the ownership-guarded terminal writes</li>
+      <li><strong>scheduler.ts</strong> — ticks <code>job_schedules</code> into <code>jobs</code></li>
+      <li><strong>reaper.ts</strong> — recovers jobs whose lease expired</li>
+      <li><strong>lanes.ts</strong> — the include/exclude pattern table and <code>resolveLane()</code></li>
+    </ul>
+  </div>
+
+  <h3>Job Handlers</h3>
+  <p>Location: <span class="file-path">backend/src/worker/handlers/</span></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Handler</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>analytics.ts</strong></td>
+        <td><code>regime.classify</code>, <code>research.refresh</code> — <strong>legacy/retired.</strong> Kept for
+          compatibility and unit coverage; D25 moved supported execution to the producer, seed disables and
+          dead-letters these kinds, and shared workers get no analytics bearer.</td>
+      </tr>
+      <tr>
+        <td><strong>swarm.ts</strong></td>
+        <td><code>swarm.open_session</code>, <code>publish_brief</code>, <code>close_window</code>,
+          <code>aggregate</code>, <code>publish</code>, and the four <code>send_*_notification</code> kinds</td>
+      </tr>
+      <tr>
+        <td><strong>projects.ts</strong></td>
+        <td><code>projects.discover</code>, <code>refresh_coins</code>, <code>refresh_wallets</code>,
+          <code>fetch_vaults</code>, <code>sync_revenue</code>, <code>snapshot_daily</code>,
+          <code>recompute_coverage</code></td>
+      </tr>
+      <tr>
+        <td><strong>vault.ts</strong></td>
+        <td><code>vault.sample_share_price</code> (hourly, feeds the 7-day APY calc),
+          <code>vault.sample_adapters</code></td>
+      </tr>
+      <tr>
+        <td><strong>wallet.ts</strong></td>
+        <td><code>wallet.sample_balances</code>, <code>wallet.sample_sleeves</code></td>
+      </tr>
+      <tr>
+        <td><strong>buybacks.ts</strong></td>
+        <td><code>buybacks.refresh</code> — <code>eth_getLogs</code> indexer upserting <code>buyback_swaps</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note">The worker is an <strong>updater, not a writer</strong> for analytics: it never writes analytics SQL,
+    it submits through the authenticated <code>/api/analytics/*</code> boundary
+    (<code>ANALYTICS_API_URL</code> + <code>ANALYTICS_TOKEN</code>). Its own DB connection is scoped to queue lifecycle
+    plus the non-analytics samplers.</p>
+
+  <h3>Job Lifecycle</h3>
+  <p>Status is a CHECK-constrained enum in <span class="file-path">0003_task_queue.sql</span>:
+    <strong>pending → running → succeeded | failed | dead</strong>. Those five are the whole vocabulary.</p>
+  <ul>
+    <li><strong>Enqueue</strong> — a row in <code>jobs</code> with a <code>kind</code> and payload. An optional
+      <code>dedupe_key</code> (unique partial index) means a schedule slot enqueues at most once even with several
+      schedulers running.</li>
+    <li><strong>Claim</strong> — <code>FOR UPDATE SKIP LOCKED</code>, narrowed by the worker's lane patterns; the row
+      is stamped with <code>locked_at</code>/<code>locked_by</code>.</li>
+    <li><strong>Lease renewal</strong> — a live handler refreshes <code>locked_at</code> every
+      <code>JOB_LEASE_RENEW_MS</code> (default one third of <code>JOB_VISIBILITY_TIMEOUT</code>, itself 300&nbsp;s),
+      so a long fetch is never reaped and re-run concurrently.</li>
+    <li><strong>Failure</strong> — <code>attempts</code> increments and <code>run_after</code> is pushed out by
+      <code>2^attempts</code> seconds, capped at 1&nbsp;h.</li>
+    <li><strong>Reap</strong> — <code>reapStuckJobs()</code> requeues rows that stayed <code>running</code> past the
+      visibility timeout (a crashed owner). It does not delete completed jobs.</li>
+    <li><strong>Terminal</strong> — once <code>attempts &gt;= max_attempts</code> (default 5) the row becomes
+      <code>status='dead'</code>. <strong>There is no separate DLQ table</strong>; <code>dead</code> is the dead
+      letter, and <code>POST /api/admin/jobs/:id/retry</code> clones it into a fresh pending job.</li>
+  </ul>
+
+  <div class="note">
+    <strong>Graceful degradation:</strong> failures retry with exponential backoff. If a provider is unreachable the
+    analytics path falls back to the persisted floor rather than writing a hole; chain reads fall back through the TTL
+    cache to the last persisted value, and the DTO labels the provenance rather than presenting stale data as live.
+  </div>
+</section>
+
+<!-- ANALYTICS PIPELINE -->
+<section id="analytics">
+  <h2>📊 Analytics &amp; Producer Pipeline</h2>
+
+  <div class="warning">
+    <strong>The "worker lane runs analytics" model is retired.</strong> Under decision <strong>D25</strong> (issue
+    #361) regime and research execution moved out of the consumer's job queue into the independent
+    <code>analytics-producer</code> service. The <code>analytics</code> worker lane <em>excludes</em>
+    <code>research.%</code> and now carries the vault / wallet / buybacks / projects pipelines; the old
+    <code>regime.classify</code> and <code>research.refresh</code> handlers remain readable for tests and historical
+    queue rows but have no supported caller and no bearer.
+  </div>
+
+  <h3>Data Flow</h3>
+  <p>Driven by the producer's own cron timers (<code>PRODUCER_REGIME_CRON</code>, <code>PRODUCER_RESEARCH_CRON</code>),
+    outside the API/database trust domain.</p>
+  <ol>
+    <li><strong>Extract</strong> — the producer fetches live indicators from external providers (EDGAR, FRED, Yahoo,
+      CoinMetrics, DeFiLlama, GeckoTerminal, Shiller, Blockchain.com), all keyless</li>
+    <li><strong>Merge</strong> — combine live data with the persisted floor, read back through
+      <code>GET /api/analytics/raw-history</code> (the producer has no database)</li>
+    <li><strong>Compute</strong> — regime classification, research signals, correlations, in the producer's own process</li>
+    <li><strong>Submit</strong> — <code>POST /api/analytics/{raw-history, regime-snapshots, research-signals,
+      telemetry}</code> under the provider bearer. The API validates and persists; it never recomputes the producer's
+      result, and an admin credential is not a substitute for the provider role.</li>
+    <li><strong>Serve</strong> — <code>/api/dashboards/regime-snapshots</code> and
+      <code>/api/dashboards/research-signals/:key</code> serve the persisted snapshots publicly</li>
+  </ol>
+
+  <h3>Indicator Categories</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Category</th>
+        <th>Source</th>
+        <th>Examples</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Macro</strong></td>
+        <td>FRED, Edgar</td>
+        <td>Inflation, unemployment, GDP growth, credit spreads</td>
+      </tr>
+      <tr>
+        <td><strong>Equity</strong></td>
+        <td>Yahoo, Shiller</td>
+        <td>Stock indices, CAPE ratio, valuations</td>
+      </tr>
+      <tr>
+        <td><strong>On-chain</strong></td>
+        <td>CoinMetrics, Blockchain.com</td>
+        <td>Transaction volumes, addresses, network health</td>
+      </tr>
+      <tr>
+        <td><strong>DeFi</strong></td>
+        <td>DeFiLlama, GeckoTerminal</td>
+        <td>TVL, pool and token market data</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Regime Classification</h3>
+  <p>A composite score is reduced to one of exactly three labels. The thresholds and the label rule are canonical in
+    <span class="file-path">contract/src/regime.js</span> — the analytics classifier, the swarm domain layer and the
+    memo builder all consume it rather than re-deriving their own:</p>
+  <ul>
+    <li><strong>risk_off</strong> — composite &lt; 0.33</li>
+    <li><strong>neutral</strong> — 0.33 ≤ composite &lt; 0.67</li>
+    <li><strong>risk_on</strong> — composite ≥ 0.67</li>
+  </ul>
+  <p>Labels are underscore-cased on the wire and in the database. Prose surfaces that render "risk-on" must map from
+    the label (<code>label.replace(/_/g, "-")</code>), never reclassify. The same rule is applied per panel, so a
+    snapshot carries <code>regime</code>, <code>macroRegime</code> and <code>onchainRegime</code> independently.</p>
+
+  <h3>Research Signals</h3>
+  <p>Two signal keys ship, and they are the values <code>:key</code> takes in
+    <code>/api/dashboards/research-signals/:key</code>:</p>
+  <ul>
+    <li><strong>channel-divergence</strong></li>
+    <li><strong>late-cycle-signals</strong></li>
+  </ul>
+  <p>Both are produced by a single <code>runAnalytics</code> invocation sharing one <code>fetchResearchInputs</code>
+    call, so a full-sweep day performs one EDGAR crawl rather than one per signal. Correlations and backtests are
+    computed by <span class="file-path">analytics/analyze/correlations.ts</span> and <code>backtest.ts</code>, but are
+    not research signals.</p>
+</section>
+
+<!-- SWARM MODULE -->
+<section id="swarm">
+  <h2>🐝 Swarm Module</h2>
+
+  <h3>Member Lifecycle</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Stage</th>
+        <th>Action</th>
+        <th>Endpoint</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Apply</strong></td>
+        <td>Submit signed application with public key</td>
+        <td><span class="endpoint">/api/swarm/apply</span></td>
+      </tr>
+      <tr>
+        <td><strong>Review</strong></td>
+        <td>Admin accepts/rejects the application (POST <code>{ decision }</code>)</td>
+        <td><span class="endpoint">/api/swarm/admin/members/:id/review</span></td>
+      </tr>
+      <tr>
+        <td><strong>Activate</strong></td>
+        <td>Admin flips applied → active and mints the bearer token (no <code>:id</code> in the path)</td>
+        <td><span class="endpoint">/api/swarm/admin/activate</span></td>
+      </tr>
+      <tr>
+        <td><strong>Challenge</strong></td>
+        <td>Member requests an opaque 10-minute key-proof challenge</td>
+        <td><span class="endpoint">/api/swarm/token-claim/challenge</span></td>
+      </tr>
+      <tr>
+        <td><strong>Claim Token</strong></td>
+        <td>Member signs the challenge; the first valid proof returns the sole bearer token</td>
+        <td><span class="endpoint">/api/swarm/token-claim</span></td>
+      </tr>
+      <tr>
+        <td><strong>Participate</strong></td>
+        <td>Member submits a signed take, and publishes memos, under that bearer</td>
+        <td><span class="endpoint">/api/swarm/submit</span>, <span class="endpoint">/api/swarm/memos</span></td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note">Re-admission is a separate verb: <code>/api/swarm/admin/members/:id/reactivate</code> (versioned,
+    mints a fresh credential). If the roster is full an applicant lands on <code>/api/swarm/waitlist</code> instead.</p>
+
+  <h3>Session Lifecycle</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Stage</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Create</strong></td>
+        <td>Admin creates the session (UTC-validated). It snapshots the expected roster and enqueues four scoped
+          swarm-lane jobs.</td>
+      </tr>
+      <tr>
+        <td><strong>Open</strong></td>
+        <td><code>swarm.open_session</code> — the session starts collecting</td>
+      </tr>
+      <tr>
+        <td><strong>Publish brief</strong></td>
+        <td><code>swarm.publish_brief</code> — the brief goes out and the submission window opens</td>
+      </tr>
+      <tr>
+        <td><strong>Close window</strong></td>
+        <td><code>swarm.close_window</code> — submissions stop (default window: 60 minutes after the brief)</td>
+      </tr>
+      <tr>
+        <td><strong>Aggregate</strong></td>
+        <td><code>swarm.aggregate</code> — deterministic rollup of the collected takes</td>
+      </tr>
+      <tr>
+        <td><strong>Publish</strong></td>
+        <td><code>swarm.publish</code> — results published to swarm history</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note">Each stage has both an admin REST verb
+    (<code>/api/swarm/admin/sessions/:id/{cancel,close,reopen,aggregate,publish}</code>, versioned and guarded) and a
+    queue kind, so a deployment can run the sequence on the five <code>SWARM_*_CRON</code> schedules or drive it by
+    hand. Those schedules ship <strong>seed-time disabled</strong> (<code>SWARM_SCHEDULES_ENABLED</code> defaults
+    false) so a fresh CI/demo database never auto-enqueues real lifecycle jobs.</p>
+
+  <h3>Cryptography</h3>
+  <p>Swarm uses Ed25519 for application and submission signing (not self-custody wallet signing).</p>
+  <ul>
+    <li><strong>Application</strong> — Signed with member's rmpc identity public key (proves possession)</li>
+    <li><strong>Token claim</strong> — Member signs backend-issued challenge to receive bearer token</li>
+    <li><strong>Submission</strong> — Member signs canonical memo payload; backend verifies signature</li>
+  </ul>
+
+  <div class="warning">
+    <strong>Important:</strong> the server only ever <em>verifies</em> — it never holds a member private key.
+    Verification is Web Crypto Ed25519 in <span class="file-path">backend/src/lib/signing.ts</span> over the
+    canonical bytes from <code>@robotmoney/contract</code> (<code>canonicalizeApplication</code>,
+    <code>canonicalizeClaimChallenge</code>, <code>canonicalizeSubmission</code>). Signing happens in the member's own
+    environment; always re-use the shared canonicalizers rather than re-deriving the bytes, or a valid signature will
+    verify against the wrong payload.
+  </div>
+
+  <h3>Notifications</h3>
+  <p>Exactly three outbox kinds exist in <code>swarm_notification_outbox</code> — there are no session-open or
+    session-results emails:</p>
+  <ul>
+    <li><strong>application_received</strong> — receipt for a public application</li>
+    <li><strong>activation_approved</strong> — sent when an admin approves and activates the applicant</li>
+    <li><strong>seat_open</strong> — sent to waitlist entries when a roster seat opens</li>
+  </ul>
+  <p>Each is written transactionally as a durable outbox row plus a matching swarm-lane delivery job
+    (<code>swarm.send_application_received_notification</code>, <code>…send_activation_notification</code>,
+    <code>…send_seat_open_notification</code>); a non-2xx transport response retries through the normal job backoff.</p>
+  <p>Transport: <strong>SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL</strong> — one JSON POST carrying
+    <code>{from,to,subject,text}</code> to a mail adapter (optionally
+    <code>SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN</code>). Links inside those emails are built from
+    <code>SWARM_PUBLIC_BASE_URL</code>, since a mail client has no origin of its own.</p>
+</section>
+
+<!-- SCRIPTS & UTILITIES -->
+<section id="scripts">
+  <h2>🛠️ Scripts & Utilities</h2>
+
+  <h3>Development & Demo</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Script</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="file-path">scripts/demo.ts</span></td>
+        <td>Full-stack demo: spins up Postgres, applies migrations, seeds data, starts api/worker</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/demo-stage.ts</span></td>
+        <td>Thin wrapper over <code>demo.ts</code> for the standing/public demo: always passes
+          <code>--static-port</code>, and adds <code>--external-pg</code> when <code>.env</code> describes a Postgres.
+          It prints the exact equivalent <code>demo.ts</code> command.</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/demo-down.ts</span></td>
+        <td>Tear down demo containers + network (keeps Postgres data)</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/demo-clean.ts</span></td>
+        <td>Delete demo Postgres data volumes</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/demo-status.ts</span></td>
+        <td>Show running demo status (port, containers)</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/demo-reap.ts</span></td>
+        <td>Clean up stale demo containers (with --older-than filter)</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/preview-server.ts</span></td>
+        <td>Frontend-only server (no backend needed) replaying the goldens as mocked /api responses. Binds a random
+          free port by default; <code>PORT=&lt;n&gt;</code> overrides.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Data Seeding & Migration</h3>
+  <p>These live in <span class="file-path">backend/scripts/</span>, <strong>not</strong> the root
+    <span class="file-path">scripts/</span>, and are invoked through the backend package —
+    <code>bun run --cwd backend &lt;name&gt;</code>.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Script (backend/scripts/)</th>
+        <th>bun run name</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="file-path">edgar-seed-{bootstrap,repopulate,regenerate}.ts</span></td>
+        <td><code>edgar-seed:*</code></td>
+        <td>EDGAR/MNA seed: <em>bootstrap</em> ingests the committed fixture once,
+          <em>repopulate</em> restores missing rows on an existing DB, <em>regenerate</em> (keyless, operator-run only)
+          rebuilds the committed pair</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">v0-seed-{bootstrap,regenerate}.ts</span></td>
+        <td><code>v0-seed:*</code></td>
+        <td>v0 archive seed (pre-launch swarm content)</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">floor-seed-regenerate.ts</span></td>
+        <td><code>floor-seed:regenerate</code></td>
+        <td>Rebuild the vendored raw-indicator floor seed — there is only this one, not a family</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">prod-bootstrap.ts</span></td>
+        <td><code>prod-bootstrap</code> (root: <code>bun run bootstrap</code>)</td>
+        <td>Production environment initialization</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">projects-roster-seed-regenerate.ts</span></td>
+        <td><code>projects-roster-seed:regenerate</code></td>
+        <td>Regenerate the committed v0 project-roster seed from v0's Supabase REST API</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">regime-eq-comparison-regenerate.ts</span>,
+          <span class="file-path">regime-independent-reference-regenerate.ts</span>,
+          <span class="file-path">weighting-comparison-regenerate.ts</span>
+          (plus <span class="file-path">regime-goldens-regenerate.ts</span>, run by path)</td>
+        <td><code>*:regenerate</code></td>
+        <td>Regenerate the committed regime comparison/reference artifacts</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Analytics & Testing</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Script</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="file-path">scripts/update-goldens.ts</span></td>
+        <td>Refresh mocked API response fixtures (goldens) from running backend</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/onboarding-eval-local.ts</span></td>
+        <td>Measure swarm member onboarding flow performance</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/swarm-eval-local.ts</span></td>
+        <td>Swarm inference + session evaluation</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/rmpc-release-e2e.ts</span></td>
+        <td>Token release cycle E2E tests</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/check-contribution.ts</span></td>
+        <td>Contribution advisory review (pre-commit checks)</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/demo-live-smoke.ts</span></td>
+        <td>E2E smoke tests against running demo</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Infrastructure & Setup</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Script</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="file-path">scripts/gitops-credentials.ts</span></td>
+        <td>Secure credential management (vault, encryption, GitHub Actions)</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/sync-contract.ts</span></td>
+        <td>Vendor contract DTOs into frontend (bun run sync-contract)</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/prerender.ts</span></td>
+        <td>Static HTML pre-rendering for SEO</td>
+      </tr>
+      <tr>
+        <td><span class="file-path">scripts/check-docs-analytics.sh</span></td>
+        <td>Documentation and analytics verification</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- COMMON COMMANDS -->
+<section id="commands">
+  <h2>⌨️ Common Commands</h2>
+
+  <h3>Development Workflow</h3>
+  <div class="cmd">bun install<br>cp .env.example .env  # configure DATABASE_URL</div>
+
+  <div class="cmd">bun run preview<br># Serves frontend with mocked /api responses from goldens (no backend needed)</div>
+
+  <div class="cmd">bun run demo<br># Full-stack: Postgres + API + workers + producer + Swarm cycle<br># EVERY published host port is drawn free at boot — read the port off the startup line</div>
+
+  <div class="cmd">bun run demo:stage<br># Standing/public demo: passes --static-port (pins the web port to the tunnel origin 48787)<br># and --external-pg when .env describes a Postgres</div>
+
+  <div class="cmd">cd backend<br>bun install<br>bun run migrate  # apply SQL migrations (and seed)<br>bun run api     # start API server only<br>WORKER_LANE=generic bun run worker  # WORKER_LANE is required — no default</div>
+
+  <h3>Testing & Validation</h3>
+  <div class="cmd">bun test                # root suite: bun test scripts/tests</div>
+  <div class="cmd">bun run test:unit       # scripts/tests/unit</div>
+  <div class="cmd">bun run test:integration # scripts/tests/integration (spins ephemeral Postgres)</div>
+  <div class="cmd">bun run test:browser    # Playwright E2E tests</div>
+  <div class="cmd">bun run --cwd backend test  # the backend's own suite</div>
+  <div class="cmd">bun run typecheck       # tsc --noEmit (full monorepo type check)</div>
+  <div class="cmd">bun run check:contribution  # pre-commit checks (lints, tests, standards)</div>
+  <div class="cmd">bun run check-contract  # fail if the vendored contract copy has drifted</div>
+
+  <h3>Data Management</h3>
+  <div class="cmd">bun run sync-contract    # vendor the contract runtime into frontend/…/app/contract/</div>
+  <div class="cmd">bun run goldens:update   # refresh mocked API responses (requires a running backend)</div>
+  <div class="cmd">BACKEND_URL=http://127.0.0.1:&lt;the port the demo printed&gt; bun run goldens:update<br># The 127.0.0.1:48787 built-in default is correct ONLY for a --static-port boot</div>
+
+  <h3>Demo Lifecycle</h3>
+  <div class="cmd">bun run demo:status     # show running demo (port, containers)</div>
+  <div class="cmd">bun run demo:down       # tear down containers + network (keeps data)</div>
+  <div class="cmd">bun run demo:clean      # delete Postgres data volumes</div>
+  <div class="cmd">bun run demo:reap -- --older-than 6h  # clean up stale containers</div>
+
+  <h3>Evaluation & Analytics</h3>
+  <div class="cmd">bun run onboarding-eval  # measure onboarding flow performance</div>
+  <div class="cmd">bun run eval             # full evaluation suite (cd evals && bun test)</div>
+
+  <h3>Container Cleanup</h3>
+  <div class="cmd">docker compose down -v   # tear down + wipe Postgres volume (ephemeral reset)</div>
+  <div class="cmd">docker ps --filter label=robotmoney.env=local  # show local demo containers</div>
+</section>
+
+<!-- INTEGRATIONS & DEPENDENCIES -->
+<section id="integrations">
+  <h2>🔗 Integrations & External Dependencies</h2>
+
+  <h3>External Data Providers</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Provider</th>
+        <th>Data Type</th>
+        <th>Integration</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Base RPC</strong></td>
+        <td>Vault TVL, token prices, wallet balances, buyback logs</td>
+        <td>HTTP endpoint (public or custom URL)</td>
+      </tr>
+      <tr>
+        <td><strong>Edgar (SEC)</strong></td>
+        <td>Company financials, sector data</td>
+        <td>Incremental/full fetch via edgar.ts</td>
+      </tr>
+      <tr>
+        <td><strong>FRED</strong></td>
+        <td>Macro indicators (T10Y2Y, HY_OAS, ICSA, UMCSENT, …)</td>
+        <td>Keyless CSV (<code>fredgraph.csv</code>) via fred.ts — <code>FRED_API_KEY</code> is <em>not</em> read</td>
+      </tr>
+      <tr>
+        <td><strong>Yahoo Finance</strong></td>
+        <td>Stock/index historical prices</td>
+        <td>REST API via yahoo.ts</td>
+      </tr>
+      <tr>
+        <td><strong>CoinMetrics</strong></td>
+        <td>Crypto on-chain and market data</td>
+        <td>REST API via coinmetrics.ts</td>
+      </tr>
+      <tr>
+        <td><strong>DeFiLlama</strong></td>
+        <td>DeFi TVL and token metrics</td>
+        <td>REST API via defillama.ts</td>
+      </tr>
+      <tr>
+        <td><strong>GeckoTerminal</strong></td>
+        <td>DEX pool / token market data</td>
+        <td>REST API via geckoterminal.ts</td>
+      </tr>
+      <tr>
+        <td><strong>Shiller CAPE</strong></td>
+        <td>Valuation cyclical indicator</td>
+        <td>REST API via shiller.ts</td>
+      </tr>
+      <tr>
+        <td><strong>Blockchain.com</strong></td>
+        <td>Bitcoin network metrics</td>
+        <td>REST API via blockchain-com.ts</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="note">
+    All of these fetchers are <strong>keyless</strong>. Which set actually runs is chosen solely by
+    <code>ANALYTICS_SOURCE</code> (unset/live → real fetchers, <code>hermetic</code> → the deterministic offline
+    source), and an unrecognized value refuses to start. The <code>/projects</code> pipelines have their own switch,
+    <code>PROJECTS_SOURCE</code>.
+  </div>
+
+  <h3>Infrastructure</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Service</th>
+        <th>Purpose</th>
+        <th>Configuration</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Postgres</strong></td>
+        <td>Persistent state, job queue, analytics snapshots</td>
+        <td><code>DATABASE_URL</code>, optional external via --external-pg</td>
+      </tr>
+      <tr>
+        <td><strong>Docker</strong></td>
+        <td>Container orchestration (compose up/down)</td>
+        <td><code>docker-compose.yml</code>, optional <code>docker-compose.stage.yml</code></td>
+      </tr>
+      <tr>
+        <td><strong>Bun Runtime</strong></td>
+        <td>Server, worker, CLI scripts</td>
+        <td>≥1.2</td>
+      </tr>
+      <tr>
+        <td><strong>Email Transport</strong></td>
+        <td>Swarm member notifications</td>
+        <td><code>SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL</code> (SMTP or HTTP)</td>
+      </tr>
+      <tr>
+        <td><strong>Cloudflare Tunnel</strong></td>
+        <td>Public demo access (stage.robotmoney-labs.dev)</td>
+        <td><code>cloudflared.config.example.yml</code>. 48787 is the tunnel's origin port and the ONLY sanctioned
+          pin — reachable only via <code>demo:stage</code> / <code>demo -- --static-port</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Frontend Libraries</h3>
+  <ul>
+    <li><strong>Alpine.js</strong> (3.14.9) — Reactive SPA framework (no build step)</li>
+    <li><strong>Chart.js</strong> (4.5.1) — Time-series and analytics charting</li>
+    <li><strong>p5.js</strong> (1.11.2) — Generative graphics (hero animations, flow fields)</li>
+    <li><strong>libsodium-wrappers</strong> (0.8.4) — Ed25519 signing for swarm submissions</li>
+  </ul>
+
+  <h3>Development Tools</h3>
+  <ul>
+    <li><strong>TypeScript</strong> (^5.9.3) — Type checking across monorepo</li>
+    <li><strong>Playwright</strong> (^1.53.2) — Browser automation and E2E testing</li>
+    <li><strong>Bun test</strong> — Native test runner (unit + integration)</li>
+  </ul>
+</section>
+
+<!-- ENVIRONMENT SETUP -->
+<section id="env">
+  <h2>⚙️ Environment Configuration</h2>
+
+  <h3>Core Variables</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Variable</th>
+        <th>Default</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>DATABASE_URL</code></td>
+        <td>required</td>
+        <td>Postgres connection string — the only required input</td>
+      </tr>
+      <tr>
+        <td><code>STATIC_DIR</code></td>
+        <td><code>null</code></td>
+        <td>If set, the API process <em>also</em> serves this directory (single-box deployment, no reverse proxy).
+          Unset means no static serving at all.</td>
+      </tr>
+      <tr>
+        <td><code>API_PORT</code></td>
+        <td>8787</td>
+        <td>The port a host-side <code>bun run api</code> binds. There is no bare <code>PORT</code> for the API
+          (<code>PORT</code> exists only in <span class="file-path">scripts/preview-server.ts</span>, defaulting to 0
+          = a random free port).</td>
+      </tr>
+      <tr>
+        <td><code>RM_ENV</code></td>
+        <td><strong>prod</strong></td>
+        <td><code>ephemeral | demo | prod</code>. Fail-closed: <strong>unset defaults to prod</strong>, and an
+          unrecognized value refuses to start, so a typo like "production" can never silently open the privileged
+          surface.</td>
+      </tr>
+      <tr>
+        <td><code>TRUST_PROXY</code></td>
+        <td>off</td>
+        <td>Trust <code>X-Forwarded-For</code> for the client IP used in rate limiting. Set only behind a known proxy.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warning">
+    <strong>Host ports are not configuration.</strong> <code>WEB_PORT</code> and <code>POSTGRES_PORT</code> were
+    deliberately removed from <code>.env.example</code>: every published host port is drawn free at boot on every run —
+    Docker picks it and the stack asks what it chose (<span class="file-path">scripts/stack/ports.ts</span>) — and
+    <code>docker-compose.yml</code> refuses to start
+    without an explicit value rather than falling back to a default. Pinning them caused a real outage — a pinned
+    <code>.env</code> put the api on exactly the port cloudflared routes stage traffic to, and CI then raced it and
+    took the site down. <code>bun run demo</code> now warns loudly and ignores those variables if it finds them.
+    8787 is only the <em>container-internal</em> API port, which is unconfigurable by construction.
+  </div>
+
+  <h3>Authentication & Authorization</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Variable</th>
+        <th>Purpose</th>
+        <th>Required</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>ADMIN_TOKEN</code></td>
+        <td>Sent as the <code>X-Admin-Token</code> header. Guards /api/swarm/admin/*, /api/admin/*, member onboarding
+          and /register.</td>
+        <td>If set, required in <em>every</em> env. If unset, those routes are locked unless
+          <code>RM_ALLOW_INSECURE=1</code> or <code>RM_ENV=ephemeral</code>.</td>
+      </tr>
+      <tr>
+        <td><code>ANALYTICS_TOKEN</code></td>
+        <td>Bearer for /api/analytics/* and POST /api/swarm/regime (analytics-provider role)</td>
+        <td>Same fail-closed rule. The producer refuses to boot in demo/prod without it, and never accepts
+          <code>ADMIN_TOKEN</code> or a member bearer as a substitute.</td>
+      </tr>
+      <tr>
+        <td><code>RM_ALLOW_INSECURE</code></td>
+        <td>Opt in to privileged routes with no token — local throwaway demos only, never a reachable box</td>
+        <td>No (implied by <code>RM_ENV=ephemeral</code>)</td>
+      </tr>
+      <tr>
+        <td><code>SWARM_PUBLIC_BASE_URL</code></td>
+        <td>Absolute origin every link inside a notification email is built from</td>
+        <td>Defaults to https://robotmoney.net — set it on staging or testers get sent to production</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Data Sources &amp; Providers</h3>
+  <p>The external analytics providers are all keyless — there are no <code>YAHOO_API_KEY</code>,
+    <code>COINMETRICS_API_KEY</code> or <code>EDGAR_COMPANY_IDS</code> variables, and <code>FRED_API_KEY</code>
+    (commented in <code>.env.example</code>, declared in the credentials tool) is never read by
+    <code>fred.ts</code>. What <em>is</em> configurable is which source runs and where the seeds live:</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Variable</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>ANALYTICS_SOURCE</code></td>
+        <td>The single authoritative analytics selector: unset/<code>live</code> → real keyless fetchers,
+          <code>hermetic</code> → deterministic offline source. Fail-closed on anything else.</td>
+      </tr>
+      <tr>
+        <td><code>PROJECTS_SOURCE</code></td>
+        <td>The /projects pipeline selector: unset → vendored offline fixtures, <code>live</code> → real keyless
+          providers. <strong>Fail-closed in prod</strong> — under <code>RM_ENV=prod</code> the pipelines REQUIRE an
+          explicit <code>PROJECTS_SOURCE=live</code> and throw otherwise, so fixture data is never served as
+          production data.</td>
+      </tr>
+      <tr>
+        <td><code>BASE_RPC_URL</code></td>
+        <td>Base mainnet JSON-RPC endpoint; defaults to the public <code>https://mainnet.base.org</code></td>
+      </tr>
+      <tr>
+        <td><code>BASE_RPC_SOURCE</code></td>
+        <td><code>live</code> (default) | <code>stub</code> (unit tests only). An unrecognized value refuses to
+          resolve rather than silently claiming 'live'.</td>
+      </tr>
+      <tr>
+        <td><code>ADAPTER_MORPHO_ADDRESS</code>, <code>ADAPTER_AAVE_ADDRESS</code>,
+          <code>ADAPTER_COMPOUND_ADDRESS</code></td>
+        <td>The three vault adapter contract addresses. Real Base mainnet defaults are built in — override only for a
+          re-pointed deployment.</td>
+      </tr>
+      <tr>
+        <td><code>ANALYTICS_FLOOR_SEED</code>, <code>FLOOR_SEED_PATH</code></td>
+        <td>One-time cold-DB raw-floor seed on a fresh live boot (idempotent, off by default) and its file override</td>
+      </tr>
+      <tr>
+        <td><code>EDGAR_SEED_PATH</code>, <code>EDGAR_SEED_MANIFEST_PATH</code></td>
+        <td>Override the committed EDGAR/MNA seed pair's location (tests only)</td>
+      </tr>
+      <tr>
+        <td><code>ROSTER_SEED_PATH</code>, <code>ROSTER_SEED_MANIFEST_PATH</code></td>
+        <td>Override the committed v0 project-roster seed's location (tests only)</td>
+      </tr>
+      <tr>
+        <td><code>OPENCODE_API_KEY</code>, <code>AGENT_MODEL</code></td>
+        <td>OpenCode Zen credential and model selector for every real-inference path (swarm take authorship,
+          member-agent onboarding containers, contribution-advisory reviewer)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Swarm Configuration</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Variable</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>SWARM_NOTIFICATION_EMAIL_FROM</code></td>
+        <td>Sender persisted with each outbox row. Unset → approval fails loudly, but a public application still
+          succeeds without its receipt (losing applicants is worse than losing an email).</td>
+      </tr>
+      <tr>
+        <td><code>SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL</code> /<br><code>…_TRANSPORT_TOKEN</code></td>
+        <td>HTTP mail adapter accepting one JSON POST of <code>{from,to,subject,text}</code>; the token is optional on
+          a trusted private network</td>
+      </tr>
+      <tr>
+        <td><code>SWARM_SEED_ROSTER</code></td>
+        <td>Seat the live house roster from the committed member manifests, applied by one
+          <code>bun run migrate</code>. Off by default; additive and idempotent; never writes a credential — a seeded
+          member holds no token until an operator issues one.</td>
+      </tr>
+      <tr>
+        <td><code>SWARM_SCHEDULES_ENABLED</code> and the five <code>SWARM_*_CRON</code> vars</td>
+        <td>Turn the daily open → publish-brief → close-window → aggregate → publish sequence on. Ships
+          <strong>disabled</strong> so a fresh CI/demo database never auto-enqueues real lifecycle jobs.</td>
+      </tr>
+      <tr>
+        <td><code>SWARM_WINDOW_MINUTES</code></td>
+        <td>Minutes the submission window stays open after the brief (default 60)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Worker &amp; Producer Configuration</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Variable</th>
+        <th>Purpose</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>WORKER_LANE</code></td>
+        <td>Which lane this worker drains: swarm | analytics | research | generic</td>
+        <td><strong>REQUIRED</strong> — empty or unknown throws at startup; there is no default</td>
+      </tr>
+      <tr>
+        <td><code>WORKER_DATABASE_URL</code></td>
+        <td>Connect the worker's pool as the restricted <code>rm_worker</code> role</td>
+        <td>falls back to <code>DATABASE_URL</code></td>
+      </tr>
+      <tr>
+        <td><code>JOB_VISIBILITY_TIMEOUT</code></td>
+        <td>Seconds a <code>running</code> job may go unrenewed before the reaper requeues it</td>
+        <td>300</td>
+      </tr>
+      <tr>
+        <td><code>JOB_LEASE_RENEW_MS</code></td>
+        <td>How often a live handler renews <code>locked_at</code></td>
+        <td>one third of <code>JOB_VISIBILITY_TIMEOUT</code></td>
+      </tr>
+      <tr>
+        <td><code>SCHEDULER_TICK_MS</code> / <code>REAPER_TICK_MS</code> / <code>WORKER_IDLE_POLL_MS</code></td>
+        <td>Loop cadences in <code>runtime.ts</code></td>
+        <td>30000 / 60000 / 2000</td>
+      </tr>
+      <tr>
+        <td><code>WORKER_SHUTDOWN_TIMEOUT_MS</code></td>
+        <td>Bounded shutdown: max wait for an in-flight job before it is released back to <code>pending</code></td>
+        <td>30000</td>
+      </tr>
+      <tr>
+        <td><code>WORKER_ID</code></td>
+        <td>Owner id recorded in <code>jobs.locked_by</code></td>
+        <td><code>&lt;lane&gt;-&lt;pid&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>ANALYTICS_API_URL</code></td>
+        <td>Where an updater/producer submits computed outputs</td>
+        <td><code>http://localhost:8787</code> (compose: <code>http://api:8787</code>)</td>
+      </tr>
+      <tr>
+        <td><code>PRODUCER_REGIME_CRON</code> / <code>PRODUCER_RESEARCH_CRON</code></td>
+        <td>The independent producer's own UTC cron timers</td>
+        <td><code>30 22 * * *</code> / <code>0 23 * * *</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note">Variables that do <em>not</em> exist: <code>PORT</code> (for the API),
+    <code>WORKER_ROLE</code>, <code>WORKER_HEARTBEAT_INTERVAL_MS</code>, <code>SCHEDULER_INTERVAL_MS</code>,
+    <code>SWARM_INITIAL_MEMBERS</code>, <code>YAHOO_API_KEY</code>, <code>COINMETRICS_API_KEY</code>,
+    <code>EDGAR_COMPANY_IDS</code>.</p>
+
+  <h3>Setup Checklist</h3>
+  <ol>
+    <li>Copy <code>.env.example</code> → <code>.env</code>. Do <strong>not</strong> add <code>WEB_PORT</code> or
+      <code>POSTGRES_PORT</code>; delete them if an old <code>.env</code> has them.</li>
+    <li>Set <code>DATABASE_URL</code> to your Postgres instance (the only required value)</li>
+    <li>Set <code>RM_ENV</code> explicitly. Remember unset means <strong>prod</strong>.</li>
+    <li>For production: set <code>ADMIN_TOKEN</code>, <code>ANALYTICS_TOKEN</code>, and
+      <code>PROJECTS_SOURCE=live</code> (the projects pipelines refuse to serve fixtures in prod)</li>
+    <li>No provider API keys are needed — the analytics fetchers are keyless</li>
+    <li>Set <code>SWARM_NOTIFICATION_EMAIL_FROM</code> + <code>…_TRANSPORT_URL</code> and
+      <code>SWARM_PUBLIC_BASE_URL</code> for member notifications</li>
+    <li>Run <code>bun run --cwd backend migrate</code> to apply the schema and seed</li>
+    <li>Run <code>bun run demo</code>, or <code>bun run api</code> plus one
+      <code>WORKER_LANE=&lt;lane&gt; bun run worker</code> per lane (separate terminals)</li>
+  </ol>
+
+  <div class="note">
+    <strong>Note:</strong> <code>RM_ENV=demo</code> allows the unauthenticated paths only when
+    <code>RM_ALLOW_INSECURE=1</code> is also set; <code>RM_ENV=ephemeral</code> implies it. Anything else — including
+    an unset <code>RM_ENV</code>, which means prod — requires the real tokens for every privileged endpoint.
+  </div>
+</section>
+
+<footer>
+  <p>RobotMoney Bill of Materials — an orientation subset of the parts list, not a complete inventory</p>
+  <p>Canonical docs: <span class="file-path">docs/architecture.md</span> and
+    <span class="file-path">docs/decisions.md</span>. Authoritative for routes / schema / config:
+    <span class="file-path">contract/src/routes.js</span>, <span class="file-path">backend/migrations/*.sql</span>,
+    <span class="file-path">.env.example</span>.</p>
+  <p>robotmoney-frontend monorepo (Bun + TypeScript + Postgres + Alpine.js) — verified 2026-08-05</p>
+</footer>
+
+</div>
+
+</body>
+</html>
