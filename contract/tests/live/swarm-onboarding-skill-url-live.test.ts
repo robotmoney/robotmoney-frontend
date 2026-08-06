@@ -106,13 +106,26 @@ describe("SWARM_ONBOARDING_SKILL_URL — live reachability", () => {
       //
       // So assert the PROCEDURE. These are the steps an operator's agent cannot
       // onboard without, and a stub that redirects elsewhere cannot carry them
-      // without ceasing to be a stub. They are deliberately spelled the way
-      // robotmoney-core spells them (`/api/committee/*`, `committee-identity`) —
-      // this constant points at core's copy, and the assertions must match what
-      // core actually publishes rather than this repo's preferred vocabulary.
+      // without ceasing to be a stub.
+      //
+      // These must be spelled the way robotmoney-core spells them, since this
+      // constant points at core's copy — and core moved under us mid-review.
+      // core#1193 (PR #1194) rewrote the skill from `/api/committee/*` to
+      // `/api/swarm/*` throughout: zero `committee` API paths remain, and the
+      // applicant status URL it prints became `<host>/swarm/apply/<uuid>`.
+      // `committee-identity` is the exception and stays — it is the rmpc CLI
+      // subcommand, which core#1201 has deliberately NOT renamed ("Investment
+      // Committee" remains the on-chain governance body; "Swarm" is the product
+      // surface), so it is a stable marker rather than an oversight.
       expect(body).toContain("committee-identity");
-      expect(body).toContain("/api/committee/apply");
+      expect(body).toContain("/api/swarm/apply");
       expect(body).toContain("token-claim");
+
+      // The applicant-facing status URL. Approval email is not wired yet, so
+      // this page is the only way an applicant can watch their application move
+      // through review — if the skill stops telling the agent to surface it,
+      // the applicant has no way to check and no notification either.
+      expect(body).toContain("/swarm/apply/");
 
       // Belt and braces on the stub shape itself: a deprecation notice is not a
       // procedure, whatever else it happens to contain.
