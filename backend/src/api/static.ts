@@ -10,6 +10,23 @@ function shellResponse(body: BodyInit, contentType?: string): Response {
   return new Response(body, { headers });
 }
 
+// The shell to answer a client route with. A deployed STATIC_DIR is an
+// ASSEMBLED directory (scripts/static-assembly.sh), so it carries a prerendered
+// `<route>/index.html` for every route in sitemap.xml — same shell, but with
+// that route's own <title>/description/canonical/og:*/twitter:* already
+// substituted from seo.js's table by scripts/prerender.ts. Serving it is the
+// entire point: link unfurlers (Slack, X, LinkedIn, iMessage, WhatsApp,
+// Telegram, Discord) read the RAW response and never run seo.js, so answering
+// them with the home-page shell made every shared link unfurl as the home page
+// — with og:url pointing at https://robotmoney.net/ rather than the page
+// (issue #480). The home-page shell stays the fallback for client routes that
+// are not in the sitemap and for an un-assembled STATIC_DIR, so nothing 404s
+// that used to resolve.
+function routeShell(staticDir: string, safePath: string): Promise<ReturnType<typeof Bun.file>> {
+  const prerendered = Bun.file(join(staticDir, safePath, "index.html"));
+  return prerendered.exists().then((ok) => (ok ? prerendered : Bun.file(join(staticDir, "index.html"))));
+}
+
 // Docs are authored as SPA fragments, but they are also a published entrypoint
 // for non-browser clients. Keep the shell (and its crawler metadata) while
 // putting the matching docs fragment in its otherwise-empty initial view.
@@ -20,7 +37,10 @@ async function docsShell(staticDir: string, safePath: string): Promise<Response 
   const fragment = Bun.file(join(staticDir, "views", `${relativePath}.html`));
   if (!(await fragment.exists())) return null;
 
-  const shell = Bun.file(join(staticDir, "index.html"));
+  // The route's PRERENDERED shell when the deploy has one, so a docs page keeps
+  // its own crawler metadata AND gets its fragment inlined — the two halves are
+  // independent and a docs route needs both.
+  const shell = await routeShell(staticDir, safePath);
   if (!(await shell.exists())) return null;
 
   const html = await shell.text();
@@ -44,10 +64,12 @@ export async function serveStatic(pathname: string, staticDir: string | null): P
       : new Response(file, { headers: { "Cache-Control": ASSET_CACHE_CONTROL } });
   }
 
-  // No file extension → treat as a client route, serve the shell. Docs retain
-  // the same shell but expose their static fragment before JS ever runs.
+  // No file extension → treat as a client route, serve the shell: the route's
+  // own prerendered one when the deploy assembled it, else the home-page shell
+  // (routeShell). Docs retain the same shell but expose their static fragment
+  // before JS ever runs.
   if (!safe.split("/").pop()!.includes(".")) {
-    return await docsShell(staticDir, safe) ?? shellResponse(Bun.file(join(staticDir, "index.html")));
+    return await docsShell(staticDir, safe) ?? shellResponse(await routeShell(staticDir, safe));
   }
   return null;
 }

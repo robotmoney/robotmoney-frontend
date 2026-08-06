@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "preview": "bun scripts/preview-server.ts",
     "prerender": "bun scripts/prerender.ts",
+    "static:assemble": "bash scripts/static-assembly.sh",
     "goldens:update": "bun scripts/update-goldens.ts",
     "demo": "bun scripts/demo.ts",
     "demo:stage": "bun scripts/demo-stage.ts",

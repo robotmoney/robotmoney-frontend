@@ -1,16 +1,23 @@
 import { metaFor } from "../frontend/public/assets/js/app/seo.js";
 import { mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const ORIGIN = "https://robotmoney.net";
 
 const repoRoot = join(import.meta.dir, "..");
 const sitemapPath = join(repoRoot, "frontend/public/sitemap.xml");
-const siteDir = join(repoRoot, "_site");
+// WHICH assembly to prerender in place. There are two hosts and one
+// prerenderer (docs/decisions.md D29): `_site` is the Cloudflare Pages deploy
+// dir `scripts/cloudflare-statics.sh` assembles, and `PRERENDER_DIR` points
+// this at the api process's STATIC_DIR assembly instead
+// (scripts/static-assembly.sh). Both read the SAME metadata table — seo.js's
+// `metaFor` — so the two hosts can never disagree, and neither can disagree
+// with the JS path that runs after hydration.
+const siteDir = resolve(repoRoot, process.env.PRERENDER_DIR || "_site");
 const shellPath = join(siteDir, "index.html");
 
 if (!(await Bun.file(shellPath).exists())) {
-  console.error("Error: _site/index.html does not exist. Run static asset assembly before prerendering.");
+  console.error(`Error: ${shellPath} does not exist. Run static asset assembly before prerendering.`);
   process.exit(1);
 }
 
@@ -53,4 +60,4 @@ for (const route of routes) {
   count++;
 }
 
-console.log(`Successfully prerendered ${count} routes into _site/`);
+console.log(`Successfully prerendered ${count} routes into ${siteDir}/`);

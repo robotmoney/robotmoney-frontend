@@ -55,8 +55,13 @@ cd backend
 bun install
 bun run migrate                           # apply backend/migrations/*.sql
 
-# one process serves the API + the static site (same origin, matches prod):
-STATIC_DIR=../frontend/public bun run api # → http://localhost:8787
+# one process serves the API + the static site (same origin, matches prod).
+# Point STATIC_DIR at the ASSEMBLED dir, not the source tree: `_static/` is
+# frontend/public plus the per-route prerendered HTML link unfurlers read
+# (docs/decisions.md D29). `../frontend/public` still works, but then every
+# route answers with the home page's <title>/og:* — the bug #480 fixed.
+bun run static:assemble                   # → _static/ (repo root)
+STATIC_DIR=../_static bun run api         # → http://localhost:8787
 bun run worker                            # drains the job queue, runs the scheduler
 ```
 

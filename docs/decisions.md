@@ -1527,3 +1527,81 @@ citation of the pre-rename contract test file was updated to
 correction, since `scripts/tests/unit/test-path-citations.test.ts` scans
 `docs/reports/` for exactly this and does not exempt it the way it exempts
 `docs/code-review/`).
+
+---
+
+## D29 — The api process (`STATIC_DIR`) is the cutover host for `robotmoney.net`, and its deploy path prerenders per-route HTML (issue #480)
+
+*(Runbook: [deployment.md](./runbooks/deployment.md) §2.1.)*
+
+**Decision.** Two questions, answered together because the first determines the
+second.
+
+**1. Which host serves `robotmoney.net` after cutover? The `api` process,
+serving an assembled `STATIC_DIR`.** It is what the cutover origin already
+does — `site.robotmoney.net` is a `cloudflared` connector onto the single-box
+stack (`docs/runbooks/deployment.md` §3.3), and `docker-compose.yml` sets
+`STATIC_DIR: /srv/frontend` so the api co-serves the marketing SPA with no
+reverse proxy (D11, D13). **Cloudflare Pages is not a candidate for
+production**: D13 confines Cloudflare to DNS + observability with no software
+to deploy, `docs/runbooks/deployment.md` §1 disables Cloudflare git integration
+outright, `CF_API_TOKEN` carries no Pages permission, and the one Pages project
+(`robotmoney-preview`, D20) has automatic production deploys **disabled** with
+previews limited to `preview/*`. Pointing production at Pages would reverse
+three decisions to obtain a prerenderer that can equally be run on the host we
+already have.
+
+**2. The prerender runs in that host's deploy path.** `STATIC_DIR` is now an
+**assembled** directory, not the raw source tree: `scripts/static-assembly.sh`
+copies `frontend/public` into `_static/` and then runs `scripts/prerender.ts`
+over it (`PRERENDER_DIR=_static`), writing a `<route>/index.html` for every
+`<loc>` in `frontend/public/sitemap.xml`. `docker-compose.yml` bind-mounts
+`./_static` at `/srv/frontend`, and `scripts/stack/stack.ts`'s `up()` runs the
+assembly before `docker compose up`, so every stack this repo brings up — demo,
+evals, CI, single-box production — serves prerendered HTML. `serveStatic`
+(`backend/src/api/static.ts`) answers an extensionless client route with that
+route's prerendered file when one exists, and with the home-page shell when it
+does not.
+
+**Why.** `frontend/public` contains exactly one `index.html` — the home-page
+shell — so mounting it made the api answer *every* route with the home page's
+`<title>`, `og:title`, `og:description` and `og:url`. `assets/js/app/seo.js`
+fixes that after hydration, which is enough for Googlebot and useless for link
+unfurlers: Slack, X, LinkedIn, iMessage, WhatsApp, Telegram and Discord read the
+raw response. Every shared Robot Money link therefore unfurled as the home page,
+with `og:url` pointing at `https://robotmoney.net/` rather than the page — a
+**regression against the site being replaced**, which server-renders per-page
+titles today.
+
+**One metadata table, two hosts.** `scripts/prerender.ts` is unchanged in
+substance: it still derives every field from `seo.js`'s `metaFor` table, and it
+now takes the assembly directory from `PRERENDER_DIR` (default `_site`). So
+`scripts/cloudflare-statics.sh` (preview) and `scripts/static-assembly.sh`
+(cutover host) run the *same* prerenderer over their own assemblies. There is no
+second, hand-maintained metadata table, and the prerendered path cannot disagree
+with the JS path.
+
+**Relationship.** Refines D13's static tier for the cutover: D13 assigns
+marketing on the apex/`www` to a **DO Spaces CDN**, which remains the intended
+end-state tier and is unimplemented in this repo (no upload path, no workflow,
+no credential wiring beyond the inventory in `docs/runbooks/deployment.md` §4).
+This decision does not foreclose it — `_static/` is a plain static assembly, so
+the Spaces migration, when it happens, uploads exactly this directory and
+inherits the prerender for free. Supersedes nothing; D20 keeps Cloudflare Pages
+for `preview/*` hosting, unchanged.
+
+**Alternatives rejected.**
+- **Enable production deploys on the Cloudflare Pages project** — reverses D13
+  (Cloudflare = DNS + observability), D20 (`preview/*` only) and the GitOps
+  principle that no vendor watches the repo, and would still leave
+  `site.robotmoney.net`'s api-served origin unfixed.
+- **Prerender into `frontend/public/` in place** — build output in the source
+  tree, and `/skills` is both a sitemap route and an existing asset directory
+  (`frontend/public/skills/`), so the outputs would interleave with sources.
+- **Serve the shell and rewrite metadata per request in `serveStatic`** — moves
+  a build-time substitution into the request path and puts a second copy of the
+  metadata logic in the backend, which is exactly the "one source of truth"
+  property the issue asks for.
+- **Leave `docker-compose.yml` mounting `frontend/public` and rely only on the
+  handler change** — the handler can only serve a per-route file that exists;
+  with the raw source tree mounted, none ever would.
