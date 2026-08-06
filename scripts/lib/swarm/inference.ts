@@ -103,7 +103,35 @@ export type InferenceTelemetrySink = (event: InferenceTelemetryEvent) => void;
 export interface AuthorTakeOptions {
   telemetry?: InferenceTelemetrySink;
   diagnosticArtifactPath?: string;
+  // How many times to sample the model for a take that satisfies the section
+  // contract below. See authorTake().
+  structureAttempts?: number;
 }
+
+// The three bold section headers `promptFor` demands, and the ONLY definition
+// of them. session.ts's post-session `assertAuthoredTakes` reads this same
+// tuple, so the prompt, the author-time check, and the harness assertion can
+// never drift into disagreeing about what a well-formed take looks like.
+export const TAKE_SECTION_LEAD_INS: readonly string[] = Object.freeze([
+  "**REGIME**",
+  "**ALLOCATION**",
+  "**SUBJECT**",
+]);
+
+// Which required section headers a take body is missing ([] when well-formed).
+// Pure and exported so the unit suite can pin it without a spawn.
+export function missingSectionLeadIns(body: string): readonly string[] {
+  return TAKE_SECTION_LEAD_INS.filter((lead) => !body.includes(lead));
+}
+
+// A model that drops a section is not a broken model, it is an unlucky sample:
+// on 2026-08-06 the smoke run's athena returned a take with REGIME and
+// ALLOCATION but no SUBJECT, was signed and accepted by the API, and only blew
+// up at the end-of-session assertion — after the session had already published.
+// Re-sampling is the honest fix (the assertion stays exactly as strict), and
+// two attempts is enough for an omission this rare while keeping a stuck model
+// from burning the session's window.
+const DEFAULT_STRUCTURE_ATTEMPTS = 2;
 
 // Prompt-facing stance vocabulary (most bullish first), DERIVED from the
 // canonical contract tuple (finding 027) — never re-declared locally.
@@ -548,13 +576,38 @@ export interface AuthoredTake extends ParsedTake {
 // Throws (no fallback) when opencode is unavailable or the transcript is empty.
 // Returns the stored body (control line stripped) plus the parsed
 // stance/confidence.
+//
+// A sample that parses but omits a required section (see TAKE_SECTION_LEAD_INS)
+// is re-sampled up to `structureAttempts` times. Only the SECTION contract is
+// retried: parseStanceFromBody's own failures — a missing or out-of-vocabulary
+// STANCE/CONFIDENCE control line — still throw on the first attempt, because
+// #301/#319 settled that a member who cannot state a stance is ABSENT rather
+// than coaxed. When every attempt omits a section the member is likewise
+// rendered absent (session.ts settles per-member failures into a no-show); the
+// take is never patched, re-headed, or otherwise fabricated into compliance.
 export async function authorTake(
   p: Persona,
   regime: RegimeContext,
   subjectId: string,
   options: AuthorTakeOptions = {},
 ): Promise<AuthoredTake> {
-  const authored = await runOpencode(promptFor(p, regime, subjectId), options);
-  const parsed = parseStanceFromBody(authored.text);
-  return { ...parsed, model: authored.model };
+  const attempts = Math.max(1, options.structureAttempts ?? DEFAULT_STRUCTURE_ATTEMPTS);
+  const prompt = promptFor(p, regime, subjectId);
+  let missing: readonly string[] = [];
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const authored = await runOpencode(prompt, options);
+    const parsed = parseStanceFromBody(authored.text);
+    missing = missingSectionLeadIns(parsed.body);
+    if (missing.length === 0) return { ...parsed, model: authored.model };
+    console.warn(
+      `[inference] ${p.memberId}: take attempt ${attempt}/${attempts} omitted ${missing.join(", ")} — re-sampling`,
+    );
+  }
+
+  throw new Error(
+    `model take for ${p.memberId} omitted the ${missing.join(", ")} section${missing.length === 1 ? "" : "s"} ` +
+      `on all ${attempts} attempt${attempts === 1 ? "" : "s"} — the member is rendered ABSENT, never patched ` +
+      `into compliance with a synthesized section.`,
+  );
 }

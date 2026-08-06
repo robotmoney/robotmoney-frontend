@@ -1134,8 +1134,10 @@ async function main(): Promise<void> {
     setStep(state, step, "done");
   }
 
-  // One shared bring-up: build/start, exactly one migration, typed scenario
-  // initialization, then Stack.up's single final readiness check.
+  // One shared bring-up: build/start, exactly one migration, Stack.up's single
+  // readiness check, and only THEN typed scenario initialization — the order
+  // the startup checklist above has always displayed (migrate → api /health →
+  // archive restore | simulation seed).
   applyHostPorts(await stack.up({
     migrateEnv: scenario.migrateEnv,
     migrateScriptArgs: [...scenario.migrateScriptArgs],
@@ -1170,7 +1172,7 @@ async function main(): Promise<void> {
       onboardedHomes: new Map<string, OnboardedMemberHome>(),
       adminToken: adminPassword,
     };
-    await session.runSession(scenario.subjects[0]!, 1, { rail, members });
+    await session.runSession(scenario.subjects[0]!, 1, { rail, members, initializer: scenario.initializer });
 
     console.log("[demo] smoke: asserting restored subjects, personas, live take and archival history…");
     await run(["bun", "run", "scripts/smoke-e2e-assert.ts"], repoRoot,

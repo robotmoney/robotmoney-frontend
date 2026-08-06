@@ -41,7 +41,7 @@ import {
 import { parseComposePortOutput, PortDiscoveryError } from "./ports.ts";
 import { readFileSync } from "node:fs";
 
-export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "initialize" | "ports" | "health";
+export type StackPhase = "docker-preflight" | "build" | "postgres" | "migrate" | "services" | "ports" | "health" | "initialize";
 
 export type StackEvent =
   | { phase: StackPhase; status: "start" | "done"; detail?: string }
@@ -133,9 +133,33 @@ function decode(buf: unknown): string {
   return buf instanceof Uint8Array ? new TextDecoder().decode(buf) : "";
 }
 
+/**
+ * The three ways this module touches anything outside its own process: it runs
+ * a docker CLI synchronously, it runs one to completion, and it probes an HTTP
+ * URL. Everything else here is argv construction and sequencing.
+ *
+ * It is injectable so `up()`'s PHASE ORDERING can be asserted by executing it
+ * rather than by reading this file's source. That distinction is the whole
+ * point: an ordering guarantee is runtime behaviour, and the byte offsets of
+ * the statements that produce it are not evidence about it — scenario
+ * initialization is passed to `up()` as a callback, so the correct order is
+ * written "out of order" in the source and a text scan reports a healthy boot
+ * as broken. See scripts/tests/unit/stack-lifecycle-order.test.ts.
+ */
+export interface StackRuntime {
+  runSync(argv: string[], io: StackIo): ComposeResult;
+  run(argv: string[], io: StackIo): Promise<number>;
+  probe(url: string): Promise<{ ok: boolean; detail: string }>;
+}
+
 export function createStack(
   cfg: StackConfig,
-  opts: { hostEnv?: Record<string, string | undefined>; io?: StackIo; hooks?: StackHooks } = {},
+  opts: {
+    hostEnv?: Record<string, string | undefined>;
+    io?: StackIo;
+    hooks?: StackHooks;
+    runtime?: StackRuntime;
+  } = {},
 ): Stack {
   // `hostEnv` defaults to EMPTY on purpose: an explicit caller passes its own
   // environment, and a caller that forgets gets a hermetic child rather than a
@@ -170,38 +194,53 @@ export function createStack(
   // on every compose child and a question can only ever be declined at once.
   // (compose 2.40.3 exposes no `--yes`/`--non-interactive` flag for `run`;
   // closing stdin IS the supported mechanism.)
+  // The default runtime IS the previous inline bodies, verbatim — spawning
+  // `docker` from cfg.repoRoot with the allowlisted spawnEnv and a closed
+  // stdin. A caller that passes nothing gets exactly the behaviour this module
+  // has always had.
+  const runtime: StackRuntime = opts.runtime ?? {
+    runSync(argv, io) {
+      const r = Bun.spawnSync(argv, {
+        cwd: cfg.repoRoot,
+        env: spawnEnv,
+        stdin: "ignore",
+        stdout: (io.stdout ?? "pipe") as "pipe",
+        stderr: (io.stderr ?? "pipe") as "pipe",
+      });
+      return { exitCode: r.exitCode ?? -1, stdout: decode(r.stdout), stderr: decode(r.stderr) };
+    },
+    async run(argv, io) {
+      const proc = Bun.spawn(argv, {
+        cwd: cfg.repoRoot,
+        env: spawnEnv,
+        stdin: "ignore",
+        stdout: (io.stdout ?? "pipe") as "pipe",
+        stderr: (io.stderr ?? "pipe") as "pipe",
+      });
+      return (await proc.exited) ?? -1;
+    },
+    async probe(url) {
+      try {
+        const r = await fetch(url);
+        return { ok: r.ok, detail: `${url} -> ${r.status}` };
+      } catch (e) {
+        return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+      }
+    },
+  };
+
   function compose(args: string[], io: StackIo = defaultIo): ComposeResult {
-    const r = Bun.spawnSync(["docker", ...prefix, ...args], {
-      cwd: cfg.repoRoot,
-      env: spawnEnv,
-      stdin: "ignore",
-      stdout: (io.stdout ?? "pipe") as "pipe",
-      stderr: (io.stderr ?? "pipe") as "pipe",
-    });
-    return { exitCode: r.exitCode ?? -1, stdout: decode(r.stdout), stderr: decode(r.stderr) };
+    return runtime.runSync(["docker", ...prefix, ...args], io);
   }
 
   async function composeAsync(args: string[], label: string, io: StackIo = defaultIo): Promise<void> {
-    const proc = Bun.spawn(["docker", ...prefix, ...args], {
-      cwd: cfg.repoRoot,
-      env: spawnEnv,
-      stdin: "ignore",
-      stdout: (io.stdout ?? "pipe") as "pipe",
-      stderr: (io.stderr ?? "pipe") as "pipe",
-    });
-    const code = await proc.exited;
+    const code = await runtime.run(["docker", ...prefix, ...args], io);
     if (code !== 0) throw new Error(`${label} failed (exit ${code})`);
   }
 
   function assertDockerAvailable(): void {
     emit({ phase: "docker-preflight", status: "start" });
-    const r = Bun.spawnSync(["docker", "version"], {
-      cwd: cfg.repoRoot,
-      env: spawnEnv,
-      stdin: "ignore",
-      stdout: "ignore",
-      stderr: "pipe",
-    });
+    const r = runtime.runSync(["docker", "version"], { stdout: "ignore", stderr: "pipe" });
     if (r.exitCode !== 0) {
       throw new Error(
         `docker is required for this stack bring-up and is not usable in this environment ` +
@@ -230,18 +269,14 @@ export function createStack(
 
   async function waitForHttp(url: string, timeoutMs = 30_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
-    let lastErr: unknown;
+    let lastDetail = "never probed";
     while (Date.now() < deadline) {
-      try {
-        const r = await fetch(url);
-        if (r.ok) return;
-        lastErr = new Error(`${url} -> ${r.status}`);
-      } catch (e) {
-        lastErr = e;
-      }
+      const r = await runtime.probe(url);
+      if (r.ok) return;
+      lastDetail = r.detail;
       await sleep(500);
     }
-    throw new Error(`timed out waiting for ${url}: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
+    throw new Error(`timed out waiting for ${url}: ${lastDetail}`);
   }
 
   async function migrate(extraEnv: Record<string, string> = {}, scriptArgs: string[] = []): Promise<void> {
@@ -322,12 +357,6 @@ export function createStack(
     await composeAsync(upArgs(rest), "start services");
     emit({ phase: "services", status: "done", detail: rest.join(", ") });
 
-    if (upOpts.initialize) {
-      emit({ phase: "initialize", status: "start" });
-      await upOpts.initialize();
-      emit({ phase: "initialize", status: "done" });
-    }
-
     // Only NOW do the host ports exist. Everything downstream — the health
     // check below, the caller's READY banner, its state file — takes them from
     // here, so there is exactly one place in the system that knows a host port
@@ -343,6 +372,20 @@ export function createStack(
     emit({ phase: "health", status: "start" });
     await waitForHttp(`${hostBackendUrl(ports.apiPort)}/health`, upOpts.healthTimeoutMs ?? 60_000);
     emit({ phase: "health", status: "done" });
+
+    // Initialization runs LAST, after the API answers /health — never merely
+    // after its container started. An initializer is a client of the running
+    // stack: the archive initializer calls the api over the compose network
+    // (ANALYTICS_API_URL=http://api:8787), so starting it between `services`
+    // and the readiness gate raced the server's own boot and failed against an
+    // API that was up but not yet listening. Readiness is a precondition of
+    // initialization, so it is sequenced as one.
+    if (upOpts.initialize) {
+      emit({ phase: "initialize", status: "start" });
+      await upOpts.initialize();
+      emit({ phase: "initialize", status: "done" });
+    }
+
     return ports;
   }
 

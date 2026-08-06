@@ -13,6 +13,8 @@
 import { demoAttends, path as routePath, ROUTES, STANCES } from "@robotmoney/contract";
 import { runAgent, enroll, railFromEnv } from "./agent.ts";
 import type { AgentStage, SessionRail } from "./agent.ts";
+import type { ScenarioInitializer } from "../smoke-mode.ts";
+import { missingSectionLeadIns } from "./inference.ts";
 import { generateKeyPair } from "./crypto.ts";
 
 export function backendUrl(): string {
@@ -99,10 +101,8 @@ export function assertAuthoredTakes(tag: string, takes: any[], expectedMemberIds
     if (OLD_TEMPLATE_RE.test(t.body)) {
       throw new Error(`${tag}: take for ${who} matches the retired template fingerprint — not a real inference body`);
     }
-    for (const lead of ["**REGIME**", "**ALLOCATION**", "**SUBJECT**"]) {
-      if (!t.body.includes(lead)) {
-        throw new Error(`${tag}: take for ${who} is missing the ${lead} lead-in`);
-      }
+    for (const lead of missingSectionLeadIns(t.body)) {
+      throw new Error(`${tag}: take for ${who} is missing the ${lead} lead-in`);
     }
     if (!VALID_STANCES.has(String(t.stance))) {
       throw new Error(`${tag}: take for ${who} has stance '${t.stance}' outside {${[...STANCES].join(",")}}`);
@@ -457,6 +457,12 @@ export async function runSession(
     rail?: SessionRail;
     onProgress?: SessionProgress;
     regimeAsof?: string;
+    // Which scenario opened this session. The session BODY is identical either
+    // way — same lifecycle, same member rail, same assertions; this selects
+    // only whether the harness may author reference-shaped subject data before
+    // the window opens. Defaults to "simulation" so the demo and every
+    // standing-mode caller keep their current behaviour unchanged.
+    initializer?: ScenarioInitializer;
   },
 ) {
   const prevOutcome = opts?.prevOutcome;
@@ -514,7 +520,18 @@ export async function runSession(
   // renders full charts. Idempotent; dated at the session date. This now runs
   // just AFTER the session row exists, because that row is what says what the
   // date is; the brief (which reads these fixtures) is still published after.
-  await admin("subject_fixtures", { id: subject.id, name: subject.name, date }, rail.adminToken);
+  //
+  // ARCHIVE SCENARIOS DO NOT GET THIS. `ensureDemoSubjectFixtures` synthesizes
+  // a subject snapshot and a trailing regime history; under the archive
+  // initializer those series were RESTORED from
+  // backend/seed-data/v0-committee-archive.json.gz and are the real v0 record.
+  // Writing simulation data over them is the one thing a continuity boot must
+  // never do — it would republish fabricated history under the release
+  // subjects' own ids. A restored subject already carries its snapshot, so
+  // there is nothing to seed (issue #537).
+  if ((opts?.initializer ?? "simulation") === "simulation") {
+    await admin("subject_fixtures", { id: subject.id, name: subject.name, date }, rail.adminToken);
+  }
 
   emitSession("scheduled", sessionId);
 

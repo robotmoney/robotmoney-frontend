@@ -153,19 +153,21 @@ test("scripts/lib/demo-main.ts runs the isolated producer seed command AFTER API
   const src = readFileSync(join(repoRoot, "scripts", "lib", "demo-main.ts"), "utf8");
   expect(src).toContain('"analytics-producer", "bun", "run", "src/producer/index.ts", "seed"');
 
-  // The bring-up moved into scripts/stack (docs/architecture.md §11.3 E5):
-  // `stack.up()` is now the step that ends with waitForHttp(`${backendUrl}/health`)
-  // internally, so it is the correct "API is healthy" anchor. The ORDERING
-  // guarantee this test exists for is unchanged — EDGAR seeding must follow API
-  // health and precede any post-boot check — only the expression marking the
-  // boundary moved.
-  const apiHealthIdx = src.indexOf("await stack.up(");
-  const bootstrapIdx = src.indexOf('"analytics-producer", "bun", "run", "src/producer/index.ts", "seed"');
-  const ciBranchIdx = src.indexOf("if (process.env.CI) {");
-
-  expect(apiHealthIdx).toBeGreaterThan(-1);
-  expect(bootstrapIdx).toBeGreaterThan(-1);
-  expect(ciBranchIdx).toBeGreaterThan(-1);
-  expect(apiHealthIdx).toBeLessThan(bootstrapIdx); // API must be healthy first
-  expect(bootstrapIdx).toBeLessThan(ciBranchIdx); // seed gate resolves before ANY post-boot checks/actions
+  // WHAT THIS TEST NO LONGER TRIES TO DO. It used to infer the RUN ORDER of
+  // the seed from where the seed command appears in this file's text. That is
+  // not evidence about ordering, and here it was actively wrong: the bring-up
+  // moved into scripts/stack (docs/architecture.md §11.3 E5) and scenario
+  // initialization became a CALLBACK, so the seed command's byte offset is now
+  // smaller than the `await stack.up(...)` that invokes it while running
+  // strictly later. The scan reported a correctly ordered boot as broken.
+  //
+  // The ordering guarantee is now asserted by EXECUTING up() against a fake
+  // runtime — scripts/tests/unit/stack-lifecycle-order.test.ts pins
+  // migrate → services → ports → health → initialize, and pins that an
+  // unhealthy API never reaches the initializer.
+  //
+  // What remains here is the one thing this file can honestly check about
+  // demo-main: that the seed is HANDED to the shared lifecycle rather than run
+  // beside it. That is a wiring fact, and wiring is what source text records.
+  expect(src).toContain("initialize: initializeScenario");
 });

@@ -60,7 +60,7 @@ writeFileSync(
     envKeys: Object.keys(process.env).sort(),
   }),
 );
-console.log(JSON.stringify({ type: "text", part: { type: "text", text: "**REGIME**\\n- one\\nSTANCE: bullish | CONFIDENCE: 0.8" } }));
+console.log(JSON.stringify({ type: "text", part: { type: "text", text: "**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8" } }));
 `);
   await chmod(fakeOpenCode, 0o755);
   process.env.OPENCODE_BIN = fakeOpenCode;
@@ -401,7 +401,7 @@ test("an auxiliary GPT title error is classified separately from a successful De
   const bin = join(dir, "opencode-title-error");
   await writeFile(bin, `#!/usr/bin/env bun
 console.error("AI_APICallError: Model is disabled providerID=opencode modelID=gpt-5.4-nano agent=title");
-console.log(JSON.stringify({type:"text",part:{type:"text",text:"body\\nSTANCE: bullish | CONFIDENCE: 0.8"}}));
+console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8"}}));
 `);
   await chmod(bin, 0o755);
   const previous = process.env.OPENCODE_BIN;
@@ -427,7 +427,7 @@ test("a legitimately selected gpt-5.4-nano primary is not mislabeled as an auxil
   const bin = join(dir, "opencode-gpt-primary");
   await writeFile(bin, `#!/usr/bin/env bun
 console.error("APIError providerID=opencode modelID=gpt-5.4-nano agent=title");
-console.log(JSON.stringify({type:"text",part:{type:"text",text:"body\\nSTANCE: bullish | CONFIDENCE: 0.8"}}));
+console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8"}}));
 `);
   await chmod(bin, 0o755);
   const previousBin = process.env.OPENCODE_BIN;
@@ -456,7 +456,7 @@ test("a successful parent with a descendant retaining pipes remains hard-bounded
 const { spawn } = require("node:child_process");
 const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 2000)"], {stdio:["ignore","inherit","inherit"]});
 child.unref();
-console.log(JSON.stringify({type:"text",part:{type:"text",text:"retained output\\nSTANCE: bullish | CONFIDENCE: 0.8"}}));
+console.log(JSON.stringify({type:"text",part:{type:"text",text:"retained output\\n**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three\\nSTANCE: bullish | CONFIDENCE: 0.8"}}));
 process.exit(0);
 `);
   await chmod(bin, 0o755);
@@ -469,7 +469,7 @@ process.exit(0);
       telemetry: (event) => milestones.push(event.milestone),
     });
     expect(Date.now() - started).toBeLessThan(1_500);
-    expect(take.body).toBe("retained output");
+    expect(take.body).toContain("retained output");
     expect(milestones).toContain("stream_drain_timeout");
     expect(milestones).toContain("completion");
   } finally {
