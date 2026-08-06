@@ -4,7 +4,7 @@
 // stage (backend verify, rmpc Rust signer, frontend apply page, docs) imports,
 // so it is pinned here first.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   APPLY_HOW_TO_STEPS,
@@ -306,38 +306,35 @@ describe("SWARM_ONBOARDING_SKILL_URL", () => {
     expect(SWARM_ONBOARDING_SKILL_URL.endsWith("SKILL.md")).toBe(true);
   });
 
-  // Regression pin, offline: robotmoney-core's default branch is `dev`, so
-  // raw.githubusercontent.com serves this path at `/dev/` (200) and 404s the
-  // `/main/` form. A 404 here is invisible to the agent that follows the URL —
-  // it simply never discovers the skill — so the branch segment is pinned.
-  // The limit of this assertion, stated plainly: it proves the STRING, not that
-  // the file is reachable. Reachability is proved only by the live test at
+  // Regression pin, offline: this URL must stay SAME-ORIGIN. The cross-repo
+  // form broke the funnel twice in four days — first when #407's rename pointed
+  // at a `robotmoney-swarm` plugin robotmoney-core did not yet have (hard 404),
+  // then when core landed that plugin (#1199/#1200) and turned the path we had
+  // fallen back to into a deprecation stub that still answered 200. Both
+  // failures are invisible from this repo: the agent simply never onboards.
+  //
+  // Serving the skill ourselves removes the coupling — the file and this
+  // constant ship in the same deploy, so they cannot skew. The limit of this
+  // assertion, stated plainly: it proves the STRING, not that the file is
+  // reachable or that it still contains a procedure. Both of those are proved
+  // only by the live test at
   // contract/tests/live/swarm-onboarding-skill-url-live.test.ts, which is
   // deliberately outside this (network-free) directory but runs in the SAME
   // required `contract` job (issue #484 — before that it ran in no job at all).
-  test("points at robotmoney-core's `dev` default branch, not the 404ing `main`", () => {
-    expect(SWARM_ONBOARDING_SKILL_URL).toContain("/robotmoney-core/dev/");
-    expect(SWARM_ONBOARDING_SKILL_URL).not.toContain("/robotmoney-core/main/");
+  test("is served from our own origin, not a third-party repo host", () => {
+    expect(new URL(SWARM_ONBOARDING_SKILL_URL).origin).toBe("https://robotmoney.net");
+    expect(SWARM_ONBOARDING_SKILL_URL).not.toContain("raw.githubusercontent.com");
   });
 
-  // Regression pin for issue #484, the second time this URL's path segments
-  // 404'd. #407's Committee→Swarm rename rewrote them to `robotmoney-swarm/
-  // …/swarm-onboarding`, but robotmoney-core was never renamed to match — it
-  // publishes plugins `robotmoney-analyst`, `robotmoney-cli`,
-  // `robotmoney-committee` and `robotmoney-user`, and nothing named
-  // `robotmoney-swarm` — so the entire onboarding funnel was dead for two days
-  // with no error raised anywhere in this repo.
-  //
-  // What this pin is FOR: a future rename sweep over this repo must not
-  // "correct" these segments again on the strength of a local naming
-  // convention. They track what robotmoney-core actually publishes, and the
-  // only thing that licenses changing them is robotmoney-core publishing the
-  // renamed path — which the live test, not this one, is what verifies.
-  test("names the plugin/skill path robotmoney-core actually publishes, not the post-#407 rename that 404s", () => {
-    expect(SWARM_ONBOARDING_SKILL_URL).toContain(
-      "/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md",
-    );
-    expect(SWARM_ONBOARDING_SKILL_URL).not.toContain("robotmoney-swarm");
+  // Regression pin: the path must be the one this repo actually publishes from
+  // frontend/public/skills/, so a rename sweep cannot repoint it at a directory
+  // no deploy serves. Unlike the previous cross-repo pin, this one is checkable
+  // against the working tree — the file is right there.
+  test("names the skill path this repo publishes", () => {
+    expect(SWARM_ONBOARDING_SKILL_URL).toContain("/skills/swarm-onboarding/SKILL.md");
+    expect(existsSync(
+      new URL("../../../frontend/public/skills/swarm-onboarding/SKILL.md", import.meta.url),
+    )).toBe(true);
   });
 });
 
