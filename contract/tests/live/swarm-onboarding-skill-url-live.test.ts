@@ -88,6 +88,36 @@ describe("SWARM_ONBOARDING_SKILL_URL — live reachability", () => {
       expect(body).toContain(`name: ${SKILL_SLUG}`);
       expect(body).toContain("rmpc");
       expect(body.length).toBeGreaterThan(500);
+
+      // A 200 with the right NAME is still not sufficient — measured, not
+      // hypothetical. When core landed its rename (core#1199 / PR #1200) it
+      // replaced the path this constant then pointed at with a 1,951-byte
+      // deprecation stub. The stub kept the old front-matter `name:`, mentioned
+      // `rmpc` (only to say it had not changed), and cleared the 500-byte floor,
+      // so every assertion above passed while the served body read, verbatim:
+      // "This file is a compatibility stub. It contains no instructions to
+      // follow." Agents were handed a signpost instead of a procedure and this
+      // job stayed green for a day.
+      //
+      // The root cause is structural: SKILL_SLUG is derived from the URL, so it
+      // agrees with the served front matter even when the served file is a
+      // deprecation notice FOR THAT VERY SLUG. Name matching proves the file is
+      // ABOUT the right skill, never that it still contains one.
+      //
+      // So assert the PROCEDURE. These are the steps an operator's agent cannot
+      // onboard without, and a stub that redirects elsewhere cannot carry them
+      // without ceasing to be a stub. They are deliberately spelled the way
+      // robotmoney-core spells them (`/api/committee/*`, `committee-identity`) —
+      // this constant points at core's copy, and the assertions must match what
+      // core actually publishes rather than this repo's preferred vocabulary.
+      expect(body).toContain("committee-identity");
+      expect(body).toContain("/api/committee/apply");
+      expect(body).toContain("token-claim");
+
+      // Belt and braces on the stub shape itself: a deprecation notice is not a
+      // procedure, whatever else it happens to contain.
+      expect(body.toLowerCase()).not.toContain("no instructions to follow");
+      expect(body.length).toBeGreaterThan(10_000);
     },
     TIMEOUT_MS,
   );

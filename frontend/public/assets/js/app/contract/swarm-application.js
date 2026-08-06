@@ -77,7 +77,7 @@ export function canonicalizeApplication(a) {
 // derives the expected front-matter name from this URL's own skill segment,
 // so no edit there is needed.
 export const SWARM_ONBOARDING_SKILL_URL =
-  "https://raw.githubusercontent.com/robotmoney/robotmoney-core/dev/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md";
+  "https://raw.githubusercontent.com/robotmoney/robotmoney-core/dev/plugins/robotmoney-swarm/skills/swarm-onboarding/SKILL.md";
 
 // The single copy-paste prompt an owner drops into their agent harness (R4).
 //

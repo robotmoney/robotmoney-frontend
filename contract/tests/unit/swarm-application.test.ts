@@ -320,24 +320,28 @@ describe("SWARM_ONBOARDING_SKILL_URL", () => {
     expect(SWARM_ONBOARDING_SKILL_URL).not.toContain("/robotmoney-core/main/");
   });
 
-  // Regression pin for issue #484, the second time this URL's path segments
-  // 404'd. #407's Committee→Swarm rename rewrote them to `robotmoney-swarm/
-  // …/swarm-onboarding`, but robotmoney-core was never renamed to match — it
-  // publishes plugins `robotmoney-analyst`, `robotmoney-cli`,
-  // `robotmoney-committee` and `robotmoney-user`, and nothing named
-  // `robotmoney-swarm` — so the entire onboarding funnel was dead for two days
-  // with no error raised anywhere in this repo.
+  // Regression pin: these segments track what robotmoney-core ACTUALLY
+  // publishes, and the only thing that licenses changing them is core changing
+  // what it publishes. They have now moved twice, in opposite directions, and
+  // both moves broke production:
   //
-  // What this pin is FOR: a future rename sweep over this repo must not
-  // "correct" these segments again on the strength of a local naming
-  // convention. They track what robotmoney-core actually publishes, and the
-  // only thing that licenses changing them is robotmoney-core publishing the
-  // renamed path — which the live test, not this one, is what verifies.
-  test("names the plugin/skill path robotmoney-core actually publishes, not the post-#407 rename that 404s", () => {
+  //   #407's rename rewrote them to `robotmoney-swarm/…/swarm-onboarding`
+  //   before core had that plugin → hard 404, funnel dead 2026-08-03.
+  //   #506 reverted them to `robotmoney-committee/…/committee-onboarding`,
+  //   after which core landed its rename (core#1199 / PR #1200) and turned
+  //   that path into a deprecation stub → 200 with no procedure, funnel dead
+  //   again 2026-08-06.
+  //
+  // Core has now published the renamed path, which is what licenses this edit.
+  // The stub it left behind at the old path is the reason the live test asserts
+  // BODY content and not just a 200 — a rename sweep that "corrects" this
+  // string on the strength of local naming convention, with core not having
+  // moved, is exactly the failure this pin exists to make loud.
+  test("names the plugin/skill path robotmoney-core actually publishes", () => {
     expect(SWARM_ONBOARDING_SKILL_URL).toContain(
-      "/plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md",
+      "/plugins/robotmoney-swarm/skills/swarm-onboarding/SKILL.md",
     );
-    expect(SWARM_ONBOARDING_SKILL_URL).not.toContain("robotmoney-swarm");
+    expect(SWARM_ONBOARDING_SKILL_URL).not.toContain("committee-onboarding");
   });
 });
 
