@@ -40,7 +40,9 @@
 //
 // Fields v1 has no column for are dropped HERE, at the point of insert, never
 // in the archive: take.model/usage, snapshot.fetched_at/source_type. The
-// artifact keeps saying exactly what v0 said.
+// artifact keeps saying exactly what v0 said. Values v1 spells differently are
+// rewritten under the same rule — see canonicalizeAvatar() for v0's
+// pre-rename /avatars/committee/ path.
 //
 // Usage: DATABASE_URL=... bun run scripts/v0-seed-bootstrap.ts
 // (V0_ARCHIVE_SIGNING_KEY overrides the published archival key; see
@@ -179,6 +181,30 @@ function diffRow(entity: string, naturalKey: string, fields: FieldSpec[], actual
 
 type RowOutcome = "inserted" | "unchanged" | "drift";
 
+// v0 published its member avatars under /avatars/committee/<id>.jpg. The
+// canonical v1 path is /avatars/swarm/<id>.<ext> (docs/decisions.md D30): it
+// is what every committed manifest under
+// frontend/public/data/swarm/manifests/members/ says, what that directory's
+// _SCHEMA.md specifies, and what src/swarm/roster-seed.ts's LIVE_ROSTER
+// writes into the same jsonb `avatar` column for athena/robotmoney.
+//
+// The rewrite happens HERE, at the point of insert — exactly the rule the
+// module header states for take.model/usage: v1's shape is applied by the
+// importer, never by editing the artifact, so seed-data/ keeps saying
+// verbatim what v0 said. Without it the two writers disagree on `.path` for
+// the two members they share, and whichever runs second reports member drift
+// and exits `bun run prod-bootstrap` non-zero (issue #540).
+const V0_AVATAR_PREFIX = "/avatars/committee/";
+const CANONICAL_AVATAR_PREFIX = "/avatars/swarm/";
+
+export function canonicalizeAvatar(avatar: unknown): unknown {
+  if (avatar === null || avatar === undefined) return null;
+  if (typeof avatar !== "object" || Array.isArray(avatar)) return avatar;
+  const path = (avatar as { path?: unknown }).path;
+  if (typeof path !== "string" || !path.startsWith(V0_AVATAR_PREFIX)) return avatar;
+  return { ...(avatar as Record<string, unknown>), path: CANONICAL_AVATAR_PREFIX + path.slice(V0_AVATAR_PREFIX.length) };
+}
+
 async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> {
   const existing = (
     await sql`
@@ -187,6 +213,7 @@ async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> 
     `
   )[0] as Record<string, unknown> | undefined;
 
+  const avatar = canonicalizeAvatar(m.avatar);
   const fields: FieldSpec[] = [
     { column: "status", kind: "text", expected: m.status ?? "inactive" },
     { column: "name", kind: "text", expected: m.name },
@@ -198,7 +225,7 @@ async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> 
     { column: "mode", kind: "text", expected: m.mode },
     { column: "submit", kind: "json", expected: m.submit },
     { column: "operator", kind: "text", expected: m.operator },
-    { column: "avatar", kind: "json", expected: m.avatar },
+    { column: "avatar", kind: "json", expected: avatar },
   ];
 
   if (!existing) {
@@ -207,10 +234,37 @@ async function processMember(m: V0Member, drifts: Drift[]): Promise<RowOutcome> 
       VALUES (
         ${m.id}, ${m.status ?? "inactive"}, ${m.name}, ${m.tagline ?? null}, ${m.lens ?? null}, ${m.mandate ?? null},
         ${sql.json(jsonValue(m.biases ?? null))}, ${m.voice_md ?? ""}, ${m.mode ?? null},
-        ${sql.json(jsonValue(m.submit ?? null))}, ${m.operator ?? null}, ${sql.json(jsonValue(m.avatar ?? null))}
+        ${sql.json(jsonValue(m.submit ?? null))}, ${m.operator ?? null}, ${sql.json(jsonValue(avatar))}
       )
     `;
     return "inserted";
+  }
+
+  // A column that is NULL on the existing row is FILLED from the archive, not
+  // reported as drift — column-level "append-only: fills in what's missing",
+  // the same principle the header states for whole rows. Nothing non-NULL is
+  // ever touched, so the never-overwrite contract is unchanged.
+  //
+  // This is what makes the row order-independent. src/swarm/roster-seed.ts's
+  // seedLiveRoster() writes only the profile columns the committed manifests
+  // own; it deliberately leaves voice_md null (the manifests keep the voice
+  // document beside them) and never writes `submit`. On a deployment that
+  // seats the live roster before this backfill runs — the order `bun run
+  // prod-bootstrap` itself produces, since step 1's migrate() calls seed() —
+  // athena and robotmoney already exist with those two columns empty, and
+  // without this the archive's own values are reported as drift on rows
+  // nobody edited (issue #540).
+  const fillable = fields.filter((f) => existing[f.column] === null && (f.expected ?? null) !== null);
+  for (const f of fillable) {
+    const value = (f.kind === "json" ? sql.json(jsonValue(f.expected as never)) : f.expected) as never;
+    await sql`UPDATE swarm_members SET ${sql(f.column)} = ${value} WHERE id = ${m.id}`;
+    existing[f.column] = f.expected;
+  }
+  if (fillable.length > 0) {
+    console.log(
+      `[v0-seed-bootstrap] swarm_members id=${m.id}: filled ${fillable.length} empty column(s) from the archive — ` +
+        fillable.map((f) => f.column).join(", "),
+    );
   }
 
   const rowDrifts = diffRow("swarm_members", `id=${m.id}`, fields, existing);
