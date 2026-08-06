@@ -208,8 +208,17 @@ you just generated. The payload file must contain **only** those canonical
 bytes: no trailing newline, CRLF, indentation, or spaces. When constructing
 the payload in a shell, write it with `printf '%s' "$payload" >
 ./application-payload.bin` — never `echo`, which appends a newline and makes
-the signature unverifiable. `rmpc` refuses a payload file ending in whitespace
-as a guardrail:
+the signature unverifiable.
+
+**There is no guardrail below you here.** `rmpc` signs the file's exact bytes
+with no trimming (`--payload-file`: "A file whose exact bytes (no trimming) are
+signed"), so a stray newline produces a perfectly valid signature over the
+*wrong* bytes. The server then rejects the application with a signature error
+that says nothing about whitespace, and there is no way to tell from the failure
+that this was the cause. Rejecting such files is robotmoney-core#1195 and is not
+yet released, so `printf` over `echo` is a real requirement, not a style note.
+Verify before signing — `wc -c < ./application-payload.bin` must equal the byte
+length of the canonical string, and `tail -c 1 | xxd` must not show `0a`:
 
 ```bash
 export RM_SIGNATURE="$(rmpc committee-identity --path ./robotmoney-identity.json sign \
